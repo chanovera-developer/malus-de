@@ -1,6 +1,6 @@
 # Malus DE
 
-**Malus DE** es un entorno de escritorio modular para Linux basado en Wayland. Su objetivo es combinar una interfaz inspirada en macOS con la flexibilidad de Linux, usando un compositor escrito en Rust y componentes de shell independientes.
+**Malus DE** es una reimplementación libre del entorno de escritorio de macOS para Linux, construida sobre Wayland. Busca trasladar su estética y ergonomía a un sistema abierto y modular, con un compositor escrito en Rust y componentes de shell independientes.
 
 > **Estado:** en desarrollo activo. El PRD marca como implementados el compositor base, el dock, la barra superior y el centro de control, entre otros hitos. La integración completa de AirDrop/AWDL sigue en progreso; consulta [PRD.md](./PRD.md) para ver el estado detallado.
 
