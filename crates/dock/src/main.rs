@@ -741,9 +741,9 @@ fn build_dock_ui(app: &Application) {
     glib::timeout_add_local(std::time::Duration::from_secs(3), move || {
         let is_full = check_trash_full();
         trash_img_ref.set_icon_name(Some(if is_full {
-            "user-trash-full-symbolic"
+            "user-trash-full"
         } else {
-            "user-trash-symbolic"
+            "user-trash"
         }));
         glib::ControlFlow::Continue
     });
@@ -966,9 +966,9 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
         .build();
 
     let trash_icon_name = if check_trash_full() {
-        "user-trash-full-symbolic"
+        "user-trash-full"
     } else {
-        "user-trash-symbolic"
+        "user-trash"
     };
 
     let trash_img = Image::builder()
@@ -1023,7 +1023,7 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
     btn_empty.connect_clicked(move |_| {
         info!("🗑️ Vaciando papelera...");
         let _ = Command::new("gio").args(["trash", "--empty"]).status();
-        img_clone.set_icon_name(Some("user-trash-symbolic"));
+        img_clone.set_icon_name(Some("user-trash"));
         popover_clone.popdown();
     });
 
