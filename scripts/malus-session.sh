@@ -10,6 +10,9 @@ fi
 
 # Aislar configuración de usuario de GNOME/GTK para Malus DE (macOS: botones a la izquierda)
 export XDG_CONFIG_HOME="$HOME/.config/malus-de"
+export XDG_CURRENT_DESKTOP="Malus:GNOME"
+export XDG_SESSION_DESKTOP="malus"
+export XDG_SESSION_TYPE="wayland"
 export GSETTINGS_BACKEND="keyfile"
 export GTK_USE_PORTAL=1
 export UBUNTU_MENUPROXY=1
@@ -67,8 +70,6 @@ export GSK_RENDERER="cairo"
 
 # Actualizar el entorno D-Bus con el display Wayland de Malus DE
 dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL 2>/dev/null || true
-systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL 2>/dev/null || true
-systemctl --user start xdg-desktop-portal 2>/dev/null || true
 
 
 # 2. Iniciar Demonio de Fondo de Pantalla (Layer Background)

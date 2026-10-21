@@ -81,8 +81,15 @@ label.clock-label {
     box-shadow: none;
     outline: none;
     transition: background-color 100ms ease;
+    color: #ffffff;
     text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 4px rgba(0, 0, 0, 0.65);
     -gtk-icon-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 4px rgba(0, 0, 0, 0.65);
+    min-height: 28px;
+}
+
+button.control-center-toggle image,
+menubutton.control-center-toggle image {
+    color: #ffffff;
 }
 
 button.topbar-btn:hover,
@@ -157,6 +164,7 @@ popover.light-popover {
     border: none;
     box-shadow: none;
     padding: 0;
+    border-radius: 18px;
 }
 
 popover.malus-popover-menu > arrow,
@@ -170,7 +178,7 @@ popover.light-popover > arrow {
 popover.malus-popover-menu > contents {
     background-color: rgba(28, 28, 34, 0.94);
     border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 14px;
+    border-radius: 18px;
     box-shadow: 0 14px 34px rgba(0, 0, 0, 0.60);
     padding: 6px;
     color: #f4f4f5;
@@ -193,7 +201,7 @@ popover.light-popover > contents,
 .light-mode popover.malus-popover-menu > contents {
     background-color: rgba(246, 246, 248, 0.96);
     border: 1px solid rgba(0, 0, 0, 0.12);
-    border-radius: 14px;
+    border-radius: 18px;
     box-shadow: 0 14px 34px rgba(0, 0, 0, 0.20);
     padding: 6px;
     color: #1d1d1f;
@@ -206,6 +214,14 @@ popover.light-popover.control-center-popover > contents,
     border-radius: 18px;
     box-shadow: 0 18px 44px rgba(0, 0, 0, 0.22);
     padding: 12px;
+    color: #1d1d1f;
+}
+
+.malus-popover-menu .menu-row-label {
+    color: #f4f4f5;
+}
+
+popover.malus-popover-menu.light-popover .menu-row-label {
     color: #1d1d1f;
 }
 
@@ -817,6 +833,36 @@ scale.horizontal slider {
 .cc-media-play-btn:hover {
     background-color: rgba(255, 255, 255, 0.28);
 }
+
+popover.malus-popover-menu.light-popover > contents label.menu-row-label,
+popover.malus-popover-menu.light-popover > contents button.popover-menu-item label.menu-row-label {
+    color: #1d1d1f;
+}
+
+popover.malus-popover-menu.light-popover > contents button.popover-menu-item:hover label.menu-row-label {
+    color: #ffffff;
+}
+
+label.menu-row-label.menu-light-text {
+    color: #1d1d1f;
+}
+
+label.menu-row-label.menu-dark-text {
+    color: #f4f4f5;
+}
+
+label.menu-shortcut-hint.menu-light-text {
+    color: rgba(0, 0, 0, 0.40);
+}
+
+label.menu-shortcut-hint.menu-dark-text {
+    color: rgba(255, 255, 255, 0.45);
+}
+
+button.popover-menu-item:hover label.menu-row-label.menu-light-text,
+button.popover-menu-item:hover label.menu-row-label.menu-dark-text {
+    color: #ffffff;
+}
 "#;
 
 fn main() {
@@ -855,7 +901,8 @@ fn load_css() {
         );
 
         let icon_theme = gtk4::IconTheme::for_display(&display);
-        icon_theme.add_search_path("/home/cristian/Apps/malus-de/assets/icons");
+        icon_theme.add_search_path("/usr/local/share/malus-de/icons");
+        icon_theme.add_search_path("/usr/share/malus-de/icons");
         if let Ok(exe) = std::env::current_exe() {
             if let Some(parent) = exe.parent() {
                 icon_theme.add_search_path(parent.join("assets/icons"));

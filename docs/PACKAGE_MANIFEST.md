@@ -2,7 +2,7 @@
 
 Este documento detalla la lista exacta de paquetes requeridos para construir una distribución independiente de Malus DE partiendo de una instalación mínima sin entorno gráfico (como *Fedora Everything/Minimal*, *Debian Minimal*, *Ubuntu Server/Core* o *Arch Linux*).
 
-La sesión fuerza a GTK a usar xdg-desktop-portal y prefiere el selector de archivos de GNOME. Por eso, instala `xdg-desktop-portal` y `xdg-desktop-portal-gnome`; el backend GTK queda como alternativa para interfaces no implementadas por GNOME.
+La sesión fuerza a GTK a usar xdg-desktop-portal y prefiere el selector de archivos del backend GTK, con GNOME como alternativa. Instala `xdg-desktop-portal`, `xdg-desktop-portal-gtk` y `xdg-desktop-portal-gnome`.
 
 ---
 
@@ -68,6 +68,7 @@ sudo dnf install -y \
     libadwaita \
     gtk4-layer-shell \
     xdg-desktop-portal \
+    xdg-desktop-portal-gtk \
     xdg-desktop-portal-gnome \
     nautilus \
     ptyxis \
@@ -119,6 +120,7 @@ sudo apt install -y \
     libadwaita-1-0 \
     libgtk4-layer-shell0 \
     xdg-desktop-portal \
+    xdg-desktop-portal-gtk \
     xdg-desktop-portal-gnome \
     nautilus \
     ptyxis \
@@ -167,6 +169,7 @@ sudo pacman -S --needed \
     libadwaita \
     gtk4-layer-shell \
     xdg-desktop-portal \
+    xdg-desktop-portal-gtk \
     xdg-desktop-portal-gnome \
     nautilus \
     ptyxis \

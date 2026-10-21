@@ -97,12 +97,6 @@ fi
 # Sincronizar variables iniciales con el daemon de activación D-Bus
 dbus-update-activation-environment --all 2>/dev/null || true
 
-# Activar target de sesión gráfica de systemd para que los portales (xdg-desktop-portal) funcionen
-if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL 2>/dev/null || true
-    systemctl --user start malus-session.target 2>/dev/null || true
-fi
-
 # ------------------------------------------------------------------------------
 # Limpieza de procesos previos de sesiones anteriores
 # ------------------------------------------------------------------------------
@@ -174,10 +168,14 @@ else
     echo "⚠️ Socket Wayland no detectado a tiempo, asumiendo WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
 fi
 
-# Actualizar el socket Wayland en el entorno de activación D-Bus y systemd
+# Actualizar el entorno de activación antes de iniciar los portales, para que
+# hereden el socket del compositor de Malus y no el de la sesión de inicio.
 dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL 2>/dev/null || true
-systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL 2>/dev/null || true
-systemctl --user start xdg-desktop-portal 2>/dev/null || true
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL || echo "⚠️ No se pudo importar el entorno de Malus a systemd --user."
+    systemctl --user start malus-session.target || echo "⚠️ No se pudo iniciar malus-session.target."
+    systemctl --user start xdg-desktop-portal || echo "⚠️ No se pudo iniciar xdg-desktop-portal."
+fi
 
 # ------------------------------------------------------------------------------
 # 2. Iniciar Servicios y Componentes del Shell de Malus DE

@@ -924,31 +924,6 @@ gtk-theme-name=Adwaita
         let _ = input_cfg.save();
     }
 
-    // 6. Asegurar malus-session.target para que xdg-desktop-portal se active en el session manager
-    let systemd_user_dir = PathBuf::from(&home).join(".config/systemd/user");
-    if let Ok(()) = std::fs::create_dir_all(&systemd_user_dir) {
-        let target_path = systemd_user_dir.join("malus-session.target");
-        if !target_path.exists() {
-            let target_content = "[Unit]\nDescription=Malus DE Session\nBindsTo=graphical-session.target\nWants=graphical-session.target\nAfter=graphical-session-pre.target\n";
-            let _ = std::fs::write(&target_path, target_content);
-        }
-    }
-
-    // 7. Asegurar que las variables de entorno de Wayland y Desktop estén en systemd y activar portal
-    let _ = std::process::Command::new("systemctl")
-        .args([
-            "--user",
-            "import-environment",
-            "WAYLAND_DISPLAY",
-            "DISPLAY",
-            "XDG_CURRENT_DESKTOP",
-            "XDG_SESSION_TYPE",
-        ])
-        .status();
-    let _ = std::process::Command::new("systemctl")
-        .args(["--user", "start", "xdg-desktop-portal"])
-        .status();
-
     // Exportar variables de cursor para los procesos iniciados desde Malus DE
     std::env::set_var("XCURSOR_THEME", "macOS");
     std::env::set_var("XCURSOR_SIZE", "24");
