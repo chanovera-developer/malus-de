@@ -401,8 +401,17 @@ button.link:hover {
 "#;
 
 pub const MALUS_GTK_CSS_SIDEBAR_COMMON: &str = r#"/* Malus DE - Paneles laterales semitransparentes estilo macOS (Sidebar / Split View) */
-window.background {
+window.view.background {
     background-color: transparent;
+}
+
+window.view popover > contents,
+window.view popover.menu > contents,
+window.view popover.background > contents,
+window.view menu,
+window.view .menu {
+    background-color: alpha(@window_bg_color, 0.84);
+    border-color: alpha(@borders, 0.75);
 }
 
 /* Mantener fondo opaco sólido para vistas de contenido y ventanas generales */
@@ -529,132 +538,41 @@ filechooser .navigation-sidebar {
     background-color: @window_bg_color;
 }
 
-/* Transparencia total en todos los componentes internos de la columna izquierda (Sidebar)
-   para que la topbar y el contenido compartan exactamente el mismo fondo homogéneo sin costuras */
-.sidebar-pane toolbarview,
-navigation-split-view > .sidebar-pane toolbarview,
-overlay-split-view > .sidebar-pane toolbarview,
-.sidebar-pane adw-toolbar-view,
-navigation-split-view > .sidebar-pane adw-toolbar-view,
-overlay-split-view > .sidebar-pane adw-toolbar-view,
-.sidebar-pane toolbarview > .top-bar,
-.sidebar-pane toolbarview > .top-bar.raised,
-.sidebar-pane toolbarview > .top-bar revealer,
-.sidebar-pane toolbarview > .bottom-bar,
-.sidebar-pane toolbarview > .bottom-bar.raised,
-.sidebar-pane revealer.top-bar,
-.sidebar-pane revealer.top-bar > windowhandle,
-.sidebar-pane revealer.top-bar box,
-navigation-split-view > .sidebar-pane toolbarview > .top-bar,
-navigation-split-view > .sidebar-pane toolbarview > .top-bar.raised,
-overlay-split-view > .sidebar-pane toolbarview > .top-bar,
-overlay-split-view > .sidebar-pane toolbarview > .top-bar.raised,
-overlay-split-view > .sidebar-pane revealer.top-bar,
-overlay-split-view > .sidebar-pane revealer.top-bar > windowhandle,
-overlay-split-view > .sidebar-pane revealer.top-bar box,
-.sidebar-pane headerbar,
-.sidebar-pane headerbar:backdrop,
-.sidebar-pane headerbar.flat,
-navigation-split-view > .sidebar-pane headerbar,
-overlay-split-view > .sidebar-pane headerbar,
-.sidebar-pane headerbar > windowhandle,
-navigation-split-view > .sidebar-pane headerbar > windowhandle,
-overlay-split-view > .sidebar-pane headerbar > windowhandle,
-.sidebar-pane headerbar > windowhandle > box,
-navigation-split-view > .sidebar-pane headerbar > windowhandle > box,
-overlay-split-view > .sidebar-pane headerbar > windowhandle > box,
-.sidebar-windowcontrols,
-.macos-sidebar .sidebar-windowcontrols,
-.sidebar-pane .macos-sidebar,
-.sidebar-pane > .macos-sidebar,
-navigation-split-view > .sidebar-pane .macos-sidebar,
-overlay-split-view > .sidebar-pane .macos-sidebar,
-.sidebar-pane scrolledwindow,
-.sidebar-pane scrolledwindow > viewport,
-.sidebar-pane viewport,
-.sidebar-pane listview,
-.sidebar-pane list,
-.sidebar-pane listbox,
-.sidebar-pane treeview,
-.sidebar-pane .view,
-navigation-split-view > .sidebar-pane scrolledwindow,
-navigation-split-view > .sidebar-pane scrolledwindow > viewport,
-navigation-split-view > .sidebar-pane viewport,
-navigation-split-view > .sidebar-pane listview,
-navigation-split-view > .sidebar-pane list,
-navigation-split-view > .sidebar-pane listbox,
-navigation-split-view > .sidebar-pane treeview,
-navigation-split-view > .sidebar-pane .view,
-overlay-split-view > .sidebar-pane scrolledwindow,
-overlay-split-view > .sidebar-pane scrolledwindow > viewport,
-overlay-split-view > .sidebar-pane viewport,
-overlay-split-view > .sidebar-pane listview,
-overlay-split-view > .sidebar-pane list,
-overlay-split-view > .sidebar-pane listbox,
-overlay-split-view > .sidebar-pane treeview,
-overlay-split-view > .sidebar-pane .view,
-.navigation-sidebar,
-.navigation-sidebar.view,
-.navigation-sidebar scrolledwindow,
-.navigation-sidebar scrolledwindow > viewport,
-.navigation-sidebar viewport,
-.navigation-sidebar listview,
-.navigation-sidebar list,
-.navigation-sidebar listbox,
-.navigation-sidebar .view,
-placessidebar,
-placessidebar.view,
-placessidebar scrolledwindow,
-placessidebar scrolledwindow > viewport,
-placessidebar viewport,
-placessidebar listview,
-placessidebar list,
-placessidebar listbox,
-placessidebar .view,
-.macos-sidebar,
-.macos-sidebar scrolledwindow,
-.macos-sidebar scrolledwindow > viewport,
-.macos-sidebar viewport,
-.macos-sidebar listview,
-.macos-sidebar list,
-.macos-sidebar listbox,
-.macos-sidebar .sidebar-body {
+/* Transparencia de los componentes internos de la barra lateral de Nautilus */
+window.view .sidebar-pane,
+window.view .sidebar-pane *,
+window.view .navigation-sidebar,
+window.view .navigation-sidebar *,
+window.view placessidebar,
+window.view placessidebar *,
+window.view .macos-sidebar,
+window.view .macos-sidebar * {
     background: transparent;
     background-color: transparent;
     border-color: transparent;
     box-shadow: none;
 }
 
-.sidebar-pane listview > row,
-.sidebar-pane list > row,
-.sidebar-pane listbox > row,
-navigation-split-view > .sidebar-pane listview > row,
-navigation-split-view > .sidebar-pane list > row,
-navigation-split-view > .sidebar-pane listbox > row,
-overlay-split-view > .sidebar-pane listview > row,
-overlay-split-view > .sidebar-pane list > row,
-overlay-split-view > .sidebar-pane listbox > row,
-.navigation-sidebar row,
-.navigation-sidebar > row,
-placessidebar row,
-placessidebar > row {
+window.view .sidebar-pane listview > row,
+window.view .sidebar-pane list > row,
+window.view .sidebar-pane listbox > row,
+window.view .navigation-sidebar row,
+window.view .navigation-sidebar > row,
+window.view placessidebar row,
+window.view placessidebar > row {
     background: transparent;
     background-color: transparent;
 }
 
-.sidebar-pane listview > row:hover,
-navigation-split-view > .sidebar-pane listview > row:hover,
-overlay-split-view > .sidebar-pane listview > row:hover,
-.navigation-sidebar row:hover,
-placessidebar row:hover {
+window.view .sidebar-pane listview > row:hover,
+window.view .navigation-sidebar row:hover,
+window.view placessidebar row:hover {
     background-color: alpha(currentColor, 0.08);
 }
 
-.sidebar-pane listview > row:selected,
-navigation-split-view > .sidebar-pane listview > row:selected,
-overlay-split-view > .sidebar-pane listview > row:selected,
-.navigation-sidebar row:selected,
-placessidebar row:selected {
+window.view .sidebar-pane listview > row:selected,
+window.view .navigation-sidebar row:selected,
+window.view placessidebar row:selected {
     background-color: @accent_bg_color;
     color: @accent_fg_color;
 }
@@ -669,62 +587,38 @@ pub const MALUS_GTK_CSS_SIDEBAR_LIGHT: &str = r#"/* Estilos de panel lateral par
     --sidebar-backdrop-color: rgba(240, 240, 242, 0.88);
 }
 
-.sidebar-pane,
-navigation-split-view > .sidebar-pane,
-overlay-split-view > .sidebar-pane,
-.macos-sidebar {
+window.view overlay-split-view > .sidebar-pane {
     background-color: rgba(246, 246, 248, 0.82);
     color: @window_fg_color;
 }
 
-.sidebar-pane:backdrop,
-navigation-split-view > .sidebar-pane:backdrop,
-overlay-split-view > .sidebar-pane:backdrop,
-.macos-sidebar:backdrop {
+window.view overlay-split-view > .sidebar-pane:backdrop {
     background-color: rgba(240, 240, 242, 0.88);
 }
 
-.sidebar-pane:dir(ltr),
-navigation-split-view > .sidebar-pane:dir(ltr),
-overlay-split-view > .sidebar-pane:dir(ltr),
-.macos-sidebar:dir(ltr) {
+window.view overlay-split-view > .sidebar-pane:dir(ltr) {
     box-shadow: inset -1px 0 rgba(0, 0, 0, 0.08);
 }
 
-.sidebar-pane:dir(rtl),
-navigation-split-view > .sidebar-pane:dir(rtl),
-overlay-split-view > .sidebar-pane:dir(rtl),
-.macos-sidebar:dir(rtl) {
+window.view overlay-split-view > .sidebar-pane:dir(rtl) {
     box-shadow: inset 1px 0 rgba(0, 0, 0, 0.08);
 }
 
 @media (prefers-color-scheme: dark) {
-    .sidebar-pane,
-    navigation-split-view > .sidebar-pane,
-    overlay-split-view > .sidebar-pane,
-    .macos-sidebar {
+    window.view overlay-split-view > .sidebar-pane {
         background-color: rgba(30, 30, 34, 0.82);
         color: @window_fg_color;
     }
 
-    .sidebar-pane:backdrop,
-    navigation-split-view > .sidebar-pane:backdrop,
-    overlay-split-view > .sidebar-pane:backdrop,
-    .macos-sidebar:backdrop {
+    window.view overlay-split-view > .sidebar-pane:backdrop {
         background-color: rgba(25, 25, 28, 0.88);
     }
 
-    .sidebar-pane:dir(ltr),
-    navigation-split-view > .sidebar-pane:dir(ltr),
-    overlay-split-view > .sidebar-pane:dir(ltr),
-    .macos-sidebar:dir(ltr) {
+    window.view overlay-split-view > .sidebar-pane:dir(ltr) {
         box-shadow: inset -1px 0 rgba(255, 255, 255, 0.08);
     }
 
-    .sidebar-pane:dir(rtl),
-    navigation-split-view > .sidebar-pane:dir(rtl),
-    overlay-split-view > .sidebar-pane:dir(rtl),
-    .macos-sidebar:dir(rtl) {
+    window.view overlay-split-view > .sidebar-pane:dir(rtl) {
         box-shadow: inset 1px 0 rgba(255, 255, 255, 0.08);
     }
 }
@@ -739,32 +633,20 @@ pub const MALUS_GTK_CSS_SIDEBAR_DARK: &str = r#"/* Estilos de panel lateral para
     --sidebar-backdrop-color: rgba(25, 25, 28, 0.88);
 }
 
-.sidebar-pane,
-navigation-split-view > .sidebar-pane,
-overlay-split-view > .sidebar-pane,
-.macos-sidebar {
+window.view overlay-split-view > .sidebar-pane {
     background-color: rgba(30, 30, 34, 0.82);
     color: @window_fg_color;
 }
 
-.sidebar-pane:backdrop,
-navigation-split-view > .sidebar-pane:backdrop,
-overlay-split-view > .sidebar-pane:backdrop,
-.macos-sidebar:backdrop {
+window.view overlay-split-view > .sidebar-pane:backdrop {
     background-color: rgba(25, 25, 28, 0.88);
 }
 
-.sidebar-pane:dir(ltr),
-navigation-split-view > .sidebar-pane:dir(ltr),
-overlay-split-view > .sidebar-pane:dir(ltr),
-.macos-sidebar:dir(ltr) {
+window.view overlay-split-view > .sidebar-pane:dir(ltr) {
     box-shadow: inset -1px 0 rgba(255, 255, 255, 0.08);
 }
 
-.sidebar-pane:dir(rtl),
-navigation-split-view > .sidebar-pane:dir(rtl),
-overlay-split-view > .sidebar-pane:dir(rtl),
-.macos-sidebar:dir(rtl) {
+window.view overlay-split-view > .sidebar-pane:dir(rtl) {
     box-shadow: inset 1px 0 rgba(255, 255, 255, 0.08);
 }
 "#;
@@ -782,9 +664,9 @@ pub fn get_malus_gtk_css(dark: bool) -> String {
 /// Hoja de estilos CSS nativa y válida para GTK 3 (Firefox, LibreOffice, GIMP, diálogos GTK3)
 pub fn get_malus_gtk3_css(dark: bool) -> String {
     let (bg_color, fg_color, sidebar_bg, border_color) = if dark {
-        ("rgb(30, 30, 34)", "rgb(255, 255, 255)", "rgba(30, 30, 34, 0.82)", "rgba(255, 255, 255, 0.08)")
+        ("rgb(30, 30, 34)", "rgb(255, 255, 255)", "rgb(30, 30, 34)", "rgba(255, 255, 255, 0.08)")
     } else {
-        ("rgb(246, 246, 248)", "rgb(0, 0, 0)", "rgba(246, 246, 248, 0.82)", "rgba(0, 0, 0, 0.08)")
+        ("rgb(246, 246, 248)", "rgb(0, 0, 0)", "rgb(246, 246, 248)", "rgba(0, 0, 0, 0.08)")
     };
 
     format!(r#"/* Malus DE - Hoja de estilos GTK 3 nativa (macOS Style) */
@@ -859,6 +741,7 @@ placessidebar.view {{
     background-color: {sidebar_bg};
     box-shadow: inset -1px 0 {border_color};
 }}
+
 "#,
         bg_color = bg_color,
         fg_color = fg_color,
@@ -867,12 +750,77 @@ placessidebar.view {{
     )
 }
 
+fn set_gtk_decoration_layout(config_dir: &Path) -> std::io::Result<()> {
+    const LAYOUT: &str = "gtk-decoration-layout=close,minimize,maximize:";
+
+    for version in ["gtk-3.0", "gtk-4.0"] {
+        let settings_path = config_dir.join(version).join("settings.ini");
+        let content = match std::fs::read_to_string(&settings_path) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(error) => return Err(error),
+        };
+        let mut lines = content.lines().map(str::to_string).collect::<Vec<_>>();
+
+        let settings_start = lines.iter().position(|line| line.trim() == "[Settings]");
+        let Some(mut start) = settings_start else {
+            if !lines.is_empty() && !lines.last().map(|line| line.is_empty()).unwrap_or(false) {
+                lines.push(String::new());
+            }
+            lines.push("[Settings]".to_string());
+            lines.push(LAYOUT.to_string());
+            std::fs::write(settings_path, lines.join("\n") + "\n")?;
+            continue;
+        };
+
+        start += 1;
+        let end = lines[start..]
+            .iter()
+            .position(|line| line.trim().starts_with('['))
+            .map(|offset| start + offset)
+            .unwrap_or(lines.len());
+        if let Some(index) = (start..end).find(|&index| {
+            lines[index].trim_start().starts_with("gtk-decoration-layout=")
+        }) {
+            lines[index] = LAYOUT.to_string();
+        } else {
+            lines.insert(end, LAYOUT.to_string());
+        }
+        std::fs::write(settings_path, lines.join("\n") + "\n")?;
+    }
+
+    Ok(())
+}
+
+fn set_gsettings_button_layout() {
+    match std::process::Command::new("gsettings")
+        .args([
+            "set",
+            "org.gnome.desktop.wm.preferences",
+            "button-layout",
+            "close,minimize,maximize:",
+        ])
+        .status()
+    {
+        Ok(status) if status.success() => {}
+        Ok(status) => tracing::warn!(
+            "No se pudo aplicar el layout aislado de botones en GSettings (código: {:?})",
+            status.code()
+        ),
+        Err(error) => tracing::warn!("No se pudo ejecutar gsettings para el layout de botones: {error}"),
+    }
+}
+
 /// Inicializa el entorno de configuración aislado para Malus DE en `$HOME/.config/malus-de`.
 /// Configura el backend `keyfile` de GSettings y los archivos `settings.ini` de GTK3/GTK4
 /// con el layout de botones a la macOS (`close,minimize,maximize:`) sin alterar dconf del host.
 pub fn setup_isolated_session_environment() -> std::io::Result<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     let malus_config_dir = PathBuf::from(&home).join(".config").join("malus-de");
+
+    std::env::set_var("XDG_CONFIG_HOME", &malus_config_dir);
+    std::env::set_var("GSETTINGS_BACKEND", "keyfile");
+    std::env::set_var("GTK_USE_PORTAL", "1");
 
     // 1. Directorio glib-2.0/settings para el backend GSettings keyfile (preservar si ya existe)
     let keyfile_dir = malus_config_dir.join("glib-2.0").join("settings");
@@ -924,19 +872,17 @@ gtk-theme-name=Adwaita
         std::fs::write(&gtk4_ini, gtk_ini_content)?;
     }
 
-    // 2.1. Archivos gtk.css y gtk-dark.css nativos estilo macOS (GTK3 y GTK4)
-    let user_gtk3 = PathBuf::from(&home).join(".config/gtk-3.0");
-    let user_gtk4 = PathBuf::from(&home).join(".config/gtk-4.0");
-    let _ = std::fs::create_dir_all(&user_gtk3);
-    let _ = std::fs::create_dir_all(&user_gtk4);
+    set_gtk_decoration_layout(&malus_config_dir)?;
+    set_gsettings_button_layout();
 
+    // 2.1. Hojas de estilo GTK exclusivas de Malus DE
     let light_css = get_malus_gtk_css(false);
     let dark_css = get_malus_gtk_css(true);
     let light_gtk3_css = get_malus_gtk3_css(false);
     let dark_gtk3_css = get_malus_gtk3_css(true);
 
-    let is_dark = if let Ok(out) = std::process::Command::new("dconf")
-        .args(["read", "/org/gnome/desktop/interface/color-scheme"])
+    let is_dark = if let Ok(out) = std::process::Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.interface", "color-scheme"])
         .output()
     {
         String::from_utf8_lossy(&out.stdout).contains("prefer-dark")
@@ -949,119 +895,12 @@ gtk-theme-name=Adwaita
 
     // GTK 3
     let _ = std::fs::write(gtk3_dir.join("gtk.css"), active_gtk3);
-    let _ = std::fs::write(user_gtk3.join("gtk.css"), active_gtk3);
 
-    // GTK 4 (sesión Malus DE y usuario)
+    // GTK 4
     let _ = std::fs::write(gtk4_dir.join("gtk.css"), active_css);
     let _ = std::fs::write(gtk4_dir.join("gtk-dark.css"), &dark_css);
-    let _ = std::fs::write(user_gtk4.join("gtk.css"), active_css);
-    let _ = std::fs::write(user_gtk4.join("gtk-dark.css"), &dark_css);
 
-    // 3. Biblioteca compartida para garantizar botones consistentes en GTK3/GTK4 (macOS style)
-    let lib_dir = malus_config_dir.join("lib");
-    let _ = std::fs::create_dir_all(&lib_dir);
-    let so_path = lib_dir.join("libmalus_gtk_layout.so");
-    let c_source = r#"#define _GNU_SOURCE
-#include <dlfcn.h>
-#include <glib-object.h>
-#include <string.h>
-
-typedef void (*orig_get_prop)(GObject*, const char*, GValue*);
-typedef void (*orig_pack)(void*, void*);
-typedef const char* (*get_action_fn)(void*);
-typedef void (*orig_set_title)(void*, const char*);
-
-void g_object_get_property(GObject *object, const char *property_name, GValue *value) {
-    static orig_get_prop real = NULL;
-    if (!real) {
-        real = (orig_get_prop)dlsym(RTLD_NEXT, "g_object_get_property");
-    }
-    if (property_name && strcmp(property_name, "gtk-decoration-layout") == 0) {
-        if (!G_IS_VALUE(value)) {
-            g_value_init(value, G_TYPE_STRING);
-        }
-        g_value_set_string(value, "close,minimize,maximize:");
-        return;
-    }
-    real(object, property_name, value);
-}
-
-void g_object_get(gpointer object, const gchar *first_property_name, ...) {
-    static void (*real_valist)(gpointer, const gchar*, va_list) = NULL;
-    if (!real_valist) {
-        real_valist = (void (*)(gpointer, const gchar*, va_list))dlsym(RTLD_NEXT, "g_object_get_valist");
-    }
-    va_list var_args;
-    va_start(var_args, first_property_name);
-    if (first_property_name && strcmp(first_property_name, "gtk-decoration-layout") == 0) {
-        gchar **str_ptr = va_arg(var_args, gchar**);
-        if (str_ptr) {
-            *str_ptr = g_strdup("close,minimize,maximize:");
-        }
-    } else if (real_valist) {
-        real_valist(object, first_property_name, var_args);
-    }
-    va_end(var_args);
-}
-
-void adw_header_bar_pack_start(void *self, void *child) {
-    static orig_pack real_start = NULL;
-    static orig_pack real_end = NULL;
-    static get_action_fn get_action = NULL;
-    if (!real_start) {
-        real_start = (orig_pack)dlsym(RTLD_NEXT, "adw_header_bar_pack_start");
-        real_end = (orig_pack)dlsym(RTLD_NEXT, "adw_header_bar_pack_end");
-        get_action = (get_action_fn)dlsym(RTLD_DEFAULT, "gtk_actionable_get_action_name");
-    }
-
-    // Mover el botón de búsqueda global a la derecha (pack_end) para no colisionar con los semáforos macOS
-    if (child && real_end && get_action) {
-        const char *act = get_action(child);
-        if (act && (strstr(act, "search-global") != NULL || strstr(act, "search") != NULL)) {
-            real_end(self, child);
-            return;
-        }
-    }
-
-    if (real_start) {
-        real_start(self, child);
-    }
-}
-
-void adw_window_title_set_title(void *self, const char *title) {
-    static orig_set_title real_title = NULL;
-    if (!real_title) {
-        real_title = (orig_set_title)dlsym(RTLD_NEXT, "adw_window_title_set_title");
-    }
-    if (real_title) {
-        // En Malus DE los programas se identifican en el menú global superior estilo macOS
-        if (title && (strcmp(title, "Archivos") == 0 || strcmp(title, "Files") == 0)) {
-            real_title(self, "");
-            return;
-        }
-        real_title(self, title);
-    }
-}
-"#;
-    let c_path = lib_dir.join("malus_gtk_layout.c");
-    let needs_compile = !so_path.exists() || std::fs::read_to_string(&c_path).map(|c| c != c_source).unwrap_or(true);
-    if needs_compile && std::fs::write(&c_path, c_source).is_ok() {
-        let _ = std::process::Command::new("gcc")
-            .args([
-                "-O2", "-shared", "-fPIC",
-                c_path.to_str().unwrap(),
-                "-o", so_path.to_str().unwrap(),
-                "-I/usr/include/glib-2.0",
-                "-I/usr/lib64/glib-2.0/include",
-            ])
-            .status();
-    }
-
-    if so_path.exists() {
-        std::env::set_var("LD_PRELOAD", &so_path);
-    }
-
-    // 4. Configuración de monitores y escalado fraccionario (~/.config/malus-de/monitors.toml)
+    // 3. Configuración de monitores y escalado fraccionario (~/.config/malus-de/monitors.toml)
     let monitors_path = malus_config_dir.join("monitors.toml");
     if !monitors_path.exists() {
         let displays_cfg = DisplaysConfig::load();
@@ -1071,24 +910,21 @@ void adw_window_title_set_title(void *self, const char *title) {
         }
     }
 
-    // 5. Configuración del Dock (~/.config/malus-de/dock.toml)
+    // 4. Configuración del Dock (~/.config/malus-de/dock.toml)
     let dock_path = malus_config_dir.join("dock.toml");
     if !dock_path.exists() {
         let dock_cfg = DockConfig::load_or_create_default();
         let _ = dock_cfg.save();
     }
 
-    // 6. Configuración de Teclado y Entrada (~/.config/malus-de/input.toml)
+    // 5. Configuración de Teclado y Entrada (~/.config/malus-de/input.toml)
     let input_path = malus_config_dir.join("input.toml");
     if !input_path.exists() {
         let input_cfg = InputConfig::load();
         let _ = input_cfg.save();
     }
 
-    // 7. Configuración automática de controles semáforo macOS para Firefox y Brave
-    configure_browsers_traffic_lights(&home);
-
-    // 8. Asegurar malus-session.target para que xdg-desktop-portal se active en el session manager
+    // 6. Asegurar malus-session.target para que xdg-desktop-portal se active en el session manager
     let systemd_user_dir = PathBuf::from(&home).join(".config/systemd/user");
     if let Ok(()) = std::fs::create_dir_all(&systemd_user_dir) {
         let target_path = systemd_user_dir.join("malus-session.target");
@@ -1098,7 +934,7 @@ void adw_window_title_set_title(void *self, const char *title) {
         }
     }
 
-    // 9. Asegurar que las variables de entorno de Wayland y Desktop estén en systemd y activar portal
+    // 7. Asegurar que las variables de entorno de Wayland y Desktop estén en systemd y activar portal
     let _ = std::process::Command::new("systemctl")
         .args([
             "--user",
@@ -1107,37 +943,29 @@ void adw_window_title_set_title(void *self, const char *title) {
             "DISPLAY",
             "XDG_CURRENT_DESKTOP",
             "XDG_SESSION_TYPE",
-            "XDG_CONFIG_HOME",
-            "GSETTINGS_BACKEND",
         ])
         .status();
     let _ = std::process::Command::new("systemctl")
         .args(["--user", "start", "xdg-desktop-portal"])
         .status();
 
-    // Exportar variables en el entorno del proceso actual
-    std::env::set_var("XDG_CONFIG_HOME", &malus_config_dir);
-    std::env::set_var("GSETTINGS_BACKEND", "keyfile");
+    // Exportar variables de cursor para los procesos iniciados desde Malus DE
     std::env::set_var("XCURSOR_THEME", "macOS");
     std::env::set_var("XCURSOR_SIZE", "24");
 
     Ok(malus_config_dir)
 }
 
-/// Sincroniza atómicamente el modo de apariencia (claro / oscuro) en todo el sistema:
-/// DConf (portal XDG/GNOME), GSettings, keyfile aislado, settings.ini (GTK3/GTK4),
-/// y regenera las hojas de estilo GTK CSS recargando en caliente las aplicaciones activas.
+/// Sincroniza el modo claro/oscuro dentro de la configuración aislada de Malus DE.
 pub fn sync_system_appearance(to_dark: bool) {
     let target = if to_dark { "prefer-dark" } else { "prefer-light" };
     let dark_val = if to_dark { "1" } else { "0" };
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let malus_config_dir = std::path::PathBuf::from(&home).join(".config/malus-de");
+    std::env::set_var("XDG_CONFIG_HOME", &malus_config_dir);
+    std::env::set_var("GSETTINGS_BACKEND", "keyfile");
 
-    // 1. DConf (portal XDG/GNOME y Libadwaita/Nautilus)
-    let _ = std::process::Command::new("dconf")
-        .args(["write", "/org/gnome/desktop/interface/color-scheme", &format!("'{}'", target)])
-        .status();
-
-    // 2. GSettings estándar
+    // GSettings usa el backend keyfile aislado de Malus DE.
     let _ = std::process::Command::new("gsettings")
         .args(["set", "org.gnome.desktop.interface", "color-scheme", target])
         .status();
@@ -1145,7 +973,7 @@ pub fn sync_system_appearance(to_dark: bool) {
         .args(["set", "org.gnome.desktop.interface", "gtk-theme", "Adwaita"])
         .status();
 
-    // 3. Keyfile de sesión aislada de Malus DE (~/.config/malus-de/glib-2.0/settings/keyfile)
+    // Keyfile de sesión aislada de Malus DE (~/.config/malus-de/glib-2.0/settings/keyfile)
     let keyfile_path = std::path::PathBuf::from(&home).join(".config/malus-de/glib-2.0/settings/keyfile");
     if keyfile_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&keyfile_path) {
@@ -1173,13 +1001,16 @@ pub fn sync_system_appearance(to_dark: bool) {
         }
     }
 
-    // 4. Archivos settings.ini (GTK3 y GTK4)
+    // Archivos settings.ini (GTK3 y GTK4) de Malus DE
     let ini_paths = [
         format!("{}/.config/malus-de/gtk-3.0/settings.ini", home),
         format!("{}/.config/malus-de/gtk-4.0/settings.ini", home),
-        format!("{}/.config/gtk-3.0/settings.ini", home),
-        format!("{}/.config/gtk-4.0/settings.ini", home),
     ];
+    if let Err(error) = set_gtk_decoration_layout(&malus_config_dir) {
+        tracing::warn!("No se pudo actualizar la posición de botones GTK de Malus DE: {error}");
+    }
+    set_gsettings_button_layout();
+
     for path_str in &ini_paths {
         let p = std::path::PathBuf::from(path_str);
         if let Some(parent) = p.parent() {
@@ -1218,7 +1049,7 @@ pub fn sync_system_appearance(to_dark: bool) {
         }
     }
 
-    // 5. Generar y escribir CSS actualizado
+    // Generar y escribir CSS actualizado solo en la configuración de Malus DE.
     let light_css = get_malus_gtk_css(false);
     let dark_css = get_malus_gtk_css(true);
     let light_gtk3_css = get_malus_gtk3_css(false);
@@ -1227,7 +1058,6 @@ pub fn sync_system_appearance(to_dark: bool) {
     let active_gtk3 = if to_dark { &dark_gtk3_css } else { &light_gtk3_css };
 
     let gtk3_paths = [
-        format!("{}/.config/gtk-3.0/gtk.css", home),
         format!("{}/.config/malus-de/gtk-3.0/gtk.css", home),
     ];
     for p in &gtk3_paths {
@@ -1235,7 +1065,6 @@ pub fn sync_system_appearance(to_dark: bool) {
     }
 
     let gtk4_css_paths = [
-        format!("{}/.config/gtk-4.0/gtk.css", home),
         format!("{}/.config/malus-de/gtk-4.0/gtk.css", home),
     ];
     for p in &gtk4_css_paths {
@@ -1243,208 +1072,18 @@ pub fn sync_system_appearance(to_dark: bool) {
     }
 
     let gtk4_dark_paths = [
-        format!("{}/.config/gtk-4.0/gtk-dark.css", home),
         format!("{}/.config/malus-de/gtk-4.0/gtk-dark.css", home),
     ];
     for p in &gtk4_dark_paths {
         let _ = std::fs::write(p, &dark_css);
     }
 
-    // 6. Controles de navegadores
-    configure_browsers_traffic_lights(&home);
-
-    // 7. Notificar a GTK tocando los archivos CSS
+    // Notificar a GTK tocando los archivos CSS
     for p in gtk3_paths.iter().chain(gtk4_css_paths.iter()).chain(gtk4_dark_paths.iter()) {
         let _ = std::process::Command::new("touch").arg(p).status();
     }
 
-    // 8. Reiniciar demonios de portal para que recarguen hojas de estilo en memoria
-    let _ = std::process::Command::new("systemctl")
-        .args(["--user", "restart", "xdg-desktop-portal-gtk", "xdg-desktop-portal-gnome"])
-        .status();
 }
-
-/// Configura los controles de ventana estilo semáforo macOS para Firefox y Brave
-pub fn configure_browsers_traffic_lights(home: &str) {
-    let firefox_css = r#"/* Malus DE - Controles de ventana macOS (Traffic Lights) para Firefox */
-.titlebar-buttonbox-container {
-    -moz-box-ordinal-group: 0 !important;
-    order: -1 !important;
-}
-
-.titlebar-buttonbox {
-    margin-left: 8px !important;
-    margin-right: 8px !important;
-}
-
-.titlebar-button {
-    padding: 0 !important;
-    margin: auto 3.5px !important;
-    width: 13px !important;
-    height: 13px !important;
-    min-width: 13px !important;
-    min-height: 13px !important;
-    max-width: 13px !important;
-    max-height: 13px !important;
-    border-radius: 9999px !important;
-    appearance: none !important;
-    -moz-appearance: none !important;
-    background-color: transparent !important;
-    box-shadow: none !important;
-    border-style: solid !important;
-    border-width: 0.5px !important;
-    transition: background-color 100ms ease, border-color 100ms ease !important;
-}
-
-.titlebar-button > .toolbarbutton-icon {
-    display: none !important;
-}
-
-.titlebar-close {
-    background-color: #ff5f56 !important;
-    border-color: #e0443e !important;
-}
-.titlebar-close:hover {
-    background-color: #ff473d !important;
-    border-color: #c93630 !important;
-}
-.titlebar-close:active {
-    background-color: #bf3933 !important;
-    border-color: #a82f2a !important;
-}
-
-.titlebar-min {
-    background-color: #ffbd2e !important;
-    border-color: #dea123 !important;
-}
-.titlebar-min:hover {
-    background-color: #ffb114 !important;
-    border-color: #c48c18 !important;
-}
-.titlebar-min:active {
-    background-color: #bf8516 !important;
-    border-color: #9e6d0f !important;
-}
-
-.titlebar-max {
-    background-color: #27c93f !important;
-    border-color: #1aab29 !important;
-}
-.titlebar-max:hover {
-    background-color: #1fbd36 !important;
-    border-color: #159322 !important;
-}
-.titlebar-max:active {
-    background-color: #158a25 !important;
-    border-color: #0f6c1a !important;
-}
-
-:root[unfocused] .titlebar-button {
-    background-color: rgba(0, 0, 0, 0.12) !important;
-    border-color: rgba(0, 0, 0, 0.08) !important;
-}
-@media (prefers-color-scheme: dark) {
-    :root[unfocused] .titlebar-button {
-        background-color: rgba(255, 255, 255, 0.15) !important;
-        border-color: rgba(255, 255, 255, 0.1) !important;
-    }
-}
-"#;
-
-    // 1. Firefox: Configurar user.js y chrome/userChrome.css para todos los perfiles
-    let ff_bases = [
-        format!("{}/.config/mozilla/firefox", home),
-        format!("{}/.config/malus-de/mozilla/firefox", home),
-    ];
-    for base_str in &ff_bases {
-        let base = Path::new(base_str);
-        if let Ok(entries) = std::fs::read_dir(base) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    let is_profile = path.extension().is_some()
-                        || path.join("prefs.js").exists()
-                        || path.join("compatibility.ini").exists();
-                    if is_profile {
-                        // user.js
-                        let user_js = path.join("user.js");
-                        let pref_line = "user_pref(\"toolkit.legacyUserProfileCustomizations.stylesheets\", true);\n";
-                        let existing = std::fs::read_to_string(&user_js).unwrap_or_default();
-                        if !existing.contains("toolkit.legacyUserProfileCustomizations.stylesheets") {
-                            let _ = std::fs::write(&user_js, format!("{}\n{}", existing, pref_line));
-                        }
-                        // userChrome.css
-                        let chrome_dir = path.join("chrome");
-                        let _ = std::fs::create_dir_all(&chrome_dir);
-                        let _ = std::fs::write(chrome_dir.join("userChrome.css"), firefox_css);
-                    }
-                }
-            }
-        }
-    }
-
-    // 2. Brave: Forzar system_theme: 1 en las preferencias de Brave
-    let brave_prefs = [
-        format!("{}/.config/BraveSoftware/Brave-Origin/Default/Preferences", home),
-        format!("{}/.config/malus-de/BraveSoftware/Brave-Origin/Default/Preferences", home),
-    ];
-    for bp in &brave_prefs {
-        if let Ok(content) = std::fs::read_to_string(bp) {
-            if let Ok(mut json_val) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(obj) = json_val.as_object_mut() {
-                    let extensions = obj.entry("extensions").or_insert_with(|| serde_json::json!({}));
-                    if let Some(ext_obj) = extensions.as_object_mut() {
-                        let theme = ext_obj.entry("theme").or_insert_with(|| serde_json::json!({}));
-                        if let Some(theme_obj) = theme.as_object_mut() {
-                            theme_obj.insert("system_theme".to_string(), serde_json::json!(1));
-                            if let Ok(new_content) = serde_json::to_string_pretty(&json_val) {
-                                let _ = std::fs::write(bp, new_content);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // 3. Brave Launcher Wrapper con soporte GTK4
-    let bin_dir = Path::new(home).join(".local/bin");
-    let _ = std::fs::create_dir_all(&bin_dir);
-    let brave_wrapper = r#"#!/usr/bin/env bash
-# Malus DE - Brave Launcher con controles de ventana GTK4 nativos macOS
-REAL_BRAVE="/opt/brave.com/brave-origin/brave-origin"
-if [ ! -x "$REAL_BRAVE" ]; then
-    REAL_BRAVE="/usr/bin/brave-origin-stable"
-fi
-exec "$REAL_BRAVE" --gtk-version=4 "$@"
-"#;
-    for bname in &["brave", "brave-browser"] {
-        let bpath = bin_dir.join(bname);
-        let _ = std::fs::remove_file(&bpath);
-        if std::fs::write(&bpath, brave_wrapper).is_ok() {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&bpath, std::fs::Permissions::from_mode(0o755));
-            }
-        }
-    }
-
-    // 4. Desktop entry override para Brave
-    let apps_dir = Path::new(home).join(".local/share/applications");
-    let _ = std::fs::create_dir_all(&apps_dir);
-    let desktop_source = "/usr/share/applications/brave-origin.desktop";
-    let desktop_dest = apps_dir.join("brave-origin.desktop");
-    if let Ok(dcontent) = std::fs::read_to_string(desktop_source) {
-        let modified = dcontent.replace(
-            "Exec=/usr/bin/brave-origin-stable",
-            "Exec=/usr/bin/brave-origin-stable --gtk-version=4",
-        );
-        let _ = std::fs::write(desktop_dest, modified);
-    }
-}
-
-
 
 /// Configuración de una aplicación anclada en el Dock
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1875,7 +1514,7 @@ fn default_true() -> bool {
 }
 
 fn default_master_scale() -> f64 {
-    1.666667
+    1.0
 }
 
 fn default_brightness() -> f64 {
@@ -1919,6 +1558,8 @@ pub struct DisplayOutputConfig {
     pub width: u32,
     pub height: u32,
     pub refresh_rate: f64,
+    #[serde(default)]
+    pub modes: Vec<DisplayModeConfig>,
     pub x: i32,
     pub y: i32,
     pub scale: f64,
@@ -1926,6 +1567,13 @@ pub struct DisplayOutputConfig {
     /// Diagonal física real del panel en pulgadas (permite corregir datos genéricos de EDID)
     #[serde(default)]
     pub diagonal_inches: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct DisplayModeConfig {
+    pub width: u32,
+    pub height: u32,
+    pub refresh_rate: f64,
 }
 
 impl DisplayOutputConfig {
@@ -1976,41 +1624,14 @@ impl DisplayOutputConfig {
 
 impl Default for DisplaysConfig {
     fn default() -> Self {
-        let mut cfg = Self {
+        Self {
             linked_physical_1to1: true,
-            master_scale: 1.71,
+            master_scale: 1.0,
             brightness: 80.0,
             screen_corner_radius: 32.0,
             window_corner_radius: 32.0,
-            outputs: vec![
-                DisplayOutputConfig {
-                    connector: "DP-1".to_string(),
-                    name: "LG Ultra HD 24\"".to_string(),
-                    width: 3840,
-                    height: 2160,
-                    refresh_rate: 59.997,
-                    x: 0,
-                    y: 169,
-                    scale: 1.71,
-                    primary: true,
-                    diagonal_inches: Some(24.0),
-                },
-                DisplayOutputConfig {
-                    connector: "HDMI-A-1".to_string(),
-                    name: "Mi Monitor 27\"".to_string(),
-                    width: 3840,
-                    height: 2160,
-                    refresh_rate: 60.0,
-                    x: 2246,
-                    y: 0,
-                    scale: 1.5,
-                    primary: false,
-                    diagonal_inches: Some(27.0),
-                },
-            ],
-        };
-        cfg.apply_linked_preset(1);
-        cfg
+            outputs: Vec::new(),
+        }
     }
 }
 
@@ -2074,66 +1695,42 @@ impl DisplaysConfig {
     }
 
     /// Devuelve el preset enlazado activo (Some(1), Some(2), o None)
-    /// Preset 1: LG 24" a 171% (1.71) y Mi 27" a 150% (1.50)
-    /// Preset 2: LG 24" a 152.5% (1.525) y Mi 27" a 133.33% (1.333333)
     pub fn current_linked_preset(&self) -> Option<u8> {
-        if !self.linked_physical_1to1 || self.outputs.len() < 2 {
+        if !self.linked_physical_1to1 || self.outputs.is_empty() {
             return None;
         }
-        let o24 = self.outputs.iter().find(|o| {
-            let c = o.connector.to_lowercase();
-            let n = o.name.to_lowercase();
-            c.contains("dp-1") || n.contains("24") || n.contains("lg")
-        })?;
-        let o27 = self.outputs.iter().find(|o| {
-            let c = o.connector.to_lowercase();
-            let n = o.name.to_lowercase();
-            c.contains("hdmi") || n.contains("27") || n.contains("mi")
-        })?;
-
-        if (o24.scale - 1.71).abs() < 0.015 && (o27.scale - 1.50).abs() < 0.015 {
+        let primary_scale = self.outputs.iter().find(|output| output.primary)?.scale;
+        if (primary_scale - 1.5).abs() < 0.015 {
             Some(1)
-        } else if (o24.scale - 1.525).abs() < 0.015 && (o27.scale - 1.333333).abs() < 0.015 {
+        } else if (primary_scale - 1.333333).abs() < 0.015 {
             Some(2)
         } else {
             None
         }
     }
 
-    /// Aplica un preset específico de resolución enlazada:
-    /// Preset 1: LG 24" a 171% (1.71) y Mi 27" a 150% (1.50) [Recomendado / Texto Nítido]
-    /// Preset 2: LG 24" a 152.5% (1.525) y Mi 27" a 133.33% (1.333333) [Más Espacio de Trabajo]
+    /// Aplica un preset de escala enlazada a partir de la pantalla principal.
     pub fn apply_linked_preset(&mut self, preset: u8) {
+        let scale = match preset {
+            1 => 1.5,
+            2 => 1.333333,
+            _ => return,
+        };
         self.linked_physical_1to1 = true;
-        for o in &mut self.outputs {
-            let n = o.name.to_lowercase();
-            let c = o.connector.to_lowercase();
-            let is_24 = c.contains("dp-1") || n.contains("24") || n.contains("lg");
-            let is_27 = c.contains("hdmi") || n.contains("27") || n.contains("mi");
-
-            match preset {
-                1 => {
-                    if is_24 {
-                        o.scale = 1.71;
-                    } else if is_27 {
-                        o.scale = 1.50;
-                    }
-                }
-                2 => {
-                    if is_24 {
-                        o.scale = 1.525;
-                    } else if is_27 {
-                        o.scale = 1.333333;
-                    }
-                }
-                _ => {}
-            }
+        if self.outputs.is_empty() {
+            self.master_scale = scale;
+            return;
         }
-
-        if let Some(p) = self.outputs.iter().find(|o| o.primary) {
-            self.master_scale = p.scale;
+        let primary_idx = self.outputs.iter().position(|output| output.primary).unwrap_or(0);
+        let primary_ppi = self.outputs[primary_idx].ppi();
+        self.master_scale = scale;
+        for (idx, output) in self.outputs.iter_mut().enumerate() {
+            output.scale = if idx == primary_idx {
+                scale
+            } else {
+                (scale * (output.ppi() / primary_ppi)).clamp(0.75, 3.0)
+            };
         }
-
         self.recalculate_layout();
     }
 
@@ -2148,15 +1745,6 @@ impl DisplaysConfig {
         // Si ya coincide con un preset, mantenerlo exacto
         if let Some(preset) = self.current_linked_preset() {
             self.apply_linked_preset(preset);
-            return;
-        }
-
-        if (self.master_scale - 1.71).abs() < 0.03 {
-            self.apply_linked_preset(1);
-            return;
-        }
-        if (self.master_scale - 1.525).abs() < 0.03 {
-            self.apply_linked_preset(2);
             return;
         }
 
@@ -2203,20 +1791,6 @@ impl DisplaysConfig {
         self.outputs[output_idx].scale = clamped;
 
         if self.linked_physical_1to1 {
-            let o = &self.outputs[output_idx];
-            let c = o.connector.to_lowercase();
-            let n = o.name.to_lowercase();
-            let is_24 = c.contains("dp-1") || n.contains("24") || n.contains("lg");
-            let is_27 = c.contains("hdmi") || n.contains("27") || n.contains("mi");
-
-            if (is_24 && (clamped - 1.71).abs() < 0.015) || (is_27 && (clamped - 1.50).abs() < 0.015) {
-                self.apply_linked_preset(1);
-                return;
-            } else if (is_24 && (clamped - 1.525).abs() < 0.015) || (is_27 && (clamped - 1.333333).abs() < 0.015) {
-                self.apply_linked_preset(2);
-                return;
-            }
-
             let ref_ppi = self.outputs[output_idx].ppi();
             for i in 0..self.outputs.len() {
                 if i != output_idx {
@@ -2378,6 +1952,11 @@ impl DisplaysConfig {
                 width,
                 height,
                 refresh_rate: rate,
+                modes: vec![DisplayModeConfig {
+                    width,
+                    height,
+                    refresh_rate: rate,
+                }],
                 x,
                 y,
                 scale,
@@ -2408,8 +1987,6 @@ impl DisplaysConfig {
         self.outputs.iter().find(|o| {
             let o_norm = o.connector.trim_start_matches("card1-").trim_start_matches("card0-");
             o_norm.eq_ignore_ascii_case(norm)
-                || (norm.starts_with("HDMI") && o_norm.starts_with("HDMI"))
-                || (norm.starts_with("DP") && o_norm.starts_with("DP"))
         })
     }
 }
@@ -2425,6 +2002,54 @@ fn extract_tag_value(xml_snippet: &str, tag: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_gtk_decoration_layout_is_set_left_without_dropping_settings() {
+        let config_dir = std::env::temp_dir().join(format!(
+            "malus-de-gtk-settings-test-{}",
+            std::process::id()
+        ));
+        let gtk3_dir = config_dir.join("gtk-3.0");
+        let gtk4_dir = config_dir.join("gtk-4.0");
+        std::fs::create_dir_all(&gtk3_dir).unwrap();
+        std::fs::create_dir_all(&gtk4_dir).unwrap();
+        std::fs::write(
+            gtk3_dir.join("settings.ini"),
+            "[Settings]\ngtk-decoration-layout=:close\ncustom-option=true\n",
+        )
+        .unwrap();
+        std::fs::write(gtk4_dir.join("settings.ini"), "[Settings]\ncustom-option=true\n").unwrap();
+
+        set_gtk_decoration_layout(&config_dir).unwrap();
+
+        for version in ["gtk-3.0", "gtk-4.0"] {
+            let settings = std::fs::read_to_string(config_dir.join(version).join("settings.ini")).unwrap();
+            assert!(settings.contains("gtk-decoration-layout=close,minimize,maximize:"));
+            assert!(settings.contains("custom-option=true"));
+        }
+        std::fs::remove_dir_all(config_dir).unwrap();
+    }
+
+    #[test]
+    fn test_gtk4_transparency_is_scoped_to_nautilus_and_popovers() {
+        let css = get_malus_gtk_css(false);
+
+        assert!(css.contains("window.view.background"));
+        assert!(css.contains("window.view overlay-split-view > .sidebar-pane"));
+        assert!(css.contains("window.view .sidebar-pane *"));
+        assert!(css.contains("window.view popover > contents"));
+        assert!(css.contains("background-color: alpha(@window_bg_color, 0.84);"));
+        assert!(!css.contains("\nwindow.background {\n"));
+        assert!(!css.contains("\n.sidebar-pane,\n"));
+    }
+
+    #[test]
+    fn test_gtk3_sidebar_background_is_opaque() {
+        let css = get_malus_gtk3_css(false);
+
+        assert!(css.contains("@define-color sidebar_bg_color rgb(246, 246, 248);"));
+        assert!(css.contains("placessidebar,\nplacessidebar.view {\n    background-color: rgb(246, 246, 248);"));
+    }
 
     #[test]
     fn test_dock_config_default_serialization() {
@@ -2525,6 +2150,34 @@ mod tests {
     #[test]
     fn test_displays_config_1to1_and_arrangement() {
         let mut cfg = DisplaysConfig::default();
+        cfg.outputs = vec![
+            DisplayOutputConfig {
+                connector: "DP-1".to_string(),
+                name: "Monitor 27".to_string(),
+                width: 3840,
+                height: 2160,
+                refresh_rate: 60.0,
+                modes: Vec::new(),
+                x: 0,
+                y: 0,
+                scale: 1.5,
+                primary: true,
+                diagonal_inches: Some(27.0),
+            },
+            DisplayOutputConfig {
+                connector: "HDMI-A-1".to_string(),
+                name: "Monitor 24".to_string(),
+                width: 3840,
+                height: 2160,
+                refresh_rate: 60.0,
+                modes: Vec::new(),
+                x: 2560,
+                y: 0,
+                scale: 1.5,
+                primary: false,
+                diagonal_inches: Some(24.0),
+            },
+        ];
         cfg.outputs[0].diagonal_inches = Some(27.0);
         cfg.outputs[1].diagonal_inches = Some(24.0);
         assert!(cfg.linked_physical_1to1);
@@ -2558,9 +2211,46 @@ mod tests {
     #[test]
     fn test_displays_config_screen_corner_radius_default() {
         let cfg = DisplaysConfig::default();
+        assert!(cfg.outputs.is_empty());
         assert_eq!(cfg.screen_corner_radius, 32.0);
         assert_eq!(cfg.window_corner_radius, 32.0);
     }
+
+    #[test]
+    fn test_display_connector_matching_is_exact() {
+        let mut cfg = DisplaysConfig::default();
+        cfg.outputs.push(DisplayOutputConfig {
+            connector: "DP-1".to_string(),
+            name: "DisplayPort".to_string(),
+            width: 1920,
+            height: 1080,
+            refresh_rate: 60.0,
+            modes: Vec::new(),
+            x: 0,
+            y: 0,
+            scale: 1.0,
+            primary: true,
+            diagonal_inches: None,
+        });
+        assert!(cfg.find_for_connector("card0-DP-1").is_some());
+        assert!(cfg.find_for_connector("DP-2").is_none());
+    }
+
+    #[test]
+    fn test_legacy_display_config_without_modes_still_loads() {
+        let legacy = r#"
+connector = "DP-1"
+name = "DisplayPort"
+width = 3840
+height = 2160
+refresh_rate = 60.0
+x = 0
+y = 0
+scale = 2.0
+primary = true
+"#;
+        let output: DisplayOutputConfig = toml::from_str(legacy).unwrap();
+        assert!(output.modes.is_empty());
+        assert_eq!(output.width, 3840);
+    }
 }
-
-

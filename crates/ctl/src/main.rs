@@ -99,7 +99,7 @@ enum DisplaysAction {
         /// 'enable' o 'disable'
         mode: String,
     },
-    /// Aplica un ajuste predefinido de enlace de resolución (1 = LG 24" 171% y Mi 27" 150%, 2 = LG 24" 152.5% y Mi 27" 133.33%)
+    /// Aplica un ajuste predefinido de escala enlazada (1 = equilibrado, 2 = más espacio)
     LinkPreset {
         /// Número de ajuste (1 o 2)
         preset: u8,
@@ -108,9 +108,9 @@ enum DisplaysAction {
     SetScale {
         scale: f64,
     },
-    /// Establece la escala de un monitor específico por índice (0 = DP-1, 1 = HDMI-A-1)
+    /// Establece la escala de un monitor específico por índice
     SetOutputScale {
-        /// Índice del monitor (0 o 1)
+        /// Índice del monitor según el orden de `malus-de-ctl displays status`
         index: usize,
         /// Factor de escala (ej. 1.25, 1.5, 1.6875, 2.0)
         scale: f64,
@@ -121,7 +121,7 @@ enum DisplaysAction {
     Align {
         mode: String,
     },
-    /// Define la diagonal real en pulgadas para una pantalla (ej. 'DP-1 27.0' o 'HDMI-A-1 24.0')
+    /// Define la diagonal real en pulgadas para una pantalla (ej. 'DP-1 27.0')
     SetDiagonal {
         connector: String,
         inches: f64,
@@ -342,8 +342,8 @@ fn main() -> Result<()> {
                 DisplaysAction::LinkPreset { preset } => {
                     if preset != 1 && preset != 2 {
                         eprintln!("Preset inválido ({}). Solo están disponibles los ajustes 1 y 2:", preset);
-                        eprintln!("  1: LG 24\" a 171% (1.71) y Mi 27\" a 150% (1.50)");
-                        eprintln!("  2: LG 24\" a 152.5% (1.525) y Mi 27\" a 133.33% (1.333333)");
+                        eprintln!("  1: Escala base equilibrada (150% en la pantalla principal)");
+                        eprintln!("  2: Más espacio de trabajo (133% en la pantalla principal)");
                         return Ok(());
                     }
                     cfg.apply_linked_preset(preset);

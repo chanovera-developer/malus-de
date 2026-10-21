@@ -1,12 +1,12 @@
 use clap::Parser;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, CssProvider,
+    Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, CssProvider, DropDown,
     DrawingArea, Entry, FileChooserAction, FileChooserNative, FileFilter, FlowBox, GestureClick,
     GestureDrag, Grid, Label, Orientation, PackType, Picture, PolicyType, Scale, ScrolledWindow,
     SearchEntry, Stack, StackTransitionType, Switch, WindowControls, WindowHandle,
 };
-use malus_de_common::config::{DisplaysConfig, DockConfig, InputConfig};
+use malus_de_common::config::{DisplayModeConfig, DisplaysConfig, DockConfig, InputConfig};
 use malus_de_common::ipc::{IpcClient, IpcMessage};
 use malus_de_common::logging::init_logging;
 use std::cell::RefCell;
@@ -97,6 +97,15 @@ fn load_macos_settings_css() {
             color: @window_fg_color;
             border-radius: 0px;
             box-shadow: none;
+        }
+
+        window.macos-settings-window popover > contents,
+        window.macos-settings-window popover.menu > contents,
+        window.macos-settings-window popover.background > contents,
+        window.macos-settings-window menu,
+        window.macos-settings-window .menu {
+            background-color: alpha(@window_bg_color, 0.84);
+            border-color: alpha(@borders, 0.75);
         }
 
         overlay-split-view {
@@ -1107,7 +1116,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         .build();
 
     let truesize_sub = Label::builder()
-        .label("Iguala matemáticamente el tamaño físico en milímetros entre el monitor de 27\" (163.18 PPI) y el de 24\" (183.58 PPI · factor 1.125x). Al arrastrar una ventana entre pantallas, conserva exactamente su tamaño real.")
+        .label("Sincroniza la escala de las pantallas conectadas según su densidad de píxeles para conservar un tamaño físico coherente al mover ventanas entre monitores.")
         .css_classes(["card-section-sub"])
         .wrap(true)
         .xalign(0.0)
@@ -1126,7 +1135,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     truesize_top_row.append(&truesize_text_col);
     truesize_top_row.append(&truesize_toggle_btn);
 
-    // Fila de Ajustes Predefinidos de Enlace 1:1 solicitados por el usuario
+    // Presets de escala enlazada
     let truesize_presets_row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(10)
@@ -1146,12 +1155,12 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         .margin_end(10)
         .build();
     let ts_p1_title = Label::builder()
-        .label("Ajuste 1: LG 24\" a 171% · Mi 27\" a 150%")
+        .label("Ajuste 1 · Equilibrado")
         .css_classes(["card-section-title"])
         .xalign(0.5)
         .build();
     let ts_p1_sub = Label::builder()
-        .label("Texto Nítido · Recomendado (2246×1263 / 2560×1440)")
+        .label("Escala base de 150% en la pantalla principal")
         .css_classes(["card-section-sub"])
         .xalign(0.5)
         .build();
@@ -1172,12 +1181,12 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         .margin_end(10)
         .build();
     let ts_p2_title = Label::builder()
-        .label("Ajuste 2: LG 24\" a 152.5% · Mi 27\" a 133.33%")
+        .label("Ajuste 2 · Más espacio")
         .css_classes(["card-section-title"])
         .xalign(0.5)
         .build();
     let ts_p2_sub = Label::builder()
-        .label("Mayor Espacio de Trabajo (2518×1416 / 2880×1620)")
+        .label("Escala base de 133% en la pantalla principal")
         .css_classes(["card-section-sub"])
         .xalign(0.5)
         .build();
@@ -1200,43 +1209,58 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     pane.append(&truesize_card);
 
     // ------------------------------------------------------------------------
-    // SECCIÓN C: Tarjetas de Escalado estilo macOS ("Texto más grande" <-> "Más espacio")
-    //            para Monitor 1 (DP-1: LG 24") y Monitor 2 (HDMI-A-1: Mi 27")
+    // SECCIÓN C: Tarjetas dinámicas para las pantallas detectadas por DRM
     // ------------------------------------------------------------------------
     let monitors_grid = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
+        .orientation(Orientation::Vertical)
         .spacing(14)
-        .homogeneous(true)
         .build();
-
-    let (mon0_card, mon0_widgets) = create_macos_monitor_scaling_card(
-        0,
-        "DP-1 · LG Ultra HD 24\"",
-        "3840 × 2160 @ 60 Hz · 24.0\" · 183.58 PPI",
-        &[
-            ("1920 × 1080", "200%", 2.0),
-            ("2246 × 1263", "171% (1:1)", 1.71),
-            ("2518 × 1416", "152.5% (1:1)", 1.525),
-            ("2560 × 1440", "150%", 1.5),
-            ("3840 × 2160", "100%", 1.0),
-        ],
-    );
-
-    let (mon1_card, mon1_widgets) = create_macos_monitor_scaling_card(
-        1,
-        "HDMI-A-1 · Mi Monitor 27\"",
-        "3840 × 2160 @ 60 Hz · 27.0\" · 163.18 PPI",
-        &[
-            ("1920 × 1080", "200%", 2.0),
-            ("2304 × 1296", "166.7%", 1.666667),
-            ("2560 × 1440", "150% (1:1)", 1.5),
-            ("2880 × 1620", "133.33% (1:1)", 1.333333),
-            ("3840 × 2160", "100%", 1.0),
-        ],
-    );
-
-    monitors_grid.append(&mon0_card);
-    monitors_grid.append(&mon1_card);
+    let initial_displays_cfg = DisplaysConfig::load();
+    let mut monitor_widgets = Vec::with_capacity(initial_displays_cfg.outputs.len());
+    if initial_displays_cfg.outputs.is_empty() {
+        monitors_grid.append(
+            &Label::builder()
+                .label("No hay pantallas activas detectadas. Conecta una pantalla y vuelve a abrir Ajustes.")
+                .css_classes(["card-section-sub"])
+                .xalign(0.0)
+                .build(),
+        );
+    }
+    for output in &initial_displays_cfg.outputs {
+        let title = format!("{} · {}", output.connector, output.name);
+        let diagonal = output
+            .diagonal_inches
+            .map(|inches| format!("{inches:.1}\""))
+            .unwrap_or_else(|| "tamaño desconocido".to_string());
+        let specs = format!(
+            "{} × {} @ {:.2} Hz · {} · {:.1} PPI",
+            output.width,
+            output.height,
+            output.refresh_rate,
+            diagonal,
+            output.ppi()
+        );
+        let presets: Vec<(String, String, f64)> = [2.0, 1.75, 1.5, 1.25, 1.0]
+            .iter()
+            .map(|scale| {
+                let width = (output.width as f64 / scale).round() as i32;
+                let height = (output.height as f64 / scale).round() as i32;
+                (
+                    format!("{width} × {height}"),
+                    format!("{:.0}%", scale * 100.0),
+                    *scale,
+                )
+            })
+            .collect();
+        let (card, widgets) = create_macos_monitor_scaling_card(
+            &title,
+            &specs,
+            &presets,
+            output,
+        );
+        monitors_grid.append(&card);
+        monitor_widgets.push(widgets);
+    }
     pane.append(&monitors_grid);
 
     // ------------------------------------------------------------------------
@@ -1513,12 +1537,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
             // Etiquetas dentro del monitor
             cr.set_source_rgb(1.0, 1.0, 1.0);
             cr.set_font_size(12.5);
-            let title_str = format!(
-                "{} {} ({})",
-                idx + 1,
-                if o.effective_diagonal() >= 26.5 { "LG 27\"" } else { "Mi 24\"" },
-                o.connector
-            );
+            let title_str = format!("{} {} ({})", idx + 1, o.name, o.connector);
             cr.move_to(rx + 12.0, ry + 28.0);
             let _ = cr.show_text(&title_str);
 
@@ -1551,8 +1570,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     let ts_p1_ref = ts_preset1_btn.clone();
     let ts_p2_ref = ts_preset2_btn.clone();
     let ts_math_ref = truesize_math_lbl.clone();
-    let m0_w = mon0_widgets.clone();
-    let m1_w = mon1_widgets.clone();
+    let monitor_widgets_ref = monitor_widgets.clone();
     let rad_lbl_ref = radius_val_lbl.clone();
     let rad_sld_ref = radius_slider.clone();
     let win_rad_lbl_ref = win_radius_val_lbl.clone();
@@ -1589,6 +1607,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
             ts_btn_ref.remove_css_class("macos-action-btn-primary");
             ts_btn_ref.add_css_class("macos-action-btn");
         }
+        ts_card_ref.set_visible(cfg.outputs.len() > 1);
 
         // Actualizar estado de los botones de Ajuste 1 y Ajuste 2
         let curr_preset = cfg.current_linked_preset();
@@ -1625,13 +1644,10 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
             ));
         }
 
-        // Actualizar Tarjeta Monitor 0
-        if let Some(o0) = cfg.outputs.first() {
-            update_monitor_card_ui(&m0_w, o0);
-        }
-        // Actualizar Tarjeta Monitor 1
-        if let Some(o1) = cfg.outputs.get(1) {
-            update_monitor_card_ui(&m1_w, o1);
+        for (idx, widgets) in monitor_widgets_ref.iter().enumerate() {
+            if let Some(output) = cfg.outputs.get(idx) {
+                update_monitor_card_ui(widgets, output);
+            }
         }
 
         // Actualizar Curvatura de Esquinas (Border-Radius Pantallas)
@@ -1645,6 +1661,10 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         da_ref.queue_draw();
         *sync_lock.borrow_mut() = false;
     });
+
+    for (idx, widgets) in monitor_widgets.iter().enumerate() {
+        wire_monitor_card_events(idx, widgets, &is_syncing, &refresh_all);
+    }
 
     refresh_all();
 
@@ -1885,17 +1905,16 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         save_and_reload(cfg, &ref_ts);
     });
 
-    // Conectar controles de Monitor 0 y Monitor 1
-    wire_monitor_card_events(0, &mon0_widgets, &is_syncing, &refresh_all);
-    wire_monitor_card_events(1, &mon1_widgets, &is_syncing, &refresh_all);
-
     (scrolled, refresh_all)
 }
 
 #[derive(Clone)]
 struct MonitorCardWidgets {
     primary_btn: Button,
+    details_lbl: Label,
     active_info_lbl: Label,
+    mode_dropdown: DropDown,
+    modes: Vec<DisplayModeConfig>,
     scale_slider: Scale,
     scale_entry: Entry,
     apply_btn: Button,
@@ -1903,10 +1922,10 @@ struct MonitorCardWidgets {
 }
 
 fn create_macos_monitor_scaling_card(
-    _output_idx: usize,
     title_str: &str,
     hw_specs_str: &str,
-    presets: &[(&str, &str, f64)],
+    presets: &[(String, String, f64)],
+    output: &malus_de_common::config::DisplayOutputConfig,
 ) -> (GtkBox, MonitorCardWidgets) {
     let card = GtkBox::builder()
         .orientation(Orientation::Vertical)
@@ -1950,6 +1969,50 @@ fn create_macos_monitor_scaling_card(
     top_row.append(&primary_btn);
     card.append(&top_row);
 
+    let mode_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .build();
+    let mode_label = Label::builder()
+        .label("Resolución disponible:")
+        .css_classes(["card-section-sub"])
+        .xalign(0.0)
+        .build();
+    let modes = if output.modes.is_empty() {
+        vec![DisplayModeConfig {
+            width: output.width,
+            height: output.height,
+            refresh_rate: output.refresh_rate,
+        }]
+    } else {
+        output.modes.clone()
+    };
+    let mode_labels: Vec<String> = modes
+        .iter()
+        .map(|mode| {
+            format!(
+                "{} × {} @ {:.2} Hz",
+                mode.width, mode.height, mode.refresh_rate
+            )
+        })
+        .collect();
+    let mode_label_refs: Vec<&str> = mode_labels.iter().map(String::as_str).collect();
+    let mode_dropdown = DropDown::from_strings(&mode_label_refs);
+    mode_dropdown.set_hexpand(true);
+    let mut selected_mode_idx = 0;
+    for (idx, mode) in modes.iter().enumerate() {
+        if mode.width == output.width
+            && mode.height == output.height
+            && (mode.refresh_rate - output.refresh_rate).abs() < 1.0
+        {
+            selected_mode_idx = idx;
+        }
+    }
+    mode_dropdown.set_selected(selected_mode_idx as u32);
+    mode_row.append(&mode_label);
+    mode_row.append(&mode_dropdown);
+    card.append(&mode_row);
+
     // Miniaturas estilo macOS: "Texto más grande" <-> "Más espacio"
     let scale_header_row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
@@ -1976,7 +2039,7 @@ fn create_macos_monitor_scaling_card(
         .build();
 
     let mut preset_buttons = Vec::new();
-    for &(res_label, pct_label, scale_val) in presets {
+    for (res_label, pct_label, scale_val) in presets {
         let btn = Button::builder()
             .css_classes(["res-thumb-btn"])
             .has_frame(false)
@@ -2003,7 +2066,7 @@ fn create_macos_monitor_scaling_card(
         col.append(&pct);
         btn.set_child(Some(&col));
         thumbs_row.append(&btn);
-        preset_buttons.push((scale_val, btn));
+        preset_buttons.push((*scale_val, btn));
     }
     card.append(&thumbs_row);
 
@@ -2059,7 +2122,10 @@ fn create_macos_monitor_scaling_card(
         card,
         MonitorCardWidgets {
             primary_btn,
+            details_lbl: specs_lbl,
             active_info_lbl,
+            mode_dropdown,
+            modes,
             scale_slider,
             scale_entry,
             apply_btn,
@@ -2073,12 +2139,27 @@ fn update_monitor_card_ui(
     o: &malus_de_common::config::DisplayOutputConfig,
 ) {
     let (lw, lh) = o.logical_size();
+    let diagonal = o
+        .diagonal_inches
+        .map(|inches| format!("{inches:.1}\""))
+        .unwrap_or_else(|| "tamaño desconocido".to_string());
+    w.details_lbl.set_label(&format!(
+        "{} × {} @ {:.2} Hz · {} · {:.1} PPI",
+        o.width, o.height, o.refresh_rate, diagonal, o.ppi()
+    ));
     w.active_info_lbl
         .set_label(&format!("{:.1}% · {} × {}", o.scale * 100.0, lw, lh));
     w.scale_slider
         .set_value((o.scale * 100.0).clamp(100.0, 250.0));
     w.scale_entry
         .set_text(&format!("{:.2}%", o.scale * 100.0));
+    let selected_mode = w.modes.iter().position(|mode| {
+        mode.width == o.width
+            && mode.height == o.height
+            && (mode.refresh_rate - o.refresh_rate).abs() < 1.0
+    });
+    w.mode_dropdown
+        .set_selected(selected_mode.map(|idx| idx as u32).unwrap_or(u32::MAX));
 
     if o.primary {
         w.primary_btn.set_label("★ Pantalla Principal");
@@ -2105,6 +2186,49 @@ fn wire_monitor_card_events(
     is_syncing: &Rc<RefCell<bool>>,
     refresh_all: &Rc<dyn Fn()>,
 ) {
+    let modes = w.modes.clone();
+    let sync_mode = is_syncing.clone();
+    let ref_mode = refresh_all.clone();
+    w.mode_dropdown.connect_selected_notify(move |dropdown| {
+        if *sync_mode.borrow() {
+            return;
+        }
+        let Some(mode) = modes.get(dropdown.selected() as usize).copied() else {
+            return;
+        };
+
+        let mut cfg = DisplaysConfig::load();
+        let Some(output) = cfg.outputs.get_mut(output_idx) else {
+            tracing::error!("No existe la pantalla de índice {} en la configuración", output_idx);
+            return;
+        };
+        if output.width == mode.width
+            && output.height == mode.height
+            && (output.refresh_rate - mode.refresh_rate).abs() < 1.0
+        {
+            return;
+        }
+        let old_logical_width = output.width as f64 / output.scale.max(0.5);
+        output.width = mode.width;
+        output.height = mode.height;
+        output.refresh_rate = mode.refresh_rate;
+        output.scale = (mode.width as f64 / old_logical_width).clamp(0.5, 3.0);
+        if output.primary {
+            cfg.master_scale = output.scale;
+        }
+        cfg.linked_physical_1to1 = false;
+        cfg.recalculate_layout();
+        if let Err(err) = cfg.save() {
+            tracing::error!("No se pudo guardar la resolución de la pantalla: {}", err);
+            return;
+        }
+        if let Err(err) = IpcClient::send_command(IpcMessage::ReloadDisplaysConfig) {
+            tracing::error!("No se pudo aplicar la nueva resolución en el compositor: {}", err);
+            return;
+        }
+        ref_mode();
+    });
+
     // Botón Hacer Principal
     let ref_prim = refresh_all.clone();
     w.primary_btn.connect_clicked(move |_| {
@@ -2459,17 +2583,6 @@ fn get_current_cursor_config() -> (String, u32) {
 }
 
 fn is_dark_mode_active() -> bool {
-    if let Ok(out) = Command::new("dconf")
-        .args(["read", "/org/gnome/desktop/interface/color-scheme"])
-        .output()
-    {
-        let s = String::from_utf8_lossy(&out.stdout);
-        if s.contains("prefer-dark") {
-            return true;
-        } else if s.contains("prefer-light") {
-            return false;
-        }
-    }
     if let Ok(out) = Command::new("gsettings")
         .args(["get", "org.gnome.desktop.interface", "color-scheme"])
         .output()
@@ -2513,7 +2626,7 @@ fn set_gtk_theme(theme_name: &str) {
 
 fn set_system_appearance_mode(to_dark: bool) {
     let target = if to_dark { "prefer-dark" } else { "prefer-light" };
-    tracing::info!("🎨 Cambiando modo de apariencia del sistema: {}", target);
+    tracing::info!("🎨 Cambiando modo de apariencia de Malus DE: {}", target);
 
     malus_de_common::config::sync_system_appearance(to_dark);
 
@@ -2540,19 +2653,13 @@ fn set_cursor_theme_and_size(theme: &str, size: u32) {
         .status();
 
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let default_theme_path = PathBuf::from(&home).join(".icons/default/index.theme");
-    let content = format!("[Icon Theme]\nName=Default\nComment=Default Cursor Theme\nInherits={}\n", theme);
-    let _ = std::fs::write(default_theme_path, content);
-
     let dark_num = if is_dark_mode_active() { "1" } else { "0" };
     let cur_gtk_theme = get_current_gtk_theme();
 
-    // Actualizar settings.ini en malus-de y general preservando el tema GTK
+    // Actualizar los settings.ini aislados de GTK3/GTK4 preservando el tema GTK.
     for ini_path in [
         format!("{}/.config/malus-de/gtk-3.0/settings.ini", home),
         format!("{}/.config/malus-de/gtk-4.0/settings.ini", home),
-        format!("{}/.config/gtk-3.0/settings.ini", home),
-        format!("{}/.config/gtk-4.0/settings.ini", home),
     ] {
         let p = PathBuf::from(ini_path);
         if let Some(parent) = p.parent() {
@@ -2581,10 +2688,6 @@ fn set_cursor_theme_and_size(theme: &str, size: u32) {
             let _ = std::fs::write(&keyfile_path, new_lines.join("\n") + "\n");
         }
     }
-
-    let _ = Command::new("dbus-update-activation-environment")
-        .args(["--systemd", &format!("XCURSOR_THEME={}", theme), &format!("XCURSOR_SIZE={}", size)])
-        .status();
 }
 
 fn create_appearance_pane(
@@ -2717,7 +2820,7 @@ fn create_appearance_pane(
         .build();
 
     let theme_desc = Label::builder()
-        .label("Selecciona el tema de controles, botones y estilo de ventanas para todas las aplicaciones GTK3, GTK4 y Libadwaita del entorno.")
+        .label("Selecciona el tema de controles, botones y estilo de ventanas para las aplicaciones GTK3, GTK4 y Libadwaita de la sesión Malus DE.")
         .css_classes(["card-section-sub"])
         .wrap(true)
         .xalign(0.0)
@@ -2737,7 +2840,7 @@ fn create_appearance_pane(
     let gtk_theme_buttons: Rc<RefCell<Vec<(String, Button)>>> = Rc::new(RefCell::new(Vec::new()));
 
     let gtk_status_hint_lbl = Label::builder()
-        .label("✓ Tema aplicado en vivo para todas las aplicaciones.")
+        .label("✓ Tema aplicado en vivo para las aplicaciones de Malus DE.")
         .css_classes(["card-section-sub"])
         .xalign(0.0)
         .build();
@@ -3125,7 +3228,7 @@ fn create_appearance_pane(
 
         btn.connect_clicked(move |_| {
             set_gtk_theme(&target_theme);
-            hint_lbl_c.set_label(&format!("✓ Tema '{}' aplicado en vivo para todas las aplicaciones.", target_theme));
+            hint_lbl_c.set_label(&format!("✓ Tema '{}' aplicado en vivo para las aplicaciones de Malus DE.", target_theme));
             ref_fn();
         });
     }
@@ -3713,7 +3816,7 @@ fn create_about_pane() -> ScrolledWindow {
         "🍎 Malus Desktop Environment v1.1.0",
         "🖥 Compositor: Smithay 0.7 (Wayland Multi-CRTC DRM/KMS)",
         "🎮 Gráficos: AMD Radeon Vega 7 (OpenGL ES 3.2 / GBM)",
-        "📐 Monitores: LG Ultra HD 24\" (DP-1, 183.6 PPI) + Mi Monitor 27\" (HDMI-A-1, 163.2 PPI)",
+        "📐 Pantallas: detección DRM/KMS de conectores, modos de resolución y escalado fraccionario",
         "⌨️ Teclado predeterminado: Español Latinoamericano (XKB 'latam')",
     ] {
         card.append(

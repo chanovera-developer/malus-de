@@ -1587,6 +1587,7 @@ dependencies = [
  "glib",
  "malus-de-common",
  "rustix 0.38.44",
+ "serde_json",
  "smithay",
  "tracing",
  "wayland-protocols",

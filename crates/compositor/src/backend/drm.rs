@@ -53,7 +53,7 @@ use smithay::{
 };
 use tracing::{error, info, warn};
 
-use malus_de_common::config::DisplaysConfig;
+use malus_de_common::config::{DisplayModeConfig, DisplayOutputConfig, DisplaysConfig};
 use malus_de_common::ipc::IpcMessage;
 use crate::backend::winit::{send_frames_surface_tree, toggle_spotlight};
 use crate::state::{ClientState, MalusState};
@@ -62,6 +62,7 @@ struct DrmOutputSurface {
     output: Output,
     surface: GbmBufferedSurface<GbmAllocator<DrmDeviceFd>, ()>,
     crtc: crtc::Handle,
+    modes: Vec<smithay::reexports::drm::control::Mode>,
     size: Size<i32, Physical>,
     damage: Rectangle<i32, Physical>,
 }
@@ -461,7 +462,7 @@ pub fn run_drm() -> Result<()> {
         }
     }
 
-    let displays_cfg = DisplaysConfig::load();
+    let mut displays_cfg = DisplaysConfig::load();
     let mut used_crtcs = HashSet::new();
     let mut surfaces = Vec::new();
 
@@ -488,8 +489,99 @@ pub fn run_drm() -> Result<()> {
         connected_list.push((conn_handle, conn_info, conn_name, is_primary));
     }
 
+    // Mantener solo las salidas conectadas y refrescar sus modos a partir de DRM.
+    let mut detected_outputs = Vec::with_capacity(connected_list.len());
+    let mut detected_x = 0;
+    for (idx, (_, conn_info, conn_name, _)) in connected_list.iter().enumerate() {
+        let modes: Vec<DisplayModeConfig> = conn_info
+            .modes()
+            .iter()
+            .map(|mode| {
+                let (width, height) = mode.size();
+                DisplayModeConfig {
+                    width: width as u32,
+                    height: height as u32,
+                    refresh_rate: mode.vrefresh() as f64,
+                }
+            })
+            .collect();
+        let previous = displays_cfg.find_for_connector(conn_name).cloned();
+        let selected_mode = previous
+            .as_ref()
+            .and_then(|output| {
+                conn_info.modes().iter().find(|mode| {
+                    let (width, height) = mode.size();
+                    width as u32 == output.width
+                        && height as u32 == output.height
+                        && (mode.vrefresh() as f64 - output.refresh_rate).abs() < 1.0
+                })
+            })
+            .or_else(|| conn_info.modes().first());
+        let Some(selected_mode) = selected_mode else {
+            continue;
+        };
+        let (width, height) = selected_mode.size();
+        let scale = previous.as_ref().map(|output| output.scale).unwrap_or(2.0);
+        let logical_width = (width as f64 / scale.max(0.5)).round() as i32;
+        let (physical_width_mm, physical_height_mm) = conn_info.size().unwrap_or((0, 0));
+        let detected_diagonal = if physical_width_mm > 0 && physical_height_mm > 0 {
+            Some(
+                (((physical_width_mm as f64).powi(2) + (physical_height_mm as f64).powi(2)).sqrt()
+                    / 25.4
+                    * 10.0)
+                    .round()
+                    / 10.0,
+            )
+        } else {
+            None
+        };
+        detected_outputs.push(DisplayOutputConfig {
+            connector: conn_name.clone(),
+            name: previous
+                .as_ref()
+                .map(|output| output.name.clone())
+                .unwrap_or_else(|| conn_name.clone()),
+            width: width as u32,
+            height: height as u32,
+            refresh_rate: selected_mode.vrefresh() as f64,
+            modes,
+            x: previous.as_ref().map(|output| output.x).unwrap_or(detected_x),
+            y: previous.as_ref().map(|output| output.y).unwrap_or(0),
+            scale,
+            primary: previous
+                .as_ref()
+                .map(|output| output.primary)
+                .unwrap_or(idx == 0),
+            diagonal_inches: previous
+                .as_ref()
+                .and_then(|output| output.diagonal_inches)
+                .or(detected_diagonal),
+        });
+        detected_x += logical_width.max(100);
+    }
+    let primary_idx = detected_outputs
+        .iter()
+        .position(|output| output.primary)
+        .unwrap_or(0);
+    for (idx, output) in detected_outputs.iter_mut().enumerate() {
+        output.primary = idx == primary_idx;
+    }
+    displays_cfg.outputs = detected_outputs;
+    if let Some(primary) = displays_cfg.outputs.get(primary_idx) {
+        displays_cfg.master_scale = primary.scale;
+    }
+    displays_cfg.recalculate_layout();
+    if let Err(err) = displays_cfg.save() {
+        warn!("No se pudo guardar la detección de pantallas: {}", err);
+    }
+
     // Monitor primario siempre en el índice 0 de state.space.outputs()
-    connected_list.sort_by_key(|(_, _, _, is_primary)| !*is_primary);
+    connected_list.sort_by_key(|(_, _, name, _)| {
+        !displays_cfg
+            .find_for_connector(name)
+            .map(|output| output.primary)
+            .unwrap_or(false)
+    });
 
     let mut next_auto_x: i32 = 0;
 
@@ -501,7 +593,17 @@ pub fn run_drm() -> Result<()> {
             conn_info
                 .modes()
                 .iter()
-                .find(|m| m.size().0 == cfg.width as u16 && m.size().1 == cfg.height as u16)
+                .find(|m| {
+                    m.size().0 == cfg.width as u16
+                        && m.size().1 == cfg.height as u16
+                        && (m.vrefresh() as f64 - cfg.refresh_rate).abs() < 1.0
+                })
+                .or_else(|| {
+                    conn_info
+                        .modes()
+                        .iter()
+                        .find(|m| m.size().0 == cfg.width as u16 && m.size().1 == cfg.height as u16)
+                })
                 .copied()
                 .or_else(|| conn_info.modes().first().copied())
         } else {
@@ -631,6 +733,7 @@ pub fn run_drm() -> Result<()> {
             output,
             surface: gbm_surface,
             crtc,
+            modes: conn_info.modes().to_vec(),
             size: (mode_w as i32, mode_h as i32).into(),
             damage: Rectangle::from_size((mode_w as i32, mode_h as i32).into()),
         });
@@ -1292,20 +1395,63 @@ pub fn run_drm() -> Result<()> {
                     let mut auto_x = 0;
                     for s in surfs.iter_mut() {
                         let out_name = s.output.name();
-                        let (loc_x, loc_y, scale) = if let Some(cfg) = new_cfg.find_for_connector(&out_name) {
-                            (cfg.x, cfg.y, cfg.scale.clamp(0.5, 4.0))
+                        let (loc_x, loc_y, scale, requested_mode) = if let Some(cfg) = new_cfg.find_for_connector(&out_name) {
+                            let requested_mode = s.modes.iter().find(|mode| {
+                                let (width, height) = mode.size();
+                                width as u32 == cfg.width
+                                    && height as u32 == cfg.height
+                                    && (mode.vrefresh() as f64 - cfg.refresh_rate).abs() < 1.0
+                            }).copied();
+                            (cfg.x, cfg.y, cfg.scale.clamp(0.5, 4.0), requested_mode)
                         } else {
-                            (auto_x, 0, new_cfg.master_scale.clamp(0.5, 4.0))
+                            (auto_x, 0, new_cfg.master_scale.clamp(0.5, 4.0), None)
                         };
+                        let mut mode_update = None;
+                        if let Some(mode) = requested_mode {
+                            let current_mode = s.surface.current_mode();
+                            if mode.size() != current_mode.size()
+                                || mode.vrefresh() != current_mode.vrefresh()
+                            {
+                                match s.surface.use_mode(mode) {
+                                    Ok(()) => {
+                                        let (width, height) = mode.size();
+                                        s.size = (width as i32, height as i32).into();
+                                        s.damage = Rectangle::from_size(s.size);
+                                        mode_update = Some(Mode {
+                                            size: (width as i32, height as i32).into(),
+                                            refresh: (mode.vrefresh() * 1000) as i32,
+                                        });
+                                        info!(
+                                            "   🖥 Resolución de {} cambiada en vivo a {}x{} @ {}Hz",
+                                            out_name,
+                                            width,
+                                            height,
+                                            mode.vrefresh()
+                                        );
+                                    }
+                                    Err(err) => warn!(
+                                        "No se pudo cambiar {} al modo {}x{} @ {}Hz: {:?}",
+                                        out_name,
+                                        mode.size().0,
+                                        mode.size().1,
+                                        mode.vrefresh(),
+                                        err
+                                    ),
+                                }
+                            }
+                        }
                         let log_w = (s.size.w as f64 / scale).round() as i32;
                         auto_x = auto_x.max(loc_x + log_w);
 
                         s.output.change_current_state(
-                            None,
+                            mode_update,
                             None,
                             Some(Scale::Fractional(scale)),
                             Some((loc_x, loc_y).into()),
                         );
+                        if let Some(mode) = mode_update {
+                            s.output.set_preferred(mode);
+                        }
                         state.space.map_output(&s.output, (loc_x, loc_y));
                         new_output_locs.insert(out_name.clone(), (Point::from((loc_x, loc_y)), scale));
 

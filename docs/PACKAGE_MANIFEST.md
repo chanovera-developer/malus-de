@@ -2,6 +2,8 @@
 
 Este documento detalla la lista exacta de paquetes requeridos para construir una distribución independiente de Malus DE partiendo de una instalación mínima sin entorno gráfico (como *Fedora Everything/Minimal*, *Debian Minimal*, *Ubuntu Server/Core* o *Arch Linux*).
 
+La sesión fuerza a GTK a usar xdg-desktop-portal y prefiere el selector de archivos de GNOME. Por eso, instala `xdg-desktop-portal` y `xdg-desktop-portal-gnome`; el backend GTK queda como alternativa para interfaces no implementadas por GNOME.
+
 ---
 
 ## 1. Arquitectura de Paquetes
@@ -88,6 +90,7 @@ sudo dnf install -y \
     mesa-libgbm-devel \
     libinput-devel \
     libseat-devel \
+    libxkbcommon-devel \
     systemd-devel \
     dbus-devel
 ```

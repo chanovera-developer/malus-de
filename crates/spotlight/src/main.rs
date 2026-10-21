@@ -336,8 +336,6 @@ fn build_spotlight_ui(app: &Application) {
                             if let Ok(xdg_rt) = std::env::var("XDG_RUNTIME_DIR") {
                                 command.env("XDG_RUNTIME_DIR", xdg_rt);
                             }
-                            command.env_remove("LD_PRELOAD");
-
                             if let Ok(mut child) = command.spawn() {
                                 std::thread::spawn(move || {
                                     let _ = child.wait();

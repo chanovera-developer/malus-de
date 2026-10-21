@@ -11,6 +11,7 @@ fi
 # Aislar configuración de usuario de GNOME/GTK para Malus DE (macOS: botones a la izquierda)
 export XDG_CONFIG_HOME="$HOME/.config/malus-de"
 export GSETTINGS_BACKEND="keyfile"
+export GTK_USE_PORTAL=1
 export UBUNTU_MENUPROXY=1
 export GTK_MODULES="${GTK_MODULES:+$GTK_MODULES:}appmenu-gtk-module"
 mkdir -p "$XDG_CONFIG_HOME/glib-2.0/settings" "$XDG_CONFIG_HOME/gtk-3.0" "$XDG_CONFIG_HOME/gtk-4.0"
@@ -63,13 +64,10 @@ sleep 1.2
 export WAYLAND_DISPLAY="wayland-1"
 export GDK_BACKEND="wayland"
 export GSK_RENDERER="cairo"
-if [ -f "$HOME/.config/malus-de/lib/libmalus_gtk_layout.so" ]; then
-    export LD_PRELOAD="$HOME/.config/malus-de/lib/libmalus_gtk_layout.so"
-fi
 
 # Actualizar el entorno D-Bus con el display Wayland de Malus DE
-dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND LD_PRELOAD 2>/dev/null || true
-systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_CONFIG_HOME GSETTINGS_BACKEND 2>/dev/null || true
+dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL 2>/dev/null || true
+systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL 2>/dev/null || true
 systemctl --user start xdg-desktop-portal 2>/dev/null || true
 
 
