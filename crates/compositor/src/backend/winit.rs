@@ -833,8 +833,14 @@ pub fn run_winit() -> Result<()> {
                             );
 
                             let mut popup_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
+                            let mut popup_shadow_rects = Vec::new();
                             for (popup, popup_offset) in smithay::desktop::PopupManager::popups_for_surface(main_surface.as_ref()) {
-                                let offset = (geo.loc + popup_offset - popup.geometry().loc).to_physical_precise_round(1.0);
+                                let popup_geometry = popup.geometry();
+                                popup_shadow_rects.push(Rectangle::new(
+                                    phys_loc + (geo.loc + popup_offset).to_physical_precise_round(1.0),
+                                    popup_geometry.size.to_physical_precise_round(1.0),
+                                ));
+                                let offset = (geo.loc + popup_offset - popup_geometry.loc).to_physical_precise_round(1.0);
                                 let p_elems = render_elements_from_surface_tree(
                                     renderer,
                                     popup.wl_surface(),
@@ -867,7 +873,7 @@ pub fn run_winit() -> Result<()> {
                                 geo.size.to_physical_precise_round(1.0),
                             );
 
-                            window_render_data.push((root_id, win_surfaces, popup_elems, should_round, is_active, win_screen_rect, content_offset, content_size, is_firefox, is_translucent));
+                            window_render_data.push((root_id, win_surfaces, popup_elems, popup_shadow_rects, should_round, is_active, win_screen_rect, content_offset, content_size, is_firefox, is_translucent));
                         }
                     }
                 }
@@ -897,7 +903,7 @@ pub fn run_winit() -> Result<()> {
                     let projection = *frame.projection();
 
                     // 2. Renderizar superficies de cada ventana con sus sombras proyectadas, desenfoque de fondo y esquinas squircle
-                    for (root_id, win_elems, _popups, should_round, is_active, win_rect, content_offset, content_size, is_firefox, is_translucent) in &window_render_data {
+                    for (root_id, win_elems, _popups, _popup_shadow_rects, should_round, is_active, win_rect, content_offset, content_size, is_firefox, is_translucent) in &window_render_data {
                         if win_elems.is_empty() {
                             continue;
                         }
@@ -1002,6 +1008,16 @@ pub fn run_winit() -> Result<()> {
                     }
 
                     // 3. Renderizar menús contextuales y popups de ventanas (siempre ENCIMA de las superficies de ventana)
+                    for (_, _, _, popup_shadow_rects, _, is_active, ..) in &window_render_data {
+                        if let (Some(radius), Some(shadow)) = (win_phys_r, shadow_pipeline.as_ref()) {
+                            for popup_rect in popup_shadow_rects {
+                                let _ = frame.with_context(|gl| {
+                                    shadow.render_shadow(gl, &projection, *popup_rect, radius as f32, *is_active, 1.0);
+                                });
+                            }
+                        }
+                    }
+
                     for (_, _, popup_elems, ..) in &window_render_data {
                         if !popup_elems.is_empty() {
                             let _ = draw_render_elements(&mut frame, 1.0, popup_elems, &[damage]);

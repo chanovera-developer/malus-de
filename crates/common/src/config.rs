@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use serde::{Deserialize, Serialize};
 
 /// Configuración global de Malus DE
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -405,13 +405,15 @@ window.view.background {
     background-color: transparent;
 }
 
+window.view popover,
 window.view popover > contents,
 window.view popover.menu > contents,
 window.view popover.background > contents,
 window.view menu,
 window.view .menu {
-    background-color: alpha(@window_bg_color, 0.84);
-    border-color: alpha(@borders, 0.75);
+    background-color: @window_bg_color;
+    border-color: @borders;
+    box-shadow: none;
 }
 
 /* Mantener fondo opaco sólido para vistas de contenido y ventanas generales */
@@ -2006,14 +2008,15 @@ mod tests {
     }
 
     #[test]
-    fn test_gtk4_transparency_is_scoped_to_nautilus_and_popovers() {
+    fn test_gtk4_transparency_is_scoped_to_nautilus_and_menus_are_opaque() {
         let css = get_malus_gtk_css(false);
 
         assert!(css.contains("window.view.background"));
         assert!(css.contains("window.view overlay-split-view > .sidebar-pane"));
         assert!(css.contains("window.view .sidebar-pane *"));
         assert!(css.contains("window.view popover > contents"));
-        assert!(css.contains("background-color: alpha(@window_bg_color, 0.84);"));
+        assert!(css.contains("background-color: @window_bg_color;\n    border-color: @borders;\n    box-shadow: none;"));
+        assert!(!css.contains("background-color: alpha(@window_bg_color, 0.84);"));
         assert!(!css.contains("\nwindow.background {\n"));
         assert!(!css.contains("\n.sidebar-pane,\n"));
     }
