@@ -2208,17 +2208,6 @@ async fn update_bluetooth_ui_async(btn: &Button, icon: &Image, sub: &Label) {
 }
 
 fn is_dark_mode_enabled() -> bool {
-    if let Ok(out) = Command::new("dconf")
-        .args(["read", "/org/gnome/desktop/interface/color-scheme"])
-        .output()
-    {
-        let s = String::from_utf8_lossy(&out.stdout);
-        if s.contains("prefer-dark") {
-            return true;
-        } else if s.contains("prefer-light") {
-            return false;
-        }
-    }
     if let Ok(out) = Command::new("gsettings")
         .args(["get", "org.gnome.desktop.interface", "color-scheme"])
         .output()
@@ -2231,12 +2220,12 @@ fn is_dark_mode_enabled() -> bool {
 
 pub fn apply_system_appearance_mode(to_dark: bool) {
     let target = if to_dark { "prefer-dark" } else { "prefer-light" };
-    info!("🎨 Aplicando modo de apariencia del sistema: {}", target);
+    info!("🎨 Aplicando modo de apariencia de Malus DE: {}", target);
 
-    // 1. Sincronizar atómicamente dconf, gsettings, keyfile, settings.ini y gtk.css
+    // 1. Sincronizar las preferencias aisladas de GSettings, GTK y CSS de Malus DE.
     malus_de_common::config::sync_system_appearance(to_dark);
 
-    // 2. Actualizar AdwStyleManager in-process
+    // 2. Actualizar AdwStyleManager en el proceso actual.
     libadwaita::StyleManager::default().set_color_scheme(
         if to_dark {
             libadwaita::ColorScheme::ForceDark
@@ -3165,4 +3154,3 @@ fn create_displays_subview(
 
     (subview, refresh_ui)
 }
-

@@ -1149,8 +1149,6 @@ fn create_dock_item(
                 if let Ok(xdg_rt) = std::env::var("XDG_RUNTIME_DIR") {
                     command.env("XDG_RUNTIME_DIR", xdg_rt);
                 }
-                command.env_remove("LD_PRELOAD");
-
                 match command.spawn() {
                     Ok(mut child) => {
                         let pid = child.id();

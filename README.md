@@ -10,7 +10,7 @@
 - Shell modular con barra superior, menú global, centro de control, dock flotante, Spotlight, notificaciones y fondo de pantalla.
 - Integración con servicios de Linux para audio, red, Bluetooth y controles multimedia.
 - Efectos gráficos con shaders, esquinas squircle y animaciones de ventanas.
-- Soporte para configuración de teclado y disposición de monitores.
+- Detección de pantallas y modos compatibles por DRM/KMS, con resolución, disposición y escala fraccionaria configurables en caliente.
 - Experimentos de integración con dispositivos Apple mediante AirDrop; el backend AWDL/BLE está en desarrollo.
 
 ## Arquitectura
@@ -40,7 +40,27 @@ La lista de paquetes por distribución está en el [manifiesto de dependencias](
 
 ## Compilar
 
-Clona el repositorio y, con las dependencias del sistema instaladas, compila desde su raíz:
+En Fedora, instala las herramientas y bibliotecas de desarrollo necesarias:
+
+```bash
+sudo dnf install -y \
+    gcc \
+    clang \
+    pkgconf-pkg-config \
+    gtk4-devel \
+    libadwaita-devel \
+    gtk4-layer-shell-devel \
+    mesa-libgbm-devel \
+    libinput-devel \
+    libseat-devel \
+    systemd-devel \
+    dbus-devel \
+    libxkbcommon-devel
+```
+
+`systemd-devel` proporciona los archivos de desarrollo de `libudev`; `libxkbcommon-devel` es necesario para enlazar el compositor. Asegúrate también de tener Rust y Cargo instalados (edición 2021).
+
+Clona el repositorio y compila desde su raíz:
 
 ```bash
 git clone https://github.com/chanovera-dev/malus-de.git
@@ -48,11 +68,15 @@ cd malus-de
 cargo build --workspace
 ```
 
+Para otras distribuciones, consulta los paquetes equivalentes en el [manifiesto de dependencias](./docs/PACKAGE_MANIFEST.md).
+
 Para compilar en modo optimizado:
 
 ```bash
 cargo build --workspace --release
 ```
+
+En **Ajustes → Pantallas**, cada pantalla detectada muestra sus modos DRM compatibles. Puedes seleccionar, por ejemplo, `1920 × 1080` para una pantalla 4K y aplicar el cambio sin cerrar sesión; la escala y la disposición se configuran por separado.
 
 ## Instalación de la sesión
 
@@ -62,7 +86,10 @@ El script [install-session.sh](./scripts/install-session.sh) compila los binario
 sudo ./scripts/install-session.sh
 ```
 
+La instalación no modifica los archivos ni las preferencias de VS Code, Antigravity, Firefox o Brave. La posición izquierda de los controles GTK se configura en el entorno aislado de Malus DE; los navegadores conservan sus controles propios.
+
 La [guía de manifiesto](./docs/PACKAGE_MANIFEST.md) documenta dependencias de ejecución, compilación y servicios que deben habilitarse.
+Los selectores de archivos de GTK y aplicaciones compatibles (por ejemplo, VS Code) usan xdg-desktop-portal; la sesión instalada prefiere el diálogo de GNOME.
 
 ## Documentación
 

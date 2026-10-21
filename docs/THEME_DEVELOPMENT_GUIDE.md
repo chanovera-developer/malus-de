@@ -135,35 +135,27 @@ card_corner_radius = 12
 
 ---
 
-## 6. Sincronización del Modo Claro / Oscuro en Todo el Sistema
+## 6. Modo Claro / Oscuro Aislado de GNOME
 
-Al alternar entre Modo Claro y Modo Oscuro, el sistema actualiza simultáneamente 5 subsistemas:
+Al alternar entre Modo Claro y Modo Oscuro desde Malus DE, los cambios se limitan a su sesión:
 
-1. **GSettings:**
-   ```bash
-   gsettings set org.gnome.desktop.interface color-scheme "prefer-dark" # o "prefer-light"
-   ```
-2. **Archivos INI para aplicaciones GTK3 y GTK4:**
+1. **GSettings con backend `keyfile`:** el valor `org.gnome.desktop.interface color-scheme` se guarda en `~/.config/malus-de/glib-2.0/settings/keyfile`, no en el almacén DConf de GNOME.
+2. **Archivos GTK3 y GTK4 de Malus DE:**
    - `~/.config/malus-de/gtk-3.0/settings.ini`
    - `~/.config/malus-de/gtk-4.0/settings.ini`
-   ```ini
-   [Settings]
-   gtk-application-prefer-dark-theme=1 # o 0
-   ```
-3. **Keyfile de Sesión Aislada:**
-   - `~/.config/malus-de/glib-2.0/settings/keyfile`
-   ```ini
-   [org/gnome/desktop/interface]
-   color-scheme='prefer-dark' # o 'prefer-light'
-   ```
-4. **Libadwaita en caliente (`AdwStyleManager`):**
+   - Sus hojas CSS se guardan en esos mismos directorios.
+3. **Libadwaita en caliente (`AdwStyleManager`):**
    ```rust
    libadwaita::StyleManager::default().set_color_scheme(
        if is_dark { libadwaita::ColorScheme::ForceDark } else { libadwaita::ColorScheme::ForceLight }
    );
    ```
-5. **Bus IPC del Compositor:**
+4. **Bus IPC del Compositor:**
    Transmisión de `IpcMessage::ThemeChanged { theme_name, is_dark }` a todos los demonios en ejecución (Dock, Settings, Spotlight).
+
+Malus DE no escribe en `~/.config/gtk-3.0`, `~/.config/gtk-4.0` ni cambia el valor DConf de GNOME. Las preferencias y transparencias GTK se aplican mediante `XDG_CONFIG_HOME=~/.config/malus-de` en la sesión de Malus.
+
+La transparencia de ventanas se limita al estilo `window.view` de Nautilus y a la ventana `.macos-settings-window`, cuyo CSS se carga desde la propia aplicación de Ajustes. El resto de ventanas mantiene el fondo opaco. En esas dos aplicaciones, los contenidos de popovers y menús usan un fondo semitransparente para dejar ver el desenfoque que dibuja el compositor detrás.
 
 ---
 

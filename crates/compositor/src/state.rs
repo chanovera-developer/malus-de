@@ -1300,14 +1300,14 @@ impl XdgShellHandler for MalusState {
             let offset = ((self.space.elements().count() % 6) as i32) * 28;
             ((geo.loc.x + 80 + offset, geo.loc.y + 60 + offset), usable)
         } else {
-            ((80, 60), Rectangle::from_loc_and_size((0, 0), (1920, 1080)))
+            ((80, 60), Rectangle::new((0, 0).into(), (1920, 1080).into()))
         };
 
         let window = smithay::desktop::Window::new_wayland_window(surface.clone());
         window.set_activated(true);
 
         // Si tenemos un tamaño recordado para esta aplicación, sugerirlo en el configure inicial
-        let initial_size = if surface.get_parent_surface().is_none() {
+        let initial_size = if surface.parent().is_none() {
             let app_id = app_id_for_surface(surface.wl_surface());
             app_id.as_deref().and_then(|id| self.get_saved_window_size(id)).map(|saved| {
                 let max_w = (usable_zone.size.w - 80).max(400);
@@ -1529,7 +1529,7 @@ impl XdgShellHandler for MalusState {
             .cloned();
 
         // Guardar el tamaño final no maximizado/no tiled de la aplicación
-        if surface.get_parent_surface().is_none() {
+        if surface.parent().is_none() {
             if let Some(id) = app_id_for_surface(surf) {
                 let states = &surface.current_state().states;
                 let is_snapped = states.contains(XdgState::Maximized)
@@ -1610,7 +1610,7 @@ impl XdgShellHandler for MalusState {
     }
 
     fn app_id_changed(&mut self, surface: ToplevelSurface) {
-        if surface.get_parent_surface().is_none() {
+        if surface.parent().is_none() {
             if let Some(id) = app_id_for_surface(surface.wl_surface()) {
                 if let Some(saved) = self.get_saved_window_size(&id) {
                     let cur_geo = self.window_for_surface(surface.wl_surface()).map(|w| w.geometry());

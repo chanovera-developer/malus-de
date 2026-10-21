@@ -41,6 +41,7 @@ export LIBSEAT_BACKEND="logind"
 
 export XDG_CONFIG_HOME="$HOME/.config/malus-de"
 export GSETTINGS_BACKEND="keyfile"
+export GTK_USE_PORTAL=1
 export UBUNTU_MENUPROXY=1
 export GTK_MODULES="${GTK_MODULES:+$GTK_MODULES:}appmenu-gtk-module"
 export GDK_BACKEND="wayland"
@@ -51,11 +52,6 @@ export CLUTTER_BACKEND="wayland"
 export MOZ_ENABLE_WAYLAND=1
 export XCURSOR_THEME="macOS"
 export XCURSOR_SIZE=24
-
-# Hook dinámico de layout de ventanas (Nautilus macOS style)
-if [ -f "$HOME/.config/malus-de/lib/libmalus_gtk_layout.so" ]; then
-    export LD_PRELOAD="$HOME/.config/malus-de/lib/libmalus_gtk_layout.so"
-fi
 
 # Asegurar archivos de configuración aislados de GNOME (respetando elecciones previas del usuario)
 mkdir -p "$XDG_CONFIG_HOME/glib-2.0/settings" "$XDG_CONFIG_HOME/gtk-3.0" "$XDG_CONFIG_HOME/gtk-4.0"
@@ -103,7 +99,7 @@ dbus-update-activation-environment --all 2>/dev/null || true
 
 # Activar target de sesión gráfica de systemd para que los portales (xdg-desktop-portal) funcionen
 if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE XDG_CONFIG_HOME 2>/dev/null || true
+    systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL 2>/dev/null || true
     systemctl --user start malus-session.target 2>/dev/null || true
 fi
 
@@ -179,8 +175,8 @@ else
 fi
 
 # Actualizar el socket Wayland en el entorno de activación D-Bus y systemd
-dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND LD_PRELOAD 2>/dev/null || true
-systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_CONFIG_HOME GSETTINGS_BACKEND 2>/dev/null || true
+dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL 2>/dev/null || true
+systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL 2>/dev/null || true
 systemctl --user start xdg-desktop-portal 2>/dev/null || true
 
 # ------------------------------------------------------------------------------
