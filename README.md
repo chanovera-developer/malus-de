@@ -90,7 +90,7 @@ sudo ./scripts/install-session.sh
 La instalación no modifica los archivos ni las preferencias de VS Code, Antigravity, Firefox o Brave. La posición izquierda de los controles GTK se configura en el entorno aislado de Malus DE; los navegadores conservan sus controles propios.
 
 La [guía de manifiesto](./docs/PACKAGE_MANIFEST.md) documenta dependencias de ejecución, compilación y servicios que deben habilitarse.
-Los selectores de archivos de GTK y aplicaciones compatibles (por ejemplo, VS Code) usan xdg-desktop-portal; la sesión instalada prefiere el diálogo de GNOME.
+Los selectores de archivos de GTK y aplicaciones compatibles (por ejemplo, VS Code) usan xdg-desktop-portal. Malus prefiere el backend GTK para estos diálogos, con GNOME como alternativa; instala ambos backends y cierra e inicia sesión después de actualizar Malus.
 
 ## Documentación
 

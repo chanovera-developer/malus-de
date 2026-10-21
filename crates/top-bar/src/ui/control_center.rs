@@ -21,7 +21,12 @@ pub fn create_control_center_widget() -> MenuButton {
         .always_show_arrow(false)
         .build();
 
-    let cc_icon = Image::from_icon_name("control-center-symbolic");
+    let cc_icon = Image::builder()
+        .icon_name("control-center-symbolic")
+        .pixel_size(16)
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .build();
     menu_btn.set_child(Some(&cc_icon));
 
     let popover = Popover::builder()
@@ -719,6 +724,8 @@ fn create_cc_tile(icon_name: &str, title: &str, subtitle: &str) -> (Button, Imag
     let icon = Image::builder()
         .icon_name(icon_name)
         .pixel_size(18)
+        .halign(Align::Center)
+        .valign(Align::Center)
         .build();
     icon_box.append(&icon);
 
@@ -774,6 +781,8 @@ fn create_cc_nav_tile(
     let icon = Image::builder()
         .icon_name(icon_name)
         .pixel_size(18)
+        .halign(Align::Center)
+        .valign(Align::Center)
         .build();
     power_btn.set_child(Some(&icon));
 
@@ -2208,14 +2217,7 @@ async fn update_bluetooth_ui_async(btn: &Button, icon: &Image, sub: &Label) {
 }
 
 fn is_dark_mode_enabled() -> bool {
-    if let Ok(out) = Command::new("gsettings")
-        .args(["get", "org.gnome.desktop.interface", "color-scheme"])
-        .output()
-    {
-        let s = String::from_utf8_lossy(&out.stdout);
-        return s.contains("prefer-dark");
-    }
-    false
+    crate::ui::theme::is_dark_mode_enabled()
 }
 
 pub fn apply_system_appearance_mode(to_dark: bool) {

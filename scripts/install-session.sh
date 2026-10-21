@@ -59,6 +59,12 @@ for bin in "${BINARIES[@]}"; do
     fi
 done
 
+# Instalar iconos específicos de Malus DE
+mkdir -p /usr/local/share/malus-de/icons
+cp -f "$PROJECT_DIR/assets/icons/control-center-symbolic.svg" \
+    /usr/local/share/malus-de/icons/control-center-symbolic.svg
+chmod 644 /usr/local/share/malus-de/icons/control-center-symbolic.svg
+
 # Instalar script de inicio de sesión
 cp -f "$SCRIPT_DIR/malus-session" "/usr/local/bin/malus-session"
 chmod 755 "/usr/local/bin/malus-session"

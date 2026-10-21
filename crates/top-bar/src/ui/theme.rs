@@ -1,21 +1,31 @@
+use gio::Settings;
 use gtk4::prelude::*;
 use gtk4::Popover;
 use std::cell::RefCell;
-use std::process::Command;
 
 thread_local! {
     static REGISTERED_POPOVERS: RefCell<Vec<glib::WeakRef<Popover>>> = RefCell::new(Vec::new());
+    static THEME_SETTINGS: RefCell<Option<Settings>> = const { RefCell::new(None) };
 }
 
 pub fn is_dark_mode_enabled() -> bool {
-    if let Ok(out) = Command::new("gsettings")
-        .args(["get", "org.gnome.desktop.interface", "color-scheme"])
-        .output()
-    {
-        let s = String::from_utf8_lossy(&out.stdout);
-        return s.contains("prefer-dark");
-    }
-    false
+    Settings::new("org.gnome.desktop.interface")
+        .string("color-scheme")
+        .contains("prefer-dark")
+}
+
+pub fn ensure_theme_monitor() {
+    THEME_SETTINGS.with(|current| {
+        if current.borrow().is_some() {
+            return;
+        }
+
+        let settings = Settings::new("org.gnome.desktop.interface");
+        settings.connect_changed(Some("color-scheme"), |settings, _| {
+            update_all_popovers_theme(settings.string("color-scheme").contains("prefer-dark"));
+        });
+        current.replace(Some(settings));
+    });
 }
 
 pub fn apply_theme_to_popover(popover: &Popover, is_dark: bool) {
@@ -24,9 +34,39 @@ pub fn apply_theme_to_popover(popover: &Popover, is_dark: bool) {
     } else {
         popover.add_css_class("light-popover");
     }
+    update_menu_text_theme(popover.upcast_ref(), is_dark);
+    popover.queue_draw();
+}
+
+fn update_menu_text_theme(widget: &gtk4::Widget, is_dark: bool) {
+    if widget.has_css_class("menu-row-label") {
+        widget.remove_css_class("menu-light-text");
+        widget.remove_css_class("menu-dark-text");
+        widget.add_css_class(if is_dark {
+            "menu-dark-text"
+        } else {
+            "menu-light-text"
+        });
+    } else if widget.has_css_class("menu-shortcut-hint") {
+        widget.remove_css_class("menu-light-text");
+        widget.remove_css_class("menu-dark-text");
+        widget.add_css_class(if is_dark {
+            "menu-dark-text"
+        } else {
+            "menu-light-text"
+        });
+    }
+
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        child = current.next_sibling();
+        update_menu_text_theme(&current, is_dark);
+    }
 }
 
 pub fn register_popover(popover: &Popover) {
+    ensure_theme_monitor();
+
     let is_dark = is_dark_mode_enabled();
     apply_theme_to_popover(popover, is_dark);
 
