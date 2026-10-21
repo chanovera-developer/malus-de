@@ -394,6 +394,7 @@ fn build_dock_ui(app: &Application) {
         switcher_window.set_layer(Layer::Overlay);
         switcher_window.set_namespace("malus-app-switcher");
         switcher_window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::None);
+        switcher_window.set_exclusive_zone(0);
     } else {
         switcher_window.set_decorated(false);
     }
@@ -689,6 +690,7 @@ fn build_dock_ui(app: &Application) {
 
                         switcher_box_ipc.append(&card);
                     }
+                    switcher_box_ipc.set_visible(true);
                     switcher_win_ipc.set_visible(true);
                     switcher_win_ipc.present();
                 }
