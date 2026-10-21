@@ -162,9 +162,9 @@ popover.light-popover {
     background-color: transparent;
     background: transparent;
     border: none;
-    box-shadow: none;
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.60);
     padding: 0;
-    border-radius: 18px;
+    border-radius: 22px;
 }
 
 popover.malus-popover-menu > arrow,
@@ -174,12 +174,11 @@ popover.light-popover > arrow {
     border: none;
 }
 
-/* El recuadro visual único y pulido se aplica a contents (Curvatura Squircle continua macOS) */
+/* GTK CSS solo ofrece esquinas circulares; 22px aproxima el aspecto squircle en popovers. */
 popover.malus-popover-menu > contents {
     background-color: rgba(28, 28, 34, 0.94);
     border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 18px;
-    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.60);
+    border-radius: 22px;
     padding: 6px;
     color: #f4f4f5;
     text-shadow: none;
@@ -188,21 +187,31 @@ popover.malus-popover-menu > contents {
 popover.control-center-popover > contents {
     background-color: rgba(26, 26, 32, 0.95);
     border: 1px solid rgba(255, 255, 255, 0.16);
-    border-radius: 18px;
-    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.65);
+    border-radius: 22px;
     padding: 12px;
     color: #f4f4f5;
     text-shadow: none;
 }
 
-/* Soporte para Modo Claro en Popovers (Curvatura Squircle continua) */
+/* Soporte para Modo Claro en Popovers */
+popover.light-popover {
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.20);
+}
+
+popover.control-center-popover {
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.65);
+}
+
+popover.control-center-popover.light-popover {
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.22);
+}
+
 popover.light-popover.malus-popover-menu > contents,
 popover.light-popover > contents,
 .light-mode popover.malus-popover-menu > contents {
     background-color: rgba(246, 246, 248, 0.96);
     border: 1px solid rgba(0, 0, 0, 0.12);
-    border-radius: 18px;
-    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.20);
+    border-radius: 22px;
     padding: 6px;
     color: #1d1d1f;
 }
@@ -211,8 +220,7 @@ popover.light-popover.control-center-popover > contents,
 .light-mode popover.control-center-popover > contents {
     background-color: rgba(245, 245, 247, 0.96);
     border: 1px solid rgba(0, 0, 0, 0.14);
-    border-radius: 18px;
-    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.22);
+    border-radius: 22px;
     padding: 12px;
     color: #1d1d1f;
 }

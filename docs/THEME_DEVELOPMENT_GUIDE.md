@@ -155,7 +155,7 @@ Al alternar entre Modo Claro y Modo Oscuro desde Malus DE, los cambios se limita
 
 Malus DE no escribe en `~/.config/gtk-3.0`, `~/.config/gtk-4.0` ni cambia el valor DConf de GNOME. Las preferencias y transparencias GTK se aplican mediante `XDG_CONFIG_HOME=~/.config/malus-de` en la sesión de Malus.
 
-La transparencia de ventanas se limita al estilo `window.view` de Nautilus y a la ventana `.macos-settings-window`, cuyo CSS se carga desde la propia aplicación de Ajustes. El resto de ventanas mantiene el fondo opaco. En esas dos aplicaciones, los contenidos de popovers y menús usan un fondo semitransparente para dejar ver el desenfoque que dibuja el compositor detrás.
+La transparencia de ventanas se limita al estilo `window.view` de Nautilus y a la ventana `.macos-settings-window`, cuyo CSS se carga desde la propia aplicación de Ajustes. El resto de ventanas mantiene el fondo opaco. En Nautilus, los menús y popovers conservan un fondo opaco y no añaden sombra CSS; el desenfoque del compositor se limita al fondo de la ventana.
 
 ---
 

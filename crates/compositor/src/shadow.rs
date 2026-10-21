@@ -201,23 +201,23 @@ impl WindowShadowPipeline {
             return;
         }
 
-        // Parámetros de sombra calibrados con fidelidad estética macOS Sequoia / Sonoma:
-        // - Opacidad sutil, etérea y sin densidad excesiva (~0.18 activa, ~0.10 inactiva)
+        // Parámetros de sombra calibrados para un efecto más discreto y menos intenso.
+        // - Opacidad reducida para que la penumbra sea más sutil
         // - Luz cenital superior: la sombra se proyecta suavemente hacia abajo (offset_y)
         // - Penumbra amplia y circular que aporta flotabilidad tridimensional limpia y orgánica
         let (blur_radius, spread, offset_y, opacity) = if is_active {
             (
-                46.0 * scale as f32,
+                36.0 * scale as f32,
                 0.0f32,
-                12.0 * scale as f32,
-                0.18f32,
+                10.0 * scale as f32,
+                0.12f32,
             )
         } else {
             (
-                24.0 * scale as f32,
+                18.0 * scale as f32,
                 0.0f32,
-                5.0 * scale as f32,
-                0.10f32,
+                4.0 * scale as f32,
+                0.06f32,
             )
         };
 
