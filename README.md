@@ -8,6 +8,7 @@
 
 - Compositor Wayland basado en [Smithay](https://github.com/Smithay/smithay), con backend anidado Winit y backend DRM/KMS.
 - Shell modular con barra superior, menú global, centro de control, dock flotante, Spotlight, notificaciones y fondo de pantalla.
+- Selector visual de ventanas Alt-Tab/Super-Tab funcional para recorrer y cambiar entre ventanas abiertas; su presentación y comportamiento siguen en desarrollo.
 - Integración con servicios de Linux para audio, red, Bluetooth y controles multimedia.
 - Efectos gráficos con shaders, esquinas squircle y animaciones de ventanas.
 - Detección de pantallas y modos compatibles por DRM/KMS, con resolución, disposición y escala fraccionaria configurables en caliente.
