@@ -995,64 +995,6 @@ pub fn run_winit() -> Result<()> {
                                         if radius > 0.0 {
                                             blur.render_blur(gl, &projection, screen_size, phys_rect, radius);
                                         }
-
-                                        // Desenfocar popups / menús emergentes de esta capa (Apple menu, Control Center, etc.)
-                                        for (popup, rel_loc) in smithay::desktop::PopupManager::popups_for_surface(surface.wl_surface()) {
-                                            let geo_rect = popup.geometry();
-                                            let (popup_w, popup_h) = if geo_rect.size.w > 0 && geo_rect.size.h > 0 {
-                                                (geo_rect.size.w, geo_rect.size.h)
-                                            } else {
-                                                smithay::wayland::compositor::with_states(popup.wl_surface(), |states| {
-                                                    let data = states.data_map.get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>();
-                                                    if let Some(d) = data {
-                                                        if let Some(dim) = d.lock().unwrap().buffer_size() {
-                                                            (dim.w, dim.h)
-                                                        } else {
-                                                            (0, 0)
-                                                        }
-                                                    } else {
-                                                        (0, 0)
-                                                    }
-                                                })
-                                            };
-                                            if popup_w > 0 && popup_h > 0 {
-                                                let popup_loc = geo.loc + (rel_loc - geo_rect.loc);
-                                                let popup_rect = Rectangle::new(popup_loc, (popup_w, popup_h).into()).to_physical_precise_round(1.0);
-                                                blur.render_blur(gl, &projection, screen_size, popup_rect, 14.0);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Desenfocar menús contextuales y popups de ventanas de aplicaciones
-                            for window in state.space.elements() {
-                                if let Some(wl_surf) = window.wl_surface() {
-                                    if let Some(win_loc) = state.space.element_location(window) {
-                                        for (popup, rel_loc) in smithay::desktop::PopupManager::popups_for_surface(&wl_surf) {
-                                            let geo_rect = popup.geometry();
-                                            let (popup_w, popup_h) = if geo_rect.size.w > 0 && geo_rect.size.h > 0 {
-                                                (geo_rect.size.w, geo_rect.size.h)
-                                            } else {
-                                                smithay::wayland::compositor::with_states(popup.wl_surface(), |states| {
-                                                    let data = states.data_map.get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>();
-                                                    if let Some(d) = data {
-                                                        if let Some(dim) = d.lock().unwrap().buffer_size() {
-                                                            (dim.w, dim.h)
-                                                        } else {
-                                                            (0, 0)
-                                                        }
-                                                    } else {
-                                                        (0, 0)
-                                                    }
-                                                })
-                                            };
-                                             if popup_w > 0 && popup_h > 0 {
-                                                let popup_loc = win_loc - output_geo.loc + (rel_loc - geo_rect.loc);
-                                                let popup_rect = Rectangle::new(popup_loc, (popup_w, popup_h).into()).to_physical_precise_round(1.0);
-                                                blur.render_blur(gl, &projection, screen_size, popup_rect, 14.0);
-                                            }
-                                        }
                                     }
                                 }
                             }
