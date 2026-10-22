@@ -383,7 +383,7 @@ graph TD
   * **Monitoreo en Tiempo Real de `~/Escritorio` (`XDG_DESKTOP_DIR`):**
     * Integración con `GFileMonitor` (GIO) para reflejar al instante cualquier archivo guardado desde el navegador, capturas, descargas o carpetas creadas en el escritorio.
   * **Disposición en Cuadrícula Inteligente (*Grid Layout*):**
-    * **Distribución estilo macOS (Predeterminada):** Los iconos se alinean ordenadamente de arriba hacia abajo comenzando en la **columna derecha** de la pantalla (o configurable a la izquierda).
+    * **Distribución estilo macOS (Predeterminada):** Los iconos solo aparecen en la pantalla principal y se alinean en la esquina superior derecha, ordenados de arriba hacia abajo (o configurable a la izquierda).
     * Etiquetas tipográficas con sombra de texto sutil para garantizar perfecta legibilidad sobre cualquier fondo de pantalla.
     * **Selección Elástica (*Rubberband / Marquee Selection*):** Arrastrar un rectángulo translúcido con curvatura squircle para seleccionar múltiples archivos a la vez.
   * **Pilas en el Escritorio (*macOS Desktop Stacks*):**

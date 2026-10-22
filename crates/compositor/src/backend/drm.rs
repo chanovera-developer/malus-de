@@ -242,9 +242,10 @@ pub fn create_squircle_corner_textures(renderer: &mut GlesRenderer, radius_px: i
     Some(arr)
 }
 
-fn find_layer_under(
+fn find_layer_under_layer(
     state: &MalusState,
     point: Point<f64, Logical>,
+    target_layer: Layer,
 ) -> Option<(
     smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
     Point<f64, Logical>,
@@ -261,9 +262,8 @@ fn find_layer_under(
         let output_local_point = point - output_geo.loc.to_f64();
         let layer_map = smithay::desktop::layer_map_for_output(output);
         let under_layer = layer_map
-            .layer_under(Layer::Overlay, output_local_point)
-            .filter(|l| !(l.namespace() == "malus-app-switcher" && !state.app_switcher.is_active))
-            .or_else(|| layer_map.layer_under(Layer::Top, output_local_point));
+            .layer_under(target_layer, output_local_point)
+            .filter(|l| !(l.namespace() == "malus-app-switcher" && !state.app_switcher.is_active));
 
         if let Some(layer) = under_layer {
             if let Some(geo) = layer_map.layer_geometry(layer) {
@@ -296,6 +296,19 @@ fn find_layer_under(
         }
     }
     None
+}
+
+fn find_layer_under(
+    state: &MalusState,
+    point: Point<f64, Logical>,
+) -> Option<(
+    smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    Point<f64, Logical>,
+    String,
+    bool,
+)> {
+    find_layer_under_layer(state, point, Layer::Overlay)
+        .or_else(|| find_layer_under_layer(state, point, Layer::Top))
 }
 
 fn clamp_pointer_location(state: &MalusState, mut point: Point<f64, Logical>) -> Point<f64, Logical> {
@@ -378,6 +391,14 @@ fn resolve_target_under(
             .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
             .map(|(surf, sub_loc)| (surf, (loc + sub_loc).to_f64()));
         (target, None, Some((window.clone(), loc)))
+    } else if let Some((surf, focus_loc, ns, can_kb)) =
+        find_layer_under_layer(state, point, Layer::Background)
+    {
+        (
+            Some((surf.clone(), focus_loc)),
+            Some((surf, ns, can_kb)),
+            None,
+        )
     } else {
         (None, None, None)
     }
