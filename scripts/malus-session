@@ -95,16 +95,26 @@ ensure_user_dir XDG_VIDEOS_DIR Videos
 # TODO: Revisar por qué Nautilus no muestra sus ubicaciones nativas en la sidebar,
 # más allá de los marcadores importados o añadidos aquí.
 # Nautilus separa los marcadores de sus ubicaciones nativas; mantener las carpetas XDG visibles allí.
-python3 - "$XDG_CONFIG_HOME/gtk-3.0/bookmarks" "$XDG_CONFIG_HOME/gtk-4.0/bookmarks" "${USER_DIR_PATHS[@]}" <<'PY'
+python3 - "$XDG_CONFIG_HOME/gtk-3.0/bookmarks" "$XDG_CONFIG_HOME/gtk-4.0/bookmarks" \
+    "$HOST_XDG_CONFIG_HOME/gtk-3.0/bookmarks" "$XDG_CONFIG_HOME/gtk-3.0/.gnome-bookmarks-imported" \
+    "${USER_DIR_PATHS[@]}" <<'PY'
 import os
 import sys
 from pathlib import Path
 
 bookmark_files = sys.argv[1:3]
+host_bookmark_file = Path(sys.argv[3])
+import_marker = Path(sys.argv[4])
 user_dirs = {
     Path(os.path.abspath(user_dir)).as_uri(): Path(user_dir).name
-    for user_dir in sys.argv[3:]
+    for user_dir in sys.argv[5:]
 }
+
+try:
+    host_lines = host_bookmark_file.read_text(encoding="utf-8").splitlines()
+except FileNotFoundError:
+    host_lines = None
+import_host_bookmarks = not import_marker.exists() and host_lines is not None
 
 for bookmark_file in bookmark_files:
     path = Path(bookmark_file)
@@ -112,6 +122,16 @@ for bookmark_file in bookmark_files:
         lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         lines = []
+
+    needs_write = False
+    if import_host_bookmarks:
+        existing_uris = {line.split(maxsplit=1)[0] for line in lines if line.split(maxsplit=1)}
+        for line in host_lines:
+            parts = line.split(maxsplit=1)
+            if parts and parts[0] not in existing_uris:
+                lines.append(line)
+                existing_uris.add(parts[0])
+                needs_write = True
 
     updated_lines = []
     seen_user_dirs = set()
@@ -130,8 +150,11 @@ for bookmark_file in bookmark_files:
         if uri not in seen_user_dirs:
             updated_lines.append(f"{uri} {label}")
 
-    if updated_lines != lines:
+    if needs_write or updated_lines != lines:
         path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
+
+if import_host_bookmarks:
+    import_marker.touch()
 PY
 
 if [ ! -f "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile" ]; then
