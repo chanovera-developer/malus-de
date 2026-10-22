@@ -45,6 +45,8 @@ En Fedora, instala las herramientas y bibliotecas de desarrollo necesarias:
 
 ```bash
 sudo dnf install -y \
+    rust \
+    cargo \
     gcc \
     clang \
     pkgconf-pkg-config \
