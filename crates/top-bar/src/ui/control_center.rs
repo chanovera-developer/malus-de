@@ -3100,7 +3100,7 @@ fn create_displays_subview(
         let pct = (sld.value() / 2.5).round() * 2.5;
         let new_scale = (pct / 100.0).clamp(0.5, 3.0);
         let mut cfg = malus_de_common::config::DisplaysConfig::load();
-        cfg.set_output_scale(0, new_scale);
+        cfg.set_output_scale_independent(0, new_scale);
         apply_and_notify(cfg, &ref_m0);
     });
 
@@ -3114,7 +3114,7 @@ fn create_displays_subview(
             let ref_p0 = refresh_ui.clone();
             btn.connect_clicked(move |_| {
                 let mut cfg = malus_de_common::config::DisplaysConfig::load();
-                cfg.set_output_scale(0, target_scale);
+                cfg.set_output_scale_independent(0, target_scale);
                 apply_and_notify(cfg, &ref_p0);
             });
             idx_m0 += 1;
@@ -3132,7 +3132,7 @@ fn create_displays_subview(
         let pct = (sld.value() / 2.5).round() * 2.5;
         let new_scale = (pct / 100.0).clamp(0.5, 3.0);
         let mut cfg = malus_de_common::config::DisplaysConfig::load();
-        cfg.set_output_scale(1, new_scale);
+        cfg.set_output_scale_independent(1, new_scale);
         apply_and_notify(cfg, &ref_m1);
     });
 
@@ -3146,7 +3146,7 @@ fn create_displays_subview(
             let ref_p1 = refresh_ui.clone();
             btn.connect_clicked(move |_| {
                 let mut cfg = malus_de_common::config::DisplaysConfig::load();
-                cfg.set_output_scale(1, target_scale);
+                cfg.set_output_scale_independent(1, target_scale);
                 apply_and_notify(cfg, &ref_p1);
             });
             idx_m1 += 1;

@@ -2245,7 +2245,7 @@ fn wire_monitor_card_events(
         let ref_p = refresh_all.clone();
         btn.connect_clicked(move |_| {
             let mut cfg = DisplaysConfig::load();
-            cfg.set_output_scale(output_idx, s);
+            cfg.set_output_scale_independent(output_idx, s);
             let _ = cfg.save();
             let _ = IpcClient::send_command(IpcMessage::ReloadDisplaysConfig);
             ref_p();
@@ -2262,7 +2262,7 @@ fn wire_monitor_card_events(
         let pct = (sld.value() / 2.5).round() * 2.5;
         let new_scale = (pct / 100.0).clamp(0.5, 3.0);
         let mut cfg = DisplaysConfig::load();
-        cfg.set_output_scale(output_idx, new_scale);
+        cfg.set_output_scale_independent(output_idx, new_scale);
         let _ = cfg.save();
         let _ = IpcClient::send_command(IpcMessage::ReloadDisplaysConfig);
         ref_sld();
@@ -2288,7 +2288,7 @@ fn wire_monitor_card_events(
                 }
                 let new_scale = (val.clamp(0.5, 3.0) * 10000.0).round() / 10000.0;
                 let mut cfg = DisplaysConfig::load();
-                cfg.set_output_scale(output_idx, new_scale);
+                cfg.set_output_scale_independent(output_idx, new_scale);
                 let _ = cfg.save();
                 let _ = IpcClient::send_command(IpcMessage::ReloadDisplaysConfig);
                 ref_apply();
