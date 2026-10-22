@@ -821,7 +821,9 @@ fn render_static_categories(
                     MenuAction::Command(args) => {
                         if !args.is_empty() {
                             info!("Ejecutando acción de menú global: {:?}", args);
-                            if let Ok(mut child) = Command::new(args[0]).args(&args[1..]).spawn() {
+                            let mut command = Command::new(args[0]);
+                            malus_de_common::config::set_cursor_environment(&mut command);
+                            if let Ok(mut child) = command.args(&args[1..]).spawn() {
                                 std::thread::spawn(move || {
                                     let _ = child.wait();
                                 });

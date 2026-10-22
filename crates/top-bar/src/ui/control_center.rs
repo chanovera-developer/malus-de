@@ -535,7 +535,9 @@ pub fn create_control_center_widget() -> MenuButton {
             .and_then(|p| p.parent().map(|dir| dir.join("malus-de-settings")))
             .filter(|p| p.exists())
             .unwrap_or_else(|| std::path::PathBuf::from("malus-de-settings"));
-        let _ = Command::new(&exe)
+        let mut command = Command::new(&exe);
+        malus_de_common::config::set_cursor_environment(&mut command);
+        let _ = command
             .env("WAYLAND_DISPLAY", &wayland_display)
             .env("GDK_BACKEND", "wayland")
             .env("GSK_RENDERER", "cairo")
@@ -549,7 +551,9 @@ pub fn create_control_center_widget() -> MenuButton {
         let wayland_display =
             std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-1".to_string());
         info!("Invocando Spotlight desde Centro de Control...");
-        let _ = Command::new("malus-de-spotlight")
+        let mut command = Command::new("malus-de-spotlight");
+        malus_de_common::config::set_cursor_environment(&mut command);
+        let _ = command
             .env("WAYLAND_DISPLAY", wayland_display)
             .env("GDK_BACKEND", "wayland")
             .env("GSK_RENDERER", "cairo")
@@ -1099,9 +1103,9 @@ fn create_airdrop_subview(
     let pop_c = popover.clone();
     downloads_btn.connect_clicked(move |_| {
         pop_c.popdown();
-        let _ = Command::new("nautilus")
-            .arg(glib::home_dir().join("Descargas"))
-            .spawn();
+        let mut command = Command::new("nautilus");
+        malus_de_common::config::set_cursor_environment(&mut command);
+        let _ = command.arg(glib::home_dir().join("Descargas")).spawn();
     });
 
     view_box.append(&footer_sep);
@@ -1395,7 +1399,9 @@ fn create_wifi_subview(
     let pop_c = popover.clone();
     pref_btn.connect_clicked(move |_| {
         pop_c.popdown();
-        let _ = Command::new("gnome-control-center").arg("wifi").spawn();
+        let mut command = Command::new("gnome-control-center");
+        malus_de_common::config::set_cursor_environment(&mut command);
+        let _ = command.arg("wifi").spawn();
     });
 
     view_box.append(&footer_sep);
@@ -1820,7 +1826,9 @@ fn create_bt_subview(
     let pop_c = popover.clone();
     pref_btn.connect_clicked(move |_| {
         pop_c.popdown();
-        let _ = Command::new("gnome-control-center").arg("bluetooth").spawn();
+        let mut command = Command::new("gnome-control-center");
+        malus_de_common::config::set_cursor_environment(&mut command);
+        let _ = command.arg("bluetooth").spawn();
     });
 
     view_box.append(&footer_sep);

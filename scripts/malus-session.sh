@@ -18,28 +18,49 @@ export GTK_USE_PORTAL=1
 export UBUNTU_MENUPROXY=1
 export GTK_MODULES="${GTK_MODULES:+$GTK_MODULES:}appmenu-gtk-module"
 mkdir -p "$XDG_CONFIG_HOME/glib-2.0/settings" "$XDG_CONFIG_HOME/gtk-3.0" "$XDG_CONFIG_HOME/gtk-4.0"
+if [ ! -f "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile" ]; then
 cat << 'EOF' > "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile"
 [org/gnome/desktop/wm/preferences]
 button-layout='close,minimize,maximize:'
 
 [org/gnome/desktop/interface]
 color-scheme='prefer-light'
+cursor-theme='macOS'
+cursor-size=24
 
 [org/gnome/settings-daemon/plugins/xsettings]
 overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
 EOF
+fi
 
-cat << 'EOF' > "$XDG_CONFIG_HOME/gtk-3.0/settings.ini"
+CURSOR_THEME="$(gsettings get org.gnome.desktop.interface cursor-theme 2>/dev/null | sed "s/^'//; s/'$//")" || CURSOR_THEME=""
+CURSOR_SIZE="$(gsettings get org.gnome.desktop.interface cursor-size 2>/dev/null)" || CURSOR_SIZE=""
+[ -n "$CURSOR_THEME" ] || CURSOR_THEME="macOS"
+case "$CURSOR_SIZE" in
+    ''|*[!0-9]*) CURSOR_SIZE=24 ;;
+esac
+export XCURSOR_THEME="$CURSOR_THEME"
+export XCURSOR_SIZE="$CURSOR_SIZE"
+
+if [ ! -f "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" ]; then
+cat << EOF > "$XDG_CONFIG_HOME/gtk-3.0/settings.ini"
 [Settings]
 gtk-decoration-layout=close,minimize,maximize:
 gtk-application-prefer-dark-theme=0
+gtk-cursor-theme-name=$CURSOR_THEME
+gtk-cursor-theme-size=$CURSOR_SIZE
 EOF
+fi
 
-cat << 'EOF' > "$XDG_CONFIG_HOME/gtk-4.0/settings.ini"
+if [ ! -f "$XDG_CONFIG_HOME/gtk-4.0/settings.ini" ]; then
+cat << EOF > "$XDG_CONFIG_HOME/gtk-4.0/settings.ini"
 [Settings]
 gtk-decoration-layout=close,minimize,maximize:
 gtk-application-prefer-dark-theme=0
+gtk-cursor-theme-name=$CURSOR_THEME
+gtk-cursor-theme-size=$CURSOR_SIZE
 EOF
+fi
 
 # Aislar el bus de sesión D-Bus para evitar que apps de instancia única (ej. Nautilus) se redirijan a la sesión GNOME anfitriona
 if [ -z "$MALUS_NESTED_DBUS" ] && which dbus-run-session >/dev/null 2>&1; then

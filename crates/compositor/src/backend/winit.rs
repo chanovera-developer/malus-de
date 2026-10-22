@@ -1371,6 +1371,7 @@ pub fn toggle_spotlight(socket_name: &str) {
 
     info!("Lanzando Spotlight desde: {:?}", exe);
     let mut command = std::process::Command::new(&exe);
+    malus_de_common::config::set_cursor_environment(&mut command);
     command.env("WAYLAND_DISPLAY", socket_name)
         .env("GDK_BACKEND", "wayland")
         .env("GSK_RENDERER", "cairo");

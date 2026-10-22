@@ -2688,6 +2688,22 @@ fn set_cursor_theme_and_size(theme: &str, size: u32) {
             let _ = std::fs::write(&keyfile_path, new_lines.join("\n") + "\n");
         }
     }
+
+    match Command::new("dbus-update-activation-environment")
+        .args(["--systemd", "XCURSOR_THEME", "XCURSOR_SIZE"])
+        .env("XCURSOR_THEME", theme)
+        .env("XCURSOR_SIZE", size.to_string())
+        .status()
+    {
+        Ok(status) if status.success() => {}
+        Ok(status) => tracing::warn!(
+            "No se pudo actualizar el entorno de activación D-Bus para el cursor (código: {:?})",
+            status.code()
+        ),
+        Err(error) => tracing::warn!(
+            "No se pudo actualizar el entorno de activación D-Bus para el cursor: {error}"
+        ),
+    }
 }
 
 fn create_appearance_pane(

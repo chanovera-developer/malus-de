@@ -113,7 +113,9 @@ pub fn create_apple_menu() -> MenuButton {
             .and_then(|p| p.parent().map(|dir| dir.join("malus-de-settings")))
             .filter(|p| p.exists())
             .unwrap_or_else(|| std::path::PathBuf::from("malus-de-settings"));
-        let _ = std::process::Command::new(&exe)
+        let mut command = std::process::Command::new(&exe);
+        malus_de_common::config::set_cursor_environment(&mut command);
+        let _ = command
             .env("WAYLAND_DISPLAY", &wayland_display)
             .env("GDK_BACKEND", "wayland")
             .env("GSK_RENDERER", "cairo")
@@ -126,7 +128,9 @@ pub fn create_apple_menu() -> MenuButton {
     item_monitor.connect_clicked(move |_| {
         popover_clone.popdown();
         info!("Abriendo Monitor del Sistema...");
-        let _ = std::process::Command::new("gnome-system-monitor").spawn();
+        let mut command = std::process::Command::new("gnome-system-monitor");
+        malus_de_common::config::set_cursor_environment(&mut command);
+        let _ = command.spawn();
     });
     content_box.append(&item_monitor);
 
@@ -164,7 +168,9 @@ pub fn create_apple_menu() -> MenuButton {
             .and_then(|p| p.parent().map(|dir| dir.join("malus-de-session-lock")))
             .unwrap_or_else(|| std::path::PathBuf::from("malus-de-session-lock"));
 
-        let _ = std::process::Command::new(&exe)
+        let mut command = std::process::Command::new(&exe);
+        malus_de_common::config::set_cursor_environment(&mut command);
+        let _ = command
             .env("WAYLAND_DISPLAY", &wayland_display)
             .env("GDK_BACKEND", "wayland")
             .spawn();

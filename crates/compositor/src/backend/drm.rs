@@ -67,7 +67,7 @@ struct DrmOutputSurface {
     damage: Rectangle<i32, Physical>,
 }
 
-struct MacosCursor {
+struct ThemedCursor {
     texture: GlesTexture,
     size: u32,
     width: i32,
@@ -76,33 +76,50 @@ struct MacosCursor {
     yhot: i32,
 }
 
-fn create_macos_cursor(renderer: &mut GlesRenderer) -> Option<MacosCursor> {
+fn create_cursor_texture(
+    renderer: &mut GlesRenderer,
+    theme: &str,
+    cursor_size: u32,
+) -> Option<ThemedCursor> {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let possible_paths = [
-        format!("{}/.icons/macOS/cursors/default", home),
-        format!("{}/.local/share/icons/macOS/cursors/default", home),
-        format!("{}/.icons/macOS/cursors/left_ptr", home),
-        format!("{}/.local/share/icons/macOS/cursors/left_ptr", home),
-        "/usr/share/icons/macOS/cursors/default".to_string(),
-        "/usr/share/icons/macOS/cursors/left_ptr".to_string(),
+    let mut icon_dirs = vec![
+        format!("{}/.icons", home),
+        format!("{}/.local/share/icons", home),
+        "/usr/share/icons".to_string(),
+        "/usr/share/pixmaps".to_string(),
     ];
+    if let Ok(xcursor_path) = std::env::var("XCURSOR_PATH") {
+        icon_dirs.extend(
+            xcursor_path
+                .split(':')
+                .filter(|dir| !dir.is_empty())
+                .map(str::to_string),
+        );
+    }
+    let possible_paths = icon_dirs
+        .iter()
+        .flat_map(|dir| {
+            ["default", "left_ptr", "arrow"]
+                .iter()
+                .map(move |name| format!("{}/{}/cursors/{}", dir, theme, name))
+        })
+        .collect::<Vec<_>>();
 
     for path in &possible_paths {
         if let Ok(content) = std::fs::read(path) {
             if let Some(images) = xcursor::parser::parse_xcursor(&content) {
-                // Seleccionar tamaño 48 o 32 para máxima nitidez en pantallas 4K con escalado fraccionario
-                if let Some(best) = images.iter().find(|img| img.size == 48)
-                    .or_else(|| images.iter().find(|img| img.size == 32))
-                    .or_else(|| images.iter().find(|img| img.size == 24))
-                    .or_else(|| images.first())
-                {
+                if let Some(best) = images.iter().min_by_key(|image| {
+                    (image.size.abs_diff(cursor_size), image.size < cursor_size)
+                }) {
                     let size = Size::from((best.width as i32, best.height as i32));
-                    if let Ok(texture) = renderer.import_memory(&best.pixels_rgba, Fourcc::Argb8888, size, false) {
+                    if let Ok(texture) =
+                        renderer.import_memory(&best.pixels_rgba, Fourcc::Argb8888, size, false)
+                    {
                         info!(
-                            "✨ Cursor nativo de macOS cargado desde '{}' ({}x{}, size={}, hotspot: {}, {})",
-                            path, best.width, best.height, best.size, best.xhot, best.yhot
+                            "Cursor del tema '{}' cargado desde '{}' ({}x{}, size={}, hotspot: {}, {})",
+                            theme, path, best.width, best.height, best.size, best.xhot, best.yhot
                         );
-                        return Some(MacosCursor {
+                        return Some(ThemedCursor {
                             texture,
                             size: best.size,
                             width: best.width as i32,
@@ -116,7 +133,10 @@ fn create_macos_cursor(renderer: &mut GlesRenderer) -> Option<MacosCursor> {
         }
     }
 
-    // Fallback procedimental en caso de no encontrar el tema en disco
+    warn!(
+        "No se encontró el cursor predeterminado del tema '{}'; usando el cursor de respaldo",
+        theme
+    );
     let w = 16;
     let h = 16;
     let mut data = vec![0u8; w * h * 4];
@@ -162,7 +182,7 @@ fn create_macos_cursor(renderer: &mut GlesRenderer) -> Option<MacosCursor> {
 
     let size = Size::from((w as i32, h as i32));
     let texture = renderer.import_memory(&data, Fourcc::Argb8888, size, false).ok()?;
-    Some(MacosCursor {
+    Some(ThemedCursor {
         texture,
         size: 16,
         width: 16,
@@ -417,8 +437,8 @@ pub fn run_drm() -> Result<()> {
 
     info!("🎨 Renderer OpenGL ES acelerado por hardware listo");
 
-    // Crear textura del cursor macOS
-    let cursor_texture = create_macos_cursor(&mut renderer);
+    let (mut cursor_theme, mut cursor_size) = malus_de_common::config::load_cursor_config();
+    let mut cursor_texture = create_cursor_texture(&mut renderer, &cursor_theme, cursor_size);
 
     // 4. Configurar dispositivos de entrada (teclado con layout de InputConfig, por defecto 'latam', y puntero)
     let input_cfg = malus_de_common::config::InputConfig::load();
@@ -1367,6 +1387,13 @@ pub fn run_drm() -> Result<()> {
         let check_now = state.pending_displays_reload || last_config_check.elapsed() >= Duration::from_millis(250);
         if check_now {
             last_config_check = Instant::now();
+            let (configured_cursor_theme, configured_cursor_size) =
+                malus_de_common::config::load_cursor_config();
+            if configured_cursor_theme != cursor_theme || configured_cursor_size != cursor_size {
+                cursor_theme = configured_cursor_theme;
+                cursor_size = configured_cursor_size;
+                cursor_texture = create_cursor_texture(&mut renderer, &cursor_theme, cursor_size);
+            }
             let current_mtime = std::fs::metadata(&monitors_toml_path)
                 .and_then(|m| m.modified())
                 .ok();
@@ -1606,7 +1633,9 @@ pub fn run_drm() -> Result<()> {
                     if output_geo.to_f64().contains(loc) {
                         let phys_x = ((loc.x - output_geo.loc.x as f64) * scale).round() as i32;
                         let phys_y = ((loc.y - output_geo.loc.y as f64) * scale).round() as i32;
-                        cursor_draw_point = Some((phys_x, phys_y));
+                        if !matches!(&state.cursor_status, CursorImageStatus::Hidden) {
+                            cursor_draw_point = Some((phys_x, phys_y));
+                        }
 
                         if let CursorImageStatus::Surface(ref surf) = state.cursor_status {
                             cursor_hotspot = smithay::wayland::compositor::with_states(surf, |states| {
@@ -2078,19 +2107,15 @@ pub fn run_drm() -> Result<()> {
                             }
                         }
 
-                        // Dibujar puntero del ratón con escala física precisa, tamaño macOS 24pt normalizado y hotspot exacto
+                        // Dibujar el puntero con el tamaño lógico configurado y el hotspot exacto
                         if let Some((phys_x, phys_y)) = cursor_draw_point {
                             if !cursor_elems.is_empty() {
                                 for elem in &cursor_elems {
                                     let view_dst = elem.view().dst;
                                     if view_dst.w > 0 && view_dst.h > 0 {
-                                        // Normalizar tamaño estrictamente a 24 puntos lógicos (evita cursores gigantes de clientes HiDPI)
-                                        let target_logical_w = if view_dst.w > 24 { 24.0 } else { view_dst.w as f64 };
-                                        let target_logical_h = if view_dst.h > 24 {
-                                            24.0 * (view_dst.h as f64 / view_dst.w as f64)
-                                        } else {
-                                            view_dst.h as f64
-                                        };
+                                        let target_logical_w = cursor_size as f64;
+                                        let target_logical_h =
+                                            target_logical_w * (view_dst.h as f64 / view_dst.w as f64);
                                         let ratio_x = target_logical_w / view_dst.w as f64;
                                         let ratio_y = target_logical_h / view_dst.h as f64;
 
@@ -2129,7 +2154,7 @@ pub fn run_drm() -> Result<()> {
                                     }
                                 }
                             } else if let Some(ref cur) = cursor_texture {
-                                let scale_factor = (24.0 * scale) / cur.size as f64;
+                                let scale_factor = (cursor_size as f64 * scale) / cur.size as f64;
                                 let cursor_w = (cur.width as f64 * scale_factor).round() as i32;
                                 let cursor_h = (cur.height as f64 * scale_factor).round() as i32;
                                 let hot_x = (cur.xhot as f64 * scale_factor).round() as i32;
