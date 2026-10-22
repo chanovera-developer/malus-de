@@ -94,6 +94,8 @@ La instalación no modifica los archivos ni las preferencias de VS Code, Antigra
 La [guía de manifiesto](./docs/PACKAGE_MANIFEST.md) documenta dependencias de ejecución, compilación y servicios que deben habilitarse.
 Los selectores de archivos de GTK y aplicaciones compatibles (por ejemplo, VS Code) usan xdg-desktop-portal. Malus prefiere el backend GTK para estos diálogos, con GNOME como alternativa; instala ambos backends y cierra e inicia sesión después de actualizar Malus.
 
+El menú global solo puede mostrar y ejecutar menús que la aplicación publique mediante `com.canonical.dbusmenu` y `com.canonical.AppMenu.Registrar`. Malus no inventa menús aproximados para aplicaciones que no los publican; algunas aplicaciones Electron, incluida VS Code según su versión y configuración, pueden no exponerlos en Linux.
+
 ## Documentación
 
 - [PRD y arquitectura técnica](./PRD.md)

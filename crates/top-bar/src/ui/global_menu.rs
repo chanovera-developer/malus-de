@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::process::Command;
 use std::rc::Rc;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::services::dbusmenu::{DbusMenuCategory, DbusMenuItem, DbusMenuService};
 
@@ -493,23 +493,61 @@ pub fn update_global_menu(
         glib::MainContext::default().spawn_local(async move {
             match DbusMenuService::fetch_layout(&srv, &pth).await {
                 Ok(categories) if !categories.is_empty() => {
+                    if !is_current_menu(&h_clone, &a_id, &t_id, window_id, &srv, &pth) {
+                        return;
+                    }
                     info!("✨ Menú dinámico D-Bus renderizado para {} ({} categorías)", srv, categories.len());
                     render_dbus_categories(&h_clone, categories, &srv, &pth);
                 }
                 Err(err) => {
-                    info!("Aviso al obtener GetLayout D-Bus ({:?}); recurriendo a menú estándar.", err);
-                    render_static_categories(&h_clone, a_id.as_deref(), t_id.as_deref());
+                    warn!("No se pudo obtener el menú D-Bus de {srv}:{pth}: {err}");
+                    if is_current_menu(&h_clone, &a_id, &t_id, window_id, &srv, &pth) {
+                        clear_app_menus(&h_clone);
+                    }
                 }
-                _ => {
-                    render_static_categories(&h_clone, a_id.as_deref(), t_id.as_deref());
+                Ok(_) => {
+                    if is_current_menu(&h_clone, &a_id, &t_id, window_id, &srv, &pth) {
+                        clear_app_menus(&h_clone);
+                    }
                 }
             }
         });
         return;
     }
 
-    // Fallback: Menús estáticos auténticos
-    render_static_categories(handles, app_id, title);
+    if app_id.is_none() && title.is_none() {
+        render_static_categories(handles, None, None);
+    } else {
+        clear_app_menus(handles);
+    }
+}
+
+fn is_current_menu(
+    handles: &GlobalMenuHandles,
+    app_id: &Option<String>,
+    title: &Option<String>,
+    window_id: Option<u64>,
+    service: &str,
+    path: &str,
+) -> bool {
+    let active = handles.current_active.borrow();
+    if active.0.as_ref() != app_id.as_ref()
+        || active.1.as_ref() != title.as_ref()
+        || active.2 != window_id
+    {
+        return false;
+    }
+
+    handles
+        .dbus_menu_service
+        .find_menu(window_id, app_id.as_deref())
+        .is_some_and(|menu| menu.0 == service && menu.1 == path)
+}
+
+fn clear_app_menus(handles: &GlobalMenuHandles) {
+    while let Some(child) = handles.menus_container.first_child() {
+        handles.menus_container.remove(&child);
+    }
 }
 
 fn render_dbus_categories(
@@ -565,7 +603,9 @@ fn render_dbus_categories(
             let srv_c = srv.clone();
             let pth_c = pth.clone();
             glib::MainContext::default().spawn_local(async move {
-                DbusMenuService::about_to_show(&srv_c, &pth_c, cat_id).await;
+                if let Err(err) = DbusMenuService::about_to_show(&srv_c, &pth_c, cat_id).await {
+                    warn!("No se pudo actualizar la categoría D-Bus {cat_id}: {err}");
+                }
             });
         });
 
@@ -648,7 +688,9 @@ fn append_dbus_menu_item(
             let srv_c = srv.clone();
             let pth_c = pth.clone();
             glib::MainContext::default().spawn_local(async move {
-                DbusMenuService::about_to_show(&srv_c, &pth_c, item_id).await;
+                if let Err(err) = DbusMenuService::about_to_show(&srv_c, &pth_c, item_id).await {
+                    warn!("No se pudo actualizar el submenú D-Bus {item_id}: {err}");
+                }
             });
             sp_clone.popup();
         });
@@ -671,7 +713,9 @@ fn append_dbus_menu_item(
         let srv_c = srv.clone();
         let pth_c = pth.clone();
         glib::MainContext::default().spawn_local(async move {
-            let _ = DbusMenuService::trigger_event(&srv_c, &pth_c, item_id).await;
+            if let Err(err) = DbusMenuService::trigger_event(&srv_c, &pth_c, item_id).await {
+                warn!("No se pudo activar el elemento de menú D-Bus {item_id}: {err}");
+            }
         });
     });
 

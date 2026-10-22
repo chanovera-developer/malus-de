@@ -81,7 +81,21 @@ impl AppMenuRegistrar {
         info!("📤 [AppMenu.Registrar] Window {} desregistrado", window_id);
         let mut by_win = self.registrations_by_window.lock().unwrap();
         if let Some(reg) = by_win.remove(&window_id) {
-            self.registrations_by_service.lock().unwrap().remove(&reg.service);
+            let mut by_service = self.registrations_by_service.lock().unwrap();
+            if by_service
+                .get(&reg.service)
+                .is_some_and(|current| current.window_id == window_id)
+            {
+                if let Some(replacement) = by_win
+                    .values()
+                    .find(|registered| registered.service == reg.service)
+                    .cloned()
+                {
+                    by_service.insert(reg.service, replacement);
+                } else {
+                    by_service.remove(&reg.service);
+                }
+            }
         }
         Ok(())
     }
@@ -175,18 +189,10 @@ impl DbusMenuService {
                     Ok(c) => c,
                     Err(e) => {
                         warn!(
-                            "Aviso: No se pudo adquirir el nombre 'com.canonical.AppMenu.Registrar' ({:?}), enlazando objeto sin nombre exclusivo.",
+                            "No se pudo iniciar com.canonical.AppMenu.Registrar: {:?}",
                             e
                         );
-                        let fallback_reg = AppMenuRegistrar {
-                            registrations_by_window: Arc::new(Mutex::new(HashMap::new())),
-                            registrations_by_service: Arc::new(Mutex::new(HashMap::new())),
-                            update_tx: async_channel::unbounded().0,
-                        };
-                        zbus::connection::Builder::session()?
-                            .serve_at("/com/canonical/AppMenu/Registrar", fallback_reg)?
-                            .build()
-                            .await?
+                        return Ok::<(), zbus::Error>(());
                     }
                 };
 
@@ -215,21 +221,13 @@ impl DbusMenuService {
             }
         }
 
-        // 2. Buscar por app_id en los servicios registrados
+        // 2. Buscar por app_id cuando el publicador usa un nombre de servicio reconocible.
         if let Some(id) = app_id {
-            let id_lower = id.to_lowercase();
+            let id_normalized = normalize_app_id(id);
             let by_srv = self.registrations_by_service.lock().unwrap();
 
             for (srv, reg) in by_srv.iter() {
-                let srv_lower = srv.to_lowercase();
-                if srv_lower.contains(&id_lower) || id_lower.contains(&srv_lower) {
-                    return Some((reg.service.clone(), reg.path.clone()));
-                }
-            }
-
-            // Si solo hay una app registrada con menú y coincide el contexto
-            if by_srv.len() == 1 {
-                if let Some(reg) = by_srv.values().next() {
+                if normalize_app_id(srv) == id_normalized {
                     return Some((reg.service.clone(), reg.path.clone()));
                 }
             }
@@ -305,19 +303,27 @@ impl DbusMenuService {
     }
 
     /// Notifica 'AboutToShow' antes de desplegar un submenú
-    pub async fn about_to_show(service: &str, path: &str, item_id: i32) {
-        if let Ok(connection) = zbus::Connection::session().await {
-            let _ = connection
-                .call_method(
-                    Some(service),
-                    path,
-                    Some("com.canonical.dbusmenu"),
-                    "AboutToShow",
-                    &(item_id,),
-                )
-                .await;
-        }
+    pub async fn about_to_show(service: &str, path: &str, item_id: i32) -> Result<()> {
+        let connection = zbus::Connection::session().await?;
+        connection
+            .call_method(
+                Some(service),
+                path,
+                Some("com.canonical.dbusmenu"),
+                "AboutToShow",
+                &(item_id,),
+            )
+            .await?;
+        Ok(())
     }
+}
+
+fn normalize_app_id(id: &str) -> String {
+    id.rsplit('/')
+        .next()
+        .unwrap_or(id)
+        .trim_end_matches(".desktop")
+        .to_lowercase()
 }
 
 fn unwrap_val<'a>(mut v: &'a Value<'a>) -> &'a Value<'a> {
@@ -566,5 +572,33 @@ mod tests {
         let found = service.find_menu(Some(1234), Some("my-app"));
         assert_eq!(found, Some((":1.99".to_string(), "/MenuBar/1".to_string())));
     }
-}
 
+    #[test]
+    fn does_not_return_an_unrelated_menu_for_a_different_app() {
+        let (service, _registrar) = DbusMenuService::new();
+        let reg = RegisteredMenu {
+            window_id: 1234,
+            service: ":1.99".to_string(),
+            path: "/MenuBar/1".to_string(),
+        };
+        service.registrations_by_service.lock().unwrap().insert(reg.service.clone(), reg);
+
+        assert_eq!(service.find_menu(None, Some("code")), None);
+    }
+
+    #[test]
+    fn matches_explicit_desktop_service_names() {
+        let (service, _registrar) = DbusMenuService::new();
+        let reg = RegisteredMenu {
+            window_id: 1234,
+            service: "org.example.Editor".to_string(),
+            path: "/MenuBar/1".to_string(),
+        };
+        service.registrations_by_service.lock().unwrap().insert(reg.service.clone(), reg);
+
+        assert_eq!(
+            service.find_menu(None, Some("org.example.Editor.desktop")),
+            Some(("org.example.Editor".to_string(), "/MenuBar/1".to_string()))
+        );
+    }
+}
