@@ -6,6 +6,7 @@ use gtk4::{
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita as adw;
+use libadwaita::prelude::MessageDialogExt;
 use malus_de_common::logging::init_logging;
 use std::cell::RefCell;
 use std::process::Command;
@@ -14,6 +15,19 @@ use tracing::info;
 
 mod calculator;
 mod indexer;
+
+#[derive(Clone, Copy)]
+enum SystemAction {
+    Logout,
+    Reboot,
+    PowerOff,
+}
+
+#[derive(Clone)]
+enum SpotlightAction {
+    LaunchApp(String),
+    System(SystemAction),
+}
 
 const SPOTLIGHT_CSS: &str = r#"
 window.malus-spotlight-window {
@@ -211,7 +225,7 @@ fn build_spotlight_ui(app: &Application) {
     card.append(&scroll);
 
     // Almacenamiento de acciones ejecutables asociadas a cada fila de la lista
-    let row_actions: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    let row_actions: Rc<RefCell<Vec<SpotlightAction>>> = Rc::new(RefCell::new(Vec::new()));
 
     // Filtrar resultados al escribir
     let apps_ref = all_apps.clone();
@@ -244,10 +258,58 @@ fn build_spotlight_ui(app: &Application) {
             row_box.append(&text_box);
             row.set_child(Some(&row_box));
             list_clone.append(&row);
-            actions_clone.borrow_mut().push(format!("echo {}", calc_res));
+            actions_clone.borrow_mut().push(SpotlightAction::LaunchApp(format!("echo {}", calc_res)));
         }
 
-        // 2. Filtrar aplicaciones
+        // 2. Acciones de Malus DE
+        if !q.is_empty() {
+            let system_actions = [
+                (
+                    SystemAction::Logout,
+                    "Cerrar sesión",
+                    "Cierra la sesión actual de Malus DE",
+                    "system-log-out-symbolic",
+                    &["cerrar sesión", "cerrar sesion", "sesión", "sesion", "logout", "salir"][..],
+                ),
+                (
+                    SystemAction::Reboot,
+                    "Reiniciar",
+                    "Reinicia el equipo",
+                    "system-reboot-symbolic",
+                    &["reiniciar", "reinicio", "restart", "reboot"][..],
+                ),
+                (
+                    SystemAction::PowerOff,
+                    "Apagar",
+                    "Apaga el equipo",
+                    "system-shutdown-symbolic",
+                    &["apagar", "apagado", "shutdown", "power off", "poweroff"][..],
+                ),
+            ];
+
+            for (action, name, description, icon_name, keywords) in system_actions {
+                if keywords.iter().any(|keyword| keyword.contains(&q)) {
+                    let row = ListBoxRow::builder().css_classes(["spotlight-row"]).build();
+                    let row_box = GtkBox::builder()
+                        .orientation(Orientation::Horizontal)
+                        .spacing(12)
+                        .build();
+                    let icon = Image::builder().icon_name(icon_name).pixel_size(32).build();
+                    let text_box = GtkBox::builder().orientation(Orientation::Vertical).build();
+                    let title = Label::builder().label(name).css_classes(["result-title"]).xalign(0.0).build();
+                    let subtitle = Label::builder().label(description).css_classes(["result-subtitle"]).xalign(0.0).build();
+                    text_box.append(&title);
+                    text_box.append(&subtitle);
+                    row_box.append(&icon);
+                    row_box.append(&text_box);
+                    row.set_child(Some(&row_box));
+                    list_clone.append(&row);
+                    actions_clone.borrow_mut().push(SpotlightAction::System(action));
+                }
+            }
+        }
+
+        // 3. Filtrar aplicaciones
         if !q.is_empty() {
             let mut matches = 0;
             for app in apps_ref.iter() {
@@ -273,7 +335,7 @@ fn build_spotlight_ui(app: &Application) {
                     row.set_child(Some(&row_box));
 
                     list_clone.append(&row);
-                    actions_clone.borrow_mut().push(app.exec.clone());
+                    actions_clone.borrow_mut().push(SpotlightAction::LaunchApp(app.exec.clone()));
                     matches += 1;
                 }
             }
@@ -309,10 +371,15 @@ fn build_spotlight_ui(app: &Application) {
                 glib::Propagation::Stop
             }
             Key::Return | Key::KP_Enter => {
-                if let Some(selected_row) = list_nav.selected_row() {
+                let action = if let Some(selected_row) = list_nav.selected_row() {
                     let idx = selected_row.index() as usize;
-                    let actions = actions_exec.borrow();
-                    if let Some(cmd) = actions.get(idx) {
+                    actions_exec.borrow().get(idx).cloned()
+                } else {
+                    None
+                };
+
+                match action {
+                    Some(SpotlightAction::LaunchApp(cmd)) => {
                         info!("Lanzando desde Spotlight: {}", cmd);
                         let parts: Vec<&str> = cmd.split_whitespace().collect();
                         if let Some((exe, args)) = parts.split_first() {
@@ -343,12 +410,22 @@ fn build_spotlight_ui(app: &Application) {
                                 });
                             }
                         }
+                        if let Some(app) = win_close.application() {
+                            app.quit();
+                        } else {
+                            win_close.close();
+                        }
                     }
-                }
-                if let Some(app) = win_close.application() {
-                    app.quit();
-                } else {
-                    win_close.close();
+                    Some(SpotlightAction::System(action)) => {
+                        show_system_action_confirmation(&win_close, action);
+                    }
+                    None => {
+                        if let Some(app) = win_close.application() {
+                            app.quit();
+                        } else {
+                            win_close.close();
+                        }
+                    }
                 }
                 glib::Propagation::Stop
             }
@@ -379,4 +456,73 @@ fn build_spotlight_ui(app: &Application) {
     window.set_child(Some(&card));
     window.present();
     search_entry.grab_focus();
+}
+
+fn show_system_action_confirmation(window: &ApplicationWindow, action: SystemAction) {
+    let (heading, body, confirm_label) = match action {
+        SystemAction::Logout => (
+            "¿Cerrar la sesión actual?",
+            "Se cerrarán las aplicaciones abiertas en Malus DE y volverás a la pantalla de inicio de sesión.",
+            "Cerrar sesión",
+        ),
+        SystemAction::Reboot => (
+            "¿Reiniciar el equipo?",
+            "El sistema cerrará las aplicaciones y reiniciará el equipo. Cualquier cambio no guardado se perderá.",
+            "Reiniciar",
+        ),
+        SystemAction::PowerOff => (
+            "¿Apagar el equipo?",
+            "El sistema cerrará las aplicaciones y apagará el equipo.",
+            "Apagar",
+        ),
+    };
+
+    let dialog = adw::MessageDialog::builder()
+        .transient_for(window)
+        .heading(heading)
+        .body(body)
+        .build();
+    dialog.add_response("cancel", "Cancelar");
+    dialog.add_response("confirm", confirm_label);
+    dialog.set_response_appearance("confirm", adw::ResponseAppearance::Destructive);
+    dialog.set_default_response(Some("cancel"));
+    dialog.set_close_response("cancel");
+
+    let app = window.application();
+    dialog.connect_response(None, move |dialog, response| {
+        if response == "confirm" {
+            let mut command = match action {
+                SystemAction::Logout => {
+                    let sibling_ctl = std::env::current_exe()
+                        .ok()
+                        .and_then(|path| path.parent().map(|dir| dir.join("malus-de-ctl")))
+                        .filter(|path| path.is_file());
+                    let mut command = sibling_ctl
+                        .map(Command::new)
+                        .unwrap_or_else(|| Command::new("malus-de-ctl"));
+                    command.arg("logout");
+                    command
+                }
+                SystemAction::Reboot => {
+                    let mut command = Command::new("systemctl");
+                    command.arg("reboot");
+                    command
+                }
+                SystemAction::PowerOff => {
+                    let mut command = Command::new("systemctl");
+                    command.arg("poweroff");
+                    command
+                }
+            };
+
+            if let Err(error) = command.spawn() {
+                tracing::error!("No se pudo ejecutar la acción del sistema: {error}");
+            }
+        }
+        dialog.close();
+        if let Some(app) = &app {
+            app.quit();
+        }
+    });
+    dialog.present();
 }
