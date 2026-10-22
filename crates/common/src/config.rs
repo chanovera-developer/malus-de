@@ -1785,6 +1785,15 @@ impl DisplaysConfig {
         self.recalculate_layout();
     }
 
+    /// Ajusta una pantalla sin modificar la escala de las demás.
+    pub fn set_output_scale_independent(&mut self, output_idx: usize, new_scale: f64) {
+        if output_idx >= self.outputs.len() {
+            return;
+        }
+        self.linked_physical_1to1 = false;
+        self.set_output_scale(output_idx, new_scale);
+    }
+
     /// Intercambia el orden horizontal (Izquierda <-> Derecha) de los monitores
     pub fn swap_horizontal_order(&mut self) {
         if self.outputs.len() < 2 {
@@ -2172,9 +2181,9 @@ mod tests {
         assert_eq!(cfg.outputs[1].x, 0);
         assert_eq!(cfg.outputs[0].x, 2276);
 
-        // Unlink and set independent scale
-        cfg.linked_physical_1to1 = false;
-        cfg.set_output_scale(1, 2.0);
+        // Editing an individual output automatically unlinks the scales.
+        cfg.set_output_scale_independent(1, 2.0);
+        assert!(!cfg.linked_physical_1to1);
         assert!((cfg.outputs[1].scale - 2.0).abs() < 0.001);
         assert!((cfg.outputs[0].scale - 1.5).abs() < 0.001);
     }
