@@ -57,6 +57,8 @@ ensure_user_dir XDG_MUSIC_DIR Music
 ensure_user_dir XDG_PICTURES_DIR Pictures
 ensure_user_dir XDG_VIDEOS_DIR Videos
 
+# TODO: Revisar por qué Nautilus no muestra sus ubicaciones nativas en la sidebar,
+# más allá de los marcadores importados o añadidos aquí.
 # Nautilus separa los marcadores de sus ubicaciones nativas; mantener las carpetas XDG visibles allí.
 python3 - "$XDG_CONFIG_HOME/gtk-3.0/bookmarks" "$XDG_CONFIG_HOME/gtk-4.0/bookmarks" "${USER_DIR_PATHS[@]}" <<'PY'
 import os
