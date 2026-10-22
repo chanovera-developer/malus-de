@@ -50,8 +50,6 @@ export QT_QPA_PLATFORM="wayland"
 export SDL_VIDEODRIVER="wayland"
 export CLUTTER_BACKEND="wayland"
 export MOZ_ENABLE_WAYLAND=1
-export XCURSOR_THEME="macOS"
-export XCURSOR_SIZE=24
 
 # Asegurar archivos de configuración aislados de GNOME (respetando elecciones previas del usuario)
 mkdir -p "$XDG_CONFIG_HOME/glib-2.0/settings" "$XDG_CONFIG_HOME/gtk-3.0" "$XDG_CONFIG_HOME/gtk-4.0"
@@ -72,24 +70,33 @@ overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
 EOF
 fi
 
+CURSOR_THEME="$(gsettings get org.gnome.desktop.interface cursor-theme 2>/dev/null | sed "s/^'//; s/'$//")" || CURSOR_THEME=""
+CURSOR_SIZE="$(gsettings get org.gnome.desktop.interface cursor-size 2>/dev/null)" || CURSOR_SIZE=""
+[ -n "$CURSOR_THEME" ] || CURSOR_THEME="macOS"
+case "$CURSOR_SIZE" in
+    ''|*[!0-9]*) CURSOR_SIZE=24 ;;
+esac
+export XCURSOR_THEME="$CURSOR_THEME"
+export XCURSOR_SIZE="$CURSOR_SIZE"
+
 if [ ! -f "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" ]; then
-cat << 'EOF' > "$XDG_CONFIG_HOME/gtk-3.0/settings.ini"
+cat << EOF > "$XDG_CONFIG_HOME/gtk-3.0/settings.ini"
 [Settings]
 gtk-decoration-layout=close,minimize,maximize:
 gtk-application-prefer-dark-theme=0
-gtk-cursor-theme-name=macOS
-gtk-cursor-theme-size=24
+gtk-cursor-theme-name=$CURSOR_THEME
+gtk-cursor-theme-size=$CURSOR_SIZE
 gtk-theme-name=Adwaita
 EOF
 fi
 
 if [ ! -f "$XDG_CONFIG_HOME/gtk-4.0/settings.ini" ]; then
-cat << 'EOF' > "$XDG_CONFIG_HOME/gtk-4.0/settings.ini"
+cat << EOF > "$XDG_CONFIG_HOME/gtk-4.0/settings.ini"
 [Settings]
 gtk-decoration-layout=close,minimize,maximize:
 gtk-application-prefer-dark-theme=0
-gtk-cursor-theme-name=macOS
-gtk-cursor-theme-size=24
+gtk-cursor-theme-name=$CURSOR_THEME
+gtk-cursor-theme-size=$CURSOR_SIZE
 gtk-theme-name=Adwaita
 EOF
 fi
@@ -170,9 +177,9 @@ fi
 
 # Actualizar el entorno de activación antes de iniciar los portales, para que
 # hereden el socket del compositor de Malus y no el de la sesión de inicio.
-dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL 2>/dev/null || true
+dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL XCURSOR_THEME XCURSOR_SIZE 2>/dev/null || true
 if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL || echo "⚠️ No se pudo importar el entorno de Malus a systemd --user."
+    systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL XCURSOR_THEME XCURSOR_SIZE || echo "⚠️ No se pudo importar el entorno de Malus a systemd --user."
     systemctl --user start malus-session.target || echo "⚠️ No se pudo iniciar malus-session.target."
     systemctl --user start xdg-desktop-portal || echo "⚠️ No se pudo iniciar xdg-desktop-portal."
 fi

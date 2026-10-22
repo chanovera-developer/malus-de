@@ -844,19 +844,17 @@ overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
 "#;
         std::fs::write(&keyfile_path, keyfile_content)?;
     }
+    let (cursor_theme, cursor_size) = load_cursor_config();
 
     // 2. Archivos settings.ini para GTK3 y GTK4 (preservar configuraciones existentes del usuario)
     let gtk3_dir = malus_config_dir.join("gtk-3.0");
     std::fs::create_dir_all(&gtk3_dir)?;
     let gtk3_ini = gtk3_dir.join("settings.ini");
     if !gtk3_ini.exists() {
-        let gtk_ini_content = r#"[Settings]
-gtk-decoration-layout=close,minimize,maximize:
-gtk-application-prefer-dark-theme=1
-gtk-cursor-theme-name=macOS
-gtk-cursor-theme-size=24
-gtk-theme-name=Adwaita
-"#;
+        let gtk_ini_content = format!(
+            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme=1\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-theme-name=Adwaita\n",
+            cursor_theme, cursor_size
+        );
         std::fs::write(&gtk3_ini, gtk_ini_content)?;
     }
 
@@ -864,13 +862,10 @@ gtk-theme-name=Adwaita
     std::fs::create_dir_all(&gtk4_dir)?;
     let gtk4_ini = gtk4_dir.join("settings.ini");
     if !gtk4_ini.exists() {
-        let gtk_ini_content = r#"[Settings]
-gtk-decoration-layout=close,minimize,maximize:
-gtk-application-prefer-dark-theme=1
-gtk-cursor-theme-name=macOS
-gtk-cursor-theme-size=24
-gtk-theme-name=Adwaita
-"#;
+        let gtk_ini_content = format!(
+            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme=1\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-theme-name=Adwaita\n",
+            cursor_theme, cursor_size
+        );
         std::fs::write(&gtk4_ini, gtk_ini_content)?;
     }
 
@@ -927,10 +922,55 @@ gtk-theme-name=Adwaita
     }
 
     // Exportar variables de cursor para los procesos iniciados desde Malus DE
-    std::env::set_var("XCURSOR_THEME", "macOS");
-    std::env::set_var("XCURSOR_SIZE", "24");
+    std::env::set_var("XCURSOR_THEME", &cursor_theme);
+    std::env::set_var("XCURSOR_SIZE", cursor_size.to_string());
 
     Ok(malus_config_dir)
+}
+
+pub fn load_cursor_config() -> (String, u32) {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let config_home = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(home).join(".config"));
+    let settings_path = config_home.join("glib-2.0/settings/keyfile");
+    let settings = std::fs::read_to_string(settings_path).unwrap_or_default();
+    let (configured_theme, configured_size) = parse_cursor_config(&settings);
+    let theme = configured_theme
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var("XCURSOR_THEME").ok())
+        .unwrap_or_else(|| "macOS".to_string());
+    let size = configured_size
+        .or_else(|| std::env::var("XCURSOR_SIZE").ok()?.parse::<u32>().ok())
+        .unwrap_or(24)
+        .clamp(1, 128);
+    (theme, size)
+}
+
+fn parse_cursor_config(settings: &str) -> (Option<String>, Option<u32>) {
+    let mut in_interface_section = false;
+    let mut theme = None;
+    let mut size = None;
+
+    for line in settings.lines().map(str::trim) {
+        if line.starts_with('[') && line.ends_with(']') {
+            in_interface_section = line == "[org/gnome/desktop/interface]";
+        } else if in_interface_section {
+            if let Some(value) = line.strip_prefix("cursor-theme=") {
+                theme = Some(value.trim().trim_matches('\'').to_string());
+            } else if let Some(value) = line.strip_prefix("cursor-size=") {
+                size = value.trim().parse::<u32>().ok();
+            }
+        }
+    }
+    (theme, size)
+}
+
+pub fn set_cursor_environment(command: &mut std::process::Command) {
+    let (theme, size) = load_cursor_config();
+    command
+        .env("XCURSOR_THEME", theme)
+        .env("XCURSOR_SIZE", size.to_string());
 }
 
 /// Sincroniza el modo claro/oscuro dentro de la configuración aislada de Malus DE.
@@ -1988,6 +2028,17 @@ fn extract_tag_value(xml_snippet: &str, tag: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_config_reads_values_from_interface_section_only() {
+        let settings = "[org/example]\ncursor-theme='wrong'\ncursor-size=99\n\
+[org/gnome/desktop/interface]\ncursor-theme='Adwaita'\ncursor-size=32\n";
+
+        assert_eq!(
+            parse_cursor_config(settings),
+            (Some("Adwaita".to_string()), Some(32))
+        );
+    }
 
     #[test]
     fn test_gtk_decoration_layout_is_set_left_without_dropping_settings() {

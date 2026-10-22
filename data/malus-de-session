@@ -2,19 +2,37 @@
 # Script de inicio de sesión de usuario para Malus DE
 set -e
 
+export XDG_CONFIG_HOME="$HOME/.config/malus-de"
+export GSETTINGS_BACKEND="keyfile"
 export XDG_CURRENT_DESKTOP="Malus:GNOME"
 export XDG_SESSION_DESKTOP="malus-de"
 export XDG_SESSION_TYPE="wayland"
 export GDK_BACKEND="wayland"
 export QT_QPA_PLATFORM="wayland"
 export MOZ_ENABLE_WAYLAND=1
-export XCURSOR_THEME="macOS"
-export XCURSOR_SIZE=24
 
-# Configuración inicial de GSettings para botones semáforo a la izquierda estilo macOS y cursor
+mkdir -p "$XDG_CONFIG_HOME/glib-2.0/settings"
+KEYFILE="$XDG_CONFIG_HOME/glib-2.0/settings/keyfile"
+if [ ! -f "$KEYFILE" ]; then
+    cat << 'EOF' > "$KEYFILE"
+[org/gnome/desktop/wm/preferences]
+button-layout='close,minimize,maximize:'
+
+[org/gnome/desktop/interface]
+cursor-theme='macOS'
+cursor-size=24
+EOF
+fi
+
+# Configuración inicial de GSettings para botones semáforo a la izquierda estilo macOS
 gsettings set org.gnome.desktop.wm.preferences button-layout "close,minimize,maximize:" || true
-gsettings set org.gnome.desktop.interface cursor-theme "macOS" || true
-gsettings set org.gnome.desktop.interface cursor-size 24 || true
+CURSOR_THEME="$(gsettings get org.gnome.desktop.interface cursor-theme 2>/dev/null | sed "s/^'//; s/'$//")" || CURSOR_THEME=""
+CURSOR_SIZE="$(gsettings get org.gnome.desktop.interface cursor-size 2>/dev/null)" || CURSOR_SIZE=""
+export XCURSOR_THEME="${CURSOR_THEME:-macOS}"
+case "$CURSOR_SIZE" in
+    ''|*[!0-9]*) CURSOR_SIZE=24 ;;
+esac
+export XCURSOR_SIZE="$CURSOR_SIZE"
 
 # Arrancar el compositor Smithay nativo
 exec malus-de-compositor --backend drm

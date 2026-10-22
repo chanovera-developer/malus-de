@@ -1143,6 +1143,7 @@ fn create_dock_item(
                     .unwrap_or_else(|| std::path::PathBuf::from(target_exe));
                 let mut command = Command::new(&resolved_exe);
                 command.args(args);
+                malus_de_common::config::set_cursor_environment(&mut command);
                 if let Ok(wayland_disp) = std::env::var("WAYLAND_DISPLAY") {
                     command.env("WAYLAND_DISPLAY", wayland_disp);
                 }

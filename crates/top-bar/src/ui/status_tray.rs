@@ -182,7 +182,9 @@ fn create_wifi_tray_button() -> MenuButton {
     let pop_c = popover.clone();
     pref_btn.connect_clicked(move |_| {
         pop_c.popdown();
-        let _ = Command::new("gnome-control-center").arg("wifi").spawn();
+        let mut command = Command::new("gnome-control-center");
+        malus_de_common::config::set_cursor_environment(&mut command);
+        let _ = command.arg("wifi").spawn();
     });
 
     popover_box.append(&sep);
@@ -513,7 +515,9 @@ fn create_bluetooth_tray_button() -> MenuButton {
     let pop_c = popover.clone();
     pref_btn.connect_clicked(move |_| {
         pop_c.popdown();
-        let _ = Command::new("gnome-control-center").arg("bluetooth").spawn();
+        let mut command = Command::new("gnome-control-center");
+        malus_de_common::config::set_cursor_environment(&mut command);
+        let _ = command.arg("bluetooth").spawn();
     });
 
     popover_box.append(&sep);
@@ -872,7 +876,9 @@ fn create_volume_tray_button() -> MenuButton {
     let pop_c = popover.clone();
     pref_btn.connect_clicked(move |_| {
         pop_c.popdown();
-        let _ = Command::new("gnome-control-center").arg("sound").spawn();
+        let mut command = Command::new("gnome-control-center");
+        malus_de_common::config::set_cursor_environment(&mut command);
+        let _ = command.arg("sound").spawn();
     });
 
     popover_box.append(&sep);
@@ -1102,9 +1108,9 @@ fn create_link_tray_button() -> MenuButton {
     let pop_c = popover.clone();
     down_btn.connect_clicked(move |_| {
         pop_c.popdown();
-        let _ = Command::new("nautilus")
-            .arg(glib::home_dir().join("Descargas"))
-            .spawn();
+        let mut command = Command::new("nautilus");
+        malus_de_common::config::set_cursor_environment(&mut command);
+        let _ = command.arg(glib::home_dir().join("Descargas")).spawn();
     });
 
     popover_box.append(&sep);
@@ -1295,7 +1301,9 @@ fn create_spotlight_button() -> Button {
             .unwrap_or_else(|| std::path::PathBuf::from("malus-de-spotlight"));
 
         info!("Lanzando Spotlight: {:?}", exe);
-        match std::process::Command::new(&exe)
+        let mut command = std::process::Command::new(&exe);
+        malus_de_common::config::set_cursor_environment(&mut command);
+        match command
             .env("WAYLAND_DISPLAY", &wayland_display)
             .env("GDK_BACKEND", "wayland")
             .env("GSK_RENDERER", "cairo")
