@@ -932,6 +932,7 @@ pub fn snap_window(
         states.contains(XdgState::Maximized)
             || states.contains(XdgState::TiledLeft)
             || states.contains(XdgState::TiledRight)
+            || states.contains(XdgState::Fullscreen)
     }).unwrap_or(false);
 
     // Guardar geometría previa flotante SOLO si la ventana no estaba ya snapped y su tamaño actual es válido
@@ -1135,6 +1136,7 @@ impl CompositorHandler for MalusState {
                 states.contains(XdgState::Maximized)
                     || states.contains(XdgState::TiledLeft)
                     || states.contains(XdgState::TiledRight)
+                    || states.contains(XdgState::Fullscreen)
             }).unwrap_or(false);
 
             if !is_currently_snapped {
@@ -1514,6 +1516,105 @@ impl XdgShellHandler for MalusState {
         }
     }
 
+    fn fullscreen_request(&mut self, surface: ToplevelSurface, requested_output: Option<WlOutput>) {
+        tracing::info!("🖥️ [XdgShell] fullscreen_request recibido del cliente");
+        let Some(window) = self.window_for_surface(surface.wl_surface()) else {
+            tracing::warn!("⚠️ fullscreen_request ignorado: no se encontró la ventana");
+            return;
+        };
+        let output = requested_output
+            .as_ref()
+            .and_then(Output::from_resource)
+            .or_else(|| self.space.outputs_for_element(&window).into_iter().next())
+            .or_else(|| self.space.outputs().next().cloned());
+        let Some(output) = output else {
+            tracing::warn!("⚠️ fullscreen_request ignorado: no hay una pantalla disponible");
+            return;
+        };
+        let Some(output_geometry) = self.space.output_geometry(&output) else {
+            tracing::warn!(
+                "⚠️ fullscreen_request ignorado: no se pudo obtener la geometría de pantalla"
+            );
+            return;
+        };
+
+        let Some(toplevel) = window.toplevel() else {
+            return;
+        };
+        let states = &toplevel.current_state().states;
+        if !states.contains(XdgState::Fullscreen)
+            && !states.contains(XdgState::Maximized)
+            && !states.contains(XdgState::TiledLeft)
+            && !states.contains(XdgState::TiledRight)
+        {
+            if let Some(surface) = window.wl_surface() {
+                let geometry = window.geometry();
+                if geometry.size.w > 150 && geometry.size.h > 150 {
+                    self.window_restore_geometries.insert(
+                        surface.into_owned(),
+                        (
+                            self.space.element_location(&window).unwrap_or_default(),
+                            geometry.size,
+                        ),
+                    );
+                }
+            }
+        }
+
+        toplevel.with_pending_state(|state| {
+            state.size = Some(output_geometry.size);
+            state.states.unset(XdgState::Maximized);
+            state.states.unset(XdgState::TiledLeft);
+            state.states.unset(XdgState::TiledRight);
+            state.states.set(XdgState::Fullscreen);
+        });
+        self.space
+            .map_element(window.clone(), output_geometry.loc, true);
+        self.space.raise_element(&window, true);
+        toplevel.send_configure();
+    }
+
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        tracing::info!("🖥️ [XdgShell] unfullscreen_request recibido del cliente");
+        let surf = surface.wl_surface();
+        let Some(window) = self.window_for_surface(surf) else {
+            tracing::warn!("⚠️ unfullscreen_request ignorado: no se encontró la ventana");
+            return;
+        };
+        let Some(toplevel) = window.toplevel() else {
+            return;
+        };
+        let output = self
+            .space
+            .outputs_for_element(&window)
+            .into_iter()
+            .next()
+            .or_else(|| self.space.outputs().next().cloned());
+        let restore = self.window_restore_geometries.get(surf).copied();
+        let (location, size) = if let Some((location, size)) = restore {
+            (location, Some(size))
+        } else if let Some(output) = output {
+            let output_geometry = self.space.output_geometry(&output).unwrap_or_default();
+            (
+                Point::from((output_geometry.loc.x + 80, output_geometry.loc.y + 60)),
+                None,
+            )
+        } else {
+            (
+                self.space.element_location(&window).unwrap_or_default(),
+                None,
+            )
+        };
+
+        toplevel.with_pending_state(|state| {
+            state.size = size;
+            state.states.unset(XdgState::Fullscreen);
+        });
+        self.space.map_element(window.clone(), location, true);
+        self.space.raise_element(&window, true);
+        toplevel.send_configure();
+    }
+
     fn minimize_request(&mut self, surface: ToplevelSurface) {
         self.minimize_toplevel(&surface);
     }
@@ -1534,7 +1635,8 @@ impl XdgShellHandler for MalusState {
                 let states = &surface.current_state().states;
                 let is_snapped = states.contains(XdgState::Maximized)
                     || states.contains(XdgState::TiledLeft)
-                    || states.contains(XdgState::TiledRight);
+                    || states.contains(XdgState::TiledRight)
+                    || states.contains(XdgState::Fullscreen);
 
                 if !is_snapped {
                     if let Some(ref win) = window {
