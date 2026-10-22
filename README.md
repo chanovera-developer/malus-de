@@ -92,7 +92,7 @@ sudo ./scripts/install-session.sh
 
 La instalación no modifica los archivos ni las preferencias de VS Code, Antigravity, Firefox o Brave. La posición izquierda de los controles GTK se configura en el entorno aislado de Malus DE; los navegadores conservan sus controles propios.
 
-Nautilus usa en Malus DE la configuración XDG del usuario, y la sesión añade sus carpetas personales como marcadores GTK para que aparezcan en el sidebar. Si no existe esa configuración, crea las carpetas personales estándar. Se conservan los marcadores existentes y los nuevos no se duplican al iniciar sesión. La sesión usa un bus D-Bus separado para evitar que Nautilus reutilice la instancia de GNOME y omita estos marcadores.
+Nautilus usa en Malus DE la configuración XDG del usuario, y la sesión añade sus carpetas personales como marcadores GTK etiquetados para que aparezcan en el sidebar, en la sección separada de las ubicaciones nativas. Si no existe esa configuración, crea las carpetas personales estándar. Se conservan los marcadores existentes y las entradas de carpetas personales no se duplican al iniciar sesión. La sesión usa un bus D-Bus separado para evitar que Nautilus reutilice la instancia de GNOME y omita estos marcadores.
 
 La [guía de manifiesto](./docs/PACKAGE_MANIFEST.md) documenta dependencias de ejecución, compilación y servicios que deben habilitarse.
 Los selectores de archivos de GTK y aplicaciones compatibles (por ejemplo, VS Code) usan xdg-desktop-portal. Malus prefiere el backend GNOME para estos diálogos, con GTK como alternativa; instala ambos backends y cierra e inicia sesión después de actualizar Malus.

@@ -57,35 +57,44 @@ ensure_user_dir XDG_MUSIC_DIR Music
 ensure_user_dir XDG_PICTURES_DIR Pictures
 ensure_user_dir XDG_VIDEOS_DIR Videos
 
-# Nautilus muestra las carpetas XDG en su propia sección, separada de los marcadores.
-# Eliminar las entradas sin etiqueta que las versiones anteriores agregaban como marcadores.
+# Nautilus separa los marcadores de sus ubicaciones nativas; mantener las carpetas XDG visibles allí.
 python3 - "$XDG_CONFIG_HOME/gtk-3.0/bookmarks" "$XDG_CONFIG_HOME/gtk-4.0/bookmarks" "${USER_DIR_PATHS[@]}" <<'PY'
 import os
 import sys
 from pathlib import Path
 
 bookmark_files = sys.argv[1:3]
-user_dir_uris = {
-    Path(os.path.abspath(user_dir)).as_uri()
+user_dirs = {
+    Path(os.path.abspath(user_dir)).as_uri(): Path(user_dir).name
     for user_dir in sys.argv[3:]
 }
 
 for bookmark_file in bookmark_files:
+    path = Path(bookmark_file)
     try:
-        with open(bookmark_file, encoding="utf-8") as bookmarks:
-            lines = bookmarks.readlines()
+        lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
-        continue
+        lines = []
 
-    filtered_lines = []
+    updated_lines = []
+    seen_user_dirs = set()
     for line in lines:
         parts = line.split(maxsplit=1)
-        if len(parts) == 1 and parts[0] in user_dir_uris:
-            continue
-        filtered_lines.append(line)
-    if filtered_lines != lines:
-        with open(bookmark_file, "w", encoding="utf-8") as bookmarks:
-            bookmarks.writelines(filtered_lines)
+        uri = parts[0] if parts else ""
+        if uri in user_dirs:
+            if uri in seen_user_dirs:
+                continue
+            seen_user_dirs.add(uri)
+            if len(parts) == 1:
+                line = f"{uri} {user_dirs[uri]}"
+        updated_lines.append(line)
+
+    for uri, label in user_dirs.items():
+        if uri not in seen_user_dirs:
+            updated_lines.append(f"{uri} {label}")
+
+    if updated_lines != lines:
+        path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
 PY
 
 if [ ! -f "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile" ]; then
