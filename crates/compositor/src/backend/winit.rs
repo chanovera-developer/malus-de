@@ -33,7 +33,7 @@ use smithay::{
         },
         winit::platform::pump_events::PumpStatus,
     },
-    utils::{Rectangle, Scale, Transform, SERIAL_COUNTER},
+    utils::{Logical, Point, Rectangle, Scale, Transform, SERIAL_COUNTER},
     wayland::{
         compositor::{with_surface_tree_downward, SurfaceAttributes, TraversalAction},
         seat::WaylandFocus,
@@ -64,6 +64,36 @@ pub fn send_frames_surface_tree(surface: &WlSurface, time: u32) {
         },
         |_, _, &()| true,
     );
+}
+
+fn find_background_layer_under(
+    state: &MalusState,
+    output: &Output,
+    point: Point<f64, Logical>,
+) -> Option<(WlSurface, Point<f64, Logical>, String, bool)> {
+    let layer_map = smithay::desktop::layer_map_for_output(output);
+    let layer = layer_map
+        .layer_under(Layer::Background, point)
+        .filter(|layer| {
+            !(layer.namespace() == "malus-app-switcher" && !state.app_switcher.is_active)
+        })?;
+    let geometry = layer_map.layer_geometry(layer)?;
+    let local_point = point - geometry.loc.to_f64();
+    let hit = if !state.active_popups.is_empty() {
+        layer.surface_under(local_point, smithay::desktop::WindowSurfaceType::POPUP)
+    } else {
+        None
+    };
+    let (surface, sub_location) = hit.or_else(|| {
+        layer.surface_under(local_point, smithay::desktop::WindowSurfaceType::TOPLEVEL)
+    })?;
+
+    Some((
+        surface,
+        (geometry.loc + sub_location).to_f64(),
+        layer.namespace().to_string(),
+        layer.can_receive_keyboard_focus(),
+    ))
 }
 
 pub fn run_winit() -> Result<()> {
@@ -439,6 +469,10 @@ pub fn run_winit() -> Result<()> {
                         window
                             .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
                             .map(|(surf, sub_loc)| (surf, (loc + sub_loc).to_f64()))
+                    } else if let Some((surf, focus_loc, _, _)) =
+                        find_background_layer_under(&state, &output, point)
+                    {
+                        Some((surf, focus_loc))
                     } else {
                         None
                     };
@@ -500,6 +534,14 @@ pub fn run_winit() -> Result<()> {
                             .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
                             .map(|(surf, sub_loc)| (surf, (loc + sub_loc).to_f64()));
                         (target, None, Some((window.clone(), loc)))
+                    } else if let Some((surf, focus_loc, ns, can_kb)) =
+                        find_background_layer_under(&state, &output, point)
+                    {
+                        (
+                            Some((surf.clone(), focus_loc)),
+                            Some((surf, ns, can_kb)),
+                            None,
+                        )
                     } else {
                         (None, None, None)
                     };

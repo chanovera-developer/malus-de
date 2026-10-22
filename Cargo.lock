@@ -1739,11 +1739,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "gdk-pixbuf",
  "gio",
  "glib",
  "gtk4",
  "gtk4-layer-shell",
  "malus-de-common",
+ "serde_json",
  "tracing",
 ]
 

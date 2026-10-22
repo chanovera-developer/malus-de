@@ -83,7 +83,7 @@ ensure_user_dir() {
     USER_DIR_PATHS+=("$path")
 }
 
-ensure_user_dir XDG_DESKTOP_DIR Desktop
+ensure_user_dir XDG_DESKTOP_DIR Escritorio
 ensure_user_dir XDG_DOWNLOAD_DIR Downloads
 ensure_user_dir XDG_TEMPLATES_DIR Templates
 ensure_user_dir XDG_PUBLICSHARE_DIR Public
