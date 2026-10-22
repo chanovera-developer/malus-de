@@ -469,7 +469,7 @@ pub fn run_drm() -> Result<()> {
     // Recopilar conectores conectados y ordenarlos de modo que el monitor primario (DP-1) sea el primero
     let mut connected_list = Vec::new();
     for &conn_handle in res_handles.connectors() {
-        let conn_info = match drm_device.get_connector(conn_handle, false) {
+        let conn_info = match drm_device.get_connector(conn_handle, true) {
             Ok(info) => info,
             Err(e) => {
                 warn!("Error al leer connector {:?}: {:?}", conn_handle, e);
