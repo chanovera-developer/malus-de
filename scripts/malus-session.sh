@@ -9,6 +9,7 @@ else
 fi
 
 # Aislar configuración de usuario de GNOME/GTK para Malus DE (macOS: botones a la izquierda)
+HOST_XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 export XDG_CONFIG_HOME="$HOME/.config/malus-de"
 export XDG_CURRENT_DESKTOP="Malus:GNOME"
 export XDG_SESSION_DESKTOP="malus"
@@ -18,6 +19,75 @@ export GTK_USE_PORTAL=1
 export UBUNTU_MENUPROXY=1
 export GTK_MODULES="${GTK_MODULES:+$GTK_MODULES:}appmenu-gtk-module"
 mkdir -p "$XDG_CONFIG_HOME/glib-2.0/settings" "$XDG_CONFIG_HOME/gtk-3.0" "$XDG_CONFIG_HOME/gtk-4.0"
+
+# Mantener disponibles en Nautilus las carpetas especiales XDG del usuario.
+USER_DIRS_FILE="$XDG_CONFIG_HOME/user-dirs.dirs"
+HOST_USER_DIRS_FILE="$HOST_XDG_CONFIG_HOME/user-dirs.dirs"
+if [ ! -f "$USER_DIRS_FILE" ] && [ -f "$HOST_USER_DIRS_FILE" ]; then
+    cp "$HOST_USER_DIRS_FILE" "$USER_DIRS_FILE"
+fi
+touch "$USER_DIRS_FILE"
+
+USER_DIR_PATHS=()
+
+ensure_user_dir() {
+    key="$1"
+    default_dir="$2"
+    path="$(sed -n "s/^${key}=\"\\(.*\\)\"$/\\1/p" "$USER_DIRS_FILE" | head -n 1)"
+    if [ -z "$path" ]; then
+        printf '%s="$HOME/%s"\n' "$key" "$default_dir" >> "$USER_DIRS_FILE"
+        path="$HOME/$default_dir"
+    else
+        case "$path" in
+            '$HOME/'*) path="$HOME/${path#\$HOME/}" ;;
+            /*) ;;
+            *) return 0 ;;
+        esac
+    fi
+    mkdir -p "$path"
+    USER_DIR_PATHS+=("$path")
+}
+
+ensure_user_dir XDG_DESKTOP_DIR Desktop
+ensure_user_dir XDG_DOWNLOAD_DIR Downloads
+ensure_user_dir XDG_TEMPLATES_DIR Templates
+ensure_user_dir XDG_PUBLICSHARE_DIR Public
+ensure_user_dir XDG_DOCUMENTS_DIR Documents
+ensure_user_dir XDG_MUSIC_DIR Music
+ensure_user_dir XDG_PICTURES_DIR Pictures
+ensure_user_dir XDG_VIDEOS_DIR Videos
+
+# Nautilus muestra las carpetas XDG en su propia sección, separada de los marcadores.
+# Eliminar las entradas sin etiqueta que las versiones anteriores agregaban como marcadores.
+python3 - "$XDG_CONFIG_HOME/gtk-3.0/bookmarks" "$XDG_CONFIG_HOME/gtk-4.0/bookmarks" "${USER_DIR_PATHS[@]}" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+bookmark_files = sys.argv[1:3]
+user_dir_uris = {
+    Path(os.path.abspath(user_dir)).as_uri()
+    for user_dir in sys.argv[3:]
+}
+
+for bookmark_file in bookmark_files:
+    try:
+        with open(bookmark_file, encoding="utf-8") as bookmarks:
+            lines = bookmarks.readlines()
+    except FileNotFoundError:
+        continue
+
+    filtered_lines = []
+    for line in lines:
+        parts = line.split(maxsplit=1)
+        if len(parts) == 1 and parts[0] in user_dir_uris:
+            continue
+        filtered_lines.append(line)
+    if filtered_lines != lines:
+        with open(bookmark_file, "w", encoding="utf-8") as bookmarks:
+            bookmarks.writelines(filtered_lines)
+PY
+
 if [ ! -f "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile" ]; then
 cat << 'EOF' > "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile"
 [org/gnome/desktop/wm/preferences]
@@ -27,6 +97,7 @@ button-layout='close,minimize,maximize:'
 color-scheme='prefer-light'
 cursor-theme='macOS'
 cursor-size=24
+icon-theme='Adwaita'
 
 [org/gnome/settings-daemon/plugins/xsettings]
 overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
@@ -49,6 +120,7 @@ gtk-decoration-layout=close,minimize,maximize:
 gtk-application-prefer-dark-theme=0
 gtk-cursor-theme-name=$CURSOR_THEME
 gtk-cursor-theme-size=$CURSOR_SIZE
+gtk-theme-name=Adwaita
 EOF
 fi
 
@@ -59,8 +131,15 @@ gtk-decoration-layout=close,minimize,maximize:
 gtk-application-prefer-dark-theme=0
 gtk-cursor-theme-name=$CURSOR_THEME
 gtk-cursor-theme-size=$CURSOR_SIZE
+gtk-theme-name=Adwaita
 EOF
 fi
+
+for GTK_SETTINGS in "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" "$XDG_CONFIG_HOME/gtk-4.0/settings.ini"; do
+    if ! grep -q '^gtk-icon-theme-name=' "$GTK_SETTINGS"; then
+        printf '\ngtk-icon-theme-name=Adwaita\n' >> "$GTK_SETTINGS"
+    fi
+done
 
 # Aislar el bus de sesión D-Bus para evitar que apps de instancia única (ej. Nautilus) se redirijan a la sesión GNOME anfitriona
 if [ -z "$MALUS_NESTED_DBUS" ] && which dbus-run-session >/dev/null 2>&1; then
