@@ -1707,6 +1707,7 @@ pub fn run_drm() -> Result<()> {
                 let layer_map = smithay::desktop::layer_map_for_output(&out_surface.output);
                 let mut lower_elements = Vec::new();
                 let mut upper_elements = Vec::new();
+                let mut topbar_popups = Vec::new();
                 for surface in layer_map.layers().rev() {
                     if surface.namespace() == "malus-app-switcher" && !state.app_switcher.is_active {
                         continue;
@@ -1723,7 +1724,8 @@ pub fn run_drm() -> Result<()> {
                         );
                         let mut p_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
                         for (popup, popup_offset) in smithay::desktop::PopupManager::popups_for_surface(surface.wl_surface()) {
-                            let offset = (popup_offset - popup.geometry().loc)
+                            let popup_geometry = popup.geometry();
+                            let offset = (popup_offset - popup_geometry.loc)
                                 .to_f64()
                                 .to_physical(scale)
                                 .to_i32_round();
@@ -1735,7 +1737,15 @@ pub fn run_drm() -> Result<()> {
                                 1.0,
                                 Kind::Unspecified,
                             );
-                            p_elems.extend(elems);
+                            if surface.namespace() == "malus-top-bar" {
+                                let popup_rect = Rectangle::new(
+                                    layer_loc + popup_offset.to_physical_precise_round(scale),
+                                    popup_geometry.size.to_physical_precise_round(scale),
+                                );
+                                topbar_popups.push((elems, popup_rect));
+                            } else {
+                                p_elems.extend(elems);
+                            }
                         }
 
                         if matches!(surface.layer(), Layer::Background | Layer::Bottom) {
@@ -1965,6 +1975,54 @@ pub fn run_drm() -> Result<()> {
                         // 4. Renderizar capas superiores translúcidas (Dock, Top Bar, Popovers)
                         if !upper_elements.is_empty() {
                             let _ = draw_render_elements(&mut frame, scale, &upper_elements, &[damage]);
+                        }
+
+                        let menu_radius = (22.0 * scale).round() as i32;
+                        for (popup_elems, popup_rect) in &topbar_popups {
+                            if let Some(blur) = blur_pipeline.as_mut() {
+                                let _ = frame.with_context(|gl| {
+                                    blur.render_blur(
+                                        gl,
+                                        &projection,
+                                        out_surface.size,
+                                        *popup_rect,
+                                        menu_radius as f32,
+                                    );
+                                });
+                            }
+
+                            if let Some(shadow) = shadow_pipeline.as_ref() {
+                                let _ = frame.with_context(|gl| {
+                                    shadow.render_shadow(
+                                        gl,
+                                        &projection,
+                                        *popup_rect,
+                                        menu_radius as f32,
+                                        true,
+                                        scale,
+                                    );
+                                });
+                            }
+
+                            for elem in popup_elems {
+                                if let Some(shader) = window_squircle_shader.as_ref() {
+                                    let elem_geo = elem.geometry(smithay::utils::Scale::from(scale));
+                                    shader.apply_clip_to_frame(
+                                        &mut frame,
+                                        elem_geo.size,
+                                        popup_rect.loc - elem_geo.loc,
+                                        popup_rect.size,
+                                        menu_radius,
+                                    );
+                                }
+                                let _ = draw_render_elements(
+                                    &mut frame,
+                                    scale,
+                                    std::slice::from_ref(elem),
+                                    &[damage],
+                                );
+                                frame.clear_tex_program_override();
+                            }
                         }
 
                         // Dibujar previsualización translúcida de Aero Snap si el puntero está agarrado y la previsualización intersecta este monitor
