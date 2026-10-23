@@ -1778,14 +1778,18 @@ pub fn run_drm() -> Result<()> {
                                 Kind::Unspecified,
                             );
 
-                            let mut popup_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
+                            let mut popup_elems: Vec<(
+                                Vec<WaylandSurfaceRenderElement<GlesRenderer>>,
+                                Rectangle<i32, Physical>,
+                            )> = Vec::new();
                             let mut popup_shadow_rects = Vec::new();
                             for (popup, popup_offset) in smithay::desktop::PopupManager::popups_for_surface(main_surface.as_ref()) {
                                 let popup_geometry = popup.geometry();
-                                popup_shadow_rects.push(Rectangle::new(
+                                let popup_rect = Rectangle::new(
                                     phys_loc + (geo.loc + popup_offset).to_physical_precise_round(scale),
                                     popup_geometry.size.to_physical_precise_round(scale),
-                                ));
+                                );
+                                popup_shadow_rects.push(popup_rect);
                                 let offset = (geo.loc + popup_offset - popup_geometry.loc).to_physical_precise_round(scale);
                                 let p_elems = render_elements_from_surface_tree(
                                     &mut renderer,
@@ -1795,7 +1799,7 @@ pub fn run_drm() -> Result<()> {
                                     1.0,
                                     Kind::Unspecified,
                                 );
-                                popup_elems.extend(p_elems);
+                                popup_elems.push((p_elems, popup_rect));
                             }
 
                             let is_fullscreen = window.toplevel().map(|t| {
@@ -1966,9 +1970,27 @@ pub fn run_drm() -> Result<()> {
                             }
                         }
 
-                        for (_, _, popup_elems, ..) in &window_render_data {
-                            if !popup_elems.is_empty() {
-                                let _ = draw_render_elements(&mut frame, scale, popup_elems, &[damage]);
+                        for (_, _, popups, ..) in &window_render_data {
+                            for (popup_elems, popup_rect) in popups {
+                                for elem in popup_elems {
+                                    if let Some(shader) = window_squircle_shader.as_ref() {
+                                        let elem_geo = elem.geometry(smithay::utils::Scale::from(scale));
+                                        shader.apply_to_frame(
+                                            &mut frame,
+                                            elem_geo.size,
+                                            popup_rect.loc - elem_geo.loc,
+                                            popup_rect.size,
+                                            (22.0 * scale).round() as i32,
+                                        );
+                                    }
+                                    let _ = draw_render_elements(
+                                        &mut frame,
+                                        scale,
+                                        std::slice::from_ref(elem),
+                                        &[damage],
+                                    );
+                                    frame.clear_tex_program_override();
+                                }
                             }
                         }
 
