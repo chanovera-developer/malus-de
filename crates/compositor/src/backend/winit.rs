@@ -1064,6 +1064,7 @@ pub fn run_winit() -> Result<()> {
                     }
 
                     // 3. Renderizar menús contextuales y popups de ventanas (siempre ENCIMA de las superficies de ventana)
+                    let menu_radius = 22;
                     for (_, _, _, popup_shadow_rects, _, is_active, ..) in &window_render_data {
                         if let (Some(radius), Some(shadow)) = (win_phys_r, shadow_pipeline.as_ref()) {
                             for popup_rect in popup_shadow_rects {
@@ -1076,6 +1077,18 @@ pub fn run_winit() -> Result<()> {
 
                     for (_, _, popups, ..) in &window_render_data {
                         for (popup_elems, popup_rect) in popups {
+                            if let Some(blur) = blur_pipeline.as_mut() {
+                                let _ = frame.with_context(|gl| {
+                                    blur.render_blur(
+                                        gl,
+                                        &projection,
+                                        size,
+                                        *popup_rect,
+                                        menu_radius as f32,
+                                    );
+                                });
+                            }
+
                             for elem in popup_elems {
                                 if let Some(shader) = window_squircle_shader.as_ref() {
                                     let elem_geo = elem.geometry(Scale::from(1.0));
@@ -1103,7 +1116,6 @@ pub fn run_winit() -> Result<()> {
                         let _ = draw_render_elements(&mut frame, 1.0, &upper_elements, &[damage]);
                     }
 
-                    let menu_radius = 22;
                     for (popup_elems, popup_rect) in &topbar_popups {
                         if let Some(blur) = blur_pipeline.as_mut() {
                             let _ = frame.with_context(|gl| {

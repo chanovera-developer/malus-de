@@ -125,7 +125,7 @@ card_corner_radius = 12
 | `.popover-menu-item:hover` | Estado hover (azul macOS `#007aff` con texto blanco) |
 | `.menu-shortcut-hint` | Indicador atajo de teclado (ej. `⌘N`, `⌥⌘H`) |
 
-Los popovers y menús contextuales de GTK usan un fondo y borde definidos por el tema. En Nautilus, el fondo de la ventana y el panel lateral pueden ser transparentes, pero los menús conservan este fondo para seguir siendo legibles. El padding exterior del menú es cero; el espaciado propio de cada opción se mantiene.
+Los popovers y menús contextuales de GTK derivan su fondo de `@window_bg_color` y el borde de `@window_fg_color`, manteniendo la transparencia definida para cada modo. En Nautilus, el fondo de la ventana y el panel lateral pueden ser transparentes, pero los menús conservan los colores del tema activo para seguir siendo legibles. El padding exterior del menú es cero; el espaciado propio de cada opción se mantiene.
 
 Los popovers asociados a la capa `malus-top-bar` y los menús emergentes XDG de ventanas Wayland se recortan en el compositor con una máscara squircle superelíptica (exponente 4.2) y radio de 22 px lógicos. En los estilos del shell, `border-radius: 0` evita que se superponga un redondeo CSS distinto. El compositor no puede cambiar el CSS de aplicaciones externas; estas conservan sus estilos internos y el recorte del popup solo afecta sus esquinas exteriores.
 
