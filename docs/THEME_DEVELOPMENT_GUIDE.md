@@ -79,7 +79,7 @@ topbar_text = "#ffffff"
 topbar_height = 36              # Altura estándar recomendada
 topbar_padding_x = 10
 dock_corner_radius = 18
-popover_corner_radius = 16
+popover_corner_radius = 22
 card_corner_radius = 12
 ```
 
@@ -124,6 +124,8 @@ card_corner_radius = 12
 | `.popover-menu-item` | Fila interactiva de opción dentro del menú |
 | `.popover-menu-item:hover` | Estado hover (azul macOS `#007aff` con texto blanco) |
 | `.menu-shortcut-hint` | Indicador atajo de teclado (ej. `⌘N`, `⌥⌘H`) |
+
+Los popovers asociados a la capa `malus-top-bar` se recortan en el compositor con una máscara squircle superelíptica (exponente 4.2) y radio de 22 px lógicos. El radio CSS de `> contents` debe mantenerse alineado como respaldo visual para entornos donde el compositor no aplique ese recorte.
 
 ### Módulos del Centro de Control
 | Selector CSS | Función |

@@ -46,6 +46,7 @@ uniform vec2 u_offset;         // Desplazamiento del área visible de la ventana
 uniform vec2 u_size;           // Dimensiones físicas del área visible de la ventana (ancho, alto en px)
 uniform float u_corner_radius; // Radio squircle configurado (ej. 32.0 px)
 uniform float u_exponent;      // Exponente superelíptico (4.2 para squircle macOS continuo)
+uniform float u_border_strength;
 
 // Distancia con signo analítica a un squircle superelíptico
 float squircle_sdf(vec2 p, vec2 b, float r, float exp_val) {
@@ -91,7 +92,7 @@ void main() {
         // Fino bisel reflectante continuo estilo macOS (1px en el contorno exterior)
         float border_mask = smoothstep(-1.2 - edge_aa, -1.2, dist);
         vec3 highlight_col = vec3(1.0, 1.0, 1.0);
-        color.rgb = mix(color.rgb, highlight_col, border_mask * 0.16);
+        color.rgb = mix(color.rgb, highlight_col, border_mask * 0.16 * u_border_strength);
 
         color = color * mask;
     }
@@ -112,6 +113,7 @@ impl WindowSquircleShader {
             UniformName::new("u_size", UniformType::_2f),
             UniformName::new("u_corner_radius", UniformType::_1f),
             UniformName::new("u_exponent", UniformType::_1f),
+            UniformName::new("u_border_strength", UniformType::_1f),
         ];
 
         match renderer.compile_custom_texture_shader(WINDOW_SQUIRCLE_FRAG_SRC, &uniforms) {
@@ -134,6 +136,29 @@ impl WindowSquircleShader {
         content_size: Size<i32, Physical>,
         radius: i32,
     ) {
+        self.apply_to_frame_with_border(frame, buf_size, offset, content_size, radius, 1.0);
+    }
+
+    pub fn apply_clip_to_frame(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        buf_size: Size<i32, Physical>,
+        offset: Point<i32, Physical>,
+        content_size: Size<i32, Physical>,
+        radius: i32,
+    ) {
+        self.apply_to_frame_with_border(frame, buf_size, offset, content_size, radius, 0.0);
+    }
+
+    fn apply_to_frame_with_border(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        buf_size: Size<i32, Physical>,
+        offset: Point<i32, Physical>,
+        content_size: Size<i32, Physical>,
+        radius: i32,
+        border_strength: f32,
+    ) {
         let (actual_offset, actual_size) = if content_size.w > 0 && content_size.h > 0 {
             (offset, content_size)
         } else {
@@ -146,6 +171,7 @@ impl WindowSquircleShader {
             Uniform::new("u_size", [actual_size.w as f32, actual_size.h as f32]),
             Uniform::new("u_corner_radius", radius as f32),
             Uniform::new("u_exponent", 4.2f32),
+            Uniform::new("u_border_strength", border_strength),
         ];
 
         frame.override_default_tex_program(self.program.clone(), uniforms);
