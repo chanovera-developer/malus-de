@@ -125,6 +125,8 @@ card_corner_radius = 12
 | `.popover-menu-item:hover` | Estado hover (azul macOS `#007aff` con texto blanco) |
 | `.menu-shortcut-hint` | Indicador atajo de teclado (ej. `⌘N`, `⌥⌘H`) |
 
+Los popovers y menús contextuales de GTK usan un fondo y borde definidos por el tema. En Nautilus, el fondo de la ventana y el panel lateral pueden ser transparentes, pero los menús conservan este fondo para seguir siendo legibles. El padding exterior del menú es cero; el espaciado propio de cada opción se mantiene.
+
 Los popovers asociados a la capa `malus-top-bar` y los menús emergentes XDG de ventanas Wayland se recortan en el compositor con una máscara squircle superelíptica (exponente 4.2) y radio de 22 px lógicos. En los estilos del shell, `border-radius: 0` evita que se superponga un redondeo CSS distinto. El compositor no puede cambiar el CSS de aplicaciones externas; estas conservan sus estilos internos y el recorte del popup solo afecta sus esquinas exteriores.
 
 ### Módulos del Centro de Control
@@ -157,7 +159,7 @@ Al alternar entre Modo Claro y Modo Oscuro desde Malus DE, los cambios se limita
 
 Malus DE no escribe en `~/.config/gtk-3.0`, `~/.config/gtk-4.0` ni cambia el valor DConf de GNOME. Las preferencias y transparencias GTK se aplican mediante `XDG_CONFIG_HOME=~/.config/malus-de` en la sesión de Malus.
 
-La transparencia de ventanas se limita al estilo `window.view` de Nautilus y a la ventana `.macos-settings-window`, cuyo CSS se carga desde la propia aplicación de Ajustes. El resto de ventanas mantiene el fondo opaco. En Nautilus, los menús y popovers conservan un fondo opaco y no añaden sombra CSS; el desenfoque del compositor se limita al fondo de la ventana.
+La transparencia de ventanas se limita al estilo `window.view` de Nautilus y a la ventana `.macos-settings-window`, cuyo CSS se carga desde la propia aplicación de Ajustes. El resto de ventanas mantiene el fondo opaco. En Nautilus, los menús y popovers conservan el fondo y borde definidos por el tema, sin sombra CSS; el desenfoque del compositor se limita al fondo de la ventana.
 
 ---
 
