@@ -75,7 +75,7 @@ label.clock-label {
     background: transparent;
     background-color: transparent;
     border: none;
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 3px 9px;
     color: #ffffff;
     box-shadow: none;
@@ -96,7 +96,7 @@ menubutton.topbar-btn > button:hover,
 menubutton > button:hover,
 label.clock-label:hover {
     background-color: rgba(255, 255, 255, 0.18);
-    border-radius: 8px;
+    border-radius: 6px;
     box-shadow: none;
 }
 
@@ -107,7 +107,7 @@ menubutton.topbar-btn > button:checked,
 menubutton > button:active,
 menubutton > button:checked {
     background-color: rgba(255, 255, 255, 0.28);
-    border-radius: 8px;
+    border-radius: 6px;
     box-shadow: none;
 }
 
@@ -125,7 +125,7 @@ menubutton.topbar-btn image {
 }
 
 .apple-icon {
-    margin-top: 1px;
+    margin-bottom: 5px;
 }
 
 .active-app-name {
@@ -173,7 +173,7 @@ popover.light-popover > arrow {
     border: none;
 }
 
-/* GTK CSS solo ofrece esquinas circulares; 22px aproxima el aspecto squircle en popovers. */
+/* El compositor aplica el recorte squircle a los popovers; CSS deja las esquinas rectas. */
 popover.malus-popover-menu > contents {
     background-color: rgba(28, 28, 34, 0.94);
     border: 1px solid rgba(255, 255, 255, 0.14);
@@ -243,7 +243,7 @@ popover.light-popover modelbutton,
 popover.light-popover .menu-row-label,
 .light-mode .menu-row-label {
     color: #1d1d1f;
-    border-radius: 8px;
+    border-radius: 6px;
 }
 
 popover.light-popover .popover-menu-item:hover,
@@ -255,7 +255,7 @@ popover.light-popover modelbutton:hover,
 .light-mode button.flat:hover,
 .light-mode modelbutton:hover {
     background-color: #007aff;
-    border-radius: 8px;
+    border-radius: 6px;
     color: #ffffff;
 }
 
@@ -417,7 +417,7 @@ popover modelbutton {
     background: transparent;
     background-color: transparent;
     border: none;
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 5px 10px;
     margin: 1px 3px;
     color: #e4e4e7;
@@ -433,7 +433,7 @@ popover.malus-popover-menu button:hover,
 popover.malus-popover-menu button.flat:hover,
 popover modelbutton:hover {
     background-color: #007aff;
-    border-radius: 8px;
+    border-radius: 6px;
     color: #ffffff;
     box-shadow: none;
 }
@@ -453,7 +453,7 @@ button.link:hover,
 .link-btn {
     color: #007aff;
     text-decoration: none;
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 3px 6px;
     transition: background-color 120ms ease, color 120ms ease;
 }
@@ -462,7 +462,7 @@ link:hover,
 button.link:hover,
 .link-btn:hover {
     background-color: rgba(0, 122, 255, 0.15);
-    border-radius: 8px;
+    border-radius: 6px;
     color: #ffffff;
 }
 
@@ -628,7 +628,7 @@ scale.horizontal slider {
     background: transparent;
     border: none;
     padding: 0 4px;
-    border-radius: 8px;
+    border-radius: 6px;
     transition: background-color 120ms ease;
 }
 
@@ -654,7 +654,7 @@ scale.horizontal slider {
     background: transparent;
     border: none;
     padding: 4px;
-    border-radius: 8px;
+    border-radius: 6px;
     color: #e4e4e7;
     transition: background-color 120ms ease;
 }
@@ -745,7 +745,7 @@ scale.horizontal slider {
     background: transparent;
     border: none;
     padding: 6px 10px;
-    border-radius: 8px;
+    border-radius: 6px;
     font-size: 11px;
     font-weight: 500;
     color: #a1a1aa;
@@ -818,7 +818,7 @@ scale.horizontal slider {
 .cc-media-btn {
     background: transparent;
     border: none;
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 4px;
     color: rgba(255, 255, 255, 0.75);
     transition: all 120ms ease;

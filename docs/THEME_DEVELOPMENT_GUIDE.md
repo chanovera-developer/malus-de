@@ -125,7 +125,7 @@ card_corner_radius = 12
 | `.popover-menu-item:hover` | Estado hover (azul macOS `#007aff` con texto blanco) |
 | `.menu-shortcut-hint` | Indicador atajo de teclado (ej. `⌘N`, `⌥⌘H`) |
 
-Los popovers asociados a la capa `malus-top-bar` se recortan en el compositor con una máscara squircle superelíptica (exponente 4.2) y radio de 22 px lógicos. El radio CSS de `> contents` debe mantenerse alineado como respaldo visual para entornos donde el compositor no aplique ese recorte.
+Los popovers asociados a la capa `malus-top-bar` y los menús emergentes XDG de ventanas Wayland se recortan en el compositor con una máscara squircle superelíptica (exponente 4.2) y radio de 22 px lógicos. En los estilos del shell, `border-radius: 0` evita que se superponga un redondeo CSS distinto. El compositor no puede cambiar el CSS de aplicaciones externas; estas conservan sus estilos internos y el recorte del popup solo afecta sus esquinas exteriores.
 
 ### Módulos del Centro de Control
 | Selector CSS | Función |
