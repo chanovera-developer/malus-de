@@ -139,7 +139,7 @@ window.malus-dock-window decoration {
 }
 
 .malus-popover-menu {
-    background-color: rgba(30, 30, 36, 0.94);
+    background-color: rgba(28, 28, 34, 0.94);
     border: 1px solid rgba(255, 255, 255, 0.14);
     border-radius: 14px;
     box-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);

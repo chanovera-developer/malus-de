@@ -374,7 +374,7 @@ popover.background > contents,
 menu,
 .menu {
     border-radius: 14px;
-    padding: 6px;
+    padding: 0;
 }
 
 /* Elementos de menú con squircle highlight */
@@ -400,6 +400,44 @@ button.link:hover {
 }
 "#;
 
+fn malus_gtk_css_popup(dark: bool) -> &'static str {
+    if dark {
+        r#"
+popover > contents,
+popover.menu > contents,
+popover.background > contents,
+menu,
+.menu,
+window.view popover,
+window.view popover > contents,
+window.view popover.menu > contents,
+window.view popover.background > contents,
+window.view menu,
+window.view .menu {
+    background-color: rgba(28, 28, 34, 0.94);
+    border-color: rgba(255, 255, 255, 0.14);
+}
+"#
+    } else {
+        r#"
+popover > contents,
+popover.menu > contents,
+popover.background > contents,
+menu,
+.menu,
+window.view popover,
+window.view popover > contents,
+window.view popover.menu > contents,
+window.view popover.background > contents,
+window.view menu,
+window.view .menu {
+    background-color: rgba(246, 246, 248, 0.82);
+    border-color: rgba(0, 0, 0, 0.12);
+}
+"#
+    }
+}
+
 pub const MALUS_GTK_CSS_SIDEBAR_COMMON: &str = r#"/* Malus DE - Paneles laterales semitransparentes estilo macOS (Sidebar / Split View) */
 window.view.background {
     background-color: transparent;
@@ -411,8 +449,8 @@ window.view popover.menu > contents,
 window.view popover.background > contents,
 window.view menu,
 window.view .menu {
-    background-color: @window_bg_color;
-    border-color: @borders;
+    background-color: transparent;
+    border-color: transparent;
     box-shadow: none;
 }
 
@@ -656,22 +694,50 @@ window.view overlay-split-view > .sidebar-pane:dir(rtl) {
 /// Genera la hoja de estilos CSS completa de Malus DE (controles macOS + recortes squircle + paneles translúcidos) para GTK 4 / Libadwaita
 pub fn get_malus_gtk_css(dark: bool) -> String {
     let (controls, sidebar) = if dark {
-        (MALUS_GTK_CSS_WINDOWCONTROLS_DARK, MALUS_GTK_CSS_SIDEBAR_DARK)
+        (
+            MALUS_GTK_CSS_WINDOWCONTROLS_DARK,
+            MALUS_GTK_CSS_SIDEBAR_DARK,
+        )
     } else {
-        (MALUS_GTK_CSS_WINDOWCONTROLS_LIGHT, MALUS_GTK_CSS_SIDEBAR_LIGHT)
+        (
+            MALUS_GTK_CSS_WINDOWCONTROLS_LIGHT,
+            MALUS_GTK_CSS_SIDEBAR_LIGHT,
+        )
     };
-    format!("{}\n{}\n{}\n{}", controls, MALUS_GTK_CSS_SQUIRCLE_RULES, MALUS_GTK_CSS_SIDEBAR_COMMON, sidebar)
+    format!(
+        "{}\n{}\n{}\n{}\n{}",
+        controls,
+        MALUS_GTK_CSS_SQUIRCLE_RULES,
+        MALUS_GTK_CSS_SIDEBAR_COMMON,
+        malus_gtk_css_popup(dark),
+        sidebar
+    )
 }
 
 /// Hoja de estilos CSS nativa y válida para GTK 3 (Firefox, LibreOffice, GIMP, diálogos GTK3)
 pub fn get_malus_gtk3_css(dark: bool) -> String {
-    let (bg_color, fg_color, sidebar_bg, border_color) = if dark {
-        ("rgb(30, 30, 34)", "rgb(255, 255, 255)", "rgb(30, 30, 34)", "rgba(255, 255, 255, 0.08)")
+    let (bg_color, fg_color, sidebar_bg, border_color, popup_bg, popup_border_color) = if dark {
+        (
+            "rgb(30, 30, 34)",
+            "rgb(255, 255, 255)",
+            "rgb(30, 30, 34)",
+            "rgba(255, 255, 255, 0.08)",
+            "rgba(28, 28, 34, 0.94)",
+            "rgba(255, 255, 255, 0.14)",
+        )
     } else {
-        ("rgb(246, 246, 248)", "rgb(0, 0, 0)", "rgb(246, 246, 248)", "rgba(0, 0, 0, 0.08)")
+        (
+            "rgb(246, 246, 248)",
+            "rgb(0, 0, 0)",
+            "rgb(246, 246, 248)",
+            "rgba(0, 0, 0, 0.08)",
+            "rgba(246, 246, 248, 0.82)",
+            "rgba(0, 0, 0, 0.12)",
+        )
     };
 
-    format!(r#"/* Malus DE - Hoja de estilos GTK 3 nativa (macOS Style) */
+    format!(
+        r#"/* Malus DE - Hoja de estilos GTK 3 nativa (macOS Style) */
 @define-color window_bg_color {bg_color};
 @define-color window_fg_color {fg_color};
 @define-color headerbar_bg_color {bg_color};
@@ -679,6 +745,16 @@ pub fn get_malus_gtk3_css(dark: bool) -> String {
 @define-color sidebar_bg_color {sidebar_bg};
 @define-color accent_bg_color @theme_selected_bg_color;
 @define-color accent_fg_color @theme_selected_fg_color;
+
+popover,
+popover.background,
+popover > contents,
+menu,
+.menu {{
+    background-color: {popup_bg};
+    border-color: {popup_border_color};
+    padding: 0;
+}}
 
 /* Controles de ventana macOS para GTK 3 */
 headerbar button.titlebutton.close,
@@ -2068,17 +2144,74 @@ mod tests {
     }
 
     #[test]
-    fn test_gtk4_transparency_is_scoped_to_nautilus_and_menus_are_opaque() {
+    fn test_gtk4_transparency_is_scoped_to_nautilus_and_menus_keep_their_background() {
         let css = get_malus_gtk_css(false);
 
         assert!(css.contains("window.view.background"));
         assert!(css.contains("window.view overlay-split-view > .sidebar-pane"));
         assert!(css.contains("window.view .sidebar-pane *"));
         assert!(css.contains("window.view popover > contents"));
-        assert!(css.contains("background-color: @window_bg_color;\n    border-color: @borders;\n    box-shadow: none;"));
+        assert!(css.contains(
+            "background-color: transparent;\n    border-color: transparent;\n    box-shadow: none;"
+        ));
+        assert!(
+            css.rfind("window.view popover > contents").unwrap()
+                > css.find("window.view popover > contents").unwrap()
+        );
+        assert!(css.contains("border-radius: 14px;\n    padding: 0;"));
         assert!(!css.contains("background-color: alpha(@window_bg_color, 0.84);"));
         assert!(!css.contains("\nwindow.background {\n"));
         assert!(!css.contains("\n.sidebar-pane,\n"));
+    }
+
+    #[test]
+    fn nautilus_popup_background_overrides_transparency_in_both_themes() {
+        for (dark, background) in [
+            (true, "background-color: rgba(28, 28, 34, 0.94);"),
+            (false, "background-color: rgba(246, 246, 248, 0.82);"),
+        ] {
+            let css = get_malus_gtk_css(dark);
+            let transparent_rule = css.find("window.view popover > contents").unwrap();
+            let themed_rule = css.rfind("window.view popover > contents").unwrap();
+
+            assert!(themed_rule > transparent_rule);
+            assert!(css[themed_rule..].contains(background));
+        }
+    }
+
+    #[test]
+    fn popup_background_and_border_match_topbar_menus_in_both_themes() {
+        let dark_gtk4 = get_malus_gtk_css(true);
+        let light_gtk4 = get_malus_gtk_css(false);
+        let dark_gtk3 = get_malus_gtk3_css(true);
+        let light_gtk3 = get_malus_gtk3_css(false);
+
+        for (css, background, border) in [
+            (
+                &dark_gtk4,
+                "background-color: rgba(28, 28, 34, 0.94);",
+                "border-color: rgba(255, 255, 255, 0.14);",
+            ),
+            (
+                &light_gtk4,
+                "background-color: rgba(246, 246, 248, 0.82);",
+                "border-color: rgba(0, 0, 0, 0.12);",
+            ),
+            (
+                &dark_gtk3,
+                "background-color: rgba(28, 28, 34, 0.94);",
+                "border-color: rgba(255, 255, 255, 0.14);",
+            ),
+            (
+                &light_gtk3,
+                "background-color: rgba(246, 246, 248, 0.82);",
+                "border-color: rgba(0, 0, 0, 0.12);",
+            ),
+        ] {
+            assert!(css.contains(background));
+            assert!(css.contains(border));
+            assert!(css.contains("padding: 0;"));
+        }
     }
 
     #[test]
@@ -2086,7 +2219,9 @@ mod tests {
         let css = get_malus_gtk3_css(false);
 
         assert!(css.contains("@define-color sidebar_bg_color rgb(246, 246, 248);"));
-        assert!(css.contains("placessidebar,\nplacessidebar.view {\n    background-color: rgb(246, 246, 248);"));
+        assert!(css.contains(
+            "placessidebar,\nplacessidebar.view {\n    background-color: rgb(246, 246, 248);"
+        ));
     }
 
     #[test]
