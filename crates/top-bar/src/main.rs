@@ -175,8 +175,8 @@ popover.light-popover > arrow {
 
 /* El compositor aplica el recorte squircle a los popovers; CSS deja las esquinas rectas. */
 popover.malus-popover-menu > contents {
-    background-color: rgba(28, 28, 34, 0.94);
-    border: 1px solid rgba(255, 255, 255, 0.14);
+    background-color: alpha(@window_bg_color, 0.94);
+    border: 1px solid alpha(@window_fg_color, 0.14);
     border-radius: 0;
     padding: 6px;
     color: #f4f4f5;
@@ -184,8 +184,8 @@ popover.malus-popover-menu > contents {
 }
 
 popover.control-center-popover > contents {
-    background-color: rgba(26, 26, 32, 0.95);
-    border: 1px solid rgba(255, 255, 255, 0.16);
+    background-color: alpha(@window_bg_color, 0.95);
+    border: 1px solid alpha(@window_fg_color, 0.16);
     border-radius: 0;
     padding: 12px;
     color: #f4f4f5;
@@ -208,8 +208,8 @@ popover.control-center-popover.light-popover {
 popover.light-popover.malus-popover-menu > contents,
 popover.light-popover > contents,
 .light-mode popover.malus-popover-menu > contents {
-    background-color: rgba(246, 246, 248, 0.82);
-    border: 1px solid rgba(0, 0, 0, 0.12);
+    background-color: alpha(@window_bg_color, 0.82);
+    border: 1px solid alpha(@window_fg_color, 0.12);
     border-radius: 0;
     padding: 6px;
     color: #1d1d1f;
@@ -217,8 +217,8 @@ popover.light-popover > contents,
 
 popover.light-popover.control-center-popover > contents,
 .light-mode popover.control-center-popover > contents {
-    background-color: rgba(245, 245, 247, 0.82);
-    border: 1px solid rgba(0, 0, 0, 0.14);
+    background-color: alpha(@window_bg_color, 0.82);
+    border: 1px solid alpha(@window_fg_color, 0.14);
     border-radius: 0;
     padding: 12px;
     color: #1d1d1f;

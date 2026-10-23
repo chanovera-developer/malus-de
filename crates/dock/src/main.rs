@@ -139,15 +139,15 @@ window.malus-dock-window decoration {
 }
 
 .malus-popover-menu {
-    background-color: rgba(28, 28, 34, 0.94);
-    border: 1px solid rgba(255, 255, 255, 0.14);
+    background-color: alpha(@window_bg_color, 0.94);
+    border: 1px solid alpha(@window_fg_color, 0.14);
     border-radius: 14px;
     box-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);
     padding: 6px;
 }
 
 .popover-menu-header {
-    color: #a1a1aa;
+    color: alpha(@window_fg_color, 0.65);
     font-size: 11px;
     font-weight: 600;
     padding: 4px 10px 2px 10px;
@@ -155,7 +155,7 @@ window.malus-dock-window decoration {
 }
 
 .popover-separator {
-    background-color: rgba(255, 255, 255, 0.12);
+    background-color: alpha(@window_fg_color, 0.12);
     min-height: 1px;
     margin: 4px 4px;
 }
@@ -165,7 +165,7 @@ window.malus-dock-window decoration {
     border: none;
     border-radius: 8px;
     padding: 6px 14px;
-    color: #e4e4e7;
+    color: @window_fg_color;
     font-size: 13px;
     font-weight: 500;
 }

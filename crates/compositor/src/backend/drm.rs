@@ -1960,6 +1960,7 @@ pub fn run_drm() -> Result<()> {
                         }
 
                         // 3. Renderizar menús contextuales y popups de ventanas (siempre ENCIMA de las superficies de ventana)
+                        let menu_radius = (22.0 * scale).round() as i32;
                         for (_, _, _, popup_shadow_rects, _, is_active, ..) in &window_render_data {
                             if let (Some(radius), Some(shadow)) = (win_phys_r, shadow_pipeline.as_ref()) {
                                 for popup_rect in popup_shadow_rects {
@@ -1972,6 +1973,18 @@ pub fn run_drm() -> Result<()> {
 
                         for (_, _, popups, ..) in &window_render_data {
                             for (popup_elems, popup_rect) in popups {
+                                if let Some(blur) = blur_pipeline.as_mut() {
+                                    let _ = frame.with_context(|gl| {
+                                        blur.render_blur(
+                                            gl,
+                                            &projection,
+                                            out_surface.size,
+                                            *popup_rect,
+                                            menu_radius as f32,
+                                        );
+                                    });
+                                }
+
                                 for elem in popup_elems {
                                     if let Some(shader) = window_squircle_shader.as_ref() {
                                         let elem_geo = elem.geometry(smithay::utils::Scale::from(scale));
@@ -1999,7 +2012,6 @@ pub fn run_drm() -> Result<()> {
                             let _ = draw_render_elements(&mut frame, scale, &upper_elements, &[damage]);
                         }
 
-                        let menu_radius = (22.0 * scale).round() as i32;
                         for (popup_elems, popup_rect) in &topbar_popups {
                             if let Some(blur) = blur_pipeline.as_mut() {
                                 let _ = frame.with_context(|gl| {
