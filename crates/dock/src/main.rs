@@ -44,7 +44,7 @@ window.malus-dock-window decoration {
 }
 
 .dock-item-box {
-    padding: 0px 4px;
+    padding: 0px 2px;
 }
 
 .dock-item-btn {
@@ -401,7 +401,7 @@ fn build_dock_ui(app: &Application) {
     // Contenedor modular de aplicaciones (fijadas y dinámicas en ejecución)
     let apps_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(4)
+        .spacing(2)
         .valign(gtk4::Align::End)
         .build();
     apps_box.set_overflow(gtk4::Overflow::Visible);
