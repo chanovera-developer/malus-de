@@ -1257,7 +1257,9 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
         .css_classes(["dock-trash-icon"])
         .valign(gtk4::Align::End)
         .build();
-    btn.set_child(Some(&create_magnifiable_icon(&trash_img, icon_size, false)));
+    let trash_overlay = create_magnifiable_icon(&trash_img, icon_size, false);
+    trash_img.set_valign(gtk4::Align::Center);
+    btn.set_child(Some(&trash_overlay));
 
     btn.connect_clicked(|_| {
         let _ = Command::new("nautilus").arg("trash://").spawn();
