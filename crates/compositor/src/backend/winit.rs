@@ -812,6 +812,7 @@ pub fn run_winit() -> Result<()> {
                 let layer_map = smithay::desktop::layer_map_for_output(&output);
                 let mut lower_elements = Vec::new();
                 let mut upper_elements = Vec::new();
+                let mut dock_clip_roots = Vec::new();
                 let mut topbar_popups = Vec::new();
                 for surface in layer_map.layers().rev() {
                     if surface.namespace() == "malus-app-switcher" && !state.app_switcher.is_active {
@@ -827,6 +828,12 @@ pub fn run_winit() -> Result<()> {
                             1.0,
                             Kind::Unspecified,
                         );
+                        if surface.namespace() == "malus-dock" {
+                            dock_clip_roots.push((
+                                smithay::backend::renderer::element::Id::from_wayland_resource(surface.wl_surface()),
+                                super::dock_clip_rect(geo, state.dock_blur_headroom, 1.0),
+                            ));
+                        }
                         let mut p_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
                         for (popup, popup_offset) in smithay::desktop::PopupManager::popups_for_surface(surface.wl_surface()) {
                             let popup_geometry = popup.geometry();
@@ -1047,14 +1054,18 @@ pub fn run_winit() -> Result<()> {
                                         continue;
                                     }
                                     if let Some(geo) = layer_map.layer_geometry(surface) {
-                                        let phys_rect = geo.to_physical_precise_round(1.0);
                                         let radius = match ns.as_ref() {
-                                            "malus-dock" => 22.0,
+                                            "malus-dock" => 32.0,
                                             "malus-spotlight" => 18.0,
                                             "malus-notifications" => 16.0,
                                             _ => 0.0,
                                         };
                                         if radius > 0.0 {
+                                            let phys_rect = if ns == "malus-dock" {
+                                                super::dock_clip_rect(geo, state.dock_blur_headroom, 1.0)
+                                            } else {
+                                                geo.to_physical_precise_round(1.0)
+                                            };
                                             blur.render_blur(gl, &projection, screen_size, phys_rect, radius);
                                         }
                                     }
@@ -1113,7 +1124,24 @@ pub fn run_winit() -> Result<()> {
 
                     // 4. Renderizar capas superiores translúcidas (Dock, Top Bar, Popovers)
                     if !upper_elements.is_empty() {
-                        let _ = draw_render_elements(&mut frame, 1.0, &upper_elements, &[damage]);
+                        for elem in &upper_elements {
+                            let dock_rect = dock_clip_roots
+                                .iter()
+                                .find(|(root_id, _)| *elem.id() == *root_id)
+                                .map(|(_, rect)| *rect);
+                            if let (Some(rect), Some(shader)) = (dock_rect, window_squircle_shader.as_ref()) {
+                                let elem_geo = elem.geometry(Scale::from(1.0));
+                                let offset = Point::from((
+                                    rect.loc.x - elem_geo.loc.x,
+                                    rect.loc.y - elem_geo.loc.y,
+                                ));
+                                shader.apply_dock_clip_to_frame(&mut frame, elem_geo.size, offset, rect.size, 32);
+                            }
+                            let _ = draw_render_elements(&mut frame, 1.0, std::slice::from_ref(elem), &[damage]);
+                            if dock_rect.is_some() {
+                                frame.clear_tex_program_override();
+                            }
+                        }
                     }
 
                     for (popup_elems, popup_rect) in &topbar_popups {

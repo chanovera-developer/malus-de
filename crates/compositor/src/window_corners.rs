@@ -47,6 +47,7 @@ uniform vec2 u_size;           // Dimensiones físicas del área visible de la v
 uniform float u_corner_radius; // Radio squircle configurado (ej. 32.0 px)
 uniform float u_exponent;      // Exponente superelíptico (4.2 para squircle macOS continuo)
 uniform float u_border_strength;
+uniform float u_preserve_outside;
 
 // Distancia con signo analítica a un squircle superelíptico
 float squircle_sdf(vec2 p, vec2 b, float r, float exp_val) {
@@ -74,6 +75,13 @@ void main() {
     if (u_corner_radius > 1.0 && u_size.x > 0.0 && u_size.y > 0.0 && u_buf_size.x > 0.0 && u_buf_size.y > 0.0) {
         // Coordenada en píxeles físicos dentro del buffer de textura
         vec2 px = v_coords * u_buf_size;
+        vec2 rect_min = u_offset;
+        vec2 rect_max = u_offset + u_size;
+        bool inside_rect = px.x >= rect_min.x && px.x <= rect_max.x && px.y >= rect_min.y && px.y <= rect_max.y;
+        if (u_preserve_outside > 0.5 && !inside_rect) {
+            gl_FragColor = color;
+            return;
+        }
 
         // Centro y semiejes del contenido visible de la ventana
         vec2 center = u_offset + u_size * 0.5;
@@ -114,6 +122,7 @@ impl WindowSquircleShader {
             UniformName::new("u_corner_radius", UniformType::_1f),
             UniformName::new("u_exponent", UniformType::_1f),
             UniformName::new("u_border_strength", UniformType::_1f),
+            UniformName::new("u_preserve_outside", UniformType::_1f),
         ];
 
         match renderer.compile_custom_texture_shader(WINDOW_SQUIRCLE_FRAG_SRC, &uniforms) {
@@ -136,7 +145,7 @@ impl WindowSquircleShader {
         content_size: Size<i32, Physical>,
         radius: i32,
     ) {
-        self.apply_to_frame_with_border(frame, buf_size, offset, content_size, radius, 1.0);
+        self.apply_to_frame_with_border(frame, buf_size, offset, content_size, radius, 1.0, false);
     }
 
     pub fn apply_clip_to_frame(
@@ -147,7 +156,18 @@ impl WindowSquircleShader {
         content_size: Size<i32, Physical>,
         radius: i32,
     ) {
-        self.apply_to_frame_with_border(frame, buf_size, offset, content_size, radius, 0.0);
+        self.apply_to_frame_with_border(frame, buf_size, offset, content_size, radius, 0.0, false);
+    }
+
+    pub fn apply_dock_clip_to_frame(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        buf_size: Size<i32, Physical>,
+        offset: Point<i32, Physical>,
+        content_size: Size<i32, Physical>,
+        radius: i32,
+    ) {
+        self.apply_to_frame_with_border(frame, buf_size, offset, content_size, radius, 0.0, true);
     }
 
     fn apply_to_frame_with_border(
@@ -158,6 +178,7 @@ impl WindowSquircleShader {
         content_size: Size<i32, Physical>,
         radius: i32,
         border_strength: f32,
+        preserve_outside: bool,
     ) {
         let (actual_offset, actual_size) = if content_size.w > 0 && content_size.h > 0 {
             (offset, content_size)
@@ -172,6 +193,7 @@ impl WindowSquircleShader {
             Uniform::new("u_corner_radius", radius as f32),
             Uniform::new("u_exponent", 4.2f32),
             Uniform::new("u_border_strength", border_strength),
+            Uniform::new("u_preserve_outside", if preserve_outside { 1.0f32 } else { 0.0f32 }),
         ];
 
         frame.override_default_tex_program(self.program.clone(), uniforms);
