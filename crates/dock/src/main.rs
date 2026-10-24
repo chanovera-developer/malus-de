@@ -33,6 +33,7 @@ window.malus-dock-window decoration {
     border-radius: 22px;
     padding: 6px 10px;
     box-shadow: none;
+    overflow: visible;
 }
 
 .dock-item-box {
@@ -45,6 +46,7 @@ window.malus-dock-window decoration {
     border-radius: 14px;
     padding: 4px;
     transition: background-color 180ms cubic-bezier(0.2, 0.9, 0.3, 1.0);
+    overflow: visible;
 }
 
 .dock-item-btn:hover {
@@ -348,6 +350,17 @@ fn build_dock_ui(app: &Application) {
         info!("Layer Shell no detectado; ejecutando Dock en ventana flotante de desarrollo.");
     }
 
+    let dock_root = GtkBox::new(Orientation::Vertical, 0);
+    dock_root.set_overflow(gtk4::Overflow::Visible);
+    let magnification_headroom = GtkBox::new(Orientation::Horizontal, 0);
+    magnification_headroom.set_size_request(
+        -1,
+        initial_cfg
+            .magnification_max_size
+            .saturating_sub(initial_cfg.icon_size) as i32,
+    );
+    dock_root.append(&magnification_headroom);
+
     let dock_bar = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .css_classes(["dock-container"])
@@ -355,6 +368,7 @@ fn build_dock_ui(app: &Application) {
         .valign(gtk4::Align::End)
         .halign(gtk4::Align::Center)
         .build();
+    dock_bar.set_overflow(gtk4::Overflow::Visible);
 
     // Contenedor modular de aplicaciones (fijadas y dinámicas en ejecución)
     let apps_box = GtkBox::builder()
@@ -362,6 +376,7 @@ fn build_dock_ui(app: &Application) {
         .spacing(4)
         .valign(gtk4::Align::End)
         .build();
+    apps_box.set_overflow(gtk4::Overflow::Visible);
     dock_bar.append(&apps_box);
 
     // Separador de cristal translúcido
@@ -376,12 +391,14 @@ fn build_dock_ui(app: &Application) {
         .spacing(4)
         .valign(gtk4::Align::End)
         .build();
+    minimized_box.set_overflow(gtk4::Overflow::Visible);
     minimized_box.set_visible(false);
     dock_bar.append(&minimized_box);
 
     // Papelera de Reciclaje (Trash) con estado reactivo y menú contextual
     let (trash_widget, trash_img) = create_trash_item(initial_cfg.icon_size as i32);
     dock_bar.append(&trash_widget);
+    dock_root.append(&dock_bar);
 
     // Ventana modal Overlay del Selector Visual de Aplicaciones (⌘Tab App Switcher HUD)
     let switcher_window = Window::builder()
@@ -464,6 +481,7 @@ fn build_dock_ui(app: &Application) {
         let cfg_clone = dock_config.clone();
         let on_rf_mon = on_refresh.clone();
         let win_mon = window.clone();
+        let headroom_mon = magnification_headroom.clone();
         monitor.connect_changed(move |_, _, _, event_type| {
             if event_type == gio::FileMonitorEvent::ChangesDoneHint || event_type == gio::FileMonitorEvent::Created {
                 info!("🔄 dock.toml modificado externamente en disco. Recargando...");
@@ -471,6 +489,12 @@ fn build_dock_ui(app: &Application) {
                 if gtk4_layer_shell::is_supported() {
                     win_mon.set_margin(Edge::Bottom, new_cfg.floating_gap as i32);
                 }
+                headroom_mon.set_size_request(
+                    -1,
+                    new_cfg
+                        .magnification_max_size
+                        .saturating_sub(new_cfg.icon_size) as i32,
+                );
                 *cfg_clone.borrow_mut() = new_cfg;
                 on_rf_mon();
             }
@@ -482,14 +506,22 @@ fn build_dock_ui(app: &Application) {
     let min_box_motion = minimized_box.clone();
     let trash_widget_motion = trash_widget.clone();
     let dock_bar_motion = dock_bar.clone();
+    let dock_root_motion = dock_root.clone();
     let cfg_motion = dock_config.clone();
 
     let motion_controller = EventControllerMotion::new();
-    motion_controller.connect_motion(move |_, x, _| {
+    motion_controller.connect_motion(move |_, x, y| {
         let cfg = cfg_motion.borrow();
         if !cfg.magnification_enabled {
             return;
         }
+        let Some(pointer_in_dock) = dock_root_motion.compute_point(
+            &dock_bar_motion,
+            &gtk4::graphene::Point::new(x as f32, y as f32),
+        ) else {
+            return;
+        };
+        let x = pointer_in_dock.x() as f64;
         let base_size = cfg.icon_size as f64;
         let max_size = cfg.magnification_max_size as f64;
         let max_scale_diff = (max_size - base_size).max(0.0);
@@ -553,7 +585,7 @@ fn build_dock_ui(app: &Application) {
         }
         update_icon_size_recursive(trash_widget_leave.upcast_ref(), base_size, base_size);
     });
-    dock_bar.add_controller(motion_controller);
+    dock_root.add_controller(motion_controller);
 
     // Escucha de eventos IPC del compositor
     let (tx, rx) = async_channel::unbounded::<IpcMessage>();
@@ -565,6 +597,7 @@ fn build_dock_ui(app: &Application) {
     let indicators_ipc = dock_indicators.clone();
     let cfg_ipc = dock_config.clone();
     let on_rf_ipc = on_refresh.clone();
+    let headroom_ipc = magnification_headroom.clone();
     let switcher_win_ipc = switcher_window.clone();
     let switcher_box_ipc = switcher_box.clone();
 
@@ -614,6 +647,12 @@ fn build_dock_ui(app: &Application) {
                     if gtk4_layer_shell::is_supported() {
                         win_ref.set_margin(Edge::Bottom, new_cfg.floating_gap as i32);
                     }
+                    headroom_ipc.set_size_request(
+                        -1,
+                        new_cfg
+                            .magnification_max_size
+                            .saturating_sub(new_cfg.icon_size) as i32,
+                    );
                     *cfg_ipc.borrow_mut() = new_cfg;
                     on_rf_ipc();
                 }
@@ -748,7 +787,7 @@ fn build_dock_ui(app: &Application) {
         glib::ControlFlow::Continue
     });
 
-    window.set_child(Some(&dock_bar));
+    window.set_child(Some(&dock_root));
     window.present();
 }
 
@@ -838,6 +877,23 @@ fn update_icon_size_recursive(widget: &gtk4::Widget, size: i32, base_size: i32) 
         update_icon_size_recursive(&c, size, base_size);
         child = c.next_sibling();
     }
+}
+
+fn create_magnifiable_icon(icon: &Image, icon_size: i32) -> Overlay {
+    let placeholder = GtkBox::new(Orientation::Horizontal, 0);
+    placeholder.set_size_request(icon_size, icon_size);
+
+    let overlay = Overlay::new();
+    overlay.set_child(Some(&placeholder));
+    overlay.add_overlay(icon);
+    overlay.set_measure_overlay(icon, false);
+    overlay.set_overflow(gtk4::Overflow::Visible);
+
+    icon.set_halign(gtk4::Align::Center);
+    icon.set_valign(gtk4::Align::End);
+    icon.set_overflow(gtk4::Overflow::Visible);
+
+    overlay
 }
 
 fn create_minimized_window_item(
@@ -957,6 +1013,7 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
         .spacing(1)
         .valign(gtk4::Align::End)
         .build();
+    item_container.set_overflow(gtk4::Overflow::Visible);
 
     let btn = Button::builder()
         .css_classes(["dock-item-btn"])
@@ -976,7 +1033,7 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
         .pixel_size(icon_size)
         .valign(gtk4::Align::End)
         .build();
-    btn.set_child(Some(&trash_img));
+    btn.set_child(Some(&create_magnifiable_icon(&trash_img, icon_size)));
 
     btn.connect_clicked(|_| {
         let _ = Command::new("nautilus").arg("trash://").spawn();
@@ -1074,6 +1131,7 @@ fn create_dock_item(
         .spacing(1)
         .valign(gtk4::Align::End)
         .build();
+    item_container.set_overflow(gtk4::Overflow::Visible);
 
     let btn = Button::builder()
         .css_classes(["dock-item-btn"])
@@ -1081,6 +1139,7 @@ fn create_dock_item(
         .focusable(false)
         .valign(gtk4::Align::End)
         .build();
+    btn.set_overflow(gtk4::Overflow::Visible);
 
     let icon = if app_cfg.icon.starts_with('/') {
         Image::builder()
@@ -1095,7 +1154,7 @@ fn create_dock_item(
             .valign(gtk4::Align::End)
             .build()
     };
-    btn.set_child(Some(&icon));
+    btn.set_child(Some(&create_magnifiable_icon(&icon, icon_size)));
 
     let cmd = app_cfg.command.clone();
     let name = app_cfg.name.clone();
