@@ -1107,7 +1107,19 @@ impl MalusState {
         let layer_map = smithay::desktop::layer_map_for_output(output);
         let zone = layer_map.non_exclusive_zone();
         if zone.size.w > 0 && zone.size.h > 0 {
-            Rectangle::new(output_geo.loc + zone.loc, zone.size)
+            let has_dock = layer_map
+                .layers()
+                .any(|layer| layer.namespace() == "malus-dock");
+            let headroom = if has_dock {
+                self.dock_blur_headroom.max(0)
+            } else {
+                0
+            };
+            let usable_height = (zone.size.h + headroom).min(output_geo.size.h - zone.loc.y);
+            Rectangle::new(
+                output_geo.loc + zone.loc,
+                (zone.size.w, usable_height.max(zone.size.h)).into(),
+            )
         } else {
             Rectangle::new(
                 (output_geo.loc.x, output_geo.loc.y + 36).into(),
