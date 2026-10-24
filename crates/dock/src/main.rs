@@ -1141,15 +1141,21 @@ fn create_dock_item(
         .build();
     btn.set_overflow(gtk4::Overflow::Visible);
 
-    let icon = if app_cfg.icon.starts_with('/') {
+    let icon_name = match app_cfg.icon.as_str() {
+        "system-file-manager" => "org.gnome.Nautilus",
+        "utilities-terminal" => "org.gnome.Ptyxis",
+        "accessories-text-editor" => "org.gnome.TextEditor",
+        icon_name => icon_name,
+    };
+    let icon = if icon_name.starts_with('/') {
         Image::builder()
-            .file(&app_cfg.icon)
+            .file(icon_name)
             .pixel_size(icon_size)
             .valign(gtk4::Align::End)
             .build()
     } else {
         Image::builder()
-            .icon_name(&app_cfg.icon)
+            .icon_name(icon_name)
             .pixel_size(icon_size)
             .valign(gtk4::Align::End)
             .build()

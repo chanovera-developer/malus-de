@@ -120,13 +120,13 @@ pub fn guess_icon_name(app_id: &str, title: &str) -> String {
     let tit = title.to_lowercase();
 
     if app.contains("nautilus") || app.contains("archivos") || tit.contains("archivos") || tit.contains("carpetas") {
-        "system-file-manager".to_string()
+        "org.gnome.Nautilus".to_string()
     } else if app.contains("ptyxis") || app.contains("terminal") || tit.contains("terminal") {
-        "utilities-terminal".to_string()
+        "org.gnome.Ptyxis".to_string()
     } else if app.contains("calculator") || app.contains("calculadora") || tit.contains("calculadora") {
         "org.gnome.Calculator".to_string()
     } else if app.contains("texteditor") || app.contains("text-editor") || app.contains("gedit") || tit.contains("editor") {
-        "accessories-text-editor".to_string()
+        "org.gnome.TextEditor".to_string()
     } else if app.contains("control-center") || app.contains("settings") || app.contains("configuración") || app.contains("configuracion") {
         "preferences-system".to_string()
     } else if app.contains("firefox") {
