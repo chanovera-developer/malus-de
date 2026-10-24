@@ -506,8 +506,7 @@ button.link:hover,
 }
 
 .cc-icon-circle {
-    min-width: 32px;
-    min-height: 32px;
+    padding: 7px;
     border-radius: 16px;
     background-color: rgba(255, 255, 255, 0.12);
     color: #e4e4e7;

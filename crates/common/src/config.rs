@@ -1263,19 +1263,19 @@ impl Default for DockConfig {
             apps: vec![
                 DockAppConfig {
                     name: "Archivos".to_string(),
-                    icon: "system-file-manager".to_string(),
+                    icon: "org.gnome.Nautilus".to_string(),
                     command: "nautilus --new-window".to_string(),
                     matchers: vec!["nautilus".into(), "archivos".into(), "org.gnome.nautilus".into()],
                 },
                 DockAppConfig {
                     name: "Terminal".to_string(),
-                    icon: "utilities-terminal".to_string(),
+                    icon: "org.gnome.Ptyxis".to_string(),
                     command: "ptyxis -s".to_string(),
                     matchers: vec!["ptyxis".into(), "terminal".into(), "org.gnome.ptyxis".into()],
                 },
                 DockAppConfig {
                     name: "Editor de Texto".to_string(),
-                    icon: "accessories-text-editor".to_string(),
+                    icon: "org.gnome.TextEditor".to_string(),
                     command: "gnome-text-editor -s".to_string(),
                     matchers: vec!["texteditor".into(), "text-editor".into(), "gedit".into(), "org.gnome.texteditor".into()],
                 },
