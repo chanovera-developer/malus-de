@@ -829,10 +829,20 @@ pub fn run_winit() -> Result<()> {
                             Kind::Unspecified,
                         );
                         if surface.namespace() == "malus-dock" {
-                            dock_clip_roots.push((
-                                smithay::backend::renderer::element::Id::from_wayland_resource(surface.wl_surface()),
-                                super::dock_clip_rect(geo, state.dock_blur_headroom, 1.0),
-                            ));
+                            let root_id =
+                                smithay::backend::renderer::element::Id::from_wayland_resource(
+                                    surface.wl_surface(),
+                                );
+                            if let Some(root_elem) = s_elems.iter().find(|elem| *elem.id() == root_id) {
+                                dock_clip_roots.push((
+                                    root_id,
+                                    super::dock_clip_rect(
+                                        root_elem.geometry(smithay::utils::Scale::from(1.0)),
+                                        state.dock_blur_headroom,
+                                        1.0,
+                                    ),
+                                ));
+                            }
                         }
                         let mut p_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
                         for (popup, popup_offset) in smithay::desktop::PopupManager::popups_for_surface(surface.wl_surface()) {
@@ -1062,7 +1072,18 @@ pub fn run_winit() -> Result<()> {
                                         };
                                         if radius > 0.0 {
                                             let phys_rect = if ns == "malus-dock" {
-                                                super::dock_clip_rect(geo, state.dock_blur_headroom, 1.0)
+                                                let root_id =
+                                                    smithay::backend::renderer::element::Id::from_wayland_resource(
+                                                        surface.wl_surface(),
+                                                    );
+                                                let Some(rect) = dock_clip_roots
+                                                    .iter()
+                                                    .find(|(id, _)| *id == root_id)
+                                                    .map(|(_, rect)| *rect)
+                                                else {
+                                                    continue;
+                                                };
+                                                rect
                                             } else {
                                                 geo.to_physical_precise_round(1.0)
                                             };

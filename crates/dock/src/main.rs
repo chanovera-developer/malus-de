@@ -262,6 +262,21 @@ fn load_css() {
     }
 }
 
+fn queue_dock_resize(window: &ApplicationWindow, dock_root: &GtkBox, dock_bar: &GtkBox) {
+    dock_bar.queue_resize();
+    dock_root.queue_resize();
+
+    let (_, width, _, _) = dock_root.measure(Orientation::Horizontal, -1);
+    if width > 0 {
+        let (_, height, _, _) = dock_root.measure(Orientation::Vertical, width);
+        if height > 0 && (width < window.width() || height < window.height()) {
+            window.set_default_size(width, height);
+        }
+    }
+
+    window.queue_resize();
+}
+
 fn check_trash_full() -> bool {
     let trash = gio::File::for_uri("trash:///");
     if let Ok(enumerator) = trash.enumerate_children(
@@ -459,6 +474,7 @@ fn build_dock_ui(app: &Application) {
     let indicators_rf = dock_indicators.clone();
     let on_rf_loop = on_refresh.clone();
     let dock_bar_resize = dock_bar.clone();
+    let dock_root_resize = dock_root.clone();
     let win_resize = window.clone();
 
     glib::spawn_future_local(async move {
@@ -470,8 +486,7 @@ fn build_dock_ui(app: &Application) {
                 &indicators_rf,
                 &on_rf_loop,
             );
-            dock_bar_resize.queue_resize();
-            win_resize.queue_resize();
+            queue_dock_resize(&win_resize, &dock_root_resize, &dock_bar_resize);
         }
     });
 
@@ -508,6 +523,7 @@ fn build_dock_ui(app: &Application) {
     let trash_widget_motion = trash_widget.clone();
     let dock_bar_motion = dock_bar.clone();
     let dock_root_motion = dock_root.clone();
+    let window_motion = window.clone();
     let cfg_motion = dock_config.clone();
 
     let motion_controller = EventControllerMotion::new();
@@ -527,9 +543,11 @@ fn build_dock_ui(app: &Application) {
         let max_size = cfg.magnification_max_size as f64;
         let max_scale_diff = (max_size - base_size).max(0.0);
         let max_zoom_dist = 110.0;
+        let mut layout_changed = false;
 
         let update_item = |widget: &gtk4::Widget| {
-            if let Some(p) = widget.compute_point(&dock_bar_motion, &gtk4::graphene::Point::zero()) {
+            if let Some(p) = widget.compute_point(&dock_bar_motion, &gtk4::graphene::Point::zero())
+            {
                 let cx = p.x() as f64;
                 let cw = widget.width() as f64;
                 let center_x = cx + cw / 2.0;
@@ -541,14 +559,16 @@ fn build_dock_ui(app: &Application) {
                     0.0
                 };
                 let target_size = (base_size + factor * max_scale_diff) as i32;
-                update_icon_size_recursive(widget, target_size, base_size as i32);
+                update_icon_size_recursive(widget, target_size, base_size as i32)
+            } else {
+                false
             }
         };
 
         // Magnificar cada app en apps_box
         let mut child = apps_box_motion.first_child();
         while let Some(c) = child {
-            update_item(&c);
+            layout_changed |= update_item(&c);
             child = c.next_sibling();
         }
 
@@ -556,35 +576,48 @@ fn build_dock_ui(app: &Application) {
         if min_box_motion.is_visible() {
             let mut min_child = min_box_motion.first_child();
             while let Some(c) = min_child {
-                update_item(&c);
+                layout_changed |= update_item(&c);
                 min_child = c.next_sibling();
             }
         }
 
         // Magnificar papelera
-        update_item(trash_widget_motion.upcast_ref());
+        layout_changed |= update_item(trash_widget_motion.upcast_ref());
+
+        if layout_changed {
+            queue_dock_resize(&window_motion, &dock_root_motion, &dock_bar_motion);
+        }
     });
 
     let apps_box_leave = apps_box.clone();
     let min_box_leave = minimized_box.clone();
     let trash_widget_leave = trash_widget.clone();
+    let dock_bar_leave = dock_bar.clone();
+    let dock_root_leave = dock_root.clone();
+    let window_leave = window.clone();
     let cfg_leave = dock_config.clone();
 
     motion_controller.connect_leave(move |_| {
         let base_size = cfg_leave.borrow().icon_size as i32;
+        let mut layout_changed = false;
         let mut child = apps_box_leave.first_child();
         while let Some(c) = child {
-            update_icon_size_recursive(&c, base_size, base_size);
+            layout_changed |= update_icon_size_recursive(&c, base_size, base_size);
             child = c.next_sibling();
         }
         if min_box_leave.is_visible() {
             let mut min_child = min_box_leave.first_child();
             while let Some(c) = min_child {
-                update_icon_size_recursive(&c, base_size, base_size);
+                layout_changed |= update_icon_size_recursive(&c, base_size, base_size);
                 min_child = c.next_sibling();
             }
         }
-        update_icon_size_recursive(trash_widget_leave.upcast_ref(), base_size, base_size);
+        layout_changed |=
+            update_icon_size_recursive(trash_widget_leave.upcast_ref(), base_size, base_size);
+
+        if layout_changed {
+            queue_dock_resize(&window_leave, &dock_root_leave, &dock_bar_leave);
+        }
     });
     dock_root.add_controller(motion_controller);
 
@@ -593,6 +626,7 @@ fn build_dock_ui(app: &Application) {
     let cache_ipc = running_cache.clone();
     let min_box = minimized_box.clone();
     let dock_bar_ref = dock_bar.clone();
+    let dock_root_ref = dock_root.clone();
     let min_map: Rc<RefCell<HashMap<u64, gtk4::Widget>>> = Rc::new(RefCell::new(HashMap::new()));
     let win_ref = window.clone();
     let indicators_ipc = dock_indicators.clone();
@@ -683,8 +717,7 @@ fn build_dock_ui(app: &Application) {
                     // Actualizar visibilidad del contenedor para colapsar espacio si está vacío
                     let has_minimized = !current_map.is_empty();
                     min_box.set_visible(has_minimized);
-                    dock_bar_ref.queue_resize();
-                    win_ref.queue_resize();
+                    queue_dock_resize(&win_ref, &dock_root_ref, &dock_bar_ref);
                 }
                 IpcMessage::ShowAppSwitcher { items, selected_index } => {
                     while let Some(c) = switcher_box_ipc.first_child() {
@@ -866,21 +899,27 @@ fn render_dock_apps(
     }
 }
 
-fn update_icon_size_recursive(widget: &gtk4::Widget, size: i32, base_size: i32) {
+fn update_icon_size_recursive(widget: &gtk4::Widget, size: i32, base_size: i32) -> bool {
+    let mut changed = false;
     if let Ok(overlay) = widget.clone().downcast::<Overlay>() {
-        overlay.set_size_request(size, base_size);
+        if overlay.width_request() != size || overlay.height_request() != base_size {
+            overlay.set_size_request(size, base_size);
+            changed = true;
+        }
     }
     if let Ok(img) = widget.clone().downcast::<Image>() {
         // Solo ajustar iconos principales del dock, preservando insignias secundarias
         if img.pixel_size() >= (base_size - 10) && img.pixel_size() != size {
             img.set_pixel_size(size);
+            changed = true;
         }
     }
     let mut child = widget.first_child();
     while let Some(c) = child {
-        update_icon_size_recursive(&c, size, base_size);
+        changed |= update_icon_size_recursive(&c, size, base_size);
         child = c.next_sibling();
     }
+    changed
 }
 
 fn create_magnifiable_icon(icon: &Image, icon_size: i32) -> Overlay {
