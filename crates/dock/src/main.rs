@@ -32,7 +32,7 @@ window.malus-dock-window decoration {
     border: 1px solid alpha(@window_fg_color, 0.12);
     /* El compositor aplica el recorte squircle; evita un redondeo CSS superpuesto. */
     border-radius: 0;
-    padding: 6px 10px;
+    padding: 6px 10px 0;
     box-shadow: none;
     overflow: visible;
 }
@@ -72,9 +72,15 @@ window.malus-dock-window decoration {
 
 .dock-indicator {
     font-size: 8px;
-    color: rgba(255, 255, 255, 0.85);
-    margin-top: -2px;
+    color: rgba(0, 0, 0, 0.85);
+    margin-top: 2px;
     margin-bottom: -2px;
+}
+
+@media (prefers-color-scheme: dark) {
+    .dock-indicator {
+        color: rgba(255, 255, 255, 0.85);
+    }
 }
 
 .dock-separator {
