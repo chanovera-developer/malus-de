@@ -1,9 +1,9 @@
 use gio::prelude::*;
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, Button, CssProvider,
-    EventControllerMotion, GestureClick, Image, Label, Orientation, Overlay, Popover,
-    Separator, Window,
+    Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea,
+    EventControllerMotion, GestureClick, Image, Label, Orientation, Overlay, Popover, Separator,
+    Window,
 };
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use libadwaita as adw;
@@ -62,6 +62,12 @@ window.malus-dock-window decoration {
 
 .dock-item-btn:active {
     background-color: rgba(255, 255, 255, 0.22);
+}
+
+.dock-trash-btn:hover,
+.dock-trash-btn:active {
+    background: transparent;
+    box-shadow: none;
 }
 
 .dock-indicator {
@@ -913,10 +919,25 @@ fn update_icon_size_recursive(widget: &gtk4::Widget, size: i32, base_size: i32) 
             changed = true;
         }
     }
+    if widget.has_css_class("dock-icon-shadow")
+        && (widget.width_request() != size || widget.height_request() != size)
+    {
+        widget.set_size_request(size, size);
+        changed = true;
+    }
     if let Ok(img) = widget.clone().downcast::<Image>() {
         // Solo ajustar iconos principales del dock, preservando insignias secundarias
-        if img.pixel_size() >= (base_size - 10) && img.pixel_size() != size {
-            img.set_pixel_size(size);
+        let target_size = (size
+            + if img.has_css_class("dock-trash-icon") {
+                8
+            } else if img.has_css_class("dock-icon-filled") {
+                -10
+            } else {
+                0
+            })
+        .max(1);
+        if img.pixel_size() >= (base_size - 10) && img.pixel_size() != target_size {
+            img.set_pixel_size(target_size);
             changed = true;
         }
     }
@@ -928,12 +949,26 @@ fn update_icon_size_recursive(widget: &gtk4::Widget, size: i32, base_size: i32) 
     changed
 }
 
-fn create_magnifiable_icon(icon: &Image, icon_size: i32) -> Overlay {
+fn create_magnifiable_icon(icon: &Image, icon_size: i32, show_backdrop: bool) -> Overlay {
     let placeholder = GtkBox::new(Orientation::Horizontal, 0);
     placeholder.set_size_request(icon_size, icon_size);
 
     let overlay = Overlay::new();
     overlay.set_child(Some(&placeholder));
+    if show_backdrop {
+        let shadow = DrawingArea::new();
+        shadow.add_css_class("dock-icon-shadow");
+        shadow.set_size_request(icon_size, icon_size);
+        shadow.set_halign(gtk4::Align::Center);
+        shadow.set_valign(gtk4::Align::End);
+        shadow.set_can_target(false);
+        shadow.set_overflow(gtk4::Overflow::Visible);
+        shadow.set_draw_func(|_, context, width, height| {
+            draw_squircle(context, width as f64, height as f64);
+        });
+        overlay.add_overlay(&shadow);
+        overlay.set_measure_overlay(&shadow, false);
+    }
     overlay.add_overlay(icon);
     overlay.set_measure_overlay(icon, false);
     overlay.set_overflow(gtk4::Overflow::Visible);
@@ -943,6 +978,56 @@ fn create_magnifiable_icon(icon: &Image, icon_size: i32) -> Overlay {
     icon.set_overflow(gtk4::Overflow::Visible);
 
     overlay
+}
+
+fn draw_squircle(context: &gtk4::cairo::Context, width: f64, height: f64) {
+    let radius = 22.0_f64.min(width / 2.0).min(height / 2.0);
+    let exponent = 4.2;
+    let power = 2.0 / exponent;
+    let segments = 24;
+    let quarter_turn = std::f64::consts::FRAC_PI_2;
+
+    context.move_to(radius, 0.0);
+    context.line_to(width - radius, 0.0);
+
+    for step in 1..=segments {
+        let angle = quarter_turn * step as f64 / segments as f64;
+        context.line_to(
+            width - radius + radius * angle.sin().powf(power),
+            radius - radius * angle.cos().powf(power),
+        );
+    }
+    context.line_to(width, height - radius);
+
+    for step in 1..=segments {
+        let angle = quarter_turn * step as f64 / segments as f64;
+        context.line_to(
+            width - radius + radius * angle.cos().powf(power),
+            height - radius + radius * angle.sin().powf(power),
+        );
+    }
+    context.line_to(radius, height);
+
+    for step in 1..=segments {
+        let angle = quarter_turn * step as f64 / segments as f64;
+        context.line_to(
+            radius - radius * angle.sin().powf(power),
+            height - radius + radius * angle.cos().powf(power),
+        );
+    }
+    context.line_to(0.0, radius);
+
+    for step in 1..=segments {
+        let angle = quarter_turn * step as f64 / segments as f64;
+        context.line_to(
+            radius - radius * angle.cos().powf(power),
+            radius - radius * angle.sin().powf(power),
+        );
+    }
+
+    context.close_path();
+    context.set_source_rgb(1.0, 1.0, 1.0);
+    let _ = context.fill();
 }
 
 fn create_minimized_window_item(
@@ -1065,7 +1150,7 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
     item_container.set_overflow(gtk4::Overflow::Visible);
 
     let btn = Button::builder()
-        .css_classes(["dock-item-btn"])
+        .css_classes(["dock-item-btn", "dock-trash-btn"])
         .tooltip_text("Papelera")
         .focusable(false)
         .valign(gtk4::Align::End)
@@ -1079,10 +1164,11 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
 
     let trash_img = Image::builder()
         .icon_name(trash_icon_name)
-        .pixel_size(icon_size)
+        .pixel_size(icon_size + 8)
+        .css_classes(["dock-trash-icon"])
         .valign(gtk4::Align::End)
         .build();
-    btn.set_child(Some(&create_magnifiable_icon(&trash_img, icon_size)));
+    btn.set_child(Some(&create_magnifiable_icon(&trash_img, icon_size, false)));
 
     btn.connect_clicked(|_| {
         let _ = Command::new("nautilus").arg("trash://").spawn();
@@ -1209,7 +1295,10 @@ fn create_dock_item(
             .valign(gtk4::Align::End)
             .build()
     };
-    btn.set_child(Some(&create_magnifiable_icon(&icon, icon_size)));
+    icon.add_css_class("dock-icon-filled");
+    icon.set_pixel_size((icon_size - 10).max(1));
+    icon.set_margin_bottom(5);
+    btn.set_child(Some(&create_magnifiable_icon(&icon, icon_size, true)));
 
     let cmd = app_cfg.command.clone();
     let name = app_cfg.name.clone();
