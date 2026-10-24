@@ -383,7 +383,24 @@ pub fn run_winit() -> Result<()> {
                                                 let zone = layer_map.non_exclusive_zone();
                                                 let output_geo = state.space.output_geometry(output).unwrap_or_default();
                                                 let usable_zone = if zone.size.w > 0 && zone.size.h > 0 {
-                                                    zone
+                                                    let has_dock = layer_map
+                                                        .layers()
+                                                        .any(|layer| layer.namespace() == "malus-dock");
+                                                    let headroom = if has_dock {
+                                                        state.dock_blur_headroom.max(0)
+                                                    } else {
+                                                        0
+                                                    };
+                                                    let usable_height = (zone.size.h + headroom)
+                                                        .min(output_geo.size.h - zone.loc.y);
+                                                    Rectangle::new(
+                                                        zone.loc,
+                                                        (
+                                                            zone.size.w,
+                                                            usable_height.max(zone.size.h),
+                                                        )
+                                                            .into(),
+                                                    )
                                                 } else {
                                                     Rectangle::new(
                                                         (0, 32).into(),

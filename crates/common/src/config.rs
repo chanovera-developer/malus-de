@@ -1265,7 +1265,7 @@ impl Default for DockConfig {
             icon_size: 48,
             magnification_enabled: true,
             magnification_max_size: 62,
-            floating_gap: 10,
+            floating_gap: 4,
             corner_radius: 24,
             background_opacity: 0.70,
             blur_strength: 24,
