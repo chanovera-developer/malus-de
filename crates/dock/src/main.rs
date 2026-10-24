@@ -7,7 +7,7 @@ use gtk4::{
 };
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use libadwaita as adw;
-use malus_de_common::config::{DockAppConfig, DockConfig};
+use malus_de_common::config::{DockAppConfig, DockConfig, DockIconAppearance};
 use malus_de_common::ipc::{ipc_socket_path, send_ipc_message, IpcMessage, MinimizedWindowInfo};
 use malus_de_common::logging::init_logging;
 use std::cell::RefCell;
@@ -677,7 +677,13 @@ fn build_dock_ui(app: &Application) {
                 }
                 IpcMessage::PinAppToDock { name, icon, command, matchers } => {
                     info!("📌 IPC PinAppToDock recibido para: {}", name);
-                    let app_cfg = DockAppConfig { name, icon, command, matchers };
+                    let app_cfg = DockAppConfig {
+                        name,
+                        icon,
+                        command,
+                        matchers,
+                        icon_appearance: DockIconAppearance::Auto,
+                    };
                     let mut cfg = cfg_ipc.borrow_mut();
                     if cfg.pin_app(app_cfg) {
                         let _ = cfg.save();
@@ -900,6 +906,7 @@ fn render_dock_apps(
             icon,
             command,
             matchers,
+            icon_appearance: DockIconAppearance::Auto,
         };
         let (widget, ind) = create_dock_item(
             &app_cfg,
@@ -936,7 +943,7 @@ fn update_icon_size_recursive(widget: &gtk4::Widget, size: i32, base_size: i32) 
         let target_size = (size
             + if img.has_css_class("dock-trash-icon") {
                 8
-            } else if img.has_css_class("dock-icon-filled") {
+            } else if img.has_css_class("dock-icon-inset") {
                 -10
             } else {
                 0
@@ -953,6 +960,79 @@ fn update_icon_size_recursive(widget: &gtk4::Widget, size: i32, base_size: i32) 
         child = c.next_sibling();
     }
     changed
+}
+
+fn should_show_dock_icon_background(
+    appearance: DockIconAppearance,
+    icon_name: &str,
+    icon: &Image,
+    icon_size: i32,
+) -> bool {
+    match appearance {
+        DockIconAppearance::DockBackground => true,
+        DockIconAppearance::Native => false,
+        DockIconAppearance::Auto => match inspect_icon_background(icon_name, icon, icon_size) {
+            Some(has_background) => !has_background,
+            None => {
+                warn!(
+                    "No se pudo analizar el fondo del icono '{}'; se usará el fondo del Dock",
+                    icon_name
+                );
+                true
+            }
+        },
+    }
+}
+
+fn inspect_icon_background(icon_name: &str, icon: &Image, icon_size: i32) -> Option<bool> {
+    let icon_path = if icon_name.starts_with('/') {
+        Some(std::path::PathBuf::from(icon_name))
+    } else {
+        gtk4::IconTheme::for_display(&icon.display())
+            .lookup_icon(
+                icon_name,
+                &[],
+                icon_size.max(1),
+                1,
+                icon.direction(),
+                gtk4::IconLookupFlags::empty(),
+            )
+            .file()
+            .and_then(|file| file.path())
+    }?;
+
+    let pixbuf = gdk_pixbuf::Pixbuf::from_file_at_scale(&icon_path, 64, 64, true).ok()?;
+    let bytes = pixbuf.read_pixel_bytes();
+    let pixels = bytes.as_ref();
+    let channels = pixbuf.n_channels() as usize;
+    let rowstride = pixbuf.rowstride() as usize;
+    let width = pixbuf.width() as usize;
+    let height = pixbuf.height() as usize;
+    if channels < 3 || width == 0 || height == 0 {
+        return None;
+    }
+
+    let alpha_index = if pixbuf.has_alpha() {
+        channels - 1
+    } else {
+        0
+    };
+    let mut opaque_pixels = 0usize;
+    for y in 0..height {
+        for x in 0..width {
+            let pixel_start = y * rowstride + x * channels;
+            let alpha = if pixbuf.has_alpha() {
+                pixels.get(pixel_start + alpha_index).copied()?
+            } else {
+                255
+            };
+            if alpha >= 230 {
+                opaque_pixels += 1;
+            }
+        }
+    }
+
+    Some(opaque_pixels as f64 / (width * height) as f64 >= 0.72)
 }
 
 fn create_magnifiable_icon(icon: &Image, icon_size: i32, show_backdrop: bool) -> Overlay {
@@ -1301,10 +1381,22 @@ fn create_dock_item(
             .valign(gtk4::Align::End)
             .build()
     };
-    icon.add_css_class("dock-icon-filled");
-    icon.set_pixel_size((icon_size - 10).max(1));
-    icon.set_margin_bottom(5);
-    btn.set_child(Some(&create_magnifiable_icon(&icon, icon_size, true)));
+    let show_backdrop = should_show_dock_icon_background(
+        app_cfg.icon_appearance,
+        icon_name,
+        &icon,
+        icon_size,
+    );
+    if show_backdrop {
+        icon.add_css_class("dock-icon-inset");
+        icon.set_pixel_size((icon_size - 10).max(1));
+        icon.set_margin_bottom(5);
+    }
+    btn.set_child(Some(&create_magnifiable_icon(
+        &icon,
+        icon_size,
+        show_backdrop,
+    )));
 
     let cmd = app_cfg.command.clone();
     let name = app_cfg.name.clone();
