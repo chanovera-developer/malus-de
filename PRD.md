@@ -34,6 +34,7 @@ graph TD
         TopBar["Top Bar (malus-de-top-bar)\n- Menú Apple\n- Menú Global\n- Centro de Control\n- Bandeja / Reloj"]
         Dock["Floating Dock (malus-de-dock)\n- Lanzadores\n- Miniaturas Ventanas\n- Indicadores"]
         Spotlight["Spotlight (malus-de-spotlight)\n- Búsqueda App/Archivos"]
+        Clipboard["Portapapeles (malus-de-clipboard)\n- Historial\n- Acceso Super + V"]
         Wallpaper["Fondo Dinámico (malus-de-wallpaper)\n- Ciclos solares"]
         Notifications["Notificaciones (malus-de-notifications)\n- Daemon D-Bus"]
     end
@@ -48,10 +49,12 @@ graph TD
     TopBar -->|wlr-layer-shell: Top| Protocols
     Dock -->|wlr-layer-shell: Top/Bottom| Protocols
     Spotlight -->|wlr-layer-shell: Overlay| Protocols
+    Clipboard -->|Wayland data-control| Protocols
     Wallpaper -->|wlr-layer-shell: Background| Protocols
 
     TopBar <-->|IPC| IPC
     Dock <-->|IPC| IPC
+    Clipboard <-->|IPC| IPC
 
     TopBar --> Audio
     TopBar --> Network
@@ -169,6 +172,16 @@ graph TD
   - **Animación Genie / Magic Lamp:** Interpolación de deformación de malla por GPU para contraer y desplegar ventanas hacia y desde sus respectivas posiciones en el Dock.
   - Gestión de popups (`xdg-popup` / `subsurface`) para garantizar que menús desplegables y barras de título respondan sin bloqueos de puntero.
 
+### 3.5. Gestor de Portapapeles (`crates/clipboard`)
+* **Objetivo:** Mantener disponible el contenido copiado aunque la aplicación que lo originó se cierre y ofrecer un historial visual accesible desde el escritorio.
+* **Arquitectura:** Servicio en segundo plano en Rust, separado del compositor, que observa el portapapeles mediante los protocolos de datos de Wayland compatibles con la sesión. La interfaz del historial se comunica con el servicio mediante IPC.
+* **Capacidades:**
+  - Mantener en memoria un historial configurable de hasta 50 elementos de texto, enlaces, imágenes y URI de archivos; permitir excluir tipos de contenido y borrar el historial.
+  - Asumir la propiedad del contenido copiado para que siga disponible después del cierre de la aplicación emisora, atendiendo solicitudes de pegado de otras aplicaciones.
+  - Abrir el historial con `Super + V`, buscar elementos, fijar favoritos y pegar un elemento seleccionado con un clic o con `Enter`.
+  - Ofrecer sincronización configurable entre el portapapeles principal y la selección primaria de Wayland.
+* **Privacidad:** El contenido se mantiene localmente; el usuario puede borrar elementos o desactivar el historial. No se sincroniza con otros dispositivos salvo que se habilite explícitamente una función independiente.
+
 ---
 
 ## 4. Estado de Implementación & Roadmap
@@ -183,3 +196,4 @@ graph TD
 | **M6** | Integración AirDrop | 🟡 En Progreso | Servicio D-Bus `malus-de-link`, modal de visibilidad y simulación nativa. Backend AWDL/BLE en curso. |
 | **M7** | Sesión GDM Nativa | ✅ Hecho | Entrada `malus.desktop`, wrapper `malus-session`, instalador `install-session.sh`, binarios Release y backend DRM/KMS. |
 | **M8** | Multi-Monitor 4K & Teclado Latam | ✅ Hecho | Disposición dual 4K en vivo, escalado independiente y enlazado 1:1 por PPI (`TrueSize`), y soporte nativo de teclado XKB Español Latinoamericano (`latam`). |
+| **M9** | Gestor de Portapapeles | ⬜ Pendiente | Servicio Wayland persistente, historial local de hasta 50 elementos y vista de búsqueda/fijados invocable con `Super + V`. |
