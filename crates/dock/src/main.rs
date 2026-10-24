@@ -867,6 +867,9 @@ fn render_dock_apps(
 }
 
 fn update_icon_size_recursive(widget: &gtk4::Widget, size: i32, base_size: i32) {
+    if let Ok(overlay) = widget.clone().downcast::<Overlay>() {
+        overlay.set_size_request(size, base_size);
+    }
     if let Ok(img) = widget.clone().downcast::<Image>() {
         // Solo ajustar iconos principales del dock, preservando insignias secundarias
         if img.pixel_size() >= (base_size - 10) && img.pixel_size() != size {
