@@ -30,7 +30,7 @@ window.malus-dock-window decoration {
 .dock-container {
     background-color: rgba(24, 24, 27, 0.72);
     border: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 22px;
+    border-radius: 32px;
     padding: 6px 10px;
     box-shadow: none;
     overflow: visible;

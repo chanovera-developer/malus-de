@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::os::unix::io::OwnedFd;
+use malus_de_common::config::DockConfig;
 use smithay::{
     delegate_compositor, delegate_data_device, delegate_fractional_scale, delegate_layer_shell,
     delegate_output, delegate_primary_selection, delegate_seat, delegate_shm, delegate_viewporter,
@@ -113,6 +114,7 @@ pub struct MalusState {
     pub cursor_status: smithay::input::pointer::CursorImageStatus,
     pub pending_displays_reload: bool,
     pub saved_app_window_sizes: HashMap<String, Size<i32, Logical>>,
+    pub dock_blur_headroom: i32,
 }
 
 pub fn guess_icon_name(app_id: &str, title: &str) -> String {
@@ -285,6 +287,7 @@ impl MalusState {
         if let Err(e) = ipc_broadcaster.start_server() {
             tracing::error!("Error al iniciar servidor IPC: {:?}", e);
         }
+        let dock_blur_headroom = Self::load_dock_blur_headroom();
 
         Self {
             display_handle: dh,
@@ -317,7 +320,16 @@ impl MalusState {
             cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
             pending_displays_reload: false,
             saved_app_window_sizes: Self::load_saved_window_sizes(),
+            dock_blur_headroom,
         }
+    }
+
+    fn load_dock_blur_headroom() -> i32 {
+        let config = DockConfig::load_or_create_default();
+        config
+            .magnification_max_size
+            .saturating_sub(config.icon_size)
+            .min(i32::MAX as u32) as i32
     }
 
     /// Carga los tamaños de ventana guardados por aplicación desde ~/.config/malus-de/window_sizes.json
@@ -723,6 +735,7 @@ impl MalusState {
                 }
                 IpcMessage::ReloadDockConfig => {
                     tracing::info!("📥 IPC ReloadDockConfig recibido — retransmitiendo a clientes shell");
+                    self.dock_blur_headroom = Self::load_dock_blur_headroom();
                     self.ipc_broadcaster.broadcast(&IpcMessage::ReloadDockConfig);
                 }
                 _ => {}
