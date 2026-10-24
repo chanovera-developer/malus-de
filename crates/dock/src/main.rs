@@ -28,8 +28,8 @@ window.malus-dock-window decoration {
 }
 
 .dock-container {
-    background-color: alpha(@window_bg_color, 0.62);
-    border: 1px solid alpha(@window_fg_color, 0.12);
+    background-color: alpha(@window_bg_color, 0.42);
+    border: 1px solid alpha(@window_fg_color, 0.22);
     /* El compositor aplica el recorte squircle; evita un redondeo CSS superpuesto. */
     border-radius: 0;
     padding: 6px 10px 0;
