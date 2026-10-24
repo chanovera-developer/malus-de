@@ -1189,6 +1189,17 @@ pub struct DockAppConfig {
     pub command: String,
     #[serde(default)]
     pub matchers: Vec<String>,
+    #[serde(default)]
+    pub icon_appearance: DockIconAppearance,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DockIconAppearance {
+    #[default]
+    Auto,
+    DockBackground,
+    Native,
 }
 
 impl DockAppConfig {
@@ -1266,30 +1277,35 @@ impl Default for DockConfig {
                     icon: "org.gnome.Nautilus".to_string(),
                     command: "nautilus --new-window".to_string(),
                     matchers: vec!["nautilus".into(), "archivos".into(), "org.gnome.nautilus".into()],
+                    icon_appearance: DockIconAppearance::Auto,
                 },
                 DockAppConfig {
                     name: "Terminal".to_string(),
                     icon: "org.gnome.Ptyxis".to_string(),
                     command: "ptyxis -s".to_string(),
                     matchers: vec!["ptyxis".into(), "terminal".into(), "org.gnome.ptyxis".into()],
+                    icon_appearance: DockIconAppearance::Auto,
                 },
                 DockAppConfig {
                     name: "Editor de Texto".to_string(),
                     icon: "org.gnome.TextEditor".to_string(),
                     command: "gnome-text-editor -s".to_string(),
                     matchers: vec!["texteditor".into(), "text-editor".into(), "gedit".into(), "org.gnome.texteditor".into()],
+                    icon_appearance: DockIconAppearance::Auto,
                 },
                 DockAppConfig {
                     name: "Calculadora".to_string(),
                     icon: "org.gnome.Calculator".to_string(),
                     command: "gnome-calculator".to_string(),
                     matchers: vec!["calculator".into(), "calculadora".into(), "org.gnome.calculator".into()],
+                    icon_appearance: DockIconAppearance::Auto,
                 },
                 DockAppConfig {
                     name: "Ajustes del Sistema".to_string(),
                     icon: "preferences-system".to_string(),
                     command: "malus-de-settings".to_string(),
                     matchers: vec!["malus-de-settings".into(), "dev.malus.settings".into(), "ajustes".into(), "settings".into(), "configuración".into(), "configuracion".into()],
+                    icon_appearance: DockIconAppearance::Auto,
                 },
             ],
         }
@@ -1341,7 +1357,7 @@ impl DockConfig {
         }
         let toml_str = toml::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-        let header = "# Configuración del Dock de Malus DE\n# Personalización de tamaño de iconos, magnificación, gap flotante y aplicaciones ancladas.\n\n";
+        let header = "# Configuración del Dock de Malus DE\n# Personalización de tamaño de iconos, magnificación, gap flotante y aplicaciones ancladas.\n# icon_appearance por aplicación: auto, dock_background o native.\n\n";
         std::fs::write(path, format!("{}{}", header, toml_str))
     }
 
@@ -2247,6 +2263,25 @@ mod tests {
         assert_eq!(parsed.corner_radius, 24); // default
         assert_eq!(parsed.apps.len(), 1);
         assert_eq!(parsed.apps[0].name, "Test App");
+        assert_eq!(parsed.apps[0].icon_appearance, DockIconAppearance::Auto);
+    }
+
+    #[test]
+    fn test_dock_app_icon_appearance_override() {
+        let config = r#"
+            [[apps]]
+            name = "Native Icon"
+            icon = "native-icon"
+            command = "native-app"
+            icon_appearance = "native"
+        "#;
+
+        let parsed: DockConfig = toml::from_str(config).expect("Deserialización falló");
+        assert_eq!(parsed.apps[0].icon_appearance, DockIconAppearance::Native);
+
+        let serialized = toml::to_string(&parsed).expect("Serialización falló");
+        let reparsed: DockConfig = toml::from_str(&serialized).expect("Deserialización falló");
+        assert_eq!(reparsed.apps[0].icon_appearance, DockIconAppearance::Native);
     }
 
     #[test]
@@ -2260,6 +2295,7 @@ mod tests {
             icon: "spotify".to_string(),
             command: "spotify".to_string(),
             matchers: vec!["spotify".into()],
+            icon_appearance: DockIconAppearance::Auto,
         };
         assert!(cfg.pin_app(new_app.clone()));
         assert_eq!(cfg.apps.len(), initial_count + 1);
@@ -2284,6 +2320,7 @@ mod tests {
             icon: "utilities-terminal".to_string(),
             command: "ptyxis -s".to_string(),
             matchers: vec!["ptyxis".into(), "terminal".into(), "org.gnome.ptyxis".into()],
+            icon_appearance: DockIconAppearance::Auto,
         };
 
         assert!(app.matches("Terminal"));
