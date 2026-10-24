@@ -28,13 +28,19 @@ window.malus-dock-window decoration {
 }
 
 .dock-container {
-    background-color: rgba(24, 24, 27, 0.72);
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    background-color: alpha(@window_bg_color, 0.62);
+    border: 1px solid alpha(@window_fg_color, 0.12);
     /* El compositor aplica el recorte squircle; evita un redondeo CSS superpuesto. */
     border-radius: 0;
     padding: 6px 10px;
     box-shadow: none;
     overflow: visible;
+}
+
+@media (prefers-color-scheme: dark) {
+    .dock-container {
+        border-color: alpha(@window_fg_color, 0.14);
+    }
 }
 
 .dock-item-box {
