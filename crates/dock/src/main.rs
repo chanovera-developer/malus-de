@@ -29,7 +29,7 @@ window.malus-dock-window decoration {
 
 .dock-container {
     background-color: alpha(@window_bg_color, 0.42);
-    border: 1px solid alpha(@window_fg_color, 0.22);
+    border: 1px solid alpha(@window_fg_color, 0.12);
     /* El compositor aplica el recorte squircle; evita un redondeo CSS superpuesto. */
     border-radius: 0;
     padding: 6px 10px 0;
@@ -52,22 +52,25 @@ window.malus-dock-window decoration {
     border: none;
     border-radius: 14px;
     padding: 4px;
+    box-shadow: none;
     transition: background-color 180ms cubic-bezier(0.2, 0.9, 0.3, 1.0);
     overflow: visible;
 }
 
-.dock-item-btn:hover {
-    background-color: rgba(255, 255, 255, 0.14);
-}
-
-.dock-item-btn:active {
-    background-color: rgba(255, 255, 255, 0.22);
-}
-
-.dock-trash-btn:hover,
-.dock-trash-btn:active {
-    background: transparent;
+button.dock-item-btn,
+button.dock-item-btn:hover,
+button.dock-item-btn:active,
+button.dock-item-btn:checked,
+button.dock-item-btn:focus {
+    background-color: transparent;
+    background-image: none;
+    border-color: transparent;
     box-shadow: none;
+}
+
+button.dock-item-btn:hover,
+button.dock-item-btn:active {
+    outline: none;
 }
 
 .dock-indicator {
