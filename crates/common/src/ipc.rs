@@ -101,6 +101,8 @@ pub enum IpcMessage {
         interactive: bool,
         record_video: bool,
     },
+    /// Solicita al compositor guardar el siguiente fotograma de pantalla como PNG.
+    CaptureScreenshot { destination: String },
     /// Invocación del Extractor de Texto en Pantalla OCR (Super + Shift + T)
     TriggerOcrCapture,
     /// Conmutar entre Modo Flotante y Modo Mosaico Automático (Super + Y)
@@ -378,7 +380,18 @@ mod tests {
             panic!("Tipo incorrecto");
         }
     }
+
+    #[test]
+    fn test_screenshot_request_serialization() {
+        let msg = IpcMessage::CaptureScreenshot {
+            destination: "/run/user/1000/malus-screenshot-test.png".to_string(),
+        };
+        let json = serde_json::to_string(&msg).expect("Serialización falló");
+        let parsed: IpcMessage = serde_json::from_str(&json).expect("Deserialización falló");
+        assert!(matches!(
+            parsed,
+            IpcMessage::CaptureScreenshot { destination }
+                if destination == "/run/user/1000/malus-screenshot-test.png"
+        ));
+    }
 }
-
-
-

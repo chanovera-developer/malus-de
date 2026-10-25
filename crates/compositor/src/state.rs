@@ -116,6 +116,7 @@ pub struct MalusState {
     pub pending_displays_reload: bool,
     pub saved_app_window_sizes: HashMap<String, Size<i32, Logical>>,
     pub dock_blur_headroom: i32,
+    pub pending_screenshot_requests: std::collections::VecDeque<std::path::PathBuf>,
 }
 
 pub fn guess_icon_name(app_id: &str, title: &str) -> String {
@@ -324,6 +325,7 @@ impl MalusState {
             pending_displays_reload: false,
             saved_app_window_sizes: Self::load_saved_window_sizes(),
             dock_blur_headroom,
+            pending_screenshot_requests: std::collections::VecDeque::new(),
         }
     }
 
@@ -681,6 +683,11 @@ impl MalusState {
                 IpcMessage::ActivateApp { app_id } => {
                     tracing::info!("📥 IPC ActivateApp recibido para: {}", app_id);
                     self.activate_or_restore_app(&app_id);
+                }
+                IpcMessage::CaptureScreenshot { destination } => {
+                    tracing::info!("Solicitud IPC de captura recibida");
+                    self.pending_screenshot_requests
+                        .push_back(std::path::PathBuf::from(destination));
                 }
                 IpcMessage::AnimateRestore { window_id } => {
                     tracing::info!("📥 IPC AnimateRestore recibido para ventana id={}", window_id);

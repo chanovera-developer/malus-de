@@ -973,7 +973,10 @@ pub fn run_winit() -> Result<()> {
                     window_squircle_shader = crate::window_corners::WindowSquircleShader::new(renderer);
                 }
 
+                let screenshot_request = state.pending_screenshot_requests.pop_front();
+                let mut frame_rendered = false;
                 if let Ok(mut frame) = renderer.render(&mut framebuffer, size, Transform::Flipped180) {
+                    frame_rendered = true;
                     let _ = frame.clear(dark_acrylic, &[damage]);
                     // 1. Renderizar fondo (wallpaper y capas inferiores)
                     if !lower_elements.is_empty() {
@@ -1495,6 +1498,25 @@ pub fn run_winit() -> Result<()> {
                             state.notify_active_app(Some(&anim.surface));
                             state.notify_running_apps();
                         }
+                    }
+                }
+                if let Some(destination) = screenshot_request {
+                    info!("Procesando solicitud de captura de pantalla");
+                    if frame_rendered {
+                        if let Err(error) =
+                            crate::capture::capture_frame(
+                                renderer,
+                                &framebuffer,
+                                size,
+                                &destination,
+                            )
+                        {
+                            warn!("Error al capturar el framebuffer: {error:#}");
+                            crate::capture::write_capture_error(&destination, &error);
+                        }
+                    } else {
+                        let error = anyhow::anyhow!("No se pudo renderizar el fotograma de captura");
+                        crate::capture::write_capture_error(&destination, &error);
                     }
                 }
             }
