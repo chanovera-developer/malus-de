@@ -12,7 +12,7 @@
 - Selector visual de ventanas Alt-Tab/Super-Tab funcional para recorrer y cambiar entre ventanas abiertas; su presentación y comportamiento siguen en desarrollo.
 - Integración con servicios de Linux para audio, red, Bluetooth y controles multimedia.
 - Captura real de pantalla completa solicitada al compositor mediante IPC, guardada en la carpeta de Imágenes y copiada como PNG al portapapeles.
-- Historial local en memoria de hasta 50 elementos de texto, imágenes PNG y listas de archivos, accesible con `Super + V`.
+- Historial local persistente de hasta 50 elementos de texto, enlaces, imágenes PNG y URI de archivos, accesible con `Super + V`. Admite búsqueda, fijar elementos, volver a copiarlos y borrarlos; ocupa como máximo 50 MiB (10 MiB por elemento). La sincronización con la selección primaria de Wayland es opcional y está desactivada por defecto. Los datos se guardan localmente con permisos privados, se conservan entre sesiones y se eliminan al borrar el historial. Requiere `wl-clipboard`; no filtra automáticamente contenido sensible.
 - Efectos gráficos con shaders, esquinas squircle y animaciones de ventanas.
 - Detección de pantallas y modos compatibles por DRM/KMS, con resolución, disposición y escala fraccionaria configurables en caliente.
 - Experimentos de integración con dispositivos Apple mediante AirDrop; el backend AWDL/BLE está en desarrollo.
