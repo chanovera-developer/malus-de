@@ -2363,6 +2363,7 @@ pub fn run_drm() -> Result<()> {
                                         if let Some(geo) = layer_map.layer_geometry(surface) {
                                             let radius = match ns.as_ref() {
                                                 "malus-dock" => 32.0 * scale as f32,
+                                                "malus-app-switcher" => 32.0 * scale as f32,
                                                 "malus-spotlight" => 18.0 * scale as f32,
                                                 "malus-notifications" => 16.0 * scale as f32,
                                                 _ => 0.0,

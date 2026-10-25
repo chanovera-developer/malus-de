@@ -205,43 +205,57 @@ button.dock-item-btn:active {
 }
 
 /* Selector Visual de Aplicaciones estilo macOS (⌘Tab App Switcher HUD) */
-window.malus-switcher-window {
+window.malus-switcher-window,
+window.malus-switcher-window.background,
+window.malus-switcher-window decoration,
+.switcher-surface,
+.switcher-container,
+.switcher-card {
     background-color: transparent;
+    background-image: none;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
 }
 
 .switcher-container {
-    background-color: rgba(26, 26, 32, 0.90);
-    border: 1px solid rgba(255, 255, 255, 0.16);
-    border-radius: 22px;
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.70);
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
     padding: 12px 16px;
+}
+
+.switcher-container-background {
+    color: @window_bg_color;
+}
+
+.switcher-card-background {
+    color: @accent_bg_color;
 }
 
 .switcher-card {
     background-color: transparent;
-    border: 1.5px solid transparent;
-    border-radius: 14px;
-    padding: 10px 14px;
+    border: none;
+    border-radius: 0;
+    padding: 0;
     opacity: 0.65;
     transition: all 120ms cubic-bezier(0.2, 0.9, 0.3, 1.0);
 }
 
 .switcher-card.selected {
-    background-color: rgba(255, 255, 255, 0.16);
-    border-color: #2563eb;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45), 0 0 10px rgba(37, 99, 235, 0.35);
     opacity: 1.0;
 }
 
 .switcher-title {
-    color: #f4f4f5;
+    color: @window_fg_color;
     font-size: 12px;
     font-weight: 600;
     margin-top: 6px;
 }
 
 .switcher-card.selected .switcher-title {
-    color: #ffffff;
+    color: @accent_fg_color;
     font-weight: 700;
 }
 "#;
@@ -466,7 +480,18 @@ fn build_dock_ui(app: &Application) {
         let _ = send_ipc_message(&IpcMessage::HideAppSwitcher);
     });
     switcher_box.set_visible(false);
-    switcher_window.set_child(Some(&switcher_box));
+    let switcher_background = DrawingArea::new();
+    switcher_background.add_css_class("switcher-container-background");
+    switcher_background.set_can_target(false);
+    switcher_background.set_draw_func(|area, context, width, height| {
+        draw_switcher_squircle(area, context, width as f64, height as f64, 32.0, false, true);
+    });
+    let switcher_surface = Overlay::new();
+    switcher_surface.add_css_class("switcher-surface");
+    switcher_surface.set_child(Some(&switcher_background));
+    switcher_surface.add_overlay(&switcher_box);
+    switcher_surface.set_measure_overlay(&switcher_box, true);
+    switcher_window.set_child(Some(&switcher_surface));
 
     // Canales y estado compartido
     let running_cache = Rc::new(RefCell::new(Vec::<String>::new()));
@@ -656,6 +681,9 @@ fn build_dock_ui(app: &Application) {
     let headroom_ipc = magnification_headroom.clone();
     let switcher_win_ipc = switcher_window.clone();
     let switcher_box_ipc = switcher_box.clone();
+    let switcher_cards_ipc: Rc<RefCell<Vec<(DrawingArea, Rc<std::cell::Cell<bool>>)>>> =
+        Rc::new(RefCell::new(Vec::new()));
+    let switcher_cards_show = switcher_cards_ipc.clone();
 
     glib::spawn_future_local(async move {
         while let Ok(msg) = rx.recv().await {
@@ -750,18 +778,42 @@ fn build_dock_ui(app: &Application) {
                     while let Some(c) = switcher_box_ipc.first_child() {
                         switcher_box_ipc.remove(&c);
                     }
+                    switcher_cards_show.borrow_mut().clear();
                     for (i, item) in items.iter().enumerate() {
-                        let card = GtkBox::builder()
+                        let content = GtkBox::builder()
                             .orientation(Orientation::Vertical)
-                            .css_classes(["switcher-card"])
                             .spacing(6)
+                            .margin_top(18)
+                            .margin_bottom(18)
+                            .margin_start(20)
+                            .margin_end(20)
                             .halign(gtk4::Align::Center)
                             .valign(gtk4::Align::Center)
                             .build();
-
-                        if i == selected_index {
+                        let selected = Rc::new(std::cell::Cell::new(i == selected_index));
+                        let card_background = DrawingArea::new();
+                        card_background.add_css_class("switcher-card-background");
+                        card_background.set_can_target(false);
+                        let selected_for_draw = selected.clone();
+                        card_background.set_draw_func(move |area, context, width, height| {
+                            draw_switcher_squircle(
+                                area,
+                                context,
+                                width as f64,
+                                height as f64,
+                                22.0,
+                                selected_for_draw.get(),
+                                false,
+                            );
+                        });
+                        let card = Overlay::new();
+                        card.add_css_class("switcher-card");
+                        if selected.get() {
                             card.add_css_class("selected");
                         }
+                        card.set_child(Some(&card_background));
+                        card.add_overlay(&content);
+                        card.set_measure_overlay(&content, true);
 
                         let icon_name = item.icon_name.as_deref().unwrap_or("application-x-executable");
                         let icon = Image::builder()
@@ -769,7 +821,7 @@ fn build_dock_ui(app: &Application) {
                             .pixel_size(64)
                             .halign(gtk4::Align::Center)
                             .build();
-                        card.append(&icon);
+                        content.append(&icon);
 
                         let title_label = Label::builder()
                             .label(&item.title)
@@ -778,7 +830,7 @@ fn build_dock_ui(app: &Application) {
                             .max_width_chars(14)
                             .halign(gtk4::Align::Center)
                             .build();
-                        card.append(&title_label);
+                        content.append(&title_label);
 
                         // Conmutar a la ventana al hacer clic sobre su tarjeta
                         let target_wid = item.window_id;
@@ -789,12 +841,21 @@ fn build_dock_ui(app: &Application) {
                         card.add_controller(card_click);
 
                         switcher_box_ipc.append(&card);
+                        switcher_cards_show
+                            .borrow_mut()
+                            .push((card_background, selected));
                     }
                     switcher_box_ipc.set_visible(true);
                     switcher_win_ipc.set_visible(true);
                     switcher_win_ipc.present();
                 }
                 IpcMessage::UpdateAppSwitcher { selected_index } => {
+                    for (index, (background, selected)) in
+                        switcher_cards_show.borrow().iter().enumerate()
+                    {
+                        selected.set(index == selected_index);
+                        background.queue_draw();
+                    }
                     let mut idx = 0;
                     let mut child = switcher_box_ipc.first_child();
                     while let Some(c) = child {
@@ -809,6 +870,7 @@ fn build_dock_ui(app: &Application) {
                 }
                 IpcMessage::HideAppSwitcher => {
                     switcher_box_ipc.set_visible(false);
+                    switcher_cards_show.borrow_mut().clear();
                     while let Some(c) = switcher_box_ipc.first_child() {
                         switcher_box_ipc.remove(&c);
                     }
@@ -1070,7 +1132,81 @@ fn create_magnifiable_icon(icon: &Image, icon_size: i32, show_backdrop: bool) ->
 }
 
 fn draw_squircle(context: &gtk4::cairo::Context, width: f64, height: f64) {
-    let radius = 22.0_f64.min(width / 2.0).min(height / 2.0);
+    squircle_path(context, width, height, 22.0);
+    context.set_source_rgb(1.0, 1.0, 1.0);
+    let _ = context.fill();
+}
+
+fn draw_switcher_squircle(
+    area: &DrawingArea,
+    context: &gtk4::cairo::Context,
+    width: f64,
+    height: f64,
+    radius: f64,
+    selected: bool,
+    container: bool,
+) {
+    let background_color = theme_color(
+        area,
+        if container {
+            "window_bg_color"
+        } else if selected {
+            "accent_bg_color"
+        } else {
+            "window_fg_color"
+        },
+    );
+    let foreground = theme_color(area, "window_fg_color");
+    let accent_color = theme_color(area, "accent_bg_color");
+
+    squircle_path(context, width, height, radius);
+    let fill_color = if container {
+        background_color
+    } else if selected {
+        accent_color
+    } else {
+        foreground
+    };
+    let fill_alpha = if container {
+        0.42
+    } else if selected {
+        0.22
+    } else {
+        0.055
+    };
+    context.set_source_rgba(
+        fill_color.red() as f64,
+        fill_color.green() as f64,
+        fill_color.blue() as f64,
+        (fill_color.alpha() * fill_alpha) as f64,
+    );
+    let _ = context.fill_preserve();
+
+    let border_color = if selected {
+        accent_color
+    } else {
+        foreground
+    };
+    let border_alpha = if container { 0.18 } else if selected { 0.95 } else { 0.14 };
+    context.set_source_rgba(
+        border_color.red() as f64,
+        border_color.green() as f64,
+        border_color.blue() as f64,
+        (border_color.alpha() * border_alpha) as f64,
+    );
+    context.set_line_width(if selected { 1.5 } else { 1.0 });
+    let _ = context.stroke();
+}
+
+#[allow(deprecated)]
+fn theme_color(area: &DrawingArea, name: &str) -> gtk4::gdk::RGBA {
+    area.style_context()
+        .lookup_color(name)
+        .unwrap_or_else(|| area.color())
+}
+
+fn squircle_path(context: &gtk4::cairo::Context, width: f64, height: f64, radius: f64) {
+    let radius = radius.min(width / 2.0).min(height / 2.0);
     let exponent = 4.2;
     let power = 2.0 / exponent;
     let segments = 24;
@@ -1115,8 +1251,6 @@ fn draw_squircle(context: &gtk4::cairo::Context, width: f64, height: f64) {
     }
 
     context.close_path();
-    context.set_source_rgb(1.0, 1.0, 1.0);
-    let _ = context.fill();
 }
 
 fn create_minimized_window_item(

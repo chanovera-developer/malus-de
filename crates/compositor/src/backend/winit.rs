@@ -1112,6 +1112,7 @@ pub fn run_winit() -> Result<()> {
                                     if let Some(geo) = layer_map.layer_geometry(surface) {
                                         let radius = match ns.as_ref() {
                                             "malus-dock" => 32.0,
+                                            "malus-app-switcher" => 32.0,
                                             "malus-spotlight" => 18.0,
                                             "malus-notifications" => 16.0,
                                             _ => 0.0,
