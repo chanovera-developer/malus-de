@@ -96,7 +96,7 @@ cargo run -p malus-de-screenshot -- --mode area
 
 La copia al portapapeles requiere `wl-copy` (`wl-clipboard`). También puedes usar `--clipboard-only` para copiar sin guardar el archivo ni abrir la miniatura. La captura de ventana, grabación y OCR todavía no están implementados.
 
-El gestor de portapapeles conserva durante la sesión los últimos 50 elementos copiados (texto, enlaces, imágenes PNG y URI de archivos). Pulsa `Super + V` para buscar, fijar o volver a copiar un elemento. El historial solo se mantiene en memoria y se elimina al cerrar la sesión; se omite el contenido marcado como sensible y se requiere `wl-clipboard`.
+El gestor de portapapeles conserva los últimos 50 elementos copiados (texto, enlaces, imágenes PNG y URI de archivos), con un límite de 10 MiB por elemento y 50 MiB en total. Pulsa `Super + V` para buscar, fijar, volver a copiar o borrar elementos. El historial se guarda localmente entre sesiones con permisos privados y requiere `wl-clipboard`; borrar el historial elimina también su copia persistente. La sincronización con la selección primaria de Wayland es opcional y está desactivada por defecto; se configura desde la interfaz del historial. Actualmente no filtra automáticamente contenido sensible.
 
 En **Ajustes → Pantallas**, cada pantalla detectada muestra sus modos DRM compatibles. Puedes seleccionar, por ejemplo, `1920 × 1080` para una pantalla 4K y aplicar el cambio sin cerrar sesión; la escala y la disposición se configuran por separado. Si KMS rechaza el modo guardado durante el arranque, el compositor prueba otros modos anunciados por la pantalla y registra cuál pudo activar.
 

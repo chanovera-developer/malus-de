@@ -174,13 +174,19 @@ graph TD
 
 ### 3.5. Gestor de Portapapeles (`crates/clipboard`)
 * **Objetivo:** Mantener disponible el contenido copiado aunque la aplicación que lo originó se cierre y ofrecer un historial visual accesible desde el escritorio.
-* **Arquitectura:** Servicio en segundo plano en Rust, separado del compositor, que observa el portapapeles mediante los protocolos de datos de Wayland compatibles con la sesión. La interfaz del historial se comunica con el servicio mediante IPC.
-* **Capacidades:**
-  - Mantener en memoria un historial configurable de hasta 50 elementos de texto, enlaces, imágenes y URI de archivos; permitir excluir tipos de contenido y borrar el historial.
-  - Asumir la propiedad del contenido copiado para que siga disponible después del cierre de la aplicación emisora, atendiendo solicitudes de pegado de otras aplicaciones.
-  - Abrir el historial con `Super + V`, buscar elementos, fijar favoritos y pegar un elemento seleccionado con un clic o con `Enter`.
-  - Ofrecer sincronización configurable entre el portapapeles principal y la selección primaria de Wayland.
-* **Privacidad:** El contenido se mantiene localmente; el usuario puede borrar elementos o desactivar el historial. No se sincroniza con otros dispositivos salvo que se habilite explícitamente una función independiente.
+* **Estado actual:** Servicio en Rust con historial persistente local de hasta 50 elementos y 50 MiB en total (10 MiB por elemento). Los datos se guardan con permisos privados en el directorio XDG de datos y se eliminan al borrar el historial. Requiere `wl-clipboard`.
+* **Capacidades implementadas:**
+  - Capturar texto, enlaces, imágenes PNG y URI de archivos, con un límite de 10 MiB por elemento.
+  - Abrir la vista con `Super + V`, buscar por contenido o tipo MIME, fijar elementos, volver a copiarlos y borrar el historial.
+  - Mantener los elementos capturados disponibles desde el historial aunque se cierre la aplicación que los originó o termine la sesión.
+  - Sincronizar opcionalmente el portapapeles principal y la selección primaria de Wayland; la opción está desactivada por defecto y se configura desde la interfaz.
+* **Pendiente:** Soporte más amplio de formatos y filtrado automático de contenido sensible.
+* **Privacidad:** El historial se conserva localmente entre sesiones, no se sincroniza con otros dispositivos y se puede borrar desde la interfaz. La implementación actual no filtra contenido sensible automáticamente.
+
+### 3.6. Captura de Pantalla (`crates/screenshot`)
+* **Estado actual:** La captura completa solicita el fotograma al compositor mediante IPC; los modos completo y de área guardan PNG en la carpeta XDG de Imágenes. La captura se copia al portapapeles y muestra una miniatura; `--clipboard-only` permite copiar sin guardar. La captura de área usa una superficie de selección y conserva solo la región delimitada.
+* **Requisitos de ejecución:** `wl-clipboard` para copiar imágenes. La tecla `Impr Pant` inicia una captura completa en la sesión instalada; tras cambios en el compositor es necesario recompilar e iniciar una sesión nueva.
+* **Pendiente:** Captura de ventana, grabación de pantalla y OCR. Estos modos no deben presentarse como funciones disponibles hasta su implementación.
 
 ---
 
@@ -196,4 +202,5 @@ graph TD
 | **M6** | Integración AirDrop | 🟡 En Progreso | Servicio D-Bus `malus-de-link`, modal de visibilidad y simulación nativa. Backend AWDL/BLE en curso. |
 | **M7** | Sesión GDM Nativa | ✅ Hecho | Entrada `malus.desktop`, wrapper `malus-session`, instalador `install-session.sh`, binarios Release y backend DRM/KMS. |
 | **M8** | Multi-Monitor 4K & Teclado Latam | ✅ Hecho | Disposición dual 4K en vivo, escalado independiente y enlazado 1:1 por PPI (`TrueSize`), y soporte nativo de teclado XKB Español Latinoamericano (`latam`). |
-| **M9** | Gestor de Portapapeles | 🟡 En Progreso | Servicio Wayland con historial de sesión, hasta 50 elementos y vista de búsqueda/fijados invocable con `Super + V`; sincronización avanzada de formatos aún pendiente. |
+| **M9** | Gestor de Portapapeles | 🟡 En Progreso | Historial persistente de hasta 50 elementos y 50 MiB; búsqueda, fijados, recopia y borrado con `Super + V`. Sincronización opcional con la selección primaria; formatos adicionales y filtrado de contenido sensible pendientes. |
+| **M10** | Captura de Pantalla | 🟡 En Progreso | Captura completa y de área mediante IPC del compositor, guardado PNG, copia al portapapeles y miniatura; captura de ventana, grabación y OCR pendientes. |
