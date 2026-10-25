@@ -490,6 +490,8 @@ pub fn run_winit() -> Result<()> {
 
                     let under_target = if let Some((surf, focus_loc)) = layer_target {
                         Some((surf, focus_loc))
+                    } else if let Some((_, loc, surf, sub_loc)) = state.popup_under(point) {
+                        Some((surf, (loc + sub_loc).to_f64()))
                     } else if let Some((window, loc)) = state.space.element_under(point) {
                         let local_point = point - loc.to_f64();
                         window
@@ -554,6 +556,12 @@ pub fn run_winit() -> Result<()> {
 
                     let (under_target, layer_info, regular_win) = if let Some((surf, focus_loc, ns, can_kb)) = layer_target {
                         (Some((surf.clone(), focus_loc)), Some((surf, ns, can_kb)), None)
+                    } else if let Some((window, loc, surf, sub_loc)) = state.popup_under(point) {
+                        (
+                            Some((surf, (loc + sub_loc).to_f64())),
+                            None,
+                            Some((window, loc)),
+                        )
                     } else if let Some((window, loc)) = state.space.element_under(point) {
                         let local_point = point - loc.to_f64();
                         let target = window

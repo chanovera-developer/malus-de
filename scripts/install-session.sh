@@ -85,11 +85,15 @@ chmod 644 /usr/lib/systemd/user/malus-session.target
 echo "   ✔ /usr/lib/systemd/user/malus-session.target"
 
 # Instalar preferencia de backend para xdg-desktop-portal
+# xdg-desktop-portal solo lee el archivo llamado portals.conf; si se instala con otro nombre,
+# el backend preferido nunca se aplica y los navegadores no pueden abrir el diálogo de guardar archivo.
 echo "🗂️ Instalando preferencia de portal para Malus DE..."
-mkdir -p /usr/share/xdg-desktop-portal
-cp -f "$PROJECT_DIR/data/malus-portals.conf" /usr/share/xdg-desktop-portal/malus-portals.conf
-chmod 644 /usr/share/xdg-desktop-portal/malus-portals.conf
-echo "   ✔ /usr/share/xdg-desktop-portal/malus-portals.conf"
+mkdir -p /etc/xdg/xdg-desktop-portal /usr/share/xdg-desktop-portal
+cp -f "$PROJECT_DIR/data/malus-portals.conf" /etc/xdg/xdg-desktop-portal/portals.conf
+cp -f "$PROJECT_DIR/data/malus-portals.conf" /usr/share/xdg-desktop-portal/portals.conf
+chmod 644 /etc/xdg/xdg-desktop-portal/portals.conf /usr/share/xdg-desktop-portal/portals.conf
+echo "   ✔ /etc/xdg/xdg-desktop-portal/portals.conf"
+echo "   ✔ /usr/share/xdg-desktop-portal/portals.conf"
 
 # 4. Instalar entrada de sesión Wayland para GDM
 echo "🖥️ [4/4] Instalando archivo de sesión para GDM en /usr/share/wayland-sessions/..."

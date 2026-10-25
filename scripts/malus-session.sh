@@ -175,13 +175,8 @@ for GTK_SETTINGS in "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" "$XDG_CONFIG_HOME/gt
     fi
 done
 
-# Aislar el bus de sesión D-Bus para evitar que apps de instancia única (ej. Nautilus) se redirijan a la sesión GNOME anfitriona
-if [ -z "$MALUS_NESTED_DBUS" ] && which dbus-run-session >/dev/null 2>&1; then
-    export MALUS_NESTED_DBUS=1
-    exec dbus-run-session -- "$0" "$@"
-fi
-
-# Sincronizar variables con el daemon D-Bus para que los servicios activados (como portales) hereden la configuración aislada
+# Mantener las aplicaciones y xdg-desktop-portal en el mismo bus de sesión
+# para que los navegadores puedan encontrar los portales activados por systemd.
 dbus-update-activation-environment --all 2>/dev/null || true
 
 echo "============================================================"

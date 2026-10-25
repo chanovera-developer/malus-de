@@ -554,6 +554,12 @@ fn resolve_target_under(
             Some((surf, ns, can_kb)),
             None,
         )
+    } else if let Some((window, loc, surf, sub_loc)) = state.popup_under(point) {
+        (
+            Some((surf, (loc + sub_loc).to_f64())),
+            None,
+            Some((window, loc)),
+        )
     } else if let Some((window, loc)) = state.space.element_under(point) {
         let local_point = point - loc.to_f64();
         let target = window
