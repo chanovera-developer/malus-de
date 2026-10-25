@@ -176,12 +176,13 @@ graph TD
 * **Objetivo:** Mantener disponible el contenido copiado aunque la aplicación que lo originó se cierre y ofrecer un historial visual accesible desde el escritorio.
 * **Estado actual:** Servicio en Rust con historial persistente local de hasta 50 elementos y 50 MiB en total (10 MiB por elemento). Los datos se guardan con permisos privados en el directorio XDG de datos y se eliminan al borrar el historial. Requiere `wl-clipboard`.
 * **Capacidades implementadas:**
-  - Capturar texto, enlaces, imágenes PNG y URI de archivos, con un límite de 10 MiB por elemento.
+  - Capturar texto, enlaces, URI de archivos, formatos de imagen y documentos comunes como PDF y RTF, con un límite de 10 MiB por elemento.
   - Abrir la vista con `Super + V`, buscar por contenido o tipo MIME, fijar elementos, volver a copiarlos y borrar el historial.
   - Mantener los elementos capturados disponibles desde el historial aunque se cierre la aplicación que los originó o termine la sesión.
   - Sincronizar opcionalmente el portapapeles principal y la selección primaria de Wayland; la opción está desactivada por defecto y se configura desde la interfaz.
-* **Pendiente:** Soporte más amplio de formatos y filtrado automático de contenido sensible.
-* **Privacidad:** El historial se conserva localmente entre sesiones, no se sincroniza con otros dispositivos y se puede borrar desde la interfaz. La implementación actual no filtra contenido sensible automáticamente.
+  - Omitir del historial, por defecto, selecciones marcadas como contraseñas por la aplicación de origen y contenido que coincida con patrones comunes de credenciales o claves privadas. El filtro se puede desactivar desde la interfaz.
+* **Limitaciones:** El filtro es heurístico y no garantiza la detección de todos los secretos; puede producir falsos positivos y no revisa el historial ya guardado. Solo se conservan formatos MIME de texto e imagen y una lista de formatos de documento explícitamente admitidos; cada elemento sigue limitado a 10 MiB.
+* **Privacidad:** El historial se conserva localmente entre sesiones, no se sincroniza con otros dispositivos y se puede borrar desde la interfaz. El contenido que el filtro clasifica como sensible no se persiste, pero puede seguir siendo el contenido actual del portapapeles.
 
 ### 3.6. Captura de Pantalla (`crates/screenshot`)
 * **Estado actual:** La captura completa solicita el fotograma al compositor mediante IPC; los modos completo y de área guardan PNG en la carpeta XDG de Imágenes. La captura se copia al portapapeles y muestra una miniatura; `--clipboard-only` permite copiar sin guardar. La captura de área usa una superficie de selección y conserva solo la región delimitada.
@@ -202,5 +203,5 @@ graph TD
 | **M6** | Integración AirDrop | 🟡 En Progreso | Servicio D-Bus `malus-de-link`, modal de visibilidad y simulación nativa. Backend AWDL/BLE en curso. |
 | **M7** | Sesión GDM Nativa | ✅ Hecho | Entrada `malus.desktop`, wrapper `malus-session`, instalador `install-session.sh`, binarios Release y backend DRM/KMS. |
 | **M8** | Multi-Monitor 4K & Teclado Latam | ✅ Hecho | Disposición dual 4K en vivo, escalado independiente y enlazado 1:1 por PPI (`TrueSize`), y soporte nativo de teclado XKB Español Latinoamericano (`latam`). |
-| **M9** | Gestor de Portapapeles | 🟡 En Progreso | Historial persistente de hasta 50 elementos y 50 MiB; búsqueda, fijados, recopia y borrado con `Super + V`. Sincronización opcional con la selección primaria; formatos adicionales y filtrado de contenido sensible pendientes. |
+| **M9** | Gestor de Portapapeles | ✅ Hecho | Historial persistente de hasta 50 elementos y 50 MiB; búsqueda, fijados, recopia y borrado con `Super + V`. Sincronización opcional con la selección primaria, formatos de imagen/documento adicionales y filtro heurístico configurable para contenido sensible. |
 | **M10** | Captura de Pantalla | 🟡 En Progreso | Captura completa y de área mediante IPC del compositor, guardado PNG, copia al portapapeles y miniatura; captura de ventana, grabación y OCR pendientes. |

@@ -59,12 +59,14 @@ struct PersistedHistory {
 #[serde(default)]
 struct ClipboardSettings {
     sync_primary_selection: bool,
+    filter_sensitive_content: bool,
 }
 
 impl Default for ClipboardSettings {
     fn default() -> Self {
         Self {
             sync_primary_selection: false,
+            filter_sensitive_content: true,
         }
     }
 }
@@ -132,11 +134,13 @@ struct CaptureHeader {
     mime_type: String,
     size: usize,
     primary_selection: bool,
+    sensitive_hint: bool,
 }
 
 enum UiEvent {
     Refresh,
     ToggleWindow,
+    SensitiveSkipped,
 }
 
 #[derive(Clone)]
@@ -149,6 +153,7 @@ struct HistoryUi {
     history_path: PathBuf,
     settings_path: PathBuf,
     sync_primary_selection: Arc<AtomicBool>,
+    filter_sensitive_content: Arc<AtomicBool>,
 }
 
 fn main() -> Result<()> {
@@ -174,6 +179,7 @@ fn run_manager() -> Result<()> {
     let settings_path = settings_path()?;
     let settings = load_settings(&settings_path)?;
     let sync_primary_selection = Arc::new(AtomicBool::new(settings.sync_primary_selection));
+    let filter_sensitive_content = Arc::new(AtomicBool::new(settings.filter_sensitive_content));
     let (event_tx, event_rx) = async_channel::unbounded();
 
     let app = Application::builder()
@@ -188,6 +194,7 @@ fn run_manager() -> Result<()> {
     let history_path_activate = history_path.clone();
     let settings_path_activate = settings_path.clone();
     let sync_primary_activate = sync_primary_selection.clone();
+    let filter_sensitive_activate = filter_sensitive_content.clone();
     app.connect_activate(move |application| {
         if ui_state_activate.lock().unwrap().is_some() {
             return;
@@ -198,6 +205,7 @@ fn run_manager() -> Result<()> {
             history_path_activate.clone(),
             settings_path_activate.clone(),
             sync_primary_activate.clone(),
+            filter_sensitive_activate.clone(),
         );
         *ui_state_activate.lock().unwrap() = Some(ui);
     });
@@ -206,6 +214,7 @@ fn run_manager() -> Result<()> {
         history.clone(),
         event_tx.clone(),
         sync_primary_selection.clone(),
+        filter_sensitive_content.clone(),
     )?;
     start_compositor_listener(event_tx)?;
     poll_ui_events(event_rx, ui_state);
@@ -407,6 +416,7 @@ fn start_clipboard_service(
     history: Arc<Mutex<ClipboardHistory>>,
     event_tx: Sender<UiEvent>,
     sync_primary_selection: Arc<AtomicBool>,
+    filter_sensitive_content: Arc<AtomicBool>,
 ) -> Result<()> {
     let socket_path = clipboard_socket_path()?;
     if let Ok(metadata) = fs::symlink_metadata(&socket_path) {
@@ -435,6 +445,7 @@ fn start_clipboard_service(
 
     let history_for_listener = history.clone();
     let sync_primary_for_listener = sync_primary_selection.clone();
+    let filter_sensitive_for_listener = filter_sensitive_content.clone();
     thread::Builder::new()
         .name("clipboard-history-ipc".to_string())
         .spawn(move || {
@@ -444,10 +455,15 @@ fn start_clipboard_service(
                         let history = history_for_listener.clone();
                         let event_tx = event_tx.clone();
                         let sync_primary_selection = sync_primary_for_listener.clone();
+                        let filter_sensitive_content = filter_sensitive_for_listener.clone();
                         thread::spawn(move || {
-                            if let Err(error) =
-                                handle_capture(stream, history, event_tx, sync_primary_selection)
-                            {
+                            if let Err(error) = handle_capture(
+                                stream,
+                                history,
+                                event_tx,
+                                sync_primary_selection,
+                                filter_sensitive_content,
+                            ) {
                                 warn!("No se pudo procesar un cambio del portapapeles: {error:#}");
                             }
                         });
@@ -575,8 +591,24 @@ fn capture_clipboard_change(primary_selection: bool) -> Result<()> {
     }
     selection_args.push("--list-types");
     let mime_types = run_bounded("wl-paste", &selection_args, 64 * 1024)?;
-    let mime_type = select_mime_type(&String::from_utf8_lossy(&mime_types))
-        .context("El elemento del portapapeles no tiene un formato compatible")?;
+    let mime_types = String::from_utf8_lossy(&mime_types);
+    let sensitive_hint = mime_types.lines().any(is_sensitive_mime_hint);
+    let mime_type = match select_mime_type(&mime_types) {
+        Some(mime_type) => mime_type,
+        None if sensitive_hint => {
+            let hint = mime_types
+                .lines()
+                .find(|mime_type| is_sensitive_mime_hint(mime_type))
+                .unwrap_or("application/x-secret")
+                .trim();
+            send_capture(hint, &[], primary_selection, true)?;
+            return Ok(());
+        }
+        None => {
+            warn!("Se omitió un formato MIME no compatible del portapapeles");
+            return Ok(());
+        }
+    };
     let mut data_args = Vec::new();
     if primary_selection {
         data_args.push("--primary");
@@ -590,14 +622,23 @@ fn capture_clipboard_change(primary_selection: bool) -> Result<()> {
         }
         Err(error) => return Err(error),
     };
-    send_capture(&mime_type, &data, primary_selection)?;
+    send_capture(&mime_type, &data, primary_selection, sensitive_hint)?;
     Ok(())
 }
 
 fn select_mime_type(types: &str) -> Option<String> {
     let offered: Vec<&str> = types.lines().map(str::trim).collect();
-    [
+    let preferred = [
         "image/png",
+        "image/jpeg",
+        "image/webp",
+        "image/gif",
+        "image/bmp",
+        "image/tiff",
+        "image/avif",
+        "image/heic",
+        "image/heif",
+        "image/svg+xml",
         "text/uri-list",
         "text/plain;charset=utf-8",
         "text/plain;charset=UTF-8",
@@ -605,15 +646,159 @@ fn select_mime_type(types: &str) -> Option<String> {
         "UTF8_STRING",
         "TEXT",
         "STRING",
+        "text/markdown",
+        "text/csv",
+        "text/xml",
         "text/html",
+        "application/rtf",
+        "text/rtf",
+        "application/pdf",
+        "application/vnd.oasis.opendocument.text",
+        "application/vnd.oasis.opendocument.spreadsheet",
+        "application/vnd.oasis.opendocument.presentation",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.ms-excel",
+        "application/vnd.ms-powerpoint",
+        "application/epub+zip",
+    ];
+    preferred
+        .into_iter()
+        .find_map(|candidate| {
+            offered
+                .iter()
+                .find(|mime| mime.eq_ignore_ascii_case(candidate))
+                .map(|mime| (*mime).to_string())
+        })
+        .or_else(|| {
+            offered
+                .iter()
+                .find(|mime| {
+                    !is_sensitive_mime_hint(mime)
+                        && (mime.to_ascii_lowercase().starts_with("text/")
+                            || mime.to_ascii_lowercase().starts_with("image/"))
+                })
+                .map(|mime| (*mime).to_string())
+        })
+}
+
+fn is_sensitive_mime_hint(mime_type: &str) -> bool {
+    let mime_type = mime_type.to_ascii_lowercase();
+    mime_type.contains("passwordmanagerhint")
+        || mime_type.contains("password-manager-hint")
+        || mime_type.contains("keepass")
+        || mime_type.contains("password-manager")
+        || mime_type == "application/x-secret"
+        || mime_type == "application/x-clipboard-manager-secret"
+}
+
+fn is_sensitive_content(mime_type: &str, data: &[u8]) -> bool {
+    if is_sensitive_mime_hint(mime_type) {
+        return true;
+    }
+    let Ok(text) = std::str::from_utf8(data) else {
+        return false;
+    };
+    let lowercase = text.to_ascii_lowercase();
+    if lowercase.contains("-----begin") && lowercase.contains("private key")
+        || [
+            "ghp_",
+            "github_pat_",
+            "glpat-",
+            "xoxb-",
+            "xoxp-",
+            "sk_live_",
+        ]
+        .iter()
+        .any(|prefix| lowercase.contains(prefix))
+    {
+        return true;
+    }
+    if let Some(credentials) = lowercase.split_once("://").map(|(_, rest)| rest) {
+        if let Some(authority) = credentials.split('/').next() {
+            if authority
+                .split_once(':')
+                .is_some_and(|(_, password)| password.contains('@') && password.len() >= 10)
+            {
+                return true;
+            }
+        }
+    }
+
+    for assignment in text.lines().flat_map(|line| line.split(',')) {
+        let line = assignment.trim();
+        if line.starts_with("export ") {
+            let Some((key, value)) = line[7..].split_once('=') else {
+                continue;
+            };
+            if is_secret_assignment(key, value) {
+                return true;
+            }
+            continue;
+        }
+        let Some(separator) = line.find(['=', ':']) else {
+            continue;
+        };
+        if is_secret_assignment(&line[..separator], &line[separator + 1..]) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_secret_assignment(key: &str, value: &str) -> bool {
+    let key = key
+        .trim()
+        .trim_matches(|character: char| matches!(character, '"' | '\'' | '`' | '{' | '}' | ','))
+        .to_ascii_lowercase()
+        .replace('-', "_");
+    let key = key.rsplit('.').next().unwrap_or(&key);
+    let secret_key = [
+        "password",
+        "passwd",
+        "pwd",
+        "secret",
+        "token",
+        "api_key",
+        "apikey",
+        "access_key",
+        "client_secret",
+        "credential",
+        "authorization",
     ]
-    .into_iter()
-    .find_map(|candidate| {
-        offered
-            .iter()
-            .find(|mime| mime.eq_ignore_ascii_case(candidate))
-            .map(|mime| (*mime).to_string())
-    })
+    .iter()
+    .any(|name| key == *name || key.ends_with(name));
+    if !secret_key {
+        return false;
+    }
+    let value = value
+        .trim()
+        .trim_matches(['"', '\'', '`'])
+        .trim_end_matches(',');
+    let normalized = value.to_ascii_lowercase();
+    let placeholder = [
+        "placeholder",
+        "example",
+        "changeme",
+        "change_me",
+        "redacted",
+        "null",
+        "none",
+        "password",
+        "secret",
+    ]
+    .iter()
+    .any(|placeholder| normalized == *placeholder)
+        || normalized.starts_with("your_")
+        || normalized.starts_with("your-");
+    value
+        .chars()
+        .filter(|character| character.is_alphanumeric())
+        .count()
+        >= 8
+        && !placeholder
 }
 
 fn run_bounded(program: &str, args: &[&str], max_bytes: usize) -> Result<Vec<u8>> {
@@ -646,7 +831,12 @@ fn run_bounded(program: &str, args: &[&str], max_bytes: usize) -> Result<Vec<u8>
     Ok(output)
 }
 
-fn send_capture(mime_type: &str, data: &[u8], primary_selection: bool) -> Result<()> {
+fn send_capture(
+    mime_type: &str,
+    data: &[u8],
+    primary_selection: bool,
+    sensitive_hint: bool,
+) -> Result<()> {
     let mut stream = UnixStream::connect(clipboard_socket_path()?)
         .context("El gestor de portapapeles no está disponible")?;
     serde_json::to_writer(
@@ -655,6 +845,7 @@ fn send_capture(mime_type: &str, data: &[u8], primary_selection: bool) -> Result
             mime_type: mime_type.to_string(),
             size: data.len(),
             primary_selection,
+            sensitive_hint,
         },
     )
     .context("No se pudo serializar el cambio del portapapeles")?;
@@ -672,6 +863,7 @@ fn handle_capture(
     history: Arc<Mutex<ClipboardHistory>>,
     event_tx: Sender<UiEvent>,
     sync_primary_selection: Arc<AtomicBool>,
+    filter_sensitive_content: Arc<AtomicBool>,
 ) -> Result<()> {
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
@@ -693,10 +885,37 @@ fn handle_capture(
         return Ok(());
     }
 
+    if header.sensitive_hint && data.is_empty() {
+        event_tx
+            .send_blocking(UiEvent::SensitiveSkipped)
+            .map_err(|_| anyhow::anyhow!("La interfaz del historial ya no está disponible"))?;
+        return Ok(());
+    }
+
+    if filter_sensitive_content.load(Ordering::Relaxed)
+        && (header.sensitive_hint || is_sensitive_content(&header.mime_type, &data))
+    {
+        event_tx
+            .send_blocking(UiEvent::SensitiveSkipped)
+            .map_err(|_| anyhow::anyhow!("La interfaz del historial ya no está disponible"))?;
+        if sync_primary {
+            let target_primary = !header.primary_selection;
+            let mut state = history
+                .lock()
+                .map_err(|_| anyhow::anyhow!("El historial del portapapeles está bloqueado"))?;
+            mark_manager_payload(&mut state, &header.mime_type, &data);
+            drop(state);
+            if let Err(error) = copy_to_selection(&header.mime_type, &data, target_primary) {
+                error!("No se pudo sincronizar la selección sensible: {error:#}");
+            }
+        }
+        return Ok(());
+    }
+
     let item = history
         .lock()
         .map_err(|_| anyhow::anyhow!("El historial del portapapeles está bloqueado"))?
-        .capture(header.mime_type, data);
+        .capture(header.mime_type.clone(), data.clone());
     if let Some(item) = item {
         let save_result = {
             let history = history
@@ -741,12 +960,16 @@ fn mark_manager_copy(history: &Arc<Mutex<ClipboardHistory>>, item: &ClipboardIte
             .expect("El elemento se encontró arriba");
         state.items.push_front(recent);
     }
-    state.manager_copy = Some((
-        item.mime_type.clone(),
-        item.data.clone(),
+    mark_manager_payload(&mut state, &item.mime_type, &item.data);
+    Ok(())
+}
+
+fn mark_manager_payload(history: &mut ClipboardHistory, mime_type: &str, data: &[u8]) {
+    history.manager_copy = Some((
+        mime_type.to_string(),
+        data.to_vec(),
         Instant::now() + Duration::from_secs(10),
     ));
-    Ok(())
 }
 
 fn copy_to_selection(mime_type: &str, data: &[u8], primary_selection: bool) -> Result<()> {
@@ -811,6 +1034,7 @@ fn build_history_ui(
     history_path: PathBuf,
     settings_path: PathBuf,
     sync_primary_selection: Arc<AtomicBool>,
+    filter_sensitive_content: Arc<AtomicBool>,
 ) -> HistoryUi {
     let window = ApplicationWindow::builder()
         .application(application)
@@ -846,8 +1070,12 @@ fn build_history_ui(
     let sync_primary_button = CheckButton::with_label("Sincronizar con la selección primaria");
     sync_primary_button.set_active(sync_primary_selection.load(Ordering::Relaxed));
     layout.append(&sync_primary_button);
+    let filter_sensitive_button =
+        CheckButton::with_label("Omitir contraseñas y credenciales detectadas del historial");
+    filter_sensitive_button.set_active(filter_sensitive_content.load(Ordering::Relaxed));
+    layout.append(&filter_sensitive_button);
     let privacy_note = Label::builder()
-        .label("El historial se guarda localmente en este dispositivo. Borrar historial elimina también la copia persistente.")
+        .label("El historial se guarda localmente en este dispositivo. El filtro automático detecta señales comunes de credenciales, pero no puede identificar todos los secretos. Borrar historial elimina también la copia persistente.")
         .xalign(0.0)
         .wrap(true)
         .css_classes(["dim-label", "caption"])
@@ -880,6 +1108,7 @@ fn build_history_ui(
         history_path,
         settings_path,
         sync_primary_selection: sync_primary_selection.clone(),
+        filter_sensitive_content: filter_sensitive_content.clone(),
     };
     let ui_search = ui.clone();
     search.connect_changed(move |_| refresh_history(&ui_search));
@@ -927,6 +1156,7 @@ fn build_history_ui(
             &ui_sync.settings_path,
             ClipboardSettings {
                 sync_primary_selection: enabled,
+                filter_sensitive_content: ui_sync.filter_sensitive_content.load(Ordering::Relaxed),
             },
         ) {
             Ok(()) => ui_sync.status.set_label(if enabled {
@@ -939,6 +1169,33 @@ fn build_history_ui(
                     "No se pudo guardar la preferencia de sincronización: {error:#}"
                 ));
                 error!("No se pudo guardar la preferencia del portapapeles: {error:#}");
+            }
+        }
+    });
+
+    let ui_filter = ui.clone();
+    filter_sensitive_button.connect_toggled(move |button| {
+        let enabled = button.is_active();
+        ui_filter
+            .filter_sensitive_content
+            .store(enabled, Ordering::Relaxed);
+        match save_settings(
+            &ui_filter.settings_path,
+            ClipboardSettings {
+                sync_primary_selection: ui_filter.sync_primary_selection.load(Ordering::Relaxed),
+                filter_sensitive_content: enabled,
+            },
+        ) {
+            Ok(()) => ui_filter.status.set_label(if enabled {
+                "El filtro automático está activo para el nuevo contenido."
+            } else {
+                "Aviso: el contenido sensible nuevo puede guardarse en el historial."
+            }),
+            Err(error) => {
+                ui_filter.status.set_label(&format!(
+                    "No se pudo guardar la preferencia del filtro: {error:#}"
+                ));
+                error!("No se pudo guardar la preferencia del filtro sensible: {error:#}");
             }
         }
     });
@@ -1076,14 +1333,36 @@ fn restore_clipboard_item(ui: &HistoryUi, item: &ClipboardItem) {
 }
 
 fn item_preview(item: &ClipboardItem) -> String {
+    if item.mime_type.starts_with("image/") {
+        return format!(
+            "Imagen {} ({} KiB)",
+            item.mime_type.trim_start_matches("image/"),
+            item.data.len().div_ceil(1024)
+        );
+    }
     match item.mime_type.as_str() {
-        "image/png" => format!("Imagen PNG ({} KiB)", item.data.len().div_ceil(1024)),
+        "application/pdf" => format!("Documento PDF ({} KiB)", item.data.len().div_ceil(1024)),
         "text/uri-list" => String::from_utf8_lossy(&item.data)
             .lines()
             .find(|line| !line.trim().is_empty() && !line.starts_with('#'))
             .unwrap_or("Lista de archivos vacía")
             .to_string(),
         _ => {
+            if !item.mime_type.starts_with("text/")
+                && !matches!(
+                    item.mime_type.as_str(),
+                    "application/rtf"
+                        | "application/vnd.oasis.opendocument.text"
+                        | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        | "application/vnd.ms-word"
+                )
+            {
+                return format!(
+                    "{} ({} KiB)",
+                    item.mime_type,
+                    item.data.len().div_ceil(1024)
+                );
+            }
             let text = String::from_utf8_lossy(&item.data);
             let first_line = text.lines().next().unwrap_or_default();
             let preview: String = first_line.chars().take(160).collect();
@@ -1106,6 +1385,9 @@ fn poll_ui_events(receiver: Receiver<UiEvent>, ui_state: Arc<Mutex<Option<Histor
             let ui = ui_guard.as_mut().unwrap();
             match event {
                 UiEvent::Refresh => refresh_history(ui),
+                UiEvent::SensitiveSkipped => ui
+                    .status
+                    .set_label("Se omitió del historial contenido que parece sensible."),
                 UiEvent::ToggleWindow => {
                     if ui.window.is_visible() {
                         ui.window.set_visible(false);
@@ -1124,8 +1406,8 @@ fn poll_ui_events(receiver: Receiver<UiEvent>, ui_state: Arc<Mutex<Option<Histor
 #[cfg(test)]
 mod tests {
     use super::{
-        load_history, mark_manager_copy, save_history, select_mime_type, ClipboardHistory,
-        MAX_HISTORY_ITEMS,
+        is_sensitive_content, is_sensitive_mime_hint, load_history, mark_manager_copy,
+        save_history, select_mime_type, ClipboardHistory, ClipboardSettings, MAX_HISTORY_ITEMS,
     };
     use std::{
         sync::{Arc, Mutex},
@@ -1136,6 +1418,53 @@ mod tests {
     fn picks_supported_types_in_priority_order() {
         let types = "text/plain\nimage/png\ntext/uri-list\n";
         assert_eq!(select_mime_type(types).as_deref(), Some("image/png"));
+    }
+
+    #[test]
+    fn supports_additional_image_and_text_mime_types() {
+        assert_eq!(
+            select_mime_type("image/jpeg\ntext/plain").as_deref(),
+            Some("image/jpeg")
+        );
+        assert_eq!(
+            select_mime_type("text/calendar\n").as_deref(),
+            Some("text/calendar")
+        );
+    }
+
+    #[test]
+    fn old_settings_keep_sensitive_filter_enabled_by_default() {
+        let settings: ClipboardSettings = toml::from_str("sync_primary_selection = true").unwrap();
+        assert!(settings.sync_primary_selection);
+        assert!(settings.filter_sensitive_content);
+    }
+
+    #[test]
+    fn detects_sensitive_mime_hints_and_common_credential_text() {
+        assert!(is_sensitive_mime_hint(
+            "application/x-kde-passwordManagerHint"
+        ));
+        assert!(is_sensitive_content(
+            "text/plain",
+            b"password = \"correct-horse-battery-staple\""
+        ));
+        assert!(is_sensitive_content(
+            "text/plain",
+            b"-----BEGIN OPENSSH PRIVATE KEY-----"
+        ));
+        assert!(is_sensitive_content(
+            "text/plain",
+            br#"{"username":"alice","userPassword":"high-entropy-secret"}"#
+        ));
+        assert!(is_sensitive_content(
+            "text/plain",
+            b"https://alice:very-secret-pass@example.test/"
+        ));
+        assert!(!is_sensitive_content(
+            "text/plain",
+            b"Remember to update your password settings."
+        ));
+        assert!(!is_sensitive_content("image/png", &[0, 159, 146, 150]));
     }
 
     #[test]
