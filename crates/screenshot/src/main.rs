@@ -3,16 +3,20 @@ use clap::{Parser, ValueEnum};
 use glib::ControlFlow;
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, Label, Orientation, Picture,
+    Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea,
+    EventControllerKey, GestureDrag, Label, Orientation, Overlay, Picture,
 };
-use gtk4_layer_shell::{Edge, Layer, LayerShell};
+use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita as adw;
 use malus_de_common::ipc::{send_ipc_message, IpcMessage};
 use malus_de_common::logging::init_logging;
-use std::fs;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::rc::Rc;
 use std::time::Duration;
 use tracing::info;
 
@@ -33,7 +37,7 @@ struct Args {
         long,
         value_enum,
         default_value_t = CaptureMode::Full,
-        help = "Modo de captura (por ahora solo full está implementado)"
+        help = "Modo de captura"
     )]
     mode: CaptureMode,
 
@@ -80,6 +84,12 @@ window.malus-screenshot-thumbnail {
 }
 "#;
 
+const CAPTURE_FLASH_CSS: &str = r#"
+window.malus-screenshot-flash {
+    background-color: rgba(255, 255, 255, 0.82);
+}
+"#;
+
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(15);
 
 fn main() -> Result<()> {
@@ -90,37 +100,206 @@ fn main() -> Result<()> {
     match args.mode {
         CaptureMode::Full => {
             let source = request_compositor_capture()?;
-            if args.clipboard_only {
-                let copy_result = copy_image_to_clipboard(&source);
-                remove_temporary_capture(&source);
-                copy_result?;
-                info!("Captura copiada al portapapeles.");
-                return Ok(());
-            }
-
-            let save_result = save_capture(source.clone(), &screenshots_directory());
-            remove_temporary_capture(&source);
-            let path = save_result?;
-            info!("Captura guardada en {}", path.display());
-            let clipboard_status = match copy_image_to_clipboard(&path) {
-                Ok(()) => {
-                    info!("Captura copiada al portapapeles.");
-                    "Captura copiada al portapapeles.".to_string()
-                }
-                Err(error) => {
-                    let message = format!("No se pudo copiar al portapapeles: {error:#}");
-                    tracing::warn!("{message}");
-                    message
-                }
-            };
-            show_thumbnail_app(args.mode, path, clipboard_status);
+            finish_capture(args.mode, source, args.clipboard_only)?;
         }
-        CaptureMode::Area | CaptureMode::Window => {
-            anyhow::bail!("Los modos de área y ventana aún no están implementados");
+        CaptureMode::Area => {
+            let selection = select_area()?;
+            let source = request_compositor_capture()?;
+            let crop_result = crop_capture(&source, &selection);
+            remove_temporary_capture(&source);
+            finish_capture(CaptureMode::Area, crop_result?, args.clipboard_only)?;
+        }
+        CaptureMode::Window => {
+            anyhow::bail!("El modo de ventana aún no está implementado");
         }
         CaptureMode::Ocr => anyhow::bail!("El modo OCR aún no está implementado"),
     }
 
+    Ok(())
+}
+
+fn finish_capture(mode: CaptureMode, source: PathBuf, clipboard_only: bool) -> Result<()> {
+    if clipboard_only {
+        let copy_result = copy_image_to_clipboard(&source);
+        remove_temporary_capture(&source);
+        copy_result?;
+        info!("Captura copiada al portapapeles.");
+        show_capture_feedback();
+        send_capture_notification("Captura lista", "La captura se copió al portapapeles.");
+        return Ok(());
+    }
+
+    let save_result = save_capture(source.clone(), &screenshots_directory());
+    remove_temporary_capture(&source);
+    let path = save_result?;
+    info!("Captura guardada en {}", path.display());
+    let clipboard_status = match copy_image_to_clipboard(&path) {
+        Ok(()) => {
+            info!("Captura copiada al portapapeles.");
+            "Captura copiada al portapapeles.".to_string()
+        }
+        Err(error) => {
+            let message = format!("No se pudo copiar al portapapeles: {error:#}");
+            tracing::warn!("{message}");
+            message
+        }
+    };
+    show_capture_feedback();
+    send_capture_notification(
+        "Captura de pantalla",
+        &format!("Guardada en {}", path.display()),
+    );
+    show_thumbnail_app(mode, path, clipboard_status);
+    Ok(())
+}
+
+fn send_capture_notification(summary: &str, body: &str) {
+    let result = zbus::block_on(async {
+        let connection = zbus::Connection::session().await?;
+        connection
+            .call_method(
+                Some("org.freedesktop.Notifications"),
+                "/org/freedesktop/Notifications",
+                Some("org.freedesktop.Notifications"),
+                "Notify",
+                &(
+                    "Malus DE",
+                    0u32,
+                    "camera-photo-symbolic",
+                    summary,
+                    body,
+                    Vec::<String>::new(),
+                    HashMap::<String, zbus::zvariant::Value<'_>>::new(),
+                    5000i32,
+                ),
+            )
+            .await?;
+        Ok::<(), zbus::Error>(())
+    });
+    if let Err(error) = result {
+        tracing::warn!("No se pudo mostrar el aviso de captura: {error}");
+    }
+}
+
+fn show_capture_feedback() {
+    play_capture_sound();
+
+    if let Err(error) = show_capture_flash() {
+        tracing::warn!("No se pudo mostrar el destello de captura: {error:#}");
+    }
+}
+
+fn play_capture_sound() {
+    std::thread::spawn(|| {
+        match Command::new("canberra-gtk-play")
+            .args(["--id", "camera-shutter"])
+            .status()
+        {
+            Ok(status) if status.success() => return,
+            Ok(status) => {
+                tracing::warn!("El sonido de cámara con libcanberra terminó con error: {status}")
+            }
+            Err(error) => {
+                tracing::warn!("No se pudo iniciar el sonido de cámara con libcanberra: {error}")
+            }
+        }
+
+        let sound_file = "/usr/share/sounds/freedesktop/stereo/camera-shutter.oga";
+        match Command::new("paplay").arg(sound_file).status() {
+            Ok(status) if status.success() => {}
+            Ok(status) => tracing::warn!("El sonido de captura con paplay terminó con error: {status}"),
+            Err(error) => tracing::warn!("No se pudo iniciar paplay para el sonido de captura: {error}"),
+        }
+    });
+}
+
+fn show_capture_flash() -> Result<()> {
+    let app = Application::builder()
+        .application_id("org.malus.de.screenshot-flash")
+        .build();
+
+    app.connect_startup(|_| {
+        let provider = CssProvider::new();
+        provider.load_from_string(CAPTURE_FLASH_CSS);
+        if let Some(display) = gtk4::gdk::Display::default() {
+            gtk4::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+    });
+
+    app.connect_activate(|application| {
+        let Some(display) = gtk4::gdk::Display::default() else {
+            tracing::warn!("No se pudo mostrar el destello: no hay pantalla GTK disponible");
+            application.quit();
+            return;
+        };
+        let monitors = display.monitors();
+        let mut windows = Vec::new();
+
+        for index in 0..monitors.n_items() {
+            let Some(monitor) = monitors
+                .item(index)
+                .and_then(|item| item.downcast::<gtk4::gdk::Monitor>().ok())
+            else {
+                continue;
+            };
+
+            let window = ApplicationWindow::builder()
+                .application(application)
+                .title("Destello de captura")
+                .decorated(false)
+                .css_classes(["malus-screenshot-flash"])
+                .opacity(0.82)
+                .build();
+
+            if gtk4_layer_shell::is_supported() {
+                window.init_layer_shell();
+                window.set_layer(Layer::Overlay);
+                window.set_namespace("malus-screenshot-flash");
+                window.set_monitor(&monitor);
+                window.set_exclusive_zone(-1);
+                for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+                    window.set_anchor(edge, true);
+                }
+            } else {
+                window.fullscreen();
+            }
+
+            window.set_child(Some(&GtkBox::new(Orientation::Vertical, 0)));
+            window.present();
+            windows.push(window);
+        }
+
+        if windows.is_empty() {
+            tracing::warn!("No se pudo mostrar el destello: no se encontraron pantallas");
+            application.quit();
+            return;
+        }
+
+        let app_for_timeout = application.clone();
+        let mut step = 0u8;
+        glib::timeout_add_local(Duration::from_millis(25), move || {
+            step += 1;
+            let opacity = 0.82 * (1.0 - f64::from(step) / 8.0);
+            for window in &windows {
+                window.set_opacity(opacity.max(0.0));
+            }
+            if step >= 8 {
+                for window in &windows {
+                    window.close();
+                }
+                app_for_timeout.quit();
+                ControlFlow::Break
+            } else {
+                ControlFlow::Continue
+            }
+        });
+    });
+
+    app.run_with_args(&["malus-de-screenshot"]);
     Ok(())
 }
 
@@ -137,10 +316,10 @@ fn request_compositor_capture() -> Result<PathBuf> {
             .as_nanos()
     );
     let destination = runtime_dir.join(format!("{token}.png"));
-    send_ipc_message(&IpcMessage::CaptureScreenshot {
+    let message = IpcMessage::CaptureScreenshot {
         destination: destination.to_string_lossy().into_owned(),
-    })
-    .context("No se pudo enviar la solicitud al compositor Malus")?;
+    };
+    send_ipc_message(&message).context("No se pudo enviar la solicitud al compositor Malus")?;
 
     info!("Solicitud enviada al compositor; esperando el fotograma capturado...");
     let error_path = destination.with_extension("error");
@@ -160,6 +339,371 @@ fn request_compositor_capture() -> Result<PathBuf> {
          Recompila y reinicia el compositor Malus para habilitar la captura IPC",
         CAPTURE_TIMEOUT.as_secs()
     );
+}
+
+#[derive(Clone, Copy)]
+struct SelectionRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    surface_width: f64,
+    surface_height: f64,
+}
+
+struct AreaSelection {
+    rect: SelectionRect,
+}
+
+fn select_area() -> Result<AreaSelection> {
+    gtk4::init().context(
+        "No se pudo inicializar GTK para seleccionar el área; verifica que haya una sesión gráfica activa",
+    )?;
+    let display = gtk4::gdk::Display::default()
+        .context("No se pudo acceder a la pantalla para seleccionar el área")?;
+    let monitors = display.monitors();
+    let monitor = monitors
+        .item(0)
+        .and_then(|monitor| monitor.downcast::<gtk4::gdk::Monitor>().ok())
+        .context("No se encontró una pantalla para seleccionar el área")?;
+    let selected = Rc::new(RefCell::new(None));
+    let selected_for_activate = selected.clone();
+    let monitor_for_activate = monitor.clone();
+
+    let app = Application::builder()
+        .application_id("org.malus.de.screenshot-selector")
+        .build();
+    app.connect_startup(|_| {
+        let provider = CssProvider::new();
+        provider.load_from_string(
+            "window.malus-screenshot-selector { background-color: transparent; } \
+             .screenshot-selector-hint { \
+                 color: white; background-color: alpha(#171717, 0.88); \
+                 border-radius: 10px; padding: 10px 16px; font-size: 14px; \
+             }",
+        );
+        if let Some(display) = gtk4::gdk::Display::default() {
+            gtk4::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+    });
+    app.connect_activate(move |application| {
+        let window = ApplicationWindow::builder()
+            .application(application)
+            .title("Seleccionar área de captura")
+            .decorated(false)
+            .css_classes(["malus-screenshot-selector"])
+            .build();
+        let state = Rc::new(RefCell::new(None::<(f64, f64, f64, f64)>));
+        let drawing_area = DrawingArea::new();
+        drawing_area.set_hexpand(true);
+        drawing_area.set_vexpand(true);
+        drawing_area.set_draw_func({
+            let state = state.clone();
+            move |_, context, _, _| {
+                context.set_source_rgba(0.0, 0.0, 0.0, 0.42);
+                let _ = context.paint();
+                if let Some((start_x, start_y, end_x, end_y)) = *state.borrow() {
+                    let x = start_x.min(end_x);
+                    let y = start_y.min(end_y);
+                    let rect_width = (start_x - end_x).abs();
+                    let rect_height = (start_y - end_y).abs();
+                    context.set_operator(gtk4::cairo::Operator::Clear);
+                    context.rectangle(x, y, rect_width, rect_height);
+                    let _ = context.fill();
+                    context.set_operator(gtk4::cairo::Operator::Over);
+                    context.set_source_rgba(1.0, 1.0, 1.0, 0.95);
+                    context.set_line_width(2.0);
+                    context.rectangle(x, y, rect_width, rect_height);
+                    let _ = context.stroke();
+                }
+            }
+        });
+
+        let overlay = Overlay::new();
+        overlay.set_child(Some(&drawing_area));
+        let hint = Label::new(Some("Arrastra para seleccionar · Esc para cancelar"));
+        hint.set_halign(Align::Center);
+        hint.set_valign(Align::Start);
+        hint.set_margin_top(28);
+        hint.set_can_target(false);
+        hint.add_css_class("screenshot-selector-hint");
+        overlay.add_overlay(&hint);
+        window.set_child(Some(&overlay));
+
+        let drag = GestureDrag::new();
+        let state_begin = state.clone();
+        drag.connect_drag_begin(move |_, x, y| {
+            *state_begin.borrow_mut() = Some((x, y, x, y));
+        });
+        let state_update = state.clone();
+        let area_update = drawing_area.clone();
+        drag.connect_drag_update(move |_, offset_x, offset_y| {
+            let current = *state_update.borrow();
+            if let Some((start_x, start_y, _, _)) = current {
+                *state_update.borrow_mut() =
+                    Some((start_x, start_y, start_x + offset_x, start_y + offset_y));
+                area_update.queue_draw();
+            }
+        });
+        let state_end = state.clone();
+        let area_end = drawing_area.clone();
+        let selected = selected_for_activate.clone();
+        let window_end = window.clone();
+        drag.connect_drag_end(move |_, offset_x, offset_y| {
+            let current = *state_end.borrow();
+            let Some((start_x, start_y, _, _)) = current else {
+                return;
+            };
+            let end_x = start_x + offset_x;
+            let end_y = start_y + offset_y;
+            let surface_width = area_end.width().max(0) as f64;
+            let surface_height = area_end.height().max(0) as f64;
+            let x = start_x.min(end_x).clamp(0.0, surface_width);
+            let y = start_y.min(end_y).clamp(0.0, surface_height);
+            let right = start_x.max(end_x).clamp(0.0, surface_width);
+            let bottom = start_y.max(end_y).clamp(0.0, surface_height);
+            if right > x && bottom > y {
+                *selected.borrow_mut() = Some(AreaSelection {
+                    rect: SelectionRect {
+                        x,
+                        y,
+                        width: right - x,
+                        height: bottom - y,
+                        surface_width,
+                        surface_height,
+                    },
+                });
+                window_end.close();
+            }
+        });
+        drawing_area.add_controller(drag);
+
+        let keys = EventControllerKey::new();
+        let window_escape = window.clone();
+        keys.connect_key_pressed(move |_, key, _, _| {
+            if key == gtk4::gdk::Key::Escape {
+                window_escape.close();
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        });
+        window.add_controller(keys);
+
+        if gtk4_layer_shell::is_supported() {
+            window.init_layer_shell();
+            window.set_layer(Layer::Overlay);
+            window.set_namespace("malus-screenshot-selector");
+            window.set_monitor(&monitor_for_activate);
+            window.set_keyboard_mode(KeyboardMode::Exclusive);
+            window.set_exclusive_zone(-1);
+            for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+                window.set_anchor(edge, true);
+            }
+        } else {
+            window.fullscreen();
+        }
+        window.present();
+    });
+
+    app.run_with_args(&["malus-de-screenshot"]);
+    let selection = selected
+        .borrow_mut()
+        .take()
+        .context("Se canceló la selección del área de captura")?;
+    // Let the selector unmap before the compositor captures the next frame.
+    std::thread::sleep(Duration::from_millis(100));
+    Ok(selection)
+}
+
+fn crop_capture(source: &std::path::Path, selection: &AreaSelection) -> Result<PathBuf> {
+    let file = File::open(source)
+        .with_context(|| format!("No se pudo abrir la captura temporal {}", source.display()))?;
+    let decoder = png::Decoder::new(file);
+    let mut reader = decoder
+        .read_info()
+        .context("No se pudo leer la captura PNG")?;
+    let mut input = vec![0; reader.output_buffer_size()];
+    let info = reader
+        .next_frame(&mut input)
+        .context("No se pudo decodificar la captura PNG")?;
+    if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
+        anyhow::bail!("El formato de la captura PNG no es RGBA de 8 bits");
+    }
+    let expected_len = (info.width as usize)
+        .checked_mul(info.height as usize)
+        .and_then(|pixel_count| pixel_count.checked_mul(4))
+        .context("La resolución de pantalla excede el tamaño permitido")?;
+    if info.buffer_size() != expected_len {
+        anyhow::bail!("La captura PNG tiene un tamaño de píxeles inesperado");
+    }
+
+    let (left, top, right, bottom) = pixel_bounds(selection.rect, info.width, info.height)?;
+    let crop_width = right - left;
+    let crop_height = bottom - top;
+    let row_bytes = crop_width as usize * 4;
+    let mut pixels = Vec::with_capacity(row_bytes * crop_height as usize);
+    for row in top..bottom {
+        let start = (row as usize * info.width as usize + left as usize) * 4;
+        pixels.extend_from_slice(&input[start..start + row_bytes]);
+    }
+
+    let stem = source
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .context("El nombre de la captura temporal no es válido")?;
+    let destination = source.with_file_name(format!("{stem}-area.png"));
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&destination)
+        .with_context(|| format!("No se pudo crear {}", destination.display()))?;
+    let write_result = (|| -> Result<()> {
+        let mut encoder = png::Encoder::new(file, crop_width, crop_height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder
+            .write_header()
+            .context("No se pudo iniciar la escritura de la captura recortada")?;
+        writer
+            .write_image_data(&pixels)
+            .context("No se pudo escribir la captura recortada")?;
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&destination);
+        return Err(error);
+    }
+    Ok(destination)
+}
+
+fn pixel_bounds(
+    rect: SelectionRect,
+    image_width: u32,
+    image_height: u32,
+) -> Result<(u32, u32, u32, u32)> {
+    if !rect.x.is_finite()
+        || !rect.y.is_finite()
+        || !rect.width.is_finite()
+        || !rect.height.is_finite()
+        || rect.surface_width <= 0.0
+        || rect.surface_height <= 0.0
+        || image_width == 0
+        || image_height == 0
+    {
+        anyhow::bail!("La selección del área de captura no tiene dimensiones válidas");
+    }
+    let scale_x = image_width as f64 / rect.surface_width;
+    let scale_y = image_height as f64 / rect.surface_height;
+    let left = (rect.x * scale_x).floor().clamp(0.0, image_width as f64) as u32;
+    let top = (rect.y * scale_y).floor().clamp(0.0, image_height as f64) as u32;
+    let right = ((rect.x + rect.width) * scale_x)
+        .ceil()
+        .clamp(0.0, image_width as f64) as u32;
+    let bottom = ((rect.y + rect.height) * scale_y)
+        .ceil()
+        .clamp(0.0, image_height as f64) as u32;
+    if right <= left || bottom <= top {
+        anyhow::bail!("La selección del área de captura está vacía");
+    }
+    Ok((left, top, right, bottom))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{crop_capture, pixel_bounds, AreaSelection, SelectionRect};
+    use std::fs::{self, File, OpenOptions};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temporary_png_path(label: &str) -> std::path::PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "malus-screenshot-{label}-{}-{nonce}.png",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn pixel_bounds_scales_selection_to_capture_resolution() {
+        let selection = SelectionRect {
+            x: 10.0,
+            y: 20.0,
+            width: 30.0,
+            height: 40.0,
+            surface_width: 100.0,
+            surface_height: 100.0,
+        };
+
+        assert_eq!(
+            pixel_bounds(selection, 200, 300).unwrap(),
+            (20, 60, 80, 180)
+        );
+    }
+
+    #[test]
+    fn pixel_bounds_rejects_empty_selection() {
+        let selection = SelectionRect {
+            x: 10.0,
+            y: 20.0,
+            width: 0.0,
+            height: 40.0,
+            surface_width: 100.0,
+            surface_height: 100.0,
+        };
+
+        assert!(pixel_bounds(selection, 200, 300).is_err());
+    }
+
+    #[test]
+    fn crop_capture_encodes_only_selected_pixels() {
+        let source = temporary_png_path("source");
+        let mut encoder = png::Encoder::new(
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&source)
+                .unwrap(),
+            2,
+            2,
+        );
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&[1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255])
+            .unwrap();
+
+        let selection = AreaSelection {
+            rect: SelectionRect {
+                x: 1.0,
+                y: 1.0,
+                width: 1.0,
+                height: 1.0,
+                surface_width: 2.0,
+                surface_height: 2.0,
+            },
+        };
+        let cropped = crop_capture(&source, &selection).unwrap();
+        let mut reader = png::Decoder::new(File::open(&cropped).unwrap())
+            .read_info()
+            .unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size()];
+        let info = reader.next_frame(&mut pixels).unwrap();
+
+        assert_eq!((info.width, info.height), (1, 1));
+        assert_eq!(&pixels[..info.buffer_size()], &[10, 11, 12, 255]);
+
+        fs::remove_file(cropped).unwrap();
+        fs::remove_file(source).unwrap();
+    }
 }
 
 fn save_capture(source: PathBuf, destination_dir: &std::path::Path) -> Result<PathBuf> {
@@ -302,6 +846,8 @@ fn show_thumbnail_app(mode: CaptureMode, capture_path: PathBuf, clipboard_status
             .application(application)
             .title("Captura de pantalla")
             .css_classes(["malus-screenshot-thumbnail"])
+            .default_width(360)
+            .default_height(300)
             .build();
 
         if gtk4_layer_shell::is_supported() {
@@ -315,6 +861,7 @@ fn show_thumbnail_app(mode: CaptureMode, capture_path: PathBuf, clipboard_status
             window.set_margin(Edge::Right, 20);
         } else {
             window.set_decorated(false);
+            window.set_default_size(360, 300);
         }
 
         let card = GtkBox::builder()
@@ -325,6 +872,8 @@ fn show_thumbnail_app(mode: CaptureMode, capture_path: PathBuf, clipboard_status
 
         let preview_img = Picture::for_filename(&capture_path);
         preview_img.set_content_fit(gtk4::ContentFit::Contain);
+        preview_img.set_can_shrink(true);
+        preview_img.set_hexpand(true);
         preview_img.set_size_request(320, 180);
         card.append(&preview_img);
 

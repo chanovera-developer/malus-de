@@ -16,3 +16,5 @@ glib.workspace = true
 gio.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
+png.workspace = true
+zbus.workspace = true

@@ -2,9 +2,9 @@ use anyhow::{bail, Context, Result};
 use smithay::{
     backend::{
         allocator::Fourcc,
-        renderer::{ExportMem, TextureMapping},
+        renderer::ExportMem,
     },
-    utils::{Buffer as BufferCoord, Physical, Rectangle, Size},
+    utils::{Buffer as BufferCoord, Physical, Rectangle, Size, Transform},
 };
 use std::{
     fs::{self, OpenOptions},
@@ -16,6 +16,7 @@ pub fn capture_frame<R>(
     target: &R::Framebuffer<'_>,
     size: Size<i32, Physical>,
     destination: &Path,
+    transform: Transform,
 ) -> Result<()>
 where
     R: ExportMem,
@@ -42,7 +43,7 @@ where
         );
     }
 
-    let image = orient_pixels(&pixels, size.w as usize * 4, mapping.flipped());
+    let image = orient_pixels(&pixels, size.w as usize * 4, transform);
     let temporary = destination.with_extension("pending");
     let file = OpenOptions::new()
         .write(true)
@@ -79,16 +80,20 @@ where
     Ok(())
 }
 
-fn orient_pixels(pixels: &[u8], row_len: usize, flipped: bool) -> Vec<u8> {
-    if flipped {
-        pixels
+fn orient_pixels(pixels: &[u8], row_len: usize, transform: Transform) -> Vec<u8> {
+    match transform {
+        Transform::Flipped180 => pixels
+            .chunks_exact(row_len)
+            .rev()
+            .flat_map(|row| row.iter().rev().copied())
+            .collect(),
+        Transform::Flipped => pixels
             .chunks_exact(row_len)
             .rev()
             .flatten()
             .copied()
-            .collect()
-    } else {
-        pixels.to_vec()
+            .collect(),
+        _ => pixels.to_vec(),
     }
 }
 
@@ -126,12 +131,26 @@ fn validate_destination(destination: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::orient_pixels;
+    use smithay::utils::Transform;
 
     #[test]
-    fn flips_rows_without_changing_pixel_order() {
-        let pixels = [1, 2, 3, 4, 5, 6, 7, 8];
+    fn flips_image_vertically_without_rotating_it() {
+        let pixels = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 
-        assert_eq!(orient_pixels(&pixels, 4, true), [5, 6, 7, 8, 1, 2, 3, 4]);
-        assert_eq!(orient_pixels(&pixels, 4, false), pixels);
+        assert_eq!(
+            orient_pixels(&pixels, 8, Transform::Flipped),
+            [9, 10, 11, 12, 13, 14, 15, 16, 1, 2, 3, 4, 5, 6, 7, 8]
+        );
+        assert_eq!(orient_pixels(&pixels, 8, Transform::Normal), pixels);
+    }
+
+    #[test]
+    fn rotates_image_180_degrees() {
+        let pixels = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+
+        assert_eq!(
+            orient_pixels(&pixels, 8, Transform::Flipped180),
+            [16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
+        );
     }
 }

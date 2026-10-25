@@ -118,7 +118,7 @@ pub struct MalusState {
     pub pending_displays_reload: bool,
     pub saved_app_window_sizes: HashMap<String, Size<i32, Logical>>,
     pub dock_blur_headroom: i32,
-    pub pending_screenshot_requests: std::collections::VecDeque<std::path::PathBuf>,
+    pub pending_screenshot_requests: std::collections::VecDeque<(std::path::PathBuf, Option<String>)>,
 }
 
 pub fn guess_icon_name(app_id: &str, title: &str) -> String {
@@ -273,6 +273,24 @@ pub enum SnapMode {
 }
 
 impl MalusState {
+    pub fn start_full_screenshot(&self) {
+        let screenshot_executable = std::env::current_exe()
+            .ok()
+            .and_then(|path| {
+                path.parent()
+                    .map(|parent| parent.join("malus-de-screenshot"))
+            })
+            .filter(|path| path.is_file())
+            .unwrap_or_else(|| std::path::PathBuf::from("malus-de-screenshot"));
+        let result = std::process::Command::new(screenshot_executable)
+            .args(["--mode", "full"])
+            .env("WAYLAND_DISPLAY", &self.socket_name)
+            .env("GDK_BACKEND", "wayland")
+            .spawn();
+        if let Err(error) = result {
+            tracing::error!("No se pudo iniciar la captura de pantalla completa: {error}");
+        }
+    }
     pub fn new(display: &Display<MalusState>) -> Self {
         let dh = display.handle();
         let compositor_state = CompositorState::new::<Self>(&dh);
@@ -691,7 +709,15 @@ impl MalusState {
                 IpcMessage::CaptureScreenshot { destination } => {
                     tracing::info!("Solicitud IPC de captura recibida");
                     self.pending_screenshot_requests
-                        .push_back(std::path::PathBuf::from(destination));
+                        .push_back((std::path::PathBuf::from(destination), None));
+                }
+                IpcMessage::CaptureScreenshotForOutput {
+                    destination,
+                    output_name,
+                } => {
+                    tracing::info!("Solicitud IPC de captura recibida para {output_name}");
+                    self.pending_screenshot_requests
+                        .push_back((std::path::PathBuf::from(destination), Some(output_name)));
                 }
                 IpcMessage::AnimateRestore { window_id } => {
                     tracing::info!("📥 IPC AnimateRestore recibido para ventana id={}", window_id);

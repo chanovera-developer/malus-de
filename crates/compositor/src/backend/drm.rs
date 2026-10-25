@@ -1100,7 +1100,7 @@ pub fn run_drm() -> Result<()> {
     loop_handle.insert_source(libinput_backend, move |event, _, state: &mut MalusState| {
         match event {
             InputEvent::Keyboard { event } => {
-                let _key = event.key_code().raw();
+                let key = event.key_code().raw();
                 let is_pressed = event.state() == KeyState::Pressed;
 
                 if let Some(keyboard) = state.seat.get_keyboard() {
@@ -1128,6 +1128,12 @@ pub fn run_drm() -> Result<()> {
                                 });
 
                             if is_pressed {
+                                if sym == keysyms::KEY_Print.into() || key == 99 {
+                                    info!("Atajo Impr Pant detectado: iniciando captura completa");
+                                    state.start_full_screenshot();
+                                    return FilterResult::Intercept(());
+                                }
+
                                 let has_super = modifiers.logo;
                                 let has_alt = modifiers.alt;
                                 let has_ctrl = modifiers.ctrl;
@@ -2159,7 +2165,16 @@ pub fn run_drm() -> Result<()> {
                 }
 
                 if let Ok(mut target) = renderer.bind(&mut dmabuf) {
-                    let screenshot_request = state.pending_screenshot_requests.pop_front();
+                    let screenshot_request = state
+                        .pending_screenshot_requests
+                        .iter()
+                        .position(|(_, output_name)| {
+                            output_name
+                                .as_deref()
+                                .map_or(true, |name| name == out_surface.output.name())
+                        })
+                        .and_then(|index| state.pending_screenshot_requests.remove(index))
+                        .map(|(destination, _)| destination);
                     let mut frame_rendered = false;
                     if let Ok(mut frame) =
                         renderer.render(&mut target, out_surface.size, Transform::Normal)
@@ -2829,6 +2844,7 @@ pub fn run_drm() -> Result<()> {
                                 &target,
                                 out_surface.size,
                                 &destination,
+                                Transform::Normal,
                             ) {
                                 warn!("Error al capturar el framebuffer DRM: {error:#}");
                                 crate::capture::write_capture_error(&destination, &error);

@@ -243,6 +243,12 @@ pub fn run_winit() -> Result<()> {
                             let is_right = sym == keysyms::KEY_Right.into() || key == 106 || key == 114;
 
                             if is_pressed {
+                                if sym == keysyms::KEY_Print.into() || key == 99 {
+                                    info!("Atajo Impr Pant detectado: iniciando captura completa");
+                                    state.start_full_screenshot();
+                                    return FilterResult::Intercept(());
+                                }
+
                                 if is_v && has_super {
                                     state
                                         .ipc_broadcaster
@@ -990,7 +996,10 @@ pub fn run_winit() -> Result<()> {
                     window_squircle_shader = crate::window_corners::WindowSquircleShader::new(renderer);
                 }
 
-                let screenshot_request = state.pending_screenshot_requests.pop_front();
+                let screenshot_request = state
+                    .pending_screenshot_requests
+                    .pop_front()
+                    .map(|(destination, _)| destination);
                 let mut frame_rendered = false;
                 if let Ok(mut frame) = renderer.render(&mut framebuffer, size, Transform::Flipped180) {
                     frame_rendered = true;
@@ -1526,6 +1535,7 @@ pub fn run_winit() -> Result<()> {
                                 &framebuffer,
                                 size,
                                 &destination,
+                                Transform::Flipped180,
                             )
                         {
                             warn!("Error al capturar el framebuffer: {error:#}");

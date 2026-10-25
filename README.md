@@ -85,15 +85,16 @@ cargo build --workspace --release
 
 ## Capturas de pantalla
 
-La captura completa solicita el fotograma al compositor de Malus mediante IPC, sin depender del portal de GNOME Shell. El PNG se guarda en la carpeta de Imágenes configurada por XDG (por ejemplo, `~/Imágenes/Capturas de pantalla` en español), se copia automáticamente al portapapeles como imagen PNG y después muestra una miniatura. En configuraciones con varias pantallas, esta primera versión captura una salida por solicitud.
-Después de actualizar el compositor, recompila Malus y reinicia la sesión para que el servicio IPC de captura esté disponible.
+La captura completa solicita el fotograma al compositor de Malus mediante IPC, sin depender del portal de GNOME Shell. Al completarse, muestra un breve destello en las pantallas, reproduce el sonido de obturador y envía una notificación; el PNG se guarda en la carpeta de Imágenes configurada por XDG (por ejemplo, `~/Imágenes/Capturas de pantalla` en español), se copia automáticamente al portapapeles como imagen PNG y después muestra una miniatura. El modo de área muestra una capa de selección en la primera pantalla, permite arrastrar para delimitar la región y cancelar con `Esc`, y guarda solo esa selección.
+Pulsa `Impr Pant` para iniciar una captura completa. Después de actualizar el compositor, recompila Malus y reinicia la sesión para que estén disponibles el atajo y el servicio IPC de captura.
 
 ```bash
 cargo run -p malus-de-screenshot -- --mode full
 cargo run -p malus-de-screenshot -- --mode full --clipboard-only
+cargo run -p malus-de-screenshot -- --mode area
 ```
 
-La copia al portapapeles requiere `wl-copy` (`wl-clipboard`). También puedes usar `--clipboard-only` para copiar sin guardar el archivo ni abrir la miniatura. La selección de área, captura de ventana, grabación y OCR todavía no están implementados.
+La copia al portapapeles requiere `wl-copy` (`wl-clipboard`). También puedes usar `--clipboard-only` para copiar sin guardar el archivo ni abrir la miniatura. La captura de ventana, grabación y OCR todavía no están implementados.
 
 El gestor de portapapeles conserva durante la sesión los últimos 50 elementos copiados (texto, enlaces, imágenes PNG y URI de archivos). Pulsa `Super + V` para buscar, fijar o volver a copiar un elemento. El historial solo se mantiene en memoria y se elimina al cerrar la sesión; se omite el contenido marcado como sensible y se requiere `wl-clipboard`.
 
@@ -115,6 +116,10 @@ La [guía de manifiesto](./docs/PACKAGE_MANIFEST.md) documenta dependencias de e
 Los selectores de archivos de GTK y aplicaciones compatibles (por ejemplo, VS Code) usan xdg-desktop-portal. Malus prefiere el backend GNOME para estos diálogos, con GTK como alternativa; instala ambos backends. Para aplicar cambios al lanzador de sesión, vuelve a ejecutar `sudo ./scripts/install-session.sh` y cierra e inicia sesión por completo.
 
 El menú global solo puede mostrar y ejecutar menús que la aplicación publique mediante `com.canonical.dbusmenu` y `com.canonical.AppMenu.Registrar`. Malus no inventa menús aproximados para aplicaciones que no los publican; algunas aplicaciones Electron, incluida VS Code según su versión y configuración, pueden no exponerlos en Linux.
+
+## Incidencias pendientes
+
+Se reporta que las funciones solicitadas no están funcionando. No se han especificado aún los fallos concretos ni pasos para reproducirlos, por lo que queda pendiente su diagnóstico; las características descritas arriba no deben considerarse verificadas por este reporte.
 
 ## Documentación
 
