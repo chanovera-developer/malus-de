@@ -103,6 +103,11 @@ pub enum IpcMessage {
     },
     /// Solicita al compositor guardar el siguiente fotograma de pantalla como PNG.
     CaptureScreenshot { destination: String },
+    /// Solicita una captura en una salida concreta del compositor.
+    CaptureScreenshotForOutput {
+        destination: String,
+        output_name: String,
+    },
     /// Invocación del Extractor de Texto en Pantalla OCR (Super + Shift + T)
     TriggerOcrCapture,
     /// Conmutar entre Modo Flotante y Modo Mosaico Automático (Super + Y)
@@ -392,6 +397,24 @@ mod tests {
             parsed,
             IpcMessage::CaptureScreenshot { destination }
                 if destination == "/run/user/1000/malus-screenshot-test.png"
+        ));
+    }
+
+    #[test]
+    fn test_screenshot_output_request_serialization() {
+        let msg = IpcMessage::CaptureScreenshotForOutput {
+            destination: "/run/user/1000/malus-screenshot-area.png".to_string(),
+            output_name: "DP-1".to_string(),
+        };
+        let json = serde_json::to_string(&msg).expect("Serialización falló");
+        let parsed: IpcMessage = serde_json::from_str(&json).expect("Deserialización falló");
+        assert!(matches!(
+            parsed,
+            IpcMessage::CaptureScreenshotForOutput {
+                destination,
+                output_name
+            } if destination == "/run/user/1000/malus-screenshot-area.png"
+                && output_name == "DP-1"
         ));
     }
 }

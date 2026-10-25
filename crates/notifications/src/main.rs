@@ -84,6 +84,7 @@ pub struct NotificationMsg {
     pub app_icon: String,
     pub summary: String,
     pub body: String,
+    pub sound: bool,
 }
 
 #[zbus::interface(name = "org.freedesktop.Notifications")]
@@ -116,6 +117,7 @@ impl NotificationServer {
             app_icon,
             summary,
             body,
+            sound: _hints.contains_key("sound-name"),
         };
 
         let _ = self.sender.send(msg).await;
@@ -127,7 +129,7 @@ impl NotificationServer {
     }
 
     async fn get_capabilities(&self) -> Vec<&'static str> {
-        vec!["body", "actions", "icon-static", "persistence"]
+        vec!["body", "actions", "icon-static", "persistence", "sound"]
     }
 
     async fn get_server_information(&self) -> (&'static str, &'static str, &'static str, &'static str) {
@@ -168,7 +170,7 @@ fn main() -> Result<()> {
     });
 
     let app = Application::builder()
-        .application_id("org.malus_de.Notifications")
+        .application_id("org.malus.de.Notifications")
         .build();
 
     app.connect_startup(|_| {
@@ -197,6 +199,16 @@ fn main() -> Result<()> {
 }
 
 fn display_banner(app: &Application, msg: NotificationMsg) {
+    if msg.sound {
+        if let Some(display) = gtk4::gdk::Display::default() {
+            display.beep();
+        } else {
+            tracing::warn!(
+                "No se pudo emitir el sonido de notificación: no hay pantalla GTK disponible"
+            );
+        }
+    }
+
     let window = ApplicationWindow::builder()
         .application(app)
         .title("Notificación")
