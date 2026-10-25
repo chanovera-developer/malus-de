@@ -889,6 +889,7 @@ Se aprovecha la robustez de **GNOME Control Center (`gnome-control-center`)** fi
 
 ### Módulo 9: Herramienta de Captura y Grabación de Pantalla (`screenshot/`)
 * **Arquitectura:** Cliente Wayland ligero en Rust con `gtk4-layer-shell` e integración con shaders GLSL del compositor.
+* **Estado de implementación (MVP):** La captura completa solicita al compositor de Malus el framebuffer renderizado mediante IPC y lo guarda como PNG en la carpeta XDG de Imágenes con nombre único; después muestra una miniatura real con acción para copiar mediante `wl-copy`. Esta versión captura una salida por solicitud. Los modos de área, ventana, grabación y OCR descritos abajo siguen pendientes; los atajos aún no están conectados al servicio.
 * **Atajos de Teclado Universales (Flujo de Trabajo Híbrido PC y macOS):**
   * **Tecla `Imprimir Pantalla` (`Print Screen` / `PrtScn`) y `Super + Shift + 5` (App Interactiva Foto / Vídeo):**
     * Invocación unificada: al presionar la tecla física estándar de teclado **`Impr Pant`** o la combinación ergonómica **`Super + Shift + 5`**, la pantalla se atenúa sutilmente y brota la **interfaz interactiva completa de delimitación y grabación**:

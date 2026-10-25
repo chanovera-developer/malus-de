@@ -2144,9 +2144,12 @@ pub fn run_drm() -> Result<()> {
                 }
 
                 if let Ok(mut target) = renderer.bind(&mut dmabuf) {
+                    let screenshot_request = state.pending_screenshot_requests.pop_front();
+                    let mut frame_rendered = false;
                     if let Ok(mut frame) =
                         renderer.render(&mut target, out_surface.size, Transform::Normal)
                     {
+                        frame_rendered = true;
                         let _ = frame.clear(dark_acrylic, &[damage]);
                         // 1. Renderizar fondo (wallpaper y capas inferiores)
                         if !lower_elements.is_empty() {
@@ -2801,6 +2804,25 @@ pub fn run_drm() -> Result<()> {
                         }
 
                         let _ = frame.finish();
+
+                    }
+                    if let Some(destination) = screenshot_request {
+                        info!("Procesando solicitud de captura de pantalla DRM");
+                        if frame_rendered {
+                            if let Err(error) = crate::capture::capture_frame(
+                                &mut renderer,
+                                &target,
+                                out_surface.size,
+                                &destination,
+                            ) {
+                                warn!("Error al capturar el framebuffer DRM: {error:#}");
+                                crate::capture::write_capture_error(&destination, &error);
+                            }
+                        } else {
+                            let error =
+                                anyhow::anyhow!("No se pudo renderizar el fotograma de captura DRM");
+                            crate::capture::write_capture_error(&destination, &error);
+                        }
                     }
                 }
 

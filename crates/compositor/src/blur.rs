@@ -300,7 +300,15 @@ impl DualKawaseBlur {
 
             // 3. Copiar región del framebuffer de pantalla actual a source_tex
             gl.BindTexture(ffi::TEXTURE_2D, self.source_tex);
+            let mut prev_read_buffer = 0;
+            gl.GetIntegerv(ffi::READ_BUFFER, &mut prev_read_buffer);
+            gl.ReadBuffer(if is_drm {
+                ffi::COLOR_ATTACHMENT0
+            } else {
+                ffi::BACK
+            });
             gl.CopyTexSubImage2D(ffi::TEXTURE_2D, 0, 0, 0, copy_x, copy_y, w, h);
+            gl.ReadBuffer(prev_read_buffer as u32);
 
             // 4. Asegurar tamaños exactos de texturas FBO intermedias
             let w0 = (w / 2).max(2);
