@@ -1,14 +1,9 @@
-use std::{
-    collections::HashSet,
-    sync::{Arc, Mutex},
-    time::{Duration, Instant},
-};
 use anyhow::{Context, Result};
 use smithay::{
     backend::{
         allocator::{
             gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
-            Fourcc,
+            Format, Fourcc,
         },
         drm::{DrmDevice, DrmDeviceFd, DrmEvent, GbmBufferedSurface},
         egl::{EGLContext, EGLDisplay},
@@ -19,20 +14,19 @@ use smithay::{
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         renderer::{
             element::{
-                surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement, WaylandSurfaceTexture},
+                surface::{
+                    render_elements_from_surface_tree, WaylandSurfaceRenderElement,
+                    WaylandSurfaceTexture,
+                },
                 Element, Kind,
             },
             gles::{GlesRenderer, GlesTexture},
             utils::draw_render_elements,
             Bind, Color32F, Frame, ImportDma, ImportMem, Renderer, Texture,
         },
-        session::{
-            libseat::LibSeatSession,
-            Event as SessionEvent, Session,
-        },
+        session::{libseat::LibSeatSession, Event as SessionEvent, Session},
         udev::{all_gpus, primary_gpu},
     },
-
     input::{
         keyboard::{keysyms, FilterResult},
         pointer::{AxisFrame, ButtonEvent, CursorImageStatus, MotionEvent},
@@ -45,18 +39,20 @@ use smithay::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::{ResizeEdge, State as XdgState},
         wayland_server::{Display, ListeningSocket},
     },
-    utils::{DeviceFd, Logical, Physical, Point, Rectangle, Transform, SERIAL_COUNTER, Size},
-    wayland::{
-        seat::WaylandFocus,
-        shell::wlr_layer::Layer,
-    },
+    utils::{DeviceFd, Logical, Physical, Point, Rectangle, Size, Transform, SERIAL_COUNTER},
+    wayland::{seat::WaylandFocus, shell::wlr_layer::Layer},
+};
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 use tracing::{error, info, warn};
 
-use malus_de_common::config::{DisplayModeConfig, DisplayOutputConfig, DisplaysConfig};
-use malus_de_common::ipc::IpcMessage;
 use crate::backend::winit::{send_frames_surface_tree, toggle_spotlight};
 use crate::state::{ClientState, MalusState};
+use malus_de_common::config::{DisplayModeConfig, DisplayOutputConfig, DisplaysConfig};
+use malus_de_common::ipc::IpcMessage;
 
 struct DrmOutputSurface {
     output: Output,
@@ -74,6 +70,153 @@ struct ThemedCursor {
     height: i32,
     xhot: i32,
     yhot: i32,
+}
+
+fn create_gbm_surface_with_fallback(
+    drm_device: &mut DrmDevice,
+    gbm_device: &GbmDevice<DrmDeviceFd>,
+    connector: connector::Handle,
+    crtc: crtc::Handle,
+    preferred_mode: smithay::reexports::drm::control::Mode,
+    available_modes: &[smithay::reexports::drm::control::Mode],
+    renderer_formats: &[Format],
+    output_name: &str,
+) -> Option<(
+    GbmBufferedSurface<GbmAllocator<DrmDeviceFd>, ()>,
+    smithay::reexports::drm::control::Mode,
+)> {
+    let color_formats = [Fourcc::Argb8888, Fourcc::Xrgb8888];
+    let mut format_candidates = vec![None];
+    for color_format in color_formats {
+        for format in renderer_formats
+            .iter()
+            .filter(|format| format.code == color_format)
+        {
+            if !format_candidates.contains(&Some(*format)) {
+                format_candidates.push(Some(*format));
+            }
+        }
+    }
+
+    let mut mode_candidates = vec![preferred_mode];
+    let mut fallback_modes = available_modes
+        .iter()
+        .copied()
+        .filter(|mode| {
+            mode.size() != preferred_mode.size() || mode.vrefresh() != preferred_mode.vrefresh()
+        })
+        .collect::<Vec<_>>();
+    fallback_modes.sort_by(|a, b| {
+        let same_resolution = b
+            .size()
+            .eq(&preferred_mode.size())
+            .cmp(&a.size().eq(&preferred_mode.size()));
+        if same_resolution != std::cmp::Ordering::Equal {
+            return same_resolution;
+        }
+
+        let area_a = u64::from(a.size().0) * u64::from(a.size().1);
+        let area_b = u64::from(b.size().0) * u64::from(b.size().1);
+        area_b
+            .cmp(&area_a)
+            .then_with(|| b.vrefresh().cmp(&a.vrefresh()))
+    });
+    for mode in fallback_modes {
+        if !mode_candidates.iter().any(|candidate| {
+            candidate.size() == mode.size() && candidate.vrefresh() == mode.vrefresh()
+        }) {
+            mode_candidates.push(mode);
+        }
+    }
+
+    for (round, delay) in [Duration::ZERO, Duration::from_millis(500)]
+        .into_iter()
+        .enumerate()
+    {
+        if !delay.is_zero() {
+            info!(
+                "Reintentando inicializar {} tras una pausa de {} ms",
+                output_name,
+                delay.as_millis()
+            );
+            std::thread::sleep(delay);
+        }
+
+        let candidates_to_try = if round == 0 {
+            format_candidates.as_slice()
+        } else {
+            &format_candidates[..1]
+        };
+        for mode in mode_candidates.iter().copied() {
+            for candidate in candidates_to_try {
+                let drm_surface = match drm_device.create_surface(crtc, mode, &[connector]) {
+                    Ok(surface) => surface,
+                    Err(err) => {
+                        warn!(
+                            "No se pudo crear DrmSurface para {} en {}x{} @ {} Hz (intento {}): {:?}",
+                            output_name,
+                            mode.size().0,
+                            mode.size().1,
+                            mode.vrefresh(),
+                            round + 1,
+                            err
+                        );
+                        break;
+                    }
+                };
+
+                let (formats, formats_to_try): (&[Fourcc], Vec<Format>) = match candidate {
+                    Some(format) => (std::slice::from_ref(&format.code), vec![*format]),
+                    None => (&color_formats, renderer_formats.to_vec()),
+                };
+                let allocator = GbmAllocator::new(
+                    gbm_device.clone(),
+                    GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
+                );
+
+                match GbmBufferedSurface::new(drm_surface, allocator, formats, formats_to_try) {
+                    Ok(surface) => {
+                        if mode.size() != preferred_mode.size()
+                            || mode.vrefresh() != preferred_mode.vrefresh()
+                        {
+                            warn!(
+                                "KMS rechazó el modo preferido de {}. Se usará {}x{} @ {} Hz.",
+                                output_name,
+                                mode.size().0,
+                                mode.size().1,
+                                mode.vrefresh()
+                            );
+                        }
+                        if let Some(format) = candidate {
+                            info!(
+                                "Superficie DRM de {} inicializada con formato alternativo {:?}",
+                                output_name, format
+                            );
+                        }
+                        return Some((surface, mode));
+                    }
+                    Err(err) => {
+                        warn!(
+                            "Falló la inicialización de {} en {}x{} @ {} Hz (intento {}, formato {:?}): {:?}",
+                            output_name,
+                            mode.size().0,
+                            mode.size().1,
+                            mode.vrefresh(),
+                            round + 1,
+                            candidate,
+                            err
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    error!(
+        "No se pudo inicializar la superficie DRM de {} tras probar los modos y formatos compatibles",
+        output_name
+    );
+    None
 }
 
 fn create_cursor_texture(
@@ -181,7 +324,9 @@ fn create_cursor_texture(
     }
 
     let size = Size::from((w as i32, h as i32));
-    let texture = renderer.import_memory(&data, Fourcc::Argb8888, size, false).ok()?;
+    let texture = renderer
+        .import_memory(&data, Fourcc::Argb8888, size, false)
+        .ok()?;
     Some(ThemedCursor {
         texture,
         size: 16,
@@ -193,7 +338,10 @@ fn create_cursor_texture(
 }
 
 /// Genera las 4 texturas de recorte squircle (n=4.2) para esquinas de pantalla estilo display moderno
-pub fn create_squircle_corner_textures(renderer: &mut GlesRenderer, radius_px: i32) -> Option<[GlesTexture; 4]> {
+pub fn create_squircle_corner_textures(
+    renderer: &mut GlesRenderer,
+    radius_px: i32,
+) -> Option<[GlesTexture; 4]> {
     let r = radius_px.max(2);
     let mut corners = Vec::with_capacity(4);
     let n = 4.2f64;
@@ -208,9 +356,9 @@ pub fn create_squircle_corner_textures(renderer: &mut GlesRenderer, radius_px: i
                 let idx = ((y * r + x) * 4) as usize;
                 let (u, v) = match corner {
                     0 => (r_f - (x as f64 + 0.5), r_f - (y as f64 + 0.5)), // Superior Izquierda
-                    1 => (x as f64 + 0.5, r_f - (y as f64 + 0.5)),        // Superior Derecha
-                    2 => (r_f - (x as f64 + 0.5), y as f64 + 0.5),        // Inferior Izquierda
-                    _ => (x as f64 + 0.5, y as f64 + 0.5),                // Inferior Derecha
+                    1 => (x as f64 + 0.5, r_f - (y as f64 + 0.5)),         // Superior Derecha
+                    2 => (r_f - (x as f64 + 0.5), y as f64 + 0.5),         // Inferior Izquierda
+                    _ => (x as f64 + 0.5, y as f64 + 0.5),                 // Inferior Derecha
                 };
 
                 let dist_px = (u.powf(n) + v.powf(n)).powf(inv_n) - r_f;
@@ -230,7 +378,10 @@ pub fn create_squircle_corner_textures(renderer: &mut GlesRenderer, radius_px: i
         let tex = match renderer.import_memory(&data, Fourcc::Abgr8888, size, false) {
             Ok(t) => t,
             Err(e) => {
-                warn!("❌ [Squircle Corners] Error al importar memoria en OpenGL (esquina {}): {:?}", corner, e);
+                warn!(
+                    "❌ [Squircle Corners] Error al importar memoria en OpenGL (esquina {}): {:?}",
+                    corner, e
+                );
                 return None;
             }
         };
@@ -274,7 +425,9 @@ fn find_layer_under_layer(
                     None
                 };
                 let surface_hit = surface_hit.or_else(|| {
-                    if layer.namespace() == "malus-top-bar" && local_point.y >= (geo.size.h as f64).max(36.0) {
+                    if layer.namespace() == "malus-top-bar"
+                        && local_point.y >= (geo.size.h as f64).max(36.0)
+                    {
                         None
                     } else {
                         layer.surface_under(
@@ -311,7 +464,10 @@ fn find_layer_under(
         .or_else(|| find_layer_under_layer(state, point, Layer::Top))
 }
 
-fn clamp_pointer_location(state: &MalusState, mut point: Point<f64, Logical>) -> Point<f64, Logical> {
+fn clamp_pointer_location(
+    state: &MalusState,
+    mut point: Point<f64, Logical>,
+) -> Point<f64, Logical> {
     let geos: Vec<Rectangle<i32, Logical>> = state
         .space
         .outputs()
@@ -332,8 +488,14 @@ fn clamp_pointer_location(state: &MalusState, mut point: Point<f64, Logical>) ->
     }
 
     // Acotar coordenada X global al rango combinado de todos los monitores
-    let min_x = geos.iter().map(|g| g.loc.x as f64).fold(f64::INFINITY, f64::min);
-    let max_x = geos.iter().map(|g| (g.loc.x + g.size.w) as f64).fold(f64::NEG_INFINITY, f64::max);
+    let min_x = geos
+        .iter()
+        .map(|g| g.loc.x as f64)
+        .fold(f64::INFINITY, f64::min);
+    let max_x = geos
+        .iter()
+        .map(|g| (g.loc.x + g.size.w) as f64)
+        .fold(f64::NEG_INFINITY, f64::max);
     point.x = point.x.clamp(min_x, (max_x - 1.0).max(min_x));
 
     // Encontrar el monitor que cubre esta franja horizontal X (o el más cercano en X)
@@ -374,8 +536,15 @@ fn resolve_target_under(
     state: &MalusState,
     point: Point<f64, Logical>,
 ) -> (
-    Option<(smithay::reexports::wayland_server::protocol::wl_surface::WlSurface, Point<f64, Logical>)>,
-    Option<(smithay::reexports::wayland_server::protocol::wl_surface::WlSurface, String, bool)>,
+    Option<(
+        smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+        Point<f64, Logical>,
+    )>,
+    Option<(
+        smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+        String,
+        bool,
+    )>,
     Option<(smithay::desktop::Window, Point<i32, Logical>)>,
 ) {
     let layer_hit = find_layer_under(state, point);
@@ -409,17 +578,20 @@ pub fn run_drm() -> Result<()> {
     info!("🚀 MALUS DE: Iniciando en modo DRM/KMS nativo (Direct TTY/GDM)");
     info!("============================================================");
 
-    let mut event_loop: EventLoop<MalusState> = EventLoop::try_new()
-        .context("Error al inicializar EventLoop de Calloop")?;
-    let mut display: Display<MalusState> = Display::new()
-        .context("Error al crear Display Wayland")?;
+    let mut event_loop: EventLoop<MalusState> =
+        EventLoop::try_new().context("Error al inicializar EventLoop de Calloop")?;
+    let mut display: Display<MalusState> =
+        Display::new().context("Error al crear Display Wayland")?;
     let mut state = MalusState::new(&display);
 
     // 1. Inicializar sesión de hardware (LibSeat / logind)
     let (mut session, notifier) = match LibSeatSession::new() {
         Ok(res) => res,
         Err(err) => {
-            error!("❌ Error fatal: no se pudo inicializar LibSeatSession: {:?}", err);
+            error!(
+                "❌ Error fatal: no se pudo inicializar LibSeatSession: {:?}",
+                err
+            );
             eprintln!("⚠️ LibSeat no pudo tomar control del asiento TTY ({err:?}).");
             eprintln!("   Si estás dentro de una sesión gráfica existente, ejecuta Malus DE en modo anidado:");
             eprintln!("   malus-de-compositor --backend winit");
@@ -436,25 +608,26 @@ pub fn run_drm() -> Result<()> {
         .unwrap_or_else(|| std::path::PathBuf::from("/dev/dri/card1"));
     info!("🎮 GPU seleccionada: {:?}", gpu_path);
 
-    let raw_fd = session.open(
-        &gpu_path,
-        smithay::reexports::rustix::fs::OFlags::RDWR
-            | smithay::reexports::rustix::fs::OFlags::CLOEXEC
-            | smithay::reexports::rustix::fs::OFlags::NOCTTY,
-    ).context("Error al abrir nodo DRM mediante libseat")?;
+    let raw_fd = session
+        .open(
+            &gpu_path,
+            smithay::reexports::rustix::fs::OFlags::RDWR
+                | smithay::reexports::rustix::fs::OFlags::CLOEXEC
+                | smithay::reexports::rustix::fs::OFlags::NOCTTY,
+        )
+        .context("Error al abrir nodo DRM mediante libseat")?;
     let drm_device_fd = DrmDeviceFd::new(DeviceFd::from(raw_fd));
 
     // 3. Inicializar DrmDevice, GBM, EGL y GlesRenderer
-    let (mut drm_device, drm_notifier) = DrmDevice::new(drm_device_fd.clone(), false)
-        .context("Error al inicializar DrmDevice")?;
-    let gbm_device = GbmDevice::new(drm_device_fd.clone())
-        .context("Error al inicializar GbmDevice")?;
+    let (mut drm_device, drm_notifier) =
+        DrmDevice::new(drm_device_fd.clone(), false).context("Error al inicializar DrmDevice")?;
+    let gbm_device =
+        GbmDevice::new(drm_device_fd.clone()).context("Error al inicializar GbmDevice")?;
     let egl_display = unsafe { EGLDisplay::new(gbm_device.clone()) }
         .context("Error al crear EGLDisplay sobre GBM")?;
-    let egl_context = EGLContext::new(&egl_display)
-        .context("Error al crear EGLContext")?;
-    let mut renderer = unsafe { GlesRenderer::new(egl_context) }
-        .context("Error al inicializar GlesRenderer")?;
+    let egl_context = EGLContext::new(&egl_display).context("Error al crear EGLContext")?;
+    let mut renderer =
+        unsafe { GlesRenderer::new(egl_context) }.context("Error al inicializar GlesRenderer")?;
 
     info!("🎨 Renderer OpenGL ES acelerado por hardware listo");
 
@@ -482,7 +655,10 @@ pub fn run_drm() -> Result<()> {
             kb
         }
         Err(e) => {
-            warn!("⚠️ Falló carga de XKB layout '{}': {:?}. Usando fallback US.", input_cfg.keyboard_layout, e);
+            warn!(
+                "⚠️ Falló carga de XKB layout '{}': {:?}. Usando fallback US.",
+                input_cfg.keyboard_layout, e
+            );
             state
                 .seat
                 .add_keyboard(Default::default(), 200, 200)
@@ -492,14 +668,24 @@ pub fn run_drm() -> Result<()> {
     let _pointer = state.seat.add_pointer();
 
     // 5. Descubrir conectores físicos y configurar superficies de pantalla
-    let res_handles = drm_device.resource_handles()
+    let res_handles = drm_device
+        .resource_handles()
         .context("Error al consultar resource handles de DRM")?;
 
     // Desactivar cualquier cursor por hardware residual de GDM o compositores previos en todos los CRTCs
     for &crtc_handle in res_handles.crtcs() {
         #[allow(deprecated)]
-        if let Err(e) = drm_device.set_cursor::<smithay::reexports::drm::control::dumbbuffer::DumbBuffer>(crtc_handle, None) {
-            tracing::debug!("Aviso al limpiar hardware cursor en CRTC {:?}: {:?}", crtc_handle, e);
+        if let Err(e) = drm_device
+            .set_cursor::<smithay::reexports::drm::control::dumbbuffer::DumbBuffer>(
+                crtc_handle,
+                None,
+            )
+        {
+            tracing::debug!(
+                "Aviso al limpiar hardware cursor en CRTC {:?}: {:?}",
+                crtc_handle,
+                e
+            );
         }
     }
 
@@ -522,7 +708,11 @@ pub fn run_drm() -> Result<()> {
             continue;
         }
 
-        let conn_name = format!("{}-{}", conn_info.interface().as_str(), conn_info.interface_id());
+        let conn_name = format!(
+            "{}-{}",
+            conn_info.interface().as_str(),
+            conn_info.interface_id()
+        );
         let is_primary = displays_cfg
             .find_for_connector(&conn_name)
             .map(|c| c.primary)
@@ -586,7 +776,10 @@ pub fn run_drm() -> Result<()> {
             height: height as u32,
             refresh_rate: selected_mode.vrefresh() as f64,
             modes,
-            x: previous.as_ref().map(|output| output.x).unwrap_or(detected_x),
+            x: previous
+                .as_ref()
+                .map(|output| output.x)
+                .unwrap_or(detected_x),
             y: previous.as_ref().map(|output| output.y).unwrap_or(0),
             scale,
             primary: previous
@@ -666,7 +859,17 @@ pub fn run_drm() -> Result<()> {
             .flat_map(|enc| res_handles.filter_crtcs(enc.possible_crtcs()))
             .collect();
 
-        let crtc = match possible_crtcs.into_iter().find(|c| !used_crtcs.contains(c)) {
+        // GDM may still own DRM master and have already routed each connector to a CRTC.
+        // Keep that mapping when available instead of choosing a different compatible CRTC.
+        let active_crtc = conn_info
+            .current_encoder()
+            .and_then(|encoder| drm_device.get_encoder(encoder).ok())
+            .and_then(|encoder| encoder.crtc())
+            .filter(|crtc| possible_crtcs.contains(crtc));
+        let crtc = match active_crtc
+            .filter(|crtc| !used_crtcs.contains(crtc))
+            .or_else(|| possible_crtcs.into_iter().find(|c| !used_crtcs.contains(c)))
+        {
             Some(c) => {
                 used_crtcs.insert(c);
                 c
@@ -677,33 +880,32 @@ pub fn run_drm() -> Result<()> {
             }
         };
 
-        info!("   🖥 Asignando CRTC {:?} a {} con modo {}x{} @ {}Hz",
-            crtc, conn_name, mode.size().0, mode.size().1, mode.vrefresh());
+        if active_crtc == Some(crtc) {
+            info!("   ♻️ Reutilizando CRTC activo {:?} de {}", crtc, conn_name);
+        }
 
-        let drm_surface = match drm_device.create_surface(crtc, mode, &[conn_handle]) {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Error al crear DrmSurface para {}: {:?}", conn_name, e);
-                continue;
-            }
-        };
-
-        let gbm_allocator = GbmAllocator::new(
-            gbm_device.clone(),
-            GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
+        info!(
+            "   🖥 Asignando CRTC {:?} a {} con modo {}x{} @ {}Hz",
+            crtc,
+            conn_name,
+            mode.size().0,
+            mode.size().1,
+            mode.vrefresh()
         );
 
-        let gbm_surface = match GbmBufferedSurface::new(
-            drm_surface,
-            gbm_allocator,
-            &[Fourcc::Argb8888, Fourcc::Xrgb8888],
-            renderer.dmabuf_formats(),
+        let renderer_formats = renderer.dmabuf_formats().into_iter().collect::<Vec<_>>();
+        let (gbm_surface, mode) = match create_gbm_surface_with_fallback(
+            &mut drm_device,
+            &gbm_device,
+            conn_handle,
+            crtc,
+            mode,
+            conn_info.modes(),
+            &renderer_formats,
+            &conn_name,
         ) {
-            Ok(s) => s,
-            Err(e) => {
-                error!("Error al inicializar GbmBufferedSurface para {}: {:?}", conn_name, e);
-                continue;
-            }
+            Some(surface) => surface,
+            None => continue,
         };
 
         let (mode_w, mode_h) = mode.size();
@@ -803,7 +1005,10 @@ pub fn run_drm() -> Result<()> {
                 },
             );
             pointer.frame(&mut state);
-            info!("🎯 Puntero DRM inicializado en el centro de la pantalla: {:?}", center);
+            info!(
+                "🎯 Puntero DRM inicializado en el centro de la pantalla: {:?}",
+                center
+            );
         }
     }
 
@@ -816,7 +1021,10 @@ pub fn run_drm() -> Result<()> {
         .unwrap()
         .to_string_lossy()
         .to_string();
-    info!("🌐 Socket Wayland escuchando activamente en: WAYLAND_DISPLAY={}", socket_name);
+    info!(
+        "🌐 Socket Wayland escuchando activamente en: WAYLAND_DISPLAY={}",
+        socket_name
+    );
     state.socket_name = socket_name.clone();
 
     let shared_surfaces = Arc::new(Mutex::new(surfaces));
@@ -824,9 +1032,8 @@ pub fn run_drm() -> Result<()> {
     let surfaces_for_vt = shared_surfaces.clone();
 
     // 7. Inicializar Libinput para teclado y ratón
-    let mut libinput_context = Libinput::new_with_udev::<LibinputSessionInterface<LibSeatSession>>(
-        session.clone().into(),
-    );
+    let mut libinput_context =
+        Libinput::new_with_udev::<LibinputSessionInterface<LibSeatSession>>(session.clone().into());
     if let Err(e) = libinput_context.udev_assign_seat(&seat_name) {
         warn!("Aviso al asignar asiento en libinput: {:?}", e);
     }
@@ -836,43 +1043,49 @@ pub fn run_drm() -> Result<()> {
     let loop_handle = event_loop.handle();
 
     // Notificador de pausa / reactivación de sesión TTY (VT Switch)
-    loop_handle.insert_source(notifier, move |event, &mut (), _state: &mut MalusState| {
-        match event {
-            SessionEvent::PauseSession => {
-                info!("⏸️ Sesión TTY pausada (VT switch away)");
-                libinput_context.suspend();
-            }
-            SessionEvent::ActivateSession => {
-                info!("▶️ Sesión TTY reactivada (VT switch back)");
-                if let Err(e) = libinput_context.resume() {
-                    error!("Error al reanudar libinput tras VT switch: {:?}", e);
+    loop_handle
+        .insert_source(
+            notifier,
+            move |event, &mut (), _state: &mut MalusState| match event {
+                SessionEvent::PauseSession => {
+                    info!("⏸️ Sesión TTY pausada (VT switch away)");
+                    libinput_context.suspend();
                 }
-                if let Ok(mut surfs) = surfaces_for_vt.lock() {
-                    for s in surfs.iter_mut() {
-                        s.damage = Rectangle::from_size(s.size);
+                SessionEvent::ActivateSession => {
+                    info!("▶️ Sesión TTY reactivada (VT switch back)");
+                    if let Err(e) = libinput_context.resume() {
+                        error!("Error al reanudar libinput tras VT switch: {:?}", e);
                     }
-                }
-            }
-        }
-    }).map_err(|e| anyhow::anyhow!("Error al registrar notificador de sesión: {e:?}"))?;
-
-    // Notificador de eventos de sincronización DRM (VBlank y Page Flip)
-    loop_handle.insert_source(drm_notifier, move |event, _metadata, _state: &mut MalusState| {
-        match event {
-            DrmEvent::VBlank(crtc) => {
-                if let Ok(mut surfs) = surfaces_for_drm.lock() {
-                    for s in surfs.iter_mut() {
-                        if s.crtc == crtc {
-                            let _ = s.surface.frame_submitted();
+                    if let Ok(mut surfs) = surfaces_for_vt.lock() {
+                        for s in surfs.iter_mut() {
+                            s.damage = Rectangle::from_size(s.size);
                         }
                     }
                 }
-            }
-            DrmEvent::Error(err) => {
-                warn!("Aviso en evento DRM: {:?}", err);
-            }
-        }
-    }).map_err(|e| anyhow::anyhow!("Error al registrar notificador DRM: {e:?}"))?;
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("Error al registrar notificador de sesión: {e:?}"))?;
+
+    // Notificador de eventos de sincronización DRM (VBlank y Page Flip)
+    loop_handle
+        .insert_source(
+            drm_notifier,
+            move |event, _metadata, _state: &mut MalusState| match event {
+                DrmEvent::VBlank(crtc) => {
+                    if let Ok(mut surfs) = surfaces_for_drm.lock() {
+                        for s in surfs.iter_mut() {
+                            if s.crtc == crtc {
+                                let _ = s.surface.frame_submitted();
+                            }
+                        }
+                    }
+                }
+                DrmEvent::Error(err) => {
+                    warn!("Aviso en evento DRM: {:?}", err);
+                }
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("Error al registrar notificador DRM: {e:?}"))?;
 
     // Despacho de eventos de Libinput con soporte para ratón, touchpad y atajos completos
     let mut session_vt = session.clone();
@@ -1391,7 +1604,8 @@ pub fn run_drm() -> Result<()> {
         .ok();
     let mut last_config_check = Instant::now();
     let mut current_displays_cfg = DisplaysConfig::load();
-    let mut squircle_corner_cache: std::collections::HashMap<i32, [GlesTexture; 4]> = std::collections::HashMap::new();
+    let mut squircle_corner_cache: std::collections::HashMap<i32, [GlesTexture; 4]> =
+        std::collections::HashMap::new();
     let mut blur_pipeline: Option<crate::blur::DualKawaseBlur> = None;
     let mut window_squircle_shader: Option<crate::window_corners::WindowSquircleShader> = None;
     let mut shadow_pipeline: Option<crate::shadow::WindowShadowPipeline> = None;
@@ -1405,7 +1619,8 @@ pub fn run_drm() -> Result<()> {
         }
 
         // Hot-reload automático de monitors.toml e input.toml (inmediato vía IPC o cada 250ms por mtime)
-        let check_now = state.pending_displays_reload || last_config_check.elapsed() >= Duration::from_millis(250);
+        let check_now = state.pending_displays_reload
+            || last_config_check.elapsed() >= Duration::from_millis(250);
         if check_now {
             last_config_check = Instant::now();
             let (configured_cursor_theme, configured_cursor_size) =
@@ -1418,7 +1633,9 @@ pub fn run_drm() -> Result<()> {
             let current_mtime = std::fs::metadata(&monitors_toml_path)
                 .and_then(|m| m.modified())
                 .ok();
-            if state.pending_displays_reload || (current_mtime.is_some() && current_mtime != last_monitors_mtime) {
+            if state.pending_displays_reload
+                || (current_mtime.is_some() && current_mtime != last_monitors_mtime)
+            {
                 state.pending_displays_reload = false;
                 last_monitors_mtime = current_mtime;
                 current_displays_cfg = DisplaysConfig::load();
@@ -1428,28 +1645,38 @@ pub fn run_drm() -> Result<()> {
                 info!("🔄 Recargando disposición y escalas de pantallas en vivo desde monitors.toml...");
 
                 // Capturar geometrías previas de cada monitor para migrar ventanas si los monitores se intercambian o desplazan
-                let mut prev_output_geos: std::collections::HashMap<String, Rectangle<i32, Logical>> =
-                    std::collections::HashMap::new();
+                let mut prev_output_geos: std::collections::HashMap<
+                    String,
+                    Rectangle<i32, Logical>,
+                > = std::collections::HashMap::new();
                 for out in state.space.outputs() {
                     if let Some(geo) = state.space.output_geometry(out) {
                         prev_output_geos.insert(out.name(), geo);
                     }
                 }
 
-                let mut new_output_locs: std::collections::HashMap<String, (Point<i32, Logical>, f64)> =
-                    std::collections::HashMap::new();
+                let mut new_output_locs: std::collections::HashMap<
+                    String,
+                    (Point<i32, Logical>, f64),
+                > = std::collections::HashMap::new();
 
                 if let Ok(mut surfs) = shared_surfaces.lock() {
                     let mut auto_x = 0;
                     for s in surfs.iter_mut() {
                         let out_name = s.output.name();
-                        let (loc_x, loc_y, scale, requested_mode) = if let Some(cfg) = new_cfg.find_for_connector(&out_name) {
-                            let requested_mode = s.modes.iter().find(|mode| {
-                                let (width, height) = mode.size();
-                                width as u32 == cfg.width
-                                    && height as u32 == cfg.height
-                                    && (mode.vrefresh() as f64 - cfg.refresh_rate).abs() < 1.0
-                            }).copied();
+                        let (loc_x, loc_y, scale, requested_mode) = if let Some(cfg) =
+                            new_cfg.find_for_connector(&out_name)
+                        {
+                            let requested_mode = s
+                                .modes
+                                .iter()
+                                .find(|mode| {
+                                    let (width, height) = mode.size();
+                                    width as u32 == cfg.width
+                                        && height as u32 == cfg.height
+                                        && (mode.vrefresh() as f64 - cfg.refresh_rate).abs() < 1.0
+                                })
+                                .copied();
                             (cfg.x, cfg.y, cfg.scale.clamp(0.5, 4.0), requested_mode)
                         } else {
                             (auto_x, 0, new_cfg.master_scale.clamp(0.5, 4.0), None)
@@ -1501,7 +1728,8 @@ pub fn run_drm() -> Result<()> {
                             s.output.set_preferred(mode);
                         }
                         state.space.map_output(&s.output, (loc_x, loc_y));
-                        new_output_locs.insert(out_name.clone(), (Point::from((loc_x, loc_y)), scale));
+                        new_output_locs
+                            .insert(out_name.clone(), (Point::from((loc_x, loc_y)), scale));
 
                         // Notificar nueva escala fraccionaria y reconfigurar todas las Layer Surfaces del monitor
                         let mut lmap = smithay::desktop::layer_map_for_output(&s.output);
@@ -1509,9 +1737,12 @@ pub fn run_drm() -> Result<()> {
                         for layer in lmap.layers() {
                             let wl_surf = layer.wl_surface();
                             smithay::wayland::compositor::with_states(wl_surf, |states| {
-                                smithay::wayland::fractional_scale::with_fractional_scale(states, |fs| {
-                                    fs.set_preferred_scale(scale);
-                                });
+                                smithay::wayland::fractional_scale::with_fractional_scale(
+                                    states,
+                                    |fs| {
+                                        fs.set_preferred_scale(scale);
+                                    },
+                                );
                             });
                             layer.layer_surface().send_configure();
                         }
@@ -1541,7 +1772,11 @@ pub fn run_drm() -> Result<()> {
                         let owner_out = prev_output_geos
                             .iter()
                             .find(|(_, geo)| geo.contains(center))
-                            .or_else(|| prev_output_geos.iter().find(|(_, geo)| geo.contains(win_loc)))
+                            .or_else(|| {
+                                prev_output_geos
+                                    .iter()
+                                    .find(|(_, geo)| geo.contains(win_loc))
+                            })
                             .map(|(name, geo)| (name.clone(), *geo));
 
                         if let Some((out_name, old_geo)) = owner_out {
@@ -1558,9 +1793,12 @@ pub fn run_drm() -> Result<()> {
                     if let Some(wl_surf) = win.wl_surface() {
                         let new_scale = state.preferred_scale_for_surface(&wl_surf);
                         smithay::wayland::compositor::with_states(&wl_surf, |states| {
-                            smithay::wayland::fractional_scale::with_fractional_scale(states, |fs| {
-                                fs.set_preferred_scale(new_scale);
-                            });
+                            smithay::wayland::fractional_scale::with_fractional_scale(
+                                states,
+                                |fs| {
+                                    fs.set_preferred_scale(new_scale);
+                                },
+                            );
                         });
                     }
                     if let Some(toplevel) = win.toplevel() {
@@ -1576,16 +1814,17 @@ pub fn run_drm() -> Result<()> {
             if cur_input_mtime.is_some() && cur_input_mtime != last_input_mtime {
                 last_input_mtime = cur_input_mtime;
                 let input_cfg = malus_de_common::config::InputConfig::load();
-                state.apply_keyboard_layout(&input_cfg.keyboard_layout, &input_cfg.keyboard_variant);
+                state
+                    .apply_keyboard_layout(&input_cfg.keyboard_layout, &input_cfg.keyboard_variant);
             }
         }
 
         // Aceptar nuevos clientes de forma no bloqueante
         while let Ok(Some(stream)) = listener.accept() {
-            match display.handle().insert_client(
-                stream,
-                Arc::new(ClientState::default()),
-            ) {
+            match display
+                .handle()
+                .insert_client(stream, Arc::new(ClientState::default()))
+            {
                 Ok(client) => {
                     info!("🎉 Nuevo cliente Wayland conectado al compositor DRM!");
                     clients.push(client);
@@ -1608,18 +1847,24 @@ pub fn run_drm() -> Result<()> {
         state.popups.cleanup();
         state.active_popups.retain(|p| p.alive());
 
-
         // 🎨 RENDERIZADO GPU REAL A CADA MONITOR FÍSICO
         if let Ok(mut surfs) = shared_surfaces.lock() {
             for out_surface in surfs.iter_mut() {
                 let scale = out_surface.output.current_scale().fractional_scale();
-                let output_geo = state.space.output_geometry(&out_surface.output).unwrap_or_default();
+                let output_geo = state
+                    .space
+                    .output_geometry(&out_surface.output)
+                    .unwrap_or_default();
 
                 let (mut dmabuf, _age) = match out_surface.surface.next_buffer() {
                     Ok(buf) => buf,
                     Err(e) => {
                         // Si no hay slots libres, la GPU aún está en escaneo de buffer anterior (esperar vblank)
-                        warn!("Buffer no disponible para {}: {:?}", out_surface.output.name(), e);
+                        warn!(
+                            "Buffer no disponible para {}: {:?}",
+                            out_surface.output.name(),
+                            e
+                        );
                         continue;
                     }
                 };
@@ -1632,7 +1877,10 @@ pub fn run_drm() -> Result<()> {
                 for anim in &state.active_animations {
                     let anim_bbox = anim.window_rect.merge(anim.dock_slot_rect);
                     if output_geo.overlaps(anim_bbox) {
-                        let elems = render_elements_from_surface_tree::<GlesRenderer, WaylandSurfaceRenderElement<GlesRenderer>>(
+                        let elems = render_elements_from_surface_tree::<
+                            GlesRenderer,
+                            WaylandSurfaceRenderElement<GlesRenderer>,
+                        >(
                             &mut renderer,
                             &anim.surface,
                             (0, 0),
@@ -1659,15 +1907,19 @@ pub fn run_drm() -> Result<()> {
                         }
 
                         if let CursorImageStatus::Surface(ref surf) = state.cursor_status {
-                            cursor_hotspot = smithay::wayland::compositor::with_states(surf, |states| {
-                                states
-                                    .data_map
-                                    .get::<smithay::input::pointer::CursorImageSurfaceData>()
-                                    .map(|attrs| attrs.lock().unwrap().hotspot)
-                                    .unwrap_or_default()
-                            });
+                            cursor_hotspot =
+                                smithay::wayland::compositor::with_states(surf, |states| {
+                                    states
+                                        .data_map
+                                        .get::<smithay::input::pointer::CursorImageSurfaceData>()
+                                        .map(|attrs| attrs.lock().unwrap().hotspot)
+                                        .unwrap_or_default()
+                                });
 
-                            cursor_elems = render_elements_from_surface_tree::<GlesRenderer, WaylandSurfaceRenderElement<GlesRenderer>>(
+                            cursor_elems = render_elements_from_surface_tree::<
+                                GlesRenderer,
+                                WaylandSurfaceRenderElement<GlesRenderer>,
+                            >(
                                 &mut renderer,
                                 surf,
                                 Point::from((0, 0)),
@@ -1684,7 +1936,9 @@ pub fn run_drm() -> Result<()> {
                     let r = (corner_radius_pt * scale).round() as i32;
                     if r > 2 {
                         if !squircle_corner_cache.contains_key(&r) {
-                            if let Some(textures) = create_squircle_corner_textures(&mut renderer, r) {
+                            if let Some(textures) =
+                                create_squircle_corner_textures(&mut renderer, r)
+                            {
                                 squircle_corner_cache.insert(r, textures);
                             }
                         }
@@ -1699,7 +1953,11 @@ pub fn run_drm() -> Result<()> {
                 let win_corner_radius_pt = current_displays_cfg.window_corner_radius;
                 let win_phys_r = if win_corner_radius_pt > 0.0 {
                     let r = (win_corner_radius_pt * scale).round() as i32;
-                    if r > 2 { Some(r) } else { None }
+                    if r > 2 {
+                        Some(r)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -1710,25 +1968,29 @@ pub fn run_drm() -> Result<()> {
                 let mut dock_clip_roots = Vec::new();
                 let mut topbar_popups = Vec::new();
                 for surface in layer_map.layers().rev() {
-                    if surface.namespace() == "malus-app-switcher" && !state.app_switcher.is_active {
+                    if surface.namespace() == "malus-app-switcher" && !state.app_switcher.is_active
+                    {
                         continue;
                     }
                     if let Some(geo) = layer_map.layer_geometry(surface) {
                         let layer_loc = geo.loc.to_physical_precise_round(scale);
-                        let s_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = render_elements_from_surface_tree(
-                            &mut renderer,
-                            surface.wl_surface(),
-                            layer_loc,
-                            smithay::utils::Scale::from(scale),
-                            1.0,
-                            Kind::Unspecified,
-                        );
+                        let s_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                            render_elements_from_surface_tree(
+                                &mut renderer,
+                                surface.wl_surface(),
+                                layer_loc,
+                                smithay::utils::Scale::from(scale),
+                                1.0,
+                                Kind::Unspecified,
+                            );
                         if surface.namespace() == "malus-dock" {
                             let root_id =
                                 smithay::backend::renderer::element::Id::from_wayland_resource(
                                     surface.wl_surface(),
                                 );
-                            if let Some(root_elem) = s_elems.iter().find(|elem| *elem.id() == root_id) {
+                            if let Some(root_elem) =
+                                s_elems.iter().find(|elem| *elem.id() == root_id)
+                            {
                                 dock_clip_roots.push((
                                     root_id,
                                     super::dock_clip_rect(
@@ -1739,8 +2001,11 @@ pub fn run_drm() -> Result<()> {
                                 ));
                             }
                         }
-                        let mut p_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
-                        for (popup, popup_offset) in smithay::desktop::PopupManager::popups_for_surface(surface.wl_surface()) {
+                        let mut p_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                            Vec::new();
+                        for (popup, popup_offset) in
+                            smithay::desktop::PopupManager::popups_for_surface(surface.wl_surface())
+                        {
                             let popup_geometry = popup.geometry();
                             let offset = (popup_offset - popup_geometry.loc)
                                 .to_f64()
@@ -1781,33 +2046,41 @@ pub fn run_drm() -> Result<()> {
                         let geo = window.geometry();
                         let win_global_rect = Rectangle::new(loc, geo.size);
                         if output_geo.overlaps(win_global_rect) {
-                            let phys_loc = (loc - geo.loc - output_geo.loc).to_physical_precise_round(scale);
+                            let phys_loc =
+                                (loc - geo.loc - output_geo.loc).to_physical_precise_round(scale);
                             let Some(main_surface) = window.wl_surface() else {
                                 continue;
                             };
 
-                            let win_surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = render_elements_from_surface_tree(
-                                &mut renderer,
-                                main_surface.as_ref(),
-                                phys_loc,
-                                smithay::utils::Scale::from(scale),
-                                1.0,
-                                Kind::Unspecified,
-                            );
+                            let win_surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                                render_elements_from_surface_tree(
+                                    &mut renderer,
+                                    main_surface.as_ref(),
+                                    phys_loc,
+                                    smithay::utils::Scale::from(scale),
+                                    1.0,
+                                    Kind::Unspecified,
+                                );
 
                             let mut popup_elems: Vec<(
                                 Vec<WaylandSurfaceRenderElement<GlesRenderer>>,
                                 Rectangle<i32, Physical>,
                             )> = Vec::new();
                             let mut popup_shadow_rects = Vec::new();
-                            for (popup, popup_offset) in smithay::desktop::PopupManager::popups_for_surface(main_surface.as_ref()) {
+                            for (popup, popup_offset) in
+                                smithay::desktop::PopupManager::popups_for_surface(
+                                    main_surface.as_ref(),
+                                )
+                            {
                                 let popup_geometry = popup.geometry();
                                 let popup_rect = Rectangle::new(
-                                    phys_loc + (geo.loc + popup_offset).to_physical_precise_round(scale),
+                                    phys_loc
+                                        + (geo.loc + popup_offset).to_physical_precise_round(scale),
                                     popup_geometry.size.to_physical_precise_round(scale),
                                 );
                                 popup_shadow_rects.push(popup_rect);
-                                let offset = (geo.loc + popup_offset - popup_geometry.loc).to_physical_precise_round(scale);
+                                let offset = (geo.loc + popup_offset - popup_geometry.loc)
+                                    .to_physical_precise_round(scale);
                                 let p_elems = render_elements_from_surface_tree(
                                     &mut renderer,
                                     popup.wl_surface(),
@@ -1819,10 +2092,13 @@ pub fn run_drm() -> Result<()> {
                                 popup_elems.push((p_elems, popup_rect));
                             }
 
-                            let is_fullscreen = window.toplevel().map(|t| {
-                                let states = &t.current_state().states;
-                                states.contains(XdgState::Fullscreen)
-                            }).unwrap_or(false);
+                            let is_fullscreen = window
+                                .toplevel()
+                                .map(|t| {
+                                    let states = &t.current_state().states;
+                                    states.contains(XdgState::Fullscreen)
+                                })
+                                .unwrap_or(false);
 
                             let is_active = window.toplevel().map(|t| {
                                 let states = &t.current_state().states;
@@ -1831,7 +2107,10 @@ pub fn run_drm() -> Result<()> {
 
                             let is_firefox = crate::state::is_firefox_window(&window);
                             let is_translucent = crate::state::is_translucent_window(&window);
-                            let root_id = smithay::backend::renderer::element::Id::from_wayland_resource(main_surface.as_ref());
+                            let root_id =
+                                smithay::backend::renderer::element::Id::from_wayland_resource(
+                                    main_surface.as_ref(),
+                                );
 
                             let should_round = win_phys_r.is_some() && !is_fullscreen;
                             let content_offset = geo.loc.to_physical_precise_round(scale);
@@ -1841,38 +2120,73 @@ pub fn run_drm() -> Result<()> {
                                 geo.size.to_physical_precise_round(scale),
                             );
 
-                            window_render_data.push((root_id, win_surfaces, popup_elems, popup_shadow_rects, should_round, is_active, win_screen_rect, content_offset, content_size, is_firefox, is_translucent));
+                            window_render_data.push((
+                                root_id,
+                                win_surfaces,
+                                popup_elems,
+                                popup_shadow_rects,
+                                should_round,
+                                is_active,
+                                win_screen_rect,
+                                content_offset,
+                                content_size,
+                                is_firefox,
+                                is_translucent,
+                            ));
                         }
                     }
                 }
 
                 // Inicializar shader de recorte squircle para ventanas si aún no existe
                 if window_squircle_shader.is_none() {
-                    window_squircle_shader = crate::window_corners::WindowSquircleShader::new(&mut renderer);
+                    window_squircle_shader =
+                        crate::window_corners::WindowSquircleShader::new(&mut renderer);
                 }
 
                 if let Ok(mut target) = renderer.bind(&mut dmabuf) {
-                    if let Ok(mut frame) = renderer.render(&mut target, out_surface.size, Transform::Normal) {
+                    if let Ok(mut frame) =
+                        renderer.render(&mut target, out_surface.size, Transform::Normal)
+                    {
                         let _ = frame.clear(dark_acrylic, &[damage]);
                         // 1. Renderizar fondo (wallpaper y capas inferiores)
                         if !lower_elements.is_empty() {
-                            let _ = draw_render_elements(&mut frame, scale, &lower_elements, &[damage]);
+                            let _ =
+                                draw_render_elements(&mut frame, scale, &lower_elements, &[damage]);
                         }
 
                         // Inicializar pipeline de sombras squircle si aún no existe
                         if shadow_pipeline.is_none() {
-                            shadow_pipeline = frame.with_context(|gl| crate::shadow::WindowShadowPipeline::new(gl)).ok().flatten();
+                            shadow_pipeline = frame
+                                .with_context(|gl| crate::shadow::WindowShadowPipeline::new(gl))
+                                .ok()
+                                .flatten();
                         }
 
                         // Inicializar pipeline de desenfoque Dual Kawase si aún no existe
                         if blur_pipeline.is_none() {
-                            blur_pipeline = frame.with_context(|gl| crate::blur::DualKawaseBlur::new(gl)).ok().flatten();
+                            blur_pipeline = frame
+                                .with_context(|gl| crate::blur::DualKawaseBlur::new(gl))
+                                .ok()
+                                .flatten();
                         }
 
                         let projection = *frame.projection();
 
                         // 2. Renderizar superficies de cada ventana con sus sombras proyectadas, desenfoque de fondo y esquinas squircle
-                        for (root_id, win_elems, _popups, _popup_shadow_rects, should_round, is_active, win_rect, content_offset, content_size, is_firefox, is_translucent) in &window_render_data {
+                        for (
+                            root_id,
+                            win_elems,
+                            _popups,
+                            _popup_shadow_rects,
+                            should_round,
+                            is_active,
+                            win_rect,
+                            content_offset,
+                            content_size,
+                            is_firefox,
+                            is_translucent,
+                        ) in &window_render_data
+                        {
                             if win_elems.is_empty() {
                                 continue;
                             }
@@ -1880,18 +2194,35 @@ pub fn run_drm() -> Result<()> {
                             // 2.1. SOMBRA PROYECTADA (Window Drop Shadow con Squircle SDF n=4.2)
                             // Se dibuja para ventanas no en pantalla completa inmediatamente antes de su superficie
                             if *should_round {
-                                if let (Some(r), Some(ref shadow)) = (win_phys_r, shadow_pipeline.as_ref()) {
+                                if let (Some(r), Some(ref shadow)) =
+                                    (win_phys_r, shadow_pipeline.as_ref())
+                                {
                                     let _ = frame.with_context(|gl| {
-                                        shadow.render_shadow(gl, &projection, *win_rect, r as f32, *is_active, scale);
+                                        shadow.render_shadow(
+                                            gl,
+                                            &projection,
+                                            *win_rect,
+                                            r as f32,
+                                            *is_active,
+                                            scale,
+                                        );
                                     });
                                 }
 
                                 // 2.1.5. DESENFOQUE DE FONDO DUAL KAWASE (Exclusivo para Nautilus y Ajustes del Sistema)
                                 if *is_translucent {
-                                    if let (Some(r), Some(ref mut blur)) = (win_phys_r, blur_pipeline.as_mut()) {
+                                    if let (Some(r), Some(ref mut blur)) =
+                                        (win_phys_r, blur_pipeline.as_mut())
+                                    {
                                         let screen_size = out_surface.size;
                                         let _ = frame.with_context(|gl| {
-                                            blur.render_blur(gl, &projection, screen_size, *win_rect, r as f32);
+                                            blur.render_blur(
+                                                gl,
+                                                &projection,
+                                                screen_size,
+                                                *win_rect,
+                                                r as f32,
+                                            );
                                         });
                                     }
                                 }
@@ -1902,21 +2233,40 @@ pub fn run_drm() -> Result<()> {
                                 if *is_firefox {
                                     // Para Firefox: aplicar recorte a todo su árbol de subsuperficies (WebRender)
                                     // para evitar esquinas cuadradas en el lienzo interno
-                                    if let (Some(r), Some(ref shader)) = (win_phys_r, window_squircle_shader.as_ref()) {
+                                    if let (Some(r), Some(ref shader)) =
+                                        (win_phys_r, window_squircle_shader.as_ref())
+                                    {
                                         for elem in win_elems {
-                                            let elem_geo = elem.geometry(smithay::utils::Scale::from(scale));
+                                            let elem_geo =
+                                                elem.geometry(smithay::utils::Scale::from(scale));
                                             let sub_offset = smithay::utils::Point::from((
                                                 win_rect.loc.x - elem_geo.loc.x,
                                                 win_rect.loc.y - elem_geo.loc.y,
                                             ));
-                                            shader.apply_to_frame(&mut frame, elem_geo.size, sub_offset, win_rect.size, r);
+                                            shader.apply_to_frame(
+                                                &mut frame,
+                                                elem_geo.size,
+                                                sub_offset,
+                                                win_rect.size,
+                                                r,
+                                            );
 
-                                            let _ = draw_render_elements(&mut frame, scale, std::slice::from_ref(elem), &[damage]);
+                                            let _ = draw_render_elements(
+                                                &mut frame,
+                                                scale,
+                                                std::slice::from_ref(elem),
+                                                &[damage],
+                                            );
 
                                             frame.clear_tex_program_override();
                                         }
                                     } else {
-                                        let _ = draw_render_elements(&mut frame, scale, win_elems, &[damage]);
+                                        let _ = draw_render_elements(
+                                            &mut frame,
+                                            scale,
+                                            win_elems,
+                                            &[damage],
+                                        );
                                     }
                                 } else {
                                     // Para el resto de ventanas (GTK, Electron, etc.): comportamiento intacto original.
@@ -1924,13 +2274,27 @@ pub fn run_drm() -> Result<()> {
                                     for elem in win_elems {
                                         let is_root = elem.id() == root_id;
                                         if is_root {
-                                            if let (Some(r), Some(ref shader)) = (win_phys_r, window_squircle_shader.as_ref()) {
-                                                let elem_geo = elem.geometry(smithay::utils::Scale::from(scale));
-                                                shader.apply_to_frame(&mut frame, elem_geo.size, *content_offset, *content_size, r);
+                                            if let (Some(r), Some(ref shader)) =
+                                                (win_phys_r, window_squircle_shader.as_ref())
+                                            {
+                                                let elem_geo = elem
+                                                    .geometry(smithay::utils::Scale::from(scale));
+                                                shader.apply_to_frame(
+                                                    &mut frame,
+                                                    elem_geo.size,
+                                                    *content_offset,
+                                                    *content_size,
+                                                    r,
+                                                );
                                             }
                                         }
 
-                                        let _ = draw_render_elements(&mut frame, scale, std::slice::from_ref(elem), &[damage]);
+                                        let _ = draw_render_elements(
+                                            &mut frame,
+                                            scale,
+                                            std::slice::from_ref(elem),
+                                            &[damage],
+                                        );
 
                                         if is_root {
                                             frame.clear_tex_program_override();
@@ -1938,13 +2302,17 @@ pub fn run_drm() -> Result<()> {
                                     }
                                 }
                             } else {
-                                let _ = draw_render_elements(&mut frame, scale, win_elems, &[damage]);
+                                let _ =
+                                    draw_render_elements(&mut frame, scale, win_elems, &[damage]);
                             }
                         }
 
                         // 2. Aplicar desenfoque de fondo Dual Kawase por GPU a las capas y popups translúcidos
                         if blur_pipeline.is_none() {
-                            blur_pipeline = frame.with_context(|gl| crate::blur::DualKawaseBlur::new(gl)).ok().flatten();
+                            blur_pipeline = frame
+                                .with_context(|gl| crate::blur::DualKawaseBlur::new(gl))
+                                .ok()
+                                .flatten();
                         }
 
                         if let Some(ref mut blur) = blur_pipeline {
@@ -1994,10 +2362,19 @@ pub fn run_drm() -> Result<()> {
                         // 3. Renderizar menús contextuales y popups de ventanas (siempre ENCIMA de las superficies de ventana)
                         let menu_radius = (22.0 * scale).round() as i32;
                         for (_, _, _, popup_shadow_rects, _, is_active, ..) in &window_render_data {
-                            if let (Some(radius), Some(shadow)) = (win_phys_r, shadow_pipeline.as_ref()) {
+                            if let (Some(radius), Some(shadow)) =
+                                (win_phys_r, shadow_pipeline.as_ref())
+                            {
                                 for popup_rect in popup_shadow_rects {
                                     let _ = frame.with_context(|gl| {
-                                        shadow.render_shadow(gl, &projection, *popup_rect, radius as f32, *is_active, scale);
+                                        shadow.render_shadow(
+                                            gl,
+                                            &projection,
+                                            *popup_rect,
+                                            radius as f32,
+                                            *is_active,
+                                            scale,
+                                        );
                                     });
                                 }
                             }
@@ -2019,7 +2396,8 @@ pub fn run_drm() -> Result<()> {
 
                                 for elem in popup_elems {
                                     if let Some(shader) = window_squircle_shader.as_ref() {
-                                        let elem_geo = elem.geometry(smithay::utils::Scale::from(scale));
+                                        let elem_geo =
+                                            elem.geometry(smithay::utils::Scale::from(scale));
                                         shader.apply_to_frame(
                                             &mut frame,
                                             elem_geo.size,
@@ -2046,16 +2424,30 @@ pub fn run_drm() -> Result<()> {
                                     .iter()
                                     .find(|(root_id, _)| *elem.id() == *root_id)
                                     .map(|(_, rect)| *rect);
-                                if let (Some(rect), Some(shader)) = (dock_rect, window_squircle_shader.as_ref()) {
-                                    let elem_geo = elem.geometry(smithay::utils::Scale::from(scale));
+                                if let (Some(rect), Some(shader)) =
+                                    (dock_rect, window_squircle_shader.as_ref())
+                                {
+                                    let elem_geo =
+                                        elem.geometry(smithay::utils::Scale::from(scale));
                                     let offset = smithay::utils::Point::from((
                                         rect.loc.x - elem_geo.loc.x,
                                         rect.loc.y - elem_geo.loc.y,
                                     ));
                                     let radius = (32.0 * scale).round() as i32;
-                                    shader.apply_dock_clip_to_frame(&mut frame, elem_geo.size, offset, rect.size, radius);
+                                    shader.apply_dock_clip_to_frame(
+                                        &mut frame,
+                                        elem_geo.size,
+                                        offset,
+                                        rect.size,
+                                        radius,
+                                    );
                                 }
-                                let _ = draw_render_elements(&mut frame, scale, std::slice::from_ref(elem), &[damage]);
+                                let _ = draw_render_elements(
+                                    &mut frame,
+                                    scale,
+                                    std::slice::from_ref(elem),
+                                    &[damage],
+                                );
                                 if dock_rect.is_some() {
                                     frame.clear_tex_program_override();
                                 }
@@ -2090,7 +2482,8 @@ pub fn run_drm() -> Result<()> {
 
                             for elem in popup_elems {
                                 if let Some(shader) = window_squircle_shader.as_ref() {
-                                    let elem_geo = elem.geometry(smithay::utils::Scale::from(scale));
+                                    let elem_geo =
+                                        elem.geometry(smithay::utils::Scale::from(scale));
                                     shader.apply_clip_to_frame(
                                         &mut frame,
                                         elem_geo.size,
@@ -2110,15 +2503,18 @@ pub fn run_drm() -> Result<()> {
                         }
 
                         // Dibujar previsualización translúcida de Aero Snap si el puntero está agarrado y la previsualización intersecta este monitor
-                        let is_pointer_grabbed = state.seat.get_pointer().map(|p| p.is_grabbed()).unwrap_or(false);
+                        let is_pointer_grabbed = state
+                            .seat
+                            .get_pointer()
+                            .map(|p| p.is_grabbed())
+                            .unwrap_or(false);
                         if is_pointer_grabbed {
                             if let Some(preview) = state.snap_preview {
                                 if output_geo.overlaps(preview) {
-                                    let local_preview = Rectangle::new(
-                                        preview.loc - output_geo.loc,
-                                        preview.size,
-                                    );
-                                    let preview_phys = local_preview.to_physical_precise_round(scale);
+                                    let local_preview =
+                                        Rectangle::new(preview.loc - output_geo.loc, preview.size);
+                                    let preview_phys =
+                                        local_preview.to_physical_precise_round(scale);
                                     let _ = frame.draw_solid(
                                         preview_phys,
                                         &[Rectangle::from_size(preview_phys.size)],
@@ -2133,7 +2529,8 @@ pub fn run_drm() -> Result<()> {
                         // 🧞 EFECTO LÁMPARA DE ALADINO (GENIE EFFECT / MAGIC LAMP)
                         for (anim, elems) in &anim_data {
                             let elapsed = now.duration_since(anim.start_time);
-                            let raw_t = (elapsed.as_secs_f32() / anim.duration.as_secs_f32()).clamp(0.0, 1.0);
+                            let raw_t = (elapsed.as_secs_f32() / anim.duration.as_secs_f32())
+                                .clamp(0.0, 1.0);
 
                             let t = if anim.is_minimizing {
                                 if raw_t < 0.65 {
@@ -2154,23 +2551,43 @@ pub fn run_drm() -> Result<()> {
                             let split = 0.30f32;
                             let (k, j) = if anim.is_minimizing {
                                 let k = if t <= split { t / split } else { 1.0 };
-                                let j = if t > split { (t - split) / (1.0 - split) } else { 0.0 };
+                                let j = if t > split {
+                                    (t - split) / (1.0 - split)
+                                } else {
+                                    0.0
+                                };
                                 (k, j)
                             } else {
-                                let j = 1.0 - if t <= (1.0 - split) { t / (1.0 - split) } else { 1.0 };
-                                let k = 1.0 - if t > (1.0 - split) { (t - (1.0 - split)) / split } else { 0.0 };
+                                let j = 1.0
+                                    - if t <= (1.0 - split) {
+                                        t / (1.0 - split)
+                                    } else {
+                                        1.0
+                                    };
+                                let k = 1.0
+                                    - if t > (1.0 - split) {
+                                        (t - (1.0 - split)) / split
+                                    } else {
+                                        0.0
+                                    };
                                 (k, j)
                             };
 
-                            let win_x = ((anim.window_rect.loc.x - output_geo.loc.x) as f64 * scale) as f32;
-                            let win_y = ((anim.window_rect.loc.y - output_geo.loc.y) as f64 * scale) as f32;
+                            let win_x =
+                                ((anim.window_rect.loc.x - output_geo.loc.x) as f64 * scale) as f32;
+                            let win_y =
+                                ((anim.window_rect.loc.y - output_geo.loc.y) as f64 * scale) as f32;
                             let win_w = ((anim.window_rect.size.w as f64 * scale) as f32).max(40.0);
                             let win_h = ((anim.window_rect.size.h as f64 * scale) as f32).max(40.0);
 
-                            let slot_x = ((anim.dock_slot_rect.loc.x - output_geo.loc.x) as f64 * scale) as f32;
-                            let slot_y = ((anim.dock_slot_rect.loc.y - output_geo.loc.y) as f64 * scale) as f32;
-                            let slot_w = ((anim.dock_slot_rect.size.w as f64 * scale) as f32).max(24.0);
-                            let slot_h = ((anim.dock_slot_rect.size.h as f64 * scale) as f32).max(24.0);
+                            let slot_x = ((anim.dock_slot_rect.loc.x - output_geo.loc.x) as f64
+                                * scale) as f32;
+                            let slot_y = ((anim.dock_slot_rect.loc.y - output_geo.loc.y) as f64
+                                * scale) as f32;
+                            let slot_w =
+                                ((anim.dock_slot_rect.size.w as f64 * scale) as f32).max(24.0);
+                            let slot_h =
+                                ((anim.dock_slot_rect.size.h as f64 * scale) as f32).max(24.0);
 
                             let target_w = slot_w.max(32.0);
                             let target_x = slot_x;
@@ -2190,13 +2607,19 @@ pub fn run_drm() -> Result<()> {
                                     + (win_w - target_w) * (1.0 - k) * v;
                                 let slice_w = slice_w.max(2.0);
 
-                                let norm_y = if full_height > 1.0 { (local_y / full_height).clamp(0.0, 1.0) } else { v };
+                                let norm_y = if full_height > 1.0 {
+                                    (local_y / full_height).clamp(0.0, 1.0)
+                                } else {
+                                    v
+                                };
                                 let norm_x = (norm_y * k + j).min(1.0);
                                 let offset_x = (target_x - win_x) * norm_x;
 
-                                let s_phase = (1.0 - norm_y) * 2.0 * std::f32::consts::PI + std::f32::consts::PI;
+                                let s_phase = (1.0 - norm_y) * 2.0 * std::f32::consts::PI
+                                    + std::f32::consts::PI;
                                 let delta_x = (win_x + win_w * 0.5) - (target_x + target_w * 0.5);
-                                let effect_x = s_phase.sin() * (delta_x / 7.0) * k * (1.0 - j * 0.7);
+                                let effect_x =
+                                    s_phase.sin() * (delta_x / 7.0) * k * (1.0 - j * 0.7);
 
                                 let left_x = win_x + offset_x + effect_x;
                                 (screen_y, left_x, slice_w)
@@ -2228,8 +2651,10 @@ pub fn run_drm() -> Result<()> {
                                     let strip_y = y_top.min(y_bottom);
                                     let strip_h = (y_bottom - y_top).abs().max(1) + 1;
 
-                                    let left_x = (sampled_slices[i].1 + sampled_slices[i + 1].1) * 0.5;
-                                    let width = (sampled_slices[i].2 + sampled_slices[i + 1].2) * 0.5;
+                                    let left_x =
+                                        (sampled_slices[i].1 + sampled_slices[i + 1].1) * 0.5;
+                                    let width =
+                                        (sampled_slices[i].2 + sampled_slices[i + 1].2) * 0.5;
 
                                     let strip_dst = Rectangle::new(
                                         (left_x.round() as i32, strip_y).into(),
@@ -2277,15 +2702,21 @@ pub fn run_drm() -> Result<()> {
                                     let view_dst = elem.view().dst;
                                     if view_dst.w > 0 && view_dst.h > 0 {
                                         let target_logical_w = cursor_size as f64;
-                                        let target_logical_h =
-                                            target_logical_w * (view_dst.h as f64 / view_dst.w as f64);
+                                        let target_logical_h = target_logical_w
+                                            * (view_dst.h as f64 / view_dst.w as f64);
                                         let ratio_x = target_logical_w / view_dst.w as f64;
                                         let ratio_y = target_logical_h / view_dst.h as f64;
 
-                                        let hot_phys_x = (cursor_hotspot.x as f64 * ratio_x * scale).round() as i32;
-                                        let hot_phys_y = (cursor_hotspot.y as f64 * ratio_y * scale).round() as i32;
-                                        let cursor_phys_w = (target_logical_w * scale).round() as i32;
-                                        let cursor_phys_h = (target_logical_h * scale).round() as i32;
+                                        let hot_phys_x = (cursor_hotspot.x as f64 * ratio_x * scale)
+                                            .round()
+                                            as i32;
+                                        let hot_phys_y = (cursor_hotspot.y as f64 * ratio_y * scale)
+                                            .round()
+                                            as i32;
+                                        let cursor_phys_w =
+                                            (target_logical_w * scale).round() as i32;
+                                        let cursor_phys_h =
+                                            (target_logical_h * scale).round() as i32;
 
                                         let cursor_rect = Rectangle::new(
                                             (phys_x - hot_phys_x, phys_y - hot_phys_y).into(),
@@ -2394,7 +2825,9 @@ pub fn run_drm() -> Result<()> {
         for anim in finished_anims {
             if !anim.is_minimizing {
                 info!("✨ Restauración Genie completada en DRM: mapeando ventana a Space");
-                state.space.map_element(anim.window.clone(), anim.original_location, true);
+                state
+                    .space
+                    .map_element(anim.window.clone(), anim.original_location, true);
                 state.space.raise_element(&anim.window, true);
                 if let Some(toplevel) = anim.window.toplevel() {
                     toplevel.send_configure();
@@ -2412,7 +2845,9 @@ pub fn run_drm() -> Result<()> {
         let now_ms = start_time.elapsed().as_millis() as u32;
         for surface in state.xdg_shell_state.toplevel_surfaces() {
             send_frames_surface_tree(surface.wl_surface(), now_ms);
-            for (popup, _) in smithay::desktop::PopupManager::popups_for_surface(surface.wl_surface()) {
+            for (popup, _) in
+                smithay::desktop::PopupManager::popups_for_surface(surface.wl_surface())
+            {
                 send_frames_surface_tree(popup.wl_surface(), now_ms);
             }
         }
@@ -2421,7 +2856,9 @@ pub fn run_drm() -> Result<()> {
             let layer_map = smithay::desktop::layer_map_for_output(output);
             for layer in layer_map.layers() {
                 send_frames_surface_tree(layer.wl_surface(), now_ms);
-                for (popup, _) in smithay::desktop::PopupManager::popups_for_surface(layer.wl_surface()) {
+                for (popup, _) in
+                    smithay::desktop::PopupManager::popups_for_surface(layer.wl_surface())
+                {
                     send_frames_surface_tree(popup.wl_surface(), now_ms);
                 }
             }
