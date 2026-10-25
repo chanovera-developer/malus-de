@@ -81,7 +81,7 @@ Para compilar en modo optimizado:
 cargo build --workspace --release
 ```
 
-En **Ajustes → Pantallas**, cada pantalla detectada muestra sus modos DRM compatibles. Puedes seleccionar, por ejemplo, `1920 × 1080` para una pantalla 4K y aplicar el cambio sin cerrar sesión; la escala y la disposición se configuran por separado.
+En **Ajustes → Pantallas**, cada pantalla detectada muestra sus modos DRM compatibles. Puedes seleccionar, por ejemplo, `1920 × 1080` para una pantalla 4K y aplicar el cambio sin cerrar sesión; la escala y la disposición se configuran por separado. Si KMS rechaza el modo guardado durante el arranque, el compositor prueba otros modos anunciados por la pantalla y registra cuál pudo activar.
 
 ## Instalación de la sesión
 
