@@ -139,6 +139,7 @@ pub fn run_winit() -> Result<()> {
         .to_string();
     info!("Socket Wayland escuchando activamente en: WAYLAND_DISPLAY={}", socket_name);
     state.socket_name = socket_name.clone();
+    let _clipboard_manager = crate::start_clipboard_manager(&socket_name);
 
     // Inicializar backend gráfico de Winit en ventana anidada
     let (mut backend, mut winit_event_loop) = winit::init::<GlesRenderer>()
@@ -228,6 +229,7 @@ pub fn run_winit() -> Result<()> {
 
                             let is_space = sym == keysyms::KEY_space.into();
                             let is_k = sym == keysyms::KEY_k.into() || sym == keysyms::KEY_K.into();
+                            let is_v = sym == keysyms::KEY_v.into() || sym == keysyms::KEY_V.into();
                             let is_tab = sym == keysyms::KEY_Tab.into() || sym == keysyms::KEY_ISO_Left_Tab.into() || key == 23;
                             let is_return = sym == keysyms::KEY_Return.into() || sym == keysyms::KEY_KP_Enter.into();
                             let is_w = sym == keysyms::KEY_w.into() || sym == keysyms::KEY_W.into();
@@ -241,6 +243,13 @@ pub fn run_winit() -> Result<()> {
                             let is_right = sym == keysyms::KEY_Right.into() || key == 106 || key == 114;
 
                             if is_pressed {
+                                if is_v && has_super {
+                                    state
+                                        .ipc_broadcaster
+                                        .broadcast(&IpcMessage::ToggleClipboardHistory);
+                                    return FilterResult::Intercept(());
+                                }
+
                                 // 1. Atajos para alternar Spotlight:
                                 // Super + Espacio (macOS nativo), Alt + Espacio, Ctrl + Espacio, Super + K
                                 if (is_space && (has_super || has_alt || has_ctrl)) || (is_k && has_super) {

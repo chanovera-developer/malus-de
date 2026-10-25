@@ -196,4 +196,4 @@ graph TD
 | **M6** | Integración AirDrop | 🟡 En Progreso | Servicio D-Bus `malus-de-link`, modal de visibilidad y simulación nativa. Backend AWDL/BLE en curso. |
 | **M7** | Sesión GDM Nativa | ✅ Hecho | Entrada `malus.desktop`, wrapper `malus-session`, instalador `install-session.sh`, binarios Release y backend DRM/KMS. |
 | **M8** | Multi-Monitor 4K & Teclado Latam | ✅ Hecho | Disposición dual 4K en vivo, escalado independiente y enlazado 1:1 por PPI (`TrueSize`), y soporte nativo de teclado XKB Español Latinoamericano (`latam`). |
-| **M9** | Gestor de Portapapeles | ⬜ Pendiente | Servicio Wayland persistente, historial local de hasta 50 elementos y vista de búsqueda/fijados invocable con `Super + V`. |
+| **M9** | Gestor de Portapapeles | 🟡 En Progreso | Servicio Wayland con historial de sesión, hasta 50 elementos y vista de búsqueda/fijados invocable con `Super + V`; sincronización avanzada de formatos aún pendiente. |

@@ -12,6 +12,7 @@
 - Selector visual de ventanas Alt-Tab/Super-Tab funcional para recorrer y cambiar entre ventanas abiertas; su presentación y comportamiento siguen en desarrollo.
 - Integración con servicios de Linux para audio, red, Bluetooth y controles multimedia.
 - Captura real de pantalla completa solicitada al compositor mediante IPC, guardada en la carpeta de Imágenes y copiada como PNG al portapapeles.
+- Historial local en memoria de hasta 50 elementos de texto, imágenes PNG y listas de archivos, accesible con `Super + V`.
 - Efectos gráficos con shaders, esquinas squircle y animaciones de ventanas.
 - Detección de pantallas y modos compatibles por DRM/KMS, con resolución, disposición y escala fraccionaria configurables en caliente.
 - Experimentos de integración con dispositivos Apple mediante AirDrop; el backend AWDL/BLE está en desarrollo.
@@ -30,7 +31,7 @@ El proyecto es un workspace de Rust. Sus componentes principales viven en `crate
 | Fondo de pantalla | `malus-de-wallpaper` |
 | Ajustes | `malus-de-settings` |
 | Servicios comunes | `malus-de-common` |
-| Bloqueo de sesión, captura, enlace y CLI | `malus-de-session-lock`, `malus-de-screenshot`, `malus-de-link`, `malus-de-ctl` |
+| Bloqueo de sesión, captura, portapapeles, enlace y CLI | `malus-de-session-lock`, `malus-de-screenshot`, `malus-de-clipboard`, `malus-de-link`, `malus-de-ctl` |
 
 ## Requisitos
 
@@ -84,7 +85,7 @@ cargo build --workspace --release
 
 ## Capturas de pantalla
 
-La captura completa solicita el fotograma al compositor de Malus mediante IPC, sin depender del portal de GNOME Shell. El PNG se guarda en la carpeta de Imágenes configurada por XDG (por ejemplo, `~/Imágenes/Capturas de pantalla` en español) y después muestra una miniatura con opción para copiar la imagen al portapapeles. En configuraciones con varias pantallas, esta primera versión captura una salida por solicitud.
+La captura completa solicita el fotograma al compositor de Malus mediante IPC, sin depender del portal de GNOME Shell. El PNG se guarda en la carpeta de Imágenes configurada por XDG (por ejemplo, `~/Imágenes/Capturas de pantalla` en español), se copia automáticamente al portapapeles como imagen PNG y después muestra una miniatura. En configuraciones con varias pantallas, esta primera versión captura una salida por solicitud.
 Después de actualizar el compositor, recompila Malus y reinicia la sesión para que el servicio IPC de captura esté disponible.
 
 ```bash
@@ -92,7 +93,9 @@ cargo run -p malus-de-screenshot -- --mode full
 cargo run -p malus-de-screenshot -- --mode full --clipboard-only
 ```
 
-La copia requiere `wl-copy` (`wl-clipboard`). La selección de área, captura de ventana, grabación y OCR todavía no están implementados.
+La copia al portapapeles requiere `wl-copy` (`wl-clipboard`). También puedes usar `--clipboard-only` para copiar sin guardar el archivo ni abrir la miniatura. La selección de área, captura de ventana, grabación y OCR todavía no están implementados.
+
+El gestor de portapapeles conserva durante la sesión los últimos 50 elementos copiados (texto, enlaces, imágenes PNG y URI de archivos). Pulsa `Super + V` para buscar, fijar o volver a copiar un elemento. El historial solo se mantiene en memoria y se elimina al cerrar la sesión; se omite el contenido marcado como sensible y se requiere `wl-clipboard`.
 
 En **Ajustes → Pantallas**, cada pantalla detectada muestra sus modos DRM compatibles. Puedes seleccionar, por ejemplo, `1920 × 1080` para una pantalla 4K y aplicar el cambio sin cerrar sesión; la escala y la disposición se configuran por separado. Si KMS rechaza el modo guardado durante el arranque, el compositor prueba otros modos anunciados por la pantalla y registra cuál pudo activar.
 

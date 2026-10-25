@@ -7,7 +7,42 @@ pub mod state;
 pub mod window_corners;
 
 use malus_de_common::logging::init_logging;
+use std::process::{Child, Command};
 use tracing::info;
+
+pub struct ClipboardManagerProcess(Child);
+
+impl Drop for ClipboardManagerProcess {
+    fn drop(&mut self) {
+        if let Err(error) = self.0.kill() {
+            tracing::debug!("No se pudo detener el gestor de portapapeles: {error}");
+        }
+        if let Err(error) = self.0.wait() {
+            tracing::warn!("No se pudo esperar al gestor de portapapeles: {error}");
+        }
+    }
+}
+
+pub fn start_clipboard_manager(socket_name: &str) -> Option<ClipboardManagerProcess> {
+    let local_binary = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(|parent| parent.join("malus-de-clipboard")))
+        .filter(|path| path.is_file());
+    let mut command = local_binary
+        .map(Command::new)
+        .unwrap_or_else(|| Command::new("malus-de-clipboard"));
+    command.env("WAYLAND_DISPLAY", socket_name);
+    match command.spawn() {
+        Ok(child) => {
+            info!("Gestor de portapapeles iniciado (PID {})", child.id());
+            Some(ClipboardManagerProcess(child))
+        }
+        Err(error) => {
+            tracing::warn!("No se pudo iniciar malus-de-clipboard: {error}");
+            None
+        }
+    }
+}
 
 fn main() -> anyhow::Result<()> {
     init_logging("malus_de_compositor");
