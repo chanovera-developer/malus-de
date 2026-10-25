@@ -102,7 +102,18 @@ fn main() -> Result<()> {
             remove_temporary_capture(&source);
             let path = save_result?;
             info!("Captura guardada en {}", path.display());
-            show_thumbnail_app(args.mode, path);
+            let clipboard_status = match copy_image_to_clipboard(&path) {
+                Ok(()) => {
+                    info!("Captura copiada al portapapeles.");
+                    "Captura copiada al portapapeles.".to_string()
+                }
+                Err(error) => {
+                    let message = format!("No se pudo copiar al portapapeles: {error:#}");
+                    tracing::warn!("{message}");
+                    message
+                }
+            };
+            show_thumbnail_app(args.mode, path, clipboard_status);
         }
         CaptureMode::Area | CaptureMode::Window => {
             anyhow::bail!("Los modos de área y ventana aún no están implementados");
@@ -265,7 +276,7 @@ fn copy_image_to_clipboard(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-fn show_thumbnail_app(mode: CaptureMode, capture_path: PathBuf) {
+fn show_thumbnail_app(mode: CaptureMode, capture_path: PathBuf, clipboard_status: String) {
     if let Err(err) = adw::init() {
         tracing::warn!("Aviso al inicializar libadwaita: {:?}", err);
     }
@@ -334,6 +345,13 @@ fn show_thumbnail_app(mode: CaptureMode, capture_path: PathBuf) {
             .build();
         card.append(&sub_label);
 
+        let status_label = Label::builder()
+            .label(&clipboard_status)
+            .wrap(true)
+            .css_classes(["thumbnail-subtitle"])
+            .build();
+        card.append(&status_label);
+
         let btn_box = GtkBox::builder()
             .orientation(Orientation::Horizontal)
             .spacing(6)
@@ -344,6 +362,7 @@ fn show_thumbnail_app(mode: CaptureMode, capture_path: PathBuf) {
             .css_classes(["action-btn", "suggested-action"])
             .build();
         let win_clone = window.clone();
+        let status_label_for_copy = status_label.clone();
         let capture_path_for_copy = capture_path.clone();
         copy_btn.connect_clicked(
             move |_| match copy_image_to_clipboard(&capture_path_for_copy) {
@@ -351,7 +370,11 @@ fn show_thumbnail_app(mode: CaptureMode, capture_path: PathBuf) {
                     info!("Captura copiada al portapapeles.");
                     win_clone.close();
                 }
-                Err(error) => tracing::error!("No se pudo copiar la captura: {error:#}"),
+                Err(error) => {
+                    let message = format!("No se pudo copiar al portapapeles: {error:#}");
+                    status_label_for_copy.set_label(&message);
+                    tracing::error!("{message}");
+                }
             },
         );
         btn_box.append(&copy_btn);

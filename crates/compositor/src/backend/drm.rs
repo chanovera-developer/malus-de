@@ -1026,6 +1026,7 @@ pub fn run_drm() -> Result<()> {
         socket_name
     );
     state.socket_name = socket_name.clone();
+    let _clipboard_manager = crate::start_clipboard_manager(&socket_name);
 
     let shared_surfaces = Arc::new(Mutex::new(surfaces));
     let surfaces_for_drm = shared_surfaces.clone();
@@ -1124,6 +1125,14 @@ pub fn run_drm() -> Result<()> {
                                 let has_super = modifiers.logo;
                                 let has_alt = modifiers.alt;
                                 let has_ctrl = modifiers.ctrl;
+                                let is_v = sym == keysyms::KEY_v.into() || sym == keysyms::KEY_V.into();
+
+                                if is_v && has_super {
+                                    state
+                                        .ipc_broadcaster
+                                        .broadcast(&IpcMessage::ToggleClipboardHistory);
+                                    return FilterResult::Intercept(());
+                                }
 
                                 // 🚨 RED DE SEGURIDAD CRÍTICA: CAMBIO DE TTY CON CTRL + ALT + F1..F12
                                 if has_ctrl && has_alt {

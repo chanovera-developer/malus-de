@@ -10,6 +10,7 @@ members = [
     "crates/notifications",
     "crates/session-lock",
     "crates/screenshot",
+    "crates/clipboard",
     "crates/link",
     "crates/wallpaper",
     "crates/ctl",

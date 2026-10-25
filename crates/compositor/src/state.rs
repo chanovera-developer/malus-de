@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::os::unix::io::OwnedFd;
 use malus_de_common::config::DockConfig;
 use smithay::{
-    delegate_compositor, delegate_data_device, delegate_fractional_scale, delegate_layer_shell,
-    delegate_output, delegate_primary_selection, delegate_seat, delegate_shm, delegate_viewporter,
-    delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_compositor, delegate_data_control, delegate_data_device, delegate_fractional_scale,
+    delegate_layer_shell, delegate_output, delegate_primary_selection, delegate_seat, delegate_shm,
+    delegate_viewporter, delegate_xdg_decoration, delegate_xdg_shell,
     desktop::{
         find_popup_root_surface, layer_map_for_output, PopupKind, PopupManager, Space,
     },
@@ -34,6 +34,7 @@ use smithay::{
             primary_selection::{
                 set_primary_focus, PrimarySelectionHandler, PrimarySelectionState,
             },
+            wlr_data_control::{DataControlHandler, DataControlState},
             SelectionHandler,
         },
         shell::{
@@ -95,6 +96,7 @@ pub struct MalusState {
     pub seat_state: SeatState<MalusState>,
     pub data_device_state: DataDeviceState,
     pub primary_selection_state: PrimarySelectionState,
+    pub data_control_state: DataControlState,
     pub output_manager_state: OutputManagerState,
     pub seat: Seat<MalusState>,
     pub space: Space<smithay::desktop::Window>,
@@ -284,6 +286,7 @@ impl MalusState {
         let seat = seat_state.new_wl_seat(&dh, "malus-seat-0");
         let data_device_state = DataDeviceState::new::<Self>(&dh);
         let primary_selection_state = PrimarySelectionState::new::<Self>(&dh);
+        let data_control_state = DataControlState::new::<Self, _>(&dh, None, |_| true);
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
 
         let ipc_broadcaster = IpcBroadcaster::new();
@@ -304,6 +307,7 @@ impl MalusState {
             seat_state,
             data_device_state,
             primary_selection_state,
+            data_control_state,
             output_manager_state,
             seat,
             space: Space::default(),
@@ -1027,6 +1031,7 @@ delegate_layer_shell!(MalusState);
 delegate_output!(MalusState);
 delegate_data_device!(MalusState);
 delegate_primary_selection!(MalusState);
+delegate_data_control!(MalusState);
 delegate_fractional_scale!(MalusState);
 delegate_viewporter!(MalusState);
 delegate_xdg_decoration!(MalusState);
@@ -1357,6 +1362,12 @@ impl DataDeviceHandler for MalusState {
 impl PrimarySelectionHandler for MalusState {
     fn primary_selection_state(&self) -> &PrimarySelectionState {
         &self.primary_selection_state
+    }
+}
+
+impl DataControlHandler for MalusState {
+    fn data_control_state(&self) -> &DataControlState {
+        &self.data_control_state
     }
 }
 

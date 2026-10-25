@@ -42,6 +42,7 @@ BINARIES=(
     "malus-de-wallpaper"
     "malus-de-notifications"
     "malus-de-screenshot"
+    "malus-de-clipboard"
     "malus-de-session-lock"
     "malus-de-link"
     "malus-de-ctl"

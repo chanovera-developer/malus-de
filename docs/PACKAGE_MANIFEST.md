@@ -2,7 +2,7 @@
 
 Este documento detalla la lista exacta de paquetes requeridos para construir una distribución independiente de Malus DE partiendo de una instalación mínima sin entorno gráfico (como *Fedora Everything/Minimal*, *Debian Minimal*, *Ubuntu Server/Core* o *Arch Linux*).
 
-La sesión fuerza a GTK a usar xdg-desktop-portal y prefiere el selector de archivos del backend GNOME, con GTK como alternativa. Instala `xdg-desktop-portal`, `xdg-desktop-portal-gtk` y `xdg-desktop-portal-gnome`. El copiado de capturas al portapapeles requiere también `wl-clipboard` (`wl-copy`).
+La sesión fuerza a GTK a usar xdg-desktop-portal y prefiere el selector de archivos del backend GNOME, con GTK como alternativa. Instala `xdg-desktop-portal`, `xdg-desktop-portal-gtk` y `xdg-desktop-portal-gnome`. El portapapeles y el copiado de capturas requieren también `wl-clipboard` (`wl-copy` y `wl-paste`).
 
 ---
 
