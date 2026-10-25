@@ -1609,6 +1609,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "malus-de-dialogs"
+version = "0.1.0"
+dependencies = [
+ "glib",
+ "gtk4",
+]
+
+[[package]]
 name = "malus-de-dock"
 version = "0.1.0"
 dependencies = [
@@ -1706,12 +1714,12 @@ name = "malus-de-spotlight"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "gio",
  "glib",
  "gtk4",
  "gtk4-layer-shell",
  "libadwaita",
  "malus-de-common",
+ "malus-de-dialogs",
  "tracing",
  "zbus",
 ]
@@ -1728,6 +1736,7 @@ dependencies = [
  "gtk4-layer-shell",
  "libadwaita",
  "malus-de-common",
+ "malus-de-dialogs",
  "serde",
  "serde_json",
  "tracing",

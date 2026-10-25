@@ -1,6 +1,7 @@
 use gtk4::prelude::*;
 use gtk4::{
-    Box as GtkBox, Button, Image, Label, MenuButton, Orientation, Popover, Separator,
+    ApplicationWindow, Box as GtkBox, Button, Image, Label, MenuButton, Orientation, Popover,
+    Separator,
 };
 use libadwaita as adw;
 use libadwaita::prelude::*;
@@ -181,12 +182,17 @@ pub fn create_apple_menu() -> MenuButton {
 
     let item_reboot = create_menu_item("Reiniciar...", None, false);
     let popover_clone = popover.clone();
+    let menu_btn_clone = menu_btn.clone();
     item_reboot.connect_clicked(move |_| {
         popover_clone.popdown();
+        let parent = menu_btn_clone
+            .root()
+            .and_then(|root| root.downcast::<ApplicationWindow>().ok());
         show_confirm_dialog(
             "¿Reiniciar el equipo?",
             "El sistema cerrará todas las aplicaciones y reiniciará el equipo. Cualquier cambio no guardado se perderá.",
             "Reiniciar",
+            parent.as_ref(),
             || {
                 info!("Reiniciando el sistema...");
                 let _ = std::process::Command::new("systemctl").arg("reboot").spawn();
@@ -197,12 +203,17 @@ pub fn create_apple_menu() -> MenuButton {
 
     let item_shutdown = create_menu_item("Apagar el Equipo...", None, false);
     let popover_clone = popover.clone();
+    let menu_btn_clone = menu_btn.clone();
     item_shutdown.connect_clicked(move |_| {
         popover_clone.popdown();
+        let parent = menu_btn_clone
+            .root()
+            .and_then(|root| root.downcast::<ApplicationWindow>().ok());
         show_confirm_dialog(
             "¿Apagar el equipo?",
             "El sistema cerrará todas las aplicaciones y apagará el equipo de forma segura.",
             "Apagar",
+            parent.as_ref(),
             || {
                 info!("Apagando el sistema...");
                 let _ = std::process::Command::new("systemctl").arg("poweroff").spawn();
@@ -217,12 +228,17 @@ pub fn create_apple_menu() -> MenuButton {
     let logout_label = format!("Cerrar Sesión de {}...", user_name);
     let item_logout = create_menu_item(&logout_label, Some("⇧⌘Q"), false);
     let popover_clone = popover.clone();
+    let menu_btn_clone = menu_btn.clone();
     item_logout.connect_clicked(move |_| {
         popover_clone.popdown();
+        let parent = menu_btn_clone
+            .root()
+            .and_then(|root| root.downcast::<ApplicationWindow>().ok());
         show_confirm_dialog(
             "¿Cerrar la sesión actual?",
             "Se cerrarán todas las aplicaciones abiertas en Malus DE y volverás a la pantalla de inicio de sesión.",
             "Cerrar Sesión",
+            parent.as_ref(),
             || {
                 info!("Cerrando sesión de Malus DE...");
                 let _ = std::process::Command::new("pkill")
@@ -299,11 +315,36 @@ fn show_about_dialog() {
     about_window.present(None as Option<&gtk4::Window>);
 }
 
-fn show_confirm_dialog(title: &str, body: &str, confirm_label: &str, on_confirm: impl FnOnce() + 'static) {
+fn show_confirm_dialog(
+    title: &str,
+    body: &str,
+    confirm_label: &str,
+    parent: Option<&ApplicationWindow>,
+    on_confirm: impl FnOnce() + 'static,
+) {
+    let app = parent.and_then(|parent| parent.application());
+    if let Some(app) = app {
+        let parent = parent.map(|parent| parent.upcast_ref());
+        malus_de_dialogs::show_confirmation(
+            &app,
+            parent,
+            title,
+            body,
+            confirm_label,
+            on_confirm,
+            || {},
+        );
+        return;
+    }
+
     let dialog = adw::MessageDialog::builder()
+        .title("Confirmación de acción del sistema")
         .heading(title)
         .body(body)
         .build();
+    if let Some(parent) = parent {
+        dialog.set_transient_for(Some(parent));
+    }
     dialog.add_response("cancel", "Cancelar");
     dialog.add_response("confirm", confirm_label);
     dialog.set_response_appearance("confirm", adw::ResponseAppearance::Destructive);
@@ -313,8 +354,8 @@ fn show_confirm_dialog(title: &str, body: &str, confirm_label: &str, on_confirm:
     let on_confirm = std::cell::RefCell::new(Some(on_confirm));
     dialog.connect_response(None, move |d, resp| {
         if resp == "confirm" {
-            if let Some(cb) = on_confirm.borrow_mut().take() {
-                cb();
+            if let Some(callback) = on_confirm.borrow_mut().take() {
+                callback();
             }
         }
         d.close();

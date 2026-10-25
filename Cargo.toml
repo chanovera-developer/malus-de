@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/common",
+    "crates/dialogs",
     "crates/compositor",
     "crates/top-bar",
     "crates/dock",
@@ -24,6 +25,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 # Dependencias internas del Workspace
 malus-de-common = { path = "crates/common" }
+malus-de-dialogs = { path = "crates/dialogs" }
 
 # GUI & Shell
 gtk4 = { version = "0.9", features = ["v4_12"] }

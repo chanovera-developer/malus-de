@@ -101,6 +101,7 @@ pub struct MalusState {
     pub popups: PopupManager,
     pub active_popups: Vec<PopupSurface>,
     pub window_restore_geometries: HashMap<WlSurface, (Point<i32, Logical>, Size<i32, Logical>)>,
+    pub centered_transient_windows: HashMap<WlSurface, (Point<i32, Logical>, Size<i32, Logical>)>,
     pub minimized_windows: HashMap<WlSurface, (smithay::desktop::Window, Point<i32, Logical>)>,
     pub window_ids: HashMap<WlSurface, u64>,
     pub next_window_id: u64,
@@ -221,8 +222,7 @@ pub fn is_firefox_window(window: &smithay::desktop::Window) -> bool {
     false
 }
 
-/// Identifica si una ventana requiere desenfoque de fondo en GPU
-/// (restringido a Nautilus y Ajustes del Sistema para ahorrar el 100% de fillrate en apps opacas).
+/// Identifica si una ventana requiere desenfoque de fondo en GPU.
 pub fn is_translucent_window(window: &smithay::desktop::Window) -> bool {
     let check = |app_id: &Option<String>, title: &Option<String>| -> bool {
         if let Some(ref id) = app_id {
@@ -237,7 +237,9 @@ pub fn is_translucent_window(window: &smithay::desktop::Window) -> bool {
         }
         if let Some(ref title) = title {
             let lower = title.to_lowercase();
-            if lower.contains("ajustes del sistema") {
+            if lower.contains("ajustes del sistema")
+                || lower.contains("confirmación de acción del sistema")
+            {
                 return true;
             }
         }
@@ -307,6 +309,7 @@ impl MalusState {
             popups: PopupManager::default(),
             active_popups: Vec::new(),
             window_restore_geometries: HashMap::new(),
+            centered_transient_windows: HashMap::new(),
             minimized_windows: HashMap::new(),
             window_ids: HashMap::new(),
             next_window_id: 0,
@@ -1156,6 +1159,74 @@ impl CompositorHandler for MalusState {
         }
 
         if let Some(window) = self.window_for_surface(surface) {
+            if let Some(toplevel) = window.toplevel() {
+                let is_system_action_confirmation = toplevel.parent().is_some()
+                    || toplevel_info(surface).1.as_deref()
+                        == Some("Confirmación de acción del sistema");
+                let geometry = window.geometry();
+                if is_system_action_confirmation
+                    && self.centered_transient_windows.get(surface)
+                        != Some(&(geometry.loc, geometry.size))
+                {
+                    if geometry.size.w > 1 && geometry.size.h > 1 {
+                        let parent_output = toplevel
+                            .parent()
+                            .and_then(|parent| {
+                                let parent_surface = parent.wl_surface();
+                                parent_surface
+                                    .as_deref()
+                                    .and_then(|surface| self.window_for_surface(surface))
+                            })
+                            .and_then(|parent| {
+                                let location = self.space.element_location(&parent)?;
+                                let parent_geometry = parent.geometry();
+                                let center = Point::<i32, Logical>::from((
+                                    location.x + parent_geometry.loc.x + parent_geometry.size.w / 2,
+                                    location.y + parent_geometry.loc.y + parent_geometry.size.h / 2,
+                                ));
+                                self.space.outputs().find(|output| {
+                                    self.space
+                                        .output_geometry(output)
+                                        .map(|output_geometry| output_geometry.contains(center))
+                                        .unwrap_or(false)
+                                })
+                            });
+                        let window_location =
+                            self.space.element_location(&window).unwrap_or_default();
+                        let current_center = Point::<i32, Logical>::from((
+                            window_location.x + geometry.loc.x + geometry.size.w / 2,
+                            window_location.y + geometry.loc.y + geometry.size.h / 2,
+                        ));
+                        let output = parent_output.or_else(|| {
+                            self.space.outputs().find(|output| {
+                                self.space
+                                    .output_geometry(output)
+                                    .map(|output_geometry| output_geometry.contains(current_center))
+                                    .unwrap_or(false)
+                            })
+                        });
+
+                        if let Some(output) = output {
+                            if let Some(output_geometry) = self.space.output_geometry(output) {
+                                let centered_location = Point::<i32, Logical>::from((
+                                    output_geometry.loc.x
+                                        + (output_geometry.size.w - geometry.size.w) / 2
+                                        - geometry.loc.x,
+                                    output_geometry.loc.y
+                                        + (output_geometry.size.h - geometry.size.h) / 2
+                                        - geometry.loc.y,
+                                ));
+                                self.space
+                                    .map_element(window.clone(), centered_location, true);
+                                self.space.raise_element(&window, true);
+                                self.centered_transient_windows
+                                    .insert(surface.clone(), (geometry.loc, geometry.size));
+                            }
+                        }
+                    }
+                }
+            }
+
             let is_currently_snapped = window.toplevel().map(|t| {
                 let states = &t.current_state().states;
                 states.contains(XdgState::Maximized)
@@ -1647,6 +1718,7 @@ impl XdgShellHandler for MalusState {
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         tracing::info!("🗑️ [XdgShell] Ventana toplevel destruida");
         let surf = surface.wl_surface();
+        self.centered_transient_windows.remove(surf);
 
         let window = self
             .space

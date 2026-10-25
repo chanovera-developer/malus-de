@@ -869,6 +869,7 @@ button.popover-menu-item:hover label.menu-row-label.menu-light-text,
 button.popover-menu-item:hover label.menu-row-label.menu-dark-text {
     color: #ffffff;
 }
+
 "#;
 
 fn main() {
