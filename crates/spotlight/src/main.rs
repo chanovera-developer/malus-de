@@ -1,12 +1,11 @@
 use gtk4::gdk::Key;
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, CssProvider, Entry, EventControllerKey,
-    Image, Label, ListBox, ListBoxRow, Orientation, ScrolledWindow,
+    Application, ApplicationWindow, Box as GtkBox, CssProvider, Entry, EventControllerKey, Image,
+    Label, ListBox, ListBoxRow, Orientation, ScrolledWindow,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita as adw;
-use libadwaita::prelude::MessageDialogExt;
 use malus_de_common::logging::init_logging;
 use std::cell::RefCell;
 use std::process::Command;
@@ -35,8 +34,8 @@ window.malus-spotlight-window {
 }
 
 .spotlight-card {
-    background-color: rgba(24, 24, 27, 0.88);
-    border: 1px solid rgba(255, 255, 255, 0.16);
+    background-color: alpha(@window_bg_color, 0.82);
+    border: 1px solid alpha(@window_fg_color, 0.16);
     border-radius: 18px;
     box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65);
     padding: 10px;
@@ -44,8 +43,8 @@ window.malus-spotlight-window {
 }
 
 .spotlight-search-box {
-    background-color: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    background-color: alpha(@window_fg_color, 0.06);
+    border: 1px solid alpha(@window_fg_color, 0.12);
     border-radius: 12px;
     padding: 8px 12px;
     margin-bottom: 8px;
@@ -56,20 +55,20 @@ entry.spotlight-entry,
 entry.spotlight-entry text {
     background: transparent;
     border: none;
-    color: #ffffff;
-    caret-color: #3b82f6;
+    color: @window_fg_color;
+    caret-color: @accent_bg_color;
     font-size: 18px;
     font-weight: 500;
     box-shadow: none;
 }
 
 entry.spotlight-entry text selection {
-    background-color: #2563eb;
-    color: #ffffff;
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
 }
 
 entry.spotlight-entry placeholder {
-    color: rgba(255, 255, 255, 0.45);
+    color: alpha(@window_fg_color, 0.45);
 }
 
 .spotlight-entry:focus,
@@ -79,7 +78,7 @@ entry.spotlight-entry:focus {
 
 .spotlight-search-icon {
     margin-right: 10px;
-    color: rgba(255, 255, 255, 0.6);
+    color: alpha(@window_fg_color, 0.6);
 }
 
 .spotlight-results-list {
@@ -96,34 +95,35 @@ entry.spotlight-entry:focus {
 }
 
 .spotlight-row:selected, .spotlight-row:hover {
-    background-color: #2563eb;
-    color: #ffffff;
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
 }
 
 .result-title {
     font-size: 15px;
     font-weight: 600;
-    color: #f4f4f5;
+    color: @window_fg_color;
 }
 
 .result-subtitle {
     font-size: 12px;
-    color: #a1a1aa;
+    color: alpha(@window_fg_color, 0.68);
 }
 
 .spotlight-row:selected .result-subtitle {
-    color: rgba(255, 255, 255, 0.85);
+    color: alpha(@accent_fg_color, 0.85);
 }
 
 .calc-result-title {
     font-size: 20px;
     font-weight: 700;
-    color: #60a5fa;
+    color: @accent_bg_color;
 }
 
 .spotlight-row:selected .calc-result-title {
-    color: #ffffff;
+    color: @accent_fg_color;
 }
+
 "#;
 
 fn main() {
@@ -477,52 +477,54 @@ fn show_system_action_confirmation(window: &ApplicationWindow, action: SystemAct
         ),
     };
 
-    let dialog = adw::MessageDialog::builder()
-        .transient_for(window)
-        .heading(heading)
-        .body(body)
-        .build();
-    dialog.add_response("cancel", "Cancelar");
-    dialog.add_response("confirm", confirm_label);
-    dialog.set_response_appearance("confirm", adw::ResponseAppearance::Destructive);
-    dialog.set_default_response(Some("cancel"));
-    dialog.set_close_response("cancel");
+    let Some(app) = window.application() else {
+        tracing::error!("No se pudo mostrar la confirmación: Spotlight no tiene una aplicación asociada.");
+        return;
+    };
 
-    let app = window.application();
-    dialog.connect_response(None, move |dialog, response| {
-        if response == "confirm" {
-            let mut command = match action {
-                SystemAction::Logout => {
-                    let sibling_ctl = std::env::current_exe()
-                        .ok()
-                        .and_then(|path| path.parent().map(|dir| dir.join("malus-de-ctl")))
-                        .filter(|path| path.is_file());
-                    let mut command = sibling_ctl
-                        .map(Command::new)
-                        .unwrap_or_else(|| Command::new("malus-de-ctl"));
-                    command.arg("logout");
-                    command
-                }
-                SystemAction::Reboot => {
-                    let mut command = Command::new("systemctl");
-                    command.arg("reboot");
-                    command
-                }
-                SystemAction::PowerOff => {
-                    let mut command = Command::new("systemctl");
-                    command.arg("poweroff");
-                    command
-                }
-            };
+    let app_on_confirm = app.clone();
+    let app_on_cancel = app.clone();
+    let parent = window.upcast_ref();
+    malus_de_dialogs::show_confirmation(
+        &app,
+        Some(parent),
+        heading,
+        body,
+        confirm_label,
+        move || {
+            execute_system_action(action);
+            app_on_confirm.quit();
+        },
+        move || app_on_cancel.quit(),
+    );
+}
 
-            if let Err(error) = command.spawn() {
-                tracing::error!("No se pudo ejecutar la acción del sistema: {error}");
-            }
+fn execute_system_action(action: SystemAction) {
+    let mut command = match action {
+        SystemAction::Logout => {
+            let sibling_ctl = std::env::current_exe()
+                .ok()
+                .and_then(|path| path.parent().map(|dir| dir.join("malus-de-ctl")))
+                .filter(|path| path.is_file());
+            let mut command = sibling_ctl
+                .map(Command::new)
+                .unwrap_or_else(|| Command::new("malus-de-ctl"));
+            command.arg("logout");
+            command
         }
-        dialog.close();
-        if let Some(app) = &app {
-            app.quit();
+        SystemAction::Reboot => {
+            let mut command = Command::new("systemctl");
+            command.arg("reboot");
+            command
         }
-    });
-    dialog.present();
+        SystemAction::PowerOff => {
+            let mut command = Command::new("systemctl");
+            command.arg("poweroff");
+            command
+        }
+    };
+
+    if let Err(error) = command.spawn() {
+        tracing::error!("No se pudo ejecutar la acción del sistema: {error}");
+    }
 }
