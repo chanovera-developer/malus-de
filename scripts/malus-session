@@ -211,17 +211,8 @@ for GTK_SETTINGS in "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" "$XDG_CONFIG_HOME/gt
     fi
 done
 
-# Evitar que Nautilus reutilice la instancia de GNOME y su configuración anterior.
-if [ -z "${MALUS_NESTED_DBUS:-}" ]; then
-    if command -v dbus-run-session >/dev/null 2>&1; then
-        export MALUS_NESTED_DBUS=1
-        exec dbus-run-session -- "$0" "$@"
-    else
-        echo "⚠️ dbus-run-session no está disponible; Nautilus podría reutilizar la sesión de GNOME."
-    fi
-fi
-
-# Sincronizar variables iniciales con el daemon de activación D-Bus
+# Mantener las aplicaciones y xdg-desktop-portal en el mismo bus de sesión
+# para que los navegadores puedan encontrar los portales activados por systemd.
 dbus-update-activation-environment --all 2>/dev/null || true
 
 # ------------------------------------------------------------------------------

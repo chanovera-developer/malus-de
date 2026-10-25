@@ -836,6 +836,25 @@ impl MalusState {
         self.popups.cleanup();
     }
 
+    pub fn popup_under(
+        &self,
+        point: Point<f64, Logical>,
+    ) -> Option<(
+        smithay::desktop::Window,
+        Point<i32, Logical>,
+        WlSurface,
+        Point<i32, Logical>,
+    )> {
+        self.space.elements().rev().find_map(|window| {
+            let location = self.space.element_location(window)?;
+            let (surface, surface_location) = window.surface_under(
+                point - location.to_f64(),
+                smithay::desktop::WindowSurfaceType::POPUP,
+            )?;
+            Some((window.clone(), location, surface, surface_location))
+        })
+    }
+
     /// Construye la lista de elementos para el selector visual de aplicaciones (⌘Tab)
     pub fn build_app_switcher_items(&mut self) -> Vec<AppSwitcherItem> {
         let mut items = Vec::new();
