@@ -1586,16 +1586,24 @@ pub fn run_drm() -> Result<()> {
             InputEvent::PointerAxis { event } => {
                 if let Some(pointer) = state.seat.get_pointer() {
                     let mut frame = AxisFrame::new(event.time_msec()).source(event.source());
-                    let horiz = event.amount(Axis::Horizontal).unwrap_or(0.0);
-                    let vert = event.amount(Axis::Vertical).unwrap_or(0.0);
-                    if horiz != 0.0 {
-                        frame = frame.value(Axis::Horizontal, horiz);
+                    if let Some(horizontal) = event.amount(Axis::Horizontal) {
+                        frame = frame.value(Axis::Horizontal, horizontal);
+                        if let Some(discrete) = event.amount_v120(Axis::Horizontal) {
+                            frame = frame.v120(Axis::Horizontal, discrete as i32);
+                        }
                     }
-                    if vert != 0.0 {
-                        frame = frame.value(Axis::Vertical, vert);
+                    if let Some(vertical) = event.amount(Axis::Vertical) {
+                        frame = frame.value(Axis::Vertical, vertical);
+                        if let Some(discrete) = event.amount_v120(Axis::Vertical) {
+                            frame = frame.v120(Axis::Vertical, discrete as i32);
+                        }
                     }
-                    pointer.axis(state, frame);
-                    pointer.frame(state);
+                    if event.amount(Axis::Horizontal).is_some()
+                        || event.amount(Axis::Vertical).is_some()
+                    {
+                        pointer.axis(state, frame);
+                        pointer.frame(state);
+                    }
                 }
             }
             _ => {}
