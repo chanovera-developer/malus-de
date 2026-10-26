@@ -15,21 +15,42 @@ echo "============================================================"
 echo "🍎 INICIANDO SESIÓN DE MALUS DE: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "============================================================"
 
-# Localizar binarios: 1) Workspace release, 2) /usr/local/bin, 3) Workspace debug
-PROJECT_DIR="$HOME/Apps/malus-de"
+# Localizar binarios: checkout local, instalación del sistema y checkout debug.
+# El launcher instalado no comparte necesariamente la ruta del checkout original.
+PROJECT_DIRS=()
+if [ -n "${MALUS_DE_PROJECT_DIR:-}" ]; then
+    PROJECT_DIRS+=("$MALUS_DE_PROJECT_DIR")
+fi
+PROJECT_DIRS+=("$HOME/Proyectos/malus-de" "$HOME/Apps/malus-de")
 
-if [ -x "$PROJECT_DIR/target/release/malus-de-compositor" ]; then
-    BIN_DIR="$PROJECT_DIR/target/release"
-elif [ -x "/usr/local/bin/malus-de-compositor" ]; then
+BIN_DIR=""
+for project_dir in "${PROJECT_DIRS[@]}"; do
+    if [ -x "$project_dir/target/release/malus-de-compositor" ]; then
+        BIN_DIR="$project_dir/target/release"
+        break
+    fi
+done
+
+if [ -z "$BIN_DIR" ] && [ -x "/usr/local/bin/malus-de-compositor" ]; then
     BIN_DIR="/usr/local/bin"
-elif [ -x "$PROJECT_DIR/target/debug/malus-de-compositor" ]; then
-    BIN_DIR="$PROJECT_DIR/target/debug"
-else
+fi
+
+if [ -z "$BIN_DIR" ]; then
+    for project_dir in "${PROJECT_DIRS[@]}"; do
+        if [ -x "$project_dir/target/debug/malus-de-compositor" ]; then
+            BIN_DIR="$project_dir/target/debug"
+            break
+        fi
+    done
+fi
+
+if [ -z "$BIN_DIR" ]; then
     echo "❌ Error: No se encontró malus-de-compositor instalado ni compilado."
     exit 1
 fi
 echo "📍 Utilizando binarios desde: $BIN_DIR"
 export PATH="$BIN_DIR:$PATH"
+export MALUS_DE_BIN_DIR="$BIN_DIR"
 
 # ------------------------------------------------------------------------------
 # Configuración del entorno de sesión aislado (macOS UX sin afectar GNOME)
@@ -54,6 +75,13 @@ export MOZ_ENABLE_WAYLAND=1
 
 # Asegurar archivos de configuración aislados de GNOME (respetando elecciones previas del usuario)
 mkdir -p "$XDG_CONFIG_HOME/glib-2.0/settings" "$XDG_CONFIG_HOME/gtk-3.0" "$XDG_CONFIG_HOME/gtk-4.0"
+
+# Mantener disponible el tema declarativo instalado para componentes que lo consuman.
+if [ ! -d "$XDG_CONFIG_HOME/themes/default-dark" ] \
+    && [ -d "/usr/local/share/malus-de/themes/default-dark" ]; then
+    mkdir -p "$XDG_CONFIG_HOME/themes"
+    cp -R "/usr/local/share/malus-de/themes/default-dark" "$XDG_CONFIG_HOME/themes/"
+fi
 
 # Mantener disponibles en Nautilus las carpetas especiales XDG del usuario.
 USER_DIRS_FILE="$XDG_CONFIG_HOME/user-dirs.dirs"

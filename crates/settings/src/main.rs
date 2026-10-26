@@ -3279,8 +3279,12 @@ struct WallpaperPreset {
 }
 
 fn get_current_wallpaper_file() -> Option<PathBuf> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let malus_dir = PathBuf::from(&home).join(".config/malus-de");
+    let malus_dir = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            PathBuf::from(home).join(".config/malus-de")
+        });
     let candidates = [
         malus_dir.join("wallpaper.png"),
         malus_dir.join("wallpaper.jpg"),
@@ -3295,7 +3299,9 @@ fn get_current_wallpaper_file() -> Option<PathBuf> {
 
 fn apply_system_wallpaper(source: Option<&std::path::Path>) {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let malus_dir = PathBuf::from(&home).join(".config/malus-de");
+    let malus_dir = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(&home).join(".config/malus-de"));
     let _ = std::fs::create_dir_all(&malus_dir);
 
     for ext in &["png", "jpg", "jpeg", "webp", "svg"] {
@@ -3332,12 +3338,16 @@ fn apply_system_wallpaper(source: Option<&std::path::Path>) {
     let _ = Command::new("killall").args(["-9", "malus-de-wallpaper"]).status();
     let wayland_disp = std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-1".to_string());
 
-    let bin_candidates = [
-        PathBuf::from(&home).join("Apps/malus-de/target/release/malus-de-wallpaper"),
-        PathBuf::from("/usr/local/bin/malus-de-wallpaper"),
-    ];
+    let mut bin_candidates = [
+        std::env::var_os("MALUS_DE_BIN_DIR")
+            .map(|dir| PathBuf::from(dir).join("malus-de-wallpaper")),
+        Some(PathBuf::from(&home).join("Proyectos/malus-de/target/release/malus-de-wallpaper")),
+        Some(PathBuf::from(&home).join("Apps/malus-de/target/release/malus-de-wallpaper")),
+        Some(PathBuf::from("/usr/local/bin/malus-de-wallpaper")),
+    ]
+    .into_iter()
+    .flatten();
     let exec_cmd = bin_candidates
-        .into_iter()
         .find(|p| p.exists())
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| "malus-de-wallpaper".to_string());
