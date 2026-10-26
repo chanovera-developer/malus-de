@@ -418,6 +418,8 @@ fn create_popover_surface(menu_box: &GtkBox) -> Overlay {
 const POPOVER_TAIL_WIDTH: f64 = 44.0;
 const POPOVER_TAIL_HEIGHT: f64 = 18.0;
 const POPOVER_BODY_BOTTOM_INSET: f64 = 34.5;
+const SQUIRCLE_EXPONENT: f64 = 4.2;
+const SQUIRCLE_SEGMENTS: usize = 24;
 
 fn themed_popover_svg(
     template: &str,
@@ -427,7 +429,7 @@ fn themed_popover_svg(
 ) -> Result<gdk_pixbuf::Pixbuf, String> {
     let background = theme_color(area, "window_bg_color");
     let foreground = theme_color(area, "window_fg_color");
-    let radius = 12.5_f64.min(f64::from(width.min(height)) / 2.0);
+    let radius = 18.0_f64.min(f64::from(width.min(height)) / 2.0);
     let tail_width = POPOVER_TAIL_WIDTH.min((f64::from(width) - radius * 2.0).max(0.0));
     let tail_height = POPOVER_TAIL_HEIGHT.min(f64::from(height) / 4.0);
     let body_bottom = f64::from(height) - POPOVER_BODY_BOTTOM_INSET;
@@ -435,28 +437,41 @@ fn themed_popover_svg(
     let tail_half_width = tail_width / 2.0;
     let left_tail = center_x - tail_half_width;
     let right_tail = center_x + tail_half_width;
-    let path = format!(
-        "M {radius},0.5 H {right_top} \
-         C {right_curve_start},0.5 {right_edge},5.5 {right_edge},{top_corner} \
-         V {bottom_corner} \
-         C {right_edge},{body_curve_start} {right_curve_start},{body_bottom} {right_bottom},{body_bottom} \
-         H {tail_right} \
+    let right_edge = f64::from(width) - 0.5;
+    let corner_center_top = 0.5 + radius;
+    let corner_center_right = right_edge - radius;
+    let corner_center_left = 0.5 + radius;
+    let mut path = format!(
+        "M {left_top},{top_edge} H {top_right}",
+        left_top = corner_center_left,
+        top_edge = 0.5,
+        top_right = corner_center_right
+    );
+    append_squircle_corner(
+        &mut path,
+        corner_center_right,
+        corner_center_top,
+        radius,
+        -std::f64::consts::FRAC_PI_2,
+        0.0,
+    );
+    path.push_str(&format!(" V {}", body_bottom - radius));
+    append_squircle_corner(
+        &mut path,
+        corner_center_right,
+        body_bottom - radius,
+        radius,
+        0.0,
+        std::f64::consts::FRAC_PI_2,
+    );
+    path.push_str(&format!(
+        " H {tail_right} \
          C {tail_right_curve},{body_bottom} {tail_right_inner},{tail_curve_y} {tail_slope_right},{tail_slope_y} \
          L {tail_tip_right},{tail_tip_curve_y} \
          Q {center_x},{tail_tip} {tail_tip_left},{tail_tip_curve_y} \
          L {tail_slope_left},{tail_slope_y} \
          C {tail_left_inner},{tail_curve_y} {tail_left_curve},{body_bottom} {tail_left},{body_bottom} \
-         H {left_bottom} \
-         C {left_curve_end},{body_bottom} 0.5,{body_curve_start} 0.5,{bottom_corner} \
-         V {top_corner} \
-         C 0.5,5.5 {left_curve_end},0.5 {radius},0.5 Z",
-        right_top = f64::from(width) - radius,
-        right_curve_start = f64::from(width) - radius / 2.0,
-        right_edge = f64::from(width) - 0.5,
-        top_corner = radius + 0.5,
-        bottom_corner = body_bottom - radius,
-        body_curve_start = body_bottom - radius / 2.0,
-        right_bottom = f64::from(width) - radius,
+         H {bottom_left}",
         tail_right = right_tail,
         tail_right_curve = right_tail - 2.5,
         tail_right_inner = right_tail - 3.5,
@@ -471,9 +486,26 @@ fn themed_popover_svg(
         tail_left_inner = left_tail + 3.5,
         tail_left_curve = left_tail + 2.5,
         tail_left = left_tail,
-        left_bottom = radius,
-        left_curve_end = radius / 2.0,
+        bottom_left = corner_center_left,
+    ));
+    append_squircle_corner(
+        &mut path,
+        corner_center_left,
+        body_bottom - radius,
+        radius,
+        std::f64::consts::FRAC_PI_2,
+        std::f64::consts::PI,
     );
+    path.push_str(&format!(" V {corner_center_top}"));
+    append_squircle_corner(
+        &mut path,
+        corner_center_left,
+        corner_center_top,
+        radius,
+        std::f64::consts::PI,
+        3.0 * std::f64::consts::FRAC_PI_2,
+    );
+    path.push_str(" Z");
     let mut svg = template
         .replace("#f5f0ff", &blend_color_hex(background, foreground, 0.08))
         .replace("#e9e0f8", &blend_color_hex(background, foreground, 0.025))
@@ -501,6 +533,28 @@ fn themed_popover_svg(
     loader
         .pixbuf()
         .ok_or_else(|| "El SVG no produjo una imagen".to_string())
+}
+
+fn append_squircle_corner(
+    path: &mut String,
+    center_x: f64,
+    center_y: f64,
+    radius: f64,
+    start_angle: f64,
+    end_angle: f64,
+) {
+    let power = 2.0 / SQUIRCLE_EXPONENT;
+    for step in 1..=SQUIRCLE_SEGMENTS {
+        let fraction = step as f64 / SQUIRCLE_SEGMENTS as f64;
+        let angle = start_angle + (end_angle - start_angle) * fraction;
+        let x = angle.cos().signum() * angle.cos().abs().powf(power);
+        let y = angle.sin().signum() * angle.sin().abs().powf(power);
+        path.push_str(&format!(
+            " L {:.3},{:.3}",
+            center_x + radius * x,
+            center_y + radius * y
+        ));
+    }
 }
 
 fn blend_color_hex(
@@ -1462,16 +1516,14 @@ fn theme_color(area: &DrawingArea, name: &str) -> gtk4::gdk::RGBA {
 
 fn squircle_path(context: &gtk4::cairo::Context, width: f64, height: f64, radius: f64) {
     let radius = radius.min(width / 2.0).min(height / 2.0);
-    let exponent = 4.2;
-    let power = 2.0 / exponent;
-    let segments = 24;
+    let power = 2.0 / SQUIRCLE_EXPONENT;
     let quarter_turn = std::f64::consts::FRAC_PI_2;
 
     context.move_to(radius, 0.0);
     context.line_to(width - radius, 0.0);
 
-    for step in 1..=segments {
-        let angle = quarter_turn * step as f64 / segments as f64;
+    for step in 1..=SQUIRCLE_SEGMENTS {
+        let angle = quarter_turn * step as f64 / SQUIRCLE_SEGMENTS as f64;
         context.line_to(
             width - radius + radius * angle.sin().powf(power),
             radius - radius * angle.cos().powf(power),
@@ -1479,8 +1531,8 @@ fn squircle_path(context: &gtk4::cairo::Context, width: f64, height: f64, radius
     }
     context.line_to(width, height - radius);
 
-    for step in 1..=segments {
-        let angle = quarter_turn * step as f64 / segments as f64;
+    for step in 1..=SQUIRCLE_SEGMENTS {
+        let angle = quarter_turn * step as f64 / SQUIRCLE_SEGMENTS as f64;
         context.line_to(
             width - radius + radius * angle.cos().powf(power),
             height - radius + radius * angle.sin().powf(power),
@@ -1488,8 +1540,8 @@ fn squircle_path(context: &gtk4::cairo::Context, width: f64, height: f64, radius
     }
     context.line_to(radius, height);
 
-    for step in 1..=segments {
-        let angle = quarter_turn * step as f64 / segments as f64;
+    for step in 1..=SQUIRCLE_SEGMENTS {
+        let angle = quarter_turn * step as f64 / SQUIRCLE_SEGMENTS as f64;
         context.line_to(
             radius - radius * angle.sin().powf(power),
             height - radius + radius * angle.cos().powf(power),
@@ -1497,8 +1549,8 @@ fn squircle_path(context: &gtk4::cairo::Context, width: f64, height: f64, radius
     }
     context.line_to(0.0, radius);
 
-    for step in 1..=segments {
-        let angle = quarter_turn * step as f64 / segments as f64;
+    for step in 1..=SQUIRCLE_SEGMENTS {
+        let angle = quarter_turn * step as f64 / SQUIRCLE_SEGMENTS as f64;
         context.line_to(
             radius - radius * angle.cos().powf(power),
             radius - radius * angle.sin().powf(power),
