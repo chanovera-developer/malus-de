@@ -4,6 +4,8 @@ Este documento detalla la lista exacta de paquetes requeridos para construir una
 
 La sesión fuerza a GTK a usar xdg-desktop-portal y prefiere el selector de archivos del backend GNOME, con GTK como alternativa. Instala `xdg-desktop-portal`, `xdg-desktop-portal-gtk` y `xdg-desktop-portal-gnome`. El portapapeles y el copiado de capturas requieren también `wl-clipboard` (`wl-copy` y `wl-paste`).
 
+Para que Nautilus monte medios extraíbles, instala GVfs con su monitor UDisks y `udisks2`. Malus configura `org.gnome.desktop.media-handling.automount=true` en el perfil aislado de la sesión; GVfs activa sus monitores mediante systemd/D-Bus y UDisks proporciona el servicio del sistema. No hace falta iniciar manualmente el monitor desde el script de sesión.
+
 ---
 
 ## 1. Arquitectura de Paquetes
@@ -71,6 +73,8 @@ sudo dnf install -y \
     xdg-desktop-portal-gtk \
     xdg-desktop-portal-gnome \
     wl-clipboard \
+    gvfs \
+    udisks2 \
     nautilus \
     ptyxis \
     gnome-control-center \
@@ -124,6 +128,9 @@ sudo apt install -y \
     xdg-desktop-portal-gtk \
     xdg-desktop-portal-gnome \
     wl-clipboard \
+    gvfs \
+    gvfs-backends \
+    udisks2 \
     nautilus \
     ptyxis \
     gnome-control-center \
@@ -173,6 +180,8 @@ sudo pacman -S --needed \
     xdg-desktop-portal \
     xdg-desktop-portal-gtk \
     xdg-desktop-portal-gnome \
+    gvfs \
+    udisks2 \
     nautilus \
     ptyxis \
     gnome-control-center \
