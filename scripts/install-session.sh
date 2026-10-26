@@ -66,6 +66,12 @@ cp -f "$PROJECT_DIR/assets/icons/control-center-symbolic.svg" \
     /usr/local/share/malus-de/icons/control-center-symbolic.svg
 chmod 644 /usr/local/share/malus-de/icons/control-center-symbolic.svg
 
+# Instalar el fondo SVG de los popovers del dock
+mkdir -p /usr/local/share/malus-de/dock
+cp -f "$PROJECT_DIR/assets/dock/macos-popover.svg" \
+    /usr/local/share/malus-de/dock/macos-popover.svg
+chmod 644 /usr/local/share/malus-de/dock/macos-popover.svg
+
 # Instalar script de inicio de sesión
 cp -f "$SCRIPT_DIR/malus-session" "/usr/local/bin/malus-session"
 chmod 755 "/usr/local/bin/malus-session"

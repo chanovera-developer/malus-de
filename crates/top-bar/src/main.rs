@@ -152,6 +152,7 @@ menubutton.topbar-btn image {
 .active-pill {
     background-color: rgba(59, 130, 246, 0.35);
     border: 1px solid rgba(96, 165, 250, 0.5);
+    border-radius: 10px;
 }
 
 /* Quitar fondo/borde del contenedor popover general para evitar recuadros superpuestos */
@@ -587,7 +588,7 @@ scale.horizontal slider {
 .cc-pill-btn {
     background-color: rgba(255, 255, 255, 0.08);
     border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 14px;
+    border-radius: 10px;
     padding: 4px 10px;
     font-size: 11px;
     font-weight: 600;
@@ -831,7 +832,7 @@ scale.horizontal slider {
 .cc-media-play-btn {
     background-color: rgba(255, 255, 255, 0.15);
     color: #ffffff;
-    border-radius: 50%;
+    border-radius: 10px;
     min-width: 28px;
     min-height: 28px;
 }
