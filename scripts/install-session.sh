@@ -72,6 +72,11 @@ cp -f "$PROJECT_DIR/assets/dock/macos-popover.svg" \
     /usr/local/share/malus-de/dock/macos-popover.svg
 chmod 644 /usr/local/share/malus-de/dock/macos-popover.svg
 
+# Instalar los temas declarativos compartidos por los componentes de Malus DE
+mkdir -p /usr/local/share/malus-de/themes
+cp -R "$PROJECT_DIR/assets/themes/." /usr/local/share/malus-de/themes/
+find /usr/local/share/malus-de/themes -type f -exec chmod 644 {} +
+
 # Instalar script de inicio de sesión
 cp -f "$SCRIPT_DIR/malus-session" "/usr/local/bin/malus-session"
 chmod 755 "/usr/local/bin/malus-session"
