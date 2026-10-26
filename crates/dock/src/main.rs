@@ -1,4 +1,5 @@
 use gio::prelude::*;
+use gdk_pixbuf::prelude::*;
 use gtk4::prelude::*;
 use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea,
@@ -155,7 +156,7 @@ button.dock-item-btn:active {
 .dock-mini-badge {
     background: rgba(24, 24, 28, 0.95);
     border: 1.5px solid rgba(255, 255, 255, 0.35);
-    border-radius: 9999px;
+    border-radius: 10px;
     padding: 2px;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.65);
     margin-right: -3px;
@@ -163,40 +164,70 @@ button.dock-item-btn:active {
 }
 
 .malus-popover-menu {
-    background-color: alpha(@window_bg_color, 0.94);
-    border: 1px solid alpha(@window_fg_color, 0.14);
-    border-radius: 14px;
-    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.45);
-    padding: 6px;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 0;
+}
+
+popover.malus-popover-menu,
+popover.malus-popover-menu.background,
+popover.malus-popover-menu > contents,
+popover.malus-popover-menu > contents.background,
+popover.malus-popover-menu > arrow {
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+}
+
+popover.malus-popover-menu > contents,
+popover.malus-popover-menu > contents.background {
+    padding: 0;
+    color: @window_fg_color;
+}
+
+.popover-surface,
+.popover-surface.background,
+.popover-surface > *,
+.popover-menu-content,
+.popover-menu-content.background {
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
 }
 
 .popover-menu-header {
-    color: alpha(@window_fg_color, 0.65);
-    font-size: 11px;
+    color: alpha(@window_fg_color, 0.72);
+    font-size: 12px;
     font-weight: 600;
-    padding: 4px 10px 2px 10px;
-    letter-spacing: 0.3px;
+    padding: 5px 10px 3px;
 }
 
 .popover-separator {
-    background-color: alpha(@window_fg_color, 0.12);
+    background-color: alpha(@window_fg_color, 0.14);
     min-height: 1px;
-    margin: 4px 4px;
+    margin: 5px 4px;
 }
 
 .popover-menu-item {
     background: transparent;
+    background-image: none;
     border: none;
-    border-radius: 8px;
-    padding: 6px 14px;
+    border-radius: 7px;
+    padding: 7px 12px;
+    margin: 1px 2px;
     color: @window_fg_color;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 500;
+    box-shadow: none;
 }
 
 .popover-menu-item:hover {
-    background-color: #2563eb;
-    color: #ffffff;
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    box-shadow: none;
 }
 
 .popover-menu-item-danger:hover {
@@ -260,6 +291,24 @@ window.malus-switcher-window decoration,
 }
 "#;
 
+const DOCK_POPOVER_CSS: &str = r#"
+popover.malus-popover-menu,
+popover.malus-popover-menu.background,
+popover.malus-popover-menu > contents,
+popover.malus-popover-menu > contents.background,
+popover.malus-popover-menu > arrow {
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+}
+
+popover.malus-popover-menu > contents,
+popover.malus-popover-menu > contents.background {
+    padding: 0;
+}
+"#;
+
 fn main() {
     init_logging("malus_de_dock");
     info!("Iniciando Malus DE Floating Dock (GTK4 / Layer Shell)...");
@@ -294,7 +343,213 @@ fn load_css() {
             &provider,
             gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
+
+        let popover_provider = CssProvider::new();
+        popover_provider.load_from_string(DOCK_POPOVER_CSS);
+        gtk4::style_context_add_provider_for_display(
+            &display,
+            &popover_provider,
+            gtk4::STYLE_PROVIDER_PRIORITY_USER + 1,
+        );
     }
+}
+
+fn create_popover_surface(menu_box: &GtkBox) -> Overlay {
+    let overlay = Overlay::new();
+    overlay.add_css_class("popover-surface");
+    menu_box.add_css_class("popover-menu-content");
+    if let Some(last_item) = menu_box.last_child() {
+        last_item.set_margin_bottom(10);
+    }
+
+    let background = DrawingArea::new();
+    background.add_css_class("popover-surface");
+    background.set_can_target(false);
+    background.set_hexpand(true);
+    background.set_vexpand(true);
+
+    match dock_popover_svg_path() {
+        Some(path) => match std::fs::read_to_string(&path) {
+            Ok(svg_template) => {
+                background.set_draw_func(move |area, context, width, height| {
+                    if width <= 0 || height <= 0 {
+                        return;
+                    }
+
+                    match themed_popover_svg(&svg_template, area, width, height) {
+                        Ok(svg) => {
+                            gtk4::gdk::prelude::GdkCairoContextExt::set_source_pixbuf(
+                                context, &svg, 0.0, 0.0,
+                            );
+                            if let Err(error) = context.paint() {
+                                warn!("No se pudo dibujar el fondo SVG del popover: {error}");
+                            }
+                        }
+                        Err(error) => {
+                            warn!("No se pudo adaptar el SVG del popover al tema: {error}");
+                        }
+                    }
+                });
+            }
+            Err(error) => {
+                warn!("No se pudo leer el SVG del popover del dock: {error}");
+            }
+        },
+        None => {
+            warn!("No se encontró el SVG del popover del dock.");
+        }
+    }
+
+    overlay.set_child(Some(&background));
+    overlay.add_overlay(menu_box);
+    overlay.set_measure_overlay(menu_box, true);
+    overlay.set_clip_overlay(menu_box, false);
+
+    menu_box.set_halign(gtk4::Align::Fill);
+    menu_box.set_valign(gtk4::Align::Fill);
+    menu_box.set_margin_start(8);
+    menu_box.set_margin_end(8);
+    menu_box.set_margin_top(6);
+    menu_box.set_margin_bottom(35);
+
+    overlay
+}
+
+const POPOVER_TAIL_WIDTH: f64 = 44.0;
+const POPOVER_TAIL_HEIGHT: f64 = 18.0;
+const POPOVER_BODY_BOTTOM_INSET: f64 = 34.5;
+
+fn themed_popover_svg(
+    template: &str,
+    area: &DrawingArea,
+    width: i32,
+    height: i32,
+) -> Result<gdk_pixbuf::Pixbuf, String> {
+    let background = theme_color(area, "window_bg_color");
+    let foreground = theme_color(area, "window_fg_color");
+    let radius = 12.5_f64.min(f64::from(width.min(height)) / 2.0);
+    let tail_width = POPOVER_TAIL_WIDTH.min((f64::from(width) - radius * 2.0).max(0.0));
+    let tail_height = POPOVER_TAIL_HEIGHT.min(f64::from(height) / 4.0);
+    let body_bottom = f64::from(height) - POPOVER_BODY_BOTTOM_INSET;
+    let center_x = f64::from(width) / 2.0;
+    let tail_half_width = tail_width / 2.0;
+    let left_tail = center_x - tail_half_width;
+    let right_tail = center_x + tail_half_width;
+    let path = format!(
+        "M {radius},0.5 H {right_top} \
+         C {right_curve_start},0.5 {right_edge},5.5 {right_edge},{top_corner} \
+         V {bottom_corner} \
+         C {right_edge},{body_curve_start} {right_curve_start},{body_bottom} {right_bottom},{body_bottom} \
+         H {tail_right} \
+         C {tail_right_curve},{body_bottom} {tail_right_inner},{tail_curve_y} {tail_slope_right},{tail_slope_y} \
+         L {tail_tip_right},{tail_tip_curve_y} \
+         Q {center_x},{tail_tip} {tail_tip_left},{tail_tip_curve_y} \
+         L {tail_slope_left},{tail_slope_y} \
+         C {tail_left_inner},{tail_curve_y} {tail_left_curve},{body_bottom} {tail_left},{body_bottom} \
+         H {left_bottom} \
+         C {left_curve_end},{body_bottom} 0.5,{body_curve_start} 0.5,{bottom_corner} \
+         V {top_corner} \
+         C 0.5,5.5 {left_curve_end},0.5 {radius},0.5 Z",
+        right_top = f64::from(width) - radius,
+        right_curve_start = f64::from(width) - radius / 2.0,
+        right_edge = f64::from(width) - 0.5,
+        top_corner = radius + 0.5,
+        bottom_corner = body_bottom - radius,
+        body_curve_start = body_bottom - radius / 2.0,
+        right_bottom = f64::from(width) - radius,
+        tail_right = right_tail,
+        tail_right_curve = right_tail - 2.5,
+        tail_right_inner = right_tail - 3.5,
+        tail_curve_y = body_bottom + 0.5,
+        tail_slope_right = center_x + 2.0,
+        tail_slope_y = body_bottom + tail_height - 2.0,
+        tail_tip_right = center_x + 2.0,
+        tail_tip_curve_y = body_bottom + tail_height - 2.0,
+        tail_tip = body_bottom + tail_height,
+        tail_tip_left = center_x - 2.0,
+        tail_slope_left = center_x - 2.0,
+        tail_left_inner = left_tail + 3.5,
+        tail_left_curve = left_tail + 2.5,
+        tail_left = left_tail,
+        left_bottom = radius,
+        left_curve_end = radius / 2.0,
+    );
+    let mut svg = template
+        .replace("#f5f0ff", &blend_color_hex(background, foreground, 0.08))
+        .replace("#e9e0f8", &blend_color_hex(background, foreground, 0.025))
+        .replace("#d9cdec", &blend_color_hex(background, foreground, 0.06))
+        .replace("#ffffff", &color_hex(foreground))
+        .replace(
+            "width=\"320\" height=\"264\" viewBox=\"0 0 320 264\"",
+            &format!("width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\""),
+        );
+    let path_start = svg
+        .find(" d=\"")
+        .ok_or_else(|| "El SVG del popover no contiene trazado".to_string())?
+        + 4;
+    let path_end = svg[path_start..]
+        .find('"')
+        .map(|offset| path_start + offset)
+        .ok_or_else(|| "El trazado SVG del popover está incompleto".to_string())?;
+    svg.replace_range(path_start..path_end, &path);
+
+    let loader = gdk_pixbuf::PixbufLoader::with_type("svg").map_err(|error| error.to_string())?;
+    loader
+        .write(svg.as_bytes())
+        .map_err(|error| error.to_string())?;
+    loader.close().map_err(|error| error.to_string())?;
+    loader
+        .pixbuf()
+        .ok_or_else(|| "El SVG no produjo una imagen".to_string())
+}
+
+fn blend_color_hex(
+    background: gtk4::gdk::RGBA,
+    foreground: gtk4::gdk::RGBA,
+    foreground_weight: f32,
+) -> String {
+    let channel = |bg: f32, fg: f32| {
+        ((bg * (1.0 - foreground_weight) + fg * foreground_weight) * 255.0).round() as u8
+    };
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        channel(background.red(), foreground.red()),
+        channel(background.green(), foreground.green()),
+        channel(background.blue(), foreground.blue())
+    )
+}
+
+fn color_hex(color: gtk4::gdk::RGBA) -> String {
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        (color.red() * 255.0).round() as u8,
+        (color.green() * 255.0).round() as u8,
+        (color.blue() * 255.0).round() as u8
+    )
+}
+
+fn dock_popover_svg_path() -> Option<std::path::PathBuf> {
+    let installed_paths = [
+        "/usr/local/share/malus-de/dock/macos-popover.svg",
+        "/usr/share/malus-de/dock/macos-popover.svg",
+    ];
+    if let Some(path) = installed_paths
+        .iter()
+        .map(std::path::PathBuf::from)
+        .find(|path| path.is_file())
+    {
+        return Some(path);
+    }
+
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| {
+            exe.parent()?
+                .parent()?
+                .parent()
+                .map(|root| root.join("assets/dock/macos-popover.svg"))
+        })
+        .filter(|path| path.is_file())
 }
 
 fn queue_dock_resize(window: &ApplicationWindow, dock_root: &GtkBox, dock_bar: &GtkBox) {
@@ -1402,7 +1657,8 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
     // Menú Popover de Clic Derecho para la Papelera
     let popover = Popover::builder()
         .css_classes(["malus-popover-menu"])
-        .has_arrow(true)
+        .has_arrow(false)
+        .position(gtk4::PositionType::Top)
         .build();
 
     let menu_box = GtkBox::builder()
@@ -1446,7 +1702,8 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
 
     menu_box.append(&btn_open);
     menu_box.append(&btn_empty);
-    popover.set_child(Some(&menu_box));
+    let popover_surface = create_popover_surface(&menu_box);
+    popover.set_child(Some(&popover_surface));
     popover.set_parent(&btn);
     let p_unroot = popover.clone();
     btn.connect_unrealize(move |_| {
@@ -1495,7 +1752,6 @@ fn create_dock_item(
 
     let btn = Button::builder()
         .css_classes(["dock-item-btn"])
-        .tooltip_text(&app_cfg.name)
         .focusable(false)
         .valign(gtk4::Align::End)
         .build();
@@ -1616,7 +1872,8 @@ fn create_dock_item(
     // Menú Popover de Clic Derecho (macOS Style Context Menu)
     let popover = Popover::builder()
         .css_classes(["malus-popover-menu"])
-        .has_arrow(true)
+        .has_arrow(false)
+        .position(gtk4::PositionType::Top)
         .build();
 
     let menu_box = GtkBox::builder()
@@ -1758,7 +2015,8 @@ fn create_dock_item(
         menu_box.append(&btn_force_quit);
     }
 
-    popover.set_child(Some(&menu_box));
+    let popover_surface = create_popover_surface(&menu_box);
+    popover.set_child(Some(&popover_surface));
     popover.set_parent(&btn);
     let p_unroot = popover.clone();
     btn.connect_unrealize(move |_| {

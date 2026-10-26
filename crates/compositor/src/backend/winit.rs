@@ -853,6 +853,7 @@ pub fn run_winit() -> Result<()> {
                 let mut lower_elements = Vec::new();
                 let mut upper_elements = Vec::new();
                 let mut dock_clip_roots = Vec::new();
+                let mut dock_popups = Vec::new();
                 let mut topbar_popups = Vec::new();
                 for surface in layer_map.layers().rev() {
                     if surface.namespace() == "malus-app-switcher" && !state.app_switcher.is_active {
@@ -905,6 +906,12 @@ pub fn run_winit() -> Result<()> {
                                     popup_geometry.size.to_physical_precise_round(1.0),
                                 );
                                 topbar_popups.push((elems, popup_rect));
+                            } else if surface.namespace() == "malus-dock" {
+                                let popup_rect = Rectangle::new(
+                                    layer_loc + offset,
+                                    popup_geometry.size.to_physical_precise_round(1.0),
+                                );
+                                dock_popups.push((elems, popup_rect));
                             } else {
                                 p_elems.extend(elems);
                             }
@@ -944,15 +951,26 @@ pub fn run_winit() -> Result<()> {
                             let mut popup_elems: Vec<(
                                 Vec<WaylandSurfaceRenderElement<GlesRenderer>>,
                                 Rectangle<i32, Physical>,
+                                bool,
                             )> = Vec::new();
                             let mut popup_shadow_rects = Vec::new();
+                            let popup_effects_enabled = crate::state::app_id_for_surface(
+                                main_surface.as_ref(),
+                            )
+                            .map(|app_id| {
+                                !app_id.contains("org.malus_de.dock")
+                                    && !app_id.contains("malus-de-dock")
+                            })
+                            .unwrap_or(true);
                             for (popup, popup_offset) in smithay::desktop::PopupManager::popups_for_surface(main_surface.as_ref()) {
                                 let popup_geometry = popup.geometry();
                                 let popup_rect = Rectangle::new(
                                     phys_loc + (geo.loc + popup_offset).to_physical_precise_round(1.0),
                                     popup_geometry.size.to_physical_precise_round(1.0),
                                 );
-                                popup_shadow_rects.push(popup_rect);
+                                if popup_effects_enabled {
+                                    popup_shadow_rects.push(popup_rect);
+                                }
                                 let offset = (geo.loc + popup_offset - popup_geometry.loc).to_physical_precise_round(1.0);
                                 let p_elems = render_elements_from_surface_tree(
                                     renderer,
@@ -962,7 +980,7 @@ pub fn run_winit() -> Result<()> {
                                     1.0,
                                     Kind::Unspecified,
                                 );
-                                popup_elems.push((p_elems, popup_rect));
+                                popup_elems.push((p_elems, popup_rect, popup_effects_enabled));
                             }
 
                             let is_fullscreen = window.toplevel().map(|t| {
@@ -1155,17 +1173,19 @@ pub fn run_winit() -> Result<()> {
                     }
 
                     for (_, _, popups, ..) in &window_render_data {
-                        for (popup_elems, popup_rect) in popups {
-                            if let Some(blur) = blur_pipeline.as_mut() {
-                                let _ = frame.with_context(|gl| {
-                                    blur.render_blur(
-                                        gl,
-                                        &projection,
-                                        size,
-                                        *popup_rect,
-                                        menu_radius as f32,
-                                    );
-                                });
+                        for (popup_elems, popup_rect, popup_effects_enabled) in popups {
+                            if *popup_effects_enabled {
+                                if let Some(blur) = blur_pipeline.as_mut() {
+                                    let _ = frame.with_context(|gl| {
+                                        blur.render_blur(
+                                            gl,
+                                            &projection,
+                                            size,
+                                            *popup_rect,
+                                            menu_radius as f32,
+                                        );
+                                    });
+                                }
                             }
 
                             for elem in popup_elems {
@@ -1209,6 +1229,41 @@ pub fn run_winit() -> Result<()> {
                             if dock_rect.is_some() {
                                 frame.clear_tex_program_override();
                             }
+                        }
+                    }
+
+                    for (popup_elems, popup_rect) in &dock_popups {
+                        if let Some(blur) = blur_pipeline.as_mut() {
+                            let blur_rect = super::dock_popover_blur_rect(*popup_rect, 1.0);
+                            let _ = frame.with_context(|gl| {
+                                blur.render_blur(
+                                    gl,
+                                    &projection,
+                                    size,
+                                    blur_rect,
+                                    menu_radius as f32,
+                                );
+                            });
+                        }
+
+                        for elem in popup_elems {
+                            if let Some(shader) = window_squircle_shader.as_ref() {
+                                let elem_geo = elem.geometry(Scale::from(1.0));
+                                shader.apply_clip_to_frame(
+                                    &mut frame,
+                                    elem_geo.size,
+                                    popup_rect.loc - elem_geo.loc,
+                                    popup_rect.size,
+                                    8,
+                                );
+                            }
+                            let _ = draw_render_elements(
+                                &mut frame,
+                                1.0,
+                                std::slice::from_ref(elem),
+                                &[damage],
+                            );
+                            frame.clear_tex_program_override();
                         }
                     }
 

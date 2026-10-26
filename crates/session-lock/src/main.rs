@@ -67,7 +67,7 @@ window.malus-lock-window {
 }
 
 .unlock-btn {
-    border-radius: 50%;
+    border-radius: 10px;
     min-width: 36px;
     min-height: 36px;
     margin-left: 8px;

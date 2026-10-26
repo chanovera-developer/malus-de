@@ -114,26 +114,13 @@ fn load_macos_settings_css() {
 
         .sidebar-pane,
         overlay-split-view > .sidebar-pane {
-            background-color: rgba(246, 246, 248, 0.82);
-            box-shadow: inset -1px 0 rgba(0, 0, 0, 0.08);
+            background-color: alpha(@window_bg_color, 0.82);
+            box-shadow: inset -1px 0 alpha(@borders, 0.75);
         }
 
         .sidebar-pane:backdrop,
         overlay-split-view > .sidebar-pane:backdrop {
-            background-color: rgba(240, 240, 242, 0.88);
-        }
-
-        @media (prefers-color-scheme: dark) {
-            .sidebar-pane,
-            overlay-split-view > .sidebar-pane {
-                background-color: rgba(30, 30, 34, 0.82);
-                box-shadow: inset -1px 0 rgba(255, 255, 255, 0.08);
-            }
-
-            .sidebar-pane:backdrop,
-            overlay-split-view > .sidebar-pane:backdrop {
-                background-color: rgba(25, 25, 28, 0.88);
-            }
+            background-color: alpha(@window_bg_color, 0.88);
         }
 
         .macos-sidebar {

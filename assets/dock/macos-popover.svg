@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="264" viewBox="0 0 320 264" preserveAspectRatio="none">
+  <defs>
+    <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f5f0ff"/>
+      <stop offset="0.55" stop-color="#e9e0f8"/>
+      <stop offset="1" stop-color="#d9cdec"/>
+    </linearGradient>
+    <filter id="shadow" x="-12%" y="-12%" width="124%" height="132%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="5"/>
+      <feOffset dy="4"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.22"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <linearGradient id="edge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.24"/>
+      <stop offset="0.78" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <!-- Stretch only straight body segments between the corner guides
+       (x=12.5/307.5, y=12.5/217.5/229.5). Keep the corner arcs and complete
+       curved tail, including its Bézier control points, fixed. The runtime
+       tail dimensions and curve controls are POPOVER_TAIL_* constants. -->
+  <path
+    d="M 12.5,0.5
+       H 307.5
+       C 314.5,0.5 319.5,5.5 319.5,12.5
+       V 217.5
+       C 319.5,224.5 314.5,229.5 307.5,229.5
+       H 182
+       C 179.5,229.5 178.5,230 176.5,231.5
+       L 162,245.5
+       Q 160,247.5 158,245.5
+       L 143.5,231.5
+       C 141.5,230 140.5,229.5 138,229.5
+       H 12.5
+       C 5.5,229.5 0.5,224.5 0.5,217.5
+       V 12.5
+       C 0.5,5.5 5.5,0.5 12.5,0.5
+       Z"
+    filter="url(#shadow)"
+    fill="url(#glass)"
+    stroke="url(#edge)"
+    stroke-width="1"
+    opacity="0.65"/>
+</svg>
