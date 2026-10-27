@@ -11,10 +11,11 @@ use libadwaita as adw;
 use malus_de_common::config::{DockAppConfig, DockConfig, DockIconAppearance};
 use malus_de_common::ipc::{ipc_socket_path, send_ipc_message, IpcMessage, MinimizedWindowInfo};
 use malus_de_common::logging::init_logging;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::process::Command;
 use std::rc::Rc;
+use std::time::Duration;
 use tracing::{error, info, warn};
 
 const DOCK_CSS: &str = r#"
@@ -46,6 +47,34 @@ window.malus-dock-window decoration {
 
 .dock-item-box {
     padding: 0px 2px;
+}
+
+.dock-bounce-target {
+    transition: transform 260ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.dock-bounce-target.dock-bouncing {
+    transition-duration: 280ms;
+    transition-timing-function: cubic-bezier(0.16, 0.76, 0.32, 1);
+    transform: translateY(-14px);
+}
+
+.dock-bounce-target.dock-bounce-falling {
+    transition-duration: 190ms;
+    transition-timing-function: cubic-bezier(0.65, 0, 0.9, 0.35);
+    transform: translateY(2px);
+}
+
+.dock-bounce-target.dock-bounce-rebound {
+    transition-duration: 130ms;
+    transition-timing-function: cubic-bezier(0.2, 0.8, 0.3, 1);
+    transform: translateY(-4px);
+}
+
+.dock-bounce-target.dock-bounce-settling {
+    transition-duration: 280ms;
+    transition-timing-function: cubic-bezier(0.34, 1.56, 0.64, 1);
+    transform: translateY(0);
 }
 
 .dock-item-btn {
@@ -676,12 +705,110 @@ fn resolve_desktop_app_info(identifier: &str) -> (String, String, String, Vec<St
     (name, icon, exec, matchers)
 }
 
+fn dock_app_context_actions(app_cfg: &DockAppConfig) -> Vec<(&'static str, &'static [&'static str])> {
+    let identity = [
+        app_cfg.name.as_str(),
+        app_cfg.icon.as_str(),
+        app_cfg.command.as_str(),
+    ]
+    .into_iter()
+    .chain(app_cfg.matchers.iter().map(String::as_str))
+    .collect::<Vec<_>>()
+    .join(" ")
+    .to_lowercase();
+
+    let mut actions = Vec::new();
+    if identity.contains("nautilus") {
+        actions.push(("Abrir nueva ventana", &["--new-window"][..]));
+    }
+
+    if identity
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|part| part == "brave")
+    {
+        actions.push(("Abrir en modo incógnito", &["--incognito"][..]));
+    }
+
+    let is_code_editor = identity.contains("antigravity")
+        || identity.contains("visual studio code")
+        || identity.contains("vscode")
+        || identity.contains("code-oss")
+        || identity.contains("code-insiders")
+        || identity
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|part| part == "code");
+    if is_code_editor {
+        actions.push(("Abrir nueva ventana vacía", &["--new-window"][..]));
+    }
+
+    actions
+}
+
 fn capitalize(s: &str) -> String {
     let mut chars = s.chars();
     match chars.next() {
         None => String::new(),
         Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
     }
+}
+
+fn bounce_dock_icon(
+    icon_container: &gtk4::Widget,
+    animation_id: Rc<Cell<u64>>,
+) {
+    let icon_container = icon_container.clone();
+    let current_id = animation_id.get().wrapping_add(1);
+    animation_id.set(current_id);
+    icon_container.remove_css_class("dock-bouncing");
+    icon_container.remove_css_class("dock-bounce-falling");
+    icon_container.remove_css_class("dock-bounce-rebound");
+    icon_container.remove_css_class("dock-bounce-settling");
+
+    let target = icon_container.clone();
+    glib::timeout_add_local_once(Duration::from_millis(1), move || {
+        if animation_id.get() != current_id {
+            return;
+        }
+        target.add_css_class("dock-bouncing");
+        let target_falling = target.clone();
+        glib::timeout_add_local_once(Duration::from_millis(280), move || {
+            if animation_id.get() != current_id {
+                return;
+            }
+            target_falling.remove_css_class("dock-bouncing");
+            target_falling.add_css_class("dock-bounce-falling");
+            let target_rebound = target_falling.clone();
+            glib::timeout_add_local_once(Duration::from_millis(190), move || {
+                if animation_id.get() != current_id {
+                    return;
+                }
+                target_rebound.remove_css_class("dock-bounce-falling");
+                target_rebound.add_css_class("dock-bounce-rebound");
+                let target_settling = target_rebound.clone();
+                glib::timeout_add_local_once(Duration::from_millis(130), move || {
+                    if animation_id.get() != current_id {
+                        return;
+                    }
+                    target_settling.remove_css_class("dock-bounce-rebound");
+                    target_settling.add_css_class("dock-bounce-settling");
+                    glib::timeout_add_local_once(Duration::from_millis(280), move || {
+                        if animation_id.get() == current_id {
+                            target_settling.remove_css_class("dock-bounce-settling");
+                        }
+                    });
+                });
+            });
+        });
+    });
+}
+
+fn matches_dock_app(matchers: &[String], app_name: &str, identity: &str) -> bool {
+    let identity = identity.to_lowercase();
+    matchers
+        .iter()
+        .filter(|matcher| !matcher.is_empty())
+        .any(|matcher| identity.contains(&matcher.to_lowercase()))
+        || (matchers.is_empty() && identity.contains(&app_name.to_lowercase()))
 }
 
 fn build_dock_ui(app: &Application) {
@@ -804,13 +931,18 @@ fn build_dock_ui(app: &Application) {
 
     // Canales y estado compartido
     let running_cache = Rc::new(RefCell::new(Vec::<String>::new()));
+    let active_app_cache = Rc::new(RefCell::new(Vec::<String>::new()));
     let dock_indicators: Rc<RefCell<Vec<(Vec<String>, Label)>>> = Rc::new(RefCell::new(Vec::new()));
 
     // Canal de actualización del layout de aplicaciones del Dock
-    let (refresh_tx, refresh_rx) = async_channel::unbounded::<()>();
+    let (refresh_tx, refresh_rx) = async_channel::unbounded::<bool>();
     let r_tx = refresh_tx.clone();
     let on_refresh: Rc<dyn Fn()> = Rc::new(move || {
-        let _ = r_tx.send_blocking(());
+        let _ = r_tx.send_blocking(true);
+    });
+    let running_tx = refresh_tx.clone();
+    let on_running_refresh: Rc<dyn Fn()> = Rc::new(move || {
+        let _ = running_tx.send_blocking(false);
     });
 
     // Render inicial de aplicaciones desde dock.toml
@@ -818,14 +950,17 @@ fn build_dock_ui(app: &Application) {
         &apps_box,
         &dock_config,
         &running_cache,
+        &active_app_cache,
         &dock_indicators,
         &on_refresh,
+        true,
     );
 
     // Loop de refresco reactivo de las aplicaciones
     let apps_box_rf = apps_box.clone();
     let dock_cfg_rf = dock_config.clone();
     let run_cache_rf = running_cache.clone();
+    let active_app_rf = active_app_cache.clone();
     let indicators_rf = dock_indicators.clone();
     let on_rf_loop = on_refresh.clone();
     let dock_bar_resize = dock_bar.clone();
@@ -833,13 +968,15 @@ fn build_dock_ui(app: &Application) {
     let win_resize = window.clone();
 
     glib::spawn_future_local(async move {
-        while let Ok(()) = refresh_rx.recv().await {
+        while let Ok(refresh_pinned) = refresh_rx.recv().await {
             render_dock_apps(
                 &apps_box_rf,
                 &dock_cfg_rf,
                 &run_cache_rf,
+                &active_app_rf,
                 &indicators_rf,
                 &on_rf_loop,
+                refresh_pinned,
             );
             queue_dock_resize(&win_resize, &dock_root_resize, &dock_bar_resize);
         }
@@ -985,8 +1122,11 @@ fn build_dock_ui(app: &Application) {
     let min_map: Rc<RefCell<HashMap<u64, gtk4::Widget>>> = Rc::new(RefCell::new(HashMap::new()));
     let win_ref = window.clone();
     let indicators_ipc = dock_indicators.clone();
+    let active_app_ipc = active_app_cache.clone();
     let cfg_ipc = dock_config.clone();
     let on_rf_ipc = on_refresh.clone();
+    let on_rf_running_ipc = on_running_refresh.clone();
+    let refresh_pending_ipc = Rc::new(Cell::new(false));
     let headroom_ipc = magnification_headroom.clone();
     let switcher_win_ipc = switcher_window.clone();
     let switcher_box_ipc = switcher_box.clone();
@@ -997,6 +1137,11 @@ fn build_dock_ui(app: &Application) {
     glib::spawn_future_local(async move {
         while let Ok(msg) = rx.recv().await {
             match msg {
+                IpcMessage::ActiveAppChanged { app_id, title, .. } => {
+                    let mut active_app = active_app_ipc.borrow_mut();
+                    active_app.clear();
+                    active_app.extend(app_id.into_iter().chain(title));
+                }
                 IpcMessage::RunningAppsChanged { running_apps } => {
                     let prev_apps = cache_ipc.borrow().clone();
                     *cache_ipc.borrow_mut() = running_apps.clone();
@@ -1011,8 +1156,13 @@ fn build_dock_ui(app: &Application) {
                     }
 
                     // 2. Si la lista de aplicaciones ejecutándose cambió, refrescar apps unpinned
-                    if prev_apps != running_apps {
-                        on_rf_ipc();
+                    if prev_apps != running_apps && !refresh_pending_ipc.replace(true) {
+                        let on_refresh = on_rf_running_ipc.clone();
+                        let refresh_pending = refresh_pending_ipc.clone();
+                        glib::timeout_add_local_once(Duration::from_millis(900), move || {
+                            refresh_pending.set(false);
+                            on_refresh();
+                        });
                     }
                 }
                 IpcMessage::PinAppToDock { name, icon, command, matchers } => {
@@ -1227,35 +1377,53 @@ fn render_dock_apps(
     apps_box: &GtkBox,
     dock_config: &Rc<RefCell<DockConfig>>,
     running_cache: &Rc<RefCell<Vec<String>>>,
+    active_app_cache: &Rc<RefCell<Vec<String>>>,
     dock_indicators: &Rc<RefCell<Vec<(Vec<String>, Label)>>>,
     on_refresh: &Rc<dyn Fn()>,
+    refresh_pinned: bool,
 ) {
-    while let Some(child) = apps_box.first_child() {
-        apps_box.remove(&child);
-    }
-    dock_indicators.borrow_mut().clear();
-
     let config = dock_config.borrow().clone();
     let running = running_cache.borrow().clone();
     let icon_size = config.icon_size as i32;
     let total_pinned = config.apps.len();
 
+    if refresh_pinned {
+        while let Some(child) = apps_box.first_child() {
+            apps_box.remove(&child);
+        }
+        dock_indicators.borrow_mut().clear();
+    } else {
+        let mut child = apps_box.first_child();
+        let mut index = 0;
+        while let Some(current) = child {
+            child = current.next_sibling();
+            if index >= total_pinned {
+                apps_box.remove(&current);
+            }
+            index += 1;
+        }
+        dock_indicators.borrow_mut().truncate(total_pinned);
+    }
+
     // 1. Aplicaciones fijadas (Pinned Apps)
-    for (idx, app) in config.apps.iter().enumerate() {
-        let is_running = running.iter().any(|r| app.matches(r));
-        let (widget, ind) = create_dock_item(
-            app,
-            true,
-            idx,
-            total_pinned,
-            icon_size,
-            is_running,
-            running_cache.clone(),
-            dock_config.clone(),
-            on_refresh.clone(),
-        );
-        apps_box.append(&widget);
-        dock_indicators.borrow_mut().push((app.matchers.clone(), ind));
+    if refresh_pinned {
+        for (idx, app) in config.apps.iter().enumerate() {
+            let is_running = running.iter().any(|r| app.matches(r));
+            let (widget, ind) = create_dock_item(
+                app,
+                true,
+                idx,
+                total_pinned,
+                icon_size,
+                is_running,
+                running_cache.clone(),
+                active_app_cache.clone(),
+                dock_config.clone(),
+                on_refresh.clone(),
+            );
+            apps_box.append(&widget);
+            dock_indicators.borrow_mut().push((app.matchers.clone(), ind));
+        }
     }
 
     // 2. Aplicaciones en ejecución no fijadas (Unpinned Running Apps)
@@ -1290,6 +1458,7 @@ fn render_dock_apps(
             icon_size,
             true,
             running_cache.clone(),
+            active_app_cache.clone(),
             dock_config.clone(),
             on_refresh.clone(),
         );
@@ -1791,6 +1960,7 @@ fn create_dock_item(
     icon_size: i32,
     is_running: bool,
     running_cache: Rc<RefCell<Vec<String>>>,
+    active_app_cache: Rc<RefCell<Vec<String>>>,
     dock_config: Rc<RefCell<DockConfig>>,
     on_refresh: Rc<dyn Fn()>,
 ) -> (GtkBox, Label) {
@@ -1839,12 +2009,14 @@ fn create_dock_item(
         icon.set_pixel_size((icon_size - 10).max(1));
         icon.set_margin_bottom(5);
     }
-    btn.set_child(Some(&create_magnifiable_icon(
+    let icon_container = create_magnifiable_icon(
         &icon,
         icon_size,
         show_backdrop,
-    )));
-
+    );
+    btn.set_child(Some(&icon_container));
+    icon_container.add_css_class("dock-bounce-target");
+    let animation_id = Rc::new(Cell::new(0_u64));
     let cmd = app_cfg.command.clone();
     let name = app_cfg.name.clone();
     let matchers = app_cfg.matchers.clone();
@@ -1855,7 +2027,19 @@ fn create_dock_item(
         let name = name.clone();
         let matchers = matchers.clone();
         let cache = cache.clone();
+        let active_app_cache = active_app_cache.clone();
+        let icon_container = icon_container.clone().upcast::<gtk4::Widget>();
+        let animation_id = animation_id.clone();
         Rc::new(move || {
+            let active_app_matches = active_app_cache
+                .borrow()
+                .iter()
+                .any(|identity| matches_dock_app(&matchers, &name, identity));
+            if active_app_matches {
+                info!("{} ya tiene el foco; no se envía acción de dock", name);
+                return;
+            }
+
             let running = cache.borrow();
             let is_currently_running = running.iter().any(|r| {
                 let r_lower = r.to_lowercase();
@@ -1871,48 +2055,12 @@ fn create_dock_item(
                 return;
             }
 
+            bounce_dock_icon(
+                &icon_container,
+                animation_id.clone(),
+            );
             info!("Lanzando aplicación desde Dock: {} (`{}`)", name, cmd);
-            let parts: Vec<&str> = cmd.split_whitespace().collect();
-            if let Some((exe, args)) = parts.split_first() {
-                let target_exe = if *exe == "gnome-control-center" {
-                    "malus-de-settings"
-                } else {
-                    *exe
-                };
-                let resolved_exe = std::env::current_exe()
-                    .ok()
-                    .and_then(|p| p.parent().map(|d| d.join(target_exe)))
-                    .filter(|p| p.exists())
-                    .or_else(|| {
-                        let rel = std::path::PathBuf::from("/home/cristian/Apps/malus-de/target/release")
-                            .join(target_exe);
-                        if rel.exists() { Some(rel) } else { None }
-                    })
-                    .unwrap_or_else(|| std::path::PathBuf::from(target_exe));
-                let mut command = Command::new(&resolved_exe);
-                command.args(args);
-                malus_de_common::config::set_cursor_environment(&mut command);
-                if let Ok(wayland_disp) = std::env::var("WAYLAND_DISPLAY") {
-                    command.env("WAYLAND_DISPLAY", wayland_disp);
-                }
-                command.env("XDG_CURRENT_DESKTOP", "Malus");
-                command.env("GDK_BACKEND", "wayland");
-                if let Ok(xdg_rt) = std::env::var("XDG_RUNTIME_DIR") {
-                    command.env("XDG_RUNTIME_DIR", xdg_rt);
-                }
-                match command.spawn() {
-                    Ok(mut child) => {
-                        let pid = child.id();
-                        info!("🚀 Proceso iniciado para {}: PID={}", name, pid);
-                        std::thread::spawn(move || {
-                            let _ = child.wait();
-                        });
-                    }
-                    Err(err) => {
-                        error!("❌ Error al lanzar aplicación {} desde Dock: {:?}", name, err);
-                    }
-                }
-            }
+            spawn_dock_app(&name, &cmd, &[]);
         })
     };
 
@@ -1957,6 +2105,21 @@ fn create_dock_item(
         act_open();
     });
     menu_box.append(&btn_open);
+
+    for (label, args) in dock_app_context_actions(app_cfg) {
+        let btn_action = Button::builder()
+            .label(label)
+            .css_classes(["popover-menu-item"])
+            .build();
+        let p_action = popover.clone();
+        let action_name = name.clone();
+        let action_command = cmd.clone();
+        btn_action.connect_clicked(move |_| {
+            p_action.popdown();
+            spawn_dock_app(&action_name, &action_command, args);
+        });
+        menu_box.append(&btn_action);
+    }
 
     // 3. Opciones de anclado / organización estilo macOS
     if is_pinned {
@@ -2095,4 +2258,110 @@ fn create_dock_item(
     item_container.append(&indicator);
 
     (item_container, indicator)
+}
+
+fn spawn_dock_app(name: &str, cmd: &str, extra_args: &[&str]) {
+    let parts: Vec<&str> = cmd.split_whitespace().collect();
+    if let Some((exe, args)) = parts.split_first() {
+        let target_exe = if *exe == "gnome-control-center" {
+            "malus-de-settings"
+        } else {
+            *exe
+        };
+        let resolved_exe = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join(target_exe)))
+            .filter(|p| p.exists())
+            .or_else(|| {
+                let rel = std::path::PathBuf::from("/home/cristian/Apps/malus-de/target/release")
+                    .join(target_exe);
+                if rel.exists() {
+                    Some(rel)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| std::path::PathBuf::from(target_exe));
+        let mut command = Command::new(&resolved_exe);
+        command.args(args).args(extra_args);
+        malus_de_common::config::set_cursor_environment(&mut command);
+        if let Ok(wayland_disp) = std::env::var("WAYLAND_DISPLAY") {
+            command.env("WAYLAND_DISPLAY", wayland_disp);
+        }
+        command.env("XDG_CURRENT_DESKTOP", "Malus");
+        command.env("GDK_BACKEND", "wayland");
+        if let Ok(xdg_rt) = std::env::var("XDG_RUNTIME_DIR") {
+            command.env("XDG_RUNTIME_DIR", xdg_rt);
+        }
+        match command.spawn() {
+            Ok(mut child) => {
+                let pid = child.id();
+                info!("🚀 Proceso iniciado para {}: PID={}", name, pid);
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            }
+            Err(err) => {
+                error!("❌ Error al lanzar aplicación {} desde Dock: {:?}", name, err);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app(name: &str, command: &str) -> DockAppConfig {
+        DockAppConfig {
+            name: name.to_string(),
+            icon: String::new(),
+            command: command.to_string(),
+            matchers: Vec::new(),
+            icon_appearance: DockIconAppearance::Auto,
+        }
+    }
+
+    #[test]
+    fn brave_has_incognito_action() {
+        assert_eq!(
+            dock_app_context_actions(&app("Brave", "brave-browser")),
+            vec![("Abrir en modo incógnito", &["--incognito"][..])]
+        );
+    }
+
+    #[test]
+    fn code_editors_have_empty_window_action() {
+        for app in [
+            app("Visual Studio Code", "code"),
+            app("Antigravity", "antigravity"),
+        ] {
+            assert_eq!(
+                dock_app_context_actions(&app),
+                vec![("Abrir nueva ventana vacía", &["--new-window"][..])]
+            );
+        }
+    }
+
+    #[test]
+    fn nautilus_has_new_window_action() {
+        assert_eq!(
+            dock_app_context_actions(&app("Archivos", "nautilus")),
+            vec![("Abrir nueva ventana", &["--new-window"][..])]
+        );
+    }
+
+    #[test]
+    fn active_app_identity_matches_dock_matchers_case_insensitively() {
+        assert!(matches_dock_app(
+            &["org.gnome.nautilus".to_string()],
+            "Archivos",
+            "org.gnome.Nautilus"
+        ));
+        assert!(!matches_dock_app(
+            &["org.gnome.nautilus".to_string()],
+            "Archivos",
+            "org.gnome.Calculator"
+        ));
+    }
 }

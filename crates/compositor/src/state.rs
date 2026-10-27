@@ -755,20 +755,21 @@ impl MalusState {
         }).cloned();
 
         if let Some(window) = visible_window {
-            // Si la ventana ya tiene foco y está en primer plano: minimizar con efecto Genie (comportamiento dock estándar)
-            let is_already_focused = self.seat.get_keyboard()
+            let is_already_focused = self
+                .seat
+                .get_keyboard()
                 .and_then(|kb| kb.current_focus())
                 .map(|focused| {
-                    window.wl_surface().map(|s| s.as_ref() == &focused).unwrap_or(false)
+                    window
+                        .wl_surface()
+                        .map(|surface| surface.as_ref() == &focused)
+                        .unwrap_or(false)
                 })
                 .unwrap_or(false);
 
             if is_already_focused {
-                if let Some(toplevel) = window.toplevel() {
-                    tracing::info!("📥 Clic en app activa del Dock: minimizando vía Genie Effect");
-                    self.minimize_toplevel(toplevel);
-                    return true;
-                }
+                tracing::debug!("La app solicitada ya tiene el foco; no se minimiza ni se altera");
+                return true;
             }
 
             self.space.raise_element(&window, true);
