@@ -1638,6 +1638,8 @@ pub fn run_drm() -> Result<()> {
     let mut blur_pipeline: Option<crate::blur::DualKawaseBlur> = None;
     let mut window_squircle_shader: Option<crate::window_corners::WindowSquircleShader> = None;
     let mut shadow_pipeline: Option<crate::shadow::WindowShadowPipeline> = None;
+    let mut theme_transition_pipeline: Option<crate::theme_transition::ThemeTransitionPipeline> =
+        None;
 
     while state.is_running {
         let frame_start = Instant::now();
@@ -1881,6 +1883,10 @@ pub fn run_drm() -> Result<()> {
 
         // 🎨 RENDERIZADO GPU REAL A CADA MONITOR FÍSICO
         if let Ok(mut surfs) = shared_surfaces.lock() {
+            let theme_capture_request = state.pending_theme_transition_capture.clone();
+            let mut theme_capture_succeeded = theme_capture_request.is_some();
+            let mut theme_capture_outputs = 0usize;
+            let expected_theme_outputs = surfs.len();
             for out_surface in surfs.iter_mut() {
                 let scale = out_surface.output.current_scale().fractional_scale();
                 let output_geo = state
@@ -1891,6 +1897,9 @@ pub fn run_drm() -> Result<()> {
                 let (mut dmabuf, _age) = match out_surface.surface.next_buffer() {
                     Ok(buf) => buf,
                     Err(e) => {
+                        if theme_capture_request.is_some() {
+                            theme_capture_succeeded = false;
+                        }
                         // Si no hay slots libres, la GPU aún está en escaneo de buffer anterior (esperar vblank)
                         warn!(
                             "Buffer no disponible para {}: {:?}",
@@ -2927,6 +2936,56 @@ pub fn run_drm() -> Result<()> {
                             }
                         }
 
+                        if theme_transition_pipeline.is_none() {
+                            theme_transition_pipeline =
+                                frame.with_context(crate::theme_transition::ThemeTransitionPipeline::new)
+                                    .ok()
+                                    .flatten();
+                        }
+                        if let Some(pipeline) = theme_transition_pipeline.as_mut() {
+                            let output_name = out_surface.output.name();
+                            let origin = theme_capture_request.as_ref().map(|request| {
+                                crate::theme_transition::output_origin(
+                                    (request.origin.x, request.origin.y),
+                                    (output_geo.loc.x, output_geo.loc.y),
+                                    scale,
+                                    out_surface.size,
+                                )
+                            });
+                            let result = frame.with_context(|gl| {
+                                if let Some(origin) = origin {
+                                    if pipeline.capture_snapshot(
+                                        gl,
+                                        &output_name,
+                                        out_surface.size,
+                                        true,
+                                        origin,
+                                    ) {
+                                        theme_capture_outputs += 1;
+                                    } else {
+                                        theme_capture_succeeded = false;
+                                    }
+                                }
+                                if let Some(started_at) = state.theme_transition_started_at {
+                                    pipeline.draw(
+                                        gl,
+                                        &output_name,
+                                        out_surface.size,
+                                        started_at,
+                                        Instant::now(),
+                                    );
+                                }
+                            });
+                            if let Err(error) = result {
+                                warn!("No se pudo dibujar la transición de tema: {error:?}");
+                                if theme_capture_request.is_some() {
+                                    theme_capture_succeeded = false;
+                                }
+                            }
+                        } else if theme_capture_request.is_some() {
+                            theme_capture_succeeded = false;
+                        }
+
                         let _ = frame.finish();
                     }
                     if let Some(destination) = screenshot_request {
@@ -2953,6 +3012,20 @@ pub fn run_drm() -> Result<()> {
 
                 if let Err(e) = out_surface.surface.queue_buffer(None, None, ()) {
                     warn!("Error al encolar buffer en DRM: {:?}", e);
+                }
+            }
+            if let Some(request) = theme_capture_request {
+                state.pending_theme_transition_capture = None;
+                if theme_capture_succeeded && theme_capture_outputs == expected_theme_outputs {
+                    state.ipc_broadcaster.broadcast(
+                        &IpcMessage::ThemeTransitionPrepared {
+                            request_id: request.request_id,
+                        },
+                    );
+                } else {
+                    warn!(
+                        "No se guardaron todos los fotogramas DRM para la transición de tema"
+                    );
                 }
             }
         }

@@ -88,6 +88,12 @@ pub struct AppSwitcherState {
     pub selected_index: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct ThemeTransitionCapture {
+    pub request_id: String,
+    pub origin: Point<f64, Logical>,
+}
+
 pub struct MalusState {
     pub display_handle: DisplayHandle,
     pub compositor_state: CompositorState,
@@ -123,6 +129,8 @@ pub struct MalusState {
     pub saved_app_window_sizes: HashMap<String, Size<i32, Logical>>,
     pub dock_blur_headroom: i32,
     pub pending_screenshot_requests: std::collections::VecDeque<(std::path::PathBuf, Option<String>)>,
+    pub pending_theme_transition_capture: Option<ThemeTransitionCapture>,
+    pub theme_transition_started_at: Option<Instant>,
 }
 
 pub fn guess_icon_name(app_id: &str, title: &str) -> String {
@@ -438,6 +446,8 @@ impl MalusState {
             saved_app_window_sizes: Self::load_saved_window_sizes(),
             dock_blur_headroom,
             pending_screenshot_requests: std::collections::VecDeque::new(),
+            pending_theme_transition_capture: None,
+            theme_transition_started_at: None,
         }
     }
 
@@ -831,6 +841,28 @@ impl MalusState {
                     self.pending_screenshot_requests
                         .push_back((std::path::PathBuf::from(destination), Some(output_name)));
                 }
+                IpcMessage::PrepareThemeTransition { request_id } => {
+                    let origin = self
+                        .seat
+                        .get_pointer()
+                        .map(|pointer| pointer.current_location())
+                        .unwrap_or_else(|| Point::from((0.0, 0.0)));
+                    self.theme_transition_started_at = None;
+                    self.pending_theme_transition_capture =
+                        Some(ThemeTransitionCapture { request_id, origin });
+                }
+                IpcMessage::ThemeChanged { theme_name, is_dark } => {
+                    tracing::info!(
+                        "📥 IPC ThemeChanged recibido: tema='{}', oscuro={}",
+                        theme_name,
+                        is_dark
+                    );
+                    self.theme_transition_started_at = Some(Instant::now());
+                    self.ipc_broadcaster.broadcast(&IpcMessage::ThemeChanged {
+                        theme_name,
+                        is_dark,
+                    });
+                }
                 IpcMessage::AnimateRestore { window_id } => {
                     tracing::info!("📥 IPC AnimateRestore recibido para ventana id={}", window_id);
                     self.restore_window_by_id(window_id);
@@ -881,6 +913,7 @@ impl MalusState {
                     self.pending_displays_reload = true;
                     self.ipc_broadcaster.broadcast(&IpcMessage::ReloadDisplaysConfig);
                 }
+                IpcMessage::ThemeTransitionPrepared { .. } => {}
                 IpcMessage::SetKeyboardLayout { layout, variant } => {
                     tracing::info!("📥 IPC SetKeyboardLayout recibido: layout='{}', variant='{}'", layout, variant);
                     self.apply_keyboard_layout(&layout, &variant);
