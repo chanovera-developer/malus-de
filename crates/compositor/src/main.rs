@@ -4,6 +4,7 @@ pub mod capture;
 pub mod grabs;
 pub mod shadow;
 pub mod state;
+pub mod theme_transition;
 pub mod window_corners;
 
 use malus_de_common::logging::init_logging;

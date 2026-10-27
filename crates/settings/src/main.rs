@@ -2615,6 +2615,17 @@ fn set_system_appearance_mode(to_dark: bool) {
     let target = if to_dark { "prefer-dark" } else { "prefer-light" };
     tracing::info!("🎨 Cambiando modo de apariencia de Malus DE: {}", target);
 
+    match IpcClient::prepare_theme_transition() {
+        Ok(true) => tracing::info!("✨ Fotograma anterior guardado para la transición de tema"),
+        Ok(false) => tracing::warn!(
+            "No se preparó la transición de tema; se aplicará el cambio sin animación"
+        ),
+        Err(error) => tracing::warn!(
+            "No se pudo preparar la transición de tema: {}; se aplicará el cambio sin animación",
+            error
+        ),
+    }
+
     malus_de_common::config::sync_system_appearance(to_dark);
 
     libadwaita::StyleManager::default().set_color_scheme(

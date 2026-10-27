@@ -137,6 +137,10 @@ pub enum IpcMessage {
         theme_name: String,
         is_dark: bool,
     },
+    /// Solicita al compositor capturar el fotograma actual antes de cambiar el tema.
+    PrepareThemeTransition { request_id: String },
+    /// Confirmación enviada cuando el fotograma anterior quedó guardado.
+    ThemeTransitionPrepared { request_id: String },
     /// Solicitud de anclar una aplicación al Dock
     PinAppToDock {
         name: String,
@@ -304,11 +308,78 @@ impl IpcClient {
     pub fn send_command(msg: IpcMessage) -> std::io::Result<()> {
         send_ipc_message(&msg)
     }
+
+    pub fn prepare_theme_transition() -> std::io::Result<bool> {
+        let request_id = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        let mut stream = UnixStream::connect(ipc_socket_path())?;
+        stream.set_read_timeout(Some(std::time::Duration::from_millis(250)))?;
+        let request = IpcMessage::PrepareThemeTransition {
+            request_id: request_id.clone(),
+        };
+        let json = serde_json::to_string(&request)?;
+        writeln!(stream, "{json}")?;
+
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => return Ok(false),
+                Ok(_) => {
+                    if let Ok(IpcMessage::ThemeTransitionPrepared {
+                        request_id: prepared_id,
+                    }) = serde_json::from_str(&line)
+                    {
+                        if prepared_id == request_id {
+                            return Ok(true);
+                        }
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    return Ok(false);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_theme_transition_messages_round_trip() {
+        let request = IpcMessage::PrepareThemeTransition {
+            request_id: "request-1".to_string(),
+        };
+        let serialized = serde_json::to_string(&request).expect("Debe serializar");
+        assert!(matches!(
+            serde_json::from_str::<IpcMessage>(&serialized),
+            Ok(IpcMessage::PrepareThemeTransition { request_id }) if request_id == "request-1"
+        ));
+
+        let response = IpcMessage::ThemeTransitionPrepared {
+            request_id: "request-1".to_string(),
+        };
+        let serialized = serde_json::to_string(&response).expect("Debe serializar");
+        assert!(matches!(
+            serde_json::from_str::<IpcMessage>(&serialized),
+            Ok(IpcMessage::ThemeTransitionPrepared { request_id }) if request_id == "request-1"
+        ));
+    }
 
     #[test]
     fn test_minimized_windows_serialization() {

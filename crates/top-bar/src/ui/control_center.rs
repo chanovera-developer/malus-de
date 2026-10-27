@@ -2232,6 +2232,17 @@ pub fn apply_system_appearance_mode(to_dark: bool) {
     let target = if to_dark { "prefer-dark" } else { "prefer-light" };
     info!("🎨 Aplicando modo de apariencia de Malus DE: {}", target);
 
+    match malus_de_common::ipc::IpcClient::prepare_theme_transition() {
+        Ok(true) => info!("✨ Fotograma anterior guardado para la transición de tema"),
+        Ok(false) => tracing::warn!(
+            "No se preparó la transición de tema; se aplicará el cambio sin animación"
+        ),
+        Err(error) => tracing::warn!(
+            "No se pudo preparar la transición de tema: {}; se aplicará el cambio sin animación",
+            error
+        ),
+    }
+
     // 1. Sincronizar las preferencias aisladas de GSettings, GTK y CSS de Malus DE.
     malus_de_common::config::sync_system_appearance(to_dark);
 

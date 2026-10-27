@@ -196,6 +196,8 @@ pub fn run_winit() -> Result<()> {
     let mut blur_pipeline: Option<crate::blur::DualKawaseBlur> = None;
     let mut window_squircle_shader: Option<crate::window_corners::WindowSquircleShader> = None;
     let mut shadow_pipeline: Option<crate::shadow::WindowShadowPipeline> = None;
+    let mut theme_transition_pipeline: Option<crate::theme_transition::ThemeTransitionPipeline> =
+        None;
 
     while state.is_running {
         let frame_start = Instant::now();
@@ -1089,6 +1091,7 @@ pub fn run_winit() -> Result<()> {
                     .pending_screenshot_requests
                     .pop_front()
                     .map(|(destination, _)| destination);
+                let theme_capture_request = state.pending_theme_transition_capture.clone();
                 let mut frame_rendered = false;
                 if let Ok(mut frame) =
                     renderer.render(&mut framebuffer, size, Transform::Flipped180)
@@ -1772,7 +1775,66 @@ pub fn run_winit() -> Result<()> {
                         }
                     }
 
+                    let mut theme_capture_succeeded = false;
+                    if theme_transition_pipeline.is_none() {
+                        theme_transition_pipeline =
+                            frame.with_context(crate::theme_transition::ThemeTransitionPipeline::new)
+                                .ok()
+                                .flatten();
+                    }
+                    if let Some(pipeline) = theme_transition_pipeline.as_mut() {
+                        let output_geo = state
+                            .space
+                            .output_geometry(&output)
+                            .unwrap_or_default();
+                        let output_name = output.name();
+                        let origin = theme_capture_request.as_ref().map(|request| {
+                            let origin = crate::theme_transition::output_origin(
+                                (request.origin.x, request.origin.y),
+                                (output_geo.loc.x, output_geo.loc.y),
+                                1.0,
+                                size,
+                            );
+                            Point::from((size.w - origin.x, origin.y))
+                        });
+                        let result = frame.with_context(|gl| {
+                            if let Some(origin) = origin {
+                                theme_capture_succeeded = pipeline.capture_snapshot(
+                                    gl,
+                                    &output_name,
+                                    size,
+                                    false,
+                                    origin,
+                                );
+                            }
+                            if let Some(started_at) = state.theme_transition_started_at {
+                                pipeline.draw(
+                                    gl,
+                                    &output_name,
+                                    size,
+                                    started_at,
+                                    Instant::now(),
+                                );
+                            }
+                        });
+                        if let Err(error) = result {
+                            warn!("No se pudo dibujar la transición de tema: {error:?}");
+                        }
+                    }
+
                     let _ = frame.finish();
+                    if let Some(request) = theme_capture_request {
+                        state.pending_theme_transition_capture = None;
+                        if theme_capture_succeeded {
+                            state.ipc_broadcaster.broadcast(
+                                &IpcMessage::ThemeTransitionPrepared {
+                                    request_id: request.request_id,
+                                },
+                            );
+                        } else {
+                            warn!("No se pudo guardar el fotograma para la transición de tema");
+                        }
+                    }
 
                     let mut finished = Vec::new();
                     state.active_animations.retain(|anim| {
