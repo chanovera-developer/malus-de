@@ -1641,6 +1641,7 @@ pub fn run_drm() -> Result<()> {
 
     while state.is_running {
         let frame_start = Instant::now();
+        state.resume_timed_out_dock_animations(frame_start);
 
         // Si la sesión TTY no está activa (VT switch away), pausar renderizado para no saturar GPU
         if !session.is_active() {
@@ -1906,6 +1907,9 @@ pub fn run_drm() -> Result<()> {
                 let now = Instant::now();
                 let mut anim_data = Vec::new();
                 for anim in &state.active_animations {
+                    if anim.waiting_for_dock_slot {
+                        continue;
+                    }
                     let anim_bbox = anim.window_rect.merge(anim.dock_slot_rect);
                     if output_geo.overlaps(anim_bbox) {
                         let elems = render_elements_from_surface_tree::<
@@ -2957,6 +2961,9 @@ pub fn run_drm() -> Result<()> {
         let now = Instant::now();
         let mut finished_anims = Vec::new();
         state.active_animations.retain(|anim| {
+            if anim.waiting_for_dock_slot {
+                return true;
+            }
             if now.duration_since(anim.start_time) >= anim.duration {
                 finished_anims.push(anim.clone());
                 false

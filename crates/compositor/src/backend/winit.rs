@@ -199,6 +199,7 @@ pub fn run_winit() -> Result<()> {
 
     while state.is_running {
         let frame_start = Instant::now();
+        state.resume_timed_out_dock_animations(frame_start);
 
         let status = winit_event_loop.dispatch_new_events(|event| match event {
             WinitEvent::CloseRequested => {
@@ -821,6 +822,9 @@ pub fn run_winit() -> Result<()> {
                 let now = Instant::now();
                 let mut anim_data = Vec::new();
                 for anim in &state.active_animations {
+                    if anim.waiting_for_dock_slot {
+                        continue;
+                    }
                     let elems = render_elements_from_surface_tree::<
                         GlesRenderer,
                         WaylandSurfaceRenderElement<GlesRenderer>,
@@ -1772,6 +1776,9 @@ pub fn run_winit() -> Result<()> {
 
                     let mut finished = Vec::new();
                     state.active_animations.retain(|anim| {
+                        if anim.waiting_for_dock_slot {
+                            return true;
+                        }
                         if now.duration_since(anim.start_time) >= anim.duration {
                             finished.push(anim.clone());
                             false

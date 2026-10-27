@@ -1221,7 +1221,7 @@ fn build_dock_ui(app: &Application) {
                     // Agregar o mantener miniaturas activas
                     for win_info in windows {
                         if !current_map.contains_key(&win_info.window_id) {
-                            let (widget, id) = create_minimized_window_item(&win_info, &win_ref);
+                            let (widget, id) = create_minimized_window_item(&win_info);
                             min_box.append(&widget);
                             current_map.insert(id, widget);
                             info!("🖼️ Miniatura agregada al Dock: window_id={} ('{}')", id, win_info.title);
@@ -1231,7 +1231,29 @@ fn build_dock_ui(app: &Application) {
                     // Actualizar visibilidad del contenedor para colapsar espacio si está vacío
                     let has_minimized = !current_map.is_empty();
                     min_box.set_visible(has_minimized);
+                    let cards: Vec<(u64, gtk4::Widget)> = current_map
+                        .iter()
+                        .map(|(id, widget)| (*id, widget.clone()))
+                        .collect();
+                    drop(current_map);
+
                     queue_dock_resize(&win_ref, &dock_root_ref, &dock_bar_ref);
+                    let dock_window_weak = win_ref.downgrade();
+                    for delay in [60, 180] {
+                        let cards = cards.clone();
+                        let dock_window_weak = dock_window_weak.clone();
+                        glib::timeout_add_local_once(Duration::from_millis(delay), move || {
+                            if let Some(dock_window) = dock_window_weak.upgrade() {
+                                for (window_id, card) in cards {
+                                    register_minimized_dock_slot(
+                                        &card,
+                                        &dock_window,
+                                        window_id,
+                                    );
+                                }
+                            }
+                        });
+                    }
                 }
                 IpcMessage::ShowAppSwitcher { items, selected_index } => {
                     while let Some(c) = switcher_box_ipc.first_child() {
@@ -1729,10 +1751,7 @@ fn squircle_path(context: &gtk4::cairo::Context, width: f64, height: f64, radius
     context.close_path();
 }
 
-fn create_minimized_window_item(
-    info: &MinimizedWindowInfo,
-    dock_window: &ApplicationWindow,
-) -> (gtk4::Widget, u64) {
+fn create_minimized_window_item(info: &MinimizedWindowInfo) -> (gtk4::Widget, u64) {
     let window_id = info.window_id;
 
     // Mini ventana: barra superior con 3 semáforos y cuerpo con simulación de contenido
@@ -1804,39 +1823,32 @@ fn create_minimized_window_item(
     });
     overlay.add_controller(gesture);
 
-    // Registro de coordenadas del slot para la animación Genie del compositor
-    let overlay_clone = overlay.clone();
-    let win_weak = dock_window.downgrade();
-    overlay.connect_realize(move |_| {
-        let card = overlay_clone.clone();
-        let win_weak = win_weak.clone();
-
-        for delay in [60, 180] {
-            let card_c = card.clone();
-            let win_w = win_weak.clone();
-            glib::timeout_add_local_once(std::time::Duration::from_millis(delay), move || {
-                if let Some(win) = win_w.upgrade() {
-                    if let Some(p) = card_c.compute_point(&win, &gtk4::graphene::Point::zero()) {
-                        let rel_x = p.x().max(0.0) as i32;
-                        let rel_y = p.y().max(0.0) as i32;
-                        let w = card_c.width().max(48) as u32;
-                        let h = card_c.height().max(42) as u32;
-
-                        info!("📍 Registrando slot de miniatura en Dock: id={}, pos=({}, {}, {}, {})", id, rel_x, rel_y, w, h);
-                        let _ = send_ipc_message(&IpcMessage::RegisterDockSlot {
-                            window_id: id,
-                            x: rel_x,
-                            y: rel_y,
-                            width: w,
-                            height: h,
-                        });
-                    }
-                }
-            });
-        }
-    });
-
     (overlay.upcast::<gtk4::Widget>(), window_id)
+}
+
+fn register_minimized_dock_slot(
+    card: &gtk4::Widget,
+    dock_window: &ApplicationWindow,
+    window_id: u64,
+) {
+    if let Some(point) = card.compute_point(dock_window, &gtk4::graphene::Point::zero()) {
+        let x = point.x().round() as i32;
+        let y = point.y().round() as i32;
+        let width = card.width().max(1) as u32;
+        let height = card.height().max(1) as u32;
+
+        info!(
+            "📍 Registrando slot de miniatura en Dock: id={}, pos=({}, {}, {}, {})",
+            window_id, x, y, width, height
+        );
+        let _ = send_ipc_message(&IpcMessage::RegisterDockSlot {
+            window_id,
+            x,
+            y,
+            width,
+            height,
+        });
+    }
 }
 
 fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
