@@ -100,6 +100,8 @@ in vec2 v_win_px;
 out vec4 frag_color;
 
 uniform sampler2D u_texture;
+uniform float u_solid_mode;
+uniform vec4 u_solid_color;
 uniform vec2 u_win_size;
 uniform float u_corner_radius;
 
@@ -112,6 +114,20 @@ float squircle_sdf(vec2 p, vec2 b, float r) {
 }
 
 void main() {
+    if (u_solid_mode > 0.5) {
+        float alpha = 1.0;
+        if (u_corner_radius > 1.0) {
+            vec2 half_size = u_win_size * 0.5;
+            vec2 p = v_win_px - half_size;
+            float effective_r = min(u_corner_radius, min(half_size.x, half_size.y));
+            float dist = squircle_sdf(p, half_size, effective_r);
+            float edge_aa = max(fwidth(dist), 1.0);
+            alpha = 1.0 - smoothstep(-edge_aa, 0.0, dist);
+        }
+        frag_color = vec4(u_solid_color.rgb, u_solid_color.a * alpha);
+        return;
+    }
+
     vec4 col = texture(u_texture, v_tex_coords);
     if (u_corner_radius > 1.0) {
         vec2 half_size = u_win_size * 0.5;
@@ -147,6 +163,8 @@ pub struct DualKawaseBlur {
     blit_u_is_drm: ffi::types::GLint,
     blit_u_texture: ffi::types::GLint,
     blit_u_corner_radius: ffi::types::GLint,
+    blit_u_solid_mode: ffi::types::GLint,
+    blit_u_solid_color: ffi::types::GLint,
 
     source_tex: ffi::types::GLuint,
     source_tex_size: (i32, i32),
@@ -190,7 +208,10 @@ impl DualKawaseBlur {
             let blit_u_win_size = gl.GetUniformLocation(blit_program, c"u_win_size".as_ptr());
             let blit_u_is_drm = gl.GetUniformLocation(blit_program, c"u_is_drm".as_ptr());
             let blit_u_texture = gl.GetUniformLocation(blit_program, c"u_texture".as_ptr());
-            let blit_u_corner_radius = gl.GetUniformLocation(blit_program, c"u_corner_radius".as_ptr());
+            let blit_u_corner_radius =
+                gl.GetUniformLocation(blit_program, c"u_corner_radius".as_ptr());
+            let blit_u_solid_mode = gl.GetUniformLocation(blit_program, c"u_solid_mode".as_ptr());
+            let blit_u_solid_color = gl.GetUniformLocation(blit_program, c"u_solid_color".as_ptr());
 
             let mut source_tex = 0;
             gl.GenTextures(1, &mut source_tex);
@@ -219,6 +240,8 @@ impl DualKawaseBlur {
                 blit_u_is_drm,
                 blit_u_texture,
                 blit_u_corner_radius,
+                blit_u_solid_mode,
+                blit_u_solid_color,
                 source_tex,
                 source_tex_size: (0, 0),
                 fbo_textures,
@@ -293,8 +316,16 @@ impl DualKawaseBlur {
                 );
                 gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MIN_FILTER, ffi::LINEAR as i32);
                 gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MAG_FILTER, ffi::LINEAR as i32);
-                gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_WRAP_S, ffi::CLAMP_TO_EDGE as i32);
-                gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_WRAP_T, ffi::CLAMP_TO_EDGE as i32);
+                gl.TexParameteri(
+                    ffi::TEXTURE_2D,
+                    ffi::TEXTURE_WRAP_S,
+                    ffi::CLAMP_TO_EDGE as i32,
+                );
+                gl.TexParameteri(
+                    ffi::TEXTURE_2D,
+                    ffi::TEXTURE_WRAP_T,
+                    ffi::CLAMP_TO_EDGE as i32,
+                );
                 self.source_tex_size = (w, h);
             }
 
@@ -333,8 +364,16 @@ impl DualKawaseBlur {
                     );
                     gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MIN_FILTER, ffi::LINEAR as i32);
                     gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MAG_FILTER, ffi::LINEAR as i32);
-                    gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_WRAP_S, ffi::CLAMP_TO_EDGE as i32);
-                    gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_WRAP_T, ffi::CLAMP_TO_EDGE as i32);
+                    gl.TexParameteri(
+                        ffi::TEXTURE_2D,
+                        ffi::TEXTURE_WRAP_S,
+                        ffi::CLAMP_TO_EDGE as i32,
+                    );
+                    gl.TexParameteri(
+                        ffi::TEXTURE_2D,
+                        ffi::TEXTURE_WRAP_T,
+                        ffi::CLAMP_TO_EDGE as i32,
+                    );
 
                     gl.BindFramebuffer(ffi::FRAMEBUFFER, self.fbos[i]);
                     gl.FramebufferTexture2D(
@@ -431,6 +470,7 @@ impl DualKawaseBlur {
             );
             gl.Uniform1i(self.blit_u_is_drm, if is_drm { 1 } else { 0 });
             gl.Uniform1f(self.blit_u_corner_radius, corner_radius);
+            gl.Uniform1f(self.blit_u_solid_mode, 0.0);
 
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
 
@@ -453,6 +493,85 @@ impl DualKawaseBlur {
             }
             if prev_cull != ffi::FALSE {
                 gl.Enable(ffi::CULL_FACE);
+            }
+        }
+    }
+
+    /// Dibuja un fondo opaco de tema bajo una ventana, conservando el recorte squircle.
+    pub fn render_solid(
+        &mut self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        screen_size: Size<i32, Physical>,
+        win_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        color: [f32; 3],
+    ) {
+        let screen_rect = Rectangle::from_size(screen_size);
+        let Some(visible_rect) = win_rect.intersection(screen_rect) else {
+            return;
+        };
+        if visible_rect.size.w < 1 || visible_rect.size.h < 1 {
+            return;
+        }
+
+        let is_drm = projection[4] > 0.0;
+
+        unsafe {
+            let prev_blend = gl.IsEnabled(ffi::BLEND);
+            let mut prev_src_rgb = 0;
+            let mut prev_dst_rgb = 0;
+            let mut prev_src_alpha = 0;
+            let mut prev_dst_alpha = 0;
+            gl.GetIntegerv(ffi::BLEND_SRC_RGB, &mut prev_src_rgb);
+            gl.GetIntegerv(ffi::BLEND_DST_RGB, &mut prev_dst_rgb);
+            gl.GetIntegerv(ffi::BLEND_SRC_ALPHA, &mut prev_src_alpha);
+            gl.GetIntegerv(ffi::BLEND_DST_ALPHA, &mut prev_dst_alpha);
+
+            gl.Enable(ffi::BLEND);
+            gl.BlendFuncSeparate(
+                ffi::SRC_ALPHA,
+                ffi::ONE_MINUS_SRC_ALPHA,
+                ffi::ZERO,
+                ffi::ONE,
+            );
+            gl.UseProgram(self.blit_program);
+            gl.Uniform1i(self.blit_u_texture, 0);
+            gl.Uniform1f(self.blit_u_solid_mode, 1.0);
+            gl.Uniform4f(self.blit_u_solid_color, color[0], color[1], color[2], 1.0);
+            gl.UniformMatrix3fv(self.blit_u_matrix, 1, ffi::FALSE, projection.as_ptr());
+            gl.Uniform4f(
+                self.blit_u_blit_rect,
+                visible_rect.loc.x as f32,
+                visible_rect.loc.y as f32,
+                visible_rect.size.w as f32,
+                visible_rect.size.h as f32,
+            );
+            gl.Uniform4f(
+                self.blit_u_win_rect,
+                win_rect.loc.x as f32,
+                win_rect.loc.y as f32,
+                win_rect.size.w as f32,
+                win_rect.size.h as f32,
+            );
+            gl.Uniform2f(
+                self.blit_u_win_size,
+                win_rect.size.w as f32,
+                win_rect.size.h as f32,
+            );
+            gl.Uniform1i(self.blit_u_is_drm, if is_drm { 1 } else { 0 });
+            gl.Uniform1f(self.blit_u_corner_radius, corner_radius);
+            gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
+            gl.UseProgram(0);
+
+            gl.BlendFuncSeparate(
+                prev_src_rgb as u32,
+                prev_dst_rgb as u32,
+                prev_src_alpha as u32,
+                prev_dst_alpha as u32,
+            );
+            if prev_blend == ffi::FALSE {
+                gl.Disable(ffi::BLEND);
             }
         }
     }

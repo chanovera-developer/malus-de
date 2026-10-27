@@ -995,6 +995,7 @@ pub fn run_winit() -> Result<()> {
 
                             let is_firefox = crate::state::is_firefox_window(&window);
                             let is_translucent = crate::state::is_translucent_window(&window);
+                            let is_system_monitor = crate::state::is_system_monitor_window(&window);
                             let root_id = smithay::backend::renderer::element::Id::from_wayland_resource(main_surface.as_ref());
                             let should_round = win_phys_r.is_some() && !is_fullscreen;
                             let content_offset = geo.loc.to_physical_precise_round(1.0);
@@ -1004,7 +1005,7 @@ pub fn run_winit() -> Result<()> {
                                 geo.size.to_physical_precise_round(1.0),
                             );
 
-                            window_render_data.push((root_id, win_surfaces, popup_elems, popup_shadow_rects, should_round, is_active, win_screen_rect, content_offset, content_size, is_firefox, is_translucent));
+                            window_render_data.push((root_id, win_surfaces, popup_elems, popup_shadow_rects, should_round, is_active, win_screen_rect, content_offset, content_size, is_firefox, is_translucent, is_system_monitor));
                         }
                     }
                 }
@@ -1040,7 +1041,7 @@ pub fn run_winit() -> Result<()> {
                     let projection = *frame.projection();
 
                     // 2. Renderizar superficies de cada ventana con sus sombras proyectadas, desenfoque de fondo y esquinas squircle
-                    for (root_id, win_elems, _popups, _popup_shadow_rects, should_round, is_active, win_rect, content_offset, content_size, is_firefox, is_translucent) in &window_render_data {
+                    for (root_id, win_elems, _popups, _popup_shadow_rects, should_round, is_active, win_rect, content_offset, content_size, is_firefox, is_translucent, is_system_monitor) in &window_render_data {
                         if win_elems.is_empty() {
                             continue;
                         }
@@ -1053,15 +1054,29 @@ pub fn run_winit() -> Result<()> {
                                     shadow.render_shadow(gl, &projection, *win_rect, r as f32, *is_active, 1.0);
                                 });
                             }
+                        }
 
-                            // 2.1.5. DESENFOQUE DE FONDO DUAL KAWASE (Exclusivo para Nautilus y Ajustes del Sistema)
-                            if *is_translucent {
-                                if let (Some(r), Some(ref mut blur)) = (win_phys_r, blur_pipeline.as_mut()) {
-                                    let screen_size = size;
-                                    let _ = frame.with_context(|gl| {
-                                        blur.render_blur(gl, &projection, screen_size, *win_rect, r as f32);
-                                    });
-                                }
+                        if *is_system_monitor {
+                            if let Some(ref mut blur) = blur_pipeline {
+                                let corner_radius = if *should_round {
+                                    win_phys_r.unwrap_or(0) as f32
+                                } else {
+                                    0.0
+                                };
+                                let color = crate::state::system_monitor_backdrop_color();
+                                let _ = frame.with_context(|gl| {
+                                    blur.render_solid(gl, &projection, size, *win_rect, corner_radius, color);
+                                });
+                            }
+                        }
+
+                        // 2.1.5. DESENFOQUE DE FONDO DUAL KAWASE (Nautilus y Ajustes del Sistema)
+                        if *should_round && *is_translucent {
+                            if let (Some(r), Some(ref mut blur)) = (win_phys_r, blur_pipeline.as_mut()) {
+                                let screen_size = size;
+                                let _ = frame.with_context(|gl| {
+                                    blur.render_blur(gl, &projection, screen_size, *win_rect, r as f32);
+                                });
                             }
                         }
 
