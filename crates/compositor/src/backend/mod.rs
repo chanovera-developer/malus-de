@@ -1,18 +1,27 @@
-pub mod winit;
 pub mod drm;
+pub mod winit;
 
 use smithay::utils::{Physical, Rectangle};
+use std::time::Duration;
+
+pub fn frame_interval(refresh_millihz: i32) -> Duration {
+    if refresh_millihz > 0 {
+        Duration::from_nanos(1_000_000_000_000 / refresh_millihz as u64)
+    } else {
+        Duration::from_nanos(16_666_667)
+    }
+}
 
 pub fn dock_clip_rect(
-	geometry: Rectangle<i32, Physical>,
-	headroom: i32,
-	scale: f64,
+    geometry: Rectangle<i32, Physical>,
+    headroom: i32,
+    scale: f64,
 ) -> Rectangle<i32, Physical> {
-	let inset = ((headroom.max(0) as f64 * scale).round() as i32).min(geometry.size.h.max(0));
-	let mut clipped = geometry;
-	clipped.loc.y += inset;
-	clipped.size.h -= inset;
-	clipped
+    let inset = ((headroom.max(0) as f64 * scale).round() as i32).min(geometry.size.h.max(0));
+    let mut clipped = geometry;
+    clipped.loc.y += inset;
+    clipped.size.h -= inset;
+    clipped
 }
 
 pub fn dock_popover_blur_rect(
@@ -32,6 +41,18 @@ pub fn dock_popover_blur_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_interval_matches_output_refresh_rate() {
+        assert_eq!(frame_interval(60_000), Duration::from_nanos(16_666_666));
+        assert_eq!(frame_interval(120_000), Duration::from_nanos(8_333_333));
+    }
+
+    #[test]
+    fn frame_interval_uses_sixty_hertz_for_invalid_refresh_rates() {
+        assert_eq!(frame_interval(0), Duration::from_nanos(16_666_667));
+        assert_eq!(frame_interval(-1), Duration::from_nanos(16_666_667));
+    }
 
     #[test]
     fn dock_popover_blur_stops_at_the_body_before_the_tail() {
