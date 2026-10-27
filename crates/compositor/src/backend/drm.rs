@@ -2154,6 +2154,7 @@ pub fn run_drm() -> Result<()> {
 
                             let is_firefox = crate::state::is_firefox_window(&window);
                             let is_translucent = crate::state::is_translucent_window(&window);
+                            let is_system_monitor = crate::state::is_system_monitor_window(&window);
                             let root_id =
                                 smithay::backend::renderer::element::Id::from_wayland_resource(
                                     main_surface.as_ref(),
@@ -2179,6 +2180,7 @@ pub fn run_drm() -> Result<()> {
                                 content_size,
                                 is_firefox,
                                 is_translucent,
+                                is_system_monitor,
                             ));
                         }
                     }
@@ -2244,6 +2246,7 @@ pub fn run_drm() -> Result<()> {
                             content_size,
                             is_firefox,
                             is_translucent,
+                            is_system_monitor,
                         ) in &window_render_data
                         {
                             if win_elems.is_empty() {
@@ -2267,23 +2270,44 @@ pub fn run_drm() -> Result<()> {
                                         );
                                     });
                                 }
+                            }
 
-                                // 2.1.5. DESENFOQUE DE FONDO DUAL KAWASE (Exclusivo para Nautilus y Ajustes del Sistema)
-                                if *is_translucent {
-                                    if let (Some(r), Some(ref mut blur)) =
-                                        (win_phys_r, blur_pipeline.as_mut())
-                                    {
-                                        let screen_size = out_surface.size;
-                                        let _ = frame.with_context(|gl| {
-                                            blur.render_blur(
-                                                gl,
-                                                &projection,
-                                                screen_size,
-                                                *win_rect,
-                                                r as f32,
-                                            );
-                                        });
-                                    }
+                            if *is_system_monitor {
+                                if let Some(ref mut blur) = blur_pipeline {
+                                    let corner_radius = if *should_round {
+                                        win_phys_r.unwrap_or(0) as f32
+                                    } else {
+                                        0.0
+                                    };
+                                    let color = crate::state::system_monitor_backdrop_color();
+                                    let _ = frame.with_context(|gl| {
+                                        blur.render_solid(
+                                            gl,
+                                            &projection,
+                                            out_surface.size,
+                                            *win_rect,
+                                            corner_radius,
+                                            color,
+                                        );
+                                    });
+                                }
+                            }
+
+                            // 2.1.5. DESENFOQUE DE FONDO DUAL KAWASE (Nautilus y Ajustes del Sistema)
+                            if *should_round && *is_translucent {
+                                if let (Some(r), Some(ref mut blur)) =
+                                    (win_phys_r, blur_pipeline.as_mut())
+                                {
+                                    let screen_size = out_surface.size;
+                                    let _ = frame.with_context(|gl| {
+                                        blur.render_blur(
+                                            gl,
+                                            &projection,
+                                            screen_size,
+                                            *win_rect,
+                                            r as f32,
+                                        );
+                                    });
                                 }
                             }
 
