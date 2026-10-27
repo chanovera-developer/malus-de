@@ -74,6 +74,7 @@ pub struct GenieAnimation {
     pub start_time: std::time::Instant,
     pub duration: std::time::Duration,
     pub is_minimizing: bool,
+    pub waiting_for_dock_slot: bool,
     pub window_rect: Rectangle<i32, Logical>,
     pub dock_slot_rect: Rectangle<i32, Logical>,
     pub original_location: Point<i32, Logical>,
@@ -600,6 +601,22 @@ impl MalusState {
         None
     }
 
+    pub fn resume_timed_out_dock_animations(&mut self, now: Instant) {
+        const DOCK_SLOT_TIMEOUT: Duration = Duration::from_millis(300);
+        for anim in &mut self.active_animations {
+            if anim.waiting_for_dock_slot
+                && now.duration_since(anim.start_time) >= DOCK_SLOT_TIMEOUT
+            {
+                tracing::warn!(
+                    "No se recibió el slot del Dock para id={}; usando destino aproximado",
+                    anim.window_id
+                );
+                anim.waiting_for_dock_slot = false;
+                anim.start_time = now;
+            }
+        }
+    }
+
     pub fn restore_window_by_id(&mut self, target_id: u64) -> bool {
         let entry = self.minimized_windows.iter().find(|(surf, _)| {
             self.window_ids.get(*surf) == Some(&target_id)
@@ -613,7 +630,7 @@ impl MalusState {
 
             if let Some((window, loc)) = self.minimized_windows.remove(&surf) {
                 let geo = window.geometry();
-                let dock_slot = self.dock_slots.get(&target_id).cloned().unwrap_or_else(|| {
+                let dock_slot = self.dock_slots.remove(&target_id).unwrap_or_else(|| {
                     if let Some((dock_geo, _)) = self.dock_surface_geometry() {
                         let slot_x = dock_geo.loc.x + (dock_geo.size.w / 2) + 20;
                         let slot_y = dock_geo.loc.y + (dock_geo.size.h / 2) - 22;
@@ -637,6 +654,7 @@ impl MalusState {
                     start_time: std::time::Instant::now(),
                     duration: std::time::Duration::from_millis(480),
                     is_minimizing: false,
+                    waiting_for_dock_slot: false,
                     window_rect: Rectangle::new(loc, geo.size),
                     dock_slot_rect: dock_slot,
                     original_location: loc,
@@ -676,7 +694,10 @@ impl MalusState {
             let window_id = self.get_or_assign_window_id(&surf);
 
             // Determinar slot de destino en el Dock
-            let dock_slot = self.dock_slots.get(&window_id).cloned().unwrap_or_else(|| {
+            let registered_dock_slot = self.dock_slots.get(&window_id).cloned();
+            let waiting_for_dock_slot =
+                registered_dock_slot.is_none() && self.dock_surface_geometry().is_some();
+            let dock_slot = registered_dock_slot.unwrap_or_else(|| {
                 if let Some((dock_geo, _)) = self.dock_surface_geometry() {
                     let slot_x = dock_geo.loc.x + (dock_geo.size.w / 2) + 20;
                     let slot_y = dock_geo.loc.y + (dock_geo.size.h / 2) - 22;
@@ -700,6 +721,7 @@ impl MalusState {
                 start_time: std::time::Instant::now(),
                 duration: std::time::Duration::from_millis(480),
                 is_minimizing: true,
+                waiting_for_dock_slot,
                 window_rect: Rectangle::new(loc, geo.size),
                 dock_slot_rect: dock_slot,
                 original_location: loc,
@@ -815,21 +837,32 @@ impl MalusState {
                 }
                 IpcMessage::RegisterDockSlot { window_id, x, y, width, height } => {
                     tracing::info!("📥 IPC RegisterDockSlot recibido: id={}, rect=({}, {}, {}, {})", window_id, x, y, width, height);
-                    let final_rect = if let Some((dock_geo, _)) = self.dock_surface_geometry() {
-                        let (abs_x, abs_y) = if x < dock_geo.size.w && y < dock_geo.size.h {
-                            (dock_geo.loc.x + x, dock_geo.loc.y + y)
-                        } else {
-                            let rel_x = (x - dock_geo.loc.x).clamp(0, (dock_geo.size.w - width as i32).max(0));
-                            let rel_y = (y - dock_geo.loc.y).clamp(0, (dock_geo.size.h - height as i32).max(0));
-                            (dock_geo.loc.x + rel_x, dock_geo.loc.y + rel_y)
-                        };
-                        Rectangle::new((abs_x, abs_y).into(), (width as i32, height as i32).into())
-                    } else {
-                        Rectangle::new((x, y).into(), (width as i32, height as i32).into())
-                    };
+                    let dock_origin = self
+                        .dock_surface_geometry()
+                        .map(|(dock_geo, _)| dock_geo.loc)
+                        .unwrap_or_default();
+                    let final_rect = Rectangle::new(
+                        (dock_origin.x + x, dock_origin.y + y).into(),
+                        (width as i32, height as i32).into(),
+                    );
 
                     tracing::info!("🎯 Dock slot ajustado con precisión: id={}, rect={:?}", window_id, final_rect);
                     self.dock_slots.insert(window_id, final_rect);
+                    for anim in &mut self.active_animations {
+                        if anim.window_id != window_id || !anim.is_minimizing {
+                            continue;
+                        }
+
+                        anim.dock_slot_rect = final_rect;
+                        if anim.waiting_for_dock_slot {
+                            anim.start_time = Instant::now();
+                            anim.waiting_for_dock_slot = false;
+                            tracing::info!(
+                                "🎯 Destino real del Dock recibido; iniciando minimización Genie para id={}",
+                                window_id
+                            );
+                        }
+                    }
                 }
                 IpcMessage::ToggleSpotlight => {
                     tracing::info!("📥 IPC ToggleSpotlight recibido");
@@ -1907,7 +1940,9 @@ impl XdgShellHandler for MalusState {
 
         self.window_restore_geometries.remove(surf);
         self.minimized_windows.remove(surf);
-        self.window_ids.remove(surf);
+        if let Some(window_id) = self.window_ids.remove(surf) {
+            self.dock_slots.remove(&window_id);
+        }
         self.active_animations.retain(|a| &a.surface != surf);
         self.notify_minimized_windows();
 
