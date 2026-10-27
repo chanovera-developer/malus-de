@@ -956,6 +956,11 @@ fn build_dock_ui(app: &Application) {
         true,
     );
 
+    let apps_box_theme = apps_box.clone();
+    adw::StyleManager::default().connect_dark_notify(move |_| {
+        queue_dock_icon_backgrounds(apps_box_theme.upcast_ref());
+    });
+
     // Loop de refresco reactivo de las aplicaciones
     let apps_box_rf = apps_box.clone();
     let dock_cfg_rf = dock_config.clone();
@@ -1631,9 +1636,27 @@ fn create_magnifiable_icon(icon: &Image, icon_size: i32, show_backdrop: bool) ->
     overlay
 }
 
+fn queue_dock_icon_backgrounds(widget: &gtk4::Widget) {
+    if let Ok(area) = widget.clone().downcast::<DrawingArea>() {
+        if area.has_css_class("dock-icon-shadow") {
+            area.queue_draw();
+        }
+    }
+
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        child = current.next_sibling();
+        queue_dock_icon_backgrounds(&current);
+    }
+}
+
 fn draw_squircle(context: &gtk4::cairo::Context, width: f64, height: f64) {
     squircle_path(context, width, height, 22.0);
-    context.set_source_rgb(1.0, 1.0, 1.0);
+    if adw::StyleManager::default().is_dark() {
+        context.set_source_rgb(0.06, 0.06, 0.07);
+    } else {
+        context.set_source_rgb(1.0, 1.0, 1.0);
+    }
     let _ = context.fill();
 }
 
