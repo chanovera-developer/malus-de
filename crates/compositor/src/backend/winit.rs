@@ -1,36 +1,35 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
 use anyhow::{Context, Result};
+use malus_de_common::ipc::IpcMessage;
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::{
+    ResizeEdge, State as XdgState,
+};
 use smithay::{
     backend::{
         input::{
-            AbsolutePositionEvent, Axis, ButtonState, Event, InputEvent, KeyState, KeyboardKeyEvent,
-            PointerAxisEvent, PointerButtonEvent,
+            AbsolutePositionEvent, Axis, ButtonState, Event, InputEvent, KeyState,
+            KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
         },
         renderer::{
-            gles::GlesRenderer,
-            utils::draw_render_elements,
             element::{
-                surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement, WaylandSurfaceTexture},
+                surface::{
+                    render_elements_from_surface_tree, WaylandSurfaceRenderElement,
+                    WaylandSurfaceTexture,
+                },
                 Element, Kind,
             },
+            gles::GlesRenderer,
+            utils::draw_render_elements,
             Color32F, Frame, Renderer, Texture,
         },
         winit::{self, WinitEvent},
     },
-
     input::{
         keyboard::{keysyms, FilterResult},
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::{
-        wayland_server::{
-            protocol::wl_surface::WlSurface,
-            Display, ListeningSocket,
-        },
+        wayland_server::{protocol::wl_surface::WlSurface, Display, ListeningSocket},
         winit::platform::pump_events::PumpStatus,
     },
     utils::{Logical, Physical, Point, Rectangle, Scale, Transform, SERIAL_COUNTER},
@@ -40,9 +39,8 @@ use smithay::{
         shell::wlr_layer::Layer,
     },
 };
-use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::{ResizeEdge, State as XdgState};
+use std::{sync::Arc, time::Instant};
 use tracing::{info, warn};
-use malus_de_common::ipc::IpcMessage;
 
 use crate::state::{ClientState, MalusState};
 
@@ -98,7 +96,8 @@ fn find_background_layer_under(
 
 pub fn run_winit() -> Result<()> {
     info!("Inicializando Display Wayland de Malus DE...");
-    let mut display: Display<MalusState> = Display::new().context("Error al crear Display Wayland")?;
+    let mut display: Display<MalusState> =
+        Display::new().context("Error al crear Display Wayland")?;
     let mut state = MalusState::new(&display);
 
     let input_cfg = malus_de_common::config::InputConfig::load();
@@ -120,7 +119,10 @@ pub fn run_winit() -> Result<()> {
             kb
         }
         Err(e) => {
-            warn!("⚠️ Falló carga de XKB layout '{}': {:?}. Usando fallback US.", input_cfg.keyboard_layout, e);
+            warn!(
+                "⚠️ Falló carga de XKB layout '{}': {:?}. Usando fallback US.",
+                input_cfg.keyboard_layout, e
+            );
             state
                 .seat
                 .add_keyboard(Default::default(), 200, 200)
@@ -137,7 +139,10 @@ pub fn run_winit() -> Result<()> {
         .unwrap()
         .to_string_lossy()
         .to_string();
-    info!("Socket Wayland escuchando activamente en: WAYLAND_DISPLAY={}", socket_name);
+    info!(
+        "Socket Wayland escuchando activamente en: WAYLAND_DISPLAY={}",
+        socket_name
+    );
     state.socket_name = socket_name.clone();
     let _clipboard_manager = crate::start_clipboard_manager(&socket_name);
 
@@ -160,7 +165,12 @@ pub fn run_winit() -> Result<()> {
         },
     );
     let _global = output.create_global::<MalusState>(&state.display_handle);
-    output.change_current_state(Some(mode), Some(Transform::Normal), None, Some((0, 0).into()));
+    output.change_current_state(
+        Some(mode),
+        Some(Transform::Normal),
+        None,
+        Some((0, 0).into()),
+    );
     output.set_preferred(mode);
     state.space.map_output(&output, (0, 0));
 
@@ -168,7 +178,10 @@ pub fn run_winit() -> Result<()> {
     info!("✨ MALUS DE: Compositor Wayland Smithay (Modo Anidado Activo)");
     info!("   Socket activo: WAYLAND_DISPLAY={}", socket_name);
     info!("   Prueba lanzar una app cliente en otra terminal:");
-    info!("   WAYLAND_DISPLAY={} GDK_BACKEND=wayland gnome-calculator", socket_name);
+    info!(
+        "   WAYLAND_DISPLAY={} GDK_BACKEND=wayland gnome-calculator",
+        socket_name
+    );
     info!("============================================================");
 
     // Color acrílico oscuro de Malus DE (#18181b = rgba(24, 24, 27, 1.0))
@@ -176,12 +189,17 @@ pub fn run_winit() -> Result<()> {
     let start_time = Instant::now();
     let mut clients = Vec::new();
     let mut current_displays_cfg = malus_de_common::config::DisplaysConfig::load();
-    let mut squircle_corner_cache: std::collections::HashMap<i32, [smithay::backend::renderer::gles::GlesTexture; 4]> = std::collections::HashMap::new();
+    let mut squircle_corner_cache: std::collections::HashMap<
+        i32,
+        [smithay::backend::renderer::gles::GlesTexture; 4],
+    > = std::collections::HashMap::new();
     let mut blur_pipeline: Option<crate::blur::DualKawaseBlur> = None;
     let mut window_squircle_shader: Option<crate::window_corners::WindowSquircleShader> = None;
     let mut shadow_pipeline: Option<crate::shadow::WindowShadowPipeline> = None;
 
     while state.is_running {
+        let frame_start = Instant::now();
+
         let status = winit_event_loop.dispatch_new_events(|event| match event {
             WinitEvent::CloseRequested => {
                 info!("Cierre de ventana anidada solicitado por el usuario.");
@@ -800,11 +818,13 @@ pub fn run_winit() -> Result<()> {
         // Renderizado del frame
         {
             if let Ok((renderer, mut framebuffer)) = backend.bind() {
-
                 let now = Instant::now();
                 let mut anim_data = Vec::new();
                 for anim in &state.active_animations {
-                    let elems = render_elements_from_surface_tree::<GlesRenderer, WaylandSurfaceRenderElement<GlesRenderer>>(
+                    let elems = render_elements_from_surface_tree::<
+                        GlesRenderer,
+                        WaylandSurfaceRenderElement<GlesRenderer>,
+                    >(
                         renderer,
                         &anim.surface,
                         (0, 0),
@@ -813,7 +833,10 @@ pub fn run_winit() -> Result<()> {
                         Kind::Unspecified,
                     );
                     if elems.is_empty() {
-                        warn!("⚠️ [Genie] anim_data: elems está VACÍO para anim id={}", anim.window_id);
+                        warn!(
+                            "⚠️ [Genie] anim_data: elems está VACÍO para anim id={}",
+                            anim.window_id
+                        );
                     }
                     anim_data.push((anim.clone(), elems));
                 }
@@ -829,7 +852,9 @@ pub fn run_winit() -> Result<()> {
                     let r = corner_radius_pt.round() as i32;
                     if r > 2 {
                         if !squircle_corner_cache.contains_key(&r) {
-                            if let Some(textures) = super::drm::create_squircle_corner_textures(renderer, r) {
+                            if let Some(textures) =
+                                super::drm::create_squircle_corner_textures(renderer, r)
+                            {
                                 squircle_corner_cache.insert(r, textures);
                             }
                         }
@@ -844,7 +869,11 @@ pub fn run_winit() -> Result<()> {
                 let win_corner_radius_pt = current_displays_cfg.window_corner_radius;
                 let win_phys_r = if win_corner_radius_pt > 0.0 {
                     let r = win_corner_radius_pt.round() as i32;
-                    if r > 2 { Some(r) } else { None }
+                    if r > 2 {
+                        Some(r)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -856,25 +885,29 @@ pub fn run_winit() -> Result<()> {
                 let mut dock_popups = Vec::new();
                 let mut topbar_popups = Vec::new();
                 for surface in layer_map.layers().rev() {
-                    if surface.namespace() == "malus-app-switcher" && !state.app_switcher.is_active {
+                    if surface.namespace() == "malus-app-switcher" && !state.app_switcher.is_active
+                    {
                         continue;
                     }
                     if let Some(geo) = layer_map.layer_geometry(surface) {
                         let layer_loc = geo.loc.to_physical_precise_round(1.0);
-                        let s_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = render_elements_from_surface_tree(
-                            renderer,
-                            surface.wl_surface(),
-                            layer_loc,
-                            smithay::utils::Scale::from(1.0),
-                            1.0,
-                            Kind::Unspecified,
-                        );
+                        let s_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                            render_elements_from_surface_tree(
+                                renderer,
+                                surface.wl_surface(),
+                                layer_loc,
+                                smithay::utils::Scale::from(1.0),
+                                1.0,
+                                Kind::Unspecified,
+                            );
                         if surface.namespace() == "malus-dock" {
                             let root_id =
                                 smithay::backend::renderer::element::Id::from_wayland_resource(
                                     surface.wl_surface(),
                                 );
-                            if let Some(root_elem) = s_elems.iter().find(|elem| *elem.id() == root_id) {
+                            if let Some(root_elem) =
+                                s_elems.iter().find(|elem| *elem.id() == root_id)
+                            {
                                 dock_clip_roots.push((
                                     root_id,
                                     super::dock_clip_rect(
@@ -885,8 +918,11 @@ pub fn run_winit() -> Result<()> {
                                 ));
                             }
                         }
-                        let mut p_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
-                        for (popup, popup_offset) in smithay::desktop::PopupManager::popups_for_surface(surface.wl_surface()) {
+                        let mut p_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                            Vec::new();
+                        for (popup, popup_offset) in
+                            smithay::desktop::PopupManager::popups_for_surface(surface.wl_surface())
+                        {
                             let popup_geometry = popup.geometry();
                             let offset = (popup_offset - popup_geometry.loc)
                                 .to_f64()
@@ -928,25 +964,30 @@ pub fn run_winit() -> Result<()> {
                 }
 
                 let mut window_render_data = Vec::new();
-                let output_geo = state.space.output_geometry(&output).unwrap_or_else(|| Rectangle::new((0, 0).into(), (size.w, size.h).into()));
+                let output_geo = state
+                    .space
+                    .output_geometry(&output)
+                    .unwrap_or_else(|| Rectangle::new((0, 0).into(), (size.w, size.h).into()));
                 for window in state.space.elements() {
                     if let Some(loc) = state.space.element_location(window) {
                         let geo = window.geometry();
                         let win_global_rect = Rectangle::new(loc, geo.size);
                         if output_geo.overlaps(win_global_rect) {
-                            let phys_loc = (loc - geo.loc - output_geo.loc).to_physical_precise_round(1.0);
+                            let phys_loc =
+                                (loc - geo.loc - output_geo.loc).to_physical_precise_round(1.0);
                             let Some(main_surface) = window.wl_surface() else {
                                 continue;
                             };
 
-                            let win_surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = render_elements_from_surface_tree(
-                                renderer,
-                                main_surface.as_ref(),
-                                phys_loc,
-                                smithay::utils::Scale::from(1.0),
-                                1.0,
-                                Kind::Unspecified,
-                            );
+                            let win_surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                                render_elements_from_surface_tree(
+                                    renderer,
+                                    main_surface.as_ref(),
+                                    phys_loc,
+                                    smithay::utils::Scale::from(1.0),
+                                    1.0,
+                                    Kind::Unspecified,
+                                );
 
                             let mut popup_elems: Vec<(
                                 Vec<WaylandSurfaceRenderElement<GlesRenderer>>,
@@ -954,24 +995,29 @@ pub fn run_winit() -> Result<()> {
                                 bool,
                             )> = Vec::new();
                             let mut popup_shadow_rects = Vec::new();
-                            let popup_effects_enabled = crate::state::app_id_for_surface(
-                                main_surface.as_ref(),
-                            )
-                            .map(|app_id| {
-                                !app_id.contains("org.malus_de.dock")
-                                    && !app_id.contains("malus-de-dock")
-                            })
-                            .unwrap_or(true);
-                            for (popup, popup_offset) in smithay::desktop::PopupManager::popups_for_surface(main_surface.as_ref()) {
+                            let popup_effects_enabled =
+                                crate::state::app_id_for_surface(main_surface.as_ref())
+                                    .map(|app_id| {
+                                        !app_id.contains("org.malus_de.dock")
+                                            && !app_id.contains("malus-de-dock")
+                                    })
+                                    .unwrap_or(true);
+                            for (popup, popup_offset) in
+                                smithay::desktop::PopupManager::popups_for_surface(
+                                    main_surface.as_ref(),
+                                )
+                            {
                                 let popup_geometry = popup.geometry();
                                 let popup_rect = Rectangle::new(
-                                    phys_loc + (geo.loc + popup_offset).to_physical_precise_round(1.0),
+                                    phys_loc
+                                        + (geo.loc + popup_offset).to_physical_precise_round(1.0),
                                     popup_geometry.size.to_physical_precise_round(1.0),
                                 );
                                 if popup_effects_enabled {
                                     popup_shadow_rects.push(popup_rect);
                                 }
-                                let offset = (geo.loc + popup_offset - popup_geometry.loc).to_physical_precise_round(1.0);
+                                let offset = (geo.loc + popup_offset - popup_geometry.loc)
+                                    .to_physical_precise_round(1.0);
                                 let p_elems = render_elements_from_surface_tree(
                                     renderer,
                                     popup.wl_surface(),
@@ -983,10 +1029,13 @@ pub fn run_winit() -> Result<()> {
                                 popup_elems.push((p_elems, popup_rect, popup_effects_enabled));
                             }
 
-                            let is_fullscreen = window.toplevel().map(|t| {
-                                let states = &t.current_state().states;
-                                states.contains(XdgState::Fullscreen)
-                            }).unwrap_or(false);
+                            let is_fullscreen = window
+                                .toplevel()
+                                .map(|t| {
+                                    let states = &t.current_state().states;
+                                    states.contains(XdgState::Fullscreen)
+                                })
+                                .unwrap_or(false);
 
                             let is_active = window.toplevel().map(|t| {
                                 let states = &t.current_state().states;
@@ -996,7 +1045,10 @@ pub fn run_winit() -> Result<()> {
                             let is_firefox = crate::state::is_firefox_window(&window);
                             let is_translucent = crate::state::is_translucent_window(&window);
                             let is_system_monitor = crate::state::is_system_monitor_window(&window);
-                            let root_id = smithay::backend::renderer::element::Id::from_wayland_resource(main_surface.as_ref());
+                            let root_id =
+                                smithay::backend::renderer::element::Id::from_wayland_resource(
+                                    main_surface.as_ref(),
+                                );
                             let should_round = win_phys_r.is_some() && !is_fullscreen;
                             let content_offset = geo.loc.to_physical_precise_round(1.0);
                             let content_size = geo.size.to_physical_precise_round(1.0);
@@ -1005,14 +1057,28 @@ pub fn run_winit() -> Result<()> {
                                 geo.size.to_physical_precise_round(1.0),
                             );
 
-                            window_render_data.push((root_id, win_surfaces, popup_elems, popup_shadow_rects, should_round, is_active, win_screen_rect, content_offset, content_size, is_firefox, is_translucent, is_system_monitor));
+                            window_render_data.push((
+                                root_id,
+                                win_surfaces,
+                                popup_elems,
+                                popup_shadow_rects,
+                                should_round,
+                                is_active,
+                                win_screen_rect,
+                                content_offset,
+                                content_size,
+                                is_firefox,
+                                is_translucent,
+                                is_system_monitor,
+                            ));
                         }
                     }
                 }
 
                 // Inicializar shader de recorte squircle para ventanas si aún no existe
                 if window_squircle_shader.is_none() {
-                    window_squircle_shader = crate::window_corners::WindowSquircleShader::new(renderer);
+                    window_squircle_shader =
+                        crate::window_corners::WindowSquircleShader::new(renderer);
                 }
 
                 let screenshot_request = state
@@ -1020,7 +1086,9 @@ pub fn run_winit() -> Result<()> {
                     .pop_front()
                     .map(|(destination, _)| destination);
                 let mut frame_rendered = false;
-                if let Ok(mut frame) = renderer.render(&mut framebuffer, size, Transform::Flipped180) {
+                if let Ok(mut frame) =
+                    renderer.render(&mut framebuffer, size, Transform::Flipped180)
+                {
                     frame_rendered = true;
                     let _ = frame.clear(dark_acrylic, &[damage]);
                     // 1. Renderizar fondo (wallpaper y capas inferiores)
@@ -1030,18 +1098,38 @@ pub fn run_winit() -> Result<()> {
 
                     // Inicializar pipeline de sombras squircle si aún no existe
                     if shadow_pipeline.is_none() {
-                        shadow_pipeline = frame.with_context(|gl| crate::shadow::WindowShadowPipeline::new(gl)).ok().flatten();
+                        shadow_pipeline = frame
+                            .with_context(|gl| crate::shadow::WindowShadowPipeline::new(gl))
+                            .ok()
+                            .flatten();
                     }
 
                     // Inicializar pipeline de desenfoque Dual Kawase si aún no existe
                     if blur_pipeline.is_none() {
-                        blur_pipeline = frame.with_context(|gl| crate::blur::DualKawaseBlur::new(gl)).ok().flatten();
+                        blur_pipeline = frame
+                            .with_context(|gl| crate::blur::DualKawaseBlur::new(gl))
+                            .ok()
+                            .flatten();
                     }
 
                     let projection = *frame.projection();
 
                     // 2. Renderizar superficies de cada ventana con sus sombras proyectadas, desenfoque de fondo y esquinas squircle
-                    for (root_id, win_elems, _popups, _popup_shadow_rects, should_round, is_active, win_rect, content_offset, content_size, is_firefox, is_translucent, is_system_monitor) in &window_render_data {
+                    for (
+                        root_id,
+                        win_elems,
+                        _popups,
+                        _popup_shadow_rects,
+                        should_round,
+                        is_active,
+                        win_rect,
+                        content_offset,
+                        content_size,
+                        is_firefox,
+                        is_translucent,
+                        is_system_monitor,
+                    ) in &window_render_data
+                    {
                         if win_elems.is_empty() {
                             continue;
                         }
@@ -1049,9 +1137,18 @@ pub fn run_winit() -> Result<()> {
                         // 2.1. SOMBRA PROYECTADA (Window Drop Shadow con Squircle SDF n=4.2)
                         // Se dibuja para ventanas no en pantalla completa inmediatamente antes de su superficie
                         if *should_round {
-                            if let (Some(r), Some(ref shadow)) = (win_phys_r, shadow_pipeline.as_ref()) {
+                            if let (Some(r), Some(ref shadow)) =
+                                (win_phys_r, shadow_pipeline.as_ref())
+                            {
                                 let _ = frame.with_context(|gl| {
-                                    shadow.render_shadow(gl, &projection, *win_rect, r as f32, *is_active, 1.0);
+                                    shadow.render_shadow(
+                                        gl,
+                                        &projection,
+                                        *win_rect,
+                                        r as f32,
+                                        *is_active,
+                                        1.0,
+                                    );
                                 });
                             }
                         }
@@ -1065,17 +1162,32 @@ pub fn run_winit() -> Result<()> {
                                 };
                                 let color = crate::state::system_monitor_backdrop_color();
                                 let _ = frame.with_context(|gl| {
-                                    blur.render_solid(gl, &projection, size, *win_rect, corner_radius, color);
+                                    blur.render_solid(
+                                        gl,
+                                        &projection,
+                                        size,
+                                        *win_rect,
+                                        corner_radius,
+                                        color,
+                                    );
                                 });
                             }
                         }
 
                         // 2.1.5. DESENFOQUE DE FONDO DUAL KAWASE (Nautilus y Ajustes del Sistema)
                         if *should_round && *is_translucent {
-                            if let (Some(r), Some(ref mut blur)) = (win_phys_r, blur_pipeline.as_mut()) {
+                            if let (Some(r), Some(ref mut blur)) =
+                                (win_phys_r, blur_pipeline.as_mut())
+                            {
                                 let screen_size = size;
                                 let _ = frame.with_context(|gl| {
-                                    blur.render_blur(gl, &projection, screen_size, *win_rect, r as f32);
+                                    blur.render_blur(
+                                        gl,
+                                        &projection,
+                                        screen_size,
+                                        *win_rect,
+                                        r as f32,
+                                    );
                                 });
                             }
                         }
@@ -1085,21 +1197,36 @@ pub fn run_winit() -> Result<()> {
                             if *is_firefox {
                                 // Para Firefox: se aplica el shader a todo el árbol de subsuperficies (WebRender)
                                 // para evitar esquinas cuadradas en el contenido web interno
-                                if let (Some(r), Some(ref shader)) = (win_phys_r, window_squircle_shader.as_ref()) {
+                                if let (Some(r), Some(ref shader)) =
+                                    (win_phys_r, window_squircle_shader.as_ref())
+                                {
                                     for elem in win_elems {
-                                        let elem_geo = elem.geometry(smithay::utils::Scale::from(1.0));
+                                        let elem_geo =
+                                            elem.geometry(smithay::utils::Scale::from(1.0));
                                         let sub_offset = smithay::utils::Point::from((
                                             win_rect.loc.x - elem_geo.loc.x,
                                             win_rect.loc.y - elem_geo.loc.y,
                                         ));
-                                        shader.apply_to_frame(&mut frame, elem_geo.size, sub_offset, win_rect.size, r);
+                                        shader.apply_to_frame(
+                                            &mut frame,
+                                            elem_geo.size,
+                                            sub_offset,
+                                            win_rect.size,
+                                            r,
+                                        );
 
-                                        let _ = draw_render_elements(&mut frame, 1.0, std::slice::from_ref(elem), &[damage]);
+                                        let _ = draw_render_elements(
+                                            &mut frame,
+                                            1.0,
+                                            std::slice::from_ref(elem),
+                                            &[damage],
+                                        );
 
                                         frame.clear_tex_program_override();
                                     }
                                 } else {
-                                    let _ = draw_render_elements(&mut frame, 1.0, win_elems, &[damage]);
+                                    let _ =
+                                        draw_render_elements(&mut frame, 1.0, win_elems, &[damage]);
                                 }
                             } else {
                                 // Para las demás apps (GTK, Electron, etc.): comportamiento intacto original,
@@ -1107,13 +1234,27 @@ pub fn run_winit() -> Result<()> {
                                 for elem in win_elems {
                                     let is_root = elem.id() == root_id;
                                     if is_root {
-                                        if let (Some(r), Some(ref shader)) = (win_phys_r, window_squircle_shader.as_ref()) {
-                                            let elem_geo = elem.geometry(smithay::utils::Scale::from(1.0));
-                                            shader.apply_to_frame(&mut frame, elem_geo.size, *content_offset, *content_size, r);
+                                        if let (Some(r), Some(ref shader)) =
+                                            (win_phys_r, window_squircle_shader.as_ref())
+                                        {
+                                            let elem_geo =
+                                                elem.geometry(smithay::utils::Scale::from(1.0));
+                                            shader.apply_to_frame(
+                                                &mut frame,
+                                                elem_geo.size,
+                                                *content_offset,
+                                                *content_size,
+                                                r,
+                                            );
                                         }
                                     }
 
-                                    let _ = draw_render_elements(&mut frame, 1.0, std::slice::from_ref(elem), &[damage]);
+                                    let _ = draw_render_elements(
+                                        &mut frame,
+                                        1.0,
+                                        std::slice::from_ref(elem),
+                                        &[damage],
+                                    );
 
                                     if is_root {
                                         frame.clear_tex_program_override();
@@ -1127,7 +1268,10 @@ pub fn run_winit() -> Result<()> {
 
                     // 2. Aplicar desenfoque de fondo Dual Kawase por GPU a las capas y popups translúcidos
                     if blur_pipeline.is_none() {
-                        blur_pipeline = frame.with_context(|gl| crate::blur::DualKawaseBlur::new(gl)).ok().flatten();
+                        blur_pipeline = frame
+                            .with_context(|gl| crate::blur::DualKawaseBlur::new(gl))
+                            .ok()
+                            .flatten();
                     }
 
                     if let Some(ref mut blur) = blur_pipeline {
@@ -1178,10 +1322,18 @@ pub fn run_winit() -> Result<()> {
                     // 3. Renderizar menús contextuales y popups de ventanas (siempre ENCIMA de las superficies de ventana)
                     let menu_radius = 22;
                     for (_, _, _, popup_shadow_rects, _, is_active, ..) in &window_render_data {
-                        if let (Some(radius), Some(shadow)) = (win_phys_r, shadow_pipeline.as_ref()) {
+                        if let (Some(radius), Some(shadow)) = (win_phys_r, shadow_pipeline.as_ref())
+                        {
                             for popup_rect in popup_shadow_rects {
                                 let _ = frame.with_context(|gl| {
-                                    shadow.render_shadow(gl, &projection, *popup_rect, radius as f32, *is_active, 1.0);
+                                    shadow.render_shadow(
+                                        gl,
+                                        &projection,
+                                        *popup_rect,
+                                        radius as f32,
+                                        *is_active,
+                                        1.0,
+                                    );
                                 });
                             }
                         }
@@ -1232,15 +1384,28 @@ pub fn run_winit() -> Result<()> {
                                 .iter()
                                 .find(|(root_id, _)| *elem.id() == *root_id)
                                 .map(|(_, rect)| *rect);
-                            if let (Some(rect), Some(shader)) = (dock_rect, window_squircle_shader.as_ref()) {
+                            if let (Some(rect), Some(shader)) =
+                                (dock_rect, window_squircle_shader.as_ref())
+                            {
                                 let elem_geo = elem.geometry(Scale::from(1.0));
                                 let offset = Point::from((
                                     rect.loc.x - elem_geo.loc.x,
                                     rect.loc.y - elem_geo.loc.y,
                                 ));
-                                shader.apply_dock_clip_to_frame(&mut frame, elem_geo.size, offset, rect.size, 32);
+                                shader.apply_dock_clip_to_frame(
+                                    &mut frame,
+                                    elem_geo.size,
+                                    offset,
+                                    rect.size,
+                                    32,
+                                );
                             }
-                            let _ = draw_render_elements(&mut frame, 1.0, std::slice::from_ref(elem), &[damage]);
+                            let _ = draw_render_elements(
+                                &mut frame,
+                                1.0,
+                                std::slice::from_ref(elem),
+                                &[damage],
+                            );
                             if dock_rect.is_some() {
                                 frame.clear_tex_program_override();
                             }
@@ -1330,7 +1495,11 @@ pub fn run_winit() -> Result<()> {
                     }
 
                     // Dibujar overlay translúcido Aero Glass de previsualización al arrastrar cerca del borde
-                    let is_pointer_grabbed = state.seat.get_pointer().map(|p| p.is_grabbed()).unwrap_or(false);
+                    let is_pointer_grabbed = state
+                        .seat
+                        .get_pointer()
+                        .map(|p| p.is_grabbed())
+                        .unwrap_or(false);
                     if is_pointer_grabbed {
                         if let Some(preview) = state.snap_preview {
                             let preview_phys = preview.to_physical_precise_round(1.0);
@@ -1344,21 +1513,51 @@ pub fn run_winit() -> Result<()> {
                             // Borde resaltado azul de 3px
                             let border_color = Color32F::new(0.38, 0.72, 1.0, 0.85);
                             let b_thickness = 3;
-                            let b_top = Rectangle::new(preview_phys.loc, (preview_phys.size.w, b_thickness).into());
-                            let b_bottom = Rectangle::new(
-                                (preview_phys.loc.x, preview_phys.loc.y + preview_phys.size.h - b_thickness).into(),
+                            let b_top = Rectangle::new(
+                                preview_phys.loc,
                                 (preview_phys.size.w, b_thickness).into(),
                             );
-                            let b_left = Rectangle::new(preview_phys.loc, (b_thickness, preview_phys.size.h).into());
+                            let b_bottom = Rectangle::new(
+                                (
+                                    preview_phys.loc.x,
+                                    preview_phys.loc.y + preview_phys.size.h - b_thickness,
+                                )
+                                    .into(),
+                                (preview_phys.size.w, b_thickness).into(),
+                            );
+                            let b_left = Rectangle::new(
+                                preview_phys.loc,
+                                (b_thickness, preview_phys.size.h).into(),
+                            );
                             let b_right = Rectangle::new(
-                                (preview_phys.loc.x + preview_phys.size.w - b_thickness, preview_phys.loc.y).into(),
+                                (
+                                    preview_phys.loc.x + preview_phys.size.w - b_thickness,
+                                    preview_phys.loc.y,
+                                )
+                                    .into(),
                                 (b_thickness, preview_phys.size.h).into(),
                             );
 
-                            let _ = frame.draw_solid(b_top, &[Rectangle::from_size(b_top.size)], border_color);
-                            let _ = frame.draw_solid(b_bottom, &[Rectangle::from_size(b_bottom.size)], border_color);
-                            let _ = frame.draw_solid(b_left, &[Rectangle::from_size(b_left.size)], border_color);
-                            let _ = frame.draw_solid(b_right, &[Rectangle::from_size(b_right.size)], border_color);
+                            let _ = frame.draw_solid(
+                                b_top,
+                                &[Rectangle::from_size(b_top.size)],
+                                border_color,
+                            );
+                            let _ = frame.draw_solid(
+                                b_bottom,
+                                &[Rectangle::from_size(b_bottom.size)],
+                                border_color,
+                            );
+                            let _ = frame.draw_solid(
+                                b_left,
+                                &[Rectangle::from_size(b_left.size)],
+                                border_color,
+                            );
+                            let _ = frame.draw_solid(
+                                b_right,
+                                &[Rectangle::from_size(b_right.size)],
+                                border_color,
+                            );
                         }
                     } else {
                         state.snap_preview = None;
@@ -1369,7 +1568,8 @@ pub fn run_winit() -> Result<()> {
                     // Implementación canónica con física elástica, sombra volumétrica y volumen 3D
                     for (anim, elems) in &anim_data {
                         let elapsed = now.duration_since(anim.start_time);
-                        let raw_t = (elapsed.as_secs_f32() / anim.duration.as_secs_f32()).clamp(0.0, 1.0);
+                        let raw_t =
+                            (elapsed.as_secs_f32() / anim.duration.as_secs_f32()).clamp(0.0, 1.0);
 
                         // Curva de física orgánica con inercia elástica (Spring Easing)
                         let t = if anim.is_minimizing {
@@ -1391,12 +1591,26 @@ pub fn run_winit() -> Result<()> {
                         let split = 0.30f32;
                         let (k, j) = if anim.is_minimizing {
                             let k = if t <= split { t / split } else { 1.0 };
-                            let j = if t > split { (t - split) / (1.0 - split) } else { 0.0 };
+                            let j = if t > split {
+                                (t - split) / (1.0 - split)
+                            } else {
+                                0.0
+                            };
                             (k, j)
                         } else {
                             // Restauración: emerge de la lámpara (j: 1 -> 0), luego su base se asienta (k: 1 -> 0)
-                            let j = 1.0 - if t <= (1.0 - split) { t / (1.0 - split) } else { 1.0 };
-                            let k = 1.0 - if t > (1.0 - split) { (t - (1.0 - split)) / split } else { 0.0 };
+                            let j = 1.0
+                                - if t <= (1.0 - split) {
+                                    t / (1.0 - split)
+                                } else {
+                                    1.0
+                                };
+                            let k = 1.0
+                                - if t > (1.0 - split) {
+                                    (t - (1.0 - split)) / split
+                                } else {
+                                    0.0
+                                };
                             (k, j)
                         };
 
@@ -1437,12 +1651,17 @@ pub fn run_winit() -> Result<()> {
                             let slice_w = slice_w.max(2.0);
 
                             // Desplazamiento horizontal progresivo hacia el slot del dock (acotado a 1.0 para evitar desfase)
-                            let norm_y = if full_height > 1.0 { (local_y / full_height).clamp(0.0, 1.0) } else { v };
+                            let norm_y = if full_height > 1.0 {
+                                (local_y / full_height).clamp(0.0, 1.0)
+                            } else {
+                                v
+                            };
                             let norm_x = (norm_y * k + j).min(1.0);
                             let offset_x = (target_x - win_x) * norm_x;
 
                             // Bucle sinusoidal ondulante en "S" (estilo Compiz / GNOME Shell Magic Lamp predeterminado)
-                            let s_phase = (1.0 - norm_y) * 2.0 * std::f32::consts::PI + std::f32::consts::PI;
+                            let s_phase =
+                                (1.0 - norm_y) * 2.0 * std::f32::consts::PI + std::f32::consts::PI;
                             let delta_x = (win_x + win_w * 0.5) - (target_x + target_w * 0.5);
                             let effect_x = s_phase.sin() * (delta_x / 7.0) * k * (1.0 - j * 0.7);
 
@@ -1564,7 +1783,11 @@ pub fn run_winit() -> Result<()> {
                     for anim in finished {
                         if !anim.is_minimizing {
                             info!("✨ Restauración Genie completada: mapeando ventana a Space");
-                            state.space.map_element(anim.window.clone(), anim.original_location, true);
+                            state.space.map_element(
+                                anim.window.clone(),
+                                anim.original_location,
+                                true,
+                            );
                             state.space.raise_element(&anim.window, true);
                             if let Some(toplevel) = anim.window.toplevel() {
                                 toplevel.send_configure();
@@ -1575,11 +1798,15 @@ pub fn run_winit() -> Result<()> {
                             }
                             if let Some(pointer) = state.seat.get_pointer() {
                                 let loc = pointer.current_location();
-                                let target = state.space.element_under(loc).and_then(|(win, win_loc)| {
-                                    let local_point = loc - win_loc.to_f64();
-                                    win.surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                                let target =
+                                    state.space.element_under(loc).and_then(|(win, win_loc)| {
+                                        let local_point = loc - win_loc.to_f64();
+                                        win.surface_under(
+                                            local_point,
+                                            smithay::desktop::WindowSurfaceType::all(),
+                                        )
                                         .map(|(s, sub_loc)| (s, (win_loc + sub_loc).to_f64()))
-                                });
+                                    });
                                 let motion_serial = smithay::utils::SERIAL_COUNTER.next_serial();
                                 pointer.motion(
                                     &mut state,
@@ -1600,20 +1827,19 @@ pub fn run_winit() -> Result<()> {
                 if let Some(destination) = screenshot_request {
                     info!("Procesando solicitud de captura de pantalla");
                     if frame_rendered {
-                        if let Err(error) =
-                            crate::capture::capture_frame(
-                                renderer,
-                                &framebuffer,
-                                size,
-                                &destination,
-                                Transform::Flipped180,
-                            )
-                        {
+                        if let Err(error) = crate::capture::capture_frame(
+                            renderer,
+                            &framebuffer,
+                            size,
+                            &destination,
+                            Transform::Flipped180,
+                        ) {
                             warn!("Error al capturar el framebuffer: {error:#}");
                             crate::capture::write_capture_error(&destination, &error);
                         }
                     } else {
-                        let error = anyhow::anyhow!("No se pudo renderizar el fotograma de captura");
+                        let error =
+                            anyhow::anyhow!("No se pudo renderizar el fotograma de captura");
                         crate::capture::write_capture_error(&destination, &error);
                     }
                 }
@@ -1623,7 +1849,9 @@ pub fn run_winit() -> Result<()> {
         let now_ms = start_time.elapsed().as_millis() as u32;
         for surface in state.xdg_shell_state.toplevel_surfaces() {
             send_frames_surface_tree(surface.wl_surface(), now_ms);
-            for (popup, _) in smithay::desktop::PopupManager::popups_for_surface(surface.wl_surface()) {
+            for (popup, _) in
+                smithay::desktop::PopupManager::popups_for_surface(surface.wl_surface())
+            {
                 send_frames_surface_tree(popup.wl_surface(), now_ms);
             }
         }
@@ -1632,7 +1860,9 @@ pub fn run_winit() -> Result<()> {
             let layer_map = smithay::desktop::layer_map_for_output(&output);
             for layer in layer_map.layers() {
                 send_frames_surface_tree(layer.wl_surface(), now_ms);
-                for (popup, _) in smithay::desktop::PopupManager::popups_for_surface(layer.wl_surface()) {
+                for (popup, _) in
+                    smithay::desktop::PopupManager::popups_for_surface(layer.wl_surface())
+                {
                     send_frames_surface_tree(popup.wl_surface(), now_ms);
                 }
             }
@@ -1640,10 +1870,10 @@ pub fn run_winit() -> Result<()> {
 
         // Aceptar nuevos clientes de forma no bloqueante
         while let Ok(Some(stream)) = listener.accept() {
-            match display.handle().insert_client(
-                stream,
-                Arc::new(ClientState::default()),
-            ) {
+            match display
+                .handle()
+                .insert_client(stream, Arc::new(ClientState::default()))
+            {
                 Ok(client) => {
                     info!("🎉 Nuevo cliente Wayland conectado exitosamente al compositor!");
                     clients.push(client);
@@ -1665,7 +1895,15 @@ pub fn run_winit() -> Result<()> {
 
         let _ = backend.submit(Some(&[damage]));
 
-        std::thread::sleep(Duration::from_millis(16));
+        let refresh_millihz = output
+            .current_mode()
+            .map(|mode| mode.refresh)
+            .unwrap_or(60_000);
+        let remaining =
+            super::frame_interval(refresh_millihz).saturating_sub(frame_start.elapsed());
+        if !remaining.is_zero() {
+            std::thread::sleep(remaining);
+        }
     }
 
     info!("Compositor Malus DE finalizado limpiamente.");
@@ -1692,7 +1930,8 @@ pub fn toggle_spotlight(socket_name: &str) {
     info!("Lanzando Spotlight desde: {:?}", exe);
     let mut command = std::process::Command::new(&exe);
     malus_de_common::config::set_cursor_environment(&mut command);
-    command.env("WAYLAND_DISPLAY", socket_name)
+    command
+        .env("WAYLAND_DISPLAY", socket_name)
         .env("GDK_BACKEND", "wayland")
         .env("GSK_RENDERER", "cairo");
     if let Ok(cfg_home) = std::env::var("XDG_CONFIG_HOME") {

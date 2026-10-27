@@ -1640,6 +1640,8 @@ pub fn run_drm() -> Result<()> {
     let mut shadow_pipeline: Option<crate::shadow::WindowShadowPipeline> = None;
 
     while state.is_running {
+        let frame_start = Instant::now();
+
         // Si la sesión TTY no está activa (VT switch away), pausar renderizado para no saturar GPU
         if !session.is_active() {
             std::thread::sleep(Duration::from_millis(30));
@@ -2104,14 +2106,13 @@ pub fn run_drm() -> Result<()> {
                                 bool,
                             )> = Vec::new();
                             let mut popup_shadow_rects = Vec::new();
-                            let popup_effects_enabled = crate::state::app_id_for_surface(
-                                main_surface.as_ref(),
-                            )
-                            .map(|app_id| {
-                                !app_id.contains("org.malus_de.dock")
-                                    && !app_id.contains("malus-de-dock")
-                            })
-                            .unwrap_or(true);
+                            let popup_effects_enabled =
+                                crate::state::app_id_for_surface(main_surface.as_ref())
+                                    .map(|app_id| {
+                                        !app_id.contains("org.malus_de.dock")
+                                            && !app_id.contains("malus-de-dock")
+                                    })
+                                    .unwrap_or(true);
                             for (popup, popup_offset) in
                                 smithay::desktop::PopupManager::popups_for_surface(
                                     main_surface.as_ref(),
@@ -2923,7 +2924,6 @@ pub fn run_drm() -> Result<()> {
                         }
 
                         let _ = frame.finish();
-
                     }
                     if let Some(destination) = screenshot_request {
                         info!("Procesando solicitud de captura de pantalla DRM");
@@ -2939,8 +2939,9 @@ pub fn run_drm() -> Result<()> {
                                 crate::capture::write_capture_error(&destination, &error);
                             }
                         } else {
-                            let error =
-                                anyhow::anyhow!("No se pudo renderizar el fotograma de captura DRM");
+                            let error = anyhow::anyhow!(
+                                "No se pudo renderizar el fotograma de captura DRM"
+                            );
                             crate::capture::write_capture_error(&destination, &error);
                         }
                     }
@@ -3007,7 +3008,18 @@ pub fn run_drm() -> Result<()> {
         }
 
         display.flush_clients()?;
-        std::thread::sleep(Duration::from_millis(16));
+        let refresh_millihz = state
+            .space
+            .outputs()
+            .filter_map(|output| output.current_mode())
+            .map(|mode| mode.refresh)
+            .max()
+            .unwrap_or(60_000);
+        let remaining =
+            crate::backend::frame_interval(refresh_millihz).saturating_sub(frame_start.elapsed());
+        if !remaining.is_zero() {
+            std::thread::sleep(remaining);
+        }
     }
 
     info!("Compositor Malus DE DRM finalizado limpiamente.");
