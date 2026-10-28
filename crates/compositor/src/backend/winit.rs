@@ -1315,17 +1315,6 @@ pub fn run_winit() -> Result<()> {
                                     if ns == "malus-top-bar" {
                                         continue;
                                     }
-                                    if spotlight_active
-                                        && matches!(
-                                            ns.as_ref(),
-                                            "malus-spotlight-controls"
-                                                | "malus-spotlight-input"
-                                                | "malus-spotlight-apps"
-                                                | "malus-spotlight-files"
-                                        )
-                                    {
-                                        continue;
-                                    }
                                     if let Some(geo) = layer_map.layer_geometry(surface) {
                                         let radius = match ns.as_ref() {
                                             "malus-dock" => 32.0,
