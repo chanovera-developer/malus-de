@@ -31,13 +31,15 @@ out vec4 frag_color;
 uniform sampler2D u_texture;
 uniform vec2 u_halfpixel;
 uniform float u_offset;
+uniform vec4 u_source_rect;
 
 void main() {
-    vec4 sum = texture(u_texture, v_tex_coords) * 4.0;
-    sum += texture(u_texture, v_tex_coords - u_halfpixel.xy * u_offset);
-    sum += texture(u_texture, v_tex_coords + u_halfpixel.xy * u_offset);
-    sum += texture(u_texture, v_tex_coords + vec2(u_halfpixel.x, -u_halfpixel.y) * u_offset);
-    sum += texture(u_texture, v_tex_coords - vec2(u_halfpixel.x, -u_halfpixel.y) * u_offset);
+    vec2 source_coords = u_source_rect.xy + v_tex_coords * u_source_rect.zw;
+    vec4 sum = texture(u_texture, source_coords) * 4.0;
+    sum += texture(u_texture, source_coords - u_halfpixel.xy * u_offset);
+    sum += texture(u_texture, source_coords + u_halfpixel.xy * u_offset);
+    sum += texture(u_texture, source_coords + vec2(u_halfpixel.x, -u_halfpixel.y) * u_offset);
+    sum += texture(u_texture, source_coords - vec2(u_halfpixel.x, -u_halfpixel.y) * u_offset);
     frag_color = sum / 8.0;
 }
 "#;
@@ -104,13 +106,14 @@ uniform float u_solid_mode;
 uniform vec4 u_solid_color;
 uniform vec2 u_win_size;
 uniform float u_corner_radius;
+uniform float u_corner_exponent;
 
-float squircle_sdf(vec2 p, vec2 b, float r) {
+float rounded_shape_sdf(vec2 p, vec2 b, float r) {
     vec2 d = abs(p) - b + vec2(r);
     if (d.x <= 0.0 || d.y <= 0.0) {
         return max(d.x, d.y) - r;
     }
-    return pow(pow(d.x, 4.2) + pow(d.y, 4.2), 1.0 / 4.2) - r;
+    return pow(pow(d.x, u_corner_exponent) + pow(d.y, u_corner_exponent), 1.0 / u_corner_exponent) - r;
 }
 
 void main() {
@@ -120,7 +123,7 @@ void main() {
             vec2 half_size = u_win_size * 0.5;
             vec2 p = v_win_px - half_size;
             float effective_r = min(u_corner_radius, min(half_size.x, half_size.y));
-            float dist = squircle_sdf(p, half_size, effective_r);
+            float dist = rounded_shape_sdf(p, half_size, effective_r);
             float edge_aa = max(fwidth(dist), 1.0);
             alpha = 1.0 - smoothstep(-edge_aa, 0.0, dist);
         }
@@ -133,7 +136,7 @@ void main() {
         vec2 half_size = u_win_size * 0.5;
         vec2 p = v_win_px - half_size;
         float effective_r = min(u_corner_radius, min(half_size.x, half_size.y));
-        float dist = squircle_sdf(p, half_size, effective_r);
+        float dist = rounded_shape_sdf(p, half_size, effective_r);
         float edge_aa = max(fwidth(dist), 1.0);
         float alpha = 1.0 - smoothstep(-edge_aa, 0.0, dist);
         frag_color = vec4(col.rgb, alpha);
@@ -151,6 +154,7 @@ pub struct DualKawaseBlur {
     down_u_texture: ffi::types::GLint,
     down_u_halfpixel: ffi::types::GLint,
     down_u_offset: ffi::types::GLint,
+    down_u_source_rect: ffi::types::GLint,
 
     up_u_texture: ffi::types::GLint,
     up_u_halfpixel: ffi::types::GLint,
@@ -163,11 +167,14 @@ pub struct DualKawaseBlur {
     blit_u_is_drm: ffi::types::GLint,
     blit_u_texture: ffi::types::GLint,
     blit_u_corner_radius: ffi::types::GLint,
+    blit_u_corner_exponent: ffi::types::GLint,
     blit_u_solid_mode: ffi::types::GLint,
     blit_u_solid_color: ffi::types::GLint,
 
     source_tex: ffi::types::GLuint,
     source_tex_size: (i32, i32),
+    snapshot_tex: ffi::types::GLuint,
+    snapshot_size: (i32, i32),
 
     fbo_textures: [ffi::types::GLuint; 2],
     fbos: [ffi::types::GLuint; 2],
@@ -197,6 +204,7 @@ impl DualKawaseBlur {
             let down_u_texture = gl.GetUniformLocation(down_program, c"u_texture".as_ptr());
             let down_u_halfpixel = gl.GetUniformLocation(down_program, c"u_halfpixel".as_ptr());
             let down_u_offset = gl.GetUniformLocation(down_program, c"u_offset".as_ptr());
+            let down_u_source_rect = gl.GetUniformLocation(down_program, c"u_source_rect".as_ptr());
 
             let up_u_texture = gl.GetUniformLocation(up_program, c"u_texture".as_ptr());
             let up_u_halfpixel = gl.GetUniformLocation(up_program, c"u_halfpixel".as_ptr());
@@ -210,11 +218,15 @@ impl DualKawaseBlur {
             let blit_u_texture = gl.GetUniformLocation(blit_program, c"u_texture".as_ptr());
             let blit_u_corner_radius =
                 gl.GetUniformLocation(blit_program, c"u_corner_radius".as_ptr());
+            let blit_u_corner_exponent =
+                gl.GetUniformLocation(blit_program, c"u_corner_exponent".as_ptr());
             let blit_u_solid_mode = gl.GetUniformLocation(blit_program, c"u_solid_mode".as_ptr());
             let blit_u_solid_color = gl.GetUniformLocation(blit_program, c"u_solid_color".as_ptr());
 
             let mut source_tex = 0;
             gl.GenTextures(1, &mut source_tex);
+            let mut snapshot_tex = 0;
+            gl.GenTextures(1, &mut snapshot_tex);
 
             let mut fbos = [0; 2];
             let mut fbo_textures = [0; 2];
@@ -230,6 +242,7 @@ impl DualKawaseBlur {
                 down_u_texture,
                 down_u_halfpixel,
                 down_u_offset,
+                down_u_source_rect,
                 up_u_texture,
                 up_u_halfpixel,
                 up_u_offset,
@@ -240,10 +253,13 @@ impl DualKawaseBlur {
                 blit_u_is_drm,
                 blit_u_texture,
                 blit_u_corner_radius,
+                blit_u_corner_exponent,
                 blit_u_solid_mode,
                 blit_u_solid_color,
                 source_tex,
                 source_tex_size: (0, 0),
+                snapshot_tex,
+                snapshot_size: (0, 0),
                 fbo_textures,
                 fbos,
                 fbo_sizes: [(0, 0), (0, 0)],
@@ -259,6 +275,146 @@ impl DualKawaseBlur {
         screen_size: Size<i32, Physical>,
         win_rect: Rectangle<i32, Physical>,
         corner_radius: f32,
+    ) {
+        self.render_blur_with_exponent(
+            gl,
+            projection,
+            screen_size,
+            win_rect,
+            corner_radius,
+            4.2,
+            false,
+        );
+    }
+
+    /// Aplica desenfoque con esquinas circulares a la región de pantalla indicada.
+    pub fn render_blur_round(
+        &mut self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        screen_size: Size<i32, Physical>,
+        win_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+    ) {
+        self.render_blur_with_exponent(
+            gl,
+            projection,
+            screen_size,
+            win_rect,
+            corner_radius,
+            2.0,
+            false,
+        );
+    }
+
+    /// Captura el fondo sin blur para que las capas translúcidas no se contaminen entre sí.
+    pub fn capture_background(
+        &mut self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        screen_size: Size<i32, Physical>,
+    ) {
+        if screen_size.w < 1 || screen_size.h < 1 {
+            return;
+        }
+
+        unsafe {
+            let mut prev_active_texture = 0;
+            gl.GetIntegerv(ffi::ACTIVE_TEXTURE, &mut prev_active_texture);
+            gl.ActiveTexture(ffi::TEXTURE0);
+            let mut prev_texture = 0;
+            gl.GetIntegerv(ffi::TEXTURE_BINDING_2D, &mut prev_texture);
+
+            let mut prev_read_buffer = 0;
+            gl.GetIntegerv(ffi::READ_BUFFER, &mut prev_read_buffer);
+            let is_drm = projection[4] > 0.0;
+            gl.ReadBuffer(if is_drm {
+                ffi::COLOR_ATTACHMENT0
+            } else {
+                ffi::BACK
+            });
+
+            gl.BindTexture(ffi::TEXTURE_2D, self.snapshot_tex);
+            if self.snapshot_size != (screen_size.w, screen_size.h) {
+                gl.TexImage2D(
+                    ffi::TEXTURE_2D,
+                    0,
+                    ffi::RGBA as i32,
+                    screen_size.w,
+                    screen_size.h,
+                    0,
+                    ffi::RGBA,
+                    ffi::UNSIGNED_BYTE,
+                    std::ptr::null(),
+                );
+                gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MIN_FILTER, ffi::LINEAR as i32);
+                gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MAG_FILTER, ffi::LINEAR as i32);
+                gl.TexParameteri(
+                    ffi::TEXTURE_2D,
+                    ffi::TEXTURE_WRAP_S,
+                    ffi::CLAMP_TO_EDGE as i32,
+                );
+                gl.TexParameteri(
+                    ffi::TEXTURE_2D,
+                    ffi::TEXTURE_WRAP_T,
+                    ffi::CLAMP_TO_EDGE as i32,
+                );
+                self.snapshot_size = (screen_size.w, screen_size.h);
+            }
+            gl.CopyTexSubImage2D(ffi::TEXTURE_2D, 0, 0, 0, 0, 0, screen_size.w, screen_size.h);
+            gl.ReadBuffer(prev_read_buffer as u32);
+            gl.BindTexture(ffi::TEXTURE_2D, prev_texture as u32);
+            gl.ActiveTexture(prev_active_texture as u32);
+        }
+    }
+
+    pub fn render_captured_blur(
+        &mut self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        screen_size: Size<i32, Physical>,
+        win_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+    ) {
+        self.render_blur_with_exponent(
+            gl,
+            projection,
+            screen_size,
+            win_rect,
+            corner_radius,
+            4.2,
+            true,
+        );
+    }
+
+    pub fn render_captured_blur_round(
+        &mut self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        screen_size: Size<i32, Physical>,
+        win_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+    ) {
+        self.render_blur_with_exponent(
+            gl,
+            projection,
+            screen_size,
+            win_rect,
+            corner_radius,
+            2.0,
+            true,
+        );
+    }
+
+    fn render_blur_with_exponent(
+        &mut self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        screen_size: Size<i32, Physical>,
+        win_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        corner_exponent: f32,
+        from_capture: bool,
     ) {
         let screen_rect = Rectangle::from_size(screen_size);
         let visible_rect = match win_rect.intersection(screen_rect) {
@@ -278,6 +434,22 @@ impl DualKawaseBlur {
             visible_rect.loc.y
         } else {
             screen_size.h - (visible_rect.loc.y + h)
+        };
+        if from_capture && self.snapshot_size != (screen_size.w, screen_size.h) {
+            return;
+        }
+        let (source_size, source_rect) = if from_capture {
+            (
+                (screen_size.w, screen_size.h),
+                [
+                    copy_x as f32 / screen_size.w as f32,
+                    copy_y as f32 / screen_size.h as f32,
+                    w as f32 / screen_size.w as f32,
+                    h as f32 / screen_size.h as f32,
+                ],
+            )
+        } else {
+            ((w, h), [0.0, 0.0, 1.0, 1.0])
         };
 
         unsafe {
@@ -301,7 +473,7 @@ impl DualKawaseBlur {
             gl.GetIntegerv(ffi::VIEWPORT, prev_viewport.as_mut_ptr());
 
             // 2. Asegurar tamaño exacto de textura origen
-            if self.source_tex_size != (w, h) {
+            if !from_capture && self.source_tex_size != (w, h) {
                 gl.BindTexture(ffi::TEXTURE_2D, self.source_tex);
                 gl.TexImage2D(
                     ffi::TEXTURE_2D,
@@ -330,16 +502,20 @@ impl DualKawaseBlur {
             }
 
             // 3. Copiar región del framebuffer de pantalla actual a source_tex
-            gl.BindTexture(ffi::TEXTURE_2D, self.source_tex);
-            let mut prev_read_buffer = 0;
-            gl.GetIntegerv(ffi::READ_BUFFER, &mut prev_read_buffer);
-            gl.ReadBuffer(if is_drm {
-                ffi::COLOR_ATTACHMENT0
+            if from_capture {
+                gl.BindTexture(ffi::TEXTURE_2D, self.snapshot_tex);
             } else {
-                ffi::BACK
-            });
-            gl.CopyTexSubImage2D(ffi::TEXTURE_2D, 0, 0, 0, copy_x, copy_y, w, h);
-            gl.ReadBuffer(prev_read_buffer as u32);
+                gl.BindTexture(ffi::TEXTURE_2D, self.source_tex);
+                let mut prev_read_buffer = 0;
+                gl.GetIntegerv(ffi::READ_BUFFER, &mut prev_read_buffer);
+                gl.ReadBuffer(if is_drm {
+                    ffi::COLOR_ATTACHMENT0
+                } else {
+                    ffi::BACK
+                });
+                gl.CopyTexSubImage2D(ffi::TEXTURE_2D, 0, 0, 0, copy_x, copy_y, w, h);
+                gl.ReadBuffer(prev_read_buffer as u32);
+            }
 
             // 4. Asegurar tamaños exactos de texturas FBO intermedias
             let w0 = (w / 2).max(2);
@@ -403,10 +579,28 @@ impl DualKawaseBlur {
             gl.Viewport(0, 0, w0, h0);
             gl.UseProgram(self.down_program);
             gl.ActiveTexture(ffi::TEXTURE0);
-            gl.BindTexture(ffi::TEXTURE_2D, self.source_tex);
+            gl.BindTexture(
+                ffi::TEXTURE_2D,
+                if from_capture {
+                    self.snapshot_tex
+                } else {
+                    self.source_tex
+                },
+            );
             gl.Uniform1i(self.down_u_texture, 0);
-            gl.Uniform2f(self.down_u_halfpixel, 0.5 / w as f32, 0.5 / h as f32);
+            gl.Uniform2f(
+                self.down_u_halfpixel,
+                0.5 / source_size.0 as f32,
+                0.5 / source_size.1 as f32,
+            );
             gl.Uniform1f(self.down_u_offset, 5.0);
+            gl.Uniform4f(
+                self.down_u_source_rect,
+                source_rect[0],
+                source_rect[1],
+                source_rect[2],
+                source_rect[3],
+            );
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
 
             // PASO 2: Downsample adicional desde FBO 0 -> FBO 1
@@ -470,6 +664,7 @@ impl DualKawaseBlur {
             );
             gl.Uniform1i(self.blit_u_is_drm, if is_drm { 1 } else { 0 });
             gl.Uniform1f(self.blit_u_corner_radius, corner_radius);
+            gl.Uniform1f(self.blit_u_corner_exponent, corner_exponent);
             gl.Uniform1f(self.blit_u_solid_mode, 0.0);
 
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
@@ -539,6 +734,7 @@ impl DualKawaseBlur {
             gl.Uniform1i(self.blit_u_texture, 0);
             gl.Uniform1f(self.blit_u_solid_mode, 1.0);
             gl.Uniform4f(self.blit_u_solid_color, color[0], color[1], color[2], 1.0);
+            gl.Uniform1f(self.blit_u_corner_exponent, 4.2);
             gl.UniformMatrix3fv(self.blit_u_matrix, 1, ffi::FALSE, projection.as_ptr());
             gl.Uniform4f(
                 self.blit_u_blit_rect,

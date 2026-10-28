@@ -888,14 +888,22 @@ pub fn run_winit() -> Result<()> {
                 let mut lower_elements = Vec::new();
                 let mut upper_elements = Vec::new();
                 let mut dock_clip_roots = Vec::new();
+                let mut spotlight_shadow_rects = Vec::new();
                 let mut dock_popups = Vec::new();
                 let mut topbar_popups = Vec::new();
+                let spotlight_active = layer_map
+                    .layers()
+                    .any(|surface| surface.namespace() == "malus-spotlight-results");
                 for surface in layer_map.layers().rev() {
                     if surface.namespace() == "malus-app-switcher" && !state.app_switcher.is_active
                     {
                         continue;
                     }
                     if let Some(geo) = layer_map.layer_geometry(surface) {
+                        let namespace = surface.namespace();
+                        if spotlight_active && namespace == "malus-spotlight-results" {
+                            spotlight_shadow_rects.push(geo.to_physical_precise_round(1.0));
+                        }
                         let layer_loc = geo.loc.to_physical_precise_round(1.0);
                         let s_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
                             render_elements_from_surface_tree(
@@ -1284,6 +1292,7 @@ pub fn run_winit() -> Result<()> {
                     if let Some(ref mut blur) = blur_pipeline {
                         let screen_size = size;
                         let _ = frame.with_context(|gl| {
+                            blur.capture_background(gl, &projection, screen_size);
                             for surface in layer_map.layers() {
                                 if matches!(surface.layer(), Layer::Top | Layer::Overlay) {
                                     let ns = surface.namespace();
@@ -1297,7 +1306,15 @@ pub fn run_winit() -> Result<()> {
                                         let radius = match ns.as_ref() {
                                             "malus-dock" => 32.0,
                                             "malus-app-switcher" => 32.0,
-                                            "malus-spotlight" => 18.0,
+                                            "malus-spotlight-results"
+                                                if spotlight_active =>
+                                            {
+                                                26.0
+                                            }
+                                            "malus-spotlight-controls"
+                                            | "malus-spotlight-input"
+                                            | "malus-spotlight-apps"
+                                            | "malus-spotlight-files" => 27.0,
                                             "malus-notifications" => 16.0,
                                             _ => 0.0,
                                         };
@@ -1316,12 +1333,55 @@ pub fn run_winit() -> Result<()> {
                                                 };
                                                 rect
                                             } else {
-                                                geo.to_physical_precise_round(1.0)
+                                                let rect = geo.to_physical_precise_round(1.0);
+                                                if matches!(
+                                                    ns.as_ref(),
+                                                    "malus-spotlight-controls"
+                                                        | "malus-spotlight-input"
+                                                        | "malus-spotlight-apps"
+                                                        | "malus-spotlight-files"
+                                                ) {
+                                                    super::spotlight_component_blur_rect(
+                                                        rect, 1.0,
+                                                    )
+                                                } else {
+                                                    rect
+                                                }
                                             };
-                                            blur.render_blur(gl, &projection, screen_size, phys_rect, radius);
+                                            if matches!(
+                                                ns.as_ref(),
+                                                "malus-spotlight-controls"
+                                                    | "malus-spotlight-input"
+                                                    | "malus-spotlight-apps"
+                                                    | "malus-spotlight-files"
+                                            ) {
+                                                blur.render_captured_blur_round(
+                                                    gl,
+                                                    &projection,
+                                                    screen_size,
+                                                    phys_rect,
+                                                    radius,
+                                                );
+                                            } else {
+                                                blur.render_captured_blur(
+                                                    gl,
+                                                    &projection,
+                                                    screen_size,
+                                                    phys_rect,
+                                                    radius,
+                                                );
+                                            }
                                         }
                                     }
                                 }
+                            }
+                        });
+                    }
+
+                    if let Some(shadow) = shadow_pipeline.as_ref() {
+                        let _ = frame.with_context(|gl| {
+                            for rect in &spotlight_shadow_rects {
+                                shadow.render_shadow(gl, &projection, *rect, 26.0, true, 1.0);
                             }
                         });
                     }
@@ -1777,16 +1837,13 @@ pub fn run_winit() -> Result<()> {
 
                     let mut theme_capture_succeeded = false;
                     if theme_transition_pipeline.is_none() {
-                        theme_transition_pipeline =
-                            frame.with_context(crate::theme_transition::ThemeTransitionPipeline::new)
-                                .ok()
-                                .flatten();
+                        theme_transition_pipeline = frame
+                            .with_context(crate::theme_transition::ThemeTransitionPipeline::new)
+                            .ok()
+                            .flatten();
                     }
                     if let Some(pipeline) = theme_transition_pipeline.as_mut() {
-                        let output_geo = state
-                            .space
-                            .output_geometry(&output)
-                            .unwrap_or_default();
+                        let output_geo = state.space.output_geometry(&output).unwrap_or_default();
                         let output_name = output.name();
                         let origin = theme_capture_request.as_ref().map(|request| {
                             let origin = crate::theme_transition::output_origin(
@@ -1808,13 +1865,7 @@ pub fn run_winit() -> Result<()> {
                                 );
                             }
                             if let Some(started_at) = state.theme_transition_started_at {
-                                pipeline.draw(
-                                    gl,
-                                    &output_name,
-                                    size,
-                                    started_at,
-                                    Instant::now(),
-                                );
+                                pipeline.draw(gl, &output_name, size, started_at, Instant::now());
                             }
                         });
                         if let Err(error) = result {
@@ -1826,11 +1877,11 @@ pub fn run_winit() -> Result<()> {
                     if let Some(request) = theme_capture_request {
                         state.pending_theme_transition_capture = None;
                         if theme_capture_succeeded {
-                            state.ipc_broadcaster.broadcast(
-                                &IpcMessage::ThemeTransitionPrepared {
+                            state
+                                .ipc_broadcaster
+                                .broadcast(&IpcMessage::ThemeTransitionPrepared {
                                     request_id: request.request_id,
-                                },
-                            );
+                                });
                         } else {
                             warn!("No se pudo guardar el fotograma para la transición de tema");
                         }
