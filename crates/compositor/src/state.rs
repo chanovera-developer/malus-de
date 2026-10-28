@@ -3,6 +3,7 @@ use std::os::unix::io::OwnedFd;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+use crate::cpu_priority::FocusCpuPriority;
 use malus_de_common::config::DockConfig;
 use smithay::{
     delegate_compositor, delegate_data_control, delegate_data_device, delegate_fractional_scale,
@@ -109,6 +110,7 @@ pub struct MalusState {
     pub data_control_state: DataControlState,
     pub output_manager_state: OutputManagerState,
     pub seat: Seat<MalusState>,
+    pub focus_cpu_priority: FocusCpuPriority,
     pub space: Space<smithay::desktop::Window>,
     pub popups: PopupManager,
     pub active_popups: Vec<PopupSurface>,
@@ -426,6 +428,7 @@ impl MalusState {
             data_control_state,
             output_manager_state,
             seat,
+            focus_cpu_priority: FocusCpuPriority::default(),
             space: Space::default(),
             popups: PopupManager::default(),
             active_popups: Vec::new(),
@@ -1522,6 +1525,11 @@ impl SeatHandler for MalusState {
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
         let dh = &self.display_handle;
         let client = focused.and_then(|s| dh.get_client(smithay::reexports::wayland_server::Resource::id(s)).ok());
+        let focused_pid = client.as_ref().and_then(|client| {
+            let credentials = client.get_credentials(dh).ok()?;
+            (credentials.uid == rustix::process::getuid().as_raw()).then_some(credentials.pid)
+        });
+        self.focus_cpu_priority.set_focused_pid(focused_pid);
         set_data_device_focus(dh, seat, client.clone());
         set_primary_focus(dh, seat, client);
 
