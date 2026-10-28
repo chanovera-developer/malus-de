@@ -520,40 +520,13 @@ fn build_spotlight_ui(app: &Application) {
     // Almacenamiento de acciones ejecutables asociadas a cada fila de la lista
     let row_actions: Rc<RefCell<Vec<SpotlightAction>>> = Rc::new(RefCell::new(Vec::new()));
     let actions_for_file_open = row_actions.clone();
-    let app_for_file_open = app.clone();
     let window_for_row_activation = window.clone();
     list_box.connect_row_activated(move |_, row| {
         let action = actions_for_file_open
             .borrow()
             .get(row.index() as usize)
             .cloned();
-        match action {
-            Some(SpotlightAction::LaunchApp(command)) => {
-                if launch_application(&command) {
-                    app_for_file_open.quit();
-                }
-            }
-            Some(SpotlightAction::LaunchDesktopApp(desktop_file, fallback_exec)) => {
-                if launch_desktop_application(&desktop_file, Some(&fallback_exec)) {
-                    app_for_file_open.quit();
-                }
-            }
-            Some(SpotlightAction::OpenUri(uri)) => {
-                match gtk4::gio::AppInfo::launch_default_for_uri(
-                    &uri,
-                    None::<&gtk4::gio::AppLaunchContext>,
-                ) {
-                    Ok(()) => app_for_file_open.quit(),
-                    Err(error) => {
-                        tracing::error!("No se pudo abrir el archivo reciente {uri}: {error}");
-                    }
-                }
-            }
-            Some(SpotlightAction::System(action)) => {
-                show_system_action_confirmation(&window_for_row_activation, action);
-            }
-            None => {}
-        }
+        activate_spotlight_action(action, &window_for_row_activation);
     });
 
     // Filtrar resultados al escribir
@@ -802,6 +775,18 @@ fn build_spotlight_ui(app: &Application) {
     search_entry.connect_changed(move |entry| {
         u_entry(entry.text().as_str());
     });
+    let actions_for_entry_activate = row_actions.clone();
+    let list_for_entry_activate = list_box.clone();
+    let window_for_entry_activate = window.clone();
+    search_entry.connect_activate(move |_| {
+        let action = list_for_entry_activate.selected_row().and_then(|row| {
+            actions_for_entry_activate
+                .borrow()
+                .get(row.index() as usize)
+                .cloned()
+        });
+        activate_spotlight_action(action, &window_for_entry_activate);
+    });
     let mode_button_group: Vec<ToggleButton> = mode_buttons
         .iter()
         .map(|(button, _, _, _, _)| button.clone())
@@ -844,7 +829,6 @@ fn build_spotlight_ui(app: &Application) {
     let key_controller = EventControllerKey::new();
     let win_close = window.clone();
     let list_nav = list_box.clone();
-    let actions_exec = row_actions.clone();
 
     key_controller.connect_key_pressed(move |_, keyval, _, _| match keyval {
         Key::Escape => {
@@ -853,61 +837,6 @@ fn build_spotlight_ui(app: &Application) {
                 app.quit();
             } else {
                 win_close.close();
-            }
-            glib::Propagation::Stop
-        }
-        Key::Return | Key::KP_Enter => {
-            let action = if let Some(selected_row) = list_nav.selected_row() {
-                let idx = selected_row.index() as usize;
-                actions_exec.borrow().get(idx).cloned()
-            } else {
-                None
-            };
-
-            match action {
-                Some(SpotlightAction::LaunchApp(cmd)) => {
-                    info!("Lanzando desde Spotlight: {}", cmd);
-                    if launch_application(&cmd) {
-                        if let Some(app) = win_close.application() {
-                            app.quit();
-                        } else {
-                            win_close.close();
-                        }
-                    }
-                }
-                Some(SpotlightAction::LaunchDesktopApp(desktop_file, fallback_exec)) => {
-                    info!("Lanzando aplicación desde Spotlight: {}", desktop_file);
-                    if launch_desktop_application(&desktop_file, Some(&fallback_exec)) {
-                        if let Some(app) = win_close.application() {
-                            app.quit();
-                        } else {
-                            win_close.close();
-                        }
-                    }
-                }
-                Some(SpotlightAction::OpenUri(uri)) => {
-                    let opened = match gtk4::gio::AppInfo::launch_default_for_uri(
-                        &uri,
-                        None::<&gtk4::gio::AppLaunchContext>,
-                    ) {
-                        Ok(()) => true,
-                        Err(error) => {
-                            tracing::error!("No se pudo abrir el archivo reciente {uri}: {error}");
-                            false
-                        }
-                    };
-                    if opened {
-                        if let Some(app) = win_close.application() {
-                            app.quit();
-                        } else {
-                            win_close.close();
-                        }
-                    }
-                }
-                Some(SpotlightAction::System(action)) => {
-                    show_system_action_confirmation(&win_close, action);
-                }
-                None => {}
             }
             glib::Propagation::Stop
         }
@@ -950,6 +879,44 @@ fn build_spotlight_ui(app: &Application) {
         button_window.present();
     }
     search_entry.grab_focus();
+}
+
+fn activate_spotlight_action(action: Option<SpotlightAction>, window: &ApplicationWindow) {
+    let should_close = match action {
+        Some(SpotlightAction::LaunchApp(command)) => {
+            info!("Lanzando desde Spotlight: {}", command);
+            launch_application(&command)
+        }
+        Some(SpotlightAction::LaunchDesktopApp(desktop_file, fallback_exec)) => {
+            info!("Lanzando aplicación desde Spotlight: {}", desktop_file);
+            launch_desktop_application(&desktop_file, Some(&fallback_exec))
+        }
+        Some(SpotlightAction::OpenUri(uri)) => {
+            match gtk4::gio::AppInfo::launch_default_for_uri(
+                &uri,
+                None::<&gtk4::gio::AppLaunchContext>,
+            ) {
+                Ok(()) => true,
+                Err(error) => {
+                    tracing::error!("No se pudo abrir el archivo reciente {uri}: {error}");
+                    false
+                }
+            }
+        }
+        Some(SpotlightAction::System(action)) => {
+            show_system_action_confirmation(window, action);
+            false
+        }
+        None => false,
+    };
+
+    if should_close {
+        if let Some(app) = window.application() {
+            app.quit();
+        } else {
+            window.close();
+        }
+    }
 }
 
 fn populate_app_grid(
