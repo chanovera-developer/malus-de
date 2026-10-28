@@ -60,7 +60,7 @@ window.malus-spotlight-window {
 }
 
 .spotlight-backdrop {
-    background-color: alpha(@window_bg_color, 0.92);
+    background-color: alpha(@window_bg_color, 0.42);
     border: 1px solid alpha(@window_fg_color, 0.16);
 }
 

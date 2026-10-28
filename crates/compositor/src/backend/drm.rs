@@ -2240,28 +2240,6 @@ pub fn run_drm() -> Result<()> {
                             let _ =
                                 draw_render_elements(&mut frame, scale, &lower_elements, &[damage]);
                         }
-                        for (elements, rect) in &spotlight_backdrop_elements {
-                            for elem in elements {
-                                if let Some(shader) = window_squircle_shader.as_ref() {
-                                    let elem_geo =
-                                        elem.geometry(smithay::utils::Scale::from(scale));
-                                    shader.apply_clip_to_frame(
-                                        &mut frame,
-                                        elem_geo.size,
-                                        rect.loc - elem_geo.loc,
-                                        rect.size,
-                                        (26.0 * scale).round() as i32,
-                                    );
-                                }
-                                let _ = draw_render_elements(
-                                    &mut frame,
-                                    scale,
-                                    std::slice::from_ref(elem),
-                                    &[damage],
-                                );
-                                frame.clear_tex_program_override();
-                            }
-                        }
 
                         // Inicializar pipeline de sombras squircle si aún no existe
                         if shadow_pipeline.is_none() {
@@ -2450,6 +2428,15 @@ pub fn run_drm() -> Result<()> {
                             let screen_size = out_surface.size;
                             let _ = frame.with_context(|gl| {
                                 blur.capture_background(gl, &projection, screen_size);
+                                for (_, rect) in &spotlight_backdrop_elements {
+                                    blur.render_captured_blur(
+                                        gl,
+                                        &projection,
+                                        screen_size,
+                                        *rect,
+                                        26.0 * scale as f32,
+                                    );
+                                }
                                 for surface in layer_map.layers() {
                                     if matches!(surface.layer(), Layer::Top | Layer::Overlay) {
                                         let ns = surface.namespace();
@@ -2459,15 +2446,21 @@ pub fn run_drm() -> Result<()> {
                                         if ns == "malus-top-bar" {
                                             continue;
                                         }
+                                        if spotlight_active
+                                            && matches!(
+                                                ns.as_ref(),
+                                                "malus-spotlight-controls"
+                                                    | "malus-spotlight-input"
+                                                    | "malus-spotlight-apps"
+                                                    | "malus-spotlight-files"
+                                            )
+                                        {
+                                            continue;
+                                        }
                                         if let Some(geo) = layer_map.layer_geometry(surface) {
                                             let radius = match ns.as_ref() {
                                                 "malus-dock" => 32.0 * scale as f32,
                                                 "malus-app-switcher" => 32.0 * scale as f32,
-                                                "malus-spotlight-results"
-                                                    if spotlight_active =>
-                                                {
-                                                    26.0 * scale as f32
-                                                }
                                                 "malus-spotlight-controls"
                                                 | "malus-spotlight-input"
                                                 | "malus-spotlight-apps"
@@ -2534,6 +2527,29 @@ pub fn run_drm() -> Result<()> {
                                     }
                                 }
                             });
+                        }
+
+                        for (elements, rect) in &spotlight_backdrop_elements {
+                            for elem in elements {
+                                if let Some(shader) = window_squircle_shader.as_ref() {
+                                    let elem_geo =
+                                        elem.geometry(smithay::utils::Scale::from(scale));
+                                    shader.apply_clip_to_frame(
+                                        &mut frame,
+                                        elem_geo.size,
+                                        rect.loc - elem_geo.loc,
+                                        rect.size,
+                                        (26.0 * scale).round() as i32,
+                                    );
+                                }
+                                let _ = draw_render_elements(
+                                    &mut frame,
+                                    scale,
+                                    std::slice::from_ref(elem),
+                                    &[damage],
+                                );
+                                frame.clear_tex_program_override();
+                            }
                         }
 
                         if let Some(shadow) = shadow_pipeline.as_ref() {
