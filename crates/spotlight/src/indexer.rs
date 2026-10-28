@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 pub struct AppEntry {
     pub name: String,
     pub exec: String,
+    pub desktop_file: String,
     pub icon: String,
     pub comment: String,
 }
@@ -77,10 +78,9 @@ fn parse_desktop_file(path: &Path) -> Option<AppEntry> {
         match key {
             "Name" if name.is_none() => name = Some(value.to_string()),
             "Exec" if exec.is_none() => {
-                // Eliminar especificadores de campo de FreeDesktop (%f, %F, %u, %U)
                 let clean_exec = value
                     .split_whitespace()
-                    .filter(|p| !p.starts_with('%'))
+                    .filter(|part| !part.starts_with('%'))
                     .collect::<Vec<_>>()
                     .join(" ");
                 exec = Some(clean_exec);
@@ -104,6 +104,7 @@ fn parse_desktop_file(path: &Path) -> Option<AppEntry> {
     Some(AppEntry {
         name,
         exec,
+        desktop_file: path.to_string_lossy().into_owned(),
         icon,
         comment,
     })
