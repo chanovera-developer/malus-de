@@ -888,6 +888,7 @@ pub fn run_winit() -> Result<()> {
                 let mut lower_elements = Vec::new();
                 let mut upper_elements = Vec::new();
                 let mut dock_clip_roots = Vec::new();
+                let mut spotlight_backdrop_elements = Vec::new();
                 let mut spotlight_shadow_rects = Vec::new();
                 let mut dock_popups = Vec::new();
                 let mut topbar_popups = Vec::new();
@@ -967,7 +968,10 @@ pub fn run_winit() -> Result<()> {
                             }
                         }
 
-                        if matches!(surface.layer(), Layer::Background | Layer::Bottom) {
+                        if namespace == "malus-spotlight-backdrop" {
+                            spotlight_backdrop_elements
+                                .push((s_elems, geo.to_physical_precise_round(1.0)));
+                        } else if matches!(surface.layer(), Layer::Background | Layer::Bottom) {
                             lower_elements.extend(s_elems);
                             lower_elements.extend(p_elems);
                         } else {
@@ -1109,6 +1113,27 @@ pub fn run_winit() -> Result<()> {
                     // 1. Renderizar fondo (wallpaper y capas inferiores)
                     if !lower_elements.is_empty() {
                         let _ = draw_render_elements(&mut frame, 1.0, &lower_elements, &[damage]);
+                    }
+                    for (elements, rect) in &spotlight_backdrop_elements {
+                        for elem in elements {
+                            if let Some(shader) = window_squircle_shader.as_ref() {
+                                let elem_geo = elem.geometry(Scale::from(1.0));
+                                shader.apply_clip_to_frame(
+                                    &mut frame,
+                                    elem_geo.size,
+                                    rect.loc - elem_geo.loc,
+                                    rect.size,
+                                    26,
+                                );
+                            }
+                            let _ = draw_render_elements(
+                                &mut frame,
+                                1.0,
+                                std::slice::from_ref(elem),
+                                &[damage],
+                            );
+                            frame.clear_tex_program_override();
+                        }
                     }
 
                     // Inicializar pipeline de sombras squircle si aún no existe
