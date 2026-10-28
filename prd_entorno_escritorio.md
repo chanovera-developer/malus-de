@@ -658,6 +658,8 @@ graph TD
     * *Tema Claro:* Superficie blanco translúcido `rgba(255, 255, 255, 0.78)` con halo perimetral tenue y sombra difusa profunda estilo drop-shadow (`box-shadow: 0 28px 56px rgba(0, 0, 0, 0.22)`).
     * *Tema Oscuro:* Carbón ahumado `rgba(28, 28, 30, 0.82)` con bisel perimetral reflectante `rgba(255, 255, 255, 0.12)`.
   * Barra de búsqueda superior con icono vectorial de lupa, tipografía moderna limpia de 20 px, texto guía (*"Buscar aplicaciones, archivos, acciones..."*) y botón para limpiar texto.
+  * Navegación rápida junto al campo de búsqueda: el icono de aplicaciones abre una cuadrícula filtrable con todas las aplicaciones instaladas; el icono de archivos muestra los elementos existentes del historial reciente del escritorio, ordenados por fecha y abribles con su aplicación predeterminada. La búsqueda filtra la vista seleccionada.
+  * Efectos por estado: en reposo, el campo de búsqueda y cada botón tienen superficies, blur y sombras independientes; al escribir o abrir una vista, esos efectos individuales desaparecen y una única superficie Spotlight reúne controles y resultados con fondo, blur y sombra propios.
 * **Arquitectura de Interfaz en Vista Dividida (*Split View* Estilo macOS Sonoma/Sequoia):**
 
   #### Panel Izquierdo: Lista de Resultados Categorizados (Ancho ~58%)

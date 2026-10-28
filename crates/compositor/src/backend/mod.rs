@@ -38,6 +38,20 @@ pub fn dock_popover_blur_rect(
     clipped
 }
 
+pub fn spotlight_component_blur_rect(
+    geometry: Rectangle<i32, Physical>,
+    scale: f64,
+) -> Rectangle<i32, Physical> {
+    let padding = (28.0 * scale.max(f64::EPSILON)).round() as i32;
+    let inset = padding
+        .min((geometry.size.w.max(1) - 1) / 2)
+        .min((geometry.size.h.max(1) - 1) / 2);
+    Rectangle::new(
+        geometry.loc + smithay::utils::Size::from((inset, inset)),
+        (geometry.size.w - inset * 2, geometry.size.h - inset * 2).into(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,5 +91,23 @@ mod tests {
         let clipped = dock_popover_blur_rect(geometry, 1.0);
 
         assert_eq!(clipped.size, (100, 13).into());
+    }
+
+    #[test]
+    fn spotlight_blur_excludes_the_shadow_gutter() {
+        let geometry = Rectangle::new((12, 34).into(), (486, 110).into());
+        let clipped = spotlight_component_blur_rect(geometry, 1.0);
+
+        assert_eq!(clipped.loc, (40, 62).into());
+        assert_eq!(clipped.size, (430, 54).into());
+    }
+
+    #[test]
+    fn spotlight_blur_scales_the_shadow_gutter() {
+        let geometry = Rectangle::new((24, 68).into(), (972, 220).into());
+        let clipped = spotlight_component_blur_rect(geometry, 2.0);
+
+        assert_eq!(clipped.loc, (80, 124).into());
+        assert_eq!(clipped.size, (860, 108).into());
     }
 }
