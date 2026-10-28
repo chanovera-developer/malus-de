@@ -1,6 +1,7 @@
 pub mod backend;
 pub mod blur;
 pub mod capture;
+mod cpu_priority;
 pub mod grabs;
 pub mod shadow;
 pub mod state;
