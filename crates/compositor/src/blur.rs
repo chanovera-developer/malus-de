@@ -609,6 +609,7 @@ impl DualKawaseBlur {
             gl.BindTexture(ffi::TEXTURE_2D, self.fbo_textures[0]);
             gl.Uniform2f(self.down_u_halfpixel, 0.5 / w0 as f32, 0.5 / h0 as f32);
             gl.Uniform1f(self.down_u_offset, 8.0);
+            gl.Uniform4f(self.down_u_source_rect, 0.0, 0.0, 1.0, 1.0);
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
 
             // PASO 3: Upsample desde FBO 1 -> FBO 0
