@@ -57,12 +57,16 @@ window.malus-spotlight-window {
     border-radius: 26px;
     overflow: visible;
     padding: 0;
-    min-width: 700px;
+}
+
+.spotlight-backdrop {
+    background-color: alpha(@window_bg_color, 0.92);
+    border: 1px solid alpha(@window_fg_color, 0.16);
 }
 
 .spotlight-card-expanded {
-    background-color: alpha(mix(@window_bg_color, #bdefff, 0.42), 0.88);
-    border: 1px solid alpha(@window_fg_color, 0.16);
+    background-color: transparent;
+    border: none;
     padding: 0;
 }
 
@@ -117,6 +121,7 @@ entry.spotlight-entry:focus {
 .spotlight-mode-button.spotlight-component-active {
     background-color: transparent;
     border-color: transparent;
+    box-shadow: none;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -128,6 +133,10 @@ entry.spotlight-entry:focus {
 
 .spotlight-search-icon {
     margin: 0 8px 0 2px;
+}
+
+.spotlight-search-icon,
+.spotlight-icon {
     color: alpha(@window_fg_color, 0.66);
 }
 
@@ -144,6 +153,10 @@ entry.spotlight-entry:focus {
 
 .spotlight-mode-button:checked {
     border-color: alpha(@accent_bg_color, 0.42);
+}
+
+.spotlight-mode-button.spotlight-component-active:checked {
+    border-color: transparent;
 }
 
 .spotlight-browse-heading {
@@ -297,7 +310,7 @@ fn build_spotlight_ui(app: &Application) {
     const CONTROL_GAP: i32 = 10;
     const SHADOW_GUTTER: i32 = 28;
     const SEARCH_TOP: i32 = 140;
-    const RESULTS_WIDTH: i32 = 700;
+    const RESULTS_WIDTH: i32 = SEARCH_WIDTH + BUTTON_SIZE * 2 + CONTROL_GAP * 2;
     const RESULTS_HEIGHT: i32 = 460;
     const RESULTS_PANEL_TOP_GAP: i32 = 70;
 
@@ -311,9 +324,28 @@ fn build_spotlight_ui(app: &Application) {
         .as_ref()
         .map(|monitor| monitor.geometry().width())
         .unwrap_or(1920);
-    let controls_width = SEARCH_WIDTH + BUTTON_SIZE * 2 + CONTROL_GAP * 2;
+    let controls_width = RESULTS_WIDTH;
     let controls_left = ((monitor_width - controls_width) / 2).max(0);
     let results_left = ((monitor_width - RESULTS_WIDTH) / 2).max(0);
+
+    let backdrop_window =
+        create_spotlight_layer_window(app, RESULTS_WIDTH, RESULTS_HEIGHT + RESULTS_PANEL_TOP_GAP);
+    let backdrop = GtkBox::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .css_classes(["spotlight-backdrop"])
+        .build();
+    backdrop_window.set_child(Some(&backdrop));
+    configure_spotlight_layer_window(
+        &backdrop_window,
+        "malus-spotlight-backdrop",
+        results_left,
+        SEARCH_TOP,
+        KeyboardMode::None,
+        monitor.as_ref(),
+    );
+    backdrop_window.set_layer(Layer::Bottom);
+    backdrop_window.set_visible(false);
 
     let window =
         create_spotlight_layer_window(app, RESULTS_WIDTH, RESULTS_HEIGHT + RESULTS_PANEL_TOP_GAP);
@@ -401,7 +433,11 @@ fn build_spotlight_ui(app: &Application) {
             .margin_bottom(SHADOW_GUTTER)
             .build();
         button.set_size_request(BUTTON_SIZE, BUTTON_SIZE);
-        let icon = Image::builder().icon_name(icon_name).pixel_size(24).build();
+        let icon = Image::builder()
+            .icon_name(icon_name)
+            .pixel_size(24)
+            .css_classes(["spotlight-icon"])
+            .build();
         button.set_child(Some(&icon));
         button_window.set_child(Some(&button));
         configure_spotlight_layer_window(
@@ -511,6 +547,7 @@ fn build_spotlight_ui(app: &Application) {
     let app_clone = app.clone();
     let selected_mode_for_results = selected_mode.clone();
     let input_surface_for_update = input_surface.clone();
+    let backdrop_window_for_update = backdrop_window.clone();
     let mode_buttons_for_update: Vec<ToggleButton> = mode_buttons
         .iter()
         .map(|(button, _, _, _, _)| button.clone())
@@ -530,6 +567,7 @@ fn build_spotlight_ui(app: &Application) {
         let mode = selected_mode_for_results.get();
         let is_active = mode != BrowseMode::Search || !q.is_empty();
         results_window_for_update.set_visible(is_active);
+        backdrop_window_for_update.set_visible(is_active);
         input_surface_for_update.set_css_classes(if is_active {
             &["spotlight-input-surface", "spotlight-component-active"]
         } else {
@@ -589,6 +627,7 @@ fn build_spotlight_ui(app: &Application) {
             let icon = Image::builder()
                 .icon_name("accessories-calculator-symbolic")
                 .pixel_size(32)
+                .css_classes(["spotlight-icon"])
                 .build();
             let text_box = GtkBox::builder().orientation(Orientation::Vertical).build();
             let title = Label::builder()
@@ -652,7 +691,11 @@ fn build_spotlight_ui(app: &Application) {
                         .orientation(Orientation::Horizontal)
                         .spacing(12)
                         .build();
-                    let icon = Image::builder().icon_name(icon_name).pixel_size(32).build();
+                    let icon = Image::builder()
+                        .icon_name(icon_name)
+                        .pixel_size(32)
+                        .css_classes(["spotlight-icon"])
+                        .build();
                     let text_box = GtkBox::builder().orientation(Orientation::Vertical).build();
                     let title = Label::builder()
                         .label(name)
@@ -691,7 +734,11 @@ fn build_spotlight_ui(app: &Application) {
                         .spacing(12)
                         .build();
 
-                    let icon = Image::builder().icon_name(&app.icon).pixel_size(32).build();
+                    let icon = Image::builder()
+                        .icon_name(&app.icon)
+                        .pixel_size(32)
+                        .css_classes(["spotlight-icon"])
+                        .build();
                     let text_box = GtkBox::builder().orientation(Orientation::Vertical).build();
                     let title = Label::builder()
                         .label(&app.name)
@@ -765,6 +812,7 @@ fn build_spotlight_ui(app: &Application) {
                 other.set_visible(next_mode == BrowseMode::Search || button_index == index);
             }
             update(entry.text().as_str());
+            entry.grab_focus();
         });
     }
     update_clone("");
@@ -895,6 +943,7 @@ fn populate_app_grid(
         let icon = Image::builder()
             .icon_name(&app_entry.icon)
             .pixel_size(48)
+            .css_classes(["spotlight-icon"])
             .build();
         let name = Label::builder()
             .label(&app_entry.name)
@@ -954,7 +1003,11 @@ fn populate_recent_files(
             .orientation(Orientation::Horizontal)
             .spacing(12)
             .build();
-        let icon = Image::builder().icon_name(icon_name).pixel_size(32).build();
+        let icon = Image::builder()
+            .icon_name(icon_name)
+            .pixel_size(32)
+            .css_classes(["spotlight-icon"])
+            .build();
         let text_box = GtkBox::builder().orientation(Orientation::Vertical).build();
         let title = Label::builder()
             .label(name.to_string())

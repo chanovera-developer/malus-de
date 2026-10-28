@@ -2010,6 +2010,7 @@ pub fn run_drm() -> Result<()> {
                 let mut lower_elements = Vec::new();
                 let mut upper_elements = Vec::new();
                 let mut dock_clip_roots = Vec::new();
+                let mut spotlight_backdrop_elements = Vec::new();
                 let mut spotlight_shadow_rects = Vec::new();
                 let mut dock_popups = Vec::new();
                 let mut topbar_popups = Vec::new();
@@ -2089,7 +2090,10 @@ pub fn run_drm() -> Result<()> {
                             }
                         }
 
-                        if matches!(surface.layer(), Layer::Background | Layer::Bottom) {
+                        if namespace == "malus-spotlight-backdrop" {
+                            spotlight_backdrop_elements
+                                .push((s_elems, geo.to_physical_precise_round(scale)));
+                        } else if matches!(surface.layer(), Layer::Background | Layer::Bottom) {
                             lower_elements.extend(s_elems);
                             lower_elements.extend(p_elems);
                         } else {
@@ -2235,6 +2239,28 @@ pub fn run_drm() -> Result<()> {
                         if !lower_elements.is_empty() {
                             let _ =
                                 draw_render_elements(&mut frame, scale, &lower_elements, &[damage]);
+                        }
+                        for (elements, rect) in &spotlight_backdrop_elements {
+                            for elem in elements {
+                                if let Some(shader) = window_squircle_shader.as_ref() {
+                                    let elem_geo =
+                                        elem.geometry(smithay::utils::Scale::from(scale));
+                                    shader.apply_clip_to_frame(
+                                        &mut frame,
+                                        elem_geo.size,
+                                        rect.loc - elem_geo.loc,
+                                        rect.size,
+                                        (26.0 * scale).round() as i32,
+                                    );
+                                }
+                                let _ = draw_render_elements(
+                                    &mut frame,
+                                    scale,
+                                    std::slice::from_ref(elem),
+                                    &[damage],
+                                );
+                                frame.clear_tex_program_override();
+                            }
                         }
 
                         // Inicializar pipeline de sombras squircle si aún no existe
