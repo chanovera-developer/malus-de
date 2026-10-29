@@ -1043,6 +1043,10 @@ fn build_dock_ui(app: &Application) {
     let dock_root_motion = dock_root.clone();
     let window_motion = window.clone();
     let cfg_motion = dock_config.clone();
+    let icon_size_animations = Rc::new(RefCell::new(Vec::<IconSizeAnimation>::new()));
+    let icon_size_animation_running = Rc::new(Cell::new(false));
+    let icon_size_animations_motion = icon_size_animations.clone();
+    let icon_size_animation_running_motion = icon_size_animation_running.clone();
 
     let motion_controller = EventControllerMotion::new();
     motion_controller.connect_motion(move |_, x, y| {
@@ -1061,9 +1065,9 @@ fn build_dock_ui(app: &Application) {
         let max_size = cfg.magnification_max_size as f64;
         let max_scale_diff = (max_size - base_size).max(0.0);
         let max_zoom_dist = 110.0;
-        let mut layout_changed = false;
+        let mut targets = Vec::new();
 
-        let update_item = |widget: &gtk4::Widget| {
+        let mut update_item = |widget: &gtk4::Widget| {
             if let Some(p) = widget.compute_point(&dock_bar_motion, &gtk4::graphene::Point::zero())
             {
                 let cx = p.x() as f64;
@@ -1077,16 +1081,14 @@ fn build_dock_ui(app: &Application) {
                     0.0
                 };
                 let target_size = (base_size + factor * max_scale_diff) as i32;
-                update_icon_size_recursive(widget, target_size, base_size as i32)
-            } else {
-                false
+                targets.push((widget.clone(), target_size, base_size as i32));
             }
         };
 
         // Magnificar cada app en apps_box
         let mut child = apps_box_motion.first_child();
         while let Some(c) = child {
-            layout_changed |= update_item(&c);
+            update_item(&c);
             child = c.next_sibling();
         }
 
@@ -1094,48 +1096,45 @@ fn build_dock_ui(app: &Application) {
         if min_box_motion.is_visible() {
             let mut min_child = min_box_motion.first_child();
             while let Some(c) = min_child {
-                layout_changed |= update_item(&c);
+                update_item(&c);
                 min_child = c.next_sibling();
             }
         }
 
         // Magnificar papelera
-        layout_changed |= update_item(trash_widget_motion.upcast_ref());
-
-        if layout_changed {
-            queue_dock_resize(&window_motion, &dock_root_motion, &dock_bar_motion);
-        }
+        update_item(trash_widget_motion.upcast_ref());
+        update_icon_size_animation_targets(&icon_size_animations_motion, targets);
+        start_icon_size_animation(
+            &icon_size_animations_motion,
+            &icon_size_animation_running_motion,
+            &window_motion,
+            &dock_root_motion,
+            &dock_bar_motion,
+        );
     });
 
-    let apps_box_leave = apps_box.clone();
-    let min_box_leave = minimized_box.clone();
-    let trash_widget_leave = trash_widget.clone();
-    let dock_bar_leave = dock_bar.clone();
-    let dock_root_leave = dock_root.clone();
-    let window_leave = window.clone();
     let cfg_leave = dock_config.clone();
+    let icon_size_animations_leave = icon_size_animations.clone();
+    let icon_size_animation_running_leave = icon_size_animation_running.clone();
+    let window_leave = window.clone();
+    let dock_root_leave = dock_root.clone();
+    let dock_bar_leave = dock_bar.clone();
 
     motion_controller.connect_leave(move |_| {
         let base_size = cfg_leave.borrow().icon_size as i32;
-        let mut layout_changed = false;
-        let mut child = apps_box_leave.first_child();
-        while let Some(c) = child {
-            layout_changed |= update_icon_size_recursive(&c, base_size, base_size);
-            child = c.next_sibling();
+        let mut animations = icon_size_animations_leave.borrow_mut();
+        for animation in animations.iter_mut() {
+            animation.target_size = base_size as f64;
+            animation.base_size = base_size;
         }
-        if min_box_leave.is_visible() {
-            let mut min_child = min_box_leave.first_child();
-            while let Some(c) = min_child {
-                layout_changed |= update_icon_size_recursive(&c, base_size, base_size);
-                min_child = c.next_sibling();
-            }
-        }
-        layout_changed |=
-            update_icon_size_recursive(trash_widget_leave.upcast_ref(), base_size, base_size);
-
-        if layout_changed {
-            queue_dock_resize(&window_leave, &dock_root_leave, &dock_bar_leave);
-        }
+        drop(animations);
+        start_icon_size_animation(
+            &icon_size_animations_leave,
+            &icon_size_animation_running_leave,
+            &window_leave,
+            &dock_root_leave,
+            &dock_bar_leave,
+        );
     });
     dock_root.add_controller(motion_controller);
 
@@ -1607,6 +1606,91 @@ fn update_icon_size_recursive(widget: &gtk4::Widget, size: i32, base_size: i32) 
         child = c.next_sibling();
     }
     changed
+}
+
+struct IconSizeAnimation {
+    widget: gtk4::Widget,
+    current_size: f64,
+    target_size: f64,
+    base_size: i32,
+}
+
+fn update_icon_size_animation_targets(
+    animations: &Rc<RefCell<Vec<IconSizeAnimation>>>,
+    targets: Vec<(gtk4::Widget, i32, i32)>,
+) {
+    let mut animations = animations.borrow_mut();
+    animations.retain(|animation| animation.widget.parent().is_some());
+
+    for (widget, target_size, base_size) in targets {
+        if let Some(animation) = animations
+            .iter_mut()
+            .find(|animation| animation.widget == widget)
+        {
+            animation.target_size = target_size as f64;
+            animation.base_size = base_size;
+        } else {
+            animations.push(IconSizeAnimation {
+                widget,
+                current_size: base_size as f64,
+                target_size: target_size as f64,
+                base_size,
+            });
+        }
+    }
+}
+
+fn start_icon_size_animation(
+    animations: &Rc<RefCell<Vec<IconSizeAnimation>>>,
+    animation_running: &Rc<Cell<bool>>,
+    window: &ApplicationWindow,
+    dock_root: &GtkBox,
+    dock_bar: &GtkBox,
+) {
+    if animation_running.replace(true) {
+        return;
+    }
+
+    let animations = animations.clone();
+    let animation_running = animation_running.clone();
+    let window = window.clone();
+    let dock_root = dock_root.clone();
+    let dock_bar = dock_bar.clone();
+    glib::timeout_add_local(Duration::from_millis(16), move || {
+        let mut layout_changed = false;
+        let mut settled = true;
+        let mut animations = animations.borrow_mut();
+        animations.retain_mut(|animation| {
+            if animation.widget.parent().is_none() {
+                return false;
+            }
+
+            let difference = animation.target_size - animation.current_size;
+            if difference.abs() < 0.5 {
+                animation.current_size = animation.target_size;
+            } else {
+                animation.current_size += difference * 0.22;
+                settled = false;
+            }
+            layout_changed |= update_icon_size_recursive(
+                &animation.widget,
+                animation.current_size.round() as i32,
+                animation.base_size,
+            );
+            true
+        });
+        drop(animations);
+
+        if layout_changed {
+            queue_dock_resize(&window, &dock_root, &dock_bar);
+        }
+        if settled {
+            animation_running.set(false);
+            glib::ControlFlow::Break
+        } else {
+            glib::ControlFlow::Continue
+        }
+    });
 }
 
 fn should_show_dock_icon_background(

@@ -1681,136 +1681,42 @@ pub fn run_winit() -> Result<()> {
                         state.snap_preview = None;
                     }
 
-                    // Renderizado auténtico de Efecto Lámpara de Aladino (Genie Effect / Magic Lamp)
-                    // Renderizado auténtico de Efecto Lámpara de Aladino (Genie Effect / Magic Lamp)
-                    // Implementación canónica con física elástica, sombra volumétrica y volumen 3D
+                    // Efecto Genie: deformación por franjas hasta el slot real de la miniatura.
                     for (anim, elems) in &anim_data {
                         let elapsed = now.duration_since(anim.start_time);
                         let raw_t =
                             (elapsed.as_secs_f32() / anim.duration.as_secs_f32()).clamp(0.0, 1.0);
-
-                        // Curva de física orgánica con inercia elástica (Spring Easing)
-                        let t = if anim.is_minimizing {
-                            if raw_t < 0.65 {
-                                (raw_t / 0.65).clamp(0.0, 1.0).powf(1.35) * 0.65
-                            } else {
-                                let p = ((raw_t - 0.65) / 0.35).clamp(0.0, 1.0);
-                                0.65 + (1.0 - (1.0 - p).powf(2.6)) * 0.35
-                            }
-                        } else {
-                            if raw_t < 0.75 {
-                                (raw_t / 0.75).clamp(0.0, 1.0).powf(0.85) * 0.75
-                            } else {
-                                let p = ((raw_t - 0.75) / 0.25).clamp(0.0, 1.0);
-                                0.75 + (1.0 - (1.0 - p).powf(2.2)) * 0.25
-                            }
-                        };
-
-                        let split = 0.30f32;
-                        let (k, j) = if anim.is_minimizing {
-                            let k = if t <= split { t / split } else { 1.0 };
-                            let j = if t > split {
-                                (t - split) / (1.0 - split)
-                            } else {
-                                0.0
-                            };
-                            (k, j)
-                        } else {
-                            // Restauración: emerge de la lámpara (j: 1 -> 0), luego su base se asienta (k: 1 -> 0)
-                            let j = 1.0
-                                - if t <= (1.0 - split) {
-                                    t / (1.0 - split)
-                                } else {
-                                    1.0
-                                };
-                            let k = 1.0
-                                - if t > (1.0 - split) {
-                                    (t - (1.0 - split)) / split
-                                } else {
-                                    0.0
-                                };
-                            (k, j)
-                        };
-
-                        info!("🎬 [Genie Frame] id={}, is_min={}, t={:.2}, k={:.2}, j={:.2}, elems={}",
-                            anim.window_id, anim.is_minimizing, t, k, j, elems.len());
-
                         let win_x = anim.window_rect.loc.x as f32;
                         let win_y = anim.window_rect.loc.y as f32;
                         let win_w = (anim.window_rect.size.w as f32).max(40.0);
                         let win_h = (anim.window_rect.size.h as f32).max(40.0);
 
-                        let slot_x = anim.dock_slot_rect.loc.x as f32;
-                        let slot_y = anim.dock_slot_rect.loc.y as f32;
-                        let slot_w = (anim.dock_slot_rect.size.w as f32).max(24.0);
-                        let slot_h = (anim.dock_slot_rect.size.h as f32).max(24.0);
-
-                        // Coordenadas objetivo en el Dock (alineación precisa al slot registrado)
-                        let target_w = slot_w.max(32.0);
-                        let target_x = slot_x;
-                        let target_y = slot_y + slot_h * 0.5;
-                        let target_top = target_y - slot_h * 0.5;
-
-                        // Altura de extensión y desplazamiento de fase Compiz
-                        let expand_h = (target_y - win_y - win_h).max(10.0);
-                        let full_height = (target_y - win_y) - expand_h * (1.0 - k);
-                        let current_height = (full_height * (1.0 - j) + slot_h * j).max(1.0);
-                        let offset_y = (target_top - win_y) * j;
-                        let window_center_x = win_x + win_w * 0.5;
-                        let target_center_x = target_x + target_w * 0.5;
-                        let path_dx = target_center_x - window_center_x;
-                        let path_dy = target_y - (win_y + win_h * 0.5);
-                        let path_length = path_dx.hypot(path_dy).max(1.0);
-                        let bend_side = if path_dx.abs() > 1.0 {
-                            -path_dx.signum()
-                        } else {
-                            1.0
+                        let target = crate::genie::GenieRect {
+                            x: anim.dock_slot_rect.loc.x as f32,
+                            y: anim.dock_slot_rect.loc.y as f32,
+                            width: anim.dock_slot_rect.size.w as f32,
+                            height: anim.dock_slot_rect.size.h as f32,
                         };
-                        let bend_distance = (path_length * 0.12).clamp(0.0, 96.0);
-
-                        // Función de deformación para una rebanada normalizada v en [0.0, 1.0]
-                        // (v = 0.0: borde superior de la ventana; v = 1.0: borde inferior)
-                        let deform_slice = |v: f32| -> (f32, f32, f32) {
-                            let local_y = v * current_height;
-                            // Desplazamiento horizontal progresivo hacia el slot del dock (acotado a 1.0 para evitar desfase)
-                            let norm_y = if full_height > 1.0 {
-                                (local_y / full_height).clamp(0.0, 1.0)
-                            } else {
-                                v
-                            };
-                            // Curva la trayectoria hacia el Dock en vez de desplazar cada franja linealmente.
-                            let path_progress = norm_y * norm_y * (3.0 - 2.0 * norm_y);
-                            let norm_x = (path_progress * k + j).min(1.0);
-                            let bend = (std::f32::consts::PI * path_progress).sin()
-                                * bend_distance
-                                * k
-                                * (1.0 - j)
-                                * bend_side;
-                            let current_center_x =
-                                window_center_x + path_dx * norm_x - (path_dy / path_length) * bend;
-                            let screen_y =
-                                win_y + local_y + offset_y + (path_dx / path_length) * bend;
-
-                            // La deformación termina con las dimensiones de la miniatura del Dock.
-                            let curved_taper = (1.0 - k) + k * (1.0 - v) * (1.0 - v);
-                            let tapered_width = target_w + (win_w - target_w) * curved_taper;
-                            let slice_w = (tapered_width * (1.0 - j) + target_w * j).max(2.0);
-                            let left_x = current_center_x - slice_w * 0.5;
-                            (screen_y, left_x, slice_w)
+                        let window = crate::genie::GenieRect {
+                            x: win_x,
+                            y: win_y,
+                            width: win_w,
+                            height: win_h,
                         };
-
-                        let alpha = if j > 0.98 {
-                            ((1.0 - j) / 0.02).clamp(0.0, 1.0)
-                        } else {
-                            1.0
-                        };
+                        let animation = crate::magic_lamp::MagicLampAnimation::new(
+                            window,
+                            target,
+                            raw_t,
+                            anim.is_minimizing,
+                        );
+                        let alpha = animation.alpha();
 
                         // Ultra-alta resolución de malla adaptativa (160 - 240 rebanadas)
                         let n_strips = ((win_h / 2.5) as usize).clamp(160, 240);
                         let sampled_slices: Vec<(f32, f32, f32)> = (0..=n_strips)
                             .map(|i| {
                                 let v = i as f32 / n_strips as f32;
-                                deform_slice(v)
+                                animation.deform_slice(v)
                             })
                             .collect();
 
