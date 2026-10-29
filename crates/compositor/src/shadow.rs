@@ -197,10 +197,6 @@ impl WindowShadowPipeline {
         is_active: bool,
         scale: f64,
     ) {
-        if win_rect.size.w <= 0 || win_rect.size.h <= 0 {
-            return;
-        }
-
         // Parámetros de sombra calibrados para un efecto más discreto y menos intenso.
         // - Opacidad reducida para que la penumbra sea más sutil
         // - Luz cenital superior: la sombra se proyecta suavemente hacia abajo (offset_y)
@@ -220,6 +216,45 @@ impl WindowShadowPipeline {
                 0.06f32,
             )
         };
+
+        self.render_shadow_with_style(
+            gl,
+            projection,
+            win_rect,
+            corner_radius,
+            blur_radius,
+            spread,
+            offset_y,
+            opacity,
+        );
+    }
+
+    pub fn render_dock_shadow(
+        &self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        dock_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        scale: f64,
+    ) {
+        self.render_shadow(gl, projection, dock_rect, corner_radius, true, scale);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_shadow_with_style(
+        &self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        win_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        blur_radius: f32,
+        spread: f32,
+        offset_y: f32,
+        opacity: f32,
+    ) {
+        if win_rect.size.w <= 0 || win_rect.size.h <= 0 {
+            return;
+        }
 
         // Expansión del quad de sombra para dar margen completo a la penumbra difusa:
         // Puesto que la luz viene de arriba, la sombra cae hacia abajo (+Y):

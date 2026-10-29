@@ -1502,21 +1502,30 @@ pub fn run_winit() -> Result<()> {
                                 .iter()
                                 .find(|(root_id, _)| *elem.id() == *root_id)
                                 .map(|(_, rect)| *rect);
-                            if let (Some(rect), Some(shader)) =
-                                (dock_rect, window_squircle_shader.as_ref())
+                            if let (Some(rect), Some(shadow)) =
+                                (dock_rect, shadow_pipeline.as_ref())
                             {
+                                let _ = frame.with_context(|gl| {
+                                    shadow.render_dock_shadow(
+                                        gl,
+                                        &projection,
+                                        rect,
+                                        32.0,
+                                        1.0,
+                                    );
+                                });
+                            }
+                            if let Some(rect) = dock_rect {
                                 let elem_geo = elem.geometry(Scale::from(1.0));
-                                let offset = Point::from((
-                                    rect.loc.x - elem_geo.loc.x,
-                                    rect.loc.y - elem_geo.loc.y,
-                                ));
-                                shader.apply_dock_clip_to_frame(
-                                    &mut frame,
-                                    elem_geo.size,
-                                    offset,
-                                    rect.size,
-                                    32,
-                                );
+                                if let Some(shader) = window_squircle_shader.as_ref() {
+                                    shader.apply_dock_clip_to_frame(
+                                        &mut frame,
+                                        elem_geo.size,
+                                        rect.loc - elem_geo.loc,
+                                        rect.size,
+                                        32,
+                                    );
+                                }
                             }
                             let _ = draw_render_elements(
                                 &mut frame,
