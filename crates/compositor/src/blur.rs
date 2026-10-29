@@ -1,7 +1,7 @@
-//! Pipeline de desenfoque de fondo acelerado por GPU (Dual Kawase Background Blur)
+//! Pipeline de desenfoque gaussiano de fondo acelerado por GPU
 //!
-//! Implementa el algoritmo Dual Kawase para desenfoque en tiempo real de alto rendimiento
-//! con soporte para recorte squircle continuo (superelipse n=4.2) y anclaje proyectado.
+//! Usa una reducción a media resolución y un filtro gaussiano separable para limitar
+//! el coste de renderizado, con soporte para recorte squircle y anclaje proyectado.
 
 use smithay::{
     backend::renderer::gles::ffi,
@@ -22,7 +22,7 @@ void main() {
 }
 "#;
 
-const DUAL_KAWASE_DOWN_SRC: &str = r#"#version 300 es
+const DOWNSAMPLE_SRC: &str = r#"#version 300 es
 precision highp float;
 
 in vec2 v_tex_coords;
@@ -44,27 +44,25 @@ void main() {
 }
 "#;
 
-const DUAL_KAWASE_UP_SRC: &str = r#"#version 300 es
+const GAUSSIAN_BLUR_SRC: &str = r#"#version 300 es
 precision highp float;
 
 in vec2 v_tex_coords;
 out vec4 frag_color;
 
 uniform sampler2D u_texture;
-uniform vec2 u_halfpixel;
-uniform float u_offset;
+uniform vec2 u_texel_size;
+uniform vec2 u_direction;
 
 void main() {
-    vec4 sum = vec4(0.0);
-    sum += texture(u_texture, v_tex_coords + vec2(-u_halfpixel.x * 2.0, 0.0) * u_offset);
-    sum += texture(u_texture, v_tex_coords + vec2(-u_halfpixel.x, u_halfpixel.y) * u_offset) * 2.0;
-    sum += texture(u_texture, v_tex_coords + vec2(0.0, u_halfpixel.y * 2.0) * u_offset);
-    sum += texture(u_texture, v_tex_coords + vec2(u_halfpixel.x, u_halfpixel.y) * u_offset) * 2.0;
-    sum += texture(u_texture, v_tex_coords + vec2(u_halfpixel.x * 2.0, 0.0) * u_offset);
-    sum += texture(u_texture, v_tex_coords + vec2(u_halfpixel.x, -u_halfpixel.y) * u_offset) * 2.0;
-    sum += texture(u_texture, v_tex_coords + vec2(0.0, -u_halfpixel.y * 2.0) * u_offset);
-    sum += texture(u_texture, v_tex_coords + vec2(-u_halfpixel.x, -u_halfpixel.y) * u_offset) * 2.0;
-    frag_color = sum / 12.0;
+    const float BLUR_RADIUS_SCALE = 1.5;
+    vec2 offset = u_texel_size * u_direction;
+    vec4 sum = texture(u_texture, v_tex_coords) * 0.227027;
+    sum += texture(u_texture, v_tex_coords + offset * (1.384615 * BLUR_RADIUS_SCALE)) * 0.316216;
+    sum += texture(u_texture, v_tex_coords - offset * (1.384615 * BLUR_RADIUS_SCALE)) * 0.316216;
+    sum += texture(u_texture, v_tex_coords + offset * (3.230769 * BLUR_RADIUS_SCALE)) * 0.070270;
+    sum += texture(u_texture, v_tex_coords - offset * (3.230769 * BLUR_RADIUS_SCALE)) * 0.070270;
+    frag_color = sum;
 }
 "#;
 
@@ -146,9 +144,9 @@ void main() {
 }
 "#;
 
-pub struct DualKawaseBlur {
+pub struct GaussianBlur {
     down_program: ffi::types::GLuint,
-    up_program: ffi::types::GLuint,
+    gaussian_program: ffi::types::GLuint,
     blit_program: ffi::types::GLuint,
 
     down_u_texture: ffi::types::GLint,
@@ -156,9 +154,9 @@ pub struct DualKawaseBlur {
     down_u_offset: ffi::types::GLint,
     down_u_source_rect: ffi::types::GLint,
 
-    up_u_texture: ffi::types::GLint,
-    up_u_halfpixel: ffi::types::GLint,
-    up_u_offset: ffi::types::GLint,
+    gaussian_u_texture: ffi::types::GLint,
+    gaussian_u_texel_size: ffi::types::GLint,
+    gaussian_u_direction: ffi::types::GLint,
 
     blit_u_matrix: ffi::types::GLint,
     blit_u_blit_rect: ffi::types::GLint,
@@ -181,23 +179,23 @@ pub struct DualKawaseBlur {
     fbo_sizes: [(i32, i32); 2],
 }
 
-impl DualKawaseBlur {
+impl GaussianBlur {
     pub fn new(gl: &ffi::Gles2) -> Option<Self> {
         unsafe {
             let quad_vert = compile_shader(gl, ffi::VERTEX_SHADER, QUAD_VERT_SRC)?;
-            let down_frag = compile_shader(gl, ffi::FRAGMENT_SHADER, DUAL_KAWASE_DOWN_SRC)?;
-            let up_frag = compile_shader(gl, ffi::FRAGMENT_SHADER, DUAL_KAWASE_UP_SRC)?;
+            let down_frag = compile_shader(gl, ffi::FRAGMENT_SHADER, DOWNSAMPLE_SRC)?;
+            let gaussian_frag = compile_shader(gl, ffi::FRAGMENT_SHADER, GAUSSIAN_BLUR_SRC)?;
 
             let blit_vert = compile_shader(gl, ffi::VERTEX_SHADER, BLIT_VERT_SRC)?;
             let blit_frag = compile_shader(gl, ffi::FRAGMENT_SHADER, BLIT_FRAG_SRC)?;
 
             let down_program = link_program(gl, quad_vert, down_frag)?;
-            let up_program = link_program(gl, quad_vert, up_frag)?;
+            let gaussian_program = link_program(gl, quad_vert, gaussian_frag)?;
             let blit_program = link_program(gl, blit_vert, blit_frag)?;
 
             gl.DeleteShader(quad_vert);
             gl.DeleteShader(down_frag);
-            gl.DeleteShader(up_frag);
+            gl.DeleteShader(gaussian_frag);
             gl.DeleteShader(blit_vert);
             gl.DeleteShader(blit_frag);
 
@@ -206,9 +204,11 @@ impl DualKawaseBlur {
             let down_u_offset = gl.GetUniformLocation(down_program, c"u_offset".as_ptr());
             let down_u_source_rect = gl.GetUniformLocation(down_program, c"u_source_rect".as_ptr());
 
-            let up_u_texture = gl.GetUniformLocation(up_program, c"u_texture".as_ptr());
-            let up_u_halfpixel = gl.GetUniformLocation(up_program, c"u_halfpixel".as_ptr());
-            let up_u_offset = gl.GetUniformLocation(up_program, c"u_offset".as_ptr());
+            let gaussian_u_texture = gl.GetUniformLocation(gaussian_program, c"u_texture".as_ptr());
+            let gaussian_u_texel_size =
+                gl.GetUniformLocation(gaussian_program, c"u_texel_size".as_ptr());
+            let gaussian_u_direction =
+                gl.GetUniformLocation(gaussian_program, c"u_direction".as_ptr());
 
             let blit_u_matrix = gl.GetUniformLocation(blit_program, c"u_matrix".as_ptr());
             let blit_u_blit_rect = gl.GetUniformLocation(blit_program, c"u_blit_rect".as_ptr());
@@ -233,19 +233,19 @@ impl DualKawaseBlur {
             gl.GenFramebuffers(2, fbos.as_mut_ptr());
             gl.GenTextures(2, fbo_textures.as_mut_ptr());
 
-            info!("✨ [DualKawaseBlur] Pipeline de desenfoque por GPU inicializado con éxito.");
+            info!("✨ [GaussianBlur] Pipeline gaussiano por GPU inicializado con éxito.");
 
             Some(Self {
                 down_program,
-                up_program,
+                gaussian_program,
                 blit_program,
                 down_u_texture,
                 down_u_halfpixel,
                 down_u_offset,
                 down_u_source_rect,
-                up_u_texture,
-                up_u_halfpixel,
-                up_u_offset,
+                gaussian_u_texture,
+                gaussian_u_texel_size,
+                gaussian_u_direction,
                 blit_u_matrix,
                 blit_u_blit_rect,
                 blit_u_win_rect,
@@ -267,7 +267,7 @@ impl DualKawaseBlur {
         }
     }
 
-    /// Aplica desenfoque Dual Kawase a la región de pantalla de la ventana dada
+    /// Aplica desenfoque gaussiano a la región de pantalla de la ventana dada
     pub fn render_blur(
         &mut self,
         gl: &ffi::Gles2,
@@ -520,10 +520,8 @@ impl DualKawaseBlur {
             // 4. Asegurar tamaños exactos de texturas FBO intermedias
             let w0 = (w / 2).max(2);
             let h0 = (h / 2).max(2);
-            let w1 = (w / 4).max(2);
-            let h1 = (h / 4).max(2);
 
-            let targets = [(w0, h0), (w1, h1)];
+            let targets = [(w0, h0), (w0, h0)];
             for i in 0..2 {
                 if self.fbo_sizes[i] != targets[i] {
                     gl.BindTexture(ffi::TEXTURE_2D, self.fbo_textures[i]);
@@ -603,23 +601,21 @@ impl DualKawaseBlur {
             );
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
 
-            // PASO 2: Downsample adicional desde FBO 0 -> FBO 1
+            // PASO 2: Filtro gaussiano horizontal a media resolución
             gl.BindFramebuffer(ffi::FRAMEBUFFER, self.fbos[1]);
-            gl.Viewport(0, 0, w1, h1);
+            gl.Viewport(0, 0, w0, h0);
             gl.BindTexture(ffi::TEXTURE_2D, self.fbo_textures[0]);
-            gl.Uniform2f(self.down_u_halfpixel, 0.5 / w0 as f32, 0.5 / h0 as f32);
-            gl.Uniform1f(self.down_u_offset, 8.0);
-            gl.Uniform4f(self.down_u_source_rect, 0.0, 0.0, 1.0, 1.0);
+            gl.UseProgram(self.gaussian_program);
+            gl.Uniform1i(self.gaussian_u_texture, 0);
+            gl.Uniform2f(self.gaussian_u_texel_size, 1.0 / w0 as f32, 1.0 / h0 as f32);
+            gl.Uniform2f(self.gaussian_u_direction, 1.0, 0.0);
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
 
-            // PASO 3: Upsample desde FBO 1 -> FBO 0
+            // PASO 3: Filtro gaussiano vertical a media resolución
             gl.BindFramebuffer(ffi::FRAMEBUFFER, self.fbos[0]);
             gl.Viewport(0, 0, w0, h0);
-            gl.UseProgram(self.up_program);
             gl.BindTexture(ffi::TEXTURE_2D, self.fbo_textures[1]);
-            gl.Uniform1i(self.up_u_texture, 0);
-            gl.Uniform2f(self.up_u_halfpixel, 0.5 / w1 as f32, 0.5 / h1 as f32);
-            gl.Uniform1f(self.up_u_offset, 8.0);
+            gl.Uniform2f(self.gaussian_u_direction, 0.0, 1.0);
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
 
             // PASO 4: Blit final desde FBO 0 hacia la pantalla con soporte squircle y anclaje proyectado
@@ -774,7 +770,7 @@ impl DualKawaseBlur {
     }
 }
 
-impl Drop for DualKawaseBlur {
+impl Drop for GaussianBlur {
     fn drop(&mut self) {
         // En Rust/Smithay la limpieza de recursos GL debe hacerse con el contexto EGL activo
     }
@@ -811,7 +807,7 @@ unsafe fn compile_shader(
             buffer.as_mut_ptr() as *mut ffi::types::GLchar,
         );
         error!(
-            "❌ [DualKawaseBlur] Error al compilar shader GLSL: {}",
+            "❌ [GaussianBlur] Error al compilar shader GLSL: {}",
             String::from_utf8_lossy(&buffer)
         );
         gl.DeleteShader(shader);
@@ -843,7 +839,7 @@ unsafe fn link_program(
             buffer.as_mut_ptr() as *mut ffi::types::GLchar,
         );
         error!(
-            "❌ [DualKawaseBlur] Error al enlazar programa GLSL: {}",
+            "❌ [GaussianBlur] Error al enlazar programa GLSL: {}",
             String::from_utf8_lossy(&buffer)
         );
         gl.DeleteProgram(program);

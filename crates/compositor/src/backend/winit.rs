@@ -193,7 +193,7 @@ pub fn run_winit() -> Result<()> {
         i32,
         [smithay::backend::renderer::gles::GlesTexture; 4],
     > = std::collections::HashMap::new();
-    let mut blur_pipeline: Option<crate::blur::DualKawaseBlur> = None;
+    let mut blur_pipeline: Option<crate::blur::GaussianBlur> = None;
     let mut window_squircle_shader: Option<crate::window_corners::WindowSquircleShader> = None;
     let mut shadow_pipeline: Option<crate::shadow::WindowShadowPipeline> = None;
     let mut theme_transition_pipeline: Option<crate::theme_transition::ThemeTransitionPipeline> =
@@ -1126,7 +1126,7 @@ pub fn run_winit() -> Result<()> {
                     // Inicializar pipeline de desenfoque Dual Kawase si aún no existe
                     if blur_pipeline.is_none() {
                         blur_pipeline = frame
-                            .with_context(|gl| crate::blur::DualKawaseBlur::new(gl))
+                            .with_context(|gl| crate::blur::GaussianBlur::new(gl))
                             .ok()
                             .flatten();
                     }
@@ -1288,7 +1288,7 @@ pub fn run_winit() -> Result<()> {
                     // 2. Aplicar desenfoque de fondo Dual Kawase por GPU a las capas y popups translúcidos
                     if blur_pipeline.is_none() {
                         blur_pipeline = frame
-                            .with_context(|gl| crate::blur::DualKawaseBlur::new(gl))
+                            .with_context(|gl| crate::blur::GaussianBlur::new(gl))
                             .ok()
                             .flatten();
                     }
