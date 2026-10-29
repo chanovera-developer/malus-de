@@ -117,6 +117,7 @@ pub struct MalusState {
     pub window_restore_geometries: HashMap<WlSurface, (Point<i32, Logical>, Size<i32, Logical>)>,
     pub centered_transient_windows: HashMap<WlSurface, (Point<i32, Logical>, Size<i32, Logical>)>,
     pub minimized_windows: HashMap<WlSurface, (smithay::desktop::Window, Point<i32, Logical>)>,
+    pub minimized_window_thumbnails: HashMap<u64, String>,
     pub window_ids: HashMap<WlSurface, u64>,
     pub next_window_id: u64,
     pub dock_slots: HashMap<u64, Rectangle<i32, Logical>>,
@@ -435,6 +436,7 @@ impl MalusState {
             window_restore_geometries: HashMap::new(),
             centered_transient_windows: HashMap::new(),
             minimized_windows: HashMap::new(),
+            minimized_window_thumbnails: HashMap::new(),
             window_ids: HashMap::new(),
             next_window_id: 0,
             dock_slots: HashMap::new(),
@@ -529,10 +531,21 @@ impl MalusState {
                     app_id: app_id_str,
                     title: title_str,
                     icon_name: Some(icon_name),
+                    thumbnail_path: self.minimized_window_thumbnails.get(&window_id).cloned(),
                 });
             }
         }
         self.ipc_broadcaster.broadcast(&IpcMessage::MinimizedWindowsChanged { windows: list });
+    }
+
+    pub fn remove_minimized_thumbnail(&mut self, window_id: u64) {
+        if let Some(path) = self.minimized_window_thumbnails.remove(&window_id) {
+            if let Err(error) = std::fs::remove_file(&path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!("No se pudo eliminar la miniatura {}: {error}", path);
+                }
+            }
+        }
     }
 
     pub fn notify_running_apps(&self) {
@@ -616,6 +629,7 @@ impl MalusState {
 
     pub fn resume_timed_out_dock_animations(&mut self, now: Instant) {
         const DOCK_SLOT_TIMEOUT: Duration = Duration::from_millis(300);
+        let mut windows_to_unmap = Vec::new();
         for anim in &mut self.active_animations {
             if anim.waiting_for_dock_slot
                 && now.duration_since(anim.start_time) >= DOCK_SLOT_TIMEOUT
@@ -626,7 +640,11 @@ impl MalusState {
                 );
                 anim.waiting_for_dock_slot = false;
                 anim.start_time = now;
+                windows_to_unmap.push(anim.window.clone());
             }
+        }
+        for window in windows_to_unmap {
+            self.space.unmap_elem(&window);
         }
     }
 
@@ -642,6 +660,7 @@ impl MalusState {
             }
 
             if let Some((window, loc)) = self.minimized_windows.remove(&surf) {
+                self.remove_minimized_thumbnail(target_id);
                 let geo = window.geometry();
                 let dock_slot = self.dock_slots.remove(&target_id).unwrap_or_else(|| {
                     if let Some((dock_geo, _)) = self.dock_surface_geometry() {
@@ -742,9 +761,16 @@ impl MalusState {
             self.active_animations.push(anim);
 
             self.minimized_windows.insert(surf.clone(), (window.clone(), loc));
-            self.space.unmap_elem(&window);
+            if !waiting_for_dock_slot {
+                self.space.unmap_elem(&window);
+            }
 
-            let next_focus = self.space.elements().last().and_then(|w| w.wl_surface().map(|s| s.into_owned()));
+            let next_focus = self
+                .space
+                .elements()
+                .filter(|candidate| candidate.wl_surface().as_deref() != Some(&surf))
+                .last()
+                .and_then(|w| w.wl_surface().map(|s| s.into_owned()));
             if let Some(kb) = self.seat.get_keyboard() {
                 let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                 kb.set_focus(self, next_focus.clone(), serial);
@@ -883,6 +909,7 @@ impl MalusState {
 
                     tracing::info!("🎯 Dock slot ajustado con precisión: id={}, rect={:?}", window_id, final_rect);
                     self.dock_slots.insert(window_id, final_rect);
+                    let mut windows_to_unmap = Vec::new();
                     for anim in &mut self.active_animations {
                         if anim.window_id != window_id || !anim.is_minimizing {
                             continue;
@@ -892,11 +919,15 @@ impl MalusState {
                         if anim.waiting_for_dock_slot {
                             anim.start_time = Instant::now();
                             anim.waiting_for_dock_slot = false;
+                            windows_to_unmap.push(anim.window.clone());
                             tracing::info!(
                                 "🎯 Destino real del Dock recibido; iniciando minimización Genie para id={}",
                                 window_id
                             );
                         }
+                    }
+                    for window in windows_to_unmap {
+                        self.space.unmap_elem(&window);
                     }
                 }
                 IpcMessage::ToggleSpotlight => {
@@ -1125,6 +1156,7 @@ impl MalusState {
             }
         } else if let Some(surf) = self.minimized_windows.keys().find(|s| self.window_ids.get(*s) == Some(&window_id)).cloned() {
             if let Some((win, _)) = self.minimized_windows.remove(&surf) {
+                self.remove_minimized_thumbnail(window_id);
                 if let Some(toplevel) = win.toplevel() {
                     toplevel.send_close();
                 }
@@ -1986,6 +2018,7 @@ impl XdgShellHandler for MalusState {
         self.minimized_windows.remove(surf);
         if let Some(window_id) = self.window_ids.remove(surf) {
             self.dock_slots.remove(&window_id);
+            self.remove_minimized_thumbnail(window_id);
         }
         self.active_animations.retain(|a| &a.surface != surf);
         self.notify_minimized_windows();

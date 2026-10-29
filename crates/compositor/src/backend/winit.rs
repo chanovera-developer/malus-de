@@ -2014,6 +2014,55 @@ pub fn run_winit() -> Result<()> {
                         crate::capture::write_capture_error(&destination, &error);
                     }
                 }
+
+                let output_origin = state
+                    .space
+                    .outputs()
+                    .next()
+                    .and_then(|output| state.space.output_geometry(output))
+                    .map(|geometry| geometry.loc)
+                    .unwrap_or_default();
+                for (anim, _) in &anim_data {
+                    if !anim.is_minimizing
+                        || state.minimized_window_thumbnails.contains_key(&anim.window_id)
+                        || now.duration_since(anim.start_time)
+                            > std::time::Duration::from_millis(80)
+                    {
+                        continue;
+                    }
+
+                    let result = crate::capture::window_thumbnail_path(anim.window_id).and_then(
+                        |path| {
+                            crate::capture::capture_window_thumbnail(
+                                renderer,
+                                &framebuffer,
+                                size,
+                                anim.window_rect.loc,
+                                anim.window_rect.size,
+                                output_origin,
+                                1.0,
+                                &path,
+                                Transform::Flipped180,
+                            )
+                            .map(|()| path)
+                        },
+                    );
+                    match result {
+                        Ok(path) => {
+                            state.minimized_window_thumbnails.insert(
+                                anim.window_id,
+                                path.display().to_string(),
+                            );
+                            state.notify_minimized_windows();
+                        }
+                        Err(error) => {
+                            warn!(
+                                "No se pudo capturar la miniatura de la ventana {}: {error:#}",
+                                anim.window_id
+                            );
+                        }
+                    }
+                }
             }
         }
 

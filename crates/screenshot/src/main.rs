@@ -91,6 +91,7 @@ window.malus-screenshot-flash {
 "#;
 
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(15);
+const THUMBNAIL_PREVIEW_SIZE: (i32, i32) = (320, 180);
 
 fn main() -> Result<()> {
     init_logging("malus_de_screenshot");
@@ -873,8 +874,7 @@ fn show_thumbnail_app(mode: CaptureMode, capture_path: PathBuf, clipboard_status
         let preview_img = Picture::for_filename(&capture_path);
         preview_img.set_content_fit(gtk4::ContentFit::Contain);
         preview_img.set_can_shrink(true);
-        preview_img.set_hexpand(true);
-        preview_img.set_size_request(320, 180);
+        preview_img.set_size_request(THUMBNAIL_PREVIEW_SIZE.0, THUMBNAIL_PREVIEW_SIZE.1);
         card.append(&preview_img);
 
         let title_label = Label::builder()
@@ -892,6 +892,8 @@ fn show_thumbnail_app(mode: CaptureMode, capture_path: PathBuf, clipboard_status
             .label(&capture_path.display().to_string())
             .css_classes(["thumbnail-subtitle"])
             .build();
+        sub_label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+        sub_label.set_max_width_chars(42);
         card.append(&sub_label);
 
         let status_label = Label::builder()
