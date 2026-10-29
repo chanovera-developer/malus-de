@@ -126,7 +126,7 @@ button.dock-item-btn:active {
 /* Tarjeta miniatura de ventana minimizada (macOS Dock Window Thumbnail) */
 .dock-window-card {
     padding: 1px 3px;
-    margin: 0px 2px 8px 2px;
+    margin: 0px 2px;
 }
 
 .dock-mini-window {
@@ -134,7 +134,6 @@ button.dock-item-btn:active {
     border: 1px solid rgba(255, 255, 255, 0.22);
     border-radius: 10px;
     min-width: 160px;
-    min-height: 100px;
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.48), 0 1px 3px rgba(255, 255, 255, 0.12);
     transition: all 180ms cubic-bezier(0.2, 0.9, 0.3, 1.0);
     padding: 0;
