@@ -1234,6 +1234,8 @@ pub struct DockConfig {
     pub apps: Vec<DockAppConfig>,
 }
 
+const DOCK_BOUNCE_HEADROOM: u32 = 16;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DockPosition {
@@ -1313,6 +1315,13 @@ impl Default for DockConfig {
 }
 
 impl DockConfig {
+    /// Height reserved above the dock for magnification and bounce animations.
+    pub fn headroom_height(&self) -> u32 {
+        self.magnification_max_size
+            .saturating_sub(self.icon_size)
+            .saturating_add(DOCK_BOUNCE_HEADROOM)
+    }
+
     /// Determina la ruta canónica del archivo `dock.toml`
     pub fn config_path() -> PathBuf {
         if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
@@ -2123,6 +2132,17 @@ fn extract_tag_value(xml_snippet: &str, tag: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dock_headroom_includes_magnification_and_bounce_space() {
+        let config = DockConfig {
+            icon_size: 48,
+            magnification_max_size: 62,
+            ..DockConfig::default()
+        };
+
+        assert_eq!(config.headroom_height(), 30);
+    }
 
     #[test]
     fn cursor_config_reads_values_from_interface_section_only() {
