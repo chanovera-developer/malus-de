@@ -133,7 +133,6 @@ button.dock-item-btn:active {
     background: linear-gradient(180deg, rgba(45, 45, 55, 0.90) 0%, rgba(25, 25, 32, 0.95) 100%);
     border: 1px solid rgba(255, 255, 255, 0.22);
     border-radius: 10px;
-    min-width: 160px;
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.48), 0 1px 3px rgba(255, 255, 255, 0.12);
     transition: all 180ms cubic-bezier(0.2, 0.9, 0.3, 1.0);
     padding: 0;
@@ -1889,6 +1888,8 @@ fn create_minimized_window_item(info: &MinimizedWindowInfo, icon_size: i32) -> (
     });
 
     if !has_thumbnail {
+        mini_win.set_size_request(icon_size.max(1), -1);
+
         // Barra superior simulada, visible solo mientras no haya una captura real.
         let titlebar = GtkBox::builder()
             .orientation(Orientation::Horizontal)
