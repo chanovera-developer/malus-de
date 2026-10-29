@@ -4,7 +4,7 @@ use smithay::{
         allocator::Fourcc,
         renderer::ExportMem,
     },
-    utils::{Buffer as BufferCoord, Physical, Rectangle, Size, Transform},
+    utils::{Buffer as BufferCoord, Logical, Physical, Point, Rectangle, Size, Transform},
 };
 use std::{
     fs::{self, OpenOptions},
@@ -78,6 +78,113 @@ where
         );
     }
     Ok(())
+}
+
+pub fn capture_window_thumbnail<R>(
+    renderer: &mut R,
+    target: &R::Framebuffer<'_>,
+    framebuffer_size: Size<i32, Physical>,
+    window_location: Point<i32, Logical>,
+    window_size: Size<i32, Logical>,
+    output_origin: Point<i32, Logical>,
+    scale: f64,
+    destination: &Path,
+    transform: Transform,
+) -> Result<()>
+where
+    R: ExportMem,
+{
+    let region_x = ((window_location.x - output_origin.x) as f64 * scale).round();
+    let region_y = ((window_location.y - output_origin.y) as f64 * scale).round();
+    let region_w = (window_size.w as f64 * scale).round();
+    let region_h = (window_size.h as f64 * scale).round();
+    if !scale.is_finite()
+        || scale <= 0.0
+        || [region_x, region_y, region_w, region_h]
+            .iter()
+            .any(|value| !value.is_finite() || *value < 0.0 || *value > i32::MAX as f64)
+    {
+        bail!("La geometría de la ventana no es válida para capturar su miniatura");
+    }
+
+    let region_x = region_x as i32;
+    let region_y = region_y as i32;
+    let region_w = region_w as i32;
+    let region_h = region_h as i32;
+    if region_w == 0
+        || region_h == 0
+        || i64::from(region_x) + i64::from(region_w) > i64::from(framebuffer_size.w)
+        || i64::from(region_y) + i64::from(region_h) > i64::from(framebuffer_size.h)
+    {
+        bail!("La ventana no cabe dentro del fotograma de salida para capturar su miniatura");
+    }
+
+    let region = Rectangle::new((region_x, region_y).into(), (region_w, region_h).into());
+    let mapping = renderer
+        .copy_framebuffer(target, region, Fourcc::Abgr8888)
+        .map_err(|error| {
+            anyhow::anyhow!("No se pudo leer el framebuffer de la ventana: {error:?}")
+        })?;
+    let pixels = renderer.map_texture(&mapping).map_err(|error| {
+        anyhow::anyhow!("No se pudo mapear la miniatura capturada: {error:?}")
+    })?;
+    let expected_len = (region_w as usize)
+        .checked_mul(region_h as usize)
+        .and_then(|pixel_count| pixel_count.checked_mul(4))
+        .context("El tamaño de la miniatura excede el tamaño permitido")?;
+    if pixels.len() != expected_len {
+        bail!(
+            "La miniatura tiene un tamaño inesperado: {} bytes, se esperaban {expected_len}",
+            pixels.len()
+        );
+    }
+
+    let image = orient_pixels(&pixels, region_w as usize * 4, transform);
+    let temporary = destination.with_extension("pending");
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .with_context(|| format!("No se pudo crear {}", temporary.display()))?;
+    let mut encoder = png::Encoder::new(file, region_w as u32, region_h as u32);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = match encoder.write_header() {
+        Ok(writer) => writer,
+        Err(error) => {
+            let _ = fs::remove_file(&temporary);
+            return Err(error).context("No se pudo iniciar la escritura de la miniatura PNG");
+        }
+    };
+    if let Err(error) = writer.write_image_data(&image) {
+        drop(writer);
+        let _ = fs::remove_file(&temporary);
+        return Err(error).context("No se pudo escribir la miniatura PNG");
+    }
+    drop(writer);
+    if let Err(error) = fs::hard_link(&temporary, destination) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error).with_context(|| {
+            format!("No se pudo finalizar la miniatura {}", destination.display())
+        });
+    }
+    if let Err(error) = fs::remove_file(&temporary) {
+        tracing::warn!(
+            "No se pudo limpiar el archivo temporal {}: {error}",
+            temporary.display()
+        );
+    }
+    Ok(())
+}
+
+pub fn window_thumbnail_path(window_id: u64) -> Result<std::path::PathBuf> {
+    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .context("XDG_RUNTIME_DIR no está definido")?;
+    Ok(runtime_dir.join(format!(
+        "malus-window-thumbnail-{}-{window_id}.png",
+        std::process::id()
+    )))
 }
 
 fn orient_pixels(pixels: &[u8], row_len: usize, transform: Transform) -> Vec<u8> {

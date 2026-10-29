@@ -3129,6 +3129,48 @@ pub fn run_drm() -> Result<()> {
                             crate::capture::write_capture_error(&destination, &error);
                         }
                     }
+
+                    for (anim, _) in &anim_data {
+                        if !anim.is_minimizing
+                            || state.minimized_window_thumbnails.contains_key(&anim.window_id)
+                            || now.duration_since(anim.start_time)
+                                > std::time::Duration::from_millis(80)
+                        {
+                            continue;
+                        }
+
+                        let result = crate::capture::window_thumbnail_path(anim.window_id)
+                            .and_then(|path| {
+                                crate::capture::capture_window_thumbnail(
+                                    &mut renderer,
+                                    &target,
+                                    out_surface.size,
+                                    anim.window_rect.loc,
+                                    anim.window_rect.size,
+                                    output_geo.loc,
+                                    scale,
+                                    &path,
+                                    Transform::Normal,
+                                )
+                                .map(|()| path)
+                            });
+                        match result {
+                            Ok(path) => {
+                                state.minimized_window_thumbnails.insert(
+                                    anim.window_id,
+                                    path.display().to_string(),
+                                );
+                                state.notify_minimized_windows();
+                            }
+                            Err(error) => {
+                                warn!(
+                                    "No se pudo capturar la miniatura de la ventana {} en {}: {error:#}",
+                                    anim.window_id,
+                                    out_surface.output.name()
+                                );
+                            }
+                        }
+                    }
                 }
 
                 if let Err(e) = out_surface.surface.queue_buffer(None, None, ()) {

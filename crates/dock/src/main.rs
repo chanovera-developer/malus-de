@@ -3,8 +3,8 @@ use gdk_pixbuf::prelude::*;
 use gtk4::prelude::*;
 use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea,
-    EventControllerMotion, GestureClick, Image, Label, Orientation, Overlay, Popover, Separator,
-    Window,
+    EventControllerMotion, GestureClick, Image, Label, Orientation, Overlay, Picture, Popover,
+    Separator, Window,
 };
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use libadwaita as adw;
@@ -132,18 +132,41 @@ button.dock-item-btn:active {
 .dock-mini-window {
     background: linear-gradient(180deg, rgba(45, 45, 55, 0.90) 0%, rgba(25, 25, 32, 0.95) 100%);
     border: 1px solid rgba(255, 255, 255, 0.22);
-    border-radius: 8px;
-    min-width: 54px;
-    min-height: 42px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.50);
+    border-radius: 10px;
+    min-width: 160px;
+    min-height: 100px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.48), 0 1px 3px rgba(255, 255, 255, 0.12);
     transition: all 180ms cubic-bezier(0.2, 0.9, 0.3, 1.0);
     padding: 0;
+}
+
+.dock-window-thumbnail {
+    border-radius: 3px;
+}
+
+.dock-window-card-thumbnail {
+    margin: 0;
+    padding: 0;
+}
+
+.dock-mini-window.has-thumbnail {
+    min-width: 0;
+    min-height: 0;
+    background: transparent;
+    border: none;
+    box-shadow: none;
 }
 
 .dock-mini-window:hover {
     background: linear-gradient(180deg, rgba(58, 58, 72, 0.95) 0%, rgba(32, 32, 42, 0.98) 100%);
     border-color: rgba(255, 255, 255, 0.45);
     box-shadow: 0 6px 16px rgba(0, 0, 0, 0.60), 0 0 8px rgba(59, 130, 246, 0.4);
+}
+
+.dock-mini-window.has-thumbnail:hover {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
 }
 
 .dock-mini-window-titlebar {
@@ -876,7 +899,7 @@ fn build_dock_ui(app: &Application) {
     let minimized_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(4)
-        .valign(gtk4::Align::End)
+        .valign(gtk4::Align::Center)
         .build();
     minimized_box.set_overflow(gtk4::Overflow::Visible);
     minimized_box.set_visible(false);
@@ -1125,6 +1148,8 @@ fn build_dock_ui(app: &Application) {
     let dock_bar_ref = dock_bar.clone();
     let dock_root_ref = dock_root.clone();
     let min_map: Rc<RefCell<HashMap<u64, gtk4::Widget>>> = Rc::new(RefCell::new(HashMap::new()));
+    let min_paths: Rc<RefCell<HashMap<u64, Option<String>>>> =
+        Rc::new(RefCell::new(HashMap::new()));
     let win_ref = window.clone();
     let indicators_ipc = dock_indicators.clone();
     let active_app_ipc = active_app_cache.clone();
@@ -1198,6 +1223,7 @@ fn build_dock_ui(app: &Application) {
                 IpcMessage::ReloadDockConfig => {
                     info!("🔄 IPC ReloadDockConfig recibido");
                     let new_cfg = DockConfig::load_or_create_default();
+                    let base_size = new_cfg.icon_size as i32;
                     if gtk4_layer_shell::is_supported() {
                         win_ref.set_margin(Edge::Bottom, new_cfg.floating_gap as i32);
                     }
@@ -1208,6 +1234,27 @@ fn build_dock_ui(app: &Application) {
                             .saturating_sub(new_cfg.icon_size) as i32,
                     );
                     *cfg_ipc.borrow_mut() = new_cfg;
+                    let cards: Vec<(u64, gtk4::Widget)> = min_map
+                        .borrow()
+                        .iter()
+                        .map(|(id, widget)| (*id, widget.clone()))
+                        .collect();
+                    for (_, card) in &cards {
+                        update_icon_size_recursive(card, base_size, base_size);
+                    }
+                    queue_dock_resize(&win_ref, &dock_root_ref, &dock_bar_ref);
+                    let dock_window_weak = win_ref.downgrade();
+                    for delay in [60, 180] {
+                        let cards = cards.clone();
+                        let dock_window_weak = dock_window_weak.clone();
+                        glib::timeout_add_local_once(Duration::from_millis(delay), move || {
+                            if let Some(dock_window) = dock_window_weak.upgrade() {
+                                for (window_id, card) in cards {
+                                    register_minimized_dock_slot(&card, &dock_window, window_id);
+                                }
+                            }
+                        });
+                    }
                     on_rf_ipc();
                 }
                 IpcMessage::MinimizedWindowsChanged { windows } => {
@@ -1221,14 +1268,26 @@ fn build_dock_ui(app: &Application) {
                             min_box.remove(&widget);
                             info!("🗑️ Miniatura removida del Dock: window_id={}", id);
                         }
+                        min_paths.borrow_mut().remove(&id);
                     }
 
                     // Agregar o mantener miniaturas activas
                     for win_info in windows {
-                        if !current_map.contains_key(&win_info.window_id) {
-                            let (widget, id) = create_minimized_window_item(&win_info);
+                        let thumbnail_changed = min_paths
+                            .borrow()
+                            .get(&win_info.window_id)
+                            != Some(&win_info.thumbnail_path);
+                        if !current_map.contains_key(&win_info.window_id) || thumbnail_changed {
+                            if let Some(widget) = current_map.remove(&win_info.window_id) {
+                                min_box.remove(&widget);
+                            }
+                            let icon_size = cfg_ipc.borrow().icon_size as i32;
+                            let (widget, id) = create_minimized_window_item(&win_info, icon_size);
                             min_box.append(&widget);
                             current_map.insert(id, widget);
+                            min_paths
+                                .borrow_mut()
+                                .insert(id, win_info.thumbnail_path.clone());
                             info!("🖼️ Miniatura agregada al Dock: window_id={} ('{}')", id, win_info.title);
                         }
                     }
@@ -1497,8 +1556,24 @@ fn render_dock_apps(
 fn update_icon_size_recursive(widget: &gtk4::Widget, size: i32, base_size: i32) -> bool {
     let mut changed = false;
     if let Ok(overlay) = widget.clone().downcast::<Overlay>() {
-        if overlay.width_request() != size || overlay.height_request() != base_size {
-            overlay.set_size_request(size, base_size);
+        let height = if overlay.has_css_class("dock-window-card-thumbnail") {
+            -1
+        } else {
+            base_size
+        };
+        if overlay.width_request() != size || overlay.height_request() != height {
+            overlay.set_size_request(size, height);
+            changed = true;
+        }
+    }
+    if let Ok(picture) = widget.clone().downcast::<Picture>() {
+        let current_width = picture.width_request().max(1);
+        let current_height = picture.height_request().max(1);
+        let height = ((size as f64 * current_height as f64) / current_width as f64)
+            .round()
+            .max(1.0) as i32;
+        if picture.width_request() != size || picture.height_request() != height {
+            picture.set_size_request(size, height);
             changed = true;
         }
     }
@@ -1774,44 +1849,71 @@ fn squircle_path(context: &gtk4::cairo::Context, width: f64, height: f64, radius
     context.close_path();
 }
 
-fn create_minimized_window_item(info: &MinimizedWindowInfo) -> (gtk4::Widget, u64) {
+fn create_minimized_window_item(info: &MinimizedWindowInfo, icon_size: i32) -> (gtk4::Widget, u64) {
     let window_id = info.window_id;
 
-    // Mini ventana: barra superior con 3 semáforos y cuerpo con simulación de contenido
+    // Mini ventana: captura real cuando está disponible, con la tarjeta simulada como respaldo.
     let mini_win = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .css_classes(["dock-mini-window"])
-        .valign(gtk4::Align::End)
-        .build();
-
-    // 1. Barra superior con puntitos estilo semáforo macOS (rojo, amarillo, verde)
-    let titlebar = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .css_classes(["dock-mini-window-titlebar"])
-        .spacing(2)
-        .build();
-
-    let dot_red = Label::builder().label("●").css_classes(["dock-mini-dot", "dot-red"]).build();
-    let dot_yellow = Label::builder().label("●").css_classes(["dock-mini-dot", "dot-yellow"]).build();
-    let dot_green = Label::builder().label("●").css_classes(["dock-mini-dot", "dot-green"]).build();
-
-    titlebar.append(&dot_red);
-    titlebar.append(&dot_yellow);
-    titlebar.append(&dot_green);
-    mini_win.append(&titlebar);
-
-    // 2. Cuerpo de la ventana simulada con líneas de contenido
-    let body = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .css_classes(["dock-mini-window-body"])
         .valign(gtk4::Align::Center)
         .build();
 
-    let line1 = GtkBox::builder().css_classes(["dock-mini-content-line"]).build();
-    let line2 = GtkBox::builder().css_classes(["dock-mini-content-line-short"]).build();
-    body.append(&line1);
-    body.append(&line2);
-    mini_win.append(&body);
+    let has_thumbnail = info.thumbnail_path.as_deref().is_some_and(|path| {
+        match gdk_pixbuf::Pixbuf::from_file_at_scale(path, icon_size.max(1), icon_size.max(1), true)
+        {
+            Ok(pixbuf) => {
+                let texture = gtk4::gdk::Texture::for_pixbuf(&pixbuf);
+                let preview_height = ((icon_size as f64 * pixbuf.height() as f64)
+                    / pixbuf.width().max(1) as f64)
+                    .round()
+                    .max(1.0) as i32;
+                let image = Picture::for_paintable(&texture);
+                image.set_content_fit(gtk4::ContentFit::Contain);
+                image.set_can_shrink(true);
+                image.set_size_request(icon_size, preview_height);
+                image.set_hexpand(true);
+                image.add_css_class("dock-window-thumbnail");
+                mini_win.add_css_class("has-thumbnail");
+                mini_win.append(&image);
+                true
+            }
+            Err(error) => {
+                warn!("No se pudo cargar la miniatura de '{}': {error}", path);
+                false
+            }
+        }
+    });
+
+    if !has_thumbnail {
+        // Barra superior simulada, visible solo mientras no haya una captura real.
+        let titlebar = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .css_classes(["dock-mini-window-titlebar"])
+            .spacing(2)
+            .build();
+
+        let dot_red = Label::builder().label("●").css_classes(["dock-mini-dot", "dot-red"]).build();
+        let dot_yellow = Label::builder().label("●").css_classes(["dock-mini-dot", "dot-yellow"]).build();
+        let dot_green = Label::builder().label("●").css_classes(["dock-mini-dot", "dot-green"]).build();
+
+        titlebar.append(&dot_red);
+        titlebar.append(&dot_yellow);
+        titlebar.append(&dot_green);
+        mini_win.append(&titlebar);
+
+        let body = GtkBox::builder()
+            .orientation(Orientation::Vertical)
+            .css_classes(["dock-mini-window-body"])
+            .valign(gtk4::Align::Center)
+            .build();
+
+        let line1 = GtkBox::builder().css_classes(["dock-mini-content-line"]).build();
+        let line2 = GtkBox::builder().css_classes(["dock-mini-content-line-short"]).build();
+        body.append(&line1);
+        body.append(&line2);
+        mini_win.append(&body);
+    }
 
     // 3. Insignia circular de la app en la esquina inferior derecha (macOS style)
     let icon_name = info.icon_name.as_deref().unwrap_or("application-x-executable");
@@ -1833,8 +1935,11 @@ fn create_minimized_window_item(info: &MinimizedWindowInfo) -> (gtk4::Widget, u6
         .css_classes(["dock-window-card"])
         .tooltip_text(&info.title)
         .focusable(false)
-        .valign(gtk4::Align::End)
+        .valign(gtk4::Align::Center)
         .build();
+    if has_thumbnail {
+        overlay.add_css_class("dock-window-card-thumbnail");
+    }
     overlay.add_overlay(&badge_box);
 
     // Clic para restaurar la ventana vía Genie Effect inverso

@@ -11,6 +11,8 @@ pub struct MinimizedWindowInfo {
     pub app_id: String,
     pub title: String,
     pub icon_name: Option<String>,
+    #[serde(default)]
+    pub thumbnail_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -392,6 +394,7 @@ mod tests {
                     app_id: "org.gnome.Nautilus".to_string(),
                     title: "Archivos — Documentos".to_string(),
                     icon_name: Some("system-file-manager".to_string()),
+                    thumbnail_path: None,
                 },
             ],
         };
@@ -407,6 +410,11 @@ mod tests {
         } else {
             panic!("Tipo de mensaje incorrecto");
         }
+
+        let legacy_json = r#"{"window_id":43,"app_id":"app","title":"Ventana","icon_name":null}"#;
+        let legacy_info: MinimizedWindowInfo =
+            serde_json::from_str(legacy_json).expect("Debe aceptar la lista de ventanas anterior");
+        assert_eq!(legacy_info.thumbnail_path, None);
     }
 
     #[test]
