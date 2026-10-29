@@ -1438,6 +1438,28 @@ pub fn run_drm() -> Result<()> {
 
                     let btn_serial = SERIAL_COUNTER.next_serial();
                     if is_pressed {
+                        let clicked_on_spotlight = layer_info.as_ref().is_some_and(
+                            |(_, namespace, _)| {
+                                matches!(
+                                    namespace.as_str(),
+                                    "malus-spotlight-results"
+                                        | "malus-spotlight-input"
+                                        | "malus-spotlight-apps"
+                                        | "malus-spotlight-files"
+                                )
+                            },
+                        );
+                        let spotlight_active = state.space.outputs().any(|output| {
+                            smithay::desktop::layer_map_for_output(output)
+                                .layers()
+                                .any(|surface| {
+                                    surface.namespace() == "malus-spotlight-results"
+                                })
+                        });
+                        if spotlight_active && !clicked_on_spotlight {
+                            state.ipc_broadcaster.broadcast(&IpcMessage::HideSpotlight);
+                        }
+
                         if state.app_switcher.is_active {
                             info!("🖱️ Click detectado mientras AppSwitcher está activo -> cerrando AppSwitcher");
                             state.app_switcher.is_active = false;

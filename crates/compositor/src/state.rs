@@ -903,6 +903,9 @@ impl MalusState {
                     tracing::info!("📥 IPC ToggleSpotlight recibido");
                     crate::backend::winit::toggle_spotlight(&self.socket_name);
                 }
+                IpcMessage::HideSpotlight => {
+                    self.ipc_broadcaster.broadcast(&IpcMessage::HideSpotlight);
+                }
                 IpcMessage::HideActiveWindow => {
                     tracing::info!("📥 IPC HideActiveWindow recibido");
                     self.minimize_active_window();

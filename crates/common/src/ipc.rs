@@ -28,6 +28,8 @@ pub struct AppSwitcherItem {
 pub enum IpcMessage {
     /// Invocación de Spotlight (abrir / cerrar modal)
     ToggleSpotlight,
+    /// Cerrar Spotlight cuando se hace clic fuera de su interfaz
+    HideSpotlight,
     /// Minimizar u ocultar la ventana activa actualmente (⌘H)
     HideActiveWindow,
     /// Cerrar la ventana activa actualmente (⌘Q)
