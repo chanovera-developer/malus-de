@@ -172,6 +172,10 @@ pub fn toplevel_info(surface: &WlSurface) -> (Option<String>, Option<String>) {
     })
 }
 
+fn is_system_action_confirmation_surface(surface: &WlSurface) -> bool {
+    toplevel_info(surface).1.as_deref() == Some("Confirmación de acción del sistema")
+}
+
 /// Normaliza el identificador de aplicación para consistencia en la persistencia
 pub fn normalize_app_id(app_id: &str) -> String {
     let lower = app_id.to_lowercase();
@@ -458,10 +462,7 @@ impl MalusState {
 
     fn load_dock_blur_headroom() -> i32 {
         let config = DockConfig::load_or_create_default();
-        config
-            .magnification_max_size
-            .saturating_sub(config.icon_size)
-            .min(i32::MAX as u32) as i32
+        config.headroom_height().min(i32::MAX as u32) as i32
     }
 
     /// Carga los tamaños de ventana guardados por aplicación desde ~/.config/malus-de/window_sizes.json
@@ -521,6 +522,9 @@ impl MalusState {
     pub fn notify_minimized_windows(&self) {
         let mut list = Vec::new();
         for (surface, _) in &self.minimized_windows {
+            if is_system_action_confirmation_surface(surface) {
+                continue;
+            }
             if let Some(&window_id) = self.window_ids.get(surface) {
                 let (app_id, title) = toplevel_info(surface);
                 let app_id_str = app_id.unwrap_or_else(|| "app".to_string());
@@ -556,6 +560,9 @@ impl MalusState {
         let mut apps = Vec::new();
         for window in self.space.elements() {
             if let Some(surface) = window.wl_surface() {
+                if is_system_action_confirmation_surface(&surface) {
+                    continue;
+                }
                 let (app_id, title) = toplevel_info(&surface);
                 let app = app_id
                     .filter(|id| !id.trim().is_empty())
@@ -568,6 +575,9 @@ impl MalusState {
             }
         }
         for (surface, _) in &self.minimized_windows {
+            if is_system_action_confirmation_surface(surface) {
+                continue;
+            }
             let (app_id, title) = toplevel_info(surface);
             let app = app_id
                 .filter(|id| !id.trim().is_empty())
@@ -1415,9 +1425,8 @@ impl CompositorHandler for MalusState {
 
         if let Some(window) = self.window_for_surface(surface) {
             if let Some(toplevel) = window.toplevel() {
-                let is_system_action_confirmation = toplevel.parent().is_some()
-                    || toplevel_info(surface).1.as_deref()
-                        == Some("Confirmación de acción del sistema");
+                let is_system_action_confirmation =
+                    toplevel.parent().is_some() || is_system_action_confirmation_surface(surface);
                 let geometry = window.geometry();
                 if is_system_action_confirmation
                     && self.centered_transient_windows.get(surface)

@@ -18,6 +18,10 @@ use std::rc::Rc;
 use std::time::Duration;
 use tracing::{error, info, warn};
 
+fn dock_headroom_height(config: &DockConfig) -> i32 {
+    config.headroom_height().min(i32::MAX as u32) as i32
+}
+
 const DOCK_CSS: &str = r#"
 window.malus-dock-window,
 window.malus-dock-window.background,
@@ -861,12 +865,7 @@ fn build_dock_ui(app: &Application) {
     let dock_root = GtkBox::new(Orientation::Vertical, 0);
     dock_root.set_overflow(gtk4::Overflow::Visible);
     let magnification_headroom = GtkBox::new(Orientation::Horizontal, 0);
-    magnification_headroom.set_size_request(
-        -1,
-        initial_cfg
-            .magnification_max_size
-            .saturating_sub(initial_cfg.icon_size) as i32,
-    );
+    magnification_headroom.set_size_request(-1, dock_headroom_height(&initial_cfg));
     dock_root.append(&magnification_headroom);
 
     let dock_bar = GtkBox::builder()
@@ -1023,12 +1022,7 @@ fn build_dock_ui(app: &Application) {
                 if gtk4_layer_shell::is_supported() {
                     win_mon.set_margin(Edge::Bottom, new_cfg.floating_gap as i32);
                 }
-                headroom_mon.set_size_request(
-                    -1,
-                    new_cfg
-                        .magnification_max_size
-                        .saturating_sub(new_cfg.icon_size) as i32,
-                );
+                headroom_mon.set_size_request(-1, dock_headroom_height(&new_cfg));
                 *cfg_clone.borrow_mut() = new_cfg;
                 on_rf_mon();
             }
@@ -1224,12 +1218,7 @@ fn build_dock_ui(app: &Application) {
                     if gtk4_layer_shell::is_supported() {
                         win_ref.set_margin(Edge::Bottom, new_cfg.floating_gap as i32);
                     }
-                    headroom_ipc.set_size_request(
-                        -1,
-                        new_cfg
-                            .magnification_max_size
-                            .saturating_sub(new_cfg.icon_size) as i32,
-                    );
+                    headroom_ipc.set_size_request(-1, dock_headroom_height(&new_cfg));
                     *cfg_ipc.borrow_mut() = new_cfg;
                     let cards: Vec<(u64, gtk4::Widget)> = min_map
                         .borrow()
