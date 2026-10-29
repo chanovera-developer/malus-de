@@ -2645,23 +2645,31 @@ pub fn run_drm() -> Result<()> {
                                     .iter()
                                     .find(|(root_id, _)| *elem.id() == *root_id)
                                     .map(|(_, rect)| *rect);
-                                if let (Some(rect), Some(shader)) =
-                                    (dock_rect, window_squircle_shader.as_ref())
+                                if let (Some(rect), Some(shadow)) =
+                                    (dock_rect, shadow_pipeline.as_ref())
                                 {
+                                    let _ = frame.with_context(|gl| {
+                                        shadow.render_dock_shadow(
+                                            gl,
+                                            &projection,
+                                            rect,
+                                            32.0 * scale as f32,
+                                            scale,
+                                        );
+                                    });
+                                }
+                                if let Some(rect) = dock_rect {
                                     let elem_geo =
                                         elem.geometry(smithay::utils::Scale::from(scale));
-                                    let offset = smithay::utils::Point::from((
-                                        rect.loc.x - elem_geo.loc.x,
-                                        rect.loc.y - elem_geo.loc.y,
-                                    ));
-                                    let radius = (32.0 * scale).round() as i32;
-                                    shader.apply_dock_clip_to_frame(
-                                        &mut frame,
-                                        elem_geo.size,
-                                        offset,
-                                        rect.size,
-                                        radius,
-                                    );
+                                    if let Some(shader) = window_squircle_shader.as_ref() {
+                                        shader.apply_dock_clip_to_frame(
+                                            &mut frame,
+                                            elem_geo.size,
+                                            rect.loc - elem_geo.loc,
+                                            rect.size,
+                                            (32.0 * scale).round() as i32,
+                                        );
+                                    }
                                 }
                                 let _ = draw_render_elements(
                                     &mut frame,
