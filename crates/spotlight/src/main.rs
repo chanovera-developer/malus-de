@@ -6,10 +6,14 @@ use gtk4::{
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita as adw;
+use malus_de_common::ipc::{ipc_socket_path, IpcMessage};
 use malus_de_common::logging::init_logging;
 use std::cell::{Cell, RefCell};
+use std::io::{BufRead, BufReader};
+use std::os::unix::net::UnixStream;
 use std::process::Command;
 use std::rc::Rc;
+use std::time::Duration;
 use tracing::info;
 
 mod calculator;
@@ -300,6 +304,8 @@ fn configure_spotlight_layer_window(
 }
 
 fn build_spotlight_ui(app: &Application) {
+    listen_for_dismissal(app);
+
     let all_apps = Rc::new(indexer::index_applications());
     info!(
         "Spotlight indexó exitosamente {} aplicaciones del sistema.",
@@ -312,7 +318,7 @@ fn build_spotlight_ui(app: &Application) {
     const SHADOW_GUTTER: i32 = 28;
     const SEARCH_TOP: i32 = 140;
     const RESULTS_WIDTH: i32 = SEARCH_WIDTH + BUTTON_SIZE * 2 + CONTROL_GAP * 2;
-    const RESULTS_HEIGHT: i32 = 460;
+    const RESULTS_MAX_HEIGHT: i32 = 460;
     const RESULTS_PANEL_TOP_GAP: i32 = 70;
 
     let monitor = gtk4::gdk::Display::default().and_then(|display| {
@@ -329,8 +335,7 @@ fn build_spotlight_ui(app: &Application) {
     let controls_left = ((monitor_width - controls_width) / 2).max(0);
     let results_left = ((monitor_width - RESULTS_WIDTH) / 2).max(0);
 
-    let backdrop_window =
-        create_spotlight_layer_window(app, RESULTS_WIDTH, RESULTS_HEIGHT + RESULTS_PANEL_TOP_GAP);
+    let backdrop_window = create_spotlight_layer_window(app, RESULTS_WIDTH, RESULTS_PANEL_TOP_GAP);
     let backdrop = GtkBox::builder()
         .hexpand(true)
         .vexpand(true)
@@ -348,8 +353,7 @@ fn build_spotlight_ui(app: &Application) {
     backdrop_window.set_layer(Layer::Bottom);
     backdrop.set_visible(false);
 
-    let window =
-        create_spotlight_layer_window(app, RESULTS_WIDTH, RESULTS_HEIGHT + RESULTS_PANEL_TOP_GAP);
+    let window = create_spotlight_layer_window(app, RESULTS_WIDTH, RESULTS_PANEL_TOP_GAP);
     window.set_title(Some("Malus Spotlight"));
 
     let card = GtkBox::builder()
@@ -360,7 +364,7 @@ fn build_spotlight_ui(app: &Application) {
         .height_request(RESULTS_PANEL_TOP_GAP)
         .build();
     card.append(&controls_spacer);
-    card.set_size_request(RESULTS_WIDTH, RESULTS_HEIGHT);
+    card.set_size_request(RESULTS_WIDTH, RESULTS_PANEL_TOP_GAP);
 
     let input_window = create_spotlight_layer_window(
         app,
@@ -512,6 +516,8 @@ fn build_spotlight_ui(app: &Application) {
     let content_stack = Stack::builder()
         .transition_type(gtk4::StackTransitionType::Crossfade)
         .transition_duration(120)
+        .hhomogeneous(false)
+        .vhomogeneous(false)
         .build();
     content_stack.add_named(&browse_view, Some("applications"));
     content_stack.add_named(&scroll, Some("results"));
@@ -549,6 +555,7 @@ fn build_spotlight_ui(app: &Application) {
     let mode_windows_for_update = mode_windows.clone();
     let recent_manager = gtk4::RecentManager::default();
     let results_window_for_update = window.clone();
+    let backdrop_window_for_update = backdrop_window.clone();
 
     let update_results = move |query: &str| {
         // Limpiar filas anteriores
@@ -600,6 +607,16 @@ fn build_spotlight_ui(app: &Application) {
             content_stack_clone.set_visible_child_name("applications");
             heading_clone.set_label("Aplicaciones");
             populate_app_grid(&app_grid_clone, &apps_ref, &q, &app_clone);
+            resize_results_panel(
+                &results_window_for_update,
+                &backdrop_window_for_update,
+                &card_clone,
+                &content_stack_clone,
+                &heading_clone,
+                RESULTS_WIDTH,
+                RESULTS_PANEL_TOP_GAP,
+                RESULTS_MAX_HEIGHT,
+            );
             return;
         }
         content_stack_clone.set_visible_child_name("results");
@@ -609,6 +626,16 @@ fn build_spotlight_ui(app: &Application) {
             if let Some(first_row) = list_clone.row_at_index(0) {
                 list_clone.select_row(Some(&first_row));
             }
+            resize_results_panel(
+                &results_window_for_update,
+                &backdrop_window_for_update,
+                &card_clone,
+                &content_stack_clone,
+                &heading_clone,
+                RESULTS_WIDTH,
+                RESULTS_PANEL_TOP_GAP,
+                RESULTS_MAX_HEIGHT,
+            );
             return;
         }
 
@@ -768,6 +795,16 @@ fn build_spotlight_ui(app: &Application) {
         if let Some(first_row) = list_clone.row_at_index(0) {
             list_clone.select_row(Some(&first_row));
         }
+        resize_results_panel(
+            &results_window_for_update,
+            &backdrop_window_for_update,
+            &card_clone,
+            &content_stack_clone,
+            &heading_clone,
+            RESULTS_WIDTH,
+            RESULTS_PANEL_TOP_GAP,
+            RESULTS_MAX_HEIGHT,
+        );
     };
 
     let update_clone = Rc::new(update_results);
@@ -879,6 +916,96 @@ fn build_spotlight_ui(app: &Application) {
         button_window.present();
     }
     search_entry.grab_focus();
+}
+
+fn resize_results_panel(
+    window: &ApplicationWindow,
+    backdrop_window: &ApplicationWindow,
+    card: &GtkBox,
+    content: &Stack,
+    heading: &Label,
+    width: i32,
+    top_gap: i32,
+    max_height: i32,
+) {
+    let content_height = if content.is_visible() {
+        content.measure(Orientation::Vertical, -1).1
+    } else {
+        0
+    };
+    let heading_height = if heading.is_visible() {
+        heading.measure(Orientation::Vertical, width).1
+    } else {
+        0
+    };
+    let height = (top_gap + heading_height + content_height).clamp(top_gap, max_height);
+
+    card.set_size_request(width, height);
+    window.set_default_size(width, height);
+    window.set_size_request(width, height);
+    backdrop_window.set_default_size(width, height);
+    backdrop_window.set_size_request(width, height);
+}
+
+fn listen_for_dismissal(app: &Application) {
+    let (dismiss_tx, dismiss_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut connection_warning_logged = false;
+        loop {
+            match UnixStream::connect(ipc_socket_path()) {
+                Ok(stream) => {
+                    connection_warning_logged = false;
+                    let reader = BufReader::new(stream);
+                    for line in reader.lines() {
+                        match line {
+                            Ok(line) => match serde_json::from_str::<IpcMessage>(&line) {
+                                Ok(IpcMessage::HideSpotlight) => {
+                                    if dismiss_tx.send(()).is_err() {
+                                        return;
+                                    }
+                                }
+                                Ok(_) => {}
+                                Err(error) => {
+                                    tracing::warn!(
+                                        "Mensaje IPC inválido recibido por Spotlight: {error}"
+                                    );
+                                }
+                            },
+                            Err(error) => {
+                                tracing::warn!("Error al leer mensajes IPC de Spotlight: {error}");
+                                break;
+                            }
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+                Err(error) => {
+                    if !connection_warning_logged {
+                        tracing::warn!(
+                            "No se pudo conectar Spotlight al IPC del compositor: {error}"
+                        );
+                        connection_warning_logged = true;
+                    }
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+            }
+        }
+    });
+
+    let app = app.clone();
+    glib::timeout_add_local(Duration::from_millis(50), move || {
+        match dismiss_rx.try_recv() {
+            Ok(()) => {
+                app.quit();
+                glib::ControlFlow::Break
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                tracing::warn!("Se cerró el canal de notificaciones IPC de Spotlight");
+                glib::ControlFlow::Break
+            }
+        }
+    });
 }
 
 fn activate_spotlight_action(action: Option<SpotlightAction>, window: &ApplicationWindow) {
