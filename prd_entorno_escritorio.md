@@ -199,15 +199,13 @@ graph TD
     * Si está desactivado (`false`): se omiten los pases de desenfoque y las superficies se dibujan con colores planos sólidos (blanco puro en claro, gris oscuro en oscuro), preservando intactos los bordes redondeados con mínimo consumo de GPU/batería.
   * **Motor de Animación: Efecto Lámpara de Aladino (`Genie Effect`):**
     * Deformación no lineal de superficies mediante malla de vértices parametrizada ($32 \times 32$) o mapeo inverso en shader GLSL acelerado por GPU (OpenGL ES / Glow).
-    * Duración de animación: 300 ms a 350 ms gobernada por curvas de interpolación Bézier cúbica suave (`cubic-bezier(0.4, 0.0, 0.2, 1)`).
+    * Duración de animación: 600 ms gobernada por curvas de interpolación Bézier cúbica suave (`cubic-bezier(0.4, 0.0, 0.2, 1)`).
     * **Modelado Matemático de la Deformación:**
       * Sean $R_{win} = (x_w, y_w, w_w, h_w)$ el rectángulo de la ventana y $R_{dock} = (x_d, y_d, w_d, h_d)$ el rectángulo destino del slot o miniatura en el Dock.
       * Para un factor de progreso temporal $t \in [0.0, 1.0]$ y una coordenada vertical normalizada de la ventana $v \in [0.0, 1.0]$ (donde $v=0$ es la parte superior y $v=1$ es la base):
-        * La base de la ventana desciende y se contrae progresivamente hacia la coordenada horizontal $x_d$ y el ancho $w_d$.
-        * El centro horizontal de la sección $C_x(v, t)$ y su ancho transversal $W(v, t)$ se deforman siguiendo una curva en 'S':
-          $$C_x(v, t) = \text{lerp}\left(x_w + \frac{w_w}{2}, x_d + \frac{w_d}{2}, \text{smoothstep}(0.0, 1.0, v \cdot t^{1.4})\right)$$
-          $$W(v, t) = \text{lerp}\left(w_w, w_d, \text{pow}(v \cdot t, 1.2)\right)$$
-        * La parte superior experimenta una curvatura convexa con compresión vertical dinámica, simulando un flujo líquido/gaseoso continuo que es absorbido por la miniatura.
+        * La ventana converge al centro del slot real de la miniatura, manteniendo su tarjeta reservada e invisible en el Dock hasta terminar la animación.
+        * El ancho transversal $W(v,k,j)$ forma un embudo de curva cuadrática, sin oscilaciones: $$W(v,k,j) = w_d + (w_w - w_d)(1-j)((1-k) + k(1-v)^2)$$ donde $k$ inicia la contracción curva y $j$ completa el colapso hacia el slot.
+        * La compresión vertical acompaña la deformación hasta que la ventana se absorbe en la miniatura.
     * **Animación Inversa al Restaurar:** Al pulsar sobre la miniatura en el Dock, la animación se reproduce en sentido inverso ($t: 1.0 \to 0.0$), expulsando la ventana desde el slot del Dock con idéntica fluidez hasta recuperar su geometría y foco.
   * **Generador de Miniaturas de Ventanas Minimizadas (`FBO Thumbnail Cache`):**
     * Antes de concluir el último fotograma de la animación de minimizado, el compositor captura una copia reducida con mipmapping del FBO de la ventana (`128x128` o `256x256` máx).

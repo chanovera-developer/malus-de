@@ -13,6 +13,8 @@ pub struct MinimizedWindowInfo {
     pub icon_name: Option<String>,
     #[serde(default)]
     pub thumbnail_path: Option<String>,
+    #[serde(default)]
+    pub is_animating: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -395,6 +397,7 @@ mod tests {
                     title: "Archivos — Documentos".to_string(),
                     icon_name: Some("system-file-manager".to_string()),
                     thumbnail_path: None,
+                    is_animating: true,
                 },
             ],
         };
@@ -407,6 +410,7 @@ mod tests {
             assert_eq!(windows[0].window_id, 42);
             assert_eq!(windows[0].app_id, "org.gnome.Nautilus");
             assert_eq!(windows[0].icon_name.as_deref(), Some("system-file-manager"));
+            assert!(windows[0].is_animating);
         } else {
             panic!("Tipo de mensaje incorrecto");
         }
@@ -415,6 +419,7 @@ mod tests {
         let legacy_info: MinimizedWindowInfo =
             serde_json::from_str(legacy_json).expect("Debe aceptar la lista de ventanas anterior");
         assert_eq!(legacy_info.thumbnail_path, None);
+        assert!(!legacy_info.is_animating);
     }
 
     #[test]

@@ -2848,42 +2848,53 @@ pub fn run_drm() -> Result<()> {
 
                             let target_w = slot_w.max(32.0);
                             let target_x = slot_x;
-                            let target_y = slot_y + slot_h * 0.40;
+                            let target_y = slot_y + slot_h * 0.5;
+                            let target_top = target_y - slot_h * 0.5;
 
                             let expand_h = (target_y - win_y - win_h).max(10.0);
                             let full_height = (target_y - win_y) - expand_h * (1.0 - k);
-                            let current_height = (full_height * (1.0 - j)).max(1.0);
-                            let offset_y = (target_y - win_y) * j;
+                            let current_height = (full_height * (1.0 - j) + slot_h * j).max(1.0);
+                            let offset_y = (target_top - win_y) * j;
+                            let window_center_x = win_x + win_w * 0.5;
+                            let target_center_x = target_x + target_w * 0.5;
+                            let path_dx = target_center_x - window_center_x;
+                            let path_dy = target_y - (win_y + win_h * 0.5);
+                            let path_length = path_dx.hypot(path_dy).max(1.0);
+                            let bend_side = if path_dx.abs() > 1.0 {
+                                -path_dx.signum()
+                            } else {
+                                1.0
+                            };
+                            let bend_distance = (path_length * 0.12).clamp(0.0, 96.0);
 
                             let deform_slice = |v: f32| -> (f32, f32, f32) {
                                 let local_y = v * current_height;
-                                let screen_y = win_y + local_y + offset_y;
-
-                                let slice_w = target_w
-                                    + (win_w - target_w) * (1.0 - j) * (1.0 - v)
-                                    + (win_w - target_w) * (1.0 - k) * v;
-                                let slice_w = slice_w.max(2.0);
-
                                 let norm_y = if full_height > 1.0 {
                                     (local_y / full_height).clamp(0.0, 1.0)
                                 } else {
                                     v
                                 };
-                                let norm_x = (norm_y * k + j).min(1.0);
-                                let offset_x = (target_x - win_x) * norm_x;
+                                let path_progress = norm_y * norm_y * (3.0 - 2.0 * norm_y);
+                                let norm_x = (path_progress * k + j).min(1.0);
+                                let bend = (std::f32::consts::PI * path_progress).sin()
+                                    * bend_distance
+                                    * k
+                                    * (1.0 - j)
+                                    * bend_side;
+                                let current_center_x = window_center_x + path_dx * norm_x
+                                    - (path_dy / path_length) * bend;
+                                let screen_y =
+                                    win_y + local_y + offset_y + (path_dx / path_length) * bend;
 
-                                let s_phase = (1.0 - norm_y) * 2.0 * std::f32::consts::PI
-                                    + std::f32::consts::PI;
-                                let delta_x = (win_x + win_w * 0.5) - (target_x + target_w * 0.5);
-                                let effect_x =
-                                    s_phase.sin() * (delta_x / 7.0) * k * (1.0 - j * 0.7);
-
-                                let left_x = win_x + offset_x + effect_x;
+                                let curved_taper = (1.0 - k) + k * (1.0 - v) * (1.0 - v);
+                                let tapered_width = target_w + (win_w - target_w) * curved_taper;
+                                let slice_w = (tapered_width * (1.0 - j) + target_w * j).max(2.0);
+                                let left_x = current_center_x - slice_w * 0.5;
                                 (screen_y, left_x, slice_w)
                             };
 
-                            let alpha = if j > 0.85 {
-                                ((1.0 - j) / 0.15).clamp(0.0, 1.0)
+                            let alpha = if j > 0.98 {
+                                ((1.0 - j) / 0.02).clamp(0.0, 1.0)
                             } else {
                                 1.0
                             };
@@ -3222,6 +3233,8 @@ pub fn run_drm() -> Result<()> {
                 }
                 state.notify_active_app(Some(&anim.surface));
                 state.notify_running_apps();
+            } else {
+                state.notify_minimized_windows();
             }
         }
 
