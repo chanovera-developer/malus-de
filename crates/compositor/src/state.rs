@@ -526,12 +526,16 @@ impl MalusState {
                 let app_id_str = app_id.unwrap_or_else(|| "app".to_string());
                 let title_str = title.unwrap_or_else(|| app_id_str.clone());
                 let icon_name = guess_icon_name(&app_id_str, &title_str);
+                let is_animating = self.active_animations.iter().any(|anim| {
+                    anim.window_id == window_id && anim.is_minimizing
+                });
                 list.push(malus_de_common::ipc::MinimizedWindowInfo {
                     window_id,
                     app_id: app_id_str,
                     title: title_str,
                     icon_name: Some(icon_name),
                     thumbnail_path: self.minimized_window_thumbnails.get(&window_id).cloned(),
+                    is_animating,
                 });
             }
         }
@@ -684,7 +688,7 @@ impl MalusState {
                     surface: surf.clone(),
                     window: window.clone(),
                     start_time: std::time::Instant::now(),
-                    duration: std::time::Duration::from_millis(480),
+                    duration: std::time::Duration::from_millis(600),
                     is_minimizing: false,
                     waiting_for_dock_slot: false,
                     window_rect: Rectangle::new(loc, geo.size),
@@ -751,7 +755,7 @@ impl MalusState {
                 surface: surf.clone(),
                 window: window.clone(),
                 start_time: std::time::Instant::now(),
-                duration: std::time::Duration::from_millis(480),
+                duration: std::time::Duration::from_millis(600),
                 is_minimizing: true,
                 waiting_for_dock_slot,
                 window_rect: Rectangle::new(loc, geo.size),

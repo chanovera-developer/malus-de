@@ -1290,6 +1290,10 @@ fn build_dock_ui(app: &Application) {
                                 .insert(id, win_info.thumbnail_path.clone());
                             info!("🖼️ Miniatura agregada al Dock: window_id={} ('{}')", id, win_info.title);
                         }
+                        if let Some(widget) = current_map.get(&win_info.window_id) {
+                            widget.set_opacity(if win_info.is_animating { 0.0 } else { 1.0 });
+                            widget.set_sensitive(!win_info.is_animating);
+                        }
                     }
 
                     // Actualizar visibilidad del contenedor para colapsar espacio si está vacío
