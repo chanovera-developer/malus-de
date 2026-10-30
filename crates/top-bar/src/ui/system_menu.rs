@@ -7,13 +7,12 @@ use libadwaita as adw;
 use libadwaita::prelude::*;
 use tracing::info;
 
-const APPLE_LOGO_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="#ffffff" class="bi bi-apple" viewBox="0 0 16 16">
-  <path d="M11.182.008C11.148-.03 9.923.023 8.857 1.18c-1.066 1.156-.902 2.482-.878 2.516s1.52.087 2.475-1.258.762-2.391.728-2.43m3.314 11.733c-.048-.096-2.325-1.234-2.113-3.422s1.675-2.789 1.698-2.854-.597-.79-1.254-1.157a3.7 3.7 0 0 0-1.563-.434c-.108-.003-.483-.095-1.254.116-.508.139-1.653.589-1.968.607-.316.018-1.256-.522-2.267-.665-.647-.125-1.333.131-1.824.328-.49.196-1.422.754-2.074 2.237-.652 1.482-.311 3.83-.067 4.56s.625 1.924 1.273 2.796c.576.984 1.34 1.667 1.659 1.899s1.219.386 1.843.067c.502-.308 1.408-.485 1.766-.472.357.013 1.061.154 1.782.539.571.197 1.111.115 1.652-.105.541-.221 1.324-1.059 2.238-2.758q.52-1.185.473-1.282"/>
-</svg>"##;
+const MENU_LOGO_SVG: &str = include_str!("../../../../data/icons/menu-logo.svg");
+const PREVIOUS_DEFAULT_LOGO_MARK: &str = "M11.182.008C11.148-.03";
 
-pub fn create_apple_menu() -> MenuButton {
+pub fn create_system_menu() -> MenuButton {
     let menu_btn = MenuButton::builder()
-        .css_classes(["apple-logo-btn", "topbar-btn"])
+        .css_classes(["menu-logo-btn", "topbar-btn"])
         .tooltip_text("Menú Malus DE")
         .has_frame(false)
         .always_show_arrow(false)
@@ -21,12 +20,11 @@ pub fn create_apple_menu() -> MenuButton {
         .build();
 
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let svg_path = std::path::PathBuf::from(&home).join(".config/malus-de/icons/apple-logo.svg");
+    let svg_path = std::path::PathBuf::from(&home).join(".config/malus-de/icons/menu-logo.svg");
 
-    // Check if user has an apple.svg in Downloads or Descargas to auto-import
     let candidate_paths = [
-        std::path::PathBuf::from(&home).join("Descargas/apple.svg"),
-        std::path::PathBuf::from(&home).join("Downloads/apple.svg"),
+        std::path::PathBuf::from(&home).join("Descargas/menu-logo.svg"),
+        std::path::PathBuf::from(&home).join("Downloads/menu-logo.svg"),
     ];
 
     for candidate in &candidate_paths {
@@ -48,11 +46,25 @@ pub fn create_apple_menu() -> MenuButton {
         }
     }
 
-    if !svg_path.exists() {
+    let update_default_logo = if svg_path.exists() {
+        match std::fs::read_to_string(&svg_path) {
+            Ok(content) => content.contains(PREVIOUS_DEFAULT_LOGO_MARK),
+            Err(error) => {
+                tracing::warn!("No se pudo leer el logotipo del menú: {error}");
+                false
+            }
+        }
+    } else {
+        true
+    };
+
+    if update_default_logo {
         if let Some(parent) = svg_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let _ = std::fs::write(&svg_path, APPLE_LOGO_SVG);
+        if let Err(error) = std::fs::write(&svg_path, MENU_LOGO_SVG) {
+            tracing::warn!("No se pudo guardar el logotipo predeterminado del menú: {error}");
+        }
     }
 
     let logo_widget: gtk4::Widget = if svg_path.exists() {
@@ -61,13 +73,13 @@ pub fn create_apple_menu() -> MenuButton {
             .pixel_size(16)
             .valign(gtk4::Align::Center)
             .halign(gtk4::Align::Center)
-            .css_classes(["apple-icon"])
+            .css_classes(["menu-logo-icon"])
             .build()
             .upcast()
     } else {
         Label::builder()
-            .label("")
-            .css_classes(["apple-icon"])
+            .label("M")
+            .css_classes(["menu-logo-icon"])
             .build()
             .upcast()
     };
@@ -91,7 +103,7 @@ pub fn create_apple_menu() -> MenuButton {
         .margin_end(4)
         .build();
 
-    // Elementos del Menú Apple
+    // Elementos del menú del sistema
     let item_about = create_menu_item("Acerca de Malus DE", None, true);
     let popover_clone = popover.clone();
     item_about.connect_clicked(move |_| {

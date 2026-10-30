@@ -1,4 +1,4 @@
-pub mod apple_menu;
+pub mod system_menu;
 pub mod auto_tiling;
 pub mod clock;
 pub mod control_center;
