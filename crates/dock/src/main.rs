@@ -53,6 +53,10 @@ window.malus-dock-window decoration {
     padding: 0px 2px;
 }
 
+.dock-trash-icon {
+    transform: translateY(4px);
+}
+
 .dock-bounce-target {
     transition: transform 260ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
@@ -2157,7 +2161,6 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
         .valign(gtk4::Align::End)
         .build();
     let trash_overlay = create_magnifiable_icon(&trash_img, icon_size, false);
-    trash_img.set_valign(gtk4::Align::Center);
     btn.set_child(Some(&trash_overlay));
 
     btn.connect_clicked(|_| {
