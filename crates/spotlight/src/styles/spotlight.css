@@ -1,0 +1,188 @@
+window.malus-spotlight-window {
+    background-color: transparent;
+}
+
+.spotlight-component-window,
+.spotlight-component-window.background,
+.spotlight-component-window decoration {
+    background-color: transparent;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    overflow: visible;
+}
+
+.spotlight-card {
+    background-color: transparent;
+    border: none;
+    border-radius: 26px;
+    overflow: visible;
+    padding: 0;
+}
+
+.spotlight-backdrop {
+    background-color: alpha(@window_bg_color, 0.42);
+    border: 1px solid alpha(@window_fg_color, 0.16);
+}
+
+.spotlight-card-expanded {
+    background-color: transparent;
+    border: none;
+    padding: 0;
+}
+
+.spotlight-entry,
+entry.spotlight-entry,
+entry.spotlight-entry text {
+    background-color: transparent;
+    border: 0;
+    color: @window_fg_color;
+    caret-color: @accent_bg_color;
+    font-size: 21px;
+    font-weight: 500;
+    box-shadow: none;
+    padding: 0 12px;
+    outline-style: none;
+    outline-width: 0;
+}
+
+entry.spotlight-entry text selection {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+}
+
+entry.spotlight-entry placeholder {
+    color: alpha(@window_fg_color, 0.45);
+}
+
+.spotlight-entry:focus,
+entry.spotlight-entry:focus {
+    background-color: transparent;
+    border: 0;
+    box-shadow: none;
+    outline-style: none;
+    outline-width: 0;
+}
+
+.spotlight-input-surface,
+.spotlight-mode-button {
+    background-color: alpha(@window_bg_color, 0.42);
+    border: 1px solid alpha(@window_fg_color, 0.12);
+    border-radius: 999px;
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28), 0 2px 6px rgba(0, 0, 0, 0.18);
+    min-height: 54px;
+    overflow: visible;
+}
+
+.spotlight-input-surface {
+    padding: 0 12px;
+}
+
+.spotlight-input-surface.spotlight-component-active,
+.spotlight-mode-button.spotlight-component-active {
+    background-color: transparent;
+    border-color: transparent;
+    box-shadow: none;
+}
+
+@media (prefers-color-scheme: dark) {
+    .spotlight-input-surface,
+    .spotlight-mode-button {
+        border-color: alpha(@window_fg_color, 0.14);
+    }
+}
+
+.spotlight-search-icon {
+    margin: 0 8px 0 2px;
+}
+
+.spotlight-search-icon,
+.spotlight-icon {
+    color: alpha(@window_fg_color, 0.66);
+}
+
+.spotlight-mode-button {
+    padding: 0;
+    min-width: 54px;
+    margin: 0;
+    transition: background-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.spotlight-mode-button:hover {
+    background-color: alpha(@window_bg_color, 0.58);
+}
+
+.spotlight-mode-button:checked {
+    border-color: alpha(@accent_bg_color, 0.42);
+}
+
+.spotlight-mode-button.spotlight-component-active:checked {
+    border-color: transparent;
+}
+
+.spotlight-browse-heading {
+    color: alpha(@window_fg_color, 0.7);
+    font-size: 13px;
+    font-weight: 600;
+    margin: 0;
+}
+
+.spotlight-app-card {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 16px;
+    padding: 12px 6px 10px;
+    transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.spotlight-app-card:hover, .spotlight-app-card:focus, .spotlight-app-card:active {
+    background-color: alpha(@window_fg_color, 0.1);
+    border-color: alpha(@window_fg_color, 0.12);
+}
+
+.spotlight-app-name {
+    font-size: 12px;
+    color: @window_fg_color;
+}
+
+.spotlight-results-list {
+    background: transparent;
+    border: none;
+}
+
+.spotlight-row {
+    background: transparent;
+    border-radius: 12px;
+    padding: 9px 12px;
+    margin: 2px 4px;
+    transition: background-color 100ms ease;
+}
+
+.spotlight-row:selected, .spotlight-row:hover {
+    background-color: alpha(@accent_bg_color, 0.2);
+}
+
+.result-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: @window_fg_color;
+}
+
+.result-subtitle {
+    font-size: 12px;
+    color: alpha(@window_fg_color, 0.68);
+}
+
+.spotlight-row:selected .result-subtitle {
+    color: alpha(@window_fg_color, 0.78);
+}
+
+.calc-result-title {
+    font-size: 20px;
+    font-weight: 700;
+    color: @window_fg_color;
+}
+
+.spotlight-row:selected .calc-result-title {
+    color: @accent_fg_color;
+}

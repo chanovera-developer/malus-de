@@ -1,0 +1,83 @@
+/* Malus DE - Hoja de estilos GTK 3 nativa (macOS Style) */
+@define-color window_bg_color __BG_COLOR__;
+@define-color window_fg_color __FG_COLOR__;
+@define-color headerbar_bg_color __BG_COLOR__;
+@define-color headerbar_fg_color __FG_COLOR__;
+@define-color sidebar_bg_color __SIDEBAR_BG__;
+@define-color accent_bg_color @theme_selected_bg_color;
+@define-color accent_fg_color @theme_selected_fg_color;
+
+popover,
+popover.background,
+popover > contents,
+menu,
+.menu {
+    background-color: alpha(@window_bg_color, __POPUP_OPACITY__);
+    border-color: alpha(@window_fg_color, __POPUP_BORDER_OPACITY__);
+    padding: 0;
+}
+
+/* Controles de ventana macOS para GTK 3 */
+headerbar button.titlebutton.close,
+headerbar button.titlebutton.minimize,
+headerbar button.titlebutton.maximize {
+    min-width: 13px;
+    min-height: 13px;
+    border-radius: 9999px;
+    padding: 0;
+    margin: 0 4px;
+}
+
+/* Fondo plano sólido e impenetrable para diálogos modales y selectores de archivos en GTK 3 */
+dialog,
+dialog.background,
+dialog.csd,
+filechooser,
+.file-chooser,
+placesview,
+placesview.vertical,
+placesview frame,
+placesview stack,
+placesview scrolledwindow,
+placesview viewport,
+placesview list,
+placesview listbox,
+dialog placessidebar,
+dialog placessidebar.view,
+dialog placessidebar viewport,
+dialog placessidebar list,
+dialog placesview,
+filechooser placessidebar,
+filechooser placessidebar.view,
+filechooser placessidebar viewport,
+filechooser placessidebar list,
+filechooser placesview,
+.dialog-vbox,
+.dialog-content-area,
+.dialog-action-box,
+.dialog-action-area {
+    background-color: @theme_bg_color;
+    color: @theme_fg_color;
+}
+
+dialog headerbar,
+filechooser headerbar {
+    background-color: @theme_bg_color;
+    color: @theme_fg_color;
+}
+
+dialog actionbar,
+dialog actionbar.background,
+filechooser actionbar,
+filechooser actionbar.background {
+    background-color: @theme_bg_color;
+    color: @theme_fg_color;
+}
+
+/* Paneles laterales GTK 3 */
+placessidebar,
+placessidebar.view {
+    background-color: __SIDEBAR_BG__;
+    box-shadow: inset -1px 0 __BORDER_COLOR__;
+}
+

@@ -1,0 +1,32 @@
+window.malus-screenshot-thumbnail {
+    background-color: transparent;
+}
+
+.thumbnail-card {
+    background-color: alpha(@window_bg_color, 0.90);
+    border: 1px solid alpha(@window_fg_color, 0.16);
+    border-radius: 14px;
+    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.55);
+    padding: 10px;
+    min-width: 240px;
+}
+
+.thumbnail-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: @window_fg_color;
+    margin-bottom: 2px;
+}
+
+.thumbnail-subtitle {
+    font-size: 11px;
+    color: alpha(@window_fg_color, 0.68);
+    margin-bottom: 6px;
+}
+
+.action-btn {
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 500;
+}

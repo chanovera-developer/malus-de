@@ -1,0 +1,453 @@
+window.macos-settings-window {
+    background-color: transparent;
+    color: @window_fg_color;
+    border-radius: 0px;
+    box-shadow: none;
+}
+
+window.macos-settings-window popover > contents,
+window.macos-settings-window popover.menu > contents,
+window.macos-settings-window popover.background > contents,
+window.macos-settings-window menu,
+window.macos-settings-window .menu {
+    background-color: alpha(@window_bg_color, 0.84);
+    border-color: alpha(@borders, 0.75);
+}
+
+overlay-split-view {
+    background-color: transparent;
+}
+
+.sidebar-pane,
+overlay-split-view > .sidebar-pane {
+    background-color: alpha(@window_bg_color, 0.82);
+    box-shadow: inset -1px 0 alpha(@borders, 0.75);
+}
+
+.sidebar-pane:backdrop,
+overlay-split-view > .sidebar-pane:backdrop {
+    background-color: alpha(@window_bg_color, 0.88);
+}
+
+.macos-sidebar {
+    background-color: transparent;
+    background: transparent;
+    border-right: none;
+    padding: 0px;
+}
+
+.macos-sidebar scrolledwindow,
+.macos-sidebar scrolledwindow > viewport,
+.macos-sidebar viewport,
+.macos-sidebar listview,
+.macos-sidebar list,
+.macos-sidebar .sidebar-body {
+    background-color: transparent;
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+}
+
+.sidebar-windowcontrols {
+    min-height: 47px;
+    padding: 0px 9px;
+    background-color: transparent;
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+}
+
+.sidebar-body {
+    padding: 0px 10px 12px 10px;
+}
+
+.sidebar-search {
+    background-color: alpha(currentColor, 0.06);
+    border: 1px solid @borders;
+    border-radius: 8px;
+    color: @window_fg_color;
+    padding: 4px 8px;
+    margin-bottom: 8px;
+}
+.sidebar-search image {
+    color: alpha(currentColor, 0.60);
+}
+
+.profile-card {
+    background-color: alpha(currentColor, 0.05);
+    border: 1px solid @borders;
+    border-radius: 12px;
+    padding: 8px 10px;
+    margin-bottom: 10px;
+}
+
+.avatar-circle {
+    background: linear-gradient(135deg, @accent_bg_color, #5e5ce6);
+    border-radius: 999px;
+    min-width: 32px;
+    min-height: 32px;
+    color: @accent_fg_color;
+    font-weight: 700;
+    font-size: 14px;
+}
+
+.sidebar-btn {
+    background: transparent;
+    border: none;
+    border-radius: 9px;
+    padding: 7px 10px;
+    color: @window_fg_color;
+    font-weight: 500;
+    font-size: 13.5px;
+}
+.sidebar-btn:hover {
+    background-color: alpha(currentColor, 0.07);
+}
+.sidebar-btn-active {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    font-weight: 600;
+}
+.sidebar-btn-active:hover {
+    filter: brightness(1.08);
+}
+
+.sidebar-icon-badge {
+    border-radius: 7px;
+    min-width: 24px;
+    min-height: 24px;
+    font-size: 13px;
+    color: white;
+}
+.badge-blue { background: linear-gradient(180deg, #32ade6, #007aff); }
+.badge-teal { background: linear-gradient(180deg, #30b0c7, #008299); }
+.badge-indigo { background: linear-gradient(180deg, #5e5ce6, #3634a3); }
+.badge-purple { background: linear-gradient(180deg, #bf5af2, #8944ab); }
+.badge-pink { background: linear-gradient(180deg, #ff375f, #d70015); }
+.badge-gray { background: linear-gradient(180deg, #8e8e93, #636366); }
+.badge-dark { background: linear-gradient(180deg, #545458, #2c2c2e); }
+
+.content-header-toolbar {
+    min-height: 47px;
+    padding: 0px 24px;
+    background-color: @view_bg_color;
+    border-bottom: 1px solid alpha(currentColor, 0.08);
+}
+
+.nav-chevron-btn {
+    color: alpha(currentColor, 0.60);
+    font-size: 18px;
+    font-weight: 700;
+    padding: 0 4px;
+    border-radius: 6px;
+    background: transparent;
+    min-width: 24px;
+    min-height: 24px;
+}
+.nav-chevron-btn:hover {
+    background-color: alpha(currentColor, 0.08);
+    color: @window_fg_color;
+}
+
+.content-header-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: @window_fg_color;
+    margin: 0px;
+    padding: 0px;
+}
+
+.spotlight-banner-icon {
+    border-radius: 10px;
+    min-width: 44px;
+    min-height: 44px;
+    font-size: 22px;
+    color: white;
+}
+
+.section-header-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: alpha(currentColor, 0.65);
+    margin-top: 6px;
+}
+
+.spotlight-list-card {
+    padding: 2px 0px;
+    border-radius: 12px;
+}
+
+.list-option-row {
+    padding: 8px 14px;
+    min-height: 38px;
+}
+
+.list-row-separator {
+    min-height: 1px;
+    background-color: @borders;
+    margin: 0 14px;
+}
+
+.macos-checkbox check {
+    border-radius: 4px;
+    border: 1.5px solid @borders;
+    background: transparent;
+    min-width: 16px;
+    min-height: 16px;
+    margin-right: 8px;
+}
+.macos-checkbox:checked check {
+    background-color: @accent_bg_color;
+    border-color: @accent_bg_color;
+    color: @accent_fg_color;
+}
+
+.content-pane {
+    background-color: @view_bg_color;
+    padding: 16px 28px 24px 28px;
+}
+
+overlay-split-view > .content-pane {
+    padding: 0px;
+}
+
+.pane-header-title {
+    font-size: 20px;
+    font-weight: 700;
+    color: @window_fg_color;
+}
+
+.pane-header-subtitle {
+    font-size: 12.5px;
+    color: alpha(currentColor, 0.65);
+}
+
+.macos-group-card {
+    background-color: @card_bg_color;
+    border: 1px solid @borders;
+    border-radius: 14px;
+    padding: 16px;
+    color: @card_fg_color;
+}
+
+.macos-canvas-card {
+    background-color: alpha(currentColor, 0.04);
+    border: 1px solid @borders;
+    border-radius: 14px;
+    padding: 12px;
+}
+
+.card-section-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: @card_fg_color;
+}
+
+.card-section-sub {
+    font-size: 12px;
+    color: alpha(currentColor, 0.65);
+}
+
+.macos-action-btn {
+    background-color: alpha(currentColor, 0.08);
+    border: 1px solid @borders;
+    border-radius: 9px;
+    padding: 6px 12px;
+    color: @window_fg_color;
+    font-size: 12.5px;
+    font-weight: 500;
+}
+.macos-action-btn:hover {
+    background-color: alpha(currentColor, 0.14);
+}
+
+.macos-action-btn-primary {
+    background-color: @accent_bg_color;
+    border: 1px solid alpha(@accent_fg_color, 0.20);
+    border-radius: 9px;
+    padding: 7px 14px;
+    color: @accent_fg_color;
+    font-size: 13px;
+    font-weight: 600;
+}
+.macos-action-btn-primary:hover {
+    filter: brightness(1.10);
+}
+
+
+.scale-input-entry {
+    background-color: alpha(currentColor, 0.07);
+    border: 1px solid @borders;
+    border-radius: 6px;
+    color: @window_fg_color;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 8px;
+    min-height: 24px;
+}
+.scale-input-entry:focus {
+    border-color: @accent_bg_color;
+    background-color: alpha(currentColor, 0.10);
+}
+
+.res-thumb-btn {
+    background-color: @card_bg_color;
+    border: 1.5px solid @borders;
+    border-radius: 10px;
+    padding: 10px 8px;
+    color: @card_fg_color;
+}
+.res-thumb-btn:hover {
+    background-color: alpha(currentColor, 0.08);
+    border-color: alpha(currentColor, 0.20);
+}
+.res-thumb-btn-active {
+    background-color: alpha(@accent_bg_color, 0.20);
+    border: 2px solid @accent_bg_color;
+    color: @card_fg_color;
+}
+
+.res-aa-label {
+    font-size: 16px;
+    font-weight: 700;
+    color: @card_fg_color;
+}
+.res-dim-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: @card_fg_color;
+}
+.res-pct-label {
+    font-size: 11px;
+    color: alpha(currentColor, 0.65);
+}
+
+.truesize-banner-active {
+    background: linear-gradient(90deg, alpha(@accent_bg_color, 0.20), alpha(#5e5ce6, 0.20));
+    border: 1.5px solid @accent_bg_color;
+    border-radius: 12px;
+    padding: 14px 16px;
+    color: @card_fg_color;
+}
+
+.truesize-banner-inactive {
+    background-color: @card_bg_color;
+    border: 1px solid @borders;
+    border-radius: 12px;
+    padding: 14px 16px;
+    color: @card_fg_color;
+}
+
+.truesize-preset-btn {
+    background-color: alpha(currentColor, 0.07);
+    border: 1px solid @borders;
+    border-radius: 10px;
+    padding: 8px 12px;
+    transition: all 150ms ease-in-out;
+    color: @card_fg_color;
+}
+.truesize-preset-btn:hover {
+    background-color: alpha(currentColor, 0.12);
+}
+.truesize-preset-btn-active {
+    background-color: alpha(@accent_bg_color, 0.25);
+    border: 1.5px solid @accent_bg_color;
+    border-radius: 10px;
+    padding: 8px 12px;
+    color: @card_fg_color;
+}
+
+.cursor-theme-btn {
+    background-color: alpha(currentColor, 0.07);
+    border: 1px solid @borders;
+    border-radius: 10px;
+    padding: 10px 14px;
+    color: @card_fg_color;
+    transition: all 150ms ease-in-out;
+}
+.cursor-theme-btn:hover {
+    background-color: alpha(currentColor, 0.12);
+}
+.cursor-theme-btn-active {
+    background-color: alpha(@accent_bg_color, 0.25);
+    border: 1.5px solid @accent_bg_color;
+    border-radius: 10px;
+    padding: 10px 14px;
+    color: @card_fg_color;
+}
+
+.cursor-theme-name,
+.cursor-preview-icon {
+    color: @card_fg_color;
+}
+
+.appearance-mode-btn {
+    background-color: alpha(currentColor, 0.06);
+    border: 1.5px solid @borders;
+    border-radius: 12px;
+    padding: 12px 16px;
+    color: @card_fg_color;
+    transition: all 150ms ease-in-out;
+}
+.appearance-mode-btn:hover {
+    background-color: alpha(currentColor, 0.10);
+}
+.appearance-mode-btn-active {
+    background-color: alpha(@accent_bg_color, 0.18);
+    border: 2px solid @accent_bg_color;
+    color: @card_fg_color;
+    box-shadow: 0 0 10px alpha(@accent_bg_color, 0.30);
+}
+
+.theme-select-btn {
+    background-color: alpha(currentColor, 0.05);
+    border: 1.5px solid @borders;
+    border-radius: 12px;
+    padding: 8px 12px;
+    color: @card_fg_color;
+    transition: all 150ms ease-in-out;
+}
+.theme-select-btn:hover {
+    background-color: alpha(currentColor, 0.10);
+    border-color: alpha(currentColor, 0.20);
+}
+.theme-select-btn-active {
+    background-color: alpha(@accent_bg_color, 0.18);
+    border: 2px solid @accent_bg_color;
+    color: @card_fg_color;
+    box-shadow: 0 0 10px alpha(@accent_bg_color, 0.25);
+}
+
+scrolledwindow,
+viewport {
+    background: transparent;
+    background-color: transparent;
+}
+
+.wallpaper-preview-box {
+    border: 1px solid @borders;
+    border-radius: 14px;
+    background-color: @card_bg_color;
+}
+
+.wallpaper-grid-item {
+    border-radius: 12px;
+    padding: 6px;
+    transition: all 150ms ease-in-out;
+    background: alpha(currentColor, 0.04);
+    border: 2px solid transparent;
+}
+.wallpaper-grid-item:hover {
+    background: alpha(currentColor, 0.08);
+    border-color: alpha(@accent_bg_color, 0.50);
+}
+.wallpaper-grid-item-active {
+    border-color: @accent_bg_color;
+    background: alpha(@accent_bg_color, 0.15);
+    box-shadow: 0 0 10px alpha(@accent_bg_color, 0.25);
+}
+.wallpaper-item-title {
+    font-size: 11px;
+    font-weight: 500;
+    color: @card_fg_color;
+}

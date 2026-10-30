@@ -1,0 +1,14 @@
+popover > contents,
+popover.menu > contents,
+popover.background > contents,
+menu,
+.menu,
+window.view popover,
+window.view popover > contents,
+window.view popover.menu > contents,
+window.view popover.background > contents,
+window.view menu,
+window.view .menu {
+    background-color: alpha(@window_bg_color, 0.62);
+    border-color: alpha(@window_fg_color, 0.12);
+}

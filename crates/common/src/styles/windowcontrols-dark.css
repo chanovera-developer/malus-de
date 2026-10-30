@@ -1,0 +1,127 @@
+/* Controles de ventana estilo macOS (Oscuro) */
+windowcontrols {
+    border-spacing: 8px;
+    padding: 0;
+    margin-top: 10px;
+    margin-bottom: 10px;
+}
+
+windowcontrols.start {
+    margin-left: 10px;
+    margin-right: 12px;
+}
+
+windowcontrols.end {
+    margin-right: 10px;
+    margin-left: 12px;
+}
+
+windowcontrols > button,
+headerbar button.titlebutton {
+    min-width: 13px;
+    min-height: 13px;
+    padding: 0;
+    margin: 0;
+    border-radius: 9999px;
+    border-style: solid;
+    border-width: 0.5px;
+    box-shadow: none;
+    outline: none;
+    background-clip: padding-box;
+    transition: background-color 100ms ease, border-color 100ms ease, opacity 100ms ease;
+}
+
+windowcontrols > button > image,
+headerbar button.titlebutton > image {
+    padding: 0;
+    margin: 0;
+    min-width: 13px;
+    min-height: 13px;
+    border-radius: 9999px;
+    opacity: 0;
+    transition: opacity 120ms ease;
+    background-color: transparent;
+    box-shadow: none;
+    -gtk-icon-size: 8px;
+}
+
+windowcontrols:hover > button > image,
+windowcontrols > button:hover > image,
+headerbar:hover button.titlebutton > image,
+headerbar button.titlebutton:hover > image {
+    opacity: 0.85;
+}
+
+windowcontrols > button.close,
+headerbar button.titlebutton.close {
+    background-color: #ff5f56;
+    border-color: #e0443e;
+}
+windowcontrols > button.close:hover,
+headerbar button.titlebutton.close:hover {
+    background-color: #ff473d;
+    border-color: #c93630;
+}
+windowcontrols > button.close:active,
+headerbar button.titlebutton.close:active {
+    background-color: #bf3933;
+    border-color: #a82f2a;
+}
+windowcontrols > button.close > image,
+headerbar button.titlebutton.close > image {
+    color: #4c0000;
+}
+
+windowcontrols > button.minimize,
+headerbar button.titlebutton.minimize {
+    background-color: #ffbd2e;
+    border-color: #dea123;
+}
+windowcontrols > button.minimize:hover,
+headerbar button.titlebutton.minimize:hover {
+    background-color: #ffb114;
+    border-color: #c48c18;
+}
+windowcontrols > button.minimize:active,
+headerbar button.titlebutton.minimize:active {
+    background-color: #bf8516;
+    border-color: #9e6d0f;
+}
+windowcontrols > button.minimize > image,
+headerbar button.titlebutton.minimize > image {
+    color: #593b00;
+}
+
+windowcontrols > button.maximize,
+headerbar button.titlebutton.maximize {
+    background-color: #27c93f;
+    border-color: #1aab29;
+}
+windowcontrols > button.maximize:hover,
+headerbar button.titlebutton.maximize:hover {
+    background-color: #1fbd36;
+    border-color: #159322;
+}
+windowcontrols > button.maximize:active,
+headerbar button.titlebutton.maximize:active {
+    background-color: #158a25;
+    border-color: #0f6c1a;
+}
+windowcontrols > button.maximize > image,
+headerbar button.titlebutton.maximize > image {
+    color: #004d11;
+}
+
+window:backdrop windowcontrols > button,
+.backdrop windowcontrols > button,
+window:backdrop headerbar button.titlebutton,
+.backdrop headerbar button.titlebutton {
+    background-color: rgba(255, 255, 255, 0.18);
+    border-color: rgba(255, 255, 255, 0.10);
+}
+window:backdrop windowcontrols > button > image,
+.backdrop windowcontrols > button > image,
+window:backdrop headerbar button.titlebutton > image,
+.backdrop headerbar button.titlebutton > image {
+    opacity: 0;
+}

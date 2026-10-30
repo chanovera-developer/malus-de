@@ -1,0 +1,324 @@
+window.malus-dock-window,
+window.malus-dock-window.background,
+window.malus-dock-window decoration {
+    background-color: transparent;
+    background: transparent;
+    border: none;
+    outline: none;
+    box-shadow: none;
+}
+
+.dock-container {
+    background-color: alpha(@window_bg_color, 0.42);
+    border: 1px solid alpha(@window_fg_color, 0.12);
+    border-top: none;
+    /* El compositor recorta esta superficie con la máscara squircle. */
+    border-radius: 0;
+    padding: 6px 10px 0;
+    overflow: visible;
+}
+
+@media (prefers-color-scheme: dark) {
+    .dock-container {
+        border-color: alpha(@window_fg_color, 0.14);
+    }
+}
+
+.dock-item-box {
+    padding: 0px 2px;
+}
+
+.dock-trash-icon {
+    transform: translateY(4px);
+}
+
+.dock-bounce-target {
+    transition: transform 260ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.dock-bounce-target.dock-bouncing {
+    transition-duration: 280ms;
+    transition-timing-function: cubic-bezier(0.16, 0.76, 0.32, 1);
+    transform: translateY(-14px);
+}
+
+.dock-bounce-target.dock-bounce-falling {
+    transition-duration: 190ms;
+    transition-timing-function: cubic-bezier(0.65, 0, 0.9, 0.35);
+    transform: translateY(2px);
+}
+
+.dock-bounce-target.dock-bounce-rebound {
+    transition-duration: 130ms;
+    transition-timing-function: cubic-bezier(0.2, 0.8, 0.3, 1);
+    transform: translateY(-4px);
+}
+
+.dock-bounce-target.dock-bounce-settling {
+    transition-duration: 280ms;
+    transition-timing-function: cubic-bezier(0.34, 1.56, 0.64, 1);
+    transform: translateY(0);
+}
+
+.dock-item-btn {
+    background: transparent;
+    border: none;
+    border-radius: 14px;
+    padding: 4px;
+    box-shadow: none;
+    transition: background-color 180ms cubic-bezier(0.2, 0.9, 0.3, 1.0);
+    overflow: visible;
+}
+
+button.dock-item-btn,
+button.dock-item-btn:hover,
+button.dock-item-btn:active,
+button.dock-item-btn:checked,
+button.dock-item-btn:focus {
+    background-color: transparent;
+    background-image: none;
+    border-color: transparent;
+    box-shadow: none;
+}
+
+button.dock-item-btn:hover,
+button.dock-item-btn:active {
+    outline: none;
+}
+
+.dock-indicator {
+    font-size: 8px;
+    color: rgba(0, 0, 0, 0.85);
+    margin-top: 2px;
+    margin-bottom: -2px;
+}
+
+@media (prefers-color-scheme: dark) {
+    .dock-indicator {
+        color: rgba(255, 255, 255, 0.85);
+    }
+}
+
+.dock-separator {
+    background-color: rgba(255, 255, 255, 0.18);
+    min-width: 1px;
+    min-height: 44px;
+    margin: 4px 6px 10px 6px;
+}
+
+/* Tarjeta miniatura de ventana minimizada (macOS Dock Window Thumbnail) */
+.dock-window-card {
+    padding: 1px 3px;
+    margin: 0px 2px;
+}
+
+.dock-mini-window {
+    background: linear-gradient(180deg, rgba(45, 45, 55, 0.90) 0%, rgba(25, 25, 32, 0.95) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 10px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.48), 0 1px 3px rgba(255, 255, 255, 0.12);
+    transition: all 180ms cubic-bezier(0.2, 0.9, 0.3, 1.0);
+    padding: 0;
+}
+
+.dock-window-thumbnail {
+    border-radius: 3px;
+}
+
+.dock-window-card-thumbnail {
+    margin: 0;
+    padding: 0;
+}
+
+.dock-mini-window.has-thumbnail {
+    min-width: 0;
+    min-height: 0;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+}
+
+.dock-mini-window:hover {
+    background: linear-gradient(180deg, rgba(58, 58, 72, 0.95) 0%, rgba(32, 32, 42, 0.98) 100%);
+    border-color: rgba(255, 255, 255, 0.45);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.60), 0 0 8px rgba(59, 130, 246, 0.4);
+}
+
+.dock-mini-window.has-thumbnail:hover {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+}
+
+.dock-mini-window-titlebar {
+    background: rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+    padding: 2px 4px;
+    border-top-left-radius: 7px;
+    border-top-right-radius: 7px;
+}
+
+.dock-mini-dot {
+    font-size: 6px;
+    line-height: 6px;
+    margin-right: 2px;
+}
+
+.dot-red { color: #ff5f56; }
+.dot-yellow { color: #ffbd2e; }
+.dot-green { color: #27c93f; }
+
+.dock-mini-window-body {
+    padding: 4px 6px;
+}
+
+.dock-mini-content-line {
+    background-color: rgba(255, 255, 255, 0.18);
+    border-radius: 2px;
+    min-height: 3px;
+    margin-bottom: 3px;
+}
+
+.dock-mini-content-line-short {
+    background-color: rgba(255, 255, 255, 0.10);
+    border-radius: 2px;
+    min-height: 3px;
+    margin-right: 14px;
+}
+
+.dock-mini-badge {
+    background: rgba(24, 24, 28, 0.95);
+    border: 1.5px solid rgba(255, 255, 255, 0.35);
+    border-radius: 10px;
+    padding: 2px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.65);
+    margin-right: -3px;
+    margin-bottom: -3px;
+}
+
+.malus-popover-menu {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 0;
+}
+
+popover.malus-popover-menu,
+popover.malus-popover-menu.background,
+popover.malus-popover-menu > contents,
+popover.malus-popover-menu > contents.background,
+popover.malus-popover-menu > arrow {
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+}
+
+popover.malus-popover-menu > contents,
+popover.malus-popover-menu > contents.background {
+    padding: 0;
+    color: @window_fg_color;
+}
+
+.popover-surface,
+.popover-surface.background,
+.popover-surface > *,
+.popover-menu-content,
+.popover-menu-content.background {
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+}
+
+.popover-menu-header {
+    color: alpha(@window_fg_color, 0.72);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 5px 10px 3px;
+}
+
+.popover-separator {
+    background-color: alpha(@window_fg_color, 0.14);
+    min-height: 1px;
+    margin: 5px 4px;
+}
+
+.popover-menu-item {
+    background: transparent;
+    background-image: none;
+    border: none;
+    border-radius: 7px;
+    padding: 7px 12px;
+    margin: 1px 2px;
+    color: @window_fg_color;
+    font-size: 14px;
+    font-weight: 500;
+    box-shadow: none;
+}
+
+.popover-menu-item:hover {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    box-shadow: none;
+}
+
+.popover-menu-item-danger:hover {
+    background-color: #dc2626;
+    color: #ffffff;
+}
+
+/* Selector Visual de Aplicaciones estilo macOS (⌘Tab App Switcher HUD) */
+window.malus-switcher-window,
+window.malus-switcher-window.background,
+window.malus-switcher-window decoration,
+.switcher-surface,
+.switcher-container,
+.switcher-card {
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+.switcher-container {
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 12px 16px;
+}
+
+.switcher-container-background {
+    color: @window_bg_color;
+}
+
+.switcher-card-background {
+    color: @accent_bg_color;
+}
+
+.switcher-card {
+    background-color: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    opacity: 0.65;
+    transition: all 120ms cubic-bezier(0.2, 0.9, 0.3, 1.0);
+}
+
+.switcher-card.selected {
+    opacity: 1.0;
+}
+
+.switcher-title {
+    color: @window_fg_color;
+    font-size: 12px;
+    font-weight: 600;
+    margin-top: 6px;
+}
+
+.switcher-card.selected .switcher-title {
+    color: @accent_fg_color;
+    font-weight: 700;
+}

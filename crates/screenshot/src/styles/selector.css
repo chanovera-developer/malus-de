@@ -1,0 +1,11 @@
+window.malus-screenshot-selector {
+    background-color: transparent;
+}
+
+.screenshot-selector-hint {
+    color: white;
+    background-color: alpha(#171717, 0.88);
+    border-radius: 10px;
+    padding: 10px 16px;
+    font-size: 14px;
+}
