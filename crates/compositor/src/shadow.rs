@@ -54,6 +54,7 @@ uniform float u_blur_radius;    // Radio de dispersión gaussiana
 uniform float u_spread;         // Expansión sólida de la sombra
 uniform float u_offset_y;       // Desplazamiento de luz cenital (luz hacia abajo, u_offset_y > 0)
 uniform float u_opacity;        // Opacidad pico de la sombra
+uniform float u_contact_strength;
 
 // Distancia con signo analítica a un rectángulo con esquinas circulares perfectas (Euclidiana L2)
 float rounded_box_sdf(vec2 p, vec2 b, float r) {
@@ -97,7 +98,7 @@ void main() {
     vec2 p_contact = v_local_px - contact_center;
     float d_contact = max(rounded_box_sdf(p_contact, win_half, effective_r), 0.0);
     float contact_sigma = max(u_blur_radius * 0.22, 2.0);
-    float contact = exp(-pow(d_contact / contact_sigma, 2.0)) * 0.28;
+    float contact = exp(-pow(d_contact / contact_sigma, 2.0)) * u_contact_strength;
 
     // - Sombra ambiental: amplia y etérea penumbra difusa que cae suavemente hacia abajo
     vec2 ambient_center = win_center + vec2(0.0, u_offset_y);
@@ -130,6 +131,7 @@ pub struct WindowShadowPipeline {
     u_spread: ffi::types::GLint,
     u_offset_y: ffi::types::GLint,
     u_opacity: ffi::types::GLint,
+    u_contact_strength: ffi::types::GLint,
 }
 
 impl WindowShadowPipeline {
@@ -168,6 +170,10 @@ impl WindowShadowPipeline {
             let u_spread = gl.GetUniformLocation(program, c"u_spread".as_ptr() as *const ffi::types::GLchar);
             let u_offset_y = gl.GetUniformLocation(program, c"u_offset_y".as_ptr() as *const ffi::types::GLchar);
             let u_opacity = gl.GetUniformLocation(program, c"u_opacity".as_ptr() as *const ffi::types::GLchar);
+            let u_contact_strength = gl.GetUniformLocation(
+                program,
+                c"u_contact_strength".as_ptr() as *const ffi::types::GLchar,
+            );
 
             info!("✨ [WindowShadowPipeline] Pipeline de sombras squircle superelípticas (n=4.2) inicializado en GPU");
 
@@ -183,6 +189,7 @@ impl WindowShadowPipeline {
                 u_spread,
                 u_offset_y,
                 u_opacity,
+                u_contact_strength,
             })
         }
     }
@@ -226,6 +233,7 @@ impl WindowShadowPipeline {
             spread,
             offset_y,
             opacity,
+            0.28,
         );
     }
 
@@ -251,6 +259,7 @@ impl WindowShadowPipeline {
         spread: f32,
         offset_y: f32,
         opacity: f32,
+        contact_strength: f32,
     ) {
         if win_rect.size.w <= 0 || win_rect.size.h <= 0 {
             return;
@@ -307,6 +316,7 @@ impl WindowShadowPipeline {
             gl.Uniform1f(self.u_spread, spread);
             gl.Uniform1f(self.u_offset_y, offset_y);
             gl.Uniform1f(self.u_opacity, opacity);
+            gl.Uniform1f(self.u_contact_strength, contact_strength);
 
             // Desactivar atributos previos para renderizar directamente vía gl_VertexID procedural
             // e impedir cualquier interferencia de VertexAttribDivisor previo de Smithay
