@@ -465,10 +465,10 @@ fn create_popover_surface(menu_box: &GtkBox) -> Overlay {
 
     menu_box.set_halign(gtk4::Align::Fill);
     menu_box.set_valign(gtk4::Align::Fill);
-    menu_box.set_margin_start(8);
-    menu_box.set_margin_end(8);
-    menu_box.set_margin_top(6);
-    menu_box.set_margin_bottom(35);
+    menu_box.set_margin_start(8 + POPOVER_SHADOW_GUTTER);
+    menu_box.set_margin_end(8 + POPOVER_SHADOW_GUTTER);
+    menu_box.set_margin_top(6 + POPOVER_SHADOW_GUTTER);
+    menu_box.set_margin_bottom(35 + POPOVER_SHADOW_GUTTER);
 
     overlay
 }
@@ -476,6 +476,7 @@ fn create_popover_surface(menu_box: &GtkBox) -> Overlay {
 const POPOVER_TAIL_WIDTH: f64 = 44.0;
 const POPOVER_TAIL_HEIGHT: f64 = 18.0;
 const POPOVER_BODY_BOTTOM_INSET: f64 = 34.5;
+const POPOVER_SHADOW_GUTTER: i32 = 32;
 const SQUIRCLE_EXPONENT: f64 = 4.2;
 const SQUIRCLE_SEGMENTS: usize = 24;
 
@@ -487,15 +488,18 @@ fn themed_popover_svg(
 ) -> Result<gdk_pixbuf::Pixbuf, String> {
     let background = theme_color(area, "window_bg_color");
     let foreground = theme_color(area, "window_fg_color");
-    let radius = 18.0_f64.min(f64::from(width.min(height)) / 2.0);
-    let tail_width = POPOVER_TAIL_WIDTH.min((f64::from(width) - radius * 2.0).max(0.0));
-    let tail_height = POPOVER_TAIL_HEIGHT.min(f64::from(height) / 4.0);
-    let body_bottom = f64::from(height) - POPOVER_BODY_BOTTOM_INSET;
-    let center_x = f64::from(width) / 2.0;
+    let shadow_gutter = f64::from(POPOVER_SHADOW_GUTTER);
+    let content_width = (f64::from(width) - shadow_gutter * 2.0).max(1.0);
+    let content_height = (f64::from(height) - shadow_gutter * 2.0).max(1.0);
+    let radius = 18.0_f64.min(content_width.min(content_height) / 2.0);
+    let tail_width = POPOVER_TAIL_WIDTH.min((content_width - radius * 2.0).max(0.0));
+    let tail_height = POPOVER_TAIL_HEIGHT.min(content_height / 4.0);
+    let body_bottom = content_height - POPOVER_BODY_BOTTOM_INSET;
+    let center_x = content_width / 2.0;
     let tail_half_width = tail_width / 2.0;
     let left_tail = center_x - tail_half_width;
     let right_tail = center_x + tail_half_width;
-    let right_edge = f64::from(width) - 0.5;
+    let right_edge = content_width - 0.5;
     let corner_center_top = 0.5 + radius;
     let corner_center_right = right_edge - radius;
     let corner_center_left = 0.5 + radius;
@@ -573,6 +577,14 @@ fn themed_popover_svg(
             "width=\"320\" height=\"264\" viewBox=\"0 0 320 264\"",
             &format!("width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\""),
         );
+    let path_tag_start = svg
+        .find("<path")
+        .ok_or_else(|| "El SVG del popover no contiene trazado".to_string())?
+        + "<path".len();
+    svg.insert_str(
+        path_tag_start,
+        &format!(" transform=\"translate({shadow_gutter} {shadow_gutter})\""),
+    );
     let path_start = svg
         .find(" d=\"")
         .ok_or_else(|| "El SVG del popover no contiene trazado".to_string())?
@@ -2173,6 +2185,7 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
         .has_arrow(false)
         .position(gtk4::PositionType::Top)
         .build();
+    popover.set_offset(0, POPOVER_SHADOW_GUTTER);
 
     let menu_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
@@ -2367,6 +2380,7 @@ fn create_dock_item(
         .has_arrow(false)
         .position(gtk4::PositionType::Top)
         .build();
+    popover.set_offset(0, POPOVER_SHADOW_GUTTER);
 
     let menu_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
