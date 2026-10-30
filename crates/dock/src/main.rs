@@ -660,7 +660,7 @@ fn dock_popover_svg_path() -> Option<std::path::PathBuf> {
         .filter(|path| path.is_file())
 }
 
-fn queue_dock_resize(window: &ApplicationWindow, dock_root: &GtkBox, dock_bar: &GtkBox) {
+fn queue_dock_resize(window: &ApplicationWindow, dock_root: &GtkBox, dock_bar: &Overlay) {
     dock_bar.queue_resize();
     dock_root.queue_resize();
 
@@ -673,6 +673,40 @@ fn queue_dock_resize(window: &ApplicationWindow, dock_root: &GtkBox, dock_bar: &
     }
 
     window.queue_resize();
+}
+
+fn sync_dock_apps_placeholder(apps_box: &GtkBox, placeholder: &GtkBox) {
+    let (_, width, _, _) = apps_box.measure(Orientation::Horizontal, -1);
+    if placeholder.width_request() != width {
+        placeholder.set_size_request(width, -1);
+    }
+}
+
+fn draw_dock_edge_highlights(context: &gtk4::cairo::Context, width: i32, height: i32) {
+    if width <= 0 || height <= 0 {
+        return;
+    }
+
+    let gradient = gtk4::cairo::LinearGradient::new(0.0, 0.0, width as f64, 0.0);
+    gradient.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 0.0);
+    gradient.add_color_stop_rgba(0.08, 1.0, 1.0, 1.0, 0.42);
+    gradient.add_color_stop_rgba(0.5, 1.0, 1.0, 1.0, 0.58);
+    gradient.add_color_stop_rgba(0.92, 1.0, 1.0, 1.0, 0.42);
+    gradient.add_color_stop_rgba(1.0, 1.0, 1.0, 1.0, 0.0);
+
+    let _ = context.save();
+    squircle_path(context, width as f64, height as f64, 32.0);
+    let _ = context.clip();
+    context.set_line_width(1.5);
+    context.set_line_cap(gtk4::cairo::LineCap::Round);
+    let _ = context.set_source(&gradient);
+    context.move_to(3.0, 1.5);
+    context.line_to(width as f64 - 3.0, 1.5);
+    let _ = context.stroke();
+    context.move_to(3.0, height as f64 - 1.5);
+    context.line_to(width as f64 - 3.0, height as f64 - 1.5);
+    let _ = context.stroke();
+    let _ = context.restore();
 }
 
 fn check_trash_full() -> bool {
@@ -868,14 +902,18 @@ fn build_dock_ui(app: &Application) {
     magnification_headroom.set_size_request(-1, dock_headroom_height(&initial_cfg));
     dock_root.append(&magnification_headroom);
 
-    let dock_bar = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .css_classes(["dock-container"])
-        .spacing(4)
+    let dock_bar = Overlay::builder()
         .valign(gtk4::Align::End)
         .halign(gtk4::Align::Center)
         .build();
     dock_bar.set_overflow(gtk4::Overflow::Visible);
+
+    let dock_content = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .css_classes(["dock-container"])
+        .spacing(4)
+        .build();
+    dock_bar.set_child(Some(&dock_content));
 
     // Contenedor modular de aplicaciones (fijadas y dinámicas en ejecución)
     let apps_box = GtkBox::builder()
@@ -884,13 +922,18 @@ fn build_dock_ui(app: &Application) {
         .valign(gtk4::Align::End)
         .build();
     apps_box.set_overflow(gtk4::Overflow::Visible);
-    dock_bar.append(&apps_box);
+    apps_box.set_halign(gtk4::Align::Start);
+    apps_box.set_margin_start(11);
+    apps_box.set_margin_bottom(1);
+
+    let apps_placeholder = GtkBox::new(Orientation::Horizontal, 0);
+    dock_content.append(&apps_placeholder);
 
     // Separador de cristal translúcido
     let separator = Separator::new(Orientation::Vertical);
     separator.add_css_class("dock-separator");
     separator.set_valign(gtk4::Align::End);
-    dock_bar.append(&separator);
+    dock_content.append(&separator);
 
     // Contenedor dinámico de miniaturas de ventanas minimizadas (Bloque Derecho)
     let minimized_box = GtkBox::builder()
@@ -900,11 +943,25 @@ fn build_dock_ui(app: &Application) {
         .build();
     minimized_box.set_overflow(gtk4::Overflow::Visible);
     minimized_box.set_visible(false);
-    dock_bar.append(&minimized_box);
+    dock_content.append(&minimized_box);
 
     // Papelera de Reciclaje (Trash) con estado reactivo y menú contextual
     let (trash_widget, trash_img) = create_trash_item(initial_cfg.icon_size as i32);
-    dock_bar.append(&trash_widget);
+    dock_content.append(&trash_widget);
+
+    let highlights = DrawingArea::new();
+    highlights.set_can_target(false);
+    highlights.set_hexpand(true);
+    highlights.set_vexpand(true);
+    highlights.set_draw_func(|_, context, width, height| {
+        draw_dock_edge_highlights(context, width, height);
+    });
+    dock_bar.add_overlay(&highlights);
+    dock_bar.set_measure_overlay(&highlights, false);
+    dock_bar.add_overlay(&apps_box);
+    dock_bar.set_measure_overlay(&apps_box, false);
+    dock_bar.set_clip_overlay(&apps_box, false);
+
     dock_root.append(&dock_bar);
 
     // Ventana modal Overlay del Selector Visual de Aplicaciones (⌘Tab App Switcher HUD)
@@ -975,6 +1032,7 @@ fn build_dock_ui(app: &Application) {
         &on_refresh,
         true,
     );
+    sync_dock_apps_placeholder(&apps_box, &apps_placeholder);
 
     let apps_box_theme = apps_box.clone();
     adw::StyleManager::default().connect_dark_notify(move |_| {
@@ -989,6 +1047,7 @@ fn build_dock_ui(app: &Application) {
     let indicators_rf = dock_indicators.clone();
     let on_rf_loop = on_refresh.clone();
     let dock_bar_resize = dock_bar.clone();
+    let apps_placeholder_resize = apps_placeholder.clone();
     let dock_root_resize = dock_root.clone();
     let win_resize = window.clone();
 
@@ -1003,6 +1062,7 @@ fn build_dock_ui(app: &Application) {
                 &on_rf_loop,
                 refresh_pinned,
             );
+            sync_dock_apps_placeholder(&apps_box_rf, &apps_placeholder_resize);
             queue_dock_resize(&win_resize, &dock_root_resize, &dock_bar_resize);
         }
     });
@@ -1034,6 +1094,7 @@ fn build_dock_ui(app: &Application) {
     let min_box_motion = minimized_box.clone();
     let trash_widget_motion = trash_widget.clone();
     let dock_bar_motion = dock_bar.clone();
+    let apps_placeholder_motion = apps_placeholder.clone();
     let dock_root_motion = dock_root.clone();
     let window_motion = window.clone();
     let cfg_motion = dock_config.clone();
@@ -1104,10 +1165,14 @@ fn build_dock_ui(app: &Application) {
             &window_motion,
             &dock_root_motion,
             &dock_bar_motion,
+            &apps_box_motion,
+            &apps_placeholder_motion,
         );
     });
 
     let cfg_leave = dock_config.clone();
+    let apps_box_leave = apps_box.clone();
+    let apps_placeholder_leave = apps_placeholder.clone();
     let icon_size_animations_leave = icon_size_animations.clone();
     let icon_size_animation_running_leave = icon_size_animation_running.clone();
     let window_leave = window.clone();
@@ -1128,6 +1193,8 @@ fn build_dock_ui(app: &Application) {
             &window_leave,
             &dock_root_leave,
             &dock_bar_leave,
+            &apps_box_leave,
+            &apps_placeholder_leave,
         );
     });
     dock_root.add_controller(motion_controller);
@@ -1634,7 +1701,9 @@ fn start_icon_size_animation(
     animation_running: &Rc<Cell<bool>>,
     window: &ApplicationWindow,
     dock_root: &GtkBox,
-    dock_bar: &GtkBox,
+    dock_bar: &Overlay,
+    apps_box: &GtkBox,
+    apps_placeholder: &GtkBox,
 ) {
     if animation_running.replace(true) {
         return;
@@ -1645,6 +1714,8 @@ fn start_icon_size_animation(
     let window = window.clone();
     let dock_root = dock_root.clone();
     let dock_bar = dock_bar.clone();
+    let apps_box = apps_box.clone();
+    let apps_placeholder = apps_placeholder.clone();
     glib::timeout_add_local(Duration::from_millis(16), move || {
         let mut layout_changed = false;
         let mut settled = true;
@@ -1671,6 +1742,7 @@ fn start_icon_size_animation(
         drop(animations);
 
         if layout_changed {
+            sync_dock_apps_placeholder(&apps_box, &apps_placeholder);
             queue_dock_resize(&window, &dock_root, &dock_bar);
         }
         if settled {
