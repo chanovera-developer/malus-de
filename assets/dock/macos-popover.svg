@@ -5,14 +5,20 @@
       <stop offset="0.55" stop-color="#e9e0f8"/>
       <stop offset="1" stop-color="#d9cdec"/>
     </linearGradient>
-    <filter id="shadow" x="-12%" y="-12%" width="124%" height="132%">
-      <feGaussianBlur in="SourceAlpha" stdDeviation="5"/>
-      <feOffset dy="4"/>
-      <feComponentTransfer>
-        <feFuncA type="linear" slope="0.22"/>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="180%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="10" result="ambient-blur"/>
+      <feOffset in="ambient-blur" dy="8" result="ambient-shadow"/>
+      <feComponentTransfer in="ambient-shadow" result="ambient">
+        <feFuncA type="linear" slope="0.34"/>
+      </feComponentTransfer>
+      <feGaussianBlur in="SourceAlpha" stdDeviation="2" result="contact-blur"/>
+      <feOffset in="contact-blur" dy="2" result="contact-shadow"/>
+      <feComponentTransfer in="contact-shadow" result="contact">
+        <feFuncA type="linear" slope="0.40"/>
       </feComponentTransfer>
       <feMerge>
-        <feMergeNode/>
+        <feMergeNode in="ambient"/>
+        <feMergeNode in="contact"/>
         <feMergeNode in="SourceGraphic"/>
       </feMerge>
     </filter>
