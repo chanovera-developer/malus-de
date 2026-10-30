@@ -37,7 +37,7 @@ Los temas de usuario se instalan en:
 ├── gtk.css                     # Reglas de estilo para aplicaciones GTK3 y GTK4
 ├── preview.png                 # Miniatura para el selector en Ajustes del Sistema
 └── icons/                      # Iconos específicos del tema
-    ├── apple-logo.svg          # Logotipo del menú de aplicaciones (esquina superior izquierda)
+    ├── menu-logo.svg           # Logotipo de semilla del menú de aplicaciones (esquina superior izquierda)
     └── control-center.svg      # Icono del Centro de Control
 ```
 
@@ -110,8 +110,8 @@ card_corner_radius = 12
 | `window.malus-topbar` | Ventana raíz anclada a Layer Shell Top |
 | `.topbar-content` | Contenedor horizontal con altura mínima (`36px`) |
 | `button.topbar-btn` | Botones de menús y reloj interactivos |
-| `.apple-logo-btn` | Botón del logotipo de Apple en la esquina superior izquierda |
-| `.apple-icon` | Imagen SVG del icono de la manzana |
+| `.menu-logo-btn` | Botón del logotipo del menú en la esquina superior izquierda |
+| `.menu-logo-icon` | Imagen SVG del logotipo del menú |
 | `.active-app-name` | Título en negrita de la aplicación en foco |
 | `.global-menu-item` | Opciones de menú ("Archivo", "Edición", "Ver", etc.) |
 

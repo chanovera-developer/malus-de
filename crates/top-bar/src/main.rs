@@ -111,20 +111,20 @@ menubutton > button:checked {
     box-shadow: none;
 }
 
-.apple-logo-btn > button {
+.menu-logo-btn > button {
     padding: 3px 8px;
 }
 
 .topbar-content image,
-.apple-icon,
-.apple-logo-btn image,
+.menu-logo-icon,
+.menu-logo-btn image,
 button.topbar-btn image,
 menubutton.topbar-btn image {
     -gtk-icon-shadow: 0 1px 4px rgba(0, 0, 0, 0.65), 0 0 4px rgba(0, 0, 0, 0.65);
     filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.60));
 }
 
-.apple-icon {
+.menu-logo-icon {
     margin-bottom: 5px;
 }
 
@@ -954,7 +954,7 @@ fn build_ui(app: &Application) {
         .spacing(8)
         .build();
 
-    // 1. Zona Izquierda: Apple Menu + Global Menu (con soporte com.canonical.AppMenu.Registrar)
+    // 1. Zona Izquierda: Menú del sistema + Global Menu (con soporte com.canonical.AppMenu.Registrar)
     let left_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .valign(gtk4::Align::Center)
@@ -966,7 +966,7 @@ fn build_ui(app: &Application) {
     let dbus_service_arc = std::sync::Arc::new(dbus_menu_service);
 
     let menu_handles = ui::global_menu::create_global_menu_widget(dbus_service_arc.clone());
-    left_box.append(&ui::apple_menu::create_apple_menu());
+    left_box.append(&ui::system_menu::create_system_menu());
     left_box.append(&menu_handles.container);
 
     // Escuchar eventos de registro de ventanas con menús D-Bus
