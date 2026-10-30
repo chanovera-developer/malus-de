@@ -2,7 +2,18 @@
 
 **Malus DE** es una reimplementación libre del entorno de escritorio de macOS para Linux, construida sobre Wayland. Busca trasladar su estética y ergonomía a un sistema abierto y modular, con un compositor escrito en Rust y componentes de shell independientes.
 
-> **Estado:** en desarrollo activo. El PRD marca como implementados el compositor base, el dock, la barra superior y el centro de control, entre otros hitos. La integración completa de AirDrop/AWDL sigue en progreso; consulta [PRD.md](./PRD.md) para ver el estado detallado.
+> **Estado:** prototipo funcional en desarrollo activo; todavía no está listo para una alpha pública. Hay una sesión Wayland propia basada en Smithay, un backend DRM/KMS y componentes de shell utilizables, pero el funcionamiento integrado en distintas máquinas aún necesita validación. AirDrop/AWDL está en desarrollo. Consulta [PRD.md](./PRD.md) para el detalle de componentes y funciones pendientes.
+
+### Estado de preparación para pruebas
+
+Malus DE está pensado actualmente para desarrollo y pruebas controladas. Antes de invitar a un público abierto faltan, como mínimo:
+
+- Dejar pasar toda la suite de pruebas automatizadas. En la revisión actual, `cargo test --workspace --no-fail-fast` compiló el workspace, pero terminó con **73 pruebas correctas y 4 fallidas** en `malus-de-common`: dos aserciones de estilos CSS de menús y dos expectativas sobre el número de aplicaciones predeterminadas del Dock.
+- Validar el flujo completo de inicio de sesión, uso diario y recuperación en hardware y configuraciones de pantalla distintos.
+- Proporcionar una instalación empaquetada y documentar una forma segura de desinstalar o revertir los cambios del instalador.
+- Publicar instrucciones de diagnóstico y un canal claro para reportar fallos reproducibles.
+
+Las funciones descritas abajo indican alcance implementado en el código, no una garantía de que todas se hayan verificado en cada distribución, GPU o configuración de monitores.
 
 ## Características
 
@@ -103,7 +114,7 @@ En **Ajustes → Pantallas**, cada pantalla detectada muestra sus modos DRM comp
 
 ## Instalación de la sesión
 
-El script [install-session.sh](./scripts/install-session.sh) compila los binarios e instala la sesión de Malus DE para GDM en el sistema. Requiere privilegios de administrador y modifica rutas del sistema; revisa el script y confirma las dependencias de tu distribución antes de ejecutarlo:
+El script [install-session.sh](./scripts/install-session.sh) compila los binarios e instala la sesión de Malus DE para GDM en el sistema. Es una instalación manual para desarrollo y pruebas, no un instalador empaquetado para distribución: requiere privilegios de administrador y modifica rutas del sistema, incluidas preferencias globales de `xdg-desktop-portal`. **No hay un desinstalador automático documentado.** Revisa el script, confirma las dependencias de tu distribución y prepara una forma de revertir los cambios antes de ejecutarlo:
 
 ```bash
 sudo ./scripts/install-session.sh
@@ -118,9 +129,16 @@ Los selectores de archivos de GTK y aplicaciones compatibles (por ejemplo, VS Co
 
 El menú global solo puede mostrar y ejecutar menús que la aplicación publique mediante `com.canonical.dbusmenu` y `com.canonical.AppMenu.Registrar`. Malus no inventa menús aproximados para aplicaciones que no los publican; algunas aplicaciones Electron, incluida VS Code según su versión y configuración, pueden no exponerlos en Linux.
 
-## Incidencias pendientes
+## Limitaciones conocidas y alcance pendiente
 
-Se reporta que las funciones solicitadas no están funcionando. No se han especificado aún los fallos concretos ni pasos para reproducirlos, por lo que queda pendiente su diagnóstico; las características descritas arriba no deben considerarse verificadas por este reporte.
+- AirDrop/AWDL y la integración BLE están en desarrollo; no se debe considerar disponible el intercambio completo con dispositivos Apple.
+- La captura de ventana, la grabación de pantalla y el OCR no están implementados.
+- El selector de ventanas Alt-Tab/Super-Tab continúa en desarrollo.
+- El menú global depende de que cada aplicación publique los protocolos `com.canonical.dbusmenu` y `com.canonical.AppMenu.Registrar`; no todas las aplicaciones lo hacen.
+- La suite automatizada tiene los cuatro fallos descritos en [Estado de preparación para pruebas](#estado-de-preparacion-para-pruebas); la compilación por sí sola no valida la sesión en hardware.
+- La instalación modifica configuración global del portal y no dispone de un proceso automático de desinstalación o reversión.
+
+Si pruebas Malus, incluye en el reporte la distribución y versión, GPU y controlador, número y modos de pantalla, backend utilizado (DRM o Winit), pasos para reproducir el problema y los registros de `~/.local/share/malus-de/session.log` cuando estén disponibles. No compartas registros que contengan información personal sin revisarlos primero.
 
 ## Documentación
 
