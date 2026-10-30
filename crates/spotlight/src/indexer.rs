@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -12,11 +13,14 @@ pub struct AppEntry {
 
 pub fn index_applications() -> Vec<AppEntry> {
     let mut apps = Vec::new();
-    let dirs = [
-        PathBuf::from("/usr/share/applications"),
-        PathBuf::from("/usr/local/share/applications"),
-        dirs_home_apps(),
-    ];
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let xdg_data_home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from);
+    let xdg_data_dirs = std::env::var_os("XDG_DATA_DIRS");
+    let dirs = application_dirs_from(
+        home.as_deref(),
+        xdg_data_home.as_deref(),
+        xdg_data_dirs.as_deref(),
+    );
 
     for dir in &dirs {
         if dir.exists() {
@@ -30,12 +34,48 @@ pub fn index_applications() -> Vec<AppEntry> {
     apps
 }
 
-fn dirs_home_apps() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(".local/share/applications")
-    } else {
-        PathBuf::from("/tmp")
+fn application_dirs_from(
+    home: Option<&Path>,
+    xdg_data_home: Option<&Path>,
+    xdg_data_dirs: Option<&OsStr>,
+) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let user_data_home = xdg_data_home
+        .filter(|path| path.is_absolute())
+        .map(Path::to_path_buf)
+        .or_else(|| home.map(|path| path.join(".local/share")));
+
+    if let Some(data_home) = user_data_home {
+        dirs.push(data_home.join("applications"));
     }
+
+    if let Some(home) = home {
+        dirs.push(home.join(".local/share/flatpak/exports/share/applications"));
+    }
+
+    let mut data_dirs: Vec<PathBuf> = xdg_data_dirs
+        .filter(|dirs| !dirs.is_empty())
+        .map(std::env::split_paths)
+        .map(Iterator::collect)
+        .unwrap_or_default();
+    data_dirs.retain(|path| path.is_absolute());
+    if data_dirs.is_empty() {
+        data_dirs = vec![
+            PathBuf::from("/usr/local/share"),
+            PathBuf::from("/usr/share"),
+        ];
+    }
+
+    dirs.extend(data_dirs.into_iter().map(|path| path.join("applications")));
+    dirs.push(PathBuf::from("/var/lib/flatpak/exports/share/applications"));
+
+    let mut unique_dirs = Vec::with_capacity(dirs.len());
+    for dir in dirs {
+        if !unique_dirs.contains(&dir) {
+            unique_dirs.push(dir);
+        }
+    }
+    unique_dirs
 }
 
 fn scan_dir(dir: &Path, apps: &mut Vec<AppEntry>) {
@@ -108,4 +148,58 @@ fn parse_desktop_file(path: &Path) -> Option<AppEntry> {
         icon,
         comment,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::application_dirs_from;
+    use std::ffi::OsStr;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn includes_flatpak_exports_and_xdg_application_dirs() {
+        let home = Path::new("/home/test");
+        let data_dirs = std::env::join_paths([
+            "/opt/apps/share",
+            "/usr/share",
+            "/var/lib/flatpak/exports/share",
+        ])
+        .expect("valid XDG data directories");
+        let dirs = application_dirs_from(
+            Some(home),
+            Some(Path::new("/home/test/.data")),
+            Some(data_dirs.as_os_str()),
+        );
+
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from("/home/test/.data/applications"),
+                PathBuf::from("/home/test/.local/share/flatpak/exports/share/applications"),
+                PathBuf::from("/opt/apps/share/applications"),
+                PathBuf::from("/usr/share/applications"),
+                PathBuf::from("/var/lib/flatpak/exports/share/applications"),
+            ]
+        );
+    }
+
+    #[test]
+    fn uses_xdg_defaults_when_environment_values_are_missing_or_invalid() {
+        let dirs = application_dirs_from(
+            Some(Path::new("/home/test")),
+            Some(Path::new("relative-data-home")),
+            Some(OsStr::new("relative-data-dir")),
+        );
+
+        assert_eq!(
+            dirs,
+            vec![
+                PathBuf::from("/home/test/.local/share/applications"),
+                PathBuf::from("/home/test/.local/share/flatpak/exports/share/applications"),
+                PathBuf::from("/usr/local/share/applications"),
+                PathBuf::from("/usr/share/applications"),
+                PathBuf::from("/var/lib/flatpak/exports/share/applications"),
+            ]
+        );
+    }
 }

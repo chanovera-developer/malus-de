@@ -11,6 +11,7 @@ use malus_de_common::logging::init_logging;
 use std::cell::{Cell, RefCell};
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
+use std::path::Path;
 use std::process::Command;
 use std::rc::Rc;
 use std::time::Duration;
@@ -1211,6 +1212,15 @@ fn launch_application(command_line: &str) -> bool {
 }
 
 fn launch_desktop_application(desktop_file: &str, fallback_exec: Option<&str>) -> bool {
+    if Path::new(desktop_file)
+        .file_name()
+        .is_some_and(|name| name == "io.mpv.Mpv.desktop")
+    {
+        return launch_application(
+            "flatpak run io.mpv.Mpv --gpu-context=wayland --player-operation-mode=pseudo-gui",
+        );
+    }
+
     if let Some(app_info) = gtk4::gio::DesktopAppInfo::from_filename(desktop_file) {
         match app_info.launch(&[], None::<&gtk4::gio::AppLaunchContext>) {
             Ok(()) => return true,
