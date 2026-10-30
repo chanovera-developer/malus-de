@@ -698,6 +698,57 @@ fn sync_dock_apps_placeholder(apps_box: &GtkBox, placeholder: &GtkBox) {
     }
 }
 
+struct DockPlaceholderWidthAnimation {
+    current_width: f64,
+    target_width: f64,
+}
+
+fn start_dock_placeholder_width_animation(
+    animation: &Rc<RefCell<DockPlaceholderWidthAnimation>>,
+    animation_running: &Rc<Cell<bool>>,
+    window: &ApplicationWindow,
+    dock_root: &GtkBox,
+    dock_bar: &Overlay,
+    apps_box: &GtkBox,
+    placeholder: &GtkBox,
+) {
+    let (_, target_width, _, _) = apps_box.measure(Orientation::Horizontal, -1);
+    animation.borrow_mut().target_width = target_width.max(0) as f64;
+    if animation_running.replace(true) {
+        return;
+    }
+
+    let animation = animation.clone();
+    let animation_running = animation_running.clone();
+    let window = window.clone();
+    let dock_root = dock_root.clone();
+    let dock_bar = dock_bar.clone();
+    let placeholder = placeholder.clone();
+    glib::timeout_add_local(Duration::from_millis(16), move || {
+        let mut animation = animation.borrow_mut();
+        let difference = animation.target_width - animation.current_width;
+        if difference.abs() < 0.5 {
+            animation.current_width = animation.target_width;
+        } else {
+            animation.current_width += difference * 0.18;
+        }
+        let width = animation.current_width.round().max(0.0) as i32;
+        let settled = difference.abs() < 0.5;
+        drop(animation);
+
+        if placeholder.width_request() != width {
+            placeholder.set_size_request(width, -1);
+            queue_dock_resize(&window, &dock_root, &dock_bar);
+        }
+        if settled {
+            animation_running.set(false);
+            glib::ControlFlow::Break
+        } else {
+            glib::ControlFlow::Continue
+        }
+    });
+}
+
 fn draw_dock_edge_highlights(context: &gtk4::cairo::Context, width: i32, height: i32) {
     if width <= 0 || height <= 0 {
         return;
@@ -1049,6 +1100,11 @@ fn build_dock_ui(app: &Application) {
         true,
     );
     sync_dock_apps_placeholder(&apps_box, &apps_placeholder);
+    let placeholder_width_animation = Rc::new(RefCell::new(DockPlaceholderWidthAnimation {
+        current_width: apps_placeholder.width_request().max(0) as f64,
+        target_width: apps_placeholder.width_request().max(0) as f64,
+    }));
+    let placeholder_width_animation_running = Rc::new(Cell::new(false));
 
     let apps_box_theme = apps_box.clone();
     adw::StyleManager::default().connect_dark_notify(move |_| {
@@ -1066,6 +1122,8 @@ fn build_dock_ui(app: &Application) {
     let apps_placeholder_resize = apps_placeholder.clone();
     let dock_root_resize = dock_root.clone();
     let win_resize = window.clone();
+    let placeholder_animation_rf = placeholder_width_animation.clone();
+    let placeholder_animation_running_rf = placeholder_width_animation_running.clone();
 
     glib::spawn_future_local(async move {
         while let Ok(refresh_pinned) = refresh_rx.recv().await {
@@ -1078,7 +1136,15 @@ fn build_dock_ui(app: &Application) {
                 &on_rf_loop,
                 refresh_pinned,
             );
-            sync_dock_apps_placeholder(&apps_box_rf, &apps_placeholder_resize);
+            start_dock_placeholder_width_animation(
+                &placeholder_animation_rf,
+                &placeholder_animation_running_rf,
+                &win_resize,
+                &dock_root_resize,
+                &dock_bar_resize,
+                &apps_box_rf,
+                &apps_placeholder_resize,
+            );
             queue_dock_resize(&win_resize, &dock_root_resize, &dock_bar_resize);
         }
     });
@@ -1329,15 +1395,58 @@ fn build_dock_ui(app: &Application) {
                 IpcMessage::MinimizedWindowsChanged { windows } => {
                     let mut current_map = min_map.borrow_mut();
                     let new_ids: HashSet<u64> = windows.iter().map(|w| w.window_id).collect();
+                    if !new_ids.is_empty() {
+                        min_box.set_visible(true);
+                    }
 
-                    // Eliminar miniaturas de ventanas ya restauradas o cerradas
-                    let to_remove: Vec<u64> = current_map.keys().filter(|id| !new_ids.contains(id)).copied().collect();
+                    // Contraer las miniaturas salientes antes de liberar su espacio.
+                    let to_remove: Vec<u64> = current_map
+                        .keys()
+                        .filter(|id| !new_ids.contains(id))
+                        .copied()
+                        .collect();
                     for id in to_remove {
-                        if let Some(widget) = current_map.remove(&id) {
-                            min_box.remove(&widget);
-                            info!("🗑️ Miniatura removida del Dock: window_id={}", id);
+                        if let Some(widget) = current_map.get(&id) {
+                            if let Ok(revealer) = widget.clone().downcast::<gtk4::Revealer>() {
+                                if revealer.reveals_child() {
+                                    revealer.set_reveal_child(false);
+                                    let widget = widget.clone();
+                                    let min_box = min_box.clone();
+                                    let min_map = min_map.clone();
+                                    let min_paths = min_paths.clone();
+                                    let win_ref = win_ref.clone();
+                                    let dock_root_ref = dock_root_ref.clone();
+                                    let dock_bar_ref = dock_bar_ref.clone();
+                                    glib::timeout_add_local_once(
+                                        Duration::from_millis(300),
+                                        move || {
+                                            let still_current = min_map
+                                                .borrow()
+                                                .get(&id)
+                                                .is_some_and(|current| *current == widget);
+                                            if !still_current || revealer.reveals_child() {
+                                                return;
+                                            }
+                                            min_box.remove(&widget);
+                                            min_map.borrow_mut().remove(&id);
+                                            min_paths.borrow_mut().remove(&id);
+                                            info!(
+                                                "🗑️ Miniatura removida del Dock: window_id={}",
+                                                id
+                                            );
+                                            if min_box.first_child().is_none() {
+                                                min_box.set_visible(false);
+                                            }
+                                            queue_dock_resize(
+                                                &win_ref,
+                                                &dock_root_ref,
+                                                &dock_bar_ref,
+                                            );
+                                        },
+                                    );
+                                }
+                            }
                         }
-                        min_paths.borrow_mut().remove(&id);
                     }
 
                     // Agregar o mantener miniaturas activas
@@ -1351,8 +1460,11 @@ fn build_dock_ui(app: &Application) {
                                 min_box.remove(&widget);
                             }
                             let icon_size = cfg_ipc.borrow().icon_size as i32;
-                            let (widget, id) = create_minimized_window_item(&win_info, icon_size);
-                            min_box.append(&widget);
+                            let (card, id) = create_minimized_window_item(&win_info, icon_size);
+                            let revealer = create_dock_item_revealer(&card);
+                            let widget = revealer.clone().upcast::<gtk4::Widget>();
+                            min_box.append(&revealer);
+                            revealer.set_reveal_child(true);
                             current_map.insert(id, widget);
                             min_paths
                                 .borrow_mut()
@@ -1360,6 +1472,9 @@ fn build_dock_ui(app: &Application) {
                             info!("🖼️ Miniatura agregada al Dock: window_id={} ('{}')", id, win_info.title);
                         }
                         if let Some(widget) = current_map.get(&win_info.window_id) {
+                            if let Ok(revealer) = widget.clone().downcast::<gtk4::Revealer>() {
+                                revealer.set_reveal_child(true);
+                            }
                             widget.set_opacity(if win_info.is_animating { 0.0 } else { 1.0 });
                             widget.set_sensitive(!win_info.is_animating);
                         }
@@ -1370,13 +1485,14 @@ fn build_dock_ui(app: &Application) {
                     min_box.set_visible(has_minimized);
                     let cards: Vec<(u64, gtk4::Widget)> = current_map
                         .iter()
+                        .filter(|(id, _)| new_ids.contains(id))
                         .map(|(id, widget)| (*id, widget.clone()))
                         .collect();
                     drop(current_map);
 
                     queue_dock_resize(&win_ref, &dock_root_ref, &dock_bar_ref);
                     let dock_window_weak = win_ref.downgrade();
-                    for delay in [60, 180] {
+                    for delay in [60, 180, 320] {
                         let cards = cards.clone();
                         let dock_window_weak = dock_window_weak.clone();
                         glib::timeout_add_local_once(Duration::from_millis(delay), move || {
@@ -2117,6 +2233,14 @@ fn create_minimized_window_item(info: &MinimizedWindowInfo, icon_size: i32) -> (
     overlay.add_controller(gesture);
 
     (overlay.upcast::<gtk4::Widget>(), window_id)
+}
+
+fn create_dock_item_revealer(child: &gtk4::Widget) -> gtk4::Revealer {
+    let revealer = gtk4::Revealer::new();
+    revealer.set_transition_type(gtk4::RevealerTransitionType::SlideLeft);
+    revealer.set_transition_duration(280);
+    revealer.set_child(Some(child));
+    revealer
 }
 
 fn register_minimized_dock_slot(
