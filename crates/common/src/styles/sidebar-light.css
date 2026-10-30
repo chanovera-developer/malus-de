@@ -1,0 +1,44 @@
+/* Estilos de panel lateral para Tema Claro */
+@define-color sidebar_bg_color rgba(246, 246, 248, 0.82);
+@define-color sidebar_backdrop_color rgba(240, 240, 242, 0.88);
+
+:root {
+    --sidebar-bg-color: rgba(246, 246, 248, 0.82);
+    --sidebar-backdrop-color: rgba(240, 240, 242, 0.88);
+}
+
+window.view overlay-split-view > .sidebar-pane {
+    background-color: rgba(246, 246, 248, 0.82);
+    color: @window_fg_color;
+}
+
+window.view overlay-split-view > .sidebar-pane:backdrop {
+    background-color: rgba(240, 240, 242, 0.88);
+}
+
+window.view overlay-split-view > .sidebar-pane:dir(ltr) {
+    box-shadow: inset -1px 0 rgba(0, 0, 0, 0.08);
+}
+
+window.view overlay-split-view > .sidebar-pane:dir(rtl) {
+    box-shadow: inset 1px 0 rgba(0, 0, 0, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+    window.view overlay-split-view > .sidebar-pane {
+        background-color: rgba(30, 30, 34, 0.82);
+        color: @window_fg_color;
+    }
+
+    window.view overlay-split-view > .sidebar-pane:backdrop {
+        background-color: rgba(25, 25, 28, 0.88);
+    }
+
+    window.view overlay-split-view > .sidebar-pane:dir(ltr) {
+        box-shadow: inset -1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    window.view overlay-split-view > .sidebar-pane:dir(rtl) {
+        box-shadow: inset 1px 0 rgba(255, 255, 255, 0.08);
+    }
+}

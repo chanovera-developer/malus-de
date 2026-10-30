@@ -24,43 +24,7 @@ struct Args {
     image: Option<PathBuf>,
 }
 
-const DEFAULT_GRADIENT_CSS: &str = r#"
-window.malus-wallpaper-window,
-window.malus-wallpaper-window.background,
-window.malus-wallpaper-window decoration {
-    margin: 0;
-    padding: 0;
-    border: none;
-    box-shadow: none;
-    background: radial-gradient(circle at 35% 25%, #2e1065 0%, #172554 35%, #0f172a 70%, #0d1526 100%);
-}
-
-window.malus-wallpaper-window picture {
-    margin: 0;
-    padding: 0;
-    border: none;
-}
-
-.desktop-icon {
-    min-width: 88px;
-    min-height: 88px;
-    padding: 6px;
-    color: white;
-    background: transparent;
-    border: none;
-    box-shadow: none;
-    border-radius: 8px;
-}
-
-.desktop-icon:hover {
-    background: alpha(white, 0.14);
-}
-
-label.desktop-icon-label {
-    color: white;
-    text-shadow: 0 1px 4px black;
-}
-"#;
+const DEFAULT_GRADIENT_CSS: &str = include_str!("styles/default-gradient.css");
 
 const DESKTOP_ICON_WIDTH: i32 = 112;
 const DESKTOP_ICON_HEIGHT: i32 = 112;

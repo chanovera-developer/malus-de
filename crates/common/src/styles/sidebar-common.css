@@ -1,0 +1,178 @@
+/* Malus DE - Paneles laterales semitransparentes estilo macOS (Sidebar / Split View) */
+window.view.background {
+    background-color: transparent;
+}
+
+window.view popover,
+window.view popover > contents,
+window.view popover.menu > contents,
+window.view popover.background > contents,
+window.view menu,
+window.view .menu {
+    background-color: transparent;
+    border-color: transparent;
+    box-shadow: none;
+}
+
+/* Mantener fondo opaco sólido para vistas de contenido y ventanas generales */
+adw-toolbar-view,
+navigation-view,
+preferencespage,
+preferencesgroup,
+.content-pane {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+}
+
+.content-pane headerbar,
+navigation-split-view > .content-pane headerbar,
+overlay-split-view > .content-pane headerbar {
+    background-color: @headerbar_bg_color;
+}
+
+/* Diálogos modales y selectores de archivos/descargas: Fondo plano sólido estilo macOS */
+window.dialog,
+window.dialog.background,
+window.background.dialog,
+window.filechooser,
+window.filechooser.background,
+window.background.filechooser,
+window.messagedialog,
+window.messagedialog.background,
+window.background.messagedialog,
+window.modal,
+window.sheet,
+dialog,
+dialog.background,
+messagedialog,
+messagedialog.background,
+filechooser,
+filechooser.background,
+.file-chooser,
+.dialog-vbox,
+.dialog-content-area,
+.dialog-action-box,
+.dialog-action-area {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+}
+
+window.dialog headerbar,
+window.filechooser headerbar,
+dialog headerbar,
+filechooser headerbar {
+    background-color: @headerbar_bg_color;
+    color: @headerbar_fg_color;
+}
+
+window.dialog actionbar,
+window.dialog actionbar.background,
+window.filechooser actionbar,
+window.filechooser actionbar.background,
+dialog actionbar,
+dialog actionbar.background,
+filechooser actionbar,
+filechooser actionbar.background {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+}
+
+/* Barra lateral de lugares (placessidebar / navigation-sidebar / placesview) con fondo plano sólido en diálogos */
+window.dialog placessidebar,
+window.dialog placessidebar.view,
+window.dialog placessidebar scrolledwindow,
+window.dialog placessidebar viewport,
+window.dialog placessidebar listview,
+window.dialog placessidebar list,
+window.dialog placessidebar listbox,
+window.dialog placessidebar .view,
+window.dialog placesview,
+window.dialog placesview scrolledwindow,
+window.dialog placesview viewport,
+window.dialog placesview list,
+window.dialog placesview stack,
+window.filechooser placessidebar,
+window.filechooser placessidebar.view,
+window.filechooser placessidebar scrolledwindow,
+window.filechooser placessidebar viewport,
+window.filechooser placessidebar listview,
+window.filechooser placessidebar list,
+window.filechooser placessidebar listbox,
+window.filechooser placessidebar .view,
+window.filechooser placesview,
+window.filechooser placesview scrolledwindow,
+window.filechooser placesview viewport,
+window.filechooser placesview list,
+window.filechooser placesview stack,
+dialog placessidebar,
+dialog placessidebar.view,
+dialog placessidebar scrolledwindow,
+dialog placessidebar viewport,
+dialog placessidebar listview,
+dialog placessidebar list,
+dialog placessidebar listbox,
+dialog placessidebar .view,
+dialog placesview,
+dialog placesview scrolledwindow,
+dialog placesview viewport,
+dialog placesview list,
+dialog placesview stack,
+filechooser placessidebar,
+filechooser placessidebar.view,
+filechooser placessidebar scrolledwindow,
+filechooser placessidebar viewport,
+filechooser placessidebar listview,
+filechooser placessidebar list,
+filechooser placessidebar listbox,
+filechooser placessidebar .view,
+filechooser placesview,
+filechooser placesview scrolledwindow,
+filechooser placesview viewport,
+filechooser placesview list,
+filechooser placesview stack,
+window.dialog .navigation-sidebar,
+window.filechooser .navigation-sidebar,
+dialog .navigation-sidebar,
+filechooser .navigation-sidebar {
+    background: @window_bg_color;
+    background-color: @window_bg_color;
+}
+
+/* Transparencia de los componentes internos de la barra lateral de Nautilus */
+window.view .sidebar-pane,
+window.view .sidebar-pane *,
+window.view .navigation-sidebar,
+window.view .navigation-sidebar *,
+window.view placessidebar,
+window.view placessidebar *,
+window.view .macos-sidebar,
+window.view .macos-sidebar * {
+    background: transparent;
+    background-color: transparent;
+    border-color: transparent;
+    box-shadow: none;
+}
+
+window.view .sidebar-pane listview > row,
+window.view .sidebar-pane list > row,
+window.view .sidebar-pane listbox > row,
+window.view .navigation-sidebar row,
+window.view .navigation-sidebar > row,
+window.view placessidebar row,
+window.view placessidebar > row {
+    background: transparent;
+    background-color: transparent;
+}
+
+window.view .sidebar-pane listview > row:hover,
+window.view .navigation-sidebar row:hover,
+window.view placessidebar row:hover {
+    background-color: alpha(currentColor, 0.08);
+}
+
+window.view .sidebar-pane listview > row:selected,
+window.view .navigation-sidebar row:selected,
+window.view placessidebar row:selected {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+}

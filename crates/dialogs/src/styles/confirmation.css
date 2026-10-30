@@ -1,0 +1,44 @@
+window.malus-confirmation-window {
+    background-color: transparent;
+}
+
+.malus-confirmation-card {
+    background-color: alpha(@window_bg_color, 0.82);
+    border: 1px solid alpha(@window_fg_color, 0.18);
+    border-radius: 0;
+    box-shadow: 0 20px 48px rgba(0, 0, 0, 0.58), 0 4px 12px rgba(0, 0, 0, 0.36);
+    padding: 24px;
+    min-width: 420px;
+    max-width: 560px;
+}
+
+.malus-confirmation-card button {
+    border-radius: 12px;
+}
+
+.malus-confirmation-cancel {
+    color: @window_fg_color;
+    background-color: alpha(@window_fg_color, 0.08);
+    background-image: none;
+    border: 1px solid alpha(@window_fg_color, 0.14);
+    box-shadow: none;
+}
+
+.malus-confirmation-cancel:hover {
+    background-color: alpha(@window_fg_color, 0.14);
+}
+
+.malus-confirmation-cancel:active {
+    background-color: alpha(@window_fg_color, 0.20);
+}
+
+.malus-confirmation-heading {
+    color: @window_fg_color;
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.malus-confirmation-body {
+    color: alpha(@window_fg_color, 0.78);
+    font-size: 14px;
+}

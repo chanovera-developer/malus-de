@@ -1,0 +1,91 @@
+/* Malus DE - Estilo macOS aislado para aplicaciones GTK3 y GTK4 */
+windowtitle .title,
+headerbar windowtitle .title {
+    opacity: 0;
+    font-size: 0px;
+    min-height: 0px;
+    margin: 0px;
+    padding: 0px;
+}
+
+/* Ventanas GTK3, GTK4 y Libadwaita: esquinas rectas a nivel de widget para permitir
+   que el compositor GPU de Malus DE aplique el recorte Squircle superelíptico continuo (n=4.2)
+   sin doble recorte circular previo ni márgenes de sombra CSD */
+window,
+window.background,
+window.csd,
+window.unified,
+window.solid-csd,
+window.messagedialog,
+window.dialog,
+decoration,
+.solid-csd,
+headerbar,
+headerbar.flat,
+.titlebar,
+tabbar,
+tab-bar,
+navigation-view,
+navigation-view > widget,
+leaflet,
+flap,
+toast-overlay,
+adw-toolbar-view,
+adw-window,
+adw-application-window {
+    border-radius: 0px;
+    box-shadow: none;
+    margin: 0px;
+}
+
+headerbar,
+headerbar.flat,
+.titlebar,
+tabbar,
+tab-bar {
+    border-top-left-radius: 0px;
+    border-top-right-radius: 0px;
+    border-radius: 0px;
+}
+
+/* Ventanas maximizadas o en pantalla completa: esquinas rectas (0px) */
+window.maximized,
+window.fullscreen,
+window.maximized.background,
+window.fullscreen.background,
+window.maximized headerbar,
+window.fullscreen headerbar {
+    border-radius: 0px;
+}
+
+/* Menús emergentes, popovers y context menus estilo Squircle macOS */
+popover > contents,
+popover.menu > contents,
+popover.background > contents,
+menu,
+.menu {
+    border-radius: 14px;
+    padding: 0;
+}
+
+/* Elementos de menú con squircle highlight */
+popover modelbutton,
+popover .popover-menu-item,
+menu menuitem,
+.menu menuitem {
+    border-radius: 8px;
+    min-height: 26px;
+    padding: 4px 10px;
+    margin: 1px 2px;
+}
+
+/* Enlaces estilo macOS con squircle hover */
+link,
+link:hover,
+link:active,
+link:visited,
+button.link,
+button.link:hover {
+    border-radius: 7px;
+    padding: 2px 6px;
+}

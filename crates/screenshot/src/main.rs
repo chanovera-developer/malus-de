@@ -49,46 +49,9 @@ struct Args {
     clipboard_only: bool,
 }
 
-const THUMBNAIL_CSS: &str = r#"
-window.malus-screenshot-thumbnail {
-    background-color: transparent;
-}
+const THUMBNAIL_CSS: &str = include_str!("styles/thumbnail.css");
 
-.thumbnail-card {
-    background-color: alpha(@window_bg_color, 0.90);
-    border: 1px solid alpha(@window_fg_color, 0.16);
-    border-radius: 14px;
-    box-shadow: 0 16px 36px rgba(0, 0, 0, 0.55);
-    padding: 10px;
-    min-width: 240px;
-}
-
-.thumbnail-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: @window_fg_color;
-    margin-bottom: 2px;
-}
-
-.thumbnail-subtitle {
-    font-size: 11px;
-    color: alpha(@window_fg_color, 0.68);
-    margin-bottom: 6px;
-}
-
-.action-btn {
-    border-radius: 6px;
-    padding: 4px 10px;
-    font-size: 12px;
-    font-weight: 500;
-}
-"#;
-
-const CAPTURE_FLASH_CSS: &str = r#"
-window.malus-screenshot-flash {
-    background-color: rgba(255, 255, 255, 0.82);
-}
-"#;
+const CAPTURE_FLASH_CSS: &str = include_str!("styles/capture-flash.css");
 
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(15);
 const THUMBNAIL_PREVIEW_SIZE: (i32, i32) = (320, 180);
@@ -376,13 +339,7 @@ fn select_area() -> Result<AreaSelection> {
         .build();
     app.connect_startup(|_| {
         let provider = CssProvider::new();
-        provider.load_from_string(
-            "window.malus-screenshot-selector { background-color: transparent; } \
-             .screenshot-selector-hint { \
-                 color: white; background-color: alpha(#171717, 0.88); \
-                 border-radius: 10px; padding: 10px 16px; font-size: 14px; \
-             }",
-        );
+        provider.load_from_string(include_str!("styles/selector.css"));
         if let Some(display) = gtk4::gdk::Display::default() {
             gtk4::style_context_add_provider_for_display(
                 &display,

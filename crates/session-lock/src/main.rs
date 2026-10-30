@@ -11,68 +11,7 @@ use malus_de_common::logging::init_logging;
 use std::time::Duration;
 use tracing::info;
 
-const LOCK_CSS: &str = r#"
-window.malus-lock-window {
-    background: radial-gradient(circle at 50% 40%, rgba(30, 27, 75, 0.95) 0%, rgba(15, 23, 42, 0.98) 50%, #09090b 100%);
-}
-
-.giant-clock {
-    font-size: 80px;
-    font-weight: 200;
-    color: #ffffff;
-    letter-spacing: -2px;
-}
-
-.lock-date {
-    font-size: 20px;
-    font-weight: 400;
-    color: rgba(255, 255, 255, 0.75);
-    margin-top: -10px;
-    margin-bottom: 40px;
-}
-
-.avatar-circle {
-    background-color: rgba(255, 255, 255, 0.12);
-    border: 2px solid rgba(255, 255, 255, 0.30);
-    border-radius: 50%;
-    min-width: 96px;
-    min-height: 96px;
-    margin-bottom: 12px;
-}
-
-.avatar-icon {
-    color: #ffffff;
-}
-
-.username-label {
-    font-size: 18px;
-    font-weight: 600;
-    color: #ffffff;
-    margin-bottom: 16px;
-}
-
-.lock-password-entry {
-    background-color: rgba(255, 255, 255, 0.12);
-    border: 1px solid rgba(255, 255, 255, 0.25);
-    border-radius: 20px;
-    padding: 8px 16px;
-    font-size: 14px;
-    color: #ffffff;
-    min-width: 240px;
-}
-
-.lock-password-entry:focus {
-    border-color: #3b82f6;
-    background-color: rgba(255, 255, 255, 0.18);
-}
-
-.unlock-btn {
-    border-radius: 10px;
-    min-width: 36px;
-    min-height: 36px;
-    margin-left: 8px;
-}
-"#;
+const LOCK_CSS: &str = include_str!("styles/lock.css");
 
 fn main() -> Result<()> {
     init_logging("malus_de_session_lock");
