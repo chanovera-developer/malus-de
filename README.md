@@ -135,6 +135,7 @@ El menú global solo puede mostrar y ejecutar menús que la aplicación publique
 
 ## Limitaciones conocidas y alcance pendiente
 
+- La posición de los botones de ventana sigue cambiando en GNOME. Investigar qué componente la restablece y mantener el diseño de Malus sin modificar las preferencias globales de GNOME.
 - AirDrop/AWDL y la integración BLE están en desarrollo; no se debe considerar disponible el intercambio completo con dispositivos Apple.
 - La captura de ventana, la grabación de pantalla y el OCR no están implementados.
 - El selector de ventanas Alt-Tab/Super-Tab continúa en desarrollo.
