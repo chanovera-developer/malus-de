@@ -127,6 +127,42 @@ impl SmoothTransition {
     }
 }
 
+/// Devuelve `(locale_completo, codigo_idioma)` de la sesión activa (p. ej. `("es_MX", "es")`).
+fn session_locale_codes() -> (String, String) {
+    let raw = std::env::var("LC_ALL")
+        .ok()
+        .filter(|v| !v.trim().is_empty() && v != "C" && v != "POSIX")
+        .or_else(|| {
+            std::env::var("LC_MESSAGES")
+                .ok()
+                .filter(|v| !v.trim().is_empty() && v != "C" && v != "POSIX")
+        })
+        .or_else(|| {
+            std::env::var("LANGUAGE")
+                .ok()
+                .and_then(|v| v.split(':').next().map(str::to_string))
+                .filter(|v| !v.trim().is_empty() && v != "C" && v != "POSIX")
+        })
+        .or_else(|| {
+            std::env::var("LANG")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+        })
+        .unwrap_or_else(|| "en_US.UTF-8".to_string());
+
+    let without_encoding = raw.split('.').next().unwrap_or(&raw).split('@').next().unwrap_or(&raw).trim();
+    let lang = without_encoding
+        .split(['_', '-'])
+        .next()
+        .unwrap_or("en")
+        .to_lowercase();
+    (without_encoding.to_string(), lang)
+}
+
+pub fn is_spanish_session() -> bool {
+    session_locale_codes().1 == "es"
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpotlightMode {
     Search,
@@ -158,12 +194,24 @@ impl SpotlightMode {
     }
 
     pub fn title(self) -> &'static str {
+        let es = is_spanish_session();
         match self {
-            Self::Search => "Spotlight Search",
-            Self::Applications => "Applications",
-            Self::Files => "Files",
-            Self::Actions => "Actions",
-            Self::Clipboard => "Clipboard",
+            Self::Search => if es { "Búsqueda de Spotlight" } else { "Spotlight Search" },
+            Self::Applications => if es { "Aplicaciones" } else { "Applications" },
+            Self::Files => if es { "Archivos" } else { "Files" },
+            Self::Actions => if es { "Acciones" } else { "Actions" },
+            Self::Clipboard => if es { "Portapapeles" } else { "Clipboard" },
+        }
+    }
+
+    pub fn placeholder(self) -> &'static str {
+        let es = is_spanish_session();
+        match self {
+            Self::Search => if es { "Búsqueda de Spotlight" } else { "Spotlight Search" },
+            Self::Applications => if es { "Buscar aplicaciones" } else { "Search Applications" },
+            Self::Files => if es { "Buscar archivos" } else { "Search Files" },
+            Self::Actions => if es { "Buscar acciones" } else { "Search Actions" },
+            Self::Clipboard => if es { "Buscar en portapapeles" } else { "Search Clipboard" },
         }
     }
 
@@ -178,12 +226,43 @@ impl SpotlightMode {
     }
 
     pub fn filter_chips(self) -> &'static [&'static str] {
+        let es = is_spanish_session();
         match self {
-            Self::Search => &["All", "Apps", "Files", "Actions"],
-            Self::Applications => &["All", "Productivity", "Development", "Media", "System"],
-            Self::Files => &["All", "PDF", "Images", "Documents", "Code"],
-            Self::Actions => &["All", "System", "Quick Note", "Desktop"],
-            Self::Clipboard => &["All", "Text", "Links"],
+            Self::Search => {
+                if es {
+                    &["Todo", "Apps", "Archivos", "Acciones"]
+                } else {
+                    &["All", "Apps", "Files", "Actions"]
+                }
+            }
+            Self::Applications => {
+                if es {
+                    &["Todo", "Productividad", "Desarrollo", "Multimedia", "Sistema"]
+                } else {
+                    &["All", "Productivity", "Development", "Media", "System"]
+                }
+            }
+            Self::Files => {
+                if es {
+                    &["Todo", "PDF", "Imágenes", "Documentos", "Código"]
+                } else {
+                    &["All", "PDF", "Images", "Documents", "Code"]
+                }
+            }
+            Self::Actions => {
+                if es {
+                    &["Todo", "Sistema", "Nota rápida", "Escritorio"]
+                } else {
+                    &["All", "System", "Quick Note", "Desktop"]
+                }
+            }
+            Self::Clipboard => {
+                if es {
+                    &["Todo", "Texto", "Enlaces"]
+                } else {
+                    &["All", "Text", "Links"]
+                }
+            }
         }
     }
 }
@@ -196,6 +275,7 @@ pub struct AppEntry {
     pub icon: String,
     pub comment: String,
     pub categories: String,
+    pub search_terms: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1027,20 +1107,21 @@ impl SpotlightState {
             return None;
         }
         let q = self.query.trim();
-        if q.len() < 2 {
+        let q_chars = q.chars().count();
+        if q_chars < 2 {
             return None;
         }
         let q_lower = q.to_lowercase();
         for app in &self.apps {
             let name_lower = app.name.to_lowercase();
-            if name_lower.starts_with(&q_lower) && app.name.len() > q.len() {
-                return Some(app.name[q.len()..].to_string());
+            if name_lower.starts_with(&q_lower) && app.name.chars().count() > q_chars {
+                return Some(app.name.chars().skip(q_chars).collect());
             }
         }
         for (name, _, _, _, _) in builtin_actions() {
             let name_lower = name.to_lowercase();
-            if name_lower.starts_with(&q_lower) && name.len() > q.len() {
-                return Some(name[q.len()..].to_string());
+            if name_lower.starts_with(&q_lower) && name.chars().count() > q_chars {
+                return Some(name.chars().skip(q_chars).collect());
             }
         }
         None
@@ -1048,12 +1129,6 @@ impl SpotlightState {
 
     pub fn filtered_apps(&self) -> Vec<AppEntry> {
         let q = self.query.trim().to_lowercase();
-        let chip = self
-            .mode
-            .filter_chips()
-            .get(self.active_filter)
-            .copied()
-            .unwrap_or("All");
 
         self.apps
             .iter()
@@ -1061,28 +1136,29 @@ impl SpotlightState {
                 let matches_query = q.is_empty()
                     || app.name.to_lowercase().contains(&q)
                     || app.comment.to_lowercase().contains(&q)
-                    || app.exec.to_lowercase().contains(&q);
+                    || app.exec.to_lowercase().contains(&q)
+                    || app.search_terms.contains(&q);
                 if !matches_query {
                     return false;
                 }
-                match chip {
-                    "Productivity" => {
+                match self.active_filter {
+                    1 => {
                         app.categories.contains("Office")
                             || app.categories.contains("Utility")
                             || app.categories.contains("TextEditor")
                     }
-                    "Development" => {
+                    2 => {
                         app.categories.contains("Development")
                             || app.categories.contains("IDE")
                             || app.name.to_lowercase().contains("code")
                             || app.name.to_lowercase().contains("terminal")
                     }
-                    "Media" => {
+                    3 => {
                         app.categories.contains("AudioVideo")
                             || app.categories.contains("Graphics")
                             || app.categories.contains("Video")
                     }
-                    "System" => {
+                    4 => {
                         app.categories.contains("System")
                             || app.categories.contains("Settings")
                     }
@@ -1095,12 +1171,7 @@ impl SpotlightState {
 
     pub fn current_rows(&self) -> Vec<SpotlightRowItem> {
         let q = self.query.trim().to_lowercase();
-        let chip = self
-            .mode
-            .filter_chips()
-            .get(self.active_filter)
-            .copied()
-            .unwrap_or("All");
+        let es = is_spanish_session();
 
         match self.mode {
             SpotlightMode::Applications => Vec::new(),
@@ -1115,17 +1186,17 @@ impl SpotlightState {
                     if !matches_q {
                         return false;
                     }
-                    match chip {
-                        "PDF" => f.extension.eq_ignore_ascii_case("pdf"),
-                        "Images" => matches!(
+                    match self.active_filter {
+                        1 => f.extension.eq_ignore_ascii_case("pdf"),
+                        2 => matches!(
                             f.extension.as_str(),
                             "png" | "jpg" | "jpeg" | "webp" | "svg" | "gif"
                         ),
-                        "Documents" => matches!(
+                        3 => matches!(
                             f.extension.as_str(),
                             "pdf" | "md" | "txt" | "doc" | "docx" | "odt"
                         ),
-                        "Code" => matches!(
+                        4 => matches!(
                             f.extension.as_str(),
                             "rs" | "toml" | "json" | "js" | "ts" | "py" | "sh" | "css" | "html"
                         ),
@@ -1143,20 +1214,33 @@ impl SpotlightState {
                 .collect(),
             SpotlightMode::Actions => builtin_actions()
                 .into_iter()
-                .filter(|(title, subtitle, category, keywords, _)| {
+                .filter(|(title, subtitle, category_id, keywords, _)| {
                     let matches_q = q.is_empty()
                         || title.to_lowercase().contains(&q)
                         || subtitle.to_lowercase().contains(&q)
                         || keywords.iter().any(|k| k.contains(&q));
-                    let matches_chip = chip == "All" || *category == chip;
+                    let matches_chip = match self.active_filter {
+                        1 => *category_id == "system",
+                        2 => *category_id == "quick_note",
+                        3 => *category_id == "desktop",
+                        _ => true,
+                    };
                     matches_q && matches_chip
                 })
-                .map(|(title, subtitle, category, _, action)| SpotlightRowItem {
-                    title: title.to_string(),
-                    subtitle: subtitle.to_string(),
-                    badge: category.to_string(),
-                    icon_kind: RowIconKind::Action(title),
-                    action,
+                .map(|(title, subtitle, category_id, _, action)| {
+                    let badge = match category_id {
+                        "system" => if es { "Sistema" } else { "System" },
+                        "quick_note" => if es { "Nota rápida" } else { "Quick Note" },
+                        "desktop" => if es { "Escritorio" } else { "Desktop" },
+                        _ => category_id,
+                    };
+                    SpotlightRowItem {
+                        title: title.to_string(),
+                        subtitle: subtitle.to_string(),
+                        badge: badge.to_string(),
+                        icon_kind: RowIconKind::Action(title),
+                        action,
+                    }
                 })
                 .collect(),
             SpotlightMode::Clipboard => self
@@ -1166,16 +1250,24 @@ impl SpotlightState {
                     let matches_q = q.is_empty()
                         || preview.to_lowercase().contains(&q)
                         || full.to_lowercase().contains(&q);
-                    let matches_chip = match chip {
-                        "Links" => full.contains("http://") || full.contains("https://"),
+                    let matches_chip = match self.active_filter {
+                        2 => full.contains("http://") || full.contains("https://"),
                         _ => true,
                     };
                     matches_q && matches_chip
                 })
                 .map(|(preview, full)| SpotlightRowItem {
                     title: preview.clone(),
-                    subtitle: "Copied to Clipboard — Press Return to copy".to_string(),
-                    badge: "Clipboard".to_string(),
+                    subtitle: if es {
+                        "Copiado al portapapeles — Pulsa Intro para copiar".to_string()
+                    } else {
+                        "Copied to Clipboard — Press Return to copy".to_string()
+                    },
+                    badge: if es {
+                        "Portapapeles".to_string()
+                    } else {
+                        "Clipboard".to_string()
+                    },
                     icon_kind: RowIconKind::Clipboard,
                     action: ResultExecuteAction::CopyText(full.clone()),
                 })
@@ -1186,28 +1278,46 @@ impl SpotlightState {
                     return items;
                 }
 
-                if chip == "All" {
+                if self.active_filter == 0 {
                     if let Some(calc) = try_calculate(&self.query) {
                         items.push(SpotlightRowItem {
                             title: format!("= {calc}"),
-                            subtitle: format!("Calculation result for {}", self.query.trim()),
-                            badge: "Copy".to_string(),
+                            subtitle: if es {
+                                format!("Resultado de cálculo para {}", self.query.trim())
+                            } else {
+                                format!("Calculation result for {}", self.query.trim())
+                            },
+                            badge: if es {
+                                "Copiar".to_string()
+                            } else {
+                                "Copy".to_string()
+                            },
                             icon_kind: RowIconKind::Calculator,
                             action: ResultExecuteAction::CopyText(calc),
                         });
                     }
                 }
 
-                if chip == "All" || chip == "Apps" {
-                    for app in self.apps.iter().filter(|a| {
-                        a.name.to_lowercase().contains(&q)
-                            || a.comment.to_lowercase().contains(&q)
-                            || a.exec.to_lowercase().contains(&q)
-                    }).take(6) {
+                if self.active_filter == 0 || self.active_filter == 1 {
+                    for app in self
+                        .apps
+                        .iter()
+                        .filter(|a| {
+                            a.name.to_lowercase().contains(&q)
+                                || a.comment.to_lowercase().contains(&q)
+                                || a.exec.to_lowercase().contains(&q)
+                                || a.search_terms.contains(&q)
+                        })
+                        .take(6)
+                    {
                         items.push(SpotlightRowItem {
                             title: app.name.clone(),
                             subtitle: if app.comment.is_empty() {
-                                "Application".to_string()
+                                if es {
+                                    "Aplicación".to_string()
+                                } else {
+                                    "Application".to_string()
+                                }
                             } else {
                                 app.comment.clone()
                             },
@@ -1221,7 +1331,7 @@ impl SpotlightState {
                     }
                 }
 
-                if chip == "All" || chip == "Actions" {
+                if self.active_filter == 0 || self.active_filter == 3 {
                     for (title, subtitle, _, keywords, action) in builtin_actions() {
                         if title.to_lowercase().contains(&q)
                             || subtitle.to_lowercase().contains(&q)
@@ -1230,7 +1340,11 @@ impl SpotlightState {
                             items.push(SpotlightRowItem {
                                 title: title.to_string(),
                                 subtitle: subtitle.to_string(),
-                                badge: "Action".to_string(),
+                                badge: if es {
+                                    "Acción".to_string()
+                                } else {
+                                    "Action".to_string()
+                                },
                                 icon_kind: RowIconKind::Action(title),
                                 action,
                             });
@@ -1238,7 +1352,7 @@ impl SpotlightState {
                     }
                 }
 
-                if chip == "All" || chip == "Files" {
+                if self.active_filter == 0 || self.active_filter == 2 {
                     for f in self
                         .files
                         .iter()
@@ -1750,13 +1864,7 @@ impl SpotlightState {
         }
 
         if self.query.is_empty() {
-            let placeholder = match self.mode {
-                SpotlightMode::Search => "Spotlight Search",
-                SpotlightMode::Applications => "Search Applications",
-                SpotlightMode::Files => "Search Files",
-                SpotlightMode::Actions => "Search Actions",
-                SpotlightMode::Clipboard => "Search Clipboard",
-            };
+            let placeholder = self.mode.placeholder();
             ctx.set_source_rgba(fg_muted[0], fg_muted[1], fg_muted[2], 0.78);
             ctx.move_to(text_x, text_y);
             let _ = ctx.show_text(placeholder);
@@ -1877,7 +1985,11 @@ impl SpotlightState {
                     ctx,
                     cap_x + cap_w * 0.5,
                     content_top + content_h * 0.48,
-                    "No results found.",
+                    if is_spanish_session() {
+                        "No se encontraron resultados."
+                    } else {
+                        "No results found."
+                    },
                     fg_muted,
                     alpha,
                 );
@@ -1937,7 +2049,11 @@ impl SpotlightState {
                     ctx,
                     cap_x + cap_w * 0.5,
                     content_top + content_h * 0.48,
-                    "No results found.",
+                    if is_spanish_session() {
+                        "No se encontraron resultados."
+                    } else {
+                        "No results found."
+                    },
                     fg_muted,
                     alpha,
                 );
@@ -2506,85 +2622,168 @@ fn builtin_actions() -> Vec<(
     &'static [&'static str],
     ResultExecuteAction,
 )> {
-    vec![
-        (
-            "Create Note",
-            "Create a quick note with title and content in ~/Notes",
-            "Quick Note",
-            &["note", "nota", "crear nota", "create note", " apuntes"],
-            ResultExecuteAction::OpenTemplate {
-                action_id: "create_note",
-                label_prefix: "Create note",
-                field1_placeholder: "Contents",
-                default_field2: "Notes",
-                label_mid: "in",
-                field2_placeholder: "Folder",
-            },
-        ),
-        (
-            "Run Command",
-            "Execute a shell command directly from Spotlight",
-            "Desktop",
-            &["run", "command", "terminal", "ejecutar", "comando"],
-            ResultExecuteAction::OpenTemplate {
-                action_id: "run_cmd",
-                label_prefix: "Run",
-                field1_placeholder: "Command",
-                default_field2: "Background",
-                label_mid: "mode",
-                field2_placeholder: "Mode",
-            },
-        ),
-        (
-            "System Settings",
-            "Open Malus DE System Settings",
-            "System",
-            &["settings", "ajustes", "configuracion", "preferencias", "system"],
-            ResultExecuteAction::RunCommand("malus-de-settings".to_string()),
-        ),
-        (
-            "Take Screenshot",
-            "Capture screenshot of the current screen",
-            "Desktop",
-            &["screenshot", "captura", "pantalla", "foto"],
-            ResultExecuteAction::RunCommand("malus-de-screenshot".to_string()),
-        ),
-        (
-            "Toggle Dark / Light Mode",
-            "Switch desktop appearance between Dark and Light Liquid Glass",
-            "Desktop",
-            &["dark", "light", "theme", "tema", "oscuro", "claro", "aspecto"],
-            ResultExecuteAction::ToggleTheme,
-        ),
-        (
-            "Lock Screen",
-            "Lock the current Malus DE session immediately",
-            "System",
-            &["lock", "bloquear", "pantalla"],
-            ResultExecuteAction::RunCommand("malus-de-session-lock".to_string()),
-        ),
-        (
-            "Log Out",
-            "Close current Malus DE session",
-            "System",
-            &["logout", "log out", "cerrar sesion", "cerrar sesión", "salir"],
-            ResultExecuteAction::SystemLogout,
-        ),
-        (
-            "Restart",
-            "Reboot the computer",
-            "System",
-            &["restart", "reboot", "reiniciar"],
-            ResultExecuteAction::SystemReboot,
-        ),
-        (
-            "Shut Down",
-            "Power off the computer",
-            "System",
-            &["shutdown", "shut down", "poweroff", "apagar"],
-            ResultExecuteAction::SystemPowerOff,
-        ),
-    ]
+    let es = is_spanish_session();
+    if es {
+        vec![
+            (
+                "Crear nota",
+                "Crear una nota rápida con contenido en ~/Notes",
+                "quick_note",
+                &["note", "nota", "crear nota", "create note", "apuntes"],
+                ResultExecuteAction::OpenTemplate {
+                    action_id: "create_note",
+                    label_prefix: "Crear nota",
+                    field1_placeholder: "Contenido",
+                    default_field2: "Notes",
+                    label_mid: "en",
+                    field2_placeholder: "Carpeta",
+                },
+            ),
+            (
+                "Ejecutar comando",
+                "Ejecutar un comando de shell directamente desde Spotlight",
+                "desktop",
+                &["run", "command", "terminal", "ejecutar", "comando"],
+                ResultExecuteAction::OpenTemplate {
+                    action_id: "run_cmd",
+                    label_prefix: "Ejecutar",
+                    field1_placeholder: "Comando",
+                    default_field2: "Segundo plano",
+                    label_mid: "modo",
+                    field2_placeholder: "Modo",
+                },
+            ),
+            (
+                "Ajustes del Sistema",
+                "Abrir Ajustes del Sistema de Malus DE",
+                "system",
+                &["settings", "ajustes", "configuracion", "configuración", "preferencias", "system"],
+                ResultExecuteAction::RunCommand("malus-de-settings".to_string()),
+            ),
+            (
+                "Capturar pantalla",
+                "Tomar una captura de la pantalla actual",
+                "desktop",
+                &["screenshot", "captura", "pantalla", "foto"],
+                ResultExecuteAction::RunCommand("malus-de-screenshot".to_string()),
+            ),
+            (
+                "Alternar modo oscuro / claro",
+                "Cambiar la apariencia del escritorio entre Liquid Glass oscuro y claro",
+                "desktop",
+                &["dark", "light", "theme", "tema", "oscuro", "claro", "aspecto"],
+                ResultExecuteAction::ToggleTheme,
+            ),
+            (
+                "Bloquear pantalla",
+                "Bloquear la sesión actual de Malus DE inmediatamente",
+                "system",
+                &["lock", "bloquear", "pantalla"],
+                ResultExecuteAction::RunCommand("malus-de-session-lock".to_string()),
+            ),
+            (
+                "Cerrar sesión",
+                "Cerrar la sesión actual de Malus DE",
+                "system",
+                &["logout", "log out", "cerrar sesion", "cerrar sesión", "salir"],
+                ResultExecuteAction::SystemLogout,
+            ),
+            (
+                "Reiniciar",
+                "Reiniciar el equipo",
+                "system",
+                &["restart", "reboot", "reiniciar"],
+                ResultExecuteAction::SystemReboot,
+            ),
+            (
+                "Apagar",
+                "Apagar el equipo",
+                "system",
+                &["shutdown", "shut down", "poweroff", "apagar"],
+                ResultExecuteAction::SystemPowerOff,
+            ),
+        ]
+    } else {
+        vec![
+            (
+                "Create Note",
+                "Create a quick note with title and content in ~/Notes",
+                "quick_note",
+                &["note", "nota", "crear nota", "create note", "apuntes"],
+                ResultExecuteAction::OpenTemplate {
+                    action_id: "create_note",
+                    label_prefix: "Create note",
+                    field1_placeholder: "Contents",
+                    default_field2: "Notes",
+                    label_mid: "in",
+                    field2_placeholder: "Folder",
+                },
+            ),
+            (
+                "Run Command",
+                "Execute a shell command directly from Spotlight",
+                "desktop",
+                &["run", "command", "terminal", "ejecutar", "comando"],
+                ResultExecuteAction::OpenTemplate {
+                    action_id: "run_cmd",
+                    label_prefix: "Run",
+                    field1_placeholder: "Command",
+                    default_field2: "Background",
+                    label_mid: "mode",
+                    field2_placeholder: "Mode",
+                },
+            ),
+            (
+                "System Settings",
+                "Open Malus DE System Settings",
+                "system",
+                &["settings", "ajustes", "configuracion", "preferencias", "system"],
+                ResultExecuteAction::RunCommand("malus-de-settings".to_string()),
+            ),
+            (
+                "Take Screenshot",
+                "Capture screenshot of the current screen",
+                "desktop",
+                &["screenshot", "captura", "pantalla", "foto"],
+                ResultExecuteAction::RunCommand("malus-de-screenshot".to_string()),
+            ),
+            (
+                "Toggle Dark / Light Mode",
+                "Switch desktop appearance between Dark and Light Liquid Glass",
+                "desktop",
+                &["dark", "light", "theme", "tema", "oscuro", "claro", "aspecto"],
+                ResultExecuteAction::ToggleTheme,
+            ),
+            (
+                "Lock Screen",
+                "Lock the current Malus DE session immediately",
+                "system",
+                &["lock", "bloquear", "pantalla"],
+                ResultExecuteAction::RunCommand("malus-de-session-lock".to_string()),
+            ),
+            (
+                "Log Out",
+                "Close current Malus DE session",
+                "system",
+                &["logout", "log out", "cerrar sesion", "cerrar sesión", "salir"],
+                ResultExecuteAction::SystemLogout,
+            ),
+            (
+                "Restart",
+                "Reboot the computer",
+                "system",
+                &["restart", "reboot", "reiniciar"],
+                ResultExecuteAction::SystemReboot,
+            ),
+            (
+                "Shut Down",
+                "Power off the computer",
+                "system",
+                &["shutdown", "shut down", "poweroff", "apagar"],
+                ResultExecuteAction::SystemPowerOff,
+            ),
+        ]
+    }
 }
 
 fn execute_template_action(tpl: &ActionTemplateState) {
@@ -2843,12 +3042,25 @@ fn application_dirs_from(
 
 fn parse_desktop_file(path: &Path) -> Option<AppEntry> {
     let content = fs::read_to_string(path).ok()?;
+    let (full_locale, lang_code) = session_locale_codes();
+    let name_full_key = format!("Name[{full_locale}]");
+    let name_lang_key = format!("Name[{lang_code}]");
+    let comment_full_key = format!("Comment[{full_locale}]");
+    let comment_lang_key = format!("Comment[{lang_code}]");
+    let keywords_full_key = format!("Keywords[{full_locale}]");
+    let keywords_lang_key = format!("Keywords[{lang_code}]");
+
     let mut in_desktop_entry = false;
-    let mut name = None;
+    let mut name_default = None;
+    let mut name_lang = None;
+    let mut name_full = None;
     let mut exec = None;
     let mut icon = None;
-    let mut comment = None;
+    let mut comment_default = None;
+    let mut comment_lang = None;
+    let mut comment_full = None;
     let mut categories = String::new();
+    let mut search_terms = Vec::new();
     let mut nodisplay = false;
 
     for line in content.lines() {
@@ -2863,21 +3075,36 @@ fn parse_desktop_file(path: &Path) -> Option<AppEntry> {
         let mut parts = line.splitn(2, '=');
         let key = parts.next()?.trim();
         let value = parts.next()?.trim();
-        match key {
-            "Name" if name.is_none() => name = Some(value.to_string()),
-            "Exec" if exec.is_none() => {
-                let clean = value
-                    .split_whitespace()
-                    .filter(|part| !part.starts_with('%'))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                exec = Some(clean);
-            }
-            "Icon" if icon.is_none() => icon = Some(value.to_string()),
-            "Comment" if comment.is_none() => comment = Some(value.to_string()),
-            "Categories" => categories = value.to_string(),
-            "NoDisplay" => nodisplay = value.eq_ignore_ascii_case("true"),
-            _ => {}
+        if key == "Name" && name_default.is_none() {
+            name_default = Some(value.to_string());
+            search_terms.push(value.to_lowercase());
+        } else if key == name_full_key {
+            name_full = Some(value.to_string());
+            search_terms.push(value.to_lowercase());
+        } else if key == name_lang_key {
+            name_lang = Some(value.to_string());
+            search_terms.push(value.to_lowercase());
+        } else if key == "Exec" && exec.is_none() {
+            let clean = value
+                .split_whitespace()
+                .filter(|part| !part.starts_with('%'))
+                .collect::<Vec<_>>()
+                .join(" ");
+            exec = Some(clean);
+        } else if key == "Icon" && icon.is_none() {
+            icon = Some(value.to_string());
+        } else if key == "Comment" && comment_default.is_none() {
+            comment_default = Some(value.to_string());
+        } else if key == comment_full_key {
+            comment_full = Some(value.to_string());
+        } else if key == comment_lang_key {
+            comment_lang = Some(value.to_string());
+        } else if key == "Keywords" || key == keywords_full_key || key == keywords_lang_key {
+            search_terms.push(value.to_lowercase());
+        } else if key == "Categories" {
+            categories = value.to_string();
+        } else if key == "NoDisplay" {
+            nodisplay = value.eq_ignore_ascii_case("true");
         }
     }
 
@@ -2885,13 +3112,17 @@ fn parse_desktop_file(path: &Path) -> Option<AppEntry> {
         return None;
     }
 
+    let name = name_full.or(name_lang).or(name_default)?;
+    let comment = comment_full.or(comment_lang).or(comment_default).unwrap_or_default();
+
     Some(AppEntry {
-        name: name?,
+        name,
         exec: exec?,
         desktop_file: path.to_string_lossy().into_owned(),
         icon: icon.unwrap_or_else(|| "application-x-executable".to_string()),
-        comment: comment.unwrap_or_default(),
+        comment,
         categories,
+        search_terms: search_terms.join(" "),
     })
 }
 
