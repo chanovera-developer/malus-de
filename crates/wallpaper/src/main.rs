@@ -455,9 +455,23 @@ fn refresh_desktop_icons(
 }
 
 fn launch_file(file: &gio::File) {
-    if let Err(error) =
-        gio::AppInfo::launch_default_for_uri(&file.uri(), None::<&gio::AppLaunchContext>)
-    {
+    let target = file
+        .path()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| file.uri().to_string());
+    let mut cmd = std::process::Command::new("xdg-open");
+    cmd.arg(&target);
+    malus_de_common::config::set_cursor_environment(&mut cmd);
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let malus_config_dir = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(&home).join(".config/malus-de"));
+    cmd.env("XDG_CONFIG_HOME", malus_config_dir);
+    cmd.env("GSETTINGS_BACKEND", "keyfile");
+    cmd.env("GTK_USE_PORTAL", "1");
+    cmd.env("XDG_CURRENT_DESKTOP", "Malus:GNOME");
+    cmd.env("GDK_BACKEND", "wayland");
+    if let Err(error) = cmd.spawn() {
         warn!("No se pudo abrir {:?}: {}", file, error);
     }
 }

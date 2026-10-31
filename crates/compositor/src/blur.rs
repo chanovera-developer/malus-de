@@ -100,6 +100,9 @@ in vec2 v_win_px;
 out vec4 frag_color;
 
 uniform sampler2D u_texture;
+uniform sampler2D u_mask_texture;
+uniform int u_use_mask;
+uniform float u_opacity;
 uniform float u_solid_mode;
 uniform vec4 u_solid_color;
 uniform vec2 u_win_size;
@@ -115,6 +118,17 @@ float rounded_shape_sdf(vec2 p, vec2 b, float r) {
 }
 
 void main() {
+    if (u_use_mask == 1) {
+        vec2 mask_uv = clamp(v_win_px / max(u_win_size, vec2(1.0)), vec2(0.0), vec2(1.0));
+        float mask_alpha = texture(u_mask_texture, mask_uv).a * u_opacity;
+        if (mask_alpha <= 0.001) {
+            discard;
+        }
+        vec4 col = texture(u_texture, v_tex_coords);
+        frag_color = vec4(col.rgb, mask_alpha);
+        return;
+    }
+
     if (u_solid_mode > 0.5) {
         float alpha = 1.0;
         if (u_corner_radius > 1.0) {
@@ -137,9 +151,9 @@ void main() {
         float dist = rounded_shape_sdf(p, half_size, effective_r);
         float edge_aa = max(fwidth(dist), 1.0);
         float alpha = 1.0 - smoothstep(-edge_aa, 0.0, dist);
-        frag_color = vec4(col.rgb, alpha);
+        frag_color = vec4(col.rgb, alpha * u_opacity);
     } else {
-        frag_color = vec4(col.rgb, 1.0);
+        frag_color = vec4(col.rgb, u_opacity);
     }
 }
 "#;
@@ -176,6 +190,9 @@ pub struct GaussianBlur {
     blit_u_win_size: ffi::types::GLint,
     blit_u_is_drm: ffi::types::GLint,
     blit_u_texture: ffi::types::GLint,
+    blit_u_mask_texture: ffi::types::GLint,
+    blit_u_use_mask: ffi::types::GLint,
+    blit_u_opacity: ffi::types::GLint,
     blit_u_corner_radius: ffi::types::GLint,
     blit_u_corner_exponent: ffi::types::GLint,
     blit_u_solid_mode: ffi::types::GLint,
@@ -183,6 +200,9 @@ pub struct GaussianBlur {
 
     snapshot_tex: ffi::types::GLuint,
     snapshot_size: (i32, i32),
+
+    spotlight_mask_tex: ffi::types::GLuint,
+    spotlight_mask_size: (i32, i32),
 
     slots: [BlurSlot; BLUR_SLOT_COUNT],
     use_counter: u64,
@@ -225,6 +245,10 @@ impl GaussianBlur {
             let blit_u_win_size = gl.GetUniformLocation(blit_program, c"u_win_size".as_ptr());
             let blit_u_is_drm = gl.GetUniformLocation(blit_program, c"u_is_drm".as_ptr());
             let blit_u_texture = gl.GetUniformLocation(blit_program, c"u_texture".as_ptr());
+            let blit_u_mask_texture =
+                gl.GetUniformLocation(blit_program, c"u_mask_texture".as_ptr());
+            let blit_u_use_mask = gl.GetUniformLocation(blit_program, c"u_use_mask".as_ptr());
+            let blit_u_opacity = gl.GetUniformLocation(blit_program, c"u_opacity".as_ptr());
             let blit_u_corner_radius =
                 gl.GetUniformLocation(blit_program, c"u_corner_radius".as_ptr());
             let blit_u_corner_exponent =
@@ -234,6 +258,9 @@ impl GaussianBlur {
 
             let mut snapshot_tex = 0;
             gl.GenTextures(1, &mut snapshot_tex);
+
+            let mut spotlight_mask_tex = 0;
+            gl.GenTextures(1, &mut spotlight_mask_tex);
 
             let mut slots = [BlurSlot {
                 source_tex: 0,
@@ -269,12 +296,17 @@ impl GaussianBlur {
                 blit_u_win_size,
                 blit_u_is_drm,
                 blit_u_texture,
+                blit_u_mask_texture,
+                blit_u_use_mask,
+                blit_u_opacity,
                 blit_u_corner_radius,
                 blit_u_corner_exponent,
                 blit_u_solid_mode,
                 blit_u_solid_color,
                 snapshot_tex,
                 snapshot_size: (0, 0),
+                spotlight_mask_tex,
+                spotlight_mask_size: (0, 0),
                 slots,
                 use_counter: 0,
             })
@@ -746,11 +778,331 @@ impl GaussianBlur {
             gl.Uniform1f(self.blit_u_corner_radius, corner_radius);
             gl.Uniform1f(self.blit_u_corner_exponent, corner_exponent);
             gl.Uniform1f(self.blit_u_solid_mode, 0.0);
+            gl.Uniform1i(self.blit_u_use_mask, 0);
+            gl.Uniform1f(self.blit_u_opacity, 1.0);
 
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
 
             // 5. Restaurar estado GL previo
             gl.BindTexture(ffi::TEXTURE_2D, 0);
+            gl.UseProgram(0);
+
+            if prev_blend == ffi::FALSE {
+                gl.Disable(ffi::BLEND);
+            } else {
+                gl.BlendFuncSeparate(
+                    prev_src_rgb as u32,
+                    prev_dst_rgb as u32,
+                    prev_src_alpha as u32,
+                    prev_dst_alpha as u32,
+                );
+            }
+            if prev_scissor != ffi::FALSE {
+                gl.Enable(ffi::SCISSOR_TEST);
+            }
+            if prev_cull != ffi::FALSE {
+                gl.Enable(ffi::CULL_FACE);
+            }
+        }
+    }
+
+    /// Aplica desenfoque gaussiano en una única pasada unificada recortada exactamente
+    /// por la máscara de silueta `mask_argb` (cápsula + puentes líquidos + botones circulares o tarjeta expandida).
+    /// Garantiza cero costuras ("parches") y cero desenfoque fuera de la silueta exacta de Spotlight.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_blur_masked(
+        &mut self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        screen_size: Size<i32, Physical>,
+        win_rect: Rectangle<i32, Physical>,
+        mask_argb: Option<&[u8]>,
+        mask_w: i32,
+        mask_h: i32,
+        opacity: f32,
+    ) {
+        if mask_w < 2 || mask_h < 2 || opacity <= 0.001 {
+            return;
+        }
+        let screen_rect = Rectangle::from_size(screen_size);
+        let visible_rect = match win_rect.intersection(screen_rect) {
+            Some(r) if r.size.w >= 4 && r.size.h >= 4 => r,
+            _ => return,
+        };
+
+        let w = visible_rect.size.w;
+        let h = visible_rect.size.h;
+        let w0 = (w / 2).max(2);
+        let h0 = (h / 2).max(2);
+
+        let is_drm = projection[4] > 0.0;
+        let copy_x = visible_rect.loc.x;
+        let copy_y = if is_drm {
+            visible_rect.loc.y
+        } else {
+            screen_size.h - (visible_rect.loc.y + h)
+        };
+
+        let slot_idx = self.acquire_slot(w, h, w0, h0, false);
+        let mut slot = self.slots[slot_idx];
+
+        unsafe {
+            let mut prev_fbo = 0;
+            let mut prev_viewport = [0; 4];
+            let mut prev_active_tex = 0;
+            let prev_blend = gl.IsEnabled(ffi::BLEND);
+            let prev_scissor = gl.IsEnabled(ffi::SCISSOR_TEST);
+            let prev_cull = gl.IsEnabled(ffi::CULL_FACE);
+
+            let mut prev_src_rgb = 0;
+            let mut prev_dst_rgb = 0;
+            let mut prev_src_alpha = 0;
+            let mut prev_dst_alpha = 0;
+            gl.GetIntegerv(ffi::BLEND_SRC_RGB, &mut prev_src_rgb);
+            gl.GetIntegerv(ffi::BLEND_DST_RGB, &mut prev_dst_rgb);
+            gl.GetIntegerv(ffi::BLEND_SRC_ALPHA, &mut prev_src_alpha);
+            gl.GetIntegerv(ffi::BLEND_DST_ALPHA, &mut prev_dst_alpha);
+            gl.GetIntegerv(ffi::ACTIVE_TEXTURE, &mut prev_active_tex);
+            gl.GetIntegerv(ffi::FRAMEBUFFER_BINDING, &mut prev_fbo);
+            gl.GetIntegerv(ffi::VIEWPORT, prev_viewport.as_mut_ptr());
+
+            // Actualizar textura de máscara si cambió la silueta o las dimensiones
+            if let Some(pixels) = mask_argb {
+                if pixels.len() >= (mask_w as usize * mask_h as usize * 4) {
+                    gl.ActiveTexture(ffi::TEXTURE1);
+                    gl.BindTexture(ffi::TEXTURE_2D, self.spotlight_mask_tex);
+                    if self.spotlight_mask_size != (mask_w, mask_h) {
+                        gl.TexImage2D(
+                            ffi::TEXTURE_2D,
+                            0,
+                            ffi::RGBA as i32,
+                            mask_w,
+                            mask_h,
+                            0,
+                            ffi::RGBA,
+                            ffi::UNSIGNED_BYTE,
+                            pixels.as_ptr() as *const _,
+                        );
+                        gl.TexParameteri(
+                            ffi::TEXTURE_2D,
+                            ffi::TEXTURE_MIN_FILTER,
+                            ffi::LINEAR as i32,
+                        );
+                        gl.TexParameteri(
+                            ffi::TEXTURE_2D,
+                            ffi::TEXTURE_MAG_FILTER,
+                            ffi::LINEAR as i32,
+                        );
+                        gl.TexParameteri(
+                            ffi::TEXTURE_2D,
+                            ffi::TEXTURE_WRAP_S,
+                            ffi::CLAMP_TO_EDGE as i32,
+                        );
+                        gl.TexParameteri(
+                            ffi::TEXTURE_2D,
+                            ffi::TEXTURE_WRAP_T,
+                            ffi::CLAMP_TO_EDGE as i32,
+                        );
+                        self.spotlight_mask_size = (mask_w, mask_h);
+                    } else {
+                        gl.TexSubImage2D(
+                            ffi::TEXTURE_2D,
+                            0,
+                            0,
+                            0,
+                            mask_w,
+                            mask_h,
+                            ffi::RGBA,
+                            ffi::UNSIGNED_BYTE,
+                            pixels.as_ptr() as *const _,
+                        );
+                    }
+                }
+            }
+
+            if self.spotlight_mask_size != (mask_w, mask_h) {
+                gl.ActiveTexture(prev_active_tex as u32);
+                return;
+            }
+
+            gl.ActiveTexture(ffi::TEXTURE0);
+            if slot.source_tex_size != (w, h) {
+                gl.BindTexture(ffi::TEXTURE_2D, slot.source_tex);
+                gl.TexImage2D(
+                    ffi::TEXTURE_2D,
+                    0,
+                    ffi::RGBA as i32,
+                    w,
+                    h,
+                    0,
+                    ffi::RGBA,
+                    ffi::UNSIGNED_BYTE,
+                    std::ptr::null(),
+                );
+                gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MIN_FILTER, ffi::LINEAR as i32);
+                gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MAG_FILTER, ffi::LINEAR as i32);
+                gl.TexParameteri(
+                    ffi::TEXTURE_2D,
+                    ffi::TEXTURE_WRAP_S,
+                    ffi::CLAMP_TO_EDGE as i32,
+                );
+                gl.TexParameteri(
+                    ffi::TEXTURE_2D,
+                    ffi::TEXTURE_WRAP_T,
+                    ffi::CLAMP_TO_EDGE as i32,
+                );
+                slot.source_tex_size = (w, h);
+            }
+
+            gl.BindTexture(ffi::TEXTURE_2D, slot.source_tex);
+            let mut prev_read_buffer = 0;
+            gl.GetIntegerv(ffi::READ_BUFFER, &mut prev_read_buffer);
+            gl.ReadBuffer(if is_drm {
+                ffi::COLOR_ATTACHMENT0
+            } else {
+                ffi::BACK
+            });
+            gl.CopyTexSubImage2D(ffi::TEXTURE_2D, 0, 0, 0, copy_x, copy_y, w, h);
+            gl.ReadBuffer(prev_read_buffer as u32);
+
+            if slot.fbo_size != (w0, h0) {
+                for i in 0..2 {
+                    gl.BindTexture(ffi::TEXTURE_2D, slot.fbo_textures[i]);
+                    gl.TexImage2D(
+                        ffi::TEXTURE_2D,
+                        0,
+                        ffi::RGBA as i32,
+                        w0,
+                        h0,
+                        0,
+                        ffi::RGBA,
+                        ffi::UNSIGNED_BYTE,
+                        std::ptr::null(),
+                    );
+                    gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MIN_FILTER, ffi::LINEAR as i32);
+                    gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MAG_FILTER, ffi::LINEAR as i32);
+                    gl.TexParameteri(
+                        ffi::TEXTURE_2D,
+                        ffi::TEXTURE_WRAP_S,
+                        ffi::CLAMP_TO_EDGE as i32,
+                    );
+                    gl.TexParameteri(
+                        ffi::TEXTURE_2D,
+                        ffi::TEXTURE_WRAP_T,
+                        ffi::CLAMP_TO_EDGE as i32,
+                    );
+
+                    gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbos[i]);
+                    gl.FramebufferTexture2D(
+                        ffi::FRAMEBUFFER,
+                        ffi::COLOR_ATTACHMENT0,
+                        ffi::TEXTURE_2D,
+                        slot.fbo_textures[i],
+                        0,
+                    );
+                }
+                slot.fbo_size = (w0, h0);
+            }
+            self.slots[slot_idx] = slot;
+
+            if gl.VertexAttribDivisor.is_loaded() {
+                gl.VertexAttribDivisor(0, 0);
+                gl.VertexAttribDivisor(1, 0);
+            }
+            gl.DisableVertexAttribArray(0);
+            gl.DisableVertexAttribArray(1);
+            gl.BindBuffer(ffi::ARRAY_BUFFER, 0);
+            gl.Disable(ffi::SCISSOR_TEST);
+            gl.Disable(ffi::CULL_FACE);
+            gl.Disable(ffi::BLEND);
+
+            // PASO 1: Downsample unificado
+            gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbos[0]);
+            gl.Viewport(0, 0, w0, h0);
+            gl.UseProgram(self.down_program);
+            gl.ActiveTexture(ffi::TEXTURE0);
+            gl.BindTexture(ffi::TEXTURE_2D, slot.source_tex);
+            gl.Uniform1i(self.down_u_texture, 0);
+            gl.Uniform2f(self.down_u_halfpixel, 0.5 / w as f32, 0.5 / h as f32);
+            gl.Uniform1f(self.down_u_offset, 5.0);
+            gl.Uniform4f(self.down_u_source_rect, 0.0, 0.0, 1.0, 1.0);
+            gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
+
+            // PASO 2: Gaussiano horizontal
+            gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbos[1]);
+            gl.Viewport(0, 0, w0, h0);
+            gl.BindTexture(ffi::TEXTURE_2D, slot.fbo_textures[0]);
+            gl.UseProgram(self.gaussian_program);
+            gl.Uniform1i(self.gaussian_u_texture, 0);
+            gl.Uniform2f(self.gaussian_u_texel_size, 1.0 / w0 as f32, 1.0 / h0 as f32);
+            gl.Uniform2f(self.gaussian_u_direction, 1.0, 0.0);
+            gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
+
+            // PASO 3: Gaussiano vertical
+            gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbos[0]);
+            gl.Viewport(0, 0, w0, h0);
+            gl.BindTexture(ffi::TEXTURE_2D, slot.fbo_textures[1]);
+            gl.Uniform2f(self.gaussian_u_direction, 0.0, 1.0);
+            gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
+
+            // PASO 4: Blit enmascarado por silueta exacta
+            gl.BindFramebuffer(ffi::FRAMEBUFFER, prev_fbo as u32);
+            gl.Viewport(
+                prev_viewport[0],
+                prev_viewport[1],
+                prev_viewport[2],
+                prev_viewport[3],
+            );
+            gl.Enable(ffi::BLEND);
+            gl.BlendFuncSeparate(
+                ffi::SRC_ALPHA,
+                ffi::ONE_MINUS_SRC_ALPHA,
+                ffi::ZERO,
+                ffi::ONE,
+            );
+
+            gl.UseProgram(self.blit_program);
+            gl.ActiveTexture(ffi::TEXTURE0);
+            gl.BindTexture(ffi::TEXTURE_2D, slot.fbo_textures[0]);
+            gl.Uniform1i(self.blit_u_texture, 0);
+
+            gl.ActiveTexture(ffi::TEXTURE1);
+            gl.BindTexture(ffi::TEXTURE_2D, self.spotlight_mask_tex);
+            gl.Uniform1i(self.blit_u_mask_texture, 1);
+            gl.Uniform1i(self.blit_u_use_mask, 1);
+            gl.Uniform1f(self.blit_u_opacity, opacity.clamp(0.0, 1.0));
+            gl.Uniform1f(self.blit_u_solid_mode, 0.0);
+
+            gl.UniformMatrix3fv(self.blit_u_matrix, 1, ffi::FALSE, projection.as_ptr());
+            gl.Uniform4f(
+                self.blit_u_blit_rect,
+                visible_rect.loc.x as f32,
+                visible_rect.loc.y as f32,
+                visible_rect.size.w as f32,
+                visible_rect.size.h as f32,
+            );
+            gl.Uniform4f(
+                self.blit_u_win_rect,
+                win_rect.loc.x as f32,
+                win_rect.loc.y as f32,
+                win_rect.size.w as f32,
+                win_rect.size.h as f32,
+            );
+            gl.Uniform2f(
+                self.blit_u_win_size,
+                win_rect.size.w as f32,
+                win_rect.size.h as f32,
+            );
+            gl.Uniform1i(self.blit_u_is_drm, if is_drm { 1 } else { 0 });
+            gl.Uniform1f(self.blit_u_corner_radius, 0.0);
+            gl.Uniform1f(self.blit_u_corner_exponent, 4.2);
+
+            gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
+
+            gl.BindTexture(ffi::TEXTURE_2D, 0);
+            gl.ActiveTexture(ffi::TEXTURE0);
+            gl.BindTexture(ffi::TEXTURE_2D, 0);
+            gl.ActiveTexture(prev_active_tex as u32);
             gl.UseProgram(0);
 
             if prev_blend == ffi::FALSE {
@@ -788,7 +1140,7 @@ impl GaussianBlur {
         };
         if visible_rect.size.w < 1 || visible_rect.size.h < 1 {
             return;
-        }
+        };
 
         let is_drm = projection[4] > 0.0;
 
@@ -812,6 +1164,8 @@ impl GaussianBlur {
             );
             gl.UseProgram(self.blit_program);
             gl.Uniform1i(self.blit_u_texture, 0);
+            gl.Uniform1i(self.blit_u_use_mask, 0);
+            gl.Uniform1f(self.blit_u_opacity, 1.0);
             gl.Uniform1f(self.blit_u_solid_mode, 1.0);
             gl.Uniform4f(self.blit_u_solid_color, color[0], color[1], color[2], 1.0);
             gl.Uniform1f(self.blit_u_corner_exponent, 4.2);

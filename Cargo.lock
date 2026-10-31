@@ -1636,10 +1636,14 @@ name = "malus-de-compositor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cairo-rs",
+ "gdk-pixbuf",
+ "gio",
  "glib",
  "malus-de-common",
  "png",
  "rustix 0.38.44",
+ "serde",
  "serde_json",
  "smithay",
  "tracing",

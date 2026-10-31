@@ -1277,45 +1277,11 @@ fn create_spotlight_button() -> Button {
     spotlight_btn.set_child(Some(&spotlight_icon));
 
     spotlight_btn.connect_clicked(|_| {
-        let wayland_display =
-            std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-1".to_string());
-        info!(
-            "Alternando Spotlight desde barra superior (WAYLAND_DISPLAY={})...",
-            wayland_display
-        );
-
-        let output = std::process::Command::new("pkill")
-            .args(["-f", "malus-de-spotlight"])
-            .status();
-
-        if let Ok(status) = output {
-            if status.success() {
-                info!("Spotlight existente cerrado con pkill.");
-                return;
-            }
-        }
-
-        let exe = std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|dir| dir.join("malus-de-spotlight")))
-            .unwrap_or_else(|| std::path::PathBuf::from("malus-de-spotlight"));
-
-        info!("Lanzando Spotlight: {:?}", exe);
-        let mut command = std::process::Command::new(&exe);
-        malus_de_common::config::set_cursor_environment(&mut command);
-        match command
-            .env("WAYLAND_DISPLAY", &wayland_display)
-            .env("GDK_BACKEND", "wayland")
-            .env("GSK_RENDERER", "cairo")
-            .spawn()
-        {
-            Ok(mut child) => {
-                info!("Spotlight lanzado con éxito, PID={}", child.id());
-                std::thread::spawn(move || {
-                    let _ = child.wait();
-                });
-            }
-            Err(e) => tracing::error!("Error al lanzar Spotlight: {:?}", e),
+        info!("Alternando Spotlight nativo del compositor desde la barra superior...");
+        if let Err(e) = malus_de_common::ipc::IpcClient::send_command(
+            malus_de_common::ipc::IpcMessage::ToggleSpotlight,
+        ) {
+            tracing::error!("Error al enviar ToggleSpotlight al compositor: {:?}", e);
         }
     });
 

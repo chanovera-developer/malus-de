@@ -6,6 +6,7 @@ pub mod genie;
 pub mod grabs;
 pub mod magic_lamp;
 pub mod shadow;
+pub mod spotlight_visual;
 pub mod state;
 pub mod theme_transition;
 pub mod window_corners;

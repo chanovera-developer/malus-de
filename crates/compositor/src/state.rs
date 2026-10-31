@@ -134,6 +134,7 @@ pub struct MalusState {
     pub pending_screenshot_requests: std::collections::VecDeque<(std::path::PathBuf, Option<String>)>,
     pub pending_theme_transition_capture: Option<ThemeTransitionCapture>,
     pub theme_transition_started_at: Option<Instant>,
+    pub spotlight: crate::spotlight_visual::SpotlightState,
 }
 
 pub fn guess_icon_name(app_id: &str, title: &str) -> String {
@@ -473,6 +474,7 @@ impl MalusState {
             pending_screenshot_requests: std::collections::VecDeque::new(),
             pending_theme_transition_capture: None,
             theme_transition_started_at: None,
+            spotlight: crate::spotlight_visual::SpotlightState::new(),
         }
     }
 
@@ -962,9 +964,10 @@ impl MalusState {
                 }
                 IpcMessage::ToggleSpotlight => {
                     tracing::info!("📥 IPC ToggleSpotlight recibido");
-                    crate::backend::winit::toggle_spotlight(&self.socket_name);
+                    self.toggle_spotlight();
                 }
                 IpcMessage::HideSpotlight => {
+                    self.spotlight.close();
                     self.ipc_broadcaster.broadcast(&IpcMessage::HideSpotlight);
                 }
                 IpcMessage::HideActiveWindow => {
@@ -1004,6 +1007,52 @@ impl MalusState {
                 _ => {}
             }
         }
+    }
+
+    /// Alterna Spotlight vinculándolo exclusivamente al monitor donde fue invocado
+    /// (el monitor bajo el cursor, o el de la ventana activa, o el primer monitor conectado).
+    pub fn toggle_spotlight(&mut self) {
+        if self.spotlight.is_open() {
+            self.spotlight.close();
+            return;
+        }
+        let pointer_loc = self.seat.get_pointer().map(|p| p.current_location());
+        let output_name = pointer_loc
+            .and_then(|pt| {
+                self.space
+                    .outputs()
+                    .find(|o| {
+                        self.space
+                            .output_geometry(o)
+                            .map(|g| g.to_f64().contains(pt))
+                            .unwrap_or(false)
+                    })
+                    .map(|o| o.name())
+            })
+            .or_else(|| {
+                self.get_active_window()
+                    .and_then(|w| self.space.outputs_for_element(&w).into_iter().next())
+                    .map(|o| o.name())
+            })
+            .or_else(|| self.space.outputs().next().map(|o| o.name()));
+
+        tracing::info!("🔍 Abriendo Spotlight en pantalla: {:?}", output_name);
+        self.spotlight.open_on_output(output_name);
+    }
+
+    /// Devuelve la geometría lógica del monitor en el que Spotlight está abierto actualmente.
+    pub fn spotlight_output_geometry(&self) -> Option<Rectangle<i32, Logical>> {
+        if let Some(target_name) = self.spotlight.active_output_name() {
+            if let Some(out) = self.space.outputs().find(|o| o.name() == target_name) {
+                if let Some(geo) = self.space.output_geometry(out) {
+                    return Some(geo);
+                }
+            }
+        }
+        self.space
+            .outputs()
+            .next()
+            .and_then(|o| self.space.output_geometry(o))
     }
 
     /// Cambia la distribución de teclado XKB en vivo para toda la sesión Wayland y persiste en input.toml

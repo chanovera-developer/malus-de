@@ -11,24 +11,36 @@ echo "============================================================"
 echo "🍎 INSTALADOR DE SESIÓN MALUS DE PARA GDM Y LINUX"
 echo "============================================================"
 
-# Verificar privilegios de superusuario (requerido para /usr/share y /usr/local)
+# 1. Compilar binarios como el usuario normal ANTES de elevar privilegios
 if [ "$(id -u)" -ne 0 ]; then
-    echo "🔑 Este script requiere permisos de administrador para instalar archivos en el sistema."
-    echo "   Reejecutando con sudo..."
-    exec sudo bash "$0" "$@"
+    echo "👤 Usuario detectado: $USER (Home: $HOME)"
+    echo "📂 Directorio del proyecto: $PROJECT_DIR"
+    echo ""
+    echo "📦 [1/4] Compilando binarios de Malus DE en perfil Release..."
+    (cd "$PROJECT_DIR" && cargo build --release --workspace)
+
+    echo ""
+    echo "🔑 Elevando permisos de administrador para instalar archivos en /usr/local y /usr/share..."
+    if grep -q '^NoNewPrivs:[[:space:]]*1' /proc/self/status 2>/dev/null; then
+        echo "ℹ️  Detectado entorno con 'NoNewPrivs=1' (terminal integrada/sandbox)."
+        if command -v systemd-run >/dev/null 2>&1 && systemd-run --user --pty --wait --collect true >/dev/null 2>&1; then
+            exec systemd-run --user --pty --wait --collect \
+                --setenv="SUDO_USER=$USER" \
+                sudo bash "$0" --skip-build "$@"
+        elif command -v run0 >/dev/null 2>&1; then
+            exec run0 --setenv="SUDO_USER=$USER" bash "$0" --skip-build "$@"
+        fi
+    fi
+    exec sudo bash "$0" --skip-build "$@"
 fi
 
-# Detectar usuario original no-root
-TARGET_USER="${SUDO_USER:-$USER}"
-TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
-
-echo "👤 Usuario detectado: $TARGET_USER (Home: $TARGET_HOME)"
-echo "📂 Directorio del proyecto: $PROJECT_DIR"
-echo ""
-
-# 1. Compilar binaries en modo Release como el usuario original (no como root)
-echo "📦 [1/4] Compilando binarios de Malus DE en perfil Release..."
-su - "$TARGET_USER" -c "cd '$PROJECT_DIR' && cargo build --release --workspace"
+if [ "${1:-}" != "--skip-build" ]; then
+    TARGET_USER="${SUDO_USER:-$USER}"
+    echo "📦 [1/4] Compilando binarios de Malus DE en perfil Release..."
+    su - "$TARGET_USER" -c "cd '$PROJECT_DIR' && cargo build --release --workspace"
+else
+    shift
+fi
 
 # 2. Instalar binarios en /usr/local/bin
 echo "🚀 [2/4] Instalando binarios ejecutables en /usr/local/bin/..."

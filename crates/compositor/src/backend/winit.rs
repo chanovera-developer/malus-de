@@ -143,6 +143,7 @@ pub fn run_winit() -> Result<()> {
         "Socket Wayland escuchando activamente en: WAYLAND_DISPLAY={}",
         socket_name
     );
+    std::env::set_var("WAYLAND_DISPLAY", &socket_name);
     state.socket_name = socket_name.clone();
     let _clipboard_manager = crate::start_clipboard_manager(&socket_name);
 
@@ -281,7 +282,12 @@ pub fn run_winit() -> Result<()> {
                                 if (is_space && (has_super || has_alt || has_ctrl)) || (is_k && has_super) {
                                     info!("🔍 Atajo de Spotlight detectado (Super={}, Alt={}, Ctrl={}): alternando...",
                                         has_super, has_alt, has_ctrl);
-                                    toggle_spotlight(&state.socket_name);
+                                    state.toggle_spotlight();
+                                    return FilterResult::Intercept(());
+                                }
+
+                                if state.spotlight.is_open() {
+                                    state.spotlight.handle_key_press(sym, *modifiers);
                                     return FilterResult::Intercept(());
                                 }
 
@@ -487,6 +493,10 @@ pub fn run_winit() -> Result<()> {
                     let point = event.position_transformed(output_geo.size);
                     let serial = SERIAL_COUNTER.next_serial();
 
+                    if state.spotlight.is_open() {
+                        state.spotlight.update_pointer_motion(output_geo, point);
+                    }
+
                     let layer_target = {
                         let layer_map = smithay::desktop::layer_map_for_output(&output);
                         let under_layer = layer_map.layer_under(Layer::Overlay, point)
@@ -620,25 +630,15 @@ pub fn run_winit() -> Result<()> {
 
                     let btn_serial = SERIAL_COUNTER.next_serial();
                     if is_pressed {
-                        let clicked_on_spotlight = layer_info.as_ref().is_some_and(
-                            |(_, namespace, _)| {
-                                matches!(
-                                    namespace.as_str(),
-                                    "malus-spotlight-results"
-                                        | "malus-spotlight-input"
-                                        | "malus-spotlight-apps"
-                                        | "malus-spotlight-files"
-                                )
-                            },
-                        );
-                        let spotlight_active =
-                            smithay::desktop::layer_map_for_output(&output)
-                                .layers()
-                                .any(|surface| {
-                                    surface.namespace() == "malus-spotlight-results"
-                                });
-                        if spotlight_active && !clicked_on_spotlight {
-                            state.ipc_broadcaster.broadcast(&IpcMessage::HideSpotlight);
+                        if state.spotlight.is_open() {
+                            let output_geo = state.space.output_geometry(&output).unwrap_or_default();
+                            if state.spotlight.handle_pointer_button(
+                                output_geo,
+                                point,
+                                event.button_code(),
+                            ) {
+                                return;
+                            }
                         }
 
                         if state.app_switcher.is_active {
@@ -803,6 +803,13 @@ pub fn run_winit() -> Result<()> {
                     pointer.frame(&mut state);
                 }
                 InputEvent::PointerAxis { event } => {
+                    if state.spotlight.is_open() {
+                        if let Some(vertical) = event.amount(Axis::Vertical) {
+                            if vertical.abs() > 0.001 && state.spotlight.handle_scroll(vertical) {
+                                return;
+                            }
+                        }
+                    }
                     let mut frame = AxisFrame::new(event.time_msec()).source(event.source());
                     if let Some(horizontal) = event.amount(Axis::Horizontal) {
                         frame = frame.value(Axis::Horizontal, horizontal);
@@ -1118,6 +1125,24 @@ pub fn run_winit() -> Result<()> {
                     window_squircle_shader =
                         crate::window_corners::WindowSquircleShader::new(renderer);
                 }
+
+                let output_geo = state.space.output_geometry(&output).unwrap_or_default();
+                let is_dark_theme = crate::state::system_monitor_backdrop_color()[0] < 0.5;
+                let spotlight_frame = if state.spotlight.is_open() {
+                    if let Some((spot_rect, mask_opt, mask_sz, spot_alpha)) =
+                        state.spotlight.prepare_frame(output_geo, 1.0, is_dark_theme)
+                    {
+                        let mask_vec = mask_opt.map(|s| s.to_vec());
+                        state
+                            .spotlight
+                            .create_render_element(renderer, spot_rect.loc.to_f64(), spot_alpha)
+                            .map(|elem| (spot_rect, mask_vec, mask_sz, spot_alpha, elem))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
 
                 let screenshot_request = state
                     .pending_screenshot_requests
@@ -1640,6 +1665,37 @@ pub fn run_winit() -> Result<()> {
                         }
                     }
 
+                    // 5. Renderizar Spotlight nativo del compositor (blur enmascarado por silueta exacta + capa Liquid Glass)
+                    if let Some((
+                        spot_rect,
+                        ref mask_vec,
+                        (mask_w, mask_h),
+                        spot_alpha,
+                        ref spot_elem,
+                    )) = spotlight_frame
+                    {
+                        if let Some(blur) = blur_pipeline.as_mut() {
+                            let _ = frame.with_context(|gl| {
+                                blur.render_blur_masked(
+                                    gl,
+                                    &projection,
+                                    size,
+                                    spot_rect,
+                                    mask_vec.as_deref(),
+                                    mask_w,
+                                    mask_h,
+                                    spot_alpha,
+                                );
+                            });
+                        }
+                        let _ = draw_render_elements(
+                            &mut frame,
+                            1.0,
+                            std::slice::from_ref(spot_elem),
+                            &[damage],
+                        );
+                    }
+
                     // Dibujar overlay translúcido Aero Glass de previsualización al arrastrar cerca del borde
                     let is_pointer_grabbed = state
                         .seat
@@ -2078,44 +2134,8 @@ pub fn run_winit() -> Result<()> {
     Ok(())
 }
 
-pub fn toggle_spotlight(socket_name: &str) {
-    let output = std::process::Command::new("pkill")
-        .args(["-f", "malus-de-spotlight"])
-        .status();
-
-    if let Ok(status) = output {
-        if status.success() {
-            info!("Spotlight cerrado por alternancia (toggle).");
-            return;
-        }
-    }
-
-    let exe = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|dir| dir.join("malus-de-spotlight")))
-        .unwrap_or_else(|| std::path::PathBuf::from("malus-de-spotlight"));
-
-    info!("Lanzando Spotlight desde: {:?}", exe);
-    let mut command = std::process::Command::new(&exe);
-    malus_de_common::config::set_cursor_environment(&mut command);
-    command
-        .env("WAYLAND_DISPLAY", socket_name)
-        .env("GDK_BACKEND", "wayland")
-        .env("GSK_RENDERER", "cairo");
-    if let Ok(cfg_home) = std::env::var("XDG_CONFIG_HOME") {
-        command.env("XDG_CONFIG_HOME", cfg_home);
-    } else if let Ok(home) = std::env::var("HOME") {
-        command.env("XDG_CONFIG_HOME", format!("{}/.config/malus-de", home));
-    }
-    command.env("GSETTINGS_BACKEND", "keyfile");
-
-    match command.spawn() {
-        Ok(mut child) => {
-            info!("Spotlight lanzado con éxito, PID={}", child.id());
-            std::thread::spawn(move || {
-                let _ = child.wait();
-            });
-        }
-        Err(e) => tracing::error!("Error al lanzar Spotlight: {:?}", e),
-    }
+pub fn toggle_spotlight(_socket_name: &str) {
+    let _ = malus_de_common::ipc::IpcClient::send_command(
+        malus_de_common::ipc::IpcMessage::ToggleSpotlight,
+    );
 }

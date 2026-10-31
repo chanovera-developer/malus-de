@@ -49,7 +49,7 @@ use std::{
 };
 use tracing::{error, info, warn};
 
-use crate::backend::winit::{send_frames_surface_tree, toggle_spotlight};
+use crate::backend::winit::send_frames_surface_tree;
 use crate::state::{ClientState, MalusState};
 use malus_de_common::config::{DisplayModeConfig, DisplayOutputConfig, DisplaysConfig};
 use malus_de_common::ipc::IpcMessage;
@@ -1031,6 +1031,7 @@ pub fn run_drm() -> Result<()> {
         "🌐 Socket Wayland escuchando activamente en: WAYLAND_DISPLAY={}",
         socket_name
     );
+    std::env::set_var("WAYLAND_DISPLAY", &socket_name);
     state.socket_name = socket_name.clone();
     let _clipboard_manager = crate::start_clipboard_manager(&socket_name);
 
@@ -1290,7 +1291,12 @@ pub fn run_drm() -> Result<()> {
                                 // Spotlight (Super+Espacio / Alt+Espacio / Super+K)
                                 if (is_space && (has_super || has_alt || has_ctrl)) || (is_k && has_super) {
                                     info!("🔍 Spotlight alternado vía atajo de teclado");
-                                    toggle_spotlight(&state.socket_name);
+                                    state.toggle_spotlight();
+                                    return FilterResult::Intercept(());
+                                }
+
+                                if state.spotlight.is_open() {
+                                    state.spotlight.handle_key_press(sym, *modifiers);
                                     return FilterResult::Intercept(());
                                 }
 
@@ -1364,6 +1370,12 @@ pub fn run_drm() -> Result<()> {
                     current_pos.y += event.delta_y();
                     let point = clamp_pointer_location(state, current_pos);
 
+                    if state.spotlight.is_open() {
+                        if let Some(spot_output_geo) = state.spotlight_output_geometry() {
+                            state.spotlight.update_pointer_motion(spot_output_geo, point);
+                        }
+                    }
+
                     let (under_target, _, _) = resolve_target_under(state, point);
 
                     let serial = SERIAL_COUNTER.next_serial();
@@ -1402,6 +1414,13 @@ pub fn run_drm() -> Result<()> {
                         point.y += output_geo.loc.y as f64;
                         let point = clamp_pointer_location(state, point);
 
+                        if state.spotlight.is_open() {
+                            let spot_output_geo = state
+                                .spotlight_output_geometry()
+                                .unwrap_or(output_geo);
+                            state.spotlight.update_pointer_motion(spot_output_geo, point);
+                        }
+
                         let (under_target, _, _) = resolve_target_under(state, point);
 
                         let serial = SERIAL_COUNTER.next_serial();
@@ -1438,26 +1457,16 @@ pub fn run_drm() -> Result<()> {
 
                     let btn_serial = SERIAL_COUNTER.next_serial();
                     if is_pressed {
-                        let clicked_on_spotlight = layer_info.as_ref().is_some_and(
-                            |(_, namespace, _)| {
-                                matches!(
-                                    namespace.as_str(),
-                                    "malus-spotlight-results"
-                                        | "malus-spotlight-input"
-                                        | "malus-spotlight-apps"
-                                        | "malus-spotlight-files"
-                                )
-                            },
-                        );
-                        let spotlight_active = state.space.outputs().any(|output| {
-                            smithay::desktop::layer_map_for_output(output)
-                                .layers()
-                                .any(|surface| {
-                                    surface.namespace() == "malus-spotlight-results"
-                                })
-                        });
-                        if spotlight_active && !clicked_on_spotlight {
-                            state.ipc_broadcaster.broadcast(&IpcMessage::HideSpotlight);
+                        if state.spotlight.is_open() {
+                            if let Some(spot_output_geo) = state.spotlight_output_geometry() {
+                                if state.spotlight.handle_pointer_button(
+                                    spot_output_geo,
+                                    point,
+                                    event.button_code(),
+                                ) {
+                                    return;
+                                }
+                            }
                         }
 
                         if state.app_switcher.is_active {
@@ -1606,6 +1615,13 @@ pub fn run_drm() -> Result<()> {
                 }
             }
             InputEvent::PointerAxis { event } => {
+                if state.spotlight.is_open() {
+                    if let Some(vertical) = event.amount(Axis::Vertical) {
+                        if vertical.abs() > 0.001 && state.spotlight.handle_scroll(vertical) {
+                            return;
+                        }
+                    }
+                }
                 if let Some(pointer) = state.seat.get_pointer() {
                     let mut frame = AxisFrame::new(event.time_msec()).source(event.source());
                     if let Some(horizontal) = event.amount(Axis::Horizontal) {
@@ -2258,6 +2274,26 @@ pub fn run_drm() -> Result<()> {
                         crate::window_corners::WindowSquircleShader::new(&mut renderer);
                 }
 
+                let is_dark_theme = crate::state::system_monitor_backdrop_color()[0] < 0.5;
+                let spotlight_frame = if state
+                    .spotlight
+                    .should_render_on_output(&out_surface.output.name())
+                {
+                    if let Some((spot_rect, mask_opt, mask_sz, spot_alpha)) =
+                        state.spotlight.prepare_frame(output_geo, scale, is_dark_theme)
+                    {
+                        let mask_vec = mask_opt.map(|s| s.to_vec());
+                        state
+                            .spotlight
+                            .create_render_element(&mut renderer, spot_rect.loc.to_f64(), spot_alpha)
+                            .map(|elem| (spot_rect, mask_vec, mask_sz, spot_alpha, elem))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 if let Ok(mut target) = renderer.bind(&mut dmabuf) {
                     let screenshot_request = state
                         .pending_screenshot_requests
@@ -2804,6 +2840,37 @@ pub fn run_drm() -> Result<()> {
                                 );
                                 frame.clear_tex_program_override();
                             }
+                        }
+
+                        // 5. Renderizar Spotlight nativo del compositor (blur enmascarado por silueta exacta + capa Liquid Glass)
+                        if let Some((
+                            spot_rect,
+                            ref mask_vec,
+                            (mask_w, mask_h),
+                            spot_alpha,
+                            ref spot_elem,
+                        )) = spotlight_frame
+                        {
+                            if let Some(blur) = blur_pipeline.as_mut() {
+                                let _ = frame.with_context(|gl| {
+                                    blur.render_blur_masked(
+                                        gl,
+                                        &projection,
+                                        out_surface.size,
+                                        spot_rect,
+                                        mask_vec.as_deref(),
+                                        mask_w,
+                                        mask_h,
+                                        spot_alpha,
+                                    );
+                                });
+                            }
+                            let _ = draw_render_elements(
+                                &mut frame,
+                                1.0,
+                                std::slice::from_ref(spot_elem),
+                                &[damage],
+                            );
                         }
 
                         // Dibujar previsualización translúcida de Aero Snap si el puntero está agarrado y la previsualización intersecta este monitor
