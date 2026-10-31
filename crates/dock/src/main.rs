@@ -465,6 +465,7 @@ fn resolve_desktop_app_info(identifier: &str) -> (String, String, String, Vec<St
     let candidates = [
         format!("{}.desktop", identifier),
         format!("{}.desktop", lower),
+        format!("{}-ide.desktop", lower),
         format!("org.gnome.{}.desktop", identifier),
         format!("org.gnome.{}.desktop", lower),
         identifier.to_string(),
@@ -473,11 +474,35 @@ fn resolve_desktop_app_info(identifier: &str) -> (String, String, String, Vec<St
     for cand in &candidates {
         if let Some(info) = gio::DesktopAppInfo::new(cand) {
             let name = info.name().to_string();
-            let icon = info.icon()
-                .and_then(|i| i.to_string())
+            let icon = info
+                .icon()
+                .and_then(|i| IconExt::to_string(&i))
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| identifier.to_string());
             let exec = info.executable().to_string_lossy().to_string();
+            let matchers = vec![identifier.to_string(), lower.clone(), name.to_lowercase()];
+            return (name, icon, exec, matchers);
+        }
+    }
+
+    for app_info in gio::AppInfo::all() {
+        let id_matches = app_info
+            .id()
+            .is_some_and(|id| id.to_lowercase().trim_end_matches(".desktop").contains(&lower));
+        let name_matches = app_info.name().to_lowercase() == lower;
+        let exec_matches = app_info
+            .executable()
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|exe| exe.eq_ignore_ascii_case(identifier) || exe.to_lowercase().contains(&lower));
+        if id_matches || name_matches || exec_matches {
+            let name = app_info.name().to_string();
+            let icon = app_info
+                .icon()
+                .and_then(|i| IconExt::to_string(&i))
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| identifier.to_string());
+            let exec = app_info.executable().to_string_lossy().to_string();
             let matchers = vec![identifier.to_string(), lower.clone(), name.to_lowercase()];
             return (name, icon, exec, matchers);
         }
@@ -1545,101 +1570,386 @@ fn start_icon_size_animation(
     });
 }
 
-fn should_show_dock_icon_background(
+enum DockIconRenderMode {
+    /// Icono con canal alfa / forma libre (ej. Antigravity, Brave, VS Code):
+    /// se dibuja el contenedor squircle del Dock y el icono reducido (`icon_size - 10`) centrado dentro.
+    ContainerBackdrop,
+    /// Icono que ya posee un bloque con relleno sólido cuadrado/redondeado:
+    /// se rellenan los márgenes/esquinas con el color del borde del propio icono y se recorta con la curvatura squircle del Dock.
+    FilledSquircle(gtk4::cairo::ImageSurface),
+    /// Modo nativo sin contenedor ni recorte (`icon_appearance = "native"`).
+    RawNative,
+}
+
+fn resolve_dock_icon_render_mode(
     appearance: DockIconAppearance,
     icon_name: &str,
     icon: &Image,
     icon_size: i32,
-) -> bool {
+) -> DockIconRenderMode {
     match appearance {
-        DockIconAppearance::DockBackground => true,
-        DockIconAppearance::Native => false,
-        DockIconAppearance::Auto => match inspect_icon_background(icon_name, icon, icon_size) {
-            Some(has_background) => !has_background,
-            None => {
-                warn!(
-                    "No se pudo analizar el fondo del icono '{}'; se usará el fondo del Dock",
-                    icon_name
-                );
-                true
-            }
+        DockIconAppearance::DockBackground => DockIconRenderMode::ContainerBackdrop,
+        DockIconAppearance::Native => DockIconRenderMode::RawNative,
+        DockIconAppearance::Auto => match inspect_filled_icon_surface(icon_name, icon, icon_size) {
+            Some(filled_surface) => DockIconRenderMode::FilledSquircle(filled_surface),
+            None => DockIconRenderMode::ContainerBackdrop,
         },
     }
 }
 
-fn inspect_icon_background(icon_name: &str, icon: &Image, icon_size: i32) -> Option<bool> {
-    let icon_path = if icon_name.starts_with('/') {
-        Some(std::path::PathBuf::from(icon_name))
-    } else {
-        gtk4::IconTheme::for_display(&icon.display())
-            .lookup_icon(
-                icon_name,
-                &[],
-                icon_size.max(1),
-                1,
-                icon.direction(),
-                gtk4::IconLookupFlags::empty(),
-            )
-            .file()
-            .and_then(|file| file.path())
-    }?;
+fn resolve_icon_file_path(
+    icon_name: &str,
+    icon: &Image,
+    icon_size: i32,
+) -> Option<std::path::PathBuf> {
+    if icon_name.starts_with('/') {
+        let p = std::path::PathBuf::from(icon_name);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
 
-    let pixbuf = gdk_pixbuf::Pixbuf::from_file_at_scale(&icon_path, 64, 64, true).ok()?;
+    if let Some(path) = gtk4::IconTheme::for_display(&icon.display())
+        .lookup_icon(
+            icon_name,
+            &[],
+            icon_size.max(64),
+            1,
+            icon.direction(),
+            gtk4::IconLookupFlags::empty(),
+        )
+        .file()
+        .and_then(|file| file.path())
+        .filter(|p| p.is_file())
+    {
+        return Some(path);
+    }
+
+    let mut bases = vec![
+        std::path::PathBuf::from("/usr/share/icons/hicolor"),
+        std::path::PathBuf::from("/usr/share/icons/Adwaita"),
+        std::path::PathBuf::from("/var/lib/flatpak/exports/share/icons/hicolor"),
+        std::path::PathBuf::from("/usr/local/share/icons/hicolor"),
+    ];
+    if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+        bases.insert(0, home.join(".local/share/icons/hicolor"));
+        bases.insert(
+            1,
+            home.join(".local/share/flatpak/exports/share/icons/hicolor"),
+        );
+    }
+
+    let subdirs = [
+        "scalable/apps",
+        "256x256/apps",
+        "128x128/apps",
+        "64x64/apps",
+        "48x48/apps",
+    ];
+    for base in &bases {
+        for sub in &subdirs {
+            for ext in ["svg", "png"] {
+                let candidate = base.join(sub).join(format!("{icon_name}.{ext}"));
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+
+    for ext in ["svg", "png"] {
+        let pixmap = std::path::PathBuf::from(format!("/usr/share/pixmaps/{icon_name}.{ext}"));
+        if pixmap.is_file() {
+            return Some(pixmap);
+        }
+    }
+
+    None
+}
+
+fn inspect_filled_icon_surface(
+    icon_name: &str,
+    icon: &Image,
+    icon_size: i32,
+) -> Option<gtk4::cairo::ImageSurface> {
+    let icon_path = resolve_icon_file_path(icon_name, icon, icon_size)?;
+    let pixbuf = gdk_pixbuf::Pixbuf::from_file_at_scale(&icon_path, 128, 128, true).ok()?;
     let bytes = pixbuf.read_pixel_bytes();
     let pixels = bytes.as_ref();
     let channels = pixbuf.n_channels() as usize;
     let rowstride = pixbuf.rowstride() as usize;
     let width = pixbuf.width() as usize;
     let height = pixbuf.height() as usize;
-    if channels < 3 || width == 0 || height == 0 {
+
+    analyze_dock_icon_pixels(
+        pixels,
+        width,
+        height,
+        channels,
+        rowstride,
+        pixbuf.has_alpha(),
+    )
+}
+
+/// Analiza los píxeles de un icono para determinar si ya es una baldosa cuadrada/squircle con relleno sólido.
+/// - Si es un símbolo con canal alfa, círculo o logo con forma libre (como Antigravity), devuelve `None`
+///   para que el Dock le cree el contenedor squircle estándar y reduzca su tamaño.
+/// - Si ya es un icono con relleno sólido, recorta el margen exterior transparente, rellena el resto de las
+///   esquinas extrapolando los colores del borde de cada fila y devuelve la superficie lista para recortar con `squircle_path`.
+fn analyze_dock_icon_pixels(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    channels: usize,
+    rowstride: usize,
+    has_alpha: bool,
+) -> Option<gtk4::cairo::ImageSurface> {
+    if channels < 3 || width < 16 || height < 16 {
         return None;
     }
 
-    let alpha_index = if pixbuf.has_alpha() {
-        channels - 1
-    } else {
-        0
+    let sample_rgba = |x: usize, y: usize| -> (u8, u8, u8, u8) {
+        let idx = y * rowstride + x * channels;
+        let r = pixels.get(idx).copied().unwrap_or(0);
+        let g = pixels.get(idx + 1).copied().unwrap_or(0);
+        let b = pixels.get(idx + 2).copied().unwrap_or(0);
+        let a = if has_alpha && channels >= 4 {
+            pixels.get(idx + 3).copied().unwrap_or(0)
+        } else {
+            255
+        };
+        (r, g, b, a)
     };
-    let mut opaque_pixels = 0usize;
+
+    // 1. Hallar el bounding box de los píxeles opacos (alpha >= 225)
+    let mut min_x = width;
+    let mut max_x = 0usize;
+    let mut min_y = height;
+    let mut max_y = 0usize;
+    let mut opaque_count = 0usize;
+
     for y in 0..height {
         for x in 0..width {
-            let pixel_start = y * rowstride + x * channels;
-            let alpha = if pixbuf.has_alpha() {
-                pixels.get(pixel_start + alpha_index).copied()?
-            } else {
-                255
-            };
-            if alpha >= 230 {
-                opaque_pixels += 1;
+            let (_, _, _, a) = sample_rgba(x, y);
+            if a >= 225 {
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+                min_y = min_y.min(y);
+                max_y = max_y.max(y);
+                opaque_count += 1;
             }
         }
     }
 
-    Some(opaque_pixels as f64 / (width * height) as f64 >= 0.72)
+    if min_x >= max_x || min_y >= max_y || opaque_count == 0 {
+        return None;
+    }
+
+    let bw = max_x - min_x + 1;
+    let bh = max_y - min_y + 1;
+
+    // La baldosa rellena debe tener proporción prácticamente cuadrada (1:1) y cubrir una fracción significativa del lienzo
+    let aspect = bw as f64 / bh as f64;
+    if bw < width * 55 / 100 || bh < height * 55 / 100 || !(0.85..=1.18).contains(&aspect) {
+        return None;
+    }
+
+    // 2. Relación de relleno dentro de su propio bounding box:
+    // Un círculo inscrito tiene pi/4 ≈ 0.785 (78.5%) y un logo en forma de 'A' o triángulo tiene < 75%.
+    // Un bloque cuadrado o squircle relleno supera siempre el 86% de su bounding box.
+    let mut bbox_opaque = 0usize;
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            if sample_rgba(x, y).3 >= 225 {
+                bbox_opaque += 1;
+            }
+        }
+    }
+    let bbox_fill_ratio = bbox_opaque as f64 / (bw * bh) as f64;
+    if bbox_fill_ratio < 0.86 {
+        return None;
+    }
+
+    // 3. El núcleo central (20%..80%) debe ser completamente sólido sin huecos internos transparentes (>= 98.5%)
+    let core_x0 = min_x + bw * 20 / 100;
+    let core_x1 = max_x.saturating_sub(bw * 20 / 100).max(core_x0);
+    let core_y0 = min_y + bh * 20 / 100;
+    let core_y1 = max_y.saturating_sub(bh * 20 / 100).max(core_y0);
+    let mut core_total = 0usize;
+    let mut core_opaque = 0usize;
+    for y in core_y0..=core_y1 {
+        for x in core_x0..=core_x1 {
+            core_total += 1;
+            if sample_rgba(x, y).3 >= 240 {
+                core_opaque += 1;
+            }
+        }
+    }
+    if core_total == 0 || (core_opaque as f64 / core_total as f64) < 0.985 {
+        return None;
+    }
+
+    // 4. Los 4 «hombros» diagonales del squircle (u, v en {0.13, 0.87}) deben ser opacos:
+    // En un círculo o logo libre, (0.13, 0.13) está a distancia sqrt(0.37^2 + 0.37^2) = 0.523 > 0.50 del centro (transparente),
+    // mientras que en un icono cuadrado o squircle está dentro del cuerpo sólido.
+    for (u, v) in [(0.13, 0.13), (0.87, 0.13), (0.13, 0.87), (0.87, 0.87)] {
+        let sx = min_x + ((bw - 1) as f64 * u).round() as usize;
+        let sy = min_y + ((bh - 1) as f64 * v).round() as usize;
+        if sample_rgba(sx, sy).3 < 225 {
+            return None;
+        }
+    }
+
+    // 5. Las 4 bandas rectas cardinales (arriba, abajo, izquierda, derecha, a 6% del borde entre 28%..72%) deben ser opacas
+    let edge_inset_x = (bw * 6 / 100).max(1);
+    let edge_inset_y = (bh * 6 / 100).max(1);
+    let span_x0 = min_x + bw * 28 / 100;
+    let span_x1 = min_x + bw * 72 / 100;
+    let span_y0 = min_y + bh * 28 / 100;
+    let span_y1 = min_y + bh * 72 / 100;
+
+    let mut cardinal_total = 0usize;
+    let mut cardinal_opaque = 0usize;
+    for x in span_x0..=span_x1 {
+        cardinal_total += 2;
+        if sample_rgba(x, min_y + edge_inset_y).3 >= 225 {
+            cardinal_opaque += 1;
+        }
+        if sample_rgba(x, max_y - edge_inset_y).3 >= 225 {
+            cardinal_opaque += 1;
+        }
+    }
+    for y in span_y0..=span_y1 {
+        cardinal_total += 2;
+        if sample_rgba(min_x + edge_inset_x, y).3 >= 225 {
+            cardinal_opaque += 1;
+        }
+        if sample_rgba(max_x - edge_inset_x, y).3 >= 225 {
+            cardinal_opaque += 1;
+        }
+    }
+    if cardinal_total == 0 || (cardinal_opaque as f64 / cardinal_total as f64) < 0.95 {
+        return None;
+    }
+
+    // 6. Construir una superficie Cairo (bw × bh) rellenando cualquier esquina transparente
+    // con el color opaco del borde de cada fila para que al aplicar `squircle_path` quede 100% relleno.
+    let mut surface =
+        gtk4::cairo::ImageSurface::create(gtk4::cairo::Format::ARgb32, bw as i32, bh as i32)
+            .ok()?;
+    let dst_stride = surface.stride() as usize;
+    {
+        let mut dst = surface.data().ok()?;
+        let mut fallback_left = (48u8, 48u8, 52u8);
+        let mut fallback_right = (48u8, 48u8, 52u8);
+
+        // Pre-muestrear la primera fila con píxeles opacos para inicializar el color de respaldo
+        for sy in min_y..=max_y {
+            let mut first = None;
+            let mut last = None;
+            for sx in min_x..=max_x {
+                let (r, g, b, a) = sample_rgba(sx, sy);
+                if a >= 240 {
+                    if first.is_none() {
+                        first = Some((r, g, b));
+                    }
+                    last = Some((r, g, b));
+                }
+            }
+            if let (Some(l), Some(r)) = (first, last) {
+                fallback_left = l;
+                fallback_right = r;
+                break;
+            }
+        }
+
+        for ry in 0..bh {
+            let sy = min_y + ry;
+            let mut row_left_rgb = None;
+            let mut row_right_rgb = None;
+            for rx in 0..bw {
+                let (r, g, b, a) = sample_rgba(min_x + rx, sy);
+                if a >= 240 {
+                    if row_left_rgb.is_none() {
+                        row_left_rgb = Some((r, g, b));
+                    }
+                    row_right_rgb = Some((r, g, b));
+                }
+            }
+            let left_fill = row_left_rgb.unwrap_or(fallback_left);
+            let right_fill = row_right_rgb.unwrap_or(fallback_right);
+            fallback_left = left_fill;
+            fallback_right = right_fill;
+
+            let dst_row = &mut dst[ry * dst_stride..];
+            for rx in 0..bw {
+                let (sr, sg, sb, sa) = sample_rgba(min_x + rx, sy);
+                let bg = if rx < bw / 2 { left_fill } else { right_fill };
+                let alpha_f = u32::from(sa);
+                let inv_a = 255 - alpha_f;
+                let out_r = ((u32::from(sr) * alpha_f + u32::from(bg.0) * inv_a + 127) / 255) as u8;
+                let out_g = ((u32::from(sg) * alpha_f + u32::from(bg.1) * inv_a + 127) / 255) as u8;
+                let out_b = ((u32::from(sb) * alpha_f + u32::from(bg.2) * inv_a + 127) / 255) as u8;
+
+                let di = rx * 4;
+                dst_row[di] = out_b;
+                dst_row[di + 1] = out_g;
+                dst_row[di + 2] = out_r;
+                dst_row[di + 3] = 255;
+            }
+        }
+    }
+    surface.flush();
+    Some(surface)
 }
 
-fn create_magnifiable_icon(icon: &Image, icon_size: i32, show_backdrop: bool) -> Overlay {
+fn create_magnifiable_icon(
+    icon: &Image,
+    icon_size: i32,
+    render_mode: DockIconRenderMode,
+) -> Overlay {
     let placeholder = GtkBox::new(Orientation::Horizontal, 0);
     placeholder.set_size_request(icon_size, icon_size);
 
     let overlay = Overlay::new();
     overlay.set_child(Some(&placeholder));
-    if show_backdrop {
-        let shadow = DrawingArea::new();
-        shadow.add_css_class("dock-icon-shadow");
-        shadow.set_size_request(icon_size, icon_size);
-        shadow.set_halign(gtk4::Align::Center);
-        shadow.set_valign(gtk4::Align::End);
-        shadow.set_can_target(false);
-        shadow.set_overflow(gtk4::Overflow::Visible);
-        shadow.set_draw_func(|_, context, width, height| {
-            draw_squircle(context, width as f64, height as f64);
-        });
-        overlay.add_overlay(&shadow);
-        overlay.set_measure_overlay(&shadow, false);
+    match render_mode {
+        DockIconRenderMode::ContainerBackdrop => {
+            let shadow = DrawingArea::new();
+            shadow.add_css_class("dock-icon-shadow");
+            shadow.set_size_request(icon_size, icon_size);
+            shadow.set_halign(gtk4::Align::Center);
+            shadow.set_valign(gtk4::Align::End);
+            shadow.set_can_target(false);
+            shadow.set_overflow(gtk4::Overflow::Visible);
+            shadow.set_draw_func(|_, context, width, height| {
+                draw_squircle(context, width as f64, height as f64);
+            });
+            overlay.add_overlay(&shadow);
+            overlay.set_measure_overlay(&shadow, false);
+
+            overlay.add_overlay(icon);
+            overlay.set_measure_overlay(icon, false);
+        }
+        DockIconRenderMode::FilledSquircle(filled_surface) => {
+            let filled_area = DrawingArea::new();
+            filled_area.add_css_class("dock-icon-shadow");
+            filled_area.set_size_request(icon_size, icon_size);
+            filled_area.set_halign(gtk4::Align::Center);
+            filled_area.set_valign(gtk4::Align::End);
+            filled_area.set_can_target(false);
+            filled_area.set_overflow(gtk4::Overflow::Visible);
+            filled_area.set_draw_func(move |_, context, width, height| {
+                draw_filled_squircle_icon(context, &filled_surface, width as f64, height as f64);
+            });
+            overlay.add_overlay(&filled_area);
+            overlay.set_measure_overlay(&filled_area, false);
+        }
+        DockIconRenderMode::RawNative => {
+            overlay.add_overlay(icon);
+            overlay.set_measure_overlay(icon, false);
+        }
     }
-    overlay.add_overlay(icon);
-    overlay.set_measure_overlay(icon, false);
     overlay.set_overflow(gtk4::Overflow::Visible);
 
     icon.set_halign(gtk4::Align::Center);
@@ -1663,14 +1973,41 @@ fn queue_dock_icon_backgrounds(widget: &gtk4::Widget) {
     }
 }
 
+fn dock_squircle_radius(width: f64, height: f64) -> f64 {
+    let side = width.min(height).max(1.0);
+    (side * (22.0 / 48.0)).min(side * 0.5)
+}
+
 fn draw_squircle(context: &gtk4::cairo::Context, width: f64, height: f64) {
-    squircle_path(context, width, height, 22.0);
+    squircle_path(context, width, height, dock_squircle_radius(width, height));
     if adw::StyleManager::default().is_dark() {
         context.set_source_rgb(0.06, 0.06, 0.07);
     } else {
         context.set_source_rgb(1.0, 1.0, 1.0);
     }
     let _ = context.fill();
+}
+
+fn draw_filled_squircle_icon(
+    context: &gtk4::cairo::Context,
+    surface: &gtk4::cairo::ImageSurface,
+    width: f64,
+    height: f64,
+) {
+    let sw = surface.width() as f64;
+    let sh = surface.height() as f64;
+    if sw <= 0.0 || sh <= 0.0 || width <= 0.0 || height <= 0.0 {
+        return;
+    }
+
+    let _ = context.save();
+    squircle_path(context, width, height, dock_squircle_radius(width, height));
+    context.clip();
+
+    context.scale(width / sw, height / sh);
+    let _ = context.set_source_surface(surface, 0.0, 0.0);
+    let _ = context.paint();
+    let _ = context.restore();
 }
 
 fn draw_switcher_squircle(
@@ -1955,7 +2292,11 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
         .css_classes(["dock-trash-icon"])
         .valign(gtk4::Align::End)
         .build();
-    let trash_overlay = create_magnifiable_icon(&trash_img, icon_size, false);
+    let trash_overlay = create_magnifiable_icon(
+        &trash_img,
+        icon_size,
+        DockIconRenderMode::RawNative,
+    );
     btn.set_child(Some(&trash_overlay));
 
     btn.connect_clicked(|_| {
@@ -2086,13 +2427,13 @@ fn create_dock_item(
             .valign(gtk4::Align::End)
             .build()
     };
-    let show_backdrop = should_show_dock_icon_background(
+    let render_mode = resolve_dock_icon_render_mode(
         app_cfg.icon_appearance,
         icon_name,
         &icon,
         icon_size,
     );
-    if show_backdrop {
+    if matches!(render_mode, DockIconRenderMode::ContainerBackdrop) {
         icon.add_css_class("dock-icon-inset");
         icon.set_pixel_size((icon_size - 10).max(1));
         icon.set_margin_bottom(5);
@@ -2100,7 +2441,7 @@ fn create_dock_item(
     let icon_container = create_magnifiable_icon(
         &icon,
         icon_size,
-        show_backdrop,
+        render_mode,
     );
     btn.set_child(Some(&icon_container));
     icon_container.add_css_class("dock-bounce-target");
@@ -2452,5 +2793,113 @@ mod tests {
             "Archivos",
             "org.gnome.Calculator"
         ));
+    }
+
+    #[test]
+    fn circular_or_freeform_alpha_icon_requires_container_backdrop() {
+        let size = 64usize;
+        let stride = size * 4;
+        let mut pixels = vec![0u8; size * stride];
+        let center = (size as f64 - 1.0) * 0.5;
+        let radius = size as f64 * 0.49;
+
+        for y in 0..size {
+            for x in 0..size {
+                let dx = x as f64 - center;
+                let dy = y as f64 - center;
+                if dx * dx + dy * dy <= radius * radius {
+                    let offset = y * stride + x * 4;
+                    pixels[offset] = 52;
+                    pixels[offset + 1] = 120;
+                    pixels[offset + 2] = 246;
+                    pixels[offset + 3] = 255;
+                }
+            }
+        }
+
+        // Although a circle covers ~75% of the canvas (>72%), its shoulders are transparent
+        // so it must NOT be treated as a pre-filled dock tile.
+        assert!(
+            analyze_dock_icon_pixels(&pixels, size, size, stride, 4, true).is_none(),
+            "Un icono circular o con canal alfa libre debe recibir el contenedor del Dock"
+        );
+    }
+
+    #[test]
+    fn hollow_symbol_icon_requires_container_backdrop() {
+        let size = 64usize;
+        let stride = size * 4;
+        let mut pixels = vec![0u8; size * stride];
+
+        for y in 4..(size - 4) {
+            for x in 4..(size - 4) {
+                // Agujero transparente en el centro (como un símbolo o letra calada)
+                if (24..40).contains(&x) && (24..40).contains(&y) {
+                    continue;
+                }
+                let offset = y * stride + x * 4;
+                pixels[offset] = 240;
+                pixels[offset + 1] = 90;
+                pixels[offset + 2] = 40;
+                pixels[offset + 3] = 255;
+            }
+        }
+
+        assert!(
+            analyze_dock_icon_pixels(&pixels, size, size, stride, 4, true).is_none(),
+            "Un icono con huecos internos transparentes debe recibir el contenedor del Dock"
+        );
+    }
+
+    #[test]
+    fn solid_rounded_tile_is_detected_and_corner_padded_for_squircle_clip() {
+        let size = 64usize;
+        let stride = size * 4;
+        let mut pixels = vec![0u8; size * stride];
+        let margin = 4isize;
+        let corner_r = 10isize;
+        let min_c = margin + corner_r;
+        let max_c = (size as isize - 1 - margin) - corner_r;
+
+        for y in margin..(size as isize - margin) {
+            for x in margin..(size as isize - margin) {
+                let dx = if x < min_c {
+                    min_c - x
+                } else if x > max_c {
+                    x - max_c
+                } else {
+                    0
+                };
+                let dy = if y < min_c {
+                    min_c - y
+                } else if y > max_c {
+                    y - max_c
+                } else {
+                    0
+                };
+                if dx * dx + dy * dy <= corner_r * corner_r {
+                    let offset = (y as usize) * stride + (x as usize) * 4;
+                    pixels[offset] = 38;
+                    pixels[offset + 1] = 162;
+                    pixels[offset + 2] = 105;
+                    pixels[offset + 3] = 255;
+                }
+            }
+        }
+
+        let mut surface = analyze_dock_icon_pixels(&pixels, size, size, stride, 4, true)
+            .expect("Un tile sólido cuadrado/redondeado debe detectarse como icono con relleno");
+        assert_eq!(surface.width(), 56);
+        assert_eq!(surface.height(), 56);
+
+        let dst_stride = surface.stride() as usize;
+        let data = surface.data().expect("surface data");
+        // Verificamos que las 4 esquinas del bounding box hayan sido rellenadas con alfa 255
+        for (cx, cy) in [(0usize, 0usize), (55, 0), (0, 55), (55, 55)] {
+            let idx = cy * dst_stride + cx * 4;
+            let pixel = u32::from_ne_bytes([data[idx], data[idx + 1], data[idx + 2], data[idx + 3]]);
+            let alpha = (pixel >> 24) & 0xff;
+            assert_eq!(alpha, 255, "La esquina ({cx}, {cy}) debe quedar rellena para el recorte squircle");
+        }
     }
 }
