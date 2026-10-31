@@ -20,6 +20,16 @@ export UBUNTU_MENUPROXY=1
 export GTK_MODULES="${GTK_MODULES:+$GTK_MODULES:}appmenu-gtk-module"
 mkdir -p "$XDG_CONFIG_HOME/glib-2.0/settings" "$XDG_CONFIG_HOME/gtk-3.0" "$XDG_CONFIG_HOME/gtk-4.0"
 
+# Limpiar valores que versiones anteriores filtraron al entorno global de systemd.
+if command -v systemctl >/dev/null 2>&1; then
+    MANAGER_ENV="$(systemctl --user show-environment 2>/dev/null || true)"
+    if grep -Fxq "XDG_CONFIG_HOME=$HOME/.config/malus-de" <<< "$MANAGER_ENV" \
+        && grep -Fxq "GSETTINGS_BACKEND=keyfile" <<< "$MANAGER_ENV"; then
+        systemctl --user unset-environment XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL \
+            || echo "⚠️ No se pudieron limpiar variables de configuración heredadas de Malus."
+    fi
+fi
+
 # Mantener disponibles en Nautilus las carpetas especiales XDG del usuario.
 USER_DIRS_FILE="$XDG_CONFIG_HOME/user-dirs.dirs"
 HOST_USER_DIRS_FILE="$HOST_XDG_CONFIG_HOME/user-dirs.dirs"
@@ -185,10 +195,6 @@ for GTK_SETTINGS in "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" "$XDG_CONFIG_HOME/gt
     fi
 done
 
-# Mantener las aplicaciones y xdg-desktop-portal en el mismo bus de sesión
-# para que los navegadores puedan encontrar los portales activados por systemd.
-dbus-update-activation-environment --all 2>/dev/null || true
-
 echo "============================================================"
 echo "🍎 INICIANDO SESIÓN COMPLETA DE MALUS DE (MODO ANIDADO WINIT)"
 echo "============================================================"
@@ -208,7 +214,9 @@ export GDK_BACKEND="wayland"
 export GSK_RENDERER="cairo"
 
 # Actualizar el entorno D-Bus con el display Wayland de Malus DE
-dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL 2>/dev/null || true
+# Propagar solo variables de ejecución necesarias para el display. La configuración
+# XDG, el backend GSettings y GTK_USE_PORTAL deben seguir siendo propios del proceso.
+dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER 2>/dev/null || true
 
 
 # 2. Iniciar Demonio de Fondo de Pantalla (Layer Background)

@@ -73,6 +73,17 @@ export SDL_VIDEODRIVER="wayland"
 export CLUTTER_BACKEND="wayland"
 export MOZ_ENABLE_WAYLAND=1
 
+# Limpiar valores que versiones anteriores filtraron al entorno global de systemd.
+if command -v systemctl >/dev/null 2>&1; then
+    MANAGER_ENV="$(systemctl --user show-environment 2>/dev/null || true)"
+    if grep -Fxq "XDG_CONFIG_HOME=$HOME/.config/malus-de" <<< "$MANAGER_ENV" \
+        || grep -Fxq "GSETTINGS_BACKEND=keyfile" <<< "$MANAGER_ENV" \
+        || grep -Fxq "GTK_USE_PORTAL=1" <<< "$MANAGER_ENV"; then
+        systemctl --user unset-environment XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL \
+            || echo "⚠️ No se pudieron limpiar variables de configuración heredadas de Malus."
+    fi
+fi
+
 # Asegurar archivos de configuración aislados de GNOME (respetando elecciones previas del usuario)
 mkdir -p "$XDG_CONFIG_HOME/glib-2.0/settings" "$XDG_CONFIG_HOME/gtk-3.0" "$XDG_CONFIG_HOME/gtk-4.0"
 
@@ -202,6 +213,9 @@ overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
 EOF
 fi
 
+# Aplicar el diseño macOS también si el keyfile ya existía con el valor de GNOME.
+gsettings set org.gnome.desktop.wm.preferences button-layout "close,minimize,maximize:" || true
+
 # Nautilus usa esta configuración aislada para montar medios extraíbles.
 if ! gsettings set org.gnome.desktop.media-handling automount true; then
     echo "No se pudo activar el automontaje de medios en la configuración de Malus DE." >&2
@@ -248,10 +262,6 @@ for GTK_SETTINGS in "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" "$XDG_CONFIG_HOME/gt
         printf '\ngtk-icon-theme-name=Adwaita\n' >> "$GTK_SETTINGS"
     fi
 done
-
-# Mantener las aplicaciones y xdg-desktop-portal en el mismo bus de sesión
-# para que los navegadores puedan encontrar los portales activados por systemd.
-dbus-update-activation-environment --all 2>/dev/null || true
 
 # ------------------------------------------------------------------------------
 # Limpieza de procesos previos de sesiones anteriores
@@ -324,11 +334,11 @@ else
     echo "⚠️ Socket Wayland no detectado a tiempo, asumiendo WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
 fi
 
-# Actualizar el entorno de activación antes de iniciar los portales, para que
-# hereden el socket del compositor de Malus y no el de la sesión de inicio.
-dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL XCURSOR_THEME XCURSOR_SIZE 2>/dev/null || true
+# Propagar solo variables de ejecución necesarias para el display. La configuración
+# XDG, el backend GSettings y GTK_USE_PORTAL deben seguir siendo propios del proceso.
+dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER XCURSOR_THEME XCURSOR_SIZE 2>/dev/null || true
 if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL XCURSOR_THEME XCURSOR_SIZE || echo "⚠️ No se pudo importar el entorno de Malus a systemd --user."
+    systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER XCURSOR_THEME XCURSOR_SIZE || echo "⚠️ No se pudo importar el entorno de Malus a systemd --user."
     systemctl --user start malus-session.target || echo "⚠️ No se pudo iniciar malus-session.target."
     systemctl --user start xdg-desktop-portal || echo "⚠️ No se pudo iniciar xdg-desktop-portal."
 fi

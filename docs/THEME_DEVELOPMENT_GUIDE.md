@@ -157,7 +157,7 @@ Al alternar entre Modo Claro y Modo Oscuro desde Malus DE, los cambios se limita
 4. **Bus IPC del Compositor:**
    Transmisión de `IpcMessage::ThemeChanged { theme_name, is_dark }` a todos los demonios en ejecución (Dock, Settings, Spotlight).
 
-Malus DE no escribe en `~/.config/gtk-3.0`, `~/.config/gtk-4.0` ni cambia el valor DConf de GNOME. Las preferencias y transparencias GTK se aplican mediante `XDG_CONFIG_HOME=~/.config/malus-de` en la sesión de Malus.
+Malus DE no escribe en `~/.config/gtk-3.0`, `~/.config/gtk-4.0` ni cambia el valor DConf de GNOME. Las preferencias y transparencias GTK se aplican mediante `XDG_CONFIG_HOME=~/.config/malus-de` en la sesión de Malus. El lanzador no propaga `XDG_CONFIG_HOME`, `GSETTINGS_BACKEND` o `GTK_USE_PORTAL` al entorno global de activación D-Bus/systemd; solo publica las variables de display necesarias para iniciar aplicaciones en el compositor Malus.
 
 La transparencia de ventanas se limita al estilo `window.view` de Nautilus y a la ventana `.macos-settings-window`, cuyo CSS se carga desde la propia aplicación de Ajustes. El resto de ventanas mantiene el fondo opaco. En Nautilus, los menús y popovers conservan el fondo y borde definidos por el tema, sin sombra CSS; el desenfoque del compositor se limita al fondo de la ventana.
 
