@@ -3,8 +3,8 @@ use gdk_pixbuf::prelude::*;
 use gtk4::prelude::*;
 use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea,
-    EventControllerMotion, GestureClick, Image, Label, Orientation, Overlay, Picture, Popover,
-    Separator, Window,
+    EventControllerMotion, GestureClick, GestureDrag, Image, Label, Orientation, Overlay, Picture,
+    Popover, Separator, Window,
 };
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use libadwaita as adw;
@@ -964,10 +964,12 @@ fn build_dock_ui(app: &Application) {
         );
     });
     dock_root.add_controller(motion_controller);
+    setup_dock_apps_drag_controller(&apps_box, &dock_config, &on_refresh);
 
     // Escucha de eventos IPC del compositor
     let (tx, rx) = async_channel::unbounded::<IpcMessage>();
     let cache_ipc = running_cache.clone();
+    let apps_box_ipc = apps_box.clone();
     let min_box = minimized_box.clone();
     let dock_bar_ref = dock_bar.clone();
     let dock_root_ref = dock_root.clone();
@@ -1019,8 +1021,17 @@ fn build_dock_ui(app: &Application) {
                         });
                     }
                 }
-                IpcMessage::PinAppToDock { name, icon, command, matchers } => {
-                    info!("📌 IPC PinAppToDock recibido para: {}", name);
+                IpcMessage::PinAppToDock {
+                    name,
+                    icon,
+                    command,
+                    matchers,
+                    insert_at_dock_x,
+                } => {
+                    info!(
+                        "📌 IPC PinAppToDock recibido para: {} (dock_x={:?})",
+                        name, insert_at_dock_x
+                    );
                     let app_cfg = DockAppConfig {
                         name,
                         icon,
@@ -1029,7 +1040,21 @@ fn build_dock_ui(app: &Application) {
                         icon_appearance: DockIconAppearance::Auto,
                     };
                     let mut cfg = cfg_ipc.borrow_mut();
-                    if cfg.pin_app(app_cfg) {
+                    let target_idx = insert_at_dock_x.and_then(|dock_x| {
+                        win_ref
+                            .compute_point(
+                                &apps_box_ipc,
+                                &gtk4::graphene::Point::new(dock_x as f32, 0.0),
+                            )
+                            .map(|pt| {
+                                compute_pinned_insert_index(
+                                    &apps_box_ipc,
+                                    cfg.apps.len(),
+                                    pt.x() as f64,
+                                )
+                            })
+                    });
+                    if cfg.pin_app_at(app_cfg, target_idx) {
                         let _ = cfg.save();
                         drop(cfg);
                         on_rf_ipc();
@@ -1330,6 +1355,228 @@ fn build_dock_ui(app: &Application) {
 
     window.set_child(Some(&dock_root));
     window.present();
+}
+
+struct DockItemDragState {
+    widget: gtk4::Widget,
+    app_name: String,
+    icon_name: String,
+    current_idx: usize,
+    total_pinned: usize,
+    start_x: f64,
+    start_y: f64,
+    active: bool,
+    will_remove: bool,
+    order_changed: bool,
+}
+
+fn compute_pinned_insert_index(apps_box: &GtkBox, total_pinned: usize, local_x: f64) -> usize {
+    let mut child = apps_box.first_child();
+    let mut idx = 0usize;
+    while let Some(c) = child {
+        if idx >= total_pinned {
+            break;
+        }
+        if let Some(bounds) = c.compute_bounds(apps_box) {
+            let center_x = bounds.x() as f64 + (bounds.width() as f64) * 0.5;
+            if local_x < center_x {
+                return idx;
+            }
+        }
+        idx += 1;
+        child = c.next_sibling();
+    }
+    total_pinned
+}
+
+fn reorder_box_child_to_index(apps_box: &GtkBox, widget: &gtk4::Widget, target_idx: usize) {
+    let mut others = Vec::new();
+    let mut child = apps_box.first_child();
+    while let Some(c) = child {
+        let next = c.next_sibling();
+        if c != *widget {
+            others.push(c);
+        }
+        child = next;
+    }
+
+    if target_idx == 0 {
+        apps_box.reorder_child_after(widget, None::<&gtk4::Widget>);
+    } else if let Some(prev) = others.get(target_idx - 1) {
+        apps_box.reorder_child_after(widget, Some(prev));
+    } else if let Some(last) = others.last() {
+        apps_box.reorder_child_after(widget, Some(last));
+    }
+}
+
+fn setup_dock_apps_drag_controller(
+    apps_box: &GtkBox,
+    dock_config: &Rc<RefCell<DockConfig>>,
+    on_refresh: &Rc<dyn Fn()>,
+) {
+    let drag = GestureDrag::new();
+    drag.set_button(1);
+    drag.set_propagation_phase(gtk4::PropagationPhase::Capture);
+
+    let drag_state: Rc<RefCell<Option<DockItemDragState>>> = Rc::new(RefCell::new(None));
+
+    let apps_box_begin = apps_box.clone();
+    let cfg_begin = dock_config.clone();
+    let state_begin = drag_state.clone();
+    drag.connect_drag_begin(move |_, start_x, start_y| {
+        let cfg = cfg_begin.borrow();
+        let total_pinned = cfg.apps.len();
+        let mut child = apps_box_begin.first_child();
+        let mut idx = 0usize;
+        while let Some(c) = child {
+            if idx >= total_pinned {
+                break;
+            }
+            if let Some(bounds) = c.compute_bounds(&apps_box_begin) {
+                let bx = bounds.x() as f64;
+                let bw = bounds.width() as f64;
+                if start_x >= bx - 2.0 && start_x <= bx + bw + 2.0 {
+                    if let Some(app_cfg) = cfg.apps.get(idx) {
+                        let resolved_icon = match app_cfg.icon.as_str() {
+                            "system-file-manager" => "org.gnome.Nautilus",
+                            "utilities-terminal" => "org.gnome.Ptyxis",
+                            "accessories-text-editor" => "org.gnome.TextEditor",
+                            other => other,
+                        };
+                        *state_begin.borrow_mut() = Some(DockItemDragState {
+                            widget: c,
+                            app_name: app_cfg.name.clone(),
+                            icon_name: resolved_icon.to_string(),
+                            current_idx: idx,
+                            total_pinned,
+                            start_x,
+                            start_y,
+                            active: false,
+                            will_remove: false,
+                            order_changed: false,
+                        });
+                    }
+                    return;
+                }
+            }
+            idx += 1;
+            child = c.next_sibling();
+        }
+        *state_begin.borrow_mut() = None;
+    });
+
+    let apps_box_update = apps_box.clone();
+    let cfg_update = dock_config.clone();
+    let state_update = drag_state.clone();
+    drag.connect_drag_update(move |gesture, offset_x, offset_y| {
+        let mut guard = state_update.borrow_mut();
+        let Some(ref mut state) = *guard else {
+            return;
+        };
+
+        if !state.active {
+            if offset_x.hypot(offset_y) < 6.0 {
+                return;
+            }
+            state.active = true;
+            gesture.set_state(gtk4::EventSequenceState::Claimed);
+            state.widget.add_css_class("dock-item-dragging");
+            state.widget.set_opacity(0.0);
+            let _ = send_ipc_message(&IpcMessage::StartDockIconDrag {
+                name: state.app_name.clone(),
+                icon: state.icon_name.clone(),
+            });
+        }
+
+        let cur_x = state.start_x + offset_x;
+        let cur_y = state.start_y + offset_y;
+        let outside_dock = cur_y < -52.0
+            || cur_y > (apps_box_update.height() as f64 + 42.0)
+            || cur_x < -72.0
+            || cur_x > (apps_box_update.width() as f64 + 72.0);
+
+        if outside_dock {
+            state.will_remove = true;
+        } else {
+            state.will_remove = false;
+
+            let mut target_idx = state.current_idx;
+            let mut child = apps_box_update.first_child();
+            let mut idx = 0usize;
+            while let Some(c) = child {
+                if idx >= state.total_pinned {
+                    break;
+                }
+                if let Some(bounds) = c.compute_bounds(&apps_box_update) {
+                    let center_x = bounds.x() as f64 + (bounds.width() as f64) * 0.5;
+                    if idx < state.current_idx && cur_x < center_x {
+                        target_idx = idx;
+                        break;
+                    } else if idx > state.current_idx && cur_x > center_x {
+                        target_idx = idx;
+                    }
+                }
+                idx += 1;
+                child = c.next_sibling();
+            }
+
+            if target_idx != state.current_idx
+                && cfg_update
+                    .borrow_mut()
+                    .move_app(state.current_idx, target_idx)
+            {
+                reorder_box_child_to_index(&apps_box_update, &state.widget, target_idx);
+                state.current_idx = target_idx;
+                state.order_changed = true;
+            }
+        }
+    });
+
+    let cfg_end = dock_config.clone();
+    let on_rf_end = on_refresh.clone();
+    let state_end = drag_state;
+    drag.connect_drag_end(move |_, _, _| {
+        let Some(state) = state_end.borrow_mut().take() else {
+            return;
+        };
+        state.widget.remove_css_class("dock-item-dragging");
+
+        if !state.active {
+            state.widget.set_opacity(1.0);
+            return;
+        }
+
+        let _ = send_ipc_message(&IpcMessage::EndDockIconDrag {
+            poof: state.will_remove,
+        });
+
+        if state.will_remove {
+            info!(
+                "🗑️ Icono '{}' arrastrado fuera del Dock; eliminando con efecto Poof",
+                state.app_name
+            );
+            let mut cfg = cfg_end.borrow_mut();
+            if cfg.unpin_app(&state.app_name) {
+                let _ = cfg.save();
+                drop(cfg);
+                on_rf_end();
+            } else {
+                state.widget.set_opacity(1.0);
+            }
+        } else {
+            state.widget.set_opacity(1.0);
+            if state.order_changed {
+                info!(
+                    "🔀 Orden de iconos del Dock actualizado tras arrastrar '{}'",
+                    state.app_name
+                );
+                let _ = cfg_end.borrow().save();
+                on_rf_end();
+            }
+        }
+    });
+
+    apps_box.add_controller(drag);
 }
 
 fn render_dock_apps(

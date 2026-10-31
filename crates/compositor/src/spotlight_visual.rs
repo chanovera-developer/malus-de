@@ -1,4 +1,4 @@
-use cairo::{Context, Format, ImageSurface, LinearGradient, Operator};
+use cairo::{Context, Format, ImageSurface, LinearGradient, Operator, RadialGradient};
 use gio::prelude::AppInfoExt;
 use serde::Deserialize;
 use smithay::{
@@ -356,6 +356,96 @@ struct PersistedClipboardEntry {
     text: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpotlightDragApp {
+    pub name: String,
+    pub icon: String,
+    pub command: String,
+    pub desktop_file: String,
+    pub matchers: Vec<String>,
+}
+
+impl SpotlightDragApp {
+    pub fn from_desktop_entry(name: &str, icon: &str, exec: &str, desktop_file: &str) -> Self {
+        let command = exec
+            .split_whitespace()
+            .filter(|part| !part.starts_with('%'))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut matchers = Vec::new();
+        let mut push_unique = |val: String| {
+            let trimmed = val.trim().to_string();
+            if !trimmed.is_empty() && !matchers.iter().any(|m: &String| m.eq_ignore_ascii_case(&trimmed)) {
+                matchers.push(trimmed);
+            }
+        };
+
+        if let Some(stem) = Path::new(desktop_file)
+            .file_stem()
+            .and_then(|s| s.to_str())
+        {
+            push_unique(stem.to_string());
+            push_unique(stem.to_lowercase());
+        }
+        if let Some(first_bin) = command
+            .split_whitespace()
+            .next()
+            .and_then(|bin| Path::new(bin).file_name())
+            .and_then(|s| s.to_str())
+        {
+            push_unique(first_bin.to_lowercase());
+        }
+        push_unique(name.to_lowercase());
+
+        Self {
+            name: name.to_string(),
+            icon: if icon.trim().is_empty() {
+                "application-x-executable".to_string()
+            } else {
+                icon.to_string()
+            },
+            command,
+            desktop_file: desktop_file.to_string(),
+            matchers,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct PendingSpotlightDrag {
+    app: SpotlightDragApp,
+    row_or_cell_index: usize,
+    press_loc: Point<f64, Logical>,
+    current_loc: Point<f64, Logical>,
+    active: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SpotlightPointerReleaseOutcome {
+    Consumed,
+    PinToDock {
+        app: SpotlightDragApp,
+        insert_at_dock_x: Option<i32>,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct ActiveDockIconDrag {
+    pub name: String,
+    pub icon: String,
+    pub current_loc: Point<f64, Logical>,
+}
+
+#[derive(Clone, Debug)]
+pub struct DockPoofAnimation {
+    pub name: String,
+    pub icon: String,
+    pub loc: Point<f64, Logical>,
+    pub started_at: Instant,
+}
+
+const DOCK_POOF_DURATION: Duration = Duration::from_millis(380);
+
 pub struct SpotlightState {
     is_open: bool,
     active_output_name: Option<String>,
@@ -378,6 +468,12 @@ pub struct SpotlightState {
     pub files: Vec<FileEntry>,
     pub clipboard_items: Vec<(String, String)>,
     icon_cache: HashMap<String, Option<ImageSurface>>,
+    pending_drag: Option<PendingSpotlightDrag>,
+    dock_drag: Option<ActiveDockIconDrag>,
+    dock_poof: Option<DockPoofAnimation>,
+    drag_buffer: Option<MemoryRenderBuffer>,
+    drag_buffer_size: (i32, i32),
+    drag_render_signature: u64,
 
     visual_buffer: Option<MemoryRenderBuffer>,
     visual_buffer_size: (i32, i32),
@@ -419,6 +515,12 @@ impl SpotlightState {
             files,
             clipboard_items,
             icon_cache: HashMap::new(),
+            pending_drag: None,
+            dock_drag: None,
+            dock_poof: None,
+            drag_buffer: None,
+            drag_buffer_size: (0, 0),
+            drag_render_signature: 0,
             visual_buffer: None,
             visual_buffer_size: (0, 0),
             mask_pixels: Vec::new(),
@@ -430,6 +532,42 @@ impl SpotlightState {
 
     pub fn is_open(&self) -> bool {
         self.is_open
+    }
+
+    pub fn is_dragging_app(&self) -> bool {
+        self.pending_drag.as_ref().is_some_and(|d| d.active)
+    }
+
+    pub fn has_active_drag_or_poof(&self) -> bool {
+        self.is_dragging_app() || self.dock_drag.is_some() || self.dock_poof.is_some()
+    }
+
+    pub fn start_dock_icon_drag(&mut self, name: String, icon: String, loc: Point<f64, Logical>) {
+        self.dock_poof = None;
+        self.dock_drag = Some(ActiveDockIconDrag {
+            name,
+            icon,
+            current_loc: loc,
+        });
+    }
+
+    pub fn update_dock_drag_location(&mut self, loc: Point<f64, Logical>) {
+        if let Some(ref mut drag) = self.dock_drag {
+            drag.current_loc = loc;
+        }
+    }
+
+    pub fn end_dock_icon_drag(&mut self, poof: bool, fallback_loc: Option<Point<f64, Logical>>) {
+        if let Some(drag) = self.dock_drag.take() {
+            if poof {
+                self.dock_poof = Some(DockPoofAnimation {
+                    name: drag.name,
+                    icon: drag.icon,
+                    loc: fallback_loc.unwrap_or(drag.current_loc),
+                    started_at: Instant::now(),
+                });
+            }
+        }
     }
 
     pub fn active_output_name(&self) -> Option<&str> {
@@ -465,6 +603,7 @@ impl SpotlightState {
         self.scroll_offset = 0.0;
         self.active_filter = 0;
         self.active_template = None;
+        self.pending_drag = None;
         self.clipboard_items = load_clipboard_items();
         self.files = index_files();
         self.mask_dirty = true;
@@ -495,6 +634,7 @@ impl SpotlightState {
         self.scroll_offset = 0.0;
         self.active_filter = 0;
         self.active_template = None;
+        self.pending_drag = None;
         self.mask_dirty = true;
         self.last_render_signature = 0;
     }
@@ -598,13 +738,30 @@ impl SpotlightState {
         let now = Instant::now();
         self.sync_transitions(now);
 
+        if let Some(ref mut drag) = self.pending_drag {
+            drag.current_loc = pointer_loc;
+            let dist = (pointer_loc.x - drag.press_loc.x).hypot(pointer_loc.y - drag.press_loc.y);
+            if !drag.active && dist >= 6.0 {
+                drag.active = true;
+            }
+            if drag.active {
+                return;
+            }
+        }
+
         let canvas = self.canvas_logical_rect(output_geo);
         let lx = pointer_loc.x - canvas.loc.x as f64;
         let ly = pointer_loc.y - canvas.loc.y as f64;
 
         let hover_t = self.hover_transition.value_at(now);
-        let expand_t = self.expand_transition.value_at(now);
-        let card_h = self.height_transition.value_at(now);
+        let expand_t = self
+            .expand_transition
+            .value_at(now)
+            .max(self.expand_transition.target());
+        let card_h = self
+            .height_transition
+            .value_at(now)
+            .max(self.height_transition.target());
         let (cap_x, cap_y, cap_w, cap_h, _) = self.capsule_rect_at(hover_t, expand_t, card_h);
 
         if !self.is_expanded() {
@@ -706,14 +863,21 @@ impl SpotlightState {
         }
         let now = Instant::now();
         self.sync_transitions(now);
+        self.pending_drag = None;
 
         let canvas = self.canvas_logical_rect(output_geo);
         let lx = pointer_loc.x - canvas.loc.x as f64;
         let ly = pointer_loc.y - canvas.loc.y as f64;
 
         let hover_t = self.hover_transition.value_at(now);
-        let expand_t = self.expand_transition.value_at(now);
-        let card_h = self.height_transition.value_at(now);
+        let expand_t = self
+            .expand_transition
+            .value_at(now)
+            .max(self.expand_transition.target());
+        let card_h = self
+            .height_transition
+            .value_at(now)
+            .max(self.height_transition.target());
         let (cap_x, cap_y, cap_w, cap_h, _) = self.capsule_rect_at(hover_t, expand_t, card_h);
 
         if !self.is_expanded() {
@@ -777,14 +941,110 @@ impl SpotlightState {
             return true;
         }
 
-        // Comprobar clic en un elemento de la cuadrícula de aplicaciones o fila de resultados
+        // Comprobar presión en un elemento de la cuadrícula de aplicaciones o fila de resultados
         if let Some(idx) = self.hovered_row {
             self.selected_index = idx;
+            if self.mode == SpotlightMode::Applications {
+                let apps = self.filtered_apps();
+                if let Some(app) = apps.get(idx) {
+                    let drag_app = SpotlightDragApp::from_desktop_entry(
+                        &app.name,
+                        &app.icon,
+                        &app.exec,
+                        &app.desktop_file,
+                    );
+                    self.pending_drag = Some(PendingSpotlightDrag {
+                        app: drag_app,
+                        row_or_cell_index: idx,
+                        press_loc: pointer_loc,
+                        current_loc: pointer_loc,
+                        active: false,
+                    });
+                    return true;
+                }
+            } else {
+                let rows = self.current_rows();
+                if let Some(row) = rows.get(idx) {
+                    if let ResultExecuteAction::LaunchDesktopApp {
+                        ref desktop_file,
+                        ref exec,
+                    } = row.action
+                    {
+                        let icon = match row.icon_kind {
+                            RowIconKind::App(ref icon_name) => icon_name.as_str(),
+                            _ => "application-x-executable",
+                        };
+                        let drag_app = SpotlightDragApp::from_desktop_entry(
+                            &row.title,
+                            icon,
+                            exec,
+                            desktop_file,
+                        );
+                        self.pending_drag = Some(PendingSpotlightDrag {
+                            app: drag_app,
+                            row_or_cell_index: idx,
+                            press_loc: pointer_loc,
+                            current_loc: pointer_loc,
+                            active: false,
+                        });
+                        return true;
+                    }
+                }
+            }
             self.activate_selected(now);
             return true;
         }
 
         true
+    }
+
+    /// Procesa la liberación del botón izquierdo cuando hay un clic o arrastre de aplicación pendiente en Spotlight.
+    pub fn handle_pointer_button_release(
+        &mut self,
+        output_geo: Rectangle<i32, Logical>,
+        pointer_loc: Point<f64, Logical>,
+        button_code: u32,
+        dock_geo: Option<Rectangle<i32, Logical>>,
+    ) -> Option<SpotlightPointerReleaseOutcome> {
+        if !self.is_open || button_code != 0x110 {
+            self.pending_drag = None;
+            return None;
+        }
+        let pending = self.pending_drag.take()?;
+        if !pending.active {
+            self.selected_index = pending.row_or_cell_index;
+            self.activate_selected(Instant::now());
+            return Some(SpotlightPointerReleaseOutcome::Consumed);
+        }
+
+        if let Some(dgeo) = dock_geo {
+            let margin_x = 40.0;
+            let margin_y = 32.0;
+            let over_dock = pointer_loc.x >= dgeo.loc.x as f64 - margin_x
+                && pointer_loc.x <= (dgeo.loc.x + dgeo.size.w) as f64 + margin_x
+                && pointer_loc.y >= dgeo.loc.y as f64 - margin_y
+                && pointer_loc.y <= (dgeo.loc.y + dgeo.size.h) as f64 + margin_y;
+            if over_dock {
+                let dock_x = (pointer_loc.x.round() as i32) - dgeo.loc.x;
+                self.close();
+                return Some(SpotlightPointerReleaseOutcome::PinToDock {
+                    app: pending.app,
+                    insert_at_dock_x: Some(dock_x),
+                });
+            }
+        }
+
+        let bottom_strip_top = (output_geo.loc.y + output_geo.size.h - 110) as f64;
+        if pointer_loc.y >= bottom_strip_top {
+            let insert_at_dock_x = dock_geo.map(|dgeo| (pointer_loc.x.round() as i32) - dgeo.loc.x);
+            self.close();
+            return Some(SpotlightPointerReleaseOutcome::PinToDock {
+                app: pending.app,
+                insert_at_dock_x,
+            });
+        }
+
+        Some(SpotlightPointerReleaseOutcome::Consumed)
     }
 
     pub fn handle_scroll(&mut self, vertical_delta: f64) -> bool {
@@ -1467,7 +1727,13 @@ impl SpotlightState {
             None
         };
 
-        Some((phys_rect, mask_slice, self.mask_size, open_t as f32))
+        let effective_alpha = if self.is_dragging_app() {
+            (open_t as f32) * 0.68
+        } else {
+            open_t as f32
+        };
+
+        Some((phys_rect, mask_slice, self.mask_size, effective_alpha))
     }
 
     pub fn create_render_element(
@@ -1482,6 +1748,204 @@ impl SpotlightState {
             location,
             buffer,
             Some(alpha.clamp(0.0, 1.0)),
+            None,
+            None,
+            Kind::Unspecified,
+        )
+        .ok()
+    }
+
+    pub fn prepare_drag_render_element(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        output_geo: Rectangle<i32, Logical>,
+        scale: f64,
+        is_dark: bool,
+    ) -> Option<MemoryRenderBufferRenderElement<GlesRenderer>> {
+        let scale = scale.max(1.0);
+
+        // 1. Si hay una animación Poof ("puff") activa tras soltar un icono fuera del Dock
+        if let Some(poof) = self.dock_poof.clone() {
+            let elapsed = Instant::now().saturating_duration_since(poof.started_at);
+            if elapsed >= DOCK_POOF_DURATION {
+                self.dock_poof = None;
+                return None;
+            }
+            let t = (elapsed.as_secs_f64() / DOCK_POOF_DURATION.as_secs_f64()).clamp(0.0, 1.0);
+            const POOF_CANVAS_LOGICAL: f64 = 128.0;
+            let phys_sz = ((POOF_CANVAS_LOGICAL * scale).round() as i32).max(2);
+
+            if let Ok(mut surface) = ImageSurface::create(Format::ARgb32, phys_sz, phys_sz) {
+                if let Ok(ctx) = Context::new(&surface) {
+                    ctx.scale(scale, scale);
+                    ctx.set_operator(Operator::Source);
+                    ctx.set_source_rgba(0.0, 0.0, 0.0, 0.0);
+                    let _ = ctx.paint();
+                    ctx.set_operator(Operator::Over);
+
+                    let center = POOF_CANVAS_LOGICAL * 0.5;
+                    if t < 0.34 {
+                        let icon_t = (t / 0.34).clamp(0.0, 1.0);
+                        let icon_scale = (1.0 - 0.68 * icon_t).max(0.12);
+                        let icon_alpha = (1.0 - icon_t * icon_t).clamp(0.0, 1.0);
+                        self.draw_app_icon(
+                            &ctx,
+                            &poof.icon,
+                            &poof.name,
+                            center,
+                            center,
+                            52.0 * icon_scale,
+                            icon_alpha,
+                        );
+                    }
+                    draw_poof_smoke_cloud(&ctx, center, t);
+                }
+                surface.flush();
+                if let Ok(data) = surface.data() {
+                    if self.drag_buffer.is_none() || self.drag_buffer_size != (phys_sz, phys_sz) {
+                        self.drag_buffer = Some(MemoryRenderBuffer::new(
+                            Fourcc::Argb8888,
+                            Size::from((phys_sz, phys_sz)),
+                            1,
+                            smithay::utils::Transform::Normal,
+                            None,
+                        ));
+                        self.drag_buffer_size = (phys_sz, phys_sz);
+                    }
+                    if let Some(ref mut buf) = self.drag_buffer {
+                        let mut rctx = buf.render();
+                        let _ = rctx.draw(|dst| {
+                            if dst.len() == data.len() {
+                                dst.copy_from_slice(&data);
+                            }
+                            Ok::<_, ()>(vec![Rectangle::from_size((phys_sz, phys_sz).into())])
+                        });
+                    }
+                    self.drag_render_signature = 0;
+                }
+            }
+
+            let buffer = self.drag_buffer.as_ref()?;
+            let local_x = (poof.loc.x - output_geo.loc.x as f64) - POOF_CANVAS_LOGICAL * 0.5;
+            let local_y = (poof.loc.y - output_geo.loc.y as f64) - POOF_CANVAS_LOGICAL * 0.5;
+            let phys_loc = Point::from((local_x * scale, local_y * scale));
+
+            return MemoryRenderBufferRenderElement::from_buffer(
+                renderer,
+                phys_loc,
+                buffer,
+                Some(1.0),
+                None,
+                None,
+                Kind::Unspecified,
+            )
+            .ok();
+        }
+
+        // 2. Arrastre activo desde Spotlight o desde el Dock
+        let (app_name, app_icon, current_loc, from_dock) =
+            if let Some(drag) = self.pending_drag.as_ref().filter(|d| d.active) {
+                (
+                    drag.app.name.clone(),
+                    drag.app.icon.clone(),
+                    drag.current_loc,
+                    false,
+                )
+            } else if let Some(ref dock_drag) = self.dock_drag {
+                (
+                    dock_drag.name.clone(),
+                    dock_drag.icon.clone(),
+                    dock_drag.current_loc,
+                    true,
+                )
+            } else {
+                return None;
+            };
+
+        const DRAG_CANVAS_LOGICAL: f64 = 88.0;
+        let phys_sz = ((DRAG_CANVAS_LOGICAL * scale).round() as i32).max(2);
+
+        let mut sig = 1469598103934665603u64;
+        for b in app_icon.as_bytes().iter().chain(app_name.as_bytes()) {
+            sig ^= u64::from(*b);
+            sig = sig.wrapping_mul(1099511628211);
+        }
+        sig ^= phys_sz as u64;
+        sig ^= u64::from(is_dark) << 16;
+        sig ^= u64::from(from_dock) << 24;
+
+        if sig != self.drag_render_signature
+            || self.drag_buffer.is_none()
+            || self.drag_buffer_size != (phys_sz, phys_sz)
+        {
+            if let Ok(mut surface) = ImageSurface::create(Format::ARgb32, phys_sz, phys_sz) {
+                if let Ok(ctx) = Context::new(&surface) {
+                    ctx.scale(scale, scale);
+                    ctx.set_operator(Operator::Source);
+                    ctx.set_source_rgba(0.0, 0.0, 0.0, 0.0);
+                    let _ = ctx.paint();
+                    ctx.set_operator(Operator::Over);
+
+                    let center = DRAG_CANVAS_LOGICAL * 0.5;
+                    draw_soft_drop_shadow(
+                        &ctx,
+                        center - 27.0,
+                        center - 27.0,
+                        54.0,
+                        54.0,
+                        14.0,
+                        1.0,
+                        is_dark,
+                    );
+                    path_squircle_rect(&ctx, center - 27.0, center - 27.0, 54.0, 54.0, 14.0);
+                    if is_dark {
+                        ctx.set_source_rgba(0.18, 0.19, 0.22, 0.78);
+                    } else {
+                        ctx.set_source_rgba(0.96, 0.97, 0.99, 0.84);
+                    }
+                    let _ = ctx.fill_preserve();
+                    ctx.set_line_width(1.1);
+                    ctx.set_source_rgba(1.0, 1.0, 1.0, if is_dark { 0.25 } else { 0.65 });
+                    let _ = ctx.stroke();
+
+                    self.draw_app_icon(&ctx, &app_icon, &app_name, center, center, 44.0, 0.98);
+                }
+                surface.flush();
+                if let Ok(data) = surface.data() {
+                    if self.drag_buffer.is_none() || self.drag_buffer_size != (phys_sz, phys_sz) {
+                        self.drag_buffer = Some(MemoryRenderBuffer::new(
+                            Fourcc::Argb8888,
+                            Size::from((phys_sz, phys_sz)),
+                            1,
+                            smithay::utils::Transform::Normal,
+                            None,
+                        ));
+                        self.drag_buffer_size = (phys_sz, phys_sz);
+                    }
+                    if let Some(ref mut buf) = self.drag_buffer {
+                        let mut rctx = buf.render();
+                        let _ = rctx.draw(|dst| {
+                            if dst.len() == data.len() {
+                                dst.copy_from_slice(&data);
+                            }
+                            Ok::<_, ()>(vec![Rectangle::from_size((phys_sz, phys_sz).into())])
+                        });
+                    }
+                    self.drag_render_signature = sig;
+                }
+            }
+        }
+
+        let buffer = self.drag_buffer.as_ref()?;
+        let local_x = (current_loc.x - output_geo.loc.x as f64) - DRAG_CANVAS_LOGICAL * 0.5;
+        let local_y = (current_loc.y - output_geo.loc.y as f64) - DRAG_CANVAS_LOGICAL * 0.5;
+        let phys_loc = Point::from((local_x * scale, local_y * scale));
+
+        MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            phys_loc,
+            buffer,
+            Some(0.96),
             None,
             None,
             Kind::Unspecified,
@@ -2232,6 +2696,100 @@ impl SpotlightState {
 
 trait CairoDestOutExt {
     fn destination_out_operator() -> Operator;
+}
+
+fn draw_poof_smoke_cloud(ctx: &Context, center: f64, t: f64) {
+    let t = t.clamp(0.0, 1.0);
+    let ease_out = 1.0 - (1.0 - t).powi(3);
+
+    // 1. Núcleo central de nube durante el estallido inicial
+    if t < 0.62 {
+        let core_t = (t / 0.62).clamp(0.0, 1.0);
+        let core_r = 12.0 + 22.0 * (1.0 - (1.0 - core_t).powi(2));
+        let core_alpha = (1.0 - core_t.powf(1.4)) * 0.88;
+        let grad = RadialGradient::new(
+            center - 3.0,
+            center - 3.0,
+            2.0,
+            center,
+            center,
+            core_r,
+        );
+        grad.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, core_alpha);
+        grad.add_color_stop_rgba(0.62, 0.93, 0.95, 0.98, core_alpha * 0.78);
+        grad.add_color_stop_rgba(1.0, 0.78, 0.82, 0.88, 0.0);
+        ctx.new_sub_path();
+        ctx.arc(center, center, core_r, 0.0, TAU);
+        let _ = ctx.set_source(&grad);
+        let _ = ctx.fill();
+    }
+
+    // 2. Motas secundarias exteriores que se dispersan rápido
+    const MOTES: [(f64, f64, f64, f64); 6] = [
+        (0.42, 8.0, 48.0, 8.5),
+        (1.48, 7.0, 44.0, 7.5),
+        (2.52, 8.0, 47.0, 8.0),
+        (3.58, 7.0, 45.0, 7.5),
+        (4.62, 8.0, 49.0, 8.5),
+        (5.68, 7.0, 43.0, 7.0),
+    ];
+    for (angle, start_d, max_d, max_r) in MOTES {
+        let d = start_d + (max_d - start_d) * (1.0 - (1.0 - t).powi(4));
+        let r = (max_r * (1.0 - t * 0.65)).max(1.0);
+        let alpha = ((t / 0.10).clamp(0.0, 1.0) * (1.0 - t).powf(1.8)).clamp(0.0, 1.0) * 0.75;
+        let mx = center + angle.cos() * d;
+        let my = center + angle.sin() * d;
+        let grad = RadialGradient::new(mx, my, 0.5, mx, my, r);
+        grad.add_color_stop_rgba(0.0, 0.98, 0.99, 1.0, alpha);
+        grad.add_color_stop_rgba(0.7, 0.86, 0.89, 0.94, alpha * 0.5);
+        grad.add_color_stop_rgba(1.0, 0.78, 0.82, 0.88, 0.0);
+        ctx.new_sub_path();
+        ctx.arc(mx, my, r, 0.0, TAU);
+        let _ = ctx.set_source(&grad);
+        let _ = ctx.fill();
+    }
+
+    // 3. 8 lóbulos principales de nube estilo macOS "Poof"
+    const PUFFS: [(f64, f64, f64, f64); 8] = [
+        (0.00, 6.0, 33.0, 20.0),
+        (0.78, 5.0, 29.0, 17.5),
+        (1.57, 6.0, 31.0, 19.0),
+        (2.35, 5.0, 35.0, 20.5),
+        (3.14, 6.0, 32.0, 19.0),
+        (3.92, 5.0, 30.0, 18.0),
+        (4.71, 6.0, 34.0, 20.0),
+        (5.50, 5.0, 28.0, 17.0),
+    ];
+    for (angle, start_d, max_d, max_r) in PUFFS {
+        let d = start_d + (max_d - start_d) * ease_out;
+        let grow = (t / 0.26).clamp(0.0, 1.0).sqrt();
+        let shrink = 1.0 - 0.36 * ((t - 0.34).max(0.0) / 0.66).powi(2);
+        let r = (max_r * grow * shrink).max(1.0);
+        let puff_alpha = ((t / 0.10).clamp(0.0, 1.0)
+            * (1.0 - ((t - 0.16).max(0.0) / 0.84).powf(1.55)))
+        .clamp(0.0, 1.0)
+            * 0.94;
+
+        let px = center + angle.cos() * d;
+        let py = center + angle.sin() * d;
+        let grad = RadialGradient::new(
+            px - r * 0.24,
+            py - r * 0.24,
+            r * 0.08,
+            px,
+            py,
+            r,
+        );
+        grad.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, puff_alpha);
+        grad.add_color_stop_rgba(0.54, 0.94, 0.96, 0.99, puff_alpha * 0.88);
+        grad.add_color_stop_rgba(0.82, 0.78, 0.82, 0.89, puff_alpha * 0.46);
+        grad.add_color_stop_rgba(1.0, 0.68, 0.73, 0.82, 0.0);
+
+        ctx.new_sub_path();
+        ctx.arc(px, py, r, 0.0, TAU);
+        let _ = ctx.set_source(&grad);
+        let _ = ctx.fill();
+    }
 }
 
 impl CairoDestOutExt for Operator {
@@ -3664,5 +4222,88 @@ mod tests {
         assert!(!spotlight.should_render_on_output("HDMI-A-1"));
         spotlight.close();
         assert!(!spotlight.should_render_on_output("DP-1"));
+    }
+
+    #[test]
+    fn spotlight_dragging_app_onto_dock_returns_pin_outcome() {
+        let mut spotlight = SpotlightState::new();
+        spotlight.apps = vec![AppEntry {
+            name: "Antigravity".to_string(),
+            exec: "/usr/share/antigravity/antigravity %F".to_string(),
+            desktop_file: "/usr/share/applications/antigravity-ide.desktop".to_string(),
+            icon: "antigravity".to_string(),
+            comment: "AI IDE".to_string(),
+            categories: "Development;IDE;".to_string(),
+            search_terms: "antigravity ide".to_string(),
+        }];
+        let output_geo = Rectangle::new((0, 0).into(), (1920, 1080).into());
+        let dock_geo = Rectangle::new((660, 1004).into(), (600, 68).into());
+
+        spotlight.open();
+        spotlight.set_mode(SpotlightMode::Applications, Instant::now());
+        spotlight.hovered_row = Some(0);
+
+        let canvas = spotlight.canvas_logical_rect(output_geo);
+        let press_pt = Point::from((canvas.loc.x as f64 + 60.0, canvas.loc.y as f64 + 160.0));
+        assert!(spotlight.handle_pointer_button(output_geo, press_pt, 0x110));
+        assert!(spotlight.is_open());
+        assert!(!spotlight.is_dragging_app());
+
+        // Arrastrar hacia el Dock
+        let drop_pt = Point::from((840.0, 1030.0));
+        spotlight.update_pointer_motion(output_geo, drop_pt);
+        assert!(spotlight.is_dragging_app());
+
+        let outcome = spotlight
+            .handle_pointer_button_release(output_geo, drop_pt, 0x110, Some(dock_geo))
+            .expect("outcome on release");
+        assert_eq!(
+            outcome,
+            SpotlightPointerReleaseOutcome::PinToDock {
+                app: SpotlightDragApp {
+                    name: "Antigravity".to_string(),
+                    icon: "antigravity".to_string(),
+                    command: "/usr/share/antigravity/antigravity".to_string(),
+                    desktop_file: "/usr/share/applications/antigravity-ide.desktop".to_string(),
+                    matchers: vec![
+                        "antigravity-ide".to_string(),
+                        "antigravity".to_string(),
+                    ],
+                },
+                insert_at_dock_x: Some(180),
+            }
+        );
+        assert!(!spotlight.is_open());
+    }
+
+    #[test]
+    fn dock_icon_drag_and_poof_lifecycle() {
+        let mut spotlight = SpotlightState::new();
+        assert!(!spotlight.has_active_drag_or_poof());
+
+        spotlight.start_dock_icon_drag(
+            "Archivos".to_string(),
+            "org.gnome.Nautilus".to_string(),
+            Point::from((600.0, 1020.0)),
+        );
+        assert!(spotlight.has_active_drag_or_poof());
+
+        spotlight.update_dock_drag_location(Point::from((620.0, 820.0)));
+        spotlight.end_dock_icon_drag(true, Some(Point::from((620.0, 820.0))));
+        assert!(
+            spotlight.has_active_drag_or_poof(),
+            "Al soltar fuera del Dock debe quedar activa la animación Poof"
+        );
+
+        let mut surface = ImageSurface::create(Format::ARgb32, 128, 128).unwrap();
+        let ctx = Context::new(&surface).unwrap();
+        draw_poof_smoke_cloud(&ctx, 64.0, 0.35);
+        drop(ctx);
+        surface.flush();
+        let data = surface.data().unwrap();
+        assert!(
+            data.chunks_exact(4).any(|px| px[3] > 0),
+            "La nube Poof debe dibujar píxeles visibles"
+        );
     }
 }

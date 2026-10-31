@@ -154,10 +154,21 @@ pub enum IpcMessage {
         command: String,
         #[serde(default)]
         matchers: Vec<String>,
+        #[serde(default)]
+        insert_at_dock_x: Option<i32>,
     },
     /// Solicitud de desanclar una aplicación del Dock
     UnpinAppFromDock {
         name: String,
+    },
+    /// Notificación de inicio de arrastre de un icono del Dock para que el compositor lo dibuje pegado al cursor
+    StartDockIconDrag {
+        name: String,
+        icon: String,
+    },
+    /// Notificación de fin de arrastre de un icono del Dock (`poof = true` reproduce la animación puff al soltar fuera)
+    EndDockIconDrag {
+        poof: bool,
     },
     /// Notificación o solicitud de recarga de configuración del Dock (dock.toml)
     ReloadDockConfig,

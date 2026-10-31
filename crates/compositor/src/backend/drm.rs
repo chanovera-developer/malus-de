@@ -1369,6 +1369,7 @@ pub fn run_drm() -> Result<()> {
                     current_pos.x += event.delta_x();
                     current_pos.y += event.delta_y();
                     let point = clamp_pointer_location(state, current_pos);
+                    state.spotlight.update_dock_drag_location(point);
 
                     if state.spotlight.is_open() {
                         if let Some(spot_output_geo) = state.spotlight_output_geometry() {
@@ -1413,6 +1414,7 @@ pub fn run_drm() -> Result<()> {
                         point.x += output_geo.loc.x as f64;
                         point.y += output_geo.loc.y as f64;
                         let point = clamp_pointer_location(state, point);
+                        state.spotlight.update_dock_drag_location(point);
 
                         if state.spotlight.is_open() {
                             let spot_output_geo = state
@@ -1596,6 +1598,38 @@ pub fn run_drm() -> Result<()> {
                             }
                         }
                     } else {
+                        if state.spotlight.is_open() {
+                            if let Some(spot_output_geo) = state.spotlight_output_geometry() {
+                                let dock_geo = state.dock_surface_geometry().map(|(geo, _)| geo);
+                                if let Some(outcome) =
+                                    state.spotlight.handle_pointer_button_release(
+                                        spot_output_geo,
+                                        point,
+                                        event.button_code(),
+                                        dock_geo,
+                                    )
+                                {
+                                    if let crate::spotlight_visual::SpotlightPointerReleaseOutcome::PinToDock {
+                                        app,
+                                        insert_at_dock_x,
+                                    } = outcome
+                                    {
+                                        info!(
+                                            "📌 Aplicación arrastrada desde Spotlight al Dock: '{}' (dock_x={:?})",
+                                            app.name, insert_at_dock_x
+                                        );
+                                        state.ipc_broadcaster.broadcast(&IpcMessage::PinAppToDock {
+                                            name: app.name,
+                                            icon: app.icon,
+                                            command: app.command,
+                                            matchers: app.matchers,
+                                            insert_at_dock_x,
+                                        });
+                                    }
+                                    return;
+                                }
+                            }
+                        }
                         state.snap_preview = None;
                     }
 
@@ -2293,6 +2327,16 @@ pub fn run_drm() -> Result<()> {
                 } else {
                     None
                 };
+                let spotlight_drag_elem = if state.spotlight.has_active_drag_or_poof() {
+                    state.spotlight.prepare_drag_render_element(
+                        &mut renderer,
+                        output_geo,
+                        scale,
+                        is_dark_theme,
+                    )
+                } else {
+                    None
+                };
 
                 if let Ok(mut target) = renderer.bind(&mut dmabuf) {
                     let screenshot_request = state
@@ -2869,6 +2913,14 @@ pub fn run_drm() -> Result<()> {
                                 &mut frame,
                                 1.0,
                                 std::slice::from_ref(spot_elem),
+                                &[damage],
+                            );
+                        }
+                        if let Some(ref drag_elem) = spotlight_drag_elem {
+                            let _ = draw_render_elements(
+                                &mut frame,
+                                1.0,
+                                std::slice::from_ref(drag_elem),
                                 &[damage],
                             );
                         }

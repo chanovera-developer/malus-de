@@ -666,10 +666,30 @@ impl DockConfig {
 
     /// Ancla una aplicación al final del dock si no está ya presente
     pub fn pin_app(&mut self, app: DockAppConfig) -> bool {
-        if self.apps.iter().any(|a| a.name.eq_ignore_ascii_case(&app.name) || (!a.command.is_empty() && a.command == app.command)) {
+        self.pin_app_at(app, None)
+    }
+
+    /// Ancla una aplicación en una posición específica del dock (o la reubica si ya estaba anclada)
+    pub fn pin_app_at(&mut self, app: DockAppConfig, index: Option<usize>) -> bool {
+        if let Some(existing_idx) = self.apps.iter().position(|a| {
+            a.name.eq_ignore_ascii_case(&app.name)
+                || (!a.command.is_empty() && a.command == app.command)
+        }) {
+            if let Some(target) = index {
+                let clamped = target.min(self.apps.len().saturating_sub(1));
+                return self.move_app(existing_idx, clamped);
+            }
             return false;
         }
-        self.apps.push(app);
+        match index {
+            Some(target) => {
+                let insert_idx = target.min(self.apps.len());
+                self.apps.insert(insert_idx, app);
+            }
+            None => {
+                self.apps.push(app);
+            }
+        }
         true
     }
 

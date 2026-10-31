@@ -492,6 +492,7 @@ pub fn run_winit() -> Result<()> {
                     let output_geo = state.space.output_geometry(&output).unwrap_or_default();
                     let point = event.position_transformed(output_geo.size);
                     let serial = SERIAL_COUNTER.next_serial();
+                    state.spotlight.update_dock_drag_location(point);
 
                     if state.spotlight.is_open() {
                         state.spotlight.update_pointer_motion(output_geo, point);
@@ -785,6 +786,37 @@ pub fn run_winit() -> Result<()> {
                             state.notify_active_app(None);
                         }
                     } else {
+                        if state.spotlight.is_open() {
+                            let output_geo = state.space.output_geometry(&output).unwrap_or_default();
+                            let dock_geo = state.dock_surface_geometry().map(|(geo, _)| geo);
+                            if let Some(outcome) =
+                                state.spotlight.handle_pointer_button_release(
+                                    output_geo,
+                                    point,
+                                    event.button_code(),
+                                    dock_geo,
+                                )
+                            {
+                                if let crate::spotlight_visual::SpotlightPointerReleaseOutcome::PinToDock {
+                                    app,
+                                    insert_at_dock_x,
+                                } = outcome
+                                {
+                                    info!(
+                                        "📌 Aplicación arrastrada desde Spotlight al Dock: '{}' (dock_x={:?})",
+                                        app.name, insert_at_dock_x
+                                    );
+                                    state.ipc_broadcaster.broadcast(&IpcMessage::PinAppToDock {
+                                        name: app.name,
+                                        icon: app.icon,
+                                        command: app.command,
+                                        matchers: app.matchers,
+                                        insert_at_dock_x,
+                                    });
+                                }
+                                return;
+                            }
+                        }
                         state.snap_preview = None;
                     }
 
@@ -1140,6 +1172,16 @@ pub fn run_winit() -> Result<()> {
                     } else {
                         None
                     }
+                } else {
+                    None
+                };
+                let spotlight_drag_elem = if state.spotlight.has_active_drag_or_poof() {
+                    state.spotlight.prepare_drag_render_element(
+                        renderer,
+                        output_geo,
+                        1.0,
+                        is_dark_theme,
+                    )
                 } else {
                     None
                 };
@@ -1692,6 +1734,14 @@ pub fn run_winit() -> Result<()> {
                             &mut frame,
                             1.0,
                             std::slice::from_ref(spot_elem),
+                            &[damage],
+                        );
+                    }
+                    if let Some(ref drag_elem) = spotlight_drag_elem {
+                        let _ = draw_render_elements(
+                            &mut frame,
+                            1.0,
+                            std::slice::from_ref(drag_elem),
                             &[damage],
                         );
                     }

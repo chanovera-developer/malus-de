@@ -1004,6 +1004,21 @@ impl MalusState {
                     self.dock_blur_headroom = Self::load_dock_blur_headroom();
                     self.ipc_broadcaster.broadcast(&IpcMessage::ReloadDockConfig);
                 }
+                msg @ (IpcMessage::PinAppToDock { .. } | IpcMessage::UnpinAppFromDock { .. }) => {
+                    self.ipc_broadcaster.broadcast(&msg);
+                }
+                IpcMessage::StartDockIconDrag { name, icon } => {
+                    let loc = self
+                        .seat
+                        .get_pointer()
+                        .map(|p| p.current_location())
+                        .unwrap_or_default();
+                    self.spotlight.start_dock_icon_drag(name, icon, loc);
+                }
+                IpcMessage::EndDockIconDrag { poof } => {
+                    let loc = self.seat.get_pointer().map(|p| p.current_location());
+                    self.spotlight.end_dock_icon_drag(poof, loc);
+                }
                 _ => {}
             }
         }
