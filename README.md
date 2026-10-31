@@ -12,7 +12,7 @@
 
 Malus DE está pensado actualmente para desarrollo y pruebas controladas. Antes de invitar a un público abierto faltan, como mínimo:
 
-- Dejar pasar toda la suite de pruebas automatizadas. En la revisión actual, `cargo test --workspace --no-fail-fast` compiló el workspace, pero terminó con **73 pruebas correctas y 4 fallidas** en `malus-de-common`: dos aserciones de estilos CSS de menús y dos expectativas sobre el número de aplicaciones predeterminadas del Dock.
+- Dejar pasar toda la suite de pruebas automatizadas. En la revisión actual, `cargo test --workspace --no-fail-fast` compiló el workspace con **87 pruebas correctas y 2 fallidas** en `malus-de-common`: dos aserciones relacionadas con selectores CSS en temas GTK de ventanas emergentes.
 - Validar el flujo completo de inicio de sesión, uso diario y recuperación en hardware y configuraciones de pantalla distintos.
 - Proporcionar una instalación empaquetada y documentar una forma segura de desinstalar o revertir los cambios del instalador.
 - Publicar instrucciones de diagnóstico y un canal claro para reportar fallos reproducibles.
@@ -21,15 +21,18 @@ Las funciones descritas abajo indican alcance implementado en el código, no una
 
 ## Características
 
-- Compositor Wayland basado en [Smithay](https://github.com/Smithay/smithay), con backend anidado Winit y backend DRM/KMS.
+- Compositor Wayland basado en [Smithay](https://github.com/Smithay/smithay), con backend anidado Winit y backend DRM/KMS nativo.
 - Prioridad de CPU adaptativa para aplicaciones Wayland nativas: crea scopes de systemd con `CPUWeight=1000` para la aplicación enfocada y `CPUWeight=20` para las que quedan en segundo plano. Los pesos son relativos; no reserva ni aísla núcleos.
-- Shell modular con barra superior, menú global, centro de control, dock flotante, Spotlight (incluye acciones para cerrar sesión, reiniciar y apagar, e indexa aplicaciones Flatpak), notificaciones y fondo de pantalla.
+- Shell modular con barra superior, menú global, centro de control, dock flotante, Spotlight, notificaciones y fondo de pantalla.
+- Dock interactivo con animación de aumento/disminución, reorganización fluida de iconos por arrastre con huecos en tiempo real, desanclado con seguimiento 1:1 del cursor en el compositor y animación de nube de humo (*Poof*) radial estilo macOS al soltar fuera. Detección automática de iconos con fondo plano para extrapolación y curvatura continua squircle homogénea, así como contenedores automáticos para iconos con canal alfa.
+- Spotlight Liquid Glass integrado en el compositor: barra de búsqueda con división fluida al pasar el cursor o desplegar resultados, esquinas squircle con desenfoque de fondo, localización automática al idioma de la sesión (`LC_MESSAGES`/`LANG`), indexación de aplicaciones nativas y Flatpak (incluyendo acciones de sesión para apagar, reiniciar o cerrar sesión) y arrastre directo de aplicaciones desde la lista de resultados hacia el Dock para anclarlas.
+- Efecto Genie (Lámpara Mágica): minimización y restauración de ventanas hacia su icono en el Dock mediante una malla de deformación no lineal con continuidad suave $C^2$ (hasta 360 franjas horizontales) y recorte exacto de sombras CSD.
 - Escritorio interactivo con iconos movibles, intercambio de archivos por arrastrar y soltar con el gestor de archivos y miniaturas de imágenes.
 - Selector visual de ventanas Alt-Tab/Super-Tab funcional para recorrer y cambiar entre ventanas abiertas; su presentación y comportamiento siguen en desarrollo.
 - Integración con servicios de Linux para audio, red, Bluetooth y controles multimedia.
 - Captura real de pantalla completa solicitada al compositor mediante IPC, guardada en la carpeta de Imágenes y copiada como PNG al portapapeles.
 - Historial local persistente de hasta 50 elementos de texto, imágenes, documentos y URI de archivos, accesible con `Super + V`. Admite búsqueda, fijar elementos, volver a copiarlos y borrarlos; ocupa como máximo 50 MiB (10 MiB por elemento). La sincronización con la selección primaria de Wayland es opcional y está desactivada por defecto. El filtro automático de credenciales está activado por defecto y se puede configurar desde la interfaz; es heurístico y no detecta todos los secretos. Los datos se guardan localmente con permisos privados, se conservan entre sesiones y se eliminan al borrar el historial. Requiere `wl-clipboard`.
-- Efectos gráficos con shaders, esquinas squircle y animaciones de ventanas.
+- Efectos gráficos con shaders GLSL, esquinas squircle y animaciones fluidas de ventanas.
 - Detección de pantallas y modos compatibles por DRM/KMS, con resolución, disposición y escala fraccionaria configurables en caliente.
 - Experimentos de integración con dispositivos Apple mediante AirDrop; el backend AWDL/BLE está en desarrollo.
 
@@ -131,7 +134,9 @@ Nautilus puede mostrar las carpetas personales XDG del usuario en Lugares; estas
 El lanzador crea las carpetas personales XDG estándar si faltan y añade sus ubicaciones como marcadores GTK. Estos marcadores son accesos adicionales y se administran por separado de las carpetas que Nautilus muestra en Lugares. Malus también comparte el bus D-Bus de la sesión para que los navegadores y otras aplicaciones puedan comunicarse con xdg-desktop-portal.
 
 La [guía de manifiesto](./docs/PACKAGE_MANIFEST.md) documenta dependencias de ejecución, compilación y servicios que deben habilitarse.
-Los selectores de archivos de GTK y aplicaciones compatibles (por ejemplo, VS Code) usan xdg-desktop-portal. Malus prefiere el backend GNOME para estos diálogos, con GTK como alternativa; instala ambos backends. Para aplicar cambios al lanzador de sesión, vuelve a ejecutar `sudo ./scripts/install-session.sh` y cierra e inicia sesión por completo.
+Los selectores de archivos de GTK y aplicaciones compatibles (por ejemplo, VS Code) usan xdg-desktop-portal. Malus prefiere el backend GNOME para estos diálogos, con GTK como alternativa; instala ambos backends.
+
+> **Flujo de desarrollo rápido:** El script lanzador de sesión (`malus-session`) prioriza automáticamente los binarios recién compilados en `$HOME/Proyectos/malus-de/target/release/`. Por lo tanto, durante el desarrollo diario no necesitas volver a ejecutar `install-session.sh` para probar cambios de código: basta con compilar con `cargo build --release` y reiniciar la sesión gráfica. Solo es necesario reejecutar el instalador si se modifican archivos del sistema (iconos, fondos SVG compartidos, targets de systemd, configuraciones de portal o el archivo `.desktop` de GDM).
 
 El menú global solo puede mostrar y ejecutar menús que la aplicación publique mediante `com.canonical.dbusmenu` y `com.canonical.AppMenu.Registrar`. Malus no inventa menús aproximados para aplicaciones que no los publican; algunas aplicaciones Electron, incluida VS Code según su versión y configuración, pueden no exponerlos en Linux.
 
@@ -142,7 +147,7 @@ El menú global solo puede mostrar y ejecutar menús que la aplicación publique
 - La captura de ventana, la grabación de pantalla y el OCR no están implementados.
 - El selector de ventanas Alt-Tab/Super-Tab continúa en desarrollo.
 - El menú global depende de que cada aplicación publique los protocolos `com.canonical.dbusmenu` y `com.canonical.AppMenu.Registrar`; no todas las aplicaciones lo hacen.
-- La suite automatizada tiene los cuatro fallos descritos en [Estado de preparación para pruebas](#estado-de-preparacion-para-pruebas); la compilación por sí sola no valida la sesión en hardware.
+- La suite automatizada tiene los dos fallos de aserción CSS descritos en [Estado de preparación para pruebas](#estado-de-preparacion-para-pruebas); la compilación por sí sola no valida la sesión en hardware.
 - La instalación modifica configuración global del portal y no dispone de un proceso automático de desinstalación o reversión.
 
 Si pruebas Malus, incluye en el reporte la distribución y versión, GPU y controlador, número y modos de pantalla, backend utilizado (DRM o Winit), pasos para reproducir el problema y los registros de `~/.local/share/malus-de/session.log` cuando estén disponibles. No compartas registros que contengan información personal sin revisarlos primero.
