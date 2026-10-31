@@ -2,18 +2,21 @@ use crate::genie::GenieRect;
 
 pub struct MagicLampAnimation {
     window: GenieRect,
-    full_height: f32,
-    current_height: f32,
-    offset_y: f32,
-    window_center_x: f32,
-    target_w: f32,
-    path_dx: f32,
-    path_dy: f32,
-    path_length: f32,
-    bend_side: f32,
-    bend_distance: f32,
+    target: GenieRect,
     k: f32,
     j: f32,
+}
+
+#[inline]
+fn smoothstep(x: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
+
+#[inline]
+fn smootherstep(x: f32) -> f32 {
+    let x = x.clamp(0.0, 1.0);
+    x * x * x * (x * (x * 6.0 - 15.0) + 10.0)
 }
 
 impl MagicLampAnimation {
@@ -24,112 +27,105 @@ impl MagicLampAnimation {
         is_minimizing: bool,
     ) -> Self {
         let raw_progress = raw_progress.clamp(0.0, 1.0);
-        let t = if is_minimizing {
-            if raw_progress < 0.65 {
-                (raw_progress / 0.65).clamp(0.0, 1.0).powf(1.35) * 0.65
-            } else {
-                let p = ((raw_progress - 0.65) / 0.35).clamp(0.0, 1.0);
-                0.65 + (1.0 - (1.0 - p).powf(2.6)) * 0.35
-            }
-        } else if raw_progress < 0.75 {
-            (raw_progress / 0.75).clamp(0.0, 1.0).powf(0.85) * 0.75
+
+        // En macOS Genie:
+        // - Fase 1 (k: 0 -> 1, j = 0): el borde inferior se estrecha y desciende en curva S hasta tocar el icono del Dock.
+        // - Fase 2 (k = 1, j: 0 -> 1): la ventana se desliza y comprime a través del embudo espacial estacionario hacia el Dock.
+        // Al restaurar (is_minimizing = false), se recorre exactamente la evolución inversa (1.0 - raw_progress).
+        let directed = if is_minimizing {
+            raw_progress
         } else {
-            let p = ((raw_progress - 0.75) / 0.25).clamp(0.0, 1.0);
-            0.75 + (1.0 - (1.0 - p).powf(2.2)) * 0.25
+            1.0 - raw_progress
         };
 
-        let split = 0.30;
-        let (k, j) = if is_minimizing {
-            let k = if t <= split { t / split } else { 1.0 };
-            let j = if t > split {
-                (t - split) / (1.0 - split)
-            } else {
-                0.0
-            };
-            (k, j)
+        // Curva temporal suave que da peso al inicio de la succión y acelera el paso por el cuello
+        let split = 0.34;
+        let (k, j) = if directed <= split {
+            let p = (directed / split).clamp(0.0, 1.0);
+            let eased_k = 1.0 - (1.0 - p).powf(2.1);
+            (eased_k, 0.0)
         } else {
-            let j = 1.0
-                - if t <= (1.0 - split) {
-                    t / (1.0 - split)
-                } else {
-                    1.0
-                };
-            let k = 1.0
-                - if t > (1.0 - split) {
-                    (t - (1.0 - split)) / split
-                } else {
-                    0.0
-                };
-            (k, j)
+            let p = ((directed - split) / (1.0 - split)).clamp(0.0, 1.0);
+            // Combinación de arranque progresivo y succión fluida hacia el final
+            let eased_j = smoothstep(p) * 0.45 + p.powf(1.35) * 0.55;
+            (1.0, eased_j.clamp(0.0, 1.0))
         };
-
-        let slot_w = target.width.max(24.0);
-        let slot_h = target.height.max(24.0);
-        let target_w = slot_w.max(32.0);
-        let target_y = target.y + slot_h * 0.5;
-        let target_top = target_y - slot_h * 0.5;
-        let expand_h = (target_y - window.y - window.height).max(10.0);
-        let full_height = (target_y - window.y) - expand_h * (1.0 - k);
-        let current_height = (full_height * (1.0 - j) + slot_h * j).max(1.0);
-        let offset_y = (target_top - window.y) * j;
-        let window_center_x = window.x + window.width * 0.5;
-        let target_center_x = target.x + target_w * 0.5;
-        let path_dx = target_center_x - window_center_x;
-        let path_dy = target_y - (window.y + window.height * 0.5);
-        let path_length = path_dx.hypot(path_dy).max(1.0);
-        let bend_side = if path_dx.abs() > 1.0 {
-            -path_dx.signum()
-        } else {
-            1.0
-        };
-        let bend_distance = (path_length * 0.12).clamp(0.0, 96.0);
 
         Self {
             window,
-            full_height,
-            current_height,
-            offset_y,
-            window_center_x,
-            target_w,
-            path_dx,
-            path_dy,
-            path_length,
-            bend_side,
-            bend_distance,
+            target: GenieRect {
+                x: target.x,
+                y: target.y,
+                width: target.width.max(24.0),
+                height: target.height.max(24.0),
+            },
             k,
             j,
         }
     }
 
     pub fn deform_slice(&self, slice: f32) -> (f32, f32, f32) {
-        let local_y = slice * self.current_height;
-        let norm_y = if self.full_height > 1.0 {
-            (local_y / self.full_height).clamp(0.0, 1.0)
-        } else {
-            slice
-        };
-        let path_progress = norm_y * norm_y * (3.0 - 2.0 * norm_y);
-        let norm_x = (path_progress * self.k + self.j).min(1.0);
-        let bend = (std::f32::consts::PI * path_progress).sin()
-            * self.bend_distance
-            * self.k
-            * (1.0 - self.j)
-            * self.bend_side;
-        let current_center_x =
-            self.window_center_x + self.path_dx * norm_x - (self.path_dy / self.path_length) * bend;
-        let screen_y =
-            self.window.y + local_y + self.offset_y + (self.path_dx / self.path_length) * bend;
+        let s = slice.clamp(0.0, 1.0);
 
-        let curved_taper = (1.0 - self.k) + self.k * (1.0 - slice) * (1.0 - slice);
-        let tapered_width = self.target_w + (self.window.width - self.target_w) * curved_taper;
-        let slice_w = (tapered_width * (1.0 - self.j) + self.target_w * self.j).max(2.0);
+        let win_top = self.window.y;
+        let win_bottom = self.window.y + self.window.height;
+        let dock_top = self.target.y;
+        let dock_bottom = self.target.y + self.target.height;
+
+        // 1. Posición vertical de la rebanada `s`:
+        // Durante Fase 1 (k: 0 -> 1, j = 0), el borde superior sigue en win_top y el inferior baja de win_bottom a dock_bottom.
+        // Durante Fase 2 (k = 1, j: 0 -> 1), el borde superior baja de win_top a dock_top mientras las rebanadas
+        // se comprimen progresivamente al entrar en el cuello del embudo.
+        let top_y = win_top + (dock_top - win_top) * self.j.powf(1.12);
+        let reach = self.k.max(self.j);
+        let bottom_y = win_bottom + (dock_bottom - win_bottom) * reach;
+
+        // Ligera aceleración vertical de las rebanadas inferiores hacia el cuello durante la succión
+        let suction_warp = s + self.k * (1.0 - self.j) * 0.22 * s * (1.0 - s);
+        let screen_y = top_y + suction_warp * (bottom_y - top_y);
+
+        // 2. Coordenada espacial normalizada dentro del embudo vertical [win_top .. dock_bottom]
+        let total_span = (dock_bottom - win_top).abs().max(1.0);
+        let spatial_u = ((screen_y - win_top) / total_span).clamp(0.0, 1.0);
+
+        // El hombro superior del embudo acompaña el descenso de la ventana durante la primera parte de `j`,
+        // manteniendo la parte alta ancha antes de estrecharse rápidamente al acercarse al Dock.
+        let neck_start = (self.j * 0.52).clamp(0.0, 0.72);
+        let funnel_t = if self.j > 0.0 {
+            ((spatial_u - neck_start) / (1.0 - neck_start).max(0.05)).clamp(0.0, 1.0)
+        } else {
+            s
+        };
+
+        // Combinar la coordenada espacial del embudo con la coordenada propia de la rebanada
+        // para garantizar convergencia exacta en los extremos (s = 0 y j = 1).
+        let tau = (funnel_t * (1.0 - self.j) + self.j).clamp(0.0, 1.0);
+
+        // 3. Curva de estrechamiento (Pinch) y curva en S de desplazamiento horizontal (Sweep):
+        // - `pinch_curve` estrecha el ancho más rápido en la mitad inferior para formar el cuello esbelto de macOS.
+        // - `sweep_curve` usa una quíntica C2 (derivadas 1ª y 2ª nulas en 0 y 1) para que los bordes laterales
+        //   salgan verticales de la ventana, tracen una S suave y entren verticales al icono del Dock.
+        let base_s = smoothstep(tau);
+        let pinch_curve = (1.0 - (1.0 - base_s).powf(1.85)) * self.k;
+        let sweep_curve = smootherstep(tau) * self.k;
+
+        // Colapso final hacia el ancho y centro exactos del slot a medida que j -> 1
+        let width_factor = (pinch_curve + (1.0 - pinch_curve) * self.j).clamp(0.0, 1.0);
+        let center_factor = (sweep_curve + (1.0 - sweep_curve) * self.j).clamp(0.0, 1.0);
+
+        let slice_w = (self.window.width + (self.target.width - self.window.width) * width_factor)
+            .max(2.0);
+
+        let win_center_x = self.window.x + self.window.width * 0.5;
+        let target_center_x = self.target.x + self.target.width * 0.5;
+        let current_center_x = win_center_x + (target_center_x - win_center_x) * center_factor;
 
         (screen_y, current_center_x - slice_w * 0.5, slice_w)
     }
 
     pub fn alpha(&self) -> f32 {
-        if self.j > 0.98 {
-            ((1.0 - self.j) / 0.02).clamp(0.0, 1.0)
+        if self.j > 0.92 {
+            ((1.0 - self.j) / 0.08).clamp(0.0, 1.0)
         } else {
             1.0
         }

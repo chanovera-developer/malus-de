@@ -1795,8 +1795,8 @@ pub fn run_winit() -> Result<()> {
                         );
                         let alpha = animation.alpha();
 
-                        // Ultra-alta resolución de malla adaptativa (160 - 240 rebanadas)
-                        let n_strips = ((win_h / 2.5) as usize).clamp(160, 240);
+                        // Ultra-alta resolución de malla adaptativa (200 - 360 rebanadas)
+                        let n_strips = ((win_h / 1.5) as usize).clamp(200, 360);
                         let sampled_slices: Vec<(f32, f32, f32)> = (0..=n_strips)
                             .map(|i| {
                                 let v = i as f32 / n_strips as f32;
@@ -1804,32 +1804,77 @@ pub fn run_winit() -> Result<()> {
                             })
                             .collect();
 
-                        // Renderizado de la textura de la ventana con traslape continuo anti-fisuras
-                        for elem in elems {
-                            let src = elem.src();
+                        let content_geo = anim.window.geometry();
+                        let cw = (content_geo.size.w as f64).max(1.0);
+                        let ch = (content_geo.size.h as f64).max(1.0);
 
-                            for i in 0..n_strips {
-                                let local_v0 = i as f32 / n_strips as f32;
-                                let local_v1 = (i + 1) as f32 / n_strips as f32;
+                        // Renderizado de la textura de la ventana con traslape continuo anti-fisuras y recorte CSD
+                        for elem in elems.iter().rev() {
+                            let src = elem.src();
+                            let elem_geo = elem.geometry(1.0.into());
+                            if elem_geo.size.w <= 0 || elem_geo.size.h <= 0 {
+                                continue;
+                            }
+
+                            let rel_x0 = (elem_geo.loc.x - content_geo.loc.x) as f64;
+                            let rel_y0 = (elem_geo.loc.y - content_geo.loc.y) as f64;
+                            let rel_x1 = rel_x0 + elem_geo.size.w as f64;
+                            let rel_y1 = rel_y0 + elem_geo.size.h as f64;
+
+                            let vis_x0 = rel_x0.clamp(0.0, cw);
+                            let vis_y0 = rel_y0.clamp(0.0, ch);
+                            let vis_x1 = rel_x1.clamp(0.0, cw);
+                            let vis_y1 = rel_y1.clamp(0.0, ch);
+                            if vis_x1 <= vis_x0 || vis_y1 <= vis_y0 {
+                                continue;
+                            }
+
+                            let u0 = (vis_x0 / cw) as f32;
+                            let u1 = (vis_x1 / cw) as f32;
+                            let v0 = (vis_y0 / ch) as f32;
+                            let v1 = (vis_y1 / ch) as f32;
+
+                            let sx_ratio = src.size.w / (elem_geo.size.w as f64);
+                            let sy_ratio = src.size.h / (elem_geo.size.h as f64);
+                            let crop_src_x = src.loc.x + (vis_x0 - rel_x0) * sx_ratio;
+                            let crop_src_y = src.loc.y + (vis_y0 - rel_y0) * sy_ratio;
+                            let crop_src_w = (vis_x1 - vis_x0) * sx_ratio;
+                            let crop_src_h = (vis_y1 - vis_y0) * sy_ratio;
+
+                            let start_strip = ((v0 * n_strips as f32).floor() as usize).min(n_strips - 1);
+                            let end_strip = ((v1 * n_strips as f32).ceil() as usize).clamp(start_strip + 1, n_strips);
+                            let v_span = (v1 - v0).max(1e-4);
+
+                            for i in start_strip..end_strip {
+                                let slice_v0 = (i as f32 / n_strips as f32).clamp(v0, v1);
+                                let slice_v1 = ((i + 1) as f32 / n_strips as f32).clamp(v0, v1);
+                                if slice_v1 <= slice_v0 {
+                                    continue;
+                                }
+
+                                let local_t0 = ((slice_v0 - v0) / v_span) as f64;
+                                let local_t1 = ((slice_v1 - v0) / v_span) as f64;
 
                                 let y_top = sampled_slices[i].0.round() as i32;
                                 let y_bottom = sampled_slices[i + 1].0.round() as i32;
                                 let strip_y = y_top.min(y_bottom);
-                                let strip_h = (y_bottom - y_top).abs().max(1) + 1; // Traslape de 1px anti-fisuras
+                                let strip_h = (y_bottom - y_top).abs().max(1) + 1;
 
-                                let left_x = (sampled_slices[i].1 + sampled_slices[i + 1].1) * 0.5;
-                                let width = (sampled_slices[i].2 + sampled_slices[i + 1].2) * 0.5;
+                                let full_left = (sampled_slices[i].1 + sampled_slices[i + 1].1) * 0.5;
+                                let full_width = (sampled_slices[i].2 + sampled_slices[i + 1].2) * 0.5;
+                                let left_x = full_left + full_width * u0;
+                                let width = full_width * (u1 - u0);
 
                                 let strip_dst = Rectangle::new(
                                     (left_x.round() as i32, strip_y).into(),
                                     (width.round().max(1.0) as i32, strip_h).into(),
                                 );
 
-                                let src_y0 = src.loc.y + (local_v0 as f64) * src.size.h;
-                                let src_y1 = src.loc.y + (local_v1 as f64) * src.size.h;
+                                let src_y0 = crop_src_y + local_t0 * crop_src_h;
+                                let src_y1 = crop_src_y + local_t1 * crop_src_h;
                                 let strip_src = Rectangle::new(
-                                    (src.loc.x, src_y0).into(),
-                                    (src.size.w, (src_y1 - src_y0).max(0.1)).into(),
+                                    (crop_src_x, src_y0).into(),
+                                    (crop_src_w.max(0.1), (src_y1 - src_y0).max(0.1)).into(),
                                 );
 
                                 match elem.texture() {
