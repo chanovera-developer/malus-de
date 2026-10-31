@@ -187,7 +187,6 @@ pub fn run_winit() -> Result<()> {
     // Color acrílico oscuro de Malus DE (#18181b = rgba(24, 24, 27, 1.0))
     let dark_acrylic = Color32F::new(0.094, 0.094, 0.106, 1.0);
     let start_time = Instant::now();
-    let mut clients = Vec::new();
     let mut current_displays_cfg = malus_de_common::config::DisplaysConfig::load();
     let mut squircle_corner_cache: std::collections::HashMap<
         i32,
@@ -1316,95 +1315,115 @@ pub fn run_winit() -> Result<()> {
 
                     if let Some(ref mut blur) = blur_pipeline {
                         let screen_size = size;
-                        let _ = frame.with_context(|gl| {
-                            blur.capture_background(gl, &projection, screen_size);
-                            for (_, rect) in &spotlight_backdrop_elements {
-                                blur.render_captured_blur(
-                                    gl,
-                                    &projection,
-                                    screen_size,
-                                    *rect,
-                                    26.0,
-                                );
-                            }
-                            for surface in layer_map.layers() {
-                                if matches!(surface.layer(), Layer::Top | Layer::Overlay) {
-                                    let ns = surface.namespace();
-                                    if ns == "malus-app-switcher" && !state.app_switcher.is_active {
-                                        continue;
-                                    }
-                                    if ns == "malus-top-bar" {
-                                        continue;
-                                    }
-                                    if let Some(geo) = layer_map.layer_geometry(surface) {
-                                        let radius = match ns.as_ref() {
-                                            "malus-dock" => 32.0,
-                                            "malus-app-switcher" => 32.0,
+                        let mut layer_blur_items: Vec<(Rectangle<i32, Physical>, f32, bool)> =
+                            Vec::new();
+                        for (_, rect) in &spotlight_backdrop_elements {
+                            layer_blur_items.push((*rect, 26.0, false));
+                        }
+                        for surface in layer_map.layers() {
+                            if matches!(surface.layer(), Layer::Top | Layer::Overlay) {
+                                let ns = surface.namespace();
+                                if ns == "malus-app-switcher" && !state.app_switcher.is_active {
+                                    continue;
+                                }
+                                if ns == "malus-top-bar" {
+                                    continue;
+                                }
+                                if let Some(geo) = layer_map.layer_geometry(surface) {
+                                    let radius = match ns.as_ref() {
+                                        "malus-dock" => 32.0,
+                                        "malus-app-switcher" => 32.0,
+                                        "malus-spotlight-controls"
+                                        | "malus-spotlight-input"
+                                        | "malus-spotlight-apps"
+                                        | "malus-spotlight-files" => 27.0,
+                                        "malus-notifications" => 16.0,
+                                        _ => 0.0,
+                                    };
+                                    if radius > 0.0 {
+                                        let is_spotlight_comp = matches!(
+                                            ns.as_ref(),
                                             "malus-spotlight-controls"
-                                            | "malus-spotlight-input"
-                                            | "malus-spotlight-apps"
-                                            | "malus-spotlight-files" => 27.0,
-                                            "malus-notifications" => 16.0,
-                                            _ => 0.0,
-                                        };
-                                        if radius > 0.0 {
-                                            let phys_rect = if ns == "malus-dock" {
-                                                let root_id =
-                                                    smithay::backend::renderer::element::Id::from_wayland_resource(
-                                                        surface.wl_surface(),
-                                                    );
-                                                let Some(rect) = dock_clip_roots
-                                                    .iter()
-                                                    .find(|(id, _)| *id == root_id)
-                                                    .map(|(_, rect)| *rect)
-                                                else {
-                                                    continue;
-                                                };
-                                                rect
-                                            } else {
-                                                let rect = geo.to_physical_precise_round(1.0);
-                                                if matches!(
-                                                    ns.as_ref(),
-                                                    "malus-spotlight-controls"
-                                                        | "malus-spotlight-input"
-                                                        | "malus-spotlight-apps"
-                                                        | "malus-spotlight-files"
-                                                ) {
-                                                    super::spotlight_component_blur_rect(
-                                                        rect, 1.0,
-                                                    )
-                                                } else {
-                                                    rect
-                                                }
+                                                | "malus-spotlight-input"
+                                                | "malus-spotlight-apps"
+                                                | "malus-spotlight-files"
+                                        );
+                                        let phys_rect = if ns == "malus-dock" {
+                                            let root_id =
+                                                smithay::backend::renderer::element::Id::from_wayland_resource(
+                                                    surface.wl_surface(),
+                                                );
+                                            let Some(rect) = dock_clip_roots
+                                                .iter()
+                                                .find(|(id, _)| *id == root_id)
+                                                .map(|(_, rect)| *rect)
+                                            else {
+                                                continue;
                                             };
-                                            if matches!(
-                                                ns.as_ref(),
-                                                "malus-spotlight-controls"
-                                                    | "malus-spotlight-input"
-                                                    | "malus-spotlight-apps"
-                                                    | "malus-spotlight-files"
-                                            ) {
-                                                blur.render_captured_blur_round(
-                                                    gl,
-                                                    &projection,
-                                                    screen_size,
-                                                    phys_rect,
-                                                    radius,
-                                                );
+                                            rect
+                                        } else {
+                                            let rect = geo.to_physical_precise_round(1.0);
+                                            if is_spotlight_comp {
+                                                super::spotlight_component_blur_rect(rect, 1.0)
                                             } else {
-                                                blur.render_captured_blur(
-                                                    gl,
-                                                    &projection,
-                                                    screen_size,
-                                                    phys_rect,
-                                                    radius,
-                                                );
+                                                rect
                                             }
+                                        };
+                                        if phys_rect.size.w > 0 && phys_rect.size.h > 0 {
+                                            layer_blur_items.push((
+                                                phys_rect,
+                                                radius,
+                                                is_spotlight_comp,
+                                            ));
                                         }
                                     }
                                 }
                             }
-                        });
+                        }
+
+                        if !layer_blur_items.is_empty() {
+                            let mut min_x = i32::MAX;
+                            let mut min_y = i32::MAX;
+                            let mut max_x = i32::MIN;
+                            let mut max_y = i32::MIN;
+                            for (rect, _, _) in &layer_blur_items {
+                                min_x = min_x.min(rect.loc.x);
+                                min_y = min_y.min(rect.loc.y);
+                                max_x = max_x.max(rect.loc.x + rect.size.w);
+                                max_y = max_y.max(rect.loc.y + rect.size.h);
+                            }
+                            let capture_region = Rectangle::new(
+                                (min_x, min_y).into(),
+                                ((max_x - min_x).max(0), (max_y - min_y).max(0)).into(),
+                            );
+                            let _ = frame.with_context(|gl| {
+                                blur.capture_background_region(
+                                    gl,
+                                    &projection,
+                                    screen_size,
+                                    capture_region,
+                                );
+                                for (phys_rect, radius, is_round) in layer_blur_items {
+                                    if is_round {
+                                        blur.render_captured_blur_round(
+                                            gl,
+                                            &projection,
+                                            screen_size,
+                                            phys_rect,
+                                            radius,
+                                        );
+                                    } else {
+                                        blur.render_captured_blur(
+                                            gl,
+                                            &projection,
+                                            screen_size,
+                                            phys_rect,
+                                            radius,
+                                        );
+                                    }
+                                }
+                            });
+                        }
                     }
 
                     for (elements, rect) in &spotlight_backdrop_elements {
@@ -2023,9 +2042,8 @@ pub fn run_winit() -> Result<()> {
                 .handle()
                 .insert_client(stream, Arc::new(ClientState::default()))
             {
-                Ok(client) => {
+                Ok(_client) => {
                     info!("🎉 Nuevo cliente Wayland conectado exitosamente al compositor!");
-                    clients.push(client);
                 }
                 Err(err) => warn!("Error al registrar nuevo cliente Wayland: {:?}", err),
             }
@@ -2040,6 +2058,7 @@ pub fn run_winit() -> Result<()> {
         }
         state.popups.cleanup();
         state.active_popups.retain(|p| p.alive());
+        state.cleanup_stale_surfaces();
         display.flush_clients()?;
 
         let _ = backend.submit(Some(&[damage]));

@@ -1639,7 +1639,6 @@ pub fn run_drm() -> Result<()> {
 
     let dark_acrylic = Color32F::new(0.094, 0.094, 0.106, 1.0);
     let start_time = Instant::now();
-    let mut clients = Vec::new();
 
     let monitors_toml_path = std::env::var("HOME")
         .map(|h| std::path::PathBuf::from(h).join(".config/malus-de/monitors.toml"))
@@ -1651,6 +1650,17 @@ pub fn run_drm() -> Result<()> {
         .map(|h| std::path::PathBuf::from(h).join(".config/malus-de/input.toml"))
         .unwrap_or_else(|_| std::path::PathBuf::from(".config/malus-de/input.toml"));
     let mut last_input_mtime = std::fs::metadata(&input_toml_path)
+        .and_then(|m| m.modified())
+        .ok();
+    let keyfile_path = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(|home| std::path::PathBuf::from(home).join(".config"))
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from(".config"))
+        .join("glib-2.0/settings/keyfile");
+    let mut last_keyfile_mtime = std::fs::metadata(&keyfile_path)
         .and_then(|m| m.modified())
         .ok();
     let mut last_config_check = Instant::now();
@@ -1679,12 +1689,20 @@ pub fn run_drm() -> Result<()> {
             || last_config_check.elapsed() >= Duration::from_millis(250);
         if check_now {
             last_config_check = Instant::now();
-            let (configured_cursor_theme, configured_cursor_size) =
-                malus_de_common::config::load_cursor_config();
-            if configured_cursor_theme != cursor_theme || configured_cursor_size != cursor_size {
-                cursor_theme = configured_cursor_theme;
-                cursor_size = configured_cursor_size;
-                cursor_texture = create_cursor_texture(&mut renderer, &cursor_theme, cursor_size);
+            let cur_keyfile_mtime = std::fs::metadata(&keyfile_path)
+                .and_then(|m| m.modified())
+                .ok();
+            if cur_keyfile_mtime != last_keyfile_mtime {
+                last_keyfile_mtime = cur_keyfile_mtime;
+                let (configured_cursor_theme, configured_cursor_size) =
+                    malus_de_common::config::load_cursor_config();
+                if configured_cursor_theme != cursor_theme || configured_cursor_size != cursor_size
+                {
+                    cursor_theme = configured_cursor_theme;
+                    cursor_size = configured_cursor_size;
+                    cursor_texture =
+                        create_cursor_texture(&mut renderer, &cursor_theme, cursor_size);
+                }
             }
             let current_mtime = std::fs::metadata(&monitors_toml_path)
                 .and_then(|m| m.modified())
@@ -1881,9 +1899,8 @@ pub fn run_drm() -> Result<()> {
                 .handle()
                 .insert_client(stream, Arc::new(ClientState::default()))
             {
-                Ok(client) => {
+                Ok(_client) => {
                     info!("🎉 Nuevo cliente Wayland conectado al compositor DRM!");
-                    clients.push(client);
                 }
                 Err(err) => warn!("Error al registrar cliente Wayland en DRM: {:?}", err),
             }
@@ -1902,6 +1919,7 @@ pub fn run_drm() -> Result<()> {
         }
         state.popups.cleanup();
         state.active_popups.retain(|p| p.alive());
+        state.cleanup_stale_surfaces();
 
         // 🎨 RENDERIZADO GPU REAL A CADA MONITOR FÍSICO
         if let Ok(mut surfs) = shared_surfaces.lock() {
@@ -2448,96 +2466,117 @@ pub fn run_drm() -> Result<()> {
 
                         if let Some(ref mut blur) = blur_pipeline {
                             let screen_size = out_surface.size;
-                            let _ = frame.with_context(|gl| {
-                                blur.capture_background(gl, &projection, screen_size);
-                                for (_, rect) in &spotlight_backdrop_elements {
-                                    blur.render_captured_blur(
-                                        gl,
-                                        &projection,
-                                        screen_size,
-                                        *rect,
-                                        26.0 * scale as f32,
-                                    );
-                                }
-                                for surface in layer_map.layers() {
-                                    if matches!(surface.layer(), Layer::Top | Layer::Overlay) {
-                                        let ns = surface.namespace();
-                                        if ns == "malus-app-switcher" && !state.app_switcher.is_active {
-                                            continue;
-                                        }
-                                        if ns == "malus-top-bar" {
-                                            continue;
-                                        }
-                                        if let Some(geo) = layer_map.layer_geometry(surface) {
-                                            let radius = match ns.as_ref() {
-                                                "malus-dock" => 32.0 * scale as f32,
-                                                "malus-app-switcher" => 32.0 * scale as f32,
+                            let mut layer_blur_items: Vec<(Rectangle<i32, Physical>, f32, bool)> =
+                                Vec::new();
+                            for (_, rect) in &spotlight_backdrop_elements {
+                                layer_blur_items.push((*rect, 26.0 * scale as f32, false));
+                            }
+                            for surface in layer_map.layers() {
+                                if matches!(surface.layer(), Layer::Top | Layer::Overlay) {
+                                    let ns = surface.namespace();
+                                    if ns == "malus-app-switcher" && !state.app_switcher.is_active {
+                                        continue;
+                                    }
+                                    if ns == "malus-top-bar" {
+                                        continue;
+                                    }
+                                    if let Some(geo) = layer_map.layer_geometry(surface) {
+                                        let radius = match ns.as_ref() {
+                                            "malus-dock" => 32.0 * scale as f32,
+                                            "malus-app-switcher" => 32.0 * scale as f32,
+                                            "malus-spotlight-controls"
+                                            | "malus-spotlight-input"
+                                            | "malus-spotlight-apps"
+                                            | "malus-spotlight-files" => 27.0 * scale as f32,
+                                            "malus-notifications" => 16.0 * scale as f32,
+                                            _ => 0.0,
+                                        };
+                                        if radius > 0.0 {
+                                            let is_spotlight_comp = matches!(
+                                                ns.as_ref(),
                                                 "malus-spotlight-controls"
-                                                | "malus-spotlight-input"
-                                                | "malus-spotlight-apps"
-                                                | "malus-spotlight-files" => 27.0 * scale as f32,
-                                                "malus-notifications" => 16.0 * scale as f32,
-                                                _ => 0.0,
-                                            };
-                                            if radius > 0.0 {
-                                                let phys_rect = if ns == "malus-dock" {
-                                                    let root_id =
-                                                        smithay::backend::renderer::element::Id::from_wayland_resource(
-                                                            surface.wl_surface(),
-                                                        );
-                                                    let Some(rect) = dock_clip_roots
-                                                        .iter()
-                                                        .find(|(id, _)| *id == root_id)
-                                                        .map(|(_, rect)| *rect)
-                                                    else {
-                                                        continue;
-                                                    };
-                                                    rect
-                                                } else {
-                                                    let rect =
-                                                        geo.to_physical_precise_round(scale);
-                                                    if matches!(
-                                                        ns.as_ref(),
-                                                        "malus-spotlight-controls"
-                                                            | "malus-spotlight-input"
-                                                            | "malus-spotlight-apps"
-                                                            | "malus-spotlight-files"
-                                                    ) {
-                                                        super::spotlight_component_blur_rect(
-                                                            rect, scale,
-                                                        )
-                                                    } else {
-                                                        rect
-                                                    }
+                                                    | "malus-spotlight-input"
+                                                    | "malus-spotlight-apps"
+                                                    | "malus-spotlight-files"
+                                            );
+                                            let phys_rect = if ns == "malus-dock" {
+                                                let root_id =
+                                                    smithay::backend::renderer::element::Id::from_wayland_resource(
+                                                        surface.wl_surface(),
+                                                    );
+                                                let Some(rect) = dock_clip_roots
+                                                    .iter()
+                                                    .find(|(id, _)| *id == root_id)
+                                                    .map(|(_, rect)| *rect)
+                                                else {
+                                                    continue;
                                                 };
-                                                if matches!(
-                                                    ns.as_ref(),
-                                                    "malus-spotlight-controls"
-                                                        | "malus-spotlight-input"
-                                                        | "malus-spotlight-apps"
-                                                        | "malus-spotlight-files"
-                                                ) {
-                                                    blur.render_captured_blur_round(
-                                                        gl,
-                                                        &projection,
-                                                        screen_size,
-                                                        phys_rect,
-                                                        radius,
-                                                    );
+                                                rect
+                                            } else {
+                                                let rect = geo.to_physical_precise_round(scale);
+                                                if is_spotlight_comp {
+                                                    super::spotlight_component_blur_rect(
+                                                        rect, scale,
+                                                    )
                                                 } else {
-                                                    blur.render_captured_blur(
-                                                        gl,
-                                                        &projection,
-                                                        screen_size,
-                                                        phys_rect,
-                                                        radius,
-                                                    );
+                                                    rect
                                                 }
+                                            };
+                                            if phys_rect.size.w > 0 && phys_rect.size.h > 0 {
+                                                layer_blur_items.push((
+                                                    phys_rect,
+                                                    radius,
+                                                    is_spotlight_comp,
+                                                ));
                                             }
                                         }
                                     }
                                 }
-                            });
+                            }
+
+                            if !layer_blur_items.is_empty() {
+                                let mut min_x = i32::MAX;
+                                let mut min_y = i32::MAX;
+                                let mut max_x = i32::MIN;
+                                let mut max_y = i32::MIN;
+                                for (rect, _, _) in &layer_blur_items {
+                                    min_x = min_x.min(rect.loc.x);
+                                    min_y = min_y.min(rect.loc.y);
+                                    max_x = max_x.max(rect.loc.x + rect.size.w);
+                                    max_y = max_y.max(rect.loc.y + rect.size.h);
+                                }
+                                let capture_region = Rectangle::new(
+                                    (min_x, min_y).into(),
+                                    ((max_x - min_x).max(0), (max_y - min_y).max(0)).into(),
+                                );
+                                let _ = frame.with_context(|gl| {
+                                    blur.capture_background_region(
+                                        gl,
+                                        &projection,
+                                        screen_size,
+                                        capture_region,
+                                    );
+                                    for (phys_rect, radius, is_round) in layer_blur_items {
+                                        if is_round {
+                                            blur.render_captured_blur_round(
+                                                gl,
+                                                &projection,
+                                                screen_size,
+                                                phys_rect,
+                                                radius,
+                                            );
+                                        } else {
+                                            blur.render_captured_blur(
+                                                gl,
+                                                &projection,
+                                                screen_size,
+                                                phys_rect,
+                                                radius,
+                                            );
+                                        }
+                                    }
+                                });
+                            }
                         }
 
                         for (elements, rect) in &spotlight_backdrop_elements {
@@ -3195,10 +3234,16 @@ pub fn run_drm() -> Result<()> {
             .map(|mode| mode.refresh)
             .max()
             .unwrap_or(60_000);
-        let remaining =
-            crate::backend::frame_interval(refresh_millihz).saturating_sub(frame_start.elapsed());
-        if !remaining.is_zero() {
-            std::thread::sleep(remaining);
+        let interval = crate::backend::frame_interval(refresh_millihz);
+        loop {
+            let remaining = interval.saturating_sub(frame_start.elapsed());
+            if remaining.is_zero() {
+                break;
+            }
+            let _ = event_loop.dispatch(Some(remaining), &mut state);
+            if interval.saturating_sub(frame_start.elapsed()).is_zero() {
+                break;
+            }
         }
     }
 

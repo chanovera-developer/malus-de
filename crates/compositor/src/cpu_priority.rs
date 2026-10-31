@@ -94,12 +94,21 @@ fn priority_worker(receiver: Receiver<Option<i32>>) {
         let Some(pid) = request else {
             continue;
         };
+        let self_pid = std::process::id() as i32;
+        if pid <= 1 || pid == self_pid {
+            continue;
+        }
         let Some(processes) = same_user_processes() else {
             tracing::warn!(
                 "No se pudo leer la tabla de procesos para crear el scope de la aplicación."
             );
             continue;
         };
+        scopes.retain(|&(tracked_pid, tracked_start), _| {
+            processes
+                .get(&tracked_pid)
+                .is_some_and(|info| info.start_time == tracked_start)
+        });
         let Some(root) = processes.get(&pid) else {
             continue;
         };

@@ -330,12 +330,15 @@ fn parse_color_scheme(settings: &str) -> Option<bool> {
     None
 }
 
-fn read_system_dark_mode() -> Option<bool> {
+fn settings_keyfile_path() -> Option<PathBuf> {
     let config_home = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
-    let settings_path = config_home.join("glib-2.0/settings/keyfile");
-    match std::fs::read_to_string(&settings_path) {
+    Some(config_home.join("glib-2.0/settings/keyfile"))
+}
+
+fn read_system_dark_mode(settings_path: & std::path::Path) -> Option<bool> {
+    match std::fs::read_to_string(settings_path) {
         Ok(settings) => parse_color_scheme(&settings),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {
@@ -347,21 +350,34 @@ fn read_system_dark_mode() -> Option<bool> {
 
 /// Devuelve el fondo base de Adwaita para el modo de color GTK activo en la sesión.
 pub fn system_monitor_backdrop_color() -> [f32; 3] {
-    static THEME_CACHE: OnceLock<Mutex<Option<(Instant, bool)>>> = OnceLock::new();
+    static THEME_CACHE: OnceLock<Mutex<Option<(Instant, Option<std::time::SystemTime>, bool)>>> =
+        OnceLock::new();
     let cache = THEME_CACHE.get_or_init(|| Mutex::new(None));
     let mut cached_theme = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
 
     let should_refresh = cached_theme
         .as_ref()
-        .is_none_or(|(last_refresh, _)| last_refresh.elapsed() >= Duration::from_millis(500));
+        .is_none_or(|(last_refresh, _, _)| last_refresh.elapsed() >= Duration::from_millis(500));
     if should_refresh {
-        let is_dark = read_system_dark_mode()
-            .or_else(|| cached_theme.as_ref().map(|(_, is_dark)| *is_dark))
-            .unwrap_or(true);
-        *cached_theme = Some((Instant::now(), is_dark));
+        let keyfile_path = settings_keyfile_path();
+        let current_mtime = keyfile_path
+            .as_ref()
+            .and_then(|p| std::fs::metadata(p).ok())
+            .and_then(|m| m.modified().ok());
+        let prev_mtime = cached_theme.as_ref().and_then(|(_, mtime, _)| *mtime);
+        let is_dark = if cached_theme.is_none() || current_mtime != prev_mtime {
+            keyfile_path
+                .as_deref()
+                .and_then(read_system_dark_mode)
+                .or_else(|| cached_theme.as_ref().map(|(_, _, is_dark)| *is_dark))
+                .unwrap_or(true)
+        } else {
+            cached_theme.as_ref().map(|(_, _, is_dark)| *is_dark).unwrap_or(true)
+        };
+        *cached_theme = Some((Instant::now(), current_mtime, is_dark));
     }
 
-    let is_dark = cached_theme.as_ref().is_some_and(|(_, is_dark)| *is_dark);
+    let is_dark = cached_theme.as_ref().is_some_and(|(_, _, is_dark)| *is_dark);
     if is_dark {
         [36.0 / 255.0, 36.0 / 255.0, 36.0 / 255.0]
     } else {
@@ -1326,10 +1342,44 @@ impl FractionalScaleHandler for MalusState {
 }
 
 impl MalusState {
+    /// Limpia referencias a `WlSurface` que ya han sido destruidas para evitar fugas de memoria a lo largo de la sesión
+    pub fn cleanup_stale_surfaces(&mut self) {
+        use smithay::utils::IsAlive;
+        self.window_restore_geometries.retain(|s, _| s.alive());
+        self.centered_transient_windows.retain(|s, _| s.alive());
+        self.minimized_windows.retain(|s, _| s.alive());
+        let dock_slots = &mut self.dock_slots;
+        let minimized_thumbnails = &mut self.minimized_window_thumbnails;
+        let minimized_windows = &self.minimized_windows;
+        self.window_ids.retain(|s, win_id| {
+            let alive = s.alive();
+            if !alive {
+                dock_slots.remove(win_id);
+                if let Some(path) = minimized_thumbnails.remove(win_id) {
+                    let _ = std::fs::remove_file(path);
+                }
+            } else if !minimized_windows.contains_key(s) {
+                if let Some(path) = minimized_thumbnails.remove(win_id) {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+            alive
+        });
+    }
+
     /// Determina la escala fraccionaria preferida para una superficie según el monitor en el que reside
     pub fn preferred_scale_for_surface(&self, surface: &WlSurface) -> f64 {
-        if let Some(window) = self.window_for_surface(surface) {
-            if let Some(win_loc) = self.space.element_location(&window) {
+        let window = self.window_for_surface(surface);
+        self.preferred_scale_for_surface_with_window(surface, window.as_ref())
+    }
+
+    pub fn preferred_scale_for_surface_with_window(
+        &self,
+        surface: &WlSurface,
+        window: Option<&smithay::desktop::Window>,
+    ) -> f64 {
+        if let Some(window) = window {
+            if let Some(win_loc) = self.space.element_location(window) {
                 let win_geo = window.geometry();
                 let center = Point::<i32, Logical>::from((
                     win_loc.x + (win_geo.size.w.max(1) / 2),
@@ -1350,7 +1400,7 @@ impl MalusState {
                     }
                 }
             }
-            if let Some(output) = self.space.outputs_for_element(&window).first() {
+            if let Some(output) = self.space.outputs_for_element(window).first() {
                 return output.current_scale().fractional_scale();
             }
         }
@@ -1410,20 +1460,20 @@ impl CompositorHandler for MalusState {
         smithay::backend::renderer::utils::on_commit_buffer_handler::<Self>(surface);
         self.popups.commit(surface);
 
+        let window = self.window_for_surface(surface);
+
         // Sincronizar escala fraccionaria preferida según el monitor físico en el que reside la superficie
-        let preferred_scale = self.preferred_scale_for_surface(surface);
+        let preferred_scale =
+            self.preferred_scale_for_surface_with_window(surface, window.as_ref());
         smithay::wayland::compositor::with_states(surface, |states| {
             smithay::wayland::fractional_scale::with_fractional_scale(states, |fractional_scale| {
                 fractional_scale.set_preferred_scale(preferred_scale);
             });
         });
 
-        // Si es una ventana regular en Space, actualizamos sus dimensiones internas
-        for window in self.space.elements() {
+        // Si es una ventana regular en Space, actualizamos sus dimensiones internas únicamente para esa ventana
+        if let Some(window) = window {
             window.on_commit();
-        }
-
-        if let Some(window) = self.window_for_surface(surface) {
             if let Some(toplevel) = window.toplevel() {
                 let is_system_action_confirmation =
                     toplevel.parent().is_some() || is_system_action_confirmation_surface(surface);
@@ -1573,11 +1623,14 @@ impl SeatHandler for MalusState {
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
         let dh = &self.display_handle;
         let client = focused.and_then(|s| dh.get_client(smithay::reexports::wayland_server::Resource::id(s)).ok());
-        let focused_pid = client.as_ref().and_then(|client| {
-            let credentials = client.get_credentials(dh).ok()?;
-            (credentials.uid == rustix::process::getuid().as_raw()).then_some(credentials.pid)
-        });
-        self.focus_cpu_priority.set_focused_pid(focused_pid);
+        let is_regular_window = focused.and_then(|s| self.window_for_surface(s)).is_some();
+        if focused.is_none() || is_regular_window {
+            let focused_pid = client.as_ref().and_then(|client| {
+                let credentials = client.get_credentials(dh).ok()?;
+                (credentials.uid == rustix::process::getuid().as_raw()).then_some(credentials.pid)
+            });
+            self.focus_cpu_priority.set_focused_pid(focused_pid);
+        }
         set_data_device_focus(dh, seat, client.clone());
         set_primary_focus(dh, seat, client);
 
@@ -1585,19 +1638,27 @@ impl SeatHandler for MalusState {
             self.cursor_status = smithay::input::pointer::CursorImageStatus::default_named();
         }
 
-        // Actualizar el estado Activated de todas las ventanas para sincronizar clientes Wayland (Brave, Chrome, Electron, etc.)
+        // Actualizar el estado Activated de las ventanas cuyo foco haya cambiado realmente
+        let activated_flag =
+            smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated;
         for win in self.space.elements() {
             let is_focused = focused.map(|s| win.wl_surface().as_deref() == Some(s)).unwrap_or(false);
             win.set_activated(is_focused);
             if let Some(toplevel) = win.toplevel() {
+                let mut changed = false;
                 toplevel.with_pending_state(|state| {
-                    if is_focused {
-                        state.states.set(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated);
-                    } else {
-                        state.states.unset(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated);
+                    let was_activated = state.states.contains(activated_flag);
+                    if is_focused && !was_activated {
+                        state.states.set(activated_flag);
+                        changed = true;
+                    } else if !is_focused && was_activated {
+                        state.states.unset(activated_flag);
+                        changed = true;
                     }
                 });
-                toplevel.send_configure();
+                if changed {
+                    toplevel.send_configure();
+                }
             }
         }
     }

@@ -236,6 +236,7 @@ impl IpcBroadcaster {
             tracing::info!("📡 Servidor IPC Malus DE escuchando en: {:?}", path);
             for stream in listener.incoming() {
                 if let Ok(mut stream) = stream {
+                    let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(20)));
                     // Enviar los últimos estados conocidos al nuevo cliente conectado
                     if let Some(ref act) = *last_active.lock().unwrap() {
                         let _ = stream.write_all(act.as_bytes());
@@ -281,13 +282,25 @@ impl IpcBroadcaster {
 
         match msg {
             IpcMessage::ActiveAppChanged { .. } => {
-                *self.last_active.lock().unwrap() = Some(line.clone());
+                let mut guard = self.last_active.lock().unwrap();
+                if guard.as_deref() == Some(line.as_str()) {
+                    return;
+                }
+                *guard = Some(line.clone());
             }
             IpcMessage::RunningAppsChanged { .. } => {
-                *self.last_running.lock().unwrap() = Some(line.clone());
+                let mut guard = self.last_running.lock().unwrap();
+                if guard.as_deref() == Some(line.as_str()) {
+                    return;
+                }
+                *guard = Some(line.clone());
             }
             IpcMessage::MinimizedWindowsChanged { .. } => {
-                *self.last_minimized.lock().unwrap() = Some(line.clone());
+                let mut guard = self.last_minimized.lock().unwrap();
+                if guard.as_deref() == Some(line.as_str()) {
+                    return;
+                }
+                *guard = Some(line.clone());
             }
             _ => {}
         }

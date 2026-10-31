@@ -144,6 +144,18 @@ void main() {
 }
 "#;
 
+const BLUR_SLOT_COUNT: usize = 12;
+
+#[derive(Clone, Copy)]
+struct BlurSlot {
+    source_tex: ffi::types::GLuint,
+    source_tex_size: (i32, i32),
+    fbo_textures: [ffi::types::GLuint; 2],
+    fbos: [ffi::types::GLuint; 2],
+    fbo_size: (i32, i32),
+    last_used: u64,
+}
+
 pub struct GaussianBlur {
     down_program: ffi::types::GLuint,
     gaussian_program: ffi::types::GLuint,
@@ -169,14 +181,11 @@ pub struct GaussianBlur {
     blit_u_solid_mode: ffi::types::GLint,
     blit_u_solid_color: ffi::types::GLint,
 
-    source_tex: ffi::types::GLuint,
-    source_tex_size: (i32, i32),
     snapshot_tex: ffi::types::GLuint,
     snapshot_size: (i32, i32),
 
-    fbo_textures: [ffi::types::GLuint; 2],
-    fbos: [ffi::types::GLuint; 2],
-    fbo_sizes: [(i32, i32); 2],
+    slots: [BlurSlot; BLUR_SLOT_COUNT],
+    use_counter: u64,
 }
 
 impl GaussianBlur {
@@ -223,15 +232,23 @@ impl GaussianBlur {
             let blit_u_solid_mode = gl.GetUniformLocation(blit_program, c"u_solid_mode".as_ptr());
             let blit_u_solid_color = gl.GetUniformLocation(blit_program, c"u_solid_color".as_ptr());
 
-            let mut source_tex = 0;
-            gl.GenTextures(1, &mut source_tex);
             let mut snapshot_tex = 0;
             gl.GenTextures(1, &mut snapshot_tex);
 
-            let mut fbos = [0; 2];
-            let mut fbo_textures = [0; 2];
-            gl.GenFramebuffers(2, fbos.as_mut_ptr());
-            gl.GenTextures(2, fbo_textures.as_mut_ptr());
+            let mut slots = [BlurSlot {
+                source_tex: 0,
+                source_tex_size: (0, 0),
+                fbo_textures: [0; 2],
+                fbos: [0; 2],
+                fbo_size: (0, 0),
+                last_used: 0,
+            }; BLUR_SLOT_COUNT];
+
+            for slot in &mut slots {
+                gl.GenTextures(1, &mut slot.source_tex);
+                gl.GenFramebuffers(2, slot.fbos.as_mut_ptr());
+                gl.GenTextures(2, slot.fbo_textures.as_mut_ptr());
+            }
 
             info!("✨ [GaussianBlur] Pipeline gaussiano por GPU inicializado con éxito.");
 
@@ -256,15 +273,35 @@ impl GaussianBlur {
                 blit_u_corner_exponent,
                 blit_u_solid_mode,
                 blit_u_solid_color,
-                source_tex,
-                source_tex_size: (0, 0),
                 snapshot_tex,
                 snapshot_size: (0, 0),
-                fbo_textures,
-                fbos,
-                fbo_sizes: [(0, 0), (0, 0)],
+                slots,
+                use_counter: 0,
             })
         }
+    }
+
+    fn acquire_slot(&mut self, w: i32, h: i32, w0: i32, h0: i32, from_capture: bool) -> usize {
+        self.use_counter = self.use_counter.wrapping_add(1);
+        let exact_idx = self.slots.iter().position(|slot| {
+            slot.fbo_size == (w0, h0) && (from_capture || slot.source_tex_size == (w, h))
+        });
+        let idx = exact_idx
+            .or_else(|| {
+                self.slots
+                    .iter()
+                    .position(|slot| slot.fbo_size == (w0, h0))
+            })
+            .unwrap_or_else(|| {
+                self.slots
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, slot)| slot.last_used)
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(0)
+            });
+        self.slots[idx].last_used = self.use_counter;
+        idx
     }
 
     /// Aplica desenfoque gaussiano a la región de pantalla de la ventana dada
@@ -314,9 +351,45 @@ impl GaussianBlur {
         projection: &[f32; 9],
         screen_size: Size<i32, Physical>,
     ) {
+        self.capture_background_region(
+            gl,
+            projection,
+            screen_size,
+            Rectangle::from_size(screen_size),
+        );
+    }
+
+    /// Captura únicamente la subregión del fondo requerida por las capas translúcidas activas.
+    pub fn capture_background_region(
+        &mut self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        screen_size: Size<i32, Physical>,
+        region: Rectangle<i32, Physical>,
+    ) {
         if screen_size.w < 1 || screen_size.h < 1 {
             return;
         }
+        let pad = 8;
+        let expanded = Rectangle::new(
+            (region.loc.x - pad, region.loc.y - pad).into(),
+            (region.size.w + pad * 2, region.size.h + pad * 2).into(),
+        );
+        let screen_rect = Rectangle::from_size(screen_size);
+        let Some(visible) = expanded.intersection(screen_rect) else {
+            return;
+        };
+        if visible.size.w < 1 || visible.size.h < 1 {
+            return;
+        }
+
+        let is_drm = projection[4] > 0.0;
+        let copy_x = visible.loc.x;
+        let copy_y = if is_drm {
+            visible.loc.y
+        } else {
+            screen_size.h - (visible.loc.y + visible.size.h)
+        };
 
         unsafe {
             let mut prev_active_texture = 0;
@@ -327,7 +400,6 @@ impl GaussianBlur {
 
             let mut prev_read_buffer = 0;
             gl.GetIntegerv(ffi::READ_BUFFER, &mut prev_read_buffer);
-            let is_drm = projection[4] > 0.0;
             gl.ReadBuffer(if is_drm {
                 ffi::COLOR_ATTACHMENT0
             } else {
@@ -361,7 +433,16 @@ impl GaussianBlur {
                 );
                 self.snapshot_size = (screen_size.w, screen_size.h);
             }
-            gl.CopyTexSubImage2D(ffi::TEXTURE_2D, 0, 0, 0, 0, 0, screen_size.w, screen_size.h);
+            gl.CopyTexSubImage2D(
+                ffi::TEXTURE_2D,
+                0,
+                copy_x,
+                copy_y,
+                copy_x,
+                copy_y,
+                visible.size.w,
+                visible.size.h,
+            );
             gl.ReadBuffer(prev_read_buffer as u32);
             gl.BindTexture(ffi::TEXTURE_2D, prev_texture as u32);
             gl.ActiveTexture(prev_active_texture as u32);
@@ -424,6 +505,8 @@ impl GaussianBlur {
 
         let w = visible_rect.size.w;
         let h = visible_rect.size.h;
+        let w0 = (w / 2).max(2);
+        let h0 = (h / 2).max(2);
 
         // En DRM (Transform::Normal), la matriz de proyección mapea Y positivo hacia abajo en NDC
         // y el framebuffer tiene origen superior (y = 0 en la parte superior de pantalla).
@@ -452,6 +535,9 @@ impl GaussianBlur {
             ((w, h), [0.0, 0.0, 1.0, 1.0])
         };
 
+        let slot_idx = self.acquire_slot(w, h, w0, h0, from_capture);
+        let mut slot = self.slots[slot_idx];
+
         unsafe {
             // 1. Guardar estado GL previo
             let mut prev_fbo = 0;
@@ -472,9 +558,9 @@ impl GaussianBlur {
             gl.GetIntegerv(ffi::FRAMEBUFFER_BINDING, &mut prev_fbo);
             gl.GetIntegerv(ffi::VIEWPORT, prev_viewport.as_mut_ptr());
 
-            // 2. Asegurar tamaño exacto de textura origen
-            if !from_capture && self.source_tex_size != (w, h) {
-                gl.BindTexture(ffi::TEXTURE_2D, self.source_tex);
+            // 2. Asegurar tamaño exacto de textura origen del slot (solo cuando no viene de snapshot)
+            if !from_capture && slot.source_tex_size != (w, h) {
+                gl.BindTexture(ffi::TEXTURE_2D, slot.source_tex);
                 gl.TexImage2D(
                     ffi::TEXTURE_2D,
                     0,
@@ -498,14 +584,14 @@ impl GaussianBlur {
                     ffi::TEXTURE_WRAP_T,
                     ffi::CLAMP_TO_EDGE as i32,
                 );
-                self.source_tex_size = (w, h);
+                slot.source_tex_size = (w, h);
             }
 
             // 3. Copiar región del framebuffer de pantalla actual a source_tex
             if from_capture {
                 gl.BindTexture(ffi::TEXTURE_2D, self.snapshot_tex);
             } else {
-                gl.BindTexture(ffi::TEXTURE_2D, self.source_tex);
+                gl.BindTexture(ffi::TEXTURE_2D, slot.source_tex);
                 let mut prev_read_buffer = 0;
                 gl.GetIntegerv(ffi::READ_BUFFER, &mut prev_read_buffer);
                 gl.ReadBuffer(if is_drm {
@@ -517,20 +603,16 @@ impl GaussianBlur {
                 gl.ReadBuffer(prev_read_buffer as u32);
             }
 
-            // 4. Asegurar tamaños exactos de texturas FBO intermedias
-            let w0 = (w / 2).max(2);
-            let h0 = (h / 2).max(2);
-
-            let targets = [(w0, h0), (w0, h0)];
-            for i in 0..2 {
-                if self.fbo_sizes[i] != targets[i] {
-                    gl.BindTexture(ffi::TEXTURE_2D, self.fbo_textures[i]);
+            // 4. Asegurar tamaños exactos de texturas FBO intermedias del slot
+            if slot.fbo_size != (w0, h0) {
+                for i in 0..2 {
+                    gl.BindTexture(ffi::TEXTURE_2D, slot.fbo_textures[i]);
                     gl.TexImage2D(
                         ffi::TEXTURE_2D,
                         0,
                         ffi::RGBA as i32,
-                        targets[i].0,
-                        targets[i].1,
+                        w0,
+                        h0,
                         0,
                         ffi::RGBA,
                         ffi::UNSIGNED_BYTE,
@@ -549,17 +631,18 @@ impl GaussianBlur {
                         ffi::CLAMP_TO_EDGE as i32,
                     );
 
-                    gl.BindFramebuffer(ffi::FRAMEBUFFER, self.fbos[i]);
+                    gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbos[i]);
                     gl.FramebufferTexture2D(
                         ffi::FRAMEBUFFER,
                         ffi::COLOR_ATTACHMENT0,
                         ffi::TEXTURE_2D,
-                        self.fbo_textures[i],
+                        slot.fbo_textures[i],
                         0,
                     );
-                    self.fbo_sizes[i] = targets[i];
                 }
+                slot.fbo_size = (w0, h0);
             }
+            self.slots[slot_idx] = slot;
 
             if gl.VertexAttribDivisor.is_loaded() {
                 gl.VertexAttribDivisor(0, 0);
@@ -573,7 +656,7 @@ impl GaussianBlur {
             gl.Disable(ffi::BLEND);
 
             // PASO 1: Downsample inicial desde source_tex -> FBO 0
-            gl.BindFramebuffer(ffi::FRAMEBUFFER, self.fbos[0]);
+            gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbos[0]);
             gl.Viewport(0, 0, w0, h0);
             gl.UseProgram(self.down_program);
             gl.ActiveTexture(ffi::TEXTURE0);
@@ -582,7 +665,7 @@ impl GaussianBlur {
                 if from_capture {
                     self.snapshot_tex
                 } else {
-                    self.source_tex
+                    slot.source_tex
                 },
             );
             gl.Uniform1i(self.down_u_texture, 0);
@@ -602,9 +685,9 @@ impl GaussianBlur {
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
 
             // PASO 2: Filtro gaussiano horizontal a media resolución
-            gl.BindFramebuffer(ffi::FRAMEBUFFER, self.fbos[1]);
+            gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbos[1]);
             gl.Viewport(0, 0, w0, h0);
-            gl.BindTexture(ffi::TEXTURE_2D, self.fbo_textures[0]);
+            gl.BindTexture(ffi::TEXTURE_2D, slot.fbo_textures[0]);
             gl.UseProgram(self.gaussian_program);
             gl.Uniform1i(self.gaussian_u_texture, 0);
             gl.Uniform2f(self.gaussian_u_texel_size, 1.0 / w0 as f32, 1.0 / h0 as f32);
@@ -612,9 +695,9 @@ impl GaussianBlur {
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
 
             // PASO 3: Filtro gaussiano vertical a media resolución
-            gl.BindFramebuffer(ffi::FRAMEBUFFER, self.fbos[0]);
+            gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbos[0]);
             gl.Viewport(0, 0, w0, h0);
-            gl.BindTexture(ffi::TEXTURE_2D, self.fbo_textures[1]);
+            gl.BindTexture(ffi::TEXTURE_2D, slot.fbo_textures[1]);
             gl.Uniform2f(self.gaussian_u_direction, 0.0, 1.0);
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
 
@@ -636,7 +719,7 @@ impl GaussianBlur {
 
             gl.UseProgram(self.blit_program);
             gl.ActiveTexture(ffi::TEXTURE0);
-            gl.BindTexture(ffi::TEXTURE_2D, self.fbo_textures[0]);
+            gl.BindTexture(ffi::TEXTURE_2D, slot.fbo_textures[0]);
             gl.Uniform1i(self.blit_u_texture, 0);
 
             gl.UniformMatrix3fv(self.blit_u_matrix, 1, ffi::FALSE, projection.as_ptr());
