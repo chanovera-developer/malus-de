@@ -266,6 +266,8 @@ pub struct MoveSurfaceGrab {
     pub start_data: GrabStartData<MalusState>,
     pub window: Window,
     pub initial_window_location: Point<i32, Logical>,
+    pub is_snapped: bool,
+    pub has_dragged: bool,
 }
 
 impl PointerGrab<MalusState> for MoveSurfaceGrab {
@@ -296,6 +298,45 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
 
         // Mientras el grab está activo, ningún cliente tiene foco del puntero
         handle.motion(data, None, event);
+
+        let delta = event.location - self.start_data.location;
+        let dist_sq = delta.x * delta.x + delta.y * delta.y;
+
+        if !self.has_dragged {
+            let threshold_sq = if self.is_snapped { 64.0 } else { 16.0 };
+            if dist_sq < threshold_sq {
+                return;
+            }
+            self.has_dragged = true;
+
+            if self.is_snapped {
+                let surface_ref = self.window.wl_surface();
+                let saved = surface_ref.as_ref().and_then(|surf| {
+                    data.window_restore_geometries.get(surf.as_ref()).copied()
+                });
+                let restore_size = saved.map(|(_, s)| s).filter(|s| s.w > 100 && s.h > 100);
+
+                if let Some(toplevel) = self.window.toplevel() {
+                    toplevel.with_pending_state(|top_state| {
+                        top_state.size = restore_size;
+                        top_state.states.unset(XdgState::Maximized);
+                        top_state.states.unset(XdgState::TiledLeft);
+                        top_state.states.unset(XdgState::TiledRight);
+                    });
+                    toplevel.send_configure();
+                }
+
+                let float_w = restore_size.map(|s| s.w).unwrap_or(400);
+                let cursor_x = event.location.x as i32;
+                let cursor_y = event.location.y as i32;
+                let new_x = (cursor_x - float_w / 2).max(0);
+                let new_loc = Point::from((new_x, (cursor_y - 15).max(32)));
+                self.initial_window_location = new_loc;
+                self.start_data.location = event.location;
+                data.space.map_element(self.window.clone(), new_loc, true);
+                self.is_snapped = false;
+            }
+        }
 
         let delta = event.location - self.start_data.location;
         let new_location = self.initial_window_location.to_f64() + delta;
@@ -364,6 +405,30 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
             data.snap_preview = None;
 
             let cur_loc = handle.current_location();
+
+            if !self.has_dragged {
+                tracing::info!("👆 MoveSurfaceGrab finalizado sin arrastre (clic simple en título/menú)");
+                handle.unset_grab(self, data, event.serial, event.time, false);
+
+                let under_target = data.space.element_under(cur_loc).and_then(|(win, loc)| {
+                    let local_point = cur_loc - loc.to_f64();
+                    win.surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                        .map(|(surf, sub_loc)| (surf, (loc + sub_loc).to_f64()))
+                });
+                let motion_serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                handle.motion(
+                    data,
+                    under_target,
+                    &MotionEvent {
+                        location: cur_loc,
+                        serial: motion_serial,
+                        time: event.time,
+                    },
+                );
+                handle.frame(data);
+                return;
+            }
+
             let win_loc = data.space.element_location(&self.window).unwrap_or_default();
             let win_geo = self.window.geometry();
             let outputs_count = data.space.outputs().count();

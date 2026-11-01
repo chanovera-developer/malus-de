@@ -1914,35 +1914,14 @@ impl XdgShellHandler for MalusState {
                 || states.contains(XdgState::TiledRight)
         }).unwrap_or(false);
 
-        let initial_window_location = if is_snapped {
-            let saved = self.window_restore_geometries.get(surface.wl_surface()).copied();
-            let restore_size = saved.map(|(_, s)| s).filter(|s| s.w > 100 && s.h > 100);
-
-            if let Some(toplevel) = window.toplevel() {
-                toplevel.with_pending_state(|top_state| {
-                    top_state.size = restore_size;
-                    top_state.states.unset(XdgState::Maximized);
-                    top_state.states.unset(XdgState::TiledLeft);
-                    top_state.states.unset(XdgState::TiledRight);
-                });
-                toplevel.send_configure();
-            }
-
-            let float_w = restore_size.map(|s| s.w).unwrap_or(400);
-            let cursor_x = start_data.location.x as i32;
-            let cursor_y = start_data.location.y as i32;
-            let new_x = (cursor_x - float_w / 2).max(0);
-            let new_loc = Point::from((new_x, (cursor_y - 15).max(32)));
-            self.space.map_element(window.clone(), new_loc, true);
-            new_loc
-        } else {
-            self.space.element_location(&window).unwrap_or_default()
-        };
+        let initial_window_location = self.space.element_location(&window).unwrap_or_default();
 
         let grab = crate::grabs::MoveSurfaceGrab {
             start_data,
             window: window.clone(),
             initial_window_location,
+            is_snapped,
+            has_dragged: false,
         };
 
         self.space.raise_element(&window, true);
@@ -1967,6 +1946,20 @@ impl XdgShellHandler for MalusState {
         }
 
         let Some(window) = self.window_for_surface(surface.wl_surface()) else { return };
+
+        let is_maximized_or_snapped = window.toplevel().map(|t| {
+            let states = &t.current_state().states;
+            states.contains(XdgState::Maximized)
+                || states.contains(XdgState::Fullscreen)
+                || states.contains(XdgState::TiledLeft)
+                || states.contains(XdgState::TiledRight)
+        }).unwrap_or(false);
+
+        if is_maximized_or_snapped {
+            tracing::info!("⚠️ [XdgShell] resize_request ignorado: la ventana está maximizada, a pantalla completa o anclada");
+            return;
+        }
+
         let start_data = pointer.grab_start_data().unwrap();
 
         let initial_window_location = self.space.element_location(&window).unwrap_or_default();

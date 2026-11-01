@@ -738,10 +738,18 @@ pub fn run_winit() -> Result<()> {
                                     button: event.button_code(),
                                     location: point,
                                 };
+                                let is_snapped = window.toplevel().map(|t| {
+                                    let states = &t.current_state().states;
+                                    states.contains(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Maximized)
+                                        || states.contains(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::TiledLeft)
+                                        || states.contains(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::TiledRight)
+                                }).unwrap_or(false);
                                 let grab = crate::grabs::MoveSurfaceGrab {
                                     start_data,
                                     window: window.clone(),
                                     initial_window_location,
+                                    is_snapped,
+                                    has_dragged: false,
                                 };
                                 pointer.set_grab(&mut state, grab, btn_serial, smithay::input::pointer::Focus::Clear);
                             }
