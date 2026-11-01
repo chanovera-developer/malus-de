@@ -17,7 +17,13 @@ windowcontrols.end {
 }
 
 windowcontrols > button,
-headerbar button.titlebutton {
+headerbar button.titlebutton,
+window.view windowcontrols > button,
+window.view headerbar button.titlebutton,
+.sidebar-pane windowcontrols > button,
+.sidebar-pane headerbar button.titlebutton,
+window.view .sidebar-pane windowcontrols > button,
+window.view .sidebar-pane headerbar button.titlebutton {
     min-width: 13px;
     min-height: 13px;
     padding: 0;
@@ -32,7 +38,13 @@ headerbar button.titlebutton {
 }
 
 windowcontrols > button > image,
-headerbar button.titlebutton > image {
+headerbar button.titlebutton > image,
+window.view windowcontrols > button > image,
+window.view headerbar button.titlebutton > image,
+.sidebar-pane windowcontrols > button > image,
+.sidebar-pane headerbar button.titlebutton > image,
+window.view .sidebar-pane windowcontrols > button > image,
+window.view .sidebar-pane headerbar button.titlebutton > image {
     padding: 0;
     margin: 0;
     min-width: 13px;
@@ -48,80 +60,188 @@ headerbar button.titlebutton > image {
 windowcontrols:hover > button > image,
 windowcontrols > button:hover > image,
 headerbar:hover button.titlebutton > image,
-headerbar button.titlebutton:hover > image {
+headerbar button.titlebutton:hover > image,
+window.view windowcontrols:hover > button > image,
+window.view windowcontrols > button:hover > image,
+window.view headerbar:hover button.titlebutton > image,
+window.view headerbar button.titlebutton:hover > image,
+.sidebar-pane windowcontrols:hover > button > image,
+.sidebar-pane windowcontrols > button:hover > image,
+.sidebar-pane headerbar:hover button.titlebutton > image,
+.sidebar-pane headerbar button.titlebutton:hover > image,
+window.view .sidebar-pane windowcontrols:hover > button > image,
+window.view .sidebar-pane windowcontrols > button:hover > image,
+window.view .sidebar-pane headerbar:hover button.titlebutton > image,
+window.view .sidebar-pane headerbar button.titlebutton:hover > image {
     opacity: 0.85;
 }
 
 windowcontrols > button.close,
-headerbar button.titlebutton.close {
+headerbar button.titlebutton.close,
+window.view windowcontrols > button.close,
+window.view headerbar button.titlebutton.close,
+.sidebar-pane windowcontrols > button.close,
+.sidebar-pane headerbar button.titlebutton.close,
+window.view .sidebar-pane windowcontrols > button.close,
+window.view .sidebar-pane headerbar button.titlebutton.close {
     background-color: #ff5f56;
     border-color: #e0443e;
 }
 windowcontrols > button.close:hover,
-headerbar button.titlebutton.close:hover {
+headerbar button.titlebutton.close:hover,
+window.view windowcontrols > button.close:hover,
+window.view headerbar button.titlebutton.close:hover,
+.sidebar-pane windowcontrols > button.close:hover,
+.sidebar-pane headerbar button.titlebutton.close:hover,
+window.view .sidebar-pane windowcontrols > button.close:hover,
+window.view .sidebar-pane headerbar button.titlebutton.close:hover {
     background-color: #ff473d;
     border-color: #c93630;
 }
 windowcontrols > button.close:active,
-headerbar button.titlebutton.close:active {
+headerbar button.titlebutton.close:active,
+window.view windowcontrols > button.close:active,
+window.view headerbar button.titlebutton.close:active,
+.sidebar-pane windowcontrols > button.close:active,
+.sidebar-pane headerbar button.titlebutton.close:active,
+window.view .sidebar-pane windowcontrols > button.close:active,
+window.view .sidebar-pane headerbar button.titlebutton.close:active {
     background-color: #bf3933;
     border-color: #a82f2a;
 }
 windowcontrols > button.close > image,
-headerbar button.titlebutton.close > image {
+headerbar button.titlebutton.close > image,
+window.view windowcontrols > button.close > image,
+window.view headerbar button.titlebutton.close > image,
+.sidebar-pane windowcontrols > button.close > image,
+.sidebar-pane headerbar button.titlebutton.close > image,
+window.view .sidebar-pane windowcontrols > button.close > image,
+window.view .sidebar-pane headerbar button.titlebutton.close > image {
     color: #4c0000;
 }
 
 windowcontrols > button.minimize,
-headerbar button.titlebutton.minimize {
+headerbar button.titlebutton.minimize,
+window.view windowcontrols > button.minimize,
+window.view headerbar button.titlebutton.minimize,
+.sidebar-pane windowcontrols > button.minimize,
+.sidebar-pane headerbar button.titlebutton.minimize,
+window.view .sidebar-pane windowcontrols > button.minimize,
+window.view .sidebar-pane headerbar button.titlebutton.minimize {
     background-color: #ffbd2e;
     border-color: #dea123;
 }
 windowcontrols > button.minimize:hover,
-headerbar button.titlebutton.minimize:hover {
+headerbar button.titlebutton.minimize:hover,
+window.view windowcontrols > button.minimize:hover,
+window.view headerbar button.titlebutton.minimize:hover,
+.sidebar-pane windowcontrols > button.minimize:hover,
+.sidebar-pane headerbar button.titlebutton.minimize:hover,
+window.view .sidebar-pane windowcontrols > button.minimize:hover,
+window.view .sidebar-pane headerbar button.titlebutton.minimize:hover {
     background-color: #ffb114;
     border-color: #c48c18;
 }
 windowcontrols > button.minimize:active,
-headerbar button.titlebutton.minimize:active {
+headerbar button.titlebutton.minimize:active,
+window.view windowcontrols > button.minimize:active,
+window.view headerbar button.titlebutton.minimize:active,
+.sidebar-pane windowcontrols > button.minimize:active,
+.sidebar-pane headerbar button.titlebutton.minimize:active,
+window.view .sidebar-pane windowcontrols > button.minimize:active,
+window.view .sidebar-pane headerbar button.titlebutton.minimize:active {
     background-color: #bf8516;
     border-color: #9e6d0f;
 }
 windowcontrols > button.minimize > image,
-headerbar button.titlebutton.minimize > image {
+headerbar button.titlebutton.minimize > image,
+window.view windowcontrols > button.minimize > image,
+window.view headerbar button.titlebutton.minimize > image,
+.sidebar-pane windowcontrols > button.minimize > image,
+.sidebar-pane headerbar button.titlebutton.minimize > image,
+window.view .sidebar-pane windowcontrols > button.minimize > image,
+window.view .sidebar-pane headerbar button.titlebutton.minimize > image {
     color: #593b00;
 }
 
 windowcontrols > button.maximize,
-headerbar button.titlebutton.maximize {
+headerbar button.titlebutton.maximize,
+window.view windowcontrols > button.maximize,
+window.view headerbar button.titlebutton.maximize,
+.sidebar-pane windowcontrols > button.maximize,
+.sidebar-pane headerbar button.titlebutton.maximize,
+window.view .sidebar-pane windowcontrols > button.maximize,
+window.view .sidebar-pane headerbar button.titlebutton.maximize {
     background-color: #27c93f;
     border-color: #1aab29;
 }
 windowcontrols > button.maximize:hover,
-headerbar button.titlebutton.maximize:hover {
+headerbar button.titlebutton.maximize:hover,
+window.view windowcontrols > button.maximize:hover,
+window.view headerbar button.titlebutton.maximize:hover,
+.sidebar-pane windowcontrols > button.maximize:hover,
+.sidebar-pane headerbar button.titlebutton.maximize:hover,
+window.view .sidebar-pane windowcontrols > button.maximize:hover,
+window.view .sidebar-pane headerbar button.titlebutton.maximize:hover {
     background-color: #1fbd36;
     border-color: #159322;
 }
 windowcontrols > button.maximize:active,
-headerbar button.titlebutton.maximize:active {
+headerbar button.titlebutton.maximize:active,
+window.view windowcontrols > button.maximize:active,
+window.view headerbar button.titlebutton.maximize:active,
+.sidebar-pane windowcontrols > button.maximize:active,
+.sidebar-pane headerbar button.titlebutton.maximize:active,
+window.view .sidebar-pane windowcontrols > button.maximize:active,
+window.view .sidebar-pane headerbar button.titlebutton.maximize:active {
     background-color: #158a25;
     border-color: #0f6c1a;
 }
 windowcontrols > button.maximize > image,
-headerbar button.titlebutton.maximize > image {
+headerbar button.titlebutton.maximize > image,
+window.view windowcontrols > button.maximize > image,
+window.view headerbar button.titlebutton.maximize > image,
+.sidebar-pane windowcontrols > button.maximize > image,
+.sidebar-pane headerbar button.titlebutton.maximize > image,
+window.view .sidebar-pane windowcontrols > button.maximize > image,
+window.view .sidebar-pane headerbar button.titlebutton.maximize > image {
     color: #004d11;
 }
 
 window:backdrop windowcontrols > button,
 .backdrop windowcontrols > button,
 window:backdrop headerbar button.titlebutton,
-.backdrop headerbar button.titlebutton {
+.backdrop headerbar button.titlebutton,
+window.view window:backdrop windowcontrols > button,
+window.view .backdrop windowcontrols > button,
+window.view window:backdrop headerbar button.titlebutton,
+window.view .backdrop headerbar button.titlebutton,
+.sidebar-pane window:backdrop windowcontrols > button,
+.sidebar-pane .backdrop windowcontrols > button,
+.sidebar-pane window:backdrop headerbar button.titlebutton,
+.sidebar-pane .backdrop headerbar button.titlebutton,
+window.view .sidebar-pane window:backdrop windowcontrols > button,
+window.view .sidebar-pane .backdrop windowcontrols > button,
+window.view .sidebar-pane window:backdrop headerbar button.titlebutton,
+window.view .sidebar-pane .backdrop headerbar button.titlebutton {
     background-color: rgba(255, 255, 255, 0.18);
     border-color: rgba(255, 255, 255, 0.10);
 }
 window:backdrop windowcontrols > button > image,
 .backdrop windowcontrols > button > image,
 window:backdrop headerbar button.titlebutton > image,
-.backdrop headerbar button.titlebutton > image {
+.backdrop headerbar button.titlebutton > image,
+window.view window:backdrop windowcontrols > button > image,
+window.view .backdrop windowcontrols > button > image,
+window.view window:backdrop headerbar button.titlebutton > image,
+window.view .backdrop headerbar button.titlebutton > image,
+.sidebar-pane window:backdrop windowcontrols > button > image,
+.sidebar-pane .backdrop windowcontrols > button > image,
+.sidebar-pane window:backdrop headerbar button.titlebutton > image,
+.sidebar-pane .backdrop headerbar button.titlebutton > image,
+window.view .sidebar-pane window:backdrop windowcontrols > button > image,
+window.view .sidebar-pane .backdrop windowcontrols > button > image,
+window.view .sidebar-pane window:backdrop headerbar button.titlebutton > image,
+window.view .sidebar-pane .backdrop headerbar button.titlebutton > image {
     opacity: 0;
 }

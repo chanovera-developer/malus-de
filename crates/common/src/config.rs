@@ -1497,6 +1497,19 @@ mod tests {
     }
 
     #[test]
+    fn test_nautilus_windowcontrols_preserve_traffic_lights_colors() {
+        for dark in [false, true] {
+            let css = get_malus_gtk_css(dark);
+            assert!(css.contains("window.view .sidebar-pane windowcontrols > button.close"));
+            assert!(css.contains("window.view .sidebar-pane windowcontrols > button.minimize"));
+            assert!(css.contains("window.view .sidebar-pane windowcontrols > button.maximize"));
+            assert!(css.contains("background-color: #ff5f56;"));
+            assert!(css.contains("background-color: #ffbd2e;"));
+            assert!(css.contains("background-color: #27c93f;"));
+        }
+    }
+
+    #[test]
     fn test_gtk4_transparency_is_scoped_to_nautilus_and_menus_keep_their_background() {
         let css = get_malus_gtk_css(false);
 
@@ -1573,7 +1586,7 @@ mod tests {
         assert_eq!(parsed.apps.len(), 5);
         assert_eq!(parsed.icon_size, 48);
         assert_eq!(parsed.magnification_max_size, 62);
-        assert_eq!(parsed.floating_gap, 10);
+        assert_eq!(parsed.floating_gap, 4);
         assert_eq!(parsed.position, DockPosition::Bottom);
     }
 

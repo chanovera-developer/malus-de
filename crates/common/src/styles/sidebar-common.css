@@ -153,6 +153,32 @@ window.view .macos-sidebar * {
     box-shadow: none;
 }
 
+/* Preservar la visibilidad de los controles de ventana (semáforo) en el headerbar de la barra lateral de Nautilus */
+window.view .sidebar-pane windowcontrols > button,
+window.view .sidebar-pane headerbar button.titlebutton {
+    background-clip: padding-box;
+    border-style: solid;
+    border-width: 0.5px;
+}
+
+window.view .sidebar-pane windowcontrols > button.close,
+window.view .sidebar-pane headerbar button.titlebutton.close {
+    background-color: #ff5f56;
+    border-color: #e0443e;
+}
+
+window.view .sidebar-pane windowcontrols > button.minimize,
+window.view .sidebar-pane headerbar button.titlebutton.minimize {
+    background-color: #ffbd2e;
+    border-color: #dea123;
+}
+
+window.view .sidebar-pane windowcontrols > button.maximize,
+window.view .sidebar-pane headerbar button.titlebutton.maximize {
+    background-color: #27c93f;
+    border-color: #1aab29;
+}
+
 window.view .sidebar-pane listview > row,
 window.view .sidebar-pane list > row,
 window.view .sidebar-pane listbox > row,
