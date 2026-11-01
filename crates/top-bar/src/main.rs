@@ -144,8 +144,8 @@ fn build_ui(app: &Application) {
                 malus_de_common::ipc::IpcMessage::ActiveAppChanged { app_id, title, window_id } => {
                     let display = format_app_name(app_id.as_deref(), title.as_deref());
                     title_label.set_label(&display);
-                    hide_btn.set_label(&format!("Ocultar {}          ⌘H", display));
-                    quit_btn.set_label(&format!("Salir de {}        ⌘Q", display));
+                    ui::global_menu::update_menu_row_label(&hide_btn, &format!("Ocultar {}", display));
+                    ui::global_menu::update_menu_row_label(&quit_btn, &format!("Salir de {}", display));
                     ui::global_menu::update_global_menu(&handles_clone, app_id.as_deref(), title.as_deref(), window_id);
                 }
                 malus_de_common::ipc::IpcMessage::ThemeChanged { is_dark, .. } => {

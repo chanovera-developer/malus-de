@@ -497,6 +497,7 @@ pub fn run_winit() -> Result<()> {
                     if state.spotlight.is_open() {
                         state.spotlight.update_pointer_motion(output_geo, point);
                     }
+                    state.update_spotlight_drag_dock_hover(point);
 
                     let layer_target = {
                         let layer_map = smithay::desktop::layer_map_for_output(&output);
@@ -797,6 +798,7 @@ pub fn run_winit() -> Result<()> {
                                     dock_geo,
                                 )
                             {
+                                state.update_spotlight_drag_dock_hover(point);
                                 if let crate::spotlight_visual::SpotlightPointerReleaseOutcome::PinToDock {
                                     app,
                                     insert_at_dock_x,

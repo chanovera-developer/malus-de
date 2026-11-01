@@ -809,8 +809,14 @@ fn build_dock_ui(app: &Application) {
     let placeholder_animation_rf = placeholder_width_animation.clone();
     let placeholder_animation_running_rf = placeholder_width_animation_running.clone();
 
+    let drop_placeholder: Rc<RefCell<Option<GtkBox>>> = Rc::new(RefCell::new(None));
+    let drop_placeholder_ipc = drop_placeholder.clone();
+
+    let drop_placeholder_rf = drop_placeholder.clone();
+
     glib::spawn_future_local(async move {
         while let Ok(refresh_pinned) = refresh_rx.recv().await {
+            *drop_placeholder_rf.borrow_mut() = None;
             render_dock_apps(
                 &apps_box_rf,
                 &dock_cfg_rf,
@@ -1032,6 +1038,11 @@ fn build_dock_ui(app: &Application) {
                         "📌 IPC PinAppToDock recibido para: {} (dock_x={:?})",
                         name, insert_at_dock_x
                     );
+                    if let Some(placeholder) = drop_placeholder_ipc.borrow_mut().take() {
+                        if placeholder.parent().as_ref() == Some(apps_box_ipc.as_ref()) {
+                            apps_box_ipc.remove(&placeholder);
+                        }
+                    }
                     let app_cfg = DockAppConfig {
                         name,
                         icon,
@@ -1049,6 +1060,7 @@ fn build_dock_ui(app: &Application) {
                             .map(|pt| {
                                 compute_pinned_insert_index(
                                     &apps_box_ipc,
+                                    None,
                                     cfg.apps.len(),
                                     pt.x() as f64,
                                 )
@@ -1058,6 +1070,42 @@ fn build_dock_ui(app: &Application) {
                         let _ = cfg.save();
                         drop(cfg);
                         on_rf_ipc();
+                    }
+                }
+                IpcMessage::PreviewDockDropGap { dock_x } => {
+                    let mut placeholder_guard = drop_placeholder_ipc.borrow_mut();
+                    if let Some(x) = dock_x {
+                        let pt = win_ref.compute_point(
+                            &apps_box_ipc,
+                            &gtk4::graphene::Point::new(x as f32, 0.0),
+                        );
+                        let cfg = cfg_ipc.borrow();
+                        let target_idx = pt
+                            .map(|p| {
+                                compute_pinned_insert_index(
+                                    &apps_box_ipc,
+                                    placeholder_guard
+                                        .as_ref()
+                                        .map(|w| w.upcast_ref::<gtk4::Widget>()),
+                                    cfg.apps.len(),
+                                    p.x() as f64,
+                                )
+                            })
+                            .unwrap_or(cfg.apps.len());
+                        drop(cfg);
+
+                        if let Some(ref placeholder) = *placeholder_guard {
+                            insert_or_reorder_box_child(&apps_box_ipc, placeholder.upcast_ref(), target_idx);
+                        } else {
+                            let icon_size = cfg_ipc.borrow().icon_size as i32;
+                            let placeholder = create_drop_placeholder(icon_size);
+                            insert_or_reorder_box_child(&apps_box_ipc, placeholder.upcast_ref(), target_idx);
+                            *placeholder_guard = Some(placeholder);
+                        }
+                    } else if let Some(placeholder) = placeholder_guard.take() {
+                        if placeholder.parent().as_ref() == Some(apps_box_ipc.as_ref()) {
+                            apps_box_ipc.remove(&placeholder);
+                        }
                     }
                 }
                 IpcMessage::UnpinAppFromDock { name } => {
@@ -1370,10 +1418,41 @@ struct DockItemDragState {
     order_changed: bool,
 }
 
-fn compute_pinned_insert_index(apps_box: &GtkBox, total_pinned: usize, local_x: f64) -> usize {
+fn create_drop_placeholder(icon_size: i32) -> GtkBox {
+    let container = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .css_classes(["dock-item-box", "dock-drop-placeholder"])
+        .valign(gtk4::Align::End)
+        .build();
+    container.set_overflow(gtk4::Overflow::Visible);
+
+    let inner = GtkBox::builder()
+        .css_classes(["dock-drop-placeholder-inner"])
+        .width_request(icon_size + 8)
+        .height_request(icon_size + 8)
+        .valign(gtk4::Align::End)
+        .build();
+    inner.set_overflow(gtk4::Overflow::Visible);
+
+    container.append(&inner);
+    container
+}
+
+fn compute_pinned_insert_index(
+    apps_box: &GtkBox,
+    ignore_child: Option<&gtk4::Widget>,
+    total_pinned: usize,
+    local_x: f64,
+) -> usize {
     let mut child = apps_box.first_child();
     let mut idx = 0usize;
     while let Some(c) = child {
+        if let Some(ignored) = ignore_child {
+            if c == *ignored {
+                child = c.next_sibling();
+                continue;
+            }
+        }
         if idx >= total_pinned {
             break;
         }
@@ -1387,6 +1466,28 @@ fn compute_pinned_insert_index(apps_box: &GtkBox, total_pinned: usize, local_x: 
         child = c.next_sibling();
     }
     total_pinned
+}
+
+fn insert_or_reorder_box_child(apps_box: &GtkBox, widget: &gtk4::Widget, target_idx: usize) {
+    if widget.parent().as_ref() == Some(apps_box.as_ref()) {
+        reorder_box_child_to_index(apps_box, widget, target_idx);
+    } else {
+        let mut others = Vec::new();
+        let mut child = apps_box.first_child();
+        while let Some(c) = child {
+            let next = c.next_sibling();
+            others.push(c);
+            child = next;
+        }
+
+        if target_idx == 0 {
+            apps_box.insert_child_after(widget, None::<&gtk4::Widget>);
+        } else if let Some(prev) = others.get(target_idx - 1) {
+            apps_box.insert_child_after(widget, Some(prev));
+        } else {
+            apps_box.append(widget);
+        }
+    }
 }
 
 fn reorder_box_child_to_index(apps_box: &GtkBox, widget: &gtk4::Widget, target_idx: usize) {

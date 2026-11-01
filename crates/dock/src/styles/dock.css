@@ -28,6 +28,18 @@ window.malus-dock-window decoration {
     padding: 0px 2px;
 }
 
+.dock-drop-placeholder {
+    padding: 0px 2px;
+}
+
+.dock-drop-placeholder-inner {
+    border-radius: 14px;
+    background-color: alpha(@window_fg_color, 0.08);
+    border: 1.5px dashed alpha(@window_fg_color, 0.35);
+    margin-bottom: 6px;
+    transition: transform 180ms ease, opacity 180ms ease;
+}
+
 .dock-trash-icon {
     transform: translateY(4px);
 }

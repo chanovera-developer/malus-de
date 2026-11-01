@@ -876,6 +876,18 @@ pub fn create_menu_row(label_text: &str, shortcut: Option<&str>) -> Button {
     btn
 }
 
+pub fn update_menu_row_label(btn: &Button, new_label: &str) {
+    if let Some(child) = btn.child() {
+        if let Some(row) = child.downcast_ref::<GtkBox>() {
+            if let Some(first) = row.first_child() {
+                if let Some(label) = first.downcast_ref::<Label>() {
+                    label.set_label(new_label);
+                }
+            }
+        }
+    }
+}
+
 fn create_divider() -> Separator {
     let sep = Separator::new(Orientation::Horizontal);
     sep.add_css_class("menu-separator");

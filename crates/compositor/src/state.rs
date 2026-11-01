@@ -574,6 +574,27 @@ impl MalusState {
         }
     }
 
+    pub fn update_spotlight_drag_dock_hover(&mut self, point: smithay::utils::Point<f64, smithay::utils::Logical>) {
+        if !self.spotlight.is_dragging_app() {
+            if self.spotlight.clear_dock_gap_preview() {
+                self.ipc_broadcaster
+                    .broadcast(&IpcMessage::PreviewDockDropGap { dock_x: None });
+            }
+            return;
+        }
+
+        let Some(output_geo) = self.spotlight_output_geometry() else {
+            return;
+        };
+        let dock_geo = self.dock_surface_geometry().map(|(geo, _)| geo);
+        let gap_x = self.spotlight.compute_dock_hover_gap(output_geo, point, dock_geo);
+
+        if self.spotlight.set_dock_gap_preview(gap_x) {
+            self.ipc_broadcaster
+                .broadcast(&IpcMessage::PreviewDockDropGap { dock_x: gap_x });
+        }
+    }
+
     pub fn notify_running_apps(&self) {
         let mut apps = Vec::new();
         for window in self.space.elements() {

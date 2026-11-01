@@ -1376,6 +1376,7 @@ pub fn run_drm() -> Result<()> {
                             state.spotlight.update_pointer_motion(spot_output_geo, point);
                         }
                     }
+                    state.update_spotlight_drag_dock_hover(point);
 
                     let (under_target, _, _) = resolve_target_under(state, point);
 
@@ -1422,6 +1423,7 @@ pub fn run_drm() -> Result<()> {
                                 .unwrap_or(output_geo);
                             state.spotlight.update_pointer_motion(spot_output_geo, point);
                         }
+                        state.update_spotlight_drag_dock_hover(point);
 
                         let (under_target, _, _) = resolve_target_under(state, point);
 
@@ -1609,6 +1611,7 @@ pub fn run_drm() -> Result<()> {
                                         dock_geo,
                                     )
                                 {
+                                    state.update_spotlight_drag_dock_hover(point);
                                     if let crate::spotlight_visual::SpotlightPointerReleaseOutcome::PinToDock {
                                         app,
                                         insert_at_dock_x,

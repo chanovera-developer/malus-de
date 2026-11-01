@@ -469,6 +469,7 @@ pub struct SpotlightState {
     pub clipboard_items: Vec<(String, String)>,
     icon_cache: HashMap<String, Option<ImageSurface>>,
     pending_drag: Option<PendingSpotlightDrag>,
+    last_dock_gap_preview: Option<i32>,
     dock_drag: Option<ActiveDockIconDrag>,
     dock_poof: Option<DockPoofAnimation>,
     drag_buffer: Option<MemoryRenderBuffer>,
@@ -516,6 +517,7 @@ impl SpotlightState {
             clipboard_items,
             icon_cache: HashMap::new(),
             pending_drag: None,
+            last_dock_gap_preview: None,
             dock_drag: None,
             dock_poof: None,
             drag_buffer: None,
@@ -540,6 +542,62 @@ impl SpotlightState {
 
     pub fn has_active_drag_or_poof(&self) -> bool {
         self.is_dragging_app() || self.dock_drag.is_some() || self.dock_poof.is_some()
+    }
+
+    pub fn has_active_dock_gap_preview(&self) -> bool {
+        self.last_dock_gap_preview.is_some()
+    }
+
+    pub fn clear_dock_gap_preview(&mut self) -> bool {
+        if self.last_dock_gap_preview.is_some() {
+            self.last_dock_gap_preview = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn set_dock_gap_preview(&mut self, next: Option<i32>) -> bool {
+        if self.last_dock_gap_preview != next {
+            self.last_dock_gap_preview = next;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn compute_dock_hover_gap(
+        &self,
+        output_geo: Rectangle<i32, Logical>,
+        pointer_loc: Point<f64, Logical>,
+        dock_geo: Option<Rectangle<i32, Logical>>,
+    ) -> Option<i32> {
+        if !self.is_dragging_app() {
+            return None;
+        }
+
+        if let Some(dgeo) = dock_geo {
+            let margin_x = 40.0;
+            let margin_y = 32.0;
+            let over_dock = pointer_loc.x >= dgeo.loc.x as f64 - margin_x
+                && pointer_loc.x <= (dgeo.loc.x + dgeo.size.w) as f64 + margin_x
+                && pointer_loc.y >= dgeo.loc.y as f64 - margin_y
+                && pointer_loc.y <= (dgeo.loc.y + dgeo.size.h) as f64 + margin_y;
+            if over_dock {
+                let dock_x = (pointer_loc.x.round() as i32) - dgeo.loc.x;
+                return Some(dock_x);
+            }
+        }
+
+        let bottom_strip_top = (output_geo.loc.y + output_geo.size.h - 110) as f64;
+        if pointer_loc.y >= bottom_strip_top {
+            let dock_x = dock_geo
+                .map(|dgeo| (pointer_loc.x.round() as i32) - dgeo.loc.x)
+                .unwrap_or(pointer_loc.x.round() as i32);
+            return Some(dock_x);
+        }
+
+        None
     }
 
     pub fn start_dock_icon_drag(&mut self, name: String, icon: String, loc: Point<f64, Logical>) {
@@ -604,6 +662,7 @@ impl SpotlightState {
         self.active_filter = 0;
         self.active_template = None;
         self.pending_drag = None;
+        self.last_dock_gap_preview = None;
         self.clipboard_items = load_clipboard_items();
         self.files = index_files();
         self.mask_dirty = true;
@@ -635,6 +694,7 @@ impl SpotlightState {
         self.active_filter = 0;
         self.active_template = None;
         self.pending_drag = None;
+        self.last_dock_gap_preview = None;
         self.mask_dirty = true;
         self.last_render_signature = 0;
     }
@@ -864,6 +924,7 @@ impl SpotlightState {
         let now = Instant::now();
         self.sync_transitions(now);
         self.pending_drag = None;
+        self.last_dock_gap_preview = None;
 
         let canvas = self.canvas_logical_rect(output_geo);
         let lx = pointer_loc.x - canvas.loc.x as f64;
@@ -1008,9 +1069,11 @@ impl SpotlightState {
     ) -> Option<SpotlightPointerReleaseOutcome> {
         if !self.is_open || button_code != 0x110 {
             self.pending_drag = None;
+        self.last_dock_gap_preview = None;
             return None;
         }
         let pending = self.pending_drag.take()?;
+        self.last_dock_gap_preview = None;
         if !pending.active {
             self.selected_index = pending.row_or_cell_index;
             self.activate_selected(Instant::now());
@@ -4253,6 +4316,16 @@ mod tests {
         let drop_pt = Point::from((840.0, 1030.0));
         spotlight.update_pointer_motion(output_geo, drop_pt);
         assert!(spotlight.is_dragging_app());
+        assert_eq!(
+            spotlight.compute_dock_hover_gap(output_geo, drop_pt, Some(dock_geo)),
+            Some(180)
+        );
+
+        let outside_pt = Point::from((300.0, 500.0));
+        assert_eq!(
+            spotlight.compute_dock_hover_gap(output_geo, outside_pt, Some(dock_geo)),
+            None
+        );
 
         let outcome = spotlight
             .handle_pointer_button_release(output_geo, drop_pt, 0x110, Some(dock_geo))

@@ -55,6 +55,14 @@ fn update_menu_text_theme(widget: &gtk4::Widget, is_dark: bool) {
         } else {
             "menu-light-text"
         });
+    } else if let Some(label) = widget.downcast_ref::<gtk4::Label>() {
+        label.remove_css_class("menu-light-text");
+        label.remove_css_class("menu-dark-text");
+        label.add_css_class(if is_dark {
+            "menu-dark-text"
+        } else {
+            "menu-light-text"
+        });
     }
 
     let mut child = widget.first_child();

@@ -831,11 +831,17 @@ scale.horizontal slider {
 }
 
 popover.malus-popover-menu.light-popover > contents label.menu-row-label,
-popover.malus-popover-menu.light-popover > contents button.popover-menu-item label.menu-row-label {
+popover.malus-popover-menu.light-popover > contents button.popover-menu-item label.menu-row-label,
+popover.malus-popover-menu.light-popover > contents label,
+popover.malus-popover-menu.light-popover > contents button label,
+popover.light-popover label {
     color: #1d1d1f;
 }
 
-popover.malus-popover-menu.light-popover > contents button.popover-menu-item:hover label.menu-row-label {
+popover.malus-popover-menu.light-popover > contents button.popover-menu-item:hover label.menu-row-label,
+popover.malus-popover-menu.light-popover > contents button.popover-menu-item:hover label,
+popover.malus-popover-menu.light-popover > contents button:hover label,
+popover.light-popover button:hover label {
     color: #ffffff;
 }
 

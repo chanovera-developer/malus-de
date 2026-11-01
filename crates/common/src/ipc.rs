@@ -161,6 +161,11 @@ pub enum IpcMessage {
     UnpinAppFromDock {
         name: String,
     },
+    /// Notificación de previsualización del hueco de inserción en el Dock al arrastrar un elemento (ej. desde Spotlight)
+    PreviewDockDropGap {
+        #[serde(default)]
+        dock_x: Option<i32>,
+    },
     /// Notificación de inicio de arrastre de un icono del Dock para que el compositor lo dibuje pegado al cursor
     StartDockIconDrag {
         name: String,
