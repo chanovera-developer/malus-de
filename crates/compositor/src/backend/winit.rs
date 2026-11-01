@@ -32,7 +32,7 @@ use smithay::{
         wayland_server::{protocol::wl_surface::WlSurface, Display, ListeningSocket},
         winit::platform::pump_events::PumpStatus,
     },
-    utils::{Logical, Physical, Point, Rectangle, Scale, Transform, SERIAL_COUNTER},
+    utils::{IsAlive, Logical, Physical, Point, Rectangle, Scale, Transform, SERIAL_COUNTER},
     wayland::{
         compositor::{with_surface_tree_downward, SurfaceAttributes, TraversalAction},
         seat::WaylandFocus,
@@ -973,6 +973,29 @@ pub fn run_winit() -> Result<()> {
                 let mut spotlight_shadow_rects = Vec::new();
                 let mut dock_popups = Vec::new();
                 let mut topbar_popups = Vec::new();
+                let is_dnd_alive = state.dnd_icon.as_ref().map(|s| s.alive()).unwrap_or(false);
+                if !is_dnd_alive && state.dnd_icon.is_some() {
+                    state.dnd_icon = None;
+                }
+
+                let mut dnd_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
+                if let Some(ref dnd_surf) = state.dnd_icon {
+                    if let Some(pointer) = state.seat.get_pointer() {
+                        let loc = pointer.current_location();
+                        let phys_loc = Point::from((loc.x.round() as i32, loc.y.round() as i32));
+                        dnd_elems = render_elements_from_surface_tree::<
+                            GlesRenderer,
+                            WaylandSurfaceRenderElement<GlesRenderer>,
+                        >(
+                            renderer,
+                            dnd_surf,
+                            phys_loc,
+                            Scale::from(1.0),
+                            1.0,
+                            Kind::Unspecified,
+                        );
+                    }
+                }
                 let spotlight_active = layer_map
                     .layers()
                     .any(|surface| surface.namespace() == "malus-spotlight-results");
@@ -1770,6 +1793,16 @@ pub fn run_winit() -> Result<()> {
                             &mut frame,
                             1.0,
                             std::slice::from_ref(drag_elem),
+                            &[damage],
+                        );
+                    }
+
+                    // Dibujar el icono de Drag and Drop (dnd_icon) si hay una operación activa
+                    if !dnd_elems.is_empty() {
+                        let _ = draw_render_elements(
+                            &mut frame,
+                            1.0,
+                            &dnd_elems,
                             &[damage],
                         );
                     }

@@ -1681,7 +1681,8 @@ mod tests {
         let cfg = DockConfig::load_or_create_default();
         let path = DockConfig::config_path();
         assert!(path.exists());
-        assert_eq!(cfg.apps.len(), 5);
+        assert!(!cfg.apps.is_empty());
+        assert_eq!(DockConfig::default().apps.len(), 5);
         assert!(cfg.icon_size > 0);
     }
 

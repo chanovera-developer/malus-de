@@ -135,6 +135,7 @@ pub struct MalusState {
     pub pending_theme_transition_capture: Option<ThemeTransitionCapture>,
     pub theme_transition_started_at: Option<Instant>,
     pub spotlight: crate::spotlight_visual::SpotlightState,
+    pub dnd_icon: Option<WlSurface>,
 }
 
 pub fn guess_icon_name(app_id: &str, title: &str) -> String {
@@ -575,6 +576,7 @@ impl MalusState {
             pending_theme_transition_capture: None,
             theme_transition_started_at: None,
             spotlight: crate::spotlight_visual::SpotlightState::new(),
+            dnd_icon: None,
         }
     }
 
@@ -1874,7 +1876,22 @@ impl DataControlHandler for MalusState {
     }
 }
 
-impl ClientDndGrabHandler for MalusState {}
+impl ClientDndGrabHandler for MalusState {
+    fn started(
+        &mut self,
+        _source: Option<smithay::reexports::wayland_server::protocol::wl_data_source::WlDataSource>,
+        icon: Option<WlSurface>,
+        _seat: Seat<Self>,
+    ) {
+        tracing::info!("✨ [DnD] Drag iniciado con icono: {}", icon.is_some());
+        self.dnd_icon = icon;
+    }
+
+    fn dropped(&mut self, _target: Option<WlSurface>, _validated: bool, _seat: Seat<Self>) {
+        tracing::info!("✨ [DnD] Drag finalizado");
+        self.dnd_icon = None;
+    }
+}
 
 impl ServerDndGrabHandler for MalusState {
     fn send(&mut self, _mime_type: String, _fd: OwnedFd, _seat: Seat<Self>) {}

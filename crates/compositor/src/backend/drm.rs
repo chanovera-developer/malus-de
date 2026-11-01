@@ -39,7 +39,7 @@ use smithay::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::{ResizeEdge, State as XdgState},
         wayland_server::{Display, ListeningSocket},
     },
-    utils::{DeviceFd, Logical, Physical, Point, Rectangle, Size, Transform, SERIAL_COUNTER},
+    utils::{DeviceFd, IsAlive, Logical, Physical, Point, Rectangle, Size, Transform, SERIAL_COUNTER},
     wayland::{seat::WaylandFocus, shell::wlr_layer::Layer},
 };
 use std::{
@@ -2089,6 +2089,33 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
 
+                let is_dnd_alive = state.dnd_icon.as_ref().map(|s| s.alive()).unwrap_or(false);
+                if !is_dnd_alive && state.dnd_icon.is_some() {
+                    state.dnd_icon = None;
+                }
+
+                let mut dnd_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
+                if let Some(ref dnd_surf) = state.dnd_icon {
+                    if let Some(pointer) = state.seat.get_pointer() {
+                        let loc = pointer.current_location();
+                        if output_geo.to_f64().contains(loc) {
+                            let phys_x = ((loc.x - output_geo.loc.x as f64) * scale).round() as i32;
+                            let phys_y = ((loc.y - output_geo.loc.y as f64) * scale).round() as i32;
+                            dnd_elems = render_elements_from_surface_tree::<
+                                GlesRenderer,
+                                WaylandSurfaceRenderElement<GlesRenderer>,
+                            >(
+                                &mut renderer,
+                                dnd_surf,
+                                Point::from((phys_x, phys_y)),
+                                smithay::utils::Scale::from(scale),
+                                1.0,
+                                Kind::Unspecified,
+                            );
+                        }
+                    }
+                }
+
                 let corner_radius_pt = current_displays_cfg.screen_corner_radius;
                 let phys_r = if corner_radius_pt > 0.0 {
                     let r = (corner_radius_pt * scale).round() as i32;
@@ -3121,6 +3148,11 @@ pub fn run_drm() -> Result<()> {
                                     }
                                 }
                             }
+                        }
+
+                        // Dibujar el icono de Drag and Drop (dnd_icon) si hay una operación activa
+                        if !dnd_elems.is_empty() {
+                            let _ = draw_render_elements(&mut frame, scale, &dnd_elems, &[damage]);
                         }
 
                         // Dibujar el puntero con el tamaño lógico configurado y el hotspot exacto
