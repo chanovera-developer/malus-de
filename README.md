@@ -30,7 +30,7 @@ Las funciones descritas abajo indican alcance implementado en el código, no una
 - Escritorio interactivo con iconos movibles, intercambio de archivos por arrastrar y soltar con el gestor de archivos y miniaturas de imágenes.
 - Selector visual de ventanas Alt-Tab/Super-Tab funcional para recorrer y cambiar entre ventanas abiertas; su presentación y comportamiento siguen en desarrollo.
 - Integración con servicios de Linux para audio, red, Bluetooth y controles multimedia.
-- Captura real de pantalla completa solicitada al compositor mediante IPC, guardada en la carpeta de Imágenes y copiada como PNG al portapapeles.
+- Captura real de pantalla (completa y de área interactiva) solicitada al compositor mediante IPC, con alerta auditiva inmediata (obturador vía PipeWire/libcanberra), alerta visual de destello blanco suave estilo macOS en todas las pantallas, miniatura flotante interactiva en la esquina inferior derecha, notificación de sistema y copia directa como PNG al portapapeles.
 - Historial local persistente de hasta 50 elementos de texto, imágenes, documentos y URI de archivos, accesible con `Super + V`. Admite búsqueda, fijar elementos, volver a copiarlos y borrarlos; ocupa como máximo 50 MiB (10 MiB por elemento). La sincronización con la selección primaria de Wayland es opcional y está desactivada por defecto. El filtro automático de credenciales está activado por defecto y se puede configurar desde la interfaz; es heurístico y no detecta todos los secretos. Los datos se guardan localmente con permisos privados, se conservan entre sesiones y se eliminan al borrar el historial. Requiere `wl-clipboard`.
 - Efectos gráficos con shaders GLSL, esquinas squircle y animaciones fluidas de ventanas.
 - Detección de pantallas y modos compatibles por DRM/KMS, con resolución, disposición y escala fraccionaria configurables en caliente.
@@ -104,8 +104,15 @@ cargo build --workspace --release
 
 ## Capturas de pantalla
 
-La captura completa solicita el fotograma al compositor de Malus mediante IPC, sin depender del portal de GNOME Shell. Al completarse, muestra un breve destello en las pantallas, reproduce el sonido de obturador y envía una notificación; el PNG se guarda en la carpeta de Imágenes configurada por XDG (por ejemplo, `~/Imágenes/Capturas de pantalla` en español), se copia automáticamente al portapapeles como imagen PNG y después muestra una miniatura. El modo de área muestra una capa de selección en la primera pantalla, permite arrastrar para delimitar la región y cancelar con `Esc`, y guarda solo esa selección.
-Pulsa `Impr Pant` para iniciar una captura completa. Después de actualizar el compositor, recompila Malus y reinicia la sesión para que estén disponibles el atajo y el servicio IPC de captura.
+La herramienta de captura solicita el fotograma al compositor de Malus mediante IPC, sin depender de portales externos. Cuenta con soporte completo para pantalla completa y recorte de área:
+
+- **Atajos de teclado globales:**
+  - **Captura completa:** Tecla `Impr Pant` o `Super + Shift + 3` (estilo macOS).
+  - **Captura de área interactiva:** `Shift + Impr Pant`, `Super + Shift + 4` (estilo macOS) o `Super + Shift + S` (estilo Windows/Linux moderno).
+- **Alerta auditiva inmediata:** Reproducción prioritaria del sonido de obturador de cámara (`screen-capture.oga` / `camera-shutter.oga`) mediante `pw-play` (PipeWire nativo de latencia casi cero), con respaldo automático a `canberra-gtk-play` y `paplay`.
+- **Alerta visual suave (destello):** Animación de destello blanco puro en capa de superposición (`Layer::Overlay`) sobre todas las pantallas conectadas, que se desvanece fluidamente de 85% a 0% de opacidad en 200 ms.
+- **Selección de área:** Despliega una capa con oscurecimiento y retícula que permite arrastrar para delimitar la región exacta, con tecla `Esc` para cancelar.
+- **Miniatura flotante interactiva y notificación:** El fotograma se guarda como imagen PNG en la carpeta de Imágenes configurada por XDG (por ejemplo, `~/Imágenes/Capturas de pantalla` en español), se copia automáticamente al portapapeles con `wl-copy` y envía una notificación de escritorio. Además, presenta en la esquina inferior derecha una miniatura flotante con previsualización del archivo y botones para volver a copiarlo o descartarlo (con auto-cierre tras 6 segundos de inactividad).
 
 ```bash
 cargo run -p malus-de-screenshot -- --mode full
@@ -113,7 +120,7 @@ cargo run -p malus-de-screenshot -- --mode full --clipboard-only
 cargo run -p malus-de-screenshot -- --mode area
 ```
 
-La copia al portapapeles requiere `wl-copy` (`wl-clipboard`). También puedes usar `--clipboard-only` para copiar sin guardar el archivo ni abrir la miniatura. La captura de ventana, grabación y OCR todavía no están implementados.
+La copia al portapapeles requiere `wl-copy` (`wl-clipboard`). También puedes usar el flag `--clipboard-only` para copiar directamente al portapapeles con destello y sonido, pero sin guardar el archivo en disco ni abrir la miniatura flotante. La captura de ventana individual, grabación y OCR continúan en desarrollo.
 
 El gestor de portapapeles conserva hasta 50 elementos (texto, enlaces, URI de archivos, imágenes comunes y formatos de documento como PDF y RTF), con un límite de 10 MiB por elemento y 50 MiB en total. Pulsa `Super + V` para buscar, fijar, volver a copiar o borrar elementos. El historial se guarda localmente entre sesiones con permisos privados y requiere `wl-clipboard`; borrar el historial elimina también su copia persistente. La sincronización con la selección primaria de Wayland es opcional y está desactivada por defecto; se configura desde la interfaz del historial. El filtro sensible, activado por defecto, omite las selecciones marcadas como contraseñas por la aplicación de origen y detecta algunas señales comunes como claves privadas y credenciales con nombre. Es una protección heurística, no una garantía: puede dejar pasar secretos o descartar texto que parezca una credencial. Se puede desactivar desde la interfaz; el cambio afecta al contenido nuevo y no modifica el historial existente.
 
