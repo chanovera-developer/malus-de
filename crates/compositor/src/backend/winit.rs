@@ -1099,8 +1099,10 @@ pub fn run_winit() -> Result<()> {
                                     .map(|app_id| {
                                         !app_id.contains("org.malus_de.dock")
                                             && !app_id.contains("malus-de-dock")
+                                            && !crate::state::is_browser_identifier(&app_id)
                                     })
-                                    .unwrap_or(true);
+                                    .unwrap_or(true)
+                                    && !crate::state::is_browser_window(&window);
                             for (popup, popup_offset) in
                                 smithay::desktop::PopupManager::popups_for_surface(
                                     main_surface.as_ref(),
@@ -1582,15 +1584,17 @@ pub fn run_winit() -> Result<()> {
                             }
 
                             for elem in popup_elems {
-                                if let Some(shader) = window_squircle_shader.as_ref() {
-                                    let elem_geo = elem.geometry(Scale::from(1.0));
-                                    shader.apply_to_frame(
-                                        &mut frame,
-                                        elem_geo.size,
-                                        popup_rect.loc - elem_geo.loc,
-                                        popup_rect.size,
-                                        22,
-                                    );
+                                if *popup_effects_enabled {
+                                    if let Some(shader) = window_squircle_shader.as_ref() {
+                                        let elem_geo = elem.geometry(Scale::from(1.0));
+                                        shader.apply_to_frame(
+                                            &mut frame,
+                                            elem_geo.size,
+                                            popup_rect.loc - elem_geo.loc,
+                                            popup_rect.size,
+                                            22,
+                                        );
+                                    }
                                 }
                                 let _ = draw_render_elements(
                                     &mut frame,
@@ -1598,7 +1602,9 @@ pub fn run_winit() -> Result<()> {
                                     std::slice::from_ref(elem),
                                     &[damage],
                                 );
-                                frame.clear_tex_program_override();
+                                if *popup_effects_enabled {
+                                    frame.clear_tex_program_override();
+                                }
                             }
                         }
                     }

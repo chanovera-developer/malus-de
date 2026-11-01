@@ -245,6 +245,59 @@ pub fn is_firefox_window(window: &smithay::desktop::Window) -> bool {
     false
 }
 
+/// Identifica si una cadena de texto corresponde a un navegador web conocido
+pub fn is_browser_identifier(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("firefox")
+        || lower.contains("mozilla")
+        || lower.contains("chrome")
+        || lower.contains("chromium")
+        || lower.contains("brave")
+        || lower.contains("edge")
+        || lower.contains("msedge")
+        || lower.contains("opera")
+        || lower.contains("vivaldi")
+        || lower.contains("epiphany")
+        || lower.contains("zen-browser")
+        || lower.contains("zen_browser")
+        || lower.contains("waterfox")
+        || lower.contains("librewolf")
+        || lower.contains("tor-browser")
+        || lower.contains("torbrowser")
+}
+
+/// Identifica si una ventana pertenece a un navegador web (para excluir sus menús
+/// contextuales del desenfoque y capas de fondo del compositor).
+pub fn is_browser_window(window: &smithay::desktop::Window) -> bool {
+    let check = |app_id: &Option<String>, title: &Option<String>| -> bool {
+        if let Some(ref id) = app_id {
+            if is_browser_identifier(id) {
+                return true;
+            }
+        }
+        if let Some(ref title) = title {
+            if is_browser_identifier(title) {
+                return true;
+            }
+        }
+        false
+    };
+
+    if let Some(surface) = window.wl_surface() {
+        let (app_id, title) = toplevel_info(&surface);
+        if check(&app_id, &title) {
+            return true;
+        }
+    }
+    if let Some(toplevel) = window.toplevel() {
+        let (app_id, title) = toplevel_info(toplevel.wl_surface());
+        if check(&app_id, &title) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Identifica si una ventana requiere desenfoque de fondo en GPU.
 pub fn is_translucent_window(window: &smithay::desktop::Window) -> bool {
     let check = |app_id: &Option<String>, title: &Option<String>| -> bool {
@@ -2375,7 +2428,24 @@ impl WlrLayerShellHandler for MalusState {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_system_monitor_identity, parse_color_scheme};
+    use super::{is_browser_identifier, is_system_monitor_identity, parse_color_scheme};
+
+    #[test]
+    fn recognizes_browser_identifiers() {
+        assert!(is_browser_identifier("google-chrome"));
+        assert!(is_browser_identifier("google-chrome-stable"));
+        assert!(is_browser_identifier("chromium"));
+        assert!(is_browser_identifier("org.chromium.Chromium"));
+        assert!(is_browser_identifier("brave-browser"));
+        assert!(is_browser_identifier("firefox"));
+        assert!(is_browser_identifier("org.mozilla.firefox"));
+        assert!(is_browser_identifier("microsoft-edge"));
+        assert!(is_browser_identifier("zen-browser"));
+        assert!(!is_browser_identifier("org.gnome.Nautilus"));
+        assert!(!is_browser_identifier("malus-de-settings"));
+        assert!(!is_browser_identifier("antigravity"));
+        assert!(!is_browser_identifier("code"));
+    }
 
     #[test]
     fn recognizes_system_monitor_app_ids_and_localized_titles() {
