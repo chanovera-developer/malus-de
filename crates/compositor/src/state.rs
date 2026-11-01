@@ -245,17 +245,42 @@ pub fn is_firefox_window(window: &smithay::desktop::Window) -> bool {
     false
 }
 
+fn contains_isolated_token(text: &str, token: &str) -> bool {
+    let token_lower = token.to_lowercase();
+    for part in text.split(|c: char| !c.is_alphanumeric()) {
+        if part.eq_ignore_ascii_case(&token_lower) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Identifica si una cadena de texto corresponde a un navegador web conocido
 pub fn is_browser_identifier(text: &str) -> bool {
     let lower = text.to_lowercase();
+
+    // Excluir explícitamente aplicaciones esenciales de Malus DE y GNOME
+    // para evitar cualquier falso positivo en sus identificadores.
+    if lower.contains("nautilus")
+        || lower.contains("malus")
+        || lower.contains("settings")
+        || lower.contains("ptyxis")
+        || lower.contains("terminal")
+        || lower.contains("texteditor")
+        || lower.contains("text-editor")
+        || lower.contains("gedit")
+        || lower.contains("calculator")
+        || lower.contains("systemmonitor")
+        || lower.contains("system-monitor")
+    {
+        return false;
+    }
+
     lower.contains("firefox")
         || lower.contains("mozilla")
         || lower.contains("chrome")
         || lower.contains("chromium")
         || lower.contains("brave")
-        || lower.contains("edge")
-        || lower.contains("msedge")
-        || lower.contains("opera")
         || lower.contains("vivaldi")
         || lower.contains("epiphany")
         || lower.contains("zen-browser")
@@ -264,19 +289,22 @@ pub fn is_browser_identifier(text: &str) -> bool {
         || lower.contains("librewolf")
         || lower.contains("tor-browser")
         || lower.contains("torbrowser")
+        || lower.contains("msedge")
+        || lower.contains("microsoft-edge")
+        || contains_isolated_token(&lower, "edge")
+        || contains_isolated_token(&lower, "opera")
 }
 
 /// Identifica si una ventana pertenece a un navegador web (para excluir sus menús
 /// contextuales del desenfoque y capas de fondo del compositor).
+///
+/// Solo evalúa `app_id` (identidad del proceso/aplicación) y nunca el título
+/// de la ventana, ya que carpetas de archivos (ej. en Nautilus) o documentos
+/// abiertos pueden contener palabras o nombres de navegadores sin serlo.
 pub fn is_browser_window(window: &smithay::desktop::Window) -> bool {
-    let check = |app_id: &Option<String>, title: &Option<String>| -> bool {
+    let check = |app_id: &Option<String>| -> bool {
         if let Some(ref id) = app_id {
             if is_browser_identifier(id) {
-                return true;
-            }
-        }
-        if let Some(ref title) = title {
-            if is_browser_identifier(title) {
                 return true;
             }
         }
@@ -284,14 +312,14 @@ pub fn is_browser_window(window: &smithay::desktop::Window) -> bool {
     };
 
     if let Some(surface) = window.wl_surface() {
-        let (app_id, title) = toplevel_info(&surface);
-        if check(&app_id, &title) {
+        let (app_id, _) = toplevel_info(&surface);
+        if check(&app_id) {
             return true;
         }
     }
     if let Some(toplevel) = window.toplevel() {
-        let (app_id, title) = toplevel_info(toplevel.wl_surface());
-        if check(&app_id, &title) {
+        let (app_id, _) = toplevel_info(toplevel.wl_surface());
+        if check(&app_id) {
             return true;
         }
     }
@@ -2440,11 +2468,27 @@ mod tests {
         assert!(is_browser_identifier("firefox"));
         assert!(is_browser_identifier("org.mozilla.firefox"));
         assert!(is_browser_identifier("microsoft-edge"));
+        assert!(is_browser_identifier("msedge"));
+        assert!(is_browser_identifier("edge"));
+        assert!(is_browser_identifier("opera"));
+        assert!(is_browser_identifier("opera-stable"));
+        assert!(is_browser_identifier("com.opera.browser"));
         assert!(is_browser_identifier("zen-browser"));
+        assert!(is_browser_identifier("vivaldi"));
+        assert!(is_browser_identifier("org.gnome.Epiphany"));
+
+        // Asegurar que aplicaciones del sistema y palabras en español/inglés no se confundan
         assert!(!is_browser_identifier("org.gnome.Nautilus"));
+        assert!(!is_browser_identifier("nautilus"));
         assert!(!is_browser_identifier("malus-de-settings"));
         assert!(!is_browser_identifier("antigravity"));
         assert!(!is_browser_identifier("code"));
+        assert!(!is_browser_identifier("org.gnome.Ptyxis"));
+        assert!(!is_browser_identifier("org.gnome.TextEditor"));
+        assert!(!is_browser_identifier("operaciones"));
+        assert!(!is_browser_identifier("knowledge"));
+        assert!(!is_browser_identifier("privilege"));
+        assert!(!is_browser_identifier("recuperacion"));
     }
 
     #[test]

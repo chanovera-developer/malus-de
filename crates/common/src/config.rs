@@ -101,7 +101,7 @@ pub fn get_malus_gtk3_css(dark: bool) -> String {
                 "rgb(255, 255, 255)",
                 "rgb(30, 30, 34)",
                 "rgba(255, 255, 255, 0.08)",
-                "0.94",
+                "0.82",
                 "0.14",
             )
         } else {
@@ -1533,7 +1533,7 @@ mod tests {
     #[test]
     fn nautilus_popup_background_overrides_transparency_in_both_themes() {
         for (dark, background) in [
-            (true, "background-color: alpha(@window_bg_color, 0.94);"),
+            (true, "background-color: alpha(@window_bg_color, 0.82);"),
             (false, "background-color: alpha(@window_bg_color, 0.82);"),
         ] {
             let css = get_malus_gtk_css(dark);
@@ -1553,9 +1553,9 @@ mod tests {
         let light_gtk3 = get_malus_gtk3_css(false);
 
         for (css, opacity, border_opacity) in [
-            (&dark_gtk4, "0.94", "0.14"),
+            (&dark_gtk4, "0.82", "0.14"),
             (&light_gtk4, "0.82", "0.12"),
-            (&dark_gtk3, "0.94", "0.14"),
+            (&dark_gtk3, "0.82", "0.14"),
             (&light_gtk3, "0.82", "0.12"),
         ] {
             assert!(css.contains(&format!(

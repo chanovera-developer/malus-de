@@ -1,9 +1,20 @@
+popover,
+popover.background,
+popover > arrow,
+window.view popover,
+window.view popover.background,
+window.view popover > arrow {
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+}
+
 popover > contents,
 popover.menu > contents,
 popover.background > contents,
 menu,
 .menu,
-window.view popover,
 window.view popover > contents,
 window.view popover.menu > contents,
 window.view popover.background > contents,
