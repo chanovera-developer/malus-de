@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Ajustes del Sistema
+GenericName=Ajustes del Sistema
+Comment=Ajustes y preferencias de Malus DE
+Exec=malus-de-settings
+Icon=preferences-system
+Terminal=false
+Type=Application
+StartupNotify=true
+StartupWMClass=dev.malus.Settings
+Categories=Settings;DesktopSettings;GTK;
+Keywords=Ajustes;Configuración;Settings;Preferencias;Malus;
+

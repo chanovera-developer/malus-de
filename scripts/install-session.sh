@@ -89,6 +89,12 @@ mkdir -p /usr/local/share/malus-de/themes
 cp -R "$PROJECT_DIR/assets/themes/." /usr/local/share/malus-de/themes/
 find /usr/local/share/malus-de/themes -type f -exec chmod 644 {} +
 
+# Instalar lanzadores .desktop de aplicaciones de Malus DE
+mkdir -p /usr/share/applications
+cp -f "$PROJECT_DIR/data/dev.malus.Settings.desktop" /usr/share/applications/dev.malus.Settings.desktop
+chmod 644 /usr/share/applications/dev.malus.Settings.desktop
+echo "   ✔ /usr/share/applications/dev.malus.Settings.desktop"
+
 # Instalar script de inicio de sesión
 cp -f "$SCRIPT_DIR/malus-session" "/usr/local/bin/malus-session"
 chmod 755 "/usr/local/bin/malus-session"

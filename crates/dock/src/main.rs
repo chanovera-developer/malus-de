@@ -460,8 +460,41 @@ fn should_ignore_app(identifier: &str) -> bool {
     ignored.iter().any(|ign| lower.contains(ign))
 }
 
+fn safe_app_info_executable(app_info: &impl glib::object::IsA<gio::AppInfo>) -> Option<std::path::PathBuf> {
+    use glib::translate::ToGlibPtr;
+    unsafe {
+        let ptr = gio::ffi::g_app_info_get_executable(app_info.as_ref().to_glib_none().0);
+        if ptr.is_null() {
+            None
+        } else {
+            let cstr = std::ffi::CStr::from_ptr(ptr);
+            cstr.to_str().ok().map(std::path::PathBuf::from)
+        }
+    }
+}
+
 fn resolve_desktop_app_info(identifier: &str) -> (String, String, String, Vec<String>) {
     let lower = identifier.to_lowercase();
+
+    // 1. Mapeo específico para Ajustes del Sistema de Malus DE
+    if lower == "dev.malus.settings"
+        || lower == "malus-de-settings"
+        || (lower.contains("malus") && lower.contains("settings"))
+    {
+        return (
+            "Ajustes del Sistema".to_string(),
+            "preferences-system".to_string(),
+            "malus-de-settings".to_string(),
+            vec![
+                "malus-de-settings".to_string(),
+                "dev.malus.settings".to_string(),
+                "dev.malus.Settings".to_string(),
+                "ajustes".to_string(),
+                "settings".to_string(),
+            ],
+        );
+    }
+
     let candidates = [
         format!("{}.desktop", identifier),
         format!("{}.desktop", lower),
@@ -479,7 +512,9 @@ fn resolve_desktop_app_info(identifier: &str) -> (String, String, String, Vec<St
                 .and_then(|i| IconExt::to_string(&i))
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| identifier.to_string());
-            let exec = info.executable().to_string_lossy().to_string();
+            let exec = safe_app_info_executable(&info)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| identifier.to_string());
             let matchers = vec![identifier.to_string(), lower.clone(), name.to_lowercase()];
             return (name, icon, exec, matchers);
         }
@@ -490,10 +525,8 @@ fn resolve_desktop_app_info(identifier: &str) -> (String, String, String, Vec<St
             .id()
             .is_some_and(|id| id.to_lowercase().trim_end_matches(".desktop").contains(&lower));
         let name_matches = app_info.name().to_lowercase() == lower;
-        let exec_matches = app_info
-            .executable()
-            .file_name()
-            .and_then(|n| n.to_str())
+        let exec_matches = safe_app_info_executable(&app_info)
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
             .is_some_and(|exe| exe.eq_ignore_ascii_case(identifier) || exe.to_lowercase().contains(&lower));
         if id_matches || name_matches || exec_matches {
             let name = app_info.name().to_string();
@@ -502,7 +535,9 @@ fn resolve_desktop_app_info(identifier: &str) -> (String, String, String, Vec<St
                 .and_then(|i| IconExt::to_string(&i))
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| identifier.to_string());
-            let exec = app_info.executable().to_string_lossy().to_string();
+            let exec = safe_app_info_executable(&app_info)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| identifier.to_string());
             let matchers = vec![identifier.to_string(), lower.clone(), name.to_lowercase()];
             return (name, icon, exec, matchers);
         }
@@ -1957,20 +1992,23 @@ fn resolve_icon_file_path(
         }
     }
 
-    if let Some(path) = gtk4::IconTheme::for_display(&icon.display())
-        .lookup_icon(
-            icon_name,
-            &[],
-            icon_size.max(64),
-            1,
-            icon.direction(),
-            gtk4::IconLookupFlags::empty(),
-        )
-        .file()
-        .and_then(|file| file.path())
-        .filter(|p| p.is_file())
-    {
-        return Some(path);
+    let icon_theme = gtk4::IconTheme::for_display(&icon.display());
+    if icon_theme.has_icon(icon_name) {
+        if let Some(path) = icon_theme
+            .lookup_icon(
+                icon_name,
+                &[],
+                icon_size.max(64),
+                1,
+                icon.direction(),
+                gtk4::IconLookupFlags::empty(),
+            )
+            .file()
+            .and_then(|file| file.path())
+            .filter(|p| p.is_file())
+        {
+            return Some(path);
+        }
     }
 
     let mut bases = vec![
@@ -3249,5 +3287,25 @@ mod tests {
             let alpha = (pixel >> 24) & 0xff;
             assert_eq!(alpha, 255, "La esquina ({cx}, {cy}) debe quedar rellena para el recorte squircle");
         }
+    }
+
+    #[test]
+    fn resolve_desktop_app_info_maps_malus_settings() {
+        let (name, icon, exec, matchers) = resolve_desktop_app_info("dev.malus.Settings");
+        assert_eq!(name, "Ajustes del Sistema");
+        assert_eq!(icon, "preferences-system");
+        assert_eq!(exec, "malus-de-settings");
+        assert!(matchers.iter().any(|m| m.contains("malus")));
+    }
+
+    #[test]
+    fn resolve_desktop_app_info_does_not_crash_on_unknown_app_with_null_executables() {
+        // En Linux/GNOME existen archivos desktop (como qemu.desktop) sin clave Exec
+        // donde g_app_info_get_executable devuelve NULL. La función debe manejarlo
+        // de forma segura sin provocar un segfault en strlen().
+        let (name, icon, exec, _) = resolve_desktop_app_info("nonexistent-unpinned-app-test");
+        assert_eq!(name, "Nonexistent-unpinned-app-test");
+        assert_eq!(icon, "nonexistent-unpinned-app-test");
+        assert_eq!(exec, "nonexistent-unpinned-app-test");
     }
 }
