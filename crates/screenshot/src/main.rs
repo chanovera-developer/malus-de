@@ -83,13 +83,16 @@ fn main() -> Result<()> {
 }
 
 fn finish_capture(mode: CaptureMode, source: PathBuf, clipboard_only: bool) -> Result<()> {
+    // Alerta auditiva inmediata al momento del disparo de captura
+    play_capture_sound();
+
     if clipboard_only {
         let copy_result = copy_image_to_clipboard(&source);
         remove_temporary_capture(&source);
         copy_result?;
         info!("Captura copiada al portapapeles.");
-        show_capture_feedback();
         send_capture_notification("Captura lista", "La captura se copió al portapapeles.");
+        show_capture_ui(mode, None, "Captura copiada al portapapeles.".to_string());
         return Ok(());
     }
 
@@ -108,12 +111,11 @@ fn finish_capture(mode: CaptureMode, source: PathBuf, clipboard_only: bool) -> R
             message
         }
     };
-    show_capture_feedback();
     send_capture_notification(
         "Captura de pantalla",
         &format!("Guardada en {}", path.display()),
     );
-    show_thumbnail_app(mode, path, clipboard_status);
+    show_capture_ui(mode, Some(path), clipboard_status);
     Ok(())
 }
 
@@ -145,126 +147,41 @@ fn send_capture_notification(summary: &str, body: &str) {
     }
 }
 
-fn show_capture_feedback() {
-    play_capture_sound();
-
-    if let Err(error) = show_capture_flash() {
-        tracing::warn!("No se pudo mostrar el destello de captura: {error:#}");
-    }
-}
-
 fn play_capture_sound() {
     std::thread::spawn(|| {
-        match Command::new("canberra-gtk-play")
-            .args(["--id", "camera-shutter"])
-            .status()
-        {
-            Ok(status) if status.success() => return,
-            Ok(status) => {
-                tracing::warn!("El sonido de cámara con libcanberra terminó con error: {status}")
-            }
-            Err(error) => {
-                tracing::warn!("No se pudo iniciar el sonido de cámara con libcanberra: {error}")
-            }
-        }
+        let sound_candidates = [
+            "/usr/share/sounds/freedesktop/stereo/screen-capture.oga",
+            "/usr/share/sounds/freedesktop/stereo/camera-shutter.oga",
+        ];
+        let sound_file = sound_candidates.iter().find(|p| std::path::Path::new(p).exists());
 
-        let sound_file = "/usr/share/sounds/freedesktop/stereo/camera-shutter.oga";
-        match Command::new("paplay").arg(sound_file).status() {
-            Ok(status) if status.success() => {}
-            Ok(status) => tracing::warn!("El sonido de captura con paplay terminó con error: {status}"),
-            Err(error) => tracing::warn!("No se pudo iniciar paplay para el sonido de captura: {error}"),
-        }
-    });
-}
-
-fn show_capture_flash() -> Result<()> {
-    let app = Application::builder()
-        .application_id("org.malus.de.screenshot-flash")
-        .build();
-
-    app.connect_startup(|_| {
-        let provider = CssProvider::new();
-        provider.load_from_string(CAPTURE_FLASH_CSS);
-        if let Some(display) = gtk4::gdk::Display::default() {
-            gtk4::style_context_add_provider_for_display(
-                &display,
-                &provider,
-                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-            );
-        }
-    });
-
-    app.connect_activate(|application| {
-        let Some(display) = gtk4::gdk::Display::default() else {
-            tracing::warn!("No se pudo mostrar el destello: no hay pantalla GTK disponible");
-            application.quit();
-            return;
-        };
-        let monitors = display.monitors();
-        let mut windows = Vec::new();
-
-        for index in 0..monitors.n_items() {
-            let Some(monitor) = monitors
-                .item(index)
-                .and_then(|item| item.downcast::<gtk4::gdk::Monitor>().ok())
-            else {
-                continue;
-            };
-
-            let window = ApplicationWindow::builder()
-                .application(application)
-                .title("Destello de captura")
-                .decorated(false)
-                .css_classes(["malus-screenshot-flash"])
-                .opacity(0.82)
-                .build();
-
-            if gtk4_layer_shell::is_supported() {
-                window.init_layer_shell();
-                window.set_layer(Layer::Overlay);
-                window.set_namespace("malus-screenshot-flash");
-                window.set_monitor(&monitor);
-                window.set_exclusive_zone(-1);
-                for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
-                    window.set_anchor(edge, true);
+        // 1. pw-play (PipeWire nativo - latencia casi cero)
+        if let Some(&file) = sound_file {
+            if let Ok(status) = Command::new("pw-play").arg(file).status() {
+                if status.success() {
+                    return;
                 }
-            } else {
-                window.fullscreen();
             }
-
-            window.set_child(Some(&GtkBox::new(Orientation::Vertical, 0)));
-            window.present();
-            windows.push(window);
         }
 
-        if windows.is_empty() {
-            tracing::warn!("No se pudo mostrar el destello: no se encontraron pantallas");
-            application.quit();
-            return;
-        }
-
-        let app_for_timeout = application.clone();
-        let mut step = 0u8;
-        glib::timeout_add_local(Duration::from_millis(25), move || {
-            step += 1;
-            let opacity = 0.82 * (1.0 - f64::from(step) / 8.0);
-            for window in &windows {
-                window.set_opacity(opacity.max(0.0));
-            }
-            if step >= 8 {
-                for window in &windows {
-                    window.close();
+        // 2. canberra-gtk-play (libcanberra - integración con temas de sonido de escritorio)
+        for id in ["screen-capture", "camera-shutter"] {
+            if let Ok(status) = Command::new("canberra-gtk-play").args(["--id", id]).status() {
+                if status.success() {
+                    return;
                 }
-                app_for_timeout.quit();
-                ControlFlow::Break
-            } else {
-                ControlFlow::Continue
             }
-        });
-    });
+        }
 
-    app.run_with_args(&["malus-de-screenshot"]);
-    Ok(())
+        // 3. paplay (PulseAudio / PipeWire Pulse)
+        if let Some(&file) = sound_file {
+            if let Ok(status) = Command::new("paplay").arg(file).status() {
+                if status.success() {
+                    return;
+                }
+            }
+        }
+    });
 }
 
 fn request_compositor_capture() -> Result<PathBuf> {
@@ -331,144 +248,146 @@ fn select_area() -> Result<AreaSelection> {
         .and_then(|monitor| monitor.downcast::<gtk4::gdk::Monitor>().ok())
         .context("No se encontró una pantalla para seleccionar el área")?;
     let selected = Rc::new(RefCell::new(None));
-    let selected_for_activate = selected.clone();
-    let monitor_for_activate = monitor.clone();
 
-    let app = Application::builder()
-        .application_id("org.malus.de.screenshot-selector")
+    let provider = CssProvider::new();
+    provider.load_from_string(include_str!("styles/selector.css"));
+    gtk4::style_context_add_provider_for_display(
+        &display,
+        &provider,
+        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+
+    let window = gtk4::Window::builder()
+        .title("Seleccionar área de captura")
+        .decorated(false)
+        .css_classes(["malus-screenshot-selector"])
         .build();
-    app.connect_startup(|_| {
-        let provider = CssProvider::new();
-        provider.load_from_string(include_str!("styles/selector.css"));
-        if let Some(display) = gtk4::gdk::Display::default() {
-            gtk4::style_context_add_provider_for_display(
-                &display,
-                &provider,
-                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-            );
+
+    let main_loop = glib::MainLoop::new(None, false);
+
+    let state = Rc::new(RefCell::new(None::<(f64, f64, f64, f64)>));
+    let drawing_area = DrawingArea::new();
+    drawing_area.set_hexpand(true);
+    drawing_area.set_vexpand(true);
+    drawing_area.set_draw_func({
+        let state = state.clone();
+        move |_, context, _, _| {
+            context.set_source_rgba(0.0, 0.0, 0.0, 0.42);
+            let _ = context.paint();
+            if let Some((start_x, start_y, end_x, end_y)) = *state.borrow() {
+                let x = start_x.min(end_x);
+                let y = start_y.min(end_y);
+                let rect_width = (start_x - end_x).abs();
+                let rect_height = (start_y - end_y).abs();
+                context.set_operator(gtk4::cairo::Operator::Clear);
+                context.rectangle(x, y, rect_width, rect_height);
+                let _ = context.fill();
+                context.set_operator(gtk4::cairo::Operator::Over);
+                context.set_source_rgba(1.0, 1.0, 1.0, 0.95);
+                context.set_line_width(2.0);
+                context.rectangle(x, y, rect_width, rect_height);
+                let _ = context.stroke();
+            }
         }
     });
-    app.connect_activate(move |application| {
-        let window = ApplicationWindow::builder()
-            .application(application)
-            .title("Seleccionar área de captura")
-            .decorated(false)
-            .css_classes(["malus-screenshot-selector"])
-            .build();
-        let state = Rc::new(RefCell::new(None::<(f64, f64, f64, f64)>));
-        let drawing_area = DrawingArea::new();
-        drawing_area.set_hexpand(true);
-        drawing_area.set_vexpand(true);
-        drawing_area.set_draw_func({
-            let state = state.clone();
-            move |_, context, _, _| {
-                context.set_source_rgba(0.0, 0.0, 0.0, 0.42);
-                let _ = context.paint();
-                if let Some((start_x, start_y, end_x, end_y)) = *state.borrow() {
-                    let x = start_x.min(end_x);
-                    let y = start_y.min(end_y);
-                    let rect_width = (start_x - end_x).abs();
-                    let rect_height = (start_y - end_y).abs();
-                    context.set_operator(gtk4::cairo::Operator::Clear);
-                    context.rectangle(x, y, rect_width, rect_height);
-                    let _ = context.fill();
-                    context.set_operator(gtk4::cairo::Operator::Over);
-                    context.set_source_rgba(1.0, 1.0, 1.0, 0.95);
-                    context.set_line_width(2.0);
-                    context.rectangle(x, y, rect_width, rect_height);
-                    let _ = context.stroke();
-                }
-            }
-        });
 
-        let overlay = Overlay::new();
-        overlay.set_child(Some(&drawing_area));
-        let hint = Label::new(Some("Arrastra para seleccionar · Esc para cancelar"));
-        hint.set_halign(Align::Center);
-        hint.set_valign(Align::Start);
-        hint.set_margin_top(28);
-        hint.set_can_target(false);
-        hint.add_css_class("screenshot-selector-hint");
-        overlay.add_overlay(&hint);
-        window.set_child(Some(&overlay));
+    let overlay = Overlay::new();
+    overlay.set_child(Some(&drawing_area));
+    let hint = Label::new(Some("Arrastra para seleccionar · Esc para cancelar"));
+    hint.set_halign(Align::Center);
+    hint.set_valign(Align::Start);
+    hint.set_margin_top(28);
+    hint.set_can_target(false);
+    hint.add_css_class("screenshot-selector-hint");
+    overlay.add_overlay(&hint);
+    window.set_child(Some(&overlay));
 
-        let drag = GestureDrag::new();
-        let state_begin = state.clone();
-        drag.connect_drag_begin(move |_, x, y| {
-            *state_begin.borrow_mut() = Some((x, y, x, y));
-        });
-        let state_update = state.clone();
-        let area_update = drawing_area.clone();
-        drag.connect_drag_update(move |_, offset_x, offset_y| {
-            let current = *state_update.borrow();
-            if let Some((start_x, start_y, _, _)) = current {
-                *state_update.borrow_mut() =
-                    Some((start_x, start_y, start_x + offset_x, start_y + offset_y));
-                area_update.queue_draw();
-            }
-        });
-        let state_end = state.clone();
-        let area_end = drawing_area.clone();
-        let selected = selected_for_activate.clone();
-        let window_end = window.clone();
-        drag.connect_drag_end(move |_, offset_x, offset_y| {
-            let current = *state_end.borrow();
-            let Some((start_x, start_y, _, _)) = current else {
-                return;
-            };
-            let end_x = start_x + offset_x;
-            let end_y = start_y + offset_y;
-            let surface_width = area_end.width().max(0) as f64;
-            let surface_height = area_end.height().max(0) as f64;
-            let x = start_x.min(end_x).clamp(0.0, surface_width);
-            let y = start_y.min(end_y).clamp(0.0, surface_height);
-            let right = start_x.max(end_x).clamp(0.0, surface_width);
-            let bottom = start_y.max(end_y).clamp(0.0, surface_height);
-            if right > x && bottom > y {
-                *selected.borrow_mut() = Some(AreaSelection {
-                    rect: SelectionRect {
-                        x,
-                        y,
-                        width: right - x,
-                        height: bottom - y,
-                        surface_width,
-                        surface_height,
-                    },
-                });
-                window_end.close();
-            }
-        });
-        drawing_area.add_controller(drag);
+    let drag = GestureDrag::new();
+    let state_begin = state.clone();
+    drag.connect_drag_begin(move |_, x, y| {
+        *state_begin.borrow_mut() = Some((x, y, x, y));
+    });
+    let state_update = state.clone();
+    let area_update = drawing_area.clone();
+    drag.connect_drag_update(move |_, offset_x, offset_y| {
+        let current = *state_update.borrow();
+        if let Some((start_x, start_y, _, _)) = current {
+            *state_update.borrow_mut() =
+                Some((start_x, start_y, start_x + offset_x, start_y + offset_y));
+            area_update.queue_draw();
+        }
+    });
+    let state_end = state.clone();
+    let area_end = drawing_area.clone();
+    let selected_end = selected.clone();
+    let window_end = window.clone();
+    let loop_drag = main_loop.clone();
+    drag.connect_drag_end(move |_, offset_x, offset_y| {
+        let current = *state_end.borrow();
+        let Some((start_x, start_y, _, _)) = current else {
+            return;
+        };
+        let end_x = start_x + offset_x;
+        let end_y = start_y + offset_y;
+        let surface_width = area_end.width().max(0) as f64;
+        let surface_height = area_end.height().max(0) as f64;
+        let x = start_x.min(end_x).clamp(0.0, surface_width);
+        let y = start_y.min(end_y).clamp(0.0, surface_height);
+        let right = start_x.max(end_x).clamp(0.0, surface_width);
+        let bottom = start_y.max(end_y).clamp(0.0, surface_height);
+        if right > x && bottom > y {
+            *selected_end.borrow_mut() = Some(AreaSelection {
+                rect: SelectionRect {
+                    x,
+                    y,
+                    width: right - x,
+                    height: bottom - y,
+                    surface_width,
+                    surface_height,
+                },
+            });
+            window_end.close();
+            loop_drag.quit();
+        }
+    });
+    drawing_area.add_controller(drag);
 
-        let keys = EventControllerKey::new();
-        let window_escape = window.clone();
-        keys.connect_key_pressed(move |_, key, _, _| {
-            if key == gtk4::gdk::Key::Escape {
-                window_escape.close();
-                glib::Propagation::Stop
-            } else {
-                glib::Propagation::Proceed
-            }
-        });
-        window.add_controller(keys);
-
-        if gtk4_layer_shell::is_supported() {
-            window.init_layer_shell();
-            window.set_layer(Layer::Overlay);
-            window.set_namespace("malus-screenshot-selector");
-            window.set_monitor(&monitor_for_activate);
-            window.set_keyboard_mode(KeyboardMode::Exclusive);
-            window.set_exclusive_zone(-1);
-            for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
-                window.set_anchor(edge, true);
-            }
+    let keys = EventControllerKey::new();
+    let window_escape = window.clone();
+    let loop_escape = main_loop.clone();
+    keys.connect_key_pressed(move |_, key, _, _| {
+        if key == gtk4::gdk::Key::Escape {
+            window_escape.close();
+            loop_escape.quit();
+            glib::Propagation::Stop
         } else {
-            window.fullscreen();
+            glib::Propagation::Proceed
         }
-        window.present();
+    });
+    window.add_controller(keys);
+
+    let loop_destroy = main_loop.clone();
+    window.connect_destroy(move |_| {
+        loop_destroy.quit();
     });
 
-    app.run_with_args(&["malus-de-screenshot"]);
+    if gtk4_layer_shell::is_supported() {
+        window.init_layer_shell();
+        window.set_layer(Layer::Overlay);
+        window.set_namespace("malus-screenshot-selector");
+        window.set_monitor(&monitor);
+        window.set_keyboard_mode(KeyboardMode::Exclusive);
+        window.set_exclusive_zone(-1);
+        for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+            window.set_anchor(edge, true);
+        }
+    } else {
+        window.fullscreen();
+    }
+    window.present();
+
+    main_loop.run();
+
     let selection = selected
         .borrow_mut()
         .take()
@@ -766,6 +685,7 @@ fn copy_image_to_clipboard(path: &std::path::Path) -> Result<()> {
         anyhow::bail!("wl-copy no abrió la entrada de datos");
     };
     let write_result = std::io::copy(&mut source, &mut stdin).and_then(|_| stdin.flush());
+    drop(stdin);
     if let Err(error) = write_result {
         let _ = child.kill();
         let _ = child.wait();
@@ -778,135 +698,213 @@ fn copy_image_to_clipboard(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-fn show_thumbnail_app(mode: CaptureMode, capture_path: PathBuf, clipboard_status: String) {
+fn show_capture_ui(mode: CaptureMode, capture_path: Option<PathBuf>, clipboard_status: String) {
     if let Err(err) = adw::init() {
         tracing::warn!("Aviso al inicializar libadwaita: {:?}", err);
     }
 
     let app = Application::builder()
-        .application_id("org.malus.de.screenshot-thumbnail")
+        .application_id("org.malus.de.screenshot-ui")
         .build();
 
     app.connect_startup(|_| {
-        let provider = CssProvider::new();
-        provider.load_from_string(THUMBNAIL_CSS);
+        let flash_provider = CssProvider::new();
+        flash_provider.load_from_string(CAPTURE_FLASH_CSS);
+        let thumb_provider = CssProvider::new();
+        thumb_provider.load_from_string(THUMBNAIL_CSS);
+
         if let Some(display) = gtk4::gdk::Display::default() {
             gtk4::style_context_add_provider_for_display(
                 &display,
-                &provider,
+                &flash_provider,
+                gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+            gtk4::style_context_add_provider_for_display(
+                &display,
+                &thumb_provider,
                 gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
             );
         }
     });
 
+    let capture_path_clone = capture_path.clone();
     app.connect_activate(move |application| {
-        let window = ApplicationWindow::builder()
-            .application(application)
-            .title("Captura de pantalla")
-            .css_classes(["malus-screenshot-thumbnail"])
-            .default_width(360)
-            .default_height(300)
-            .build();
+        let Some(display) = gtk4::gdk::Display::default() else {
+            tracing::warn!("No se pudo mostrar la interfaz de captura: no hay pantalla GTK");
+            application.quit();
+            return;
+        };
 
-        if gtk4_layer_shell::is_supported() {
-            window.init_layer_shell();
-            window.set_layer(Layer::Overlay);
-            window.set_namespace("malus-screenshot-thumbnail");
-            // Anclar a esquina inferior derecha estilo macOS
-            window.set_anchor(Edge::Bottom, true);
-            window.set_anchor(Edge::Right, true);
-            window.set_margin(Edge::Bottom, 20);
-            window.set_margin(Edge::Right, 20);
-        } else {
-            window.set_decorated(false);
-            window.set_default_size(360, 300);
+        // 1. Destello blanco visual en cada pantalla conectada
+        let monitors = display.monitors();
+        let mut flash_windows = Vec::new();
+
+        for index in 0..monitors.n_items() {
+            let Some(monitor) = monitors
+                .item(index)
+                .and_then(|item| item.downcast::<gtk4::gdk::Monitor>().ok())
+            else {
+                continue;
+            };
+
+            let flash_window = ApplicationWindow::builder()
+                .application(application)
+                .title("Destello de captura")
+                .decorated(false)
+                .css_classes(["malus-screenshot-flash"])
+                .opacity(0.85)
+                .build();
+
+            if gtk4_layer_shell::is_supported() {
+                flash_window.init_layer_shell();
+                flash_window.set_layer(Layer::Overlay);
+                flash_window.set_namespace("malus-screenshot-flash");
+                flash_window.set_monitor(&monitor);
+                flash_window.set_exclusive_zone(-1);
+                for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+                    flash_window.set_anchor(edge, true);
+                }
+            } else {
+                flash_window.fullscreen();
+            }
+
+            flash_window.set_child(Some(&GtkBox::new(Orientation::Vertical, 0)));
+            flash_window.present();
+            flash_windows.push(flash_window);
         }
 
-        let card = GtkBox::builder()
-            .orientation(Orientation::Vertical)
-            .css_classes(["thumbnail-card"])
-            .spacing(4)
-            .build();
-
-        let preview_img = Picture::for_filename(&capture_path);
-        preview_img.set_content_fit(gtk4::ContentFit::Contain);
-        preview_img.set_can_shrink(true);
-        preview_img.set_size_request(THUMBNAIL_PREVIEW_SIZE.0, THUMBNAIL_PREVIEW_SIZE.1);
-        card.append(&preview_img);
-
-        let title_label = Label::builder()
-            .label(match mode {
-                CaptureMode::Area => "Captura de Área",
-                CaptureMode::Window => "Captura de Ventana",
-                CaptureMode::Full => "Captura de Pantalla Completa",
-                CaptureMode::Ocr => "Texto Extraído",
-            })
-            .css_classes(["thumbnail-title"])
-            .build();
-        card.append(&title_label);
-
-        let sub_label = Label::builder()
-            .label(&capture_path.display().to_string())
-            .css_classes(["thumbnail-subtitle"])
-            .build();
-        sub_label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
-        sub_label.set_max_width_chars(42);
-        card.append(&sub_label);
-
-        let status_label = Label::builder()
-            .label(&clipboard_status)
-            .wrap(true)
-            .css_classes(["thumbnail-subtitle"])
-            .build();
-        card.append(&status_label);
-
-        let btn_box = GtkBox::builder()
-            .orientation(Orientation::Horizontal)
-            .spacing(6)
-            .build();
-
-        let copy_btn = Button::builder()
-            .label("Copiar")
-            .css_classes(["action-btn", "suggested-action"])
-            .build();
-        let win_clone = window.clone();
-        let status_label_for_copy = status_label.clone();
-        let capture_path_for_copy = capture_path.clone();
-        copy_btn.connect_clicked(
-            move |_| match copy_image_to_clipboard(&capture_path_for_copy) {
-                Ok(()) => {
-                    info!("Captura copiada al portapapeles.");
-                    win_clone.close();
+        let is_clipboard_only = capture_path_clone.is_none();
+        let app_for_flash = application.clone();
+        let mut step = 0u8;
+        glib::timeout_add_local(Duration::from_millis(25), move || {
+            step += 1;
+            let opacity = 0.85 * (1.0 - f64::from(step) / 8.0);
+            for win in &flash_windows {
+                win.set_opacity(opacity.max(0.0));
+            }
+            if step >= 8 {
+                for win in &flash_windows {
+                    win.close();
                 }
-                Err(error) => {
-                    let message = format!("No se pudo copiar al portapapeles: {error:#}");
-                    status_label_for_copy.set_label(&message);
-                    tracing::error!("{message}");
+                if is_clipboard_only {
+                    app_for_flash.quit();
                 }
-            },
-        );
-        btn_box.append(&copy_btn);
-
-        let dismiss_btn = Button::builder()
-            .label("Cerrar")
-            .css_classes(["action-btn"])
-            .build();
-        let win_clone2 = window.clone();
-        dismiss_btn.connect_clicked(move |_| {
-            win_clone2.close();
+                ControlFlow::Break
+            } else {
+                ControlFlow::Continue
+            }
         });
-        btn_box.append(&dismiss_btn);
 
-        card.append(&btn_box);
-        window.set_child(Some(&card));
-        window.present();
+        // 2. Si se guardó en disco, mostrar miniatura flotante en la esquina inferior derecha
+        if let Some(ref path) = capture_path_clone {
+            let window = ApplicationWindow::builder()
+                .application(application)
+                .title("Captura de pantalla")
+                .css_classes(["malus-screenshot-thumbnail"])
+                .default_width(360)
+                .default_height(300)
+                .build();
 
-        // Auto-cerrar miniatura tras 5 segundos si el usuario no interactúa
-        let win_auto = window.clone();
-        glib::timeout_add_local(Duration::from_secs(5), move || {
-            win_auto.close();
-            ControlFlow::Break
-        });
+            if gtk4_layer_shell::is_supported() {
+                window.init_layer_shell();
+                window.set_layer(Layer::Overlay);
+                window.set_namespace("malus-screenshot-thumbnail");
+                // Anclar a esquina inferior derecha estilo macOS
+                window.set_anchor(Edge::Bottom, true);
+                window.set_anchor(Edge::Right, true);
+                window.set_margin(Edge::Bottom, 20);
+                window.set_margin(Edge::Right, 20);
+            } else {
+                window.set_decorated(false);
+                window.set_default_size(360, 300);
+            }
+
+            let card = GtkBox::builder()
+                .orientation(Orientation::Vertical)
+                .css_classes(["thumbnail-card"])
+                .spacing(4)
+                .build();
+
+            let preview_img = Picture::for_filename(path);
+            preview_img.set_content_fit(gtk4::ContentFit::Contain);
+            preview_img.set_can_shrink(true);
+            preview_img.set_size_request(THUMBNAIL_PREVIEW_SIZE.0, THUMBNAIL_PREVIEW_SIZE.1);
+            card.append(&preview_img);
+
+            let title_label = Label::builder()
+                .label(match mode {
+                    CaptureMode::Area => "Captura de Área",
+                    CaptureMode::Window => "Captura de Ventana",
+                    CaptureMode::Full => "Captura de Pantalla Completa",
+                    CaptureMode::Ocr => "Texto Extraído",
+                })
+                .css_classes(["thumbnail-title"])
+                .build();
+            card.append(&title_label);
+
+            let sub_label = Label::builder()
+                .label(&path.display().to_string())
+                .css_classes(["thumbnail-subtitle"])
+                .build();
+            sub_label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+            sub_label.set_max_width_chars(42);
+            card.append(&sub_label);
+
+            let status_label = Label::builder()
+                .label(&clipboard_status)
+                .wrap(true)
+                .css_classes(["thumbnail-subtitle"])
+                .build();
+            card.append(&status_label);
+
+            let btn_box = GtkBox::builder()
+                .orientation(Orientation::Horizontal)
+                .spacing(6)
+                .build();
+
+            let copy_btn = Button::builder()
+                .label("Copiar")
+                .css_classes(["action-btn", "suggested-action"])
+                .build();
+            let win_clone = window.clone();
+            let status_label_for_copy = status_label.clone();
+            let capture_path_for_copy = path.clone();
+            copy_btn.connect_clicked(
+                move |_| match copy_image_to_clipboard(&capture_path_for_copy) {
+                    Ok(()) => {
+                        info!("Captura copiada al portapapeles.");
+                        win_clone.close();
+                    }
+                    Err(error) => {
+                        let message = format!("No se pudo copiar al portapapeles: {error:#}");
+                        status_label_for_copy.set_label(&message);
+                        tracing::error!("{message}");
+                    }
+                },
+            );
+            btn_box.append(&copy_btn);
+
+            let dismiss_btn = Button::builder()
+                .label("Cerrar")
+                .css_classes(["action-btn"])
+                .build();
+            let win_clone2 = window.clone();
+            dismiss_btn.connect_clicked(move |_| {
+                win_clone2.close();
+            });
+            btn_box.append(&dismiss_btn);
+
+            card.append(&btn_box);
+            window.set_child(Some(&card));
+            window.present();
+
+            // Auto-cerrar miniatura tras 6 segundos si el usuario no interactúa
+            let win_auto = window.clone();
+            glib::timeout_add_local(Duration::from_secs(6), move || {
+                win_auto.close();
+                ControlFlow::Break
+            });
+        }
     });
 
     app.run_with_args(&["malus-de-screenshot"]);

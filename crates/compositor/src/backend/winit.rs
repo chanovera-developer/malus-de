@@ -245,6 +245,7 @@ pub fn run_winit() -> Result<()> {
                                 });
 
                             let has_super = modifiers.logo;
+                            let has_shift = modifiers.shift;
                             let has_alt = modifiers.alt;
                             let has_ctrl = modifiers.ctrl;
 
@@ -264,8 +265,19 @@ pub fn run_winit() -> Result<()> {
                             let is_right = sym == keysyms::KEY_Right.into() || key == 106 || key == 114;
 
                             if is_pressed {
-                                if sym == keysyms::KEY_Print.into() || key == 99 {
-                                    info!("Atajo Impr Pant detectado: iniciando captura completa");
+                                let is_print = sym == keysyms::KEY_Print.into() || key == 99;
+                                let is_s = sym == keysyms::KEY_s.into() || sym == keysyms::KEY_S.into();
+                                let is_3 = sym == keysyms::KEY_3.into() || sym == keysyms::KEY_numbersign.into();
+                                let is_4 = sym == keysyms::KEY_4.into() || sym == keysyms::KEY_dollar.into();
+
+                                if (is_print && has_shift) || (has_super && has_shift && (is_s || is_4)) {
+                                    info!("📸 Atajo de captura de área detectado (Shift+Print, Super+Shift+S, Super+Shift+4)");
+                                    state.start_area_screenshot();
+                                    return FilterResult::Intercept(());
+                                }
+
+                                if (is_print && !has_shift) || (has_super && has_shift && is_3) {
+                                    info!("📸 Atajo de captura completa detectado (Print, Super+Shift+3)");
                                     state.start_full_screenshot();
                                     return FilterResult::Intercept(());
                                 }

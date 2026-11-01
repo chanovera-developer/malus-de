@@ -413,6 +413,25 @@ impl MalusState {
             tracing::error!("No se pudo iniciar la captura de pantalla completa: {error}");
         }
     }
+
+    pub fn start_area_screenshot(&self) {
+        let screenshot_executable = std::env::current_exe()
+            .ok()
+            .and_then(|path| {
+                path.parent()
+                    .map(|parent| parent.join("malus-de-screenshot"))
+            })
+            .filter(|path| path.is_file())
+            .unwrap_or_else(|| std::path::PathBuf::from("malus-de-screenshot"));
+        let result = std::process::Command::new(screenshot_executable)
+            .args(["--mode", "area"])
+            .env("WAYLAND_DISPLAY", &self.socket_name)
+            .env("GDK_BACKEND", "wayland")
+            .spawn();
+        if let Err(error) = result {
+            tracing::error!("No se pudo iniciar la captura de pantalla de área: {error}");
+        }
+    }
     pub fn new(display: &Display<MalusState>) -> Self {
         let dh = display.handle();
         let compositor_state = CompositorState::new::<Self>(&dh);
