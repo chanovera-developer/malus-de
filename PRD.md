@@ -1,6 +1,6 @@
 # Malus DE: Product Requirements Document (PRD) & Arquitectura Técnica
 
-**Versión:** 1.1.0  
+**Versión:** 1.2.0  
 **Estado:** Activo / En Desarrollo  
 **Stack Principal:** Rust (Edición 2021), Smithay, Wayland Protocols, GTK4 / Layer Shell, GLSL Shaders, PipeWire/WirePlumber, NetworkManager, BlueZ, AWDL/omdrop  
 
@@ -37,6 +37,7 @@ graph TD
         Clipboard["Portapapeles (malus-de-clipboard)\n- Historial\n- Acceso Super + V"]
         Wallpaper["Fondo Dinámico (malus-de-wallpaper)\n- Ciclos solares"]
         Notifications["Notificaciones (malus-de-notifications)\n- Daemon D-Bus"]
+        Finder["Finder / Archivos (malus-de-finder / Futuro)\n- Explorador nativo en Rust\n- Columnas Miller & Quick Look\n- Disposición libre de iconos & DnD"]
     end
 
     subgraph IntegrationServices ["Servicios del Sistema & Ecosistema"]
@@ -51,6 +52,7 @@ graph TD
     Spotlight -->|wlr-layer-shell: Overlay| Protocols
     Clipboard -->|Wayland data-control| Protocols
     Wallpaper -->|wlr-layer-shell: Background| Protocols
+    Finder -.->|xdg-shell| Protocols
 
     TopBar <-->|IPC| IPC
     Dock <-->|IPC| IPC
@@ -189,6 +191,28 @@ graph TD
 * **Requisitos de ejecución:** `wl-clipboard` para copiar imágenes. La tecla `Impr Pant` inicia una captura completa en la sesión instalada; tras cambios en el compositor es necesario recompilar e iniciar una sesión nueva.
 * **Pendiente:** Captura de ventana, grabación de pantalla y OCR. Estos modos no deben presentarse como funciones disponibles hasta su implementación.
 
+### 3.7. Explorador de Archivos Nativo tipo Finder (`crates/finder` - Planificado)
+* **Objetivo:** Diseñar e implementar un explorador de archivos autónomo y ultraligero escrito en Rust nativo que proporcione una experiencia idéntica a **macOS Finder**, superando las limitaciones y carencias históricas de GNOME Nautilus.
+* **Carencias de Nautilus resueltas:**
+  - Nautilus no publica ni administra la superficie de escritorio con posicionamiento libre, ni permite arrastrar y soltar con coordenadas arbitrarias persistentes.
+  - Ausencia de navegación en columnas Miller nativas con previsualización fluida de metadatos encadenada en panel lateral.
+  - Carencia de vista previa instantánea universal desacoplada de aplicaciones pesadas mediante barra espaciadora (*Quick Look* nativo).
+  - Falta de un sistema nativo de etiquetas de color (*Color Tags/Labels*) para clasificación visual transversal de archivos.
+* **Capacidades y Arquitectura Planificada:**
+  - **4 Modos de Visualización Esenciales (Paridad macOS Finder):**
+    1. **Vista de Iconos (*Icon View*):** Cuadrícula con ordenación libre, alineación magnética (*Snap to Grid*), tamaño de icono regulable y persistencia de posiciones espaciales de archivos tanto en ventanas como en el escritorio.
+    2. **Vista de Lista (*List View*):** Vista tabular multicolumna con triángulos de revelado en línea para desplegar subcarpetas jerárquicamente sin cambiar de directorio.
+    3. **Vista de Columnas (*Miller Columns*):** Navegación en cascada horizontal multinivel con panel final de previsualización y metadatos detallados (EXIF, códecs de audio/vídeo, permisos, fechas).
+    4. **Vista de Galería (*Gallery View*):** Carrusel horizontal inferior de miniaturas con lienzo superior de previsualización a gran escala.
+  - **Quick Look Integrado (`Espacio`):** Ventana modal flotante acrílica ultrarrápida para inspeccionar imágenes, vídeo, audio, PDFs, documentos y código fuente con resaltado de sintaxis sin lanzar aplicaciones externas.
+  - **Etiquetas de Color (*Color Tags / Labels*):** Etiquetado visual con puntos cromáticos (Rojo, Naranja, Amarillo, Verde, Azul, Púrpura, Gris) persistido en atributos extendidos (`xattr`) del sistema de archivos y sincronizado con Spotlight para búsquedas instantáneas por etiqueta.
+  - **Barra Lateral (*Sidebar*) Acrílica:** Secciones colapsables de *Favoritos*, *iCloud / Red*, *Dispositivos / Unidades montadas*, *Etiquetas* y dispositivos detectados por AirDrop (`malus-de-link`).
+  - **Integración Nativa con Wayland y Compositor Malus:**
+    - Arrastre visible de archivos con `dnd_icon` translúcido flotando junto al cursor.
+    - Soporte completo de gestos táctiles hacia adelante/atrás en el historial de navegación.
+    - Barra de herramientas unificada (*Unified Toolbar*) con controles semáforo a la izquierda, esquinas squircle y desenfoque acrílico Dual-Kawase.
+  - **Stack Técnico:** Rust (Edición 2021), GTK4 / Libadwaita o Smithay-based client, operaciones asíncronas con `tokio`, vigilancia reactiva de directorios con `notify` y persistencia de vistas con SQLite / sled.
+
 ---
 
 ## 4. Estado de Implementación & Roadmap
@@ -205,3 +229,4 @@ graph TD
 | **M8** | Multi-Monitor 4K & Teclado Latam | ✅ Hecho | Disposición dual 4K en vivo, escalado independiente y enlazado 1:1 por PPI (`TrueSize`), y soporte nativo de teclado XKB Español Latinoamericano (`latam`). |
 | **M9** | Gestor de Portapapeles | ✅ Hecho | Historial persistente de hasta 50 elementos y 50 MiB; búsqueda, fijados, recopia y borrado con `Super + V`. Sincronización opcional con la selección primaria, formatos de imagen/documento adicionales y filtro heurístico configurable para contenido sensible. |
 | **M10** | Captura de Pantalla | 🟡 En Progreso | Captura completa y de área mediante IPC del compositor, guardado PNG, copia al portapapeles y miniatura; captura de ventana, grabación y OCR pendientes. |
+| **M11** | Explorador de Archivos (Finder) | 📋 Planificado | Gestor de archivos nativo en Rust tipo macOS Finder: 4 vistas (iconos libres, lista jerárquica, columnas Miller, galería), Quick Look (`Espacio`), etiquetas de color, gestión libre de escritorio y reemplazo progresivo de Nautilus. |
