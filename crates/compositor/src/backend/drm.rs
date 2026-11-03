@@ -1996,6 +1996,7 @@ pub fn run_drm() -> Result<()> {
         state.cleanup_stale_surfaces();
 
         // 🎨 RENDERIZADO GPU REAL A CADA MONITOR FÍSICO
+        let mut visible_surface_ids = std::collections::HashSet::new();
         if let Ok(mut surfs) = shared_surfaces.lock() {
             let theme_capture_request = state.pending_theme_transition_capture.clone();
             let mut theme_capture_succeeded = theme_capture_request.is_some();
@@ -2033,6 +2034,11 @@ pub fn run_drm() -> Result<()> {
                     if anim.waiting_for_dock_slot {
                         continue;
                     }
+                    visible_surface_ids.insert(
+                        smithay::backend::renderer::element::Id::from_wayland_resource(
+                            &anim.surface,
+                        ),
+                    );
                     let anim_bbox = anim.window_rect.merge(anim.dock_slot_rect);
                     if output_geo.overlaps(anim_bbox) {
                         let elems = render_elements_from_surface_tree::<
@@ -2316,6 +2322,14 @@ pub fn run_drm() -> Result<()> {
                                 })
                                 .unwrap_or(false);
 
+                            let is_maximized = window
+                                .toplevel()
+                                .map(|t| {
+                                    let states = &t.current_state().states;
+                                    states.contains(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Maximized)
+                                })
+                                .unwrap_or(false);
+
                             let is_active = window.toplevel().map(|t| {
                                 let states = &t.current_state().states;
                                 states.contains(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated)
@@ -2329,7 +2343,7 @@ pub fn run_drm() -> Result<()> {
                                     main_surface.as_ref(),
                                 );
 
-                            let should_round = win_phys_r.is_some() && !is_fullscreen;
+                            let should_round = win_phys_r.is_some() && !is_fullscreen && !is_maximized;
                             let content_offset = geo.loc.to_physical_precise_round(scale);
                             let content_size = geo.size.to_physical_precise_round(scale);
                             let win_screen_rect = Rectangle::new(
@@ -2503,6 +2517,10 @@ pub fn run_drm() -> Result<()> {
                             }
                             let is_body_occluded = body_occluded[idx];
                             let is_shadow_occluded = shadow_occluded[idx];
+
+                            if !is_body_occluded {
+                                visible_surface_ids.insert(root_id.clone());
+                            }
 
                             // 2.1. SOMBRA PROYECTADA (Window Drop Shadow con Squircle SDF n=4.2)
                             // Se dibuja para ventanas no en pantalla completa inmediatamente antes de su superficie
@@ -3487,10 +3505,16 @@ pub fn run_drm() -> Result<()> {
             }
         }
 
-        // Notificar fotogramas a los clientes de ventanas activas (evita despertar apps minimizadas a 60 Hz)
+        // Notificar fotogramas a los clientes de ventanas activas (evita despertar apps minimizadas u ocluidas a 60 Hz)
         let now_ms = start_time.elapsed().as_millis() as u32;
         for window in state.space.elements() {
             if let Some(surface) = window.wl_surface() {
+                let sid = smithay::backend::renderer::element::Id::from_wayland_resource(
+                    surface.as_ref(),
+                );
+                if !visible_surface_ids.contains(&sid) {
+                    continue;
+                }
                 send_frames_surface_tree(surface.as_ref(), now_ms);
                 for (popup, _) in
                     smithay::desktop::PopupManager::popups_for_surface(surface.as_ref())

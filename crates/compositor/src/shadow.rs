@@ -217,10 +217,10 @@ impl WindowShadowPipeline {
             )
         } else {
             (
-                18.0 * scale as f32,
+                8.0 * scale as f32,
                 0.0f32,
-                4.0 * scale as f32,
-                0.06f32,
+                2.0 * scale as f32,
+                0.04f32,
             )
         };
 
@@ -277,19 +277,10 @@ impl WindowShadowPipeline {
         let quad_h = win_rect.size.h + pad_y_top + pad_y_bottom;
 
         unsafe {
-            // Guardar estado GL previo
+            // Guardar estado GL previo sin consultas síncronas costosas al hardware de la GPU
             let prev_blend = gl.IsEnabled(ffi::BLEND);
             let prev_scissor = gl.IsEnabled(ffi::SCISSOR_TEST);
             let prev_cull = gl.IsEnabled(ffi::CULL_FACE);
-
-            let mut prev_src_rgb = 0;
-            let mut prev_dst_rgb = 0;
-            let mut prev_src_alpha = 0;
-            let mut prev_dst_alpha = 0;
-            gl.GetIntegerv(ffi::BLEND_SRC_RGB, &mut prev_src_rgb);
-            gl.GetIntegerv(ffi::BLEND_DST_RGB, &mut prev_dst_rgb);
-            gl.GetIntegerv(ffi::BLEND_SRC_ALPHA, &mut prev_src_alpha);
-            gl.GetIntegerv(ffi::BLEND_DST_ALPHA, &mut prev_dst_alpha);
 
             // Desactivar scissor previo para que la penumbra no sea recortada
             gl.Disable(ffi::SCISSOR_TEST);
@@ -330,14 +321,14 @@ impl WindowShadowPipeline {
 
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
 
-            // Restaurar estado GL previo
+            // Restaurar estado GL previo canónico de Smithay
             gl.UseProgram(0);
 
             gl.BlendFuncSeparate(
-                prev_src_rgb as u32,
-                prev_dst_rgb as u32,
-                prev_src_alpha as u32,
-                prev_dst_alpha as u32,
+                ffi::ONE,
+                ffi::ONE_MINUS_SRC_ALPHA,
+                ffi::ONE,
+                ffi::ONE_MINUS_SRC_ALPHA,
             );
             if prev_blend == ffi::FALSE {
                 gl.Disable(ffi::BLEND);
