@@ -1390,10 +1390,13 @@ pub fn run_winit() -> Result<()> {
                         }
 
                         // 2.1.5. DESENFOQUE DE FONDO DUAL KAWASE (Nautilus y Ajustes del Sistema)
-                        if *should_round && *is_translucent && !is_body_occluded {
-                            if let (Some(r), Some(ref mut blur)) =
-                                (win_phys_r, blur_pipeline.as_mut())
-                            {
+                        if *is_translucent && !is_body_occluded {
+                            if let Some(ref mut blur) = blur_pipeline {
+                                let corner_radius = if *should_round {
+                                    win_phys_r.unwrap_or(0) as f32
+                                } else {
+                                    0.0
+                                };
                                 let screen_size = size;
                                 let _ = frame.with_context(|gl| {
                                     blur.render_blur(
@@ -1401,7 +1404,7 @@ pub fn run_winit() -> Result<()> {
                                         &projection,
                                         screen_size,
                                         *win_rect,
-                                        r as f32,
+                                        corner_radius,
                                     );
                                 });
                             }
