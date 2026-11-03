@@ -1242,10 +1242,57 @@ pub fn run_winit() -> Result<()> {
                 if let Ok(mut frame) =
                     renderer.render(&mut framebuffer, size, Transform::Flipped180)
                 {
+                    // Precomputar oclusión (Occlusion Culling) de arriba hacia abajo para evitar overdraw masivo
+                    let mut body_occluded = vec![false; window_render_data.len()];
+                    let mut shadow_occluded = vec![false; window_render_data.len()];
+                    let mut occluders: Vec<super::OpaqueOccluder> = Vec::new();
+
+                    let shadow_pad = 80;
+                    for i in (0..window_render_data.len()).rev() {
+                        let win = &window_render_data[i];
+                        let win_rect = win.6;
+                        let should_round = win.4;
+                        let is_translucent = win.10;
+                        let is_system_monitor = win.11;
+
+                        let shadow_rect = Rectangle::new(
+                            (win_rect.loc.x - shadow_pad, win_rect.loc.y - shadow_pad).into(),
+                            (win_rect.size.w + shadow_pad * 2, win_rect.size.h + shadow_pad * 2).into(),
+                        );
+
+                        for occluder in &occluders {
+                            if occluder.contains_rect(win_rect) {
+                                body_occluded[i] = true;
+                            }
+                            if occluder.contains_rect(shadow_rect) {
+                                shadow_occluded[i] = true;
+                            }
+                            if body_occluded[i] && shadow_occluded[i] {
+                                break;
+                            }
+                        }
+
+                        if !is_translucent && !is_system_monitor {
+                            let r = if should_round {
+                                win_phys_r.unwrap_or(0)
+                            } else {
+                                0
+                            };
+                            occluders.push(super::OpaqueOccluder {
+                                rect: win_rect,
+                                corner_radius: r,
+                            });
+                        }
+                    }
+
+                    let wallpaper_occluded = occluders
+                        .iter()
+                        .any(|occ| occ.contains_rect(Rectangle::from_size(size)));
+
                     frame_rendered = true;
                     let _ = frame.clear(dark_acrylic, &[damage]);
-                    // 1. Renderizar fondo (wallpaper y capas inferiores)
-                    if !lower_elements.is_empty() {
+                    // 1. Renderizar fondo (wallpaper y capas inferiores) solo si no está 100% ocluido por una ventana pantalla completa
+                    if !wallpaper_occluded && !lower_elements.is_empty() {
                         let _ = draw_render_elements(&mut frame, 1.0, &lower_elements, &[damage]);
                     }
 
@@ -1269,27 +1316,32 @@ pub fn run_winit() -> Result<()> {
 
                     // 2. Renderizar superficies de cada ventana con sus sombras proyectadas, desenfoque de fondo y esquinas squircle
                     for (
-                        root_id,
-                        win_elems,
-                        _popups,
-                        _popup_shadow_rects,
-                        should_round,
-                        is_active,
-                        win_rect,
-                        content_offset,
-                        content_size,
-                        is_firefox,
-                        is_translucent,
-                        is_system_monitor,
-                    ) in &window_render_data
+                        idx,
+                        (
+                            root_id,
+                            win_elems,
+                            _popups,
+                            _popup_shadow_rects,
+                            should_round,
+                            is_active,
+                            win_rect,
+                            content_offset,
+                            content_size,
+                            is_firefox,
+                            is_translucent,
+                            is_system_monitor,
+                        ),
+                    ) in window_render_data.iter().enumerate()
                     {
                         if win_elems.is_empty() {
                             continue;
                         }
+                        let is_body_occluded = body_occluded[idx];
+                        let is_shadow_occluded = shadow_occluded[idx];
 
                         // 2.1. SOMBRA PROYECTADA (Window Drop Shadow con Squircle SDF n=4.2)
                         // Se dibuja para ventanas no en pantalla completa inmediatamente antes de su superficie
-                        if *should_round {
+                        if *should_round && !is_shadow_occluded {
                             if let (Some(r), Some(ref shadow)) =
                                 (win_phys_r, shadow_pipeline.as_ref())
                             {
@@ -1306,7 +1358,7 @@ pub fn run_winit() -> Result<()> {
                             }
                         }
 
-                        if *is_system_monitor {
+                        if *is_system_monitor && !is_body_occluded {
                             if let Some(ref mut blur) = blur_pipeline {
                                 let corner_radius = if *should_round {
                                     win_phys_r.unwrap_or(0) as f32
@@ -1328,7 +1380,7 @@ pub fn run_winit() -> Result<()> {
                         }
 
                         // 2.1.5. DESENFOQUE DE FONDO DUAL KAWASE (Nautilus y Ajustes del Sistema)
-                        if *should_round && *is_translucent {
+                        if *should_round && *is_translucent && !is_body_occluded {
                             if let (Some(r), Some(ref mut blur)) =
                                 (win_phys_r, blur_pipeline.as_mut())
                             {
@@ -1346,27 +1398,66 @@ pub fn run_winit() -> Result<()> {
                         }
 
                         // 2.2. SUPERFICIES DE LA VENTANA (con recorte Squircle)
-                        if *should_round {
-                            if *is_firefox {
-                                // Para Firefox: se aplica el shader a todo el árbol de subsuperficies (WebRender)
-                                // para evitar esquinas cuadradas en el contenido web interno
-                                if let (Some(r), Some(ref shader)) =
-                                    (win_phys_r, window_squircle_shader.as_ref())
-                                {
-                                    for elem in win_elems {
-                                        let elem_geo =
-                                            elem.geometry(smithay::utils::Scale::from(1.0));
-                                        let sub_offset = smithay::utils::Point::from((
-                                            win_rect.loc.x - elem_geo.loc.x,
-                                            win_rect.loc.y - elem_geo.loc.y,
-                                        ));
-                                        shader.apply_to_frame(
+                        if !is_body_occluded {
+                            if *should_round {
+                                if *is_firefox {
+                                    // Para Firefox: se aplica el shader a todo el árbol de subsuperficies (WebRender)
+                                    // para evitar esquinas cuadradas en el contenido web interno
+                                    if let (Some(r), Some(ref shader)) =
+                                        (win_phys_r, window_squircle_shader.as_ref())
+                                    {
+                                        for elem in win_elems {
+                                            let elem_geo =
+                                                elem.geometry(smithay::utils::Scale::from(1.0));
+                                            let sub_offset = smithay::utils::Point::from((
+                                                win_rect.loc.x - elem_geo.loc.x,
+                                                win_rect.loc.y - elem_geo.loc.y,
+                                            ));
+                                            shader.apply_to_frame(
+                                                &mut frame,
+                                                elem_geo.size,
+                                                sub_offset,
+                                                win_rect.size,
+                                                r,
+                                            );
+
+                                            let _ = draw_render_elements(
+                                                &mut frame,
+                                                1.0,
+                                                std::slice::from_ref(elem),
+                                                &[damage],
+                                            );
+
+                                            frame.clear_tex_program_override();
+                                        }
+                                    } else {
+                                        let _ = draw_render_elements(
                                             &mut frame,
-                                            elem_geo.size,
-                                            sub_offset,
-                                            win_rect.size,
-                                            r,
+                                            1.0,
+                                            win_elems,
+                                            &[damage],
                                         );
+                                    }
+                                } else {
+                                    // Para las demás apps (GTK, Electron, etc.): comportamiento intacto original,
+                                    // SOLO se aplica el recorte a la superficie raíz para no distorsionar widgets GTK
+                                    for elem in win_elems {
+                                        let is_root = elem.id() == root_id;
+                                        if is_root {
+                                            if let (Some(r), Some(ref shader)) =
+                                                (win_phys_r, window_squircle_shader.as_ref())
+                                            {
+                                                let elem_geo =
+                                                    elem.geometry(smithay::utils::Scale::from(1.0));
+                                                shader.apply_to_frame(
+                                                    &mut frame,
+                                                    elem_geo.size,
+                                                    *content_offset,
+                                                    *content_size,
+                                                    r,
+                                                );
+                                            }
+                                        }
 
                                         let _ = draw_render_elements(
                                             &mut frame,
@@ -1375,47 +1466,14 @@ pub fn run_winit() -> Result<()> {
                                             &[damage],
                                         );
 
-                                        frame.clear_tex_program_override();
-                                    }
-                                } else {
-                                    let _ =
-                                        draw_render_elements(&mut frame, 1.0, win_elems, &[damage]);
-                                }
-                            } else {
-                                // Para las demás apps (GTK, Electron, etc.): comportamiento intacto original,
-                                // SOLO se aplica el recorte a la superficie raíz para no distorsionar widgets GTK
-                                for elem in win_elems {
-                                    let is_root = elem.id() == root_id;
-                                    if is_root {
-                                        if let (Some(r), Some(ref shader)) =
-                                            (win_phys_r, window_squircle_shader.as_ref())
-                                        {
-                                            let elem_geo =
-                                                elem.geometry(smithay::utils::Scale::from(1.0));
-                                            shader.apply_to_frame(
-                                                &mut frame,
-                                                elem_geo.size,
-                                                *content_offset,
-                                                *content_size,
-                                                r,
-                                            );
+                                        if is_root {
+                                            frame.clear_tex_program_override();
                                         }
                                     }
-
-                                    let _ = draw_render_elements(
-                                        &mut frame,
-                                        1.0,
-                                        std::slice::from_ref(elem),
-                                        &[damage],
-                                    );
-
-                                    if is_root {
-                                        frame.clear_tex_program_override();
-                                    }
                                 }
+                            } else {
+                                let _ = draw_render_elements(&mut frame, 1.0, win_elems, &[damage]);
                             }
-                        } else {
-                            let _ = draw_render_elements(&mut frame, 1.0, win_elems, &[damage]);
                         }
                     }
 
@@ -1590,7 +1648,10 @@ pub fn run_winit() -> Result<()> {
                         }
                     }
 
-                    for (_, _, popups, ..) in &window_render_data {
+                    for (idx, (_, _, popups, ..)) in window_render_data.iter().enumerate() {
+                        if body_occluded[idx] {
+                            continue;
+                        }
                         for (popup_elems, popup_rect, popup_effects_enabled) in popups {
                             if *popup_effects_enabled {
                                 if let Some(blur) = blur_pipeline.as_mut() {
@@ -2226,13 +2287,16 @@ pub fn run_winit() -> Result<()> {
             }
         }
 
+        // Notificar fotogramas a los clientes de ventanas activas (evita despertar apps minimizadas a 60 Hz)
         let now_ms = start_time.elapsed().as_millis() as u32;
-        for surface in state.xdg_shell_state.toplevel_surfaces() {
-            send_frames_surface_tree(surface.wl_surface(), now_ms);
-            for (popup, _) in
-                smithay::desktop::PopupManager::popups_for_surface(surface.wl_surface())
-            {
-                send_frames_surface_tree(popup.wl_surface(), now_ms);
+        for window in state.space.elements() {
+            if let Some(surface) = window.wl_surface() {
+                send_frames_surface_tree(surface.as_ref(), now_ms);
+                for (popup, _) in
+                    smithay::desktop::PopupManager::popups_for_surface(surface.as_ref())
+                {
+                    send_frames_surface_tree(popup.wl_surface(), now_ms);
+                }
             }
         }
 

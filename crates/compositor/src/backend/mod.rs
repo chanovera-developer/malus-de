@@ -58,9 +58,91 @@ pub fn spotlight_component_blur_rect(
     )
 }
 
+/// Comprueba si un rectángulo exterior contiene completamente a un rectángulo interior.
+#[inline]
+pub fn rect_contains_rect(
+    outer: &Rectangle<i32, Physical>,
+    inner: &Rectangle<i32, Physical>,
+) -> bool {
+    if inner.size.w <= 0 || inner.size.h <= 0 {
+        return true;
+    }
+    if outer.size.w <= 0 || outer.size.h <= 0 {
+        return false;
+    }
+    outer.loc.x <= inner.loc.x
+        && outer.loc.y <= inner.loc.y
+        && outer.loc.x + outer.size.w >= inner.loc.x + inner.size.w
+        && outer.loc.y + outer.size.h >= inner.loc.y + inner.size.h
+}
+
+/// Representa un oclusor opaco (ventana que cubre áreas inferiores) para descarte de sobre-renderizado.
+#[derive(Debug, Clone, Copy)]
+pub struct OpaqueOccluder {
+    pub rect: Rectangle<i32, Physical>,
+    pub corner_radius: i32,
+}
+
+impl OpaqueOccluder {
+    /// Determina si el objetivo queda 100% cubierto por el área opaca de este oclusor.
+    pub fn contains_rect(&self, target: Rectangle<i32, Physical>) -> bool {
+        if target.size.w <= 0 || target.size.h <= 0 {
+            return true;
+        }
+        if self.rect.size.w <= 0 || self.rect.size.h <= 0 {
+            return false;
+        }
+        let r = self
+            .corner_radius
+            .max(0)
+            .min(self.rect.size.w / 2)
+            .min(self.rect.size.h / 2);
+        if r == 0 {
+            rect_contains_rect(&self.rect, &target)
+        } else {
+            // Dos bandas ortogonales opacas que excluyen las 4 esquinas redondeadas
+            let band_h = Rectangle::new(
+                (self.rect.loc.x, self.rect.loc.y + r).into(),
+                (self.rect.size.w, (self.rect.size.h - 2 * r).max(0)).into(),
+            );
+            let band_v = Rectangle::new(
+                (self.rect.loc.x + r, self.rect.loc.y).into(),
+                ((self.rect.size.w - 2 * r).max(0), self.rect.size.h).into(),
+            );
+            rect_contains_rect(&band_h, &target) || rect_contains_rect(&band_v, &target)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rect_contains_rect_detects_complete_enclosure() {
+        let outer = Rectangle::new((0, 0).into(), (1920, 1080).into());
+        let inside = Rectangle::new((100, 100).into(), (800, 600).into());
+        let overlapping = Rectangle::new((1800, 1000).into(), (200, 200).into());
+
+        assert!(rect_contains_rect(&outer, &inside));
+        assert!(!rect_contains_rect(&outer, &overlapping));
+    }
+
+    #[test]
+    fn opaque_occluder_handles_rounded_corners_safely() {
+        let occluder = OpaqueOccluder {
+            rect: Rectangle::new((0, 0).into(), (1000, 800).into()),
+            corner_radius: 32,
+        };
+
+        // En el centro de la ventana: completamente cubierto
+        let central = Rectangle::new((100, 100).into(), (400, 300).into());
+        assert!(occluder.contains_rect(central));
+
+        // En la esquina superior izquierda (dentro del radio de corte de esquina): no ocluido
+        let in_corner = Rectangle::new((5, 5).into(), (20, 20).into());
+        assert!(!occluder.contains_rect(in_corner));
+    }
 
     #[test]
     fn frame_interval_matches_output_refresh_rate() {
