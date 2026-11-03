@@ -694,12 +694,39 @@ fn build_dock_ui(app: &Application) {
         .build();
     dock_bar.set_overflow(gtk4::Overflow::Visible);
 
+    // Fondo del dock: contenedor acrílico + línea de brillo de bordes (en segundo plano absoluto)
+    let dock_background = Overlay::new();
+    dock_background.set_overflow(gtk4::Overflow::Visible);
+    let dock_bg_box = GtkBox::builder()
+        .css_classes(["dock-container"])
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+    dock_bg_box.set_overflow(gtk4::Overflow::Visible);
+
+    let highlights = DrawingArea::new();
+    highlights.set_can_target(false);
+    highlights.set_hexpand(true);
+    highlights.set_vexpand(true);
+    highlights.set_draw_func(|_, context, width, height| {
+        draw_dock_edge_highlights(context, width, height);
+    });
+    dock_background.set_child(Some(&dock_bg_box));
+    dock_background.add_overlay(&highlights);
+    dock_background.set_measure_overlay(&highlights, false);
+
+    dock_bar.set_child(Some(&dock_background));
+
+    // Capa frontal de contenido: contiene apps_box, separator, miniaturas y papelera.
+    // Al ser el overlay superior de dock_bar, TODOS los iconos y sus contenedores
+    // se dibujan por encima del fondo y de la línea de brillo, garantizando que nunca se corten
+    // al hacer el efecto zoom o al saltar en rebote.
     let dock_content = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .css_classes(["dock-container"])
+        .css_classes(["dock-items"])
         .spacing(4)
         .build();
-    dock_bar.set_child(Some(&dock_content));
+    dock_content.set_overflow(gtk4::Overflow::Visible);
 
     // Contenedor modular de aplicaciones (fijadas y dinámicas en ejecución)
     let apps_box = GtkBox::builder()
@@ -709,11 +736,11 @@ fn build_dock_ui(app: &Application) {
         .build();
     apps_box.set_overflow(gtk4::Overflow::Visible);
     apps_box.set_halign(gtk4::Align::Start);
-    apps_box.set_margin_start(11);
     apps_box.set_margin_bottom(1);
 
+    dock_content.append(&apps_box);
+
     let apps_placeholder = GtkBox::new(Orientation::Horizontal, 0);
-    dock_content.append(&apps_placeholder);
 
     // Separador de cristal translúcido
     let separator = Separator::new(Orientation::Vertical);
@@ -735,18 +762,9 @@ fn build_dock_ui(app: &Application) {
     let (trash_widget, trash_img) = create_trash_item(initial_cfg.icon_size as i32);
     dock_content.append(&trash_widget);
 
-    let highlights = DrawingArea::new();
-    highlights.set_can_target(false);
-    highlights.set_hexpand(true);
-    highlights.set_vexpand(true);
-    highlights.set_draw_func(|_, context, width, height| {
-        draw_dock_edge_highlights(context, width, height);
-    });
-    dock_bar.add_overlay(&highlights);
-    dock_bar.set_measure_overlay(&highlights, false);
-    dock_bar.add_overlay(&apps_box);
-    dock_bar.set_measure_overlay(&apps_box, false);
-    dock_bar.set_clip_overlay(&apps_box, false);
+    dock_bar.add_overlay(&dock_content);
+    dock_bar.set_measure_overlay(&dock_content, true);
+    dock_bar.set_clip_overlay(&dock_content, false);
 
     dock_root.append(&dock_bar);
 

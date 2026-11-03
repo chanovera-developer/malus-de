@@ -14,7 +14,15 @@ window.malus-dock-window decoration {
     border-top: none;
     /* El compositor recorta esta superficie con la máscara squircle. */
     border-radius: 0;
+    overflow: visible;
+}
+
+.dock-items {
     padding: 6px 10px 0;
+    background: transparent;
+    border: none;
+    outline: none;
+    box-shadow: none;
     overflow: visible;
 }
 
