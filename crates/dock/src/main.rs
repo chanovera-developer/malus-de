@@ -597,50 +597,159 @@ fn capitalize(s: &str) -> String {
     }
 }
 
+fn clear_dock_bounce_classes(widget: &gtk4::Widget) {
+    widget.remove_css_class("dock-bounce-up");
+    widget.remove_css_class("dock-bounce-down");
+    widget.remove_css_class("dock-bounce-rebound-up");
+    widget.remove_css_class("dock-bounce-rebound-down");
+    widget.remove_css_class("dock-bounce-settle-up");
+    widget.remove_css_class("dock-bounce-settle-down");
+}
+
 fn bounce_dock_icon(
     icon_container: &gtk4::Widget,
     animation_id: Rc<Cell<u64>>,
+    running_cache: Option<Rc<RefCell<Vec<String>>>>,
+    matchers: Vec<String>,
 ) {
-    let icon_container = icon_container.clone();
     let current_id = animation_id.get().wrapping_add(1);
     animation_id.set(current_id);
-    icon_container.remove_css_class("dock-bouncing");
-    icon_container.remove_css_class("dock-bounce-falling");
-    icon_container.remove_css_class("dock-bounce-rebound");
-    icon_container.remove_css_class("dock-bounce-settling");
+    clear_dock_bounce_classes(icon_container);
 
     let target = icon_container.clone();
+    let anim_id = animation_id.clone();
+
     glib::timeout_add_local_once(Duration::from_millis(1), move || {
-        if animation_id.get() != current_id {
+        if anim_id.get() != current_id {
             return;
         }
-        target.add_css_class("dock-bouncing");
-        let target_falling = target.clone();
-        glib::timeout_add_local_once(Duration::from_millis(280), move || {
-            if animation_id.get() != current_id {
+        run_dock_bounce_cycle(target, anim_id, current_id, running_cache, matchers, 0);
+    });
+}
+
+fn run_dock_bounce_cycle(
+    target: gtk4::Widget,
+    animation_id: Rc<Cell<u64>>,
+    current_id: u64,
+    cache: Option<Rc<RefCell<Vec<String>>>>,
+    matchers: Vec<String>,
+    cycle_count: u32,
+) {
+    if animation_id.get() != current_id {
+        return;
+    }
+
+    // Fase 1: Impulso ascendente contra la gravedad (230ms con desaceleración hasta -24px)
+    clear_dock_bounce_classes(&target);
+    target.add_css_class("dock-bounce-up");
+
+    let target_down = target.clone();
+    let anim_id_down = animation_id.clone();
+    let cache_down = cache.clone();
+    let matchers_down = matchers.clone();
+
+    glib::timeout_add_local_once(Duration::from_millis(230), move || {
+        if anim_id_down.get() != current_id {
+            return;
+        }
+
+        // Fase 2: Caída libre acelerada por gravedad hasta la base del dock (180ms hasta y=0)
+        target_down.remove_css_class("dock-bounce-up");
+        target_down.add_css_class("dock-bounce-down");
+
+        let target_check = target_down.clone();
+        let anim_id_check = anim_id_down.clone();
+
+        glib::timeout_add_local_once(Duration::from_millis(180), move || {
+            if anim_id_check.get() != current_id {
                 return;
             }
-            target_falling.remove_css_class("dock-bouncing");
-            target_falling.add_css_class("dock-bounce-falling");
-            let target_rebound = target_falling.clone();
-            glib::timeout_add_local_once(Duration::from_millis(190), move || {
-                if animation_id.get() != current_id {
+
+            // Impacto firme con la base: verificar si la aplicación ya se encuentra en ejecución
+            let is_running = if let Some(cache_ref) = &cache_down {
+                let running = cache_ref.borrow();
+                !matchers_down.is_empty()
+                    && running.iter().any(|r| {
+                        let r_lower = r.to_lowercase();
+                        matchers_down.iter().any(|m| r_lower.contains(&m.to_lowercase()))
+                    })
+            } else {
+                true
+            };
+
+            // Permitir hasta 3 saltos completos si la aplicación continúa cargando
+            if !is_running && cycle_count + 1 < 3 {
+                run_dock_bounce_cycle(
+                    target_check,
+                    anim_id_check,
+                    current_id,
+                    cache_down,
+                    matchers_down,
+                    cycle_count + 1,
+                );
+            } else {
+                run_dock_bounce_decay(target_check, anim_id_check, current_id);
+            }
+        });
+    });
+}
+
+fn run_dock_bounce_decay(
+    target: gtk4::Widget,
+    animation_id: Rc<Cell<u64>>,
+    current_id: u64,
+) {
+    if animation_id.get() != current_id {
+        return;
+    }
+
+    // Fase 3: Rebote elástico secundario (135ms con desaceleración hasta -8.5px)
+    clear_dock_bounce_classes(&target);
+    target.add_css_class("dock-bounce-rebound-up");
+
+    let target_reb_down = target.clone();
+    let anim_id_reb_down = animation_id.clone();
+
+    glib::timeout_add_local_once(Duration::from_millis(135), move || {
+        if anim_id_reb_down.get() != current_id {
+            return;
+        }
+
+        // Fase 4: Segunda caída libre acelerada hacia la superficie (115ms hasta y=0)
+        target_reb_down.remove_css_class("dock-bounce-rebound-up");
+        target_reb_down.add_css_class("dock-bounce-rebound-down");
+
+        let target_settle = target_reb_down.clone();
+        let anim_id_settle = anim_id_reb_down.clone();
+
+        glib::timeout_add_local_once(Duration::from_millis(115), move || {
+            if anim_id_settle.get() != current_id {
+                return;
+            }
+
+            // Fase 5: Micro-asentamiento elástico (75ms hasta -2px)
+            target_settle.remove_css_class("dock-bounce-rebound-down");
+            target_settle.add_css_class("dock-bounce-settle-up");
+
+            let target_final = target_settle.clone();
+            let anim_id_final = anim_id_settle.clone();
+
+            glib::timeout_add_local_once(Duration::from_millis(75), move || {
+                if anim_id_final.get() != current_id {
                     return;
                 }
-                target_rebound.remove_css_class("dock-bounce-falling");
-                target_rebound.add_css_class("dock-bounce-rebound");
-                let target_settling = target_rebound.clone();
-                glib::timeout_add_local_once(Duration::from_millis(130), move || {
-                    if animation_id.get() != current_id {
-                        return;
+
+                // Fase 6: Contacto final y descanso absoluto en la superficie (70ms hasta y=0)
+                target_final.remove_css_class("dock-bounce-settle-up");
+                target_final.add_css_class("dock-bounce-settle-down");
+
+                let target_cleanup = target_final.clone();
+                let anim_id_cleanup = anim_id_final.clone();
+
+                glib::timeout_add_local_once(Duration::from_millis(70), move || {
+                    if anim_id_cleanup.get() == current_id {
+                        clear_dock_bounce_classes(&target_cleanup);
                     }
-                    target_settling.remove_css_class("dock-bounce-rebound");
-                    target_settling.add_css_class("dock-bounce-settling");
-                    glib::timeout_add_local_once(Duration::from_millis(280), move || {
-                        if animation_id.get() == current_id {
-                            target_settling.remove_css_class("dock-bounce-settling");
-                        }
-                    });
                 });
             });
         });
@@ -2891,6 +3000,8 @@ fn create_dock_item(
             bounce_dock_icon(
                 &icon_container,
                 animation_id.clone(),
+                Some(cache.clone()),
+                matchers.clone(),
             );
             info!("Lanzando aplicación desde Dock: {} (`{}`)", name, cmd);
             spawn_dock_app(&name, &cmd, &[]);

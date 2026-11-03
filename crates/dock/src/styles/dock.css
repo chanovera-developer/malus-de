@@ -53,30 +53,44 @@ window.malus-dock-window decoration {
 }
 
 .dock-bounce-target {
-    transition: transform 260ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    transform: translateY(0);
 }
 
-.dock-bounce-target.dock-bouncing {
-    transition-duration: 280ms;
-    transition-timing-function: cubic-bezier(0.16, 0.76, 0.32, 1);
-    transform: translateY(-14px);
+/* Física de rebote macOS: gravedad parabólica, restitución cinética e impacto sólido */
+
+/* Fase 1: Impulso ascendente contra la gravedad (desaceleración hacia el ápice a -24px) */
+.dock-bounce-target.dock-bounce-up {
+    transition: transform 230ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    transform: translateY(-24px);
 }
 
-.dock-bounce-target.dock-bounce-falling {
-    transition-duration: 190ms;
-    transition-timing-function: cubic-bezier(0.65, 0, 0.9, 0.35);
-    transform: translateY(2px);
+/* Fase 2: Caída libre acelerada por gravedad (impacto directo en el nivel base y=0) */
+.dock-bounce-target.dock-bounce-down {
+    transition: transform 180ms cubic-bezier(0.55, 0.085, 0.68, 0.53);
+    transform: translateY(0);
 }
 
-.dock-bounce-target.dock-bounce-rebound {
-    transition-duration: 130ms;
-    transition-timing-function: cubic-bezier(0.2, 0.8, 0.3, 1);
-    transform: translateY(-4px);
+/* Fase 3: Rebote secundario elástico (restitución cinética tras el impacto) */
+.dock-bounce-target.dock-bounce-rebound-up {
+    transition: transform 135ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    transform: translateY(-8.5px);
 }
 
-.dock-bounce-target.dock-bounce-settling {
-    transition-duration: 280ms;
-    transition-timing-function: cubic-bezier(0.34, 1.56, 0.64, 1);
+/* Fase 4: Segunda caída libre hacia la superficie */
+.dock-bounce-target.dock-bounce-rebound-down {
+    transition: transform 115ms cubic-bezier(0.55, 0.085, 0.68, 0.53);
+    transform: translateY(0);
+}
+
+/* Fase 5: Micro-asentamiento elástico final */
+.dock-bounce-target.dock-bounce-settle-up {
+    transition: transform 75ms cubic-bezier(0.22, 0.61, 0.36, 1);
+    transform: translateY(-2px);
+}
+
+/* Fase 6: Contacto final en reposo absoluto sobre la superficie */
+.dock-bounce-target.dock-bounce-settle-down {
+    transition: transform 70ms cubic-bezier(0.55, 0.085, 0.68, 0.53);
     transform: translateY(0);
 }
 

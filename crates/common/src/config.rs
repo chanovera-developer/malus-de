@@ -528,7 +528,7 @@ pub struct DockConfig {
     pub apps: Vec<DockAppConfig>,
 }
 
-const DOCK_BOUNCE_HEADROOM: u32 = 16;
+const DOCK_BOUNCE_HEADROOM: u32 = 28;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -1455,7 +1455,7 @@ mod tests {
             ..DockConfig::default()
         };
 
-        assert_eq!(config.headroom_height(), 30);
+        assert_eq!(config.headroom_height(), 42);
     }
 
     #[test]
