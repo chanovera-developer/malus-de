@@ -8,7 +8,7 @@ export XDG_CURRENT_DESKTOP="Malus:GNOME"
 export XDG_SESSION_DESKTOP="malus-de"
 export XDG_SESSION_TYPE="wayland"
 export GDK_BACKEND="wayland"
-export QT_QPA_PLATFORM="wayland"
+export QT_QPA_PLATFORM="wayland;xcb"
 export MOZ_ENABLE_WAYLAND=1
 
 mkdir -p "$XDG_CONFIG_HOME/glib-2.0/settings"

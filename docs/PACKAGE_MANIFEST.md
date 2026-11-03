@@ -81,7 +81,10 @@ sudo dnf install -y \
     gnome-system-monitor \
     gnome-text-editor \
     loupe \
-    inter-fonts
+    inter-fonts \
+    qt5-qtwayland \
+    qt6-qtwayland \
+    xorg-x11-server-Xwayland
 ```
 
 ### B. Dependencias de Compilación (`dnf` para desarrolladores)

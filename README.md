@@ -81,7 +81,10 @@ sudo dnf install -y \
     libseat-devel \
     systemd-devel \
     dbus-devel \
-    libxkbcommon-devel
+    libxkbcommon-devel \
+    qt5-qtwayland \
+    qt6-qtwayland \
+    xorg-x11-server-Xwayland
 ```
 
 `systemd-devel` proporciona los archivos de desarrollo de `libudev`; `libxkbcommon-devel` es necesario para enlazar el compositor. Asegúrate también de tener Rust y Cargo instalados (edición 2021).
