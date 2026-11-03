@@ -1167,14 +1167,6 @@ pub fn run_winit() -> Result<()> {
                                 })
                                 .unwrap_or(false);
 
-                            let is_maximized = window
-                                .toplevel()
-                                .map(|t| {
-                                    let states = &t.current_state().states;
-                                    states.contains(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Maximized)
-                                })
-                                .unwrap_or(false);
-
                             let is_active = window.toplevel().map(|t| {
                                 let states = &t.current_state().states;
                                 states.contains(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated)
@@ -1187,7 +1179,7 @@ pub fn run_winit() -> Result<()> {
                                 smithay::backend::renderer::element::Id::from_wayland_resource(
                                     main_surface.as_ref(),
                                 );
-                            let should_round = win_phys_r.is_some() && !is_fullscreen && !is_maximized;
+                            let should_round = win_phys_r.is_some() && !is_fullscreen;
                             let content_offset = geo.loc.to_physical_precise_round(1.0);
                             let content_size = geo.size.to_physical_precise_round(1.0);
                             let win_screen_rect = Rectangle::new(

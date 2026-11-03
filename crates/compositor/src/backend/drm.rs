@@ -2322,14 +2322,6 @@ pub fn run_drm() -> Result<()> {
                                 })
                                 .unwrap_or(false);
 
-                            let is_maximized = window
-                                .toplevel()
-                                .map(|t| {
-                                    let states = &t.current_state().states;
-                                    states.contains(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Maximized)
-                                })
-                                .unwrap_or(false);
-
                             let is_active = window.toplevel().map(|t| {
                                 let states = &t.current_state().states;
                                 states.contains(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated)
@@ -2343,7 +2335,7 @@ pub fn run_drm() -> Result<()> {
                                     main_surface.as_ref(),
                                 );
 
-                            let should_round = win_phys_r.is_some() && !is_fullscreen && !is_maximized;
+                            let should_round = win_phys_r.is_some() && !is_fullscreen;
                             let content_offset = geo.loc.to_physical_precise_round(scale);
                             let content_size = geo.size.to_physical_precise_round(scale);
                             let win_screen_rect = Rectangle::new(
