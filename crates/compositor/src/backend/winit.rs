@@ -19,7 +19,7 @@ use smithay::{
             },
             gles::GlesRenderer,
             utils::draw_render_elements,
-            Color32F, Frame, Renderer, Texture,
+            Color32F, ExportMem, Frame, Renderer, Texture,
         },
         winit::{self, WinitEvent},
     },
@@ -269,6 +269,20 @@ pub fn run_winit() -> Result<()> {
                                 let is_s = sym == keysyms::KEY_s.into() || sym == keysyms::KEY_S.into();
                                 let is_3 = sym == keysyms::KEY_3.into() || sym == keysyms::KEY_numbersign.into();
                                 let is_4 = sym == keysyms::KEY_4.into() || sym == keysyms::KEY_dollar.into();
+                                let is_5 = sym == keysyms::KEY_5.into() || sym == keysyms::KEY_percent.into();
+
+                                if state.screenshot_ui.is_open() {
+                                    if state.screenshot_ui.handle_key_press(sym, *modifiers) {
+                                        state.execute_screenshot_ui_action();
+                                    }
+                                    return FilterResult::Intercept(());
+                                }
+
+                                if (is_print && has_super) || (has_super && has_shift && is_5) {
+                                    info!("📸 Atajo de barra interactiva de captura detectado (Super+Shift+5, Super+Print)");
+                                    state.start_interactive_screenshot();
+                                    return FilterResult::Intercept(());
+                                }
 
                                 if (is_print && has_shift) || (has_super && has_shift && (is_s || is_4)) {
                                     info!("📸 Atajo de captura de área detectado (Shift+Print, Super+Shift+S, Super+Shift+4)");
@@ -509,6 +523,9 @@ pub fn run_winit() -> Result<()> {
                     if state.spotlight.is_open() {
                         state.spotlight.update_pointer_motion(output_geo, point);
                     }
+                    if state.screenshot_ui.is_open() {
+                        state.screenshot_ui.update_pointer_motion(output_geo, point);
+                    }
                     state.update_spotlight_drag_dock_hover(point);
 
                     let layer_target = {
@@ -644,6 +661,25 @@ pub fn run_winit() -> Result<()> {
 
                     let btn_serial = SERIAL_COUNTER.next_serial();
                     if is_pressed {
+                        if state.screenshot_ui.is_open() {
+                            let output_geo = state.space.output_geometry(&output).unwrap_or_default();
+                            match state.screenshot_ui.handle_pointer_button(
+                                output_geo,
+                                point,
+                                event.button_code(),
+                                event.state(),
+                            ) {
+                                crate::screenshot_ui::ScreenshotPointerResult::TriggerAction => {
+                                    state.execute_screenshot_ui_action();
+                                    return;
+                                }
+                                crate::screenshot_ui::ScreenshotPointerResult::Consumed => {
+                                    return;
+                                }
+                                crate::screenshot_ui::ScreenshotPointerResult::Ignored => {}
+                            }
+                        }
+
                         if state.spotlight.is_open() {
                             let output_geo = state.space.output_geometry(&output).unwrap_or_default();
                             if state.spotlight.handle_pointer_button(
@@ -807,6 +843,25 @@ pub fn run_winit() -> Result<()> {
                             state.notify_active_app(None);
                         }
                     } else {
+                        if state.screenshot_ui.is_open() {
+                            let output_geo = state.space.output_geometry(&output).unwrap_or_default();
+                            match state.screenshot_ui.handle_pointer_button(
+                                output_geo,
+                                point,
+                                event.button_code(),
+                                event.state(),
+                            ) {
+                                crate::screenshot_ui::ScreenshotPointerResult::TriggerAction => {
+                                    state.execute_screenshot_ui_action();
+                                    return;
+                                }
+                                crate::screenshot_ui::ScreenshotPointerResult::Consumed => {
+                                    return;
+                                }
+                                crate::screenshot_ui::ScreenshotPointerResult::Ignored => {}
+                            }
+                        }
+
                         if state.spotlight.is_open() {
                             let output_geo = state.space.output_geometry(&output).unwrap_or_default();
                             let dock_geo = state.dock_surface_geometry().map(|(geo, _)| geo);
@@ -1272,6 +1327,22 @@ pub fn run_winit() -> Result<()> {
                         1.0,
                         is_dark_theme,
                     )
+                } else {
+                    None
+                };
+
+                let screenshot_ui_frame = if state.screenshot_ui.is_open() {
+                    if let Some((ui_rect, mask_opt, mask_sz, ui_alpha)) =
+                        state.screenshot_ui.prepare_frame(output_geo, 1.0, is_dark_theme)
+                    {
+                        let mask_vec = mask_opt.map(|s| s.to_vec());
+                        state
+                            .screenshot_ui
+                            .create_render_element(renderer, ui_rect.loc.to_f64())
+                            .map(|elem| (ui_rect, mask_vec, mask_sz, ui_alpha, elem))
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };
@@ -1910,6 +1981,37 @@ pub fn run_winit() -> Result<()> {
                         );
                     }
 
+                    // Renderizar Screenshot UI nativa con curvas squircle y Dual-Kawase blur
+                    if let Some((
+                        ui_rect,
+                        ref mask_vec,
+                        (mask_w, mask_h),
+                        ui_alpha,
+                        ref ui_elem,
+                    )) = screenshot_ui_frame
+                    {
+                        if let Some(blur) = blur_pipeline.as_mut() {
+                            let _ = frame.with_context(|gl| {
+                                blur.render_blur_masked(
+                                    gl,
+                                    &projection,
+                                    size,
+                                    ui_rect,
+                                    mask_vec.as_deref(),
+                                    mask_w,
+                                    mask_h,
+                                    ui_alpha,
+                                );
+                            });
+                        }
+                        let _ = draw_render_elements(
+                            &mut frame,
+                            1.0,
+                            std::slice::from_ref(ui_elem),
+                            &[damage],
+                        );
+                    }
+
                     // Dibujar el icono de Drag and Drop (dnd_icon) si hay una operación activa
                     if !dnd_elems.is_empty() {
                         let _ = draw_render_elements(
@@ -2285,6 +2387,31 @@ pub fn run_winit() -> Result<()> {
                         let error =
                             anyhow::anyhow!("No se pudo renderizar el fotograma de captura");
                         crate::capture::write_capture_error(&destination, &error);
+                    }
+                }
+
+                if let Some(ref mut session) = state.active_screen_recording {
+                    let interval = std::time::Duration::from_millis(
+                        (1000 / session.target_fps.max(1)) as u64,
+                    );
+                    if now.duration_since(session.last_frame) >= interval {
+                        session.last_frame = now;
+                        let crop = session.rect.unwrap_or_else(|| {
+                            Rectangle::from_size(size)
+                        });
+                        let cl_x = crop.loc.x.clamp(0, size.w);
+                        let cl_y = crop.loc.y.clamp(0, size.h);
+                        let cl_w = (crop.size.w.min(size.w - cl_x) & !1).max(2);
+                        let cl_h = (crop.size.h.min(size.h - cl_y) & !1).max(2);
+                        let region = Rectangle::new((cl_x, cl_y).into(), (cl_w, cl_h).into());
+
+                        if let Ok(mapping) = renderer.copy_framebuffer(&framebuffer, region, smithay::backend::allocator::Fourcc::Abgr8888) {
+                            if let Ok(pixels) = renderer.map_texture(&mapping) {
+                                if pixels.len() == (cl_w as usize * cl_h as usize * 4) {
+                                    session.push_frame(pixels.to_vec());
+                                }
+                            }
+                        }
                     }
                 }
 

@@ -20,12 +20,17 @@ use std::rc::Rc;
 use std::time::Duration;
 use tracing::info;
 
+mod recorder;
+pub mod toolbar;
+
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 enum CaptureMode {
+    Toolbar,
     Area,
     Window,
     Full,
     Ocr,
+    Record,
 }
 
 #[derive(Parser, Debug)]
@@ -36,7 +41,7 @@ struct Args {
         short,
         long,
         value_enum,
-        default_value_t = CaptureMode::Full,
+        default_value_t = CaptureMode::Toolbar,
         help = "Modo de captura"
     )]
     mode: CaptureMode,
@@ -47,6 +52,15 @@ struct Args {
         help = "Copia la captura al portapapeles sin guardarla en Imágenes"
     )]
     clipboard_only: bool,
+
+    #[arg(long, help = "Rectángulo de recorte (x,y,w,h,surface_w,surface_h)")]
+    crop: Option<String>,
+
+    #[arg(long, help = "Directorio destino para guardar la captura")]
+    save_dir: Option<PathBuf>,
+
+    #[arg(long, default_value_t = 0, help = "Temporizador en segundos")]
+    delay: u32,
 }
 
 const THUMBNAIL_CSS: &str = include_str!("styles/thumbnail.css");
@@ -62,16 +76,146 @@ fn main() -> Result<()> {
     info!("Iniciando captura con modo: {:?}", args.mode);
 
     match args.mode {
+        CaptureMode::Toolbar => {
+            if let Err(e) = send_ipc_message(&IpcMessage::TriggerScreenshot {
+                interactive: true,
+                record_video: false,
+            }) {
+                tracing::warn!("No se pudo enviar solicitud nativa al compositor: {e}");
+                let action = toolbar::run_interactive_toolbar(None)?;
+                match action {
+                    toolbar::ToolbarResult::Capture { mode: _, rect, options } => {
+                        if options.timer_seconds > 0 {
+                            recorder::run_countdown(options.timer_seconds)?;
+                        }
+                        let source = request_compositor_capture()?;
+                        let final_source = if let Some(r) = rect {
+                            let cropped = crop_capture(
+                                &source,
+                                &AreaSelection {
+                                    rect: SelectionRect {
+                                        x: r.x,
+                                        y: r.y,
+                                        width: r.width,
+                                        height: r.height,
+                                        surface_width: r.surface_width,
+                                        surface_height: r.surface_height,
+                                    },
+                                },
+                            )?;
+                            remove_temporary_capture(&source);
+                            cropped
+                        } else {
+                            source
+                        };
+                        let save_dir = match options.destination {
+                            toolbar::SaveDestination::Desktop => {
+                                let home = std::env::var_os("HOME")
+                                    .map(PathBuf::from)
+                                    .unwrap_or_else(|| PathBuf::from("."));
+                                home.join("Escritorio")
+                            }
+                            toolbar::SaveDestination::Documents => {
+                                let home = std::env::var_os("HOME")
+                                    .map(PathBuf::from)
+                                    .unwrap_or_else(|| PathBuf::from("."));
+                                home.join("Documentos")
+                            }
+                            _ => screenshots_directory(),
+                        };
+                        let clipboard_only = options.destination == toolbar::SaveDestination::Clipboard
+                            || args.clipboard_only;
+                        finish_capture_with_dir(CaptureMode::Toolbar, final_source, clipboard_only, &save_dir)?;
+                    }
+                    toolbar::ToolbarResult::Record { mode: _, rect, options } => {
+                        if options.timer_seconds > 0 {
+                            recorder::run_countdown(options.timer_seconds)?;
+                        }
+                        let video_path = recorder::start_screen_recording(rect, &options)?;
+                        play_capture_sound();
+                        send_capture_notification(
+                            "Grabación de pantalla guardada",
+                            &format!("Guardada en {}", video_path.display()),
+                        );
+                        show_capture_ui(
+                            CaptureMode::Record,
+                            Some(video_path),
+                            "Grabación de video completada".to_string(),
+                        );
+                    }
+                    toolbar::ToolbarResult::Cancel => {}
+                }
+            }
+        }
         CaptureMode::Full => {
+            if args.delay > 0 {
+                std::thread::sleep(Duration::from_secs(args.delay as u64));
+            }
             let source = request_compositor_capture()?;
-            finish_capture(args.mode, source, args.clipboard_only)?;
+            let dest_dir = args.save_dir.unwrap_or_else(screenshots_directory);
+            finish_capture_with_dir(args.mode, source, args.clipboard_only, &dest_dir)?;
         }
         CaptureMode::Area => {
-            let selection = select_area()?;
+            if args.delay > 0 {
+                std::thread::sleep(Duration::from_secs(args.delay as u64));
+            }
+            let selection = if let Some(ref crop_str) = args.crop {
+                let parts: Vec<f64> = crop_str
+                    .split(',')
+                    .filter_map(|s| s.trim().parse().ok())
+                    .collect();
+                if parts.len() == 6 {
+                    AreaSelection {
+                        rect: SelectionRect {
+                            x: parts[0],
+                            y: parts[1],
+                            width: parts[2],
+                            height: parts[3],
+                            surface_width: parts[4],
+                            surface_height: parts[5],
+                        },
+                    }
+                } else if parts.len() == 4 {
+                    AreaSelection {
+                        rect: SelectionRect {
+                            x: parts[0],
+                            y: parts[1],
+                            width: parts[2],
+                            height: parts[3],
+                            surface_width: parts[0] + parts[2],
+                            surface_height: parts[1] + parts[3],
+                        },
+                    }
+                } else {
+                    select_area()?
+                }
+            } else {
+                select_area()?
+            };
             let source = request_compositor_capture()?;
             let crop_result = crop_capture(&source, &selection);
             remove_temporary_capture(&source);
-            finish_capture(CaptureMode::Area, crop_result?, args.clipboard_only)?;
+            let dest_dir = args.save_dir.unwrap_or_else(screenshots_directory);
+            finish_capture_with_dir(CaptureMode::Area, crop_result?, args.clipboard_only, &dest_dir)?;
+        }
+        CaptureMode::Record => {
+            let options = toolbar::ToolbarOptions {
+                destination: toolbar::SaveDestination::Screenshots,
+                timer_seconds: 0,
+                record_audio: false,
+                show_cursor: true,
+            };
+            let video_path = recorder::start_screen_recording(None, &options)?;
+            play_capture_sound();
+            send_capture_notification(
+                "Grabación de pantalla guardada",
+                &format!("Guardada en {}", video_path.display()),
+            );
+            show_capture_ui(
+                CaptureMode::Record,
+                Some(video_path),
+                "Grabación de video completada".to_string(),
+            );
         }
         CaptureMode::Window => {
             anyhow::bail!("El modo de ventana aún no está implementado");
@@ -82,7 +226,17 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 fn finish_capture(mode: CaptureMode, source: PathBuf, clipboard_only: bool) -> Result<()> {
+    finish_capture_with_dir(mode, source, clipboard_only, &screenshots_directory())
+}
+
+fn finish_capture_with_dir(
+    mode: CaptureMode,
+    source: PathBuf,
+    clipboard_only: bool,
+    destination_dir: &std::path::Path,
+) -> Result<()> {
     // Alerta auditiva inmediata al momento del disparo de captura
     play_capture_sound();
 
@@ -96,7 +250,7 @@ fn finish_capture(mode: CaptureMode, source: PathBuf, clipboard_only: bool) -> R
         return Ok(());
     }
 
-    let save_result = save_capture(source.clone(), &screenshots_directory());
+    let save_result = save_capture(source.clone(), destination_dir);
     remove_temporary_capture(&source);
     let path = save_result?;
     info!("Captura guardada en {}", path.display());
@@ -735,65 +889,70 @@ fn show_capture_ui(mode: CaptureMode, capture_path: Option<PathBuf>, clipboard_s
             return;
         };
 
-        // 1. Destello blanco visual en cada pantalla conectada
-        let monitors = display.monitors();
+        // 1. Destello blanco visual en cada pantalla conectada (solo para fotos)
         let mut flash_windows = Vec::new();
+        if mode != CaptureMode::Record {
+            let monitors = display.monitors();
+            for index in 0..monitors.n_items() {
+                let Some(monitor) = monitors
+                    .item(index)
+                    .and_then(|item| item.downcast::<gtk4::gdk::Monitor>().ok())
+                else {
+                    continue;
+                };
 
-        for index in 0..monitors.n_items() {
-            let Some(monitor) = monitors
-                .item(index)
-                .and_then(|item| item.downcast::<gtk4::gdk::Monitor>().ok())
-            else {
-                continue;
-            };
+                let flash_window = ApplicationWindow::builder()
+                    .application(application)
+                    .title("Destello de captura")
+                    .decorated(false)
+                    .css_classes(["malus-screenshot-flash"])
+                    .opacity(0.85)
+                    .build();
 
-            let flash_window = ApplicationWindow::builder()
-                .application(application)
-                .title("Destello de captura")
-                .decorated(false)
-                .css_classes(["malus-screenshot-flash"])
-                .opacity(0.85)
-                .build();
-
-            if gtk4_layer_shell::is_supported() {
-                flash_window.init_layer_shell();
-                flash_window.set_layer(Layer::Overlay);
-                flash_window.set_namespace("malus-screenshot-flash");
-                flash_window.set_monitor(&monitor);
-                flash_window.set_exclusive_zone(-1);
-                for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
-                    flash_window.set_anchor(edge, true);
+                if gtk4_layer_shell::is_supported() {
+                    flash_window.init_layer_shell();
+                    flash_window.set_layer(Layer::Overlay);
+                    flash_window.set_namespace("malus-screenshot-flash");
+                    flash_window.set_monitor(&monitor);
+                    flash_window.set_exclusive_zone(-1);
+                    for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+                        flash_window.set_anchor(edge, true);
+                    }
+                } else {
+                    flash_window.fullscreen();
                 }
-            } else {
-                flash_window.fullscreen();
-            }
 
-            flash_window.set_child(Some(&GtkBox::new(Orientation::Vertical, 0)));
-            flash_window.present();
-            flash_windows.push(flash_window);
+                flash_window.set_child(Some(&GtkBox::new(Orientation::Vertical, 0)));
+                flash_window.present();
+                flash_windows.push(flash_window);
+            }
         }
 
         let is_clipboard_only = capture_path_clone.is_none();
         let app_for_flash = application.clone();
         let mut step = 0u8;
-        glib::timeout_add_local(Duration::from_millis(25), move || {
-            step += 1;
-            let opacity = 0.85 * (1.0 - f64::from(step) / 8.0);
-            for win in &flash_windows {
-                win.set_opacity(opacity.max(0.0));
-            }
-            if step >= 8 {
+        if !flash_windows.is_empty() {
+            glib::timeout_add_local(Duration::from_millis(25), move || {
+                step += 1;
+                let opacity = 0.85 * (1.0 - f64::from(step) / 8.0);
                 for win in &flash_windows {
-                    win.close();
+                    win.set_opacity(opacity.max(0.0));
                 }
-                if is_clipboard_only {
-                    app_for_flash.quit();
+                if step >= 8 {
+                    for win in &flash_windows {
+                        win.close();
+                    }
+                    if is_clipboard_only {
+                        app_for_flash.quit();
+                    }
+                    ControlFlow::Break
+                } else {
+                    ControlFlow::Continue
                 }
-                ControlFlow::Break
-            } else {
-                ControlFlow::Continue
-            }
-        });
+            });
+        } else if is_clipboard_only {
+            application.quit();
+        }
 
         // 2. Si se guardó en disco, mostrar miniatura flotante en la esquina inferior derecha
         if let Some(ref path) = capture_path_clone {
@@ -825,18 +984,28 @@ fn show_capture_ui(mode: CaptureMode, capture_path: Option<PathBuf>, clipboard_s
                 .spacing(4)
                 .build();
 
-            let preview_img = Picture::for_filename(path);
-            preview_img.set_content_fit(gtk4::ContentFit::Contain);
-            preview_img.set_can_shrink(true);
-            preview_img.set_size_request(THUMBNAIL_PREVIEW_SIZE.0, THUMBNAIL_PREVIEW_SIZE.1);
-            card.append(&preview_img);
+            let is_video = mode == CaptureMode::Record
+                || path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e == "webm" || e == "mp4" || e == "mkv");
+
+            if !is_video {
+                let preview_img = Picture::for_filename(path);
+                preview_img.set_content_fit(gtk4::ContentFit::Contain);
+                preview_img.set_can_shrink(true);
+                preview_img.set_size_request(THUMBNAIL_PREVIEW_SIZE.0, THUMBNAIL_PREVIEW_SIZE.1);
+                card.append(&preview_img);
+            }
 
             let title_label = Label::builder()
                 .label(match mode {
+                    CaptureMode::Toolbar => "Captura de Pantalla",
                     CaptureMode::Area => "Captura de Área",
                     CaptureMode::Window => "Captura de Ventana",
                     CaptureMode::Full => "Captura de Pantalla Completa",
                     CaptureMode::Ocr => "Texto Extraído",
+                    CaptureMode::Record => "Grabación de Pantalla",
                 })
                 .css_classes(["thumbnail-title"])
                 .build();
@@ -862,27 +1031,55 @@ fn show_capture_ui(mode: CaptureMode, capture_path: Option<PathBuf>, clipboard_s
                 .spacing(6)
                 .build();
 
-            let copy_btn = Button::builder()
-                .label("Copiar")
-                .css_classes(["action-btn", "suggested-action"])
-                .build();
-            let win_clone = window.clone();
-            let status_label_for_copy = status_label.clone();
-            let capture_path_for_copy = path.clone();
-            copy_btn.connect_clicked(
-                move |_| match copy_image_to_clipboard(&capture_path_for_copy) {
-                    Ok(()) => {
-                        info!("Captura copiada al portapapeles.");
-                        win_clone.close();
+            if is_video {
+                let open_btn = Button::builder()
+                    .label("Reproducir")
+                    .css_classes(["action-btn", "suggested-action"])
+                    .build();
+                let path_clone = path.clone();
+                let win_clone = window.clone();
+                open_btn.connect_clicked(move |_| {
+                    let _ = Command::new("xdg-open").arg(&path_clone).spawn();
+                    win_clone.close();
+                });
+                btn_box.append(&open_btn);
+
+                let folder_btn = Button::builder()
+                    .label("Mostrar en carpeta")
+                    .css_classes(["action-btn"])
+                    .build();
+                let path_clone2 = path.clone();
+                let win_clone2 = window.clone();
+                folder_btn.connect_clicked(move |_| {
+                    if let Some(parent) = path_clone2.parent() {
+                        let _ = Command::new("xdg-open").arg(parent).spawn();
                     }
-                    Err(error) => {
-                        let message = format!("No se pudo copiar al portapapeles: {error:#}");
-                        status_label_for_copy.set_label(&message);
-                        tracing::error!("{message}");
-                    }
-                },
-            );
-            btn_box.append(&copy_btn);
+                    win_clone2.close();
+                });
+                btn_box.append(&folder_btn);
+            } else {
+                let copy_btn = Button::builder()
+                    .label("Copiar")
+                    .css_classes(["action-btn", "suggested-action"])
+                    .build();
+                let win_clone = window.clone();
+                let status_label_for_copy = status_label.clone();
+                let capture_path_for_copy = path.clone();
+                copy_btn.connect_clicked(
+                    move |_| match copy_image_to_clipboard(&capture_path_for_copy) {
+                        Ok(()) => {
+                            info!("Captura copiada al portapapeles.");
+                            win_clone.close();
+                        }
+                        Err(error) => {
+                            let message = format!("No se pudo copiar al portapapeles: {error:#}");
+                            status_label_for_copy.set_label(&message);
+                            tracing::error!("{message}");
+                        }
+                    },
+                );
+                btn_box.append(&copy_btn);
+            }
 
             let dismiss_btn = Button::builder()
                 .label("Cerrar")

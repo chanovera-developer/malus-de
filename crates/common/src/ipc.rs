@@ -107,6 +107,26 @@ pub enum IpcMessage {
         interactive: bool,
         record_video: bool,
     },
+    /// Inicia la grabación de pantalla con parámetros opcionales de recorte y audio
+    StartScreenRecording {
+        destination: String,
+        rect: Option<(i32, i32, i32, i32)>,
+        include_audio: bool,
+        fps: u32,
+    },
+    /// Detiene la grabación de pantalla activa
+    StopScreenRecording,
+    /// Notificación periódica de estado de grabación activa
+    ScreenRecordingStatus {
+        is_recording: bool,
+        elapsed_secs: u64,
+    },
+    /// Notificación de finalización de grabación de pantalla
+    ScreenRecordingFinished {
+        destination: String,
+        success: bool,
+        error: Option<String>,
+    },
     /// Solicita al compositor guardar el siguiente fotograma de pantalla como PNG.
     CaptureScreenshot { destination: String },
     /// Solicita una captura en una salida concreta del compositor.
@@ -531,5 +551,31 @@ mod tests {
             } if destination == "/run/user/1000/malus-screenshot-area.png"
                 && output_name == "DP-1"
         ));
+    }
+
+    #[test]
+    fn test_screen_recording_serialization() {
+        let msg = IpcMessage::StartScreenRecording {
+            destination: "/home/user/video.mp4".to_string(),
+            rect: Some((100, 200, 800, 600)),
+            include_audio: true,
+            fps: 30,
+        };
+        let json = serde_json::to_string(&msg).expect("Serialización falló");
+        let parsed: IpcMessage = serde_json::from_str(&json).expect("Deserialización falló");
+        assert!(matches!(
+            parsed,
+            IpcMessage::StartScreenRecording {
+                destination,
+                rect: Some((100, 200, 800, 600)),
+                include_audio: true,
+                fps: 30,
+            } if destination == "/home/user/video.mp4"
+        ));
+
+        let stop = IpcMessage::StopScreenRecording;
+        let json = serde_json::to_string(&stop).expect("Serialización falló");
+        let parsed: IpcMessage = serde_json::from_str(&json).expect("Deserialización falló");
+        assert!(matches!(parsed, IpcMessage::StopScreenRecording));
     }
 }

@@ -22,7 +22,7 @@ use smithay::{
             },
             gles::{GlesRenderer, GlesTexture},
             utils::draw_render_elements,
-            Bind, Color32F, Frame, ImportDma, ImportMem, Renderer, Texture,
+            Bind, Color32F, ExportMem, Frame, ImportDma, ImportMem, Renderer, Texture,
         },
         session::{libseat::LibSeatSession, Event as SessionEvent, Session},
         udev::{all_gpus, primary_gpu},
@@ -1138,6 +1138,20 @@ pub fn run_drm() -> Result<()> {
                                 let is_s = sym == keysyms::KEY_s.into() || sym == keysyms::KEY_S.into();
                                 let is_3 = sym == keysyms::KEY_3.into() || sym == keysyms::KEY_numbersign.into();
                                 let is_4 = sym == keysyms::KEY_4.into() || sym == keysyms::KEY_dollar.into();
+                                let is_5 = sym == keysyms::KEY_5.into() || sym == keysyms::KEY_percent.into();
+
+                                if state.screenshot_ui.is_open() {
+                                    if state.screenshot_ui.handle_key_press(sym, *modifiers) {
+                                        state.execute_screenshot_ui_action();
+                                    }
+                                    return FilterResult::Intercept(());
+                                }
+
+                                if (is_print && has_super) || (has_super && has_shift && is_5) {
+                                    info!("📸 Atajo de barra interactiva de captura detectado (Super+Shift+5, Super+Print)");
+                                    state.start_interactive_screenshot();
+                                    return FilterResult::Intercept(());
+                                }
 
                                 if (is_print && has_shift) || (has_super && has_shift && (is_s || is_4)) {
                                     info!("📸 Atajo de captura de área detectado (Shift+Print, Super+Shift+S, Super+Shift+4)");
@@ -1389,6 +1403,15 @@ pub fn run_drm() -> Result<()> {
                             state.spotlight.update_pointer_motion(spot_output_geo, point);
                         }
                     }
+                    if state.screenshot_ui.is_open() {
+                        let output_geo = state
+                            .space
+                            .outputs()
+                            .next()
+                            .and_then(|o| state.space.output_geometry(o))
+                            .unwrap_or_default();
+                        state.screenshot_ui.update_pointer_motion(output_geo, point);
+                    }
                     state.update_spotlight_drag_dock_hover(point);
 
                     let (under_target, _, _) = resolve_target_under(state, point);
@@ -1436,6 +1459,9 @@ pub fn run_drm() -> Result<()> {
                                 .unwrap_or(output_geo);
                             state.spotlight.update_pointer_motion(spot_output_geo, point);
                         }
+                        if state.screenshot_ui.is_open() {
+                            state.screenshot_ui.update_pointer_motion(output_geo, point);
+                        }
                         state.update_spotlight_drag_dock_hover(point);
 
                         let (under_target, _, _) = resolve_target_under(state, point);
@@ -1474,6 +1500,30 @@ pub fn run_drm() -> Result<()> {
 
                     let btn_serial = SERIAL_COUNTER.next_serial();
                     if is_pressed {
+                        if state.screenshot_ui.is_open() {
+                            let output_geo = state
+                                .space
+                                .outputs()
+                                .next()
+                                .and_then(|o| state.space.output_geometry(o))
+                                .unwrap_or_default();
+                            match state.screenshot_ui.handle_pointer_button(
+                                output_geo,
+                                point,
+                                event.button_code(),
+                                event.state(),
+                            ) {
+                                crate::screenshot_ui::ScreenshotPointerResult::TriggerAction => {
+                                    state.execute_screenshot_ui_action();
+                                    return;
+                                }
+                                crate::screenshot_ui::ScreenshotPointerResult::Consumed => {
+                                    return;
+                                }
+                                crate::screenshot_ui::ScreenshotPointerResult::Ignored => {}
+                            }
+                        }
+
                         if state.spotlight.is_open() {
                             if let Some(spot_output_geo) = state.spotlight_output_geometry() {
                                 if state.spotlight.handle_pointer_button(
@@ -1621,6 +1671,30 @@ pub fn run_drm() -> Result<()> {
                             }
                         }
                     } else {
+                        if state.screenshot_ui.is_open() {
+                            let output_geo = state
+                                .space
+                                .outputs()
+                                .next()
+                                .and_then(|o| state.space.output_geometry(o))
+                                .unwrap_or_default();
+                            match state.screenshot_ui.handle_pointer_button(
+                                output_geo,
+                                point,
+                                event.button_code(),
+                                event.state(),
+                            ) {
+                                crate::screenshot_ui::ScreenshotPointerResult::TriggerAction => {
+                                    state.execute_screenshot_ui_action();
+                                    return;
+                                }
+                                crate::screenshot_ui::ScreenshotPointerResult::Consumed => {
+                                    return;
+                                }
+                                crate::screenshot_ui::ScreenshotPointerResult::Ignored => {}
+                            }
+                        }
+
                         if state.spotlight.is_open() {
                             if let Some(spot_output_geo) = state.spotlight_output_geometry() {
                                 let dock_geo = state.dock_surface_geometry().map(|(geo, _)| geo);
@@ -2434,6 +2508,25 @@ pub fn run_drm() -> Result<()> {
                     None
                 };
 
+                let screenshot_ui_frame = if state
+                    .screenshot_ui
+                    .should_render_on_output(&out_surface.output.name())
+                {
+                    if let Some((ui_rect, mask_opt, mask_sz, ui_alpha)) =
+                        state.screenshot_ui.prepare_frame(output_geo, scale, is_dark_theme)
+                    {
+                        let mask_vec = mask_opt.map(|s| s.to_vec());
+                        state
+                            .screenshot_ui
+                            .create_render_element(&mut renderer, ui_rect.loc.to_f64())
+                            .map(|elem| (ui_rect, mask_vec, mask_sz, ui_alpha, elem))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 if let Ok(mut target) = renderer.bind(&mut dmabuf) {
                     let screenshot_request = state
                         .pending_screenshot_requests
@@ -3091,6 +3184,37 @@ pub fn run_drm() -> Result<()> {
                             );
                         }
 
+                        // Renderizar Screenshot UI nativa con curvas squircle y Dual-Kawase blur
+                        if let Some((
+                            ui_rect,
+                            ref mask_vec,
+                            (mask_w, mask_h),
+                            ui_alpha,
+                            ref ui_elem,
+                        )) = screenshot_ui_frame
+                        {
+                            if let Some(blur) = blur_pipeline.as_mut() {
+                                let _ = frame.with_context(|gl| {
+                                    blur.render_blur_masked(
+                                        gl,
+                                        &projection,
+                                        out_surface.size,
+                                        ui_rect,
+                                        mask_vec.as_deref(),
+                                        mask_w,
+                                        mask_h,
+                                        ui_alpha,
+                                    );
+                                });
+                            }
+                            let _ = draw_render_elements(
+                                &mut frame,
+                                1.0,
+                                std::slice::from_ref(ui_elem),
+                                &[damage],
+                            );
+                        }
+
                         // Dibujar previsualización translúcida de Aero Snap si el puntero está agarrado y la previsualización intersecta este monitor
                         let is_pointer_grabbed = state
                             .seat
@@ -3439,6 +3563,31 @@ pub fn run_drm() -> Result<()> {
                                 "No se pudo renderizar el fotograma de captura DRM"
                             );
                             crate::capture::write_capture_error(&destination, &error);
+                        }
+                    }
+
+                    if let Some(ref mut session) = state.active_screen_recording {
+                        let interval = std::time::Duration::from_millis(
+                            (1000 / session.target_fps.max(1)) as u64,
+                        );
+                        if now.duration_since(session.last_frame) >= interval {
+                            session.last_frame = now;
+                            let crop = session.rect.unwrap_or_else(|| {
+                                Rectangle::from_size(out_surface.size)
+                            });
+                            let cl_x = crop.loc.x.clamp(0, out_surface.size.w);
+                            let cl_y = crop.loc.y.clamp(0, out_surface.size.h);
+                            let cl_w = (crop.size.w.min(out_surface.size.w - cl_x) & !1).max(2);
+                            let cl_h = (crop.size.h.min(out_surface.size.h - cl_y) & !1).max(2);
+                            let region = Rectangle::new((cl_x, cl_y).into(), (cl_w, cl_h).into());
+
+                            if let Ok(mapping) = renderer.copy_framebuffer(&target, region, smithay::backend::allocator::Fourcc::Abgr8888) {
+                                if let Ok(pixels) = renderer.map_texture(&mapping) {
+                                    if pixels.len() == (cl_w as usize * cl_h as usize * 4) {
+                                        session.push_frame(pixels.to_vec());
+                                    }
+                                }
+                            }
                         }
                     }
 

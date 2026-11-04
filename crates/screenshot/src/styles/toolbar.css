@@ -1,0 +1,98 @@
+window.malus-screenshot-selector {
+    background-color: transparent;
+}
+
+.screenshot-toolbar-pill {
+    background-color: rgba(30, 30, 32, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 26px;
+    padding: 6px 12px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+}
+
+.screenshot-pill-btn {
+    border-radius: 18px;
+    padding: 6px 12px;
+    color: #ffffff;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    transition: all 150ms ease;
+}
+
+.screenshot-pill-btn:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+.screenshot-pill-btn.active {
+    background-color: rgba(255, 255, 255, 0.22);
+}
+
+.screenshot-action-btn {
+    border-radius: 18px;
+    padding: 6px 20px;
+    font-weight: 600;
+    font-size: 13px;
+    color: white;
+}
+
+.screenshot-action-btn.capture {
+    background-color: #007aff;
+}
+
+.screenshot-action-btn.capture:hover {
+    background-color: #0066d6;
+}
+
+.screenshot-action-btn.record {
+    background-color: #e02424;
+}
+
+.screenshot-action-btn.record:hover {
+    background-color: #c81e1e;
+}
+
+.screenshot-recording-indicator {
+    background-color: rgba(26, 26, 28, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 20px;
+    padding: 4px 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.screenshot-rec-dot {
+    color: #ef4444;
+    font-size: 16px;
+}
+
+.screenshot-timer-label {
+    font-family: monospace;
+    font-size: 13px;
+    font-weight: 600;
+    color: #ffffff;
+}
+
+.screenshot-stop-btn {
+    border-radius: 12px;
+    background-color: #dc2626;
+    color: white;
+    padding: 3px 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.screenshot-stop-btn:hover {
+    background-color: #b91c1c;
+}
+
+.screenshot-countdown-badge {
+    background-color: rgba(0, 0, 0, 0.72);
+    border: 2px solid rgba(255, 255, 255, 0.85);
+    border-radius: 50%;
+    color: white;
+    font-size: 64px;
+    font-weight: 700;
+    min-width: 120px;
+    min-height: 120px;
+}
+

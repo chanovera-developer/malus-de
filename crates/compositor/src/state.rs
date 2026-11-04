@@ -189,6 +189,8 @@ pub struct MalusState {
     pub theme_transition_started_at: Option<Instant>,
     pub spotlight: crate::spotlight_visual::SpotlightState,
     pub dnd_icon: Option<WlSurface>,
+    pub active_screen_recording: Option<crate::recording::ScreenRecordingSession>,
+    pub screenshot_ui: crate::screenshot_ui::ScreenshotUiState,
 }
 
 pub fn guess_icon_name(app_id: &str, title: &str) -> String {
@@ -567,6 +569,192 @@ impl MalusState {
             tracing::error!("No se pudo iniciar la captura de pantalla de área: {error}");
         }
     }
+
+    pub fn start_interactive_screenshot(&mut self) {
+        if self.screenshot_ui.is_open() {
+            self.screenshot_ui.close();
+            return;
+        }
+        let (output_geo, output_name) = self
+            .space
+            .outputs()
+            .next()
+            .map(|o| (self.space.output_geometry(o).unwrap_or_default(), o.name()))
+            .unwrap_or_else(|| {
+                (
+                    Rectangle::new((0, 0).into(), (1920, 1080).into()),
+                    "default".to_string(),
+                )
+            });
+        self.screenshot_ui.open(output_geo, output_name);
+    }
+
+    pub fn execute_screenshot_ui_action(&mut self) {
+        if !self.screenshot_ui.is_open {
+            return;
+        }
+
+        if self.screenshot_ui.mode.is_video() {
+            let dest_dir = if let Some(home) = std::env::var_os("HOME") {
+                std::path::PathBuf::from(home).join("Vídeos/Grabaciones de pantalla")
+            } else {
+                std::path::PathBuf::from("Grabaciones de pantalla")
+            };
+            let _ = std::fs::create_dir_all(&dest_dir);
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let dest = dest_dir.join(format!("Grabación de pantalla-{timestamp}.webm"));
+
+            let crop = if self.screenshot_ui.mode.is_area() {
+                let r = self.screenshot_ui.selection;
+                Some((
+                    r.x.round() as i32,
+                    r.y.round() as i32,
+                    r.width.round() as i32,
+                    r.height.round() as i32,
+                ))
+            } else {
+                None
+            };
+
+            self.screenshot_ui.is_recording = true;
+            self.screenshot_ui.recording_start = Some(std::time::Instant::now());
+            self.screenshot_ui.recording_dest = Some(dest.clone());
+            self.screenshot_ui.is_open = false;
+
+            self.start_screen_recording(
+                dest,
+                crop,
+                self.screenshot_ui.options.include_audio,
+                30,
+            );
+        } else {
+            let options = self.screenshot_ui.options.clone();
+            let mode = self.screenshot_ui.mode;
+            let sel = self.screenshot_ui.selection;
+            self.screenshot_ui.close();
+
+            let output_geo = self
+                .space
+                .outputs()
+                .next()
+                .and_then(|o| self.space.output_geometry(o))
+                .unwrap_or_else(|| Rectangle::from_size((1920, 1080).into()));
+            let sw = output_geo.size.w as f64;
+            let sh = output_geo.size.h as f64;
+
+            let mut cmd = std::process::Command::new(
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(|d| d.join("malus-de-screenshot")))
+                    .filter(|p| p.is_file())
+                    .unwrap_or_else(|| std::path::PathBuf::from("malus-de-screenshot")),
+            );
+
+            if mode == crate::screenshot_ui::ScreenshotUiMode::CaptureArea {
+                let crop_arg = format!(
+                    "{},{},{},{},{},{}",
+                    sel.x.max(0.0),
+                    sel.y.max(0.0),
+                    sel.width.max(10.0),
+                    sel.height.max(10.0),
+                    sw,
+                    sh
+                );
+                cmd.args(["--mode", "area", "--crop", &crop_arg]);
+            } else if mode == crate::screenshot_ui::ScreenshotUiMode::CaptureWindow {
+                cmd.args(["--mode", "window"]);
+            } else {
+                cmd.args(["--mode", "full"]);
+            }
+
+            if options.save_to == crate::screenshot_ui::SaveTarget::Clipboard {
+                cmd.arg("--clipboard-only");
+            } else {
+                let home = std::env::var_os("HOME")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| std::path::PathBuf::from("."));
+                let dest_dir = match options.save_to {
+                    crate::screenshot_ui::SaveTarget::Desktop => home.join("Escritorio"),
+                    crate::screenshot_ui::SaveTarget::Documents => home.join("Documentos"),
+                    _ => home.join("Imágenes/Capturas"),
+                };
+                cmd.args(["--save-dir", dest_dir.to_str().unwrap_or(".")]);
+            }
+
+            if options.timer_seconds > 0 {
+                cmd.args(["--delay", &options.timer_seconds.to_string()]);
+            }
+
+            cmd.env("WAYLAND_DISPLAY", &self.socket_name);
+            cmd.env("GDK_BACKEND", "wayland");
+            let _ = cmd.spawn();
+        }
+    }
+
+    pub fn start_screen_recording(
+        &mut self,
+        destination: std::path::PathBuf,
+        rect: Option<(i32, i32, i32, i32)>,
+        include_audio: bool,
+        fps: u32,
+    ) {
+        if self.active_screen_recording.is_some() {
+            tracing::warn!("Ya hay una grabación de pantalla activa; deteniéndola primero");
+            self.stop_screen_recording();
+        }
+
+        let (width, height, phys_rect) = if let Some((x, y, w, h)) = rect {
+            let scale = self
+                .space
+                .outputs()
+                .next()
+                .map(|o| o.current_scale().fractional_scale())
+                .unwrap_or(1.0);
+            let phys_x = (x as f64 * scale).round() as i32;
+            let phys_y = (y as f64 * scale).round() as i32;
+            let phys_w = (w as f64 * scale).round() as i32;
+            let phys_h = (h as f64 * scale).round() as i32;
+            let r = Rectangle::new((phys_x, phys_y).into(), (phys_w, phys_h).into());
+            (phys_w as u32, phys_h as u32, Some(r))
+        } else {
+            let (w, h) = self
+                .space
+                .outputs()
+                .next()
+                .and_then(|o| o.current_mode().map(|m| (m.size.w as u32, m.size.h as u32)))
+                .unwrap_or((1920, 1080));
+            (w, h, None)
+        };
+
+        match crate::recording::ScreenRecordingSession::start(
+            destination,
+            phys_rect,
+            width,
+            height,
+            include_audio,
+            fps,
+            self.ipc_broadcaster.clone(),
+        ) {
+            Ok(session) => {
+                self.active_screen_recording = Some(session);
+            }
+            Err(e) => {
+                tracing::error!("No se pudo iniciar la grabación de pantalla: {e}");
+            }
+        }
+    }
+
+    pub fn stop_screen_recording(&mut self) {
+        if let Some(session) = self.active_screen_recording.take() {
+            tracing::info!(
+                "Deteniendo grabación de pantalla en: {}",
+                session.destination.display()
+            );
+        }
+    }
     pub fn new(display: &Display<MalusState>) -> Self {
         let dh = display.handle();
         let compositor_state = CompositorState::new::<Self>(&dh);
@@ -631,6 +819,8 @@ impl MalusState {
             theme_transition_started_at: None,
             spotlight: crate::spotlight_visual::SpotlightState::new(),
             dnd_icon: None,
+            active_screen_recording: None,
+            screenshot_ui: crate::screenshot_ui::ScreenshotUiState::new(),
         }
     }
 
@@ -1070,6 +1260,34 @@ impl MalusState {
                     tracing::info!("Solicitud IPC de captura recibida");
                     self.pending_screenshot_requests
                         .push_back((std::path::PathBuf::from(destination), None));
+                }
+                IpcMessage::StartScreenRecording {
+                    destination,
+                    rect,
+                    include_audio,
+                    fps,
+                } => {
+                    tracing::info!("📥 Solicitud IPC de inicio de grabación recibida: {}", destination);
+                    self.start_screen_recording(
+                        std::path::PathBuf::from(destination),
+                        rect,
+                        include_audio,
+                        fps,
+                    );
+                }
+                IpcMessage::StopScreenRecording => {
+                    tracing::info!("📥 Solicitud IPC de parada de grabación recibida");
+                    self.stop_screen_recording();
+                }
+                IpcMessage::TriggerScreenshot {
+                    interactive: _,
+                    record_video,
+                } => {
+                    self.start_interactive_screenshot();
+                    if record_video {
+                        self.screenshot_ui.mode =
+                            crate::screenshot_ui::ScreenshotUiMode::RecordArea;
+                    }
                 }
                 IpcMessage::CaptureScreenshotForOutput {
                     destination,

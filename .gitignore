@@ -6,3 +6,7 @@
 .idea/
 .vscode/
 /.config/
+/*.png
+/*.jpg
+/*.jpeg
+/*.webp

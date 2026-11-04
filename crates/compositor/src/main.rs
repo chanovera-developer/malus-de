@@ -5,6 +5,8 @@ mod cpu_priority;
 pub mod genie;
 pub mod grabs;
 pub mod magic_lamp;
+pub mod recording;
+pub mod screenshot_ui;
 pub mod shadow;
 pub mod spotlight_visual;
 pub mod state;
