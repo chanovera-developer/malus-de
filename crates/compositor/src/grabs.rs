@@ -49,6 +49,10 @@ impl PointerGrab<MalusState> for ResizeSurfaceGrab {
 
         handle.motion(data, None, event);
 
+        if let Some(surf) = self.window.wl_surface() {
+            data.snap_transitions.remove(surf.as_ref());
+        }
+
         let delta = event.location - self.start_data.location;
         let dx = delta.x as i32;
         let dy = delta.y as i32;
@@ -299,6 +303,10 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
         // Mientras el grab está activo, ningún cliente tiene foco del puntero
         handle.motion(data, None, event);
 
+        if let Some(surf) = self.window.wl_surface() {
+            data.snap_transitions.remove(surf.as_ref());
+        }
+
         let delta = event.location - self.start_data.location;
         let dist_sq = delta.x * delta.x + delta.y * delta.y;
 
@@ -308,6 +316,10 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
                 return;
             }
             self.has_dragged = true;
+
+            if let Some(surf) = self.window.wl_surface() {
+                data.snap_transitions.remove(surf.as_ref());
+            }
 
             if self.is_snapped {
                 let surface_ref = self.window.wl_surface();

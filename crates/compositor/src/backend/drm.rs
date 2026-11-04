@@ -2254,12 +2254,54 @@ pub fn run_drm() -> Result<()> {
                 for window in state.space.elements() {
                     if let Some(loc) = state.space.element_location(window) {
                         let geo = window.geometry();
-                        let win_global_rect = Rectangle::new(loc, geo.size);
+                        let Some(main_surface) = window.wl_surface() else {
+                            continue;
+                        };
+
+                        let trans_opt = state.snap_transitions.get(main_surface.as_ref()).cloned();
+                        let (effective_loc, effective_size, is_transitioning) = if let Some(ref trans) = trans_opt {
+                            let (eloc, esize) = trans.current_geometry(now);
+                            (eloc, esize, true)
+                        } else {
+                            (loc, geo.size, false)
+                        };
+
+                        let win_global_rect = Rectangle::new(effective_loc, effective_size);
                         if output_geo.overlaps(win_global_rect) {
-                            let phys_loc =
-                                (loc - geo.loc - output_geo.loc).to_physical_precise_round(scale);
-                            let Some(main_surface) = window.wl_surface() else {
-                                continue;
+                            let (phys_loc, win_scale, content_offset, content_size, win_screen_rect) = if is_transitioning {
+                                let sx = effective_size.w as f64 / geo.size.w.max(1) as f64;
+                                let sy = effective_size.h as f64 / geo.size.h.max(1) as f64;
+                                let surface_origin_x = effective_loc.x as f64 - geo.loc.x as f64 * sx;
+                                let surface_origin_y = effective_loc.y as f64 - geo.loc.y as f64 * sy;
+                                let pl = Point::from((
+                                    ((surface_origin_x - output_geo.loc.x as f64) * scale).round() as i32,
+                                    ((surface_origin_y - output_geo.loc.y as f64) * scale).round() as i32,
+                                ));
+                                let c_off = Point::from((
+                                    (geo.loc.x as f64 * sx * scale).round() as i32,
+                                    (geo.loc.y as f64 * sy * scale).round() as i32,
+                                ));
+                                let c_sz = Size::from((
+                                    (effective_size.w as f64 * scale).round() as i32,
+                                    (effective_size.h as f64 * scale).round() as i32,
+                                ));
+                                let w_rect = Rectangle::new(
+                                    Point::from((
+                                        ((effective_loc.x - output_geo.loc.x) as f64 * scale).round() as i32,
+                                        ((effective_loc.y - output_geo.loc.y) as f64 * scale).round() as i32,
+                                    )),
+                                    c_sz,
+                                );
+                                (pl, smithay::utils::Scale { x: scale * sx, y: scale * sy }, c_off, c_sz, w_rect)
+                            } else {
+                                let pl = (loc - geo.loc - output_geo.loc).to_physical_precise_round(scale);
+                                let c_off = geo.loc.to_physical_precise_round(scale);
+                                let c_sz = geo.size.to_physical_precise_round(scale);
+                                let w_rect = Rectangle::new(
+                                    (loc - output_geo.loc).to_physical_precise_round(scale),
+                                    geo.size.to_physical_precise_round(scale),
+                                );
+                                (pl, smithay::utils::Scale::from(scale), c_off, c_sz, w_rect)
                             };
 
                             let win_surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
@@ -2267,7 +2309,7 @@ pub fn run_drm() -> Result<()> {
                                     &mut renderer,
                                     main_surface.as_ref(),
                                     phys_loc,
-                                    smithay::utils::Scale::from(scale),
+                                    win_scale,
                                     1.0,
                                     Kind::Unspecified,
                                 );
@@ -2336,12 +2378,6 @@ pub fn run_drm() -> Result<()> {
                                 );
 
                             let should_round = win_phys_r.is_some() && !is_fullscreen;
-                            let content_offset = geo.loc.to_physical_precise_round(scale);
-                            let content_size = geo.size.to_physical_precise_round(scale);
-                            let win_screen_rect = Rectangle::new(
-                                (loc - output_geo.loc).to_physical_precise_round(scale),
-                                geo.size.to_physical_precise_round(scale),
-                            );
 
                             window_render_data.push((
                                 root_id,
@@ -2356,6 +2392,7 @@ pub fn run_drm() -> Result<()> {
                                 is_firefox,
                                 is_translucent,
                                 is_system_monitor,
+                                is_transitioning,
                             ));
                         }
                     }
@@ -2425,6 +2462,7 @@ pub fn run_drm() -> Result<()> {
                             let should_round = win.4;
                             let is_translucent = win.10;
                             let is_system_monitor = win.11;
+                            let is_transitioning = win.12;
 
                             let shadow_rect = Rectangle::new(
                                 (win_rect.loc.x - shadow_pad, win_rect.loc.y - shadow_pad).into(),
@@ -2443,7 +2481,7 @@ pub fn run_drm() -> Result<()> {
                                 }
                             }
 
-                            if !is_translucent && !is_system_monitor {
+                            if !is_translucent && !is_system_monitor && !is_transitioning {
                                 let r = if should_round {
                                     win_phys_r.unwrap_or(0)
                                 } else {
@@ -2501,6 +2539,7 @@ pub fn run_drm() -> Result<()> {
                                 is_firefox,
                                 is_translucent,
                                 is_system_monitor,
+                                _is_transitioning,
                             ),
                         ) in window_render_data.iter().enumerate()
                         {
@@ -3499,6 +3538,9 @@ pub fn run_drm() -> Result<()> {
                 state.notify_minimized_windows();
             }
         }
+
+        // Limpiar transiciones de maximizado/restauración finalizadas
+        state.snap_transitions.retain(|_, trans| !trans.is_finished(now));
 
         // Notificar fotogramas a los clientes de ventanas activas (evita despertar apps minimizadas u ocluidas a 60 Hz)
         let now_ms = start_time.elapsed().as_millis() as u32;

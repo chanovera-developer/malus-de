@@ -81,6 +81,58 @@ pub struct GenieAnimation {
     pub original_location: Point<i32, Logical>,
 }
 
+pub const SNAP_TRANSITION_DURATION: Duration = Duration::from_millis(220);
+
+/// Animación suave de interpolación geométrica para transiciones de maximizar, restaurar y Aero Snap
+#[derive(Debug, Clone)]
+pub struct SnapTransition {
+    pub start_time: Instant,
+    pub duration: Duration,
+    pub start_loc: Point<i32, Logical>,
+    pub start_size: Size<i32, Logical>,
+    pub target_loc: Point<i32, Logical>,
+    pub target_size: Size<i32, Logical>,
+}
+
+impl SnapTransition {
+    pub fn new(
+        start_loc: Point<i32, Logical>,
+        start_size: Size<i32, Logical>,
+        target_loc: Point<i32, Logical>,
+        target_size: Size<i32, Logical>,
+        duration: Duration,
+    ) -> Self {
+        Self {
+            start_time: Instant::now(),
+            duration,
+            start_loc,
+            start_size: Size::from((start_size.w.max(1), start_size.h.max(1))),
+            target_loc,
+            target_size: Size::from((target_size.w.max(1), target_size.h.max(1))),
+        }
+    }
+
+    /// Calcula la posición y tamaño interpolados usando aceleración ease-out cúbica estilo macOS
+    pub fn current_geometry(&self, now: Instant) -> (Point<i32, Logical>, Size<i32, Logical>) {
+        let elapsed = now.saturating_duration_since(self.start_time);
+        let progress = (elapsed.as_secs_f64() / self.duration.as_secs_f64()).clamp(0.0, 1.0);
+
+        // Curva cúbica ease-out: despegue reactivo con frenado suave y elegante al aterrizar
+        let p = 1.0 - (1.0 - progress).powi(3);
+
+        let cur_x = (self.start_loc.x as f64 + (self.target_loc.x - self.start_loc.x) as f64 * p).round() as i32;
+        let cur_y = (self.start_loc.y as f64 + (self.target_loc.y - self.start_loc.y) as f64 * p).round() as i32;
+        let cur_w = (self.start_size.w as f64 + (self.target_size.w - self.start_size.w) as f64 * p).round() as i32;
+        let cur_h = (self.start_size.h as f64 + (self.target_size.h - self.start_size.h) as f64 * p).round() as i32;
+
+        (Point::from((cur_x, cur_y)), Size::from((cur_w.max(1), cur_h.max(1))))
+    }
+
+    pub fn is_finished(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.start_time) >= self.duration
+    }
+}
+
 /// Estado en memoria del selector de aplicaciones visual (⌘Tab / App Switcher HUD)
 #[derive(Debug, Default, Clone)]
 pub struct AppSwitcherState {
@@ -122,6 +174,7 @@ pub struct MalusState {
     pub next_window_id: u64,
     pub dock_slots: HashMap<u64, Rectangle<i32, Logical>>,
     pub active_animations: Vec<GenieAnimation>,
+    pub snap_transitions: HashMap<WlSurface, SnapTransition>,
     pub snap_preview: Option<Rectangle<i32, Logical>>,
     pub socket_name: String,
     pub is_running: bool,
@@ -563,6 +616,7 @@ impl MalusState {
             next_window_id: 0,
             dock_slots: HashMap::new(),
             active_animations: Vec::new(),
+            snap_transitions: HashMap::new(),
             snap_preview: None,
             socket_name: String::new(),
             is_running: true,
@@ -1410,6 +1464,13 @@ pub fn snap_window(
     let cur_loc = state.space.element_location(window).unwrap_or_default();
     let cur_geo = window.geometry();
 
+    // Si ya había una transición en vuelo para esta ventana, capturamos su geometría actual como punto de partida suave
+    let (start_loc, start_size) = if let Some(existing) = state.snap_transitions.get(&surface) {
+        existing.current_geometry(Instant::now())
+    } else {
+        (cur_loc, cur_geo.size)
+    };
+
     let is_currently_snapped = window.toplevel().map(|t| {
         let states = &t.current_state().states;
         states.contains(XdgState::Maximized)
@@ -1420,7 +1481,7 @@ pub fn snap_window(
 
     // Guardar geometría previa flotante SOLO si la ventana no estaba ya snapped y su tamaño actual es válido
     if mode != SnapMode::CenterRestore && !is_currently_snapped && cur_geo.size.w > 150 && cur_geo.size.h > 150 {
-        state.window_restore_geometries.insert(surface.clone(), (cur_loc, cur_geo.size));
+        state.window_restore_geometries.insert(surface.clone(), (start_loc, start_size));
     }
 
     let (target_loc, target_size, xdg_states) = match mode {
@@ -1454,12 +1515,30 @@ pub fn snap_window(
         }
     };
 
+    let final_target_size = target_size.unwrap_or(start_size);
+
     tracing::info!(
         "🪟 Aero Snap aplicado: modo={:?}, loc={:?}, size={:?}",
         mode,
         target_loc,
         target_size
     );
+
+    // Si hay un cambio perceptible en posición o tamaño, iniciamos la transición suave
+    if (start_loc != target_loc || start_size != final_target_size) && start_size.w > 0 && start_size.h > 0 {
+        state.snap_transitions.insert(
+            surface.clone(),
+            SnapTransition::new(
+                start_loc,
+                start_size,
+                target_loc,
+                final_target_size,
+                SNAP_TRANSITION_DURATION,
+            ),
+        );
+    } else {
+        state.snap_transitions.remove(&surface);
+    }
 
     if let Some(toplevel) = window.toplevel() {
         toplevel.with_pending_state(|top_state| {
@@ -1533,6 +1612,7 @@ impl MalusState {
     pub fn cleanup_stale_surfaces(&mut self) {
         use smithay::utils::IsAlive;
         self.window_restore_geometries.retain(|s, _| s.alive());
+        self.snap_transitions.retain(|s, _| s.alive());
         self.centered_transient_windows.retain(|s, _| s.alive());
         self.minimized_windows.retain(|s, _| s.alive());
         let dock_slots = &mut self.dock_slots;
@@ -2284,6 +2364,7 @@ impl XdgShellHandler for MalusState {
         }
 
         self.window_restore_geometries.remove(surf);
+        self.snap_transitions.remove(surf);
         self.minimized_windows.remove(surf);
         if let Some(window_id) = self.window_ids.remove(surf) {
             self.dock_slots.remove(&window_id);
@@ -2523,5 +2604,41 @@ mod tests {
         assert_eq!(parse_color_scheme("[org/gnome/desktop/interface]\ncolor-scheme='prefer-light'\n"), Some(false));
         assert_eq!(parse_color_scheme("[org/gnome/desktop/interface]\ncolor-scheme='default'\n"), None);
         assert_eq!(parse_color_scheme("[org/gnome/desktop/wm/preferences]\ncolor-scheme='prefer-light'\n"), None);
+    }
+
+    #[test]
+    fn snap_transition_interpolates_smoothly_with_cubic_ease_out() {
+        use std::time::Duration;
+        use smithay::utils::{Point, Size};
+
+        let start_time = std::time::Instant::now();
+        let trans = super::SnapTransition {
+            start_time,
+            duration: Duration::from_millis(220),
+            start_loc: Point::from((100, 100)),
+            start_size: Size::from((800, 600)),
+            target_loc: Point::from((0, 32)),
+            target_size: Size::from((1920, 1048)),
+        };
+
+        // Inicio exacto (t = 0)
+        let (loc_0, sz_0) = trans.current_geometry(start_time);
+        assert_eq!(loc_0, Point::from((100, 100)));
+        assert_eq!(sz_0, Size::from((800, 600)));
+
+        // Mitad de la transición (t = 110ms): curva ease-out cúbica p = 1 - (1 - 0.5)^3 = 0.875
+        let (loc_half, sz_half) = trans.current_geometry(start_time + Duration::from_millis(110));
+        let expected_x = (100.0_f64 + (0.0_f64 - 100.0_f64) * 0.875_f64).round() as i32;
+        let expected_y = (100.0_f64 + (32.0_f64 - 100.0_f64) * 0.875_f64).round() as i32;
+        let expected_w = (800.0_f64 + (1920.0_f64 - 800.0_f64) * 0.875_f64).round() as i32;
+        let expected_h = (600.0_f64 + (1048.0_f64 - 600.0_f64) * 0.875_f64).round() as i32;
+        assert_eq!(loc_half, Point::from((expected_x, expected_y)));
+        assert_eq!(sz_half, Size::from((expected_w, expected_h)));
+
+        // Final de la transición (t >= 220ms)
+        let (loc_end, sz_end) = trans.current_geometry(start_time + Duration::from_millis(220));
+        assert_eq!(loc_end, Point::from((0, 32)));
+        assert_eq!(sz_end, Size::from((1920, 1048)));
+        assert!(trans.is_finished(start_time + Duration::from_millis(220)));
     }
 }
