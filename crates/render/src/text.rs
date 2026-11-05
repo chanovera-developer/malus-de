@@ -8,6 +8,15 @@ pub use cosmic_text::{
 };
 pub use glyphon::{Cache, Color, Resolution, TextAtlas, TextArea, TextBounds, TextRenderer, Viewport};
 
+/// Alineación horizontal del texto dentro de las dimensiones del nodo.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub enum TextAlign {
+    #[default]
+    Center,
+    Left,
+    Right,
+}
+
 /// Etiqueta de texto decorativa para un botón o elemento de la interfaz de usuario.
 #[derive(Clone, Debug)]
 pub struct TextLabel {
@@ -16,7 +25,7 @@ pub struct TextLabel {
     pub line_height: f32,
     pub color: [f32; 4],
     pub weight: Weight,
-    pub is_centered: bool,
+    pub align: TextAlign,
 }
 
 impl Default for TextLabel {
@@ -27,7 +36,7 @@ impl Default for TextLabel {
             line_height: 16.0,
             color: [0.95, 0.95, 0.98, 1.0],
             weight: Weight::NORMAL,
-            is_centered: true,
+            align: TextAlign::Center,
         }
     }
 }
@@ -62,7 +71,19 @@ impl TextLabel {
 
     /// Alinea el texto a la izquierda en lugar de centrarlo dentro del contenedor.
     pub fn left_aligned(mut self) -> Self {
-        self.is_centered = false;
+        self.align = TextAlign::Left;
+        self
+    }
+
+    /// Alinea el texto a la derecha dentro del contenedor (útil para atajos de teclado en menús).
+    pub fn right_aligned(mut self) -> Self {
+        self.align = TextAlign::Right;
+        self
+    }
+
+    /// Centra el texto dentro del contenedor.
+    pub fn centered(mut self) -> Self {
+        self.align = TextAlign::Center;
         self
     }
 }
@@ -156,13 +177,20 @@ impl TextSystem {
                 .fold(0.0f32, f32::max);
             let text_h = label.line_height;
 
-            // Calcular posición horizontal y vertical
-            let (draw_x, draw_y) = if label.is_centered {
-                let offset_x = ((size[0] - text_w) * 0.5).max(0.0);
-                let offset_y = ((size[1] - text_h) * 0.5).max(0.0);
-                (pos[0] + offset_x, pos[1] + offset_y)
-            } else {
-                (pos[0] + 6.0, pos[1] + ((size[1] - text_h) * 0.5).max(0.0))
+            // Calcular posición horizontal y vertical según alineación
+            let (draw_x, draw_y) = match label.align {
+                TextAlign::Center => {
+                    let offset_x = ((size[0] - text_w) * 0.5).max(0.0);
+                    let offset_y = ((size[1] - text_h) * 0.5).max(0.0);
+                    (pos[0] + offset_x, pos[1] + offset_y)
+                }
+                TextAlign::Left => {
+                    (pos[0] + 6.0, pos[1] + ((size[1] - text_h) * 0.5).max(0.0))
+                }
+                TextAlign::Right => {
+                    let offset_x = (size[0] - text_w - 6.0).max(0.0);
+                    (pos[0] + offset_x, pos[1] + ((size[1] - text_h) * 0.5).max(0.0))
+                }
             };
 
             let r = (label.color[0] * 255.0).clamp(0.0, 255.0) as u8;

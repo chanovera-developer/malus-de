@@ -30,6 +30,7 @@ fn test_cosmic_text_typography_and_topbar_rendering() -> Result<()> {
         ],
         status_items: vec!["WiFi".to_string(), "100%".to_string()],
         clock_text: "Mié 4 Nov 21:30".to_string(),
+        active_popover: None,
     };
 
     // 1. Construir la barra superior con Flexbox y etiquetas de texto

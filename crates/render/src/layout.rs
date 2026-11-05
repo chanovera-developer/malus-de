@@ -75,6 +75,12 @@ impl SquircleStyle {
         self
     }
 
+    /// Sobrescribe el radio de curvatura de las esquinas.
+    pub fn with_radius(mut self, radius: f32) -> Self {
+        self.corner_radius = radius;
+        self
+    }
+
     /// Sobrescribe la potencia superelíptica (ej. 2.0 para círculo clásico).
     pub fn with_power(mut self, power: f32) -> Self {
         self.squircle_power = power;

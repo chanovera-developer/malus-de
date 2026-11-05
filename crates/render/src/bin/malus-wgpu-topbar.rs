@@ -8,7 +8,7 @@ use calloop::EventLoop;
 use calloop_wayland_source::WaylandSource;
 use malus_de_common::ipc::{ipc_socket_path, IpcMessage};
 use malus_de_common::logging::init_logging;
-use malus_de_render::dbus_menu::DbusMenuService;
+use malus_de_render::dbus_menu::{DbusMenuCategory, DbusMenuService};
 use malus_de_render::{TopBarConfig, TopBarModel, WaylandTopBarApp};
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
@@ -23,6 +23,7 @@ use wayland_client::Connection;
 pub struct MenuUpdate {
     pub app_name: String,
     pub menus: Vec<String>,
+    pub categories: Vec<DbusMenuCategory>,
 }
 
 fn main() -> Result<()> {
@@ -54,6 +55,7 @@ fn main() -> Result<()> {
             if let Event::Msg(update) = event {
                 info!("🔄 [TopBar] Aplicando actualización de menú: {} ({:?})", update.app_name, update.menus);
                 let _ = app.update_active_app(update.app_name, update.menus);
+                app.update_dbus_categories(update.categories);
                 let _ = app.render();
             }
         })
@@ -97,10 +99,11 @@ fn main() -> Result<()> {
                     let tx = menu_tx.clone();
                     std::thread::spawn(move || {
                         if let Ok(categories) = futures_lite::future::block_on(DbusMenuService::fetch_layout(&srv, &pth)) {
-                            let titles: Vec<String> = categories.into_iter().map(|c| c.title).collect();
+                            let titles: Vec<String> = categories.iter().map(|c| c.title.clone()).collect();
                             let _ = tx.send(MenuUpdate {
                                 app_name: display_name,
                                 menus: titles,
+                                categories,
                             });
                         }
                     });
@@ -140,22 +143,25 @@ fn main() -> Result<()> {
                                 let d_name = display_name.clone();
                                 std::thread::spawn(move || {
                                     if let Ok(categories) = futures_lite::future::block_on(DbusMenuService::fetch_layout(&srv, &pth)) {
-                                        let titles: Vec<String> = categories.into_iter().map(|c| c.title).collect();
+                                        let titles: Vec<String> = categories.iter().map(|c| c.title.clone()).collect();
                                         let _ = tx.send(MenuUpdate {
                                             app_name: d_name,
                                             menus: titles,
+                                            categories,
                                         });
                                         return;
                                     }
                                     let _ = tx.send(MenuUpdate {
                                         app_name: d_name,
                                         menus: default_menus_for_app(&app_id),
+                                        categories: Vec::new(),
                                     });
                                 });
                             } else {
                                 let _ = menu_tx.send(MenuUpdate {
                                     app_name: display_name,
                                     menus: default_menus_for_app(&app_id),
+                                    categories: Vec::new(),
                                 });
                             }
                         }
@@ -181,6 +187,7 @@ fn main() -> Result<()> {
         menus: default_menus_for_app(&None),
         status_items: vec!["WiFi".to_string(), "100%".to_string()],
         clock_text: current_clock_string(),
+        active_popover: None,
     };
 
     info!("Inicializando superficie layer-shell y contexto WGPU...");

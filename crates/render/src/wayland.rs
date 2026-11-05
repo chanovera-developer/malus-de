@@ -2,7 +2,9 @@
 // Malus DE: Cliente Wayland Layer-Shell Nativo (Top-Bar wlr-layer-shell)
 // ==============================================================================
 
+use crate::dbus_menu::DbusMenuCategory;
 use crate::layout::UiTree;
+use crate::popover::{PopoverConfig, PopoverMenuModel};
 use crate::squircle::SquirclePipeline;
 use crate::text::TextSystem;
 use crate::top_bar::{build_top_bar, TopBarConfig, TopBarModel, TopBarNodes};
@@ -56,6 +58,7 @@ pub struct WaylandTopBarApp {
     pub nodes: Option<TopBarNodes>,
     pub config: TopBarConfig,
     pub model: TopBarModel,
+    pub dbus_categories: Vec<DbusMenuCategory>,
 
     pub width: u32,
     pub height: u32,
@@ -162,6 +165,7 @@ impl WaylandTopBarApp {
             nodes,
             config,
             model,
+            dbus_categories: Vec::new(),
             width: 1920,
             height: total_layer_height,
             scale_factor: 1.0,
@@ -254,6 +258,134 @@ impl WaylandTopBarApp {
         self.needs_redraw = true;
 
         Ok(())
+    }
+
+    /// Actualiza las categorías D-Bus con sus ítems deserializados para los popovers.
+    pub fn update_dbus_categories(&mut self, categories: Vec<DbusMenuCategory>) {
+        self.dbus_categories = categories;
+    }
+
+    /// Reconstruye el árbol de la interfaz de usuario y marca necesidad de redibujado.
+    pub fn rebuild_ui(&mut self) -> Result<()> {
+        self.ui = UiTree::new();
+        self.nodes = build_top_bar(&mut self.ui, &self.config, &self.model).ok();
+        self.needs_redraw = true;
+        Ok(())
+    }
+
+    /// Alterna el estado abierto/cerrado del Menú del Sistema Apple.
+    pub fn toggle_apple_menu(&mut self) -> Result<()> {
+        let is_open = self
+            .model
+            .active_popover
+            .as_ref()
+            .map_or(false, |p| p.menu_id == "apple");
+
+        if is_open {
+            self.close_popover()?;
+        } else {
+            let anchor_x = self.config.margin_x + 8.0;
+            let anchor_y = self.config.height + self.config.margin_top + 4.0;
+            let popover = PopoverMenuModel::apple_menu(anchor_x, anchor_y);
+            self.open_popover(popover)?;
+        }
+        Ok(())
+    }
+
+    /// Alterna el estado abierto/cerrado de una categoría de menú específico.
+    pub fn toggle_menu(&mut self, menu_title: &str, anchor_x: f32) -> Result<()> {
+        let menu_id = format!("menu:{}", menu_title);
+        let is_open = self
+            .model
+            .active_popover
+            .as_ref()
+            .map_or(false, |p| p.menu_id == menu_id);
+
+        if is_open {
+            self.close_popover()?;
+        } else {
+            let anchor_y = self.config.height + self.config.margin_top + 4.0;
+            let popover = if let Some(cat) = self
+                .dbus_categories
+                .iter()
+                .find(|c| c.title.eq_ignore_ascii_case(menu_title))
+            {
+                PopoverMenuModel::from_dbus_category(anchor_x, anchor_y, cat)
+            } else {
+                PopoverMenuModel::sample_file_menu(anchor_x, anchor_y)
+            };
+            self.open_popover(popover)?;
+        }
+        Ok(())
+    }
+
+    /// Despliega un menú popover adaptando la altura de la superficie en Wayland sin alterar la zona de exclusión.
+    pub fn open_popover(&mut self, popover: PopoverMenuModel) -> Result<()> {
+        let popover_h = popover.total_height(&PopoverConfig::default());
+        let required_h = (self.config.height + self.config.margin_top + 8.0 + popover_h + 16.0) as u32;
+
+        self.model.active_popover = Some(popover);
+        if required_h > self.height {
+            self.height = required_h;
+            self.layer.set_size(0, self.height);
+            self.layer.commit();
+            self.configure_surface();
+        }
+
+        self.rebuild_ui()?;
+        Ok(())
+    }
+
+    /// Cierra cualquier menú popover activo y restituye la altura mínima de la superficie en Wayland.
+    pub fn close_popover(&mut self) -> Result<()> {
+        if self.model.active_popover.is_some() {
+            self.model.active_popover = None;
+            let base_h = (self.config.height + self.config.margin_top + 4.0) as u32;
+            self.height = base_h;
+            self.layer.set_size(0, self.height);
+            self.layer.commit();
+            self.configure_surface();
+            self.rebuild_ui()?;
+        }
+        Ok(())
+    }
+
+    /// Ejecuta la acción asociada al ítem de popover seleccionado y cierra el menú.
+    pub fn handle_popover_action(&mut self, item_id: i32) {
+        info!("🎯 Ejecutando acción de ítem de popover (id={})", item_id);
+        match item_id {
+            1 => {
+                info!("ℹ️ Mostrando Acerca de Malus DE");
+            }
+            2 => {
+                info!("⚙️ Abriendo Preferencias del Sistema (malus-de-settings)...");
+                let _ = std::process::Command::new("malus-de-settings").spawn();
+            }
+            3 => {
+                info!("📊 Abriendo Monitor del Sistema...");
+                let _ = std::process::Command::new("gnome-system-monitor").spawn();
+            }
+            4 => {
+                info!("🔄 Recargando Shell de Malus DE...");
+                let _ = std::process::Command::new("malus-de-ctl").arg("reload").spawn();
+            }
+            5 => {
+                info!("🔒 Bloqueando sesión con malus-de-session-lock...");
+                let _ = std::process::Command::new("malus-de-session-lock").spawn();
+            }
+            6 => {
+                info!("⚡ Invocando reinicio del sistema...");
+                let _ = std::process::Command::new("systemctl").arg("reboot").spawn();
+            }
+            7 => {
+                info!("🛑 Invocando apagado del equipo...");
+                let _ = std::process::Command::new("systemctl").arg("poweroff").spawn();
+            }
+            _ => {
+                info!("Ejecutando acción de menú con id={}", item_id);
+            }
+        }
+        let _ = self.close_popover();
     }
 
     fn configure_surface(&mut self) {
@@ -388,7 +520,64 @@ impl PointerHandler for WaylandTopBarApp {
                 PointerEventKind::Motion { .. } => {
                     let (x, y) = event.position;
                     let hit = self.ui.hit_test([x as f32, y as f32]);
-                    if hit != self.hovered_node {
+                    let hit_tag = hit
+                        .and_then(|n| self.ui.node_data(n))
+                        .and_then(|d| d.tag.clone());
+
+                    if self.model.active_popover.is_some() {
+                        let mut needs_refresh = false;
+                        let mut new_menu_switch = None;
+
+                        if let Some(ref tag) = hit_tag {
+                            if tag.starts_with("popover_item:") {
+                                let parts: Vec<&str> = tag.split(':').collect();
+                                if parts.len() >= 3 {
+                                    if let Ok(idx) = parts[1].parse::<usize>() {
+                                        if let Some(ref mut popover) = self.model.active_popover {
+                                            if popover.hovered_index != Some(idx) {
+                                                popover.hovered_index = Some(idx);
+                                                needs_refresh = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if tag == "apple_menu" {
+                                if let Some(ref popover) = self.model.active_popover {
+                                    if popover.menu_id != "apple" {
+                                        new_menu_switch = Some(("apple", 0.0));
+                                    }
+                                }
+                            } else if tag.starts_with("menu:") {
+                                let menu_title = &tag[5..];
+                                if let Some(ref popover) = self.model.active_popover {
+                                    if popover.menu_id != *tag {
+                                        let anchor_x = hit
+                                            .and_then(|n| self.ui.taffy.layout(n).ok())
+                                            .map(|l| l.location.x)
+                                            .unwrap_or(80.0);
+                                        new_menu_switch = Some((menu_title, anchor_x));
+                                    }
+                                }
+                            }
+                        } else {
+                            if let Some(ref mut popover) = self.model.active_popover {
+                                if popover.hovered_index.is_some() {
+                                    popover.hovered_index = None;
+                                    needs_refresh = true;
+                                }
+                            }
+                        }
+
+                        if let Some((menu, ax)) = new_menu_switch {
+                            if menu == "apple" {
+                                let _ = self.toggle_apple_menu();
+                            } else {
+                                let _ = self.toggle_menu(menu, ax);
+                            }
+                        } else if needs_refresh {
+                            let _ = self.rebuild_ui();
+                        }
+                    } else if hit != self.hovered_node {
                         // Restaurar estilo anterior
                         if let Some(prev) = self.hovered_node {
                             if let Some(data) = self.ui.node_data(prev) {
@@ -415,10 +604,31 @@ impl PointerHandler for WaylandTopBarApp {
                 }
                 PointerEventKind::Press { button, .. } => {
                     let (x, y) = event.position;
-                    if let Some(hit) = self.ui.hit_test([x as f32, y as f32]) {
-                        if let Some(data) = self.ui.node_data(hit) {
-                            info!("Clic en botón Wayland (botón={}): {:?}", button, data.tag);
+                    let hit = self.ui.hit_test([x as f32, y as f32]);
+                    let hit_tag = hit
+                        .and_then(|n| self.ui.node_data(n))
+                        .and_then(|d| d.tag.clone());
+
+                    if let Some(tag) = hit_tag {
+                        info!("Clic en botón Wayland (botón={}): {}", button, tag);
+                        if tag == "apple_menu" {
+                            let _ = self.toggle_apple_menu();
+                        } else if tag.starts_with("menu:") {
+                            let menu_title = &tag[5..];
+                            let anchor_x = hit
+                                .and_then(|n| self.ui.taffy.layout(n).ok())
+                                .map(|l| l.location.x)
+                                .unwrap_or(80.0);
+                            let _ = self.toggle_menu(menu_title, anchor_x);
+                        } else if tag.starts_with("popover_item:") {
+                            let parts: Vec<&str> = tag.split(':').collect();
+                            if parts.len() >= 3 {
+                                let item_id: i32 = parts[2].parse().unwrap_or(-1);
+                                self.handle_popover_action(item_id);
+                            }
                         }
+                    } else if self.model.active_popover.is_some() {
+                        let _ = self.close_popover();
                     }
                 }
                 PointerEventKind::Leave { .. } => {

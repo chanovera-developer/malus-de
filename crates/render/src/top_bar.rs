@@ -3,6 +3,7 @@
 // ==============================================================================
 
 use crate::layout::{SquircleStyle, UiTree};
+use crate::popover::{build_popover_menu, PopoverConfig, PopoverMenuModel, PopoverNodes};
 use crate::text::{TextLabel, Weight};
 use anyhow::Result;
 use taffy::prelude::*;
@@ -40,6 +41,7 @@ pub struct TopBarModel {
     pub menus: Vec<String>,
     pub status_items: Vec<String>,
     pub clock_text: String,
+    pub active_popover: Option<PopoverMenuModel>,
 }
 
 impl Default for TopBarModel {
@@ -56,6 +58,7 @@ impl Default for TopBarModel {
             ],
             status_items: vec!["WiFi".to_string(), "Batería".to_string()],
             clock_text: "Mié 4 Nov 21:25".to_string(),
+            active_popover: None,
         }
     }
 }
@@ -69,6 +72,7 @@ pub struct TopBarNodes {
     pub menu_items: Vec<(String, NodeId)>,
     pub control_center_btn: NodeId,
     pub clock_btn: NodeId,
+    pub popover: Option<PopoverNodes>,
 }
 
 /// Construye la estructura Flexbox completa de la barra superior inspirada en macOS.
@@ -82,7 +86,20 @@ pub fn build_top_bar(
     // --------------------------------------------------------------------------
     let mut left_children = Vec::new();
 
-    // Botón Logo Apple
+    // Determinar qué menú o botón se encuentra activo en popover
+    let active_menu_id = model
+        .active_popover
+        .as_ref()
+        .map(|p| p.menu_id.as_str())
+        .unwrap_or("");
+
+    // Botón Logo Apple (resaltado si su popover está desplegado)
+    let apple_style = if active_menu_id == "apple" {
+        SquircleStyle::button([0.0, 0.48, 1.0, 0.90]).with_border(1.0, [1.0, 1.0, 1.0, 0.35])
+    } else {
+        SquircleStyle::button([0.25, 0.25, 0.30, 0.60]).with_border(1.0, [1.0, 1.0, 1.0, 0.12])
+    };
+
     let apple_btn = ui.add_leaf(
         Style {
             size: Size {
@@ -91,7 +108,7 @@ pub fn build_top_bar(
             },
             ..Default::default()
         },
-        SquircleStyle::button([0.25, 0.25, 0.30, 0.60]).with_border(1.0, [1.0, 1.0, 1.0, 0.12]),
+        apple_style,
         Some("apple_menu"),
     )?;
     ui.set_text(apple_btn, TextLabel::new("🍎").with_size(13.0));
@@ -120,6 +137,15 @@ pub fn build_top_bar(
     // Elementos del menú activo de la aplicación
     let mut menu_items = Vec::new();
     for menu in &model.menus {
+        let menu_id_tag = format!("menu:{}", menu);
+        let is_menu_active = active_menu_id == menu_id_tag;
+
+        let menu_style = if is_menu_active {
+            SquircleStyle::button([0.0, 0.48, 1.0, 0.90]).with_border(1.0, [1.0, 1.0, 1.0, 0.35])
+        } else {
+            SquircleStyle::button([0.20, 0.20, 0.24, 0.45]).with_border(1.0, [1.0, 1.0, 1.0, 0.08])
+        };
+
         let menu_node = ui.add_leaf(
             Style {
                 size: Size {
@@ -128,13 +154,13 @@ pub fn build_top_bar(
                 },
                 ..Default::default()
             },
-            SquircleStyle::button([0.20, 0.20, 0.24, 0.45]).with_border(1.0, [1.0, 1.0, 1.0, 0.08]),
-            Some(format!("menu:{}", menu)),
+            menu_style,
+            Some(menu_id_tag),
         )?;
         ui.set_text(
             menu_node,
             TextLabel::new(menu)
-                .with_weight(Weight::NORMAL)
+                .with_weight(if is_menu_active { Weight::MEDIUM } else { Weight::NORMAL })
                 .with_size(13.0),
         );
         menu_items.push((menu.clone(), menu_node));
@@ -285,6 +311,20 @@ pub fn build_top_bar(
         Some("top_bar_pill"),
     )?;
 
+    // --------------------------------------------------------------------------
+    // 5. Construir Popover activo si está presente en el modelo
+    // --------------------------------------------------------------------------
+    let popover_nodes = if let Some(ref popover_model) = model.active_popover {
+        build_popover_menu(ui, &PopoverConfig::default(), popover_model).ok()
+    } else {
+        None
+    };
+
+    let mut screen_children = vec![pill];
+    if let Some(ref pn) = popover_nodes {
+        screen_children.push(pn.root_container);
+    }
+
     // Envoltorio de pantalla (Screen Root) que estira la píldora respetando sus márgenes horizontales
     let root = ui.add_container(
         Style {
@@ -297,7 +337,7 @@ pub fn build_top_bar(
             ..Default::default()
         },
         SquircleStyle::transparent(),
-        &[pill],
+        &screen_children,
         Some("top_bar_screen_root"),
     )?;
 
@@ -311,5 +351,6 @@ pub fn build_top_bar(
         menu_items,
         control_center_btn,
         clock_btn,
+        popover: popover_nodes,
     })
 }

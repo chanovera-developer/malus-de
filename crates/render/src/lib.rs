@@ -4,6 +4,7 @@
 
 pub mod dbus_menu;
 pub mod layout;
+pub mod popover;
 pub mod renderer;
 pub mod squircle;
 pub mod text;
@@ -12,6 +13,9 @@ pub mod wayland;
 
 pub use dbus_menu::{DbusMenuCategory, DbusMenuItem, DbusMenuService, RegisteredMenu};
 pub use layout::{squircle_sdf_cpu, SquircleStyle, UiNodeData, UiTree};
+pub use popover::{
+    build_popover_menu, PopoverConfig, PopoverItem, PopoverMenuModel, PopoverNodes,
+};
 pub use renderer::SquircleRenderer;
 pub use squircle::{
     SquircleInstance, SquirclePipeline, SquircleUniforms, MACOS_SQUIRCLE_POWER,

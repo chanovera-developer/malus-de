@@ -27,6 +27,7 @@ Durante las pruebas de fidelidad visual de la barra superior y los botones del s
 - [x] **Renderizado de Tipografía con `cosmic-text` y `glyphon`:** Subsistema de texto GPU implementado en `malus-de-render::text` con soporte para fallbacks del sistema, pesos tipográficos (Bold/Semibold), conformación avanzada de texto y atlas dinámico de glifos. Test de integración validado (`test_text.rs`).
 - [x] **Protocolo Wayland Layer-Shell:** Cliente Wayland nativo implementado con `smithay-client-toolkit` (`crates/render/src/wayland.rs`) y binario ejecutable (`target/debug/malus-wgpu-topbar`). Anclaje superior exclusivo, renderizado directo a `wgpu::Surface` nativa y eventos de cursor interactivos (hover & click).
 - [x] **Integración de Menú Global D-Bus (`com.canonical.dbusmenu`) e IPC del Compositor:** Servicio D-Bus asíncrono con `zbus`, servidor `com.canonical.AppMenu.Registrar`, obtención y normalización de árboles de menú dinámicos, despacho unificado en el bucle de eventos `calloop 0.13` junto con notificaciones de cambio de aplicación activa (`ActiveAppChanged`) del compositor. Pruebas de integración aprobadas (`test_dbus_menu.rs`).
+- [x] **Menús Desplegables y Popovers Superelípticos G2:** Módulo `malus-de-render::popover` implementado con sombras difusas multicapa (outer e inner squircle), hit-testing analítico, soporte para menú del sistema Apple y categorías D-Bus, interactividad reactiva en Wayland (hover dinámico, apertura/cierre sin parpadeos y transición fluida entre menús contiguos). Suite `test_popover.rs` validada (3/3 tests OK).
 - [x] **Salud del Workspace 100% Verde:** Ejecución completa de `cargo test --workspace --no-fail-fast` finalizada exitosamente con cero fallos en todos los crates del proyecto.
 
 ---
@@ -42,6 +43,29 @@ Se ejecutó la suite completa de pruebas automatizadas en todo el workspace de M
 * `malus-de-spotlight`: 2/2 correctas
 * `malus-de-dock` y `malus-de-compositor`: aprobadas
 * **Estado global:** Cero advertencias críticas y 100% de aserciones válidas.
+
+---
+
+## [2026-11-04] — Menús Desplegables y Popovers Superelípticos G2 (`malus-de-render::popover`)
+
+### Componentes Implementados
+* **Módulo Popover:** [`crates/render/src/popover.rs`](../crates/render/src/popover.rs)
+  * Tarjeta flotante superelíptica continua ($n=4.2$, radio $10.0\text{px}$) con borde reflectante sutil y fondo translúcido profundo estilo macOS.
+  * **Sombras difusas multicapa (GPU Drop Shadows):**
+    * Generación analítica de dos capas de squircle exterior e interior con degradado de opacidad y radio expandido sin costo de multipass en GPU.
+  * **Filas Interactivas y Tipografía:**
+    * Resaltado en tiempo real al pasar el puntero (hover) cambiando a color de acento macOS (`rgba(0, 122, 255, 0.95)`), squircle de $5.0\text{px}$ y borde blanco fino.
+    * Atajos de teclado alineados a la derecha (`TextAlign::Right`) mediante la extensión del motor tipográfico [`TextLabel`](../crates/render/src/text.rs).
+    * Separadores de 1px con opacidad sutil entre grupos lógicos.
+  * **Menú del Sistema Apple y D-Bus Menu:**
+    * Soporte nativo para opciones de sistema (Acerca de Malus DE, Preferencias, Monitor del Sistema, Recarga de Shell, Bloqueo de Sesión, Reiniciar, Apagar).
+    * Conversión automática de árboles [`DbusMenuCategory`](../crates/render/src/dbus_menu.rs) a ítems de popover interactivos.
+* **Integración Wayland e Interactividad (`WaylandTopBarApp`):**
+  * Despliegue con ajuste dinámico de tamaño de superficie en `smithay-client-toolkit` preservando la zona de exclusión original (para evitar que las ventanas del escritorio se desplacen).
+  * Manejo reactivo de `PointerHandler`: clic para abrir/cerrar, selección de ítem con ejecución de comandos del sistema, descarte automático al hacer clic fuera del popover y navegación fluida entre menús adyacentes al deslizar el mouse con un menú ya abierto.
+* **Resultados de Validación:**
+  * Suite [`crates/render/tests/test_popover.rs`](../crates/render/tests/test_popover.rs) aprobada (3/3 tests OK: geometría, hit-testing analítico y exportación de imágenes PNG).
+  * Archivos de artefacto generados y verificados: `target/malus_popover_apple.png` y `target/malus_popover_file.png`.
 
 ---
 
