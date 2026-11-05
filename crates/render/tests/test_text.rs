@@ -52,7 +52,7 @@ fn test_cosmic_text_typography_and_topbar_rendering() -> Result<()> {
     // Verificar que existen las etiquetas clave
     let has_finder = labels.iter().any(|(lbl, _, _)| lbl.text == "Finder");
     let has_clock = labels.iter().any(|(lbl, _, _)| lbl.text == "Mié 4 Nov 21:30");
-    let has_apple = labels.iter().any(|(lbl, _, _)| lbl.text == "🍎");
+    let has_apple = labels.iter().any(|(lbl, _, _)| lbl.text == "\u{F179}" || lbl.text == "");
     assert!(has_finder, "Debe contener la etiqueta de la app activa 'Finder'");
     assert!(has_clock, "Debe contener la etiqueta del reloj");
     assert!(has_apple, "Debe contener el icono de Apple");

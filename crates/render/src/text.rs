@@ -8,6 +8,31 @@ pub use cosmic_text::{
 };
 pub use glyphon::{Cache, Color, Resolution, TextAtlas, TextArea, TextBounds, TextRenderer, Viewport};
 
+/// Estima el ancho en píxeles de una etiqueta de texto tipográfico con alta precisión.
+pub fn estimate_label_width(text: &str, font_size: f32, weight: Weight) -> f32 {
+    let is_bold = weight == Weight::BOLD || weight == Weight::SEMIBOLD;
+    let base_factor = if is_bold { 0.65 } else { 0.58 };
+    let mut total_w = 0.0f32;
+    for c in text.chars() {
+        if c == '\u{F179}' || c == '' || c == '\u{F8FF}' {
+            total_w += font_size * 1.1;
+        } else if c == '%' || c == '@' || c == '#' || c == '&' || c == 'm' || c == 'w' || c == 'M' || c == 'W' {
+            total_w += font_size * 0.90;
+        } else if c.is_ascii_uppercase() {
+            total_w += font_size * 0.74;
+        } else if c == 'i' || c == 'l' || c == 'j' || c == '!' || c == '|' || c == ':' || c == '.' || c == '\'' {
+            total_w += font_size * 0.32;
+        } else if c.is_ascii_punctuation() || c == ' ' {
+            total_w += font_size * 0.45;
+        } else if c.is_ascii_digit() {
+            total_w += font_size * 0.65;
+        } else {
+            total_w += font_size * base_factor;
+        }
+    }
+    total_w.ceil()
+}
+
 /// Alineación horizontal del texto dentro de las dimensiones del nodo.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum TextAlign {
@@ -139,7 +164,7 @@ impl TextSystem {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         screen_size: [f32; 2],
-        scale_factor: f32,
+        _scale_factor: f32,
         labels: &[(TextLabel, [f32; 2], [f32; 2])], // (Label, position [x, y], size [w, h])
     ) -> Result<()> {
         let width = screen_size[0] as u32;
@@ -160,11 +185,17 @@ impl TextSystem {
             let metrics = Metrics::new(label.font_size, label.line_height);
             let mut buffer = Buffer::new(&mut self.font_system, metrics);
 
+            let family = if label.text.contains('\u{F179}') || label.text.contains('') || label.text.contains('\u{F8FF}') {
+                Family::Name("Font Awesome 6 Brands")
+            } else {
+                Family::SansSerif
+            };
+
             buffer.set_text(
                 &mut self.font_system,
                 &label.text,
                 Attrs::new()
-                    .family(Family::SansSerif)
+                    .family(family)
                     .weight(label.weight),
                 Shaping::Advanced,
             );
@@ -211,7 +242,7 @@ impl TextSystem {
             buffer: &item.buffer,
             left: item.left,
             top: item.top,
-            scale: scale_factor,
+            scale: 1.0, // La escala 1.0 respeta exactamente las coordenadas métricas del buffer
             bounds: TextBounds {
                 left: 0,
                 top: 0,

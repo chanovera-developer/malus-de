@@ -104,14 +104,61 @@ pub fn calculate_luminance_rgba(rgba_data: &[u8]) -> f32 {
     }
 }
 
-/// Detecta si el sistema o fondo actual corresponde a un tema oscuro.
+/// Detecta si el fondo bajo la barra superior es oscuro (usando luminancia real del wallpaper) o el tema del sistema.
 pub fn detect_system_is_dark() -> bool {
+    // 1. Intentar analizar la imagen de fondo de pantalla activa en Malus DE / GNOME
+    if let Some(is_dark) = detect_wallpaper_luminance_is_dark() {
+        return is_dark;
+    }
+
+    // 2. Si no se puede leer el fondo de pantalla, recurrir al tema del sistema
     if let Ok(out) = std::process::Command::new("gsettings")
         .args(["get", "org.gnome.desktop.interface", "color-scheme"])
         .output()
     {
-        String::from_utf8_lossy(&out.stdout).contains("prefer-dark")
-    } else {
-        true
+        let scheme = String::from_utf8_lossy(&out.stdout).to_lowercase();
+        if scheme.contains("prefer-dark") || scheme.contains("dark") {
+            return true;
+        }
     }
+
+    true // Por defecto fondo oscuro en Malus DE (macOS dark vibrancy)
+}
+
+/// Analiza la tira superior del archivo de fondo de pantalla para calcular su luminancia matemática ITU-R BT.709.
+fn detect_wallpaper_luminance_is_dark() -> Option<bool> {
+    if let Ok(out) = std::process::Command::new("python3")
+        .args([
+            "-c",
+            r#"
+import os, sys
+try:
+    from PIL import Image
+    home = os.environ.get('HOME', '')
+    path = os.path.join(home, '.config/malus-de/wallpaper.jpg')
+    if not os.path.exists(path):
+        import subprocess
+        uri = subprocess.check_output(['gsettings', 'get', 'org.gnome.desktop.background', 'picture-uri']).decode().strip().strip("'")
+        if uri.startswith('file://'):
+            path = uri[7:]
+    if os.path.exists(path):
+        im = Image.open(path)
+        top = im.crop((0, 0, im.width, min(48, im.height)))
+        px = list(top.getdata())
+        lum = sum(0.2126*(p[0]/255) + 0.7152*(p[1]/255) + 0.0722*(p[2]/255) for p in px) / len(px)
+        sys.exit(0 if lum < 0.50 else 1)
+except Exception:
+    pass
+sys.exit(2)
+"#,
+        ])
+        .status()
+    {
+        if out.code() == Some(0) {
+            return Some(true); // Fondo oscuro -> texto blanco
+        } else if out.code() == Some(1) {
+            return Some(false); // Fondo claro -> texto oscuro
+        }
+    }
+    None
 }

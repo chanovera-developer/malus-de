@@ -5,7 +5,7 @@
 use crate::layout::{SquircleStyle, UiTree};
 use crate::luminance::AdaptivePalette;
 use crate::popover::{build_popover_menu, PopoverConfig, PopoverMenuModel, PopoverNodes};
-use crate::text::{TextLabel, Weight};
+use crate::text::{estimate_label_width, TextLabel, Weight};
 use anyhow::Result;
 use taffy::prelude::*;
 
@@ -104,10 +104,11 @@ pub fn build_top_bar(
         SquircleStyle::button(palette.button_idle_bg)
     };
 
+    let apple_w = (estimate_label_width("\u{F179}", 15.0, Weight::NORMAL) + 16.0).max(30.0);
     let apple_btn = ui.add_leaf(
         Style {
             size: Size {
-                width: Dimension::length(28.0),
+                width: Dimension::length(apple_w),
                 height: Dimension::length(24.0),
             },
             ..Default::default()
@@ -115,14 +116,20 @@ pub fn build_top_bar(
         apple_style,
         Some("apple_menu"),
     )?;
-    ui.set_text(apple_btn, TextLabel::new("🍎").with_size(13.0));
+    ui.set_text(
+        apple_btn,
+        TextLabel::new("\u{F179}")
+            .with_size(15.0)
+            .with_color(palette.text_primary),
+    );
     left_children.push(apple_btn);
 
     // Botón Nombre de Aplicación Activa (Acento azul macOS)
+    let app_w = (estimate_label_width(&model.app_name, 13.0, Weight::BOLD) + 16.0).max(36.0);
     let app_btn = ui.add_leaf(
         Style {
             size: Size {
-                width: Dimension::length(75.0),
+                width: Dimension::length(app_w),
                 height: Dimension::length(24.0),
             },
             ..Default::default()
@@ -139,9 +146,17 @@ pub fn build_top_bar(
     );
     left_children.push(app_btn);
 
+    // Filtrar menús para evitar duplicar el nombre de la app activa en la barra (estilo macOS)
+    let filtered_menus: Vec<String> = model
+        .menus
+        .iter()
+        .filter(|m| !m.eq_ignore_ascii_case(&model.app_name))
+        .cloned()
+        .collect();
+
     // Elementos del menú activo de la aplicación
     let mut menu_items = Vec::new();
-    for menu in &model.menus {
+    for menu in &filtered_menus {
         let menu_id_tag = format!("menu:{}", menu);
         let is_menu_active = active_menu_id == menu_id_tag;
 
@@ -151,10 +166,11 @@ pub fn build_top_bar(
             SquircleStyle::button(palette.button_idle_bg)
         };
 
+        let menu_w = (estimate_label_width(menu, 13.0, Weight::NORMAL) + 16.0).max(36.0);
         let menu_node = ui.add_leaf(
             Style {
                 size: Size {
-                    width: Dimension::length(58.0),
+                    width: Dimension::length(menu_w),
                     height: Dimension::length(24.0),
                 },
                 ..Default::default()
@@ -206,10 +222,11 @@ pub fn build_top_bar(
     let mut right_children = Vec::new();
 
     for item in &model.status_items {
+        let status_w = (estimate_label_width(item, 11.0, Weight::NORMAL) + 14.0).max(30.0);
         let item_node = ui.add_leaf(
             Style {
                 size: Size {
-                    width: Dimension::length(36.0),
+                    width: Dimension::length(status_w),
                     height: Dimension::length(24.0),
                 },
                 ..Default::default()
@@ -227,10 +244,11 @@ pub fn build_top_bar(
     }
 
     // Botón Centro de Control (Pill compacta)
+    let cc_w = (estimate_label_width("CC", 11.0, Weight::BOLD) + 14.0).max(28.0);
     let control_center_btn = ui.add_leaf(
         Style {
             size: Size {
-                width: Dimension::length(38.0),
+                width: Dimension::length(cc_w),
                 height: Dimension::length(24.0),
             },
             ..Default::default()
@@ -248,10 +266,11 @@ pub fn build_top_bar(
     right_children.push(control_center_btn);
 
     // Botón Reloj
+    let clock_w = (estimate_label_width(&model.clock_text, 12.5, Weight::SEMIBOLD) + 16.0).max(48.0);
     let clock_btn = ui.add_leaf(
         Style {
             size: Size {
-                width: Dimension::length(110.0),
+                width: Dimension::length(clock_w),
                 height: Dimension::length(24.0),
             },
             ..Default::default()

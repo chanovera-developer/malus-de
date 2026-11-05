@@ -402,6 +402,34 @@ impl WaylandTopBarApp {
         };
         self.wgpu_surface.configure(&self.device, &surface_config);
     }
+
+    /// Actualiza el ancho de la barra superior a partir de un monitor específico.
+    pub fn update_width_for_output(&mut self, output: &wl_output::WlOutput) {
+        if let Some(info) = self.output_state.info(output) {
+            let detected_width = if let Some(logical_size) = info.logical_size {
+                logical_size.0 as u32
+            } else if let Some(mode) = info.modes.iter().find(|m| m.current) {
+                let scale = info.scale_factor.max(1) as u32;
+                (mode.dimensions.0 as u32) / scale
+            } else {
+                0
+            };
+
+            if detected_width > 0 && detected_width != self.width {
+                info!("🖥️ [TopBar] Ancho de superficie ajustado al monitor activo: {}px (anterior: {}px)", detected_width, self.width);
+                self.width = detected_width;
+                self.configure_surface();
+                let _ = self.render();
+            }
+        }
+    }
+
+    /// Actualiza el ancho de la barra superior a partir del primer monitor (primario).
+    pub fn update_output_geometry(&mut self) {
+        if let Some(output) = self.output_state.outputs().next() {
+            self.update_width_for_output(&output);
+        }
+    }
 }
 
 // ==============================================================================
@@ -420,6 +448,8 @@ impl LayerShellHandler for WaylandTopBarApp {
         let (new_width, new_height) = configure.new_size;
         if new_width > 0 {
             self.width = new_width;
+        } else {
+            self.update_output_geometry();
         }
         if new_height > 0 {
             self.height = new_height;
@@ -461,8 +491,9 @@ impl CompositorHandler for WaylandTopBarApp {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
         _surface: &wl_surface::WlSurface,
-        _output: &wl_output::WlOutput,
+        output: &wl_output::WlOutput,
     ) {
+        self.update_width_for_output(output);
     }
 
     fn surface_leave(
@@ -492,8 +523,12 @@ impl OutputHandler for WaylandTopBarApp {
         &mut self.output_state
     }
 
-    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {
+        self.update_output_geometry();
+    }
+    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {
+        self.update_output_geometry();
+    }
     fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
 }
 
