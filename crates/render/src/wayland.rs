@@ -234,6 +234,28 @@ impl WaylandTopBarApp {
         Ok(())
     }
 
+    /// Actualiza dinámicamente la aplicación activa y las categorías del Menú Global D-Bus.
+    pub fn update_active_app(&mut self, app_name: String, menus: Vec<String>) -> Result<()> {
+        self.model.app_name = app_name;
+        if !menus.is_empty() {
+            self.model.menus = menus;
+        } else {
+            self.model.menus = vec![
+                "Archivo".to_string(),
+                "Edición".to_string(),
+                "Visualización".to_string(),
+                "Ventana".to_string(),
+                "Ayuda".to_string(),
+            ];
+        }
+
+        self.ui = UiTree::new();
+        self.nodes = build_top_bar(&mut self.ui, &self.config, &self.model).ok();
+        self.needs_redraw = true;
+
+        Ok(())
+    }
+
     fn configure_surface(&mut self) {
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,

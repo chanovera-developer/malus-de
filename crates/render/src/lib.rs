@@ -2,6 +2,7 @@
 //! Malus DE: Pipeline de Renderizado GPU Nativo y Sistema de Layout Reactivo
 //! ==============================================================================
 
+pub mod dbus_menu;
 pub mod layout;
 pub mod renderer;
 pub mod squircle;
@@ -9,6 +10,7 @@ pub mod text;
 pub mod top_bar;
 pub mod wayland;
 
+pub use dbus_menu::{DbusMenuCategory, DbusMenuItem, DbusMenuService, RegisteredMenu};
 pub use layout::{squircle_sdf_cpu, SquircleStyle, UiNodeData, UiTree};
 pub use renderer::SquircleRenderer;
 pub use squircle::{

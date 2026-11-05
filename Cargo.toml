@@ -38,6 +38,8 @@ glyphon = "0.8.0"
 cosmic-text = "0.12"
 smithay-client-toolkit = "0.19"
 raw-window-handle = "0.6"
+calloop = "0.13"
+calloop-wayland-source = "0.3"
 
 # GUI & Shell
 gtk4 = { version = "0.9", features = ["v4_12"] }

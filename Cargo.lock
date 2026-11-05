@@ -2033,12 +2033,15 @@ dependencies = [
  "anyhow",
  "async-channel",
  "bytemuck",
+ "calloop 0.13.0",
+ "calloop-wayland-source",
  "cosmic-text",
  "futures-lite",
  "glyphon",
  "malus-de-common",
  "png",
  "raw-window-handle",
+ "serde_json",
  "smithay-client-toolkit",
  "taffy",
  "thiserror 1.0.69",
@@ -2046,6 +2049,7 @@ dependencies = [
  "wayland-backend",
  "wayland-client",
  "wgpu",
+ "zbus",
 ]
 
 [[package]]
