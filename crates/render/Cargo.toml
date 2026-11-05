@@ -1,0 +1,26 @@
+[package]
+name = "malus-de-render"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+malus-de-common.workspace = true
+wgpu.workspace = true
+bytemuck.workspace = true
+taffy.workspace = true
+glyphon.workspace = true
+cosmic-text.workspace = true
+smithay-client-toolkit.workspace = true
+wayland-client.workspace = true
+wayland-backend = { version = "0.3", features = ["client_system"] }
+raw-window-handle.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+futures-lite = "2.6"
+async-channel.workspace = true
+
+[dev-dependencies]
+png.workspace = true

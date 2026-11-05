@@ -15,6 +15,7 @@ members = [
     "crates/wallpaper",
     "crates/ctl",
     "crates/settings",
+    "crates/render",
 ]
 
 [workspace.package]
@@ -27,6 +28,16 @@ license = "MIT OR Apache-2.0"
 # Dependencias internas del Workspace
 malus-de-common = { path = "crates/common" }
 malus-de-dialogs = { path = "crates/dialogs" }
+malus-de-render = { path = "crates/render" }
+
+# Renderizado GPU Nativo & Shell
+wgpu = "24"
+bytemuck = { version = "1.25", features = ["derive"] }
+taffy = "0.15"
+glyphon = "0.8.0"
+cosmic-text = "0.12"
+smithay-client-toolkit = "0.19"
+raw-window-handle = "0.6"
 
 # GUI & Shell
 gtk4 = { version = "0.9", features = ["v4_12"] }
@@ -49,6 +60,7 @@ smithay = { version = "0.7", default-features = false, features = [
     "xwayland",
 ] }
 wayland-server = "0.31"
+wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "server"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client", "server"] }
 wayland-protocols-misc = { version = "0.3", features = ["client", "server"] }
