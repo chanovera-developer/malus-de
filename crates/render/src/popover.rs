@@ -76,6 +76,9 @@ pub struct PopoverConfig {
     pub bg_color: [f32; 4],
     pub border_color: [f32; 4],
     pub border_width: f32,
+    pub text_color: [f32; 4],
+    pub text_dimmed_color: [f32; 4],
+    pub separator_color: [f32; 4],
     pub item_height: f32,
     pub item_padding_x: f32,
     pub padding_y: f32,
@@ -94,13 +97,32 @@ impl Default for PopoverConfig {
             bg_color: [0.14, 0.14, 0.17, 0.94],   // Fondo translúcido profundo macOS
             border_color: [1.0, 1.0, 1.0, 0.16],  // Borde reflectante sutil
             border_width: 1.0,
+            text_color: [0.92, 0.92, 0.96, 1.0],
+            text_dimmed_color: [0.60, 0.60, 0.68, 0.75],
+            separator_color: [1.0, 1.0, 1.0, 0.10],
             item_height: 24.0,
             item_padding_x: 8.0,
             padding_y: 6.0,
             padding_x: 6.0,
             active_bg_color: [0.0, 0.48, 1.0, 0.95], // Acento azul macOS activo
             active_corner_radius: 5.0,
-            shadow: true,
+            shadow: false, // SOMBRAS DESACTIVADAS según requerimiento de diseño
+        }
+    }
+}
+
+impl PopoverConfig {
+    /// Genera la configuración de popover adaptada a la paleta de contraste del fondo.
+    pub fn for_palette(palette: &crate::luminance::AdaptivePalette) -> Self {
+        Self {
+            bg_color: palette.popover_bg,
+            border_color: palette.popover_border,
+            text_color: palette.popover_text,
+            text_dimmed_color: palette.popover_text_dimmed,
+            separator_color: palette.popover_separator,
+            active_bg_color: palette.button_active_bg,
+            shadow: false,
+            ..Default::default()
         }
     }
 }
@@ -315,7 +337,7 @@ pub fn build_popover_menu(
                     },
                     ..Default::default()
                 },
-                SquircleStyle::card(0.5, [1.0, 1.0, 1.0, 0.10]).with_z(85.0),
+                SquircleStyle::card(0.5, config.separator_color).with_z(85.0),
                 Some(format!("popover_sep:{}", idx)),
             )?;
             card_children.push(sep_node);
@@ -342,9 +364,14 @@ pub fn build_popover_menu(
             let label_color = if is_hovered {
                 [1.0, 1.0, 1.0, 1.0]
             } else if item.enabled {
-                [0.92, 0.92, 0.94, 1.0]
+                config.text_color
             } else {
-                [0.48, 0.48, 0.52, 0.60]
+                [
+                    config.text_color[0] * 0.5,
+                    config.text_color[1] * 0.5,
+                    config.text_color[2] * 0.5,
+                    0.50,
+                ]
             };
 
             let label_weight = if is_hovered {
@@ -380,9 +407,14 @@ pub fn build_popover_menu(
                 let sc_color = if is_hovered {
                     [1.0, 1.0, 1.0, 0.85]
                 } else if item.enabled {
-                    [0.62, 0.62, 0.70, 0.80]
+                    config.text_dimmed_color
                 } else {
-                    [0.40, 0.40, 0.45, 0.45]
+                    [
+                        config.text_dimmed_color[0] * 0.6,
+                        config.text_dimmed_color[1] * 0.6,
+                        config.text_dimmed_color[2] * 0.6,
+                        0.40,
+                    ]
                 };
 
                 ui.set_text(

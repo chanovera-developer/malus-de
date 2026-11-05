@@ -314,8 +314,14 @@ impl UiTree {
         let height = layout.size.height;
         if point[0] >= abs_x && point[0] <= abs_x + width && point[1] >= abs_y && point[1] <= abs_y + height {
             if let Some(data) = self.node_data.get(&node) {
-                // Los contenedores transparentes no interceptan eventos (permiten pasar los clics)
-                if !data.style.is_visible() {
+                // Los contenedores estructurales transparentes no interceptan eventos,
+                // excepto si son elementos interactivos identificados con texto o ítems de popover.
+                let is_interactive = data.text.is_some()
+                    || data
+                        .tag
+                        .as_deref()
+                        .map_or(false, |t| t.starts_with("popover_item:"));
+                if !data.style.is_visible() && !is_interactive {
                     return None;
                 }
 

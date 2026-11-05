@@ -62,14 +62,17 @@ fn test_taffy_flexbox_topbar_layout_and_render() -> Result<()> {
     let rgba_pixels = renderer.render_to_rgba_image(screen_w as u32, screen_h as u32, 1.0, &instances)?;
 
     let output_path = Path::new("/home/cristian/Proyectos/malus-de/target/malus_topbar_taffy.png");
-    let file = File::create(output_path)?;
-    let ref mut w = BufWriter::new(file);
+    {
+        let file = File::create(output_path)?;
+        let w = BufWriter::new(file);
 
-    let mut encoder = png::Encoder::new(w, screen_w as u32, screen_h as u32);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header()?;
-    writer.write_image_data(&rgba_pixels)?;
+        let mut encoder = png::Encoder::new(w, screen_w as u32, screen_h as u32);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header()?;
+        writer.write_image_data(&rgba_pixels)?;
+        writer.finish()?;
+    }
 
     println!("✅ Top-Bar con Flexbox Taffy generada con éxito en: {:?}", output_path);
     assert!(output_path.exists());

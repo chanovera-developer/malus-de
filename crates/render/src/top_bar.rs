@@ -3,6 +3,7 @@
 // ==============================================================================
 
 use crate::layout::{SquircleStyle, UiTree};
+use crate::luminance::AdaptivePalette;
 use crate::popover::{build_popover_menu, PopoverConfig, PopoverMenuModel, PopoverNodes};
 use crate::text::{TextLabel, Weight};
 use anyhow::Result;
@@ -24,12 +25,12 @@ impl Default for TopBarConfig {
     fn default() -> Self {
         Self {
             height: 32.0,
-            is_floating_pill: true,
-            margin_x: 16.0,
-            margin_top: 6.0,
-            bg_color: [0.12, 0.12, 0.15, 0.85],
-            border_color: [1.0, 1.0, 1.0, 0.18],
-            border_width: 1.0,
+            is_floating_pill: false, // Barra transparente continua por defecto
+            margin_x: 0.0,
+            margin_top: 0.0,
+            bg_color: [0.0, 0.0, 0.0, 0.0], // 100% transparente para mostrar el fondo/wallpaper
+            border_color: [0.0, 0.0, 0.0, 0.0],
+            border_width: 0.0,
         }
     }
 }
@@ -41,6 +42,7 @@ pub struct TopBarModel {
     pub menus: Vec<String>,
     pub status_items: Vec<String>,
     pub clock_text: String,
+    pub is_dark_background: bool,
     pub active_popover: Option<PopoverMenuModel>,
 }
 
@@ -58,6 +60,7 @@ impl Default for TopBarModel {
             ],
             status_items: vec!["WiFi".to_string(), "Batería".to_string()],
             clock_text: "Mié 4 Nov 21:25".to_string(),
+            is_dark_background: true,
             active_popover: None,
         }
     }
@@ -85,6 +88,7 @@ pub fn build_top_bar(
     // 1. Sección Izquierda: [Logo Apple] + [Nombre App en Negrita] + [Menús Globales]
     // --------------------------------------------------------------------------
     let mut left_children = Vec::new();
+    let palette = AdaptivePalette::new(model.is_dark_background);
 
     // Determinar qué menú o botón se encuentra activo en popover
     let active_menu_id = model
@@ -95,9 +99,9 @@ pub fn build_top_bar(
 
     // Botón Logo Apple (resaltado si su popover está desplegado)
     let apple_style = if active_menu_id == "apple" {
-        SquircleStyle::button([0.0, 0.48, 1.0, 0.90]).with_border(1.0, [1.0, 1.0, 1.0, 0.35])
+        SquircleStyle::button(palette.button_active_bg)
     } else {
-        SquircleStyle::button([0.25, 0.25, 0.30, 0.60]).with_border(1.0, [1.0, 1.0, 1.0, 0.12])
+        SquircleStyle::button(palette.button_idle_bg)
     };
 
     let apple_btn = ui.add_leaf(
@@ -123,13 +127,14 @@ pub fn build_top_bar(
             },
             ..Default::default()
         },
-        SquircleStyle::button([0.0, 0.48, 1.0, 0.90]).with_border(1.0, [1.0, 1.0, 1.0, 0.25]),
+        SquircleStyle::button(palette.button_idle_bg),
         Some(format!("app:{}", model.app_name)),
     )?;
     ui.set_text(
         app_btn,
         TextLabel::new(&model.app_name)
             .with_weight(Weight::BOLD)
+            .with_color(palette.text_primary)
             .with_size(13.0),
     );
     left_children.push(app_btn);
@@ -141,9 +146,9 @@ pub fn build_top_bar(
         let is_menu_active = active_menu_id == menu_id_tag;
 
         let menu_style = if is_menu_active {
-            SquircleStyle::button([0.0, 0.48, 1.0, 0.90]).with_border(1.0, [1.0, 1.0, 1.0, 0.35])
+            SquircleStyle::button(palette.button_active_bg)
         } else {
-            SquircleStyle::button([0.20, 0.20, 0.24, 0.45]).with_border(1.0, [1.0, 1.0, 1.0, 0.08])
+            SquircleStyle::button(palette.button_idle_bg)
         };
 
         let menu_node = ui.add_leaf(
@@ -161,6 +166,7 @@ pub fn build_top_bar(
             menu_node,
             TextLabel::new(menu)
                 .with_weight(if is_menu_active { Weight::MEDIUM } else { Weight::NORMAL })
+                .with_color(palette.text_primary)
                 .with_size(13.0),
         );
         menu_items.push((menu.clone(), menu_node));
@@ -208,14 +214,14 @@ pub fn build_top_bar(
                 },
                 ..Default::default()
             },
-            SquircleStyle::button([0.18, 0.18, 0.22, 0.50]).with_border(1.0, [1.0, 1.0, 1.0, 0.10]),
+            SquircleStyle::button(palette.button_idle_bg),
             Some(format!("status:{}", item)),
         )?;
         ui.set_text(
             item_node,
             TextLabel::new(item)
                 .with_size(11.0)
-                .with_color([0.80, 0.80, 0.85, 1.0]),
+                .with_color(palette.text_secondary),
         );
         right_children.push(item_node);
     }
@@ -229,13 +235,14 @@ pub fn build_top_bar(
             },
             ..Default::default()
         },
-        SquircleStyle::pill([0.22, 0.22, 0.26, 0.70]).with_border(1.0, [1.0, 1.0, 1.0, 0.15]),
+        SquircleStyle::pill(palette.button_idle_bg),
         Some("control_center"),
     )?;
     ui.set_text(
         control_center_btn,
         TextLabel::new("CC")
             .with_weight(Weight::BOLD)
+            .with_color(palette.text_secondary)
             .with_size(11.0),
     );
     right_children.push(control_center_btn);
@@ -249,13 +256,14 @@ pub fn build_top_bar(
             },
             ..Default::default()
         },
-        SquircleStyle::button([0.16, 0.16, 0.20, 0.60]).with_border(1.0, [1.0, 1.0, 1.0, 0.12]),
+        SquircleStyle::button(palette.button_idle_bg),
         Some("clock"),
     )?;
     ui.set_text(
         clock_btn,
         TextLabel::new(&model.clock_text)
             .with_weight(Weight::SEMIBOLD)
+            .with_color(palette.text_primary)
             .with_size(12.5),
     );
     right_children.push(clock_btn);
@@ -315,7 +323,8 @@ pub fn build_top_bar(
     // 5. Construir Popover activo si está presente en el modelo
     // --------------------------------------------------------------------------
     let popover_nodes = if let Some(ref popover_model) = model.active_popover {
-        build_popover_menu(ui, &PopoverConfig::default(), popover_model).ok()
+        let popover_cfg = PopoverConfig::for_palette(&palette);
+        build_popover_menu(ui, &popover_cfg, popover_model).ok()
     } else {
         None
     };

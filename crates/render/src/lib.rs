@@ -4,6 +4,7 @@
 
 pub mod dbus_menu;
 pub mod layout;
+pub mod luminance;
 pub mod popover;
 pub mod renderer;
 pub mod squircle;
@@ -13,6 +14,7 @@ pub mod wayland;
 
 pub use dbus_menu::{DbusMenuCategory, DbusMenuItem, DbusMenuService, RegisteredMenu};
 pub use layout::{squircle_sdf_cpu, SquircleStyle, UiNodeData, UiTree};
+pub use luminance::{calculate_luminance_rgba, detect_system_is_dark, AdaptivePalette};
 pub use popover::{
     build_popover_menu, PopoverConfig, PopoverItem, PopoverMenuModel, PopoverNodes,
 };

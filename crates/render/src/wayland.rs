@@ -321,7 +321,8 @@ impl WaylandTopBarApp {
 
     /// Despliega un menú popover adaptando la altura de la superficie en Wayland sin alterar la zona de exclusión.
     pub fn open_popover(&mut self, popover: PopoverMenuModel) -> Result<()> {
-        let popover_h = popover.total_height(&PopoverConfig::default());
+        let palette = crate::luminance::AdaptivePalette::new(self.model.is_dark_background);
+        let popover_h = popover.total_height(&PopoverConfig::for_palette(&palette));
         let required_h = (self.config.height + self.config.margin_top + 8.0 + popover_h + 16.0) as u32;
 
         self.model.active_popover = Some(popover);
@@ -578,23 +579,23 @@ impl PointerHandler for WaylandTopBarApp {
                             let _ = self.rebuild_ui();
                         }
                     } else if hit != self.hovered_node {
-                        // Restaurar estilo anterior
+                        let palette = crate::luminance::AdaptivePalette::new(self.model.is_dark_background);
+                        // Restaurar estilo anterior al salir del botón
                         if let Some(prev) = self.hovered_node {
                             if let Some(data) = self.ui.node_data(prev) {
                                 let mut style = data.style.clone();
-                                if let Some(ref mut bg) = style.bg_color {
-                                    bg[3] = (bg[3] - 0.15).max(0.1);
-                                }
+                                style.bg_color = Some(palette.button_idle_bg);
+                                style.border_color = None;
+                                style.border_width = 0.0;
                                 self.ui.set_visual_style(prev, style);
                             }
                         }
-                        // Aplicar hover highlight
+                        // Aplicar hover highlight estilo escarcha líquida
                         if let Some(curr) = hit {
                             if let Some(data) = self.ui.node_data(curr) {
                                 let mut style = data.style.clone();
-                                if let Some(ref mut bg) = style.bg_color {
-                                    bg[3] = (bg[3] + 0.15).min(1.0);
-                                }
+                                style.bg_color = Some(palette.button_hover_bg);
+                                style.corner_radius = 6.0;
                                 self.ui.set_visual_style(curr, style);
                             }
                         }

@@ -30,6 +30,7 @@ fn test_cosmic_text_typography_and_topbar_rendering() -> Result<()> {
         ],
         status_items: vec!["WiFi".to_string(), "100%".to_string()],
         clock_text: "Mié 4 Nov 21:30".to_string(),
+        is_dark_background: true,
         active_popover: None,
     };
 

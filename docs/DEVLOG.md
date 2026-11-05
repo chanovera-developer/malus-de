@@ -28,6 +28,7 @@ Durante las pruebas de fidelidad visual de la barra superior y los botones del s
 - [x] **Protocolo Wayland Layer-Shell:** Cliente Wayland nativo implementado con `smithay-client-toolkit` (`crates/render/src/wayland.rs`) y binario ejecutable (`target/debug/malus-wgpu-topbar`). Anclaje superior exclusivo, renderizado directo a `wgpu::Surface` nativa y eventos de cursor interactivos (hover & click).
 - [x] **Integración de Menú Global D-Bus (`com.canonical.dbusmenu`) e IPC del Compositor:** Servicio D-Bus asíncrono con `zbus`, servidor `com.canonical.AppMenu.Registrar`, obtención y normalización de árboles de menú dinámicos, despacho unificado en el bucle de eventos `calloop 0.13` junto con notificaciones de cambio de aplicación activa (`ActiveAppChanged`) del compositor. Pruebas de integración aprobadas (`test_dbus_menu.rs`).
 - [x] **Menús Desplegables y Popovers Superelípticos G2:** Módulo `malus-de-render::popover` implementado con sombras difusas multicapa (outer e inner squircle), hit-testing analítico, soporte para menú del sistema Apple y categorías D-Bus, interactividad reactiva en Wayland (hover dinámico, apertura/cierre sin parpadeos y transición fluida entre menús contiguos). Suite `test_popover.rs` validada (3/3 tests OK).
+- [x] **Barra Transparente, Eliminación de Sombras y Adaptabilidad de Luminancia:** Módulo `malus-de-render::luminance` implementado con cálculo analítico ITU-R BT.709, paleta adaptativa (`AdaptivePalette`) que ajusta automáticamente los colores tipográficos (blanco para fondos oscuros, grafito oscuro para fondos claros), barra 100% transparente sin píldora opaca de fondo, eliminación de sombras por defecto en popovers y shader Liquid Glass con brillo especular perimetral en WGSL. Suite `test_luminance.rs` validada (3/3 tests OK).
 - [x] **Salud del Workspace 100% Verde:** Ejecución completa de `cargo test --workspace --no-fail-fast` finalizada exitosamente con cero fallos en todos los crates del proyecto.
 
 ---
@@ -43,6 +44,29 @@ Se ejecutó la suite completa de pruebas automatizadas en todo el workspace de M
 * `malus-de-spotlight`: 2/2 correctas
 * `malus-de-dock` y `malus-de-compositor`: aprobadas
 * **Estado global:** Cero advertencias críticas y 100% de aserciones válidas.
+
+---
+
+## [2026-11-04] — Barra Transparente, Eliminación de Sombras y Adaptabilidad de Luminancia
+
+### Contexto y Requerimientos de Diseño
+Siguiendo las pautas de fidelidad visual con macOS y los requerimientos del usuario:
+1. **Barra 100% Transparente:** La barra superior se desacopla de fondos tipo píldora opacos (`bg_color = [0, 0, 0, 0]`, `border_width = 0.0`), permitiendo que el wallpaper o el desenfoque del compositor se perciban directamente tras el texto y los iconos.
+2. **Eliminación Total de Sombras:** Se desactivan las sombras por defecto (`shadow: false`), garantizando una estética limpia, ligera y sin recuadros oscuros adicionales.
+3. **Adaptabilidad del Texto a la Luminancia:** Los colores tipográficos y los resaltados de botones se adaptan en tiempo real al brillo percibido del fondo.
+
+### Componentes Implementados
+* **Módulo de Luminancia:** [`crates/render/src/luminance.rs`](../crates/render/src/luminance.rs)
+  * Cálculo analítico de luminancia percibida bajo el estándar **ITU-R BT.709**:
+    $$L = 0.2126 R + 0.7152 G + 0.0722 B$$
+  * Estructura [`AdaptivePalette`](../crates/render/src/luminance.rs#L8-L45) con conmutación dinámica:
+    * **Fondo Oscuro ($L < 0.50$):** Texto primario en blanco brillante (`rgba(0.98, 0.98, 1.0, 1.0)`), hover en escarcha translúcida clara (`rgba(1.0, 1.0, 1.0, 0.18)`), popover en vidrio oscuro.
+    * **Fondo Claro ($L \ge 0.50$):** Texto primario en grafito oscuro (`rgba(0.10, 0.10, 0.14, 1.0)`), hover en escarcha oscura (`rgba(0.0, 0.0, 0.0, 0.12)`), popover en vidrio claro.
+* **Shader WGSL de Liquid Glass Vibrancy:** [`crates/render/src/shader/squircle.wgsl`](../crates/render/src/shader/squircle.wgsl)
+  * Brillo especular sutil en el borde superior de los elementos translúcidos (`rim_specular`), simulando la refracción de luz sobre vidrio esmerilado sin costo computacional de pases adicionales.
+* **Resultados de Validación:**
+  * Suite [`crates/render/tests/test_luminance.rs`](../crates/render/tests/test_luminance.rs) (3/3 tests aprobados).
+  * Exportación de capturas verificadas en `target/malus_topbar_transparent_dark.png` y `target/malus_topbar_transparent_light.png`.
 
 ---
 

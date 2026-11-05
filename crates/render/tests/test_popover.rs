@@ -132,9 +132,11 @@ fn test_popover_rendering_and_png_export() {
     let instances_apple = ui_apple.generate_instances();
     let text_labels_apple = ui_apple.generate_text_labels();
 
+    assert!(nodes_apple.outer_shadow.is_none(), "Las sombras deben estar desactivadas por defecto");
+    assert!(nodes_apple.inner_shadow.is_none(), "Las sombras deben estar desactivadas por defecto");
     assert!(
         !instances_apple.is_empty(),
-        "Debe haber instancias generadas para el popover (sombras + tarjeta + ítems)"
+        "Debe haber instancias generadas para el popover (tarjeta + ítems)"
     );
     assert!(
         !text_labels_apple.is_empty(),

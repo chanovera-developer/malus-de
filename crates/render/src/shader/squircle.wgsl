@@ -99,6 +99,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         col = mix(in.bg_color, in.border_color, border_mask);
     }
 
+    // Efecto sutil de Liquid Glass: brillo especular en el borde perimetral superior
+    if (in.bg_color.a > 0.01) {
+        let rim_specular = smoothstep(in.half_size.y * 0.6, in.half_size.y, -in.local_pos.y) * 0.06 * in.bg_color.a;
+        col = vec4<f32>(min(col.rgb + vec3<f32>(rim_specular), vec3<f32>(1.0)), col.a);
+    }
+
     // Retornar color pre-multiplicado por alpha para evitar halos oscuros en transparencia
     let final_alpha = col.a * alpha;
     return vec4<f32>(col.rgb * final_alpha, final_alpha);

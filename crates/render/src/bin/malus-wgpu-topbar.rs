@@ -172,21 +172,22 @@ fn main() -> Result<()> {
         });
     }
 
-    // 8. Crear la aplicación de barra superior
+    // 8. Crear la aplicación de barra superior (100% transparente y adaptativa)
     let config = TopBarConfig {
         height: 32.0,
-        is_floating_pill: true,
-        margin_x: 16.0,
-        margin_top: 6.0,
-        bg_color: [0.12, 0.12, 0.15, 0.88],
-        border_color: [1.0, 1.0, 1.0, 0.20],
-        border_width: 1.0,
+        is_floating_pill: false,
+        margin_x: 0.0,
+        margin_top: 0.0,
+        bg_color: [0.0, 0.0, 0.0, 0.0],
+        border_color: [0.0, 0.0, 0.0, 0.0],
+        border_width: 0.0,
     };
     let model = TopBarModel {
         app_name: "Finder".to_string(),
         menus: default_menus_for_app(&None),
         status_items: vec!["WiFi".to_string(), "100%".to_string()],
         clock_text: current_clock_string(),
+        is_dark_background: malus_de_render::luminance::detect_system_is_dark(),
         active_popover: None,
     };
 
