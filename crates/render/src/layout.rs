@@ -337,4 +337,33 @@ impl UiTree {
 
         None
     }
+
+    /// Obtiene las coordenadas absolutas en pantalla (x, y, width, height) de un nodo del árbol.
+    pub fn absolute_layout(&self, target_node: NodeId) -> Option<(f32, f32, f32, f32)> {
+        self.root.and_then(|root| self.find_absolute_layout(root, (0.0, 0.0), target_node))
+    }
+
+    fn find_absolute_layout(
+        &self,
+        current: NodeId,
+        parent_offset: (f32, f32),
+        target: NodeId,
+    ) -> Option<(f32, f32, f32, f32)> {
+        let layout = self.taffy.layout(current).ok()?;
+        let abs_x = parent_offset.0 + layout.location.x;
+        let abs_y = parent_offset.1 + layout.location.y;
+
+        if current == target {
+            return Some((abs_x, abs_y, layout.size.width, layout.size.height));
+        }
+
+        if let Ok(children) = self.taffy.children(current) {
+            for child in children {
+                if let Some(res) = self.find_absolute_layout(child, (abs_x, abs_y), target) {
+                    return Some(res);
+                }
+            }
+        }
+        None
+    }
 }

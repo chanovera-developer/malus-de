@@ -28,7 +28,7 @@ fn test_cosmic_text_typography_and_topbar_rendering() -> Result<()> {
             "Ventana".to_string(),
             "Ayuda".to_string(),
         ],
-        status_items: vec!["WiFi".to_string(), "100%".to_string()],
+        status_items: vec!["WiFi".into(), "100%".into()],
         clock_text: "Mié 4 Nov 21:30".to_string(),
         is_dark_background: true,
         active_popover: None,
@@ -89,4 +89,27 @@ fn test_cosmic_text_typography_and_topbar_rendering() -> Result<()> {
     assert!(std::fs::metadata(output_path)?.len() > 0);
 
     Ok(())
+}
+
+#[test]
+fn test_cosmic_text_system_font_matching() {
+    use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Weight};
+    let mut fs = FontSystem::new();
+    fs.db_mut().set_sans_serif_family("Adwaita Sans");
+    let metrics = Metrics::new(13.0, 16.0);
+    let mut buffer = Buffer::new(&mut fs, metrics);
+    buffer.set_text(
+        &mut fs,
+        "Acerca de este Mac",
+        Attrs::new().family(Family::SansSerif).weight(Weight::NORMAL),
+        Shaping::Advanced,
+    );
+    buffer.shape_until_scroll(&mut fs, false);
+    for run in buffer.layout_runs() {
+        for glyph in run.glyphs {
+            let face = fs.db().face(glyph.font_id).unwrap();
+            assert_eq!(face.post_script_name, "AdwaitaSans");
+            break;
+        }
+    }
 }

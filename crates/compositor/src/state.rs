@@ -2688,7 +2688,7 @@ impl WlrLayerShellHandler for MalusState {
         tracing::info!("✨ Nueva Layer Surface recibida: namespace={}", namespace);
         if namespace == "malus-top-bar" {
             surface.with_pending_state(|state| {
-                state.size = Some((0, 36).into());
+                state.size = None;
             });
         }
         let output = output

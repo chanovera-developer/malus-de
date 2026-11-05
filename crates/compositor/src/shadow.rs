@@ -248,6 +248,31 @@ impl WindowShadowPipeline {
         self.render_shadow(gl, projection, dock_rect, corner_radius, true, scale);
     }
 
+    pub fn render_menu_shadow(
+        &self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        menu_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        scale: f64,
+    ) {
+        let blur_radius = 28.0 * scale as f32;
+        let spread = 0.0f32;
+        let offset_y = 0.0f32; // Sombra central uniforme y difusa
+        let opacity = 0.12f32;
+        self.render_shadow_with_style(
+            gl,
+            projection,
+            menu_rect,
+            corner_radius,
+            blur_radius,
+            spread,
+            offset_y,
+            opacity,
+            0.15,
+        );
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn render_shadow_with_style(
         &self,

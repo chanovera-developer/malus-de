@@ -421,14 +421,23 @@ pub fn create_global_menu_widget(dbus_menu_service: Arc<DbusMenuService>) -> Glo
         .margin_end(4)
         .build();
 
-    let hide_btn = create_menu_row("Ocultar Malus DE", Some("⌘H"));
+    let es = std::env::var("LC_ALL")
+        .or_else(|_| std::env::var("LC_MESSAGES"))
+        .or_else(|_| std::env::var("LANG"))
+        .unwrap_or_default()
+        .to_lowercase()
+        .starts_with("es");
+    let hide_init = if es { "Ocultar Malus DE" } else { "Hide Malus DE" };
+    let quit_init = if es { "Salir de Malus DE" } else { "Quit Malus DE" };
+
+    let hide_btn = create_menu_row(hide_init, Some("⌘H"));
     let popover_hide = popover.clone();
     hide_btn.connect_clicked(move |_| {
         popover_hide.popdown();
         let _ = malus_de_common::ipc::send_ipc_message(&malus_de_common::ipc::IpcMessage::HideActiveWindow);
     });
 
-    let quit_btn = create_menu_row("Salir de Malus DE", Some("⌘Q"));
+    let quit_btn = create_menu_row(quit_init, Some("⌘Q"));
     let popover_quit = popover.clone();
     quit_btn.connect_clicked(move |_| {
         popover_quit.popdown();
@@ -851,7 +860,7 @@ pub fn create_menu_row(label_text: &str, shortcut: Option<&str>) -> Button {
 
     let row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(16)
+        .spacing(10)
         .build();
 
     let label = Label::builder()

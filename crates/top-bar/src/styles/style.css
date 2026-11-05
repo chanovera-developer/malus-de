@@ -10,10 +10,9 @@ window.malus-topbar decoration {
     margin: 0;
     padding: 0;
     font-size: 13.5px;
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     font-weight: 500;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 4px rgba(0, 0, 0, 0.65);
-    -gtk-icon-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 4px rgba(0, 0, 0, 0.65);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    -gtk-icon-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 .topbar-content {
@@ -64,15 +63,15 @@ label.clock-label {
     background: transparent;
     background-color: transparent;
     border: none;
-    border-radius: 6px;
-    padding: 3px 9px;
+    border-radius: 13px;
+    padding: 3px 10px;
     color: #ffffff;
     box-shadow: none;
     outline: none;
     transition: background-color 100ms ease;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 4px rgba(0, 0, 0, 0.65);
-    -gtk-icon-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 4px rgba(0, 0, 0, 0.65);
-    min-height: 28px;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    -gtk-icon-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    min-height: 26px;
 }
 
 button.control-center-toggle image,
@@ -84,8 +83,8 @@ button.topbar-btn:hover,
 menubutton.topbar-btn > button:hover,
 menubutton > button:hover,
 label.clock-label:hover {
-    background-color: rgba(255, 255, 255, 0.18);
-    border-radius: 6px;
+    background-color: rgba(255, 255, 255, 0.08);
+    border-radius: 13px;
     box-shadow: none;
 }
 
@@ -95,22 +94,39 @@ menubutton.topbar-btn > button:active,
 menubutton.topbar-btn > button:checked,
 menubutton > button:active,
 menubutton > button:checked {
-    background-color: rgba(255, 255, 255, 0.28);
-    border-radius: 6px;
+    background-color: rgba(255, 255, 255, 0.02);
+    border-radius: 13px;
     box-shadow: none;
 }
 
 .menu-logo-btn > button {
     padding: 3px 8px;
+    border-radius: 13px;
 }
 
-.topbar-content image,
+.topbar-content > box > image,
+.topbar-content > box > button > image,
+.topbar-content > box > menubutton > button image,
 .menu-logo-icon,
-.menu-logo-btn image,
-button.topbar-btn image,
-menubutton.topbar-btn image {
-    -gtk-icon-shadow: 0 1px 4px rgba(0, 0, 0, 0.65), 0 0 4px rgba(0, 0, 0, 0.65);
-    filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.60));
+.menu-logo-btn > button image,
+button.topbar-btn > image,
+menubutton.topbar-btn > button image {
+    -gtk-icon-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    filter: none;
+}
+
+/* Quitar cualquier sombra o filtro a los iconos e imágenes dentro de los menús y popovers */
+popover image,
+popover .menu-item-icon,
+popover button image,
+popover modelbutton image,
+image.menu-item-icon,
+.menu-item-icon,
+.popover-menu-item image {
+    -gtk-icon-shadow: none;
+    filter: none;
+    box-shadow: none;
+    text-shadow: none;
 }
 
 .menu-logo-icon {
@@ -122,20 +138,20 @@ menubutton.topbar-btn image {
     color: #ffffff;
     padding-left: 2px;
     padding-right: 4px;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.90), 0 0 4px rgba(0, 0, 0, 0.60);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.40);
 }
 
 .global-menu-item {
     font-weight: 600;
     color: #f4f4f5;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 4px rgba(0, 0, 0, 0.65);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 .clock-label {
     font-variant-numeric: tabular-nums;
     font-weight: 600;
     color: #ffffff;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85), 0 0 4px rgba(0, 0, 0, 0.65);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 .active-pill {
@@ -144,15 +160,16 @@ menubutton.topbar-btn image {
     border-radius: 10px;
 }
 
-/* Quitar fondo/borde del contenedor popover general para evitar recuadros superpuestos */
+/* Quitar fondo/borde del contenedor popover general para evitar recuadros superpuestos y que el compositor gestione la sombra y recorte squircle */
 popover.malus-popover-menu,
 popover.control-center-popover,
 popover.light-popover {
     background-color: transparent;
     background: transparent;
     border: none;
-    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.60);
+    box-shadow: none;
     padding: 0;
+    margin: 0;
     border-radius: 0;
 }
 
@@ -161,64 +178,71 @@ popover.control-center-popover > arrow,
 popover.light-popover > arrow {
     background: transparent;
     border: none;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    margin: 0;
 }
 
-/* El compositor aplica el recorte squircle a los popovers; CSS deja las esquinas rectas. */
+/* El compositor aplica el recorte squircle (superelipse continua n=4.2) a los popovers; CSS deja las esquinas a 0 para que coincidan con exactitud subpíxel con la capa de blur del compositor */
 popover.malus-popover-menu > contents {
-    background-color: alpha(@window_bg_color, 0.82);
-    border: 1px solid alpha(@window_fg_color, 0.14);
+    background-color: rgba(30, 30, 36, 0.78);
+    border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 0;
-    padding: 6px;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.10);
+    padding: 5px 5px;
     color: #f4f4f5;
     text-shadow: none;
+    -gtk-icon-shadow: none;
+    filter: none;
 }
 
 popover.control-center-popover > contents {
-    background-color: alpha(@window_bg_color, 0.95);
-    border: 1px solid alpha(@window_fg_color, 0.16);
+    background-color: rgba(30, 30, 36, 0.82);
+    border: 1px solid rgba(255, 255, 255, 0.14);
     border-radius: 0;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.10);
     padding: 12px;
     color: #f4f4f5;
     text-shadow: none;
+    -gtk-icon-shadow: none;
+    filter: none;
 }
 
-/* Soporte para Modo Claro en Popovers */
-popover.light-popover {
-    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.20);
-}
-
-popover.control-center-popover {
-    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.65);
-}
-
-popover.control-center-popover.light-popover {
-    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.22);
-}
-
+/* Modo Claro en Popovers (fondo al 76%, esquinas a 0 en CSS para que el recorte squircle n=4.2 del compositor a 32px coincida exactamente con la capa de blur) */
 popover.light-popover.malus-popover-menu > contents,
 popover.light-popover > contents,
 .light-mode popover.malus-popover-menu > contents {
-    background-color: alpha(@window_bg_color, 0.82);
-    border: 1px solid alpha(@window_fg_color, 0.12);
+    background-color: rgba(244, 246, 250, 0.76);
+    border: 1px solid rgba(0, 0, 0, 0.18);
     border-radius: 0;
-    padding: 6px;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+    padding: 5px 5px;
     color: #1d1d1f;
+    text-shadow: none;
+    -gtk-icon-shadow: none;
+    filter: none;
 }
 
 popover.light-popover.control-center-popover > contents,
 .light-mode popover.control-center-popover > contents {
-    background-color: alpha(@window_bg_color, 0.82);
-    border: 1px solid alpha(@window_fg_color, 0.14);
+    background-color: rgba(244, 246, 250, 0.78);
+    border: 1px solid rgba(0, 0, 0, 0.18);
     border-radius: 0;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
     padding: 12px;
     color: #1d1d1f;
+    text-shadow: none;
+    -gtk-icon-shadow: none;
+    filter: none;
 }
 
 .malus-popover-menu .menu-row-label {
-    color: #1d1d1f;
+    color: #f4f4f5;
 }
 
-popover.malus-popover-menu.light-popover .menu-row-label {
+popover.light-popover.malus-popover-menu .menu-row-label,
+popover.light-popover .menu-row-label {
     color: #1d1d1f;
 }
 
@@ -234,6 +258,8 @@ popover.light-popover .menu-row-label,
 .light-mode .menu-row-label {
     color: #1d1d1f;
     border-radius: 6px;
+    padding: 3px 8px;
+    margin: 1px 2px;
 }
 
 popover.light-popover .popover-menu-item:hover,
@@ -263,6 +289,44 @@ popover.light-popover .menu-shortcut-hint,
 popover.light-popover .popover-menu-item:hover .menu-shortcut-hint,
 .light-mode .popover-menu-item:hover .menu-shortcut-hint {
     color: rgba(255, 255, 255, 0.90);
+}
+
+image.menu-item-icon,
+.menu-item-icon {
+    min-width: 15px;
+    min-height: 15px;
+    margin-right: 0px;
+    color: #f4f4f5;
+    -gtk-icon-palette: default;
+    -gtk-icon-shadow: none;
+    filter: none;
+    box-shadow: none;
+    text-shadow: none;
+}
+
+popover.light-popover image.menu-item-icon,
+popover.light-popover .menu-item-icon,
+.light-mode image.menu-item-icon,
+.light-mode .menu-item-icon {
+    color: #1d1d1f;
+    -gtk-icon-shadow: none;
+    filter: none;
+}
+
+button.popover-menu-item:hover image.menu-item-icon,
+button.popover-menu-item:hover .menu-item-icon,
+popover.light-popover button.popover-menu-item:hover image.menu-item-icon,
+popover.light-popover button.popover-menu-item:hover .menu-item-icon,
+.light-mode button.popover-menu-item:hover image.menu-item-icon,
+.light-mode button.popover-menu-item:hover .menu-item-icon {
+    color: #ffffff;
+    -gtk-icon-shadow: none;
+    filter: none;
+}
+
+.menu-submenu-chevron {
+    font-size: 14px;
+    font-weight: 600;
 }
 
 popover.light-popover .menu-separator,
@@ -408,8 +472,8 @@ popover modelbutton {
     background-color: transparent;
     border: none;
     border-radius: 6px;
-    padding: 5px 10px;
-    margin: 1px 3px;
+    padding: 3px 8px;
+    margin: 1px 2px;
     color: #e4e4e7;
     font-size: 13px;
     font-weight: 500;

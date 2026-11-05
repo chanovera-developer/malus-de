@@ -19,6 +19,8 @@ pub struct AdaptivePalette {
     pub button_hover_bg: [f32; 4],
     /// Fondo activo cuando un menú o botón está presionado o su popover desplegado.
     pub button_active_bg: [f32; 4],
+    /// Píldora translúcida de selección en la barra superior al abrir un menú (estilo macOS).
+    pub topbar_active_bg: [f32; 4],
     /// Fondo de la tarjeta flotante del popover (vidrio translúcido esmerilado).
     pub popover_bg: [f32; 4],
     /// Borde perimetral reflectante del popover.
@@ -37,18 +39,20 @@ impl AdaptivePalette {
         if is_dark_background {
             // Fondo oscuro (fondos oscuros, nocturnos o espaciales estilo macOS)
             // Barra 100% transparente con texto e iconos en blanco puro / brillante.
+            // Popovers con vidrio translúcido vibrante claro estilo macOS Tahoe / Monterey (menu-bar.jpg).
             Self {
                 is_dark_background: true,
                 text_primary: [0.98, 0.98, 1.0, 1.0],
                 text_secondary: [0.85, 0.85, 0.90, 0.85],
                 button_idle_bg: [0.0, 0.0, 0.0, 0.0], // Totalmente transparente
-                button_hover_bg: [1.0, 1.0, 1.0, 0.18], // Escarcha translúcida clara
-                button_active_bg: [0.0, 0.48, 1.0, 0.90], // Acento azul macOS activo
-                popover_bg: [0.12, 0.12, 0.15, 0.92],   // Vidrio oscuro translúcido
-                popover_border: [1.0, 1.0, 1.0, 0.14],  // Borde reflectante sutil
-                popover_text: [0.95, 0.95, 0.98, 1.0],
-                popover_text_dimmed: [0.60, 0.60, 0.68, 0.75],
-                popover_separator: [1.0, 1.0, 1.0, 0.10],
+                button_hover_bg: [1.0, 1.0, 1.0, 0.04], // Escarcha translúcida muy sutil
+                button_active_bg: [0.0, 0.48, 1.0, 1.0], // Acento azul macOS activo (#007AFF)
+                topbar_active_bg: [1.0, 1.0, 1.0, 0.02], // Píldora translúcida extremadamente sutil (2% opacidad)
+                popover_bg: [0.93, 0.95, 0.98, 0.35],   // Vidrio claro muy translúcido (35% opacidad)
+                popover_border: [0.0, 0.0, 0.0, 0.22],  // Línea exterior oscura semitransparente
+                popover_text: [0.11, 0.11, 0.13, 1.0],  // Grafito oscuro nítido (#1D1D1F)
+                popover_text_dimmed: [0.43, 0.43, 0.46, 0.80], // Atajos y subtítulos (#6E6E73)
+                popover_separator: [0.0, 0.0, 0.0, 0.08], // Línea divisoria fina sutil
             }
         } else {
             // Fondo claro (fondos diurnos, soleados o minimalistas blancos)
@@ -56,15 +60,16 @@ impl AdaptivePalette {
             Self {
                 is_dark_background: false,
                 text_primary: [0.10, 0.10, 0.14, 1.0], // Grafito oscuro de alta legibilidad
-                text_secondary: [0.28, 0.28, 0.35, 0.85],
+                text_secondary: [0.28, 0.28, 0.35, 0.88],
                 button_idle_bg: [0.0, 0.0, 0.0, 0.0], // Totalmente transparente
-                button_hover_bg: [0.0, 0.0, 0.0, 0.12], // Escarcha translúcida oscura
-                button_active_bg: [0.0, 0.48, 1.0, 0.90], // Acento azul macOS activo
-                popover_bg: [0.95, 0.95, 0.97, 0.94],   // Vidrio claro translúcido
-                popover_border: [0.0, 0.0, 0.0, 0.12],  // Borde oscuro fino
-                popover_text: [0.12, 0.12, 0.16, 1.0],
-                popover_text_dimmed: [0.45, 0.45, 0.50, 0.70],
-                popover_separator: [0.0, 0.0, 0.0, 0.10],
+                button_hover_bg: [0.0, 0.0, 0.0, 0.03], // Escarcha translúcida oscura muy sutil
+                button_active_bg: [0.0, 0.48, 1.0, 1.0], // Acento azul macOS activo (#007AFF)
+                topbar_active_bg: [0.0, 0.0, 0.0, 0.02], // Píldora translúcida sutil oscura (2% opacidad)
+                popover_bg: [0.95, 0.96, 0.98, 0.35],   // Vidrio claro muy translúcido (35% opacidad)
+                popover_border: [0.0, 0.0, 0.0, 0.22],  // Línea exterior oscura semitransparente
+                popover_text: [0.11, 0.11, 0.13, 1.0],  // Grafito oscuro nítido (#1D1D1F)
+                popover_text_dimmed: [0.43, 0.43, 0.46, 0.80], // Atajos y subtítulos (#6E6E73)
+                popover_separator: [0.0, 0.0, 0.0, 0.08], // Línea divisoria fina sutil
             }
         }
     }
@@ -131,7 +136,8 @@ fn detect_wallpaper_luminance_is_dark() -> Option<bool> {
         .args([
             "-c",
             r#"
-import os, sys
+import os, sys, warnings
+warnings.filterwarnings('ignore')
 try:
     from PIL import Image
     home = os.environ.get('HOME', '')

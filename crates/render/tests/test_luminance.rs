@@ -44,8 +44,8 @@ fn test_adaptive_palette_contrast_switch() {
     assert!(dark_bg_palette.text_primary[0] > 0.90);
     // El fondo de los botones en reposo debe ser 100% transparente
     assert_eq!(dark_bg_palette.button_idle_bg[3], 0.0);
-    // El fondo del popover debe ser oscuro
-    assert!(dark_bg_palette.popover_bg[0] < 0.20);
+    // El fondo del popover debe ser vidrio translúcido claro estilo macOS (menu-bar.jpg)
+    assert!(dark_bg_palette.popover_bg[0] > 0.85);
 
     // Paleta para fondo claro
     let light_bg_palette = AdaptivePalette::new(false);
@@ -91,7 +91,7 @@ fn test_transparent_topbar_rendering_and_text_adaptation() -> Result<()> {
             "Ventana".to_string(),
             "Ayuda".to_string(),
         ],
-        status_items: vec!["WiFi".to_string(), "100%".to_string()],
+        status_items: vec!["WiFi".into(), "100%".into()],
         clock_text: "Mié 4 Nov 22:45".to_string(),
         is_dark_background: true,
         active_popover: None,
@@ -140,7 +140,7 @@ fn test_transparent_topbar_rendering_and_text_adaptation() -> Result<()> {
             "Ventana".to_string(),
             "Ayuda".to_string(),
         ],
-        status_items: vec!["WiFi".to_string(), "95%".to_string()],
+        status_items: vec!["WiFi".into(), "95%".into()],
         clock_text: "Mié 4 Nov 22:45".to_string(),
         is_dark_background: false, // Fondo claro detectado
         active_popover: None,

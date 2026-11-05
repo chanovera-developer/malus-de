@@ -16,6 +16,8 @@ pub fn estimate_label_width(text: &str, font_size: f32, weight: Weight) -> f32 {
     for c in text.chars() {
         if c == '\u{F179}' || c == '' || c == '\u{F8FF}' {
             total_w += font_size * 1.1;
+        } else if (c as u32) >= 0xF000 && (c as u32) <= 0xF8FF {
+            total_w += font_size * 1.1;
         } else if c == '%' || c == '@' || c == '#' || c == '&' || c == 'm' || c == 'w' || c == 'M' || c == 'W' {
             total_w += font_size * 0.90;
         } else if c.is_ascii_uppercase() {
@@ -121,6 +123,29 @@ pub struct PreparedTextItem {
     pub color: Color,
 }
 
+/// Obtiene el nombre de la familia tipográfica general del sistema desde GNOME / Malus DE.
+pub fn detect_system_font_family() -> String {
+    if let Ok(out) = std::process::Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.interface", "font-name"])
+        .output()
+    {
+        let raw = String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .trim_matches('\'')
+            .to_string();
+        if !raw.is_empty() {
+            // "Adwaita Sans 11" -> "Adwaita Sans"
+            if let Some((family, size_str)) = raw.rsplit_once(' ') {
+                if size_str.chars().all(|c| c.is_ascii_digit() || c == '.') {
+                    return family.to_string();
+                }
+            }
+            return raw;
+        }
+    }
+    "Adwaita Sans".to_string()
+}
+
 /// Subsistema gráfico de texto para Malus DE impulsado por `cosmic-text` y `glyphon`.
 pub struct TextSystem {
     pub font_system: FontSystem,
@@ -130,12 +155,15 @@ pub struct TextSystem {
     pub atlas: TextAtlas,
     pub text_renderer: TextRenderer,
     pub prepared_items: Vec<PreparedTextItem>,
+    pub system_font_family: String,
 }
 
 impl TextSystem {
     /// Inicializa el atlas de glifos GPU, el viewport y el motor de rasterización.
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
-        let font_system = FontSystem::new();
+        let mut font_system = FontSystem::new();
+        let system_font_family = detect_system_font_family();
+        font_system.db_mut().set_sans_serif_family(&system_font_family);
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
         let viewport = Viewport::new(device, &cache);
@@ -155,6 +183,7 @@ impl TextSystem {
             atlas,
             text_renderer,
             prepared_items: Vec::new(),
+            system_font_family,
         }
     }
 
@@ -185,10 +214,15 @@ impl TextSystem {
             let metrics = Metrics::new(label.font_size, label.line_height);
             let mut buffer = Buffer::new(&mut self.font_system, metrics);
 
-            let family = if label.text.contains('\u{F179}') || label.text.contains('') || label.text.contains('\u{F8FF}') {
-                Family::Name("Font Awesome 6 Brands")
+            let is_brands = label.text.contains('\u{F179}') || label.text.contains('') || label.text.contains('\u{F8FF}') || label.text.contains('\u{F294}') || label.text.contains('\u{F293}');
+            let is_icons = label.text.chars().any(|c| (c as u32) >= 0xF000 && (c as u32) <= 0xF8FF);
+
+            let (family, weight) = if is_brands {
+                (Family::Name("Font Awesome 6 Brands"), label.weight)
+            } else if is_icons {
+                (Family::Name("Font Awesome 6 Free"), Weight::BLACK)
             } else {
-                Family::SansSerif
+                (Family::SansSerif, Weight::NORMAL)
             };
 
             buffer.set_text(
@@ -196,7 +230,7 @@ impl TextSystem {
                 &label.text,
                 Attrs::new()
                     .family(family)
-                    .weight(label.weight),
+                    .weight(weight),
                 Shaping::Advanced,
             );
             buffer.shape_until_scroll(&mut self.font_system, false);

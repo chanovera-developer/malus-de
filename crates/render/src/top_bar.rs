@@ -35,12 +35,55 @@ impl Default for TopBarConfig {
     }
 }
 
+/// Elemento de estado o icono interactivo para la sección derecha de la barra superior.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StatusItem {
+    pub tag: String,
+    pub text: String,
+    pub font_size: f32,
+    pub is_bold: bool,
+}
+
+impl StatusItem {
+    pub fn new(tag: impl Into<String>, text: impl Into<String>) -> Self {
+        Self {
+            tag: tag.into(),
+            text: text.into(),
+            font_size: 13.0,
+            is_bold: false,
+        }
+    }
+
+    pub fn with_size(mut self, size: f32) -> Self {
+        self.font_size = size;
+        self
+    }
+
+    pub fn bold(mut self) -> Self {
+        self.is_bold = true;
+        self
+    }
+}
+
+impl From<&str> for StatusItem {
+    fn from(s: &str) -> Self {
+        StatusItem::new(format!("status:{}", s), s)
+    }
+}
+
+impl From<String> for StatusItem {
+    fn from(s: String) -> Self {
+        let tag = format!("status:{}", s);
+        StatusItem::new(tag, s)
+    }
+}
+
 /// Datos y estado del modelo del Menú Global y barra de estado.
 #[derive(Clone, Debug)]
 pub struct TopBarModel {
     pub app_name: String,
     pub menus: Vec<String>,
-    pub status_items: Vec<String>,
+    pub status_items: Vec<StatusItem>,
     pub clock_text: String,
     pub is_dark_background: bool,
     pub active_popover: Option<PopoverMenuModel>,
@@ -58,7 +101,14 @@ impl Default for TopBarModel {
                 "Ventana".to_string(),
                 "Ayuda".to_string(),
             ],
-            status_items: vec!["WiFi".to_string(), "Batería".to_string()],
+            status_items: vec![
+                StatusItem::new("status:tray", "> +4").with_size(11.0).bold(),
+                StatusItem::new("status:keyboard", "ES").with_size(11.0).bold(),
+                StatusItem::new("status:wifi", "\u{F1EB}").with_size(13.0),
+                StatusItem::new("status:volume", "\u{F028}").with_size(13.0),
+                StatusItem::new("status:battery", "\u{F240}").with_size(13.0),
+                StatusItem::new("status:spotlight", "\u{F002}").with_size(12.0),
+            ],
             clock_text: "Mié 4 Nov 21:25".to_string(),
             is_dark_background: true,
             active_popover: None,
@@ -99,7 +149,7 @@ pub fn build_top_bar(
 
     // Botón Logo Apple (resaltado si su popover está desplegado)
     let apple_style = if active_menu_id == "apple" {
-        SquircleStyle::button(palette.button_active_bg)
+        SquircleStyle::card(14.0, palette.topbar_active_bg).with_power(2.0)
     } else {
         SquircleStyle::button(palette.button_idle_bg)
     };
@@ -124,7 +174,14 @@ pub fn build_top_bar(
     );
     left_children.push(apple_btn);
 
-    // Botón Nombre de Aplicación Activa (Acento azul macOS)
+    // Botón Nombre de Aplicación Activa (Acento azul macOS / píldora activa)
+    let is_app_active = active_menu_id == format!("app:{}", model.app_name) || active_menu_id == format!("menu:{}", model.app_name);
+    let app_style = if is_app_active {
+        SquircleStyle::card(14.0, palette.topbar_active_bg).with_power(2.0)
+    } else {
+        SquircleStyle::button(palette.button_idle_bg)
+    };
+
     let app_w = (estimate_label_width(&model.app_name, 13.0, Weight::BOLD) + 16.0).max(36.0);
     let app_btn = ui.add_leaf(
         Style {
@@ -134,7 +191,7 @@ pub fn build_top_bar(
             },
             ..Default::default()
         },
-        SquircleStyle::button(palette.button_idle_bg),
+        app_style,
         Some(format!("app:{}", model.app_name)),
     )?;
     ui.set_text(
@@ -161,7 +218,7 @@ pub fn build_top_bar(
         let is_menu_active = active_menu_id == menu_id_tag;
 
         let menu_style = if is_menu_active {
-            SquircleStyle::button(palette.button_active_bg)
+            SquircleStyle::card(14.0, palette.topbar_active_bg).with_power(2.0)
         } else {
             SquircleStyle::button(palette.button_idle_bg)
         };
@@ -222,7 +279,15 @@ pub fn build_top_bar(
     let mut right_children = Vec::new();
 
     for item in &model.status_items {
-        let status_w = (estimate_label_width(item, 11.0, Weight::NORMAL) + 14.0).max(30.0);
+        let weight = if item.is_bold { Weight::BOLD } else { Weight::NORMAL };
+        let status_w = (estimate_label_width(&item.text, item.font_size, weight) + 16.0).max(28.0);
+        let is_active = active_menu_id == item.tag;
+        let item_style = if is_active {
+            SquircleStyle::card(14.0, palette.topbar_active_bg).with_power(2.0)
+        } else {
+            SquircleStyle::button(palette.button_idle_bg)
+        };
+
         let item_node = ui.add_leaf(
             Style {
                 size: Size {
@@ -231,20 +296,27 @@ pub fn build_top_bar(
                 },
                 ..Default::default()
             },
-            SquircleStyle::button(palette.button_idle_bg),
-            Some(format!("status:{}", item)),
+            item_style,
+            Some(item.tag.clone()),
         )?;
         ui.set_text(
             item_node,
-            TextLabel::new(item)
-                .with_size(11.0)
-                .with_color(palette.text_secondary),
+            TextLabel::new(&item.text)
+                .with_size(item.font_size)
+                .with_weight(weight)
+                .with_color(palette.text_primary),
         );
         right_children.push(item_node);
     }
 
-    // Botón Centro de Control (Pill compacta)
-    let cc_w = (estimate_label_width("CC", 11.0, Weight::BOLD) + 14.0).max(28.0);
+    // Botón Centro de Control (Pill compacta con icono \u{F1DE})
+    let is_cc_active = active_menu_id == "control_center";
+    let cc_style = if is_cc_active {
+        SquircleStyle::card(14.0, palette.topbar_active_bg).with_power(2.0)
+    } else {
+        SquircleStyle::button(palette.button_idle_bg)
+    };
+    let cc_w = (estimate_label_width("\u{F1DE}", 13.0, Weight::NORMAL) + 16.0).max(28.0);
     let control_center_btn = ui.add_leaf(
         Style {
             size: Size {
@@ -253,19 +325,24 @@ pub fn build_top_bar(
             },
             ..Default::default()
         },
-        SquircleStyle::pill(palette.button_idle_bg),
+        cc_style,
         Some("control_center"),
     )?;
     ui.set_text(
         control_center_btn,
-        TextLabel::new("CC")
-            .with_weight(Weight::BOLD)
-            .with_color(palette.text_secondary)
-            .with_size(11.0),
+        TextLabel::new("\u{F1DE}")
+            .with_color(palette.text_primary)
+            .with_size(13.0),
     );
     right_children.push(control_center_btn);
 
     // Botón Reloj
+    let is_clock_active = active_menu_id == "clock";
+    let clock_style = if is_clock_active {
+        SquircleStyle::card(14.0, palette.topbar_active_bg).with_power(2.0)
+    } else {
+        SquircleStyle::button(palette.button_idle_bg)
+    };
     let clock_w = (estimate_label_width(&model.clock_text, 12.5, Weight::SEMIBOLD) + 16.0).max(48.0);
     let clock_btn = ui.add_leaf(
         Style {
@@ -275,7 +352,7 @@ pub fn build_top_bar(
             },
             ..Default::default()
         },
-        SquircleStyle::button(palette.button_idle_bg),
+        clock_style,
         Some("clock"),
     )?;
     ui.set_text(

@@ -48,10 +48,17 @@ fn load_css() {
         let icon_theme = gtk4::IconTheme::for_display(&display);
         icon_theme.add_search_path("/usr/local/share/malus-de/icons");
         icon_theme.add_search_path("/usr/share/malus-de/icons");
+        if let Ok(home) = std::env::var("HOME") {
+            let config_icons = std::path::PathBuf::from(&home).join(".config/malus-de/icons");
+            let local_icons = std::path::PathBuf::from(&home).join(".local/share/icons");
+            icon_theme.add_search_path(&config_icons);
+            icon_theme.add_search_path(&local_icons);
+        }
         if let Ok(exe) = std::env::current_exe() {
             if let Some(parent) = exe.parent() {
                 icon_theme.add_search_path(parent.join("assets/icons"));
                 icon_theme.add_search_path(parent.join("../../assets/icons"));
+                icon_theme.add_search_path(parent.join("../../data/icons"));
             }
         }
     }
@@ -144,8 +151,16 @@ fn build_ui(app: &Application) {
                 malus_de_common::ipc::IpcMessage::ActiveAppChanged { app_id, title, window_id } => {
                     let display = format_app_name(app_id.as_deref(), title.as_deref());
                     title_label.set_label(&display);
-                    ui::global_menu::update_menu_row_label(&hide_btn, &format!("Ocultar {}", display));
-                    ui::global_menu::update_menu_row_label(&quit_btn, &format!("Salir de {}", display));
+                    let es = std::env::var("LC_ALL")
+                        .or_else(|_| std::env::var("LC_MESSAGES"))
+                        .or_else(|_| std::env::var("LANG"))
+                        .unwrap_or_default()
+                        .to_lowercase()
+                        .starts_with("es");
+                    let hide_txt = if es { format!("Ocultar {}", display) } else { format!("Hide {}", display) };
+                    let quit_txt = if es { format!("Salir de {}", display) } else { format!("Quit {}", display) };
+                    ui::global_menu::update_menu_row_label(&hide_btn, &hide_txt);
+                    ui::global_menu::update_menu_row_label(&quit_btn, &quit_txt);
                     ui::global_menu::update_global_menu(&handles_clone, app_id.as_deref(), title.as_deref(), window_id);
                 }
                 malus_de_common::ipc::IpcMessage::ThemeChanged { is_dark, .. } => {
@@ -199,20 +214,27 @@ fn build_ui(app: &Application) {
 }
 
 fn format_app_name(app_id: Option<&str>, title: Option<&str>) -> String {
+    let es = std::env::var("LC_ALL")
+        .or_else(|_| std::env::var("LC_MESSAGES"))
+        .or_else(|_| std::env::var("LANG"))
+        .unwrap_or_default()
+        .to_lowercase()
+        .starts_with("es");
+
     if let Some(id) = app_id {
         let lower = id.to_lowercase();
         if lower.contains("firefox") || lower.contains("mozilla") {
             return "Firefox".to_string();
         } else if lower.contains("nautilus") || lower.contains("archivos") {
-            return "Archivos".to_string();
+            return if es { "Archivos" } else { "Files" }.to_string();
         } else if lower.contains("calculator") || lower.contains("calculadora") {
-            return "Calculadora".to_string();
+            return if es { "Calculadora" } else { "Calculator" }.to_string();
         } else if lower.contains("ptyxis") || lower.contains("terminal") {
             return "Terminal".to_string();
         } else if lower.contains("texteditor") || lower.contains("text-editor") || lower.contains("gedit") {
-            return "Editor de Texto".to_string();
+            return if es { "Editor de Texto" } else { "Text Editor" }.to_string();
         } else if lower.contains("control-center") || lower.contains("settings") {
-            return "Configuración".to_string();
+            return if es { "Configuración" } else { "Settings" }.to_string();
         }
     }
 

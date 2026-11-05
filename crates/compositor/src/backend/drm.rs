@@ -2950,7 +2950,7 @@ pub fn run_drm() -> Result<()> {
                         }
 
                         // 3. Renderizar menús contextuales y popups de ventanas (siempre ENCIMA de las superficies de ventana)
-                        let menu_radius = (22.0 * scale).round() as i32;
+                        let menu_radius = (32.0 * scale).round() as i32;
                         for (_, _, _, popup_shadow_rects, _, is_active, ..) in &window_render_data {
                             if let (Some(radius), Some(shadow)) =
                                 (win_phys_r, shadow_pipeline.as_ref())
@@ -2999,7 +2999,7 @@ pub fn run_drm() -> Result<()> {
                                                 elem_geo.size,
                                                 popup_rect.loc - elem_geo.loc,
                                                 popup_rect.size,
-                                                (22.0 * scale).round() as i32,
+                                                (32.0 * scale).round() as i32,
                                             );
                                         }
                                     }
@@ -3112,12 +3112,11 @@ pub fn run_drm() -> Result<()> {
 
                             if let Some(shadow) = shadow_pipeline.as_ref() {
                                 let _ = frame.with_context(|gl| {
-                                    shadow.render_shadow(
+                                    shadow.render_menu_shadow(
                                         gl,
                                         &projection,
                                         *popup_rect,
                                         menu_radius as f32,
-                                        true,
                                         scale,
                                     );
                                 });
