@@ -122,7 +122,7 @@ card_corner_radius = 12
 | `popover.control-center-popover > contents` | Recuadro del Centro de Control |
 | `popover.light-popover > contents` | Modo Claro para popovers (fondo blanco lechoso) |
 | `.popover-menu-item` | Fila interactiva de opción dentro del menú |
-| `.popover-menu-item:hover` | Estado hover (azul macOS `#007aff` con texto blanco) |
+| `.popover-menu-item:hover` | Estado hover (azul macOS semitransparente `rgba(0, 122, 255, 0.70)` con texto blanco) |
 | `.menu-shortcut-hint` | Indicador atajo de teclado (ej. `⌘N`, `⌥⌘H`) |
 
 Los popovers y menús contextuales de GTK derivan su fondo de `@window_bg_color` y el borde de `@window_fg_color`, manteniendo la transparencia definida para cada modo. En Nautilus, el fondo de la ventana y el panel lateral pueden ser transparentes, pero los menús conservan los colores del tema activo para seguir siendo legibles. El padding exterior del menú es cero; el espaciado propio de cada opción se mantiene.

@@ -270,7 +270,7 @@ popover.light-popover modelbutton:hover,
 .light-mode button.popover-menu-item:hover,
 .light-mode button.flat:hover,
 .light-mode modelbutton:hover {
-    background-color: #007aff;
+    background-color: rgba(0, 122, 255, 0.70);
     border-radius: 6px;
     color: #ffffff;
 }
@@ -486,7 +486,7 @@ button.popover-menu-item:hover,
 popover.malus-popover-menu button:hover,
 popover.malus-popover-menu button.flat:hover,
 popover modelbutton:hover {
-    background-color: #007aff;
+    background-color: rgba(0, 122, 255, 0.70);
     border-radius: 6px;
     color: #ffffff;
     box-shadow: none;

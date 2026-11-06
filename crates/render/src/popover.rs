@@ -104,7 +104,7 @@ impl Default for PopoverConfig {
             item_padding_x: 14.0,                // Mayor padding a la izquierda y derecha dentro del ítem
             padding_y: 6.0,
             padding_x: 7.0,                      // Mayor padding horizontal de la tarjeta del menú
-            active_bg_color: [0.0, 0.48, 1.0, 1.0], // Acento azul macOS activo (#007AFF)
+            active_bg_color: [0.0, 0.48, 1.0, 0.70], // Acento azul macOS activo semitransparente (#007AFF al 70%)
             active_corner_radius: 5.5,           // Border-radius suave exacto para el hover (menu-bar.jpg)
             shadow: true,                        // Sombra exterior difuminada suave y sutil
         }

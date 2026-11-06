@@ -292,8 +292,8 @@ popover.malus-popover-menu > contents.background {
 }
 
 .popover-menu-item:hover {
-    background-color: @accent_bg_color;
-    color: @accent_fg_color;
+    background-color: rgba(0, 122, 255, 0.70);
+    color: #ffffff;
     box-shadow: none;
 }
 

@@ -46,7 +46,7 @@ impl AdaptivePalette {
                 text_secondary: [0.85, 0.85, 0.90, 0.85],
                 button_idle_bg: [0.0, 0.0, 0.0, 0.0], // Totalmente transparente
                 button_hover_bg: [1.0, 1.0, 1.0, 0.04], // Escarcha translúcida muy sutil
-                button_active_bg: [0.0, 0.48, 1.0, 1.0], // Acento azul macOS activo (#007AFF)
+                button_active_bg: [0.0, 0.48, 1.0, 0.70], // Acento azul macOS activo semitransparente (#007AFF)
                 topbar_active_bg: [1.0, 1.0, 1.0, 0.02], // Píldora translúcida extremadamente sutil (2% opacidad)
                 popover_bg: [0.93, 0.95, 0.98, 0.35],   // Vidrio claro muy translúcido (35% opacidad)
                 popover_border: [0.0, 0.0, 0.0, 0.22],  // Línea exterior oscura semitransparente
@@ -63,7 +63,7 @@ impl AdaptivePalette {
                 text_secondary: [0.28, 0.28, 0.35, 0.88],
                 button_idle_bg: [0.0, 0.0, 0.0, 0.0], // Totalmente transparente
                 button_hover_bg: [0.0, 0.0, 0.0, 0.03], // Escarcha translúcida oscura muy sutil
-                button_active_bg: [0.0, 0.48, 1.0, 1.0], // Acento azul macOS activo (#007AFF)
+                button_active_bg: [0.0, 0.48, 1.0, 0.70], // Acento azul macOS activo semitransparente (#007AFF)
                 topbar_active_bg: [0.0, 0.0, 0.0, 0.02], // Píldora translúcida sutil oscura (2% opacidad)
                 popover_bg: [0.95, 0.96, 0.98, 0.35],   // Vidrio claro muy translúcido (35% opacidad)
                 popover_border: [0.0, 0.0, 0.0, 0.22],  // Línea exterior oscura semitransparente
