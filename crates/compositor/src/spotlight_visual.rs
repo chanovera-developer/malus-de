@@ -665,6 +665,9 @@ impl SpotlightState {
         self.last_dock_gap_preview = None;
         self.clipboard_items = load_clipboard_items();
         self.files = index_files();
+        if self.apps.is_empty() {
+            self.apps = index_applications();
+        }
         self.mask_dirty = true;
         self.last_render_signature = 0;
     }
