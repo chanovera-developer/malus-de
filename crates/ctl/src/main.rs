@@ -72,8 +72,26 @@ enum Commands {
     /// Cierra y descarta el selector visual de aplicaciones (Alt-Tab / App Switcher)
     DismissAppSwitcher,
 
+    /// Controla el modo de apariencia (claro, oscuro o alternar) con transición visual
+    Theme {
+        #[command(subcommand)]
+        action: Option<ThemeAction>,
+    },
+
     /// Cierra la sesión actual de Malus DE de forma limpia y vuelve al gestor de sesión (GDM)
     Logout,
+}
+
+#[derive(Subcommand, Debug)]
+enum ThemeAction {
+    /// Activa el modo oscuro
+    Dark,
+    /// Activa el modo claro
+    Light,
+    /// Alterna entre modo oscuro y claro
+    Toggle,
+    /// Muestra el modo de apariencia actual
+    Status,
 }
 
 #[derive(Subcommand, Debug)]
@@ -498,6 +516,29 @@ fn main() -> Result<()> {
         Commands::DismissAppSwitcher => {
             println!("Descartando selector visual de aplicaciones (App Switcher)...");
             let _ = malus_de_common::ipc::send_ipc_message(&malus_de_common::ipc::IpcMessage::HideAppSwitcher);
+        }
+        Commands::Theme { action } => {
+            let is_dark_now = malus_de_common::config::is_dark_mode_active();
+            let to_dark = match action {
+                Some(ThemeAction::Dark) => true,
+                Some(ThemeAction::Light) => false,
+                Some(ThemeAction::Toggle) | None => !is_dark_now,
+                Some(ThemeAction::Status) => {
+                    println!("Modo de apariencia: {}", if is_dark_now { "oscuro" } else { "claro" });
+                    return Ok(());
+                }
+            };
+
+            println!("🎨 Cambiando modo de apariencia a: {}", if to_dark { "oscuro" } else { "claro" });
+            let _ = malus_de_common::ipc::IpcClient::prepare_theme_transition();
+            malus_de_common::config::sync_system_appearance(to_dark);
+            let _ = malus_de_common::ipc::IpcClient::send_command(
+                malus_de_common::ipc::IpcMessage::ThemeChanged {
+                    theme_name: if to_dark { "Adwaita-Dark".to_string() } else { "Adwaita-Light".to_string() },
+                    is_dark: to_dark,
+                }
+            );
+            println!("✓ Apariencia sincronizada exitosamente en el sistema y componentes.");
         }
         Commands::Logout => {
             println!("👋 Cerrando sesión de Malus DE...");

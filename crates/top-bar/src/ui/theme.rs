@@ -9,9 +9,7 @@ thread_local! {
 }
 
 pub fn is_dark_mode_enabled() -> bool {
-    Settings::new("org.gnome.desktop.interface")
-        .string("color-scheme")
-        .contains("prefer-dark")
+    malus_de_common::config::is_dark_mode_active()
 }
 
 pub fn ensure_theme_monitor() {
@@ -21,8 +19,9 @@ pub fn ensure_theme_monitor() {
         }
 
         let settings = Settings::new("org.gnome.desktop.interface");
-        settings.connect_changed(Some("color-scheme"), |settings, _| {
-            update_all_popovers_theme(settings.string("color-scheme").contains("prefer-dark"));
+        settings.connect_changed(Some("color-scheme"), |_, _| {
+            let is_dark = malus_de_common::config::is_dark_mode_active();
+            update_all_popovers_theme(is_dark);
         });
         current.replace(Some(settings));
     });

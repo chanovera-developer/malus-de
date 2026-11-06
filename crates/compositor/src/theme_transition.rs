@@ -39,7 +39,7 @@ void main() {
 }
 "#;
 
-const DURATION: Duration = Duration::from_millis(620);
+pub const DURATION: Duration = Duration::from_millis(620);
 
 struct Snapshot {
     texture: ffi::types::GLuint,

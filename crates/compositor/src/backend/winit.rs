@@ -2288,7 +2288,11 @@ pub fn run_winit() -> Result<()> {
                                 );
                             }
                             if let Some(started_at) = state.theme_transition_started_at {
-                                pipeline.draw(gl, &output_name, size, started_at, Instant::now());
+                                let now = Instant::now();
+                                let drawn = pipeline.draw(gl, &output_name, size, started_at, now);
+                                if !drawn && now.duration_since(started_at) >= crate::theme_transition::DURATION {
+                                    state.theme_transition_started_at = None;
+                                }
                             }
                         });
                         if let Err(error) = result {

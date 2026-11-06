@@ -346,24 +346,98 @@ pub fn set_cursor_environment(command: &mut std::process::Command) {
         .env("XCURSOR_SIZE", size.to_string());
 }
 
-/// Sincroniza el modo claro/oscuro dentro de la configuración aislada de Malus DE.
+/// Consulta el modo oscuro actual combinando dconf del host, gsettings y el keyfile aislado de Malus DE.
+pub fn is_dark_mode_active() -> bool {
+    // 1. Dconf del host (fuente de verdad directa para xdg-desktop-portal y aplicaciones Libadwaita/GTK4)
+    if let Ok(out) = std::process::Command::new("dconf")
+        .env_remove("XDG_CONFIG_HOME")
+        .args(["read", "/org/gnome/desktop/interface/color-scheme"])
+        .output()
+    {
+        let s = String::from_utf8_lossy(&out.stdout);
+        if s.contains("prefer-dark") {
+            return true;
+        } else if s.contains("prefer-light") || s.contains("default") {
+            return false;
+        }
+    }
+
+    // 2. GSettings del host
+    if let Ok(out) = std::process::Command::new("gsettings")
+        .env_remove("GSETTINGS_BACKEND")
+        .env_remove("XDG_CONFIG_HOME")
+        .args(["get", "org.gnome.desktop.interface", "color-scheme"])
+        .output()
+    {
+        let s = String::from_utf8_lossy(&out.stdout);
+        if s.contains("prefer-dark") {
+            return true;
+        } else if s.contains("prefer-light") || s.contains("default") {
+            return false;
+        }
+    }
+
+    // 3. Keyfile aislado de Malus DE
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let keyfile_path = std::path::PathBuf::from(home).join(".config/malus-de/glib-2.0/settings/keyfile");
+    if let Ok(content) = std::fs::read_to_string(keyfile_path) {
+        if content.contains("color-scheme='prefer-dark'") {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Sincroniza el modo claro/oscuro tanto en la configuración aislada de Malus DE
+/// como en el sistema host (dconf / gsettings) para que xdg-desktop-portal notifique
+/// inmediatamente a todas las aplicaciones Libadwaita y GTK (Nautilus, Monitor del Sistema, etc.).
 pub fn sync_system_appearance(to_dark: bool) {
     let target = if to_dark { "prefer-dark" } else { "prefer-light" };
     let dark_val = if to_dark { "1" } else { "0" };
+    let gtk_theme_target = "Adwaita";
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     let malus_config_dir = std::path::PathBuf::from(&home).join(".config/malus-de");
+
+    // 1. Sincronizar en DCONF del host directamente (requerido por xdg-desktop-portal en Fedora/GNOME/Wayland)
+    let dconf_scheme = format!("'{}'", target);
+    let _ = std::process::Command::new("dconf")
+        .env_remove("XDG_CONFIG_HOME")
+        .args(["write", "/org/gnome/desktop/interface/color-scheme", &dconf_scheme])
+        .status();
+
+    let dconf_theme = format!("'{}'", gtk_theme_target);
+    let _ = std::process::Command::new("dconf")
+        .env_remove("XDG_CONFIG_HOME")
+        .args(["write", "/org/gnome/desktop/interface/gtk-theme", &dconf_theme])
+        .status();
+
+    // 2. Sincronizar GSettings del host (sin sobreescritura de backend)
+    let _ = std::process::Command::new("gsettings")
+        .env_remove("GSETTINGS_BACKEND")
+        .env_remove("XDG_CONFIG_HOME")
+        .args(["set", "org.gnome.desktop.interface", "color-scheme", target])
+        .status();
+
+    let _ = std::process::Command::new("gsettings")
+        .env_remove("GSETTINGS_BACKEND")
+        .env_remove("XDG_CONFIG_HOME")
+        .args(["set", "org.gnome.desktop.interface", "gtk-theme", gtk_theme_target])
+        .status();
+
+    // 3. Establecer variables de entorno para la configuración aislada de Malus DE
     std::env::set_var("XDG_CONFIG_HOME", &malus_config_dir);
     std::env::set_var("GSETTINGS_BACKEND", "keyfile");
 
-    // GSettings usa el backend keyfile aislado de Malus DE.
+    // 4. GSettings usa el backend keyfile aislado de Malus DE.
     let _ = std::process::Command::new("gsettings")
         .args(["set", "org.gnome.desktop.interface", "color-scheme", target])
         .status();
     let _ = std::process::Command::new("gsettings")
-        .args(["set", "org.gnome.desktop.interface", "gtk-theme", "Adwaita"])
+        .args(["set", "org.gnome.desktop.interface", "gtk-theme", gtk_theme_target])
         .status();
 
-    // Keyfile de sesión aislada de Malus DE (~/.config/malus-de/glib-2.0/settings/keyfile)
+    // 5. Keyfile de sesión aislada de Malus DE (~/.config/malus-de/glib-2.0/settings/keyfile)
     let keyfile_path = std::path::PathBuf::from(&home).join(".config/malus-de/glib-2.0/settings/keyfile");
     if keyfile_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&keyfile_path) {
@@ -375,7 +449,7 @@ pub fn sync_system_appearance(to_dark: bool) {
                     lines.push(format!("color-scheme='{}'", target));
                     found_color = true;
                 } else if line.starts_with("gtk-theme=") {
-                    lines.push("gtk-theme='Adwaita'".to_string());
+                    lines.push(format!("gtk-theme='{}'", gtk_theme_target));
                     found_theme = true;
                 } else {
                     lines.push(line.to_string());
@@ -385,16 +459,18 @@ pub fn sync_system_appearance(to_dark: bool) {
                 lines.push(format!("color-scheme='{}'", target));
             }
             if !found_theme {
-                lines.push("gtk-theme='Adwaita'".to_string());
+                lines.push(format!("gtk-theme='{}'", gtk_theme_target));
             }
             let _ = std::fs::write(&keyfile_path, lines.join("\n") + "\n");
         }
     }
 
-    // Archivos settings.ini (GTK3 y GTK4) de Malus DE
+    // 6. Archivos settings.ini (GTK3 y GTK4) de Malus DE y del host
     let ini_paths = [
         format!("{}/.config/malus-de/gtk-3.0/settings.ini", home),
         format!("{}/.config/malus-de/gtk-4.0/settings.ini", home),
+        format!("{}/.config/gtk-3.0/settings.ini", home),
+        format!("{}/.config/gtk-4.0/settings.ini", home),
     ];
     if let Err(error) = set_gtk_decoration_layout(&malus_config_dir) {
         tracing::warn!("No se pudo actualizar la posición de botones GTK de Malus DE: {error}");
@@ -416,7 +492,7 @@ pub fn sync_system_appearance(to_dark: bool) {
                         lines.push(format!("gtk-application-prefer-dark-theme={}", dark_val));
                         found_dark = true;
                     } else if line.starts_with("gtk-theme-name=") {
-                        lines.push("gtk-theme-name=Adwaita".to_string());
+                        lines.push(format!("gtk-theme-name={}", gtk_theme_target));
                         found_theme = true;
                     } else {
                         lines.push(line.to_string());
@@ -426,20 +502,20 @@ pub fn sync_system_appearance(to_dark: bool) {
                     lines.push(format!("gtk-application-prefer-dark-theme={}", dark_val));
                 }
                 if !found_theme {
-                    lines.push("gtk-theme-name=Adwaita".to_string());
+                    lines.push(format!("gtk-theme-name={}", gtk_theme_target));
                 }
                 let _ = std::fs::write(&p, lines.join("\n") + "\n");
             }
         } else {
             let content = format!(
-                "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme={}\ngtk-cursor-theme-name=macOS\ngtk-cursor-theme-size=24\ngtk-theme-name=Adwaita\n",
-                dark_val
+                "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme={}\ngtk-cursor-theme-name=macOS\ngtk-cursor-theme-size=24\ngtk-theme-name={}\n",
+                dark_val, gtk_theme_target
             );
             let _ = std::fs::write(&p, content);
         }
     }
 
-    // Generar y escribir CSS actualizado solo en la configuración de Malus DE.
+    // 7. Generar y escribir CSS actualizado en la configuración de Malus DE
     let light_css = get_malus_gtk_css(false);
     let dark_css = get_malus_gtk_css(true);
     let light_gtk3_css = get_malus_gtk3_css(false);

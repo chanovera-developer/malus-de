@@ -2116,14 +2116,7 @@ fn get_current_cursor_config() -> (String, u32) {
 }
 
 fn is_dark_mode_active() -> bool {
-    if let Ok(out) = Command::new("gsettings")
-        .args(["get", "org.gnome.desktop.interface", "color-scheme"])
-        .output()
-    {
-        let s = String::from_utf8_lossy(&out.stdout);
-        return s.contains("prefer-dark");
-    }
-    false
+    malus_de_common::config::is_dark_mode_active()
 }
 
 fn get_installed_gtk_themes() -> Vec<(String, String, &'static str)> {

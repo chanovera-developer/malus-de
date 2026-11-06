@@ -36,6 +36,7 @@ fn main() {
     if let Err(err) = adw::init() {
         warn!("Aviso al inicializar libadwaita: {:?}", err);
     }
+    adw::StyleManager::default().set_color_scheme(adw::ColorScheme::Default);
 
     let app = Application::builder()
         .application_id("org.malus_de.Dock")
@@ -953,8 +954,12 @@ fn build_dock_ui(app: &Application) {
     let placeholder_width_animation_running = Rc::new(Cell::new(false));
 
     let apps_box_theme = apps_box.clone();
+    let dock_root_theme = dock_root.clone();
+    let win_theme = window.clone();
     adw::StyleManager::default().connect_dark_notify(move |_| {
         queue_dock_icon_backgrounds(apps_box_theme.upcast_ref());
+        dock_root_theme.queue_draw();
+        win_theme.queue_draw();
     });
 
     // Loop de refresco reactivo de las aplicaciones
@@ -1527,6 +1532,20 @@ fn build_dock_ui(app: &Application) {
                     while let Some(c) = switcher_box_ipc.first_child() {
                         switcher_box_ipc.remove(&c);
                     }
+                }
+                IpcMessage::ThemeChanged { is_dark, .. } => {
+                    info!("🎨 [Dock] IPC ThemeChanged recibido: is_dark={}", is_dark);
+                    adw::StyleManager::default().set_color_scheme(if is_dark {
+                        adw::ColorScheme::ForceDark
+                    } else {
+                        adw::ColorScheme::ForceLight
+                    });
+                    queue_dock_icon_backgrounds(apps_box_ipc.upcast_ref());
+                    dock_root_ref.queue_draw();
+                    win_ref.queue_draw();
+                    glib::idle_add_local_once(|| {
+                        adw::StyleManager::default().set_color_scheme(adw::ColorScheme::Default);
+                    });
                 }
                 _ => {}
             }

@@ -20,6 +20,7 @@ fn main() {
     if let Err(err) = adw::init() {
         tracing::warn!("Aviso al inicializar libadwaita: {:?}", err);
     }
+    adw::StyleManager::default().set_color_scheme(adw::ColorScheme::Default);
 
     let app = Application::builder()
         .application_id("org.malus_de.TopBar")
@@ -145,6 +146,11 @@ fn build_ui(app: &Application) {
     let quit_btn = menu_handles.quit_btn.clone();
     let handles_clone = menu_handles.clone();
 
+    adw::StyleManager::default().connect_dark_notify(|sm| {
+        let is_dark = sm.is_dark();
+        ui::theme::update_all_popovers_theme(is_dark);
+    });
+
     glib::spawn_future_local(async move {
         while let Ok(msg) = rx.recv().await {
             match msg {
@@ -164,7 +170,15 @@ fn build_ui(app: &Application) {
                     ui::global_menu::update_global_menu(&handles_clone, app_id.as_deref(), title.as_deref(), window_id);
                 }
                 malus_de_common::ipc::IpcMessage::ThemeChanged { is_dark, .. } => {
+                    adw::StyleManager::default().set_color_scheme(if is_dark {
+                        adw::ColorScheme::ForceDark
+                    } else {
+                        adw::ColorScheme::ForceLight
+                    });
                     ui::theme::update_all_popovers_theme(is_dark);
+                    glib::idle_add_local_once(|| {
+                        adw::StyleManager::default().set_color_scheme(adw::ColorScheme::Default);
+                    });
                 }
                 _ => {}
             }

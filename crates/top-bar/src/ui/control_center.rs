@@ -517,10 +517,11 @@ pub fn create_control_center_widget() -> MenuButton {
     let dark_icon_c = dark_icon.clone();
     let popover_dark = popover.clone();
     dark_btn.connect_clicked(move |_| {
-        let is_dark = is_dark_mode_enabled();
-        apply_system_appearance_mode(!is_dark);
-        crate::ui::theme::update_all_popovers_theme(!is_dark);
-        update_dark_mode_ui(&dark_btn_c, &dark_icon_c, &dark_sub_c, Some(&popover_dark));
+        let is_dark = malus_de_common::config::is_dark_mode_active();
+        let target_dark = !is_dark;
+        apply_system_appearance_mode(target_dark);
+        crate::ui::theme::update_all_popovers_theme(target_dark);
+        update_dark_mode_ui_state(&dark_btn_c, &dark_icon_c, &dark_sub_c, Some(&popover_dark), target_dark);
     });
 
     // Preferencias del Sistema (Ajustes nativos de Malus DE)
@@ -2224,10 +2225,6 @@ async fn update_bluetooth_ui_async(btn: &Button, icon: &Image, sub: &Label) {
     }
 }
 
-fn is_dark_mode_enabled() -> bool {
-    crate::ui::theme::is_dark_mode_enabled()
-}
-
 pub fn apply_system_appearance_mode(to_dark: bool) {
     let target = if to_dark { "prefer-dark" } else { "prefer-light" };
     info!("🎨 Aplicando modo de apariencia de Malus DE: {}", target);
@@ -2254,6 +2251,9 @@ pub fn apply_system_appearance_mode(to_dark: bool) {
             libadwaita::ColorScheme::ForceLight
         }
     );
+    glib::idle_add_local_once(|| {
+        libadwaita::StyleManager::default().set_color_scheme(libadwaita::ColorScheme::Default);
+    });
 
     // 3. Notificar a otros módulos mediante IPC
     let _ = malus_de_common::ipc::IpcClient::send_command(
@@ -2264,8 +2264,13 @@ pub fn apply_system_appearance_mode(to_dark: bool) {
     );
 }
 
-fn update_dark_mode_ui(btn: &Button, icon: &Image, sub: &Label, popover: Option<&Popover>) {
-    let is_dark = is_dark_mode_enabled();
+fn update_dark_mode_ui_state(
+    btn: &Button,
+    icon: &Image,
+    sub: &Label,
+    popover: Option<&Popover>,
+    is_dark: bool,
+) {
     if is_dark {
         btn.add_css_class("cc-tile-active");
         if let Some(icon_box) = icon.parent() {
@@ -2285,6 +2290,11 @@ fn update_dark_mode_ui(btn: &Button, icon: &Image, sub: &Label, popover: Option<
             pop.add_css_class("light-popover");
         }
     }
+}
+
+fn update_dark_mode_ui(btn: &Button, icon: &Image, sub: &Label, popover: Option<&Popover>) {
+    let is_dark = malus_de_common::config::is_dark_mode_active();
+    update_dark_mode_ui_state(btn, icon, sub, popover, is_dark);
 }
 
 async fn refresh_volume_ui_async(

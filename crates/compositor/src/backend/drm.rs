@@ -3523,13 +3523,17 @@ pub fn run_drm() -> Result<()> {
                                     }
                                 }
                                 if let Some(started_at) = state.theme_transition_started_at {
-                                    pipeline.draw(
+                                    let now = Instant::now();
+                                    let drawn = pipeline.draw(
                                         gl,
                                         &output_name,
                                         out_surface.size,
                                         started_at,
-                                        Instant::now(),
+                                        now,
                                     );
+                                    if !drawn && now.duration_since(started_at) >= crate::theme_transition::DURATION {
+                                        state.theme_transition_started_at = None;
+                                    }
                                 }
                             });
                             if let Err(error) = result {
