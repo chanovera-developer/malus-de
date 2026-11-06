@@ -239,6 +239,16 @@ fn format_app_name(app_id: Option<&str>, title: Option<&str>) -> String {
         let lower = id.to_lowercase();
         if lower.contains("firefox") || lower.contains("mozilla") {
             return "Firefox".to_string();
+        } else if lower.contains("libreoffice") || lower.contains("soffice") {
+            if lower.contains("writer") {
+                return "LibreOffice Writer".to_string();
+            } else if lower.contains("calc") {
+                return "LibreOffice Calc".to_string();
+            } else if lower.contains("impress") {
+                return "LibreOffice Impress".to_string();
+            } else {
+                return "LibreOffice".to_string();
+            }
         } else if lower.contains("nautilus") || lower.contains("archivos") {
             return if es { "Archivos" } else { "Files" }.to_string();
         } else if lower.contains("calculator") || lower.contains("calculadora") {
@@ -257,6 +267,12 @@ fn format_app_name(app_id: Option<&str>, title: Option<&str>) -> String {
         let lower = trimmed.to_lowercase();
         if lower.contains("firefox") {
             return "Firefox".to_string();
+        } else if lower.contains("libreoffice") || lower.contains("writer") {
+            return "LibreOffice Writer".to_string();
+        } else if lower.contains("calc") {
+            return "LibreOffice Calc".to_string();
+        } else if lower.contains("impress") {
+            return "LibreOffice Impress".to_string();
         }
         if !trimmed.is_empty() {
             if let Some((_, last)) = trimmed.rsplit_once(" — ") {

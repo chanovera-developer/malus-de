@@ -209,6 +209,107 @@ const NAUTILUS_MENUS: &[MenuCategoryDef] = &[
     },
 ];
 
+// --- 2.1 LibreOffice (Writer / Calc / Impress) ---
+const LIBREOFFICE_MENUS: &[MenuCategoryDef] = &[
+    MenuCategoryDef {
+        title: "Archivo",
+        items: &[
+            MenuItemDef::item("Nuevo", Some("⌘N"), MenuAction::Command(&["libreoffice", "--writer"])),
+            MenuItemDef::item("Abrir...", Some("⌘O"), MenuAction::None),
+            MenuItemDef::separator(),
+            MenuItemDef::item("Guardar", Some("⌘S"), MenuAction::None),
+            MenuItemDef::item("Guardar como...", Some("⇧⌘S"), MenuAction::None),
+            MenuItemDef::item("Exportar a PDF...", None, MenuAction::None),
+            MenuItemDef::separator(),
+            MenuItemDef::item("Imprimir...", Some("⌘P"), MenuAction::None),
+            MenuItemDef::item("Cerrar ventana", Some("⌘W"), MenuAction::CloseActiveWindow),
+        ],
+    },
+    MenuCategoryDef {
+        title: "Editar",
+        items: &[
+            MenuItemDef::item("Deshacer", Some("⌘Z"), MenuAction::None),
+            MenuItemDef::item("Rehacer", Some("⇧⌘Z"), MenuAction::None),
+            MenuItemDef::separator(),
+            MenuItemDef::item("Cortar", Some("⌘X"), MenuAction::None),
+            MenuItemDef::item("Copiar", Some("⌘C"), MenuAction::None),
+            MenuItemDef::item("Pegar", Some("⌘V"), MenuAction::None),
+            MenuItemDef::item("Pegar texto sin formato", Some("⌥⇧⌘V"), MenuAction::None),
+            MenuItemDef::item("Seleccionar todo", Some("⌘A"), MenuAction::None),
+            MenuItemDef::separator(),
+            MenuItemDef::item("Buscar...", Some("⌘F"), MenuAction::None),
+            MenuItemDef::item("Buscar y reemplazar...", Some("⌥⌘F"), MenuAction::None),
+        ],
+    },
+    MenuCategoryDef {
+        title: "Ver",
+        items: &[
+            MenuItemDef::item("Diseño normal", None, MenuAction::None),
+            MenuItemDef::item("Diseño web", None, MenuAction::None),
+            MenuItemDef::separator(),
+            MenuItemDef::item("Barra lateral", Some("⌘F13"), MenuAction::None),
+            MenuItemDef::item("Reglas", Some("⇧⌘R"), MenuAction::None),
+            MenuItemDef::separator(),
+            MenuItemDef::item("Pantalla completa", Some("⇧⌘J"), MenuAction::None),
+            MenuItemDef::item("Zoom...", None, MenuAction::None),
+        ],
+    },
+    MenuCategoryDef {
+        title: "Insertar",
+        items: &[
+            MenuItemDef::item("Salto de página", Some("⌘Intro"), MenuAction::None),
+            MenuItemDef::item("Imagen...", None, MenuAction::None),
+            MenuItemDef::item("Tabla...", Some("⌘F12"), MenuAction::None),
+            MenuItemDef::item("Gráfico...", None, MenuAction::None),
+            MenuItemDef::item("Hiperenlace...", Some("⌘K"), MenuAction::None),
+            MenuItemDef::separator(),
+            MenuItemDef::item("Encabezado y pie", None, MenuAction::None),
+            MenuItemDef::item("Número de página", None, MenuAction::None),
+            MenuItemDef::item("Comentario", Some("⌥⌘C"), MenuAction::None),
+        ],
+    },
+    MenuCategoryDef {
+        title: "Formato",
+        items: &[
+            MenuItemDef::item("Texto (Negrita, Cursiva...)", None, MenuAction::None),
+            MenuItemDef::item("Espaciado y sangría", None, MenuAction::None),
+            MenuItemDef::item("Alineación", None, MenuAction::None),
+            MenuItemDef::separator(),
+            MenuItemDef::item("Párrafo...", None, MenuAction::None),
+            MenuItemDef::item("Carácter...", None, MenuAction::None),
+            MenuItemDef::item("Página...", None, MenuAction::None),
+            MenuItemDef::separator(),
+            MenuItemDef::item("Limpiar formato directo", Some("⌘M"), MenuAction::None),
+        ],
+    },
+    MenuCategoryDef {
+        title: "Herramientas",
+        items: &[
+            MenuItemDef::item("Ortografía...", Some("F7"), MenuAction::None),
+            MenuItemDef::item("Contar palabras", None, MenuAction::None),
+            MenuItemDef::item("Idioma", None, MenuAction::None),
+            MenuItemDef::separator(),
+            MenuItemDef::item("Personalizar...", None, MenuAction::None),
+            MenuItemDef::item("Opciones...", Some("⌥F12"), MenuAction::None),
+        ],
+    },
+    MenuCategoryDef {
+        title: "Ventana",
+        items: &[
+            MenuItemDef::item("Nueva ventana", None, MenuAction::None),
+            MenuItemDef::item("Minimizar", Some("⌘M"), MenuAction::HideActiveWindow),
+            MenuItemDef::item("Cerrar", Some("⌘W"), MenuAction::CloseActiveWindow),
+        ],
+    },
+    MenuCategoryDef {
+        title: "Ayuda",
+        items: &[
+            MenuItemDef::item("Ayuda de LibreOffice", Some("F1"), MenuAction::None),
+            MenuItemDef::item("Acerca de LibreOffice", None, MenuAction::None),
+        ],
+    },
+];
+
 // --- 3. Terminal / Ptyxis ---
 const TERMINAL_MENUS: &[MenuCategoryDef] = &[
     MenuCategoryDef {
@@ -511,12 +612,12 @@ pub fn update_global_menu(
                 Err(err) => {
                     warn!("No se pudo obtener el menú D-Bus de {srv}:{pth}: {err}");
                     if is_current_menu(&h_clone, &a_id, &t_id, window_id, &srv, &pth) {
-                        clear_app_menus(&h_clone);
+                        render_static_or_clear(&h_clone, a_id.as_deref(), t_id.as_deref());
                     }
                 }
                 Ok(_) => {
                     if is_current_menu(&h_clone, &a_id, &t_id, window_id, &srv, &pth) {
-                        clear_app_menus(&h_clone);
+                        render_static_or_clear(&h_clone, a_id.as_deref(), t_id.as_deref());
                     }
                 }
             }
@@ -524,11 +625,7 @@ pub fn update_global_menu(
         return;
     }
 
-    if app_id.is_none() && title.is_none() {
-        render_static_categories(handles, None, None);
-    } else {
-        clear_app_menus(handles);
-    }
+    render_static_or_clear(handles, app_id, title);
 }
 
 fn is_current_menu(
@@ -731,46 +828,62 @@ fn append_dbus_menu_item(
     menu_box.append(&btn);
 }
 
-fn render_static_categories(
+fn get_static_categories(app_id: Option<&str>, title: Option<&str>) -> Option<&'static [MenuCategoryDef]> {
+    if let Some(id) = app_id {
+        let lower = id.to_lowercase();
+        if lower.contains("firefox") || lower.contains("mozilla") {
+            return Some(FIREFOX_MENUS);
+        } else if lower.contains("libreoffice") || lower.contains("soffice") || lower.contains("writer") || lower.contains("calc") || lower.contains("impress") {
+            return Some(LIBREOFFICE_MENUS);
+        } else if lower.contains("nautilus") || lower.contains("archivos") {
+            return Some(NAUTILUS_MENUS);
+        } else if lower.contains("ptyxis") || lower.contains("terminal") {
+            return Some(TERMINAL_MENUS);
+        } else if lower.contains("texteditor") || lower.contains("text-editor") || lower.contains("gedit") {
+            return Some(TEXT_EDITOR_MENUS);
+        } else if lower.contains("calculator") || lower.contains("calculadora") {
+            return Some(CALCULATOR_MENUS);
+        }
+    }
+
+    if let Some(t) = title {
+        let lower = t.to_lowercase();
+        if lower.contains("firefox") {
+            return Some(FIREFOX_MENUS);
+        } else if lower.contains("libreoffice") || lower.contains("writer") || lower.contains("calc") || lower.contains("impress") || lower.contains("documento") || lower.contains("sin título") {
+            return Some(LIBREOFFICE_MENUS);
+        } else if lower.contains("archivos") || lower.contains("nautilus") {
+            return Some(NAUTILUS_MENUS);
+        } else if lower.contains("terminal") || lower.contains("ptyxis") {
+            return Some(TERMINAL_MENUS);
+        } else if lower.contains("editor") {
+            return Some(TEXT_EDITOR_MENUS);
+        } else if lower.contains("calculadora") {
+            return Some(CALCULATOR_MENUS);
+        }
+    }
+
+    None
+}
+
+fn render_static_or_clear(
     handles: &GlobalMenuHandles,
     app_id: Option<&str>,
     title: Option<&str>,
 ) {
-    // Determinar conjunto de menús según la aplicación activa
-    let categories: &[MenuCategoryDef] = if let Some(id) = app_id {
-        let lower = id.to_lowercase();
-        if lower.contains("firefox") || lower.contains("mozilla") {
-            FIREFOX_MENUS
-        } else if lower.contains("nautilus") || lower.contains("archivos") {
-            NAUTILUS_MENUS
-        } else if lower.contains("ptyxis") || lower.contains("terminal") {
-            TERMINAL_MENUS
-        } else if lower.contains("texteditor") || lower.contains("text-editor") || lower.contains("gedit") {
-            TEXT_EDITOR_MENUS
-        } else if lower.contains("calculator") || lower.contains("calculadora") {
-            CALCULATOR_MENUS
-        } else {
-            DEFAULT_MENUS
-        }
-    } else if let Some(t) = title {
-        let lower = t.to_lowercase();
-        if lower.contains("firefox") {
-            FIREFOX_MENUS
-        } else if lower.contains("archivos") || lower.contains("nautilus") {
-            NAUTILUS_MENUS
-        } else if lower.contains("terminal") || lower.contains("ptyxis") {
-            TERMINAL_MENUS
-        } else if lower.contains("editor") {
-            TEXT_EDITOR_MENUS
-        } else if lower.contains("calculadora") {
-            CALCULATOR_MENUS
-        } else {
-            DEFAULT_MENUS
-        }
+    if let Some(categories) = get_static_categories(app_id, title) {
+        render_static_categories(handles, categories);
+    } else if app_id.is_none() && title.is_none() {
+        render_static_categories(handles, DEFAULT_MENUS);
     } else {
-        DEFAULT_MENUS
-    };
+        clear_app_menus(handles);
+    }
+}
 
+fn render_static_categories(
+    handles: &GlobalMenuHandles,
+    categories: &[MenuCategoryDef],
+) {
     // Limpiar menús previos
     while let Some(child) = handles.menus_container.first_child() {
         handles.menus_container.remove(&child);
