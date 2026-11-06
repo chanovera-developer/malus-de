@@ -100,6 +100,19 @@ cp -f "$SCRIPT_DIR/malus-session" "/usr/local/bin/malus-session"
 chmod 755 "/usr/local/bin/malus-session"
 echo "   ✔ /usr/local/bin/malus-session"
 
+# Instalar wrapper universal para editores Electron (Antigravity IDE, VS Code, etc.)
+if [ -f "$SCRIPT_DIR/malus-ide-wrapper" ]; then
+    cp -f "$SCRIPT_DIR/malus-ide-wrapper" "/usr/local/bin/malus-ide-wrapper"
+    chmod 755 "/usr/local/bin/malus-ide-wrapper"
+    ln -sf "/usr/local/bin/malus-ide-wrapper" "/usr/local/bin/antigravity-ide-wrapper"
+    ln -sf "/usr/local/bin/malus-ide-wrapper" "/usr/local/bin/code-wrapper"
+    echo "   ✔ /usr/local/bin/malus-ide-wrapper (antigravity-ide-wrapper, code-wrapper)"
+elif [ -f "$SCRIPT_DIR/antigravity-ide-wrapper" ]; then
+    cp -f "$SCRIPT_DIR/antigravity-ide-wrapper" "/usr/local/bin/antigravity-ide-wrapper"
+    chmod 755 "/usr/local/bin/antigravity-ide-wrapper"
+    echo "   ✔ /usr/local/bin/antigravity-ide-wrapper"
+fi
+
 # 3. Instalar target de systemd para gestión de sesión gráfica y portales
 echo "⚙️ [3/4] Instalando malus-session.target para systemd..."
 mkdir -p /usr/lib/systemd/user

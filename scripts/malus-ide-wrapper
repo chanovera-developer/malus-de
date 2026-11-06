@@ -1,0 +1,380 @@
+#!/usr/bin/env python3
+"""
+Malus DE - Universal Electron IDE Wrapper (Antigravity IDE & Visual Studio Code)
+Injects left-aligned macOS style traffic light window controls at runtime
+without modifying application files or triggering integrity warnings.
+"""
+
+import sys
+import os
+import shutil
+import subprocess
+import time
+import socket
+import urllib.request
+import urllib.parse
+import json
+import base64
+import threading
+import signal
+
+def is_same_file(path1, path2):
+    try:
+        return os.path.realpath(path1) == os.path.realpath(path2)
+    except Exception:
+        return False
+
+def find_target_command(invoked_name, extra_args):
+    # 1. Override explícito absoluto por variable de entorno
+    if "MALUS_IDE_BIN" in os.environ:
+        return [os.environ["MALUS_IDE_BIN"]]
+
+    invoked_base = os.path.basename(invoked_name).lower()
+    target_kind = os.environ.get("MALUS_IDE_TARGET", "").lower()
+
+    if not target_kind:
+        if any(k in invoked_base for k in ["code", "codium", "oss"]):
+            target_kind = "vscode"
+        elif any(k in invoked_base for k in ["antigravity"]):
+            target_kind = "antigravity"
+
+    self_path = os.path.realpath(__file__)
+
+    # 2. Búsqueda para Visual Studio Code / Code - OSS / VSCodium
+    if target_kind == "vscode":
+        if "MALUS_VSCODE_BIN" in os.environ:
+            return [os.environ["MALUS_VSCODE_BIN"]]
+
+        # Preferir el binario Electron real: los scripts bin/* lanzan el CLI
+        # (ELECTRON_RUN_AS_NODE), que crea la ventana desacoplada y termina
+        # de inmediato, matando al watcher antes de inyectar los estilos.
+        candidates = [
+            "/usr/share/code/code",
+            "/usr/share/code/bin/code",
+            "/usr/bin/code",
+            "/usr/local/bin/code",
+            "/usr/bin/code-oss",
+            "/usr/bin/codium",
+            os.path.expanduser("~/.local/share/code/bin/code"),
+        ]
+        for candidate in candidates:
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK) and not is_same_file(candidate, self_path):
+                return [candidate]
+
+        for name in ["code", "code-oss", "codium"]:
+            w = shutil.which(name)
+            if w and not is_same_file(w, self_path):
+                return [w]
+
+        # Soporte para instalación Flatpak
+        flatpak_bin = shutil.which("flatpak")
+        if flatpak_bin:
+            for app_id in ["com.visualstudio.code", "com.vscodium.codium"]:
+                try:
+                    res = subprocess.run([flatpak_bin, "info", app_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    if res.returncode == 0:
+                        return [flatpak_bin, "run", app_id]
+                except Exception:
+                    pass
+
+        return ["code"]
+
+    # 3. Búsqueda para Antigravity IDE
+    if "MALUS_ANTIGRAVITY_BIN" in os.environ:
+        return [os.environ["MALUS_ANTIGRAVITY_BIN"]]
+
+    antigravity_candidates = [
+        # Binario Electron real primero (ver nota en la sección de VS Code)
+        os.path.expanduser("~/.local/share/antigravity-ide/antigravity-ide"),
+        "/usr/local/share/antigravity-ide/antigravity-ide",
+        "/usr/share/antigravity/antigravity",
+        "/opt/antigravity-ide/antigravity-ide",
+        os.path.expanduser("~/.local/share/antigravity-ide/bin/antigravity-ide"),
+    ]
+    for candidate in antigravity_candidates:
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK) and not is_same_file(candidate, self_path):
+            return [candidate]
+
+    which_ag = shutil.which("antigravity-ide")
+    if which_ag and not is_same_file(which_ag, self_path):
+        return [which_ag]
+
+    # Si no se especificó un tipo y Antigravity no existe, probar con Code
+    if not target_kind:
+        for name in ["code", "code-oss", "codium"]:
+            w = shutil.which(name)
+            if w and not is_same_file(w, self_path):
+                return [w]
+
+    return ["antigravity-ide"]
+
+def get_free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+def send_cdp_eval(ws_url, expr):
+    try:
+        u = urllib.parse.urlparse(ws_url)
+        s = socket.create_connection((u.hostname, u.port or 80), timeout=3)
+        key = base64.b64encode(os.urandom(16)).decode('utf-8')
+        req = (
+            f"GET {u.path} HTTP/1.1\r\n"
+            f"Host: {u.hostname}:{u.port}\r\n"
+            f"Upgrade: websocket\r\n"
+            f"Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            f"Sec-WebSocket-Version: 13\r\n\r\n"
+        )
+        s.sendall(req.encode('utf-8'))
+        res = s.recv(4096)
+        if b"101" not in res:
+            s.close()
+            return False
+
+        payload = json.dumps({
+            "id": 1,
+            "method": "Runtime.evaluate",
+            "params": {"expression": expr, "returnByValue": True}
+        }).encode('utf-8')
+
+        length = len(payload)
+        mask = os.urandom(4)
+        header = bytearray([0x81])
+        if length < 126:
+            header.append(0x80 | length)
+        elif length < 65536:
+            header.append(0x80 | 126)
+            header.extend(length.to_bytes(2, 'big'))
+        else:
+            header.append(0x80 | 127)
+            header.extend(length.to_bytes(8, 'big'))
+
+        masked = bytearray(b ^ mask[i % 4] for i, b in enumerate(payload))
+        s.sendall(header + mask + masked)
+
+        s.settimeout(2)
+        try:
+            s.recv(4096)
+        except Exception:
+            pass
+        s.close()
+        return True
+    except Exception:
+        return False
+
+INJECTION_SCRIPT = """
+(() => {
+    function relocate() {
+        const left = document.querySelector('.titlebar-left');
+        const controls = document.querySelector('.window-controls-container');
+        if (left && controls) {
+            if (controls.parentElement !== left || left.firstElementChild !== controls) {
+                left.prepend(controls);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function ensureStyle() {
+        if (!document.getElementById('malus-left-controls-style')) {
+            const style = document.createElement('style');
+            style.id = 'malus-left-controls-style';
+            style.textContent = `
+                /* Contenedor estilo semáforo macOS */
+                .monaco-workbench .part.titlebar .window-controls-container {
+                    display: inline-flex !important;
+                    align-items: center !important;
+                    justify-content: center !important;
+                    flex-direction: row !important;
+                    gap: 8px !important;
+                    padding: 0 12px 0 12px !important;
+                    width: auto !important;
+                    height: 100% !important;
+                    -webkit-app-region: no-drag !important;
+                }
+
+                /* Círculos de 12px con bordes sutiles */
+                .monaco-workbench .part.titlebar .window-controls-container > .window-icon {
+                    width: 12px !important;
+                    height: 12px !important;
+                    min-width: 12px !important;
+                    min-height: 12px !important;
+                    border-radius: 50% !important;
+                    padding: 0 !important;
+                    margin: 0 !important;
+                    border: 0.5px solid rgba(0, 0, 0, 0.25) !important;
+                    box-sizing: border-box !important;
+                    display: flex !important;
+                    align-items: center !important;
+                    justify-content: center !important;
+                    cursor: pointer !important;
+                    position: relative !important;
+                    transition: transform 0.1s ease, filter 0.1s ease !important;
+                }
+
+                .monaco-workbench .part.titlebar .window-controls-container > .window-icon:hover {
+                    filter: brightness(0.9) !important;
+                }
+
+                /* Orden y colores oficiales de semáforo macOS (Rojo=1, Amarillo=2, Verde=3) */
+                .monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-close {
+                    order: 1 !important;
+                    background-color: #ff5f56 !important;
+                    border-color: #e0443e !important;
+                }
+                .monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-close:active {
+                    background-color: #bf403a !important;
+                }
+
+                .monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-minimize {
+                    order: 2 !important;
+                    background-color: #ffbd2e !important;
+                    border-color: #dea123 !important;
+                }
+                .monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-minimize:active {
+                    background-color: #bf8e22 !important;
+                }
+
+                .monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-max-restore,
+                .monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-maximize,
+                .monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-unmaximize {
+                    order: 3 !important;
+                    background-color: #27c93f !important;
+                    border-color: #1aab29 !important;
+                }
+                .monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-max-restore:active,
+                .monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-maximize:active,
+                .monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-unmaximize:active {
+                    background-color: #1d9730 !important;
+                }
+
+                /* Glifos internos centrados con SVG geométrico (sin desfases de fuente) */
+                .monaco-workbench .part.titlebar .window-controls-container > .window-icon::before {
+                    content: "" !important;
+                    width: 6px !important;
+                    height: 6px !important;
+                    opacity: 0 !important;
+                    background-repeat: no-repeat !important;
+                    background-position: center !important;
+                    background-size: contain !important;
+                    transition: opacity 0.12s ease !important;
+                    display: block !important;
+                    line-height: 0 !important;
+                    font-size: 0 !important;
+                }
+
+                .monaco-workbench .part.titlebar .window-controls-container:hover > .window-icon::before {
+                    opacity: 0.85 !important;
+                }
+
+                .monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-close::before {
+                    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 6 6'%3E%3Cpath d='M0.8 0.8 L5.2 5.2 M5.2 0.8 L0.8 5.2' stroke='%234c0000' stroke-width='1.1' stroke-linecap='round'/%3E%3C/svg%3E") !important;
+                }
+
+                .monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-minimize::before {
+                    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 6 6'%3E%3Cpath d='M0.8 3 L5.2 3' stroke='%23593b00' stroke-width='1.1' stroke-linecap='round'/%3E%3C/svg%3E") !important;
+                }
+
+                .monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-max-restore::before,
+                .monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-maximize::before,
+                .monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-unmaximize::before {
+                    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 6 6'%3E%3Cpolygon points='0.8,0.8 3.4,0.8 0.8,3.4' fill='%23004d1a'/%3E%3Cpolygon points='5.2,5.2 2.6,5.2 5.2,2.6' fill='%23004d1a'/%3E%3C/svg%3E") !important;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+    }
+
+    ensureStyle();
+    relocate();
+
+    if (!window._malusControlsInstalled) {
+        window._malusControlsInstalled = true;
+        const observer = new MutationObserver(() => {
+            ensureStyle();
+            relocate();
+        });
+        observer.observe(document.body, { childList: true, subtree: true });
+        setInterval(() => {
+            ensureStyle();
+            relocate();
+        }, 200);
+    }
+})()
+"""
+
+REINJECT_INTERVAL = 3.0  # segundos; el script inyectado es idempotente
+
+def watcher(port, stop_event, state):
+    # tid -> momento de la última inyección. Se reinyecta periódicamente para
+    # sobrevivir a "Reload Window", que conserva el mismo id de target pero
+    # descarta el DOM (y con él los estilos inyectados).
+    injected_targets = {}
+    url = f"http://127.0.0.1:{port}/json"
+
+    while not stop_event.is_set():
+        try:
+            with urllib.request.urlopen(url, timeout=1) as resp:
+                targets = json.loads(resp.read().decode('utf-8'))
+                state["last_alive"] = time.time()
+                state["ever_alive"] = True
+                now = time.time()
+                for t in targets:
+                    tid = t.get("id")
+                    t_url = t.get("url", "")
+                    if t.get("type") != "page" or "workbench" not in t_url:
+                        continue
+                    if now - injected_targets.get(tid, 0) < REINJECT_INTERVAL:
+                        continue
+                    ws_url = t.get("webSocketDebuggerUrl")
+                    if ws_url and send_cdp_eval(ws_url, INJECTION_SCRIPT):
+                        injected_targets[tid] = now
+        except Exception:
+            pass
+        time.sleep(0.5)
+
+def main():
+    target_cmd = find_target_command(sys.argv[0], sys.argv[1:])
+    port = get_free_port()
+    args = target_cmd + [f"--remote-debugging-port={port}", "--ozone-platform-hint=auto"] + sys.argv[1:]
+
+    proc = subprocess.Popen(args)
+
+    stop_event = threading.Event()
+    state = {"last_alive": 0.0, "ever_alive": False}
+    t = threading.Thread(target=watcher, args=(port, stop_event, state), daemon=True)
+    t.start()
+
+    def handle_signal(sig, frame):
+        try:
+            proc.send_signal(sig)
+        except Exception:
+            pass
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
+    try:
+        ret = proc.wait()
+        # Si el proceso lanzado era un CLI que desacopla la ventana real (o si
+        # Electron se relanzó a sí mismo), el IDE sigue vivo con nuestro puerto
+        # de depuración: seguir inyectando mientras responda.
+        start = time.time()
+        while True:
+            time.sleep(1)
+            if state["ever_alive"]:
+                if time.time() - state["last_alive"] > 5:
+                    break
+            elif time.time() - start > 30:
+                # Nunca respondió (p. ej. ya había una instancia abierta que
+                # absorbió la petición): no hay nada que vigilar.
+                break
+    finally:
+        stop_event.set()
+
+    sys.exit(ret)
+
+if __name__ == "__main__":
+    main()

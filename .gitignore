@@ -10,3 +10,5 @@
 /*.jpg
 /*.jpeg
 /*.webp
+__pycache__/
+*.pyc
