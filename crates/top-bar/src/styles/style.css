@@ -43,10 +43,10 @@ menubutton.topbar-btn:hover {
 menubutton arrow,
 menubutton image.arrow,
 menubutton .arrow,
-menubutton > button arrow,
-menubutton > button image.arrow,
-menubutton > button > box > arrow,
-menubutton > button > box > image.arrow {
+menubutton>button arrow,
+menubutton>button image.arrow,
+menubutton>button>box>arrow,
+menubutton>button>box>image.arrow {
     opacity: 0;
     -gtk-icon-size: 0;
     min-width: 0;
@@ -57,8 +57,8 @@ menubutton > button > box > image.arrow {
 
 /* Botón interactivo único (limpio, sin recuadros superpuestos, estilo squircle) */
 button.topbar-btn,
-menubutton.topbar-btn > button,
-menubutton > button,
+menubutton.topbar-btn>button,
+menubutton>button,
 label.clock-label {
     background: transparent;
     background-color: transparent;
@@ -80,8 +80,8 @@ menubutton.control-center-toggle image {
 }
 
 button.topbar-btn:hover,
-menubutton.topbar-btn > button:hover,
-menubutton > button:hover,
+menubutton.topbar-btn>button:hover,
+menubutton>button:hover,
 label.clock-label:hover {
     background-color: rgba(255, 255, 255, 0.08);
     border-radius: 13px;
@@ -90,27 +90,27 @@ label.clock-label:hover {
 
 button.topbar-btn:active,
 button.topbar-btn:checked,
-menubutton.topbar-btn > button:active,
-menubutton.topbar-btn > button:checked,
-menubutton > button:active,
-menubutton > button:checked {
+menubutton.topbar-btn>button:active,
+menubutton.topbar-btn>button:checked,
+menubutton>button:active,
+menubutton>button:checked {
     background-color: rgba(255, 255, 255, 0.02);
     border-radius: 13px;
     box-shadow: none;
 }
 
-.menu-logo-btn > button {
+.menu-logo-btn>button {
     padding: 3px 8px;
     border-radius: 13px;
 }
 
-.topbar-content > box > image,
-.topbar-content > box > button > image,
-.topbar-content > box > menubutton > button image,
+.topbar-content>box>image,
+.topbar-content>box>button>image,
+.topbar-content>box>menubutton>button image,
 .menu-logo-icon,
-.menu-logo-btn > button image,
-button.topbar-btn > image,
-menubutton.topbar-btn > button image {
+.menu-logo-btn>button image,
+button.topbar-btn>image,
+menubutton.topbar-btn>button image {
     -gtk-icon-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
     filter: none;
 }
@@ -130,7 +130,7 @@ image.menu-item-icon,
 }
 
 .menu-logo-icon {
-    margin-bottom: 5px;
+    margin-bottom: 0;
 }
 
 .active-app-name {
@@ -173,9 +173,9 @@ popover.light-popover {
     border-radius: 0;
 }
 
-popover.malus-popover-menu > arrow,
-popover.control-center-popover > arrow,
-popover.light-popover > arrow {
+popover.malus-popover-menu>arrow,
+popover.control-center-popover>arrow,
+popover.light-popover>arrow {
     background: transparent;
     border: none;
     min-width: 0;
@@ -185,7 +185,7 @@ popover.light-popover > arrow {
 }
 
 /* El compositor aplica el recorte squircle (superelipse continua n=4.2) a los popovers; CSS deja las esquinas a 0 para que coincidan con exactitud subpíxel con la capa de blur del compositor */
-popover.malus-popover-menu > contents {
+popover.malus-popover-menu>contents {
     background-color: rgba(30, 30, 36, 0.78);
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 0;
@@ -197,7 +197,7 @@ popover.malus-popover-menu > contents {
     filter: none;
 }
 
-popover.control-center-popover > contents {
+popover.control-center-popover>contents {
     background-color: rgba(30, 30, 36, 0.82);
     border: 1px solid rgba(255, 255, 255, 0.14);
     border-radius: 0;
@@ -210,9 +210,9 @@ popover.control-center-popover > contents {
 }
 
 /* Modo Claro en Popovers (fondo al 76%, esquinas a 0 en CSS para que el recorte squircle n=4.2 del compositor a 32px coincida exactamente con la capa de blur) */
-popover.light-popover.malus-popover-menu > contents,
-popover.light-popover > contents,
-.light-mode popover.malus-popover-menu > contents {
+popover.light-popover.malus-popover-menu>contents,
+popover.light-popover>contents,
+.light-mode popover.malus-popover-menu>contents {
     background-color: rgba(244, 246, 250, 0.76);
     border: 1px solid rgba(0, 0, 0, 0.18);
     border-radius: 0;
@@ -224,8 +224,8 @@ popover.light-popover > contents,
     filter: none;
 }
 
-popover.light-popover.control-center-popover > contents,
-.light-mode popover.control-center-popover > contents {
+popover.light-popover.control-center-popover>contents,
+.light-mode popover.control-center-popover>contents {
     background-color: rgba(244, 246, 250, 0.78);
     border: 1px solid rgba(0, 0, 0, 0.18);
     border-radius: 0;
@@ -283,7 +283,7 @@ popover.light-popover button.popover-menu-item:hover .menu-row-label,
 
 popover.light-popover .menu-shortcut-hint,
 .light-mode .menu-shortcut-hint {
-    color: rgba(0, 0, 0, 0.40);
+    color: rgba(0, 0, 0, 0.28);
 }
 
 popover.light-popover .popover-menu-item:hover .menu-shortcut-hint,
@@ -532,7 +532,7 @@ button.link:hover,
 .menu-shortcut-hint {
     font-size: 12px;
     font-weight: 400;
-    color: rgba(255, 255, 255, 0.45);
+    color: rgba(255, 255, 255, 0.30);
     margin-left: 20px;
 }
 
@@ -894,17 +894,17 @@ scale.horizontal slider {
     background-color: rgba(255, 255, 255, 0.28);
 }
 
-popover.malus-popover-menu.light-popover > contents label.menu-row-label,
-popover.malus-popover-menu.light-popover > contents button.popover-menu-item label.menu-row-label,
-popover.malus-popover-menu.light-popover > contents label,
-popover.malus-popover-menu.light-popover > contents button label,
+popover.malus-popover-menu.light-popover>contents label.menu-row-label,
+popover.malus-popover-menu.light-popover>contents button.popover-menu-item label.menu-row-label,
+popover.malus-popover-menu.light-popover>contents label,
+popover.malus-popover-menu.light-popover>contents button label,
 popover.light-popover label {
     color: #1d1d1f;
 }
 
-popover.malus-popover-menu.light-popover > contents button.popover-menu-item:hover label.menu-row-label,
-popover.malus-popover-menu.light-popover > contents button.popover-menu-item:hover label,
-popover.malus-popover-menu.light-popover > contents button:hover label,
+popover.malus-popover-menu.light-popover>contents button.popover-menu-item:hover label.menu-row-label,
+popover.malus-popover-menu.light-popover>contents button.popover-menu-item:hover label,
+popover.malus-popover-menu.light-popover>contents button:hover label,
 popover.light-popover button:hover label {
     color: #ffffff;
 }
@@ -918,14 +918,25 @@ label.menu-row-label.menu-dark-text {
 }
 
 label.menu-shortcut-hint.menu-light-text {
-    color: rgba(0, 0, 0, 0.40);
+    color: rgba(0, 0, 0, 0.28);
 }
 
 label.menu-shortcut-hint.menu-dark-text {
-    color: rgba(255, 255, 255, 0.45);
+    color: rgba(255, 255, 255, 0.30);
 }
 
 button.popover-menu-item:hover label.menu-row-label.menu-light-text,
 button.popover-menu-item:hover label.menu-row-label.menu-dark-text {
     color: #ffffff;
+}
+
+popover.malus-popover-menu.light-popover>contents label.menu-shortcut-hint,
+popover.malus-popover-menu.light-popover>contents button label.menu-shortcut-hint,
+popover.light-popover label.menu-shortcut-hint {
+    color: rgba(0, 0, 0, 0.28);
+}
+
+popover.malus-popover-menu.light-popover>contents button.popover-menu-item:hover label.menu-shortcut-hint,
+popover.light-popover button:hover label.menu-shortcut-hint {
+    color: rgba(255, 255, 255, 0.90);
 }
