@@ -3563,8 +3563,12 @@ fn spawn_shell_command(command_line: &str) {
         return;
     };
 
+    let target_path_buf;
     let target_exe = if *exe == "gnome-control-center" {
         "malus-de-settings"
+    } else if let Some(wrapper) = malus_de_common::config::resolve_electron_ide_wrapper(exe) {
+        target_path_buf = wrapper.to_string_lossy().to_string();
+        &target_path_buf
     } else {
         *exe
     };

@@ -3227,8 +3227,12 @@ fn create_dock_item(
 fn spawn_dock_app(name: &str, cmd: &str, extra_args: &[&str]) {
     let parts: Vec<&str> = cmd.split_whitespace().collect();
     if let Some((exe, args)) = parts.split_first() {
+        let target_path_buf;
         let target_exe = if *exe == "gnome-control-center" {
             "malus-de-settings"
+        } else if let Some(wrapper) = malus_de_common::config::resolve_electron_ide_wrapper(exe) {
+            target_path_buf = wrapper.to_string_lossy().to_string();
+            &target_path_buf
         } else {
             *exe
         };
