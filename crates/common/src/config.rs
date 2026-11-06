@@ -294,11 +294,115 @@ overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
         let _ = input_cfg.save();
     }
 
+    // 6. Configuración de editores Electron (Antigravity IDE, Code) para controles a la izquierda
+    setup_electron_ide_configurations(&malus_config_dir);
+
     // Exportar variables de cursor para los procesos iniciados desde Malus DE
     std::env::set_var("XCURSOR_THEME", &cursor_theme);
     std::env::set_var("XCURSOR_SIZE", cursor_size.to_string());
 
     Ok(malus_config_dir)
+}
+
+/// Configura los editores basados en VS Code / Electron (Antigravity IDE, Code) para que utilicen
+/// la barra personalizada pero con controles custom (`"window.controlsStyle": "custom"`), permitiendo
+/// que los controles de ventana respeten la posición y estética de macOS en Malus DE.
+pub fn setup_electron_ide_configurations(malus_config_dir: &Path) {
+    let ide_names = ["Antigravity IDE", "Code", "Code - OSS", "VSCodium"];
+    for ide_name in ide_names {
+        let user_dir = malus_config_dir.join(ide_name).join("User");
+        let settings_path = user_dir.join("settings.json");
+
+        if !settings_path.exists() {
+            let _ = std::fs::create_dir_all(&user_dir);
+            let default_settings = serde_json::json!({
+                "window.titleBarStyle": "custom",
+                "window.controlsStyle": "custom"
+            });
+            if let Ok(content) = serde_json::to_string_pretty(&default_settings) {
+                let _ = std::fs::write(&settings_path, content);
+            }
+        } else if let Ok(existing) = std::fs::read_to_string(&settings_path) {
+            if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&existing) {
+                let mut modified = false;
+                if let Some(obj) = json.as_object_mut() {
+                    if obj.get("window.controlsStyle").and_then(|v| v.as_str()) != Some("custom") {
+                        obj.insert(
+                            "window.controlsStyle".to_string(),
+                            serde_json::Value::String("custom".to_string()),
+                        );
+                        modified = true;
+                    }
+                    if obj.get("window.titleBarStyle").and_then(|v| v.as_str()) != Some("custom") {
+                        obj.insert(
+                            "window.titleBarStyle".to_string(),
+                            serde_json::Value::String("custom".to_string()),
+                        );
+                        modified = true;
+                    }
+                }
+                if modified {
+                    if let Ok(content) = serde_json::to_string_pretty(&json) {
+                        let _ = std::fs::write(&settings_path, content);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Resuelve la ruta al wrapper de Malus DE para editores basados en Electron
+/// (Antigravity IDE, VS Code, Code - OSS, VSCodium).
+pub fn resolve_electron_ide_wrapper(exe: &str) -> Option<PathBuf> {
+    let is_antigravity = exe == "antigravity-ide"
+        || exe == "antigravity"
+        || exe.ends_with("/antigravity-ide")
+        || exe.ends_with("/antigravity");
+
+    let is_vscode = exe == "code"
+        || exe == "code-oss"
+        || exe == "vscode"
+        || exe == "codium"
+        || exe == "vscodium"
+        || exe.ends_with("/code")
+        || exe.ends_with("/code-oss")
+        || exe.ends_with("/codium")
+        || exe.ends_with("/vscodium");
+
+    if !is_antigravity && !is_vscode {
+        return None;
+    }
+
+    let home = std::env::var("HOME").ok().map(PathBuf::from);
+    let mut candidate_paths = Vec::new();
+
+    if is_antigravity {
+        if let Some(h) = &home {
+            candidate_paths.push(h.join(".local/bin/antigravity-ide-wrapper"));
+        }
+        candidate_paths.push(PathBuf::from("/usr/local/bin/antigravity-ide-wrapper"));
+    }
+
+    if is_vscode {
+        if let Some(h) = &home {
+            candidate_paths.push(h.join(".local/bin/code-wrapper"));
+        }
+        candidate_paths.push(PathBuf::from("/usr/local/bin/code-wrapper"));
+    }
+
+    // Wrappers unificados de Malus DE
+    if let Some(h) = &home {
+        candidate_paths.push(h.join(".local/bin/malus-ide-wrapper"));
+    }
+    candidate_paths.push(PathBuf::from("/usr/local/bin/malus-ide-wrapper"));
+
+    for path in candidate_paths {
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    None
 }
 
 pub fn load_cursor_config() -> (String, u32) {
@@ -1877,5 +1981,62 @@ primary = true
         let output: DisplayOutputConfig = toml::from_str(legacy).unwrap();
         assert!(output.modes.is_empty());
         assert_eq!(output.width, 3840);
+    }
+
+    #[test]
+    fn test_setup_electron_ide_configurations_creates_and_updates_settings() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let config_dir = std::env::temp_dir().join(format!("malus-test-ide-{}", unique));
+        let _ = std::fs::remove_dir_all(&config_dir);
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        // 1. Probar creación limpia
+        setup_electron_ide_configurations(&config_dir);
+
+        let antigravity_settings = config_dir.join("Antigravity IDE/User/settings.json");
+        assert!(antigravity_settings.exists());
+        let content: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&antigravity_settings).unwrap()).unwrap();
+        assert_eq!(content["window.titleBarStyle"], "custom");
+        assert_eq!(content["window.controlsStyle"], "custom");
+
+        // 2. Probar actualización preservando otras configuraciones del usuario
+        let code_user_dir = config_dir.join("Code/User");
+        std::fs::create_dir_all(&code_user_dir).unwrap();
+        let code_settings = code_user_dir.join("settings.json");
+        std::fs::write(
+            &code_settings,
+            r#"{"editor.fontSize": 14, "window.controlsStyle": "native"}"#,
+        )
+        .unwrap();
+
+        setup_electron_ide_configurations(&config_dir);
+
+        let updated: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&code_settings).unwrap()).unwrap();
+        assert_eq!(updated["editor.fontSize"], 14);
+        assert_eq!(updated["window.controlsStyle"], "custom");
+        assert_eq!(updated["window.titleBarStyle"], "custom");
+
+        let codium_settings = config_dir.join("VSCodium/User/settings.json");
+        assert!(codium_settings.exists());
+
+        let _ = std::fs::remove_dir_all(&config_dir);
+    }
+
+    #[test]
+    fn test_resolve_electron_ide_wrapper() {
+        assert!(resolve_electron_ide_wrapper("firefox").is_none());
+        assert!(resolve_electron_ide_wrapper("nautilus").is_none());
+        // Debe reconocer comandos válidos si existe el wrapper en ~/.local/bin o /usr/local/bin
+        if let Some(wrapper) = resolve_electron_ide_wrapper("antigravity-ide") {
+            assert!(wrapper.to_string_lossy().contains("wrapper"));
+        }
+        if let Some(wrapper) = resolve_electron_ide_wrapper("code") {
+            assert!(wrapper.to_string_lossy().contains("wrapper"));
+        }
     }
 }
