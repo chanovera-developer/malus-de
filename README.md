@@ -127,30 +127,76 @@ Para compilar en modo optimizado:
 cargo build --workspace --release
 ```
 
-## Capturas y grabación de pantalla
+## Capturas y Grabación de Pantalla
 
-La herramienta de captura y grabación está integrada directamente en el compositor de Malus DE sin depender de portales externos. Cuenta con soporte para pantalla completa, ventana enfocada, recorte de área y grabación de vídeo:
+La suite de captura y grabación de Malus DE (`malus-de-screenshot`) está integrada directamente en el núcleo del compositor Wayland y el protocolo `Layer Shell`, garantizando capturas de máxima fidelidad gráfica sin intermediarios ni dependencias de portales externos.
 
-- **Atajos de teclado globales:**
-  - **Barra interactiva de captura y grabación:** `Super + Shift + 5` o `Super + Impr Pant` (estilo macOS). Permite alternar entre capturar toda la pantalla, capturar la ventana activa, capturar una región seleccionada, grabar toda la pantalla o grabar una selección, además de configurar temporizador (ninguno, 5 s, 10 s), destino (archivo o portapapeles) y visibilidad del cursor.
-  - **Captura completa directa:** Tecla `Impr Pant` o `Super + Shift + 3`.
-  - **Captura de área interactiva:** `Shift + Impr Pant`, `Super + Shift + 4` o `Super + Shift + S`.
-- **Alerta auditiva inmediata:** Reproducción prioritaria del sonido de obturador de cámara (`screen-capture.oga` / `camera-shutter.oga`) mediante `pw-play` (PipeWire nativo de latencia casi cero), con respaldo automático a `canberra-gtk-play` y `paplay`.
-- **Alerta visual suave (destello):** Animación de destello blanco puro en capa de superposición (`Layer::Overlay`) sobre todas las pantallas conectadas, que se desvanece fluidamente de 85% a 0% de opacidad en 200 ms.
-- **Selección de área:** Despliega una capa con oscurecimiento y retícula que permite arrastrar y ajustar bordes/esquinas para delimitar la región exacta, con tecla `Esc` para cancelar.
-- **Miniatura flotante interactiva y notificación:** El fotograma se guarda como imagen PNG en la carpeta de Imágenes configurada por XDG (por ejemplo, `~/Imágenes/Capturas de pantalla` en español), se copia automáticamente al portapapeles con `wl-copy` y envía una notificación de escritorio. Además, presenta en la esquina inferior derecha una miniatura flotante con previsualización del archivo y botones para volver a copiarlo o descartarlo (con auto-cierre tras 6 segundos de inactividad).
+### Atajos de teclado estilo macOS
+
+| Atajo | Acción | Descripción |
+| :--- | :--- | :--- |
+| `Super + Shift + 5` / `Super + Impr Pant` | **Barra interactiva** | Despliega la barra flotante estilo macOS para alternar modos, temporizador y destino. |
+| `Super + Shift + 3` / `Impr Pant` | **Pantalla completa** | Captura inmediata de todas las pantallas conectadas. |
+| `Super + Shift + 4` / `Shift + Impr Pant` / `Super + Shift + S` | **Selección de área** | Capa interactiva de recorte con oscurecimiento, retícula de precisión y ajuste de esquinas. |
+
+### Características principales
+
+- **Barra interactiva de captura y grabación:**
+  - Selector visual de **Captura Completa**, **Captura de Área** y **Grabación de Pantalla** en formato `.webm`.
+  - Configuración de temporizador con cuenta regresiva flotante (desactivado, 5 s, 10 s).
+  - Selector de destino (guardar archivo en carpeta de usuario o copiar directamente al portapapeles).
+  - Opción para incluir u ocultar el puntero del cursor en el fotograma.
+- **Feedback audiovisual auténtico:**
+  - **Sonido de obturador instantáneo:** Reproducción prioritaria del sonido nativo (`screen-capture.oga` / `camera-shutter.oga`) mediante PipeWire (`pw-play`) con latencia casi cero, y respaldo automático a `canberra-gtk-play` y `paplay`.
+  - **Destello visual suave (*Flash*):** Animación de destello blanco puro en capa `Layer::Overlay` sobre todas las salidas, desvaneciéndose fluidamente en 200 ms.
+- **Miniatura flotante interactiva (*Floating Thumbnail*):**
+  - Al completar la captura, se presenta una miniatura flotante en la esquina inferior derecha con vista previa de alta resolución.
+  - Ofrece botones de acción rápida para volver a copiar la imagen al portapapeles o descartar el archivo, cerrándose automáticamente tras 6 segundos de inactividad.
+- **Grabación de pantalla con indicador en vivo:**
+  - Indicador flotante en la barra superior con contador cronométrico y botón de parada rápida (`● 00:00 [⏹ Detener]`).
+  - Almacena automáticamente los vídeos generados en `~/Vídeos/Grabaciones de pantalla/`.
+- **Destino y compatibilidad de archivos:**
+  - Las capturas se guardan en formato PNG de compresión óptima en `~/Imágenes/Capturas de pantalla/` (respetando carpetas de usuario XDG) y se copian en paralelo al portapapeles del sistema mediante `wl-copy`.
+
+### Comandos CLI de captura
 
 ```bash
-cargo run -p malus-de-screenshot -- --mode full
-cargo run -p malus-de-screenshot -- --mode full --clipboard-only
-cargo run -p malus-de-screenshot -- --mode area
+# Lanzar la barra interactiva de opciones (estilo macOS)
+malus-de-screenshot
+
+# Captura inmediata de pantalla completa
+malus-de-screenshot --mode full
+
+# Selección interactiva de área
+malus-de-screenshot --mode area
+
+# Grabación de pantalla directa
+malus-de-screenshot --mode record
+
+# Copiar exclusivamente al portapapeles (sin guardar archivo ni mostrar miniatura)
+malus-de-screenshot --mode full --clipboard-only
+
+# Captura con cuenta regresiva de 5 segundos
+malus-de-screenshot --mode area --delay 5
 ```
 
-La copia al portapapeles requiere `wl-copy` (`wl-clipboard`) y la codificación de vídeo en grabación de pantalla utiliza `ffmpeg` (`ffmpeg-free`). También puedes usar el flag `--clipboard-only` para copiar directamente al portapapeles con destello y sonido, pero sin guardar el archivo en disco ni abrir la miniatura flotante. El OCR sobre capturas continúa en desarrollo.
+> **Alcance y dependencias:** Requiere `wl-clipboard` (`wl-copy`) para portapapeles, `pipewire-utils` (`pw-play`) para sonido de obturador y `ffmpeg` (`ffmpeg-free`) para codificación de vídeo. La captura aislada de ventana individual y la extracción de texto mediante OCR continúan en desarrollo activo.
 
-El gestor de portapapeles conserva hasta 50 elementos (texto, enlaces, URI de archivos, imágenes comunes y formatos de documento como PDF y RTF), con un límite de 10 MiB por elemento y 50 MiB en total. Pulsa `Super + V` para buscar, fijar, volver a copiar o borrar elementos. El historial se guarda localmente entre sesiones con permisos privados y requiere `wl-clipboard`; borrar el historial elimina también su copia persistente. La sincronización con la selección primaria de Wayland es opcional y está desactivada por defecto; se configura desde la interfaz del historial. El filtro sensible, activado por defecto, omite las selecciones marcadas como contraseñas por la aplicación de origen y detecta algunas señales comunes como claves privadas y credenciales con nombre. Es una protección heurística, no una garantía: puede dejar pasar secretos o descartar texto que parezca una credencial. Se puede desactivar desde la interfaz; el cambio afecta al contenido nuevo y no modifica el historial existente.
+## Gestor de Portapapeles (Super + V)
 
-En **Ajustes → Pantallas**, cada pantalla detectada muestra sus modos DRM compatibles. Puedes seleccionar, por ejemplo, `1920 × 1080` para una pantalla 4K y aplicar el cambio sin cerrar sesión; la escala y la disposición se configuran por separado. Si KMS rechaza el modo guardado durante el arranque, el compositor prueba otros modos anunciados por la pantalla y registra cuál pudo activar.
+El gestor de portapapeles integrado (`malus-de-clipboard`) opera en segundo plano conectado a las extensiones de portapapeles de Wayland (`wlr-data-control`):
+
+- **Capacidad e historial:** Conserva hasta 50 elementos (texto sin formato, enlaces, URIs de archivos, imágenes y documentos PDF/RTF) con un límite de 10 MiB por elemento y un tope global de 50 MiB.
+- **Acceso rápido y búsqueda:** Pulsa `Super + V` para abrir la interfaz flotante donde podrás buscar en tiempo real, anclar/fijar elementos prioritarios en la parte superior, volver a copiar al portapapeles o eliminarlos individualmente o en lote.
+- **Privacidad y filtro sensible:** Incluye un filtro heurístico configurable activado por defecto que ignora selecciones marcadas como contraseñas por los clientes (gestores de contraseñas, campos protegidos) y omite patrones comunes de claves privadas o credenciales. El historial se almacena en el disco con permisos restrictivos privados (`0600`) dentro de `$HOME/.config/malus-de/clipboard/`.
+
+## Gestión de Pantallas 4K y Escalado (TrueSize)
+
+En **Ajustes del Sistema → Pantallas**, cada monitor conectado muestra sus modos DRM/KMS nativos:
+
+- Permite seleccionar resoluciones independientes (por ejemplo, `3840 × 2160` y `1920 × 1080`) y aplicar escalado fraccionario independiente en vivo sin necesidad de reiniciar la sesión gráfica.
+- **Enlace Físico 1:1 (`TrueSize Link`):** Vincula matemáticamente las pantallas contiguas según su densidad real de píxeles por pulgada (`PPI`), de modo que el cursor y las ventanas mantengan su tamaño físico continuo al cruzar de un monitor a otro sin saltos o desfases geométricos.
+- **Resiliencia KMS:** Si el controlador de gráficos rechaza un modo guardado durante el arranque en frío, el compositor realiza un sondeo fallback automático entre los modos anunciados por la pantalla y activa el modo más óptimo compatible.
 
 ## Instalación de la sesión
 
