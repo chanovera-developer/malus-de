@@ -4,6 +4,56 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-07] — Controles Semáforo para Firefox y Soporte XDG Popups en Compositor
+
+### Hitos Implementados
+* **Integración Nativa de Mozilla Firefox con `userChrome.css`:**
+  * Archivo de estilos [`crates/common/src/styles/firefox-userchrome.css`](../crates/common/src/styles/firefox-userchrome.css) con botones semáforo (cerrar, minimizar, maximizar) a la izquierda, círculos de colores fieles a macOS y glifos vectoriales que se revelan en hover.
+  * Inyección automática en perfiles: [`crates/common/src/config.rs`](../crates/common/src/config.rs#L411) detecta perfiles locales y del host (`~/.mozilla/firefox`), genera carpetas `chrome/`, inyecta `userChrome.css` y activa `toolkit.legacyUserProfileCustomizations.stylesheets = true` en `user.js`.
+  * Políticas de sistema: [`scripts/install-session.sh`](../scripts/install-session.sh) instala `/etc/firefox/policies/policies.json` para garantizar el soporte de hojas de estilo en cualquier perfil nuevo.
+* **Manejo de Popups XDG en Compositor Wayland (Smithay):**
+  * Desahogo de límites geométricos mediante `unconstrain_popup` en [`crates/compositor/src/state.rs`](../crates/compositor/src/state.rs) relativo a las coordenadas del padre directo y del monitor.
+  * Implementación de retención de foco mediante `popup_grab` (`PopupPointerGrab` y `PopupKeyboardGrab`), canalizando eventos de puntero y teclado exclusivamente a los menús emergentes mientras permanecen abiertos.
+  * Corrección de hit-testing en backends DRM ([`crates/compositor/src/backend/drm.rs`](../crates/compositor/src/backend/drm.rs)) y Winit ([`crates/compositor/src/backend/winit.rs`](../crates/compositor/src/backend/winit.rs)) tomando en cuenta el desplazamiento de geometría (`render_loc = location - window.geometry().loc`).
+
+### Incidencias Pendientes (Backlog de Depuración)
+* **Desfase en Popups y Menús Desplegables de Navegador:**
+  * Aunque los popups en Firefox ya responden e interactúan adecuadamente, se observa que los menús emergentes y desplegables (`<select>`) siguen presentando un desfase relativo respecto a su posición de anclaje esperada.
+  * En elementos `<select>`, las listas de opciones se expanden en ocasiones por detrás del popup o no respetan el orden $Z$ de la superficie hija.
+  * **Acción para la próxima sesión:** Ajustar el cálculo de coordenadas relativas de anclaje (`positioner.get_unconstrained_geometry` vs. posición de toplevel / subsurfaces) y verificar el orden de composición/sub-renderizado de popups jerárquicos en Smithay.
+
+---
+
+## [2026-11-06] — Editores Electron, Menú Global DBusMenu y Sincronización de Temas
+
+### Hitos Implementados
+* **Soporte de Controles Semáforo para Editores Electron (Antigravity IDE & VS Code):**
+  * Script wrapper [`scripts/malus-ide-wrapper.sh`](../scripts/malus-ide-wrapper.sh) con inyección de variables de entorno y parámetros de ejecución.
+  * Inyección de estilos y configuración de ventana en [`crates/common/src/config.rs`](../crates/common/src/config.rs): controles nativos a la izquierda para editores basados en Electron.
+  * Lanzamiento transparente desde Dock ([`crates/dock/src/main.rs`](../crates/dock/src/main.rs)) y Spotlight ([`crates/spotlight/src/main.rs`](../crates/spotlight/src/main.rs)).
+* **Menú Global para Firefox y LibreOffice:**
+  * Integración en [`crates/top-bar/src/services/dbusmenu.rs`](../crates/top-bar/src/services/dbusmenu.rs) para exportar e interpretar árboles de menú dinámicos de aplicaciones GTK/GDK vía `com.canonical.dbusmenu`.
+* **Sincronización Dinámica de Tema y Efecto Ripple:**
+  * Detección y aplicación inmediata de `org.gnome.desktop.interface color-scheme` en tiempo de ejecución.
+  * Transición visual fluida entre modo oscuro y claro coordinada entre top-bar, dock y compositor.
+* **Ajuste Tipográfico y Contraste en Menú Superior:**
+  * Atenuación de glifos de atajos de teclado (`.menu-shortcut-hint`) con `rgba(0, 0, 0, 0.28)` en modo claro y `rgba(255, 255, 255, 0.30)` en modo oscuro en [`crates/top-bar/src/styles/style.css`](../crates/top-bar/src/styles/style.css).
+  * Hover con contraste blanco puro (`#ffffff`) sobre el fondo de selección azul.
+
+---
+
+## [2026-11-05] — Menú del Sistema macOS, Idioma y Radios Squircle
+
+### Hitos Implementados
+* **Menú del Sistema Tipo Apple:**
+  * Implementación de opciones completas: *Acerca de este Mac / Acerca de Malus*, *Ajustes del Sistema...*, *App Store*, *Ítems Recientes*, *Forzar salida...*, *Reposo*, *Reiniciar...*, *Apagar equipo...*, *Bloquear pantalla* y *Cerrar sesión*.
+  * Soporte de localización e idioma (Español / Inglés).
+* **Fidelidad Visual:**
+  * Esquinas redondeadas squircle continuas (radio 32px en ventanas y paneles flotantes).
+  * Sombras suaves y eliminación de bordes duros.
+
+---
+
 ## [2026-11-04] — Hito Arquitectónico: Transición de la Shell hacia WGPU + Taffy (Desacople de GTK4)
 
 ### Contexto
