@@ -17,10 +17,13 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
   * Corrección de hit-testing en backends DRM ([`crates/compositor/src/backend/drm.rs`](../crates/compositor/src/backend/drm.rs)) y Winit ([`crates/compositor/src/backend/winit.rs`](../crates/compositor/src/backend/winit.rs)) tomando en cuenta el desplazamiento de geometría (`render_loc = location - window.geometry().loc`).
 
 ### Incidencias Pendientes (Backlog de Depuración)
-* **Desfase en Popups y Menús Desplegables de Navegador:**
+* **Desfase en Popups y Menús Desplegables de Navegador (Firefox):**
   * Aunque los popups en Firefox ya responden e interactúan adecuadamente, se observa que los menús emergentes y desplegables (`<select>`) siguen presentando un desfase relativo respecto a su posición de anclaje esperada.
   * En elementos `<select>`, las listas de opciones se expanden en ocasiones por detrás del popup o no respetan el orden $Z$ de la superficie hija.
   * **Acción para la próxima sesión:** Ajustar el cálculo de coordenadas relativas de anclaje (`positioner.get_unconstrained_geometry` vs. posición de toplevel / subsurfaces) y verificar el orden de composición/sub-renderizado de popups jerárquicos en Smithay.
+* **Fallo de Popups en Navegadores Chromium (Brave Browser):**
+  * A diferencia de Firefox, en **Brave Browser** los menús emergentes (menú hamburguesa, menús contextuales de clic derecho y desplegables) siguen sin funcionar o no se muestran.
+  * **Causa a investigar en la próxima sesión:** Brave/Chromium opera mediante el backend Ozone/Wayland y posee requerimientos estrictos sobre el ciclo de configuración de `xdg_popup` (`configure` inicial con dimensiones y token de reposicionamiento, tratamiento de buffers de subsuperficies y respuesta a grabs de puntero). Será necesario revisar en `crates/compositor/src/state.rs` si los popups de Chromium están siendo rechazados por un cálculo de geometría erróneo o si se ejecutan bajo XWayland / Ozone con parámetros específicos.
 
 ---
 
