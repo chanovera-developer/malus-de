@@ -137,6 +137,18 @@ chmod 644 /etc/xdg/xdg-desktop-portal/portals.conf /usr/share/xdg-desktop-portal
 echo "   ✔ /etc/xdg/xdg-desktop-portal/portals.conf"
 echo "   ✔ /usr/share/xdg-desktop-portal/portals.conf"
 
+# Asegurar que el servicio de llavero (org.freedesktop.secrets) esté instalado
+if ! command -v gnome-keyring-daemon >/dev/null 2>&1; then
+    echo "🔐 Instalando servicio de llavero del sistema (gnome-keyring)..."
+    if command -v dnf >/dev/null 2>&1; then
+        dnf install -y gnome-keyring gnome-keyring-pam
+    elif command -v apt-get >/dev/null 2>&1; then
+        apt-get update && apt-get install -y gnome-keyring libpam-gnome-keyring
+    elif command -v pacman >/dev/null 2>&1; then
+        pacman -S --noconfirm --needed gnome-keyring
+    fi
+fi
+
 # Instalar políticas globales para soporte nativo de userChrome.css en Firefox
 echo "🦊 Instalando políticas de distribución para Mozilla Firefox..."
 mkdir -p /etc/firefox/policies

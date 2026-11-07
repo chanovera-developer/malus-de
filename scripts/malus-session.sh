@@ -213,10 +213,19 @@ export WAYLAND_DISPLAY="wayland-1"
 export GDK_BACKEND="wayland"
 export GSK_RENDERER="cairo"
 
+# Inicializar el llavero del sistema (FreeDesktop Secret Service: org.freedesktop.secrets)
+if command -v gnome-keyring-daemon >/dev/null 2>&1; then
+    if [ ! -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/keyring/control" ]; then
+        systemctl --user start gnome-keyring-daemon.socket 2>/dev/null || true
+    fi
+    eval "$(gnome-keyring-daemon --start --daemonize --components=secrets,pkcs11,ssh 2>/dev/null)" || true
+    export SSH_AUTH_SOCK
+fi
+
 # Actualizar el entorno D-Bus con el display Wayland de Malus DE
 # Propagar solo variables de ejecución necesarias para el display. La configuración
 # XDG, el backend GSettings y GTK_USE_PORTAL deben seguir siendo propios del proceso.
-dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER 2>/dev/null || true
+dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER SSH_AUTH_SOCK 2>/dev/null || true
 
 
 # 2. Iniciar Demonio de Fondo de Pantalla (Layer Background)
