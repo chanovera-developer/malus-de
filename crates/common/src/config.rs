@@ -303,7 +303,39 @@ overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
     // 7. Configuración de Mozilla Firefox (controles semáforo macOS vía userChrome.css)
     setup_firefox_configuration(&malus_config_dir);
 
+    // 8. Asegurar que el tema de cursores macOS integrado esté disponible en el entorno del usuario
+    let bundled_cursor_dirs = [
+        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/cursors")),
+        PathBuf::from("/usr/local/share/malus-de/cursors"),
+    ];
+    let user_icons_dir = PathBuf::from(&home).join(".local/share/icons");
+    let dot_icons_dir = PathBuf::from(&home).join(".icons");
+    let _ = std::fs::create_dir_all(&user_icons_dir);
+    let _ = std::fs::create_dir_all(&dot_icons_dir);
+    for variant in ["macOS", "macOS-White"] {
+        if let Some(src_dir) = bundled_cursor_dirs
+            .iter()
+            .map(|base| base.join(variant))
+            .find(|p| p.join("cursors").is_dir())
+        {
+            for target_base in [&user_icons_dir, &dot_icons_dir] {
+                let dst = target_base.join(variant);
+                if !dst.exists() {
+                    #[cfg(unix)]
+                    let _ = std::os::unix::fs::symlink(&src_dir, &dst);
+                }
+            }
+        }
+    }
+
     // Exportar variables de cursor para los procesos iniciados desde Malus DE
+    let xcursor_path = format!(
+        "{}:{}:/usr/local/share/malus-de/cursors:{}:/usr/share/icons",
+        user_icons_dir.display(),
+        dot_icons_dir.display(),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/cursors")
+    );
+    std::env::set_var("XCURSOR_PATH", xcursor_path);
     std::env::set_var("XCURSOR_THEME", &cursor_theme);
     std::env::set_var("XCURSOR_SIZE", cursor_size.to_string());
 
@@ -543,8 +575,20 @@ pub fn load_cursor_config() -> (String, u32) {
     let settings = std::fs::read_to_string(settings_path).unwrap_or_default();
     let (configured_theme, configured_size) = parse_cursor_config(&settings);
     let theme = configured_theme
-        .filter(|value| !value.is_empty())
-        .or_else(|| std::env::var("XCURSOR_THEME").ok())
+        .filter(|value| {
+            !value.is_empty()
+                && value != "Adwaita"
+                && value != "AdwaitaLegacy"
+                && value != "default"
+        })
+        .or_else(|| {
+            std::env::var("XCURSOR_THEME").ok().filter(|value| {
+                !value.is_empty()
+                    && value != "Adwaita"
+                    && value != "AdwaitaLegacy"
+                    && value != "default"
+            })
+        })
         .unwrap_or_else(|| "macOS".to_string());
     let size = configured_size
         .or_else(|| std::env::var("XCURSOR_SIZE").ok()?.parse::<u32>().ok())

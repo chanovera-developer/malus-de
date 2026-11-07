@@ -89,6 +89,19 @@ mkdir -p /usr/local/share/malus-de/themes
 cp -R "$PROJECT_DIR/assets/themes/." /usr/local/share/malus-de/themes/
 find /usr/local/share/malus-de/themes -type f -exec chmod 644 {} +
 
+# Instalar temas de cursores macOS integrados en el sistema y en Malus DE
+if [ -d "$PROJECT_DIR/assets/cursors/macOS" ]; then
+    echo "🖱️ Instalando temas de cursores macOS en /usr/share/icons y /usr/local/share/malus-de/cursors..."
+    mkdir -p /usr/local/share/malus-de/cursors /usr/share/icons
+    cp -Rf "$PROJECT_DIR/assets/cursors/macOS" /usr/local/share/malus-de/cursors/
+    cp -Rf "$PROJECT_DIR/assets/cursors/macOS" /usr/share/icons/
+    if [ -d "$PROJECT_DIR/assets/cursors/macOS-White" ]; then
+        cp -Rf "$PROJECT_DIR/assets/cursors/macOS-White" /usr/local/share/malus-de/cursors/
+        cp -Rf "$PROJECT_DIR/assets/cursors/macOS-White" /usr/share/icons/
+    fi
+    echo "   ✔ /usr/share/icons/macOS y /usr/local/share/malus-de/cursors/macOS"
+fi
+
 # Instalar lanzadores .desktop de aplicaciones de Malus DE
 mkdir -p /usr/share/applications
 cp -f "$PROJECT_DIR/data/dev.malus.Settings.desktop" /usr/share/applications/dev.malus.Settings.desktop

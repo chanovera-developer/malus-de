@@ -158,12 +158,33 @@ if ! gsettings set org.gnome.desktop.media-handling automount-open false; then
     exit 1
 fi
 
+# Asegurar que el tema de cursores macOS integrado esté disponible en el entorno del usuario
+mkdir -p "$HOME/.local/share/icons" "$HOME/.icons"
+for variant in "macOS" "macOS-White"; do
+    if [ -d "$DIR/assets/cursors/$variant/cursors" ]; then
+        if [ ! -d "$HOME/.local/share/icons/$variant/cursors" ]; then
+            cp -Rf "$DIR/assets/cursors/$variant" "$HOME/.local/share/icons/" 2>/dev/null || true
+        else
+            cp -f "$DIR/assets/cursors/$variant/index.theme" "$DIR/assets/cursors/$variant/cursor.theme" "$HOME/.local/share/icons/$variant/" 2>/dev/null || true
+        fi
+        if [ ! -d "$HOME/.icons/$variant/cursors" ]; then
+            cp -Rf "$DIR/assets/cursors/$variant" "$HOME/.icons/" 2>/dev/null || true
+        else
+            cp -f "$DIR/assets/cursors/$variant/index.theme" "$DIR/assets/cursors/$variant/cursor.theme" "$HOME/.icons/$variant/" 2>/dev/null || true
+        fi
+    fi
+done
+
 CURSOR_THEME="$(gsettings get org.gnome.desktop.interface cursor-theme 2>/dev/null | sed "s/^'//; s/'$//")" || CURSOR_THEME=""
 CURSOR_SIZE="$(gsettings get org.gnome.desktop.interface cursor-size 2>/dev/null)" || CURSOR_SIZE=""
-[ -n "$CURSOR_THEME" ] || CURSOR_THEME="macOS"
+if [ -z "$CURSOR_THEME" ] || [ "$CURSOR_THEME" = "Adwaita" ] || [ "$CURSOR_THEME" = "default" ]; then
+    CURSOR_THEME="macOS"
+    gsettings set org.gnome.desktop.interface cursor-theme "macOS" 2>/dev/null || true
+fi
 case "$CURSOR_SIZE" in
     ''|*[!0-9]*) CURSOR_SIZE=24 ;;
 esac
+export XCURSOR_PATH="$HOME/.local/share/icons:$HOME/.icons:$DIR/assets/cursors:/usr/local/share/malus-de/cursors:/usr/share/icons${XCURSOR_PATH:+:$XCURSOR_PATH}"
 export XCURSOR_THEME="$CURSOR_THEME"
 export XCURSOR_SIZE="$CURSOR_SIZE"
 
@@ -176,6 +197,8 @@ gtk-cursor-theme-name=$CURSOR_THEME
 gtk-cursor-theme-size=$CURSOR_SIZE
 gtk-theme-name=Adwaita
 EOF
+else
+    sed -i "s/^gtk-cursor-theme-name=.*/gtk-cursor-theme-name=$CURSOR_THEME/" "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" 2>/dev/null || true
 fi
 
 if [ ! -f "$XDG_CONFIG_HOME/gtk-4.0/settings.ini" ]; then
@@ -187,6 +210,8 @@ gtk-cursor-theme-name=$CURSOR_THEME
 gtk-cursor-theme-size=$CURSOR_SIZE
 gtk-theme-name=Adwaita
 EOF
+else
+    sed -i "s/^gtk-cursor-theme-name=.*/gtk-cursor-theme-name=$CURSOR_THEME/" "$XDG_CONFIG_HOME/gtk-4.0/settings.ini" 2>/dev/null || true
 fi
 
 for GTK_SETTINGS in "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" "$XDG_CONFIG_HOME/gtk-4.0/settings.ini"; do

@@ -2046,6 +2046,8 @@ fn get_installed_cursor_themes() -> Vec<(String, String, &'static str)> {
     let mut themes: Vec<(String, String, &'static str)> = Vec::new();
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     let dirs = [
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/cursors").to_string(),
+        "/usr/local/share/malus-de/cursors".to_string(),
         format!("{}/.icons", home),
         format!("{}/.local/share/icons", home),
         "/usr/share/icons".to_string(),
