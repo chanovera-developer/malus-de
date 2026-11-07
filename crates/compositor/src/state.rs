@@ -1898,7 +1898,7 @@ impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for MalusSta
         use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
         let win_opt = self.window_for_surface(toplevel.wl_surface());
         let cannot_have_ssd = win_opt.as_ref().is_some_and(|w| {
-            is_browser_window(w) || is_nautilus_window(w) || is_settings_window(w)
+            is_browser_window(w) || is_gnome_window(w)
         });
         let effective_mode = if cannot_have_ssd {
             Mode::ClientSide
@@ -1928,6 +1928,69 @@ impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for MalusSta
         });
         toplevel.send_configure();
     }
+}
+
+pub fn is_gnome_identity(app_id: Option<&str>, title: Option<&str>) -> bool {
+    if let Some(id) = app_id {
+        let lower = id.to_lowercase();
+        if lower.starts_with("org.gnome.")
+            || lower.contains(".gnome.")
+            || lower.starts_with("gnome-")
+            || lower.contains("nautilus")
+            || lower.contains("control-center")
+            || lower.contains("malus.settings")
+            || lower.contains("malus-de-settings")
+            || lower.contains("malus_de_settings")
+            || lower.contains("ptyxis")
+            || lower.contains("loupe")
+            || lower.contains("baobab")
+            || lower.contains("epiphany")
+            || lower.contains("evince")
+            || lower.contains("papers")
+            || lower.contains("totem")
+            || lower.contains("gedit")
+            || lower.contains("texteditor")
+            || lower.contains("calculator")
+            || lower.contains("calendar")
+            || lower.contains("systemmonitor")
+            || lower.contains("weather")
+            || lower.contains("clocks")
+            || lower.contains("contacts")
+            || lower.contains("characters")
+            || lower.contains("diskutility")
+            || lower.contains("file-roller")
+            || lower.contains("seahorse")
+        {
+            return true;
+        }
+    }
+    if let Some(t) = title {
+        let lower = t.to_lowercase();
+        if lower.contains("archivos")
+            || lower.contains("carpetas")
+            || lower.contains("ajustes del sistema")
+            || lower.contains("configuración")
+            || lower.contains("monitor del sistema")
+            || lower.contains("calculadora")
+            || lower.contains("calendario")
+            || lower.contains("editor de texto")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Identifica si una ventana pertenece al ecosistema GNOME / GTK con CSD nativo.
+pub fn is_gnome_window(window: &smithay::desktop::Window) -> bool {
+    let matches = |surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface| {
+        let (app_id, title) = toplevel_info(surface);
+        is_gnome_identity(app_id.as_deref(), title.as_deref())
+    };
+    window.wl_surface().is_some_and(|surface| matches(surface.as_ref()))
+        || window
+            .toplevel()
+            .is_some_and(|toplevel| matches(toplevel.wl_surface()))
 }
 
 pub fn is_nautilus_identity(app_id: Option<&str>, title: Option<&str>) -> bool {
@@ -1986,8 +2049,8 @@ pub fn is_settings_window(window: &smithay::desktop::Window) -> bool {
 
 /// Determina si una ventana tiene activadas las decoraciones del lado del servidor (SSD) estilo macOS.
 pub fn window_uses_ssd(window: &smithay::desktop::Window) -> bool {
-    // Nautilus, Ajustes y navegadores NUNCA llevan barra SSD superior (va integrada u oculta)
-    if is_browser_window(window) || is_nautilus_window(window) || is_settings_window(window) {
+    // Aplicaciones de GNOME, Nautilus, Ajustes y navegadores NUNCA llevan barra SSD superior (usan su propia barra nativa u oculta)
+    if is_browser_window(window) || is_gnome_window(window) {
         return false;
     }
     let Some(toplevel) = window.toplevel() else {
@@ -3336,24 +3399,29 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_nautilus_and_settings_identities() {
-        use super::{is_nautilus_identity, is_settings_identity};
+    fn recognizes_gnome_identities() {
+        use super::is_gnome_identity;
 
-        // Nautilus (Archivos)
-        assert!(is_nautilus_identity(Some("org.gnome.Nautilus"), None));
-        assert!(is_nautilus_identity(Some("nautilus"), None));
-        assert!(is_nautilus_identity(None, Some("Archivos")));
-        assert!(is_nautilus_identity(None, Some("Carpetas")));
-        assert!(!is_nautilus_identity(Some("firefox"), Some("Firefox")));
+        // Apps comunes de GNOME
+        assert!(is_gnome_identity(Some("org.gnome.TextEditor"), None));
+        assert!(is_gnome_identity(Some("org.gnome.Ptyxis"), None));
+        assert!(is_gnome_identity(Some("org.gnome.Calculator"), None));
+        assert!(is_gnome_identity(Some("org.gnome.Calendar"), None));
+        assert!(is_gnome_identity(Some("org.gnome.Loupe"), None));
+        assert!(is_gnome_identity(Some("org.gnome.SystemMonitor"), None));
+        assert!(is_gnome_identity(Some("org.gnome.DiskUtility"), None));
+        assert!(is_gnome_identity(Some("gnome-terminal"), None));
+        assert!(is_gnome_identity(Some("gnome-calculator"), None));
+        assert!(is_gnome_identity(Some("org.gnome.Nautilus"), None));
+        assert!(is_gnome_identity(Some("dev.malus.Settings"), None));
+        assert!(is_gnome_identity(None, Some("Editor de texto")));
+        assert!(is_gnome_identity(None, Some("Calculadora")));
 
-        // Ajustes / Configuración
-        assert!(is_settings_identity(Some("dev.malus.Settings"), None));
-        assert!(is_settings_identity(Some("malus-de-settings"), None));
-        assert!(is_settings_identity(Some("gnome-control-center"), None));
-        assert!(is_settings_identity(None, Some("Ajustes del Sistema")));
-        assert!(is_settings_identity(None, Some("Configuración")));
-        assert!(is_settings_identity(None, Some("Settings")));
-        assert!(!is_settings_identity(Some("org.gnome.TextEditor"), Some("Editor de texto")));
+        // Aplicaciones que NO son GNOME y SÍ pueden recibir SSD si lo solicitan
+        assert!(!is_gnome_identity(Some("zapfast"), Some("ZapFast")));
+        assert!(!is_gnome_identity(Some("alacritty"), Some("Alacritty")));
+        assert!(!is_gnome_identity(Some("foot"), Some("Foot")));
+        assert!(!is_gnome_identity(Some("code"), Some("Visual Studio Code")));
     }
 
     #[test]
