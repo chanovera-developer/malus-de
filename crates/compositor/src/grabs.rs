@@ -44,6 +44,7 @@ impl PointerGrab<MalusState> for ResizeSurfaceGrab {
             });
             handle.motion(data, under_target, event);
             handle.frame(data);
+            data.update_ssd_hover(cur_loc);
             return;
         }
 
@@ -57,6 +58,20 @@ impl PointerGrab<MalusState> for ResizeSurfaceGrab {
         let dx = delta.x as i32;
         let dy = delta.y as i32;
 
+        let (min_w, min_h) = self
+            .window
+            .wl_surface()
+            .map(|wl_surf| {
+                smithay::wayland::compositor::with_states(&wl_surf, |states| {
+                    let mut guard = states
+                        .cached_state
+                        .get::<smithay::wayland::shell::xdg::SurfaceCachedState>();
+                    let cur = guard.current();
+                    (cur.min_size.w.max(180), cur.min_size.h.max(120))
+                })
+            })
+            .unwrap_or((180, 120));
+
         let mut new_width = self.initial_window_size.w;
         let mut new_height = self.initial_window_size.h;
         let mut new_x = self.initial_window_location.x;
@@ -64,38 +79,38 @@ impl PointerGrab<MalusState> for ResizeSurfaceGrab {
 
         match self.edges {
             ResizeEdge::Left => {
-                new_width = (self.initial_window_size.w - dx).max(180);
+                new_width = (self.initial_window_size.w - dx).max(min_w);
                 new_x = self.initial_window_location.x + (self.initial_window_size.w - new_width);
             }
             ResizeEdge::Right => {
-                new_width = (self.initial_window_size.w + dx).max(180);
+                new_width = (self.initial_window_size.w + dx).max(min_w);
             }
             ResizeEdge::Top => {
-                new_height = (self.initial_window_size.h - dy).max(120);
+                new_height = (self.initial_window_size.h - dy).max(min_h);
                 new_y = self.initial_window_location.y + (self.initial_window_size.h - new_height);
             }
             ResizeEdge::Bottom => {
-                new_height = (self.initial_window_size.h + dy).max(120);
+                new_height = (self.initial_window_size.h + dy).max(min_h);
             }
             ResizeEdge::TopLeft => {
-                new_width = (self.initial_window_size.w - dx).max(180);
+                new_width = (self.initial_window_size.w - dx).max(min_w);
                 new_x = self.initial_window_location.x + (self.initial_window_size.w - new_width);
-                new_height = (self.initial_window_size.h - dy).max(120);
+                new_height = (self.initial_window_size.h - dy).max(min_h);
                 new_y = self.initial_window_location.y + (self.initial_window_size.h - new_height);
             }
             ResizeEdge::TopRight => {
-                new_width = (self.initial_window_size.w + dx).max(180);
-                new_height = (self.initial_window_size.h - dy).max(120);
+                new_width = (self.initial_window_size.w + dx).max(min_w);
+                new_height = (self.initial_window_size.h - dy).max(min_h);
                 new_y = self.initial_window_location.y + (self.initial_window_size.h - new_height);
             }
             ResizeEdge::BottomLeft => {
-                new_width = (self.initial_window_size.w - dx).max(180);
+                new_width = (self.initial_window_size.w - dx).max(min_w);
                 new_x = self.initial_window_location.x + (self.initial_window_size.w - new_width);
-                new_height = (self.initial_window_size.h + dy).max(120);
+                new_height = (self.initial_window_size.h + dy).max(min_h);
             }
             ResizeEdge::BottomRight => {
-                new_width = (self.initial_window_size.w + dx).max(180);
-                new_height = (self.initial_window_size.h + dy).max(120);
+                new_width = (self.initial_window_size.w + dx).max(min_w);
+                new_height = (self.initial_window_size.h + dy).max(min_h);
             }
             _ => {}
         }
@@ -103,18 +118,25 @@ impl PointerGrab<MalusState> for ResizeSurfaceGrab {
         let new_size = Size::from((new_width, new_height));
         let new_loc = Point::from((new_x, new_y));
 
+        data.cursor_status = smithay::input::pointer::CursorImageStatus::Named(
+            cursor_icon_for_resize_edge(self.edges),
+        );
+
         if new_size != self.last_window_size {
             self.last_window_size = new_size;
             if let Some(toplevel) = self.window.toplevel() {
                 toplevel.with_pending_state(|top_state| {
                     top_state.size = Some(new_size);
+                    top_state.states.unset(XdgState::Maximized);
+                    top_state.states.unset(XdgState::TiledLeft);
+                    top_state.states.unset(XdgState::TiledRight);
                     top_state.states.set(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Resizing);
                 });
                 toplevel.send_configure();
             }
         }
 
-        if new_x != self.initial_window_location.x || new_y != self.initial_window_location.y {
+        if data.space.element_location(&self.window) != Some(new_loc) {
             data.space.map_element(self.window.clone(), new_loc, true);
         }
     }
@@ -166,6 +188,7 @@ impl PointerGrab<MalusState> for ResizeSurfaceGrab {
                 },
             );
             handle.frame(data);
+            data.update_ssd_hover(cur_loc);
             tracing::info!("✅ ResizeSurfaceGrab finalizado y foco restaurado");
         }
     }
@@ -263,7 +286,10 @@ impl PointerGrab<MalusState> for ResizeSurfaceGrab {
         &self.start_data
     }
 
-    fn unset(&mut self, _data: &mut MalusState) {}
+    fn unset(&mut self, data: &mut MalusState) {
+        data.ssd.grab_active = false;
+        data.ssd.cursor_override = false;
+    }
 }
 
 pub struct MoveSurfaceGrab {
@@ -297,6 +323,7 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
             });
             handle.motion(data, under_target, event);
             handle.frame(data);
+            data.update_ssd_hover(cur_loc);
             return;
         }
 
@@ -342,7 +369,12 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
                 let cursor_x = event.location.x as i32;
                 let cursor_y = event.location.y as i32;
                 let new_x = (cursor_x - float_w / 2).max(0);
-                let new_loc = Point::from((new_x, (cursor_y - 15).max(32)));
+                let new_y = if crate::state::window_uses_ssd(&self.window) {
+                    (cursor_y + crate::ssd::SSD_TITLEBAR_HEIGHT / 2).max(32 + crate::ssd::SSD_TITLEBAR_HEIGHT)
+                } else {
+                    (cursor_y - 15).max(32)
+                };
+                let new_loc = Point::from((new_x, new_y));
                 self.initial_window_location = new_loc;
                 self.start_data.location = event.location;
                 data.space.map_element(self.window.clone(), new_loc, true);
@@ -438,6 +470,7 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
                     },
                 );
                 handle.frame(data);
+                data.update_ssd_hover(cur_loc);
                 return;
             }
 
@@ -499,6 +532,7 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
                 },
             );
             handle.frame(data);
+            data.update_ssd_hover(cur_loc);
         }
     }
 
@@ -595,7 +629,9 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
         &self.start_data
     }
 
-    fn unset(&mut self, _data: &mut MalusState) {}
+    fn unset(&mut self, data: &mut MalusState) {
+        data.ssd.grab_active = false;
+    }
 }
 
 pub fn evaluate_snap(
@@ -650,8 +686,9 @@ pub fn check_window_resize_edge(
     point: Point<f64, Logical>,
     thickness: f64,
 ) -> Option<ResizeEdge> {
-    // Solo aplicar a Firefox; las ventanas GTK y Electron gestionan sus propios bordes y botones sin interferencias
-    if !crate::state::is_firefox_window(window) {
+    let uses_ssd = crate::state::window_uses_ssd(window);
+    // Solo aplicar a Firefox y a ventanas con decoración SSD del compositor
+    if !crate::state::is_firefox_window(window) && !uses_ssd {
         return None;
     }
 
@@ -669,10 +706,15 @@ pub fn check_window_resize_edge(
         return None;
     }
 
-    let win_x = (loc.x + geo.loc.x) as f64;
-    let win_y = (loc.y + geo.loc.y) as f64;
+    let ssd_top = if uses_ssd {
+        crate::ssd::SSD_TITLEBAR_HEIGHT
+    } else {
+        0
+    };
+    let win_x = loc.x as f64;
+    let win_y = (loc.y - ssd_top) as f64;
     let win_w = geo.size.w as f64;
-    let win_h = geo.size.h as f64;
+    let win_h = (geo.size.h + ssd_top) as f64;
 
     let rel_x = point.x - win_x;
     let rel_y = point.y - win_y;
@@ -682,9 +724,10 @@ pub fn check_window_resize_edge(
         return None;
     }
 
+    let top_inner = if uses_ssd { 5.0 } else { thickness };
     let on_left = rel_x <= thickness;
     let on_right = rel_x >= win_w - thickness;
-    let on_top = rel_y <= thickness;
+    let on_top = rel_y <= top_inner;
     let on_bottom = rel_y >= win_h - thickness;
 
     if !on_left && !on_right && !on_top && !on_bottom {
@@ -693,20 +736,48 @@ pub fn check_window_resize_edge(
 
     // Proteger zona de controles de ventana (semáforo macOS en esquina superior izquierda x in [8, 72])
     // para garantizar que los clics en los botones de cerrar/minimizar/maximizar nunca se confundan con resize
-    if on_top && rel_x > thickness && rel_x < 72.0 {
+    if on_top && rel_x > thickness && rel_x < 72.0 && (!uses_ssd || rel_y > 2.0) {
+        return None;
+    }
+    if uses_ssd && on_left && rel_y >= 8.0 && rel_y <= 30.0 && rel_x >= 10.0 {
         return None;
     }
 
+    let corner_span = 16.0;
+    let in_left_corner = rel_x <= corner_span;
+    let in_right_corner = rel_x >= win_w - corner_span;
+    let in_top_corner = rel_y <= corner_span;
+    let in_bottom_corner = rel_y >= win_h - corner_span;
+
     match (on_left, on_right, on_top, on_bottom) {
-        (true, _, true, _) => Some(ResizeEdge::TopLeft),
-        (_, true, true, _) => Some(ResizeEdge::TopRight),
-        (true, _, _, true) => Some(ResizeEdge::BottomLeft),
-        (_, true, _, true) => Some(ResizeEdge::BottomRight),
+        (true, _, _, _) if in_top_corner => Some(ResizeEdge::TopLeft),
+        (_, _, true, _) if in_left_corner => Some(ResizeEdge::TopLeft),
+        (_, true, _, _) if in_top_corner => Some(ResizeEdge::TopRight),
+        (_, _, true, _) if in_right_corner => Some(ResizeEdge::TopRight),
+        (true, _, _, _) if in_bottom_corner => Some(ResizeEdge::BottomLeft),
+        (_, _, _, true) if in_left_corner => Some(ResizeEdge::BottomLeft),
+        (_, true, _, _) if in_bottom_corner => Some(ResizeEdge::BottomRight),
+        (_, _, _, true) if in_right_corner => Some(ResizeEdge::BottomRight),
         (true, _, _, _) => Some(ResizeEdge::Left),
         (_, true, _, _) => Some(ResizeEdge::Right),
         (_, _, true, _) => Some(ResizeEdge::Top),
         (_, _, _, true) => Some(ResizeEdge::Bottom),
         _ => None,
+    }
+}
+
+pub fn cursor_icon_for_resize_edge(edge: ResizeEdge) -> smithay::input::pointer::CursorIcon {
+    use smithay::input::pointer::CursorIcon;
+    match edge {
+        ResizeEdge::Top => CursorIcon::NResize,
+        ResizeEdge::Bottom => CursorIcon::SResize,
+        ResizeEdge::Left => CursorIcon::WResize,
+        ResizeEdge::Right => CursorIcon::EResize,
+        ResizeEdge::TopLeft => CursorIcon::NwResize,
+        ResizeEdge::BottomRight => CursorIcon::SeResize,
+        ResizeEdge::TopRight => CursorIcon::NeResize,
+        ResizeEdge::BottomLeft => CursorIcon::SwResize,
+        _ => CursorIcon::Default,
     }
 }
 
@@ -720,6 +791,20 @@ pub fn find_window_resize_edge_under(
         let Some(loc) = space.element_location(window) else { continue };
         if let Some(edge) = check_window_resize_edge(window, loc, point, thickness) {
             return Some((window.clone(), edge, loc));
+        }
+        let geo = window.geometry();
+        let ssd_top = if crate::state::window_uses_ssd(window) {
+            crate::ssd::SSD_TITLEBAR_HEIGHT
+        } else {
+            0
+        };
+        let full_rect = Rectangle::new(
+            Point::from((loc.x, loc.y - ssd_top)),
+            Size::from((geo.size.w, geo.size.h + ssd_top)),
+        )
+        .to_f64();
+        if full_rect.contains(point) {
+            return None;
         }
     }
     None

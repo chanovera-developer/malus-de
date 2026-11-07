@@ -194,6 +194,7 @@ pub struct MalusState {
     pub dnd_icon: Option<WlSurface>,
     pub active_screen_recording: Option<crate::recording::ScreenRecordingSession>,
     pub screenshot_ui: crate::screenshot_ui::ScreenshotUiState,
+    pub ssd: crate::ssd::SsdManager,
 }
 
 pub fn guess_icon_name(app_id: &str, title: &str) -> String {
@@ -825,6 +826,7 @@ impl MalusState {
             dnd_icon: None,
             active_screen_recording: None,
             screenshot_ui: crate::screenshot_ui::ScreenshotUiState::new(),
+            ssd: crate::ssd::SsdManager::new(),
         }
     }
 
@@ -1754,11 +1756,18 @@ pub fn snap_window(
     };
 
     let is_currently_snapped = window.toplevel().map(|t| {
-        let states = &t.current_state().states;
-        states.contains(XdgState::Maximized)
-            || states.contains(XdgState::TiledLeft)
-            || states.contains(XdgState::TiledRight)
-            || states.contains(XdgState::Fullscreen)
+        let cur = &t.current_state().states;
+        let cur_snapped = cur.contains(XdgState::Maximized)
+            || cur.contains(XdgState::TiledLeft)
+            || cur.contains(XdgState::TiledRight)
+            || cur.contains(XdgState::Fullscreen);
+        let pend_snapped = t.with_pending_state(|p| {
+            p.states.contains(XdgState::Maximized)
+                || p.states.contains(XdgState::TiledLeft)
+                || p.states.contains(XdgState::TiledRight)
+                || p.states.contains(XdgState::Fullscreen)
+        });
+        cur_snapped || pend_snapped
     }).unwrap_or(false);
 
     // Guardar geometría previa flotante SOLO si la ventana no estaba ya snapped y su tamaño actual es válido
@@ -1766,20 +1775,38 @@ pub fn snap_window(
         state.window_restore_geometries.insert(surface.clone(), (start_loc, start_size));
     }
 
+    let ssd_top = if window_uses_ssd(window) {
+        crate::ssd::SSD_TITLEBAR_HEIGHT
+    } else {
+        0
+    };
+
     let (target_loc, target_size, xdg_states) = match mode {
         SnapMode::LeftHalf => (
-            Point::from((usable_zone.loc.x, usable_zone.loc.y)),
-            Some(Size::from((usable_zone.size.w / 2, usable_zone.size.h))),
+            Point::from((usable_zone.loc.x, usable_zone.loc.y + ssd_top)),
+            Some(Size::from((
+                usable_zone.size.w / 2,
+                (usable_zone.size.h - ssd_top).max(100),
+            ))),
             vec![XdgState::TiledLeft],
         ),
         SnapMode::RightHalf => (
-            Point::from((usable_zone.loc.x + usable_zone.size.w / 2, usable_zone.loc.y)),
-            Some(Size::from((usable_zone.size.w - usable_zone.size.w / 2, usable_zone.size.h))),
+            Point::from((
+                usable_zone.loc.x + usable_zone.size.w / 2,
+                usable_zone.loc.y + ssd_top,
+            )),
+            Some(Size::from((
+                usable_zone.size.w - usable_zone.size.w / 2,
+                (usable_zone.size.h - ssd_top).max(100),
+            ))),
             vec![XdgState::TiledRight],
         ),
         SnapMode::Maximize => (
-            Point::from((usable_zone.loc.x, usable_zone.loc.y)),
-            Some(Size::from((usable_zone.size.w, usable_zone.size.h))),
+            Point::from((usable_zone.loc.x, usable_zone.loc.y + ssd_top)),
+            Some(Size::from((
+                usable_zone.size.w,
+                (usable_zone.size.h - ssd_top).max(100),
+            ))),
             vec![XdgState::Maximized],
         ),
         SnapMode::CenterRestore => {
@@ -1791,7 +1818,7 @@ pub fn snap_window(
                 };
                 (saved_loc, size_opt, vec![])
             } else {
-                let default_loc = Point::from((usable_zone.loc.x + 80, usable_zone.loc.y + 80));
+                let default_loc = Point::from((usable_zone.loc.x + 80, usable_zone.loc.y + 80 + ssd_top));
                 (default_loc, None, vec![])
             }
         }
@@ -1855,8 +1882,27 @@ delegate_xdg_decoration!(MalusState);
 
 impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for MalusState {
     fn new_decoration(&mut self, toplevel: smithay::wayland::shell::xdg::ToplevelSurface) {
+        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+        let win_opt = self.window_for_surface(toplevel.wl_surface());
+        let is_browser = win_opt.as_ref().is_some_and(is_browser_window);
+        let mode = if is_browser {
+            Mode::ClientSide
+        } else {
+            Mode::ServerSide
+        };
+        if mode == Mode::ServerSide {
+            if let Some(ref win) = win_opt {
+                if let Some(loc) = self.space.element_location(win) {
+                    let min_y = 36 + crate::ssd::SSD_TITLEBAR_HEIGHT;
+                    if loc.y < min_y {
+                        self.space
+                            .map_element(win.clone(), Point::from((loc.x, min_y + 8)), false);
+                    }
+                }
+            }
+        }
         toplevel.with_pending_state(|state| {
-            state.decoration_mode = Some(smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode::ClientSide);
+            state.decoration_mode = Some(mode);
         });
         toplevel.send_configure();
     }
@@ -1865,17 +1911,84 @@ impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for MalusSta
         toplevel: smithay::wayland::shell::xdg::ToplevelSurface,
         mode: smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
     ) {
+        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+        let win_opt = self.window_for_surface(toplevel.wl_surface());
+        let is_browser = win_opt.as_ref().is_some_and(is_browser_window);
+        let effective_mode = if is_browser {
+            Mode::ClientSide
+        } else {
+            mode
+        };
+        if effective_mode == Mode::ServerSide {
+            if let Some(ref win) = win_opt {
+                if let Some(loc) = self.space.element_location(win) {
+                    let min_y = 36 + crate::ssd::SSD_TITLEBAR_HEIGHT;
+                    if loc.y < min_y {
+                        self.space
+                            .map_element(win.clone(), Point::from((loc.x, min_y + 8)), false);
+                    }
+                }
+            }
+        }
+        toplevel.with_pending_state(|state| {
+            state.decoration_mode = Some(effective_mode);
+        });
+        toplevel.send_configure();
+    }
+    fn unset_mode(&mut self, toplevel: smithay::wayland::shell::xdg::ToplevelSurface) {
+        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+        let is_browser = self
+            .window_for_surface(toplevel.wl_surface())
+            .is_some_and(|w| is_browser_window(&w));
+        let mode = if is_browser {
+            Mode::ClientSide
+        } else {
+            Mode::ServerSide
+        };
         toplevel.with_pending_state(|state| {
             state.decoration_mode = Some(mode);
         });
         toplevel.send_configure();
     }
-    fn unset_mode(&mut self, toplevel: smithay::wayland::shell::xdg::ToplevelSurface) {
-        toplevel.with_pending_state(|state| {
-            state.decoration_mode = Some(smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode::ClientSide);
-        });
-        toplevel.send_configure();
+}
+
+/// Determina si una ventana tiene activadas las decoraciones del lado del servidor (SSD) estilo macOS.
+pub fn window_uses_ssd(window: &smithay::desktop::Window) -> bool {
+    if is_browser_window(window) {
+        return false;
     }
+    let Some(toplevel) = window.toplevel() else {
+        return false;
+    };
+    let is_fullscreen = toplevel
+        .current_state()
+        .states
+        .contains(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Fullscreen);
+    if is_fullscreen {
+        return false;
+    }
+    use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+    let current_is_ssd = toplevel.current_state().decoration_mode == Some(Mode::ServerSide);
+    let pending_is_ssd = toplevel.with_pending_state(|s| s.decoration_mode == Some(Mode::ServerSide));
+    current_is_ssd || pending_is_ssd
+}
+
+/// Obtiene el título visible que debe mostrarse en la barra SSD de la ventana.
+pub fn window_title_for_ssd(window: &smithay::desktop::Window) -> String {
+    if let Some(surf) = window.wl_surface() {
+        let (app_id, title) = toplevel_info(&surf);
+        if let Some(t) = title {
+            if !t.trim().is_empty() {
+                return t;
+            }
+        }
+        if let Some(id) = app_id {
+            if !id.trim().is_empty() {
+                return id;
+            }
+        }
+    }
+    String::new()
 }
 
 impl FractionalScaleHandler for MalusState {
@@ -1890,9 +2003,265 @@ impl FractionalScaleHandler for MalusState {
 }
 
 impl MalusState {
+    /// Detecta si el punto global cae sobre la barra de título SSD de alguna ventana (respetando orden Z).
+    pub fn ssd_titlebar_under(
+        &self,
+        point: Point<f64, Logical>,
+    ) -> Option<(
+        smithay::desktop::Window,
+        Point<i32, Logical>,
+        crate::ssd::SsdHit,
+        f64,
+        f64,
+        f64,
+    )> {
+        for window in self.space.elements().rev() {
+            let Some(loc) = self.space.element_location(window) else {
+                continue;
+            };
+            let geo = window.geometry();
+            if geo.size.w <= 0 || geo.size.h <= 0 {
+                continue;
+            }
+            if window_uses_ssd(window) {
+                let tb_x = loc.x as f64;
+                let tb_y = (loc.y - crate::ssd::SSD_TITLEBAR_HEIGHT) as f64;
+                let tb_w = geo.size.w as f64;
+                let tb_h = crate::ssd::SSD_TITLEBAR_HEIGHT as f64;
+                if point.x >= tb_x
+                    && point.x <= tb_x + tb_w
+                    && point.y >= tb_y
+                    && point.y <= tb_y + tb_h
+                {
+                    let lx = point.x - tb_x;
+                    let ly = point.y - tb_y;
+                    if let Some(hit) = crate::ssd::hit_test_titlebar(lx, ly, tb_w) {
+                        return Some((window.clone(), loc, hit, lx, ly, tb_w));
+                    }
+                }
+            }
+            let body_rect = Rectangle::new(loc, geo.size).to_f64();
+            if body_rect.contains(point) {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// Actualiza el estado de hover de los botones semáforo SSD y el icono de redimensión perimetral.
+    pub fn update_ssd_hover(&mut self, point: Point<f64, Logical>) {
+        if self.ssd.grab_active {
+            return;
+        }
+        let occluded_by_top_ui = self.spotlight.is_open()
+            || self.screenshot_ui.is_open()
+            || self.popup_under(point).is_some()
+            || self.space.outputs().any(|output| {
+                let layer_map = smithay::desktop::layer_map_for_output(output);
+                let under_layer = layer_map
+                    .layer_under(smithay::wayland::shell::wlr_layer::Layer::Overlay, point)
+                    .filter(|l| {
+                        !(l.namespace() == "malus-app-switcher" && !self.app_switcher.is_active)
+                    })
+                    .or_else(|| {
+                        layer_map.layer_under(smithay::wayland::shell::wlr_layer::Layer::Top, point)
+                    });
+                under_layer.is_some_and(|layer| {
+                    layer_map.layer_geometry(layer).is_some_and(|geo| {
+                        let local_point = point - geo.loc.to_f64();
+                        if layer.namespace() == "malus-top-bar" && local_point.y >= 32.0 {
+                            false
+                        } else {
+                            layer
+                                .surface_under(
+                                    local_point,
+                                    smithay::desktop::WindowSurfaceType::all(),
+                                )
+                                .is_some()
+                        }
+                    })
+                })
+            });
+
+        if !occluded_by_top_ui {
+            if let Some((_win, edge, _loc)) =
+                crate::grabs::find_window_resize_edge_under(&self.space, point, 8.0)
+            {
+                self.ssd.cursor_override = true;
+                self.ssd.update_hover(None, 0.0, 0.0, 0.0);
+                self.cursor_status = smithay::input::pointer::CursorImageStatus::Named(
+                    crate::grabs::cursor_icon_for_resize_edge(edge),
+                );
+                return;
+            }
+            if let Some((win, _, _, lx, ly, w)) = self.ssd_titlebar_under(point) {
+                let surf = win.wl_surface().map(|s| s.into_owned());
+                self.ssd.cursor_override = true;
+                self.ssd.update_hover(surf, lx, ly, w);
+                self.cursor_status = smithay::input::pointer::CursorImageStatus::default_named();
+                return;
+            }
+        }
+
+        if self.ssd.cursor_override
+            || self.ssd.hovered_surface.is_some()
+            || !matches!(
+                self.cursor_status,
+                smithay::input::pointer::CursorImageStatus::Surface(_)
+                    | smithay::input::pointer::CursorImageStatus::Hidden
+            )
+        {
+            self.cursor_status = smithay::input::pointer::CursorImageStatus::default_named();
+        }
+        self.ssd.cursor_override = false;
+        self.ssd.update_hover(None, 0.0, 0.0, 0.0);
+    }
+
+    /// Procesa clics sobre la barra de título SSD (botones de cerrar, minimizar, maximizar, doble clic y arrastre).
+    /// Devuelve `true` si el evento fue consumido por la decoración SSD.
+    pub fn handle_ssd_pointer_button(
+        &mut self,
+        point: Point<f64, Logical>,
+        button_code: u32,
+        serial: Serial,
+    ) -> bool {
+        if button_code != 0x110 || self.popup_grab_active() {
+            return false;
+        }
+        let Some((window, loc, hit, _, _, _)) = self.ssd_titlebar_under(point) else {
+            return false;
+        };
+
+        let was_already_top = self
+            .space
+            .elements()
+            .last()
+            .map(|w| w == &window)
+            .unwrap_or(false);
+        if !was_already_top {
+            self.space.raise_element(&window, true);
+        }
+        if let Some(surface) = window.wl_surface() {
+            if let Some(keyboard) = self.seat.get_keyboard() {
+                if keyboard.current_focus().as_ref() != Some(surface.as_ref()) {
+                    keyboard.set_focus(self, Some(surface.clone().into_owned()), serial);
+                    self.notify_active_app(Some(&surface));
+                }
+            }
+        }
+
+        let target_output = self
+            .space
+            .outputs()
+            .find(|o| {
+                self.space
+                    .output_geometry(o)
+                    .map(|g| g.to_f64().contains(point))
+                    .unwrap_or(false)
+            })
+            .or_else(|| self.space.outputs().next())
+            .cloned();
+        let usable_zone = target_output
+            .as_ref()
+            .map(|o| self.usable_zone_for_output(o))
+            .unwrap_or_else(|| Rectangle::new((0, 32).into(), (1920, 1000).into()));
+
+        match hit {
+            crate::ssd::SsdHit::Button(crate::ssd::SsdButton::Close) => {
+                if let Some(toplevel) = window.toplevel() {
+                    toplevel.send_close();
+                }
+                true
+            }
+            crate::ssd::SsdHit::Button(crate::ssd::SsdButton::Minimize) => {
+                if let Some(toplevel) = window.toplevel().cloned() {
+                    self.minimize_toplevel(&toplevel);
+                }
+                true
+            }
+            crate::ssd::SsdHit::Button(crate::ssd::SsdButton::Maximize) => {
+                let is_maximized = window
+                    .toplevel()
+                    .map(|t| t.current_state().states.contains(XdgState::Maximized))
+                    .unwrap_or(false);
+                let mode = if is_maximized {
+                    SnapMode::CenterRestore
+                } else {
+                    SnapMode::Maximize
+                };
+                snap_window(self, &window, mode, usable_zone);
+                true
+            }
+            crate::ssd::SsdHit::Titlebar => {
+                let now = Instant::now();
+                let is_double_click = if let Some((ref prev_surf, prev_time, prev_pt)) =
+                    self.ssd.last_titlebar_click
+                {
+                    window.wl_surface().as_deref() == Some(prev_surf)
+                        && now.saturating_duration_since(prev_time) <= Duration::from_millis(400)
+                        && (point.x - prev_pt.x).hypot(point.y - prev_pt.y) <= 10.0
+                } else {
+                    false
+                };
+
+                if is_double_click {
+                    self.ssd.last_titlebar_click = None;
+                    let is_maximized = window
+                        .toplevel()
+                        .map(|t| t.current_state().states.contains(XdgState::Maximized))
+                        .unwrap_or(false);
+                    let mode = if is_maximized {
+                        SnapMode::CenterRestore
+                    } else {
+                        SnapMode::Maximize
+                    };
+                    snap_window(self, &window, mode, usable_zone);
+                    return true;
+                }
+
+                if let Some(surf) = window.wl_surface() {
+                    self.ssd.last_titlebar_click = Some((surf.into_owned(), now, point));
+                }
+
+                if let Some(pointer) = self.seat.get_pointer() {
+                    let is_snapped = window
+                        .toplevel()
+                        .map(|t| {
+                            let states = &t.current_state().states;
+                            states.contains(XdgState::Maximized)
+                                || states.contains(XdgState::TiledLeft)
+                                || states.contains(XdgState::TiledRight)
+                        })
+                        .unwrap_or(false);
+                    let start_data = smithay::input::pointer::GrabStartData {
+                        focus: None,
+                        button: button_code,
+                        location: point,
+                    };
+                    let grab = crate::grabs::MoveSurfaceGrab {
+                        start_data,
+                        window: window.clone(),
+                        initial_window_location: loc,
+                        is_snapped,
+                        has_dragged: false,
+                    };
+                    self.ssd.grab_active = true;
+                    pointer.set_grab(
+                        self,
+                        grab,
+                        serial,
+                        smithay::input::pointer::Focus::Clear,
+                    );
+                }
+                true
+            }
+        }
+    }
+
     /// Limpia referencias a `WlSurface` que ya han sido destruidas para evitar fugas de memoria a lo largo de la sesión
     pub fn cleanup_stale_surfaces(&mut self) {
         use smithay::utils::IsAlive;
+        self.ssd.retain_alive();
         self.window_restore_geometries.retain(|s, _| s.alive());
         self.snap_transitions.retain(|s, _| s.alive());
         self.centered_transient_windows.retain(|s, _| s.alive());
@@ -2098,7 +2467,7 @@ impl CompositorHandler for MalusState {
                     || states.contains(XdgState::Fullscreen)
             }).unwrap_or(false);
 
-            if !is_currently_snapped {
+            if !is_currently_snapped && !self.snap_transitions.contains_key(surface) {
                 let geo = window.geometry();
                 let loc = self.space.element_location(&window).unwrap_or_default();
                 if geo.size.w > 150 && geo.size.h > 150 {
@@ -2212,6 +2581,12 @@ impl SeatHandler for MalusState {
         }
     }
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: smithay::input::pointer::CursorImageStatus) {
+        // IMPORTANTE: Nunca invocar métodos de `PointerHandle` (`is_grabbed`, `current_location`, etc.)
+        // aquí porque Smithay llama a `SeatHandler::cursor_image` desde `PointerInternal::motion` /
+        // `PointerTarget::replace` mientras el `Mutex<PointerInternal>` ya está bloqueado en el mismo hilo.
+        if self.ssd.grab_active || self.ssd.cursor_override {
+            return;
+        }
         self.cursor_status = image;
     }
 }
@@ -2316,8 +2691,13 @@ impl XdgShellHandler for MalusState {
             None
         };
 
+        let is_browser = is_browser_window(&window);
         surface.with_pending_state(|state| {
             state.states.set(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated);
+            if !is_browser {
+                use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+                state.decoration_mode = Some(Mode::ServerSide);
+            }
             if let Some(size) = initial_size {
                 tracing::info!("📐 [State] Aplicando tamaño de ventana recordado a nueva ventana: {:?}", size);
                 state.size = Some(size);
@@ -2441,6 +2821,7 @@ impl XdgShellHandler for MalusState {
         };
 
         self.space.raise_element(&window, true);
+        self.ssd.grab_active = true;
         pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Clear);
         tracing::info!("✅ [XdgShell] MoveSurfaceGrab activado exitosamente para arrastre por título!");
     }
@@ -2491,6 +2872,11 @@ impl XdgShellHandler for MalusState {
         };
 
         self.space.raise_element(&window, true);
+        self.ssd.grab_active = true;
+        self.ssd.cursor_override = true;
+        self.cursor_status = smithay::input::pointer::CursorImageStatus::Named(
+            crate::grabs::cursor_icon_for_resize_edge(edges),
+        );
         pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Clear);
         tracing::info!("✅ [XdgShell] ResizeSurfaceGrab activado exitosamente para redimensión de ventana!");
     }
@@ -2960,5 +3346,193 @@ mod tests {
         assert_eq!(loc_end, Point::from((0, 32)));
         assert_eq!(sz_end, Size::from((1920, 1048)));
         assert!(trans.is_finished(start_time + Duration::from_millis(220)));
+    }
+
+    #[test]
+    fn cursor_image_and_update_ssd_hover_do_not_deadlock_while_pointer_mutex_is_locked() {
+        use smithay::{
+            input::{
+                pointer::{
+                    AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, GestureHoldBeginEvent,
+                    GestureHoldEndEvent, GesturePinchBeginEvent, GesturePinchEndEvent,
+                    GesturePinchUpdateEvent, GestureSwipeBeginEvent, GestureSwipeEndEvent,
+                    GestureSwipeUpdateEvent, GrabStartData, MotionEvent, PointerGrab,
+                    PointerInnerHandle, RelativeMotionEvent,
+                },
+                SeatHandler,
+            },
+            reexports::wayland_server::Display,
+            utils::{Logical, Point, SERIAL_COUNTER},
+        };
+
+        struct ReentrantTestGrab {
+            start_data: GrabStartData<super::MalusState>,
+        }
+
+        impl PointerGrab<super::MalusState> for ReentrantTestGrab {
+            fn motion(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                _focus: Option<(
+                    <super::MalusState as SeatHandler>::PointerFocus,
+                    Point<f64, Logical>,
+                )>,
+                event: &MotionEvent,
+            ) {
+                handle.motion(data, None, event);
+                let seat = data.seat.clone();
+                data.cursor_image(&seat, CursorImageStatus::Named(CursorIcon::Pointer));
+                data.update_ssd_hover(event.location);
+            }
+            fn relative_motion(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                focus: Option<(
+                    <super::MalusState as SeatHandler>::PointerFocus,
+                    Point<f64, Logical>,
+                )>,
+                event: &RelativeMotionEvent,
+            ) {
+                handle.relative_motion(data, focus, event);
+            }
+            fn button(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                event: &ButtonEvent,
+            ) {
+                handle.unset_grab(self, data, event.serial, event.time, false);
+                data.update_ssd_hover(handle.current_location());
+            }
+            fn axis(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                details: AxisFrame,
+            ) {
+                handle.axis(data, details);
+            }
+            fn frame(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+            ) {
+                handle.frame(data);
+            }
+            fn gesture_swipe_begin(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                event: &GestureSwipeBeginEvent,
+            ) {
+                handle.gesture_swipe_begin(data, event);
+            }
+            fn gesture_swipe_update(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                event: &GestureSwipeUpdateEvent,
+            ) {
+                handle.gesture_swipe_update(data, event);
+            }
+            fn gesture_swipe_end(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                event: &GestureSwipeEndEvent,
+            ) {
+                handle.gesture_swipe_end(data, event);
+            }
+            fn gesture_pinch_begin(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                event: &GesturePinchBeginEvent,
+            ) {
+                handle.gesture_pinch_begin(data, event);
+            }
+            fn gesture_pinch_update(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                event: &GesturePinchUpdateEvent,
+            ) {
+                handle.gesture_pinch_update(data, event);
+            }
+            fn gesture_pinch_end(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                event: &GesturePinchEndEvent,
+            ) {
+                handle.gesture_pinch_end(data, event);
+            }
+            fn gesture_hold_begin(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                event: &GestureHoldBeginEvent,
+            ) {
+                handle.gesture_hold_begin(data, event);
+            }
+            fn gesture_hold_end(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                event: &GestureHoldEndEvent,
+            ) {
+                handle.gesture_hold_end(data, event);
+            }
+            fn start_data(&self) -> &GrabStartData<super::MalusState> {
+                &self.start_data
+            }
+            fn unset(&mut self, data: &mut super::MalusState) {
+                data.ssd.grab_active = false;
+                data.ssd.cursor_override = false;
+                let seat = data.seat.clone();
+                data.cursor_image(&seat, CursorImageStatus::default_named());
+            }
+        }
+
+        let display: Display<super::MalusState> = Display::new().unwrap();
+        let mut state = super::MalusState::new(&display);
+        let pointer = state.seat.add_pointer();
+        let serial = SERIAL_COUNTER.next_serial();
+
+        state.ssd.grab_active = true;
+        pointer.set_grab(
+            &mut state,
+            ReentrantTestGrab {
+                start_data: GrabStartData {
+                    focus: None,
+                    button: 0x110,
+                    location: (100.0, 100.0).into(),
+                },
+            },
+            serial,
+            smithay::input::pointer::Focus::Clear,
+        );
+
+        pointer.motion(
+            &mut state,
+            None,
+            &MotionEvent {
+                location: (120.0, 120.0).into(),
+                serial: SERIAL_COUNTER.next_serial(),
+                time: 10,
+            },
+        );
+        pointer.button(
+            &mut state,
+            &ButtonEvent {
+                button: 0x110,
+                state: smithay::backend::input::ButtonState::Released,
+                serial: SERIAL_COUNTER.next_serial(),
+                time: 20,
+            },
+        );
+        assert!(!state.ssd.grab_active);
     }
 }

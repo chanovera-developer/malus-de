@@ -219,13 +219,113 @@ fn create_gbm_surface_with_fallback(
     None
 }
 
-fn create_cursor_texture(
+fn cursor_names_for_icon(icon: smithay::input::pointer::CursorIcon) -> &'static [&'static str] {
+    use smithay::input::pointer::CursorIcon;
+    match icon {
+        CursorIcon::NResize | CursorIcon::NsResize => &[
+            "n-resize",
+            "ns-resize",
+            "sb_v_double_arrow",
+            "v_double_arrow",
+            "size_ver",
+            "top_side",
+        ],
+        CursorIcon::SResize => &[
+            "s-resize",
+            "ns-resize",
+            "sb_v_double_arrow",
+            "v_double_arrow",
+            "size_ver",
+            "bottom_side",
+        ],
+        CursorIcon::EResize | CursorIcon::EwResize => &[
+            "e-resize",
+            "ew-resize",
+            "sb_h_double_arrow",
+            "h_double_arrow",
+            "size_hor",
+            "right_side",
+        ],
+        CursorIcon::WResize => &[
+            "w-resize",
+            "ew-resize",
+            "sb_h_double_arrow",
+            "h_double_arrow",
+            "size_hor",
+            "left_side",
+        ],
+        CursorIcon::NwResize | CursorIcon::NwseResize => &[
+            "nw-resize",
+            "nwse-resize",
+            "bd_double_arrow",
+            "size_fdiag",
+            "top_left_corner",
+        ],
+        CursorIcon::SeResize => &[
+            "se-resize",
+            "nwse-resize",
+            "bd_double_arrow",
+            "size_fdiag",
+            "bottom_right_corner",
+        ],
+        CursorIcon::NeResize | CursorIcon::NeswResize => &[
+            "ne-resize",
+            "nesw-resize",
+            "fd_double_arrow",
+            "size_bdiag",
+            "top_right_corner",
+        ],
+        CursorIcon::SwResize => &[
+            "sw-resize",
+            "nesw-resize",
+            "fd_double_arrow",
+            "size_bdiag",
+            "bottom_left_corner",
+        ],
+        CursorIcon::Pointer => &["pointer", "hand2", "hand1", "pointing_hand"],
+        CursorIcon::Text => &["text", "xterm", "ibeam"],
+        CursorIcon::Grab => &["grab", "openhand"],
+        CursorIcon::Grabbing => &["grabbing", "closedhand", "fleur"],
+        _ => &["default", "left_ptr", "arrow"],
+    }
+}
+
+const EMBEDDED_MACOS_LEFT_PTR: &[u8] =
+    include_bytes!("../../../../assets/cursors/macOS/cursors/left_ptr");
+
+fn parse_xcursor_bytes_to_texture(
+    renderer: &mut GlesRenderer,
+    content: &[u8],
+    cursor_size: u32,
+) -> Option<ThemedCursor> {
+    let images = xcursor::parser::parse_xcursor(content)?;
+    let best = images
+        .iter()
+        .min_by_key(|image| (image.size.abs_diff(cursor_size), image.size < cursor_size))?;
+    let size = Size::from((best.width as i32, best.height as i32));
+    let texture = renderer
+        .import_memory(&best.pixels_rgba, Fourcc::Argb8888, size, false)
+        .ok()?;
+    Some(ThemedCursor {
+        texture,
+        size: best.size,
+        width: best.width as i32,
+        height: best.height as i32,
+        xhot: best.xhot as i32,
+        yhot: best.yhot as i32,
+    })
+}
+
+fn load_cursor_texture_by_names(
     renderer: &mut GlesRenderer,
     theme: &str,
     cursor_size: u32,
+    names: &[&str],
 ) -> Option<ThemedCursor> {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     let mut icon_dirs = vec![
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/cursors").to_string(),
+        "/usr/local/share/malus-de/cursors".to_string(),
         format!("{}/.icons", home),
         format!("{}/.local/share/icons", home),
         "/usr/share/icons".to_string(),
@@ -239,41 +339,69 @@ fn create_cursor_texture(
                 .map(str::to_string),
         );
     }
-    let possible_paths = icon_dirs
+    let primary_theme = if theme.is_empty() || theme == "default" || theme == "Adwaita" {
+        "macOS"
+    } else {
+        theme
+    };
+    let mut theme_candidates = vec![primary_theme];
+    for fallback in ["macOS", "macOS-White", "Adwaita", "default", "AdwaitaLegacy"] {
+        if !theme_candidates.contains(&fallback) {
+            theme_candidates.push(fallback);
+        }
+    }
+    let possible_paths = theme_candidates
         .iter()
-        .flat_map(|dir| {
-            ["default", "left_ptr", "arrow"]
-                .iter()
-                .map(move |name| format!("{}/{}/cursors/{}", dir, theme, name))
+        .flat_map(|candidate_theme| {
+            let dirs = &icon_dirs;
+            dirs.iter().flat_map(move |dir| {
+                names
+                    .iter()
+                    .map(move |name| format!("{}/{}/cursors/{}", dir, candidate_theme, name))
+            })
         })
         .collect::<Vec<_>>();
 
     for path in &possible_paths {
         if let Ok(content) = std::fs::read(path) {
-            if let Some(images) = xcursor::parser::parse_xcursor(&content) {
-                if let Some(best) = images.iter().min_by_key(|image| {
-                    (image.size.abs_diff(cursor_size), image.size < cursor_size)
-                }) {
-                    let size = Size::from((best.width as i32, best.height as i32));
-                    if let Ok(texture) =
-                        renderer.import_memory(&best.pixels_rgba, Fourcc::Argb8888, size, false)
-                    {
-                        info!(
-                            "Cursor del tema '{}' cargado desde '{}' ({}x{}, size={}, hotspot: {}, {})",
-                            theme, path, best.width, best.height, best.size, best.xhot, best.yhot
-                        );
-                        return Some(ThemedCursor {
-                            texture,
-                            size: best.size,
-                            width: best.width as i32,
-                            height: best.height as i32,
-                            xhot: best.xhot as i32,
-                            yhot: best.yhot as i32,
-                        });
-                    }
+            if let Some(cur) = parse_xcursor_bytes_to_texture(renderer, &content, cursor_size) {
+                return Some(cur);
+            }
+        }
+    }
+
+    // Si algún nombre de cursor específico falla o no existe en el tema, usar siempre el cursor macOS integrado
+    for dir in &icon_dirs {
+        for fallback_name in ["default", "left_ptr", "arrow"] {
+            let macos_fallback_path = format!("{}/macOS/cursors/{}", dir, fallback_name);
+            if let Ok(content) = std::fs::read(&macos_fallback_path) {
+                if let Some(cur) = parse_xcursor_bytes_to_texture(renderer, &content, cursor_size) {
+                    return Some(cur);
                 }
             }
         }
+    }
+
+    parse_xcursor_bytes_to_texture(renderer, EMBEDDED_MACOS_LEFT_PTR, cursor_size)
+}
+
+fn create_cursor_texture(
+    renderer: &mut GlesRenderer,
+    theme: &str,
+    cursor_size: u32,
+) -> Option<ThemedCursor> {
+    if let Some(cur) = load_cursor_texture_by_names(
+        renderer,
+        theme,
+        cursor_size,
+        &["default", "left_ptr", "arrow"],
+    ) {
+        return Some(cur);
+    }
+
+    if let Some(cur) = parse_xcursor_bytes_to_texture(renderer, EMBEDDED_MACOS_LEFT_PTR, cursor_size)
+    {
+        return Some(cur);
     }
 
     warn!(
@@ -563,6 +691,12 @@ fn resolve_target_under(
             None,
             true,
         )
+    } else if let Some((win, _edge, loc)) =
+        crate::grabs::find_window_resize_edge_under(&state.space, point, 8.0)
+    {
+        (None, None, Some((win, loc)), false)
+    } else if let Some((win, loc, _, _, _, _)) = state.ssd_titlebar_under(point) {
+        (None, None, Some((win, loc)), false)
     } else if let Some((window, loc)) = state.space.element_under(point) {
         let local_point = point - loc.to_f64();
         let target = window
@@ -1421,6 +1555,7 @@ pub fn run_drm() -> Result<()> {
                         state.screenshot_ui.update_pointer_motion(output_geo, point);
                     }
                     state.update_spotlight_drag_dock_hover(point);
+                    state.update_ssd_hover(point);
 
                     let (under_target, _, _, _) = resolve_target_under(state, point);
 
@@ -1435,6 +1570,7 @@ pub fn run_drm() -> Result<()> {
                         },
                     );
                     pointer.frame(state);
+                    state.update_ssd_hover(point);
                 }
             }
             InputEvent::PointerMotionAbsolute { event } => {
@@ -1471,6 +1607,7 @@ pub fn run_drm() -> Result<()> {
                             state.screenshot_ui.update_pointer_motion(output_geo, point);
                         }
                         state.update_spotlight_drag_dock_hover(point);
+                        state.update_ssd_hover(point);
 
                         let (under_target, _, _, _) = resolve_target_under(state, point);
 
@@ -1485,6 +1622,7 @@ pub fn run_drm() -> Result<()> {
                             },
                         );
                         pointer.frame(state);
+                        state.update_ssd_hover(point);
                     }
                 }
             }
@@ -1580,6 +1718,114 @@ pub fn run_drm() -> Result<()> {
                             pointer.unset_grab(state, btn_serial, event.time_msec());
                         }
 
+                        let (has_super, has_alt) = state
+                            .seat
+                            .get_keyboard()
+                            .map(|kb| {
+                                let mods = kb.modifier_state();
+                                (mods.logo, mods.alt)
+                            })
+                            .unwrap_or((false, false));
+
+                        if event.button_code() == 0x110
+                            && !has_super
+                            && !has_alt
+                            && layer_info.is_none()
+                            && !clicked_on_popup
+                            && !state.popup_grab_active()
+                        {
+                            if let Some((resize_win, edge, win_loc)) =
+                                crate::grabs::find_window_resize_edge_under(&state.space, point, 8.0)
+                            {
+                                let was_already_top = state
+                                    .space
+                                    .elements()
+                                    .last()
+                                    .map(|w| w == &resize_win)
+                                    .unwrap_or(false);
+                                if !was_already_top {
+                                    state.space.raise_element(&resize_win, true);
+                                }
+                                if let Some(surface) = resize_win.wl_surface() {
+                                    if let Some(keyboard) = state.seat.get_keyboard() {
+                                        if keyboard.current_focus().as_ref() != Some(surface.as_ref()) {
+                                            keyboard.set_focus(
+                                                state,
+                                                Some(surface.clone().into_owned()),
+                                                btn_serial,
+                                            );
+                                            state.notify_active_app(Some(&surface));
+                                        }
+                                    }
+                                }
+                                let start_data = smithay::input::pointer::GrabStartData {
+                                    focus: None,
+                                    button: event.button_code(),
+                                    location: point,
+                                };
+                                let initial_window_size = resize_win.geometry().size;
+                                let grab = crate::grabs::ResizeSurfaceGrab {
+                                    start_data,
+                                    window: resize_win.clone(),
+                                    edges: edge,
+                                    initial_window_location: win_loc,
+                                    initial_window_size,
+                                    last_window_size: initial_window_size,
+                                };
+                                state.ssd.grab_active = true;
+                                state.ssd.cursor_override = true;
+                                state.cursor_status =
+                                    smithay::input::pointer::CursorImageStatus::Named(
+                                        crate::grabs::cursor_icon_for_resize_edge(edge),
+                                    );
+                                pointer.set_grab(
+                                    state,
+                                    grab,
+                                    btn_serial,
+                                    smithay::input::pointer::Focus::Clear,
+                                );
+                                pointer.button(
+                                    state,
+                                    &ButtonEvent {
+                                        button: event.button_code(),
+                                        state: event.state(),
+                                        serial: btn_serial,
+                                        time: event.time_msec(),
+                                    },
+                                );
+                                pointer.frame(state);
+                                info!(
+                                    "📐 [ServerResize] Redimensión perimetral activada: edge={:?}, win={:?}",
+                                    edge,
+                                    resize_win.geometry()
+                                );
+                                return;
+                            }
+                        }
+
+                        if !has_super
+                            && !has_alt
+                            && layer_info.is_none()
+                            && !clicked_on_popup
+                            && state.handle_ssd_pointer_button(
+                                point,
+                                event.button_code(),
+                                btn_serial,
+                            )
+                        {
+                            pointer.button(
+                                state,
+                                &ButtonEvent {
+                                    button: event.button_code(),
+                                    state: event.state(),
+                                    serial: btn_serial,
+                                    time: event.time_msec(),
+                                },
+                            );
+                            pointer.frame(state);
+                            return;
+                        }
+
                         if let Some(keyboard) = state.seat.get_keyboard() {
                             if keyboard.is_grabbed() && !state.popup_grab_active() {
                                 keyboard.unset_grab(state);
@@ -1598,42 +1844,6 @@ pub fn run_drm() -> Result<()> {
                                     if keyboard.current_focus().as_ref() != Some(surface.as_ref()) {
                                         keyboard.set_focus(state, Some(surface.clone().into_owned()), btn_serial);
                                         state.notify_active_app(Some(&surface));
-                                    }
-                                }
-
-                                let has_super = keyboard.modifier_state().logo;
-                                let has_alt = keyboard.modifier_state().alt;
-
-                                // Detección perimetral de redimensión del lado del servidor (8 px) con Clic Izquierdo (0x110 = BTN_LEFT)
-                                // APLICADO EXCLUSIVAMENTE A FIREFOX (para no alterar umbrales ni controles en ventanas GTK/Electron)
-                                if event.button_code() == 0x110 && !has_super && !has_alt {
-                                    if let Some((resize_win, edge, win_loc)) = crate::grabs::find_window_resize_edge_under(&state.space, point, 8.0) {
-                                        let was_already_top = state.space.elements().last().map(|w| w == &resize_win).unwrap_or(false);
-                                        if !was_already_top {
-                                            state.space.raise_element(&resize_win, true);
-                                        }
-                                        if let Some(surface) = resize_win.wl_surface() {
-                                            if keyboard.current_focus().as_ref() != Some(surface.as_ref()) {
-                                                keyboard.set_focus(state, Some(surface.clone().into_owned()), btn_serial);
-                                                state.notify_active_app(Some(&surface));
-                                            }
-                                        }
-                                        let start_data = smithay::input::pointer::GrabStartData {
-                                            focus: None,
-                                            button: event.button_code(),
-                                            location: point,
-                                        };
-                                        let initial_window_size = resize_win.geometry().size;
-                                        let grab = crate::grabs::ResizeSurfaceGrab {
-                                            start_data,
-                                            window: resize_win.clone(),
-                                            edges: edge,
-                                            initial_window_location: win_loc,
-                                            initial_window_size,
-                                            last_window_size: initial_window_size,
-                                        };
-                                        pointer.set_grab(state, grab, btn_serial, smithay::input::pointer::Focus::Clear);
-                                        info!("📐 [ServerResize] Redimensión perimetral activada para Firefox: edge={:?}, win={:?}", edge, resize_win.geometry());
                                     }
                                 }
 
@@ -1656,6 +1866,7 @@ pub fn run_drm() -> Result<()> {
                                         is_snapped,
                                         has_dragged: false,
                                     };
+                                    state.ssd.grab_active = true;
                                     pointer.set_grab(state, grab, btn_serial, smithay::input::pointer::Focus::Clear);
                                 }
 
@@ -1687,6 +1898,12 @@ pub fn run_drm() -> Result<()> {
                                         initial_window_size,
                                         last_window_size: initial_window_size,
                                     };
+                                    state.ssd.grab_active = true;
+                                    state.ssd.cursor_override = true;
+                                    state.cursor_status =
+                                        smithay::input::pointer::CursorImageStatus::Named(
+                                            crate::grabs::cursor_icon_for_resize_edge(edges),
+                                        );
                                     pointer.set_grab(state, grab, btn_serial, smithay::input::pointer::Focus::Clear);
                                 }
                             }
@@ -1836,6 +2053,10 @@ pub fn run_drm() -> Result<()> {
     let mut current_displays_cfg = DisplaysConfig::load();
     let mut squircle_corner_cache: std::collections::HashMap<i32, [GlesTexture; 4]> =
         std::collections::HashMap::new();
+    let mut named_cursor_cache: std::collections::HashMap<
+        smithay::input::pointer::CursorIcon,
+        Option<ThemedCursor>,
+    > = std::collections::HashMap::new();
     let mut blur_pipeline: Option<crate::blur::GaussianBlur> = None;
     let mut window_squircle_shader: Option<crate::window_corners::WindowSquircleShader> = None;
     let mut shadow_pipeline: Option<crate::shadow::WindowShadowPipeline> = None;
@@ -1871,6 +2092,7 @@ pub fn run_drm() -> Result<()> {
                     cursor_size = configured_cursor_size;
                     cursor_texture =
                         create_cursor_texture(&mut renderer, &cursor_theme, cursor_size);
+                    named_cursor_cache.clear();
                 }
             }
             let current_mtime = std::fs::metadata(&monitors_toml_path)
@@ -2167,6 +2389,12 @@ pub fn run_drm() -> Result<()> {
                         }
 
                         if let CursorImageStatus::Surface(ref surf) = state.cursor_status {
+                            if !surf.alive() {
+                                state.cursor_status = CursorImageStatus::default_named();
+                            }
+                        }
+
+                        if let CursorImageStatus::Surface(ref surf) = state.cursor_status {
                             cursor_hotspot =
                                 smithay::wayland::compositor::with_states(surf, |states| {
                                     states
@@ -2346,6 +2574,7 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
 
+                let is_dark_theme = crate::state::system_monitor_backdrop_color()[0] < 0.5;
                 let mut window_render_data = Vec::new();
                 for window in state.space.elements() {
                     if let Some(loc) = state.space.element_location(window) {
@@ -2362,7 +2591,16 @@ pub fn run_drm() -> Result<()> {
                             (loc, geo.size, false)
                         };
 
-                        let win_global_rect = Rectangle::new(effective_loc, effective_size);
+                        let uses_ssd = crate::state::window_uses_ssd(window);
+                        let ssd_top = if uses_ssd {
+                            crate::ssd::SSD_TITLEBAR_HEIGHT
+                        } else {
+                            0
+                        };
+                        let win_global_rect = Rectangle::new(
+                            Point::from((effective_loc.x, effective_loc.y - ssd_top)),
+                            Size::from((effective_size.w, effective_size.h + ssd_top)),
+                        );
                         if output_geo.overlaps(win_global_rect) {
                             let (phys_loc, win_scale, content_offset, content_size, win_screen_rect) = if is_transitioning {
                                 let sx = effective_size.w as f64 / geo.size.w.max(1) as f64;
@@ -2477,6 +2715,37 @@ pub fn run_drm() -> Result<()> {
 
                             let should_round = win_phys_r.is_some() && !is_fullscreen;
 
+                            let (win_screen_rect, ssd_elem) = if uses_ssd {
+                                let tb_phys_h =
+                                    (crate::ssd::SSD_TITLEBAR_HEIGHT as f64 * scale).round() as i32;
+                                let tb_loc = Point::from((
+                                    win_screen_rect.loc.x,
+                                    win_screen_rect.loc.y - tb_phys_h,
+                                ));
+                                let full_rect = Rectangle::new(
+                                    tb_loc,
+                                    Size::from((
+                                        win_screen_rect.size.w,
+                                        win_screen_rect.size.h + tb_phys_h,
+                                    )),
+                                );
+                                let ssd_title = crate::state::window_title_for_ssd(window);
+                                let elem = state.ssd.render_element_for_window(
+                                    &mut renderer,
+                                    main_surface.as_ref(),
+                                    tb_loc,
+                                    win_screen_rect.size.w,
+                                    tb_phys_h,
+                                    scale,
+                                    &ssd_title,
+                                    is_active,
+                                    is_dark_theme,
+                                );
+                                (full_rect, elem)
+                            } else {
+                                (win_screen_rect, None)
+                            };
+
                             window_render_data.push((
                                 root_id,
                                 win_surfaces,
@@ -2491,6 +2760,7 @@ pub fn run_drm() -> Result<()> {
                                 is_translucent,
                                 is_system_monitor,
                                 is_transitioning,
+                                ssd_elem,
                             ));
                         }
                     }
@@ -2502,7 +2772,6 @@ pub fn run_drm() -> Result<()> {
                         crate::window_corners::WindowSquircleShader::new(&mut renderer);
                 }
 
-                let is_dark_theme = crate::state::system_monitor_backdrop_color()[0] < 0.5;
                 let spotlight_frame = if state
                     .spotlight
                     .should_render_on_output(&out_surface.output.name())
@@ -2550,6 +2819,20 @@ pub fn run_drm() -> Result<()> {
                 } else {
                     None
                 };
+
+                if let CursorImageStatus::Named(icon) = state.cursor_status {
+                    if icon != smithay::input::pointer::CursorIcon::Default
+                        && !named_cursor_cache.contains_key(&icon)
+                    {
+                        let loaded = load_cursor_texture_by_names(
+                            &mut renderer,
+                            &cursor_theme,
+                            cursor_size,
+                            cursor_names_for_icon(icon),
+                        );
+                        named_cursor_cache.insert(icon, loaded);
+                    }
+                }
 
                 if let Ok(mut target) = renderer.bind(&mut dmabuf) {
                     let screenshot_request = state
@@ -2657,6 +2940,7 @@ pub fn run_drm() -> Result<()> {
                                 is_translucent,
                                 is_system_monitor,
                                 _is_transitioning,
+                                ssd_elem,
                             ),
                         ) in window_render_data.iter().enumerate()
                         {
@@ -2734,9 +3018,10 @@ pub fn run_drm() -> Result<()> {
                             // 2.2. SUPERFICIES DE LA VENTANA (con recorte Squircle)
                             if !is_body_occluded {
                                 if *should_round {
-                                    if *is_firefox {
-                                        // Para Firefox: aplicar recorte a todo su árbol de subsuperficies (WebRender)
-                                        // para evitar esquinas cuadradas en el lienzo interno
+                                    if *is_firefox || ssd_elem.is_some() {
+                                        // Para Firefox y ventanas con decoración SSD del servidor:
+                                        // aplicar recorte squircle unificado a todo su árbol de superficies
+                                        // (y a la barra de título SSD superior) respecto al contenedor completo `win_rect`.
                                         if let (Some(r), Some(ref shader)) =
                                             (win_phys_r, window_squircle_shader.as_ref())
                                         {
@@ -2765,6 +3050,28 @@ pub fn run_drm() -> Result<()> {
 
                                                 frame.clear_tex_program_override();
                                             }
+                                            if let Some(ref tb_elem) = ssd_elem {
+                                                let tb_geo =
+                                                    tb_elem.geometry(smithay::utils::Scale::from(1.0));
+                                                let sub_offset = smithay::utils::Point::from((
+                                                    win_rect.loc.x - tb_geo.loc.x,
+                                                    win_rect.loc.y - tb_geo.loc.y,
+                                                ));
+                                                shader.apply_to_frame(
+                                                    &mut frame,
+                                                    tb_geo.size,
+                                                    sub_offset,
+                                                    win_rect.size,
+                                                    r,
+                                                );
+                                                let _ = draw_render_elements(
+                                                    &mut frame,
+                                                    1.0,
+                                                    std::slice::from_ref(tb_elem),
+                                                    &[damage],
+                                                );
+                                                frame.clear_tex_program_override();
+                                            }
                                         } else {
                                             let _ = draw_render_elements(
                                                 &mut frame,
@@ -2772,6 +3079,14 @@ pub fn run_drm() -> Result<()> {
                                                 win_elems,
                                                 &[damage],
                                             );
+                                            if let Some(ref tb_elem) = ssd_elem {
+                                                let _ = draw_render_elements(
+                                                    &mut frame,
+                                                    1.0,
+                                                    std::slice::from_ref(tb_elem),
+                                                    &[damage],
+                                                );
+                                            }
                                         }
                                     } else {
                                         // Para el resto de ventanas (GTK, Electron, etc.): comportamiento intacto original.
@@ -3419,10 +3734,12 @@ pub fn run_drm() -> Result<()> {
 
                         // Dibujar el puntero con el tamaño lógico configurado y el hotspot exacto
                         if let Some((phys_x, phys_y)) = cursor_draw_point {
+                            let mut rendered_surface_cursor = false;
                             if !cursor_elems.is_empty() {
                                 for elem in &cursor_elems {
                                     let view_dst = elem.view().dst;
                                     if view_dst.w > 0 && view_dst.h > 0 {
+                                        rendered_surface_cursor = true;
                                         let target_logical_w = cursor_size as f64;
                                         let target_logical_h = target_logical_w
                                             * (view_dst.h as f64 / view_dst.w as f64);
@@ -3469,27 +3786,43 @@ pub fn run_drm() -> Result<()> {
                                         }
                                     }
                                 }
-                            } else if let Some(ref cur) = cursor_texture {
-                                let scale_factor = (cursor_size as f64 * scale) / cur.size as f64;
-                                let cursor_w = (cur.width as f64 * scale_factor).round() as i32;
-                                let cursor_h = (cur.height as f64 * scale_factor).round() as i32;
-                                let hot_x = (cur.xhot as f64 * scale_factor).round() as i32;
-                                let hot_y = (cur.yhot as f64 * scale_factor).round() as i32;
-                                let cursor_rect = Rectangle::new(
-                                    (phys_x - hot_x, phys_y - hot_y).into(),
-                                    (cursor_w, cursor_h).into(),
-                                );
-                                let _ = frame.render_texture_from_to(
-                                    &cur.texture,
-                                    Rectangle::from_size(cur.texture.size()).to_f64(),
-                                    cursor_rect,
-                                    &[Rectangle::from_size(cursor_rect.size)],
-                                    &[],
-                                    Transform::Normal,
-                                    1.0,
-                                    None,
-                                    &[],
-                                );
+                            }
+                            if !rendered_surface_cursor {
+                                let active_cursor = match state.cursor_status {
+                                    CursorImageStatus::Named(icon)
+                                        if icon != smithay::input::pointer::CursorIcon::Default =>
+                                    {
+                                        named_cursor_cache
+                                            .get(&icon)
+                                            .and_then(|c| c.as_ref())
+                                            .or(cursor_texture.as_ref())
+                                    }
+                                    _ => cursor_texture.as_ref(),
+                                };
+                                if let Some(cur) = active_cursor {
+                                    let scale_factor =
+                                        (cursor_size as f64 * scale) / cur.size as f64;
+                                    let cursor_w = (cur.width as f64 * scale_factor).round() as i32;
+                                    let cursor_h =
+                                        (cur.height as f64 * scale_factor).round() as i32;
+                                    let hot_x = (cur.xhot as f64 * scale_factor).round() as i32;
+                                    let hot_y = (cur.yhot as f64 * scale_factor).round() as i32;
+                                    let cursor_rect = Rectangle::new(
+                                        (phys_x - hot_x, phys_y - hot_y).into(),
+                                        (cursor_w, cursor_h).into(),
+                                    );
+                                    let _ = frame.render_texture_from_to(
+                                        &cur.texture,
+                                        Rectangle::from_size(cur.texture.size()).to_f64(),
+                                        cursor_rect,
+                                        &[Rectangle::from_size(cursor_rect.size)],
+                                        &[],
+                                        Transform::Normal,
+                                        1.0,
+                                        None,
+                                        &[],
+                                    );
+                                }
                             }
                         }
 

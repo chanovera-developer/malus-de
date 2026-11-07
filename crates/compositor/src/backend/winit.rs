@@ -527,6 +527,7 @@ pub fn run_winit() -> Result<()> {
                         state.screenshot_ui.update_pointer_motion(output_geo, point);
                     }
                     state.update_spotlight_drag_dock_hover(point);
+                    state.update_ssd_hover(point);
 
                     let layer_target = {
                         let layer_map = smithay::desktop::layer_map_for_output(&output);
@@ -559,6 +560,12 @@ pub fn run_winit() -> Result<()> {
                         Some((surf, focus_loc))
                     } else if let Some((_, loc, surf, sub_loc)) = state.popup_under(point) {
                         Some((surf, (loc + sub_loc).to_f64()))
+                    } else if crate::grabs::find_window_resize_edge_under(&state.space, point, 8.0)
+                        .is_some()
+                    {
+                        None
+                    } else if state.ssd_titlebar_under(point).is_some() {
+                        None
                     } else if let Some((window, loc)) = state.space.element_under(point) {
                         let local_point = point - loc.to_f64();
                         window
@@ -586,6 +593,7 @@ pub fn run_winit() -> Result<()> {
                         },
                     );
                     pointer.frame(&mut state);
+                    state.update_ssd_hover(point);
                 }
                 InputEvent::PointerButton { event } => {
                     let is_pressed = event.state() == ButtonState::Pressed;
@@ -634,6 +642,12 @@ pub fn run_winit() -> Result<()> {
                             None,
                             true,
                         )
+                    } else if let Some((win, _edge, loc)) =
+                        crate::grabs::find_window_resize_edge_under(&state.space, point, 8.0)
+                    {
+                        (None, None, Some((win, loc)), false)
+                    } else if let Some((win, loc, _, _, _, _)) = state.ssd_titlebar_under(point) {
+                        (None, None, Some((win, loc)), false)
                     } else if let Some((window, loc)) = state.space.element_under(point) {
                         let local_point = point - loc.to_f64();
                         let target = window
@@ -741,6 +755,106 @@ pub fn run_winit() -> Result<()> {
                             keyboard.unset_grab(&mut state);
                         }
 
+                        let has_super = keyboard.modifier_state().logo;
+                        let has_alt = keyboard.modifier_state().alt;
+
+                        if event.button_code() == 0x110
+                            && !has_super
+                            && !has_alt
+                            && layer_info.is_none()
+                            && !clicked_on_popup
+                            && !state.popup_grab_active()
+                        {
+                            if let Some((resize_win, edge, win_loc)) =
+                                crate::grabs::find_window_resize_edge_under(&state.space, point, 8.0)
+                            {
+                                let was_already_top = state
+                                    .space
+                                    .elements()
+                                    .last()
+                                    .map(|w| w == &resize_win)
+                                    .unwrap_or(false);
+                                if !was_already_top {
+                                    state.space.raise_element(&resize_win, true);
+                                }
+                                if let Some(surface) = resize_win.wl_surface() {
+                                    if keyboard.current_focus().as_ref() != Some(surface.as_ref()) {
+                                        keyboard.set_focus(
+                                            &mut state,
+                                            Some(surface.clone().into_owned()),
+                                            btn_serial,
+                                        );
+                                        state.notify_active_app(Some(&surface));
+                                    }
+                                }
+                                let start_data = smithay::input::pointer::GrabStartData {
+                                    focus: None,
+                                    button: event.button_code(),
+                                    location: point,
+                                };
+                                let initial_window_size = resize_win.geometry().size;
+                                let grab = crate::grabs::ResizeSurfaceGrab {
+                                    start_data,
+                                    window: resize_win.clone(),
+                                    edges: edge,
+                                    initial_window_location: win_loc,
+                                    initial_window_size,
+                                    last_window_size: initial_window_size,
+                                };
+                                state.ssd.grab_active = true;
+                                state.ssd.cursor_override = true;
+                                state.cursor_status =
+                                    smithay::input::pointer::CursorImageStatus::Named(
+                                        crate::grabs::cursor_icon_for_resize_edge(edge),
+                                    );
+                                pointer.set_grab(
+                                    &mut state,
+                                    grab,
+                                    btn_serial,
+                                    smithay::input::pointer::Focus::Clear,
+                                );
+                                pointer.button(
+                                    &mut state,
+                                    &ButtonEvent {
+                                        button: event.button_code(),
+                                        state: event.state(),
+                                        serial: btn_serial,
+                                        time: event.time_msec(),
+                                    },
+                                );
+                                pointer.frame(&mut state);
+                                info!(
+                                    "📐 [ServerResize] Redimensión perimetral activada: edge={:?}, win={:?}",
+                                    edge,
+                                    resize_win.geometry()
+                                );
+                                return;
+                            }
+                        }
+
+                        if !has_super
+                            && !has_alt
+                            && layer_info.is_none()
+                            && !clicked_on_popup
+                            && state.handle_ssd_pointer_button(
+                                point,
+                                event.button_code(),
+                                btn_serial,
+                            )
+                        {
+                            pointer.button(
+                                &mut state,
+                                &ButtonEvent {
+                                    button: event.button_code(),
+                                    state: event.state(),
+                                    serial: btn_serial,
+                                    time: event.time_msec(),
+                                },
+                            );
+                            pointer.frame(&mut state);
+                            return;
+                        }
+
                         if let Some((surf, ns, can_kb)) = layer_info {
                             info!("🎯 Clic de ratón sobre layer surface: namespace={}, pos={:?}", ns, point);
                             if can_kb {
@@ -758,43 +872,6 @@ pub fn run_winit() -> Result<()> {
                                 if keyboard.current_focus().as_ref() != Some(surface.as_ref()) {
                                     keyboard.set_focus(&mut state, Some(surface.clone().into_owned()), btn_serial);
                                     state.notify_active_app(Some(&surface));
-                                }
-                            }
-
-                            // Si Super o Alt está presionado y es clic izquierdo (0x110 = BTN_LEFT): arrastrar ventana inmediatamente desde cualquier punto
-                            let has_super = keyboard.modifier_state().logo;
-                            let has_alt = keyboard.modifier_state().alt;
-
-                            // Detección perimetral de redimensión del lado del servidor (8 px) con Clic Izquierdo (0x110 = BTN_LEFT)
-                            // APLICADO EXCLUSIVAMENTE A FIREFOX (para no alterar umbrales ni controles en ventanas GTK/Electron)
-                            if event.button_code() == 0x110 && !has_super && !has_alt {
-                                if let Some((resize_win, edge, win_loc)) = crate::grabs::find_window_resize_edge_under(&state.space, point, 8.0) {
-                                    let was_already_top = state.space.elements().last().map(|w| w == &resize_win).unwrap_or(false);
-                                    if !was_already_top {
-                                        state.space.raise_element(&resize_win, true);
-                                    }
-                                    if let Some(surface) = resize_win.wl_surface() {
-                                        if keyboard.current_focus().as_ref() != Some(surface.as_ref()) {
-                                            keyboard.set_focus(&mut state, Some(surface.clone().into_owned()), btn_serial);
-                                            state.notify_active_app(Some(&surface));
-                                        }
-                                    }
-                                    let start_data = smithay::input::pointer::GrabStartData {
-                                        focus: None,
-                                        button: event.button_code(),
-                                        location: point,
-                                    };
-                                    let initial_window_size = resize_win.geometry().size;
-                                    let grab = crate::grabs::ResizeSurfaceGrab {
-                                        start_data,
-                                        window: resize_win.clone(),
-                                        edges: edge,
-                                        initial_window_location: win_loc,
-                                        initial_window_size,
-                                        last_window_size: initial_window_size,
-                                    };
-                                    pointer.set_grab(&mut state, grab, btn_serial, smithay::input::pointer::Focus::Clear);
-                                    info!("📐 [ServerResize] Redimensión perimetral activada para Firefox: edge={:?}, win={:?}", edge, resize_win.geometry());
                                 }
                             }
 
@@ -819,6 +896,7 @@ pub fn run_winit() -> Result<()> {
                                     is_snapped,
                                     has_dragged: false,
                                 };
+                                state.ssd.grab_active = true;
                                 pointer.set_grab(&mut state, grab, btn_serial, smithay::input::pointer::Focus::Clear);
                             }
 
@@ -856,6 +934,12 @@ pub fn run_winit() -> Result<()> {
                                     initial_window_size,
                                     last_window_size: initial_window_size,
                                 };
+                                state.ssd.grab_active = true;
+                                state.ssd.cursor_override = true;
+                                state.cursor_status =
+                                    smithay::input::pointer::CursorImageStatus::Named(
+                                        crate::grabs::cursor_icon_for_resize_edge(edges),
+                                    );
                                 pointer.set_grab(&mut state, grab, btn_serial, smithay::input::pointer::Focus::Clear);
                             }
                         } else {
@@ -894,6 +978,7 @@ pub fn run_winit() -> Result<()> {
                                 )
                             {
                                 state.update_spotlight_drag_dock_hover(point);
+                    state.update_ssd_hover(point);
                                 if let crate::spotlight_visual::SpotlightPointerReleaseOutcome::PinToDock {
                                     app,
                                     insert_at_dock_x,
@@ -1167,6 +1252,7 @@ pub fn run_winit() -> Result<()> {
                 }
 
                 let mut window_render_data = Vec::new();
+                let is_dark_theme = crate::state::system_monitor_backdrop_color()[0] < 0.5;
                 let output_geo = state
                     .space
                     .output_geometry(&output)
@@ -1294,11 +1380,42 @@ pub fn run_winit() -> Result<()> {
                             let is_firefox = crate::state::is_firefox_window(&window);
                             let is_translucent = crate::state::is_translucent_window(&window);
                             let is_system_monitor = crate::state::is_system_monitor_window(&window);
+                            let uses_ssd = crate::state::window_uses_ssd(window);
                             let root_id =
                                 smithay::backend::renderer::element::Id::from_wayland_resource(
                                     main_surface.as_ref(),
                                 );
                             let should_round = win_phys_r.is_some() && !is_fullscreen;
+
+                            let (win_screen_rect, ssd_elem) = if uses_ssd && !is_fullscreen {
+                                let tb_phys_h = crate::ssd::SSD_TITLEBAR_HEIGHT;
+                                let tb_loc = Point::from((
+                                    win_screen_rect.loc.x,
+                                    win_screen_rect.loc.y - tb_phys_h,
+                                ));
+                                let full_rect = Rectangle::new(
+                                    tb_loc,
+                                    smithay::utils::Size::from((
+                                        win_screen_rect.size.w,
+                                        win_screen_rect.size.h + tb_phys_h,
+                                    )),
+                                );
+                                let ssd_title = crate::state::window_title_for_ssd(window);
+                                let elem = state.ssd.render_element_for_window(
+                                    renderer,
+                                    main_surface.as_ref(),
+                                    tb_loc,
+                                    win_screen_rect.size.w,
+                                    tb_phys_h,
+                                    1.0,
+                                    &ssd_title,
+                                    is_active,
+                                    is_dark_theme,
+                                );
+                                (full_rect, elem)
+                            } else {
+                                (win_screen_rect, None)
+                            };
 
                             window_render_data.push((
                                 root_id,
@@ -1314,6 +1431,7 @@ pub fn run_winit() -> Result<()> {
                                 is_translucent,
                                 is_system_monitor,
                                 is_transitioning,
+                                ssd_elem,
                             ));
                         }
                     }
@@ -1326,7 +1444,6 @@ pub fn run_winit() -> Result<()> {
                 }
 
                 let output_geo = state.space.output_geometry(&output).unwrap_or_default();
-                let is_dark_theme = crate::state::system_monitor_backdrop_color()[0] < 0.5;
                 let spotlight_frame = if state.spotlight.is_open() {
                     if let Some((spot_rect, mask_opt, mask_sz, spot_alpha)) =
                         state.spotlight.prepare_frame(output_geo, 1.0, is_dark_theme)
@@ -1468,6 +1585,7 @@ pub fn run_winit() -> Result<()> {
                             is_translucent,
                             is_system_monitor,
                             _is_transitioning,
+                            ssd_elem,
                         ),
                     ) in window_render_data.iter().enumerate()
                     {
@@ -1545,9 +1663,10 @@ pub fn run_winit() -> Result<()> {
                         // 2.2. SUPERFICIES DE LA VENTANA (con recorte Squircle)
                         if !is_body_occluded {
                             if *should_round {
-                                if *is_firefox {
-                                    // Para Firefox: se aplica el shader a todo el árbol de subsuperficies (WebRender)
-                                    // para evitar esquinas cuadradas en el contenido web interno
+                                if *is_firefox || ssd_elem.is_some() {
+                                    // Para Firefox y ventanas con decoración SSD del servidor:
+                                    // se aplica el shader a todo el árbol de subsuperficies y barra SSD
+                                    // respecto al contenedor unificado `win_rect`.
                                     if let (Some(r), Some(ref shader)) =
                                         (win_phys_r, window_squircle_shader.as_ref())
                                     {
@@ -1575,6 +1694,28 @@ pub fn run_winit() -> Result<()> {
 
                                             frame.clear_tex_program_override();
                                         }
+                                        if let Some(ref tb_elem) = ssd_elem {
+                                            let tb_geo =
+                                                tb_elem.geometry(smithay::utils::Scale::from(1.0));
+                                            let sub_offset = smithay::utils::Point::from((
+                                                win_rect.loc.x - tb_geo.loc.x,
+                                                win_rect.loc.y - tb_geo.loc.y,
+                                            ));
+                                            shader.apply_to_frame(
+                                                &mut frame,
+                                                tb_geo.size,
+                                                sub_offset,
+                                                win_rect.size,
+                                                r,
+                                            );
+                                            let _ = draw_render_elements(
+                                                &mut frame,
+                                                1.0,
+                                                std::slice::from_ref(tb_elem),
+                                                &[damage],
+                                            );
+                                            frame.clear_tex_program_override();
+                                        }
                                     } else {
                                         let _ = draw_render_elements(
                                             &mut frame,
@@ -1582,6 +1723,14 @@ pub fn run_winit() -> Result<()> {
                                             win_elems,
                                             &[damage],
                                         );
+                                        if let Some(ref tb_elem) = ssd_elem {
+                                            let _ = draw_render_elements(
+                                                &mut frame,
+                                                1.0,
+                                                std::slice::from_ref(tb_elem),
+                                                &[damage],
+                                            );
+                                        }
                                     }
                                 } else {
                                     // Para las demás apps (GTK, Electron, etc.): comportamiento intacto original,
@@ -1618,6 +1767,14 @@ pub fn run_winit() -> Result<()> {
                                 }
                             } else {
                                 let _ = draw_render_elements(&mut frame, 1.0, win_elems, &[damage]);
+                                if let Some(ref tb_elem) = ssd_elem {
+                                    let _ = draw_render_elements(
+                                        &mut frame,
+                                        1.0,
+                                        std::slice::from_ref(tb_elem),
+                                        &[damage],
+                                    );
+                                }
                             }
                         }
                     }

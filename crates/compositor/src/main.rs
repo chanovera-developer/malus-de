@@ -9,6 +9,7 @@ pub mod recording;
 pub mod screenshot_ui;
 pub mod shadow;
 pub mod spotlight_visual;
+pub mod ssd;
 pub mod state;
 pub mod theme_transition;
 pub mod window_corners;
