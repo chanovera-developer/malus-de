@@ -4,6 +4,27 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-07] — Eliminación de Doble Barra en Apps GNOME, Agente Polkit para GNOME Software y Monitoreo Reactivo de Spotlight
+
+### Hitos Implementados
+* **Eliminación Definitiva de Doble Barra de Título en Aplicaciones GNOME:**
+  * Identificación exhaustiva del ecosistema GNOME mediante [`is_gnome_window`](../crates/compositor/src/state.rs) e [`is_gnome_identity`](../crates/compositor/src/state.rs) (abarcando `org.gnome.*`, `gnome-*`, Nautilus, Ajustes, Ptyxis, Text Editor, Loupe, etc.).
+  * Forzado incondicional de `Mode::ClientSide` en [`XdgDecorationHandler`](../crates/compositor/src/state.rs) e invalidación de `window_uses_ssd`, garantizando que ninguna app GNOME reciba barra SSD del compositor sobre su barra nativa.
+  * Preservación del estilo semáforo estilo macOS en GTK 3 y GTK 4 (`close,minimize,maximize:`) sobre las cabeceras nativas (CSD).
+  * Concesión estricta de decoraciones del servidor (SSD) solo a clientes que negocien y soliciten explícitamente `Mode::ServerSide` (como ZapFast y herramientas Wayland sin CSD).
+* **Integración del Agente de Autenticación Polkit y Asociaciones de Instaladores:**
+  * Incorporación del arranque y terminación automática de `mate-polkit` (`/usr/libexec/polkit-mate-authentication-agent-1`) en los scripts de sesión ([`scripts/malus-session`](../scripts/malus-session) y [`scripts/malus-session.sh`](../scripts/malus-session.sh)).
+  * Inclusión de `mate-polkit` en el script instalador de sesión ([`scripts/install-session.sh`](../scripts/install-session.sh)) y en el manifiesto de paquetes ([`docs/PACKAGE_MANIFEST.md`](./PACKAGE_MANIFEST.md)).
+  * Implementación de [`setup_default_mime_applications`](../crates/common/src/config.rs) para asociar archivos `.rpm`, `.flatpakref`, `.flatpak` y `.deb` a GNOME Software en `mimeapps.list` al hacer doble clic.
+
+### Incidencias Pendientes (Backlog de Depuración)
+* **Actualización Dinámica de Aplicaciones en Spotlight (`malus-de-spotlight`):**
+  * El indexador de aplicaciones de Spotlight (`crates/spotlight/src/indexer.rs`) escanea los directorios de archivos `.desktop` (`/usr/share/applications`, `~/.local/share/applications`) únicamente durante el arranque inicial del proceso.
+  * Al instalar o desinstalar aplicaciones durante la sesión activa (por ejemplo, vía GNOME Software o `dnf`), el catálogo en memoria no se refresca automáticamente, requiriendo cerrar e iniciar sesión para que la nueva app sea visible en los resultados de búsqueda.
+  * **Acción para el próximo sprint:** Integrar un observador de cambios en el sistema de archivos (`notify` / `inotify`) sobre los directorios XDG para recargar la lista de aplicaciones de manera reactiva en segundo plano sin reiniciar la sesión.
+
+---
+
 ## [2026-11-07] — Decoraciones SSD Nativas macOS, Tema de Cursores `macOS` Integrado y Llavero del Sistema
 
 ### Hitos Implementados

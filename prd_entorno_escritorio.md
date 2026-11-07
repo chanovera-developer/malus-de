@@ -1241,6 +1241,7 @@ flowchart LR
 - [ ] **Motor de Fondo Dinámico en Vídeo:** Reactivar `libmpv` con decodificación VA-API/NVDEC por hardware y transiciones suaves según franja solar.
 - [ ] **Ecosistema Ampliado de Widgets para el Dock:** Sistema abierto de plugins en WebAssembly/IPC para widgets comunitarios en el Dock (reproductor MPRIS expandido, métricas de red, monitor de GPU/sensores térmicos).
 - [ ] Sombras suaves procedurales adaptadas a la geometría squircle.
+- [ ] **Monitoreo Reactivo de Aplicaciones en Spotlight (`malus-de-spotlight`):** Implementar un observador de sistema de archivos reactivo (`notify` / `inotify`) sobre `/usr/share/applications` y `~/.local/share/applications` para actualizar dinámicamente el catálogo de aplicaciones instaladas o eliminadas al vuelo sin requerir reiniciar la sesión gráfica.
 - [ ] Gesto de pellizco inverso con 4/5 dedos para separar ventanas y mostrar escritorio (*Show Desktop*).
 - [ ] Sistema de plugins en WebAssembly o IPC Unix Domain Sockets para widgets de la barra y escritorio.
 - [ ] Integración con geolocalización automática para cálculo solar exacto del fondo de pantalla.

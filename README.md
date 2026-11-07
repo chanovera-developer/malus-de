@@ -175,6 +175,7 @@ El menú global solo puede mostrar y ejecutar menús que la aplicación publique
 
 ## Limitaciones conocidas y alcance pendiente
 
+- **Indexación dinámica de aplicaciones en Spotlight:** El indexador de aplicaciones de Spotlight (`malus-de-spotlight`) lee los directorios `.desktop` al inicializarse la sesión. Si se instala o desinstala una aplicación durante la sesión activa (por ejemplo, mediante la app Software o DNF), se requiere reiniciar la sesión para que aparezca en los resultados de búsqueda. El monitoreo dinámico de directorios en tiempo real mediante `inotify` está pendiente de implementación.
 - Los menús emergentes y desplegables (`xdg_popup`) en navegadores tienen incidencias pendientes en depuración (desfase de coordenadas en desplegables `<select>` de Firefox y visualización de menús contextuales/hamburguesa en Brave Browser bajo Ozone/Wayland).
 - AirDrop/AWDL y la integración BLE están en desarrollo; no se debe considerar disponible el intercambio completo con dispositivos Apple.
 - El OCR en capturas de pantalla aún no está implementado.
