@@ -69,6 +69,9 @@ pub const MALUS_GTK_CSS_SIDEBAR_LIGHT: &str = include_str!("styles/sidebar-light
 
 pub const MALUS_GTK_CSS_SIDEBAR_DARK: &str = include_str!("styles/sidebar-dark.css");
 
+/// Reglas CSS de Mozilla Firefox para controles de ventana estilo semáforo macOS (`userChrome.css`)
+pub const MALUS_FIREFOX_USER_CHROME_CSS: &str = include_str!("styles/firefox-userchrome.css");
+
 /// Genera la hoja de estilos CSS completa de Malus DE (controles macOS + recortes squircle + paneles translúcidos) para GTK 4 / Libadwaita
 pub fn get_malus_gtk_css(dark: bool) -> String {
     let (controls, sidebar) = if dark {
@@ -297,6 +300,9 @@ overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
     // 6. Configuración de editores Electron (Antigravity IDE, Code) para controles a la izquierda
     setup_electron_ide_configurations(&malus_config_dir);
 
+    // 7. Configuración de Mozilla Firefox (controles semáforo macOS vía userChrome.css)
+    setup_firefox_configuration(&malus_config_dir);
+
     // Exportar variables de cursor para los procesos iniciados desde Malus DE
     std::env::set_var("XCURSOR_THEME", &cursor_theme);
     std::env::set_var("XCURSOR_SIZE", cursor_size.to_string());
@@ -403,6 +409,129 @@ pub fn resolve_electron_ide_wrapper(exe: &str) -> Option<PathBuf> {
     }
 
     None
+}
+
+/// Configura los perfiles de Mozilla Firefox para que utilicen los controles de ventana
+/// semáforo estilo macOS (posición a la izquierda, círculos de colores y glifos vectoriales en hover)
+/// persistiendo los estilos en `chrome/userChrome.css` y habilitando la preferencia en `user.js`.
+pub fn setup_firefox_configuration(malus_config_dir: &Path) {
+    let mut candidate_dirs = Vec::new();
+
+    // 1. Perfiles bajo el XDG_CONFIG_HOME aislado de Malus DE (~/.config/malus-de/mozilla/firefox)
+    let isolated_firefox_dir = malus_config_dir.join("mozilla").join("firefox");
+    candidate_dirs.push(isolated_firefox_dir.clone());
+
+    // 2. Perfiles estándar del host (~/.mozilla/firefox)
+    if let Ok(home) = std::env::var("HOME") {
+        let host_firefox_dir = PathBuf::from(home).join(".mozilla").join("firefox");
+        if host_firefox_dir != isolated_firefox_dir {
+            candidate_dirs.push(host_firefox_dir);
+        }
+    }
+
+    let mut configured_any_profile = false;
+
+    for base_dir in &candidate_dirs {
+        if !base_dir.exists() {
+            continue;
+        }
+
+        // Buscar perfiles definidos en profiles.ini si existe
+        let mut profile_subdirs = Vec::new();
+        let profiles_ini_path = base_dir.join("profiles.ini");
+        if let Ok(content) = std::fs::read_to_string(&profiles_ini_path) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("Path=") {
+                    let rel_path = trimmed.trim_start_matches("Path=").trim();
+                    if !rel_path.is_empty() {
+                        profile_subdirs.push(base_dir.join(rel_path));
+                    }
+                }
+            }
+        }
+
+        // Escanear también todas las carpetas hijas por si hay perfiles no registrados en profiles.ini
+        if let Ok(entries) = std::fs::read_dir(base_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() && !profile_subdirs.contains(&path) {
+                    let is_profile = path.join("prefs.js").exists()
+                        || path.join("compatibility.ini").exists()
+                        || path.join("times.json").exists()
+                        || path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|n| n.contains(".default") || n.contains(".release"))
+                            .unwrap_or(false);
+                    if is_profile {
+                        profile_subdirs.push(path);
+                    }
+                }
+            }
+        }
+
+        for profile_dir in profile_subdirs {
+            apply_firefox_profile_styles(&profile_dir);
+            configured_any_profile = true;
+        }
+    }
+
+    // 3. Si es una instalación limpia de Malus DE donde aún no se ha abierto Firefox por primera vez,
+    // pre-crear un perfil default inicial con los estilos ya inyectados
+    if !configured_any_profile {
+        let default_profile_dir = isolated_firefox_dir.join("default-release");
+        let _ = std::fs::create_dir_all(&default_profile_dir);
+        apply_firefox_profile_styles(&default_profile_dir);
+
+        let initial_profiles_ini = r#"[General]
+StartWithLastProfile=1
+Version=2
+
+[Profile0]
+Name=default-release
+IsRelative=1
+Path=default-release
+Default=1
+
+[InstallMalusDE]
+Default=default-release
+Locked=1
+"#;
+        let _ = std::fs::write(isolated_firefox_dir.join("profiles.ini"), initial_profiles_ini);
+    }
+}
+
+/// Aplica o actualiza `chrome/userChrome.css` y la preferencia en `user.js` para un perfil específico de Firefox.
+pub fn apply_firefox_profile_styles(profile_dir: &Path) {
+    let chrome_dir = profile_dir.join("chrome");
+    let _ = std::fs::create_dir_all(&chrome_dir);
+    let user_chrome_path = chrome_dir.join("userChrome.css");
+
+    let should_write_css = match std::fs::read_to_string(&user_chrome_path) {
+        Ok(existing) => existing != MALUS_FIREFOX_USER_CHROME_CSS,
+        Err(_) => true,
+    };
+
+    if should_write_css {
+        let _ = std::fs::write(&user_chrome_path, MALUS_FIREFOX_USER_CHROME_CSS);
+        tracing::info!("🎨 [Firefox] userChrome.css actualizado en: {:?}", user_chrome_path);
+    }
+
+    let user_js_path = profile_dir.join("user.js");
+    let pref_line = "user_pref(\"toolkit.legacyUserProfileCustomizations.stylesheets\", true);";
+
+    if user_js_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&user_js_path) {
+            if !content.contains("toolkit.legacyUserProfileCustomizations.stylesheets") {
+                let new_content = format!("{}\n{}\n", content.trim_end(), pref_line);
+                let _ = std::fs::write(&user_js_path, new_content);
+            }
+        }
+    } else {
+        let content = format!("// Malus DE - Configuración de interfaz de ventana\n{}\n", pref_line);
+        let _ = std::fs::write(&user_js_path, content);
+    }
 }
 
 pub fn load_cursor_config() -> (String, u32) {
@@ -2038,5 +2167,48 @@ primary = true
         if let Some(wrapper) = resolve_electron_ide_wrapper("code") {
             assert!(wrapper.to_string_lossy().contains("wrapper"));
         }
+    }
+
+    #[test]
+    fn test_setup_firefox_configuration_creates_and_updates_profiles() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let config_dir = std::env::temp_dir().join(format!("malus-test-firefox-{}", unique));
+        let _ = std::fs::remove_dir_all(&config_dir);
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        // 1. Probar inicialización limpia (sin perfiles previos)
+        setup_firefox_configuration(&config_dir);
+
+        let default_css = config_dir.join("mozilla/firefox/default-release/chrome/userChrome.css");
+        assert!(default_css.exists());
+        let css_content = std::fs::read_to_string(&default_css).unwrap();
+        assert!(css_content.contains("Malus DE - macOS Traffic Light Controls for Mozilla Firefox"));
+        assert!(css_content.contains(".titlebar-close"));
+
+        let default_user_js = config_dir.join("mozilla/firefox/default-release/user.js");
+        assert!(default_user_js.exists());
+        let user_js_content = std::fs::read_to_string(&default_user_js).unwrap();
+        assert!(user_js_content.contains("toolkit.legacyUserProfileCustomizations.stylesheets"));
+
+        // 2. Probar actualización en perfil existente
+        let custom_profile = config_dir.join("mozilla/firefox/custom.profile");
+        std::fs::create_dir_all(&custom_profile).unwrap();
+        let custom_prefs = custom_profile.join("prefs.js");
+        std::fs::write(&custom_prefs, "// Dummy prefs\n").unwrap();
+        let custom_user_js = custom_profile.join("user.js");
+        std::fs::write(&custom_user_js, "user_pref(\"browser.startup.page\", 3);\n").unwrap();
+
+        setup_firefox_configuration(&config_dir);
+
+        let custom_css = custom_profile.join("chrome/userChrome.css");
+        assert!(custom_css.exists());
+        let updated_user_js = std::fs::read_to_string(&custom_user_js).unwrap();
+        assert!(updated_user_js.contains("browser.startup.page"));
+        assert!(updated_user_js.contains("toolkit.legacyUserProfileCustomizations.stylesheets"));
+
+        let _ = std::fs::remove_dir_all(&config_dir);
     }
 }

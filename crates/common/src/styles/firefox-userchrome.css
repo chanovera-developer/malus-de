@@ -1,0 +1,178 @@
+/* ==========================================================================
+   Malus DE - macOS Traffic Light Controls for Mozilla Firefox
+   Proporciona controles de ventana tipo semáforo consistentes con el diseño
+   global de Malus DE (radio, orden, colores y glifos vectoriales en hover).
+   ========================================================================== */
+
+/* Posicionar los controles de ventana únicamente en la barra superior de pestañas */
+#TabsToolbar .titlebar-buttonbox-container {
+    -moz-box-ordinal-group: 0 !important;
+    order: -1 !important;
+    margin-left: 10px !important;
+    margin-right: 14px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+}
+
+/* Ocultar el contenedor duplicado que Firefox renderiza en la barra de navegación (#nav-bar) */
+#nav-bar .titlebar-buttonbox-container {
+    display: none !important;
+}
+
+/* Espaciadores sobrantes de la barra de título cuando los controles están a la izquierda */
+.titlebar-spacer[type="pre-tabs"] {
+    display: none !important;
+}
+
+.titlebar-buttonbox {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    gap: 8px !important;
+}
+
+/* ==========================================================================
+   Gestión de visibilidad de botones Maximizar y Restaurar
+   Firefox incluye en el DOM ambos elementos (<toolbarbutton class="titlebar-max">
+   y <toolbarbutton class="titlebar-restore">). Es indispensable ocultar
+   el que no corresponda al estado de la ventana para evitar botones duplicados.
+   ========================================================================== */
+:root:not([sizemode="maximized"]) .titlebar-buttonbox > .titlebar-restore {
+    display: none !important;
+}
+
+:root[sizemode="maximized"] .titlebar-buttonbox > .titlebar-max {
+    display: none !important;
+}
+
+:root[inFullscreen="true"] .titlebar-buttonbox > .titlebar-restore,
+:root[inFullscreen="true"] .titlebar-buttonbox > .titlebar-max {
+    display: none !important;
+}
+
+/* Estilo base circular idéntico al tema GTK y editores de Malus DE */
+.titlebar-buttonbox > .titlebar-button {
+    appearance: none !important;
+    -moz-appearance: none !important;
+    background-color: transparent !important;
+    border-radius: 9999px !important;
+    border-style: solid !important;
+    border-width: 0.5px !important;
+    box-shadow: none !important;
+    outline: none !important;
+    width: 13px !important;
+    height: 13px !important;
+    min-width: 13px !important;
+    min-height: 13px !important;
+    max-width: 13px !important;
+    max-height: 13px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    cursor: default !important;
+    position: relative !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    transition: background-color 100ms ease, border-color 100ms ease, opacity 100ms ease !important;
+}
+
+/* Ocultar iconos gráficos estándar de Firefox dentro del botón */
+.titlebar-buttonbox > .titlebar-button > .toolbarbutton-icon,
+.titlebar-buttonbox > .titlebar-button > image {
+    display: none !important;
+}
+
+/* Orden y Colores base de macOS: Cerrar (Rojo), Minimizar (Amarillo), Maximizar/Restaurar (Verde) */
+.titlebar-buttonbox > .titlebar-close {
+    -moz-box-ordinal-group: 1 !important;
+    order: 1 !important;
+    background-color: #ff5f56 !important;
+    border-color: #e0443e !important;
+}
+
+.titlebar-buttonbox > .titlebar-min {
+    -moz-box-ordinal-group: 2 !important;
+    order: 2 !important;
+    background-color: #ffbd2e !important;
+    border-color: #dea123 !important;
+}
+
+.titlebar-buttonbox > .titlebar-max,
+.titlebar-buttonbox > .titlebar-restore {
+    -moz-box-ordinal-group: 3 !important;
+    order: 3 !important;
+    background-color: #27c93f !important;
+    border-color: #1aab29 !important;
+}
+
+/* Hover individual en botones */
+.titlebar-buttonbox > .titlebar-close:hover {
+    background-color: #ff473d !important;
+    border-color: #c93630 !important;
+}
+
+.titlebar-buttonbox > .titlebar-min:hover {
+    background-color: #ffb414 !important;
+    border-color: #c78f1a !important;
+}
+
+.titlebar-buttonbox > .titlebar-max:hover,
+.titlebar-buttonbox > .titlebar-restore:hover {
+    background-color: #1ecc37 !important;
+    border-color: #159c23 !important;
+}
+
+/* Click/Active en botones */
+.titlebar-buttonbox > .titlebar-close:active {
+    background-color: #bf3933 !important;
+    border-color: #a82f2a !important;
+}
+
+.titlebar-buttonbox > .titlebar-min:active {
+    background-color: #bf860f !important;
+    border-color: #9e6e07 !important;
+}
+
+.titlebar-buttonbox > .titlebar-max:active,
+.titlebar-buttonbox > .titlebar-restore:active {
+    background-color: #179624 !important;
+    border-color: #0f751a !important;
+}
+
+/* Glifos vectoriales centrados visibles al pasar el puntero sobre la botonera */
+.titlebar-buttonbox > .titlebar-button::before {
+    content: '' !important;
+    position: absolute !important;
+    inset: 0 !important;
+    opacity: 0 !important;
+    background-repeat: no-repeat !important;
+    background-position: center !important;
+    background-size: 6px 6px !important;
+    transition: opacity 120ms ease !important;
+}
+
+.titlebar-buttonbox:hover > .titlebar-button::before,
+.titlebar-buttonbox > .titlebar-button:hover::before {
+    opacity: 0.85 !important;
+}
+
+.titlebar-buttonbox > .titlebar-close::before {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 6 6'%3E%3Cpath d='M0.8 0.8 L5.2 5.2 M5.2 0.8 L0.8 5.2' stroke='%234c0000' stroke-width='1.1' stroke-linecap='round'/%3E%3C/svg%3E") !important;
+}
+
+.titlebar-buttonbox > .titlebar-min::before {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 6 6'%3E%3Cpath d='M0.8 3 L5.2 3' stroke='%23593b00' stroke-width='1.1' stroke-linecap='round'/%3E%3C/svg%3E") !important;
+}
+
+.titlebar-buttonbox > .titlebar-max::before,
+.titlebar-buttonbox > .titlebar-restore::before {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 6 6'%3E%3Cpolygon points='0.8,0.8 3.4,0.8 0.8,3.4' fill='%23004d1a'/%3E%3Cpolygon points='5.2,5.2 2.6,5.2 5.2,2.6' fill='%23004d1a'/%3E%3C/svg%3E") !important;
+}
+
+/* Atenuación suave cuando la ventana de Firefox no tiene el foco del compositor */
+:root:-moz-window-inactive .titlebar-buttonbox > .titlebar-button,
+:root[inactive] .titlebar-buttonbox > .titlebar-button {
+    filter: grayscale(85%) opacity(0.65) !important;
+}

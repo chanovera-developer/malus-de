@@ -137,6 +137,24 @@ chmod 644 /etc/xdg/xdg-desktop-portal/portals.conf /usr/share/xdg-desktop-portal
 echo "   ✔ /etc/xdg/xdg-desktop-portal/portals.conf"
 echo "   ✔ /usr/share/xdg-desktop-portal/portals.conf"
 
+# Instalar políticas globales para soporte nativo de userChrome.css en Firefox
+echo "🦊 Instalando políticas de distribución para Mozilla Firefox..."
+mkdir -p /etc/firefox/policies
+cat << 'EOF' > /etc/firefox/policies/policies.json
+{
+  "policies": {
+    "Preferences": {
+      "toolkit.legacyUserProfileCustomizations.stylesheets": {
+        "Value": true,
+        "Status": "default"
+      }
+    }
+  }
+}
+EOF
+chmod 644 /etc/firefox/policies/policies.json
+echo "   ✔ /etc/firefox/policies/policies.json"
+
 # 4. Instalar entrada de sesión Wayland para GDM
 echo "🖥️ [4/4] Instalando archivo de sesión para GDM en /usr/share/wayland-sessions/..."
 mkdir -p /usr/share/wayland-sessions
