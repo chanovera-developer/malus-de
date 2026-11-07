@@ -4,6 +4,22 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-07] — Decoraciones SSD Nativas macOS, Tema de Cursores `macOS` Integrado y Llavero del Sistema
+
+### Hitos Implementados
+* **Decoraciones del Servidor (Server-Side Decorations / SSD) Nativas Estilo macOS (`zxdg_decoration_manager_v1`):**
+  * Implementación de [`crates/compositor/src/ssd.rs`](../crates/compositor/src/ssd.rs) (`SSD_TITLEBAR_HEIGHT = 38`), renderizando una barra de título nativa estilo macOS para aplicaciones que negocian `Mode::ServerSide` (como ZapFast y clientes Electron/Wayland sin CSD propio).
+  * Incluye los 3 botones semáforo a la izquierda (Cerrar `#ff5f57`, Minimizar `#febc2e` con integración al efecto Genie, Maximizar/Restaurar `#28c840`) con glifos vectoriales al pasar el cursor, título centrado y adaptación automática a modo claro/oscuro.
+  * **Recorte Squircle Unificado ($n = 4.2$):** El compositor agrupa la barra SSD y el árbol de superficies de la ventana dentro de un mismo contenedor (`win_screen_rect`), aplicando el shader de esquinas squircle y la sombra proyectada al conjunto completo.
+  * **Movimiento y Redimensión Perimetral Interactiva:** Soporte completo de arrastre desde la barra SSD (`MoveSurfaceGrab`), doble clic para maximizar y redimensión desde los 8 bordes y esquinas (`ResizeSurfaceGrab` y `find_window_resize_edge_under` en [`crates/compositor/src/grabs.rs`](../crates/compositor/src/grabs.rs)) con actualización dinámica de iconos de cursor y respeto al tamaño mínimo de ventana.
+* **Integración del Tema de Cursores `macOS` (`apple_cursor`) con Respaldo Infalible:**
+  * Incorporación de los temas de cursores `macOS` y `macOS-White` (`v2.0.1`) en [`assets/cursors/`](../assets/cursors/) —creados por **Abdulkaiz Khatri ([@ful1e5](https://github.com/ful1e5))** en el proyecto [`apple_cursor`](https://github.com/ful1e5/apple_cursor) bajo licencia GPL-3.0 ([`assets/cursors/LICENSE`](../assets/cursors/LICENSE))—, con instalación automática en `/usr/share/icons`, `/usr/local/share/malus-de/cursors`, `~/.local/share/icons` y `~/.icons`.
+  * Respaldo en memoria compilado dentro del compositor (`EMBEDDED_MACOS_LEFT_PTR` en [`crates/compositor/src/backend/drm.rs`](../crates/compositor/src/backend/drm.rs)) y recuperación automática ante superficies de cursor muertas o vacías, garantizando que el cursor `macOS` se muestre en todos los casos incluso cuando ocurran errores de cursor en aplicaciones cliente.
+* **Servicio de Llavero (`org.freedesktop.secrets`) en la Sesión:**
+  * Integración de `gnome-keyring-daemon --start --components=secrets,pkcs11,ssh` y `libsecret` en [`scripts/malus-session`](../scripts/malus-session), [`scripts/malus-session.sh`](../scripts/malus-session.sh), [`scripts/install-session.sh`](../scripts/install-session.sh) y [`docs/PACKAGE_MANIFEST.md`](./PACKAGE_MANIFEST.md) para dar soporte a aplicaciones que almacenan credenciales seguras (como ZapFast).
+
+---
+
 ## [2026-11-07] — Controles Semáforo para Firefox y Soporte XDG Popups en Compositor
 
 ### Hitos Implementados

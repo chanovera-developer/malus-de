@@ -12,7 +12,7 @@
 
 Malus DE está pensado actualmente para desarrollo y pruebas controladas. Antes de invitar a un público abierto faltan, como mínimo:
 
-- Dejar pasar toda la suite de pruebas automatizadas. En la revisión actual, `cargo test --workspace --no-fail-fast` compiló el workspace con **87 pruebas correctas y 2 fallidas** en `malus-de-common`: dos aserciones relacionadas con selectores CSS en temas GTK de ventanas emergentes.
+- Dejar pasar toda la suite de pruebas automatizadas. En la revisión actual, `cargo test --workspace --no-fail-fast` pasa **al 100% sin fallos** en todos los crates del workspace (`malus-de-common`, `malus-de-compositor`, `malus-de-render`, `malus-de-top-bar`, `malus-de-dock`, `malus-de-spotlight`, `malus-de-wallpaper`, `malus-de-screenshot`).
 - Validar el flujo completo de inicio de sesión, uso diario y recuperación en hardware y configuraciones de pantalla distintos.
 - Proporcionar una instalación empaquetada y documentar una forma segura de desinstalar o revertir los cambios del instalador.
 - Publicar instrucciones de diagnóstico y un canal claro para reportar fallos reproducibles.
@@ -22,6 +22,9 @@ Las funciones descritas abajo indican alcance implementado en el código, no una
 ## Características
 
 - Compositor Wayland basado en [Smithay](https://github.com/Smithay/smithay), con backend anidado Winit y backend DRM/KMS nativo.
+- **Decoraciones de ventana del servidor (Server-Side Decorations / SSD) nativas estilo macOS:** Para aplicaciones que solicitan decoración del servidor mediante `zxdg_decoration_manager_v1` (como clientes Electron/Chromium, ZapFast, etc.), el compositor renderiza una barra de título nativa de `38 px` con los 3 botones semáforo a la izquierda (Cerrar, Minimizar con efecto Genie, Maximizar/Restaurar) con glifos vectoriales en hover, título centrado, arrastre fluido desde la barra, doble clic para maximizar, **redimensión perimetral interactiva desde los 8 bordes y esquinas** y **recorte squircle unificado ($n = 4.2$)** que abarca tanto la barra SSD como el cuerpo de la ventana.
+- **Tema de cursores `macOS` integrado de serie (con respaldo infalible):** Incluye los temas `macOS` y `macOS-White` (`v2.0.1`) del proyecto [`apple_cursor`](https://github.com/ful1e5/apple_cursor) creado por **Abdulkaiz Khatri ([@ful1e5](https://github.com/ful1e5))** dentro del repositorio (`assets/cursors/`), instalándolos automáticamente en la sesión y embebiendo el cursor principal en el binario del compositor para que siempre se utilice el puntero de macOS en todos los casos, incluso ante errores de cursor o superficies de cliente inválidas.
+- **Integración nativa de llavero (`org.freedesktop.secrets`):** Inicialización automática de `gnome-keyring-daemon --start --components=secrets,pkcs11,ssh` en la sesión de Malus DE para aplicaciones que requieren almacenamiento seguro de credenciales (ZapFast, clientes de mensajería, navegadores y editores).
 - Prioridad de CPU adaptativa para aplicaciones Wayland nativas: crea scopes de systemd con `CPUWeight=1000` para la aplicación enfocada y `CPUWeight=20` para las que quedan en segundo plano. Los pesos son relativos; no reserva ni aísla núcleos.
 - Shell modular con barra superior, menú global, centro de control, dock flotante, Spotlight, notificaciones y fondo de pantalla.
 - Dock interactivo con animación de aumento/disminución, reorganización fluida de iconos por arrastre con huecos en tiempo real, desanclado con seguimiento 1:1 del cursor en el compositor y animación de nube de humo (*Poof*) radial estilo macOS al soltar fuera. Detección automática de iconos con fondo plano para extrapolación y curvatura continua squircle homogénea, así como contenedores automáticos para iconos con canal alfa.
@@ -30,7 +33,7 @@ Las funciones descritas abajo indican alcance implementado en el código, no una
 - Escritorio interactivo con iconos movibles, intercambio de archivos por arrastrar y soltar con el gestor de archivos y miniaturas de imágenes.
 - Conmutador visual de ventanas (App Switcher) mediante `Alt + Tab` y `Super + Tab` para recorrer y alternar fluidamente entre aplicaciones y ventanas abiertas.
 - Integración con servicios de Linux para audio, red, Bluetooth y controles multimedia.
-- Captura real de pantalla (completa y de área interactiva) solicitada al compositor mediante IPC, con alerta auditiva inmediata (obturador vía PipeWire/libcanberra), alerta visual de destello blanco suave estilo macOS en todas las pantallas, miniatura flotante interactiva en la esquina inferior derecha, notificación de sistema y copia directa como PNG al portapapeles.
+- **Barra interactiva de captura y grabación de pantalla (`Super + Shift + 5` / `Super + Impr Pant`):** Renderizada directamente en el compositor con estética Liquid Glass, permite elegir entre captura de pantalla completa, ventana enfocada o selección de área, así como grabación de vídeo de pantalla completa o de región en MP4 (`H.264`), con opciones de temporizador (ninguno, 5 s, 10 s), destino (Archivo o Portapapeles) e inclusión del cursor. Además mantiene los atajos directos (`Super + Shift + 3` y `Super + Shift + 4`), alerta auditiva inmediata, destello blanco suave estilo macOS, miniatura flotante interactiva y copia con `wl-copy`.
 - Historial local persistente de hasta 50 elementos de texto, imágenes, documentos y URI de archivos, accesible con `Super + V`. Admite búsqueda, fijar elementos, volver a copiarlos y borrarlos; ocupa como máximo 50 MiB (10 MiB por elemento). La sincronización con la selección primaria de Wayland es opcional y está desactivada por defecto. El filtro automático de credenciales está activado por defecto y se puede configurar desde la interfaz; es heurístico y no detecta todos los secretos. Los datos se guardan localmente con permisos privados, se conservan entre sesiones y se eliminan al borrar el historial. Requiere `wl-clipboard`.
 - Efectos gráficos con shaders GLSL, esquinas squircle y animaciones fluidas de ventanas.
 - Detección de pantallas y modos compatibles por DRM/KMS, con resolución, disposición y escala fraccionaria configurables en caliente.
@@ -56,14 +59,19 @@ El proyecto es un workspace de Rust. Sus componentes principales viven en `crate
 
 - Linux con soporte para Wayland.
 - Rust y Cargo (edición 2021).
-- Bibliotecas de desarrollo de GTK4, libadwaita, gtk4-layer-shell, Mesa/GBM, libinput, libseat, systemd y D-Bus.
-- Para las funciones de escritorio, los servicios del sistema correspondientes, como PipeWire/WirePlumber, NetworkManager, BlueZ y Polkit.
+- Bibliotecas de desarrollo de GTK4, libadwaita, gtk4-layer-shell, Mesa/GBM, libinput, libseat, systemd, libxkbcommon y D-Bus.
+- Servicios y utilidades de sesión para que Malus DE funcione de forma completa:
+  - **Audio y multimedia:** `pipewire`, `pipewire-pulseaudio`, `pipewire-utils` (`pw-play`), `wireplumber`, `libcanberra-gtk3` y `ffmpeg` (para grabación de pantalla en MP4).
+  - **Seguridad y llavero (`org.freedesktop.secrets`):** `polkit`, `gnome-keyring`, `gnome-keyring-pam` y `libsecret`.
+  - **Portales, portapapeles y montaje de medios:** `xdg-desktop-portal`, `xdg-desktop-portal-gnome`, `xdg-desktop-portal-gtk`, `wl-clipboard` (`wl-copy` / `wl-paste`), `gvfs` y `udisks2`.
+  - **Conectividad y energía:** `NetworkManager`, `bluez`, `power-profiles-daemon`.
+  - **Compatibilidad de clientes:** `qt5-qtwayland`, `qt6-qtwayland` y `xorg-x11-server-Xwayland`.
 
-La lista de paquetes por distribución está en el [manifiesto de dependencias](./docs/PACKAGE_MANIFEST.md). Los componentes y requisitos de producto se describen en el [PRD](./PRD.md).
+La lista detallada de paquetes por distribución está en el [manifiesto de dependencias](./docs/PACKAGE_MANIFEST.md). Los componentes y requisitos de producto se describen en el [PRD](./PRD.md) y el avance cronológico en el [registro de desarrollo (DEVLOG)](./docs/DEVLOG.md).
 
-## Compilar
+## Compilar y Dependencias en Fedora
 
-En Fedora, instala las herramientas y bibliotecas de desarrollo necesarias:
+En Fedora, instala las herramientas de compilación y los paquetes de ejecución necesarios:
 
 ```bash
 sudo dnf install -y \
@@ -82,6 +90,18 @@ sudo dnf install -y \
     systemd-devel \
     dbus-devel \
     libxkbcommon-devel \
+    gnome-keyring \
+    gnome-keyring-pam \
+    libsecret \
+    xdg-desktop-portal \
+    xdg-desktop-portal-gtk \
+    xdg-desktop-portal-gnome \
+    wl-clipboard \
+    pipewire-utils \
+    libcanberra-gtk3 \
+    ffmpeg-free \
+    gvfs \
+    udisks2 \
     qt5-qtwayland \
     qt6-qtwayland \
     xorg-x11-server-Xwayland
@@ -105,16 +125,17 @@ Para compilar en modo optimizado:
 cargo build --workspace --release
 ```
 
-## Capturas de pantalla
+## Capturas y grabación de pantalla
 
-La herramienta de captura solicita el fotograma al compositor de Malus mediante IPC, sin depender de portales externos. Cuenta con soporte completo para pantalla completa y recorte de área:
+La herramienta de captura y grabación está integrada directamente en el compositor de Malus DE sin depender de portales externos. Cuenta con soporte para pantalla completa, ventana enfocada, recorte de área y grabación de vídeo:
 
 - **Atajos de teclado globales:**
-  - **Captura completa:** Tecla `Impr Pant` o `Super + Shift + 3` (estilo macOS).
-  - **Captura de área interactiva:** `Shift + Impr Pant`, `Super + Shift + 4` (estilo macOS) o `Super + Shift + S` (estilo Windows/Linux moderno).
+  - **Barra interactiva de captura y grabación:** `Super + Shift + 5` o `Super + Impr Pant` (estilo macOS). Permite alternar entre capturar toda la pantalla, capturar la ventana activa, capturar una región seleccionada, grabar toda la pantalla o grabar una selección, además de configurar temporizador (ninguno, 5 s, 10 s), destino (archivo o portapapeles) y visibilidad del cursor.
+  - **Captura completa directa:** Tecla `Impr Pant` o `Super + Shift + 3`.
+  - **Captura de área interactiva:** `Shift + Impr Pant`, `Super + Shift + 4` o `Super + Shift + S`.
 - **Alerta auditiva inmediata:** Reproducción prioritaria del sonido de obturador de cámara (`screen-capture.oga` / `camera-shutter.oga`) mediante `pw-play` (PipeWire nativo de latencia casi cero), con respaldo automático a `canberra-gtk-play` y `paplay`.
 - **Alerta visual suave (destello):** Animación de destello blanco puro en capa de superposición (`Layer::Overlay`) sobre todas las pantallas conectadas, que se desvanece fluidamente de 85% a 0% de opacidad en 200 ms.
-- **Selección de área:** Despliega una capa con oscurecimiento y retícula que permite arrastrar para delimitar la región exacta, con tecla `Esc` para cancelar.
+- **Selección de área:** Despliega una capa con oscurecimiento y retícula que permite arrastrar y ajustar bordes/esquinas para delimitar la región exacta, con tecla `Esc` para cancelar.
 - **Miniatura flotante interactiva y notificación:** El fotograma se guarda como imagen PNG en la carpeta de Imágenes configurada por XDG (por ejemplo, `~/Imágenes/Capturas de pantalla` en español), se copia automáticamente al portapapeles con `wl-copy` y envía una notificación de escritorio. Además, presenta en la esquina inferior derecha una miniatura flotante con previsualización del archivo y botones para volver a copiarlo o descartarlo (con auto-cierre tras 6 segundos de inactividad).
 
 ```bash
@@ -123,7 +144,7 @@ cargo run -p malus-de-screenshot -- --mode full --clipboard-only
 cargo run -p malus-de-screenshot -- --mode area
 ```
 
-La copia al portapapeles requiere `wl-copy` (`wl-clipboard`). También puedes usar el flag `--clipboard-only` para copiar directamente al portapapeles con destello y sonido, pero sin guardar el archivo en disco ni abrir la miniatura flotante. La captura de ventana individual, grabación y OCR continúan en desarrollo.
+La copia al portapapeles requiere `wl-copy` (`wl-clipboard`) y la codificación de vídeo en grabación de pantalla utiliza `ffmpeg` (`ffmpeg-free`). También puedes usar el flag `--clipboard-only` para copiar directamente al portapapeles con destello y sonido, pero sin guardar el archivo en disco ni abrir la miniatura flotante. El OCR sobre capturas continúa en desarrollo.
 
 El gestor de portapapeles conserva hasta 50 elementos (texto, enlaces, URI de archivos, imágenes comunes y formatos de documento como PDF y RTF), con un límite de 10 MiB por elemento y 50 MiB en total. Pulsa `Super + V` para buscar, fijar, volver a copiar o borrar elementos. El historial se guarda localmente entre sesiones con permisos privados y requiere `wl-clipboard`; borrar el historial elimina también su copia persistente. La sincronización con la selección primaria de Wayland es opcional y está desactivada por defecto; se configura desde la interfaz del historial. El filtro sensible, activado por defecto, omite las selecciones marcadas como contraseñas por la aplicación de origen y detecta algunas señales comunes como claves privadas y credenciales con nombre. Es una protección heurística, no una garantía: puede dejar pasar secretos o descartar texto que parezca una credencial. Se puede desactivar desde la interfaz; el cambio afecta al contenido nuevo y no modifica el historial existente.
 
@@ -152,11 +173,10 @@ El menú global solo puede mostrar y ejecutar menús que la aplicación publique
 
 ## Limitaciones conocidas y alcance pendiente
 
-- La posición de los botones de ventana sigue cambiando en GNOME. Investigar qué componente la restablece y mantener el diseño de Malus sin modificar las preferencias globales de GNOME.
+- Los menús emergentes y desplegables (`xdg_popup`) en navegadores tienen incidencias pendientes en depuración (desfase de coordenadas en desplegables `<select>` de Firefox y visualización de menús contextuales/hamburguesa en Brave Browser bajo Ozone/Wayland).
 - AirDrop/AWDL y la integración BLE están en desarrollo; no se debe considerar disponible el intercambio completo con dispositivos Apple.
-- La captura de ventana, la grabación de pantalla y el OCR no están implementados.
+- El OCR en capturas de pantalla aún no está implementado.
 - El menú global depende de que cada aplicación publique los protocolos `com.canonical.dbusmenu` y `com.canonical.AppMenu.Registrar`; no todas las aplicaciones lo hacen.
-- La suite automatizada tiene los dos fallos de aserción CSS descritos en [Estado de preparación para pruebas](#estado-de-preparacion-para-pruebas); la compilación por sí sola no valida la sesión en hardware.
 - La instalación modifica configuración global del portal y no dispone de un proceso automático de desinstalación o reversión.
 
 Si pruebas Malus, incluye en el reporte la distribución y versión, GPU y controlador, número y modos de pantalla, backend utilizado (DRM o Winit), pasos para reproducir el problema y los registros de `~/.local/share/malus-de/session.log` cuando estén disponibles. No compartas registros que contengan información personal sin revisarlos primero.
@@ -164,9 +184,11 @@ Si pruebas Malus, incluye en el reporte la distribución y versión, GPU y contr
 ## Documentación
 
 - [PRD y arquitectura técnica](./PRD.md)
+- [Registro de desarrollo (DEVLOG)](./docs/DEVLOG.md)
 - [Manifiesto de dependencias y paquetes](./docs/PACKAGE_MANIFEST.md)
 - [Guía de desarrollo de temas](./docs/THEME_DEVELOPMENT_GUIDE.md)
 
-## Licencia
+## Créditos y Licencias
 
-El workspace declara las licencias **MIT OR Apache-2.0** en `Cargo.toml`.
+- **Código fuente de Malus DE:** El workspace declara las licencias **MIT OR Apache-2.0** en `Cargo.toml`.
+- **Tema de cursores `macOS` y `macOS-White` (`assets/cursors/`):** Basado en [`apple_cursor` (v2.0.1)](https://github.com/ful1e5/apple_cursor), creado y mantenido por **Abdulkaiz Khatri ([@ful1e5](https://github.com/ful1e5))**, distribuido bajo la licencia **GNU General Public License v3.0 (GPL-3.0)** (ver [`assets/cursors/LICENSE`](./assets/cursors/LICENSE)).

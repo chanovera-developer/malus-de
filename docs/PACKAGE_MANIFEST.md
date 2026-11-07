@@ -65,6 +65,9 @@ sudo dnf install -y \
     bluez-tools \
     power-profiles-daemon \
     polkit \
+    gnome-keyring \
+    gnome-keyring-pam \
+    libsecret \
     gdm \
     gtk4 \
     libadwaita \
@@ -73,6 +76,9 @@ sudo dnf install -y \
     xdg-desktop-portal-gtk \
     xdg-desktop-portal-gnome \
     wl-clipboard \
+    pipewire-utils \
+    libcanberra-gtk3 \
+    ffmpeg-free \
     gvfs \
     udisks2 \
     nautilus \
@@ -123,6 +129,9 @@ sudo apt install -y \
     bluez-tools \
     power-profiles-daemon \
     policykit-1 \
+    gnome-keyring \
+    libpam-gnome-keyring \
+    libsecret-1-0 \
     gdm3 \
     libgtk-4-1 \
     libadwaita-1-0 \
@@ -131,6 +140,8 @@ sudo apt install -y \
     xdg-desktop-portal-gtk \
     xdg-desktop-portal-gnome \
     wl-clipboard \
+    libcanberra-gtk3-module \
+    ffmpeg \
     gvfs \
     gvfs-backends \
     udisks2 \
@@ -140,7 +151,10 @@ sudo apt install -y \
     gnome-system-monitor \
     gnome-text-editor \
     loupe \
-    fonts-inter
+    fonts-inter \
+    qtwayland5 \
+    qt6-wayland \
+    xwayland
 ```
 
 ### B. Dependencias de Compilación (`apt` para desarrolladores)
@@ -155,6 +169,7 @@ sudo apt install -y \
     libgbm-dev \
     libinput-dev \
     libseat-dev \
+    libxkbcommon-dev \
     libsystemd-dev \
     libdbus-1-dev
 ```
@@ -176,6 +191,8 @@ sudo pacman -S --needed \
     bluez-utils \
     power-profiles-daemon \
     polkit \
+    gnome-keyring \
+    libsecret \
     gdm \
     gtk4 \
     libadwaita \
@@ -183,6 +200,9 @@ sudo pacman -S --needed \
     xdg-desktop-portal \
     xdg-desktop-portal-gtk \
     xdg-desktop-portal-gnome \
+    wl-clipboard \
+    libcanberra \
+    ffmpeg \
     gvfs \
     udisks2 \
     nautilus \
@@ -191,7 +211,10 @@ sudo pacman -S --needed \
     gnome-system-monitor \
     gnome-text-editor \
     loupe \
-    inter-font
+    inter-font \
+    qt5-wayland \
+    qt6-wayland \
+    xorg-xwayland
 ```
 
 ---
