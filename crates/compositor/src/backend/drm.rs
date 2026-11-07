@@ -546,6 +546,7 @@ fn resolve_target_under(
         bool,
     )>,
     Option<(smithay::desktop::Window, Point<i32, Logical>)>,
+    bool,
 ) {
     let layer_hit = find_layer_under(state, point);
     if let Some((surf, focus_loc, ns, can_kb)) = layer_hit {
@@ -553,19 +554,25 @@ fn resolve_target_under(
             Some((surf.clone(), focus_loc)),
             Some((surf, ns, can_kb)),
             None,
+            false,
         )
-    } else if let Some((window, loc, surf, sub_loc)) = state.popup_under(point) {
+    } else if let Some((_window, loc, surf, sub_loc)) = state.popup_under(point) {
         (
             Some((surf, (loc + sub_loc).to_f64())),
             None,
-            Some((window, loc)),
+            None,
+            true,
         )
     } else if let Some((window, loc)) = state.space.element_under(point) {
         let local_point = point - loc.to_f64();
         let target = window
-            .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+            .surface_under(
+                local_point,
+                smithay::desktop::WindowSurfaceType::TOPLEVEL
+                    | smithay::desktop::WindowSurfaceType::SUBSURFACE,
+            )
             .map(|(surf, sub_loc)| (surf, (loc + sub_loc).to_f64()));
-        (target, None, Some((window.clone(), loc)))
+        (target, None, Some((window.clone(), loc)), false)
     } else if let Some((surf, focus_loc, ns, can_kb)) =
         find_layer_under_layer(state, point, Layer::Background)
     {
@@ -573,9 +580,10 @@ fn resolve_target_under(
             Some((surf.clone(), focus_loc)),
             Some((surf, ns, can_kb)),
             None,
+            false,
         )
     } else {
-        (None, None, None)
+        (None, None, None, false)
     }
 }
 
@@ -1414,7 +1422,7 @@ pub fn run_drm() -> Result<()> {
                     }
                     state.update_spotlight_drag_dock_hover(point);
 
-                    let (under_target, _, _) = resolve_target_under(state, point);
+                    let (under_target, _, _, _) = resolve_target_under(state, point);
 
                     let serial = SERIAL_COUNTER.next_serial();
                     pointer.motion(
@@ -1464,7 +1472,7 @@ pub fn run_drm() -> Result<()> {
                         }
                         state.update_spotlight_drag_dock_hover(point);
 
-                        let (under_target, _, _) = resolve_target_under(state, point);
+                        let (under_target, _, _, _) = resolve_target_under(state, point);
 
                         let serial = SERIAL_COUNTER.next_serial();
                         pointer.motion(
@@ -1485,7 +1493,7 @@ pub fn run_drm() -> Result<()> {
                     let point = pointer.current_location();
                     let is_pressed = event.state() == ButtonState::Pressed;
 
-                    let (under_target, layer_info, regular_win) = resolve_target_under(state, point);
+                    let (under_target, layer_info, regular_win, is_popup) = resolve_target_under(state, point);
 
                     let motion_serial = SERIAL_COUNTER.next_serial();
                     pointer.motion(
@@ -1542,25 +1550,38 @@ pub fn run_drm() -> Result<()> {
                             state.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
                         }
 
-                        let clicked_on_popup = under_target
-                            .as_ref()
-                            .map(|(s, _)| {
-                                state.active_popups.iter().any(|p| p.wl_surface() == s)
-                                    || state.popups.find_popup(s).is_some()
-                            })
-                            .unwrap_or(false);
+                        let clicked_on_popup = is_popup
+                            || under_target
+                                .as_ref()
+                                .map(|(s, _)| {
+                                    state.active_popups.iter().any(|p| p.wl_surface() == s)
+                                        || state.popups.find_popup(s).is_some()
+                                })
+                                .unwrap_or(false);
 
-                        if !clicked_on_popup && !state.active_popups.is_empty() {
+                        if is_popup {
+                            if let Some((win, _, _, _)) = state.popup_under(point) {
+                                let was_already_top = state.space.elements().last().map(|w| w == &win).unwrap_or(false);
+                                if !was_already_top {
+                                    state.space.raise_element(&win, true);
+                                }
+                            }
+                        }
+
+                        // Si hay popups activos pero NO hay un grab explícito (o el grab ya finalizó)
+                        // y el clic fue fuera del popup, descartamos los popups. Si hay un grab
+                        // explícito activo, PopupPointerGrab gestionará el clic y el cierre protocolar.
+                        if !clicked_on_popup && !state.active_popups.is_empty() && !state.popup_grab_active() {
                             state.dismiss_all_popups();
                         }
 
-                        if pointer.is_grabbed() {
+                        if pointer.is_grabbed() && !state.popup_grab_active() {
                             state.snap_preview = None;
                             pointer.unset_grab(state, btn_serial, event.time_msec());
                         }
 
                         if let Some(keyboard) = state.seat.get_keyboard() {
-                            if keyboard.is_grabbed() {
+                            if keyboard.is_grabbed() && !state.popup_grab_active() {
                                 keyboard.unset_grab(state);
                             }
 
@@ -2056,6 +2077,7 @@ pub fn run_drm() -> Result<()> {
 
         // Despachar eventos de hardware (libinput, sesión, vblank)
         let _ = event_loop.dispatch(Some(Duration::from_millis(1)), &mut state);
+        let _ = display.flush_clients();
 
         state.process_ipc_messages();
         display.dispatch_clients(&mut state)?;
@@ -2403,11 +2425,13 @@ pub fn run_drm() -> Result<()> {
                                     })
                                     .unwrap_or(true)
                                     && !crate::state::is_browser_window(&window);
-                            for (popup, popup_offset) in
+                            let mut raw_popups: Vec<_> =
                                 smithay::desktop::PopupManager::popups_for_surface(
                                     main_surface.as_ref(),
                                 )
-                            {
+                                .collect();
+                            raw_popups.reverse();
+                            for (popup, popup_offset) in raw_popups {
                                 let popup_geometry = popup.geometry();
                                 let popup_rect = Rectangle::new(
                                     phys_loc
@@ -2716,7 +2740,8 @@ pub fn run_drm() -> Result<()> {
                                         if let (Some(r), Some(ref shader)) =
                                             (win_phys_r, window_squircle_shader.as_ref())
                                         {
-                                            for elem in win_elems {
+                                            // Orden de atrás hacia adelante (ver nota en la rama general).
+                                            for elem in win_elems.iter().rev() {
                                                 let elem_geo =
                                                     elem.geometry(smithay::utils::Scale::from(scale));
                                                 let sub_offset = smithay::utils::Point::from((
@@ -2751,7 +2776,12 @@ pub fn run_drm() -> Result<()> {
                                     } else {
                                         // Para el resto de ventanas (GTK, Electron, etc.): comportamiento intacto original.
                                         // Solo se recorta la superficie raíz (is_root), sin alterar widgets ni subsuperficies GTK.
-                                        for elem in win_elems {
+                                        // `render_elements_from_surface_tree` devuelve los elementos de adelante hacia atrás
+                                        // (la subsuperficie superior primero, la raíz al final). Al dibujarlos uno a uno hay
+                                        // que recorrerlos al revés (painter's algorithm); de lo contrario la raíz se pinta
+                                        // encima de sus subsuperficies y oculta, p. ej., las burbujas de Chromium/Brave
+                                        // (descargas, permisos, extensiones), que son `wl_subsurface`.
+                                        for elem in win_elems.iter().rev() {
                                             let is_root = elem.id() == root_id;
                                             if is_root {
                                                 if let (Some(r), Some(ref shader)) =
@@ -2912,7 +2942,7 @@ pub fn run_drm() -> Result<()> {
                         }
 
                         for (elements, rect) in &spotlight_backdrop_elements {
-                            for elem in elements {
+                            for elem in elements.iter().rev() {
                                 if let Some(shader) = window_squircle_shader.as_ref() {
                                     let elem_geo =
                                         elem.geometry(smithay::utils::Scale::from(scale));
@@ -2989,7 +3019,7 @@ pub fn run_drm() -> Result<()> {
                                     }
                                 }
 
-                                for elem in popup_elems {
+                                for elem in popup_elems.iter().rev() {
                                     if *popup_effects_enabled {
                                         if let Some(shader) = window_squircle_shader.as_ref() {
                                             let elem_geo =
@@ -3075,7 +3105,7 @@ pub fn run_drm() -> Result<()> {
                                 });
                             }
 
-                            for elem in popup_elems {
+                            for elem in popup_elems.iter().rev() {
                                 if let Some(shader) = window_squircle_shader.as_ref() {
                                     let elem_geo =
                                         elem.geometry(smithay::utils::Scale::from(scale));
@@ -3122,7 +3152,7 @@ pub fn run_drm() -> Result<()> {
                                 });
                             }
 
-                            for elem in popup_elems {
+                            for elem in popup_elems.iter().rev() {
                                 if let Some(shader) = window_squircle_shader.as_ref() {
                                     let elem_geo =
                                         elem.geometry(smithay::utils::Scale::from(scale));

@@ -10,7 +10,8 @@ use smithay::{
     delegate_layer_shell, delegate_output, delegate_primary_selection, delegate_seat, delegate_shm,
     delegate_viewporter, delegate_xdg_decoration, delegate_xdg_shell,
     desktop::{
-        find_popup_root_surface, layer_map_for_output, PopupKind, PopupManager, Space,
+        find_popup_root_surface, get_popup_toplevel_coords, layer_map_for_output, PopupGrab,
+        PopupKeyboardGrab, PopupKind, PopupManager, PopupPointerGrab, Space,
     },
     input::{Seat, SeatHandler, SeatState},
     output::Output,
@@ -24,7 +25,7 @@ use smithay::{
             Client, Display, DisplayHandle,
         },
     },
-    utils::{Logical, Point, Rectangle, Serial, Size},
+    utils::{IsAlive, Logical, Point, Rectangle, Serial, Size},
     wayland::{
         buffer::BufferHandler,
         compositor::{CompositorClientState, CompositorHandler, CompositorState},
@@ -166,6 +167,8 @@ pub struct MalusState {
     pub space: Space<smithay::desktop::Window>,
     pub popups: PopupManager,
     pub active_popups: Vec<PopupSurface>,
+    /// Grab explícito (`xdg_popup.grab`) activo de un popup de ventana de aplicación.
+    pub popup_grab: Option<PopupGrab<MalusState>>,
     pub window_restore_geometries: HashMap<WlSurface, (Point<i32, Logical>, Size<i32, Logical>)>,
     pub centered_transient_windows: HashMap<WlSurface, (Point<i32, Logical>, Size<i32, Logical>)>,
     pub minimized_windows: HashMap<WlSurface, (smithay::desktop::Window, Point<i32, Logical>)>,
@@ -796,6 +799,7 @@ impl MalusState {
             space: Space::default(),
             popups: PopupManager::default(),
             active_popups: Vec::new(),
+            popup_grab: None,
             window_restore_geometries: HashMap::new(),
             centered_transient_windows: HashMap::new(),
             minimized_windows: HashMap::new(),
@@ -1542,6 +1546,65 @@ impl MalusState {
             }
         }
         self.popups.cleanup();
+        // Los popups con grab acaban de cerrarse: el grab termina con ellos.
+        // El llamador (manejador de clic) se encarga de soltar los grabs de puntero/teclado.
+        self.popup_grab = None;
+    }
+
+    /// Indica si hay un grab explícito de popup (`xdg_popup.grab`) todavía vigente.
+    pub fn popup_grab_active(&self) -> bool {
+        self.popup_grab.as_ref().is_some_and(|grab| !grab.has_ended())
+    }
+
+    /// Libera el grab de popup cuando el cliente ya destruyó todos sus popups
+    /// y devuelve el foco de teclado a la ventana raíz sin esperar a la siguiente tecla.
+    pub fn refresh_popup_grab(&mut self) {
+        let Some(grab) = self.popup_grab.clone() else { return };
+        if !grab.has_ended() {
+            return;
+        }
+        self.popup_grab = None;
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            let previous = grab.previous_serial().unwrap_or(grab.serial());
+            if keyboard.is_grabbed()
+                && (keyboard.has_grab(grab.serial()) || keyboard.has_grab(previous))
+            {
+                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                keyboard.unset_grab(self);
+                keyboard.set_focus(self, grab.current_grab().filter(|s| s.alive()), serial);
+            }
+        }
+    }
+
+    /// Ajusta la geometría de un popup de ventana para que no se salga de los monitores,
+    /// respetando el `constraint_adjustment` (flip/slide/resize) pedido por el cliente
+    /// en su `xdg_positioner`.
+    fn unconstrain_popup(&self, popup: &PopupSurface) {
+        let kind = PopupKind::Xdg(popup.clone());
+        let Ok(root) = find_popup_root_surface(&kind) else { return };
+        let Some(window) = self.window_for_surface(&root) else { return };
+        let Some(window_loc) = self.space.element_location(&window) else { return };
+
+        let mut outputs = self.space.outputs_for_element(&window);
+        if outputs.is_empty() {
+            outputs = self.space.outputs().cloned().collect();
+        }
+        let Some(outputs_geo) = outputs
+            .iter()
+            .filter_map(|output| self.space.output_geometry(output))
+            .reduce(|acc, geo| acc.merge(geo))
+        else {
+            return;
+        };
+
+        // El objetivo debe expresarse relativo a la geometría del padre directo del popup.
+        let mut target = outputs_geo;
+        target.loc -= window_loc;
+        target.loc -= get_popup_toplevel_coords(&kind);
+
+        popup.with_pending_state(|state| {
+            state.geometry = state.positioner.get_unconstrained_geometry(target);
+        });
     }
 
     pub fn popup_under(
@@ -1555,11 +1618,12 @@ impl MalusState {
     )> {
         self.space.elements().rev().find_map(|window| {
             let location = self.space.element_location(window)?;
+            let render_loc = location - window.geometry().loc;
             let (surface, surface_location) = window.surface_under(
-                point - location.to_f64(),
+                point - render_loc.to_f64(),
                 smithay::desktop::WindowSurfaceType::POPUP,
             )?;
-            Some((window.clone(), location, surface, surface_location))
+            Some((window.clone(), render_loc, surface, surface_location))
         })
     }
 
@@ -2275,6 +2339,7 @@ impl XdgShellHandler for MalusState {
             state.geometry = positioner.get_geometry();
             state.positioner = positioner;
         });
+        self.unconstrain_popup(&surface);
         if self.popups.find_popup(surface.wl_surface()).is_none() {
             if let Err(err) = self.popups.track_popup(PopupKind::Xdg(surface.clone())) {
                 tracing::warn!("⚠️ Error al registrar popup en PopupManager: {:?}", err);
@@ -2290,10 +2355,45 @@ impl XdgShellHandler for MalusState {
         }
     }
 
-    fn grab(&mut self, surface: PopupSurface, _seat: WlSeat, _serial: Serial) {
+    fn grab(&mut self, surface: PopupSurface, seat: WlSeat, serial: Serial) {
         tracing::info!("🎯 [XdgShell] grab request recibido para popup surface: {:?}", smithay::reexports::wayland_server::Resource::id(surface.wl_surface()));
         if !self.active_popups.iter().any(|p| p.wl_surface() == surface.wl_surface()) {
-            self.active_popups.push(surface);
+            self.active_popups.push(surface.clone());
+        }
+
+        let kind = PopupKind::Xdg(surface.clone());
+        let root = match find_popup_root_surface(&kind) {
+            Ok(root) => root,
+            Err(err) => {
+                tracing::warn!("⚠️ No se encontró root surface para popup grab: {:?}", err);
+                return;
+            }
+        };
+
+        let Some(seat) = Seat::<Self>::from_resource(&seat) else {
+            tracing::warn!("⚠️ No se pudo resolver Seat desde WlSeat para popup grab");
+            return;
+        };
+
+        match self.popups.grab_popup::<Self>(root, kind, &seat, serial) {
+            Ok(popup_grab) => {
+                if let Some(keyboard) = seat.get_keyboard() {
+                    keyboard.set_grab(self, PopupKeyboardGrab::new(&popup_grab), serial);
+                }
+                if let Some(pointer) = seat.get_pointer() {
+                    pointer.set_grab(
+                        self,
+                        PopupPointerGrab::new(&popup_grab),
+                        serial,
+                        smithay::input::pointer::Focus::Keep,
+                    );
+                }
+                self.popup_grab = Some(popup_grab);
+                tracing::info!("✅ [XdgShell] Popup grab (teclado + puntero) establecido exitosamente");
+            }
+            Err(err) => {
+                tracing::warn!("⚠️ Error al registrar popup grab en PopupManager: {:?}", err);
+            }
         }
     }
 
@@ -2305,6 +2405,7 @@ impl XdgShellHandler for MalusState {
             let _ = PopupManager::dismiss_popup(&root, &PopupKind::Xdg(surface));
         }
         self.popups.cleanup();
+        self.refresh_popup_grab();
     }
 
     fn move_request(&mut self, surface: ToplevelSurface, seat: WlSeat, serial: Serial) {
@@ -2405,6 +2506,7 @@ impl XdgShellHandler for MalusState {
             state.geometry = geometry;
             state.positioner = positioner;
         });
+        self.unconstrain_popup(&surface);
         let _ = surface.send_repositioned(token);
     }
 

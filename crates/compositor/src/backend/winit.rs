@@ -562,7 +562,11 @@ pub fn run_winit() -> Result<()> {
                     } else if let Some((window, loc)) = state.space.element_under(point) {
                         let local_point = point - loc.to_f64();
                         window
-                            .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                            .surface_under(
+                                local_point,
+                                smithay::desktop::WindowSurfaceType::TOPLEVEL
+                                    | smithay::desktop::WindowSurfaceType::SUBSURFACE,
+                            )
                             .map(|(surf, sub_loc)| (surf, (loc + sub_loc).to_f64()))
                     } else if let Some((surf, focus_loc, _, _)) =
                         find_background_layer_under(&state, &output, point)
@@ -621,20 +625,25 @@ pub fn run_winit() -> Result<()> {
                         })
                     };
 
-                    let (under_target, layer_info, regular_win) = if let Some((surf, focus_loc, ns, can_kb)) = layer_target {
-                        (Some((surf.clone(), focus_loc)), Some((surf, ns, can_kb)), None)
-                    } else if let Some((window, loc, surf, sub_loc)) = state.popup_under(point) {
+                    let (under_target, layer_info, regular_win, is_popup) = if let Some((surf, focus_loc, ns, can_kb)) = layer_target {
+                        (Some((surf.clone(), focus_loc)), Some((surf, ns, can_kb)), None, false)
+                    } else if let Some((_window, loc, surf, sub_loc)) = state.popup_under(point) {
                         (
                             Some((surf, (loc + sub_loc).to_f64())),
                             None,
-                            Some((window, loc)),
+                            None,
+                            true,
                         )
                     } else if let Some((window, loc)) = state.space.element_under(point) {
                         let local_point = point - loc.to_f64();
                         let target = window
-                            .surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                            .surface_under(
+                                local_point,
+                                smithay::desktop::WindowSurfaceType::TOPLEVEL
+                                    | smithay::desktop::WindowSurfaceType::SUBSURFACE,
+                            )
                             .map(|(surf, sub_loc)| (surf, (loc + sub_loc).to_f64()));
-                        (target, None, Some((window.clone(), loc)))
+                        (target, None, Some((window.clone(), loc)), false)
                     } else if let Some((surf, focus_loc, ns, can_kb)) =
                         find_background_layer_under(&state, &output, point)
                     {
@@ -642,9 +651,10 @@ pub fn run_winit() -> Result<()> {
                             Some((surf.clone(), focus_loc)),
                             Some((surf, ns, can_kb)),
                             None,
+                            false,
                         )
                     } else {
-                        (None, None, None)
+                        (None, None, None, false)
                     };
 
                     // Sincronizar foco del puntero antes de procesar el botón para que el cliente reciba enter/button
@@ -698,25 +708,35 @@ pub fn run_winit() -> Result<()> {
                         }
 
                         // Si hay popups activos y el clic NO fue sobre el popup, descartamos los popups
-                        let clicked_on_popup = under_target
-                            .as_ref()
-                            .map(|(s, _)| {
-                                state.active_popups.iter().any(|p| p.wl_surface() == s)
-                                    || state.popups.find_popup(s).is_some()
-                            })
-                            .unwrap_or(false);
+                        let clicked_on_popup = is_popup
+                            || under_target
+                                .as_ref()
+                                .map(|(s, _)| {
+                                    state.active_popups.iter().any(|p| p.wl_surface() == s)
+                                        || state.popups.find_popup(s).is_some()
+                                })
+                                .unwrap_or(false);
 
-                        if !clicked_on_popup && !state.active_popups.is_empty() {
+                        if is_popup {
+                            if let Some((win, _, _, _)) = state.popup_under(point) {
+                                let was_already_top = state.space.elements().last().map(|w| w == &win).unwrap_or(false);
+                                if !was_already_top {
+                                    state.space.raise_element(&win, true);
+                                }
+                            }
+                        }
+
+                        if !clicked_on_popup && !state.active_popups.is_empty() && !state.popup_grab_active() {
                             state.dismiss_all_popups();
                         }
 
                         // Liberar cualquier grab residual para que los clics nunca se queden congelados
-                        if pointer.is_grabbed() {
+                        if pointer.is_grabbed() && !state.popup_grab_active() {
                             tracing::warn!("⚠️ Grab de puntero residual detectado al hacer clic; liberando grab");
                             state.snap_preview = None;
                             pointer.unset_grab(&mut state, btn_serial, event.time_msec());
                         }
-                        if keyboard.is_grabbed() {
+                        if keyboard.is_grabbed() && !state.popup_grab_active() {
                             tracing::warn!("⚠️ Grab de teclado residual detectado al hacer clic; liberando grab");
                             keyboard.unset_grab(&mut state);
                         }
@@ -1229,11 +1249,13 @@ pub fn run_winit() -> Result<()> {
                                     })
                                     .unwrap_or(true)
                                     && !crate::state::is_browser_window(&window);
-                            for (popup, popup_offset) in
+                            let mut raw_popups: Vec<_> =
                                 smithay::desktop::PopupManager::popups_for_surface(
                                     main_surface.as_ref(),
                                 )
-                            {
+                                .collect();
+                            raw_popups.reverse();
+                            for (popup, popup_offset) in raw_popups {
                                 let popup_geometry = popup.geometry();
                                 let popup_rect = Rectangle::new(
                                     phys_loc
@@ -1529,7 +1551,7 @@ pub fn run_winit() -> Result<()> {
                                     if let (Some(r), Some(ref shader)) =
                                         (win_phys_r, window_squircle_shader.as_ref())
                                     {
-                                        for elem in win_elems {
+                                        for elem in win_elems.iter().rev() {
                                             let elem_geo =
                                                 elem.geometry(smithay::utils::Scale::from(1.0));
                                             let sub_offset = smithay::utils::Point::from((
@@ -1564,7 +1586,7 @@ pub fn run_winit() -> Result<()> {
                                 } else {
                                     // Para las demás apps (GTK, Electron, etc.): comportamiento intacto original,
                                     // SOLO se aplica el recorte a la superficie raíz para no distorsionar widgets GTK
-                                    for elem in win_elems {
+                                    for elem in win_elems.iter().rev() {
                                         let is_root = elem.id() == root_id;
                                         if is_root {
                                             if let (Some(r), Some(ref shader)) =
@@ -1790,7 +1812,7 @@ pub fn run_winit() -> Result<()> {
                                 }
                             }
 
-                            for elem in popup_elems {
+                            for elem in popup_elems.iter().rev() {
                                 if *popup_effects_enabled {
                                     if let Some(shader) = window_squircle_shader.as_ref() {
                                         let elem_geo = elem.geometry(Scale::from(1.0));
@@ -1874,7 +1896,7 @@ pub fn run_winit() -> Result<()> {
                             });
                         }
 
-                        for elem in popup_elems {
+                        for elem in popup_elems.iter().rev() {
                             if let Some(shader) = window_squircle_shader.as_ref() {
                                 let elem_geo = elem.geometry(Scale::from(1.0));
                                 shader.apply_clip_to_frame(
@@ -1920,7 +1942,7 @@ pub fn run_winit() -> Result<()> {
                             });
                         }
 
-                        for elem in popup_elems {
+                        for elem in popup_elems.iter().rev() {
                             if let Some(shader) = window_squircle_shader.as_ref() {
                                 let elem_geo = elem.geometry(Scale::from(1.0));
                                 shader.apply_clip_to_frame(
