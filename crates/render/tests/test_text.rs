@@ -100,7 +100,7 @@ fn test_cosmic_text_system_font_matching() {
     let mut buffer = Buffer::new(&mut fs, metrics);
     buffer.set_text(
         &mut fs,
-        "Acerca de este Mac",
+        "Acerca de este equipo",
         Attrs::new().family(Family::SansSerif).weight(Weight::NORMAL),
         Shaping::Advanced,
     );

@@ -104,9 +104,9 @@ pub fn create_system_menu() -> MenuButton {
 
     let es = is_spanish_locale();
 
-    let label_about = if es { "Acerca de esta Mac" } else { "About This Mac" };
+    let label_about = if es { "Acerca de este equipo" } else { "About This Computer" };
     let label_settings = if es { "Configuración del Sistema..." } else { "System Settings..." };
-    let label_appstore = "App Store";
+    let label_appstore = if es { "Software" } else { "Software" };
     let label_recent = if es { "Elementos recientes" } else { "Recent Items" };
     let label_forcequit = if es { "Forzar salida..." } else { "Force Quit..." };
     let label_sleep = if es { "Reposo" } else { "Sleep" };
@@ -122,8 +122,8 @@ pub fn create_system_menu() -> MenuButton {
     };
 
     // Elementos del menú del sistema según idioma del sistema y estilo macOS
-    // 1. About This Mac / Acerca de esta Mac
-    let item_about = create_menu_item("apple-about-symbolic", label_about, None, false);
+    // 1. About This Computer / Acerca de este equipo
+    let item_about = create_menu_item("help-about-symbolic", label_about, None, false);
     let popover_clone = popover.clone();
     item_about.connect_clicked(move |_| {
         popover_clone.popdown();
@@ -156,8 +156,8 @@ pub fn create_system_menu() -> MenuButton {
     });
     content_box.append(&item_settings);
 
-    // 3. App Store
-    let item_appstore = create_menu_item("apple-appstore-symbolic", label_appstore, None, false);
+    // 3. Software
+    let item_appstore = create_menu_item("system-software-install-symbolic", label_appstore, None, false);
     let popover_clone = popover.clone();
     item_appstore.connect_clicked(move |_| {
         popover_clone.popdown();

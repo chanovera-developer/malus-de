@@ -185,12 +185,12 @@ impl PopoverMenuModel {
             anchor_x,
             anchor_y,
             items: vec![
-                PopoverItem::new(1, "Acerca de este Mac").with_icon("\u{F108}"),
+                PopoverItem::new(1, "Acerca de este equipo").with_icon("\u{F108}"),
                 PopoverItem::separator(),
                 PopoverItem::new(2, "Ajustes del Sistema...")
                     .with_shortcut("⌘,")
                     .with_icon("\u{F013}"),
-                PopoverItem::new(10, "App Store...")
+                PopoverItem::new(10, "Software...")
                     .with_icon("\u{F290}"),
                 PopoverItem::new(11, "Ítems recientes")
                     .with_shortcut(">")

@@ -92,8 +92,8 @@ fn test_popover_hit_testing_analytical() {
     );
     assert_eq!(
         matched_item.unwrap().label,
-        "Acerca de este Mac",
-        "El ítem detectado debe ser 'Acerca de este Mac'"
+        "Acerca de este equipo",
+        "El ítem detectado debe ser 'Acerca de este equipo'"
     );
 
     // Probar clic fuera del popover (ej. en x = 500, y = 500)

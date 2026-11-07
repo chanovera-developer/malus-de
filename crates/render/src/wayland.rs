@@ -682,7 +682,7 @@ impl WaylandTopBarApp {
                 let _ = std::process::Command::new("systemctl").arg("poweroff").spawn();
             }
             10 => {
-                info!("🛍️ Abriendo App Store / Centro de Software...");
+                info!("🛍️ Abriendo Software...");
                 let _ = std::process::Command::new("gnome-software").spawn();
             }
             11 => {
