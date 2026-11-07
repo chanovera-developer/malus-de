@@ -17,15 +17,109 @@ menu,
     padding: 0;
 }
 
-/* Controles de ventana macOS para GTK 3 */
-headerbar button.titlebutton.close,
-headerbar button.titlebutton.minimize,
-headerbar button.titlebutton.maximize {
+/* Controles de ventana macOS para GTK 3 y libdecor (Traffic Lights) */
+headerbar button.titlebutton,
+headerbar button.close,
+headerbar button.minimize,
+headerbar button.maximize {
     min-width: 13px;
     min-height: 13px;
-    border-radius: 9999px;
     padding: 0;
     margin: 0 4px;
+    border-radius: 9999px;
+    border-style: solid;
+    border-width: 0.5px;
+    box-shadow: none;
+    outline: none;
+    background-clip: padding-box;
+    transition: background-color 100ms ease, border-color 100ms ease;
+}
+
+headerbar button.titlebutton.close,
+headerbar button.close {
+    background-color: #ff5f56;
+    border-color: #e0443e;
+    color: #4c0000;
+}
+headerbar button.titlebutton.close:hover,
+headerbar button.close:hover {
+    background-color: #ff473d;
+    border-color: #c93630;
+}
+headerbar button.titlebutton.close:active,
+headerbar button.close:active {
+    background-color: #bf3933;
+    border-color: #a82f2a;
+}
+
+headerbar button.titlebutton.minimize,
+headerbar button.minimize {
+    background-color: #ffbd2e;
+    border-color: #e09e16;
+    color: #593b00;
+}
+headerbar button.titlebutton.minimize:hover,
+headerbar button.minimize:hover {
+    background-color: #ffb219;
+    border-color: #bf8516;
+}
+headerbar button.titlebutton.minimize:active,
+headerbar button.minimize:active {
+    background-color: #bf8516;
+    border-color: #9e6d0f;
+}
+
+headerbar button.titlebutton.maximize,
+headerbar button.maximize {
+    background-color: #27c93f;
+    border-color: #1aab29;
+    color: #004d11;
+}
+headerbar button.titlebutton.maximize:hover,
+headerbar button.maximize:hover {
+    background-color: #1fbd36;
+    border-color: #159322;
+}
+headerbar button.titlebutton.maximize:active,
+headerbar button.maximize:active {
+    background-color: #158a25;
+    border-color: #0f6c1a;
+}
+
+/* Ocultar iconos por defecto y revelarlos sutilmente en hover estilo macOS */
+headerbar button.titlebutton > image,
+headerbar button.close > image,
+headerbar button.minimize > image,
+headerbar button.maximize > image {
+    opacity: 0;
+    transition: opacity 120ms ease;
+    -gtk-icon-size: 8px;
+}
+
+headerbar:hover button.titlebutton > image,
+headerbar:hover button.close > image,
+headerbar:hover button.minimize > image,
+headerbar:hover button.maximize > image,
+headerbar button.titlebutton:hover > image,
+headerbar button.close:hover > image,
+headerbar button.minimize:hover > image,
+headerbar button.maximize:hover > image {
+    opacity: 0.85;
+}
+
+headerbar button.titlebutton:backdrop,
+headerbar button.close:backdrop,
+headerbar button.minimize:backdrop,
+headerbar button.maximize:backdrop {
+    background-color: rgba(0, 0, 0, 0.12);
+    border-color: rgba(0, 0, 0, 0.08);
+}
+
+headerbar button.titlebutton:backdrop > image,
+headerbar button.close:backdrop > image,
+headerbar button.minimize:backdrop > image,
+headerbar button.maximize:backdrop > image {
+    opacity: 0;
 }
 
 /* Fondo plano sólido e impenetrable para diálogos modales y selectores de archivos en GTK 3 */

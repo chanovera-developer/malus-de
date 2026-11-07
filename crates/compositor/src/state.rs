@@ -1883,26 +1883,10 @@ delegate_xdg_decoration!(MalusState);
 impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for MalusState {
     fn new_decoration(&mut self, toplevel: smithay::wayland::shell::xdg::ToplevelSurface) {
         use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
-        let win_opt = self.window_for_surface(toplevel.wl_surface());
-        let is_browser = win_opt.as_ref().is_some_and(is_browser_window);
-        let mode = if is_browser {
-            Mode::ClientSide
-        } else {
-            Mode::ServerSide
-        };
-        if mode == Mode::ServerSide {
-            if let Some(ref win) = win_opt {
-                if let Some(loc) = self.space.element_location(win) {
-                    let min_y = 36 + crate::ssd::SSD_TITLEBAR_HEIGHT;
-                    if loc.y < min_y {
-                        self.space
-                            .map_element(win.clone(), Point::from((loc.x, min_y + 8)), false);
-                    }
-                }
-            }
-        }
+        // Preferir barra nativa de Gnome (CSD) con controles semáforo.
+        // Solo las ventanas que negocien y soliciten explícitamente ServerSide recibirán barra SSD.
         toplevel.with_pending_state(|state| {
-            state.decoration_mode = Some(mode);
+            state.decoration_mode = Some(Mode::ClientSide);
         });
         toplevel.send_configure();
     }
@@ -1913,8 +1897,10 @@ impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for MalusSta
     ) {
         use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
         let win_opt = self.window_for_surface(toplevel.wl_surface());
-        let is_browser = win_opt.as_ref().is_some_and(is_browser_window);
-        let effective_mode = if is_browser {
+        let cannot_have_ssd = win_opt.as_ref().is_some_and(|w| {
+            is_browser_window(w) || is_nautilus_window(w) || is_settings_window(w)
+        });
+        let effective_mode = if cannot_have_ssd {
             Mode::ClientSide
         } else {
             mode
@@ -1937,24 +1923,71 @@ impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for MalusSta
     }
     fn unset_mode(&mut self, toplevel: smithay::wayland::shell::xdg::ToplevelSurface) {
         use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
-        let is_browser = self
-            .window_for_surface(toplevel.wl_surface())
-            .is_some_and(|w| is_browser_window(&w));
-        let mode = if is_browser {
-            Mode::ClientSide
-        } else {
-            Mode::ServerSide
-        };
         toplevel.with_pending_state(|state| {
-            state.decoration_mode = Some(mode);
+            state.decoration_mode = Some(Mode::ClientSide);
         });
         toplevel.send_configure();
     }
 }
 
+pub fn is_nautilus_identity(app_id: Option<&str>, title: Option<&str>) -> bool {
+    let app_matches = app_id.is_some_and(|id| {
+        let lower = id.to_lowercase();
+        lower.contains("nautilus") || lower.contains("org.gnome.nautilus")
+    });
+    let title_matches = title.is_some_and(|title| {
+        let lower = title.to_lowercase();
+        lower.contains("archivos") || lower.contains("carpetas")
+    });
+    app_matches || title_matches
+}
+
+/// Identifica si una ventana pertenece a Nautilus (Archivos / Finder).
+pub fn is_nautilus_window(window: &smithay::desktop::Window) -> bool {
+    let matches = |surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface| {
+        let (app_id, title) = toplevel_info(surface);
+        is_nautilus_identity(app_id.as_deref(), title.as_deref())
+    };
+    window.wl_surface().is_some_and(|surface| matches(surface.as_ref()))
+        || window
+            .toplevel()
+            .is_some_and(|toplevel| matches(toplevel.wl_surface()))
+}
+
+pub fn is_settings_identity(app_id: Option<&str>, title: Option<&str>) -> bool {
+    let app_matches = app_id.is_some_and(|id| {
+        let lower = id.to_lowercase();
+        lower.contains("malus.settings")
+            || lower.contains("malus-de-settings")
+            || lower.contains("malus_de_settings")
+            || lower.contains("gnome-control-center")
+            || lower.contains("control-center")
+    });
+    let title_matches = title.is_some_and(|title| {
+        let lower = title.to_lowercase();
+        lower.contains("ajustes del sistema")
+            || lower.contains("configuración")
+            || lower.contains("settings")
+    });
+    app_matches || title_matches
+}
+
+/// Identifica si una ventana pertenece a Ajustes del Sistema (Configuración).
+pub fn is_settings_window(window: &smithay::desktop::Window) -> bool {
+    let matches = |surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface| {
+        let (app_id, title) = toplevel_info(surface);
+        is_settings_identity(app_id.as_deref(), title.as_deref())
+    };
+    window.wl_surface().is_some_and(|surface| matches(surface.as_ref()))
+        || window
+            .toplevel()
+            .is_some_and(|toplevel| matches(toplevel.wl_surface()))
+}
+
 /// Determina si una ventana tiene activadas las decoraciones del lado del servidor (SSD) estilo macOS.
 pub fn window_uses_ssd(window: &smithay::desktop::Window) -> bool {
-    if is_browser_window(window) {
+    // Nautilus, Ajustes y navegadores NUNCA llevan barra SSD superior (va integrada u oculta)
+    if is_browser_window(window) || is_nautilus_window(window) || is_settings_window(window) {
         return false;
     }
     let Some(toplevel) = window.toplevel() else {
@@ -1968,9 +2001,8 @@ pub fn window_uses_ssd(window: &smithay::desktop::Window) -> bool {
         return false;
     }
     use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
-    let current_is_ssd = toplevel.current_state().decoration_mode == Some(Mode::ServerSide);
-    let pending_is_ssd = toplevel.with_pending_state(|s| s.decoration_mode == Some(Mode::ServerSide));
-    current_is_ssd || pending_is_ssd
+    // Solo si la ventana negoció y solicitó explícitamente Mode::ServerSide
+    toplevel.current_state().decoration_mode == Some(Mode::ServerSide)
 }
 
 /// Obtiene el título visible que debe mostrarse en la barra SSD de la ventana.
@@ -2691,13 +2723,12 @@ impl XdgShellHandler for MalusState {
             None
         };
 
-        let is_browser = is_browser_window(&window);
         surface.with_pending_state(|state| {
             state.states.set(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated);
-            if !is_browser {
-                use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
-                state.decoration_mode = Some(Mode::ServerSide);
-            }
+            use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+            // Preferir decoraciones del lado del cliente (CSD) nativas estilo Gnome por defecto.
+            // Solo las ventanas que soliciten explícitamente ServerSide recibirán SSD.
+            state.decoration_mode = Some(Mode::ClientSide);
             if let Some(size) = initial_size {
                 tracing::info!("📐 [State] Aplicando tamaño de ventana recordado a nueva ventana: {:?}", size);
                 state.size = Some(size);
@@ -3302,6 +3333,27 @@ mod tests {
         assert!(is_system_monitor_identity(None, Some("Monitor del sistema")));
         assert!(is_system_monitor_identity(None, Some("System Monitor")));
         assert!(!is_system_monitor_identity(Some("org.gnome.Nautilus"), Some("Archivos")));
+    }
+
+    #[test]
+    fn recognizes_nautilus_and_settings_identities() {
+        use super::{is_nautilus_identity, is_settings_identity};
+
+        // Nautilus (Archivos)
+        assert!(is_nautilus_identity(Some("org.gnome.Nautilus"), None));
+        assert!(is_nautilus_identity(Some("nautilus"), None));
+        assert!(is_nautilus_identity(None, Some("Archivos")));
+        assert!(is_nautilus_identity(None, Some("Carpetas")));
+        assert!(!is_nautilus_identity(Some("firefox"), Some("Firefox")));
+
+        // Ajustes / Configuración
+        assert!(is_settings_identity(Some("dev.malus.Settings"), None));
+        assert!(is_settings_identity(Some("malus-de-settings"), None));
+        assert!(is_settings_identity(Some("gnome-control-center"), None));
+        assert!(is_settings_identity(None, Some("Ajustes del Sistema")));
+        assert!(is_settings_identity(None, Some("Configuración")));
+        assert!(is_settings_identity(None, Some("Settings")));
+        assert!(!is_settings_identity(Some("org.gnome.TextEditor"), Some("Editor de texto")));
     }
 
     #[test]
