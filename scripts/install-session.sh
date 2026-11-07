@@ -162,6 +162,21 @@ if ! command -v gnome-keyring-daemon >/dev/null 2>&1; then
     fi
 fi
 
+# Asegurar que el agente de autenticación Polkit esté instalado (necesario para pedir contraseñas al instalar apps)
+if [ ! -x "/usr/libexec/polkit-mate-authentication-agent-1" ] && \
+   [ ! -x "/usr/libexec/polkit-gnome-authentication-agent-1" ] && \
+   [ ! -x "/usr/libexec/xfce-polkit" ] && \
+   [ ! -x "/usr/bin/lxpolkit" ]; then
+    echo "🛡️ Instalando agente de autenticación Polkit (mate-polkit)..."
+    if command -v dnf >/dev/null 2>&1; then
+        dnf install -y mate-polkit
+    elif command -v apt-get >/dev/null 2>&1; then
+        apt-get update && apt-get install -y mate-polkit || apt-get install -y policykit-1-gnome
+    elif command -v pacman >/dev/null 2>&1; then
+        pacman -S --noconfirm --needed mate-polkit
+    fi
+fi
+
 # Instalar políticas globales para soporte nativo de userChrome.css en Firefox
 echo "🦊 Instalando políticas de distribución para Mozilla Firefox..."
 mkdir -p /etc/firefox/policies

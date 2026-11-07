@@ -247,6 +247,22 @@ if command -v gnome-keyring-daemon >/dev/null 2>&1; then
     export SSH_AUTH_SOCK
 fi
 
+# Inicializar el agente de autenticación Polkit (para pedir contraseña gráfica al instalar software y paquetes)
+POLKIT_AGENT_PID=""
+for agent_bin in \
+    "/usr/libexec/polkit-mate-authentication-agent-1" \
+    "/usr/libexec/polkit-gnome-authentication-agent-1" \
+    "/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1" \
+    "/usr/libexec/xfce-polkit" \
+    "/usr/bin/lxpolkit"; do
+    if [ -x "$agent_bin" ]; then
+        echo "🛡️ Iniciando agente de autenticación Polkit ($agent_bin)..."
+        "$agent_bin" &
+        POLKIT_AGENT_PID=$!
+        break
+    fi
+done
+
 # Actualizar el entorno D-Bus con el display Wayland de Malus DE
 # Propagar solo variables de ejecución necesarias para el display. La configuración
 # XDG, el backend GSettings y GTK_USE_PORTAL deben seguir siendo propios del proceso.
@@ -292,6 +308,7 @@ echo "============================================================"
 cleanup() {
     echo ""
     echo "🛑 Cerrando sesión de Malus DE..."
+    [ -n "$POLKIT_AGENT_PID" ] && kill "$POLKIT_AGENT_PID" 2>/dev/null || true
     kill "$CALC_PID" 2>/dev/null || true
     kill "$LINK_PID" 2>/dev/null || true
     kill "$NOTIF_PID" 2>/dev/null || true

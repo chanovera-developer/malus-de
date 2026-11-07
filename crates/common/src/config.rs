@@ -303,7 +303,10 @@ overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
     // 7. Configuración de Mozilla Firefox (controles semáforo macOS vía userChrome.css)
     setup_firefox_configuration(&malus_config_dir);
 
-    // 8. Asegurar que el tema de cursores macOS integrado esté disponible en el entorno del usuario
+    // 8. Asociaciones MIME por defecto (paquetes .rpm, flatpak, etc. hacia GNOME Software)
+    setup_default_mime_applications(&malus_config_dir);
+
+    // 9. Asegurar que el tema de cursores macOS integrado esté disponible en el entorno del usuario
     let bundled_cursor_dirs = [
         PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/cursors")),
         PathBuf::from("/usr/local/share/malus-de/cursors"),
@@ -564,6 +567,81 @@ pub fn apply_firefox_profile_styles(profile_dir: &Path) {
         let content = format!("// Malus DE - Configuración de interfaz de ventana\n{}\n", pref_line);
         let _ = std::fs::write(&user_js_path, content);
     }
+}
+
+/// Configura las asociaciones MIME por defecto en `mimeapps.list` para que
+/// paquetes de aplicaciones (.rpm, .flatpakref, .deb, etc.) se abran con GNOME Software al hacer doble clic.
+pub fn setup_default_mime_applications(malus_config_dir: &Path) {
+    let mime_path = malus_config_dir.join("mimeapps.list");
+    let default_package_associations: &[(&str, &str)] = &[
+        ("application/x-rpm", "gnome-software-local-file-packagekit.desktop"),
+        ("application/x-redhat-package-manager", "gnome-software-local-file-packagekit.desktop"),
+        ("application/vnd.flatpak", "gnome-software-local-file-flatpak.desktop"),
+        ("application/vnd.flatpak.ref", "gnome-software-local-file-flatpak.desktop"),
+        ("application/vnd.flatpak.repo", "gnome-software-local-file-flatpak.desktop"),
+        ("application/x-deb", "gnome-software-local-file-packagekit.desktop"),
+        ("application/x-app-package", "gnome-software-local-file-packagekit.desktop"),
+    ];
+
+    let content = std::fs::read_to_string(&mime_path).unwrap_or_default();
+    let mut default_apps: Vec<String> = Vec::new();
+    let mut added_associations: Vec<String> = Vec::new();
+    let mut other_sections: Vec<(String, Vec<String>)> = Vec::new();
+    let mut current_section = "";
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            current_section = trimmed;
+            if current_section != "[Default Applications]" && current_section != "[Added Associations]" {
+                other_sections.push((current_section.to_string(), Vec::new()));
+            }
+            continue;
+        }
+        if trimmed.is_empty() {
+            continue;
+        }
+        if current_section == "[Default Applications]" {
+            default_apps.push(trimmed.to_string());
+        } else if current_section == "[Added Associations]" {
+            added_associations.push(trimmed.to_string());
+        } else if let Some((_, list)) = other_sections.last_mut() {
+            list.push(trimmed.to_string());
+        }
+    }
+
+    for (mime, app) in default_package_associations {
+        let prefix = format!("{}=", mime);
+        if !default_apps.iter().any(|entry| entry.starts_with(&prefix)) {
+            default_apps.push(format!("{}={}", mime, app));
+        }
+        let added_entry = format!("{}={};", mime, app);
+        if !added_associations.iter().any(|entry| entry.starts_with(&prefix)) {
+            added_associations.push(added_entry);
+        }
+    }
+
+    let mut new_content = String::from("[Default Applications]\n");
+    for entry in &default_apps {
+        new_content.push_str(entry);
+        new_content.push('\n');
+    }
+    new_content.push_str("\n[Added Associations]\n");
+    for entry in &added_associations {
+        new_content.push_str(entry);
+        new_content.push('\n');
+    }
+    for (sec, list) in &other_sections {
+        new_content.push('\n');
+        new_content.push_str(sec);
+        new_content.push('\n');
+        for entry in list {
+            new_content.push_str(entry);
+            new_content.push('\n');
+        }
+    }
+
+    let _ = std::fs::write(&mime_path, new_content);
 }
 
 pub fn load_cursor_config() -> (String, u32) {
@@ -2252,6 +2330,43 @@ primary = true
         let updated_user_js = std::fs::read_to_string(&custom_user_js).unwrap();
         assert!(updated_user_js.contains("browser.startup.page"));
         assert!(updated_user_js.contains("toolkit.legacyUserProfileCustomizations.stylesheets"));
+
+        let _ = std::fs::remove_dir_all(&config_dir);
+    }
+
+    #[test]
+    fn test_setup_default_mime_applications_registers_package_managers_and_preserves_user_apps() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let config_dir = std::env::temp_dir().join(format!("malus-test-mime-{}", unique));
+        let _ = std::fs::remove_dir_all(&config_dir);
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        // 1. Inicializar con archivo preexistente que contiene preferencias de usuario
+        let initial_mime = r#"[Default Applications]
+text/html=brave-origin.desktop
+image/png=org.gnome.Loupe.desktop
+
+[Added Associations]
+image/png=org.gnome.Loupe.desktop;
+"#;
+        std::fs::write(config_dir.join("mimeapps.list"), initial_mime).unwrap();
+
+        setup_default_mime_applications(&config_dir);
+
+        let content = std::fs::read_to_string(config_dir.join("mimeapps.list")).unwrap();
+        // Verificar que preserva las asociaciones existentes del usuario
+        assert!(content.contains("text/html=brave-origin.desktop"));
+        assert!(content.contains("image/png=org.gnome.Loupe.desktop"));
+        // Verificar que agrega las asociaciones de paquetes hacia GNOME Software
+        assert!(content.contains("application/x-rpm=gnome-software-local-file-packagekit.desktop"));
+        assert!(content.contains("application/x-redhat-package-manager=gnome-software-local-file-packagekit.desktop"));
+        assert!(content.contains("application/vnd.flatpak=gnome-software-local-file-flatpak.desktop"));
+        assert!(content.contains("application/vnd.flatpak.ref=gnome-software-local-file-flatpak.desktop"));
+        assert!(content.contains("application/vnd.flatpak.repo=gnome-software-local-file-flatpak.desktop"));
+        assert!(content.contains("application/x-deb=gnome-software-local-file-packagekit.desktop"));
 
         let _ = std::fs::remove_dir_all(&config_dir);
     }

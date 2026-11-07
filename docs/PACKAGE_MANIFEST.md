@@ -65,6 +65,7 @@ sudo dnf install -y \
     bluez-tools \
     power-profiles-daemon \
     polkit \
+    mate-polkit \
     gnome-keyring \
     gnome-keyring-pam \
     libsecret \
@@ -191,6 +192,7 @@ sudo pacman -S --needed \
     bluez-utils \
     power-profiles-daemon \
     polkit \
+    mate-polkit \
     gnome-keyring \
     libsecret \
     gdm \
