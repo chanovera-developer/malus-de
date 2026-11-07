@@ -130,6 +130,7 @@ sudo apt install -y \
     bluez-tools \
     power-profiles-daemon \
     policykit-1 \
+    mate-polkit \
     gnome-keyring \
     libpam-gnome-keyring \
     libsecret-1-0 \

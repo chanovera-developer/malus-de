@@ -62,7 +62,7 @@ El proyecto es un workspace de Rust. Sus componentes principales viven en `crate
 - Bibliotecas de desarrollo de GTK4, libadwaita, gtk4-layer-shell, Mesa/GBM, libinput, libseat, systemd, libxkbcommon y D-Bus.
 - Servicios y utilidades de sesión para que Malus DE funcione de forma completa:
   - **Audio y multimedia:** `pipewire`, `pipewire-pulseaudio`, `pipewire-utils` (`pw-play`), `wireplumber`, `libcanberra-gtk3` y `ffmpeg` (para grabación de pantalla en MP4).
-  - **Seguridad y llavero (`org.freedesktop.secrets`):** `polkit`, `gnome-keyring`, `gnome-keyring-pam` y `libsecret`.
+  - **Seguridad, permisos y llavero (`org.freedesktop.secrets`):** `polkit`, `mate-polkit` (agente de autenticación gráfica para instalación de apps y permisos de administrador), `gnome-keyring`, `gnome-keyring-pam` y `libsecret`.
   - **Portales, portapapeles y montaje de medios:** `xdg-desktop-portal`, `xdg-desktop-portal-gnome`, `xdg-desktop-portal-gtk`, `wl-clipboard` (`wl-copy` / `wl-paste`), `gvfs` y `udisks2`.
   - **Conectividad y energía:** `NetworkManager`, `bluez`, `power-profiles-daemon`.
   - **Compatibilidad de clientes:** `qt5-qtwayland`, `qt6-qtwayland` y `xorg-x11-server-Xwayland`.
@@ -90,6 +90,8 @@ sudo dnf install -y \
     systemd-devel \
     dbus-devel \
     libxkbcommon-devel \
+    polkit \
+    mate-polkit \
     gnome-keyring \
     gnome-keyring-pam \
     libsecret \
