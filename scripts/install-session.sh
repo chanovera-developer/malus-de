@@ -59,6 +59,7 @@ BINARIES=(
     "malus-de-link"
     "malus-de-ctl"
     "malus-de-settings"
+    "malus-de-branches"
 )
 
 for bin in "${BINARIES[@]}"; do
@@ -107,6 +108,11 @@ mkdir -p /usr/share/applications
 cp -f "$PROJECT_DIR/data/dev.malus.Settings.desktop" /usr/share/applications/dev.malus.Settings.desktop
 chmod 644 /usr/share/applications/dev.malus.Settings.desktop
 echo "   ✔ /usr/share/applications/dev.malus.Settings.desktop"
+if [ -f "$PROJECT_DIR/data/dev.malus.Branches.desktop" ]; then
+    cp -f "$PROJECT_DIR/data/dev.malus.Branches.desktop" /usr/share/applications/dev.malus.Branches.desktop
+    chmod 644 /usr/share/applications/dev.malus.Branches.desktop
+    echo "   ✔ /usr/share/applications/dev.malus.Branches.desktop"
+fi
 
 # Instalar script de inicio de sesión
 cp -f "$SCRIPT_DIR/malus-session" "/usr/local/bin/malus-session"
