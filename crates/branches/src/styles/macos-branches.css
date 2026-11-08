@@ -167,11 +167,97 @@ button.branches-split-btn.active {
     color: @accent_fg_color;
 }
 
+/* ========================================================= */
+/* TOOLBAR / TOPBAR DEL PANEL DERECHO (ESTILO MACOS FINDER)  */
+/* ========================================================= */
+
 .branches-header-toolbar {
-    min-height: 48px;
+    min-height: 50px;
     padding: 0 16px;
     background-color: @view_bg_color;
-    border-bottom: 1px solid alpha(@borders, 0.40);
+    border-bottom: 1px solid alpha(@borders, 0.35);
+}
+
+.branches-nav-group {
+    background-color: transparent;
+}
+
+.branches-nav-btn {
+    min-height: 28px;
+    min-width: 28px;
+    padding: 3px 5px;
+    border-radius: 6px;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    color: alpha(@window_fg_color, 0.85);
+    transition: background-color 120ms ease;
+}
+
+.branches-nav-btn:hover {
+    background-color: alpha(@window_fg_color, 0.08);
+    color: @window_fg_color;
+}
+
+.branches-nav-btn:disabled {
+    opacity: 0.35;
+}
+
+.branches-header-title-box {
+    margin-left: 4px;
+}
+
+.branches-header-title {
+    font-size: 13.5px;
+    font-weight: 700;
+    color: @window_fg_color;
+    letter-spacing: -0.2px;
+}
+
+/* Botones genéricos de herramientas de barra superior */
+.branches-tool-btn {
+    min-height: 28px;
+    min-width: 28px;
+    padding: 4px;
+    border-radius: 6px;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    color: alpha(@window_fg_color, 0.75);
+    transition: background-color 120ms ease, color 120ms ease;
+}
+
+.branches-tool-btn:hover {
+    background-color: alpha(@window_fg_color, 0.08);
+    color: @window_fg_color;
+}
+
+.branches-tool-btn:active,
+.branches-tool-btn:checked,
+.branches-tool-btn.active {
+    background-color: alpha(@accent_bg_color, 0.20);
+    color: @accent_fg_color;
+}
+
+/* Buscador expandible estilo macOS */
+.branches-search-container {
+    margin-left: 2px;
+}
+
+.branches-search-entry {
+    min-height: 28px;
+    border-radius: 14px;
+    padding: 0 8px;
+    font-size: 12px;
+    background-color: alpha(@window_bg_color, 0.65);
+    border: 1px solid alpha(@borders, 0.50);
+    color: @window_fg_color;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.branches-search-entry:focus-within {
+    border-color: @accent_bg_color;
+    box-shadow: 0 0 0 1.5px @accent_bg_color;
 }
 
 .branches-icon-canvas {
@@ -298,9 +384,36 @@ button.branches-split-btn.active {
     color: @accent_fg_color;
 }
 
-/* Selector segmentado de vista */
+/* Selector segmentado de vista (Segmented Control macOS) */
+.branches-view-toggle {
+    border-radius: 7px;
+    background-color: alpha(@window_fg_color, 0.05);
+    border: 1px solid alpha(@borders, 0.40);
+    padding: 1px;
+}
+
 .branches-view-toggle button {
-    padding: 4px 10px;
+    min-height: 26px;
+    min-width: 30px;
+    padding: 3px 6px;
+    border-radius: 5px;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    color: alpha(@window_fg_color, 0.70);
+    transition: all 120ms ease;
+}
+
+.branches-view-toggle button:hover {
+    background-color: alpha(@window_fg_color, 0.07);
+    color: @window_fg_color;
+}
+
+.branches-view-toggle button:checked,
+.branches-view-toggle button.active {
+    background-color: alpha(@window_fg_color, 0.16);
+    color: @window_fg_color;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.10);
 }
 
 /* ========================================================= */

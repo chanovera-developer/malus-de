@@ -8,9 +8,9 @@ use gtk4::gdk;
 use gtk4::gio;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Application, ApplicationWindow, Box as GtkBox, Button, EventControllerKey, Image, Label,
-    MenuButton, Orientation, PackType, Paned, SearchEntry, ToggleButton, WindowControls,
-    WindowHandle,
+    Align, Application, ApplicationWindow, Box as GtkBox, Button, EventControllerKey, Label,
+    MenuButton, Orientation, PackType, Paned, Revealer, RevealerTransitionType, SearchEntry,
+    ToggleButton, WindowControls, WindowHandle,
 };
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -35,6 +35,7 @@ pub struct BranchesWindow {
     btn_col_view: ToggleButton,
     btn_gallery_view: ToggleButton,
     quick_look: Rc<QuickLook>,
+    search_toggle_btn: ToggleButton,
 }
 
 impl BranchesWindow {
@@ -55,26 +56,60 @@ impl BranchesWindow {
         let dummy_titlebar = GtkBox::builder().visible(false).build();
         window.set_titlebar(Some(&dummy_titlebar));
 
-        // 1. Botones de navegación [ < ] y [ > ]
-        let nav_box = GtkBox::new(Orientation::Horizontal, 4);
+        // 1. Botones de navegación [ < ] y [ > ] (Chevron macOS)
+        let nav_box = GtkBox::new(Orientation::Horizontal, 2);
         nav_box.set_valign(Align::Center);
+        nav_box.add_css_class("linked");
+        nav_box.add_css_class("branches-nav-group");
 
         let back_btn = Button::builder()
             .icon_name("go-previous-symbolic")
             .tooltip_text("Atrás (Alt+Izquierda)")
+            .css_classes(["branches-nav-btn"])
             .sensitive(false)
             .build();
 
         let forward_btn = Button::builder()
             .icon_name("go-next-symbolic")
             .tooltip_text("Adelante (Alt+Derecha)")
+            .css_classes(["branches-nav-btn"])
             .sensitive(false)
             .build();
 
         nav_box.append(&back_btn);
         nav_box.append(&forward_btn);
 
-        // 2. Selector segmentado de 4 modos de vista
+        // 2. Título de directorio alineado a la izquierda junto a la navegación
+        let title_box = GtkBox::new(Orientation::Horizontal, 4);
+        title_box.set_valign(Align::Center);
+        title_box.add_css_class("branches-header-title-box");
+
+        let title_label = Label::builder()
+            .label("Branches")
+            .css_classes(["branches-header-title"])
+            .valign(Align::Center)
+            .ellipsize(gtk4::pango::EllipsizeMode::End)
+            .max_width_chars(26)
+            .build();
+        title_box.append(&title_label);
+
+        // Contenedor izquierdo del header (Navegación + Título)
+        let left_header_box = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(12)
+            .valign(Align::Center)
+            .halign(Align::Start)
+            .build();
+        left_header_box.append(&nav_box);
+        left_header_box.append(&title_box);
+
+        // Espaciador flexible central (macOS Finder deja el centro limpio)
+        let center_spacer = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .hexpand(true)
+            .build();
+
+        // 3. Selector segmentado de 4 modos de vista
         let view_box = GtkBox::new(Orientation::Horizontal, 0);
         view_box.add_css_class("linked");
         view_box.add_css_class("branches-view-toggle");
@@ -93,7 +128,7 @@ impl BranchesWindow {
             .build();
 
         let btn_col_view = ToggleButton::builder()
-            .icon_name("view-column-symbolic")
+            .icon_name("view-dual-symbolic")
             .tooltip_text("Vista de Columnas Miller (Ctrl+3)")
             .group(&btn_icon_view)
             .build();
@@ -109,33 +144,42 @@ impl BranchesWindow {
         view_box.append(&btn_col_view);
         view_box.append(&btn_gallery_view);
 
-        // 3. Título central con icono de carpeta
-        let title_box = GtkBox::new(Orientation::Horizontal, 6);
-        title_box.set_valign(Align::Center);
-        title_box.set_halign(Align::Center);
-        title_box.set_hexpand(true);
-        let title_icon = Image::from_icon_name("folder-symbolic");
-        title_icon.set_pixel_size(16);
-        let title_label = Label::builder()
-            .label("Branches")
-            .css_classes(["title", "bold"])
-            .build();
-        title_box.append(&title_icon);
-        title_box.append(&title_label);
-
-        // 4. Botón de división de pantalla (Split View)
+        // 4. Botón de división de pantalla (Split View Dual Pane)
         let split_btn = Button::builder()
             .icon_name("sidebar-show-right-symbolic")
             .tooltip_text("Dividir pantalla (Dual Pane - F3)")
             .valign(Align::Center)
-            .css_classes(["branches-split-btn"])
+            .css_classes(["branches-tool-btn", "branches-split-btn"])
             .build();
 
-        // 5. Menú de Acción y Ajustes
+        // 5. Botón de Compartir (Share)
+        let share_menu_btn = MenuButton::builder()
+            .icon_name("document-send-symbolic")
+            .tooltip_text("Compartir...")
+            .valign(Align::Center)
+            .css_classes(["branches-tool-btn"])
+            .build();
+
+        let share_model = gio::Menu::new();
+        share_model.append(Some("Copiar ruta al portapapeles"), Some("win.copy_path"));
+        share_model.append(Some("KDE Connect / Enviar a dispositivo"), Some("win.share_kdeconnect"));
+        share_model.append(Some("Enviar por correo electrónico"), Some("win.share_email"));
+        share_menu_btn.set_menu_model(Some(&share_model));
+
+        // 6. Botón de Información / Quick Look (Inspector "i")
+        let info_btn = Button::builder()
+            .icon_name("dialog-information-symbolic")
+            .tooltip_text("Obtener información / Vista Rápida (Espacio / Ctrl+I)")
+            .valign(Align::Center)
+            .css_classes(["branches-tool-btn"])
+            .build();
+
+        // 7. Menú de Acciones y Opciones (...)
         let action_menu_btn = MenuButton::builder()
             .icon_name("view-more-symbolic")
             .tooltip_text("Acciones y opciones")
             .valign(Align::Center)
+            .css_classes(["branches-tool-btn"])
             .build();
         
         let menu_model = gio::Menu::new();
@@ -154,14 +198,67 @@ impl BranchesWindow {
 
         action_menu_btn.set_menu_model(Some(&menu_model));
 
-        // 6. Campo de búsqueda integrado
+        // 8. Búsqueda expandible macOS (Icono de lupa a la derecha que revela el campo)
+        let search_container = GtkBox::new(Orientation::Horizontal, 4);
+        search_container.set_valign(Align::Center);
+        search_container.add_css_class("branches-search-container");
+
         let search_entry = SearchEntry::builder()
-            .placeholder_text("Buscar archivos...")
+            .placeholder_text("Buscar...")
             .width_chars(16)
             .valign(Align::Center)
+            .css_classes(["branches-search-entry"])
             .build();
 
-        // 7. Paned principal (Sidebar a la izquierda y Contenido a la derecha)
+        let search_revealer = Revealer::builder()
+            .transition_type(RevealerTransitionType::SlideLeft)
+            .transition_duration(180)
+            .reveal_child(false)
+            .child(&search_entry)
+            .build();
+
+        let search_toggle_btn = ToggleButton::builder()
+            .icon_name("system-search-symbolic")
+            .tooltip_text("Buscar archivos (Ctrl+F)")
+            .valign(Align::Center)
+            .css_classes(["branches-tool-btn", "branches-search-btn"])
+            .build();
+
+        let se_toggle = search_entry.clone();
+        let rev_toggle = search_revealer.clone();
+        search_toggle_btn.connect_toggled(move |btn| {
+            let active = btn.is_active();
+            rev_toggle.set_reveal_child(active);
+            if active {
+                se_toggle.grab_focus();
+            } else {
+                se_toggle.set_text("");
+            }
+        });
+
+        let stb_stop = search_toggle_btn.clone();
+        search_entry.connect_stop_search(move |_| {
+            stb_stop.set_active(false);
+        });
+
+        search_container.append(&search_revealer);
+        search_container.append(&search_toggle_btn);
+
+        // Contenedor derecho del header (Vistas + Herramientas + Búsqueda)
+        let right_header_box = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(6)
+            .valign(Align::Center)
+            .halign(Align::End)
+            .build();
+        right_header_box.append(&view_box);
+        right_header_box.append(&split_btn);
+        right_header_box.append(&share_menu_btn);
+        right_header_box.append(&info_btn);
+        right_header_box.append(&action_menu_btn);
+        right_header_box.append(&search_container);
+
+        // 9. Paned principal (Sidebar a la izquierda y Contenido a la derecha)
         let hpaned = Paned::builder()
             .orientation(Orientation::Horizontal)
             .position(210)
@@ -335,18 +432,9 @@ impl BranchesWindow {
             .valign(Align::Center)
             .build();
 
-        header_toolbar.append(&nav_box);
-        header_toolbar.append(&view_box);
-        header_toolbar.append(&title_box);
-        header_toolbar.append(&search_entry);
-        header_toolbar.append(&split_btn);
-        header_toolbar.append(&action_menu_btn);
-
-        let window_controls_end = WindowControls::builder()
-            .side(PackType::End)
-            .valign(Align::Center)
-            .build();
-        header_toolbar.append(&window_controls_end);
+        header_toolbar.append(&left_header_box);
+        header_toolbar.append(&center_spacer);
+        header_toolbar.append(&right_header_box);
 
         let header_handle = WindowHandle::builder()
             .child(&header_toolbar)
@@ -381,6 +469,7 @@ impl BranchesWindow {
             btn_col_view,
             btn_gallery_view,
             quick_look,
+            search_toggle_btn,
         });
 
         *win_weak_holder.borrow_mut() = Some(branches_window.clone());
@@ -429,6 +518,12 @@ impl BranchesWindow {
         let bw_split = branches_window.clone();
         branches_window.split_btn.connect_clicked(move |_| {
             bw_split.toggle_split_view();
+        });
+
+        // Conectar botón de Información / Quick Look
+        let bw_info = branches_window.clone();
+        info_btn.connect_clicked(move |_| {
+            bw_info.toggle_quick_look();
         });
 
         // Conectar campo de búsqueda
@@ -589,6 +684,47 @@ impl BranchesWindow {
         });
         actions.add_action(&act_tag_b);
 
+        let bw_copy = self.clone_ref();
+        let act_copy_path = gio::SimpleAction::new("copy_path", None);
+        act_copy_path.connect_activate(move |_, _| {
+            let path = if let Some(item) = bw_copy.active_pane().get_selected_item() {
+                item.path
+            } else {
+                bw_copy.active_pane().current_path()
+            };
+            bw_copy.window.clipboard().set_text(&path.to_string_lossy());
+        });
+        actions.add_action(&act_copy_path);
+
+        let bw_kde = self.clone_ref();
+        let act_kde = gio::SimpleAction::new("share_kdeconnect", None);
+        act_kde.connect_activate(move |_, _| {
+            let path = if let Some(item) = bw_kde.active_pane().get_selected_item() {
+                item.path
+            } else {
+                bw_kde.active_pane().current_path()
+            };
+            let _ = std::process::Command::new("kdeconnect-handler")
+                .arg(&path)
+                .spawn();
+        });
+        actions.add_action(&act_kde);
+
+        let bw_email = self.clone_ref();
+        let act_email = gio::SimpleAction::new("share_email", None);
+        act_email.connect_activate(move |_, _| {
+            let path = if let Some(item) = bw_email.active_pane().get_selected_item() {
+                item.path
+            } else {
+                bw_email.active_pane().current_path()
+            };
+            let mailto = format!("mailto:?subject=Compartido desde Malus DE&body={}", path.to_string_lossy());
+            let _ = std::process::Command::new("xdg-open")
+                .arg(mailto)
+                .spawn();
+        });
+        actions.add_action(&act_email);
+
         self.window.insert_action_group("win", Some(&actions));
     }
 
@@ -615,6 +751,22 @@ impl BranchesWindow {
         key_controller.connect_key_pressed(move |_, keyval, _keycode, state| {
             let is_alt = state.contains(gdk::ModifierType::ALT_MASK);
             let is_ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
+
+            if keyval == gdk::Key::Escape && bw.search_toggle_btn.is_active() {
+                bw.search_toggle_btn.set_active(false);
+                return glib::Propagation::Stop;
+            }
+
+            if is_ctrl && (keyval == gdk::Key::f || keyval == gdk::Key::F) {
+                let active = !bw.search_toggle_btn.is_active();
+                bw.search_toggle_btn.set_active(active);
+                return glib::Propagation::Stop;
+            }
+
+            if is_ctrl && (keyval == gdk::Key::i || keyval == gdk::Key::I) {
+                bw.toggle_quick_look();
+                return glib::Propagation::Stop;
+            }
 
             if keyval == gdk::Key::F3 {
                 bw.toggle_split_view();
@@ -708,6 +860,7 @@ impl BranchesWindow {
             btn_col_view: self.btn_col_view.clone(),
             btn_gallery_view: self.btn_gallery_view.clone(),
             quick_look: self.quick_look.clone(),
+            search_toggle_btn: self.search_toggle_btn.clone(),
         })
     }
 }
