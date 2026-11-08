@@ -78,53 +78,46 @@ label.desktop-icon-label {
 popover.desktop-popover-menu,
 popover.desktop-popover-menu.background,
 popover.desktop-popover-menu > arrow {
-    background-color: transparent !important;
-    background: transparent !important;
+    background-color: transparent;
+    background: transparent;
     padding: 0;
     margin: 0;
-    border: none !important;
-    box-shadow: none !important;
+    border: none;
+    box-shadow: none;
 }
 
-/* Modo Oscuro por defecto (Acrílico Nautilus / Malus DE) */
+/* Modo Oscuro (Por defecto - Acrílico Nautilus) */
 popover.desktop-popover-menu > contents,
 popover.desktop-popover-menu > contents.background {
-    background-color: rgba(30, 30, 36, 0.82) !important;
-    border: 1px solid rgba(255, 255, 255, 0.14) !important;
+    background-color: rgba(30, 30, 36, 0.82);
+    border: 1px solid rgba(255, 255, 255, 0.14);
     border-radius: 14px;
     padding: 5px;
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08) !important;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
-/* Modo Claro (vía clase .light-popover) */
+/* Modo Claro (vía clase .light-popover en Popover) */
 popover.desktop-popover-menu.light-popover > contents,
 popover.desktop-popover-menu.light-popover > contents.background,
+popover.light-popover.desktop-popover-menu > contents,
 popover.light-popover > contents {
-    background-color: rgba(246, 246, 248, 0.85) !important;
-    border: 1px solid rgba(0, 0, 0, 0.14) !important;
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35) !important;
-}
-
-@media (prefers-color-scheme: light) {
-    popover.desktop-popover-menu > contents,
-    popover.desktop-popover-menu > contents.background {
-        background-color: rgba(246, 246, 248, 0.85) !important;
-        border: 1px solid rgba(0, 0, 0, 0.14) !important;
-        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35) !important;
-    }
+    background-color: rgba(246, 246, 248, 0.85);
+    border: 1px solid rgba(0, 0, 0, 0.14);
+    border-radius: 14px;
+    padding: 5px;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
 }
 
 .desktop-context-menu {
-    background: transparent !important;
-    border: none !important;
+    background: transparent;
+    border: none;
     border-radius: 0;
     padding: 0;
     margin: 0;
-    box-shadow: none !important;
+    box-shadow: none;
 }
 
 .desktop-context-btn {
-    color: #f1f5f9;
     background: transparent;
     border: none;
     box-shadow: none;
@@ -135,52 +128,78 @@ popover.light-popover > contents {
     font-size: 13px;
     font-weight: 500;
     text-shadow: none;
-}
-
-.desktop-context-btn label {
-    xalign: 0;
-    justify: left;
     color: #f1f5f9;
 }
 
-.desktop-context-btn:hover {
-    background: #007aff !important;
-    color: #ffffff !important;
+popover.desktop-popover-menu.light-popover .desktop-context-btn,
+popover.light-popover .desktop-context-btn,
+.light-popover .desktop-context-btn {
+    color: #1e293b;
 }
 
-.desktop-context-btn:hover label {
-    color: #ffffff !important;
+/* Clases directas de texto en Label para máxima reactividad */
+label.menu-dark-text {
+    color: #f1f5f9;
+}
+
+label.menu-light-text {
+    color: #1e293b;
+}
+
+.desktop-context-btn:hover {
+    background-color: #007aff;
+    color: #ffffff;
+}
+
+.desktop-context-btn:hover label,
+.desktop-context-btn:hover label.menu-dark-text,
+.desktop-context-btn:hover label.menu-light-text {
+    color: #ffffff;
 }
 
 .desktop-context-btn.destructive:hover {
-    background: #e11d48 !important;
-    color: #ffffff !important;
+    background-color: #e11d48;
+    color: #ffffff;
 }
 
-.desktop-context-btn.destructive:hover label {
-    color: #ffffff !important;
+.desktop-context-btn.destructive:hover label,
+.desktop-context-btn.destructive:hover label.menu-dark-text,
+.desktop-context-btn.destructive:hover label.menu-light-text {
+    color: #ffffff;
 }
 
 .desktop-context-btn.suggested-action {
-    background: #007aff;
+    background-color: #007aff;
     color: #ffffff;
 }
 
 .desktop-context-btn.suggested-action:hover {
-    background: #0062cc;
+    background-color: #0062cc;
     color: #ffffff;
 }
 
 .desktop-context-separator {
-    background: rgba(255, 255, 255, 0.12);
+    background-color: rgba(255, 255, 255, 0.12);
     min-height: 1px;
     margin: 4px 6px;
+}
+
+popover.desktop-popover-menu.light-popover .desktop-context-separator,
+popover.light-popover .desktop-context-separator,
+.light-popover .desktop-context-separator {
+    background-color: rgba(0, 0, 0, 0.10);
 }
 
 .card-section-title {
     font-size: 13px;
     font-weight: 600;
     color: #f1f5f9;
+}
+
+popover.desktop-popover-menu.light-popover .card-section-title,
+popover.light-popover .card-section-title,
+.light-popover .card-section-title {
+    color: #1e293b;
 }
 
 popover.desktop-popover-menu entry {
@@ -191,74 +210,10 @@ popover.desktop-popover-menu entry {
     padding: 4px 8px;
 }
 
-/* Reglas en Modo Claro */
-popover.desktop-popover-menu.light-popover .desktop-context-btn,
-popover.light-popover .desktop-context-btn,
-.light-popover .desktop-context-btn {
-    color: #1e293b;
-}
-
-popover.desktop-popover-menu.light-popover .desktop-context-btn label,
-popover.light-popover .desktop-context-btn label,
-.light-popover .desktop-context-btn label {
-    color: #1e293b;
-}
-
-popover.desktop-popover-menu.light-popover .desktop-context-btn:hover,
-popover.light-popover .desktop-context-btn:hover,
-.light-popover .desktop-context-btn:hover {
-    background: #007aff !important;
-    color: #ffffff !important;
-}
-
-popover.desktop-popover-menu.light-popover .desktop-context-btn:hover label,
-popover.light-popover .desktop-context-btn:hover label,
-.light-popover .desktop-context-btn:hover label {
-    color: #ffffff !important;
-}
-
-popover.desktop-popover-menu.light-popover .desktop-context-separator,
-popover.light-popover .desktop-context-separator,
-.light-popover .desktop-context-separator {
-    background: rgba(0, 0, 0, 0.10);
-}
-
-popover.desktop-popover-menu.light-popover .card-section-title,
-popover.light-popover .card-section-title,
-.light-popover .card-section-title {
-    color: #1e293b;
-}
-
 popover.desktop-popover-menu.light-popover entry,
-popover.light-popover entry {
+popover.light-popover entry,
+.light-popover entry {
     background-color: rgba(0, 0, 0, 0.05);
     color: #1e293b;
     border: 1px solid rgba(0, 0, 0, 0.16);
-}
-
-@media (prefers-color-scheme: light) {
-    .desktop-context-btn {
-        color: #1e293b;
-    }
-    .desktop-context-btn label {
-        color: #1e293b;
-    }
-    .desktop-context-btn:hover {
-        background: #007aff !important;
-        color: #ffffff !important;
-    }
-    .desktop-context-btn:hover label {
-        color: #ffffff !important;
-    }
-    .desktop-context-separator {
-        background: rgba(0, 0, 0, 0.10);
-    }
-    .card-section-title {
-        color: #1e293b;
-    }
-    popover.desktop-popover-menu entry {
-        background-color: rgba(0, 0, 0, 0.05);
-        color: #1e293b;
-        border: 1px solid rgba(0, 0, 0, 0.16);
-    }
 }

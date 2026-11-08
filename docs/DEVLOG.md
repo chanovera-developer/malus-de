@@ -4,27 +4,27 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
-## [2026-11-08] — Fondo Acrílico Coloreado y Conmutación Dinámica de Tema Oscuro/Claro en Menús Emergentes del Escritorio
+## [2026-11-08] — Corrección Crítica: Eliminación de Tokens Inválidos CSS, IPC Bus ThemeChanged y Sincronización de Contraste en Menús del Escritorio
 
 ### Diagnóstico de Causa Raíz
-* **Sobreescritura de Estilos por Prioridad de Proveedores GTK (`STYLE_PROVIDER_PRIORITY`):**
-  * El daemon de fondo de pantalla (`malus-de-wallpaper`) cargaba sus estilos con `STYLE_PROVIDER_PRIORITY_APPLICATION` ($600$). En el entorno Malus DE, `~/.config/gtk-4.0/gtk.css` se inyecta a nivel usuario con prioridad `STYLE_PROVIDER_PRIORITY_USER` ($800$).
-  * En `gtk.css`, las reglas globales para popovers utilizaban la función `alpha(@window_bg_color, 0.82)`. Al ser el daemon de fondo de pantalla una aplicación GTK4 pura (sin enlace a `libadwaita`), la paleta de colores nombrados `@window_bg_color` no existía, provocando que GTK4 descartase la propiedad de color de fondo y dejase el contenedor totalmente transparente.
-* **Falta de Detección Dinámica de Tema en Aplicaciones GTK4 sin Libadwaita:**
-  * GTK4 en Wayland no activa automáticamente las consultas `@media (prefers-color-scheme: light)` a menos que se configure explícitamente `gtk-application-prefer-dark-theme` en `GtkSettings` o se gestionen clases temáticas manuales (`.light-popover`).
-  * Los menús contextuales del escritorio (tanto el menú general como los menús de icono, renombrado y creación de carpetas) no monitoreaban la clave `color-scheme` de `org.gnome.desktop.interface`.
+* **Rechazo de Reglas de Color por `!important` en el Motor CSS de GTK4:**
+  * GTK4 implementa un subconjunto estricto de especificaciones CSS donde `!important` no es un modificador válido y es calificado como *"Junk at end of value"*. Esto provocaba que GTK4 descartase por completo las declaraciones `background-color` y `border`, dejando los popovers 100% transparentes tanto en modo oscuro como en modo claro.
+* **Sobreescritura Uncondicional de Tipografía por Bloque `@media`:**
+  * GTK4 no evalúa consultas condicionales `@media (prefers-color-scheme)`. Las reglas ubicadas al final de la hoja (`color: #1e293b`) se aplicaban de forma incondicional sobre todos los botones, provocando texto gris oscuro casi negro sobre el fondo transparente del wallpaper oscuro, resultando en ilegibilidad absoluta.
+* **Aislamiento de Sesión y Falta de Bus IPC entre Procesos:**
+  * Malus DE configura `GSETTINGS_BACKEND="keyfile"`. El backend `keyfile` de GLib no emite señales D-Bus entre procesos cuando otro demonio (como Top Bar o Settings) altera la configuración de apariencia. Al depender únicamente de `gio::Settings::connect_changed`, `malus-de-wallpaper` nunca era notificado del cambio de tema en caliente.
 
 ### Solución Implementada (`crates/wallpaper/src/styles/default-gradient.css`, `crates/wallpaper/src/main.rs`)
-* **Prioridad Elevada y Colores Base Fallback:**
-  * Se definieron directivas `@define-color window_bg_color rgb(30, 30, 36);` y `@define-color window_fg_color rgb(255, 255, 255);` en la cabecera CSS.
-  * Se registró el proveedor CSS en `app.connect_startup` con prioridad `STYLE_PROVIDER_PRIORITY_USER + 100` ($900$), garantizando que los estilos acrílicos del escritorio tengan precedencia total sobre cualquier regla de usuario o del sistema.
-* **Fondo Acrílico Idéntico a Nautilus en Modo Oscuro y Claro:**
-  * **Modo Oscuro (por defecto):** Fondo `rgba(30, 30, 36, 0.82)`, borde perimetral `1px solid rgba(255, 255, 255, 0.14)`, bisel de luz interior `box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08)`, tipografía `#f1f5f9` y separadores `rgba(255, 255, 255, 0.12)`.
-  * **Modo Claro (`.light-popover`, `@media (prefers-color-scheme: light)`):** Fondo blanco lechoso acrílico `rgba(246, 246, 248, 0.85)`, borde `1px solid rgba(0, 0, 0, 0.14)`, bisel interior `box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35)`, tipografía `#1e293b` y separadores `rgba(0, 0, 0, 0.10)`.
-  * **Interacción:** Efecto hover en opciones con el azul estándar macOS `#007aff` y tipografía blanca contrastada.
-* **Sincronización Reactiva con el Esquema de Color del Sistema:**
-  * En `app.connect_startup`, se vinculó un monitor `gio::Settings` sobre `org.gnome.desktop.interface:color-scheme` que actualiza `set_gtk_application_prefer_dark_theme` en tiempo real sin requerir reinicio del daemon.
-  * En los 5 generadores de popover (menú de fondo primario, menú de fondo secundario, menú contextual de archivo/icono, diálogo de renombrar y diálogo de nueva carpeta), se evalúa `malus_de_common::config::is_dark_mode_active()` en el momento exacto de apertura para aplicar o remover de forma instantánea la clase `.light-popover`.
+* **Hoja de Estilos Limpia y Libre de Advertencias GTK4:**
+  * Eliminación total de `!important`, propiedades inválidas (`xalign`, `justify`) y bloques `@media`.
+  * Reglas limpias para fondo acrílico oscuro (`rgba(30, 30, 36, 0.82)`) y claro (`rgba(246, 246, 248, 0.85)`).
+  * Clases temáticas directas para etiquetas: `label.menu-dark-text` (`#f1f5f9`, blanco nítido) y `label.menu-light-text` (`#1e293b`, grafito oscuro), con hover `#ffffff` y acento azul macOS `#007aff`.
+* **Conexión Directa al Socket IPC del Compositor:**
+  * Se implementó un hilo lector sobre `malus_de_common::ipc::ipc_socket_path()` con canal asíncrono hacia el hilo principal de GTK.
+  * Al recibirse `IpcMessage::ThemeChanged { is_dark, .. }`, se actualiza el estado atómico global `CURRENT_IS_DARK`, se sincroniza `gtk_application_prefer_dark_theme` y se refrescan de inmediato todos los popovers registrados.
+* **Gestor Centralizado de Popovers de Escritorio (`register_wallpaper_popover`, `apply_theme_to_popover`):**
+  * Se unificó la gestión de popovers (fondo primario, fondos secundarios, iconos de escritorio y diálogos de renombrar / nueva carpeta).
+  * Al mostrarse o crearse cualquier menú, se aplica dinámicamente la clase `.light-popover` y se recorre el árbol de widgets para asignar `.menu-light-text` o `.menu-dark-text` con contraste garantizado.
 
 ---
 

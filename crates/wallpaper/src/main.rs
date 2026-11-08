@@ -34,6 +34,83 @@ const DEFAULT_GRADIENT_CSS: &str = include_str!("styles/default-gradient.css");
 /// Margen superior de la cuadrícula de iconos del escritorio para dejar respiración bajo la Top Bar (36px).
 pub const DESKTOP_TOP_MARGIN: f64 = 56.0;
 
+static CURRENT_IS_DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+thread_local! {
+    static REGISTERED_POPOVERS: RefCell<Vec<glib::WeakRef<Popover>>> = RefCell::new(Vec::new());
+}
+
+pub fn is_dark_mode_active() -> bool {
+    CURRENT_IS_DARK.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+pub fn set_is_dark_mode(is_dark: bool) {
+    CURRENT_IS_DARK.store(is_dark, std::sync::atomic::Ordering::SeqCst);
+    if let Some(gtk_settings) = gtk4::Settings::default() {
+        gtk_settings.set_gtk_application_prefer_dark_theme(is_dark);
+    }
+    update_all_registered_popovers(is_dark);
+}
+
+pub fn register_wallpaper_popover(popover: &Popover) {
+    let is_dark = is_dark_mode_active();
+    apply_theme_to_popover(popover, is_dark);
+
+    let pop_weak = popover.downgrade();
+    popover.connect_show(move |_| {
+        if let Some(pop) = pop_weak.upgrade() {
+            apply_theme_to_popover(&pop, is_dark_mode_active());
+        }
+    });
+
+    REGISTERED_POPOVERS.with(|list| {
+        let mut l = list.borrow_mut();
+        l.retain(|w| w.upgrade().is_some());
+        l.push(popover.downgrade());
+    });
+}
+
+pub fn update_all_registered_popovers(is_dark: bool) {
+    REGISTERED_POPOVERS.with(|list| {
+        let mut l = list.borrow_mut();
+        l.retain(|w| {
+            if let Some(pop) = w.upgrade() {
+                apply_theme_to_popover(&pop, is_dark);
+                true
+            } else {
+                false
+            }
+        });
+    });
+}
+
+pub fn apply_theme_to_popover(popover: &Popover, is_dark: bool) {
+    if is_dark {
+        popover.remove_css_class("light-popover");
+    } else {
+        popover.add_css_class("light-popover");
+    }
+    update_menu_text_theme(popover.upcast_ref(), is_dark);
+    popover.queue_draw();
+}
+
+fn update_menu_text_theme(widget: &gtk4::Widget, is_dark: bool) {
+    if let Some(label) = widget.downcast_ref::<Label>() {
+        label.remove_css_class("menu-light-text");
+        label.remove_css_class("menu-dark-text");
+        label.add_css_class(if is_dark {
+            "menu-dark-text"
+        } else {
+            "menu-light-text"
+        });
+    }
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        child = current.next_sibling();
+        update_menu_text_theme(&current, is_dark);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StackCategory {
     Screenshots,
@@ -492,12 +569,9 @@ fn duplicate_file(path: &Path) {
 }
 
 fn show_rename_dialog(parent_widget: &impl IsA<gtk4::Widget>, current_path: PathBuf) {
-    let is_dark = malus_de_common::config::is_dark_mode_active();
     let popover = Popover::new();
     popover.add_css_class("desktop-popover-menu");
-    if !is_dark {
-        popover.add_css_class("light-popover");
-    }
+    register_wallpaper_popover(&popover);
     popover.set_parent(parent_widget);
     popover.set_autohide(true);
 
@@ -560,17 +634,15 @@ fn show_rename_dialog(parent_widget: &impl IsA<gtk4::Widget>, current_path: Path
     container.append(&btn_box);
 
     popover.set_child(Some(&container));
+    apply_theme_to_popover(&popover, is_dark_mode_active());
     popover.connect_closed(|p| p.unparent());
     popover.popup();
 }
 
 fn show_new_folder_dialog(parent_widget: &impl IsA<gtk4::Widget>, desktop_dir: PathBuf) {
-    let is_dark = malus_de_common::config::is_dark_mode_active();
     let popover = Popover::new();
     popover.add_css_class("desktop-popover-menu");
-    if !is_dark {
-        popover.add_css_class("light-popover");
-    }
+    register_wallpaper_popover(&popover);
     popover.set_parent(parent_widget);
     popover.set_autohide(true);
 
@@ -625,6 +697,7 @@ fn show_new_folder_dialog(parent_widget: &impl IsA<gtk4::Widget>, desktop_dir: P
     container.append(&btn_box);
 
     popover.set_child(Some(&container));
+    apply_theme_to_popover(&popover, is_dark_mode_active());
     popover.connect_closed(|p| p.unparent());
     popover.popup();
 }
@@ -874,6 +947,12 @@ fn create_menu_button(label: &str, destructive: bool) -> Button {
     if let Some(child) = btn.child() {
         if let Some(lbl) = child.downcast_ref::<Label>() {
             lbl.set_xalign(0.0);
+            let is_dark = is_dark_mode_active();
+            lbl.add_css_class(if is_dark {
+                "menu-dark-text"
+            } else {
+                "menu-light-text"
+            });
         }
     }
     btn
@@ -1092,19 +1171,10 @@ fn render_single_icon(
 
     popover.set_child(Some(&menu));
     popover.set_parent(&item_box);
+    register_wallpaper_popover(&popover);
     let p_unroot = popover.clone();
     item_box.connect_unrealize(move |_| {
         p_unroot.unparent();
-    });
-
-    let p_show = popover.clone();
-    popover.connect_show(move |_| {
-        let is_dark = malus_de_common::config::is_dark_mode_active();
-        if is_dark {
-            p_show.remove_css_class("light-popover");
-        } else {
-            p_show.add_css_class("light-popover");
-        }
     });
 
     let context_click = GestureClick::new();
@@ -1112,12 +1182,8 @@ fn render_single_icon(
     let p_click = popover.clone();
     context_click.connect_pressed(move |gesture, _, x, y| {
         gesture.set_state(gtk4::EventSequenceState::Claimed);
-        let is_dark = malus_de_common::config::is_dark_mode_active();
-        if is_dark {
-            p_click.remove_css_class("light-popover");
-        } else {
-            p_click.add_css_class("light-popover");
-        }
+        let is_dark = is_dark_mode_active();
+        apply_theme_to_popover(&p_click, is_dark);
         let rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
         p_click.set_pointing_to(Some(&rect));
         p_click.popup();
@@ -1313,17 +1379,13 @@ fn create_wallpaper_window(
                 return;
             }
             gesture.set_state(gtk4::EventSequenceState::Claimed);
-            let is_dark = malus_de_common::config::is_dark_mode_active();
             let popover = Popover::builder()
                 .has_arrow(false)
                 .autohide(true)
-                .css_classes(if is_dark {
-                    vec!["desktop-popover-menu"]
-                } else {
-                    vec!["desktop-popover-menu", "light-popover"]
-                })
+                .css_classes(["desktop-popover-menu"])
                 .build();
             popover.set_parent(&overlay_context);
+            register_wallpaper_popover(&popover);
 
             let pointing_rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
             popover.set_pointing_to(Some(&pointing_rect));
@@ -1430,6 +1492,7 @@ fn create_wallpaper_window(
             menu.append(&wp_btn);
 
             popover.set_child(Some(&menu));
+            apply_theme_to_popover(&popover, is_dark_mode_active());
             popover.connect_closed(|p| p.unparent());
             popover.popup();
         });
@@ -1819,17 +1882,13 @@ fn create_wallpaper_window(
 
         bg_context.connect_pressed(move |gesture, _, x, y| {
             gesture.set_state(gtk4::EventSequenceState::Claimed);
-            let is_dark = malus_de_common::config::is_dark_mode_active();
             let popover = Popover::builder()
                 .has_arrow(false)
                 .autohide(true)
-                .css_classes(if is_dark {
-                    vec!["desktop-popover-menu"]
-                } else {
-                    vec!["desktop-popover-menu", "light-popover"]
-                })
+                .css_classes(["desktop-popover-menu"])
                 .build();
             popover.set_parent(&overlay_context);
+            register_wallpaper_popover(&popover);
 
             let pointing_rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
             popover.set_pointing_to(Some(&pointing_rect));
@@ -1844,8 +1903,7 @@ fn create_wallpaper_window(
                 .css_classes(["desktop-context-menu"])
                 .build();
 
-            let wp_btn = Button::with_label("Fondo de pantalla y Estilo...");
-            wp_btn.add_css_class("desktop-context-btn");
+            let wp_btn = create_menu_button("Fondo de pantalla y Estilo...", false);
             let popover_c = popover.clone();
             wp_btn.connect_clicked(move |_| {
                 let mut cmd = std::process::Command::new("malus-de-settings");
@@ -1856,6 +1914,7 @@ fn create_wallpaper_window(
             menu.append(&wp_btn);
 
             popover.set_child(Some(&menu));
+            apply_theme_to_popover(&popover, is_dark_mode_active());
             popover.connect_closed(|p| p.unparent());
             popover.popup();
         });
@@ -1886,20 +1945,53 @@ fn main() -> Result<()> {
     let active_icon_drag = Rc::new(RefCell::new(None));
 
     app.connect_startup(|_| {
-        let is_dark = malus_de_common::config::is_dark_mode_active();
-        if let Some(gtk_settings) = gtk4::Settings::default() {
-            gtk_settings.set_gtk_application_prefer_dark_theme(is_dark);
-        }
+        let initial_dark = malus_de_common::config::is_dark_mode_active();
+        set_is_dark_mode(initial_dark);
 
-        let gsettings = Box::leak(Box::new(gio::Settings::new("org.gnome.desktop.interface")));
-        gsettings.connect_changed(Some("color-scheme"), move |settings, _| {
-            let scheme = settings.string("color-scheme");
-            let to_dark = scheme.contains("dark") || malus_de_common::config::is_dark_mode_active();
-            if let Some(gtk_settings) = gtk4::Settings::default() {
-                gtk_settings.set_gtk_application_prefer_dark_theme(to_dark);
+        // 1. Escuchar mensajes IPC del compositor (ThemeChanged entre procesos en tiempo real)
+        let (tx, rx) = async_channel::unbounded::<malus_de_common::ipc::IpcMessage>();
+        glib::spawn_future_local(async move {
+            while let Ok(msg) = rx.recv().await {
+                if let malus_de_common::ipc::IpcMessage::ThemeChanged { is_dark, .. } = msg {
+                    info!("🎨 [Wallpaper] IPC ThemeChanged recibido: is_dark={}", is_dark);
+                    set_is_dark_mode(is_dark);
+                }
             }
         });
 
+        std::thread::spawn(move || {
+            let sock_path = malus_de_common::ipc::ipc_socket_path();
+            loop {
+                if let Ok(stream) = std::os::unix::net::UnixStream::connect(&sock_path) {
+                    let reader = std::io::BufReader::new(stream);
+                    for line in std::io::BufRead::lines(reader) {
+                        if let Ok(line) = line {
+                            if let Ok(msg) = serde_json::from_str::<malus_de_common::ipc::IpcMessage>(&line) {
+                                let _ = tx.send_blocking(msg);
+                            }
+                        }
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        });
+
+        // 2. Monitor fallback de GSettings (para sesiones GNOME estándar)
+        let has_schema = gio::SettingsSchemaSource::default()
+            .map(|s| s.lookup("org.gnome.desktop.interface", true).is_some())
+            .unwrap_or(false);
+        if has_schema {
+            let gsettings = gio::Settings::new("org.gnome.desktop.interface");
+            gsettings.connect_changed(Some("color-scheme"), move |settings, _| {
+                let scheme = settings.string("color-scheme");
+                let to_dark = scheme.contains("dark");
+                info!("🎨 [Wallpaper] GSettings color-scheme: {}", scheme);
+                set_is_dark_mode(to_dark);
+            });
+            Box::leak(Box::new(gsettings));
+        }
+
+        // 3. Registrar hoja de estilo CSS
         let provider = CssProvider::new();
         provider.load_from_string(DEFAULT_GRADIENT_CSS);
         if let Some(display) = gtk4::gdk::Display::default() {
@@ -2148,5 +2240,8 @@ mod tests {
         assert!(css.contains("#1e293b"));
         // Hover azul macOS
         assert!(css.contains("#007aff"));
+        // GTK4 CSS no soporta !important ni queries @media condicionales
+        assert!(!css.contains("!important"));
+        assert!(!css.contains("@media"));
     }
 }
