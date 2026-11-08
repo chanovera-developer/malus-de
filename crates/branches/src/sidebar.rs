@@ -15,8 +15,12 @@ struct SidebarEntry {
 }
 
 impl Sidebar {
-    pub fn new<F: Fn(PathBuf) + 'static>(on_navigate: F) -> Self {
+    pub fn new<F: Fn(PathBuf) + 'static, T: Fn(String) + 'static>(
+        on_navigate: F,
+        on_tag_selected: T,
+    ) -> Self {
         let on_navigate = Rc::new(on_navigate);
+        let on_tag_selected = Rc::new(on_tag_selected);
 
         let list_box = ListBox::builder()
             .selection_mode(gtk4::SelectionMode::Single)
@@ -141,6 +145,11 @@ impl Sidebar {
 
         for (name, color_hex) in tags {
             let row = create_tag_row(name, color_hex);
+            let tag_cb = on_tag_selected.clone();
+            let tag_name = name.to_string();
+            row.connect_activate(move |_| {
+                tag_cb(tag_name.clone());
+            });
             list_box.append(&row);
         }
 

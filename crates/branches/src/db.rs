@@ -55,6 +55,12 @@ pub fn open_db() -> Result<Connection, rusqlite::Error> {
         CREATE TABLE IF NOT EXISTS folder_settings (
             folder_path TEXT PRIMARY KEY,
             layout_mode TEXT NOT NULL DEFAULT 'auto'
+        );
+        CREATE TABLE IF NOT EXISTS file_tags (
+            file_path TEXT NOT NULL,
+            tag_name TEXT NOT NULL,
+            tag_color TEXT NOT NULL,
+            PRIMARY KEY (file_path, tag_name)
         );",
     )?;
 
@@ -161,3 +167,59 @@ pub fn set_layout_mode(conn: &Connection, folder: &Path, mode: LayoutMode) -> Re
     )?;
     Ok(())
 }
+
+pub fn set_file_tag(
+    conn: &Connection,
+    file_path: &Path,
+    tag_name: &str,
+    tag_color: &str,
+) -> Result<(), rusqlite::Error> {
+    let p_str = file_path.to_string_lossy();
+    conn.execute(
+        "INSERT INTO file_tags (file_path, tag_name, tag_color)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(file_path, tag_name) DO UPDATE SET tag_color = excluded.tag_color",
+        params![p_str, tag_name, tag_color],
+    )?;
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub fn remove_file_tag(
+    conn: &Connection,
+    file_path: &Path,
+    tag_name: &str,
+) -> Result<(), rusqlite::Error> {
+    let p_str = file_path.to_string_lossy();
+    conn.execute(
+        "DELETE FROM file_tags WHERE file_path = ?1 AND tag_name = ?2",
+        params![p_str, tag_name],
+    )?;
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub fn get_file_tags(conn: &Connection, file_path: &Path) -> Vec<(String, String)> {
+    let p_str = file_path.to_string_lossy();
+    let mut stmt = match conn.prepare("SELECT tag_name, tag_color FROM file_tags WHERE file_path = ?1") {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let rows = stmt.query_map(params![p_str], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    });
+    rows.map(|iter| iter.flatten().collect()).unwrap_or_default()
+}
+
+pub fn get_files_by_tag(conn: &Connection, tag_name: &str) -> Vec<PathBuf> {
+    let mut stmt = match conn.prepare("SELECT file_path FROM file_tags WHERE tag_name = ?1") {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let rows = stmt.query_map(params![tag_name], |row| {
+        let p: String = row.get(0)?;
+        Ok(PathBuf::from(p))
+    });
+    rows.map(|iter| iter.flatten().collect()).unwrap_or_default()
+}
+

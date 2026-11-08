@@ -1,3 +1,5 @@
+pub mod column_view;
+pub mod gallery_view;
 pub mod icon_view;
 pub mod list_view;
 

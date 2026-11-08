@@ -1,6 +1,7 @@
 use crate::folder_pane::{FolderPane, PaneId};
 use crate::fs_backend::get_free_space;
 use crate::path_bar::PathBar;
+use crate::quick_look::QuickLook;
 use crate::sidebar::Sidebar;
 use crate::status_bar::StatusBar;
 use gtk4::gdk;
@@ -33,6 +34,7 @@ pub struct BranchesWindow {
     btn_list_view: ToggleButton,
     btn_col_view: ToggleButton,
     btn_gallery_view: ToggleButton,
+    quick_look: Rc<QuickLook>,
 }
 
 impl BranchesWindow {
@@ -138,9 +140,18 @@ impl BranchesWindow {
         
         let menu_model = gio::Menu::new();
         menu_model.append(Some("Nueva Carpeta"), Some("win.new_folder"));
+        menu_model.append(Some("Duplicar"), Some("win.duplicate"));
+        menu_model.append(Some("Mover a la Papelera"), Some("win.trash"));
         menu_model.append(Some("Abrir en Terminal"), Some("win.open_terminal"));
         menu_model.append(Some("Mostrar Archivos Ocultos"), Some("win.toggle_hidden"));
         menu_model.append(Some("Recargar"), Some("win.reload"));
+
+        let tag_menu = gio::Menu::new();
+        tag_menu.append(Some("Rojo"), Some("win.tag_red"));
+        tag_menu.append(Some("Verde"), Some("win.tag_green"));
+        tag_menu.append(Some("Azul"), Some("win.tag_blue"));
+        menu_model.append_submenu(Some("Etiquetar"), &tag_menu);
+
         action_menu_btn.set_menu_model(Some(&menu_model));
 
         // 6. Campo de búsqueda integrado
@@ -158,22 +169,34 @@ impl BranchesWindow {
             .shrink_end_child(false)
             .hexpand(true)
             .vexpand(true)
+            .css_classes(["branches-main-paned"])
             .build();
 
         // Barras inferiores
         let status_bar = Rc::new(StatusBar::new());
+        let quick_look = QuickLook::new();
 
         let win_weak_holder: Rc<RefCell<Option<Rc<BranchesWindow>>>> = Rc::new(RefCell::new(None));
         let win_weak_for_nav = win_weak_holder.clone();
 
-        let sidebar = Rc::new(Sidebar::new({
-            let w_clone = win_weak_for_nav.clone();
-            move |p| {
-                if let Some(w) = w_clone.borrow().as_ref() {
-                    w.active_pane().navigate_to(p);
+        let sidebar = Rc::new(Sidebar::new(
+            {
+                let w_clone = win_weak_for_nav.clone();
+                move |p| {
+                    if let Some(w) = w_clone.borrow().as_ref() {
+                        w.active_pane().navigate_to(p);
+                    }
                 }
-            }
-        }));
+            },
+            {
+                let w_clone = win_weak_for_nav.clone();
+                move |tag_name| {
+                    if let Some(w) = w_clone.borrow().as_ref() {
+                        w.active_pane().show_tag_filter(&tag_name);
+                    }
+                }
+            },
+        ));
 
         let path_bar = Rc::new(PathBar::new({
             let w_clone = win_weak_for_nav.clone();
@@ -204,11 +227,17 @@ impl BranchesWindow {
 
         // Callback cuando cambia la selección o conteo de un panel
         let w_for_sel = win_weak_for_nav.clone();
+        let ql_for_sel = quick_look.clone();
         let on_selection_changed = Rc::new(move |id: PaneId, count: usize, path: PathBuf| {
             if let Some(w) = w_for_sel.borrow().as_ref() {
                 if *w.active_pane_id.borrow() == id {
                     let free = get_free_space(&path);
                     w.status_bar.update(count, 0, &free);
+                    if ql_for_sel.is_open() {
+                        if let Some(item) = w.active_pane().get_selected_item() {
+                            ql_for_sel.update_if_open(&item);
+                        }
+                    }
                 }
             }
         });
@@ -351,6 +380,7 @@ impl BranchesWindow {
             btn_list_view,
             btn_col_view,
             btn_gallery_view,
+            quick_look,
         });
 
         *win_weak_holder.borrow_mut() = Some(branches_window.clone());
@@ -448,6 +478,11 @@ impl BranchesWindow {
         self.set_split_view(!current);
     }
 
+    pub fn toggle_quick_look(&self) {
+        let item = self.active_pane().get_selected_item();
+        self.quick_look.toggle(&self.window, item);
+    }
+
     pub fn set_split_view(&self, active: bool) {
         *self.split_view_active.borrow_mut() = active;
 
@@ -519,6 +554,41 @@ impl BranchesWindow {
         });
         actions.add_action(&act_mkdir);
 
+        let bw_dup = self.clone_ref();
+        let act_dup = gio::SimpleAction::new("duplicate", None);
+        act_dup.connect_activate(move |_, _| {
+            bw_dup.active_pane().duplicate_selected();
+        });
+        actions.add_action(&act_dup);
+
+        let bw_trash = self.clone_ref();
+        let act_trash = gio::SimpleAction::new("trash", None);
+        act_trash.connect_activate(move |_, _| {
+            bw_trash.active_pane().trash_selected();
+        });
+        actions.add_action(&act_trash);
+
+        let bw_tag_r = self.clone_ref();
+        let act_tag_r = gio::SimpleAction::new("tag_red", None);
+        act_tag_r.connect_activate(move |_, _| {
+            bw_tag_r.active_pane().set_tag_on_selected("Rojo", "#ff3b30");
+        });
+        actions.add_action(&act_tag_r);
+
+        let bw_tag_g = self.clone_ref();
+        let act_tag_g = gio::SimpleAction::new("tag_green", None);
+        act_tag_g.connect_activate(move |_, _| {
+            bw_tag_g.active_pane().set_tag_on_selected("Verde", "#34c759");
+        });
+        actions.add_action(&act_tag_g);
+
+        let bw_tag_b = self.clone_ref();
+        let act_tag_b = gio::SimpleAction::new("tag_blue", None);
+        act_tag_b.connect_activate(move |_, _| {
+            bw_tag_b.active_pane().set_tag_on_selected("Azul", "#007aff");
+        });
+        actions.add_action(&act_tag_b);
+
         self.window.insert_action_group("win", Some(&actions));
     }
 
@@ -551,6 +621,11 @@ impl BranchesWindow {
                 return glib::Propagation::Stop;
             }
 
+            if keyval == gdk::Key::space {
+                bw.toggle_quick_look();
+                return glib::Propagation::Stop;
+            }
+
             if is_alt && keyval == gdk::Key::Left {
                 bw.active_pane().go_back();
                 return glib::Propagation::Stop;
@@ -569,6 +644,15 @@ impl BranchesWindow {
             }
             if (is_ctrl && (keyval == gdk::Key::r || keyval == gdk::Key::R)) || keyval == gdk::Key::F5 {
                 bw.active_pane().reload();
+                return glib::Propagation::Stop;
+            }
+
+            if is_ctrl && (keyval == gdk::Key::d || keyval == gdk::Key::D) {
+                bw.active_pane().duplicate_selected();
+                return glib::Propagation::Stop;
+            }
+            if keyval == gdk::Key::Delete {
+                bw.active_pane().trash_selected();
                 return glib::Propagation::Stop;
             }
 
@@ -623,6 +707,7 @@ impl BranchesWindow {
             btn_list_view: self.btn_list_view.clone(),
             btn_col_view: self.btn_col_view.clone(),
             btn_gallery_view: self.btn_gallery_view.clone(),
+            quick_look: self.quick_look.clone(),
         })
     }
 }

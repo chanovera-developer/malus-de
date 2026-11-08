@@ -1,5 +1,7 @@
 use crate::fs_backend::{load_directory, FileItem};
 use crate::state::AppState;
+use crate::views::column_view::ColumnView;
+use crate::views::gallery_view::GalleryView;
 use crate::views::icon_view::IconView;
 use crate::views::list_view::ListView;
 use gtk4::gdk;
@@ -24,6 +26,8 @@ pub struct FolderPane {
     view_stack: Stack,
     icon_view: Rc<IconView>,
     list_view: Rc<ListView>,
+    pub column_view: Rc<ColumnView>,
+    pub gallery_view: Rc<GalleryView>,
     pane_header: GtkBox,
     pane_title: Label,
     items_cache: Rc<RefCell<Vec<FileItem>>>,
@@ -105,6 +109,8 @@ impl FolderPane {
 
         let icon_view = Rc::new(IconView::new(on_navigate.clone(), on_selection.clone()));
         let list_view = Rc::new(ListView::new(on_navigate.clone(), on_selection.clone()));
+        let column_view = Rc::new(ColumnView::new(on_navigate.clone(), on_selection.clone()));
+        let gallery_view = GalleryView::new(on_navigate.clone(), on_selection.clone());
 
         let view_stack = Stack::builder()
             .vexpand(true)
@@ -114,20 +120,8 @@ impl FolderPane {
 
         view_stack.add_named(icon_view.widget(), Some("icons"));
         view_stack.add_named(list_view.widget(), Some("list"));
-
-        let col_placeholder = create_placeholder(
-            "Vista de Columnas Miller",
-            "Navegación horizontal fluida en cascada.",
-            "view-column-symbolic",
-        );
-        view_stack.add_named(&col_placeholder, Some("columns"));
-
-        let gal_placeholder = create_placeholder(
-            "Vista de Galería",
-            "Lienzo central de medios con carrusel.",
-            "view-paged-symbolic",
-        );
-        view_stack.add_named(&gal_placeholder, Some("gallery"));
+        view_stack.add_named(column_view.widget(), Some("columns"));
+        view_stack.add_named(gallery_view.widget(), Some("gallery"));
 
         container.append(&view_stack);
 
@@ -156,6 +150,8 @@ impl FolderPane {
             view_stack,
             icon_view,
             list_view,
+            column_view,
+            gallery_view,
             pane_header,
             pane_title,
             items_cache,
@@ -268,6 +264,8 @@ impl FolderPane {
                 let count = items.len();
                 self.icon_view.set_items(&items);
                 self.list_view.set_items(&items);
+                self.column_view.set_root(&current_path, &items, show_hidden, sort_by, sort_order);
+                self.gallery_view.set_items(&items);
                 *self.items_cache.borrow_mut() = items;
                 (self.on_selection_changed)(self.id, count, current_path);
             }
@@ -292,34 +290,62 @@ impl FolderPane {
     pub fn items_count(&self) -> usize {
         self.items_cache.borrow().len()
     }
+
+    pub fn get_selected_item(&self) -> Option<FileItem> {
+        let mode = self.view_stack.visible_child_name().unwrap_or_default();
+        if mode == "columns" {
+            self.column_view.get_selected_item()
+        } else {
+            self.items_cache.borrow().first().cloned()
+        }
+    }
+
+    pub fn duplicate_selected(&self) {
+        if let Some(item) = self.get_selected_item() {
+            if let Ok(_) = crate::operations::duplicate_item(&item.path) {
+                self.reload();
+            }
+        }
+    }
+
+    pub fn trash_selected(&self) {
+        if let Some(item) = self.get_selected_item() {
+            if let Ok(_) = crate::operations::trash_item(&item.path) {
+                self.reload();
+            }
+        }
+    }
+
+    pub fn show_tag_filter(&self, tag_name: &str) {
+        if let Ok(conn) = crate::db::open_db() {
+            let paths = crate::db::get_files_by_tag(&conn, tag_name);
+            let mut items = Vec::new();
+            for p in paths {
+                if let Some(item) = FileItem::from_path(&p) {
+                    items.push(item);
+                }
+            }
+            self.pane_title.set_label(&format!("Etiqueta: {}", tag_name));
+            let count = items.len();
+            self.icon_view.set_items(&items);
+            self.list_view.set_items(&items);
+            let s = self.state.borrow();
+            self.column_view.set_root(&s.current_path, &items, s.show_hidden, s.sort_by, s.sort_order);
+            self.gallery_view.set_items(&items);
+            *self.items_cache.borrow_mut() = items;
+            (self.on_selection_changed)(self.id, count, s.current_path.clone());
+        }
+    }
+
+    pub fn set_tag_on_selected(&self, tag_name: &str, tag_color: &str) {
+        if let Some(item) = self.get_selected_item() {
+            if let Ok(conn) = crate::db::open_db() {
+                let _ = crate::db::set_file_tag(&conn, &item.path, tag_name, tag_color);
+            }
+        }
+    }
 }
 
-fn create_placeholder(title: &str, subtitle: &str, icon_name: &str) -> GtkBox {
-    let vbox = GtkBox::new(Orientation::Vertical, 12);
-    vbox.set_valign(Align::Center);
-    vbox.set_halign(Align::Center);
-    vbox.add_css_class("branches-placeholder-view");
-
-    let icon = Image::from_icon_name(icon_name);
-    icon.set_pixel_size(64);
-    icon.add_css_class("dim-label");
-
-    let t_label = Label::builder()
-        .label(title)
-        .css_classes(["title-2", "bold"])
-        .build();
-
-    let s_label = Label::builder()
-        .label(subtitle)
-        .css_classes(["dim-label"])
-        .build();
-
-    vbox.append(&icon);
-    vbox.append(&t_label);
-    vbox.append(&s_label);
-
-    vbox
-}
 
 fn setup_drop_target<F: Fn() + 'static>(
     widget: &impl IsA<gtk4::Widget>,
