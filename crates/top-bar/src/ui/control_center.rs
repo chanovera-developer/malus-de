@@ -42,11 +42,11 @@ pub fn create_control_center_widget() -> MenuButton {
         .transition_type(StackTransitionType::SlideLeftRight)
         .transition_duration(220)
         .interpolate_size(true)
-        .width_request(330)
+        .width_request(340)
         .build();
 
     // ==========================================
-    // Vista Principal ("main")
+    // Vista Principal ("main") — Estilo macOS Tahoe
     // ==========================================
     let main_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
@@ -57,97 +57,80 @@ pub fn create_control_center_widget() -> MenuButton {
         .spacing(10)
         .build();
 
-    // 1. Matriz 2x2 de Módulos Superiores
-    let grid_box = GtkBox::builder()
+    let is_es = malus_de_common::is_spanish_locale();
+
+    // 1. Módulo Superior de 2 Columnas (Wi-Fi + Círculos BT/AirDrop a la izquierda, Now Playing a la derecha)
+    let top_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .homogeneous(true)
+        .build();
+
+    let left_col = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .spacing(6)
-        .build();
-
-    let row1 = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(6)
-        .homogeneous(true)
-        .build();
-
-    let row2 = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(6)
-        .homogeneous(true)
+        .spacing(8)
         .build();
 
     // --- Tile 1: Wi-Fi ---
-    let (wifi_tile, wifi_power_btn, wifi_nav_btn, wifi_icon, wifi_sub) =
-        create_cc_nav_tile("network-wireless-symbolic", "Wi-Fi", "Buscando...");
-    row1.append(&wifi_tile);
+    let (wifi_tile, wifi_power_btn, wifi_nav_btn, wifi_icon, wifi_sub) = create_wifi_tahoe_tile();
+    left_col.append(&wifi_tile);
 
-    // --- Tile 2: Bluetooth ---
-    let (bt_tile, bt_power_btn, bt_nav_btn, bt_icon, bt_sub) =
-        create_cc_nav_tile("bluetooth-active-symbolic", "Bluetooth", "Verificando...");
-    row1.append(&bt_tile);
-
-    // --- Tile 3: AirDrop ---
-    let (airdrop_tile, airdrop_power_btn, airdrop_nav_btn, airdrop_icon, airdrop_sub) =
-        create_cc_nav_tile("network-wireless-hotspot-symbolic", "AirDrop", "Todos (10 min)");
-    row2.append(&airdrop_tile);
-
-    // --- Tile 4: Modo Oscuro ---
-    let (dark_btn, dark_icon, dark_sub) =
-        create_cc_tile("weather-clear-night-symbolic", "Modo Oscuro", "Activado");
-    row2.append(&dark_btn);
-
-    grid_box.append(&row1);
-    grid_box.append(&row2);
-    main_box.append(&grid_box);
-
-    // 2. Tarjeta Deslizadora de Sonido (PipeWire / WirePlumber)
-    let sound_card = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .css_classes(["cc-slider-card"])
-        .spacing(6)
-        .build();
-
-    let sound_header = GtkBox::builder()
+    // --- Fila de botones circulares: Bluetooth y AirDrop ---
+    let bt_airdrop_row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(6)
+        .spacing(8)
+        .homogeneous(true)
         .build();
 
-    let mute_btn = Button::builder()
-        .css_classes(["cc-mute-btn"])
+    let (bt_circle_btn, _bt_circle_icon) = create_bt_tahoe_circle();
+    let (airdrop_circle_btn, _airdrop_circle_icon) = create_airdrop_tahoe_circle();
+    bt_airdrop_row.append(&bt_circle_btn);
+    bt_airdrop_row.append(&airdrop_circle_btn);
+    left_col.append(&bt_airdrop_row);
+
+    // --- Columna Derecha: Tarjeta Multimedia "En Reproducción" (Now Playing) ---
+    let (media_card, refresh_media) = create_mpris_media_card();
+
+    top_row.append(&left_col);
+    top_row.append(&media_card);
+    main_box.append(&top_row);
+
+    // 2. Módulo Focus (Concentración) + Stage Manager + Screen Mirroring
+    let focus_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .build();
+
+    let (focus_btn, focus_icon, _focus_lbl) = create_focus_tahoe_tile();
+
+    let stage_btn = Button::builder()
+        .css_classes(["cc-circle-btn-sm"])
         .has_frame(false)
-        .tooltip_text("Silenciar / Reactivar Audio")
+        .tooltip_text("Stage Manager / Espacios")
         .build();
-    let vol_icon = Image::from_icon_name("audio-volume-high-symbolic");
-    mute_btn.set_child(Some(&vol_icon));
+    let stage_icon = Image::from_icon_name("view-dual-symbolic");
+    stage_icon.set_pixel_size(20);
+    stage_btn.set_child(Some(&stage_icon));
 
-    let sound_title = Label::builder()
-        .label("Sonido")
-        .css_classes(["cc-tile-title"])
-        .hexpand(true)
-        .xalign(0.0)
+    let screen_mirror_btn = Button::builder()
+        .css_classes(["cc-circle-btn-sm"])
+        .has_frame(false)
+        .tooltip_text(if is_es { "Disposición y Escalas de Pantallas" } else { "Displays & Screen Mirroring" })
         .build();
+    let mirror_icon = Image::from_icon_name("video-display-symbolic");
+    mirror_icon.set_pixel_size(20);
+    screen_mirror_btn.set_child(Some(&mirror_icon));
 
-    let sound_pct = Label::builder()
-        .label("75%")
-        .css_classes(["cc-tile-subtitle"])
-        .build();
+    focus_row.append(&focus_btn);
+    focus_row.append(&stage_btn);
+    focus_row.append(&screen_mirror_btn);
+    main_box.append(&focus_row);
 
-    sound_header.append(&mute_btn);
-    sound_header.append(&sound_title);
-    sound_header.append(&sound_pct);
-
-    let volume_scale = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
-    volume_scale.set_value(75.0);
-    volume_scale.set_draw_value(false);
-
-    sound_card.append(&sound_header);
-    sound_card.append(&volume_scale);
-    main_box.append(&sound_card);
-
-    // 2.5. Tarjeta Deslizadora de Pantalla con Brillo, Escalado, Disposición y Enlace Físico 1:1 (TrueSize Link)
+    // 3. Tarjeta Deslizadora de Pantalla (Display) estilo macOS Tahoe
     let display_card = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .css_classes(["cc-slider-card"])
-        .spacing(8)
+        .css_classes(["cc-slider-card-tahoe"])
+        .spacing(6)
         .build();
 
     let display_header = GtkBox::builder()
@@ -155,16 +138,8 @@ pub fn create_control_center_widget() -> MenuButton {
         .spacing(6)
         .build();
 
-    let disp_icon_btn = Button::builder()
-        .css_classes(["cc-mute-btn"])
-        .has_frame(false)
-        .tooltip_text("Pantalla y Brillo")
-        .build();
-    let disp_icon = Image::from_icon_name("display-brightness-symbolic");
-    disp_icon_btn.set_child(Some(&disp_icon));
-
     let disp_title = Label::builder()
-        .label("Pantalla")
+        .label(if is_es { "Pantalla" } else { "Display" })
         .css_classes(["cc-tile-title"])
         .hexpand(true)
         .xalign(0.0)
@@ -176,219 +151,182 @@ pub fn create_control_center_widget() -> MenuButton {
         .css_classes(["cc-tile-subtitle"])
         .build();
 
-    let disp_arrange_nav_btn = Button::builder()
-        .css_classes(["cc-pill-btn", "cc-pill-btn-active"])
-        .has_frame(false)
-        .tooltip_text("Configurar disposición de pantallas, escalas individuales y enlace 1:1")
-        .build();
-    let disp_arrange_nav_lbl = Label::builder()
-        .label("📐 Disposición y Escalas ›")
-        .css_classes(["cc-tile-subtitle"])
-        .build();
-    disp_arrange_nav_btn.set_child(Some(&disp_arrange_nav_lbl));
-
-    display_header.append(&disp_icon_btn);
     display_header.append(&disp_title);
     display_header.append(&disp_pct);
-    display_header.append(&disp_arrange_nav_btn);
 
-    // Deslizador de Brillo de Pantalla
+    let disp_slider_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .build();
+
+    let disp_icon_low = Image::from_icon_name("display-brightness-low-symbolic");
+    disp_icon_low.set_pixel_size(16);
+
     let brightness_scale = Scale::with_range(Orientation::Horizontal, 5.0, 100.0, 1.0);
     brightness_scale.set_value(current_cfg.brightness.clamp(5.0, 100.0));
     brightness_scale.set_draw_value(false);
+    brightness_scale.set_hexpand(true);
 
-    // Deslizador rápido de Escala Maestro / Monitor Primario (100% a 250%)
-    let scale_row_header = GtkBox::builder()
+    let disp_icon = Image::from_icon_name("display-brightness-symbolic");
+    disp_icon.set_pixel_size(16);
+
+    disp_slider_row.append(&disp_icon_low);
+    disp_slider_row.append(&brightness_scale);
+    disp_slider_row.append(&disp_icon);
+
+    display_card.append(&display_header);
+    display_card.append(&disp_slider_row);
+    main_box.append(&display_card);
+
+    // 4. Tarjeta Deslizadora de Sonido (Sound) estilo macOS Tahoe
+    let sound_card = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .css_classes(["cc-slider-card-tahoe"])
+        .spacing(6)
+        .build();
+
+    let sound_header = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(6)
         .build();
-    let scale_row_lbl = Label::builder()
-        .label("Escala Global / Primaria")
-        .css_classes(["cc-tile-subtitle"])
+
+    let sound_title = Label::builder()
+        .label(if is_es { "Sonido" } else { "Sound" })
+        .css_classes(["cc-tile-title"])
         .hexpand(true)
         .xalign(0.0)
-        .margin_start(4)
         .build();
-    let scale_row_val = Label::builder()
-        .label(&format!("{:.1}%", current_cfg.master_scale * 100.0))
+
+    let sound_pct = Label::builder()
+        .label("75%")
         .css_classes(["cc-tile-subtitle"])
         .build();
-    scale_row_header.append(&scale_row_lbl);
-    scale_row_header.append(&scale_row_val);
 
-    let master_scale_slider = Scale::with_range(Orientation::Horizontal, 100.0, 250.0, 5.0);
-    master_scale_slider.set_value((current_cfg.master_scale * 100.0).clamp(100.0, 250.0));
-    master_scale_slider.set_draw_value(false);
+    sound_header.append(&sound_title);
+    sound_header.append(&sound_pct);
 
-    // Fila de Acciones Rápidas (Modo Noche + TrueSize 1:1)
-    let pills_box = GtkBox::builder()
+    let sound_slider_row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(6)
+        .spacing(8)
+        .build();
+
+    let vol_icon_low = Image::from_icon_name("audio-volume-low-symbolic");
+    vol_icon_low.set_pixel_size(16);
+
+    let volume_scale = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
+    volume_scale.set_value(75.0);
+    volume_scale.set_draw_value(false);
+    volume_scale.set_hexpand(true);
+
+    let vol_icon = Image::from_icon_name("audio-volume-high-symbolic");
+    vol_icon.set_pixel_size(16);
+
+    let sound_output_btn = Button::builder()
+        .css_classes(["cc-sound-output-btn"])
+        .has_frame(false)
+        .tooltip_text(if is_es { "Salidas de audio / Dispositivos" } else { "Sound Output Devices" })
+        .build();
+    let sound_output_icon = Image::from_icon_name("audio-card-symbolic");
+    sound_output_icon.set_pixel_size(16);
+    sound_output_btn.set_child(Some(&sound_output_icon));
+
+    sound_slider_row.append(&vol_icon_low);
+    sound_slider_row.append(&volume_scale);
+    sound_slider_row.append(&vol_icon);
+    sound_slider_row.append(&sound_output_btn);
+
+    sound_card.append(&sound_header);
+    sound_card.append(&sound_slider_row);
+    main_box.append(&sound_card);
+
+    // 5. Módulo de Accesos Rápidos Tahoe (Píldoras + 4 Botones Circulares + Editar Controles)
+    let pills_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
         .homogeneous(true)
         .build();
 
-    let night_shift_btn = Button::builder()
-        .css_classes(["cc-pill-btn"])
+    let (dark_btn, dark_icon, dark_sub) = create_dark_mode_tahoe_pill();
+    let (kb_btn, _kb_sub, refresh_keyboard_card) = create_keyboard_tahoe_pill();
+    pills_row.append(&dark_btn);
+    pills_row.append(&kb_btn);
+    main_box.append(&pills_row);
+
+    let circles_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .homogeneous(true)
+        .build();
+
+    let calc_btn = Button::builder()
+        .css_classes(["cc-circle-quick-btn"])
         .has_frame(false)
-        .tooltip_text("Alternar Modo Noche (temperatura de color cálida)")
+        .tooltip_text(if is_es { "Calculadora" } else { "Calculator" })
         .build();
-    let night_shift_lbl = Label::builder()
-        .label("🌙 Modo Noche")
-        .css_classes(["cc-tile-subtitle"])
-        .build();
-    night_shift_btn.set_child(Some(&night_shift_lbl));
+    let calc_icon = Image::from_icon_name("accessories-calculator-symbolic");
+    calc_icon.set_pixel_size(20);
+    calc_btn.set_child(Some(&calc_icon));
 
-    let link_btn = Button::builder()
-        .css_classes(["cc-pill-btn"])
+    let screenshot_btn = Button::builder()
+        .css_classes(["cc-circle-quick-btn"])
         .has_frame(false)
-        .tooltip_text("Enlazar resolución física 1:1 pixel a pixel entre ambas pantallas (163.2 PPI ↔ 183.6 PPI)")
+        .tooltip_text(if is_es { "Captura de Pantalla" } else { "Screenshot" })
         .build();
-    if current_cfg.linked_physical_1to1 {
-        link_btn.add_css_class("cc-pill-btn-active");
-    }
-    let link_icon_label = Label::builder()
-        .label(if current_cfg.linked_physical_1to1 { "🔗 TrueSize 1:1" } else { "🔓 Escala Libre" })
-        .css_classes(["cc-tile-subtitle"])
+    let sc_icon = Image::from_icon_name("camera-photo-symbolic");
+    sc_icon.set_pixel_size(20);
+    screenshot_btn.set_child(Some(&sc_icon));
+
+    let spotlight_quick = Button::builder()
+        .css_classes(["cc-circle-quick-btn"])
+        .has_frame(false)
+        .tooltip_text("Spotlight (Cmd + Espacio)")
         .build();
-    link_btn.set_child(Some(&link_icon_label));
+    let sp_icon = Image::from_icon_name("system-search-symbolic");
+    sp_icon.set_pixel_size(20);
+    spotlight_quick.set_child(Some(&sp_icon));
 
-    pills_box.append(&night_shift_btn);
-    pills_box.append(&link_btn);
+    let night_shift_quick_btn = Button::builder()
+        .css_classes(["cc-circle-quick-btn"])
+        .has_frame(false)
+        .tooltip_text(if is_es { "Modo Noche (Temperatura cálida)" } else { "Night Shift" })
+        .build();
+    let ns_icon = Image::from_icon_name("night-light-symbolic");
+    ns_icon.set_pixel_size(20);
+    night_shift_quick_btn.set_child(Some(&ns_icon));
 
-    // Subtítulo con escala física y resolución lógica de ambos monitores
+    circles_row.append(&calc_btn);
+    circles_row.append(&screenshot_btn);
+    circles_row.append(&spotlight_quick);
+    circles_row.append(&night_shift_quick_btn);
+    main_box.append(&circles_row);
+
+    let edit_controls_btn = Button::builder()
+        .css_classes(["cc-edit-controls-btn"])
+        .label(if is_es { "Editar Controles" } else { "Edit Controls" })
+        .halign(Align::Center)
+        .has_frame(false)
+        .build();
+    main_box.append(&edit_controls_btn);
+
+    // Controles auxiliares requeridos por la subvista de pantallas (Displays Subview)
     let monitors_info = Label::builder()
         .label(&format_monitors_summary(&current_cfg))
         .css_classes(["cc-tile-subtitle"])
-        .xalign(0.0)
-        .margin_start(4)
-        .wrap(true)
         .build();
-
+    let link_btn = Button::builder()
+        .css_classes(["cc-pill-btn"])
+        .has_frame(false)
+        .build();
+    let link_icon_label = Label::builder()
+        .label(if current_cfg.linked_physical_1to1 { "🔗 TrueSize 1:1" } else { "🔓 Escala Libre" })
+        .build();
+    link_btn.set_child(Some(&link_icon_label));
+    let master_scale_slider = Scale::with_range(Orientation::Horizontal, 100.0, 250.0, 5.0);
+    master_scale_slider.set_value((current_cfg.master_scale * 100.0).clamp(100.0, 250.0));
+    let scale_row_val = Label::builder()
+        .label(&format!("{:.1}%", current_cfg.master_scale * 100.0))
+        .build();
     let is_updating_master_scale = Rc::new(RefCell::new(false));
-
-    // Conectar el deslizador de escala rápida
-    let is_upd_ms_c = is_updating_master_scale.clone();
-    let scale_row_val_c = scale_row_val.clone();
-    let monitors_info_ms_c = monitors_info.clone();
-    master_scale_slider.connect_value_changed(move |slider| {
-        if *is_upd_ms_c.borrow() {
-            return;
-        }
-        let pct = (slider.value() / 5.0).round() * 5.0;
-        let new_scale = (pct / 100.0).clamp(0.5, 3.0);
-        let mut cfg = malus_de_common::config::DisplaysConfig::load();
-        let primary_idx = cfg.outputs.iter().position(|o| o.primary).unwrap_or(0);
-        cfg.set_output_scale(primary_idx, new_scale);
-        let _ = cfg.save();
-        let _ = malus_de_common::ipc::IpcClient::send_command(
-            malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig,
-        );
-        scale_row_val_c.set_label(&format!("{:.1}%", cfg.master_scale * 100.0));
-        monitors_info_ms_c.set_label(&format_monitors_summary(&cfg));
-    });
-
-    // Conectar el botón de enlace 1:1 (TrueSize Link)
-    let link_btn_clone = link_btn.clone();
-    let link_label_clone = link_icon_label.clone();
-    let monitors_info_clone = monitors_info.clone();
-    let scale_row_val_link = scale_row_val.clone();
-    let master_slider_link = master_scale_slider.clone();
-    let is_upd_ms_link = is_updating_master_scale.clone();
-    link_btn.connect_clicked(move |_| {
-        let mut cfg = malus_de_common::config::DisplaysConfig::load();
-        cfg.linked_physical_1to1 = !cfg.linked_physical_1to1;
-        if cfg.linked_physical_1to1 {
-            cfg.apply_1to1_link();
-            link_btn_clone.add_css_class("cc-pill-btn-active");
-            link_label_clone.set_label("🔗 TrueSize 1:1");
-        } else {
-            cfg.recalculate_layout();
-            link_btn_clone.remove_css_class("cc-pill-btn-active");
-            link_label_clone.set_label("🔓 Escala Libre");
-        }
-        let _ = cfg.save();
-        let _ = malus_de_common::ipc::IpcClient::send_command(
-            malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig,
-        );
-        *is_upd_ms_link.borrow_mut() = true;
-        master_slider_link.set_value((cfg.master_scale * 100.0).clamp(100.0, 250.0));
-        *is_upd_ms_link.borrow_mut() = false;
-        scale_row_val_link.set_label(&format!("{:.1}%", cfg.master_scale * 100.0));
-        monitors_info_clone.set_label(&format_monitors_summary(&cfg));
-    });
-
-    // Conectar el botón de Modo Noche (Night Shift)
-    let ns_btn_c = night_shift_btn.clone();
-    let ns_lbl_c = night_shift_lbl.clone();
-    night_shift_btn.connect_clicked(move |_| {
-        let btn = ns_btn_c.clone();
-        let lbl = ns_lbl_c.clone();
-        glib::MainContext::default().spawn_local(async move {
-            let current = BrightnessService::get_night_shift().await;
-            BrightnessService::set_night_shift(!current);
-            refresh_night_shift_ui_async(&btn, &lbl).await;
-        });
-    });
-
-    // Conectar el deslizador de brillo
-    let is_updating_brightness = Rc::new(RefCell::new(false));
-    let is_upd_b_clone = is_updating_brightness.clone();
-    let disp_pct_clone = disp_pct.clone();
-    let disp_icon_clone = disp_icon.clone();
-    brightness_scale.connect_value_changed(move |scale| {
-        if *is_upd_b_clone.borrow() {
-            return;
-        }
-        let val = scale.value();
-        disp_pct_clone.set_label(&format!("{}%", val.round() as i32));
-        if val < 35.0 {
-            disp_icon_clone.set_icon_name(Some("display-brightness-low-symbolic"));
-        } else if val < 70.0 {
-            disp_icon_clone.set_icon_name(Some("display-brightness-medium-symbolic"));
-        } else {
-            disp_icon_clone.set_icon_name(Some("display-brightness-symbolic"));
-        }
-        BrightnessService::set_brightness(val);
-    });
-
-    display_card.append(&display_header);
-    display_card.append(&brightness_scale);
-    display_card.append(&scale_row_header);
-    display_card.append(&master_scale_slider);
-    display_card.append(&pills_box);
-    display_card.append(&monitors_info);
-    main_box.append(&display_card);
-
-    // 2.6. Tarjeta de Distribución de Teclado (Soporte Español Latinoamericano 'latam' en vivo)
-    let (keyboard_card, refresh_keyboard_card) = create_keyboard_card();
-    main_box.append(&keyboard_card);
-
-    // 3. Tarjeta Multimedia "En Reproducción" (MPRIS D-Bus)
-    let (media_card, refresh_media) = create_mpris_media_card();
-    main_box.append(&media_card);
-
-    // 4. Fila de Accesos Rápidos Inferiores
-    let bottom_box = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(6)
-        .build();
-
-    let spotlight_quick = Button::builder()
-        .css_classes(["cc-quick-action-btn"])
-        .label("🔍 Spotlight (Cmd + Espacio)")
-        .hexpand(true)
-        .has_frame(false)
-        .build();
-
-    let settings_quick = Button::builder()
-        .css_classes(["cc-quick-action-btn"])
-        .label("⚙️ Ajustes")
-        .has_frame(false)
-        .build();
-
-    bottom_box.append(&spotlight_quick);
-    bottom_box.append(&settings_quick);
-    main_box.append(&bottom_box);
 
     stack.add_named(&main_box, Some("main"));
 
@@ -399,16 +337,22 @@ pub fn create_control_center_widget() -> MenuButton {
         create_wifi_subview(&stack, &popover, &wifi_power_btn, &wifi_icon, &wifi_sub);
     stack.add_named(&wifi_subview, Some("wifi"));
 
+    let bt_dummy_power = Button::new();
+    let bt_dummy_icon = Image::new();
+    let bt_dummy_sub = Label::new(None);
     let (bt_subview, refresh_bt) =
-        create_bt_subview(&stack, &popover, &bt_power_btn, &bt_icon, &bt_sub);
+        create_bt_subview(&stack, &popover, &bt_dummy_power, &bt_dummy_icon, &bt_dummy_sub);
     stack.add_named(&bt_subview, Some("bluetooth"));
 
+    let ad_dummy_power = Button::new();
+    let ad_dummy_icon = Image::new();
+    let ad_dummy_sub = Label::new(None);
     let (airdrop_subview, refresh_airdrop) = create_airdrop_subview(
         &stack,
         &popover,
-        &airdrop_power_btn,
-        &airdrop_icon,
-        &airdrop_sub,
+        &ad_dummy_power,
+        &ad_dummy_icon,
+        &ad_dummy_sub,
     );
     stack.add_named(&airdrop_subview, Some("airdrop"));
 
@@ -430,10 +374,10 @@ pub fn create_control_center_widget() -> MenuButton {
     // Conexiones de Navegación e Interactividad
     // ==========================================
 
-    // Navegación Disposición y Escalas de Pantallas
+    // Navegación Disposición y Escalas de Pantallas (Screen Mirroring)
     let stack_disp = stack.clone();
     let ref_disp = refresh_displays_subview.clone();
-    disp_arrange_nav_btn.connect_clicked(move |_| {
+    screen_mirror_btn.connect_clicked(move |_| {
         ref_disp();
         stack_disp.set_visible_child_name("displays");
     });
@@ -444,22 +388,6 @@ pub fn create_control_center_widget() -> MenuButton {
     wifi_nav_btn.connect_clicked(move |_| {
         stack_wifi.set_visible_child_name("wifi");
         ref_wifi();
-    });
-
-    // Navegación Bluetooth
-    let stack_bt = stack.clone();
-    let ref_bt = refresh_bt.clone();
-    bt_nav_btn.connect_clicked(move |_| {
-        stack_bt.set_visible_child_name("bluetooth");
-        ref_bt();
-    });
-
-    // Navegación AirDrop
-    let stack_ad = stack.clone();
-    let ref_ad = refresh_airdrop.clone();
-    airdrop_nav_btn.connect_clicked(move |_| {
-        stack_ad.set_visible_child_name("airdrop");
-        ref_ad();
     });
 
     // Wi-Fi Power Toggle directo (botón circular) con D-Bus
@@ -478,37 +406,51 @@ pub fn create_control_center_widget() -> MenuButton {
         });
     });
 
-    // Bluetooth Power Toggle directo (botón circular) con D-Bus
-    let bt_sub_c = bt_sub.clone();
-    let bt_icon_c = bt_icon.clone();
-    let bt_btn_c = bt_power_btn.clone();
-    bt_power_btn.connect_clicked(move |_| {
+    // Bluetooth Circle Button: Clic izquierdo conmuta encendido/apagado
+    let bt_btn_c = bt_circle_btn.clone();
+    bt_circle_btn.connect_clicked(move |_| {
         let btn = bt_btn_c.clone();
-        let ico = bt_icon_c.clone();
-        let sub = bt_sub_c.clone();
         glib::MainContext::default().spawn_local(async move {
             let current = BluetoothService::is_powered().await;
             info!("Cambiando estado de Bluetooth a: {}", !current);
             let _ = BluetoothService::set_powered(!current).await;
-            update_bluetooth_ui_async(&btn, &ico, &sub).await;
+            update_bluetooth_tahoe_ui(&btn).await;
         });
     });
 
-    // AirDrop Power Toggle directo (botón circular) con D-Bus
-    let ad_sub_c = airdrop_sub.clone();
-    let ad_ico_c = airdrop_icon.clone();
-    let ad_btn_c = airdrop_power_btn.clone();
-    airdrop_power_btn.connect_clicked(move |_| {
-        let is_active = ad_btn_c.has_css_class("cc-tile-active");
-        let new_mode = if is_active { "off" } else { "everyone" };
-        info!("Cambiando estado de AirDrop a: {}", new_mode);
-        let btn = ad_btn_c.clone();
-        let ico = ad_ico_c.clone();
-        let sub = ad_sub_c.clone();
-        glib::MainContext::default().spawn_local(async move {
-            set_airdrop_mode_dbus(new_mode).await;
-            update_airdrop_ui_mode(&btn, &ico, &sub, new_mode);
-        });
+    // Bluetooth Circle Button: Clic derecho (botón 3) abre la subvista de dispositivos
+    let gesture_bt = gtk4::GestureClick::new();
+    gesture_bt.set_button(3);
+    let stack_bt = stack.clone();
+    let ref_bt = refresh_bt.clone();
+    gesture_bt.connect_pressed(move |_, _, _, _| {
+        stack_bt.set_visible_child_name("bluetooth");
+        ref_bt();
+    });
+    bt_circle_btn.add_controller(gesture_bt);
+
+    // AirDrop Circle Button: Clic abre la subvista de opciones de AirDrop
+    let stack_ad = stack.clone();
+    let ref_ad = refresh_airdrop.clone();
+    airdrop_circle_btn.connect_clicked(move |_| {
+        stack_ad.set_visible_child_name("airdrop");
+        ref_ad();
+    });
+
+    // Focus Toggle (Concentración / No Molestar)
+    let f_btn_c = focus_btn.clone();
+    let f_ico_c = focus_icon.clone();
+    focus_btn.connect_clicked(move |_| {
+        let current = is_focus_active();
+        let target = !current;
+        set_focus_active(target);
+        update_focus_tahoe_ui(&f_btn_c, &f_ico_c);
+    });
+
+    // Botón de salida de audio (Sound Output)
+    sound_output_btn.connect_clicked(move |_| {
+        let mut cmd = Command::new("gnome-control-center");
+        let _ = cmd.arg("sound").spawn();
     });
 
     // Modo Oscuro Toggle
@@ -524,11 +466,47 @@ pub fn create_control_center_widget() -> MenuButton {
         update_dark_mode_ui_state(&dark_btn_c, &dark_icon_c, &dark_sub_c, Some(&popover_dark), target_dark);
     });
 
-    // Preferencias del Sistema (Ajustes nativos de Malus DE)
-    let popover_c = popover.clone();
-    settings_quick.connect_clicked(move |_| {
-        popover_c.popdown();
-        info!("Lanzando Ajustes del Sistema (malus-de-settings) desde Centro de Control...");
+    // Accesos Rápidos Inferiores
+    let pop_calc = popover.clone();
+    calc_btn.connect_clicked(move |_| {
+        pop_calc.popdown();
+        let _ = Command::new("gnome-calculator").spawn();
+    });
+
+    let pop_sc = popover.clone();
+    screenshot_btn.connect_clicked(move |_| {
+        pop_sc.popdown();
+        let _ = Command::new("gnome-screenshot").arg("-i").spawn();
+    });
+
+    let popover_c2 = popover.clone();
+    spotlight_quick.connect_clicked(move |_| {
+        popover_c2.popdown();
+        let wayland_display =
+            std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-1".to_string());
+        info!("Invocando Spotlight desde Centro de Control...");
+        let mut command = Command::new("malus-de-spotlight");
+        malus_de_common::config::set_cursor_environment(&mut command);
+        let _ = command
+            .env("WAYLAND_DISPLAY", wayland_display)
+            .env("GDK_BACKEND", "wayland")
+            .env("GSK_RENDERER", "cairo")
+            .spawn();
+    });
+
+    let ns_q_btn_c = night_shift_quick_btn.clone();
+    night_shift_quick_btn.connect_clicked(move |_| {
+        let btn = ns_q_btn_c.clone();
+        glib::MainContext::default().spawn_local(async move {
+            let current = BrightnessService::get_night_shift().await;
+            BrightnessService::set_night_shift(!current);
+            update_night_shift_quick_ui(&btn).await;
+        });
+    });
+
+    let pop_ec = popover.clone();
+    edit_controls_btn.connect_clicked(move |_| {
+        pop_ec.popdown();
         let wayland_display =
             std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-1".to_string());
         let exe = std::env::current_exe()
@@ -545,20 +523,25 @@ pub fn create_control_center_widget() -> MenuButton {
             .spawn();
     });
 
-    // Spotlight Quick Launch
-    let popover_c2 = popover.clone();
-    spotlight_quick.connect_clicked(move |_| {
-        popover_c2.popdown();
-        let wayland_display =
-            std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-1".to_string());
-        info!("Invocando Spotlight desde Centro de Control...");
-        let mut command = Command::new("malus-de-spotlight");
-        malus_de_common::config::set_cursor_environment(&mut command);
-        let _ = command
-            .env("WAYLAND_DISPLAY", wayland_display)
-            .env("GDK_BACKEND", "wayland")
-            .env("GSK_RENDERER", "cairo")
-            .spawn();
+    // Control de Brillo con debouncing
+    let is_updating_brightness = Rc::new(RefCell::new(false));
+    let is_upd_b_clone = is_updating_brightness.clone();
+    let disp_pct_clone = disp_pct.clone();
+    let disp_icon_clone = disp_icon.clone();
+    brightness_scale.connect_value_changed(move |scale| {
+        if *is_upd_b_clone.borrow() {
+            return;
+        }
+        let val = scale.value();
+        disp_pct_clone.set_label(&format!("{}%", val.round() as i32));
+        if val < 35.0 {
+            disp_icon_clone.set_icon_name(Some("display-brightness-low-symbolic"));
+        } else if val < 70.0 {
+            disp_icon_clone.set_icon_name(Some("display-brightness-medium-symbolic"));
+        } else {
+            disp_icon_clone.set_icon_name(Some("display-brightness-symbolic"));
+        }
+        BrightnessService::set_brightness(val);
     });
 
     // Control de Volumen con debouncing y AudioService
@@ -587,33 +570,15 @@ pub fn create_control_center_widget() -> MenuButton {
         AudioService::set_volume(val);
     });
 
-    // Botón Silenciar
-    let scale_c = volume_scale.clone();
-    let is_upd_mute = is_updating_volume.clone();
-    let pct_c = sound_pct.clone();
-    let icon_c = vol_icon.clone();
-    mute_btn.connect_clicked(move |_| {
-        AudioService::toggle_mute();
-        let scale = scale_c.clone();
-        let pct = pct_c.clone();
-        let icon = icon_c.clone();
-        let lock = is_upd_mute.clone();
-        glib::MainContext::default().spawn_local(async move {
-            refresh_volume_ui_async(&scale, &pct, &icon, &lock).await;
-        });
-    });
-
     // Actualización de estado al abrir el Popover (reseteando vista a "main")
     let stack_pop = stack.clone();
     let w_btn = wifi_power_btn.clone();
     let w_ico = wifi_icon.clone();
     let w_sub = wifi_sub.clone();
-    let b_btn = bt_power_btn.clone();
-    let b_ico = bt_icon.clone();
-    let b_sub = bt_sub.clone();
-    let a_btn = airdrop_power_btn.clone();
-    let a_ico = airdrop_icon.clone();
-    let a_sub = airdrop_sub.clone();
+    let b_btn = bt_circle_btn.clone();
+    let a_btn = airdrop_circle_btn.clone();
+    let f_btn = focus_btn.clone();
+    let f_ico = focus_icon.clone();
     let d_btn = dark_btn.clone();
     let d_ico = dark_icon.clone();
     let d_sub = dark_sub.clone();
@@ -629,12 +594,12 @@ pub fn create_control_center_widget() -> MenuButton {
     let br_pct = disp_pct.clone();
     let br_ico = disp_icon.clone();
     let br_lock = is_updating_brightness.clone();
-    let ns_btn = night_shift_btn.clone();
-    let ns_lbl = night_shift_lbl.clone();
+    let ns_btn = night_shift_quick_btn.clone();
 
     popover.connect_show(move |pop| {
         stack_pop.set_visible_child_name("main");
         update_dark_mode_ui(&d_btn, &d_ico, &d_sub, Some(pop));
+        update_focus_tahoe_ui(&f_btn, &f_ico);
         ref_media_c();
         ref_kb_c();
         ref_disp_c();
@@ -643,11 +608,7 @@ pub fn create_control_center_widget() -> MenuButton {
         let wi = w_ico.clone();
         let ws = w_sub.clone();
         let bb = b_btn.clone();
-        let bi = b_ico.clone();
-        let bs = b_sub.clone();
         let ab = a_btn.clone();
-        let ai = a_ico.clone();
-        let asub = a_sub.clone();
         let vs = v_scale.clone();
         let vp = v_pct.clone();
         let vi = v_ico.clone();
@@ -657,30 +618,26 @@ pub fn create_control_center_widget() -> MenuButton {
         let bri = br_ico.clone();
         let brl = br_lock.clone();
         let nsb = ns_btn.clone();
-        let nsl = ns_lbl.clone();
 
         glib::MainContext::default().spawn_local(async move {
             update_wifi_ui_async(&wb, &wi, &ws).await;
-            update_bluetooth_ui_async(&bb, &bi, &bs).await;
+            update_bluetooth_tahoe_ui(&bb).await;
             refresh_volume_ui_async(&vs, &vp, &vi, &vl).await;
             refresh_brightness_ui_async(&brs, &brp, &bri, &brl).await;
-            refresh_night_shift_ui_async(&nsb, &nsl).await;
+            update_night_shift_quick_ui(&nsb).await;
             let mode = get_airdrop_mode_dbus().await;
-            update_airdrop_ui_mode(&ab, &ai, &asub, &mode);
+            update_airdrop_tahoe_ui(&ab, &mode);
         });
     });
 
     // Inicializar estado una vez al crearse
     update_dark_mode_ui(&dark_btn, &dark_icon, &dark_sub, Some(&popover));
+    update_focus_tahoe_ui(&focus_btn, &focus_icon);
     let wb_init = wifi_power_btn.clone();
     let wi_init = wifi_icon.clone();
     let ws_init = wifi_sub.clone();
-    let bb_init = bt_power_btn.clone();
-    let bi_init = bt_icon.clone();
-    let bs_init = bt_sub.clone();
-    let ab_init = airdrop_power_btn.clone();
-    let ai_init = airdrop_icon.clone();
-    let as_init = airdrop_sub.clone();
+    let bb_init = bt_circle_btn.clone();
+    let ab_init = airdrop_circle_btn.clone();
     let vs_init = volume_scale.clone();
     let vp_init = sound_pct.clone();
     let vi_init = vol_icon.clone();
@@ -689,17 +646,16 @@ pub fn create_control_center_widget() -> MenuButton {
     let brp_init = disp_pct.clone();
     let bri_init = disp_icon.clone();
     let brl_init = is_updating_brightness.clone();
-    let nsb_init = night_shift_btn.clone();
-    let nsl_init = night_shift_lbl.clone();
+    let nsb_init = night_shift_quick_btn.clone();
 
     glib::MainContext::default().spawn_local(async move {
         update_wifi_ui_async(&wb_init, &wi_init, &ws_init).await;
-        update_bluetooth_ui_async(&bb_init, &bi_init, &bs_init).await;
+        update_bluetooth_tahoe_ui(&bb_init).await;
         refresh_volume_ui_async(&vs_init, &vp_init, &vi_init, &vl_init).await;
         refresh_brightness_ui_async(&brs_init, &brp_init, &bri_init, &brl_init).await;
-        refresh_night_shift_ui_async(&nsb_init, &nsl_init).await;
+        update_night_shift_quick_ui(&nsb_init).await;
         let mode = get_airdrop_mode_dbus().await;
-        update_airdrop_ui_mode(&ab_init, &ai_init, &as_init, &mode);
+        update_airdrop_tahoe_ui(&ab_init, &mode);
     });
 
     menu_btn
@@ -709,6 +665,343 @@ pub fn create_control_center_widget() -> MenuButton {
 // Constructores de Tarjetas y Subvistas
 // ==========================================
 
+fn is_focus_active() -> bool {
+    let output = Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.notifications", "show-banners"])
+        .output();
+    if let Ok(out) = output {
+        let text = String::from_utf8_lossy(&out.stdout).trim().to_lowercase();
+        text == "false"
+    } else {
+        false
+    }
+}
+
+fn set_focus_active(active: bool) {
+    let val = if active { "false" } else { "true" };
+    let _ = Command::new("gsettings")
+        .args(["set", "org.gnome.desktop.notifications", "show-banners", val])
+        .spawn();
+}
+
+fn create_wifi_tahoe_tile() -> (GtkBox, Button, Button, Image, Label) {
+    let tile_box = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .css_classes(["cc-tile-tahoe-wifi"])
+        .spacing(8)
+        .build();
+
+    let power_btn = Button::builder()
+        .css_classes(["cc-tile-power-btn", "cc-icon-circle"])
+        .has_frame(false)
+        .valign(Align::Center)
+        .halign(Align::Start)
+        .tooltip_text("Activar / Desactivar Wi-Fi")
+        .build();
+
+    let icon = Image::builder()
+        .icon_name("network-wireless-symbolic")
+        .pixel_size(18)
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .build();
+    power_btn.set_child(Some(&icon));
+
+    let nav_btn = Button::builder()
+        .css_classes(["cc-tile-nav-btn"])
+        .has_frame(false)
+        .hexpand(true)
+        .valign(Align::Fill)
+        .tooltip_text("Ver redes Wi-Fi")
+        .build();
+
+    let nav_content = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(4)
+        .hexpand(true)
+        .build();
+
+    let text_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .valign(Align::Center)
+        .hexpand(true)
+        .spacing(1)
+        .build();
+
+    let title_lbl = Label::builder()
+        .label("Wi-Fi")
+        .css_classes(["cc-tile-title"])
+        .xalign(0.0)
+        .build();
+
+    let sub_lbl = Label::builder()
+        .label(if malus_de_common::is_spanish_locale() { "Buscando..." } else { "Searching..." })
+        .css_classes(["cc-tile-subtitle"])
+        .xalign(0.0)
+        .ellipsize(gtk4::pango::EllipsizeMode::End)
+        .max_width_chars(11)
+        .build();
+
+    text_box.append(&title_lbl);
+    text_box.append(&sub_lbl);
+
+    let chevron = Image::builder()
+        .icon_name("go-next-symbolic")
+        .css_classes(["cc-chevron"])
+        .pixel_size(12)
+        .valign(Align::Center)
+        .halign(Align::End)
+        .build();
+
+    nav_content.append(&text_box);
+    nav_content.append(&chevron);
+    nav_btn.set_child(Some(&nav_content));
+
+    tile_box.append(&power_btn);
+    tile_box.append(&nav_btn);
+
+    (tile_box, power_btn, nav_btn, icon, sub_lbl)
+}
+
+fn create_bt_tahoe_circle() -> (Button, Image) {
+    let btn = Button::builder()
+        .css_classes(["cc-circle-btn"])
+        .has_frame(false)
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .tooltip_text(if malus_de_common::is_spanish_locale() {
+            "Bluetooth (Clic: Alternar, Clic secundario: Dispositivos)"
+        } else {
+            "Bluetooth (Click: Toggle, Right-click: Devices)"
+        })
+        .build();
+
+    let icon = Image::builder()
+        .icon_name("bluetooth-active-symbolic")
+        .pixel_size(22)
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .build();
+    btn.set_child(Some(&icon));
+    (btn, icon)
+}
+
+fn create_airdrop_tahoe_circle() -> (Button, Image) {
+    let btn = Button::builder()
+        .css_classes(["cc-circle-btn"])
+        .has_frame(false)
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .tooltip_text(if malus_de_common::is_spanish_locale() {
+            "AirDrop / Compartir"
+        } else {
+            "AirDrop / Share"
+        })
+        .build();
+
+    let icon = Image::builder()
+        .icon_name("network-wireless-hotspot-symbolic")
+        .pixel_size(22)
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .build();
+    btn.set_child(Some(&icon));
+    (btn, icon)
+}
+
+fn create_focus_tahoe_tile() -> (Button, Image, Label) {
+    let btn = Button::builder()
+        .css_classes(["cc-tile-tahoe-focus"])
+        .has_frame(false)
+        .hexpand(true)
+        .valign(Align::Center)
+        .tooltip_text(if malus_de_common::is_spanish_locale() {
+            "Modo Concentración / No Molestar"
+        } else {
+            "Focus Mode / Do Not Disturb"
+        })
+        .build();
+
+    let content = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(10)
+        .valign(Align::Center)
+        .build();
+
+    let icon_circle = GtkBox::builder()
+        .css_classes(["cc-icon-circle"])
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .build();
+
+    let icon = Image::builder()
+        .icon_name("weather-clear-night-symbolic")
+        .pixel_size(18)
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .build();
+    icon_circle.append(&icon);
+
+    let label = Label::builder()
+        .label(if malus_de_common::is_spanish_locale() { "Concentración" } else { "Focus" })
+        .css_classes(["cc-tile-title"])
+        .xalign(0.0)
+        .build();
+
+    content.append(&icon_circle);
+    content.append(&label);
+    btn.set_child(Some(&content));
+
+    (btn, icon, label)
+}
+
+fn create_dark_mode_tahoe_pill() -> (Button, Image, Label) {
+    let btn = Button::builder()
+        .css_classes(["cc-pill-btn-tahoe"])
+        .has_frame(false)
+        .hexpand(true)
+        .valign(Align::Center)
+        .tooltip_text("Alternar Modo Oscuro / Claro")
+        .build();
+
+    let content = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .valign(Align::Center)
+        .build();
+
+    let icon_circle = GtkBox::builder()
+        .css_classes(["cc-icon-circle"])
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .build();
+
+    let icon = Image::builder()
+        .icon_name("weather-clear-night-symbolic")
+        .pixel_size(18)
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .build();
+    icon_circle.append(&icon);
+
+    let text_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .valign(Align::Center)
+        .spacing(1)
+        .build();
+
+    let title_lbl = Label::builder()
+        .label(if malus_de_common::is_spanish_locale() { "Modo Oscuro" } else { "Dark Mode" })
+        .css_classes(["cc-tile-title"])
+        .xalign(0.0)
+        .build();
+
+    let sub_lbl = Label::builder()
+        .label(if malus_de_common::is_spanish_locale() { "Activado" } else { "On" })
+        .css_classes(["cc-tile-subtitle"])
+        .xalign(0.0)
+        .build();
+
+    text_box.append(&title_lbl);
+    text_box.append(&sub_lbl);
+
+    content.append(&icon_circle);
+    content.append(&text_box);
+    btn.set_child(Some(&content));
+
+    (btn, icon, sub_lbl)
+}
+
+fn create_keyboard_tahoe_pill() -> (Button, Label, Rc<dyn Fn()>) {
+    let btn = Button::builder()
+        .css_classes(["cc-pill-btn-tahoe"])
+        .has_frame(false)
+        .hexpand(true)
+        .valign(Align::Center)
+        .tooltip_text(if malus_de_common::is_spanish_locale() {
+            "Distribución de Teclado (Clic: Alternar)"
+        } else {
+            "Keyboard Layout (Click: Toggle)"
+        })
+        .build();
+
+    let content = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .valign(Align::Center)
+        .build();
+
+    let icon_circle = GtkBox::builder()
+        .css_classes(["cc-icon-circle"])
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .build();
+
+    let icon = Image::builder()
+        .icon_name("input-keyboard-symbolic")
+        .pixel_size(18)
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .build();
+    icon_circle.append(&icon);
+
+    let text_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .valign(Align::Center)
+        .spacing(1)
+        .build();
+
+    let title_lbl = Label::builder()
+        .label(if malus_de_common::is_spanish_locale() { "Teclado" } else { "Keyboard" })
+        .css_classes(["cc-tile-title"])
+        .xalign(0.0)
+        .build();
+
+    let input_cfg = malus_de_common::config::InputConfig::load();
+    let sub_lbl = Label::builder()
+        .label(input_cfg.layout_display_name())
+        .css_classes(["cc-tile-subtitle"])
+        .xalign(0.0)
+        .ellipsize(gtk4::pango::EllipsizeMode::End)
+        .max_width_chars(11)
+        .build();
+
+    text_box.append(&title_lbl);
+    text_box.append(&sub_lbl);
+
+    content.append(&icon_circle);
+    content.append(&text_box);
+    btn.set_child(Some(&content));
+
+    let sub_clone = sub_lbl.clone();
+    let refresh = Rc::new(move || {
+        let cfg = malus_de_common::config::InputConfig::load();
+        sub_clone.set_label(cfg.layout_display_name());
+    });
+
+    let ref_click = refresh.clone();
+    btn.connect_clicked(move |_| {
+        let mut cfg = malus_de_common::config::InputConfig::load();
+        let next_layout = match cfg.keyboard_layout.as_str() {
+            "latam" => "es",
+            "es" => "us",
+            _ => "latam",
+        };
+        cfg.keyboard_layout = next_layout.to_string();
+        let _ = cfg.save();
+        let _ = malus_de_common::ipc::IpcClient::send_command(
+            malus_de_common::ipc::IpcMessage::SetKeyboardLayout {
+                layout: next_layout.to_string(),
+                variant: String::new(),
+            },
+        );
+        ref_click();
+    });
+
+    (btn, sub_lbl, refresh)
+}
+
+#[allow(dead_code)]
 fn create_cc_tile(icon_name: &str, title: &str, subtitle: &str) -> (Button, Image, Label) {
     let btn = Button::builder()
         .css_classes(["cc-tile"])
@@ -764,6 +1057,7 @@ fn create_cc_tile(icon_name: &str, title: &str, subtitle: &str) -> (Button, Imag
     (btn, icon, sub_lbl)
 }
 
+#[allow(dead_code)]
 fn create_cc_nav_tile(
     icon_name: &str,
     title: &str,
@@ -848,19 +1142,24 @@ fn create_cc_nav_tile(
 }
 
 // ==========================================
-// Tarjeta Multimedia (MPRIS D-Bus)
+// Tarjeta Multimedia (MPRIS D-Bus) — Estilo macOS Tahoe
 // ==========================================
 
 fn create_mpris_media_card() -> (GtkBox, Rc<dyn Fn()>) {
     let card = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .css_classes(["cc-media-card-tahoe"])
+        .spacing(6)
+        .build();
+
+    let top_row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .css_classes(["cc-media-card"])
-        .spacing(10)
+        .spacing(8)
         .build();
 
     let art_box = GtkBox::builder()
         .css_classes(["cc-media-art"])
-        .halign(Align::Center)
+        .halign(Align::Start)
         .valign(Align::Center)
         .build();
     let art_icon = Image::builder()
@@ -868,6 +1167,7 @@ fn create_mpris_media_card() -> (GtkBox, Rc<dyn Fn()>) {
         .pixel_size(24)
         .build();
     art_box.append(&art_icon);
+    top_row.append(&art_box);
 
     let info_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
@@ -876,35 +1176,41 @@ fn create_mpris_media_card() -> (GtkBox, Rc<dyn Fn()>) {
         .spacing(2)
         .build();
 
+    let is_es = malus_de_common::is_spanish_locale();
     let title_lbl = Label::builder()
-        .label("Sin reproducción activa")
+        .label(if is_es { "Sin reproducción" } else { "Not Playing" })
         .css_classes(["cc-media-title"])
         .xalign(0.0)
         .ellipsize(gtk4::pango::EllipsizeMode::End)
-        .max_width_chars(18)
+        .max_width_chars(14)
         .build();
 
     let artist_lbl = Label::builder()
-        .label("Multimedia")
+        .label(if is_es { "Multimedia" } else { "Media" })
         .css_classes(["cc-media-subtitle"])
         .xalign(0.0)
         .ellipsize(gtk4::pango::EllipsizeMode::End)
-        .max_width_chars(18)
+        .max_width_chars(14)
         .build();
 
     info_box.append(&title_lbl);
     info_box.append(&artist_lbl);
+    top_row.append(&info_box);
+
+    card.append(&top_row);
 
     let controls_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .valign(Align::Center)
-        .spacing(4)
+        .halign(Align::Center)
+        .valign(Align::End)
+        .spacing(10)
+        .vexpand(true)
         .build();
 
     let prev_btn = Button::builder()
         .css_classes(["cc-media-btn"])
         .has_frame(false)
-        .tooltip_text("Pista anterior")
+        .tooltip_text(if is_es { "Pista anterior" } else { "Previous track" })
         .build();
     let prev_icon = Image::from_icon_name("media-skip-backward-symbolic");
     prev_btn.set_child(Some(&prev_icon));
@@ -912,7 +1218,7 @@ fn create_mpris_media_card() -> (GtkBox, Rc<dyn Fn()>) {
     let play_btn = Button::builder()
         .css_classes(["cc-media-btn", "cc-media-play-btn"])
         .has_frame(false)
-        .tooltip_text("Reproducir / Pausar")
+        .tooltip_text(if is_es { "Reproducir / Pausar" } else { "Play / Pause" })
         .build();
     let play_icon = Image::from_icon_name("media-playback-start-symbolic");
     play_btn.set_child(Some(&play_icon));
@@ -920,7 +1226,7 @@ fn create_mpris_media_card() -> (GtkBox, Rc<dyn Fn()>) {
     let next_btn = Button::builder()
         .css_classes(["cc-media-btn"])
         .has_frame(false)
-        .tooltip_text("Siguiente pista")
+        .tooltip_text(if is_es { "Siguiente pista" } else { "Next track" })
         .build();
     let next_icon = Image::from_icon_name("media-skip-forward-symbolic");
     next_btn.set_child(Some(&next_icon));
@@ -929,8 +1235,6 @@ fn create_mpris_media_card() -> (GtkBox, Rc<dyn Fn()>) {
     controls_box.append(&play_btn);
     controls_box.append(&next_btn);
 
-    card.append(&art_box);
-    card.append(&info_box);
     card.append(&controls_box);
 
     let current_bus = Rc::new(RefCell::new(String::new()));
@@ -2225,6 +2529,47 @@ async fn update_bluetooth_ui_async(btn: &Button, icon: &Image, sub: &Label) {
     }
 }
 
+async fn update_bluetooth_tahoe_ui(btn: &Button) {
+    let enabled = BluetoothService::is_powered().await;
+    if enabled {
+        btn.add_css_class("cc-circle-btn-active");
+    } else {
+        btn.remove_css_class("cc-circle-btn-active");
+    }
+}
+
+fn update_airdrop_tahoe_ui(btn: &Button, mode: &str) {
+    if mode != "off" {
+        btn.add_css_class("cc-circle-btn-active");
+    } else {
+        btn.remove_css_class("cc-circle-btn-active");
+    }
+}
+
+fn update_focus_tahoe_ui(btn: &Button, icon: &Image) {
+    let active = is_focus_active();
+    if active {
+        btn.add_css_class("cc-tile-active");
+        if let Some(parent) = icon.parent() {
+            parent.add_css_class("cc-icon-circle-active");
+        }
+    } else {
+        btn.remove_css_class("cc-tile-active");
+        if let Some(parent) = icon.parent() {
+            parent.remove_css_class("cc-icon-circle-active");
+        }
+    }
+}
+
+async fn update_night_shift_quick_ui(btn: &Button) {
+    let enabled = BrightnessService::get_night_shift().await;
+    if enabled {
+        btn.add_css_class("cc-circle-btn-active");
+    } else {
+        btn.remove_css_class("cc-circle-btn-active");
+    }
+}
+
 pub fn apply_system_appearance_mode(to_dark: bool) {
     let target = if to_dark { "prefer-dark" } else { "prefer-light" };
     info!("🎨 Aplicando modo de apariencia de Malus DE: {}", target);
@@ -2348,6 +2693,7 @@ async fn refresh_brightness_ui_async(
     }
 }
 
+#[allow(dead_code)]
 async fn refresh_night_shift_ui_async(btn: &Button, lbl: &Label) {
     let enabled = BrightnessService::get_night_shift().await;
     if enabled {
@@ -2394,6 +2740,7 @@ fn format_monitors_summary(cfg: &malus_de_common::config::DisplaysConfig) -> Str
 // Tarjeta de Teclado / Idioma (Español Latinoamericano 'latam')
 // ==========================================
 
+#[allow(dead_code)]
 fn create_keyboard_card() -> (GtkBox, Rc<dyn Fn()>) {
     let card = GtkBox::builder()
         .orientation(Orientation::Vertical)

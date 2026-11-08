@@ -367,6 +367,47 @@ popover.light-popover .cc-slider-card,
     border: 1px solid rgba(0, 0, 0, 0.06);
 }
 
+popover.light-popover .cc-tile-tahoe-wifi,
+.light-mode .cc-tile-tahoe-wifi,
+popover.light-popover .cc-circle-btn,
+.light-mode .cc-circle-btn,
+popover.light-popover .cc-circle-btn-sm,
+.light-mode .cc-circle-btn-sm,
+popover.light-popover .cc-tile-tahoe-focus,
+.light-mode .cc-tile-tahoe-focus,
+popover.light-popover .cc-media-card-tahoe,
+.light-mode .cc-media-card-tahoe,
+popover.light-popover .cc-slider-card-tahoe,
+.light-mode .cc-slider-card-tahoe,
+popover.light-popover .cc-pill-btn-tahoe,
+.light-mode .cc-pill-btn-tahoe,
+popover.light-popover .cc-circle-quick-btn,
+.light-mode .cc-circle-quick-btn {
+    background-color: rgba(0, 0, 0, 0.05);
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    color: #1d1d1f;
+}
+
+popover.light-popover .cc-circle-btn-active,
+.light-mode .cc-circle-btn-active {
+    background-color: #007aff;
+    border-color: #007aff;
+    color: #ffffff;
+}
+
+popover.light-popover .cc-edit-controls-btn,
+.light-mode .cc-edit-controls-btn {
+    background-color: rgba(0, 0, 0, 0.07);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    color: #1d1d1f;
+}
+
+popover.light-popover .cc-sound-output-btn,
+.light-mode .cc-sound-output-btn {
+    background-color: rgba(0, 0, 0, 0.07);
+    color: #1d1d1f;
+}
+
 popover.light-popover .cc-subview-title,
 .light-mode .cc-subview-title {
     color: #1d1d1f;
@@ -618,24 +659,194 @@ button.link:hover,
 }
 
 scale.horizontal trough {
-    min-height: 20px;
-    border-radius: 10px;
+    min-height: 24px;
+    border-radius: 12px;
     background-color: rgba(255, 255, 255, 0.16);
 }
 
 scale.horizontal highlight {
-    min-height: 20px;
-    border-radius: 10px;
+    min-height: 24px;
+    border-radius: 12px;
     background-color: #ffffff;
 }
 
 scale.horizontal slider {
-    min-width: 18px;
-    min-height: 18px;
-    border-radius: 9px;
+    min-width: 0;
+    min-height: 0;
+    opacity: 0;
+    margin: 0;
+}
+
+/* ======================================================== */
+/* macOS Tahoe Control Center Styles                        */
+/* ======================================================== */
+
+.cc-tile-tahoe-wifi {
+    background-color: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 20px;
+    padding: 6px 10px;
+    min-height: 52px;
+    transition: all 150ms ease;
+}
+
+.cc-tile-tahoe-wifi:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+.cc-circle-btn {
+    background-color: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 9999px;
+    min-width: 52px;
+    min-height: 52px;
+    padding: 0;
+    color: #f4f4f5;
+    transition: all 150ms ease, transform 100ms ease;
+}
+
+.cc-circle-btn:hover {
+    background-color: rgba(255, 255, 255, 0.14);
+    transform: scale(1.04);
+}
+
+.cc-circle-btn:active {
+    transform: scale(0.96);
+}
+
+.cc-circle-btn-active {
     background-color: #ffffff;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
-    margin: -1px;
+    border-color: rgba(255, 255, 255, 0.4);
+    color: #007aff;
+}
+
+.cc-circle-btn-active:hover {
+    background-color: #f0f0f5;
+    color: #0062cc;
+}
+
+.cc-circle-btn-sm {
+    background-color: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 9999px;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+    color: #f4f4f5;
+    transition: all 150ms ease, transform 100ms ease;
+}
+
+.cc-circle-btn-sm:hover {
+    background-color: rgba(255, 255, 255, 0.14);
+    transform: scale(1.05);
+}
+
+.cc-circle-btn-sm:active {
+    transform: scale(0.95);
+}
+
+.cc-tile-tahoe-focus {
+    background-color: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 22px;
+    padding: 6px 14px;
+    min-height: 44px;
+    color: #f4f4f5;
+    transition: all 150ms ease;
+}
+
+.cc-tile-tahoe-focus:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+.cc-media-card-tahoe {
+    background-color: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 22px;
+    padding: 10px 12px;
+    min-height: 112px;
+    transition: all 150ms ease;
+}
+
+.cc-media-card-tahoe:hover {
+    background-color: rgba(255, 255, 255, 0.11);
+}
+
+.cc-slider-card-tahoe {
+    background-color: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 20px;
+    padding: 8px 14px;
+    transition: all 150ms ease;
+}
+
+.cc-slider-card-tahoe:hover {
+    background-color: rgba(255, 255, 255, 0.10);
+}
+
+.cc-sound-output-btn {
+    background-color: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 9999px;
+    min-width: 30px;
+    min-height: 30px;
+    padding: 0;
+    color: #f4f4f5;
+    transition: all 120ms ease;
+}
+
+.cc-sound-output-btn:hover {
+    background-color: rgba(255, 255, 255, 0.22);
+    color: #ffffff;
+}
+
+.cc-pill-btn-tahoe {
+    background-color: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 18px;
+    padding: 6px 12px;
+    min-height: 42px;
+    transition: all 150ms ease;
+}
+
+.cc-pill-btn-tahoe:hover {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+.cc-circle-quick-btn {
+    background-color: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 9999px;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+    color: #f4f4f5;
+    transition: all 150ms ease, transform 100ms ease;
+}
+
+.cc-circle-quick-btn:hover {
+    background-color: rgba(255, 255, 255, 0.15);
+    transform: scale(1.06);
+}
+
+.cc-circle-quick-btn:active {
+    transform: scale(0.95);
+}
+
+.cc-edit-controls-btn {
+    background-color: rgba(255, 255, 255, 0.10);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 6px 20px;
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.85);
+    transition: all 120ms ease;
+}
+
+.cc-edit-controls-btn:hover {
+    background-color: rgba(255, 255, 255, 0.18);
+    color: #ffffff;
 }
 
 .cc-pill-btn {

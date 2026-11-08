@@ -4,9 +4,27 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
-## [2026-11-08] — Corrección de Regresiones de Rendimiento en Compositor, Rediseño de Branches (macOS Finder), Localización del Menú del Sistema y Pantalla Completa Multimonitor
+## [2026-11-08] — Rediseño del Centro de Control Estilo macOS Tahoe / iOS 18 Modular, Pantalla Completa Multimonitor y Corrección de Regresiones
 
 ### Hitos Implementados
+
+* **Rediseño Completo del Centro de Control Estilo macOS Tahoe (`crates/top-bar/src/ui/control_center.rs`):**
+  * **Estructura Modular Basada en Cápsulas e Islas Flotantes:** Adaptación fiel a las capturas de referencia ([`assets/screenshots/macOS-Tahoe-Control-Center-and-Menu-Bar.webp`](../assets/screenshots/macOS-Tahoe-Control-Center-and-Menu-Bar.webp) y [`assets/screenshots/control-center.jpg`](../assets/screenshots/control-center.jpg)).
+  * **Módulo Superior de 2 Columnas Homogéneas:**
+    * *Columna Izquierda:* Cápsula alargada de Wi-Fi con icono circular activo, nombre SSID dinámico y flecha de subvista, acompañada de dos botones circulares de 52px para **Bluetooth** (alternar encendido y clic derecho para subvista) y **AirDrop** (conmutar modo o abrir subvista).
+    * *Columna Derecha (Widget Multimedia Now Playing):* Tarjeta vertical de música con carátula cuadrada de esquinas redondeadas, información de la pista y artista mediante D-Bus MPRIS y fila de controles de reproducción centrados (`⏮`, `⏯`, `⏭`).
+  * **Fila de Focus (Concentración) y Modos:**
+    * Cápsula de **Concentración / Focus** integrada con DND de GNOME/FreeDesktop (`org.gnome.desktop.notifications show-banners`).
+    * Botón circular de **Stage Manager / Espacios**.
+    * Botón circular de **Screen Mirroring / Duplicar Pantalla**, que navega directamente a la subvista de Disposición y Escalas de Pantallas (`displays`).
+  * **Tarjetas Deslizadoras Continuas (Display y Sound):**
+    * Sliders de pantalla y volumen rediseñados como cápsulas continuas gruesas estilo macOS Tahoe con iconos vectoriales en ambos extremos (`display-brightness-low/high` y `audio-volume-low/high`).
+    * Botón circular de salida de audio (`sound_output_btn`) para gestionar dispositivos y fuentes de sonido.
+  * **Fila de Accesos Rápidos Inferiores:**
+    * Píldoras de **Modo Oscuro** y **Distribución de Teclado** (alternando en vivo entre `latam`, `es` y `us`).
+    * Cuarteto de botones circulares rápidos de 44px: **Calculadora** (`gnome-calculator`), **Captura de Pantalla** (`gnome-screenshot`), **Spotlight** (`malus-de-spotlight`) y **Modo Noche** (Night Shift con temperatura de color cálida).
+    * Botón translúcido centrado **"Editar Controles"** para abrir Ajustes del Sistema.
+  * **Estilos Visuales Glassmorphic:** Reglas CSS avanzadas en [`style.css`](../crates/top-bar/src/styles/style.css) con soporte dual para tema claro y tema oscuro, transparencias equilibradas y bordes sutiles.
 
 * **Respeto Estricto de la Pantalla de Origen en Pantalla Completa Multimonitor:**
   * Implementación de [`origin_output_for_window`](../crates/compositor/src/state.rs), calculando la intersección geométrica de mayor área física entre la geometría de la ventana y los monitores activos (con desempates por centroide, coordenadas de origen y puntero del ratón).
