@@ -4,6 +4,32 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-08] — Eliminación de Oscilación/Jitter y Arrastre Unificado de Iconos en Overlay
+
+### Diagnóstico de Causa Raíz
+* **Bucle de Retroalimentación de Coordenadas de Widgets Móviles en GTK4 (*Moving-Widget Feedback Loop*):**
+  * Al asociar un `GestureDrag` directamente a cada `item_box` individual dentro de `GtkFixed`, cada llamada a `fixed.move_(&item_box, new_x, new_y)` en el callback `connect_drag_update` alteraba de forma instantánea el origen de coordenadas locales del widget bajo el cursor.
+  * GTK4 calcula el delta de movimiento (`offset_x`, `offset_y`) restando la posición actual del puntero respecto a la posición inicial en las coordenadas del propio widget receptor. Al moverse el widget en dirección al cursor, el desplazamiento en el siguiente evento de movimiento se contraía o revertía artificialmente.
+  * Esto producía una violenta oscilación a 60/120 Hz donde el icono vibraba o temblaba entre dos posiciones antagónicas, desincronizándose del cursor y cayendo en una posición aleatoria al soltar el botón según la fase de la oscilación en ese fotograma.
+
+### Arquitectura de Solución Implementada (`crates/wallpaper/src/main.rs`)
+* **Controlador de Arrastre Centralizado en `GtkOverlay` (`desktop_drag`):**
+  * Se retiró completamente el `GestureDrag` de las cajas individuales de los iconos (`item_box`).
+  * Se unificó el arrastre del escritorio en un único `GestureDrag` sobre el contenedor raíz `GtkOverlay`, cuyas coordenadas están fijadas estáticamente a `(0, 0)` del monitor y nunca se desplazan ni se alteran.
+  * En `connect_drag_begin(start_x, start_y)`:
+    * Se utiliza `find_icon_at` recorriendo los hijos en orden inverso (z-order superior a inferior) con hit-testing exacto (108x112px mínimo) y validación de metadatos del archivo (`p.symlink_metadata().is_ok()`).
+    * Si el clic ocurre sobre un icono: se adopta `DesktopDragMode::Icon`, asegurando la selección del elemento y almacenando las posiciones de anclaje iniciales de todos los iconos seleccionados.
+    * Si el clic ocurre sobre espacio vacío: se adopta `DesktopDragMode::Rubberband` para selección elástica rectangular.
+  * En `connect_drag_update(offset_x, offset_y)`:
+    * Cuando el desplazamiento supera el umbral de movimiento inicial (> 2px), se reclama la secuencia (`gesture.set_state(Claimed)`) y se actualiza la posición de cada icono seleccionado:
+      $$\text{pos}_\text{nueva} = \text{clamp}(\text{pos}_\text{inicial} + \vec{\Delta}_\text{cursor}, (16, 56), (W - 108 - 16, H - 112 - 20))$$
+    * Al ser $\vec{\Delta}_\text{cursor}$ un vector estático y continuo emitido por el `overlay`, no existe bucle de retroalimentación: el arrastre es 100% fluido, con seguimiento 1:1 bloqueado con precisión de píxel bajo el cursor y cero temblores.
+  * En `connect_drag_end(offset_x, offset_y)`:
+    * Si hubo desplazamiento real (> 3px), se imantan las coordenadas finales a la cuadrícula (si `snap_to_grid` está activado) o se conservan las coordenadas libres arbitrarias y se guardan inmediatamente en `~/.config/malus-de/desktop-icons.json`.
+    * Si fue un clic simple sin arrastre sobre un elemento que formaba parte de una selección múltiple previa, se deseleccionan los otros elementos dejando seleccionado únicamente el icono pulsado (comportamiento estándar estilo macOS / Windows).
+
+---
+
 ## [2026-11-08] — Corrección del Menú Contextual (Clic Derecho), Posicionamiento Libre de Iconos y Despeje de la Top-Bar
 
 ### Hitos Implementados

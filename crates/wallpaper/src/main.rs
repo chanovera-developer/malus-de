@@ -226,6 +226,35 @@ fn save_icon_positions(positions: &HashMap<PathBuf, (f64, f64)>) {
     }
 }
 
+fn find_icon_at(
+    fixed: &Fixed,
+    x: f64,
+    y: f64,
+    rubberband: &impl IsA<gtk4::Widget>,
+) -> Option<(PathBuf, gtk4::Widget, (f64, f64))> {
+    let mut child = fixed.last_child();
+    let rb_widget = rubberband.as_ref();
+    while let Some(item) = child {
+        child = item.prev_sibling();
+        if item == *rb_widget {
+            continue;
+        }
+        let (ix, iy) = fixed.child_position(&item);
+        let iw = item.width().max(item.width_request()).max(64) as f64;
+        let ih = item.height().max(item.height_request()).max(64) as f64;
+        if x >= ix && x <= ix + iw && y >= iy && y <= iy + ih {
+            if let Some(path_str) = item.property::<Option<String>>("tooltip-text") {
+                let p = PathBuf::from(path_str);
+                if p.symlink_metadata().is_ok() {
+                    let pointer_offset = (x - ix, y - iy);
+                    return Some((p, item, pointer_offset));
+                }
+            }
+        }
+    }
+    None
+}
+
 fn is_point_over_icon(fixed: &Fixed, x: f64, y: f64, rubberband: &impl IsA<gtk4::Widget>) -> bool {
     let mut child = fixed.first_child();
     let rb_widget = rubberband.as_ref();
@@ -907,9 +936,6 @@ fn render_single_icon(
     }
     fixed.put(&item_box, x, y);
 
-    let pointer_offset = Rc::new(RefCell::new((0.0, 0.0)));
-    let drag_origin = Rc::new(RefCell::new((x, y)));
-
     // Clic con botón 1 (Selección simple / doble clic para abrir)
     let click = GestureClick::new();
     click.set_button(1);
@@ -1067,139 +1093,19 @@ fn render_single_icon(
         p_click.popup();
     });
     item_box.add_controller(context_click);
+}
 
-    // Arrastre interactivo de iconos con soporte de colocación libre y selección múltiple
-    let drag_gesture = GestureDrag::new();
-    drag_gesture.set_button(1);
-
-    let drag_start_positions: Rc<RefCell<HashMap<PathBuf, (f64, f64)>>> =
-        Rc::new(RefCell::new(HashMap::new()));
-    let start_pos_begin = drag_start_positions.clone();
-    let fixed_begin = fixed.clone();
-    let sel_begin = selected_paths.clone();
-    let origin_begin = drag_origin.clone();
-    let offset_begin = pointer_offset.clone();
-    let path_begin = path.clone();
-    let item_begin = item_box.clone();
-
-    drag_gesture.connect_drag_begin(move |gesture, start_x, start_y| {
-        *offset_begin.borrow_mut() = (start_x, start_y);
-        let orig = fixed_begin.child_position(&item_begin);
-        *origin_begin.borrow_mut() = orig;
-
-        // Asegurar que este icono esté seleccionado al arrastrarlo
-        let mut sel = sel_begin.borrow_mut();
-        if !sel.contains(&path_begin) {
-            let mut sibling = fixed_begin.first_child();
-            while let Some(child) = sibling {
-                sibling = child.next_sibling();
-                child.remove_css_class("selected");
-            }
-            sel.clear();
-            sel.insert(path_begin.clone());
-            item_begin.add_css_class("selected");
-        }
-
-        // Guardar las posiciones iniciales de todos los iconos seleccionados
-        let mut map = start_pos_begin.borrow_mut();
-        map.clear();
-        let mut child = fixed_begin.first_child();
-        while let Some(c) = child {
-            child = c.next_sibling();
-            if let Some(p_str) = c.property::<Option<String>>("tooltip-text") {
-                let p = PathBuf::from(p_str);
-                if sel.contains(&p) {
-                    map.insert(p, fixed_begin.child_position(&c));
-                }
-            }
-        }
-        gesture.set_state(gtk4::EventSequenceState::Claimed);
-    });
-
-    let start_pos_update = drag_start_positions.clone();
-    let fixed_update = fixed.clone();
-    let metrics_update = *metrics;
-    let path_update = path.clone();
-    let origin_update = drag_origin.clone();
-    let offset_update = pointer_offset.clone();
-
-    drag_gesture.connect_drag_update(move |_, offset_x, offset_y| {
-        let map = start_pos_update.borrow();
-        if map.len() > 1 {
-            // Mover todos los iconos seleccionados con el mismo delta
-            for (p, &(orig_x, orig_y)) in map.iter() {
-                let new_pos = clamp_icon_position(
-                    orig_x + offset_x,
-                    orig_y + offset_y,
-                    (0.0, 0.0),
-                    &metrics_update,
-                    desktop_size,
-                );
-                move_desktop_icon(&fixed_update, p, new_pos);
-            }
-        } else {
-            // Mover únicamente este icono de forma precisa
-            let position = dragged_icon_position(
-                *origin_update.borrow(),
-                *offset_update.borrow(),
-                (offset_x, offset_y),
-                &metrics_update,
-                desktop_size,
-            );
-            move_desktop_icon(&fixed_update, &path_update, position);
-        }
-    });
-
-    let start_pos_end = drag_start_positions.clone();
-    let fixed_end = fixed.clone();
-    let positions_end = icon_positions.clone();
-    let metrics_end = *metrics;
-    let path_end = path.clone();
-    let origin_end = drag_origin.clone();
-    let offset_end = pointer_offset.clone();
-    let snap_end = config.snap_to_grid;
-    let align_left_end = config.align_left;
-
-    drag_gesture.connect_drag_end(move |_, offset_x, offset_y| {
-        if offset_x.abs() > 3.0 || offset_y.abs() > 3.0 {
-            let map = start_pos_end.borrow();
-            let mut positions_map = positions_end.borrow_mut();
-
-            if map.len() > 1 {
-                for (p, &(orig_x, orig_y)) in map.iter() {
-                    let mut final_pos = clamp_icon_position(
-                        orig_x + offset_x,
-                        orig_y + offset_y,
-                        (0.0, 0.0),
-                        &metrics_end,
-                        desktop_size,
-                    );
-                    if snap_end {
-                        final_pos = snap_position_to_grid(final_pos, &metrics_end, align_left_end, desktop_size);
-                    }
-                    move_desktop_icon(&fixed_end, p, final_pos);
-                    positions_map.insert(p.clone(), final_pos);
-                }
-            } else {
-                let mut pos = dragged_icon_position(
-                    *origin_end.borrow(),
-                    *offset_end.borrow(),
-                    (offset_x, offset_y),
-                    &metrics_end,
-                    desktop_size,
-                );
-                if snap_end {
-                    pos = snap_position_to_grid(pos, &metrics_end, align_left_end, desktop_size);
-                }
-                move_desktop_icon(&fixed_end, &path_end, pos);
-                positions_map.insert(path_end.clone(), pos);
-            }
-
-            save_icon_positions(&positions_map);
-        }
-    });
-
-    item_box.add_controller(drag_gesture);
+#[derive(Clone, Debug)]
+enum DesktopDragMode {
+    None,
+    Rubberband {
+        start: (f64, f64),
+    },
+    Icon {
+        clicked_path: PathBuf,
+        start_positions: HashMap<PathBuf, (f64, f64)>,
+        had_multiple_selected: bool,
+    },
 }
 
 fn create_wallpaper_window(
@@ -1503,88 +1409,236 @@ fn create_wallpaper_window(
         });
         overlay.add_controller(bg_context);
 
-        let drag_marquee = GestureDrag::new();
-        drag_marquee.set_button(1);
-        let rb_widget = rubberband.clone();
-        let icons_marquee = icons.clone();
-        let sel_marquee = selected_paths.clone();
-        let start_coord = Rc::new(RefCell::new((0.0, 0.0)));
+        let drag_mode = Rc::new(RefCell::new(DesktopDragMode::None));
+        let desktop_drag = GestureDrag::new();
+        desktop_drag.set_button(1);
 
-        let start_begin = start_coord.clone();
-        let rb_begin = rb_widget.clone();
-        let sel_begin = sel_marquee.clone();
-        let icons_begin = icons_marquee.clone();
+        let drag_mode_begin = drag_mode.clone();
+        let icons_begin = icons.clone();
+        let rb_begin = rubberband.clone();
+        let sel_begin = selected_paths.clone();
+        let foc_begin = focused_path.clone();
 
-        drag_marquee.connect_drag_begin(move |gesture, x, y| {
-            if is_point_over_icon(&icons_begin, x, y, &rb_begin) {
-                gesture.set_state(gtk4::EventSequenceState::Denied);
-                return;
-            }
-            gesture.set_state(gtk4::EventSequenceState::Claimed);
-            *start_begin.borrow_mut() = (x, y);
-            rb_begin.set_size_request(1, 1);
-            icons_begin.move_(&rb_begin, x, y);
-            rb_begin.set_visible(true);
-
+        desktop_drag.connect_drag_begin(move |gesture, start_x, start_y| {
             let is_ctrl = gesture
                 .current_event_state()
                 .contains(gtk4::gdk::ModifierType::CONTROL_MASK);
-            if !is_ctrl {
-                let mut sibling = icons_begin.first_child();
-                while let Some(child) = sibling {
-                    sibling = child.next_sibling();
-                    child.remove_css_class("selected");
+
+            if let Some((clicked_path, item_box, _)) =
+                find_icon_at(&icons_begin, start_x, start_y, &rb_begin)
+            {
+                let mut sel = sel_begin.borrow_mut();
+                let had_multiple = sel.len() > 1;
+                if is_ctrl {
+                    if !sel.contains(&clicked_path) {
+                        sel.insert(clicked_path.clone());
+                        item_box.add_css_class("selected");
+                    }
+                } else if !sel.contains(&clicked_path) {
+                    let mut sibling = icons_begin.first_child();
+                    while let Some(child) = sibling {
+                        sibling = child.next_sibling();
+                        child.remove_css_class("selected");
+                    }
+                    sel.clear();
+                    sel.insert(clicked_path.clone());
+                    item_box.add_css_class("selected");
                 }
-                sel_begin.borrow_mut().clear();
-            }
-        });
+                *foc_begin.borrow_mut() = Some(clicked_path.clone());
 
-        let start_update = start_coord.clone();
-        let rb_update = rb_widget.clone();
-        let icons_update = icons_marquee.clone();
-        let sel_update = sel_marquee.clone();
-
-        drag_marquee.connect_drag_update(move |_, offset_x, offset_y| {
-            let (sx, sy) = *start_update.borrow();
-            let min_x = if offset_x >= 0.0 { sx } else { sx + offset_x };
-            let min_y = if offset_y >= 0.0 { sy } else { sy + offset_y };
-            let width = offset_x.abs().max(1.0) as i32;
-            let height = offset_y.abs().max(1.0) as i32;
-
-            icons_update.move_(&rb_update, min_x, min_y);
-            rb_update.set_size_request(width, height);
-
-            // Determinar qué iconos intersecan el rectángulo elástico
-            let mut sibling = icons_update.first_child();
-            let mut sel = sel_update.borrow_mut();
-            while let Some(child) = sibling {
-                sibling = child.next_sibling();
-                if child == rb_update {
-                    continue;
-                }
-                let (ix, iy) = icons_update.child_position(&child);
-                let iw = child.width() as f64;
-                let ih = child.height() as f64;
-
-                let intersects = min_x < ix + iw
-                    && min_x + (width as f64) > ix
-                    && min_y < iy + ih
-                    && min_y + (height as f64) > iy;
-
-                if intersects {
-                    child.add_css_class("selected");
-                    if let Some(path_str) = child.property::<Option<String>>("tooltip-text") {
-                        sel.insert(PathBuf::from(path_str));
+                let mut start_positions = HashMap::new();
+                let mut child = icons_begin.first_child();
+                while let Some(c) = child {
+                    child = c.next_sibling();
+                    if c == rb_begin {
+                        continue;
+                    }
+                    if let Some(p_str) = c.property::<Option<String>>("tooltip-text") {
+                        let p = PathBuf::from(p_str);
+                        if sel.contains(&p) {
+                            start_positions.insert(p, icons_begin.child_position(&c));
+                        }
                     }
                 }
+
+                *drag_mode_begin.borrow_mut() = DesktopDragMode::Icon {
+                    clicked_path,
+                    start_positions,
+                    had_multiple_selected: had_multiple,
+                };
+            } else {
+                if !is_ctrl {
+                    let mut sibling = icons_begin.first_child();
+                    while let Some(child) = sibling {
+                        sibling = child.next_sibling();
+                        child.remove_css_class("selected");
+                    }
+                    sel_begin.borrow_mut().clear();
+                    *foc_begin.borrow_mut() = None;
+                }
+
+                *drag_mode_begin.borrow_mut() = DesktopDragMode::Rubberband {
+                    start: (start_x, start_y),
+                };
             }
         });
 
-        let rb_end = rb_widget;
-        drag_marquee.connect_drag_end(move |_, _, _| {
-            rb_end.set_visible(false);
+        let drag_mode_update = drag_mode.clone();
+        let icons_update = icons.clone();
+        let rb_update = rubberband.clone();
+        let sel_update = selected_paths.clone();
+        let cfg_update = current_config.clone();
+
+        desktop_drag.connect_drag_update(move |gesture, offset_x, offset_y| {
+            let mode = drag_mode_update.borrow().clone();
+            match mode {
+                DesktopDragMode::Icon {
+                    ref start_positions,
+                    ..
+                } => {
+                    if offset_x.abs() > 2.0 || offset_y.abs() > 2.0 {
+                        gesture.set_state(gtk4::EventSequenceState::Claimed);
+                        let metrics = IconLayoutMetrics::from_config(&cfg_update.borrow());
+                        for (p, (orig_x, orig_y)) in start_positions.iter() {
+                            let new_pos = clamp_icon_position(
+                                orig_x + offset_x,
+                                orig_y + offset_y,
+                                (0.0, 0.0),
+                                &metrics,
+                                desktop_size,
+                            );
+                            move_desktop_icon(&icons_update, p, new_pos);
+                        }
+                    }
+                }
+                DesktopDragMode::Rubberband { start: (sx, sy) } => {
+                    if offset_x.abs() > 3.0 || offset_y.abs() > 3.0 {
+                        gesture.set_state(gtk4::EventSequenceState::Claimed);
+                        let min_x = if offset_x >= 0.0 { sx } else { sx + offset_x };
+                        let min_y = if offset_y >= 0.0 { sy } else { sy + offset_y };
+                        let width = offset_x.abs().max(1.0) as i32;
+                        let height = offset_y.abs().max(1.0) as i32;
+
+                        icons_update.move_(&rb_update, min_x, min_y);
+                        rb_update.set_size_request(width, height);
+                        if !rb_update.is_visible() {
+                            rb_update.set_visible(true);
+                        }
+
+                        let mut sibling = icons_update.first_child();
+                        let mut sel = sel_update.borrow_mut();
+                        while let Some(child) = sibling {
+                            sibling = child.next_sibling();
+                            if child == rb_update {
+                                continue;
+                            }
+                            let (ix, iy) = icons_update.child_position(&child);
+                            let iw = child.width().max(child.width_request()).max(64) as f64;
+                            let ih = child.height().max(child.height_request()).max(64) as f64;
+
+                            let intersects = min_x < ix + iw
+                                && min_x + (width as f64) > ix
+                                && min_y < iy + ih
+                                && min_y + (height as f64) > iy;
+
+                            if intersects {
+                                child.add_css_class("selected");
+                                if let Some(path_str) =
+                                    child.property::<Option<String>>("tooltip-text")
+                                {
+                                    sel.insert(PathBuf::from(path_str));
+                                }
+                            }
+                        }
+                    }
+                }
+                DesktopDragMode::None => {}
+            }
         });
-        overlay.add_controller(drag_marquee);
+
+        let drag_mode_end = drag_mode.clone();
+        let icons_end = icons.clone();
+        let rb_end = rubberband.clone();
+        let pos_end = icon_positions.clone();
+        let cfg_end = current_config.clone();
+        let sel_end = selected_paths.clone();
+
+        desktop_drag.connect_drag_end(move |gesture, offset_x, offset_y| {
+            let mode = drag_mode_end.borrow().clone();
+            match mode {
+                DesktopDragMode::Rubberband { .. } => {
+                    rb_end.set_visible(false);
+                }
+                DesktopDragMode::Icon {
+                    ref clicked_path,
+                    ref start_positions,
+                    had_multiple_selected,
+                } => {
+                    let is_drag = offset_x.abs() > 3.0 || offset_y.abs() > 3.0;
+                    if is_drag {
+                        let cfg = cfg_end.borrow();
+                        let metrics = IconLayoutMetrics::from_config(&cfg);
+                        let mut positions_map = pos_end.borrow_mut();
+
+                        for (p, (orig_x, orig_y)) in start_positions.iter() {
+                            let mut final_pos = clamp_icon_position(
+                                orig_x + offset_x,
+                                orig_y + offset_y,
+                                (0.0, 0.0),
+                                &metrics,
+                                desktop_size,
+                            );
+                            if cfg.snap_to_grid {
+                                final_pos = snap_position_to_grid(
+                                    final_pos,
+                                    &metrics,
+                                    cfg.align_left,
+                                    desktop_size,
+                                );
+                            }
+                            move_desktop_icon(&icons_end, p, final_pos);
+                            positions_map.insert(p.clone(), final_pos);
+                        }
+
+                        save_icon_positions(&positions_map);
+                    } else {
+                        for (p, (orig_x, orig_y)) in start_positions.iter() {
+                            move_desktop_icon(&icons_end, p, (*orig_x, *orig_y));
+                        }
+
+                        let is_ctrl = gesture
+                            .current_event_state()
+                            .contains(gtk4::gdk::ModifierType::CONTROL_MASK);
+
+                        if !is_ctrl && had_multiple_selected {
+                            let mut sibling = icons_end.first_child();
+                            while let Some(child) = sibling {
+                                sibling = child.next_sibling();
+                                if child == rb_end {
+                                    continue;
+                                }
+                                if let Some(p_str) =
+                                    child.property::<Option<String>>("tooltip-text")
+                                {
+                                    if p_str == clicked_path.to_string_lossy() {
+                                        child.add_css_class("selected");
+                                    } else {
+                                        child.remove_css_class("selected");
+                                    }
+                                }
+                            }
+                            let mut sel = sel_end.borrow_mut();
+                            sel.clear();
+                            sel.insert(clicked_path.clone());
+                        }
+                    }
+                }
+                DesktopDragMode::None => {}
+            }
+            *drag_mode_end.borrow_mut() = DesktopDragMode::None;
+        });
+
+        overlay.add_controller(desktop_drag);
 
         // Destino para soltar archivos arrastrados al escritorio (DropTarget)
         let drop_target = gtk4::DropTarget::new(
