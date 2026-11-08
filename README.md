@@ -49,6 +49,7 @@ El proyecto es un workspace de Rust. Sus componentes principales viven en `crate
 | Barra superior y centro de control | `malus-de-top-bar` |
 | Dock | `malus-de-dock` |
 | Lanzador Spotlight | `malus-de-spotlight` |
+| Explorador de archivos (Branches) | `malus-de-branches` |
 | Notificaciones | `malus-de-notifications` |
 | Fondo de pantalla | `malus-de-wallpaper` |
 | Ajustes | `malus-de-settings` |

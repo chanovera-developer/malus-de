@@ -4,6 +4,31 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-08] — Corrección de Regresiones de Rendimiento en Compositor, Rediseño de Branches (macOS Finder) y Localización del Menú del Sistema
+
+### Hitos Implementados
+
+* **Corrección de Regresiones de Rendimiento y Occlusion Culling en el Compositor (`crates/compositor`):**
+  * **Occlusion Culling en Ventanas Maximizadas Redondeadas:** Se implementó [`OpaqueOccluder::contains_rounded_rect`](../crates/compositor/src/backend/mod.rs) para solventar la regresión provocada por la curvatura squircle continua ($n = 4.2$) en ventanas maximizadas. Anteriormente, la deducción de bandas interiores provocaba que una ventana maximizada no pudiera ocluir a otra detrás, desencadenando ráfagas de 60 Hz (`wl_surface.frame`) y overdraw completo de todas las ventanas en segundo plano.
+  * **Optimización de Sombras Proyectadas SDF:** Se desactivó el renderizado innecesario de sombras en ventanas maximizadas (`is_maximized && !is_transitioning`) y se implementó [`clamp_rect_to_bounds`](../crates/compositor/src/backend/mod.rs) para recortar las sombras proyectadas al tamaño de la pantalla, evitando falsos negativos en `shadow_occluded` para ventanas en segundo plano.
+  * **Resolución de Falso Positivo en Desenfoque Dual Kawase:** Se corrigió [`is_translucent_window`](../crates/compositor/src/state.rs) (que evaluaba por subcadena `"branches"` en el título de la ventana) para prevenir que editores de código o terminales abiertas en carpetas de `Branches` ejecutaran 4 pasadas de desenfoque Gaussiano a pantalla completa cada frame.
+  * **Desenfoque Acotado en Branches:** Ahora solo se aplica desenfoque acrílico a la barra lateral izquierda (`212 px`), registrando el panel derecho de archivos como un `OpaqueOccluder` 100% opaco para acelerar el descarte de ventanas traseras.
+  * **Eliminación de Hit-Tests Duplicados por Movimiento de Puntero:** Se suprimió la llamada redundante a `update_ssd_hover` previa a `pointer.motion` en [`drm.rs`](../crates/compositor/src/backend/drm.rs) y [`winit.rs`](../crates/compositor/src/backend/winit.rs), agregando retorno anticipado cuando el estado SSD ya se encuentra inactivo.
+
+* **Rediseño Fiel de la Barra Superior de Branches (macOS Finder Sequoia/Sonoma):**
+  * Reestructuración visual de la cabecera en [`crates/branches/src/header.rs`](../crates/branches/src/header.rs): disposición unificada con botones de navegación compactos (`<`, `>`), segmented view switcher cuádruple (Iconos, Lista, Columnas Miller, Galería), botón de agrupación/orden y campo de búsqueda integrado.
+  * Sincronización e integración de capturas de pantalla de referencia en [`assets/screenshots/`](../assets/screenshots/).
+
+* **Navegación del Sidebar y Soporte de Rutas en Español (`crates/branches/src/sidebar.rs`):**
+  * Resolución robusta de nombres de directorios de usuario XDG (`XDG_DESKTOP_DIR`, `XDG_DOCUMENTS_DIR`, `XDG_DOWNLOAD_DIR`, `XDG_PICTURES_DIR`, `XDG_MUSIC_DIR`, `XDG_VIDEOS_DIR`) tanto en inglés como en español (`Escritorio`, `Documentos`, `Descargas`, etc.).
+  * Conexión funcional de los eventos de clic en la barra lateral para navegar a las carpetas correspondientes y filtrar archivos por etiquetas de color SQLite.
+  * Incorporación de [`is_spanish_locale`](../crates/common/src/lib.rs) para detección unificada de idioma en la sesión.
+
+* **Localización y Nomenclatura del Menú del Sistema (`crates/top-bar/src/menu.rs`):**
+  * Actualización de los elementos principales a sus homónimos en Linux: *"Acerca de este equipo"* / *"About This Computer"* y *"Software"* para la apertura de la tienda de aplicaciones con soporte multidioma.
+
+---
+
 ## [2026-11-07] — Eliminación de Doble Barra en Apps GNOME, Agente Polkit para GNOME Software y Monitoreo Reactivo de Spotlight
 
 ### Hitos Implementados
