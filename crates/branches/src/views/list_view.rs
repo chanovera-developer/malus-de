@@ -213,23 +213,8 @@ fn create_list_row(item: &FileItem, on_navigate: NavigateCallback) -> ListBoxRow
     });
 
     let row_drag_end = row.clone();
-    let path_drag_end = item.path.clone();
-    let on_nav_drag_end = on_navigate.clone();
-    drag_source.connect_drag_end(move |_, _, delete_data| {
+    drag_source.connect_drag_end(move |_, _, _| {
         row_drag_end.remove_css_class("branches-icon-dragging");
-        if delete_data {
-            let file = gio::File::for_path(&path_drag_end);
-            if file.trash(gio::Cancellable::NONE).is_err() {
-                if path_drag_end.is_dir() {
-                    let _ = std::fs::remove_dir_all(&path_drag_end);
-                } else {
-                    let _ = std::fs::remove_file(&path_drag_end);
-                }
-            }
-            if let Some(parent) = path_drag_end.parent() {
-                on_nav_drag_end(parent.to_path_buf());
-            }
-        }
     });
     row.add_controller(drag_source);
 

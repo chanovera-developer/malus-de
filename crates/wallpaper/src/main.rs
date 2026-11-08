@@ -1350,34 +1350,13 @@ fn render_single_icon(
 
     let fixed_drag_end = fixed.clone();
     let act_drag_end = active_icon_drag.clone();
-    let path_drag_end = path.clone();
-    let sel_drag_end = selected_paths.clone();
-    drag_source.connect_drag_end(move |_, _drag, delete_data| {
+    drag_source.connect_drag_end(move |_, _drag, _| {
         let mut sibling = fixed_drag_end.first_child();
         while let Some(child) = sibling {
             sibling = child.next_sibling();
             child.remove_css_class("desktop-icon-dragging");
         }
         *act_drag_end.borrow_mut() = None;
-
-        if delete_data {
-            let sel = sel_drag_end.borrow();
-            let paths_to_delete: Vec<PathBuf> = if sel.contains(&path_drag_end) && sel.len() > 1 {
-                sel.iter().cloned().collect()
-            } else {
-                vec![path_drag_end.clone()]
-            };
-            for p in paths_to_delete {
-                let file = gio::File::for_path(&p);
-                if file.trash(gio::Cancellable::NONE).is_err() {
-                    if p.is_dir() {
-                        let _ = std::fs::remove_dir_all(&p);
-                    } else {
-                        let _ = std::fs::remove_file(&p);
-                    }
-                }
-            }
-        }
     });
 
     item_box.add_controller(drag_source);

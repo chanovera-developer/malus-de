@@ -19,9 +19,11 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
   * Para mantener la aparición inmediata (0 latencia) y la desaparición total del icono de origen en el escritorio (`opacity: 0.0`) sin perder la marca de selección ni el nombre del archivo, se implementó una caja de previsualización dedicada (`drag_preview_box` en `wallpaper` y `drag_preview` en `branches`).
   * Esta caja se aloja fuera de la vista del usuario en el lienzo (`fixed.put(&drag_preview_box, -2000.0, -2000.0)`), permitiendo que esté realizada, mapeada y con su CSS completo (`desktop-icon selected`, icono en tamaño completo y etiqueta con el nombre del archivo).
   * Se conecta su `WidgetPaintable` a `drag_source.set_icon(...)` antes de iniciar la interacción. Al arrastrar, el cursor muestra el archivo completo con su placa de selección y título, mientras el elemento real en la cuadrícula desaparece de forma instantánea.
-* **Acción de Traslado Real (`DragAction::MOVE`) y Limpieza de Origen:**
-  * En `wallpaper`: se procesa `delete_data` en `drag_source.connect_drag_end`. Si `delete_data == true`, los archivos seleccionados se envían a la papelera (`gio::File::trash`), haciendo que desaparezcan automáticamente del escritorio tras completarse el traslado.
-  * En `branches`: se implementó `connect_enter` y `connect_motion` en `canvas_drop` devolviendo `gdk::DragAction::MOVE`, y se procesa `delete_data` en `icon_view` y `list_view`, utilizando `file.move_(&dest_file, ...)` para traslados nativos garantizados sin duplicaciones.
+* **Corrección Crítica: Eliminación de `delete_data` Destructivo en el Origen:**
+  * Al reordenar iconos dentro del mismo escritorio o lienzo de Branches, GTK notificaba `delete_data = true` al completarse el arrastre con acción `MOVE`. El borrado incondicional en `drag_source.connect_drag_end` interpretaba erróneamente cualquier reposicionamiento local como una solicitud de eliminación, enviando los archivos a la papelera o eliminándolos.
+  * Se retiró completamente el borrado en `connect_drag_end`. En el modelo de escritorio y gestor de archivos, la responsabilidad del traslado recae exclusivamente en el destino (`drop_target.connect_drop`), el cual ejecuta `file.move_(&dest_file, ...)` únicamente cuando el archivo proviene de una carpeta externa (`source != destination`). Si el arrastre es una reorganización en el mismo escritorio o lienzo, sólo se actualizan las coordenadas espaciales `(x, y)` sin alterar el archivo en disco.
+* **Traslado Nativo (`DragAction::MOVE`) sin Duplicación entre Ventanas:**
+  * En `branches`: se implementó `connect_enter` y `connect_motion` en `canvas_drop` devolviendo `gdk::DragAction::MOVE`. Al soltar archivos procedentes del escritorio, se utiliza `file.move_(&dest_file, ...)`, garantizando el traslado atómico directo en el sistema de archivos (moviéndolo efectivamente de `~/Escritorio` al directorio destino sin duplicados).
 
 ---
 

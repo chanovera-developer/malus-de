@@ -273,23 +273,8 @@ impl IconView {
         });
 
         let vbox_drag_end = vbox.clone();
-        let path_drag_end = item.path.clone();
-        let cur_folder_drag_end = self.current_folder.clone();
-        let on_nav_drag_end = self.on_navigate.clone();
-        drag_source.connect_drag_end(move |_, _drag, delete_data| {
+        drag_source.connect_drag_end(move |_, _drag, _| {
             vbox_drag_end.remove_css_class("branches-icon-dragging");
-            if delete_data {
-                let file = gio::File::for_path(&path_drag_end);
-                if file.trash(gio::Cancellable::NONE).is_err() {
-                    if path_drag_end.is_dir() {
-                        let _ = std::fs::remove_dir_all(&path_drag_end);
-                    } else {
-                        let _ = std::fs::remove_file(&path_drag_end);
-                    }
-                }
-                let cf = cur_folder_drag_end.borrow().clone();
-                on_nav_drag_end(cf);
-            }
         });
         vbox.add_controller(drag_source);
 
