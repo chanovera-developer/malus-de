@@ -1,6 +1,6 @@
 use gtk4::prelude::*;
-use gtk4::{Align, Box as GtkBox, Image, Label, ListBox, ListBoxRow, Orientation, PolicyType, ScrolledWindow};
-use std::path::PathBuf;
+use gtk4::{Align, Box as GtkBox, GestureClick, Image, Label, ListBox, ListBoxRow, Orientation, PolicyType, ScrolledWindow};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 pub struct Sidebar {
@@ -9,9 +9,41 @@ pub struct Sidebar {
 }
 
 struct SidebarEntry {
-    title: &'static str,
+    title: String,
     icon_name: &'static str,
     path: PathBuf,
+}
+
+fn resolve_user_dir(home: &Path, xdg_key: &str, spanish_name: &str, english_name: &str) -> PathBuf {
+    let config_file = home.join(".config/user-dirs.dirs");
+    if let Ok(content) = std::fs::read_to_string(&config_file) {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with(xdg_key) && trimmed.contains('=') {
+                if let Some((_, raw_val)) = trimmed.split_once('=') {
+                    let val = raw_val.trim().trim_matches('"');
+                    let expanded = val.replace("$HOME", &home.to_string_lossy());
+                    let p = PathBuf::from(expanded);
+                    return p;
+                }
+            }
+        }
+    }
+
+    let es_dir = home.join(spanish_name);
+    if es_dir.exists() {
+        return es_dir;
+    }
+    let en_dir = home.join(english_name);
+    if en_dir.exists() {
+        return en_dir;
+    }
+
+    if malus_de_common::is_spanish_locale() {
+        es_dir
+    } else {
+        en_dir
+    }
 }
 
 impl Sidebar {
@@ -24,79 +56,96 @@ impl Sidebar {
 
         let list_box = ListBox::builder()
             .selection_mode(gtk4::SelectionMode::Single)
+            .activate_on_single_click(true)
             .css_classes(["branches-sidebar"])
             .hexpand(true)
             .vexpand(true)
             .build();
 
+        let es = malus_de_common::is_spanish_locale();
+
         // 1. Sección Favoritos
-        add_section_title(&list_box, "Favoritos");
+        add_section_title(&list_box, if es { "Favoritos" } else { "Favorites" });
 
         let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/"));
+        let desktop_path = resolve_user_dir(&home, "XDG_DESKTOP_DIR", "Escritorio", "Desktop");
+        let docs_path = resolve_user_dir(&home, "XDG_DOCUMENTS_DIR", "Documentos", "Documents");
+        let downloads_path = resolve_user_dir(&home, "XDG_DOWNLOAD_DIR", "Descargas", "Downloads");
+        let pictures_path = resolve_user_dir(&home, "XDG_PICTURES_DIR", "Imágenes", "Pictures");
+        let music_path = resolve_user_dir(&home, "XDG_MUSIC_DIR", "Música", "Music");
+        let videos_path = resolve_user_dir(&home, "XDG_VIDEOS_DIR", "Vídeos", "Videos");
+        let projects_path = resolve_user_dir(&home, "XDG_PROJECTS_DIR", "Proyectos", "Projects");
+        let trash_path = home.join(".local/share/Trash/files");
+        let apps_path = PathBuf::from("/usr/share/applications");
+
         let favorites = [
             SidebarEntry {
-                title: "AirDrop",
-                icon_name: "network-wireless-symbolic",
-                path: home.clone(), // En fase posterior: malus-de-link
-            },
-            SidebarEntry {
-                title: "Recientes",
-                icon_name: "document-open-recent-symbolic",
-                path: home.clone(),
-            },
-            SidebarEntry {
-                title: "Aplicaciones",
+                title: if es { "Aplicaciones".to_string() } else { "Applications".to_string() },
                 icon_name: "system-software-install-symbolic",
-                path: PathBuf::from("/usr/share/applications"),
+                path: apps_path,
             },
             SidebarEntry {
-                title: "Inicio",
+                title: if es { "Inicio".to_string() } else { "Home".to_string() },
                 icon_name: "user-home-symbolic",
                 path: home.clone(),
             },
             SidebarEntry {
-                title: "Escritorio",
+                title: if es { "Escritorio".to_string() } else { "Desktop".to_string() },
                 icon_name: "user-desktop-symbolic",
-                path: home.join("Desktop"),
+                path: desktop_path,
             },
             SidebarEntry {
-                title: "Documentos",
+                title: if es { "Documentos".to_string() } else { "Documents".to_string() },
                 icon_name: "folder-documents-symbolic",
-                path: home.join("Documents"),
+                path: docs_path,
             },
             SidebarEntry {
-                title: "Descargas",
+                title: if es { "Descargas".to_string() } else { "Downloads".to_string() },
                 icon_name: "folder-download-symbolic",
-                path: home.join("Downloads"),
+                path: downloads_path,
             },
             SidebarEntry {
-                title: "Imágenes",
+                title: if es { "Imágenes".to_string() } else { "Pictures".to_string() },
                 icon_name: "folder-pictures-symbolic",
-                path: home.join("Pictures"),
+                path: pictures_path,
             },
             SidebarEntry {
-                title: "Música",
+                title: if es { "Música".to_string() } else { "Music".to_string() },
                 icon_name: "folder-music-symbolic",
-                path: home.join("Music"),
+                path: music_path,
             },
             SidebarEntry {
-                title: "Vídeos",
+                title: if es { "Vídeos".to_string() } else { "Videos".to_string() },
                 icon_name: "folder-videos-symbolic",
-                path: home.join("Videos"),
+                path: videos_path,
             },
             SidebarEntry {
-                title: "Papelera",
+                title: if es { "Proyectos".to_string() } else { "Projects".to_string() },
+                icon_name: "folder-projects-symbolic",
+                path: projects_path,
+            },
+            SidebarEntry {
+                title: if es { "Papelera".to_string() } else { "Trash".to_string() },
                 icon_name: "user-trash-symbolic",
-                path: home.join(".local/share/Trash/files"),
+                path: trash_path,
             },
         ];
 
         for entry in favorites {
-            let row = create_sidebar_row(entry.title, entry.icon_name, entry.path.clone());
+            let row = create_sidebar_row(&entry.title, entry.icon_name, entry.path.clone());
             let cb = on_navigate.clone();
             let p = entry.path;
-            
-            // Conectar activación de la fila
+
+            // Controlador de clic directo de ratón
+            let click = GestureClick::new();
+            let cb_c = cb.clone();
+            let p_c = p.clone();
+            click.connect_released(move |_, _, _, _| {
+                cb_c(p_c.clone());
+            });
+            row.add_controller(click);
+
+            // Controlador de teclado (Enter)
             row.connect_activate(move |_| {
                 cb(p.clone());
             });
@@ -105,24 +154,32 @@ impl Sidebar {
         }
 
         // 2. Sección Ubicaciones
-        add_section_title(&list_box, "Ubicaciones");
+        add_section_title(&list_box, if es { "Ubicaciones" } else { "Locations" });
         let locations = [
             SidebarEntry {
-                title: "Este Equipo",
+                title: if es { "Este Equipo".to_string() } else { "This Computer".to_string() },
                 icon_name: "drive-harddisk-symbolic",
                 path: PathBuf::from("/"),
             },
             SidebarEntry {
-                title: "Red",
+                title: if es { "Red".to_string() } else { "Network".to_string() },
                 icon_name: "network-workgroup-symbolic",
                 path: PathBuf::from("/mnt"),
             },
         ];
 
         for entry in locations {
-            let row = create_sidebar_row(entry.title, entry.icon_name, entry.path.clone());
+            let row = create_sidebar_row(&entry.title, entry.icon_name, entry.path.clone());
             let cb = on_navigate.clone();
             let p = entry.path;
+
+            let click = GestureClick::new();
+            let cb_c = cb.clone();
+            let p_c = p.clone();
+            click.connect_released(move |_, _, _, _| {
+                cb_c(p_c.clone());
+            });
+            row.add_controller(click);
 
             row.connect_activate(move |_| {
                 cb(p.clone());
@@ -132,26 +189,49 @@ impl Sidebar {
         }
 
         // 3. Sección Etiquetas (Tags)
-        add_section_title(&list_box, "Etiquetas");
+        add_section_title(&list_box, if es { "Etiquetas" } else { "Tags" });
         let tags = [
-            ("Rojo", "#ff3b30"),
-            ("Naranja", "#ff9500"),
-            ("Amarillo", "#ffcc00"),
-            ("Verde", "#34c759"),
-            ("Azul", "#007aff"),
-            ("Púrpura", "#af52de"),
-            ("Gris", "#8e8e93"),
+            (if es { "Rojo" } else { "Red" }, "#ff3b30"),
+            (if es { "Naranja" } else { "Orange" }, "#ff9500"),
+            (if es { "Amarillo" } else { "Yellow" }, "#ffcc00"),
+            (if es { "Verde" } else { "Green" }, "#34c759"),
+            (if es { "Azul" } else { "Blue" }, "#007aff"),
+            (if es { "Púrpura" } else { "Purple" }, "#af52de"),
+            (if es { "Gris" } else { "Gray" }, "#8e8e93"),
         ];
 
         for (name, color_hex) in tags {
             let row = create_tag_row(name, color_hex);
             let tag_cb = on_tag_selected.clone();
             let tag_name = name.to_string();
+
+            let click = GestureClick::new();
+            let cb_c = tag_cb.clone();
+            let t_c = tag_name.clone();
+            click.connect_released(move |_, _, _, _| {
+                cb_c(t_c.clone());
+            });
+            row.add_controller(click);
+
+            let t_a = tag_name.clone();
             row.connect_activate(move |_| {
-                tag_cb(tag_name.clone());
+                tag_cb(t_a.clone());
             });
             list_box.append(&row);
         }
+
+        // Manejador centralizado de activación de filas del ListBox
+        let nav_for_lb = on_navigate.clone();
+        let tag_for_lb = on_tag_selected.clone();
+        list_box.connect_row_activated(move |_lb, row| {
+            if let Some(path_obj) = unsafe { row.data::<PathBuf>("target_path") } {
+                let p = unsafe { path_obj.as_ref() }.clone();
+                nav_for_lb(p);
+            } else if let Some(tag_obj) = unsafe { row.data::<String>("target_tag") } {
+                let t = unsafe { tag_obj.as_ref() }.clone();
+                tag_for_lb(t);
+            }
+        });
 
         let container = ScrolledWindow::builder()
             .hscrollbar_policy(PolicyType::Never)
@@ -223,6 +303,8 @@ fn create_sidebar_row(title: &str, icon_name: &str, path: PathBuf) -> ListBoxRow
 
     let row = ListBoxRow::builder()
         .child(&hbox)
+        .activatable(true)
+        .selectable(true)
         .css_classes(["branches-sidebar-row"])
         .build();
 
@@ -260,8 +342,16 @@ fn create_tag_row(title: &str, color_hex: &str) -> ListBoxRow {
     hbox.append(&dot);
     hbox.append(&label);
 
-    ListBoxRow::builder()
+    let row = ListBoxRow::builder()
         .child(&hbox)
+        .activatable(true)
+        .selectable(true)
         .css_classes(["branches-sidebar-row"])
-        .build()
+        .build();
+
+    unsafe {
+        row.set_data("target_tag", title.to_string());
+    }
+
+    row
 }

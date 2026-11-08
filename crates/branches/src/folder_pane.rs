@@ -188,11 +188,17 @@ impl FolderPane {
     }
 
     pub fn navigate_to(&self, target: PathBuf) {
+        if !target.exists() {
+            let _ = std::fs::create_dir_all(&target);
+        }
         let changed = self.state.borrow_mut().navigate_to(target.clone());
         if changed {
             (self.on_activated)(self.id);
             self.reload();
             (self.on_path_changed)(self.id, target);
+        } else {
+            (self.on_activated)(self.id);
+            self.reload();
         }
     }
 
