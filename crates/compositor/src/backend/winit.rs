@@ -94,6 +94,34 @@ fn find_background_layer_under(
     ))
 }
 
+fn find_layer_popup_under(
+    state: &MalusState,
+    output: &smithay::output::Output,
+    point: Point<f64, Logical>,
+) -> Option<(
+    smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    Point<f64, Logical>,
+)> {
+    if state.active_popups.is_empty() {
+        return None;
+    }
+    let layer_map = smithay::desktop::layer_map_for_output(output);
+    for layer in layer_map.layers() {
+        if let Some(geo) = layer_map.layer_geometry(layer) {
+            let local_point = point - geo.loc.to_f64();
+            if let Some((surf, sub_loc)) =
+                layer.surface_under(local_point, smithay::desktop::WindowSurfaceType::POPUP)
+            {
+                return Some((
+                    surf,
+                    (geo.loc + sub_loc).to_f64(),
+                ));
+            }
+        }
+    }
+    None
+}
+
 pub fn run_winit() -> Result<()> {
     info!("Inicializando Display Wayland de Malus DE...");
     let mut display: Display<MalusState> =
@@ -562,7 +590,9 @@ pub fn run_winit() -> Result<()> {
                         })
                     };
 
-                    let under_target = if let Some((surf, focus_loc)) = layer_target {
+                    let under_target = if let Some((surf, focus_loc)) = find_layer_popup_under(&state, &output, point) {
+                        Some((surf, focus_loc))
+                    } else if let Some((surf, focus_loc)) = layer_target {
                         Some((surf, focus_loc))
                     } else if let Some((_, loc, surf, sub_loc)) = state.popup_under(point) {
                         Some((surf, (loc + sub_loc).to_f64()))
@@ -646,7 +676,9 @@ pub fn run_winit() -> Result<()> {
                         })
                     };
 
-                    let (under_target, layer_info, regular_win, is_popup) = if let Some((surf, focus_loc, ns, can_kb)) = layer_target {
+                    let (under_target, layer_info, regular_win, is_popup) = if let Some((surf, focus_loc)) = find_layer_popup_under(&state, &output, point) {
+                        (Some((surf, focus_loc)), None, None, true)
+                    } else if let Some((surf, focus_loc, ns, can_kb)) = layer_target {
                         (Some((surf.clone(), focus_loc)), Some((surf, ns, can_kb)), None, false)
                     } else if let Some((_window, loc, surf, sub_loc)) = state.popup_under(point) {
                         (
@@ -1262,7 +1294,7 @@ pub fn run_winit() -> Result<()> {
                                 .push((s_elems, geo.to_physical_precise_round(1.0)));
                         } else if matches!(surface.layer(), Layer::Background | Layer::Bottom) {
                             lower_elements.extend(s_elems);
-                            lower_elements.extend(p_elems);
+                            upper_elements.extend(p_elems);
                         } else if surface.layer() == Layer::Top {
                             // Por protocolo wlr-layer-shell, Layer::Top está por debajo de ventanas a pantalla completa.
                             // Solo se dibuja en capas superiores cuando NO hay una ventana a pantalla completa en este monitor.

@@ -615,6 +615,42 @@ fn find_layer_under(
     None
 }
 
+fn find_layer_popup_under(
+    state: &MalusState,
+    point: Point<f64, Logical>,
+) -> Option<(
+    smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    Point<f64, Logical>,
+)> {
+    if state.active_popups.is_empty() {
+        return None;
+    }
+    for output in state.space.outputs() {
+        let Some(output_geo) = state.space.output_geometry(output) else {
+            continue;
+        };
+        if !output_geo.to_f64().contains(point) {
+            continue;
+        }
+        let output_local_point = point - output_geo.loc.to_f64();
+        let layer_map = smithay::desktop::layer_map_for_output(output);
+        for layer in layer_map.layers() {
+            if let Some(geo) = layer_map.layer_geometry(layer) {
+                let local_point = output_local_point - geo.loc.to_f64();
+                if let Some((surf, sub_loc)) =
+                    layer.surface_under(local_point, smithay::desktop::WindowSurfaceType::POPUP)
+                {
+                    return Some((
+                        surf,
+                        (output_geo.loc + geo.loc + sub_loc).to_f64(),
+                    ));
+                }
+            }
+        }
+    }
+    None
+}
+
 fn clamp_pointer_location(
     state: &MalusState,
     mut point: Point<f64, Logical>,
@@ -706,6 +742,13 @@ fn resolve_target_under(
             Some((surf, ns, can_kb)),
             None,
             false,
+        )
+    } else if let Some((surf, focus_loc)) = find_layer_popup_under(state, point) {
+        (
+            Some((surf, focus_loc)),
+            None,
+            None,
+            true,
         )
     } else if let Some((_window, loc, surf, sub_loc)) = state.popup_under(point) {
         (
@@ -2593,7 +2636,7 @@ pub fn run_drm() -> Result<()> {
                                 .push((s_elems, geo.to_physical_precise_round(scale)));
                         } else if matches!(surface.layer(), Layer::Background | Layer::Bottom) {
                             lower_elements.extend(s_elems);
-                            lower_elements.extend(p_elems);
+                            upper_elements.extend(p_elems);
                         } else if surface.layer() == Layer::Top {
                             // Por protocolo wlr-layer-shell, Layer::Top está por debajo de ventanas a pantalla completa.
                             // Solo se dibuja en capas superiores cuando NO hay una ventana a pantalla completa en este monitor.

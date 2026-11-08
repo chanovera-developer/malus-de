@@ -1160,6 +1160,69 @@ impl Default for TopBarConfig {
     }
 }
 
+/// Configuración de la superficie de escritorio activa (archivos e iconos de `~/Escritorio`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DesktopIconsConfig {
+    /// Mostrar los archivos de la carpeta de escritorio sobre el fondo de pantalla
+    pub show_icons: bool,
+    /// Tamaño de los iconos en píxeles lógicos (32-96)
+    pub icon_size: u32,
+    /// Alinear la cuadrícula a la columna izquierda (por defecto derecha, estilo macOS)
+    pub align_left: bool,
+    /// Imantar los iconos a una rejilla invisible al soltarlos
+    pub snap_to_grid: bool,
+    /// Agrupar automáticamente los archivos en pilas por categoría (macOS Stacks)
+    pub use_stacks: bool,
+}
+
+impl Default for DesktopIconsConfig {
+    fn default() -> Self {
+        Self {
+            show_icons: true,
+            icon_size: 64,
+            align_left: false,
+            snap_to_grid: false,
+            use_stacks: false,
+        }
+    }
+}
+
+impl DesktopIconsConfig {
+    pub const MIN_ICON_SIZE: u32 = 32;
+    pub const MAX_ICON_SIZE: u32 = 96;
+
+    pub fn config_path() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/malus-de/desktop.toml")
+    }
+
+    /// Carga la configuración (o la predeterminada si no existe o es inválida)
+    pub fn load() -> Self {
+        std::fs::read_to_string(Self::config_path())
+            .ok()
+            .and_then(|content| toml::from_str::<DesktopIconsConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let toml_str = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let header = "# Superficie de Escritorio de Malus DE (archivos de ~/Escritorio)\n\n";
+        std::fs::write(path, format!("{}{}", header, toml_str))
+    }
+
+    /// Tamaño de icono acotado al rango soportado
+    pub fn clamped_icon_size(&self) -> i32 {
+        self.icon_size
+            .clamp(Self::MIN_ICON_SIZE, Self::MAX_ICON_SIZE) as i32
+    }
+}
+
 fn default_keyboard_layout() -> String {
     "latam".to_string()
 }

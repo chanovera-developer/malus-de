@@ -18,12 +18,19 @@ use gtk4::{Application, CssProvider};
 use malus_de_common::logging::init_logging;
 use std::path::PathBuf;
 
+use quick_look::QuickLook;
+use fs_backend::FileItem;
+
 const APP_ID: &str = "dev.malus.Branches";
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "malus-de-branches")]
 #[command(about = "Branches - Explorador de Archivos Nativo de Malus DE (inspirado fielmente en macOS Finder)")]
 struct Args {
+    /// Abrir previsualización Quick Look para un archivo específico
+    #[arg(short = 'q', long = "quick-look", value_name = "ARCHIVO")]
+    quick_look: Option<PathBuf>,
+
     /// Ruta del directorio inicial a abrir (por defecto: $HOME)
     #[arg(value_name = "RUTA")]
     path: Option<PathBuf>,
@@ -39,6 +46,26 @@ fn main() {
     }
 
     let args = Args::parse();
+
+    if let Some(ql_path) = args.quick_look {
+        let app = Application::builder()
+            .application_id("dev.malus.Branches.QuickLook")
+            .build();
+        app.connect_startup(|_| {
+            load_custom_css();
+        });
+        app.connect_activate(move |app| {
+            if let Some(item) = FileItem::from_path(&ql_path) {
+                let ql = QuickLook::new();
+                ql.show_standalone(app, &item);
+            } else {
+                tracing::warn!("No se pudo crear vista Quick Look para {:?}", ql_path);
+            }
+        });
+        app.run_with_args::<&str>(&[]);
+        return;
+    }
+
     let initial_path = args.path.unwrap_or_else(|| {
         std::env::var("HOME")
             .map(PathBuf::from)

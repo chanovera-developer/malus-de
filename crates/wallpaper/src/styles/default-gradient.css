@@ -15,21 +15,106 @@ window.malus-wallpaper-window picture {
 }
 
 .desktop-icon {
-    min-width: 88px;
-    min-height: 88px;
+    min-width: 80px;
+    min-height: 80px;
     padding: 6px;
     color: white;
     background: transparent;
-    border: none;
+    border: 1px solid transparent;
     box-shadow: none;
-    border-radius: 8px;
+    border-radius: 10px;
+    transition: background 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
 }
 
 .desktop-icon:hover {
-    background: alpha(white, 0.14);
+    background: rgba(255, 255, 255, 0.16);
+    border-radius: 10px;
+}
+
+.desktop-icon.selected,
+.desktop-icon:focus-visible {
+    background: rgba(0, 122, 255, 0.36);
+    border-color: rgba(255, 255, 255, 0.35);
+    box-shadow: 0 0 0 1px rgba(0, 122, 255, 0.4);
+    border-radius: 10px;
 }
 
 label.desktop-icon-label {
-    color: white;
-    text-shadow: 0 1px 4px black;
+    color: #ffffff;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 2px 4px;
+    border-radius: 4px;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95), 0 0 6px rgba(0, 0, 0, 0.85);
+}
+
+.desktop-icon.selected label.desktop-icon-label {
+    background: #007aff;
+    color: #ffffff;
+    text-shadow: none;
+    border-radius: 4px;
+}
+
+.desktop-stack-badge {
+    background: rgba(20, 24, 33, 0.88);
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: 12px;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 6px;
+}
+
+.desktop-rubberband {
+    background: rgba(0, 122, 255, 0.22);
+    border: 1px solid rgba(0, 122, 255, 0.75);
+    border-radius: 4px;
+}
+
+popover.desktop-popover-menu,
+popover.desktop-popover-menu.background,
+popover.desktop-popover-menu > contents,
+popover.desktop-popover-menu > contents.background,
+popover.desktop-popover-menu > arrow {
+    background: transparent;
+    padding: 0;
+    margin: 0;
+    border: none;
+    box-shadow: none;
+}
+
+.desktop-context-menu {
+    background: rgba(28, 30, 36, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 10px;
+    padding: 6px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+}
+
+.desktop-context-btn {
+    color: #f1f5f9;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 13px;
+    font-weight: 500;
+    text-shadow: none;
+}
+
+.desktop-context-btn:hover {
+    background: #007aff;
+    color: #ffffff;
+}
+
+.desktop-context-btn.destructive:hover {
+    background: #e11d48;
+    color: #ffffff;
+}
+
+.desktop-context-separator {
+    background: rgba(255, 255, 255, 0.12);
+    min-height: 1px;
+    margin: 4px 6px;
 }

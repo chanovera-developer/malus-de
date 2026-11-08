@@ -6,7 +6,7 @@ use gtk4::{
     GestureDrag, Grid, Label, Orientation, PackType, Picture, PolicyType, Scale, ScrolledWindow,
     SearchEntry, Stack, StackTransitionType, Switch, WindowControls, WindowHandle,
 };
-use malus_de_common::config::{DisplayModeConfig, DisplaysConfig, DockConfig, InputConfig};
+use malus_de_common::config::{DesktopIconsConfig, DisplayModeConfig, DisplaysConfig, DockConfig, InputConfig};
 use malus_de_common::ipc::{IpcClient, IpcMessage};
 use malus_de_common::logging::init_logging;
 use std::cell::RefCell;
@@ -2640,6 +2640,139 @@ fn create_appearance_pane(
     dock_card.append(&size_lbl);
     dock_card.append(&size_slider);
     pane.append(&dock_card);
+
+    // ------------------------------------------------------------------------
+    // SECCIÓN 4B: Superficie de Escritorio (Archivos e Iconos)
+    // ------------------------------------------------------------------------
+    let desktop_card = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .css_classes(["macos-group-card"])
+        .spacing(12)
+        .build();
+
+    let desktop_header_lbl = Label::builder()
+        .label("🖥️ Superficie de Escritorio (Archivos e Iconos)")
+        .css_classes(["card-section-title"])
+        .xalign(0.0)
+        .build();
+    desktop_card.append(&desktop_header_lbl);
+
+    let desk_cfg = DesktopIconsConfig::load();
+
+    // 1. Mostrar archivos en el escritorio
+    let show_row = GtkBox::new(Orientation::Horizontal, 10);
+    let show_lbl = Label::builder()
+        .label("Mostrar archivos en el escritorio")
+        .css_classes(["card-section-title"])
+        .hexpand(true)
+        .xalign(0.0)
+        .build();
+    let show_switch = Switch::builder()
+        .valign(Align::Center)
+        .active(desk_cfg.show_icons)
+        .build();
+    show_row.append(&show_lbl);
+    show_row.append(&show_switch);
+    desktop_card.append(&show_row);
+
+    show_switch.connect_state_set(|_, active| {
+        let mut cfg = DesktopIconsConfig::load();
+        cfg.show_icons = active;
+        let _ = cfg.save();
+        glib::Propagation::Proceed
+    });
+
+    // 2. Usar Pilas en el escritorio (macOS Stacks)
+    let stacks_row = GtkBox::new(Orientation::Horizontal, 10);
+    let stacks_lbl = Label::builder()
+        .label("Usar Pilas en el escritorio (macOS Stacks)")
+        .css_classes(["card-section-title"])
+        .hexpand(true)
+        .xalign(0.0)
+        .build();
+    let stacks_switch = Switch::builder()
+        .valign(Align::Center)
+        .active(desk_cfg.use_stacks)
+        .build();
+    stacks_row.append(&stacks_lbl);
+    stacks_row.append(&stacks_switch);
+    desktop_card.append(&stacks_row);
+
+    stacks_switch.connect_state_set(|_, active| {
+        let mut cfg = DesktopIconsConfig::load();
+        cfg.use_stacks = active;
+        let _ = cfg.save();
+        glib::Propagation::Proceed
+    });
+
+    // 3. Imantar a la cuadrícula (Snap to Grid)
+    let snap_row = GtkBox::new(Orientation::Horizontal, 10);
+    let snap_lbl = Label::builder()
+        .label("Imantar iconos a la cuadrícula (Snap to Grid)")
+        .css_classes(["card-section-title"])
+        .hexpand(true)
+        .xalign(0.0)
+        .build();
+    let snap_switch = Switch::builder()
+        .valign(Align::Center)
+        .active(desk_cfg.snap_to_grid)
+        .build();
+    snap_row.append(&snap_lbl);
+    snap_row.append(&snap_switch);
+    desktop_card.append(&snap_row);
+
+    snap_switch.connect_state_set(|_, active| {
+        let mut cfg = DesktopIconsConfig::load();
+        cfg.snap_to_grid = active;
+        let _ = cfg.save();
+        glib::Propagation::Proceed
+    });
+
+    // 4. Alineación de la cuadrícula
+    let align_row = GtkBox::new(Orientation::Horizontal, 10);
+    let align_lbl = Label::builder()
+        .label("Alineación de cuadrícula de iconos")
+        .css_classes(["card-section-title"])
+        .hexpand(true)
+        .xalign(0.0)
+        .build();
+    let align_dropdown = DropDown::from_strings(&[
+        "Columna Derecha (Estilo macOS)",
+        "Columna Izquierda",
+    ]);
+    align_dropdown.set_selected(if desk_cfg.align_left { 1 } else { 0 });
+    align_row.append(&align_lbl);
+    align_row.append(&align_dropdown);
+    desktop_card.append(&align_row);
+
+    align_dropdown.connect_selected_notify(|dd| {
+        let mut cfg = DesktopIconsConfig::load();
+        cfg.align_left = dd.selected() == 1;
+        let _ = cfg.save();
+    });
+
+    // 5. Tamaño de iconos del escritorio
+    let desk_size_lbl = Label::builder()
+        .label(&format!("Tamaño de iconos del escritorio: {} px", desk_cfg.clamped_icon_size()))
+        .css_classes(["card-section-sub"])
+        .xalign(0.0)
+        .build();
+    let desk_size_slider = Scale::with_range(Orientation::Horizontal, 32.0, 96.0, 4.0);
+    desk_size_slider.set_value(desk_cfg.clamped_icon_size() as f64);
+    desk_size_slider.set_draw_value(false);
+
+    let desk_size_lbl_c = desk_size_lbl.clone();
+    desk_size_slider.connect_value_changed(move |s| {
+        let val = s.value().round() as u32;
+        desk_size_lbl_c.set_label(&format!("Tamaño de iconos del escritorio: {} px", val));
+        let mut cfg = DesktopIconsConfig::load();
+        cfg.icon_size = val;
+        let _ = cfg.save();
+    });
+
+    desktop_card.append(&desk_size_lbl);
+    desktop_card.append(&desk_size_slider);
+    pane.append(&desktop_card);
 
     // ------------------------------------------------------------------------
     // SECCIÓN 5: Fondo de Pantalla (Enlace a la sección dedicada)

@@ -4,6 +4,62 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-08] — Corrección del Menú Contextual (Clic Derecho), Posicionamiento Libre de Iconos y Despeje de la Top-Bar
+
+### Hitos Implementados
+
+* **Corrección de Eventos y Menús Emergentes de Clic Derecho (`crates/wallpaper/src/main.rs`, `crates/wallpaper/src/styles/default-gradient.css`):**
+  * **Picking de Eventos en Lienzo de Fondo (`GtkOverlay` vs `GtkFixed`):** Se identificó que `GtkFixed` (donde residen los iconos) devuelve `NULL` en `gtk_widget_pick` sobre áreas vacías, impidiendo que controladores de eventos (`bg_context`, `bg_click`, `drag_marquee`, `drop_target`) recibieran clics o arrastres en el espacio libre. Se reubicaron dichos controladores en el widget contenedor raíz `GtkOverlay`, garantizando la captura fiable en cualquier coordenada del monitor.
+  * **Menú Popover de Fondo de Pantalla:** Clic derecho sobre espacio vacío despliega el menú contextual estilo macOS (`desktop-popover-menu`) con: *Nueva carpeta*, *Usar Pilas*, conmutador de *Alineación automática*, *Alinear a la cuadrícula* y acceso a *Fondo de pantalla y Estilo...*. Se añadió soporte completo en pantallas secundarias.
+  * **Menú Popover sobre Iconos Individuales:** Clic derecho sobre un archivo o pila activa el menú contextual vinculado a su `item_box` (*Abrir*, *Vista rápida*, *Mostrar en gestor de archivos*, *Renombrar...*, *Duplicar*, *Mover a la papelera*) con `gesture.set_state(Claimed)`, evitando colisiones con el menú de fondo.
+  * **Estilizado CSS:** Clases `.desktop-popover-menu` y `.desktop-popover-menu > contents` con fondos transparentes y sin bordes residuales para integración acrílica perfecta con esquinas redondeadas.
+
+* **Reordenamiento y Colocación Libre de Iconos (*Freeform Icon Dragging*):**
+  * **Comportamiento por Defecto:** `DesktopIconsConfig::default()` ahora establece `snap_to_grid: false` (fiel al Finder de macOS), permitiendo colocar los iconos en cualquier posición arbitraria del escritorio.
+  * **Persistencia Inmediata:** Integración de `drag_gesture.connect_drag_end` para guardar y persistir instantáneamente en `desktop-icons.json` cualquier desplazamiento manual superior a 4 píxeles.
+  * **Eliminación del Rebote Involuntario:** Al registrar `drop_target` en `overlay`, las operaciones de arrastre y soltado dentro del lienzo reconocen correctamente el destino local sin revertir el icono a su coordenada de origen.
+
+* **Separación de la Top-Bar en la Rejilla del Escritorio (`crates/wallpaper/src/main.rs`):**
+  * **Margen Superior Ajustado (`DESKTOP_TOP_MARGIN = 56.0`):** Se incrementó la cota mínima vertical de 20px a 56px, garantizando 20px libres de separación visual debajo de los 36px de la top-bar del compositor tanto en la cuadrícula inicial como en el arrastre y la imantación.
+  * **Ajuste y Clamping de Coordenadas Guardadas:** Al refrescar iconos o cargar posiciones existentes, cualquier icono con `y < 56.0` es reajustado automáticamente a la cota segura sin quedar oculto o pegado a la barra superior.
+
+* **Soporte de Popovers Layer-Shell en el Compositor (`crates/compositor/src/backend/drm.rs`, `crates/compositor/src/backend/winit.rs`):**
+  * **Pila de Renderizado (`upper_elements`):** Los popovers hijos de superficies `Layer::Background` y `Layer::Bottom` se promocionan a la capa de renderizado superior (`upper_elements`), asegurando que se dibujen por encima de ventanas activas, sombras y efectos de desenfoque.
+  * **Detección de Puntero (`find_layer_popup_under`):** Inspección prioritaria de popups pertenecientes a capas layer shell antes del árbol de ventanas toplevel, configurando `is_popup = true` para enrutamiento exacto del cursor y botones.
+
+---
+
+## [2026-11-08] — Superficie de Escritorio Activa con Pilas macOS (Stacks), Quick Look y Gestión Fluida de Iconos
+
+### Hitos Implementados
+
+* **Pilas en el Escritorio (*macOS Desktop Stacks*) y Categorización Automática (`crates/wallpaper/src/main.rs`):**
+  * **Categorización Reactiva (`StackCategory`):** Clasificación automática de los archivos de `~/Escritorio` en categorías semánticas: *Capturas de pantalla* (detección por prefijo y metadatos), *Imágenes*, *Documentos* (PDF, Office, Markdown, texto), *Vídeos*, *Música y Audio*, *Código y Scripts*, *Archivos Comprimidos*, *Carpetas* y *Otros*.
+  * **Despliegue Interactivo:** Cuando las Pilas están activas (`use_stacks: true`), los archivos dispersos se agrupan en un contenedor estilizado con insignia numérica (`.desktop-stack-badge`). Un clic expande los archivos sobre la cuadrícula del escritorio; un segundo clic contrae la pila.
+  * **Conmutador Rápido:** Opción *"Usar Pilas"* disponible tanto en el menú contextual del fondo del escritorio como en los Ajustes del Sistema.
+
+* **Integración Nativa de Quick Look (`Espacio`) y Teclas de Acceso Rápido:**
+  * **Soporte CLI en Branches (`crates/branches/src/main.rs`, `crates/branches/src/quick_look.rs`):** Nueva bandera `--quick-look <path>` (`-q`) para invocar la ventana modal de previsualización acrílica a gran escala directamente desde la línea de comandos o procesos externos, sin necesidad de abrir la ventana completa del gestor de archivos.
+  * **Atajo Universal de Espacio:** Al seleccionar cualquier archivo o icono en el escritorio y presionar la barra espaciadora (`Espacio`), se ejecuta instantáneamente la vista previa de Quick Look.
+  * **Atajos Adicionales:** `Return`/`Enter` para abrir el elemento con `xdg-open`, y `Delete`/`Backspace` para enviar a la papelera mediante la API de `gio::File::trash()`.
+
+* **Menús Contextuales Enriquecidos Estilo macOS Tahoe:**
+  * **Menú sobre Elementos/Iconos:** Opciones de *Abrir*, *Vista rápida (Espacio)*, *Mostrar en el gestor de archivos*, *Renombrar...* (diálogo integrado), *Duplicar* y *Mover a la papelera*.
+  * **Menú sobre Fondo de Pantalla Vacío:** Opciones de *Nueva carpeta* (diálogo modal emergente), *Usar Pilas* (con indicador de estado activo `✓`), *Alinear a la cuadrícula* y acceso directo a *Fondo de pantalla y Estilo...*.
+
+* **Imantación Inteligente (*Snap-to-Grid*) y Selección Elástica (*Rubberband*):**
+  * **Cuadrícula Magnética (`snap_position_to_grid`):** Redondeo analítico y fluido a múltiplos de celda manteniendo la alineación predeterminada a la derecha estilo macOS (o configurable a la izquierda).
+  * **Selección Elástica:** Arrastre rectangular sobre el lienzo con contorno acrílico translúcido (`.desktop-rubberband`), seleccionando interactivamente todos los iconos intersectados y permitiendo selección múltiple con `Ctrl`.
+  * **Resaltado Visual:** Estilo `.desktop-icon.selected` con fondo azul acrílico translúcido y píldora de etiqueta contrastada fiel a macOS Finder.
+
+* **Configuración Unificada y Monitorización Reactiva (`crates/common/src/config.rs`, `crates/settings/src/main.rs`):**
+  * **Estructura `DesktopIconsConfig`:** Configuración persistente en `~/.config/malus-de/desktop.toml` con interruptor maestro `show_icons`, tamaño de icono `icon_size` (32px a 96px), alineación `align_left`, `snap_to_grid` y `use_stacks`.
+  * **Panel en Ajustes del Sistema:** Nueva tarjeta interactiva en la sección *"Escritorio y Dock"* de `malus-de-settings` con conmutadores, selector de alineación y deslizador de tamaño de iconos con actualización en vivo.
+  * **Monitoreo Cero CPU:** El demonio de fondo de pantalla vigila en tiempo real tanto `~/Escritorio` como `desktop.toml` mediante `gio::FileMonitor`.
+
+* **Pruebas Unitarias Automatizadas:**
+  * Tests en `crates/wallpaper` verificando resolución de directorios XDG, sujeción de coordenadas (*clamping*), imantación a cuadrícula macOS/izquierda, ordenación de columnas y clasificación exhaustiva de Pilas.
+
 ## [2026-11-08] — Exclusión Estricta de la Top-Bar: Prevención de Solapamiento en Redimensionado, Arrastre y Mapeo de Ventanas
 
 ### Hitos Implementados

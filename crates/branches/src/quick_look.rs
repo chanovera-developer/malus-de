@@ -4,7 +4,7 @@ use gtk4::gdk::{Key, Texture};
 use gtk4::pango;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, ApplicationWindow, Box as GtkBox, Button, EventControllerKey, Grid, Image, Label,
+    Align, Application, ApplicationWindow, Box as GtkBox, Button, EventControllerKey, Grid, Image, Label,
     Orientation, PolicyType, ScrolledWindow, Separator, TextView, Window,
 };
 use std::cell::RefCell;
@@ -66,6 +66,17 @@ impl QuickLook {
         }
     }
 
+    pub fn show_standalone(self: &Rc<Self>, app: &Application, item: &FileItem) {
+        let win = Window::builder()
+            .application(app)
+            .title(&item.name)
+            .default_width(740)
+            .default_height(520)
+            .css_classes(["branches-quicklook-window"])
+            .build();
+        self.setup_window(&win, item);
+    }
+
     fn show(self: &Rc<Self>, parent: &ApplicationWindow, item: &FileItem) {
         let win = Window::builder()
             .transient_for(parent)
@@ -75,7 +86,10 @@ impl QuickLook {
             .default_height(520)
             .css_classes(["branches-quicklook-window"])
             .build();
+        self.setup_window(&win, item);
+    }
 
+    fn setup_window(self: &Rc<Self>, win: &Window, item: &FileItem) {
         let root_box = GtkBox::new(Orientation::Vertical, 0);
         root_box.add_css_class("branches-quicklook-container");
 
