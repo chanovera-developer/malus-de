@@ -15,9 +15,11 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
   * **Estilizado CSS:** Clases `.desktop-popover-menu` y `.desktop-popover-menu > contents` con fondos transparentes y sin bordes residuales para integración acrílica perfecta con esquinas redondeadas.
 
 * **Reordenamiento y Colocación Libre de Iconos (*Freeform Icon Dragging*):**
-  * **Comportamiento por Defecto:** `DesktopIconsConfig::default()` ahora establece `snap_to_grid: false` (fiel al Finder de macOS), permitiendo colocar los iconos en cualquier posición arbitraria del escritorio.
-  * **Persistencia Inmediata:** Integración de `drag_gesture.connect_drag_end` para guardar y persistir instantáneamente en `desktop-icons.json` cualquier desplazamiento manual superior a 4 píxeles.
-  * **Eliminación del Rebote Involuntario:** Al registrar `drop_target` en `overlay`, las operaciones de arrastre y soltado dentro del lienzo reconocen correctamente el destino local sin revertir el icono a su coordenada de origen.
+  * **Causa Raíz:** Se detectó que el controlador `GestureClick` en cada icono ejecutaba `gesture.set_state(Claimed)` de forma indiscriminada en la pulsación inicial (`pressed`). En GTK4, reclamar una secuencia en la pulsación inicial cancela inmediatamente cualquier otro controlador de arrastre (`GestureDrag`), imposibilitando mover los iconos. Asimismo, la presencia de `GtkDragSource` entraba en conflicto con los eventos locales al intentar iniciar un arrastre Wayland interproceso.
+  * **Controlador `GestureDrag` Puro y Fluido:** Se desacopló `GestureClick` (reservando `Claimed` exclusivamente para el doble clic de apertura) y se confió el movimiento de iconos a un controlador `GestureDrag` dedicado y robusto en cada icono.
+  * **Arrastre Multiselección:** Al iniciar el arrastre, se guardan las posiciones relativas de todos los iconos seleccionados, permitiendo mover un grupo completo de archivos juntos de manera reactiva e intuitiva.
+  * **Persistencia Inmediata y Modo Libre:** Al soltar (`connect_drag_end`), si el desplazamiento supera 3px, se calcula la posición final (manteniendo coordenadas libres si `snap_to_grid: false` o imantando si está activado) y se persiste en `~/.config/malus-de/desktop-icons.json`.
+  * **Picking Confiable:** En `is_point_over_icon` se incluyó `width_request` y `height_request` del widget para asegurar que la caja de 108x112px sea respetada por completo antes y después de los pases de diseño.
 
 * **Separación de la Top-Bar en la Rejilla del Escritorio (`crates/wallpaper/src/main.rs`):**
   * **Margen Superior Ajustado (`DESKTOP_TOP_MARGIN = 56.0`):** Se incrementó la cota mínima vertical de 20px a 56px, garantizando 20px libres de separación visual debajo de los 36px de la top-bar del compositor tanto en la cuadrícula inicial como en el arrastre y la imantación.

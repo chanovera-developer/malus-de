@@ -235,8 +235,8 @@ fn is_point_over_icon(fixed: &Fixed, x: f64, y: f64, rubberband: &impl IsA<gtk4:
             continue;
         }
         let (ix, iy) = fixed.child_position(&item);
-        let iw = item.width().max(64) as f64;
-        let ih = item.height().max(64) as f64;
+        let iw = item.width().max(item.width_request()).max(64) as f64;
+        let ih = item.height().max(item.height_request()).max(64) as f64;
         if x >= ix && x <= ix + iw && y >= iy && y <= iy + ih {
             return true;
         }
@@ -825,6 +825,7 @@ fn refresh_desktop_icons(
     }
 }
 
+#[allow(unused_variables)]
 fn render_single_icon(
     fixed: &Fixed,
     index: usize,
@@ -912,19 +913,19 @@ fn render_single_icon(
     // Clic con botón 1 (Selección simple / doble clic para abrir)
     let click = GestureClick::new();
     click.set_button(1);
-    let pointer_offset_press = pointer_offset.clone();
-    let drag_origin_press = drag_origin.clone();
-    let drag_item_press = item_box.clone();
-    let drag_fixed_press = fixed.clone();
     let open_file = file.clone();
     let path_click = path.clone();
     let sel_paths_click = selected_paths.clone();
     let foc_path_click = focused_path.clone();
+    let drag_fixed_press = fixed.clone();
+    let drag_item_press = item_box.clone();
 
-    click.connect_pressed(move |gesture, presses, pointer_x, pointer_y| {
-        gesture.set_state(gtk4::EventSequenceState::Claimed);
-        *pointer_offset_press.borrow_mut() = (pointer_x, pointer_y);
-        *drag_origin_press.borrow_mut() = drag_fixed_press.child_position(&drag_item_press);
+    click.connect_pressed(move |gesture, presses, _, _| {
+        if presses == 2 {
+            gesture.set_state(gtk4::EventSequenceState::Claimed);
+            launch_file(&open_file);
+            return;
+        }
 
         let is_ctrl = gesture
             .current_event_state()
@@ -939,8 +940,8 @@ fn render_single_icon(
                 sel.insert(path_click.clone());
                 drag_item_press.add_css_class("selected");
             }
-        } else {
-            // Deseleccionar hermanos
+        } else if !sel.contains(&path_click) {
+            // Deseleccionar hermanos si este elemento no estaba seleccionado
             let mut sibling = drag_fixed_press.first_child();
             while let Some(child) = sibling {
                 sibling = child.next_sibling();
@@ -951,10 +952,6 @@ fn render_single_icon(
             drag_item_press.add_css_class("selected");
         }
         *foc_path_click.borrow_mut() = Some(path_click.clone());
-
-        if presses == 2 {
-            launch_file(&open_file);
-        }
     });
     item_box.add_controller(click);
 
@@ -1071,127 +1068,137 @@ fn render_single_icon(
     });
     item_box.add_controller(context_click);
 
-    // Arrastre interactivo de iconos (Drag and Drop fluido con soporte libre)
-    let drag_source = gtk4::DragSource::new();
-    drag_source.set_actions(gtk4::gdk::DragAction::MOVE);
+    // Arrastre interactivo de iconos con soporte de colocación libre y selección múltiple
     let drag_gesture = GestureDrag::new();
     drag_gesture.set_button(1);
 
-    let drag_path = path.clone();
-    let drag_icons = fixed.clone();
-    let drag_origin_update = drag_origin.clone();
-    let pointer_offset_update = pointer_offset.clone();
-    let metrics_copy = *metrics;
+    let drag_start_positions: Rc<RefCell<HashMap<PathBuf, (f64, f64)>>> =
+        Rc::new(RefCell::new(HashMap::new()));
+    let start_pos_begin = drag_start_positions.clone();
+    let fixed_begin = fixed.clone();
+    let sel_begin = selected_paths.clone();
+    let origin_begin = drag_origin.clone();
+    let offset_begin = pointer_offset.clone();
+    let path_begin = path.clone();
+    let item_begin = item_box.clone();
 
-    drag_gesture.connect_drag_update(move |_, offset_x, offset_y| {
-        let position = dragged_icon_position(
-            *drag_origin_update.borrow(),
-            *pointer_offset_update.borrow(),
-            (offset_x, offset_y),
-            &metrics_copy,
-            desktop_size,
-        );
-        move_desktop_icon(&drag_icons, &drag_path, position);
+    drag_gesture.connect_drag_begin(move |gesture, start_x, start_y| {
+        *offset_begin.borrow_mut() = (start_x, start_y);
+        let orig = fixed_begin.child_position(&item_begin);
+        *origin_begin.borrow_mut() = orig;
+
+        // Asegurar que este icono esté seleccionado al arrastrarlo
+        let mut sel = sel_begin.borrow_mut();
+        if !sel.contains(&path_begin) {
+            let mut sibling = fixed_begin.first_child();
+            while let Some(child) = sibling {
+                sibling = child.next_sibling();
+                child.remove_css_class("selected");
+            }
+            sel.clear();
+            sel.insert(path_begin.clone());
+            item_begin.add_css_class("selected");
+        }
+
+        // Guardar las posiciones iniciales de todos los iconos seleccionados
+        let mut map = start_pos_begin.borrow_mut();
+        map.clear();
+        let mut child = fixed_begin.first_child();
+        while let Some(c) = child {
+            child = c.next_sibling();
+            if let Some(p_str) = c.property::<Option<String>>("tooltip-text") {
+                let p = PathBuf::from(p_str);
+                if sel.contains(&p) {
+                    map.insert(p, fixed_begin.child_position(&c));
+                }
+            }
+        }
+        gesture.set_state(gtk4::EventSequenceState::Claimed);
     });
 
-    let drag_path_ge = path.clone();
-    let positions_ge = icon_positions.clone();
-    let icons_ge = fixed.clone();
-    let metrics_ge = *metrics;
-    let drag_origin_ge = drag_origin.clone();
-    let pointer_offset_ge = pointer_offset.clone();
-    let snap_ge = config.snap_to_grid;
-    let align_left_ge = config.align_left;
+    let start_pos_update = drag_start_positions.clone();
+    let fixed_update = fixed.clone();
+    let metrics_update = *metrics;
+    let path_update = path.clone();
+    let origin_update = drag_origin.clone();
+    let offset_update = pointer_offset.clone();
 
-    drag_gesture.connect_drag_end(move |_, offset_x, offset_y| {
-        if offset_x.abs() > 4.0 || offset_y.abs() > 4.0 {
-            let mut pos = dragged_icon_position(
-                *drag_origin_ge.borrow(),
-                *pointer_offset_ge.borrow(),
+    drag_gesture.connect_drag_update(move |_, offset_x, offset_y| {
+        let map = start_pos_update.borrow();
+        if map.len() > 1 {
+            // Mover todos los iconos seleccionados con el mismo delta
+            for (p, &(orig_x, orig_y)) in map.iter() {
+                let new_pos = clamp_icon_position(
+                    orig_x + offset_x,
+                    orig_y + offset_y,
+                    (0.0, 0.0),
+                    &metrics_update,
+                    desktop_size,
+                );
+                move_desktop_icon(&fixed_update, p, new_pos);
+            }
+        } else {
+            // Mover únicamente este icono de forma precisa
+            let position = dragged_icon_position(
+                *origin_update.borrow(),
+                *offset_update.borrow(),
                 (offset_x, offset_y),
-                &metrics_ge,
+                &metrics_update,
                 desktop_size,
             );
-            if snap_ge {
-                pos = snap_position_to_grid(pos, &metrics_ge, align_left_ge, desktop_size);
+            move_desktop_icon(&fixed_update, &path_update, position);
+        }
+    });
+
+    let start_pos_end = drag_start_positions.clone();
+    let fixed_end = fixed.clone();
+    let positions_end = icon_positions.clone();
+    let metrics_end = *metrics;
+    let path_end = path.clone();
+    let origin_end = drag_origin.clone();
+    let offset_end = pointer_offset.clone();
+    let snap_end = config.snap_to_grid;
+    let align_left_end = config.align_left;
+
+    drag_gesture.connect_drag_end(move |_, offset_x, offset_y| {
+        if offset_x.abs() > 3.0 || offset_y.abs() > 3.0 {
+            let map = start_pos_end.borrow();
+            let mut positions_map = positions_end.borrow_mut();
+
+            if map.len() > 1 {
+                for (p, &(orig_x, orig_y)) in map.iter() {
+                    let mut final_pos = clamp_icon_position(
+                        orig_x + offset_x,
+                        orig_y + offset_y,
+                        (0.0, 0.0),
+                        &metrics_end,
+                        desktop_size,
+                    );
+                    if snap_end {
+                        final_pos = snap_position_to_grid(final_pos, &metrics_end, align_left_end, desktop_size);
+                    }
+                    move_desktop_icon(&fixed_end, p, final_pos);
+                    positions_map.insert(p.clone(), final_pos);
+                }
+            } else {
+                let mut pos = dragged_icon_position(
+                    *origin_end.borrow(),
+                    *offset_end.borrow(),
+                    (offset_x, offset_y),
+                    &metrics_end,
+                    desktop_size,
+                );
+                if snap_end {
+                    pos = snap_position_to_grid(pos, &metrics_end, align_left_end, desktop_size);
+                }
+                move_desktop_icon(&fixed_end, &path_end, pos);
+                positions_map.insert(path_end.clone(), pos);
             }
-            move_desktop_icon(&icons_ge, &drag_path_ge, pos);
-            let mut positions_map = positions_ge.borrow_mut();
-            positions_map.insert(drag_path_ge.clone(), pos);
+
             save_icon_positions(&positions_map);
         }
     });
 
-    let drag_path = path.clone();
-    let internal_paths_begin = internal_drag_paths.clone();
-    let active_drag_begin = active_icon_drag.clone();
-    let pointer_offset_begin = pointer_offset.clone();
-    let drag_origin_begin = drag_origin.clone();
-
-    drag_source.connect_drag_begin(move |_, _| {
-        internal_paths_begin.borrow_mut().remove(&drag_path);
-        *active_drag_begin.borrow_mut() = Some((
-            drag_path.clone(),
-            *drag_origin_begin.borrow(),
-            *pointer_offset_begin.borrow(),
-        ));
-    });
-
-    let drag_file = file.clone();
-    drag_source.connect_prepare(move |_, _, _| {
-        let files = gtk4::gdk::FileList::from_array(std::slice::from_ref(&drag_file));
-        Some(gtk4::gdk::ContentProvider::for_value(&files.to_value()))
-    });
-
-    let drag_file = file.clone();
-    let drag_path = path.clone();
-    let positions_after_drag = icon_positions.clone();
-    let internal_paths_end = internal_drag_paths.clone();
-    let active_drag_end = active_icon_drag.clone();
-    let icons_after_drag = fixed.clone();
-    let metrics_drag_end = *metrics;
-    let snap_to_grid = config.snap_to_grid;
-    let align_left = config.align_left;
-
-    drag_source.connect_drag_end(move |_, _, delete_data| {
-        let was_internal_move = internal_paths_end.borrow_mut().remove(&drag_path);
-        let original_position = active_drag_end
-            .borrow_mut()
-            .take()
-            .filter(|(active_path, _, _)| active_path == &drag_path)
-            .map(|(_, orig_pos, _)| orig_pos);
-
-        if delete_data && !was_internal_move {
-            match drag_file.delete(gio::Cancellable::NONE) {
-                Ok(()) => {
-                    let mut pos = positions_after_drag.borrow_mut();
-                    pos.remove(&drag_path);
-                    save_icon_positions(&pos);
-                }
-                Err(error) => {
-                    warn!(
-                        "No se pudo mover {:?} fuera del escritorio: {}",
-                        drag_file, error
-                    );
-                    if let Some(orig_pos) = original_position {
-                        move_desktop_icon(&icons_after_drag, &drag_path, orig_pos);
-                    }
-                }
-            }
-        } else if was_internal_move && snap_to_grid {
-            // Aplicar imantación a cuadrícula si está activado
-            let mut pos = positions_after_drag.borrow_mut();
-            if let Some(&current_pos) = pos.get(&drag_path) {
-                let snapped = snap_position_to_grid(current_pos, &metrics_drag_end, align_left, desktop_size);
-                pos.insert(drag_path.clone(), snapped);
-                move_desktop_icon(&icons_after_drag, &drag_path, snapped);
-                save_icon_positions(&pos);
-            }
-        }
-    });
-
-    drag_source.group_with(&drag_gesture);
-    item_box.add_controller(drag_source);
     item_box.add_controller(drag_gesture);
 }
 
