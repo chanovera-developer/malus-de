@@ -131,7 +131,8 @@ pub fn map_window(state: &mut MalusState, surface: X11Surface) {
     }
     let window = Window::new_x11_window(surface.clone());
     window.set_activated(true);
-    state.space.map_element(window, location, true);
+    state.space.map_element(window.clone(), location, true);
+    state.ensure_window_below_topbar(&window);
     state.get_or_assign_window_id(&wl_surface);
     if let Some(keyboard) = state.seat.get_keyboard() {
         keyboard.set_focus(
@@ -193,7 +194,8 @@ pub fn update_window_location(
     else {
         return;
     };
-    state.space.map_element(window, location, true);
+    state.space.map_element(window.clone(), location, true);
+    state.ensure_window_below_topbar(&window);
 }
 
 pub fn set_window_state(state: &mut MalusState, surface: &X11Surface, fullscreen: bool) {

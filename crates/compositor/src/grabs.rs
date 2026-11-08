@@ -77,6 +77,39 @@ impl PointerGrab<MalusState> for ResizeSurfaceGrab {
         let mut new_x = self.initial_window_location.x;
         let mut new_y = self.initial_window_location.y;
 
+        // Determinar el monitor de la ventana y el límite superior libre bajo la Top Bar
+        let output = data
+            .origin_output_for_window(&self.window)
+            .or_else(|| {
+                data.space
+                    .outputs()
+                    .find(|o| {
+                        data.space
+                            .output_geometry(o)
+                            .map(|g| g.to_f64().contains(event.location))
+                            .unwrap_or(false)
+                    })
+                    .cloned()
+            })
+            .or_else(|| data.space.outputs().next().cloned());
+
+        let min_top = if let Some(ref o) = output {
+            let usable = data.usable_zone_for_output(o);
+            let ssd = if crate::state::window_uses_ssd(&self.window) {
+                crate::ssd::SSD_TITLEBAR_HEIGHT
+            } else {
+                0
+            };
+            usable.loc.y + ssd
+        } else {
+            let ssd = if crate::state::window_uses_ssd(&self.window) {
+                crate::ssd::SSD_TITLEBAR_HEIGHT
+            } else {
+                0
+            };
+            36 + ssd
+        };
+
         match self.edges {
             ResizeEdge::Left => {
                 new_width = (self.initial_window_size.w - dx).max(min_w);
@@ -86,8 +119,13 @@ impl PointerGrab<MalusState> for ResizeSurfaceGrab {
                 new_width = (self.initial_window_size.w + dx).max(min_w);
             }
             ResizeEdge::Top => {
+                let initial_bottom = self.initial_window_location.y + self.initial_window_size.h;
                 new_height = (self.initial_window_size.h - dy).max(min_h);
                 new_y = self.initial_window_location.y + (self.initial_window_size.h - new_height);
+                if new_y < min_top {
+                    new_y = min_top;
+                    new_height = (initial_bottom - min_top).max(min_h);
+                }
             }
             ResizeEdge::Bottom => {
                 new_height = (self.initial_window_size.h + dy).max(min_h);
@@ -95,13 +133,23 @@ impl PointerGrab<MalusState> for ResizeSurfaceGrab {
             ResizeEdge::TopLeft => {
                 new_width = (self.initial_window_size.w - dx).max(min_w);
                 new_x = self.initial_window_location.x + (self.initial_window_size.w - new_width);
+                let initial_bottom = self.initial_window_location.y + self.initial_window_size.h;
                 new_height = (self.initial_window_size.h - dy).max(min_h);
                 new_y = self.initial_window_location.y + (self.initial_window_size.h - new_height);
+                if new_y < min_top {
+                    new_y = min_top;
+                    new_height = (initial_bottom - min_top).max(min_h);
+                }
             }
             ResizeEdge::TopRight => {
                 new_width = (self.initial_window_size.w + dx).max(min_w);
+                let initial_bottom = self.initial_window_location.y + self.initial_window_size.h;
                 new_height = (self.initial_window_size.h - dy).max(min_h);
                 new_y = self.initial_window_location.y + (self.initial_window_size.h - new_height);
+                if new_y < min_top {
+                    new_y = min_top;
+                    new_height = (initial_bottom - min_top).max(min_h);
+                }
             }
             ResizeEdge::BottomLeft => {
                 new_width = (self.initial_window_size.w - dx).max(min_w);
@@ -114,6 +162,9 @@ impl PointerGrab<MalusState> for ResizeSurfaceGrab {
             }
             _ => {}
         }
+
+        // Jamás permitir que la coordenada Y de la ventana penetre bajo la Top Bar
+        new_y = new_y.max(min_top);
 
         let new_size = Size::from((new_width, new_height));
         let new_loc = Point::from((new_x, new_y));
@@ -384,7 +435,44 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
         }
 
         let delta = event.location - self.start_data.location;
-        let new_location = self.initial_window_location.to_f64() + delta;
+        let mut new_location = self.initial_window_location.to_f64() + delta;
+
+        // Determinar el monitor actual y limitar el arrastre para que nunca quede bajo la Top Bar
+        let output = data
+            .origin_output_for_window(&self.window)
+            .or_else(|| {
+                data.space
+                    .outputs()
+                    .find(|o| {
+                        data.space
+                            .output_geometry(o)
+                            .map(|g| g.to_f64().contains(event.location))
+                            .unwrap_or(false)
+                    })
+                    .cloned()
+            })
+            .or_else(|| data.space.outputs().next().cloned());
+
+        let min_top = if let Some(ref o) = output {
+            let usable = data.usable_zone_for_output(o);
+            let ssd = if crate::state::window_uses_ssd(&self.window) {
+                crate::ssd::SSD_TITLEBAR_HEIGHT
+            } else {
+                0
+            };
+            usable.loc.y + ssd
+        } else {
+            let ssd = if crate::state::window_uses_ssd(&self.window) {
+                crate::ssd::SSD_TITLEBAR_HEIGHT
+            } else {
+                0
+            };
+            36 + ssd
+        };
+
+        if new_location.y < min_top as f64 {
+            new_location.y = min_top as f64;
+        }
 
         data.space
             .map_element(self.window.clone(), new_location.to_i32_round(), true);

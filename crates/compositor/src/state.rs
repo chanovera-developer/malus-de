@@ -1868,6 +1868,12 @@ pub fn snap_window(
         }
     };
 
+    let min_y = usable_zone.loc.y + ssd_top;
+    let mut target_loc = target_loc;
+    if target_loc.y < min_y {
+        target_loc.y = min_y;
+    }
+
     let final_target_size = target_size.unwrap_or(start_size);
 
     tracing::info!(
@@ -2479,26 +2485,42 @@ impl MalusState {
         let output_geo = self.space.output_geometry(output).unwrap_or_default();
         let layer_map = smithay::desktop::layer_map_for_output(output);
         let zone = layer_map.non_exclusive_zone();
-        if zone.size.w > 0 && zone.size.h > 0 {
-            let has_dock = layer_map
-                .layers()
-                .any(|layer| layer.namespace() == "malus-dock");
-            let headroom = if has_dock {
-                self.dock_blur_headroom.max(0)
-            } else {
-                0
-            };
-            let usable_height = (zone.size.h + headroom).min(output_geo.size.h - zone.loc.y);
-            Rectangle::new(
-                output_geo.loc + zone.loc,
-                (zone.size.w, usable_height.max(zone.size.h)).into(),
-            )
+
+        // En Malus DE, la Top Bar siempre ocupa de manera estricta al menos 36 píxeles lógicos
+        // superiores de la pantalla. Ninguna ventana puede invadir esa franja bajo ninguna circunstancia.
+        let top_bar_min_height = 36;
+        let top_offset = if zone.size.w > 0 && zone.size.h > 0 {
+            zone.loc.y.max(top_bar_min_height)
         } else {
-            Rectangle::new(
-                (output_geo.loc.x, output_geo.loc.y + 36).into(),
-                (output_geo.size.w, (output_geo.size.h - 36).max(100)).into(),
-            )
-        }
+            top_bar_min_height
+        };
+
+        let has_dock = layer_map
+            .layers()
+            .any(|layer| layer.namespace() == "malus-dock");
+        let headroom = if has_dock {
+            self.dock_blur_headroom.max(0)
+        } else {
+            0
+        };
+
+        let width = if zone.size.w > 0 {
+            zone.size.w
+        } else {
+            output_geo.size.w
+        };
+
+        let raw_height = if zone.size.h > 0 {
+            zone.size.h - (top_offset - zone.loc.y).max(0)
+        } else {
+            output_geo.size.h - top_offset
+        };
+        let usable_height = (raw_height + headroom).min(output_geo.size.h - top_offset).max(100);
+
+        Rectangle::new(
+            (output_geo.loc.x + zone.loc.x.max(0), output_geo.loc.y + top_offset).into(),
+            (width, usable_height).into(),
+        )
     }
 
     /// Determina la pantalla (Output) de origen donde reside principalmente una ventana.
@@ -2591,6 +2613,37 @@ impl MalusState {
             }
         }
         false
+    }
+
+    /// Asegura que una ventana (que no esté en pantalla completa) nunca ocupe el espacio de la Top Bar.
+    /// Si su coordenada Y es menor que la parte inferior de la Top Bar del monitor donde reside,
+    /// ajusta su posición atómicamente para que su barra de título quede completamente visible.
+    pub fn ensure_window_below_topbar(&mut self, window: &smithay::desktop::Window) {
+        let is_fullscreen = window.toplevel().map(|t| {
+            t.current_state().states.contains(XdgState::Fullscreen)
+        }).or_else(|| {
+            window.x11_surface().map(|s| s.is_fullscreen())
+        }).unwrap_or(false);
+
+        if is_fullscreen {
+            return;
+        }
+
+        if let Some(loc) = self.space.element_location(window) {
+            if let Some(output) = self.origin_output_for_window(window) {
+                let usable_zone = self.usable_zone_for_output(&output);
+                let ssd_top = if window_uses_ssd(window) {
+                    crate::ssd::SSD_TITLEBAR_HEIGHT
+                } else {
+                    0
+                };
+                let min_y = usable_zone.loc.y + ssd_top;
+                if loc.y < min_y {
+                    let clamped = Point::from((loc.x, min_y));
+                    self.space.map_element(window.clone(), clamped, false);
+                }
+            }
+        }
     }
 }
 
@@ -2695,6 +2748,10 @@ impl CompositorHandler for MalusState {
                     || states.contains(XdgState::TiledRight)
                     || states.contains(XdgState::Fullscreen)
             }).unwrap_or(false);
+
+            if !is_currently_snapped {
+                self.ensure_window_below_topbar(&window);
+            }
 
             if !is_currently_snapped && !self.snap_transitions.contains_key(surface) {
                 let geo = window.geometry();
@@ -2900,7 +2957,8 @@ impl XdgShellHandler for MalusState {
             let geo = self.space.output_geometry(output).unwrap_or_default();
             let usable = self.usable_zone_for_output(output);
             let offset = ((self.space.elements().count() % 6) as i32) * 28;
-            ((geo.loc.x + 80 + offset, geo.loc.y + 60 + offset), usable)
+            let spawn_y = (geo.loc.y + 60 + offset).max(usable.loc.y + crate::ssd::SSD_TITLEBAR_HEIGHT);
+            ((geo.loc.x + 80 + offset, spawn_y), usable)
         } else {
             ((80, 60), Rectangle::new((0, 0).into(), (1920, 1080).into()))
         };
@@ -3781,5 +3839,43 @@ mod tests {
             },
         );
         assert!(!state.ssd.grab_active);
+    }
+
+    #[test]
+    fn usable_zone_respects_top_bar_height() {
+        use smithay::output::{Mode, Output, PhysicalProperties, Subpixel};
+        use smithay::reexports::wayland_server::Display;
+        use smithay::utils::Transform;
+
+        let display: Display<super::MalusState> = Display::new().unwrap();
+        let mut state = super::MalusState::new(&display);
+
+        let output = Output::new(
+            "test_output".to_string(),
+            PhysicalProperties {
+                size: (1920, 1080).into(),
+                subpixel: Subpixel::Unknown,
+                make: "Malus".to_string(),
+                model: "Test Display".to_string(),
+            },
+        );
+        let mode = Mode {
+            size: (1920, 1080).into(),
+            refresh: 60_000,
+        };
+        output.change_current_state(
+            Some(mode),
+            Some(Transform::Normal),
+            None,
+            Some((0, 0).into()),
+        );
+        state.space.map_output(&output, (0, 0));
+
+        let usable = state.usable_zone_for_output(&output);
+        assert!(
+            usable.loc.y >= 36,
+            "La zona utilizable debe comenzar debajo de la Top Bar (esperado >= 36, actual = {})",
+            usable.loc.y
+        );
     }
 }

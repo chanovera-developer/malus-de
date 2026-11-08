@@ -4,6 +4,29 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-08] — Exclusión Estricta de la Top-Bar: Prevención de Solapamiento en Redimensionado, Arrastre y Mapeo de Ventanas
+
+### Hitos Implementados
+
+* **Garantía Incondicional de Espacio Libre para la Top-Bar (`crates/compositor/src/state.rs`):**
+  * **Zona Utilizable Respetada (`usable_zone_for_output`):** Corrección para asegurar que la coordenada superior `loc.y` de la zona utilizable nunca sea inferior a `output_geo.loc.y + 36`, protegiendo la barra superior incluso antes de que la capa layer shell termine de negociar o en casos de reinicio o recarga de la barra.
+  * **Clamping Atómico de Ventanas (`ensure_window_below_topbar`):** Método centralizado que evalúa si una ventana (no en modo pantalla completa) tiene su borde superior invadiendo la zona de la top-bar. En caso afirmativo, traslada atómicamente la ventana hacia abajo.
+  * **Compensación Automática de Decoraciones del Servidor (SSD vs CSD):** En ventanas que utilizan decoraciones del servidor (`window_uses_ssd`), la barra de título se dibuja en `win_loc.y - SSD_TITLEBAR_HEIGHT (38px)`. El cálculo exige una cota mínima `min_y = usable_zone.loc.y + 38` para SSD, y `min_y = usable_zone.loc.y` para CSD, asegurando que la barra de título y los botones de control (cerrar, minimizar, maximizar) nunca queden ocultos detrás de la barra superior.
+  * **Validación en Commit de Superficies y Mapeo:** Comprobación automática en el commit de buffers XDG para reubicar ventanas si la aplicación intenta redimensionarse o reposicionarse internamente bajo la barra superior.
+  * **Posición Inicial de Nuevas Ventanas (`new_toplevel`):** La coordenada `spawn_y` de nuevas ventanas ahora garantiza al menos `usable.loc.y + SSD_TITLEBAR_HEIGHT`.
+
+* **Restricción en Grabs Interactivos de Puntero (`crates/compositor/src/grabs.rs`):**
+  * **Redimensionado Superior (`ResizeSurfaceGrab::motion`):** Al redimensionar desde los bordes `Top`, `TopLeft` o `TopRight`, se calcula dinámicamente la cota superior permitida según el monitor de origen y el tipo de decoración (SSD/CSD). Se clampa `new_y = new_y.max(min_top)` y se ajusta la altura disponible manteniendo el borde inferior anclado.
+  * **Arrastre y Movimiento de Ventana (`MoveSurfaceGrab::motion`):** Al mover ventanas mediante la barra de título o combinaciones de teclas, se clampa la coordenada vertical `new_location.y = new_location.y.max(min_top as f64)`, impidiendo que el usuario pueda empujar la ventana detrás de la barra superior.
+
+* **Integración con Xwayland (`crates/compositor/src/backend/xwayland.rs`):**
+  * Aplicación de `ensure_window_below_topbar` tanto en el mapeo inicial de ventanas X11 (`map_window`) como en las actualizaciones de posición solicitadas por clientes X11 (`update_window_location`).
+
+* **Pruebas Automatizadas:**
+  * Nuevo test unitario `usable_zone_respects_top_bar_height` en el compositor para verificar que `usable_zone_for_output` mantenga siempre una cota vertical mínima de 36px.
+
+---
+
 ## [2026-11-08] — Rediseño del Centro de Control Estilo macOS Tahoe / iOS 18 Modular, Pantalla Completa Multimonitor y Corrección de Regresiones
 
 ### Hitos Implementados
