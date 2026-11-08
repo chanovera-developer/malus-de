@@ -721,6 +721,7 @@ fn refresh_desktop_icons(
     selected_paths: &Rc<RefCell<HashSet<PathBuf>>>,
     focused_path: &Rc<RefCell<Option<PathBuf>>>,
     expanded_stacks: &Rc<RefCell<HashSet<StackCategory>>>,
+    recently_dropped_paths: &Rc<RefCell<HashSet<PathBuf>>>,
 ) {
     let mut child = fixed.first_child();
     while let Some(current) = child {
@@ -869,6 +870,8 @@ fn refresh_desktop_icons(
             let sel_paths_refresh = selected_paths.clone();
             let foc_path_refresh = focused_path.clone();
 
+            let rec_refresh = recently_dropped_paths.clone();
+
             click.connect_pressed(move |_, _, _, _| {
                 let mut exp = expanded_ref.borrow_mut();
                 if exp.contains(&cat) {
@@ -889,6 +892,7 @@ fn refresh_desktop_icons(
                     &sel_paths_refresh,
                     &foc_path_refresh,
                     &expanded_ref,
+                    &rec_refresh,
                 );
             });
             stack_box.add_controller(click);
@@ -910,6 +914,7 @@ fn refresh_desktop_icons(
                         active_icon_drag,
                         selected_paths,
                         focused_path,
+                        recently_dropped_paths,
                     );
                     slot_index += 1;
                 }
@@ -932,6 +937,7 @@ fn refresh_desktop_icons(
                 active_icon_drag,
                 selected_paths,
                 focused_path,
+                recently_dropped_paths,
             );
         }
     }
@@ -973,6 +979,7 @@ fn render_single_icon(
     active_icon_drag: &Rc<RefCell<Option<(PathBuf, (f64, f64), (f64, f64))>>>,
     selected_paths: &Rc<RefCell<HashSet<PathBuf>>>,
     focused_path: &Rc<RefCell<Option<PathBuf>>>,
+    recently_dropped_paths: &Rc<RefCell<HashSet<PathBuf>>>,
 ) {
     let path = item.path;
     let file = gio::File::for_path(&path);
@@ -1039,6 +1046,18 @@ fn render_single_icon(
         positions.insert(path.clone(), (x, y));
     }
     fixed.put(&item_box, x, y);
+
+    // Animación de aterrizaje suave estilo Finder si el archivo acaba de ser soltado
+    if recently_dropped_paths.borrow().contains(&path) {
+        item_box.add_css_class("landing");
+        let box_landing = item_box.clone();
+        let path_landing = path.clone();
+        let rec_landing = recently_dropped_paths.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
+            box_landing.remove_css_class("landing");
+            rec_landing.borrow_mut().remove(&path_landing);
+        });
+    }
 
     // Clic con botón 1 (Selección simple / doble clic para abrir)
     let click = GestureClick::new();
@@ -1189,6 +1208,118 @@ fn render_single_icon(
         p_click.popup();
     });
     item_box.add_controller(context_click);
+
+    // Arrastrar archivo/carpeta (Drag & Drop Wayland con icono translúcido estilo Finder)
+    let drag_source = gtk4::DragSource::new();
+    drag_source.set_actions(gtk4::gdk::DragAction::COPY | gtk4::gdk::DragAction::MOVE);
+    let path_drag = path.clone();
+    let sel_drag = selected_paths.clone();
+    drag_source.connect_prepare(move |_, _, _| {
+        let sel = sel_drag.borrow();
+        let files: Vec<gio::File> = if sel.contains(&path_drag) && sel.len() > 1 {
+            sel.iter().map(|p| gio::File::for_path(p)).collect()
+        } else {
+            vec![gio::File::for_path(&path_drag)]
+        };
+        let file_list = gtk4::gdk::FileList::from_array(&files);
+        Some(gtk4::gdk::ContentProvider::for_value(&file_list.to_value()))
+    });
+
+    let item_box_drag = item_box.clone();
+    let fixed_drag = fixed.clone();
+    let path_drag_begin = path.clone();
+    let sel_drag_begin = selected_paths.clone();
+    let metrics_drag = metrics.clone();
+    let act_drag_begin = active_icon_drag.clone();
+    drag_source.connect_drag_begin(move |source, _drag| {
+        let sel = sel_drag_begin.borrow();
+        if sel.contains(&path_drag_begin) && sel.len() > 1 {
+            let mut sibling = fixed_drag.first_child();
+            while let Some(child) = sibling {
+                sibling = child.next_sibling();
+                if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
+                    if sel.contains(&PathBuf::from(p_str)) {
+                        child.add_css_class("desktop-icon-dragging");
+                    }
+                }
+            }
+        } else {
+            item_box_drag.add_css_class("desktop-icon-dragging");
+        }
+        *act_drag_begin.borrow_mut() = Some((
+            path_drag_begin.clone(),
+            (0.0, 0.0),
+            (f64::from(metrics_drag.box_width) / 2.0, f64::from(metrics_drag.box_height) / 2.0),
+        ));
+        let paintable = gtk4::WidgetPaintable::new(Some(&item_box_drag));
+        source.set_icon(Some(&paintable), metrics_drag.box_width / 2, metrics_drag.box_height / 2);
+    });
+
+    let fixed_drag_end = fixed.clone();
+    let act_drag_end = active_icon_drag.clone();
+    drag_source.connect_drag_end(move |_, _drag, _| {
+        let mut sibling = fixed_drag_end.first_child();
+        while let Some(child) = sibling {
+            sibling = child.next_sibling();
+            child.remove_css_class("desktop-icon-dragging");
+        }
+        *act_drag_end.borrow_mut() = None;
+    });
+
+    item_box.add_controller(drag_source);
+
+    // Si es carpeta, permitir soltar archivos encima con resaltado azul acrílico estilo Finder
+    if path.is_dir() {
+        let folder_drop = gtk4::DropTarget::new(
+            gtk4::gdk::FileList::static_type(),
+            gtk4::gdk::DragAction::COPY | gtk4::gdk::DragAction::MOVE,
+        );
+        let item_box_hover = item_box.clone();
+        folder_drop.connect_enter(move |_, _, _| {
+            item_box_hover.add_css_class("folder-drop-hover");
+            gtk4::gdk::DragAction::MOVE
+        });
+
+        let item_box_leave = item_box.clone();
+        folder_drop.connect_leave(move |_| {
+            item_box_leave.remove_css_class("folder-drop-hover");
+        });
+
+        let item_box_drop = item_box.clone();
+        let target_dir = path.clone();
+        let pos_map_drop = icon_positions.clone();
+        folder_drop.connect_drop(move |_, value, _, _| {
+            item_box_drop.remove_css_class("folder-drop-hover");
+            if let Ok(file_list) = value.get::<gtk4::gdk::FileList>() {
+                let mut moved_any = false;
+                for src_file in file_list.files() {
+                    if let Some(src_path) = src_file.path() {
+                        if let Some(fname) = src_path.file_name() {
+                            let dest_path = target_dir.join(fname);
+                            if dest_path != src_path {
+                                let dest_file = gio::File::for_path(&dest_path);
+                                if src_file.move_(
+                                    &dest_file,
+                                    gio::FileCopyFlags::NONE,
+                                    gio::Cancellable::NONE,
+                                    None,
+                                ).is_ok() {
+                                    pos_map_drop.borrow_mut().remove(&src_path);
+                                    moved_any = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                if moved_any {
+                    save_icon_positions(&pos_map_drop.borrow());
+                    return true;
+                }
+            }
+            false
+        });
+        item_box.add_controller(folder_drop);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1197,6 +1328,7 @@ enum DesktopDragMode {
     Rubberband {
         start: (f64, f64),
     },
+    #[allow(dead_code)]
     Icon {
         clicked_path: PathBuf,
         start_positions: HashMap<PathBuf, (f64, f64)>,
@@ -1271,6 +1403,7 @@ fn create_wallpaper_window(
         let selected_paths: Rc<RefCell<HashSet<PathBuf>>> = Rc::new(RefCell::new(HashSet::new()));
         let focused_path: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
         let expanded_stacks: Rc<RefCell<HashSet<StackCategory>>> = Rc::new(RefCell::new(HashSet::new()));
+        let recently_dropped_paths: Rc<RefCell<HashSet<PathBuf>>> = Rc::new(RefCell::new(HashSet::new()));
 
         let current_config = Rc::new(RefCell::new(DesktopIconsConfig::load()));
 
@@ -1282,6 +1415,7 @@ fn create_wallpaper_window(
         let sel_paths_c = selected_paths.clone();
         let foc_path_c = focused_path.clone();
         let exp_stacks_c = expanded_stacks.clone();
+        let rec_c = recently_dropped_paths.clone();
         let cfg_c = current_config.clone();
 
         let trigger_refresh: Rc<dyn Fn()> = Rc::new(move || {
@@ -1297,6 +1431,7 @@ fn create_wallpaper_window(
                 &sel_paths_c,
                 &foc_path_c,
                 &exp_stacks_c,
+                &rec_c,
             );
         });
 
@@ -1517,7 +1652,6 @@ fn create_wallpaper_window(
                 find_icon_at(&icons_begin, start_x, start_y, &rb_begin)
             {
                 let mut sel = sel_begin.borrow_mut();
-                let had_multiple = sel.len() > 1;
                 if is_ctrl {
                     if !sel.contains(&clicked_path) {
                         sel.insert(clicked_path.clone());
@@ -1550,11 +1684,8 @@ fn create_wallpaper_window(
                     }
                 }
 
-                *drag_mode_begin.borrow_mut() = DesktopDragMode::Icon {
-                    clicked_path,
-                    start_positions,
-                    had_multiple_selected: had_multiple,
-                };
+                // DragSource en el icono se encarga del arrastre Wayland y del feedback visual
+                *drag_mode_begin.borrow_mut() = DesktopDragMode::None;
             } else {
                 if !is_ctrl {
                     let mut sibling = icons_begin.first_child();
@@ -1732,7 +1863,7 @@ fn create_wallpaper_window(
         // Destino para soltar archivos arrastrados al escritorio (DropTarget)
         let drop_target = gtk4::DropTarget::new(
             gtk4::gdk::FileList::static_type(),
-            gtk4::gdk::DragAction::MOVE,
+            gtk4::gdk::DragAction::COPY | gtk4::gdk::DragAction::MOVE,
         );
         let drop_dir = desktop_dir.to_path_buf();
         let drop_positions = icon_positions.clone();
@@ -1753,6 +1884,7 @@ fn create_wallpaper_window(
         let active_drag_drop = active_icon_drag.clone();
         let drop_icons = icons.clone();
         let cfg_drop = current_config.clone();
+        let rec_drop = recently_dropped_paths.clone();
 
         drop_target.connect_drop(move |_, value, x, y| {
             let files = match value.get::<gtk4::gdk::FileList>() {
@@ -1791,13 +1923,28 @@ fn create_wallpaper_window(
                                 f64::from(metrics.box_width) / 2.0,
                                 f64::from(metrics.box_height) / 2.0,
                             ));
-                        let mut position = clamp_icon_position(x, y, pointer_offset, &metrics, desktop_size);
+                        let offset_idx = (index % 4) as f64 * 24.0;
+                        let mut position = clamp_icon_position(x + offset_idx, y + offset_idx, pointer_offset, &metrics, desktop_size);
                         if snap {
                             position = snap_position_to_grid(position, &metrics, align_left, desktop_size);
                         }
                         if move_desktop_icon(&drop_icons, &path, position) {
                             drop_positions.borrow_mut().insert(path.clone(), position);
-                            internal_paths_drop.borrow_mut().insert(path);
+                            internal_paths_drop.borrow_mut().insert(path.clone());
+                            let mut sibling = drop_icons.first_child();
+                            while let Some(child) = sibling {
+                                sibling = child.next_sibling();
+                                if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
+                                    if p_str == path.to_string_lossy() {
+                                        child.add_css_class("landing");
+                                        let c = child.clone();
+                                        glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
+                                            c.remove_css_class("landing");
+                                        });
+                                        break;
+                                    }
+                                }
+                            }
                             moved_any = true;
                         }
                     }
@@ -1824,7 +1971,9 @@ fn create_wallpaper_window(
                 ) {
                     Ok(()) => {
                         if let Some(path) = destination.path() {
-                            drop_positions.borrow_mut().insert(path, position);
+                            drop_positions.borrow_mut().insert(path.clone(), position);
+                            internal_paths_drop.borrow_mut().insert(path.clone());
+                            rec_drop.borrow_mut().insert(path);
                         }
                         moved_any = true;
                     }
@@ -2243,5 +2392,16 @@ mod tests {
         // GTK4 CSS no soporta !important ni queries @media condicionales
         assert!(!css.contains("!important"));
         assert!(!css.contains("@media"));
+    }
+
+    #[test]
+    fn test_desktop_drag_and_drop_macos_css_classes() {
+        let css = include_str!("styles/default-gradient.css");
+        assert!(css.contains(".desktop-icon.desktop-icon-dragging"));
+        assert!(css.contains(".desktop-icon.folder-drop-hover"));
+        assert!(css.contains(".desktop-icon.landing"));
+        assert!(css.contains("@keyframes macos-drop-landing"));
+        assert!(css.contains("cubic-bezier(0.16, 1, 0.3, 1)"));
+        assert!(!css.contains("!important"));
     }
 }

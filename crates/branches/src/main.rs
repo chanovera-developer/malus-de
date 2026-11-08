@@ -102,3 +102,16 @@ fn load_custom_css() {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_branches_macos_drag_and_drop_styles() {
+        let css = include_str!("styles/macos-branches.css");
+        assert!(css.contains(".branches-icon-dragging"));
+        assert!(css.contains(".folder-drop-hover"));
+        assert!(css.contains(".branches-icon-item.landing"));
+        assert!(css.contains("@keyframes macos-drop-landing"));
+        assert!(css.contains("cubic-bezier(0.16, 1, 0.3, 1)"));
+    }
+}

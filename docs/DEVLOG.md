@@ -4,7 +4,33 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
-## [2026-11-08] — Corrección Crítica: Eliminación de Tokens Inválidos CSS, IPC Bus ThemeChanged y Sincronización de Contraste en Menús del Escritorio
+## [2026-11-08] — Efecto de Mover Carpetas Estilo macOS Finder (Drag & Drop Wayland Bidireccional, Drag Ghost Translúcido, Resaltado de Carpeta Receptora y Animación Elástica de Aterrizaje)
+
+### Diagnóstico de Causa Raíz
+* **Inexistencia de `DragSource` en los Iconos del Escritorio:**
+  * Anteriormente, los iconos en [`crates/wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs) sólo implementaban un `GestureDrag` local sobre el widget `Fixed`. Al arrastrar un icono para moverlo a otra ventana (como Branches o Nautilus), el puntero jamás iniciaba una sesión Wayland de Drag & Drop (`wl_data_device.start_drag`), haciendo físicamente imposible mover carpetas o archivos desde el escritorio hacia el gestor de archivos.
+* **Ausencia de Previsualización Gráfica (`Drag Ghost Icon`):**
+  * En [`crates/branches/src/views/icon_view.rs`](../crates/branches/src/views/icon_view.rs) y [`crates/branches/src/views/list_view.rs`](../crates/branches/src/views/list_view.rs), se utilizaba `gtk4::DragSource` pero sin conectar `connect_drag_begin` ni suministrar `drag_source.set_icon(&paintable, hot_x, hot_y)`. En Wayland, el compositor recibía una superficie nula (`icon: None`), dejando al cursor sin miniatura flotante durante el vuelo.
+* **Falta de Detección de Carpetas Receptoras y Aterrizaje Brusco:**
+  * Al arrastrar un elemento sobre una carpeta existente en el escritorio o en el explorador, la carpeta no reaccionaba visualmente ni aceptaba soltar dentro de ella; únicamente se permitía soltar en el fondo plano. Al soltar en el escritorio, el icono aparecía instantáneamente sin suavidad física.
+
+### Solución Implementada (`crates/wallpaper`, `crates/branches`)
+* **`DragSource` Nativo y Bidireccional en el Escritorio (`crates/wallpaper/src/main.rs`):**
+  * Se equipó a cada icono de escritorio (`render_single_icon`) con un `gtk4::DragSource` configurado con `gdk::DragAction::COPY | gdk::DragAction::MOVE` y empaquetado en `gdk::FileList`.
+  * Soporte de selección múltiple: al arrastrar un icono seleccionado, se transfieren todos los elementos activos simultáneamente.
+  * Al comenzar el arrastre, se captura un snapshot exacto del widget con `gtk4::WidgetPaintable::new(Some(&item_box))` y se asigna al cursor con `source.set_icon`, mientras el elemento original se atenúa a `opacity: 0.35` (`.desktop-icon-dragging`).
+* **Resaltado Acrílico de Carpeta Receptora (`Drop Hover Glow`):**
+  * Si el elemento es un directorio (`path.is_dir()`), se añade un `gtk4::DropTarget` dedicado al icono de la carpeta (tanto en el Escritorio como en las vistas de Iconos y Lista de Branches).
+  * Al pasar por encima mientras se arrastran archivos (`connect_enter`), se activa la clase `.folder-drop-hover`: halo azul acrílico translúcido (`rgba(0, 122, 255, 0.28)`), borde redondeado brillante de 2px, sombra exterior de 16px y ligera expansión física (`transform: scale(1.05 / 1.06)`).
+  * Al soltar sobre la carpeta, los archivos se mueven automáticamente a esa subcarpeta (`target_dir.join(name)`).
+* **Física y Microanimación de Aterrizaje Suave (`macos-drop-landing`):**
+  * Se implementó `@keyframes macos-drop-landing` con curva elástica Apple `cubic-bezier(0.16, 1, 0.3, 1)` de 240ms (`scale(1.12) -> scale(0.98) -> scale(1.0)` y `opacity: 0.6 -> 1.0`).
+  * Los elementos soltados en el escritorio reciben la clase `.landing` temporalmente mediante `glib::timeout_add_local_once`, logrando un asentamiento con peso físico idéntico al de macOS Finder.
+* **Integración Completa en Branches (`crates/branches/src/views/icon_view.rs`, `crates/branches/src/views/list_view.rs`):**
+  * Soporte de arrastre con `WidgetPaintable` e icono translúcido en Icon View y List View.
+  * Receptores de carpetas en subdirectorios y soltado en el lienzo para absorber archivos arrastrados desde el Escritorio.
+
+---
 
 ### Diagnóstico de Causa Raíz
 * **Rechazo de Reglas de Color por `!important` en el Motor CSS de GTK4:**

@@ -228,7 +228,7 @@ impl IconView {
         });
         vbox.add_controller(click_gesture);
 
-        // 2. Drag & Drop entre ventanas/paneles (DragSource Wayland)
+        // 2. Drag & Drop entre ventanas/paneles (DragSource Wayland con icono translúcido estilo Finder)
         let drag_source = gtk4::DragSource::new();
         drag_source.set_actions(gdk::DragAction::COPY | gdk::DragAction::MOVE);
         let path_for_drag = item.path.clone();
@@ -237,7 +237,67 @@ impl IconView {
             let file_list = gdk::FileList::from_array(&[file]);
             Some(gdk::ContentProvider::for_value(&file_list.to_value()))
         });
+
+        let vbox_drag_begin = vbox.clone();
+        drag_source.connect_drag_begin(move |source, _drag| {
+            vbox_drag_begin.add_css_class("branches-icon-dragging");
+            let paintable = gtk4::WidgetPaintable::new(Some(&vbox_drag_begin));
+            source.set_icon(Some(&paintable), 40, 40);
+        });
+
+        let vbox_drag_end = vbox.clone();
+        drag_source.connect_drag_end(move |_, _drag, _| {
+            vbox_drag_end.remove_css_class("branches-icon-dragging");
+        });
         vbox.add_controller(drag_source);
+
+        // Si es carpeta, permitir soltar archivos encima con resaltado azul acrílico estilo Finder
+        if is_dir {
+            let folder_drop = gtk4::DropTarget::new(
+                gdk::FileList::static_type(),
+                gdk::DragAction::COPY | gdk::DragAction::MOVE,
+            );
+            let vbox_hover = vbox.clone();
+            folder_drop.connect_enter(move |_, _x, _y| {
+                vbox_hover.add_css_class("folder-drop-hover");
+                gdk::DragAction::MOVE
+            });
+
+            let vbox_leave = vbox.clone();
+            folder_drop.connect_leave(move |_| {
+                vbox_leave.remove_css_class("folder-drop-hover");
+            });
+
+            let vbox_drop = vbox.clone();
+            let dest_dir = item.path.clone();
+            let on_nav_reload = self.on_navigate.clone();
+            let cur_folder = self.current_folder.clone();
+            folder_drop.connect_drop(move |_, value, _, _| {
+                vbox_drop.remove_css_class("folder-drop-hover");
+                if let Ok(file_list) = value.get::<gdk::FileList>() {
+                    let mut moved = false;
+                    for file in file_list.files() {
+                        if let Some(src) = file.path() {
+                            if let Some(fname) = src.file_name() {
+                                let target = dest_dir.join(fname);
+                                if target != src {
+                                    if std::fs::rename(&src, &target).is_ok() || std::fs::copy(&src, &target).is_ok() {
+                                        moved = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if moved {
+                        let cf = cur_folder.borrow().clone();
+                        on_nav_reload(cf);
+                        return true;
+                    }
+                }
+                false
+            });
+            vbox.add_controller(folder_drop);
+        }
 
         // 3. Arrastre Libre de Icono dentro del Canvas (GestureDrag)
         let drag_gesture = GestureDrag::new();
@@ -339,6 +399,43 @@ impl IconView {
         });
 
         self.fixed_canvas.add_controller(click);
+
+        // Destino para soltar archivos provenientes de ventanas externas (ej. Escritorio)
+        let canvas_drop = gtk4::DropTarget::new(
+            gdk::FileList::static_type(),
+            gdk::DragAction::COPY | gdk::DragAction::MOVE,
+        );
+        let folder_drop_ref = self.current_folder.clone();
+        let on_nav_drop = self.on_navigate.clone();
+
+        canvas_drop.connect_drop(move |_, value, _, _| {
+            if let Ok(file_list) = value.get::<gdk::FileList>() {
+                let cur_folder = folder_drop_ref.borrow().clone();
+                let mut moved = false;
+
+                for file in file_list.files() {
+                    if let Some(src) = file.path() {
+                        let is_internal = src.parent().map(|p| p == cur_folder).unwrap_or(false);
+                        if !is_internal {
+                            if let Some(fname) = src.file_name() {
+                                let dest = cur_folder.join(fname);
+                                if dest != src {
+                                    if std::fs::rename(&src, &dest).is_ok() || std::fs::copy(&src, &dest).is_ok() {
+                                        moved = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if moved {
+                    on_nav_drop(cur_folder);
+                    return true;
+                }
+            }
+            false
+        });
+        self.fixed_canvas.add_controller(canvas_drop);
     }
 }
 

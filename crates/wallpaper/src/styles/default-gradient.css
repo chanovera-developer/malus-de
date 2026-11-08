@@ -26,7 +26,7 @@ window.malus-wallpaper-window picture {
     border: 1px solid transparent;
     box-shadow: none;
     border-radius: 10px;
-    transition: background 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+    transition: background 120ms ease, box-shadow 120ms ease, border-color 120ms ease, transform 120ms cubic-bezier(0.16, 1, 0.3, 1), opacity 150ms ease;
 }
 
 .desktop-icon:hover {
@@ -40,6 +40,40 @@ window.malus-wallpaper-window picture {
     border-color: rgba(255, 255, 255, 0.35);
     box-shadow: 0 0 0 1px rgba(0, 122, 255, 0.4);
     border-radius: 10px;
+}
+
+/* Efectos Drag & Drop estilo macOS Finder */
+.desktop-icon.desktop-icon-dragging {
+    opacity: 0.35;
+    transition: opacity 150ms ease;
+}
+
+.desktop-icon.folder-drop-hover {
+    background-color: rgba(0, 122, 255, 0.28);
+    border: 2px solid rgba(0, 122, 255, 0.85);
+    box-shadow: 0 0 16px rgba(0, 122, 255, 0.45);
+    border-radius: 12px;
+    transform: scale(1.06);
+    transition: all 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.desktop-icon.landing {
+    animation: macos-drop-landing 240ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes macos-drop-landing {
+    0% {
+        transform: scale(1.12);
+        opacity: 0.6;
+    }
+    60% {
+        transform: scale(0.98);
+        opacity: 0.95;
+    }
+    100% {
+        transform: scale(1.0);
+        opacity: 1.0;
+    }
 }
 
 label.desktop-icon-label {

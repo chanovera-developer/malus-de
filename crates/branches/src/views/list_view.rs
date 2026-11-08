@@ -159,13 +159,14 @@ fn create_list_row(item: &FileItem, on_navigate: NavigateCallback) -> ListBoxRow
     let gesture = GestureClick::new();
     let path = item.path.clone();
     let is_dir = item.is_dir;
+    let on_nav_click = on_navigate.clone();
 
     gesture.connect_pressed(move |g, n_press, _x, _y| {
         let button = g.current_button();
 
         if button == gdk::BUTTON_PRIMARY && n_press == 2 {
             if is_dir {
-                on_navigate(path.clone());
+                on_nav_click(path.clone());
             } else {
                 let _ = open_file(&path);
             }
@@ -176,7 +177,7 @@ fn create_list_row(item: &FileItem, on_navigate: NavigateCallback) -> ListBoxRow
 
     row.add_controller(gesture);
 
-    // Arrastrar archivo (Drag & Drop)
+    // Arrastrar archivo (Drag & Drop con icono translúcido estilo macOS Finder)
     let drag_source = gtk4::DragSource::new();
     drag_source.set_actions(gdk::DragAction::COPY | gdk::DragAction::MOVE);
     let path_for_drag = item.path.clone();
@@ -185,7 +186,67 @@ fn create_list_row(item: &FileItem, on_navigate: NavigateCallback) -> ListBoxRow
         let file_list = gdk::FileList::from_array(&[file]);
         Some(gdk::ContentProvider::for_value(&file_list.to_value()))
     });
+
+    let row_drag_begin = row.clone();
+    drag_source.connect_drag_begin(move |source, _| {
+        row_drag_begin.add_css_class("branches-icon-dragging");
+        let paintable = gtk4::WidgetPaintable::new(Some(&row_drag_begin));
+        source.set_icon(Some(&paintable), 24, 16);
+    });
+
+    let row_drag_end = row.clone();
+    drag_source.connect_drag_end(move |_, _, _| {
+        row_drag_end.remove_css_class("branches-icon-dragging");
+    });
     row.add_controller(drag_source);
+
+    // Si es carpeta, permitir soltar archivos encima con resaltado azul acrílico estilo Finder
+    if is_dir {
+        let folder_drop = gtk4::DropTarget::new(
+            gdk::FileList::static_type(),
+            gdk::DragAction::COPY | gdk::DragAction::MOVE,
+        );
+        let row_hover = row.clone();
+        folder_drop.connect_enter(move |_, _, _| {
+            row_hover.add_css_class("folder-drop-hover");
+            gdk::DragAction::MOVE
+        });
+
+        let row_leave = row.clone();
+        folder_drop.connect_leave(move |_| {
+            row_leave.remove_css_class("folder-drop-hover");
+        });
+
+        let row_drop = row.clone();
+        let target_dir = item.path.clone();
+        let on_nav_reload = on_navigate.clone();
+        folder_drop.connect_drop(move |_, value, _, _| {
+            row_drop.remove_css_class("folder-drop-hover");
+            if let Ok(file_list) = value.get::<gdk::FileList>() {
+                let mut moved = false;
+                for file in file_list.files() {
+                    if let Some(src) = file.path() {
+                        if let Some(fname) = src.file_name() {
+                            let target = target_dir.join(fname);
+                            if target != src {
+                                if std::fs::rename(&src, &target).is_ok() || std::fs::copy(&src, &target).is_ok() {
+                                    moved = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                if moved {
+                    if let Some(parent) = target_dir.parent() {
+                        on_nav_reload(parent.to_path_buf());
+                    }
+                    return true;
+                }
+            }
+            false
+        });
+        row.add_controller(folder_drop);
+    }
 
     row
 }
