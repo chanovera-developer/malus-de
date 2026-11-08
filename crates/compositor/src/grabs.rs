@@ -314,6 +314,7 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
         if handle.current_pressed().is_empty() {
             tracing::info!("🛑 MoveSurfaceGrab: ratón liberado durante motion, restaurando puntero");
             data.snap_preview = None;
+            data.moving_window_surface = None;
             handle.unset_grab(self, data, event.serial, event.time, false);
             let cur_loc = event.location;
             let under_target = data.space.element_under(cur_loc).and_then(|(win, loc)| {
@@ -447,6 +448,7 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
         if handle.current_pressed().is_empty() {
             // Limpiar previsualización inmediatamente al soltar
             data.snap_preview = None;
+            data.moving_window_surface = None;
 
             let cur_loc = handle.current_location();
 

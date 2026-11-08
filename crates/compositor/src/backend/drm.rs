@@ -1865,6 +1865,7 @@ pub fn run_drm() -> Result<()> {
                                         has_dragged: false,
                                     };
                                     state.ssd.grab_active = true;
+                                    state.moving_window_surface = window.wl_surface().map(|s| s.into_owned());
                                     pointer.set_grab(state, grab, btn_serial, smithay::input::pointer::Focus::Clear);
                                 }
 
@@ -2952,6 +2953,17 @@ pub fn run_drm() -> Result<()> {
 
                         let projection = *frame.projection();
 
+                        let is_pointer_grabbed = state
+                            .seat
+                            .get_pointer()
+                            .map(|p| p.is_grabbed())
+                            .unwrap_or(false);
+                        if !is_pointer_grabbed {
+                            state.snap_preview = None;
+                            state.moving_window_surface = None;
+                        }
+                        let mut snap_preview_drawn = false;
+
                         // 2. Renderizar superficies de cada ventana con sus sombras proyectadas, desenfoque de fondo y esquinas squircle
                         for (
                             idx,
@@ -2978,6 +2990,50 @@ pub fn run_drm() -> Result<()> {
                             if win_elems.is_empty() {
                                 continue;
                             }
+
+                            // Dibujar la previsualización de ajuste (Snap Preview) INMEDIATAMENTE ANTES
+                            // de la ventana activa que se está arrastrando, de modo que la ventana quede POR ENCIMA
+                            if !snap_preview_drawn && is_pointer_grabbed {
+                                let is_target_window = state.moving_window_surface.as_ref().map_or(
+                                    idx == window_render_data.len() - 1,
+                                    |moving_surf| {
+                                        let moving_id = smithay::backend::renderer::element::Id::from_wayland_resource(moving_surf);
+                                        *root_id == moving_id
+                                    },
+                                );
+                                if is_target_window {
+                                    if let Some(preview) = state.snap_preview {
+                                        if output_geo.overlaps(preview) {
+                                            let local_preview =
+                                                Rectangle::new(preview.loc - output_geo.loc, preview.size);
+                                            let preview_phys =
+                                                local_preview.to_physical_precise_round(scale);
+                                            let target_r = win_phys_r.unwrap_or((22.0 * scale).round() as i32) as f32;
+
+                                            if let Some(ref mut blur) = blur_pipeline {
+                                                let _ = frame.with_context(|gl| {
+                                                    blur.render_snap_preview(
+                                                        gl,
+                                                        &projection,
+                                                        out_surface.size,
+                                                        preview_phys,
+                                                        target_r,
+                                                        scale,
+                                                    );
+                                                });
+                                            } else {
+                                                let _ = frame.draw_solid(
+                                                    preview_phys,
+                                                    &[Rectangle::from_size(preview_phys.size)],
+                                                    Color32F::new(0.0, 0.48, 1.0, 0.14),
+                                                );
+                                            }
+                                        }
+                                    }
+                                    snap_preview_drawn = true;
+                                }
+                            }
+
                             let is_body_occluded = body_occluded[idx];
                             let is_shadow_occluded = shadow_occluded[idx];
 
@@ -3172,6 +3228,38 @@ pub fn run_drm() -> Result<()> {
                                 } else {
                                     let _ =
                                         draw_render_elements(&mut frame, scale, win_elems, &[damage]);
+                                }
+                            }
+                        }
+
+                        // Si no se dibujó antes (por ejemplo, si no hay ventanas en este monitor), dibujarlo sobre el fondo
+                        if !snap_preview_drawn && is_pointer_grabbed {
+                            if let Some(preview) = state.snap_preview {
+                                if output_geo.overlaps(preview) {
+                                    let local_preview =
+                                        Rectangle::new(preview.loc - output_geo.loc, preview.size);
+                                    let preview_phys =
+                                        local_preview.to_physical_precise_round(scale);
+                                    let target_r = win_phys_r.unwrap_or((22.0 * scale).round() as i32) as f32;
+
+                                    if let Some(ref mut blur) = blur_pipeline {
+                                        let _ = frame.with_context(|gl| {
+                                            blur.render_snap_preview(
+                                                gl,
+                                                &projection,
+                                                out_surface.size,
+                                                preview_phys,
+                                                target_r,
+                                                scale,
+                                            );
+                                        });
+                                    } else {
+                                        let _ = frame.draw_solid(
+                                            preview_phys,
+                                            &[Rectangle::from_size(preview_phys.size)],
+                                            Color32F::new(0.0, 0.48, 1.0, 0.14),
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -3605,45 +3693,6 @@ pub fn run_drm() -> Result<()> {
                                 std::slice::from_ref(ui_elem),
                                 &[damage],
                             );
-                        }
-
-                        // Dibujar previsualización translúcida de ajuste (Snap Preview) si el puntero está agarrado y la previsualización intersecta este monitor
-                        let is_pointer_grabbed = state
-                            .seat
-                            .get_pointer()
-                            .map(|p| p.is_grabbed())
-                            .unwrap_or(false);
-                        if is_pointer_grabbed {
-                            if let Some(preview) = state.snap_preview {
-                                if output_geo.overlaps(preview) {
-                                    let local_preview =
-                                        Rectangle::new(preview.loc - output_geo.loc, preview.size);
-                                    let preview_phys =
-                                        local_preview.to_physical_precise_round(scale);
-                                    let target_r = win_phys_r.unwrap_or((22.0 * scale).round() as i32) as f32;
-
-                                    if let Some(ref mut blur) = blur_pipeline {
-                                        let _ = frame.with_context(|gl| {
-                                            blur.render_snap_preview(
-                                                gl,
-                                                &projection,
-                                                out_surface.size,
-                                                preview_phys,
-                                                target_r,
-                                                scale,
-                                            );
-                                        });
-                                    } else {
-                                        let _ = frame.draw_solid(
-                                            preview_phys,
-                                            &[Rectangle::from_size(preview_phys.size)],
-                                            Color32F::new(0.0, 0.48, 1.0, 0.14),
-                                        );
-                                    }
-                                }
-                            }
-                        } else {
-                            state.snap_preview = None;
                         }
 
                         // 🧞 EFECTO LÁMPARA DE ALADINO (GENIE EFFECT / MAGIC LAMP)

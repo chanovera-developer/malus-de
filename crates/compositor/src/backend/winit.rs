@@ -896,6 +896,7 @@ pub fn run_winit() -> Result<()> {
                                     has_dragged: false,
                                 };
                                 state.ssd.grab_active = true;
+                                state.moving_window_surface = window.wl_surface().map(|s| s.into_owned());
                                 pointer.set_grab(&mut state, grab, btn_serial, smithay::input::pointer::Focus::Clear);
                             }
 
@@ -1595,6 +1596,17 @@ pub fn run_winit() -> Result<()> {
 
                     let projection = *frame.projection();
 
+                    let is_pointer_grabbed = state
+                        .seat
+                        .get_pointer()
+                        .map(|p| p.is_grabbed())
+                        .unwrap_or(false);
+                    if !is_pointer_grabbed {
+                        state.snap_preview = None;
+                        state.moving_window_surface = None;
+                    }
+                    let mut snap_preview_drawn = false;
+
                     // 2. Renderizar superficies de cada ventana con sus sombras proyectadas, desenfoque de fondo y esquinas squircle
                     for (
                         idx,
@@ -1621,6 +1633,45 @@ pub fn run_winit() -> Result<()> {
                         if win_elems.is_empty() {
                             continue;
                         }
+
+                        // Dibujar la previsualización de ajuste (Snap Preview) INMEDIATAMENTE ANTES
+                        // de la ventana activa que se está arrastrando, de modo que la ventana quede POR ENCIMA
+                        if !snap_preview_drawn && is_pointer_grabbed {
+                            let is_target_window = state.moving_window_surface.as_ref().map_or(
+                                idx == window_render_data.len() - 1,
+                                |moving_surf| {
+                                    let moving_id = smithay::backend::renderer::element::Id::from_wayland_resource(moving_surf);
+                                    *root_id == moving_id
+                                },
+                            );
+                            if is_target_window {
+                                if let Some(preview) = state.snap_preview {
+                                    let preview_phys = preview.to_physical_precise_round(1.0);
+                                    let target_r = win_phys_r.unwrap_or(22) as f32;
+
+                                    if let Some(ref mut blur) = blur_pipeline {
+                                        let _ = frame.with_context(|gl| {
+                                            blur.render_snap_preview(
+                                                gl,
+                                                &projection,
+                                                size,
+                                                preview_phys,
+                                                target_r,
+                                                1.0,
+                                            );
+                                        });
+                                    } else {
+                                        let _ = frame.draw_solid(
+                                            preview_phys,
+                                            &[Rectangle::from_size(preview_phys.size)],
+                                            Color32F::new(0.0, 0.48, 1.0, 0.14),
+                                        );
+                                    }
+                                }
+                                snap_preview_drawn = true;
+                            }
+                        }
+
                         let is_body_occluded = body_occluded[idx];
                         let is_shadow_occluded = shadow_occluded[idx];
 
@@ -1814,6 +1865,33 @@ pub fn run_winit() -> Result<()> {
                                         &[damage],
                                     );
                                 }
+                            }
+                        }
+                    }
+
+                    // Si no se dibujó antes (por ejemplo, si no hay ventanas en este monitor), dibujarlo sobre el fondo
+                    if !snap_preview_drawn && is_pointer_grabbed {
+                        if let Some(preview) = state.snap_preview {
+                            let preview_phys = preview.to_physical_precise_round(1.0);
+                            let target_r = win_phys_r.unwrap_or(22) as f32;
+
+                            if let Some(ref mut blur) = blur_pipeline {
+                                let _ = frame.with_context(|gl| {
+                                    blur.render_snap_preview(
+                                        gl,
+                                        &projection,
+                                        size,
+                                        preview_phys,
+                                        target_r,
+                                        1.0,
+                                    );
+                                });
+                            } else {
+                                let _ = frame.draw_solid(
+                                    preview_phys,
+                                    &[Rectangle::from_size(preview_phys.size)],
+                                    Color32F::new(0.0, 0.48, 1.0, 0.14),
+                                );
                             }
                         }
                     }
@@ -2242,40 +2320,6 @@ pub fn run_winit() -> Result<()> {
                             &dnd_elems,
                             &[damage],
                         );
-                    }
-
-                    // Dibujar previsualización translúcida de ajuste (Snap Preview) al arrastrar cerca del borde
-                    let is_pointer_grabbed = state
-                        .seat
-                        .get_pointer()
-                        .map(|p| p.is_grabbed())
-                        .unwrap_or(false);
-                    if is_pointer_grabbed {
-                        if let Some(preview) = state.snap_preview {
-                            let preview_phys = preview.to_physical_precise_round(1.0);
-                            let target_r = win_phys_r.unwrap_or(22) as f32;
-
-                            if let Some(ref mut blur) = blur_pipeline {
-                                let _ = frame.with_context(|gl| {
-                                    blur.render_snap_preview(
-                                        gl,
-                                        &projection,
-                                        size,
-                                        preview_phys,
-                                        target_r,
-                                        1.0,
-                                    );
-                                });
-                            } else {
-                                let _ = frame.draw_solid(
-                                    preview_phys,
-                                    &[Rectangle::from_size(preview_phys.size)],
-                                    Color32F::new(0.0, 0.48, 1.0, 0.14),
-                                );
-                            }
-                        }
-                    } else {
-                        state.snap_preview = None;
                     }
 
                     // Efecto Genie: deformación por franjas hasta el slot real de la miniatura.

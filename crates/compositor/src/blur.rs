@@ -1225,7 +1225,7 @@ impl GaussianBlur {
     }
 
     /// Dibuja la previsualización translúcida de ajuste de ventana (macOS Snap Preview)
-    /// con esquinas squircle que respetan el radio de la ventana activa, desenfoque de fondo y borde sutil.
+    /// con esquinas squircle que respetan el radio de la ventana activa y borde sutil, sin desenfoque.
     pub fn render_snap_preview(
         &mut self,
         gl: &ffi::Gles2,
@@ -1235,16 +1235,7 @@ impl GaussianBlur {
         corner_radius: f32,
         scale: f64,
     ) {
-        // 1. Desenfoque suave del fondo para acabado de vidrio translúcido auténtico
-        self.render_blur(
-            gl,
-            projection,
-            screen_size,
-            win_rect,
-            corner_radius,
-        );
-
-        // 2. Overlay translúcido suave con curvatura squircle y borde sutil
+        // Overlay translúcido suave con curvatura squircle y borde sutil
         let screen_rect = Rectangle::from_size(screen_size);
         let Some(visible_rect) = win_rect.intersection(screen_rect) else {
             return;

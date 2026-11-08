@@ -179,6 +179,7 @@ pub struct MalusState {
     pub active_animations: Vec<GenieAnimation>,
     pub snap_transitions: HashMap<WlSurface, SnapTransition>,
     pub snap_preview: Option<Rectangle<i32, Logical>>,
+    pub moving_window_surface: Option<WlSurface>,
     pub socket_name: String,
     pub is_running: bool,
     pub ipc_broadcaster: IpcBroadcaster,
@@ -853,6 +854,7 @@ impl MalusState {
             active_animations: Vec::new(),
             snap_transitions: HashMap::new(),
             snap_preview: None,
+            moving_window_surface: None,
             socket_name: String::new(),
             is_running: true,
             ipc_broadcaster,
@@ -2376,6 +2378,7 @@ impl MalusState {
                         has_dragged: false,
                     };
                     self.ssd.grab_active = true;
+                    self.moving_window_surface = window.wl_surface().map(|s| s.into_owned());
                     pointer.set_grab(
                         self,
                         grab,
@@ -2951,6 +2954,7 @@ impl XdgShellHandler for MalusState {
 
         self.space.raise_element(&window, true);
         self.ssd.grab_active = true;
+        self.moving_window_surface = window.wl_surface().map(|s| s.into_owned());
         pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Clear);
         tracing::info!("✅ [XdgShell] MoveSurfaceGrab activado exitosamente para arrastre por título!");
     }
