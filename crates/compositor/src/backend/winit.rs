@@ -1186,6 +1186,7 @@ pub fn run_winit() -> Result<()> {
                 let mut spotlight_shadow_rects = Vec::new();
                 let mut dock_popups = Vec::new();
                 let mut topbar_popups = Vec::new();
+                let mut wallpaper_popups = Vec::new();
                 let is_dnd_alive = state.dnd_icon.as_ref().map(|s| s.alive()).unwrap_or(false);
                 if !is_dnd_alive && state.dnd_icon.is_some() {
                     state.dnd_icon = None;
@@ -1284,6 +1285,12 @@ pub fn run_winit() -> Result<()> {
                                     );
                                     dock_popups.push((elems, popup_rect));
                                 }
+                            } else if surface.namespace() == "malus-wallpaper" {
+                                let popup_rect = Rectangle::new(
+                                    layer_loc + offset,
+                                    popup_geometry.size.to_physical_precise_round(1.0),
+                                );
+                                wallpaper_popups.push((elems, popup_rect));
                             } else {
                                 p_elems.extend(elems);
                             }
@@ -2291,6 +2298,54 @@ pub fn run_winit() -> Result<()> {
                                     popup_rect.loc - elem_geo.loc,
                                     popup_rect.size,
                                     menu_radius,
+                                );
+                            }
+                            let _ = draw_render_elements(
+                                &mut frame,
+                                1.0,
+                                std::slice::from_ref(elem),
+                                &[damage],
+                            );
+                            frame.clear_tex_program_override();
+                        }
+                    }
+
+                    for (popup_elems, popup_rect) in &wallpaper_popups {
+                        if let Some(shadow) = shadow_pipeline.as_ref() {
+                            let shadow_r = win_phys_r.unwrap_or(22) as f32;
+                            let _ = frame.with_context(|gl| {
+                                shadow.render_shadow(
+                                    gl,
+                                    &projection,
+                                    *popup_rect,
+                                    shadow_r,
+                                    true,
+                                    1.0,
+                                );
+                            });
+                        }
+
+                        if let Some(blur) = blur_pipeline.as_mut() {
+                            let _ = frame.with_context(|gl| {
+                                blur.render_blur(
+                                    gl,
+                                    &projection,
+                                    size,
+                                    *popup_rect,
+                                    menu_radius as f32,
+                                );
+                            });
+                        }
+
+                        for elem in popup_elems.iter().rev() {
+                            if let Some(shader) = window_squircle_shader.as_ref() {
+                                let elem_geo = elem.geometry(Scale::from(1.0));
+                                shader.apply_to_frame(
+                                    &mut frame,
+                                    elem_geo.size,
+                                    popup_rect.loc - elem_geo.loc,
+                                    popup_rect.size,
+                                    32,
                                 );
                             }
                             let _ = draw_render_elements(

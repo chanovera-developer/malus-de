@@ -2551,6 +2551,7 @@ pub fn run_drm() -> Result<()> {
                 let mut spotlight_shadow_rects = Vec::new();
                 let mut dock_popups = Vec::new();
                 let mut topbar_popups = Vec::new();
+                let mut wallpaper_popups = Vec::new();
                 let spotlight_active = layer_map
                     .layers()
                     .any(|surface| surface.namespace() == "malus-spotlight-results");
@@ -2626,6 +2627,12 @@ pub fn run_drm() -> Result<()> {
                                     );
                                     dock_popups.push((elems, popup_rect));
                                 }
+                            } else if surface.namespace() == "malus-wallpaper" {
+                                let popup_rect = Rectangle::new(
+                                    layer_loc + offset,
+                                    popup_geometry.size.to_physical_precise_round(scale),
+                                );
+                                wallpaper_popups.push((elems, popup_rect));
                             } else {
                                 p_elems.extend(elems);
                             }
@@ -3694,6 +3701,56 @@ pub fn run_drm() -> Result<()> {
                                         popup_rect.loc - elem_geo.loc,
                                         popup_rect.size,
                                         menu_radius,
+                                    );
+                                }
+                                let _ = draw_render_elements(
+                                    &mut frame,
+                                    scale,
+                                    std::slice::from_ref(elem),
+                                    &[damage],
+                                );
+                                frame.clear_tex_program_override();
+                            }
+                        }
+
+                        for (popup_elems, popup_rect) in &wallpaper_popups {
+                            if let Some(shadow) = shadow_pipeline.as_ref() {
+                                let shadow_r =
+                                    win_phys_r.unwrap_or((22.0 * scale).round() as i32) as f32;
+                                let _ = frame.with_context(|gl| {
+                                    shadow.render_shadow(
+                                        gl,
+                                        &projection,
+                                        *popup_rect,
+                                        shadow_r,
+                                        true,
+                                        scale,
+                                    );
+                                });
+                            }
+
+                            if let Some(blur) = blur_pipeline.as_mut() {
+                                let _ = frame.with_context(|gl| {
+                                    blur.render_blur(
+                                        gl,
+                                        &projection,
+                                        out_surface.size,
+                                        *popup_rect,
+                                        menu_radius as f32,
+                                    );
+                                });
+                            }
+
+                            for elem in popup_elems.iter().rev() {
+                                if let Some(shader) = window_squircle_shader.as_ref() {
+                                    let elem_geo =
+                                        elem.geometry(smithay::utils::Scale::from(scale));
+                                    shader.apply_to_frame(
+                                        &mut frame,
+                                        elem_geo.size,
+                                        popup_rect.loc - elem_geo.loc,
+                                        popup_rect.size,
+                                        (32.0 * scale).round() as i32,
                                     );
                                 }
                                 let _ = draw_render_elements(

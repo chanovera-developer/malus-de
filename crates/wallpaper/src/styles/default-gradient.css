@@ -71,10 +71,9 @@ label.desktop-icon-label {
     border-radius: 4px;
 }
 
+/* Menús emergentes (Popovers) del escritorio con diseño nativo acrílico / Nautilus */
 popover.desktop-popover-menu,
 popover.desktop-popover-menu.background,
-popover.desktop-popover-menu > contents,
-popover.desktop-popover-menu > contents.background,
 popover.desktop-popover-menu > arrow {
     background: transparent;
     padding: 0;
@@ -83,12 +82,30 @@ popover.desktop-popover-menu > arrow {
     box-shadow: none;
 }
 
+popover.desktop-popover-menu > contents,
+popover.desktop-popover-menu > contents.background {
+    background-color: rgba(30, 30, 34, 0.82);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 14px;
+    padding: 5px;
+    box-shadow: none;
+}
+
+@media (prefers-color-scheme: light) {
+    popover.desktop-popover-menu > contents,
+    popover.desktop-popover-menu > contents.background {
+        background-color: rgba(246, 246, 248, 0.82);
+        border: 1px solid rgba(0, 0, 0, 0.12);
+    }
+}
+
 .desktop-context-menu {
-    background: rgba(28, 30, 36, 0.92);
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 10px;
-    padding: 6px;
-    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    margin: 0;
+    box-shadow: none;
 }
 
 .desktop-context-btn {
@@ -96,11 +113,18 @@ popover.desktop-popover-menu > arrow {
     background: transparent;
     border: none;
     box-shadow: none;
-    border-radius: 6px;
-    padding: 6px 12px;
+    border-radius: 8px;
+    padding: 4px 10px;
+    margin: 1px 2px;
+    min-height: 28px;
     font-size: 13px;
     font-weight: 500;
     text-shadow: none;
+}
+
+.desktop-context-btn label {
+    xalign: 0;
+    justify: left;
 }
 
 .desktop-context-btn:hover {
@@ -117,4 +141,21 @@ popover.desktop-popover-menu > arrow {
     background: rgba(255, 255, 255, 0.12);
     min-height: 1px;
     margin: 4px 6px;
+}
+
+@media (prefers-color-scheme: light) {
+    .desktop-context-btn {
+        color: #1e293b;
+    }
+    .desktop-context-btn:hover {
+        background: #007aff;
+        color: #ffffff;
+    }
+    .desktop-context-btn.destructive:hover {
+        background: #e11d48;
+        color: #ffffff;
+    }
+    .desktop-context-separator {
+        background: rgba(0, 0, 0, 0.10);
+    }
 }

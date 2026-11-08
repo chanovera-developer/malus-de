@@ -4,6 +4,23 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-08] — Diseño Acrílico en Menús Emergentes del Escritorio (Alineación con Nautilus, Dual Kawase Blur, Sombra GPU y Squircle)
+
+### Hitos Implementados
+
+* **Pipeline de Renderizado de Popovers de Fondo en el Compositor (`crates/compositor/src/backend/drm.rs`, `crates/compositor/src/backend/winit.rs`):**
+  * **Captura de Superficies Popover del Fondo de Pantalla (`wallpaper_popups`):** Se interceptan los popovers xdg pertenecientes a la superficie layer shell `malus-wallpaper`, extrayendo su geometría y árboles de renderizado físico para aplicarles el mismo pipeline de postprocesado GPU reservado a ventanas toplevel como Nautilus.
+  * **Sombra Volumétrica Flotante (`shadow.render_shadow`):** Sombra Gaussiana profunda con desplazamiento vertical sutil (`is_active = true`), eliminando las sombras CSS planas generadas en el cliente y sustituyéndolas por la penumbra envolvente del compositor.
+  * **Desenfoque Dual-Kawase de Fondo (`blur.render_blur`):** Desenfoque por GPU en tiempo real sobre la escena completa detrás del popover con radio de redondeo adaptativo (`menu_radius`).
+  * **Recorte Squircle Continuo (`shader.apply_to_frame`):** Superelipse $G^2$ ($n = 4.2$) aplicada mediante shader GLSL a la textura de los popovers con radio de esquina de 32px físicos.
+
+* **Rediseño Visual y Estilizado Acrílico en el Escritorio (`crates/wallpaper/src/styles/default-gradient.css`, `crates/wallpaper/src/main.rs`):**
+  * **Misma Transparencia y Bordes que Nautilus:** Fondo translúcido con opacidad acrílica (`rgba(30, 30, 34, 0.82)` en tema oscuro / `rgba(246, 246, 248, 0.82)` en tema claro) y borde sutil de 1px (`rgba(255, 255, 255, 0.14)` / `rgba(0, 0, 0, 0.12)`).
+  * **Eliminación de la Sombra CSS:** Se retiró el `box-shadow` CSS de la caja interior, permitiendo que el contenedor coincida de manera exacta con el tamaño físico de la superficie Wayland sin colchones de padding sobrante.
+  * **Ergonomía y Alineación de Elementos:** Botones de menú (`desktop-context-btn`) con altura mínima de 28px, bordes redondeados tipo squircle de 8px, alineación de texto a la izquierda (`xalign: 0.0`) y selector azul macOS (`#007aff`) en hover con tipografía blanca nítida.
+
+---
+
 ## [2026-11-08] — Eliminación de Oscilación/Jitter y Arrastre Unificado de Iconos en Overlay
 
 ### Diagnóstico de Causa Raíz

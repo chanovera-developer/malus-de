@@ -854,6 +854,21 @@ fn refresh_desktop_icons(
     }
 }
 
+fn create_menu_button(label: &str, destructive: bool) -> Button {
+    let btn = Button::with_label(label);
+    btn.add_css_class("desktop-context-btn");
+    if destructive {
+        btn.add_css_class("destructive");
+    }
+    btn.set_halign(Align::Fill);
+    if let Some(child) = btn.child() {
+        if let Some(lbl) = child.downcast_ref::<Label>() {
+            lbl.set_xalign(0.0);
+        }
+    }
+    btn
+}
+
 #[allow(unused_variables)]
 fn render_single_icon(
     fixed: &Fixed,
@@ -992,16 +1007,11 @@ fn render_single_icon(
     let menu = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(2)
-        .margin_top(6)
-        .margin_bottom(6)
-        .margin_start(6)
-        .margin_end(6)
         .css_classes(["desktop-context-menu"])
         .build();
 
     // 1. Abrir
-    let open_button = Button::with_label("Abrir");
-    open_button.add_css_class("desktop-context-btn");
+    let open_button = create_menu_button("Abrir", false);
     let open_file_btn = file.clone();
     let popover_c = popover.clone();
     open_button.connect_clicked(move |_| {
@@ -1011,8 +1021,7 @@ fn render_single_icon(
     menu.append(&open_button);
 
     // 2. Vista rápida (Quick Look)
-    let ql_button = Button::with_label("Vista rápida (Espacio)");
-    ql_button.add_css_class("desktop-context-btn");
+    let ql_button = create_menu_button("Vista rápida (Espacio)", false);
     let ql_path = path.clone();
     let popover_c = popover.clone();
     ql_button.connect_clicked(move |_| {
@@ -1022,8 +1031,7 @@ fn render_single_icon(
     menu.append(&ql_button);
 
     // 3. Mostrar en gestor de archivos
-    let reveal_button = Button::with_label("Mostrar en el gestor de archivos");
-    reveal_button.add_css_class("desktop-context-btn");
+    let reveal_button = create_menu_button("Mostrar en el gestor de archivos", false);
     let reveal_file = file.clone();
     let popover_c = popover.clone();
     reveal_button.connect_clicked(move |_| {
@@ -1038,8 +1046,7 @@ fn render_single_icon(
     menu.append(&sep1);
 
     // 4. Renombrar
-    let rename_button = Button::with_label("Renombrar...");
-    rename_button.add_css_class("desktop-context-btn");
+    let rename_button = create_menu_button("Renombrar...", false);
     let rename_path = path.clone();
     let rename_item = item_box.clone();
     let popover_c = popover.clone();
@@ -1050,8 +1057,7 @@ fn render_single_icon(
     menu.append(&rename_button);
 
     // 5. Duplicar
-    let dup_button = Button::with_label("Duplicar");
-    dup_button.add_css_class("desktop-context-btn");
+    let dup_button = create_menu_button("Duplicar", false);
     let dup_path = path.clone();
     let popover_c = popover.clone();
     dup_button.connect_clicked(move |_| {
@@ -1065,9 +1071,7 @@ fn render_single_icon(
     menu.append(&sep2);
 
     // 6. Mover a la papelera
-    let trash_button = Button::with_label("Mover a la papelera");
-    trash_button.add_css_class("desktop-context-btn");
-    trash_button.add_css_class("destructive");
+    let trash_button = create_menu_button("Mover a la papelera", true);
     let trash_path = path.clone();
     let popover_c = popover.clone();
     trash_button.connect_clicked(move |_| {
@@ -1296,16 +1300,11 @@ fn create_wallpaper_window(
             let menu = GtkBox::builder()
                 .orientation(Orientation::Vertical)
                 .spacing(2)
-                .margin_top(6)
-                .margin_bottom(6)
-                .margin_start(6)
-                .margin_end(6)
                 .css_classes(["desktop-context-menu"])
                 .build();
 
             // 1. Nueva Carpeta
-            let new_folder_btn = Button::with_label("Nueva carpeta");
-            new_folder_btn.add_css_class("desktop-context-btn");
+            let new_folder_btn = create_menu_button("Nueva carpeta", false);
             let popover_c = popover.clone();
             let d_dir = desktop_dir_menu.clone();
             let parent_w = icons_context.clone();
@@ -1326,8 +1325,7 @@ fn create_wallpaper_window(
             } else {
                 "Usar Pilas"
             };
-            let stacks_btn = Button::with_label(stacks_label);
-            stacks_btn.add_css_class("desktop-context-btn");
+            let stacks_btn = create_menu_button(stacks_label, false);
             let popover_c = popover.clone();
             let cfg_c2 = cfg_menu.clone();
             let trigger_c = trigger_refresh_menu.clone();
@@ -1348,8 +1346,7 @@ fn create_wallpaper_window(
             } else {
                 "Alineación automática"
             };
-            let snap_btn = Button::with_label(snap_label);
-            snap_btn.add_css_class("desktop-context-btn");
+            let snap_btn = create_menu_button(snap_label, false);
             let popover_c = popover.clone();
             let cfg_c4 = cfg_menu.clone();
             let trigger_c = trigger_refresh_menu.clone();
@@ -1364,8 +1361,7 @@ fn create_wallpaper_window(
             menu.append(&snap_btn);
 
             // 4. Alinear a la cuadrícula (Snap all)
-            let snap_all_btn = Button::with_label("Alinear a la cuadrícula");
-            snap_all_btn.add_css_class("desktop-context-btn");
+            let snap_all_btn = create_menu_button("Alinear a la cuadrícula", false);
             let popover_c = popover.clone();
             let cfg_c3 = cfg_menu.clone();
             let trigger_c = trigger_refresh_menu.clone();
@@ -1392,8 +1388,7 @@ fn create_wallpaper_window(
             menu.append(&sep2);
 
             // 5. Cambiar fondo de pantalla...
-            let wp_btn = Button::with_label("Fondo de pantalla y Estilo...");
-            wp_btn.add_css_class("desktop-context-btn");
+            let wp_btn = create_menu_button("Fondo de pantalla y Estilo...", false);
             let popover_c = popover.clone();
             wp_btn.connect_clicked(move |_| {
                 let mut cmd = std::process::Command::new("malus-de-settings");
