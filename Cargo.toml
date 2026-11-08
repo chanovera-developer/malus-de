@@ -16,6 +16,7 @@ members = [
     "crates/ctl",
     "crates/settings",
     "crates/render",
+    "crates/branches",
 ]
 
 [workspace.package]

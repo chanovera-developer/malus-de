@@ -395,6 +395,10 @@ pub fn is_translucent_window(window: &smithay::desktop::Window) -> bool {
                 || lower.contains("malus.settings")
                 || lower.contains("malus-de-settings")
                 || lower.contains("malus_de_settings")
+                || lower.contains("branches")
+                || lower.contains("malus.branches")
+                || lower.contains("malus-de-branches")
+                || lower.contains("malus_de_branches")
             {
                 return true;
             }
@@ -403,6 +407,7 @@ pub fn is_translucent_window(window: &smithay::desktop::Window) -> bool {
             let lower = title.to_lowercase();
             if lower.contains("ajustes del sistema")
                 || lower.contains("confirmación de acción del sistema")
+                || lower.contains("branches")
             {
                 return true;
             }

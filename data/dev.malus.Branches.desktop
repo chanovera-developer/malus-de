@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Branches
+GenericName=Explorador de Archivos
+Comment=Explorador de archivos nativo de Malus DE
+Exec=malus-de-branches %U
+Icon=system-file-manager
+Terminal=false
+Type=Application
+StartupNotify=true
+StartupWMClass=dev.malus.Branches
+Categories=System;FileTools;FileManager;GTK;
+MimeType=inode/directory;
+Keywords=Archivos;Carpetas;Explorador;Files;FileManager;Finder;Branches;

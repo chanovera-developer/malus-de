@@ -37,7 +37,7 @@ graph TD
         Clipboard["Portapapeles (malus-de-clipboard)\n- Historial\n- Acceso Super + V"]
         Wallpaper["Fondo Dinámico (malus-de-wallpaper)\n- Ciclos solares"]
         Notifications["Notificaciones (malus-de-notifications)\n- Daemon D-Bus"]
-        Finder["Finder / Archivos (malus-de-finder / Futuro)\n- Explorador nativo en Rust\n- Columnas Miller & Quick Look\n- Disposición libre de iconos & DnD"]
+        Branches["Branches / Archivos (malus-de-branches / Futuro)\n- Explorador nativo en Rust\n- Árbol de directorios & Columnas Miller\n- Disposición libre de iconos & DnD"]
     end
 
     subgraph IntegrationServices ["Servicios del Sistema & Ecosistema"]
@@ -52,7 +52,7 @@ graph TD
     Spotlight -->|wlr-layer-shell: Overlay| Protocols
     Clipboard -->|Wayland data-control| Protocols
     Wallpaper -->|wlr-layer-shell: Background| Protocols
-    Finder -.->|xdg-shell| Protocols
+    Branches -.->|xdg-shell| Protocols
 
     TopBar <-->|IPC| IPC
     Dock <-->|IPC| IPC
@@ -191,27 +191,85 @@ graph TD
 * **Requisitos de ejecución:** `wl-clipboard` para copiar imágenes. La tecla `Impr Pant` inicia una captura completa en la sesión instalada; tras cambios en el compositor es necesario recompilar e iniciar una sesión nueva.
 * **Pendiente:** Captura de ventana, grabación de pantalla y OCR. Estos modos no deben presentarse como funciones disponibles hasta su implementación.
 
-### 3.7. Explorador de Archivos Nativo tipo Finder (`crates/finder` - Planificado)
-* **Objetivo:** Diseñar e implementar un explorador de archivos autónomo y ultraligero escrito en Rust nativo que proporcione una experiencia idéntica a **macOS Finder**, superando las limitaciones y carencias históricas de GNOME Nautilus.
+### 3.7. Explorador de Archivos Nativo Branches (`crates/branches` - Planificado)
+* **Objetivo:** Diseñar e implementar **Branches** (`malus-de-branches`), el explorador de archivos nativo, autónomo y ultraligero de Malus DE escrito en Rust sobre **GTK4 / Libadwaita**. Bautizado en honor a las ramas del árbol de manzanas (*Malus*) y a la estructura ramificada del sistema de archivos (*directory tree*), reproduce fielmente la ergonomía, diseño y controles de **macOS Finder** con afinidad visual total hacia el resto del escritorio, permitiendo desplazar progresivamente a GNOME Nautilus hasta lograr total independencia.
 * **Carencias de Nautilus resueltas:**
-  - Nautilus no publica ni administra la superficie de escritorio con posicionamiento libre, ni permite arrastrar y soltar con coordenadas arbitrarias persistentes.
-  - Ausencia de navegación en columnas Miller nativas con previsualización fluida de metadatos encadenada en panel lateral.
-  - Carencia de vista previa instantánea universal desacoplada de aplicaciones pesadas mediante barra espaciadora (*Quick Look* nativo).
-  - Falta de un sistema nativo de etiquetas de color (*Color Tags/Labels*) para clasificación visual transversal de archivos.
-* **Capacidades y Arquitectura Planificada:**
-  - **4 Modos de Visualización Esenciales (Paridad macOS Finder):**
-    1. **Vista de Iconos (*Icon View*):** Cuadrícula con ordenación libre, alineación magnética (*Snap to Grid*), tamaño de icono regulable y persistencia de posiciones espaciales de archivos tanto en ventanas como en el escritorio.
-    2. **Vista de Lista (*List View*):** Vista tabular multicolumna con triángulos de revelado en línea para desplegar subcarpetas jerárquicamente sin cambiar de directorio.
-    3. **Vista de Columnas (*Miller Columns*):** Navegación en cascada horizontal multinivel con panel final de previsualización y metadatos detallados (EXIF, códecs de audio/vídeo, permisos, fechas).
-    4. **Vista de Galería (*Gallery View*):** Carrusel horizontal inferior de miniaturas con lienzo superior de previsualización a gran escala.
-  - **Quick Look Integrado (`Espacio`):** Ventana modal flotante acrílica ultrarrápida para inspeccionar imágenes, vídeo, audio, PDFs, documentos y código fuente con resaltado de sintaxis sin lanzar aplicaciones externas.
-  - **Etiquetas de Color (*Color Tags / Labels*):** Etiquetado visual con puntos cromáticos (Rojo, Naranja, Amarillo, Verde, Azul, Púrpura, Gris) persistido en atributos extendidos (`xattr`) del sistema de archivos y sincronizado con Spotlight para búsquedas instantáneas por etiqueta.
-  - **Barra Lateral (*Sidebar*) Acrílica:** Secciones colapsables de *Favoritos*, *iCloud / Red*, *Dispositivos / Unidades montadas*, *Etiquetas* y dispositivos detectados por AirDrop (`malus-de-link`).
-  - **Integración Nativa con Wayland y Compositor Malus:**
-    - Arrastre visible de archivos con `dnd_icon` translúcido flotando junto al cursor.
-    - Soporte completo de gestos táctiles hacia adelante/atrás en el historial de navegación.
-    - Barra de herramientas unificada (*Unified Toolbar*) con controles semáforo a la izquierda, esquinas squircle y desenfoque acrílico Dual-Kawase.
-  - **Stack Técnico:** Rust (Edición 2021), GTK4 / Libadwaita o Smithay-based client, operaciones asíncronas con `tokio`, vigilancia reactiva de directorios con `notify` y persistencia de vistas con SQLite / sled.
+  - Nautilus carece de división de pantalla (*Split View*) ágil e intuitiva en su interfaz moderna.
+  - Nautilus no soporta disposición libre de iconos con persistencia de coordenadas arbitrarias `(x, y)` ni cuadrícula magnética personalizable (*Snap to Grid*).
+  - Ausencia de navegación en columnas Miller nativas con previsualización encadenada de metadatos.
+  - Carencia de previsualización ultrarrápida desacoplada mediante barra espaciadora (*Quick Look* nativo).
+  - Falta de un sistema nativo de etiquetas de color (*Color Tags/Labels*) para clasificación visual transversal.
+
+* **Diseño e Interfaz Unificada (Paridad Estricta con macOS Finder):**
+  1. **Barra de Herramientas Unificada (*Unified Toolbar*):**
+     - **Controles de Ventana Semáforo:** `[Cerrar, Minimizar, Maximizar]` integrados al borde superior izquierdo.
+     - **Navegación Histórica:** Botones `[ < ]` y `[ > ]` con soporte para clic sostenido / menú contextual con el historial de carpetas.
+     - **Selector Segmentado de Vista (4 Modos):** Botón cuádruple con glifos idénticos a macOS:
+       - *Iconos* (icono cuadrícula 2x2).
+       - *Lista* (icono líneas de texto con viñetas).
+       - *Columnas Miller* (icono 3 columnas verticales).
+       - *Galería* (icono marco de imagen sobre carrusel).
+     - **División de Pantalla (*Split View Toggle*):** Botón con icono de doble panel vertical (`sidebar-show-right-symbolic` o cápsula dividida) para activar/desactivar el modo de doble panel interactivo.
+     - **Menú de Agrupación y Orden (*Grouping / Sort*):** Selector desplegable con opciones idénticas a Finder (*Ninguno, Nombre, Clase/Tipo, Fecha de Modificación, Tamaño, Etiquetas*).
+     - **Menú de Acción (*Action / Gear Menu*):** Acciones contextuales globales (*Nueva Carpeta, Obtener Información [Cmd+I], Renombrar, Duplicar, Comprimir*).
+     - **Compartir (*Share*):** Integración nativa con `malus-de-link` (AirDrop) y copiado rápido de rutas.
+     - **Etiquetas (*Tag Button*):** Selector cromático rápido para aplicar etiquetas al archivo o carpeta seleccionada.
+     - **Campo de Búsqueda Integrado:** Conmutador interactivo entre búsqueda local en la carpeta actual o global mediante Spotlight.
+  2. **Barra de Ruta (*Path Bar / Breadcrumbs*):**
+     - Barra delgada en la base de la ventana que muestra la jerarquía completa (`Disco > Usuarios > cristian > Documentos > ...`).
+     - Cada nodo es clicable y soporta arrastrar y soltar hacia él (*drop target*).
+  3. **Barra de Estado (*Status Bar*):**
+     - Muestra el recuento de elementos (`14 ítems`), selección activa (`1 ítem seleccionado, 4.2 MB`) y almacenamiento disponible restante (`185.3 GB disponibles`).
+  4. **Barra Lateral Translúcida (*Sidebar* con Blur Acrílico):**
+     - Secciones colapsables idénticas a macOS:
+       - **Favoritos:** *AirDrop, Recientes, Aplicaciones, Escritorio, Documentos, Descargas, Imágenes*.
+       - **iCloud / Nube:** Integración con proveedores locales o servicios sincronizados.
+       - **Ubicaciones:** Discos duros, memorias USB, particiones montadas y servidores de red (SMB/NFS).
+       - **Etiquetas (*Tags*):** Lista de puntos de color (Rojo, Naranja, Amarillo, Verde, Azul, Púrpura, Gris) para filtrar archivos etiquetados al instante.
+
+* **Requerimientos Específicos Clave:**
+  - **División de Pantalla (Dual Pane / Split View):**
+    - Contenedor `GtkPaned` que divide la ventana en dos paneles independientes (`LeftPane` y `RightPane`).
+    - Atajo de teclado directo (`Cmd + Option + 2` o `F3`).
+    - Cada panel mantiene su propio historial de navegación, modo de vista (uno puede estar en columnas y el otro en iconos) y selección.
+    - Soporte completo para arrastrar y soltar (*Drag & Drop*) entre ambos paneles para copiar o mover con modificadores (`Shift`/`Ctrl`).
+    - Resaltado visual sutil para indicar cuál es el panel activo/enfocado.
+  - **Modo Libre de Iconos (*Freeform Canvas / Spatial View*):**
+    - En la vista de iconos (y en el escritorio), los archivos pueden ser arrastrados y colocados en cualquier coordenada `(x, y)` dentro del lienzo.
+    - Soporte para alternar entre:
+      - *Colocación Libre:* Los iconos conservan exactamente la posición espacial donde el usuario los suelte.
+      - *Alinear a Cuadrícula (Snap to Grid):* Los iconos se imantan a una rejilla invisible regular sin forzar ordenación alfabética.
+      - *Limpieza / Ordenar Automáticamente:* Reordena al instante según el criterio elegido (nombre, fecha, etc.).
+    - Persistencia de coordenadas mediante base de datos ligera SQLite (`~/.local/share/malus-de/branches_views.sqlite`) o metadatos extendidos `xattr`, guardando escala de iconos, offset de scroll y posición `(x, y)` por ruta.
+    - Selección rectangular elástica (*rubber-band selection*) mediante arrastre en el fondo.
+
+* **Hoja de Ruta: Fases de Implementación para Reemplazo Progresivo de Nautilus:**
+  - **Fase 1: Andamiaje GTK4 y Navegación Básica (MVP)**
+    - Creación del crate `crates/branches` e integración en el workspace Cargo de Malus DE.
+    - Ventana principal en GTK4 / Libadwaita con *Unified HeaderBar*, barra lateral básica con accesos XDG y barra de ruta.
+    - Motor asíncrono con Tokio (`tokio::fs`) para listar directorios sin congelar el hilo de UI.
+    - Vigilancia reactiva de archivos en tiempo real con el crate `notify`.
+    - Vista de lista básica con iconos, nombres, tamaños y fechas.
+    - Lanzamiento de archivos con aplicaciones predeterminadas mediante `gio` / `xdg-open`.
+  - **Fase 2: División de Pantalla (Split View) y Canvas de Iconos Libres**
+    - Implementación del contenedor de vista dividida (`GtkPaned`) con dos controladores `FolderPane` autónomos.
+    - Implementación del canvas de vista de iconos (`GtkFixed` o widget de dibujo personalizado) con soporte para coordenadas libres `(x, y)` y snap-to-grid.
+    - Drag & drop fluido de archivos dentro del panel, entre paneles y desde/hacia aplicaciones externas.
+    - Capa de persistencia SQLite para almacenar posiciones de iconos por carpeta.
+  - **Fase 3: Vista de Columnas Miller & Quick Look**
+    - Implementación de la vista de columnas multinivel con desplazamiento horizontal automático al profundizar en la jerarquía.
+    - Panel derecho de previsualización con metadatos extendidos (resolución, códecs, fecha de modificación, permisos POSIX).
+    - Módulo modal Quick Look activado con `Espacio`: previsualización instantánea de imágenes (`gdk-pixbuf`), texto y código con resaltado sintáctico (`gtksourceview5`), y audio/vídeo.
+  - **Fase 4: Etiquetas de Color (Color Tags), Operaciones y Galería**
+    - Vista de galería con carrusel inferior de miniaturas y visor central.
+    - Almacenamiento de etiquetas cromáticas en atributos extendidos (`user.malus.tags`).
+    - Gestor de operaciones en segundo plano con cola no bloqueante (copiar, mover, enviar a papelera `gio::Trash`), con indicador de progreso circular en la barra de herramientas.
+    - Filtro instantáneo por etiquetas en la barra lateral.
+  - **Fase 5: Reemplazo Completo de Nautilus & Gestión de Escritorio**
+    - Registro formal como manejador de directorios predeterminado del sistema (`xdg-mime default malus-de-branches.desktop inode/directory`).
+    - Extensión del canvas de iconos libres al fondo de escritorio como cliente Layer-Shell (`wlr-layer-shell`), administrando los archivos de `~/Desktop` sobre el wallpaper dinámico.
+    - Eliminación de dependencias de demonios específicos de GNOME (Tracker, GVfs) sustituyéndolos por servicios internos livianos (`udisks2` para montajes y `malus-de-spotlight` para búsqueda indexada).
+* **Stack Técnico:** Rust (Edición 2021), GTK4 (`gtk4-rs`), Libadwaita (`libadwaita-rs`), operaciones asíncronas con `tokio`, vigilancia reactiva de directorios con `notify`, renderizado de miniaturas con `gdk-pixbuf` y persistencia con `rusqlite`.
 
 ---
 
@@ -229,5 +287,5 @@ graph TD
 | **M8** | Multi-Monitor 4K & Teclado Latam | ✅ Hecho | Disposición dual 4K en vivo, escalado independiente y enlazado 1:1 por PPI (`TrueSize`), y soporte nativo de teclado XKB Español Latinoamericano (`latam`). |
 | **M9** | Gestor de Portapapeles | ✅ Hecho | Historial persistente de hasta 50 elementos y 50 MiB; búsqueda, fijados, recopia y borrado con `Super + V`. Sincronización opcional con la selección primaria, formatos de imagen/documento adicionales y filtro heurístico configurable para contenido sensible. |
 | **M10** | Captura de Pantalla | 🟡 En Progreso | Captura completa y de área mediante IPC del compositor, guardado PNG, copia al portapapeles y miniatura; captura de ventana, grabación y OCR pendientes. |
-| **M11** | Explorador de Archivos (Finder) | 📋 Planificado | Gestor de archivos nativo en Rust tipo macOS Finder: 4 vistas (iconos libres, lista jerárquica, columnas Miller, galería), Quick Look (`Espacio`), etiquetas de color, gestión libre de escritorio y reemplazo progresivo de Nautilus. |
+| **M11** | Explorador de Archivos (Branches) | 🟡 En Progreso | Gestor nativo en GTK4 (`malus-de-branches`): Fase 1 (MVP, HeaderBar, Sidebar acrílica) y Fase 2 (Split View dual pane con drag & drop, canvas espacial de iconos libres y persistencia SQLite) completadas. Columnas Miller y Quick Look planificadas. |
 | **M12** | Indexación Reactiva Spotlight | 📋 Planificado | Monitoreo reactivo de directorios `.desktop` (`/usr/share/applications`, `~/.local/share/applications`) con `inotify`/`notify` para reflejar automáticamente aplicaciones instaladas o eliminadas sin requerir reinicio de sesión. |

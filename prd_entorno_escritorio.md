@@ -1223,17 +1223,28 @@ flowchart LR
 ---
 
 ## 6. Backlog de Ideas Futuras
-- [ ] **Explorador de Archivos Nativo en Rust tipo macOS Finder (`malus-de-finder`):**
-  - **Reemplazo Progresivo de Nautilus:** Desarrollar un explorador de archivos autónomo, rápido y ligero escrito 100% en Rust (`tokio` + `notify`), plenamente integrado con el compositor y la shell de Malus DE.
-  - **4 Modos de Vista Finder:**
-    1. *Iconos:* Cuadrícula espacial con colocación y ordenación libre, alineación magnética (*snap to grid*) y persistencia de posiciones espaciales, tanto en carpetas como en la superficie del escritorio.
+- [ ] **Explorador de Archivos Nativo Branches (`malus-de-branches`):**
+  - **Reemplazo Progresivo de Nautilus:** Desarrollar **Branches** (bautizado por las ramas del árbol de manzanas *Malus* y las ramas del árbol de directorios), un explorador de archivos autónomo, rápido y ligero escrito 100% en Rust sobre **GTK4 / Libadwaita** (`tokio` + `notify`), plenamente integrado con el compositor y la shell de Malus DE, diseñado para desplazar a Nautilus fase por fase.
+  - **Diseño Idéntico a macOS Finder:**
+    - Barra de herramientas unificada con semáforos, navegación histórica, selector de 4 modos, conmutador de división de pantalla, menús de agrupación/acción/compartir/tags y búsqueda.
+    - Barra de ruta (*breadcrumbs*) interactiva inferior y barra de estado con conteo y espacio disponible.
+    - Barra lateral acrílica (*Sidebar*) con Favoritos, Ubicaciones y Etiquetas.
+  - **División de Pantalla (*Split View / Dual Pane*):** Vista en dos paneles simultáneos (`GtkPaned`) independientes para operaciones ágiles de navegación y drag-and-drop entre carpetas.
+  - **Modo de Iconos Libre (*Freeform Canvas / Spatial Desktop & Folders*):** Posicionamiento arbitrario de iconos con coordenadas `(x, y)` persistidas en SQLite (`branches_views.sqlite`), snap-to-grid magnético y selección elástica de área.
+  - **4 Modos de Vista Branches:**
+    1. *Iconos:* Cuadrícula espacial con colocación y ordenación libre, alineación magnética (*snap to grid*) y persistencia de posiciones espaciales.
     2. *Lista Jerárquica:* Visualización tabular multicolumna con triángulos de revelado en línea para expandir y colapsar subcarpetas sin abandonar el directorio actual.
     3. *Columnas Miller (*Miller Columns*):* Navegación en cascada horizontal multinivel con panel final de previsualización y metadatos detallados (EXIF, códecs, fechas, permisos).
     4. *Galería / Carrusel:* Vista enfocada en medios con carrusel inferior de miniaturas y lienzo superior de gran tamaño.
   - **Quick Look Integrado (`Espacio`):** Ventana modal flotante acrílica instantánea para inspeccionar imágenes, vídeo, audio, PDFs, documentos y código fuente con resaltado de sintaxis sin lanzar aplicaciones externas pesadas.
   - **Etiquetas de Color (*Color Tags / Labels*):** Marcado visual con puntos cromáticos (Rojo, Naranja, Amarillo, Verde, Azul, Púrpura, Gris) persistido en atributos extendidos (`xattr`) del sistema de archivos y sincronizado con Spotlight para búsquedas instantáneas por etiqueta.
-  - **Drag and Drop Wayland de Primera Clase:** Soporte visual completo con miniatura `dnd_icon` translúcida flotando junto al cursor para arrastres fluidos entre ventanas, escritorio y el Dock.
-  - **Barra Lateral Acrílica y Toolbar Unificada:** Unidades montadas, volúmenes de red, etiquetas, favoritos, AirDrop (`malus-de-link`), esquinas squircle, desenfoque Dual-Kawase y controles de semáforo a la izquierda.
+  - **Drag and Drop Wayland de Primera Clase:** Soporte visual completo con miniatura `dnd_icon` translúcida flotando junto al cursor para arrastres fluidos entre ventanas, paneles, escritorio y el Dock.
+  - **Fases de Implementación:**
+    1. *Fase 1 (MVP):* Ventana GTK4, HeaderBar unificada, backend async Tokio + notify, lista básica y apertura de archivos.
+    2. *Fase 2:* Split View (`GtkPaned`) y canvas de iconos con coordenadas libres `(x, y)` persistidas en SQLite.
+    3. *Fase 3:* Columnas Miller y visor modal Quick Look (`Espacio`).
+    4. *Fase 4:* Etiquetas de color (`xattr`), visor de galería y gestor de operaciones asíncronas con progreso.
+    5. *Fase 5:* Registro como explorador predeterminado del sistema (`malus-de-branches.desktop`), gestión de iconos sobre el escritorio Wayland y desacople de demonios GNOME.
 - [ ] **Widgets Interactivos en el Escritorio (Estilo macOS Sonoma / Sequoia):**
   - Capacidad de colocar y anclar libremente en cualquier posición de la cuadrícula del escritorio los mismos widgets modulares (1x1, 2x1, 2x2) desarrollados para el Centro de Notificaciones (Calendario EDS, Tiempo, Baterías Bluetooth, Notas adhesivas, Reproductor MPRIS).
   - **Atenuación Inteligente y Fusión con el Fondo (*Intelligent Background Fade*):** Cuando una ventana de aplicación entra en primer plano o se sitúa sobre el escritorio, los widgets se atenúan automáticamente convirtiéndose en siluetas monocromáticas sutiles que armonizan con el wallpaper para evitar distracciones visuales. Al hacer clic en el escritorio o minimizar las ventanas, recuperan su color vivo e interactividad completa.

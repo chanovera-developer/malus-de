@@ -496,6 +496,25 @@ fn resolve_desktop_app_info(identifier: &str) -> (String, String, String, Vec<St
         );
     }
 
+    // 1.1. Mapeo específico para Branches de Malus DE
+    if lower == "dev.malus.branches"
+        || lower == "malus-de-branches"
+        || (lower.contains("malus") && lower.contains("branches"))
+    {
+        return (
+            "Branches".to_string(),
+            "system-file-manager".to_string(),
+            "malus-de-branches".to_string(),
+            vec![
+                "malus-de-branches".to_string(),
+                "dev.malus.branches".to_string(),
+                "dev.malus.Branches".to_string(),
+                "branches".to_string(),
+                "files".to_string(),
+            ],
+        );
+    }
+
     let candidates = [
         format!("{}.desktop", identifier),
         format!("{}.desktop", lower),
