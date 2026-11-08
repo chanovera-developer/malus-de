@@ -1868,16 +1868,11 @@ fn create_wallpaper_window(
         let drop_dir = desktop_dir.to_path_buf();
         let drop_positions = icon_positions.clone();
         let internal_paths_drop = internal_drag_paths.clone();
-        let active_drag_motion = active_icon_drag.clone();
-        let drop_icons = icons.clone();
-        let cfg_drop_motion = current_config.clone();
 
-        drop_target.connect_motion(move |_, x, y| {
-            if let Some((path, _, pointer_offset)) = active_drag_motion.borrow().as_ref() {
-                let metrics = IconLayoutMetrics::from_config(&cfg_drop_motion.borrow());
-                let position = clamp_icon_position(x, y, *pointer_offset, &metrics, desktop_size);
-                move_desktop_icon(&drop_icons, path, position);
-            }
+        // En Wayland el cursor lleva consigo la miniatura flotante (WidgetPaintable).
+        // No movemos el widget del escritorio durante connect_motion para evitar cualquier
+        // estela o duplicación semitransparente detrás del puntero.
+        drop_target.connect_motion(move |_, _x, _y| {
             gtk4::gdk::DragAction::MOVE
         });
 

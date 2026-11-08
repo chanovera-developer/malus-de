@@ -4,7 +4,7 @@ use crate::views::{NavigateCallback, SelectionCallback};
 use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Box as GtkBox, Fixed, GestureClick, GestureDrag, Image, Label,
+    Align, Box as GtkBox, Fixed, GestureClick, Image, Label,
     Orientation, PolicyType, Popover, ScrolledWindow,
 };
 use std::cell::RefCell;
@@ -173,7 +173,7 @@ impl IconView {
         self.fixed_canvas.set_size_request(max_x + 80, max_y + 80);
     }
 
-    fn create_spatial_icon_widget(&self, item: &FileItem, init_x: i32, init_y: i32) -> GtkBox {
+    fn create_spatial_icon_widget(&self, item: &FileItem, _init_x: i32, _init_y: i32) -> GtkBox {
         let vbox = GtkBox::new(Orientation::Vertical, 4);
         vbox.set_halign(Align::Center);
         vbox.set_valign(Align::Start);
@@ -299,65 +299,6 @@ impl IconView {
             vbox.add_controller(folder_drop);
         }
 
-        // 3. Arrastre Libre de Icono dentro del Canvas (GestureDrag)
-        let drag_gesture = GestureDrag::new();
-        let fixed = self.fixed_canvas.clone();
-        let vbox_drag = vbox.clone();
-        let folder_ref = self.current_folder.clone();
-        let layout_ref = self.layout_mode.clone();
-        let file_name = item.name.clone();
-
-        let start_pos = Rc::new(RefCell::new((init_x, init_y)));
-        let start_pos_begin = start_pos.clone();
-        let start_pos_update = start_pos.clone();
-        let start_pos_end = start_pos.clone();
-
-        drag_gesture.connect_drag_begin(move |_, _x, _y| {
-            vbox_drag.add_css_class("branches-icon-dragging");
-        });
-
-        let vbox_update = vbox.clone();
-        let fixed_update = fixed.clone();
-        drag_gesture.connect_drag_update(move |_, offset_x, offset_y| {
-            let (sx, sy) = *start_pos_update.borrow();
-            let cur_x = (sx as f64 + offset_x).max(10.0);
-            let cur_y = (sy as f64 + offset_y).max(10.0);
-            fixed_update.move_(&vbox_update, cur_x, cur_y);
-        });
-
-        let vbox_end = vbox.clone();
-        let fixed_end = fixed.clone();
-        drag_gesture.connect_drag_end(move |_, offset_x, offset_y| {
-            vbox_end.remove_css_class("branches-icon-dragging");
-
-            let (sx, sy) = *start_pos_end.borrow();
-            let raw_x = (sx as f64 + offset_x).max(10.0) as i32;
-            let raw_y = (sy as f64 + offset_y).max(10.0) as i32;
-
-            let mode = *layout_ref.borrow();
-            let (final_x, final_y) = match mode {
-                LayoutMode::SnapToGrid => {
-                    let col = ((raw_x - MARGIN_LEFT + GRID_CELL_W / 2) / GRID_CELL_W).max(0);
-                    let row = ((raw_y - MARGIN_TOP + GRID_CELL_H / 2) / GRID_CELL_H).max(0);
-                    (MARGIN_LEFT + col * GRID_CELL_W, MARGIN_TOP + row * GRID_CELL_H)
-                }
-                LayoutMode::Freeform => (raw_x, raw_y),
-                LayoutMode::Auto => (sx, sy), // En auto, vuelve a su posición fija de orden
-            };
-
-            fixed_end.move_(&vbox_end, final_x as f64, final_y as f64);
-            *start_pos_begin.borrow_mut() = (final_x, final_y);
-
-            // Persistir inmediatamente en SQLite
-            if mode != LayoutMode::Auto {
-                let folder = folder_ref.borrow().clone();
-                if let Ok(conn) = db::open_db() {
-                    let _ = db::save_position(&conn, &folder, &file_name, final_x, final_y);
-                }
-            }
-        });
-
-        vbox.add_controller(drag_gesture);
         vbox
     }
 
@@ -400,36 +341,77 @@ impl IconView {
 
         self.fixed_canvas.add_controller(click);
 
-        // Destino para soltar archivos provenientes de ventanas externas (ej. Escritorio)
+        // Destino para soltar archivos (tanto reorganización interna como desde Escritorio)
         let canvas_drop = gtk4::DropTarget::new(
             gdk::FileList::static_type(),
             gdk::DragAction::COPY | gdk::DragAction::MOVE,
         );
         let folder_drop_ref = self.current_folder.clone();
+        let layout_drop_ref = self.layout_mode.clone();
+        let fixed_drop_canvas = self.fixed_canvas.clone();
+        let widgets_drop_map = self.item_widgets.clone();
         let on_nav_drop = self.on_navigate.clone();
 
-        canvas_drop.connect_drop(move |_, value, _, _| {
+        canvas_drop.connect_drop(move |_, value, x, y| {
             if let Ok(file_list) = value.get::<gdk::FileList>() {
                 let cur_folder = folder_drop_ref.borrow().clone();
-                let mut moved = false;
+                let mode = *layout_drop_ref.borrow();
+                let mut moved_external = false;
+                let mut moved_internal = false;
 
                 for file in file_list.files() {
                     if let Some(src) = file.path() {
                         let is_internal = src.parent().map(|p| p == cur_folder).unwrap_or(false);
-                        if !is_internal {
+                        if is_internal {
+                            // Reordenamiento local en el lienzo sin arrastrar el widget en movimiento
+                            if let Some(fname) = src.file_name() {
+                                let fname_str = fname.to_string_lossy().to_string();
+                                let raw_x = (x - 40.0).max(10.0) as i32;
+                                let raw_y = (y - 40.0).max(10.0) as i32;
+                                let (final_x, final_y) = match mode {
+                                    LayoutMode::SnapToGrid => {
+                                        let col = ((raw_x - MARGIN_LEFT + GRID_CELL_W / 2) / GRID_CELL_W).max(0);
+                                        let row = ((raw_y - MARGIN_TOP + GRID_CELL_H / 2) / GRID_CELL_H).max(0);
+                                        (MARGIN_LEFT + col * GRID_CELL_W, MARGIN_TOP + row * GRID_CELL_H)
+                                    }
+                                    LayoutMode::Freeform => (raw_x, raw_y),
+                                    LayoutMode::Auto => (raw_x, raw_y),
+                                };
+
+                                if let Some(item_data) = widgets_drop_map.borrow().get(&fname_str) {
+                                    let mut d = item_data.borrow_mut();
+                                    d.pos_x = final_x;
+                                    d.pos_y = final_y;
+                                    fixed_drop_canvas.move_(&d.widget, final_x as f64, final_y as f64);
+                                    d.widget.add_css_class("landing");
+                                    let w_clone = d.widget.clone();
+                                    glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
+                                        w_clone.remove_css_class("landing");
+                                    });
+                                }
+
+                                if let Ok(conn) = db::open_db() {
+                                    let _ = db::save_position(&conn, &cur_folder, &fname_str, final_x, final_y);
+                                }
+                                moved_internal = true;
+                            }
+                        } else {
                             if let Some(fname) = src.file_name() {
                                 let dest = cur_folder.join(fname);
                                 if dest != src {
                                     if std::fs::rename(&src, &dest).is_ok() || std::fs::copy(&src, &dest).is_ok() {
-                                        moved = true;
+                                        moved_external = true;
                                     }
                                 }
                             }
                         }
                     }
                 }
-                if moved {
+                if moved_external {
                     on_nav_drop(cur_folder);
+                    return true;
+                }
+                if moved_internal {
                     return true;
                 }
             }

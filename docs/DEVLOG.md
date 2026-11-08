@@ -26,6 +26,9 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 * **Física y Microanimación de Aterrizaje Suave (`macos-drop-landing`):**
   * Se implementó `@keyframes macos-drop-landing` con curva elástica Apple `cubic-bezier(0.16, 1, 0.3, 1)` de 240ms (`scale(1.12) -> scale(0.98) -> scale(1.0)` y `opacity: 0.6 -> 1.0`).
   * Los elementos soltados en el escritorio reciben la clase `.landing` temporalmente mediante `glib::timeout_add_local_once`, logrando un asentamiento con peso físico idéntico al de macOS Finder.
+* **Eliminación de la Estela Semitransparente en Movimiento:**
+  * Se eliminó el callback `move_desktop_icon` que se ejecutaba en cada evento de `drop_target.connect_motion` en [`crates/wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs), el cual desplazaba el widget de origen paralelamente al puntero generando un efecto de estela o duplicación semitransparente.
+  * Se desacopló de [`crates/branches/src/views/icon_view.rs`](../crates/branches/src/views/icon_view.rs) el antiguo `GestureDrag` que movía el widget del lienzo en tiempo real, delegando el reordenamiento libre y snap al manejador `connect_drop` del lienzo, logrando que únicamente la miniatura flotante de Wayland siga al cursor con cero latencia ni estelas de fondo.
 * **Integración Completa en Branches (`crates/branches/src/views/icon_view.rs`, `crates/branches/src/views/list_view.rs`):**
   * Soporte de arrastre con `WidgetPaintable` e icono translúcido en Icon View y List View.
   * Receptores de carpetas en subdirectorios y soltado en el lienzo para absorber archivos arrastrados desde el Escritorio.
