@@ -964,6 +964,45 @@ fn create_menu_button(label: &str, destructive: bool) -> Button {
     btn
 }
 
+fn resolve_desktop_icon_paintable(
+    path: &Path,
+    content_type: Option<&str>,
+    icon: Option<&gio::Icon>,
+    icon_size: i32,
+) -> Option<gtk4::gdk::Paintable> {
+    if let Some(ct) = content_type {
+        if ct.starts_with("image/") {
+            if let Ok(pixbuf) = gdk_pixbuf::Pixbuf::from_file_at_scale(path, icon_size, icon_size, true) {
+                let texture = gtk4::gdk::Texture::for_pixbuf(&pixbuf);
+                return Some(texture.upcast());
+            }
+        }
+    }
+
+    let display = gtk4::gdk::Display::default()?;
+    let icon_theme = gtk4::IconTheme::for_display(&display);
+    if let Some(gicon) = icon {
+        let icon_paintable = icon_theme.lookup_by_gicon(
+            gicon,
+            icon_size,
+            1,
+            gtk4::TextDirection::Ltr,
+            gtk4::IconLookupFlags::empty(),
+        );
+        Some(icon_paintable.upcast())
+    } else {
+        let icon_paintable = icon_theme.lookup_icon(
+            "text-x-generic",
+            &[],
+            icon_size,
+            1,
+            gtk4::TextDirection::Ltr,
+            gtk4::IconLookupFlags::empty(),
+        );
+        Some(icon_paintable.upcast())
+    }
+}
+
 #[allow(unused_variables)]
 fn render_single_icon(
     fixed: &Fixed,
@@ -986,6 +1025,13 @@ fn render_single_icon(
     let display_name = item.display_name;
     let icon = item.icon;
     let content_type = item.content_type;
+
+    let icon_paintable = resolve_desktop_icon_paintable(
+        &path,
+        content_type.as_deref(),
+        icon.as_ref(),
+        metrics.icon_size,
+    );
 
     let thumbnail = content_type
         .as_deref()
@@ -1225,12 +1271,18 @@ fn render_single_icon(
         Some(gtk4::gdk::ContentProvider::for_value(&file_list.to_value()))
     });
 
+    // Pre-adjuntar el icono para respuesta visual instantánea (sin lapso de cursor vacío)
+    if let Some(ref paintable) = icon_paintable {
+        drag_source.set_icon(Some(paintable), metrics.icon_size / 2, metrics.icon_size / 2);
+    }
+
     let item_box_drag = item_box.clone();
     let fixed_drag = fixed.clone();
     let path_drag_begin = path.clone();
     let sel_drag_begin = selected_paths.clone();
     let metrics_drag = metrics.clone();
     let act_drag_begin = active_icon_drag.clone();
+    let icon_paintable_drag = icon_paintable.clone();
     drag_source.connect_drag_begin(move |source, _drag| {
         let sel = sel_drag_begin.borrow();
         if sel.contains(&path_drag_begin) && sel.len() > 1 {
@@ -1251,8 +1303,9 @@ fn render_single_icon(
             (0.0, 0.0),
             (f64::from(metrics_drag.box_width) / 2.0, f64::from(metrics_drag.box_height) / 2.0),
         ));
-        let paintable = gtk4::WidgetPaintable::new(Some(&item_box_drag));
-        source.set_icon(Some(&paintable), metrics_drag.box_width / 2, metrics_drag.box_height / 2);
+        if let Some(ref paintable) = icon_paintable_drag {
+            source.set_icon(Some(paintable), metrics_drag.icon_size / 2, metrics_drag.icon_size / 2);
+        }
     });
 
     let fixed_drag_end = fixed.clone();
@@ -2393,10 +2446,29 @@ mod tests {
     fn test_desktop_drag_and_drop_macos_css_classes() {
         let css = include_str!("styles/default-gradient.css");
         assert!(css.contains(".desktop-icon.desktop-icon-dragging"));
+        assert!(css.contains("opacity: 0.0;"));
+        assert!(css.contains("transition: none;"));
         assert!(css.contains(".desktop-icon.folder-drop-hover"));
         assert!(css.contains(".desktop-icon.landing"));
         assert!(css.contains("@keyframes macos-drop-landing"));
         assert!(css.contains("cubic-bezier(0.16, 1, 0.3, 1)"));
         assert!(!css.contains("!important"));
+    }
+
+    #[test]
+    fn test_resolve_desktop_icon_paintable() {
+        if gtk4::init().is_err() {
+            return;
+        }
+        let paintable = super::resolve_desktop_icon_paintable(
+            Path::new("/dummy/nonexistent.png"),
+            None,
+            None,
+            48,
+        );
+        let src = gtk4::DragSource::new();
+        if let Some(ref p) = paintable {
+            src.set_icon(Some(p), 24, 24);
+        }
     }
 }

@@ -238,11 +238,29 @@ impl IconView {
             Some(gdk::ContentProvider::for_value(&file_list.to_value()))
         });
 
+        // Pre-adjuntar el icono para respuesta visual instantánea (sin lapso de cursor vacío)
+        let display = gdk::Display::default();
+        let icon_paintable = display.map(|d| {
+            let theme = gtk4::IconTheme::for_display(&d);
+            theme.lookup_by_gicon(
+                &item.gicon,
+                48,
+                1,
+                gtk4::TextDirection::Ltr,
+                gtk4::IconLookupFlags::empty(),
+            )
+        });
+        if let Some(ref paintable) = icon_paintable {
+            drag_source.set_icon(Some(paintable), 24, 24);
+        }
+
         let vbox_drag_begin = vbox.clone();
+        let icon_paintable_begin = icon_paintable.clone();
         drag_source.connect_drag_begin(move |source, _drag| {
             vbox_drag_begin.add_css_class("branches-icon-dragging");
-            let paintable = gtk4::WidgetPaintable::new(Some(&vbox_drag_begin));
-            source.set_icon(Some(&paintable), 40, 40);
+            if let Some(ref paintable) = icon_paintable_begin {
+                source.set_icon(Some(paintable), 24, 24);
+            }
         });
 
         let vbox_drag_end = vbox.clone();

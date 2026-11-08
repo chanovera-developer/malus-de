@@ -187,11 +187,29 @@ fn create_list_row(item: &FileItem, on_navigate: NavigateCallback) -> ListBoxRow
         Some(gdk::ContentProvider::for_value(&file_list.to_value()))
     });
 
+    // Pre-adjuntar el icono para respuesta visual instantánea (sin lapso de cursor vacío)
+    let display = gdk::Display::default();
+    let icon_paintable = display.map(|d| {
+        let theme = gtk4::IconTheme::for_display(&d);
+        theme.lookup_by_gicon(
+            &item.gicon,
+            32,
+            1,
+            gtk4::TextDirection::Ltr,
+            gtk4::IconLookupFlags::empty(),
+        )
+    });
+    if let Some(ref paintable) = icon_paintable {
+        drag_source.set_icon(Some(paintable), 16, 16);
+    }
+
     let row_drag_begin = row.clone();
+    let icon_paintable_begin = icon_paintable.clone();
     drag_source.connect_drag_begin(move |source, _| {
         row_drag_begin.add_css_class("branches-icon-dragging");
-        let paintable = gtk4::WidgetPaintable::new(Some(&row_drag_begin));
-        source.set_icon(Some(&paintable), 24, 16);
+        if let Some(ref paintable) = icon_paintable_begin {
+            source.set_icon(Some(paintable), 16, 16);
+        }
     });
 
     let row_drag_end = row.clone();

@@ -109,6 +109,8 @@ mod tests {
     fn test_branches_macos_drag_and_drop_styles() {
         let css = include_str!("styles/macos-branches.css");
         assert!(css.contains(".branches-icon-dragging"));
+        assert!(css.contains("opacity: 0.0 !important;"));
+        assert!(css.contains("transition: none !important;"));
         assert!(css.contains(".folder-drop-hover"));
         assert!(css.contains(".branches-icon-item.landing"));
         assert!(css.contains("@keyframes macos-drop-landing"));

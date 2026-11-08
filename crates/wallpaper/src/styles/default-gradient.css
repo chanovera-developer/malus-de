@@ -44,8 +44,8 @@ window.malus-wallpaper-window picture {
 
 /* Efectos Drag & Drop estilo macOS Finder */
 .desktop-icon.desktop-icon-dragging {
-    opacity: 0.35;
-    transition: opacity 150ms ease;
+    opacity: 0.0;
+    transition: none;
 }
 
 .desktop-icon.folder-drop-hover {

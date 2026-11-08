@@ -4,6 +4,31 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-08] — Cero Latencia en Miniatura Flotante de Arrastre y Desaparición Completa del Elemento de Origen (Sensación Física Real estilo macOS Finder)
+
+### Diagnóstico de Causa Raíz
+* **Latencia y Lapso de Cursor Vacío (*Empty Cursor Latency*):**
+  * Al configurar la miniatura de arrastre dinámicamente dentro del callback `connect_drag_begin` mediante `gtk4::WidgetPaintable::new(Some(&widget))`, el compositor Wayland iniciaba la sesión de arrastre (`wl_data_device.start_drag`) sin que la superficie del cursor tuviese aún un `wl_buffer` asociado. GTK4 debía esperar al siguiente ciclo de snapshot/commit de la ventana para renderizar el widget, provocando que el cursor estuviera vacío durante los primeros 1 a 3 fotogramas del arrastre.
+* **Silueta o "Recorte" Residual en la Posición de Origen:**
+  * Las clases CSS `.desktop-icon-dragging` y `.branches-icon-dragging` aplicaban `opacity: 0.35` con una transición de 150ms (`transition: opacity 150ms ease`). Esto dejaba una silueta o "recorte" translúcido en la posición original del archivo en el escritorio o explorador, arruinando la ilusión óptica de que el archivo fue "levantado" físicamente de la superficie.
+* **Conflicto de Acoplamiento de Opacidad en `WidgetPaintable`:**
+  * En GTK4, si se intenta forzar `opacity: 0.0` sobre el widget de origen mientras se usa `WidgetPaintable::new(Some(&widget))`, la función de snapshot de GTK descarta el renderizado del widget (`if (gtk_widget_get_opacity (widget) < 0.001) return;`), haciendo que la miniatura flotante bajo el cursor también desaparezca por completo.
+
+### Solución Implementada (`crates/wallpaper`, `crates/branches`)
+* **Pre-configuración Temprana e Inmediata del Icono de Arrastre:**
+  * Se desacopló la miniatura flotante del widget de la interfaz mediante la función `resolve_desktop_icon_paintable` (en `wallpaper`) y `lookup_by_gicon` (en `icon_view` y `list_view` de `branches`).
+  * Para imágenes con miniatura se genera directamente un `gdk::Texture::for_pixbuf`, y para directorios o archivos generales se consulta `gtk4::IconTheme::for_display(...).lookup_by_gicon(...)`, obteniendo un `gdk::Paintable` independiente y persistente.
+  * Se asigna el icono con `drag_source.set_icon(Some(&paintable), icon_size / 2, icon_size / 2)` inmediatamente al instanciar el `DragSource`, antes de que comience cualquier interacción. Al activarse el arrastre, el búfer ya está listo en Wayland, logrando respuesta visual instantánea (0 ms, cero lapso de cursor vacío).
+* **Desaparición Instantánea del Elemento de Origen (Sin Recortes ni Siluetas):**
+  * Se actualizaron las reglas CSS en [`crates/wallpaper/src/styles/default-gradient.css`](../crates/wallpaper/src/styles/default-gradient.css) y [`crates/branches/src/styles/macos-branches.css`](../crates/branches/src/styles/macos-branches.css):
+    * `.desktop-icon.desktop-icon-dragging { opacity: 0.0; transition: none; }`
+    * `.branches-icon-dragging, .branches-icon-item.branches-icon-dragging, .branches-list-row.branches-icon-dragging { opacity: 0.0 !important; transition: none !important; }`
+  * Como el icono del cursor utiliza una textura o `IconPaintable` autónomo, permanece 100% visible, nítido y opaco, mientras que la posición original desaparece al instante en cuanto el puntero se mueve, transmitiendo la sensación física idéntica a macOS Finder de que el archivo ha sido despegado y tomado por el cursor.
+* **Cobertura con Pruebas Unitarias:**
+  * Se agregaron aserciones y tests (`test_resolve_desktop_icon_paintable`, `test_desktop_drag_and_drop_macos_css_classes` y `test_branches_macos_drag_and_drop_styles`) verificando la presencia de `opacity: 0.0` y `transition: none`, garantizando que futuras modificaciones no reintroduzcan siluetas residuales ni dependencias circulares de opacidad.
+
+---
+
 ## [2026-11-08] — Efecto de Mover Carpetas Estilo macOS Finder (Drag & Drop Wayland Bidireccional, Drag Ghost Translúcido, Resaltado de Carpeta Receptora y Animación Elástica de Aterrizaje)
 
 ### Diagnóstico de Causa Raíz

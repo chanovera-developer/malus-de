@@ -270,8 +270,8 @@ button.branches-split-btn.active {
 .branches-icon-dragging,
 .branches-icon-item.branches-icon-dragging,
 .branches-list-row.branches-icon-dragging {
-    opacity: 0.35 !important;
-    transition: opacity 150ms ease;
+    opacity: 0.0 !important;
+    transition: none !important;
     box-shadow: none !important;
     outline: none !important;
 }
