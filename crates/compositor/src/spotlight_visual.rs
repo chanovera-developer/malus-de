@@ -4295,6 +4295,10 @@ mod tests {
     #[test]
     fn spotlight_dragging_app_onto_dock_returns_pin_outcome() {
         let mut spotlight = SpotlightState::new();
+        let output_geo = Rectangle::new((0, 0).into(), (1920, 1080).into());
+        let dock_geo = Rectangle::new((660, 1004).into(), (600, 68).into());
+
+        spotlight.open();
         spotlight.apps = vec![AppEntry {
             name: "Antigravity".to_string(),
             exec: "/usr/share/antigravity/antigravity %F".to_string(),
@@ -4304,10 +4308,6 @@ mod tests {
             categories: "Development;IDE;".to_string(),
             search_terms: "antigravity ide".to_string(),
         }];
-        let output_geo = Rectangle::new((0, 0).into(), (1920, 1080).into());
-        let dock_geo = Rectangle::new((660, 1004).into(), (600, 68).into());
-
-        spotlight.open();
         spotlight.set_mode(SpotlightMode::Applications, Instant::now());
         spotlight.hovered_row = Some(0);
 

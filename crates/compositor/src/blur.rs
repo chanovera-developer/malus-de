@@ -108,6 +108,8 @@ uniform vec4 u_solid_color;
 uniform vec2 u_win_size;
 uniform float u_corner_radius;
 uniform float u_corner_exponent;
+uniform float u_border_width;
+uniform vec4 u_border_color;
 
 float rounded_shape_sdf(vec2 p, vec2 b, float r) {
     vec2 d = abs(p) - b + vec2(r);
@@ -131,14 +133,23 @@ void main() {
 
     if (u_solid_mode > 0.5) {
         float alpha = 1.0;
-        if (u_corner_radius > 1.0) {
-            vec2 half_size = u_win_size * 0.5;
-            vec2 p = v_win_px - half_size;
-            float effective_r = min(u_corner_radius, min(half_size.x, half_size.y));
-            float dist = rounded_shape_sdf(p, half_size, effective_r);
-            float edge_aa = max(fwidth(dist), 1.0);
-            alpha = 1.0 - smoothstep(-edge_aa, 0.0, dist);
+        vec2 half_size = u_win_size * 0.5;
+        vec2 p = v_win_px - half_size;
+        float effective_r = (u_corner_radius > 1.0) ? min(u_corner_radius, min(half_size.x, half_size.y)) : 0.0;
+        float dist = rounded_shape_sdf(p, half_size, effective_r);
+        float edge_aa = max(fwidth(dist), 1.0);
+        alpha = 1.0 - smoothstep(-edge_aa, 0.0, dist);
+
+        if (u_border_width > 0.0) {
+            float outer_mask = alpha;
+            float inner_mask = 1.0 - smoothstep(-edge_aa, 0.0, dist + u_border_width);
+            float border_mask = clamp(outer_mask - inner_mask, 0.0, 1.0);
+            vec3 rgb = mix(u_solid_color.rgb, u_border_color.rgb, border_mask);
+            float a = clamp(u_solid_color.a * inner_mask + u_border_color.a * border_mask, 0.0, 1.0);
+            frag_color = vec4(rgb, a);
+            return;
         }
+
         frag_color = vec4(u_solid_color.rgb, u_solid_color.a * alpha);
         return;
     }
@@ -197,6 +208,8 @@ pub struct GaussianBlur {
     blit_u_corner_exponent: ffi::types::GLint,
     blit_u_solid_mode: ffi::types::GLint,
     blit_u_solid_color: ffi::types::GLint,
+    blit_u_border_width: ffi::types::GLint,
+    blit_u_border_color: ffi::types::GLint,
 
     snapshot_tex: ffi::types::GLuint,
     snapshot_size: (i32, i32),
@@ -255,6 +268,8 @@ impl GaussianBlur {
                 gl.GetUniformLocation(blit_program, c"u_corner_exponent".as_ptr());
             let blit_u_solid_mode = gl.GetUniformLocation(blit_program, c"u_solid_mode".as_ptr());
             let blit_u_solid_color = gl.GetUniformLocation(blit_program, c"u_solid_color".as_ptr());
+            let blit_u_border_width = gl.GetUniformLocation(blit_program, c"u_border_width".as_ptr());
+            let blit_u_border_color = gl.GetUniformLocation(blit_program, c"u_border_color".as_ptr());
 
             let mut snapshot_tex = 0;
             gl.GenTextures(1, &mut snapshot_tex);
@@ -303,6 +318,8 @@ impl GaussianBlur {
                 blit_u_corner_exponent,
                 blit_u_solid_mode,
                 blit_u_solid_color,
+                blit_u_border_width,
+                blit_u_border_color,
                 snapshot_tex,
                 snapshot_size: (0, 0),
                 spotlight_mask_tex,
@@ -1168,6 +1185,105 @@ impl GaussianBlur {
             gl.Uniform1f(self.blit_u_opacity, 1.0);
             gl.Uniform1f(self.blit_u_solid_mode, 1.0);
             gl.Uniform4f(self.blit_u_solid_color, color[0], color[1], color[2], 1.0);
+            gl.Uniform1f(self.blit_u_border_width, 0.0);
+            gl.Uniform1f(self.blit_u_corner_exponent, 4.2);
+            gl.UniformMatrix3fv(self.blit_u_matrix, 1, ffi::FALSE, projection.as_ptr());
+            gl.Uniform4f(
+                self.blit_u_blit_rect,
+                visible_rect.loc.x as f32,
+                visible_rect.loc.y as f32,
+                visible_rect.size.w as f32,
+                visible_rect.size.h as f32,
+            );
+            gl.Uniform4f(
+                self.blit_u_win_rect,
+                win_rect.loc.x as f32,
+                win_rect.loc.y as f32,
+                win_rect.size.w as f32,
+                win_rect.size.h as f32,
+            );
+            gl.Uniform2f(
+                self.blit_u_win_size,
+                win_rect.size.w as f32,
+                win_rect.size.h as f32,
+            );
+            gl.Uniform1i(self.blit_u_is_drm, if is_drm { 1 } else { 0 });
+            gl.Uniform1f(self.blit_u_corner_radius, corner_radius);
+            gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
+            gl.UseProgram(0);
+
+            gl.BlendFuncSeparate(
+                prev_src_rgb as u32,
+                prev_dst_rgb as u32,
+                prev_src_alpha as u32,
+                prev_dst_alpha as u32,
+            );
+            if prev_blend == ffi::FALSE {
+                gl.Disable(ffi::BLEND);
+            }
+        }
+    }
+
+    /// Dibuja la previsualización translúcida de ajuste de ventana (macOS Snap Preview)
+    /// con esquinas squircle que respetan el radio de la ventana activa, desenfoque de fondo y borde sutil.
+    pub fn render_snap_preview(
+        &mut self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        screen_size: Size<i32, Physical>,
+        win_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        scale: f64,
+    ) {
+        // 1. Desenfoque suave del fondo para acabado de vidrio translúcido auténtico
+        self.render_blur(
+            gl,
+            projection,
+            screen_size,
+            win_rect,
+            corner_radius,
+        );
+
+        // 2. Overlay translúcido suave con curvatura squircle y borde sutil
+        let screen_rect = Rectangle::from_size(screen_size);
+        let Some(visible_rect) = win_rect.intersection(screen_rect) else {
+            return;
+        };
+        if visible_rect.size.w < 1 || visible_rect.size.h < 1 {
+            return;
+        };
+
+        let is_drm = projection[4] > 0.0;
+        let border_w = (1.5 * scale as f32).max(1.0);
+
+        unsafe {
+            let prev_blend = gl.IsEnabled(ffi::BLEND);
+            let mut prev_src_rgb = 0;
+            let mut prev_dst_rgb = 0;
+            let mut prev_src_alpha = 0;
+            let mut prev_dst_alpha = 0;
+            gl.GetIntegerv(ffi::BLEND_SRC_RGB, &mut prev_src_rgb);
+            gl.GetIntegerv(ffi::BLEND_DST_RGB, &mut prev_dst_rgb);
+            gl.GetIntegerv(ffi::BLEND_SRC_ALPHA, &mut prev_src_alpha);
+            gl.GetIntegerv(ffi::BLEND_DST_ALPHA, &mut prev_dst_alpha);
+
+            gl.Enable(ffi::BLEND);
+            gl.BlendFuncSeparate(
+                ffi::SRC_ALPHA,
+                ffi::ONE_MINUS_SRC_ALPHA,
+                ffi::ZERO,
+                ffi::ONE,
+            );
+            gl.UseProgram(self.blit_program);
+            gl.Uniform1i(self.blit_u_texture, 0);
+            gl.Uniform1i(self.blit_u_use_mask, 0);
+            gl.Uniform1f(self.blit_u_opacity, 1.0);
+            gl.Uniform1f(self.blit_u_solid_mode, 1.0);
+            // Tinte translúcido suave estilo macOS (#0078d4 con ~14% de opacidad)
+            gl.Uniform4f(self.blit_u_solid_color, 0.0, 0.48, 1.0, 0.14);
+            // Borde squircle nítido y sutil con ~55% de opacidad
+            gl.Uniform1f(self.blit_u_border_width, border_w);
+            gl.Uniform4f(self.blit_u_border_color, 0.28, 0.65, 1.0, 0.55);
             gl.Uniform1f(self.blit_u_corner_exponent, 4.2);
             gl.UniformMatrix3fv(self.blit_u_matrix, 1, ffi::FALSE, projection.as_ptr());
             gl.Uniform4f(

@@ -2244,7 +2244,7 @@ pub fn run_winit() -> Result<()> {
                         );
                     }
 
-                    // Dibujar overlay translúcido Aero Glass de previsualización al arrastrar cerca del borde
+                    // Dibujar previsualización translúcida de ajuste (Snap Preview) al arrastrar cerca del borde
                     let is_pointer_grabbed = state
                         .seat
                         .get_pointer()
@@ -2253,61 +2253,26 @@ pub fn run_winit() -> Result<()> {
                     if is_pointer_grabbed {
                         if let Some(preview) = state.snap_preview {
                             let preview_phys = preview.to_physical_precise_round(1.0);
-                            // Fondo azul translúcido (#0078d4 con 35% de opacidad)
-                            let _ = frame.draw_solid(
-                                preview_phys,
-                                &[Rectangle::from_size(preview_phys.size)],
-                                Color32F::new(0.0, 0.47, 0.83, 0.35),
-                            );
+                            let target_r = win_phys_r.unwrap_or(22) as f32;
 
-                            // Borde resaltado azul de 3px
-                            let border_color = Color32F::new(0.38, 0.72, 1.0, 0.85);
-                            let b_thickness = 3;
-                            let b_top = Rectangle::new(
-                                preview_phys.loc,
-                                (preview_phys.size.w, b_thickness).into(),
-                            );
-                            let b_bottom = Rectangle::new(
-                                (
-                                    preview_phys.loc.x,
-                                    preview_phys.loc.y + preview_phys.size.h - b_thickness,
-                                )
-                                    .into(),
-                                (preview_phys.size.w, b_thickness).into(),
-                            );
-                            let b_left = Rectangle::new(
-                                preview_phys.loc,
-                                (b_thickness, preview_phys.size.h).into(),
-                            );
-                            let b_right = Rectangle::new(
-                                (
-                                    preview_phys.loc.x + preview_phys.size.w - b_thickness,
-                                    preview_phys.loc.y,
-                                )
-                                    .into(),
-                                (b_thickness, preview_phys.size.h).into(),
-                            );
-
-                            let _ = frame.draw_solid(
-                                b_top,
-                                &[Rectangle::from_size(b_top.size)],
-                                border_color,
-                            );
-                            let _ = frame.draw_solid(
-                                b_bottom,
-                                &[Rectangle::from_size(b_bottom.size)],
-                                border_color,
-                            );
-                            let _ = frame.draw_solid(
-                                b_left,
-                                &[Rectangle::from_size(b_left.size)],
-                                border_color,
-                            );
-                            let _ = frame.draw_solid(
-                                b_right,
-                                &[Rectangle::from_size(b_right.size)],
-                                border_color,
-                            );
+                            if let Some(ref mut blur) = blur_pipeline {
+                                let _ = frame.with_context(|gl| {
+                                    blur.render_snap_preview(
+                                        gl,
+                                        &projection,
+                                        size,
+                                        preview_phys,
+                                        target_r,
+                                        1.0,
+                                    );
+                                });
+                            } else {
+                                let _ = frame.draw_solid(
+                                    preview_phys,
+                                    &[Rectangle::from_size(preview_phys.size)],
+                                    Color32F::new(0.0, 0.48, 1.0, 0.14),
+                                );
+                            }
                         }
                     } else {
                         state.snap_preview = None;

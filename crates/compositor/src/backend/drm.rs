@@ -3607,7 +3607,7 @@ pub fn run_drm() -> Result<()> {
                             );
                         }
 
-                        // Dibujar previsualización translúcida de Aero Snap si el puntero está agarrado y la previsualización intersecta este monitor
+                        // Dibujar previsualización translúcida de ajuste (Snap Preview) si el puntero está agarrado y la previsualización intersecta este monitor
                         let is_pointer_grabbed = state
                             .seat
                             .get_pointer()
@@ -3620,11 +3620,26 @@ pub fn run_drm() -> Result<()> {
                                         Rectangle::new(preview.loc - output_geo.loc, preview.size);
                                     let preview_phys =
                                         local_preview.to_physical_precise_round(scale);
-                                    let _ = frame.draw_solid(
-                                        preview_phys,
-                                        &[Rectangle::from_size(preview_phys.size)],
-                                        Color32F::new(0.0, 0.47, 0.83, 0.35),
-                                    );
+                                    let target_r = win_phys_r.unwrap_or((22.0 * scale).round() as i32) as f32;
+
+                                    if let Some(ref mut blur) = blur_pipeline {
+                                        let _ = frame.with_context(|gl| {
+                                            blur.render_snap_preview(
+                                                gl,
+                                                &projection,
+                                                out_surface.size,
+                                                preview_phys,
+                                                target_r,
+                                                scale,
+                                            );
+                                        });
+                                    } else {
+                                        let _ = frame.draw_solid(
+                                            preview_phys,
+                                            &[Rectangle::from_size(preview_phys.size)],
+                                            Color32F::new(0.0, 0.48, 1.0, 0.14),
+                                        );
+                                    }
                                 }
                             }
                         } else {

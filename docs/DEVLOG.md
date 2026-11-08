@@ -8,6 +8,11 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ### Hitos Implementados
 
+* **Previsualización Translúcida de Ajuste de Ventanas con Esquinas Squircle (`Snap Preview`):**
+  * Sustitución del antiguo rectángulo opaco de esquinas rectas (`draw_solid` con borde tosco) por un pipeline de vidrio acrílico en GPU ([`GaussianBlur::render_snap_preview`](../crates/compositor/src/blur.rs)).
+  * Integración de desenfoque de fondo Dual Kawase bajo el área de acoplamiento, tinte azul translúcido sutil estilo macOS (~14% opacidad) y borde vectorial continuo ($n = 4.2$) que respeta con precisión milimétrica el radio de curvatura de la ventana activa (`win_phys_r`).
+  * Aplicación unificada tanto en el backend KMS/DRM nativo ([`drm.rs`](../crates/compositor/src/backend/drm.rs)) como en el backend de pruebas ([`winit.rs`](../crates/compositor/src/backend/winit.rs)).
+
 * **Corrección de Regresiones de Rendimiento y Occlusion Culling en el Compositor (`crates/compositor`):**
   * **Occlusion Culling en Ventanas Maximizadas Redondeadas:** Se implementó [`OpaqueOccluder::contains_rounded_rect`](../crates/compositor/src/backend/mod.rs) para solventar la regresión provocada por la curvatura squircle continua ($n = 4.2$) en ventanas maximizadas. Anteriormente, la deducción de bandas interiores provocaba que una ventana maximizada no pudiera ocluir a otra detrás, desencadenando ráfagas de 60 Hz (`wl_surface.frame`) y overdraw completo de todas las ventanas en segundo plano.
   * **Optimización de Sombras Proyectadas SDF:** Se desactivó el renderizado innecesario de sombras en ventanas maximizadas (`is_maximized && !is_transitioning`) y se implementó [`clamp_rect_to_bounds`](../crates/compositor/src/backend/mod.rs) para recortar las sombras proyectadas al tamaño de la pantalla, evitando falsos negativos en `shadow_occluded` para ventanas en segundo plano.
