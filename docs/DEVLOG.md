@@ -4,6 +4,27 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-08] — Restauración de Miniatura Flotante Completa (Marca de Selección y Nombre) y Acción de Mover (`MOVE`) por Defecto sin Duplicados
+
+### Diagnóstico de Causa Raíz
+* **Pérdida de Marca de Selección y Nombre en la Miniatura de Arrastre:**
+  * Al reemplazar el uso de `WidgetPaintable` por un `IconPaintable` puro en la iteración previa, la miniatura flotante pasó a mostrar únicamente la imagen del icono, prescindiendo del rótulo con el nombre del archivo y del halo/placa azul acrílica de selección (`.selected`).
+* **Comportamiento Erróneo de Copia en lugar de Mover (`delete_data` ignorado):**
+  * Al arrastrar desde el escritorio hacia una ventana externa o explorador de archivos, la acción acordada en Wayland era `MOVE`. Sin embargo, en [`crates/wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs) el manejador `connect_drag_end` ignoraba el tercer parámetro `delete_data: bool`.
+  * En el protocolo Wayland DND, cuando el destino acepta la operación como `MOVE`, la fuente del arrastre recibe `delete_data = true` y tiene la obligación contractual de eliminar el archivo de origen de su carpeta local (`~/Escritorio`). Al ignorar este parámetro, el archivo quedaba en el destino y también en el escritorio, generando una copia no deseada.
+  * De igual modo, en [`crates/branches/src/views/icon_view.rs`](../crates/branches/src/views/icon_view.rs), el lienzo `canvas_drop` no forzaba `DragAction::MOVE` en `connect_enter` / `connect_motion`, provocando que GTK4 negociase `COPY` de forma predeterminada.
+
+### Solución Implementada (`crates/wallpaper`, `crates/branches`)
+* **Widget Flotante Completo Desacoplado (`drag_preview_box`):**
+  * Para mantener la aparición inmediata (0 latencia) y la desaparición total del icono de origen en el escritorio (`opacity: 0.0`) sin perder la marca de selección ni el nombre del archivo, se implementó una caja de previsualización dedicada (`drag_preview_box` en `wallpaper` y `drag_preview` en `branches`).
+  * Esta caja se aloja fuera de la vista del usuario en el lienzo (`fixed.put(&drag_preview_box, -2000.0, -2000.0)`), permitiendo que esté realizada, mapeada y con su CSS completo (`desktop-icon selected`, icono en tamaño completo y etiqueta con el nombre del archivo).
+  * Se conecta su `WidgetPaintable` a `drag_source.set_icon(...)` antes de iniciar la interacción. Al arrastrar, el cursor muestra el archivo completo con su placa de selección y título, mientras el elemento real en la cuadrícula desaparece de forma instantánea.
+* **Acción de Traslado Real (`DragAction::MOVE`) y Limpieza de Origen:**
+  * En `wallpaper`: se procesa `delete_data` en `drag_source.connect_drag_end`. Si `delete_data == true`, los archivos seleccionados se envían a la papelera (`gio::File::trash`), haciendo que desaparezcan automáticamente del escritorio tras completarse el traslado.
+  * En `branches`: se implementó `connect_enter` y `connect_motion` en `canvas_drop` devolviendo `gdk::DragAction::MOVE`, y se procesa `delete_data` en `icon_view` y `list_view`, utilizando `file.move_(&dest_file, ...)` para traslados nativos garantizados sin duplicaciones.
+
+---
+
 ## [2026-11-08] — Cero Latencia en Miniatura Flotante de Arrastre y Desaparición Completa del Elemento de Origen (Sensación Física Real estilo macOS Finder)
 
 ### Diagnóstico de Causa Raíz

@@ -238,34 +238,58 @@ impl IconView {
             Some(gdk::ContentProvider::for_value(&file_list.to_value()))
         });
 
-        // Pre-adjuntar el icono para respuesta visual instantánea (sin lapso de cursor vacío)
-        let display = gdk::Display::default();
-        let icon_paintable = display.map(|d| {
-            let theme = gtk4::IconTheme::for_display(&d);
-            theme.lookup_by_gicon(
-                &item.gicon,
-                48,
-                1,
-                gtk4::TextDirection::Ltr,
-                gtk4::IconLookupFlags::empty(),
-            )
-        });
-        if let Some(ref paintable) = icon_paintable {
-            drag_source.set_icon(Some(paintable), 24, 24);
-        }
+        // Pre-adjuntar la miniatura completa con icono, nombre y marca de selección
+        let drag_preview = GtkBox::new(Orientation::Vertical, 4);
+        drag_preview.set_halign(Align::Center);
+        drag_preview.set_valign(Align::Start);
+        drag_preview.add_css_class("branches-icon-item");
+        drag_preview.add_css_class("selected");
+
+        let drag_img = Image::from_gicon(&item.gicon);
+        drag_img.set_pixel_size(48);
+        drag_preview.append(&drag_img);
+
+        let drag_label = Label::builder()
+            .label(&item.name)
+            .ellipsize(gtk4::pango::EllipsizeMode::Middle)
+            .max_width_chars(12)
+            .wrap(true)
+            .wrap_mode(gtk4::pango::WrapMode::WordChar)
+            .lines(2)
+            .halign(Align::Center)
+            .css_classes(["branches-icon-label"])
+            .build();
+        drag_preview.append(&drag_label);
+        self.fixed_canvas.put(&drag_preview, -2000.0, -2000.0);
+
+        let drag_paintable = gtk4::WidgetPaintable::new(Some(&drag_preview));
+        drag_source.set_icon(Some(&drag_paintable), 40, 40);
 
         let vbox_drag_begin = vbox.clone();
-        let icon_paintable_begin = icon_paintable.clone();
+        let drag_paintable_begin = drag_paintable.clone();
         drag_source.connect_drag_begin(move |source, _drag| {
             vbox_drag_begin.add_css_class("branches-icon-dragging");
-            if let Some(ref paintable) = icon_paintable_begin {
-                source.set_icon(Some(paintable), 24, 24);
-            }
+            source.set_icon(Some(&drag_paintable_begin), 40, 40);
         });
 
         let vbox_drag_end = vbox.clone();
-        drag_source.connect_drag_end(move |_, _drag, _| {
+        let path_drag_end = item.path.clone();
+        let cur_folder_drag_end = self.current_folder.clone();
+        let on_nav_drag_end = self.on_navigate.clone();
+        drag_source.connect_drag_end(move |_, _drag, delete_data| {
             vbox_drag_end.remove_css_class("branches-icon-dragging");
+            if delete_data {
+                let file = gio::File::for_path(&path_drag_end);
+                if file.trash(gio::Cancellable::NONE).is_err() {
+                    if path_drag_end.is_dir() {
+                        let _ = std::fs::remove_dir_all(&path_drag_end);
+                    } else {
+                        let _ = std::fs::remove_file(&path_drag_end);
+                    }
+                }
+                let cf = cur_folder_drag_end.borrow().clone();
+                on_nav_drag_end(cf);
+            }
         });
         vbox.add_controller(drag_source);
 
@@ -278,6 +302,9 @@ impl IconView {
             let vbox_hover = vbox.clone();
             folder_drop.connect_enter(move |_, _x, _y| {
                 vbox_hover.add_css_class("folder-drop-hover");
+                gdk::DragAction::MOVE
+            });
+            folder_drop.connect_motion(move |_, _x, _y| {
                 gdk::DragAction::MOVE
             });
 
@@ -299,7 +326,13 @@ impl IconView {
                             if let Some(fname) = src.file_name() {
                                 let target = dest_dir.join(fname);
                                 if target != src {
-                                    if std::fs::rename(&src, &target).is_ok() || std::fs::copy(&src, &target).is_ok() {
+                                    let dest_file = gio::File::for_path(&target);
+                                    if file.move_(
+                                        &dest_file,
+                                        gio::FileCopyFlags::NONE,
+                                        gio::Cancellable::NONE,
+                                        None,
+                                    ).is_ok() || std::fs::rename(&src, &target).is_ok() {
                                         moved = true;
                                     }
                                 }
@@ -364,6 +397,12 @@ impl IconView {
             gdk::FileList::static_type(),
             gdk::DragAction::COPY | gdk::DragAction::MOVE,
         );
+        canvas_drop.connect_enter(move |_, _x, _y| {
+            gdk::DragAction::MOVE
+        });
+        canvas_drop.connect_motion(move |_, _x, _y| {
+            gdk::DragAction::MOVE
+        });
         let folder_drop_ref = self.current_folder.clone();
         let layout_drop_ref = self.layout_mode.clone();
         let fixed_drop_canvas = self.fixed_canvas.clone();
@@ -417,7 +456,13 @@ impl IconView {
                             if let Some(fname) = src.file_name() {
                                 let dest = cur_folder.join(fname);
                                 if dest != src {
-                                    if std::fs::rename(&src, &dest).is_ok() || std::fs::copy(&src, &dest).is_ok() {
+                                    let dest_file = gio::File::for_path(&dest);
+                                    if file.move_(
+                                        &dest_file,
+                                        gio::FileCopyFlags::NONE,
+                                        gio::Cancellable::NONE,
+                                        None,
+                                    ).is_ok() || std::fs::rename(&src, &dest).is_ok() {
                                         moved_external = true;
                                     }
                                 }

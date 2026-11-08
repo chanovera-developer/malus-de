@@ -1052,8 +1052,8 @@ fn render_single_icon(
             let texture = gtk4::gdk::Texture::for_pixbuf(pixbuf);
             Image::from_paintable(Some(&texture))
         })
-        .unwrap_or_else(|| match icon {
-            Some(i) => Image::from_gicon(&i),
+        .unwrap_or_else(|| match icon.as_ref() {
+            Some(i) => Image::from_gicon(i),
             None => Image::from_icon_name("text-x-generic"),
         });
     icon_image.set_pixel_size(metrics.icon_size);
@@ -1092,6 +1092,42 @@ fn render_single_icon(
         positions.insert(path.clone(), (x, y));
     }
     fixed.put(&item_box, x, y);
+
+    // Previsualización de arrastre (icono + nombre + marca de selección estilo Finder)
+    let drag_preview_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(4)
+        .halign(Align::Center)
+        .width_request(metrics.box_width)
+        .height_request(metrics.box_height)
+        .css_classes(["desktop-icon", "selected"])
+        .build();
+
+    let drag_icon_image = thumbnail
+        .as_ref()
+        .map(|pixbuf| {
+            let texture = gtk4::gdk::Texture::for_pixbuf(pixbuf);
+            Image::from_paintable(Some(&texture))
+        })
+        .unwrap_or_else(|| match icon {
+            Some(ref i) => Image::from_gicon(i),
+            None => Image::from_icon_name("text-x-generic"),
+        });
+    drag_icon_image.set_pixel_size(metrics.icon_size);
+
+    let drag_label = Label::builder()
+        .label(&display_name)
+        .wrap(true)
+        .max_width_chars(14)
+        .justify(gtk4::Justification::Center)
+        .css_classes(["desktop-icon-label"])
+        .build();
+
+    drag_preview_box.append(&drag_icon_image);
+    drag_preview_box.append(&drag_label);
+    fixed.put(&drag_preview_box, -2000.0, -2000.0);
+
+    let drag_preview_paintable = gtk4::WidgetPaintable::new(Some(&drag_preview_box));
 
     // Animación de aterrizaje suave estilo Finder si el archivo acaba de ser soltado
     if recently_dropped_paths.borrow().contains(&path) {
@@ -1271,10 +1307,12 @@ fn render_single_icon(
         Some(gtk4::gdk::ContentProvider::for_value(&file_list.to_value()))
     });
 
-    // Pre-adjuntar el icono para respuesta visual instantánea (sin lapso de cursor vacío)
-    if let Some(ref paintable) = icon_paintable {
-        drag_source.set_icon(Some(paintable), metrics.icon_size / 2, metrics.icon_size / 2);
-    }
+    // Pre-adjuntar la miniatura completa con icono, nombre y marca de selección
+    drag_source.set_icon(
+        Some(&drag_preview_paintable),
+        metrics.box_width / 2,
+        metrics.box_height / 2,
+    );
 
     let item_box_drag = item_box.clone();
     let fixed_drag = fixed.clone();
@@ -1282,7 +1320,7 @@ fn render_single_icon(
     let sel_drag_begin = selected_paths.clone();
     let metrics_drag = metrics.clone();
     let act_drag_begin = active_icon_drag.clone();
-    let icon_paintable_drag = icon_paintable.clone();
+    let drag_preview_paintable_begin = drag_preview_paintable.clone();
     drag_source.connect_drag_begin(move |source, _drag| {
         let sel = sel_drag_begin.borrow();
         if sel.contains(&path_drag_begin) && sel.len() > 1 {
@@ -1303,20 +1341,43 @@ fn render_single_icon(
             (0.0, 0.0),
             (f64::from(metrics_drag.box_width) / 2.0, f64::from(metrics_drag.box_height) / 2.0),
         ));
-        if let Some(ref paintable) = icon_paintable_drag {
-            source.set_icon(Some(paintable), metrics_drag.icon_size / 2, metrics_drag.icon_size / 2);
-        }
+        source.set_icon(
+            Some(&drag_preview_paintable_begin),
+            metrics_drag.box_width / 2,
+            metrics_drag.box_height / 2,
+        );
     });
 
     let fixed_drag_end = fixed.clone();
     let act_drag_end = active_icon_drag.clone();
-    drag_source.connect_drag_end(move |_, _drag, _| {
+    let path_drag_end = path.clone();
+    let sel_drag_end = selected_paths.clone();
+    drag_source.connect_drag_end(move |_, _drag, delete_data| {
         let mut sibling = fixed_drag_end.first_child();
         while let Some(child) = sibling {
             sibling = child.next_sibling();
             child.remove_css_class("desktop-icon-dragging");
         }
         *act_drag_end.borrow_mut() = None;
+
+        if delete_data {
+            let sel = sel_drag_end.borrow();
+            let paths_to_delete: Vec<PathBuf> = if sel.contains(&path_drag_end) && sel.len() > 1 {
+                sel.iter().cloned().collect()
+            } else {
+                vec![path_drag_end.clone()]
+            };
+            for p in paths_to_delete {
+                let file = gio::File::for_path(&p);
+                if file.trash(gio::Cancellable::NONE).is_err() {
+                    if p.is_dir() {
+                        let _ = std::fs::remove_dir_all(&p);
+                    } else {
+                        let _ = std::fs::remove_file(&p);
+                    }
+                }
+            }
+        }
     });
 
     item_box.add_controller(drag_source);
@@ -1925,6 +1986,9 @@ fn create_wallpaper_window(
         // En Wayland el cursor lleva consigo la miniatura flotante (WidgetPaintable).
         // No movemos el widget del escritorio durante connect_motion para evitar cualquier
         // estela o duplicación semitransparente detrás del puntero.
+        drop_target.connect_enter(move |_, _x, _y| {
+            gtk4::gdk::DragAction::MOVE
+        });
         drop_target.connect_motion(move |_, _x, _y| {
             gtk4::gdk::DragAction::MOVE
         });
@@ -2310,6 +2374,7 @@ mod tests {
         dragged_icon_position, snap_position_to_grid, IconLayoutMetrics, StackCategory,
         DESKTOP_TOP_MARGIN,
     };
+    use gtk4::prelude::*;
     use malus_de_common::config::DesktopIconsConfig;
     use std::path::{Path, PathBuf};
 
@@ -2453,6 +2518,23 @@ mod tests {
         assert!(css.contains("@keyframes macos-drop-landing"));
         assert!(css.contains("cubic-bezier(0.16, 1, 0.3, 1)"));
         assert!(!css.contains("!important"));
+    }
+
+    #[test]
+    fn test_drag_preview_widget_paintable() {
+        if gtk4::init().is_err() {
+            return;
+        }
+        let fixed = gtk4::Fixed::new();
+        let preview = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+        preview.add_css_class("desktop-icon");
+        preview.add_css_class("selected");
+        let lbl = gtk4::Label::new(Some("Archivo"));
+        preview.append(&lbl);
+        fixed.put(&preview, -2000.0, -2000.0);
+        let paintable = gtk4::WidgetPaintable::new(Some(&preview));
+        let src = gtk4::DragSource::new();
+        src.set_icon(Some(&paintable), 50, 50);
     }
 
     #[test]
