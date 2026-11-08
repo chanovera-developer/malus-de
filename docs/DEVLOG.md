@@ -4,6 +4,30 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-08] — Fondo Acrílico Coloreado y Conmutación Dinámica de Tema Oscuro/Claro en Menús Emergentes del Escritorio
+
+### Diagnóstico de Causa Raíz
+* **Sobreescritura de Estilos por Prioridad de Proveedores GTK (`STYLE_PROVIDER_PRIORITY`):**
+  * El daemon de fondo de pantalla (`malus-de-wallpaper`) cargaba sus estilos con `STYLE_PROVIDER_PRIORITY_APPLICATION` ($600$). En el entorno Malus DE, `~/.config/gtk-4.0/gtk.css` se inyecta a nivel usuario con prioridad `STYLE_PROVIDER_PRIORITY_USER` ($800$).
+  * En `gtk.css`, las reglas globales para popovers utilizaban la función `alpha(@window_bg_color, 0.82)`. Al ser el daemon de fondo de pantalla una aplicación GTK4 pura (sin enlace a `libadwaita`), la paleta de colores nombrados `@window_bg_color` no existía, provocando que GTK4 descartase la propiedad de color de fondo y dejase el contenedor totalmente transparente.
+* **Falta de Detección Dinámica de Tema en Aplicaciones GTK4 sin Libadwaita:**
+  * GTK4 en Wayland no activa automáticamente las consultas `@media (prefers-color-scheme: light)` a menos que se configure explícitamente `gtk-application-prefer-dark-theme` en `GtkSettings` o se gestionen clases temáticas manuales (`.light-popover`).
+  * Los menús contextuales del escritorio (tanto el menú general como los menús de icono, renombrado y creación de carpetas) no monitoreaban la clave `color-scheme` de `org.gnome.desktop.interface`.
+
+### Solución Implementada (`crates/wallpaper/src/styles/default-gradient.css`, `crates/wallpaper/src/main.rs`)
+* **Prioridad Elevada y Colores Base Fallback:**
+  * Se definieron directivas `@define-color window_bg_color rgb(30, 30, 36);` y `@define-color window_fg_color rgb(255, 255, 255);` en la cabecera CSS.
+  * Se registró el proveedor CSS en `app.connect_startup` con prioridad `STYLE_PROVIDER_PRIORITY_USER + 100` ($900$), garantizando que los estilos acrílicos del escritorio tengan precedencia total sobre cualquier regla de usuario o del sistema.
+* **Fondo Acrílico Idéntico a Nautilus en Modo Oscuro y Claro:**
+  * **Modo Oscuro (por defecto):** Fondo `rgba(30, 30, 36, 0.82)`, borde perimetral `1px solid rgba(255, 255, 255, 0.14)`, bisel de luz interior `box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08)`, tipografía `#f1f5f9` y separadores `rgba(255, 255, 255, 0.12)`.
+  * **Modo Claro (`.light-popover`, `@media (prefers-color-scheme: light)`):** Fondo blanco lechoso acrílico `rgba(246, 246, 248, 0.85)`, borde `1px solid rgba(0, 0, 0, 0.14)`, bisel interior `box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35)`, tipografía `#1e293b` y separadores `rgba(0, 0, 0, 0.10)`.
+  * **Interacción:** Efecto hover en opciones con el azul estándar macOS `#007aff` y tipografía blanca contrastada.
+* **Sincronización Reactiva con el Esquema de Color del Sistema:**
+  * En `app.connect_startup`, se vinculó un monitor `gio::Settings` sobre `org.gnome.desktop.interface:color-scheme` que actualiza `set_gtk_application_prefer_dark_theme` en tiempo real sin requerir reinicio del daemon.
+  * En los 5 generadores de popover (menú de fondo primario, menú de fondo secundario, menú contextual de archivo/icono, diálogo de renombrar y diálogo de nueva carpeta), se evalúa `malus_de_common::config::is_dark_mode_active()` en el momento exacto de apertura para aplicar o remover de forma instantánea la clase `.light-popover`.
+
+---
+
 ## [2026-11-08] — Diseño Acrílico en Menús Emergentes del Escritorio (Alineación con Nautilus, Dual Kawase Blur, Sombra GPU y Squircle)
 
 ### Hitos Implementados
