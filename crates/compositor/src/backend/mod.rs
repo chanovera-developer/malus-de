@@ -76,6 +76,19 @@ pub fn rect_contains_rect(
         && outer.loc.y + outer.size.h >= inner.loc.y + inner.size.h
 }
 
+/// Recorta un rectángulo para que no exceda los límites del área visible indicada.
+#[inline]
+pub fn clamp_rect_to_bounds(
+    rect: Rectangle<i32, Physical>,
+    bounds: Rectangle<i32, Physical>,
+) -> Rectangle<i32, Physical> {
+    let x0 = rect.loc.x.max(bounds.loc.x);
+    let y0 = rect.loc.y.max(bounds.loc.y);
+    let x1 = (rect.loc.x + rect.size.w).min(bounds.loc.x + bounds.size.w);
+    let y1 = (rect.loc.y + rect.size.h).min(bounds.loc.y + bounds.size.h);
+    Rectangle::new((x0, y0).into(), ((x1 - x0).max(0), (y1 - y0).max(0)).into())
+}
+
 /// Representa un oclusor opaco (ventana que cubre áreas inferiores) para descarte de sobre-renderizado.
 #[derive(Debug, Clone, Copy)]
 pub struct OpaqueOccluder {
@@ -84,12 +97,20 @@ pub struct OpaqueOccluder {
 }
 
 impl OpaqueOccluder {
-    /// Determina si el objetivo queda 100% cubierto por el área opaca de este oclusor.
-    pub fn contains_rect(&self, target: Rectangle<i32, Physical>) -> bool {
+    /// Determina si el objetivo (con su propio radio de esquina `target_radius`) queda 100% cubierto
+    /// por el área opaca de este oclusor.
+    pub fn contains_rounded_rect(
+        &self,
+        target: Rectangle<i32, Physical>,
+        target_radius: i32,
+    ) -> bool {
         if target.size.w <= 0 || target.size.h <= 0 {
             return true;
         }
         if self.rect.size.w <= 0 || self.rect.size.h <= 0 {
+            return false;
+        }
+        if !rect_contains_rect(&self.rect, &target) {
             return false;
         }
         let r = self
@@ -97,20 +118,24 @@ impl OpaqueOccluder {
             .max(0)
             .min(self.rect.size.w / 2)
             .min(self.rect.size.h / 2);
-        if r == 0 {
-            rect_contains_rect(&self.rect, &target)
-        } else {
-            // Dos bandas ortogonales opacas que excluyen las 4 esquinas redondeadas
-            let band_h = Rectangle::new(
-                (self.rect.loc.x, self.rect.loc.y + r).into(),
-                (self.rect.size.w, (self.rect.size.h - 2 * r).max(0)).into(),
-            );
-            let band_v = Rectangle::new(
-                (self.rect.loc.x + r, self.rect.loc.y).into(),
-                ((self.rect.size.w - 2 * r).max(0), self.rect.size.h).into(),
-            );
-            rect_contains_rect(&band_h, &target) || rect_contains_rect(&band_v, &target)
+        if r == 0 || target_radius >= r {
+            return true;
         }
+        // Dos bandas ortogonales opacas que excluyen las 4 esquinas redondeadas
+        let band_h = Rectangle::new(
+            (self.rect.loc.x, self.rect.loc.y + r).into(),
+            (self.rect.size.w, (self.rect.size.h - 2 * r).max(0)).into(),
+        );
+        let band_v = Rectangle::new(
+            (self.rect.loc.x + r, self.rect.loc.y).into(),
+            ((self.rect.size.w - 2 * r).max(0), self.rect.size.h).into(),
+        );
+        rect_contains_rect(&band_h, &target) || rect_contains_rect(&band_v, &target)
+    }
+
+    /// Determina si el objetivo queda 100% cubierto por el área opaca de este oclusor.
+    pub fn contains_rect(&self, target: Rectangle<i32, Physical>) -> bool {
+        self.contains_rounded_rect(target, 0)
     }
 }
 
@@ -139,9 +164,13 @@ mod tests {
         let central = Rectangle::new((100, 100).into(), (400, 300).into());
         assert!(occluder.contains_rect(central));
 
-        // En la esquina superior izquierda (dentro del radio de corte de esquina): no ocluido
+        // En la esquina superior izquierda (dentro del radio de corte de esquina): no ocluido si target no es redondeado
         let in_corner = Rectangle::new((5, 5).into(), (20, 20).into());
         assert!(!occluder.contains_rect(in_corner));
+
+        // Otra ventana maximizada con el mismo rectángulo y mismo radio de esquina (32) queda 100% ocluida
+        let background_maximized = Rectangle::new((0, 0).into(), (1000, 800).into());
+        assert!(occluder.contains_rounded_rect(background_maximized, 32));
     }
 
     #[test]

@@ -386,6 +386,42 @@ pub fn is_browser_window(window: &smithay::desktop::Window) -> bool {
     false
 }
 
+/// Identifica si una ventana corresponde al explorador nativo Branches (`malus-de-branches`).
+pub fn is_branches_window(window: &smithay::desktop::Window) -> bool {
+    let check = |app_id: &Option<String>, title: &Option<String>| -> bool {
+        if let Some(ref id) = app_id {
+            let lower = id.to_lowercase();
+            if lower == "branches"
+                || lower.contains("malus.branches")
+                || lower.contains("malus-de-branches")
+                || lower.contains("malus_de_branches")
+            {
+                return true;
+            }
+        }
+        if let Some(ref title) = title {
+            if title.trim().eq_ignore_ascii_case("branches") {
+                return true;
+            }
+        }
+        false
+    };
+
+    if let Some(surface) = window.wl_surface() {
+        let (app_id, title) = toplevel_info(&surface);
+        if check(&app_id, &title) {
+            return true;
+        }
+    }
+    if let Some(toplevel) = window.toplevel() {
+        let (app_id, title) = toplevel_info(toplevel.wl_surface());
+        if check(&app_id, &title) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Identifica si una ventana requiere desenfoque de fondo en GPU.
 pub fn is_translucent_window(window: &smithay::desktop::Window) -> bool {
     let check = |app_id: &Option<String>, title: &Option<String>| -> bool {
@@ -395,7 +431,7 @@ pub fn is_translucent_window(window: &smithay::desktop::Window) -> bool {
                 || lower.contains("malus.settings")
                 || lower.contains("malus-de-settings")
                 || lower.contains("malus_de_settings")
-                || lower.contains("branches")
+                || lower == "branches"
                 || lower.contains("malus.branches")
                 || lower.contains("malus-de-branches")
                 || lower.contains("malus_de_branches")
@@ -404,10 +440,11 @@ pub fn is_translucent_window(window: &smithay::desktop::Window) -> bool {
             }
         }
         if let Some(ref title) = title {
-            let lower = title.to_lowercase();
-            if lower.contains("ajustes del sistema")
-                || lower.contains("confirmación de acción del sistema")
-                || lower.contains("branches")
+            let lower = title.trim().to_lowercase();
+            if lower == "ajustes del sistema"
+                || lower == "confirmación de acción del sistema"
+                || lower == "system action confirmation"
+                || lower == "branches"
             {
                 return true;
             }
@@ -2203,18 +2240,11 @@ impl MalusState {
             }
         }
 
-        if self.ssd.cursor_override
-            || self.ssd.hovered_surface.is_some()
-            || !matches!(
-                self.cursor_status,
-                smithay::input::pointer::CursorImageStatus::Surface(_)
-                    | smithay::input::pointer::CursorImageStatus::Hidden
-            )
-        {
+        if self.ssd.cursor_override || self.ssd.hovered_surface.is_some() {
             self.cursor_status = smithay::input::pointer::CursorImageStatus::default_named();
+            self.ssd.cursor_override = false;
+            self.ssd.update_hover(None, 0.0, 0.0, 0.0);
         }
-        self.ssd.cursor_override = false;
-        self.ssd.update_hover(None, 0.0, 0.0, 0.0);
     }
 
     /// Procesa clics sobre la barra de título SSD (botones de cerrar, minimizar, maximizar, doble clic y arrastre).

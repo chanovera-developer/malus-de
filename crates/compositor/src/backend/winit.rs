@@ -527,7 +527,6 @@ pub fn run_winit() -> Result<()> {
                         state.screenshot_ui.update_pointer_motion(output_geo, point);
                     }
                     state.update_spotlight_drag_dock_hover(point);
-                    state.update_ssd_hover(point);
 
                     let layer_target = {
                         let layer_map = smithay::desktop::layer_map_for_output(&output);
@@ -1364,13 +1363,16 @@ pub fn run_winit() -> Result<()> {
                                 popup_elems.push((p_elems, popup_rect, popup_effects_enabled));
                             }
 
-                            let is_fullscreen = window
+                            let (is_fullscreen, is_maximized) = window
                                 .toplevel()
                                 .map(|t| {
                                     let states = &t.current_state().states;
-                                    states.contains(XdgState::Fullscreen)
+                                    (
+                                        states.contains(XdgState::Fullscreen),
+                                        states.contains(XdgState::Maximized),
+                                    )
                                 })
-                                .unwrap_or(false);
+                                .unwrap_or((false, false));
 
                             let is_active = window.toplevel().map(|t| {
                                 let states = &t.current_state().states;
@@ -1379,6 +1381,7 @@ pub fn run_winit() -> Result<()> {
 
                             let is_firefox = crate::state::is_firefox_window(&window);
                             let is_translucent = crate::state::is_translucent_window(&window);
+                            let is_branches = crate::state::is_branches_window(&window);
                             let is_system_monitor = crate::state::is_system_monitor_window(&window);
                             let uses_ssd = crate::state::window_uses_ssd(window);
                             let root_id =
@@ -1432,6 +1435,8 @@ pub fn run_winit() -> Result<()> {
                                 is_system_monitor,
                                 is_transitioning,
                                 ssd_elem,
+                                is_maximized,
+                                is_branches,
                             ));
                         }
                     }
@@ -1500,6 +1505,7 @@ pub fn run_winit() -> Result<()> {
                     let mut shadow_occluded = vec![false; window_render_data.len()];
                     let mut occluders: Vec<super::OpaqueOccluder> = Vec::new();
 
+                    let screen_bounds = Rectangle::from_size(size);
                     let shadow_pad = 80;
                     for i in (0..window_render_data.len()).rev() {
                         let win = &window_render_data[i];
@@ -1508,17 +1514,31 @@ pub fn run_winit() -> Result<()> {
                         let is_translucent = win.10;
                         let is_system_monitor = win.11;
                         let is_transitioning = win.12;
+                        let is_maximized = win.14;
+                        let is_branches = win.15;
+                        let target_r = if should_round {
+                            win_phys_r.unwrap_or(0)
+                        } else {
+                            0
+                        };
 
-                        let shadow_rect = Rectangle::new(
+                        if is_maximized && !is_transitioning {
+                            shadow_occluded[i] = true;
+                        }
+
+                        let raw_shadow_rect = Rectangle::new(
                             (win_rect.loc.x - shadow_pad, win_rect.loc.y - shadow_pad).into(),
                             (win_rect.size.w + shadow_pad * 2, win_rect.size.h + shadow_pad * 2).into(),
                         );
+                        let shadow_rect = super::clamp_rect_to_bounds(raw_shadow_rect, screen_bounds);
 
                         for occluder in &occluders {
-                            if occluder.contains_rect(win_rect) {
+                            if occluder.contains_rounded_rect(win_rect, target_r) {
                                 body_occluded[i] = true;
                             }
-                            if occluder.contains_rect(shadow_rect) {
+                            if !shadow_occluded[i]
+                                && occluder.contains_rounded_rect(shadow_rect, target_r)
+                            {
                                 shadow_occluded[i] = true;
                             }
                             if body_occluded[i] && shadow_occluded[i] {
@@ -1527,15 +1547,22 @@ pub fn run_winit() -> Result<()> {
                         }
 
                         if !is_translucent && !is_system_monitor && !is_transitioning {
-                            let r = if should_round {
-                                win_phys_r.unwrap_or(0)
-                            } else {
-                                0
-                            };
                             occluders.push(super::OpaqueOccluder {
                                 rect: win_rect,
-                                corner_radius: r,
+                                corner_radius: target_r,
                             });
+                        } else if is_branches && !is_transitioning {
+                            let sidebar_w = 212;
+                            if win_rect.size.w > sidebar_w {
+                                let opaque_right_rect = Rectangle::new(
+                                    (win_rect.loc.x + sidebar_w, win_rect.loc.y).into(),
+                                    (win_rect.size.w - sidebar_w, win_rect.size.h).into(),
+                                );
+                                occluders.push(super::OpaqueOccluder {
+                                    rect: opaque_right_rect,
+                                    corner_radius: target_r,
+                                });
+                            }
                         }
                     }
 
@@ -1586,6 +1613,8 @@ pub fn run_winit() -> Result<()> {
                             is_system_monitor,
                             _is_transitioning,
                             ssd_elem,
+                            _is_maximized,
+                            is_branches,
                         ),
                     ) in window_render_data.iter().enumerate()
                     {
@@ -1639,7 +1668,7 @@ pub fn run_winit() -> Result<()> {
                             }
                         }
 
-                        // 2.1.5. DESENFOQUE DE FONDO DUAL KAWASE (Nautilus y Ajustes del Sistema)
+                        // 2.1.5. DESENFOQUE DE FONDO DUAL KAWASE (Branches, Nautilus y Ajustes del Sistema)
                         if *is_translucent && !is_body_occluded {
                             if let Some(ref mut blur) = blur_pipeline {
                                 let corner_radius = if *should_round {
@@ -1647,13 +1676,23 @@ pub fn run_winit() -> Result<()> {
                                 } else {
                                     0.0
                                 };
+                                let blur_rect = if *is_branches {
+                                    let sidebar_blur_w =
+                                        (212 + corner_radius as i32 + 4).min(win_rect.size.w);
+                                    Rectangle::new(
+                                        win_rect.loc,
+                                        (sidebar_blur_w, win_rect.size.h).into(),
+                                    )
+                                } else {
+                                    *win_rect
+                                };
                                 let screen_size = size;
                                 let _ = frame.with_context(|gl| {
                                     blur.render_blur(
                                         gl,
                                         &projection,
                                         screen_size,
-                                        *win_rect,
+                                        blur_rect,
                                         corner_radius,
                                     );
                                 });
@@ -1932,7 +1971,12 @@ pub fn run_winit() -> Result<()> {
 
                     // 3. Renderizar menús contextuales y popups de ventanas (siempre ENCIMA de las superficies de ventana)
                     let menu_radius = 32;
-                    for (_, _, _, popup_shadow_rects, _, is_active, ..) in &window_render_data {
+                    for (idx, (_, _, _, popup_shadow_rects, _, is_active, ..)) in
+                        window_render_data.iter().enumerate()
+                    {
+                        if body_occluded[idx] {
+                            continue;
+                        }
                         if let (Some(radius), Some(shadow)) = (win_phys_r, shadow_pipeline.as_ref())
                         {
                             for popup_rect in popup_shadow_rects {
