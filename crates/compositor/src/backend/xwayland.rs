@@ -216,7 +216,7 @@ pub fn set_window_state(state: &mut MalusState, surface: &X11Surface, fullscreen
 
     let Some(output) = window
         .as_ref()
-        .and_then(|window| state.space.outputs_for_element(window).into_iter().next())
+        .and_then(|window| state.origin_output_for_window(window))
         .or_else(|| state.space.outputs().next().cloned())
     else {
         return;

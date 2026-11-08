@@ -528,11 +528,18 @@ pub fn run_winit() -> Result<()> {
                     }
                     state.update_spotlight_drag_dock_hover(point);
 
+                    let has_fullscreen = state.has_fullscreen_window_on_output(&output);
                     let layer_target = {
                         let layer_map = smithay::desktop::layer_map_for_output(&output);
                         let under_layer = layer_map.layer_under(Layer::Overlay, point)
                             .filter(|l| !(l.namespace() == "malus-app-switcher" && !state.app_switcher.is_active))
-                            .or_else(|| layer_map.layer_under(Layer::Top, point));
+                            .or_else(|| {
+                                if !has_fullscreen {
+                                    layer_map.layer_under(Layer::Top, point)
+                                } else {
+                                    None
+                                }
+                            });
 
                         under_layer.and_then(|layer| {
                             layer_map.layer_geometry(layer).and_then(|geo| {
@@ -598,11 +605,18 @@ pub fn run_winit() -> Result<()> {
                     let is_pressed = event.state() == ButtonState::Pressed;
                     let point = pointer.current_location();
 
+                    let has_fullscreen = state.has_fullscreen_window_on_output(&output);
                     let layer_target = {
                         let layer_map = smithay::desktop::layer_map_for_output(&output);
                         let under_layer = layer_map.layer_under(Layer::Overlay, point)
                             .filter(|l| !(l.namespace() == "malus-app-switcher" && !state.app_switcher.is_active))
-                            .or_else(|| layer_map.layer_under(Layer::Top, point));
+                            .or_else(|| {
+                                if !has_fullscreen {
+                                    layer_map.layer_under(Layer::Top, point)
+                                } else {
+                                    None
+                                }
+                            });
 
                         under_layer.and_then(|layer| {
                             layer_map.layer_geometry(layer).and_then(|geo| {
@@ -1132,6 +1146,7 @@ pub fn run_winit() -> Result<()> {
                 };
 
                 let layer_map = smithay::desktop::layer_map_for_output(&output);
+                let has_fullscreen_window = state.has_fullscreen_window_on_output(&output);
                 let mut lower_elements = Vec::new();
                 let mut upper_elements = Vec::new();
                 let mut dock_clip_roots = Vec::new();
@@ -1185,7 +1200,7 @@ pub fn run_winit() -> Result<()> {
                                 1.0,
                                 Kind::Unspecified,
                             );
-                        if surface.namespace() == "malus-dock" {
+                        if surface.namespace() == "malus-dock" && !has_fullscreen_window {
                             let root_id =
                                 smithay::backend::renderer::element::Id::from_wayland_resource(
                                     surface.wl_surface(),
@@ -1222,17 +1237,21 @@ pub fn run_winit() -> Result<()> {
                                 Kind::Unspecified,
                             );
                             if surface.namespace() == "malus-top-bar" {
-                                let popup_rect = Rectangle::new(
-                                    layer_loc + popup_offset.to_physical_precise_round(1.0),
-                                    popup_geometry.size.to_physical_precise_round(1.0),
-                                );
-                                topbar_popups.push((elems, popup_rect));
+                                if !has_fullscreen_window {
+                                    let popup_rect = Rectangle::new(
+                                        layer_loc + popup_offset.to_physical_precise_round(1.0),
+                                        popup_geometry.size.to_physical_precise_round(1.0),
+                                    );
+                                    topbar_popups.push((elems, popup_rect));
+                                }
                             } else if surface.namespace() == "malus-dock" {
-                                let popup_rect = Rectangle::new(
-                                    layer_loc + offset,
-                                    popup_geometry.size.to_physical_precise_round(1.0),
-                                );
-                                dock_popups.push((elems, popup_rect));
+                                if !has_fullscreen_window {
+                                    let popup_rect = Rectangle::new(
+                                        layer_loc + offset,
+                                        popup_geometry.size.to_physical_precise_round(1.0),
+                                    );
+                                    dock_popups.push((elems, popup_rect));
+                                }
                             } else {
                                 p_elems.extend(elems);
                             }
@@ -1244,6 +1263,13 @@ pub fn run_winit() -> Result<()> {
                         } else if matches!(surface.layer(), Layer::Background | Layer::Bottom) {
                             lower_elements.extend(s_elems);
                             lower_elements.extend(p_elems);
+                        } else if surface.layer() == Layer::Top {
+                            // Por protocolo wlr-layer-shell, Layer::Top está por debajo de ventanas a pantalla completa.
+                            // Solo se dibuja en capas superiores cuando NO hay una ventana a pantalla completa en este monitor.
+                            if !has_fullscreen_window {
+                                upper_elements.extend(s_elems);
+                                upper_elements.extend(p_elems);
+                            }
                         } else {
                             upper_elements.extend(s_elems);
                             upper_elements.extend(p_elems);
@@ -1913,6 +1939,9 @@ pub fn run_winit() -> Result<()> {
                         }
                         for surface in layer_map.layers() {
                             if matches!(surface.layer(), Layer::Top | Layer::Overlay) {
+                                if has_fullscreen_window && surface.layer() == Layer::Top {
+                                    continue;
+                                }
                                 let ns = surface.namespace();
                                 if ns == "malus-app-switcher" && !state.app_switcher.is_active {
                                     continue;

@@ -588,8 +588,31 @@ fn find_layer_under(
     String,
     bool,
 )> {
-    find_layer_under_layer(state, point, Layer::Overlay)
-        .or_else(|| find_layer_under_layer(state, point, Layer::Top))
+    if let Some(hit) = find_layer_under_layer(state, point, Layer::Overlay) {
+        return Some(hit);
+    }
+
+    // Para Layer::Top (Top Bar, Dock): si el monitor donde cae el puntero tiene una ventana
+    // en pantalla completa, Layer::Top queda por debajo de esa ventana (wlr-layer-shell spec).
+    let output_has_fullscreen = state
+        .space
+        .outputs()
+        .find(|o| {
+            state
+                .space
+                .output_geometry(o)
+                .map(|g| g.to_f64().contains(point))
+                .unwrap_or(false)
+        })
+        .map(|o| state.has_fullscreen_window_on_output(o))
+        .unwrap_or(false);
+
+    if !output_has_fullscreen {
+        if let Some(hit) = find_layer_under_layer(state, point, Layer::Top) {
+            return Some(hit);
+        }
+    }
+    None
 }
 
 fn clamp_pointer_location(
@@ -2477,6 +2500,7 @@ pub fn run_drm() -> Result<()> {
                 };
 
                 let layer_map = smithay::desktop::layer_map_for_output(&out_surface.output);
+                let has_fullscreen_window = state.has_fullscreen_window_on_output(&out_surface.output);
                 let mut lower_elements = Vec::new();
                 let mut upper_elements = Vec::new();
                 let mut dock_clip_roots = Vec::new();
@@ -2507,7 +2531,7 @@ pub fn run_drm() -> Result<()> {
                                 1.0,
                                 Kind::Unspecified,
                             );
-                        if surface.namespace() == "malus-dock" {
+                        if surface.namespace() == "malus-dock" && !has_fullscreen_window {
                             let root_id =
                                 smithay::backend::renderer::element::Id::from_wayland_resource(
                                     surface.wl_surface(),
@@ -2544,17 +2568,21 @@ pub fn run_drm() -> Result<()> {
                                 Kind::Unspecified,
                             );
                             if surface.namespace() == "malus-top-bar" {
-                                let popup_rect = Rectangle::new(
-                                    layer_loc + popup_offset.to_physical_precise_round(scale),
-                                    popup_geometry.size.to_physical_precise_round(scale),
-                                );
-                                topbar_popups.push((elems, popup_rect));
+                                if !has_fullscreen_window {
+                                    let popup_rect = Rectangle::new(
+                                        layer_loc + popup_offset.to_physical_precise_round(scale),
+                                        popup_geometry.size.to_physical_precise_round(scale),
+                                    );
+                                    topbar_popups.push((elems, popup_rect));
+                                }
                             } else if surface.namespace() == "malus-dock" {
-                                let popup_rect = Rectangle::new(
-                                    layer_loc + offset,
-                                    popup_geometry.size.to_physical_precise_round(scale),
-                                );
-                                dock_popups.push((elems, popup_rect));
+                                if !has_fullscreen_window {
+                                    let popup_rect = Rectangle::new(
+                                        layer_loc + offset,
+                                        popup_geometry.size.to_physical_precise_round(scale),
+                                    );
+                                    dock_popups.push((elems, popup_rect));
+                                }
                             } else {
                                 p_elems.extend(elems);
                             }
@@ -2566,6 +2594,13 @@ pub fn run_drm() -> Result<()> {
                         } else if matches!(surface.layer(), Layer::Background | Layer::Bottom) {
                             lower_elements.extend(s_elems);
                             lower_elements.extend(p_elems);
+                        } else if surface.layer() == Layer::Top {
+                            // Por protocolo wlr-layer-shell, Layer::Top está por debajo de ventanas a pantalla completa.
+                            // Solo se dibuja en capas superiores cuando NO hay una ventana a pantalla completa en este monitor.
+                            if !has_fullscreen_window {
+                                upper_elements.extend(s_elems);
+                                upper_elements.extend(p_elems);
+                            }
                         } else {
                             upper_elements.extend(s_elems);
                             upper_elements.extend(p_elems);
@@ -3281,6 +3316,9 @@ pub fn run_drm() -> Result<()> {
                             }
                             for surface in layer_map.layers() {
                                 if matches!(surface.layer(), Layer::Top | Layer::Overlay) {
+                                    if has_fullscreen_window && surface.layer() == Layer::Top {
+                                        continue;
+                                    }
                                     let ns = surface.namespace();
                                     if ns == "malus-app-switcher" && !state.app_switcher.is_active {
                                         continue;

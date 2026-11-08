@@ -2203,7 +2203,11 @@ impl MalusState {
                         !(l.namespace() == "malus-app-switcher" && !self.app_switcher.is_active)
                     })
                     .or_else(|| {
-                        layer_map.layer_under(smithay::wayland::shell::wlr_layer::Layer::Top, point)
+                        if !self.has_fullscreen_window_on_output(output) {
+                            layer_map.layer_under(smithay::wayland::shell::wlr_layer::Layer::Top, point)
+                        } else {
+                            None
+                        }
                     });
                 under_layer.is_some_and(|layer| {
                     layer_map.layer_geometry(layer).is_some_and(|geo| {
@@ -2495,6 +2499,98 @@ impl MalusState {
                 (output_geo.size.w, (output_geo.size.h - 36).max(100)).into(),
             )
         }
+    }
+
+    /// Determina la pantalla (Output) de origen donde reside principalmente una ventana.
+    /// Prioriza el monitor con mayor área de intersección física con la ventana,
+    /// seguido del monitor que contiene su centro o su posición actual, o la posición del puntero.
+    pub fn origin_output_for_window(&self, window: &smithay::desktop::Window) -> Option<Output> {
+        let win_loc = self.space.element_location(window).unwrap_or_default();
+        let win_geo = window.geometry();
+        let win_rect = Rectangle::new(win_loc, win_geo.size);
+
+        // 1. Monitor con mayor área de solapamiento con la ventana
+        let mut best_output = None;
+        let mut max_area = 0i64;
+        for output in self.space.outputs() {
+            if let Some(out_geo) = self.space.output_geometry(output) {
+                if let Some(intersection) = win_rect.intersection(out_geo) {
+                    let area = intersection.size.w as i64 * intersection.size.h as i64;
+                    if area > max_area {
+                        max_area = area;
+                        best_output = Some(output.clone());
+                    }
+                }
+            }
+        }
+        if best_output.is_some() {
+            return best_output;
+        }
+
+        // 2. Monitor que contiene el centro de la ventana
+        let center = Point::from((
+            win_rect.loc.x + win_rect.size.w / 2,
+            win_rect.loc.y + win_rect.size.h / 2,
+        ));
+        for output in self.space.outputs() {
+            if let Some(out_geo) = self.space.output_geometry(output) {
+                if out_geo.contains(center) {
+                    return Some(output.clone());
+                }
+            }
+        }
+
+        // 3. Monitor que contiene la posición (esquina superior izquierda) de la ventana
+        for output in self.space.outputs() {
+            if let Some(out_geo) = self.space.output_geometry(output) {
+                if out_geo.contains(win_loc) {
+                    return Some(output.clone());
+                }
+            }
+        }
+
+        // 4. Monitor donde se encuentra actualmente el puntero del ratón
+        if let Some(pointer) = self.seat.get_pointer() {
+            let cur_loc = pointer.current_location();
+            for output in self.space.outputs() {
+                if let Some(out_geo) = self.space.output_geometry(output) {
+                    if out_geo.to_f64().contains(cur_loc) {
+                        return Some(output.clone());
+                    }
+                }
+            }
+        }
+
+        // 5. Fallback a la lista de monitores de Smithay
+        self.space
+            .outputs_for_element(window)
+            .into_iter()
+            .next()
+            .or_else(|| self.space.outputs().next().cloned())
+    }
+
+    /// Determina si hay una ventana en pantalla completa visible sobre un monitor específico.
+    pub fn has_fullscreen_window_on_output(&self, output: &Output) -> bool {
+        let Some(output_geo) = self.space.output_geometry(output) else {
+            return false;
+        };
+        for window in self.space.elements() {
+            let is_fullscreen = window
+                .toplevel()
+                .map(|t| t.current_state().states.contains(XdgState::Fullscreen))
+                .unwrap_or_else(|| {
+                    window.x11_surface().map(|x| x.is_fullscreen()).unwrap_or(false)
+                });
+            if is_fullscreen {
+                if let Some(loc) = self.space.element_location(window) {
+                    let win_rect = Rectangle::new(loc, window.geometry().size);
+                    if output_geo.overlaps(win_rect) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 }
 
@@ -3068,10 +3164,14 @@ impl XdgShellHandler for MalusState {
             tracing::warn!("⚠️ fullscreen_request ignorado: no se encontró la ventana");
             return;
         };
-        let output = requested_output
-            .as_ref()
-            .and_then(Output::from_resource)
-            .or_else(|| self.space.outputs_for_element(&window).into_iter().next())
+        // Siempre respetar la pantalla de origen donde reside la ventana para que los vídeos
+        // o aplicaciones en pantalla completa no salten arbitrariamente al monitor primario.
+        let output = self.origin_output_for_window(&window)
+            .or_else(|| {
+                requested_output
+                    .as_ref()
+                    .and_then(Output::from_resource)
+            })
             .or_else(|| self.space.outputs().next().cloned());
         let Some(output) = output else {
             tracing::warn!("⚠️ fullscreen_request ignorado: no hay una pantalla disponible");
@@ -3088,22 +3188,14 @@ impl XdgShellHandler for MalusState {
             return;
         };
         let states = &toplevel.current_state().states;
-        if !states.contains(XdgState::Fullscreen)
-            && !states.contains(XdgState::Maximized)
-            && !states.contains(XdgState::TiledLeft)
-            && !states.contains(XdgState::TiledRight)
-        {
+        if !states.contains(XdgState::Fullscreen) {
             if let Some(surface) = window.wl_surface() {
                 let geometry = window.geometry();
-                if geometry.size.w > 150 && geometry.size.h > 150 {
-                    self.window_restore_geometries.insert(
-                        surface.into_owned(),
-                        (
-                            self.space.element_location(&window).unwrap_or_default(),
-                            geometry.size,
-                        ),
-                    );
-                }
+                let loc = self.space.element_location(&window).unwrap_or_default();
+                self.window_restore_geometries.insert(
+                    surface.into_owned(),
+                    (loc, geometry.size),
+                );
             }
         }
 
@@ -3130,11 +3222,7 @@ impl XdgShellHandler for MalusState {
         let Some(toplevel) = window.toplevel() else {
             return;
         };
-        let output = self
-            .space
-            .outputs_for_element(&window)
-            .into_iter()
-            .next()
+        let output = self.origin_output_for_window(&window)
             .or_else(|| self.space.outputs().next().cloned());
         let restore = self.window_restore_geometries.get(surf).copied();
         let (location, size) = if let Some((location, size)) = restore {

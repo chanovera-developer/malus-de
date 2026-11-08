@@ -4,9 +4,26 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
-## [2026-11-08] — Corrección de Regresiones de Rendimiento en Compositor, Rediseño de Branches (macOS Finder) y Localización del Menú del Sistema
+## [2026-11-08] — Corrección de Regresiones de Rendimiento en Compositor, Rediseño de Branches (macOS Finder), Localización del Menú del Sistema y Pantalla Completa Multimonitor
 
 ### Hitos Implementados
+
+* **Respeto Estricto de la Pantalla de Origen en Pantalla Completa Multimonitor:**
+  * Implementación de [`origin_output_for_window`](../crates/compositor/src/state.rs), calculando la intersección geométrica de mayor área física entre la geometría de la ventana y los monitores activos (con desempates por centroide, coordenadas de origen y puntero del ratón).
+  * Solución definitiva al problema donde navegadores (Chromium, Firefox, Brave) o reproductores multimedia (MPV, VLC) pasaban un monitor por defecto o donde la ordenación interna de Smithay enviaba la ventana al monitor primario al activar pantalla completa.
+  * Preservación exacta de la geometría y posición previa mediante `window_restore_geometries` para restaurar la ventana al monitor y dimensiones originales al salir de pantalla completa.
+  * Soporte equivalente para clientes X11 vía Xwayland en [`backend/xwayland.rs`](../crates/compositor/src/backend/xwayland.rs).
+
+* **Ocultación de Dock y Top Bar en Pantalla Completa según la Especificación `wlr-layer-shell`:**
+  * Conforme a la especificación estándar Wayland `wlr-layer-shell`, las superficies con nivel de capa `Layer::Top` (como `malus-top-bar` y `malus-dock`) deben situarse por debajo de ventanas en pantalla completa, reservando solo `Layer::Overlay` por encima.
+  * Implementación de [`has_fullscreen_window_on_output`](../crates/compositor/src/state.rs) para comprobar si existe alguna ventana activa en modo pantalla completa en la pantalla dada.
+  * Supresión selectiva en [`drm.rs`](../crates/compositor/src/backend/drm.rs) y [`winit.rs`](../crates/compositor/src/backend/winit.rs) de los elementos gráficos de `Layer::Top` en `upper_elements`, recorte de esquinas del dock (`dock_clip_roots`), popups asociados y pasadas de desenfoque GPU (`layer_blur_items`) en monitores con una ventana fullscreen.
+  * Filtrado de eventos del puntero e hit-testing en [`find_layer_under`](../crates/compositor/src/backend/drm.rs) y [`update_ssd_hover`](../crates/compositor/src/state.rs) para evitar capturas o clics fantasma sobre la barra o el dock ocultos tras el vídeo.
+  * Mantenimiento de independencia multimonitor: un monitor secundario continúa mostrando su barra superior y dock de forma interactiva aunque el monitor principal tenga un vídeo o juego a pantalla completa (o viceversa).
+
+* **Ajuste del Snap Preview de Ventanas:**
+  * Renderizado del rectángulo de previsualización por debajo de la ventana activa en movimiento para mantener visibilidad constante del contenido durante el arrastre.
+  * Supresión del filtro de desenfoque de fondo en el snap preview a favor de un tinte semitransparente con esquinas redondeadas coincidentes con el radio squircle de la ventana.
 
 * **Previsualización Translúcida de Ajuste de Ventanas con Esquinas Squircle (`Snap Preview`):**
   * Sustitución del antiguo rectángulo opaco de esquinas rectas (`draw_solid` con borde tosco) por un pipeline de vidrio acrílico en GPU ([`GaussianBlur::render_snap_preview`](../crates/compositor/src/blur.rs)).
