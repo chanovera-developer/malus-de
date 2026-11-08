@@ -382,9 +382,19 @@ button.branches-split-btn.active {
 }
 
 .branches-icon-item:selected,
+.branches-icon-item.selected,
 .branches-icon-item:focus {
     background-color: alpha(@accent_bg_color, 0.35);
     outline: 2px solid alpha(@accent_bg_color, 0.7);
+    border-radius: 10px;
+}
+
+.branches-icon-item.selected .branches-icon-label,
+.branches-icon-item:selected .branches-icon-label {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border-radius: 4px;
+    padding: 1px 4px;
 }
 
 .branches-icon-label {
