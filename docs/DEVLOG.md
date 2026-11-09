@@ -4,6 +4,36 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-08] — Corrección del Desfase de Contenedor y Animación VSync por Frame-Clock para Menús Contextuales
+
+### Diagnóstico de Causa Raíz
+* **Desfase del Menú Respecto a su Contenedor ("Menú Desfasado"):**
+  * Al aplicar `@keyframes macos-popover-appear` con `transform: scale(0.92)` sobre `popover.desktop-popover-menu > contents` y `@keyframes macos-submenu-slide` con `transform: translateY(3px)` sobre `.desktop-context-menu`, el motor de renderizado de GTK4 / GSK (`GskTransformNode`) aplicó la transformación visual sobre el contenido sin reajustar los límites de la subsuperficie Wayland asignada por `GtkPopoverLayout`.
+  * Como consecuencia visible (evidenciada en la captura del usuario), la caja acrílica exterior y los elementos del menú interno quedaron desfasados entre sí, con el contenido desplazado hacia abajo y a la derecha, dejando espacios vacíos y bordes recortados.
+* **Incompatibilidad de Timelines CSS en Subsuperficies de Popover:**
+  * En GTK4 sobre Wayland, los timelines de animación `@keyframes` CSS aplicados a nodos internos de subsuperficies no se actualizan de manera continua de forma autónoma, lo que provocaba que la animación se congelara en el primer frame de transformación (`scale(0.92)` / `translateY`), impidiendo que el menú se mostrara correctamente.
+
+### Solución Implementada (`crates/wallpaper`)
+* **Retiro de Transformaciones Geométricas en CSS:**
+  * Se eliminaron completamente las reglas `@keyframes macos-popover-appear` y `@keyframes macos-submenu-slide` de [`crates/wallpaper/src/styles/default-gradient.css`](../crates/wallpaper/src/styles/default-gradient.css).
+  * Se eliminó `transform: scale(0.97)` en `:active` de `.desktop-context-btn`, reemplazándolo por una transición de color de fondo pura (`#0062cc`), eliminando cualquier distorsión geométrica en toda la jerarquía del popover.
+  * Se preservaron las sombras flotantes profundas multicapa y el diseño acrílico nativo tanto para modo claro como para modo oscuro.
+* **Animación Nativa por Frame-Clock VSync (`animate_widget_fade_in`):**
+  * Se implementó `animate_widget_fade_in` en [`crates/wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs), utilizando `widget.add_tick_callback` sincronizado directamente con el `gdk::FrameClock` de la pantalla.
+  * Emplea interpolación de opacidad suave de 0.0 a 1.0 gobernada por la función cúbica `ease_out_cubic` ($1 - (1 - t)^3$) durante 140ms.
+  * Al modular exclusivamente la opacidad sin alterar dimensiones, escala ni traslación, se garantiza un alineamiento pixel-perfect 100% exacto con cero desfases respecto al contenedor acrílico.
+* **Transiciones Fluidas en Submenús y Vistas Internas:**
+  * Se integró `animate_widget_fade_in` en todas las aperturas y cambios de vista:
+    * Popover del escritorio primario y secundarios (`140ms`).
+    * Popover de archivos y carpetas (`140ms`).
+    * Diálogo de renombrar archivo (`140ms`).
+    * Formulario de "Nueva carpeta" en popover (`120ms`).
+    * Submenú "Organizar por ▸" y botón "← Volver" (`120ms`).
+* **Cobertura con Pruebas Unitarias:**
+  * Se implementó `test_ease_out_cubic` verificando el comportamiento determinista de la curva de interpolación, y se actualizaron las pruebas de estilos CSS para comprobar la consistencia de las reglas acrílicas.
+
+---
+
 ## [2026-11-08] — Animaciones Fluidas del Menú Contextual del Escritorio (Apertura Elástica macOS, Sombra Flotante Profunda y Transición de Submenús)
 
 ### Diagnóstico de Causa Raíz

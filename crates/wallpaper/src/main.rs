@@ -111,6 +111,46 @@ fn update_menu_text_theme(widget: &gtk4::Widget, is_dark: bool) {
     }
 }
 
+/// Curva de aceleración cúbica ease-out (estilo macOS) para transiciones fluidas.
+pub fn ease_out_cubic(t: f64) -> f64 {
+    let progress = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - progress).powi(3)
+}
+
+/// Anima suavemente la opacidad de un widget de 0.0 a 1.0 mediante el frame-clock nativo de GTK4
+/// con aceleración cubic ease-out, garantizando 100% de alineación sin desfases de geometría.
+pub fn animate_widget_fade_in<W: IsA<gtk4::Widget>>(widget: &W, duration_ms: i64) {
+    widget.set_opacity(0.0);
+    let start_time: Rc<Cell<Option<i64>>> = Rc::new(Cell::new(None));
+    let start_time_clone = start_time.clone();
+
+    widget.add_tick_callback(move |w, frame_clock| {
+        let now = frame_clock.frame_time() / 1000;
+        let start = match start_time_clone.get() {
+            Some(t) => t,
+            None => {
+                start_time_clone.set(Some(now));
+                now
+            }
+        };
+
+        let elapsed = now - start;
+        if elapsed > 0 && !w.is_visible() {
+            return glib::ControlFlow::Break;
+        }
+
+        if elapsed >= duration_ms {
+            w.set_opacity(1.0);
+            glib::ControlFlow::Break
+        } else {
+            let progress = elapsed as f64 / duration_ms as f64;
+            let eased = ease_out_cubic(progress);
+            w.set_opacity(eased);
+            glib::ControlFlow::Continue
+        }
+    });
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StackCategory {
     Screenshots,
@@ -636,6 +676,7 @@ fn show_rename_dialog(parent_widget: &impl IsA<gtk4::Widget>, current_path: Path
     popover.set_child(Some(&container));
     apply_theme_to_popover(&popover, is_dark_mode_active());
     popover.connect_closed(|p| p.unparent());
+    animate_widget_fade_in(&popover, 140);
     popover.popup();
 }
 
@@ -738,6 +779,7 @@ fn show_new_folder_in_popover(
     });
 
     popover.set_child(Some(&container));
+    animate_widget_fade_in(&container, 120);
     entry.grab_focus();
     entry.select_region(0, -1);
 }
@@ -843,6 +885,7 @@ fn show_organize_submenu(
     let main_menu_clone = main_menu.clone();
     back_btn.connect_clicked(move |_| {
         popover_back.set_child(Some(&main_menu_clone));
+        animate_widget_fade_in(&main_menu_clone, 120);
     });
     container.append(&back_btn);
 
@@ -891,6 +934,7 @@ fn show_organize_submenu(
 
     apply_theme_to_popover(popover, is_dark_mode_active());
     popover.set_child(Some(&container));
+    animate_widget_fade_in(&container, 120);
 }
 
 struct DesktopItemData {
@@ -1442,6 +1486,7 @@ fn render_single_icon(
         apply_theme_to_popover(&p_click, is_dark);
         let rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
         p_click.set_pointing_to(Some(&rect));
+        animate_widget_fade_in(&p_click, 140);
         p_click.popup();
     });
     item_box.add_controller(context_click);
@@ -1958,6 +2003,7 @@ fn create_wallpaper_window(
             popover.set_child(Some(&menu));
             apply_theme_to_popover(&popover, is_dark_mode_active());
             popover.connect_closed(|p| p.unparent());
+            animate_widget_fade_in(&popover, 140);
             popover.popup();
         });
         overlay.add_controller(bg_context);
@@ -2392,6 +2438,7 @@ fn create_wallpaper_window(
             popover.set_child(Some(&menu));
             apply_theme_to_popover(&popover, is_dark_mode_active());
             popover.connect_closed(|p| p.unparent());
+            animate_widget_fade_in(&popover, 140);
             popover.popup();
         });
         overlay.add_controller(bg_context);
@@ -2784,13 +2831,20 @@ mod tests {
         assert!(css.contains("#1e293b"));
         // Hover azul macOS
         assert!(css.contains("#007aff"));
-        // Animaciones de apertura elástica y transiciones de submenús estilo macOS
-        assert!(css.contains("@keyframes macos-popover-appear"));
-        assert!(css.contains("@keyframes macos-submenu-slide"));
+        // Transiciones suaves de hover y activación en botones estilo macOS
         assert!(css.contains("cubic-bezier(0.16, 1, 0.3, 1)"));
         // GTK4 CSS no soporta !important ni queries @media condicionales
         assert!(!css.contains("!important"));
         assert!(!css.contains("@media"));
+    }
+
+    #[test]
+    fn test_ease_out_cubic() {
+        assert_eq!(super::ease_out_cubic(0.0), 0.0);
+        assert_eq!(super::ease_out_cubic(1.0), 1.0);
+        assert!((super::ease_out_cubic(0.5) - 0.875).abs() < 1e-6);
+        assert_eq!(super::ease_out_cubic(-0.5), 0.0);
+        assert_eq!(super::ease_out_cubic(1.5), 1.0);
     }
 
     #[test]
