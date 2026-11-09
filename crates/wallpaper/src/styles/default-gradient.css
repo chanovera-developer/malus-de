@@ -36,9 +36,9 @@ window.malus-wallpaper-window picture {
 
 .desktop-icon.selected,
 .desktop-icon:focus-visible {
-    background: rgba(0, 122, 255, 0.36);
-    border-color: rgba(255, 255, 255, 0.35);
-    box-shadow: 0 0 0 1px rgba(0, 122, 255, 0.4);
+    background: rgba(0, 122, 255, 0.14);
+    border-color: rgba(71, 166, 255, 0.55);
+    box-shadow: 0 0 0 1px rgba(71, 166, 255, 0.25);
     border-radius: 10px;
 }
 
@@ -103,8 +103,8 @@ label.desktop-icon-label {
 }
 
 .desktop-rubberband {
-    background: rgba(0, 122, 255, 0.22);
-    border: 1px solid rgba(0, 122, 255, 0.75);
+    background: rgba(0, 122, 255, 0.14);
+    border: 1px solid rgba(71, 166, 255, 0.55);
     border-radius: 4px;
 }
 

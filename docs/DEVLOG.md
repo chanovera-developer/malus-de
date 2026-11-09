@@ -4,6 +4,26 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-09] — Armonización Visual de Selección: Ajuste de Transparencia de Iconos y Rubberband al 14% de Snap Window (`malus-de-wallpaper`, `malus-de-branches`)
+
+### Diagnóstico y Motivación
+* En el compositor (`crates/compositor/src/blur.rs`), la previsualización de anclaje de ventanas (Aero Snap, `render_snap_preview`) renderiza un tinte translúcido azul sutil estilo macOS con `14%` de opacidad (`gl.Uniform4f(self.blit_u_solid_color, 0.0, 0.48, 1.0, 0.14)` / `rgba(0, 122, 255, 0.14)`) y un borde squircle nítido con `55%` de opacidad (`gl.Uniform4f(self.blit_u_border_color, 0.28, 0.65, 1.0, 0.55)` / `rgba(71, 166, 255, 0.55)`).
+* En contraposición, los elementos seleccionados en el escritorio (`.desktop-icon.selected`, `:focus-visible` y el rectángulo de selección múltiple `.desktop-rubberband`) utilizaban opacidades más densas (`36%` y `22%` respectivamente con bordes `0.75`), rompiendo la armonía visual y estética del entorno.
+* Asimismo, la vista en cuadrícula del explorador de archivos (`malus-de-branches`) mantenía una opacidad de selección de `35%`.
+
+### Solución Implementada
+* **Escritorio (`crates/wallpaper/src/styles/default-gradient.css`):**
+  * Se sincronizó el fondo de `.desktop-icon.selected` y `.desktop-icon:focus-visible` a `rgba(0, 122, 255, 0.14)` y su borde/halo a `rgba(71, 166, 255, 0.55)`, igualando exactamente los parámetros del shader de Snap Window.
+  * Se sincronizó el rectángulo de selección interactiva `.desktop-rubberband` con `background: rgba(0, 122, 255, 0.14)` y `border: 1px solid rgba(71, 166, 255, 0.55)`.
+  * Se preservó el fondo de pastilla sólido (`#007aff`) en `label.desktop-icon-label` al estar seleccionado, asegurando legibilidad tipográfica absoluta sobre cualquier fondo de pantalla.
+* **Explorador de Archivos Branches (`crates/branches/src/styles/macos-branches.css`):**
+  * Se actualizó `.branches-icon-item:selected`, `.branches-icon-item.selected` y `:focus` para utilizar `alpha(@accent_bg_color, 0.14)` en el fondo y `outline: 2px solid alpha(@accent_bg_color, 0.55)` en el contorno, unificando la selección visual entre el escritorio y el gestor de archivos.
+* **Pruebas y Verificación:**
+  * Se ejecutaron las suites de pruebas unitarias (`malus-de-wallpaper`: 17 pruebas; `malus-de-branches`: 1 prueba; `malus-de-compositor`: 39 pruebas), todas pasando satisfactoriamente.
+  * Se generaron binarios de producción optimizados (`cargo build --release`).
+
+---
+
 ## [2026-11-09] — Corrección del Salto de Pantalla al Salir de Pantalla Completa, Ocultación Indebida de Top Bar/Dock Multimonitor y Adaptación de Margen Superior de la Rejilla en Pantallas Secundarias (`malus-de-compositor`, `malus-de-wallpaper`)
 
 ### Diagnóstico de Causa Raíz

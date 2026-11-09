@@ -384,8 +384,8 @@ button.branches-split-btn.active {
 .branches-icon-item:selected,
 .branches-icon-item.selected,
 .branches-icon-item:focus {
-    background-color: alpha(@accent_bg_color, 0.35);
-    outline: 2px solid alpha(@accent_bg_color, 0.7);
+    background-color: alpha(@accent_bg_color, 0.14);
+    outline: 2px solid alpha(@accent_bg_color, 0.55);
     border-radius: 10px;
 }
 
