@@ -1421,6 +1421,105 @@ fn resolve_desktop_icon_paintable(
     }
 }
 
+pub fn truncate_desktop_name(name: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = name.chars().collect();
+    let n = chars.len();
+    if n <= max_chars || max_chars < 6 {
+        return name.to_string();
+    }
+
+    // Identificar si tiene extensión de archivo (ej. .png, .pdf, .tar.gz)
+    let dot_pos = chars.iter().rposition(|&c| c == '.');
+    let has_extension = match dot_pos {
+        Some(pos) => pos > 0 && (n - pos) <= 8 && (n - pos) < max_chars / 2,
+        None => false,
+    };
+
+    let avail = max_chars.saturating_sub(1); // Descontar 1 carácter para el elipsis '…'
+
+    if let (true, Some(last_dot)) = (has_extension, dot_pos) {
+        // Detectar si es una extensión compuesta como .tar.gz o .tar.xz
+        let effective_dot = if last_dot >= 4 {
+            let prev_slice: String = chars[last_dot.saturating_sub(4)..last_dot].iter().collect();
+            if prev_slice == ".tar" {
+                last_dot - 4
+            } else {
+                last_dot
+            }
+        } else {
+            last_dot
+        };
+
+        let ext_len = n - effective_dot;
+        let extra_tail = ((avail.saturating_sub(ext_len)) / 3).clamp(1, 4);
+        let tail_len = (ext_len + extra_tail).min(avail.saturating_sub(3));
+        let head_len = avail - tail_len;
+
+        let head: String = chars[..head_len].iter().collect();
+        let tail: String = chars[n - tail_len..].iter().collect();
+        format!("{}…{}", head.trim_end(), tail.trim_start())
+    } else {
+        let head_len = (avail + 1) / 2;
+        let tail_len = avail - head_len;
+        let head: String = chars[..head_len].iter().collect();
+        let tail: String = chars[n - tail_len..].iter().collect();
+        format!("{}…{}", head.trim_end(), tail.trim_start())
+    }
+}
+
+pub fn get_icon_label<W: IsA<gtk4::Widget>>(item_box: &W) -> Option<gtk4::Label> {
+    if let Some(box_widget) = item_box.as_ref().downcast_ref::<gtk4::Box>() {
+        let mut child = box_widget.first_child();
+        while let Some(c) = child {
+            if let Some(label) = c.downcast_ref::<gtk4::Label>() {
+                if label.has_css_class("desktop-icon-label") {
+                    return Some(label.clone());
+                }
+            }
+            child = c.next_sibling();
+        }
+    }
+    None
+}
+
+pub fn set_desktop_icon_selected<W: IsA<gtk4::Widget>>(item_box: &W, selected: bool) {
+    let widget = item_box.as_ref();
+    if widget.has_css_class("desktop-rubberband") {
+        return;
+    }
+
+    if selected {
+        widget.add_css_class("selected");
+    } else {
+        widget.remove_css_class("selected");
+    }
+
+    if let Some(label) = get_icon_label(item_box) {
+        let full_name = label.widget_name();
+        let full_name_str = full_name.as_str();
+        if full_name_str.is_empty() || full_name_str == "GtkLabel" {
+            return;
+        }
+
+        let max_chars = if widget.width_request() > 0 {
+            (widget.width_request() * 2 / 9).clamp(20, 36) as usize
+        } else {
+            24
+        };
+
+        if selected {
+            label.set_lines(0);
+            label.set_ellipsize(gtk4::pango::EllipsizeMode::None);
+            label.set_text(full_name_str);
+        } else {
+            let truncated = truncate_desktop_name(full_name_str, max_chars);
+            label.set_lines(2);
+            label.set_ellipsize(gtk4::pango::EllipsizeMode::Middle);
+            label.set_text(&truncated);
+        }
+    }
+}
+
 #[allow(unused_variables)]
 fn render_single_icon(
     fixed: &Fixed,
@@ -1477,12 +1576,13 @@ fn render_single_icon(
     icon_image.set_pixel_size(metrics.icon_size);
 
     let label = Label::builder()
-        .label(&display_name)
         .wrap(true)
+        .wrap_mode(gtk4::pango::WrapMode::WordChar)
         .max_width_chars(14)
         .justify(gtk4::Justification::Center)
         .css_classes(["desktop-icon-label"])
         .build();
+    label.set_widget_name(&display_name);
 
     let item_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
@@ -1495,12 +1595,11 @@ fn render_single_icon(
         .tooltip_text(path.to_string_lossy())
         .build();
 
-    if selected_paths.borrow().contains(&path) {
-        item_box.add_css_class("selected");
-    }
-
     item_box.append(&icon_image);
     item_box.append(&label);
+
+    let is_selected = selected_paths.borrow().contains(&path);
+    set_desktop_icon_selected(&item_box, is_selected);
 
     let (x, mut y) = *positions.entry(path.clone()).or_insert_with(|| {
         calculate_grid_position(index, rows, metrics, config.align_left, desktop_size)
@@ -1548,21 +1647,21 @@ fn render_single_icon(
         if is_ctrl {
             if sel.contains(&path_click) {
                 sel.remove(&path_click);
-                drag_item_press.remove_css_class("selected");
+                set_desktop_icon_selected(&drag_item_press, false);
             } else {
                 sel.insert(path_click.clone());
-                drag_item_press.add_css_class("selected");
+                set_desktop_icon_selected(&drag_item_press, true);
             }
         } else if !sel.contains(&path_click) {
             // Deseleccionar hermanos si este elemento no estaba seleccionado
             let mut sibling = drag_fixed_press.first_child();
             while let Some(child) = sibling {
                 sibling = child.next_sibling();
-                child.remove_css_class("selected");
+                set_desktop_icon_selected(&child, false);
             }
             sel.clear();
             sel.insert(path_click.clone());
-            drag_item_press.add_css_class("selected");
+            set_desktop_icon_selected(&drag_item_press, true);
         }
         *foc_path_click.borrow_mut() = Some(path_click.clone());
     });
@@ -1697,7 +1796,7 @@ fn render_single_icon(
     let stored_click_prep = stored_click.clone();
     drag_source.connect_prepare(move |source, click_x, click_y| {
         stored_click_prep.set((click_x, click_y));
-        item_box_prep.add_css_class("selected");
+        set_desktop_icon_selected(&item_box_prep, true);
         let paintable = gtk4::WidgetPaintable::new(Some(&item_box_prep));
         source.set_icon(Some(&paintable), click_x as i32, click_y as i32);
 
@@ -1989,7 +2088,7 @@ fn create_wallpaper_window(
             let mut sibling = icons_bg_click.first_child();
             while let Some(child) = sibling {
                 sibling = child.next_sibling();
-                child.remove_css_class("selected");
+                set_desktop_icon_selected(&child, false);
             }
             sel_paths_bg.borrow_mut().clear();
             *foc_path_bg.borrow_mut() = None;
@@ -2264,17 +2363,17 @@ fn create_wallpaper_window(
                 if is_ctrl {
                     if !sel.contains(&clicked_path) {
                         sel.insert(clicked_path.clone());
-                        item_box.add_css_class("selected");
+                        set_desktop_icon_selected(&item_box, true);
                     }
                 } else if !sel.contains(&clicked_path) {
                     let mut sibling = icons_begin.first_child();
                     while let Some(child) = sibling {
                         sibling = child.next_sibling();
-                        child.remove_css_class("selected");
+                        set_desktop_icon_selected(&child, false);
                     }
                     sel.clear();
                     sel.insert(clicked_path.clone());
-                    item_box.add_css_class("selected");
+                    set_desktop_icon_selected(&item_box, true);
                 }
                 *foc_begin.borrow_mut() = Some(clicked_path.clone());
 
@@ -2300,7 +2399,7 @@ fn create_wallpaper_window(
                     let mut sibling = icons_begin.first_child();
                     while let Some(child) = sibling {
                         sibling = child.next_sibling();
-                        child.remove_css_class("selected");
+                        set_desktop_icon_selected(&child, false);
                     }
                     sel_begin.borrow_mut().clear();
                     *foc_begin.borrow_mut() = None;
@@ -2371,7 +2470,7 @@ fn create_wallpaper_window(
                                 && min_y + (height as f64) > iy;
 
                             if intersects {
-                                child.add_css_class("selected");
+                                set_desktop_icon_selected(&child, true);
                                 if let Some(path_str) =
                                     child.property::<Option<String>>("tooltip-text")
                                 {
@@ -2450,9 +2549,9 @@ fn create_wallpaper_window(
                                     child.property::<Option<String>>("tooltip-text")
                                 {
                                     if p_str == clicked_path.to_string_lossy() {
-                                        child.add_css_class("selected");
+                                        set_desktop_icon_selected(&child, true);
                                     } else {
-                                        child.remove_css_class("selected");
+                                        set_desktop_icon_selected(&child, false);
                                     }
                                 }
                             }
@@ -3155,6 +3254,38 @@ mod tests {
     }
 
 
+
+    #[test]
+    fn test_truncate_desktop_name() {
+        // 1. Archivo corto: no se corta
+        let short = super::truncate_desktop_name("Notas.txt", 24);
+        assert_eq!(short, "Notas.txt");
+
+        // 2. Archivo largo con extensión: corta por el centro y preserva la extensión
+        let long_file = super::truncate_desktop_name("Documento_De_Investigacion_Final_2026.pdf", 24);
+        assert!(long_file.contains('…'));
+        assert!(long_file.ends_with(".pdf"));
+        assert!(long_file.chars().count() <= 24);
+
+        // 3. Extensión compuesta .tar.gz: preserva la extensión completa
+        let tar_file = super::truncate_desktop_name("malus_de_backup_noviembre_2026.tar.gz", 24);
+        assert!(tar_file.contains('…'));
+        assert!(tar_file.ends_with(".tar.gz"));
+        assert!(tar_file.chars().count() <= 24);
+
+        // 4. Carpeta larga sin extensión: divide equitativamente por el centro
+        let long_folder = super::truncate_desktop_name("Carpeta con fotos de las vacaciones 2026", 24);
+        assert!(long_folder.contains('…'));
+        assert!(long_folder.starts_with("Carpeta"));
+        assert!(long_folder.ends_with("2026"));
+        assert!(long_folder.chars().count() <= 24);
+
+        // 5. Caracteres UTF-8 multibyte (español, acentos, eñe)
+        let utf8_file = super::truncate_desktop_name("Diseño_gráfico_año_2026_españa_final.png", 24);
+        assert!(utf8_file.contains('…'));
+        assert!(utf8_file.ends_with(".png"));
+        assert!(utf8_file.chars().count() <= 24);
+    }
 
     #[test]
     fn test_resolve_desktop_icon_paintable() {

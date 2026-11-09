@@ -4,6 +4,42 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-09] — Truncado Central (Middle Ellipsis) de Nombres en el Escritorio y Expansión al Seleccionar (`malus-de-wallpaper`)
+
+### Diagnóstico de Causa Raíz
+* **Desbordamiento Vertical y Solapamiento de Nombres Largos en la Cuadrícula:**
+  * En el contenedor `Fixed` del fondo de escritorio GTK4, las etiquetas `Label` tenían `wrap(true)` activado sin un límite explícito de líneas (`lines(2)`) ni elipsis configurado.
+  * Cuando un archivo o carpeta tenía un nombre largo, la caja del icono crecía verticalmente más allá del alto de la celda de la cuadrícula (`cell_height()`), provocando que el texto se solapara con el icono ubicado en la fila inferior.
+  * Un truncado estándar al final (`End`) ocultaba extensiones críticas del archivo (por ejemplo `.pdf`, `.png`, `.tar.gz`), mientras que la ausencia de un modo expandido impedía al usuario leer el nombre completo del archivo sin abrir un administrador de archivos externo.
+
+### Solución Implementada (`crates/wallpaper`)
+* **Algoritmo de Truncado Central Inteligente (`truncate_desktop_name`):**
+  * Se implementó una función pura que procesa de manera segura secuencias de caracteres UTF-8 (`Vec<char>`), garantizando compatibilidad con acentos, tildes y caracteres multibyte en español.
+  * **Preservación de Extensiones Simples y Compuestas:** detecta extensiones comunes (ej. `.pdf`, `.png`, `.desktop`) y compuestas (ej. `.tar.gz`, `.tar.xz`), reservando los caracteres finales para mantener visible la extensión junto con los caracteres finales del nombre base.
+  * **División Central para Carpetas:** para directorios y archivos sin extensión, divide simétricamente los caracteres disponibles a ambos lados del elipsis central (`…`).
+  * **Cálculo Proporcional a la Cuadrícula:** calcula el límite de caracteres (`max_chars`) de forma proporcional al ancho configurado del icono (`width_request * 2 / 9`), garantizando que el texto nunca desborde el ancho ni el alto de la celda en 2 líneas.
+* **Control Centralizado de Selección y Expansión (`set_desktop_icon_selected`):**
+  * Se almacena el nombre completo e íntegro del archivo directamente en el widget GTK (`label.set_widget_name(&display_name)`), evitando dependencias de almacenamiento secundario.
+  * **Estado No Seleccionado:** etiqueta restringida a `lines(2)`, modo `EllipsizeMode::Middle` y texto procesado por `truncate_desktop_name`.
+  * **Estado Seleccionado:** etiqueta expandida a `lines(0)`, `EllipsizeMode::None` y texto restaurado a su valor íntegro original, permitiendo la lectura completa del archivo seleccionado sobre el fondo de selección.
+* **Integración en Todos los Disparadores de Selección:**
+  * Se conectó `set_desktop_icon_selected` en:
+    * Clic primario directo y selección múltiple con `Ctrl + clic`.
+    * Inicio de arrastre (drag-and-drop / `connect_drag_begin`).
+    * Selección elástica rectangular por marquesina (`desktop-rubberband` / `connect_drag_update`).
+    * Deselección por clic en el fondo del escritorio (`bg_click.connect_pressed`).
+* **Pruebas y Verificación:**
+  * Se incorporó el test unitario `test_truncate_desktop_name` validando:
+    1. Archivos cortos (sin truncado).
+    2. Archivos largos con extensión simple (truncado central + preservación de extensión).
+    3. Archivos con extensión compuesta (`.tar.gz`).
+    4. Carpetas largas (distribución balanceada).
+    5. Caracteres UTF-8 multibyte en español (`Diseño_gráfico_año_2026_españa_final.png`).
+  * Todas las 16 pruebas unitarias pasaron con éxito (`cargo test -p malus-de-wallpaper`).
+  * Compilación exitosa en modo release (`cargo build --release -p malus-de-wallpaper`).
+
+---
+
 ## [2026-11-08] — Animación Fluida de Desplazamiento al Organizar Iconos del Escritorio (`malus-de-wallpaper`)
 
 ### Diagnóstico de Causa Raíz
