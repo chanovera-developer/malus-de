@@ -19,6 +19,83 @@ Malus DE está pensado actualmente para desarrollo y pruebas controladas. Antes 
 
 Las funciones descritas abajo indican alcance implementado en el código, no una garantía de que todas se hayan verificado en cada distribución, GPU o configuración de monitores.
 
+## Estado del Proyecto: ¿Qué funciona y qué no?
+
+Para máxima transparencia técnica, el siguiente desglose detalla el estado real verificado de cada subsistema y función:
+
+### ✅ Totalmente Funcional y Operativo
+- **Compositor Wayland nativo (`malus-de-compositor`):**
+  - Doble backend: anidado Winit (desarrollo en ventana) y DRM/KMS Multi-CRTC nativo (arranque en frío desde GDM / TTY).
+  - Shaders GPU para esquinas squircle superelípticas ($n = 4.2$) y desenfoque Dual-Kawase acelerado por hardware.
+  - **Decoraciones del servidor (SSD) estilo macOS:** Barra de 38px con botones semáforo a la izquierda, hover vectorial interactivo, arrastre fluido, redimensión perimetral interactiva desde los 8 bordes y esquinas, y recorte squircle unificado.
+  - **Efecto Genie (Lámpara Mágica):** Minimización y restauración de ventanas con deformación de malla no lineal continua $C^2$ hacia el Dock con recorte exacto de sombras.
+  - **Conmutador de Ventanas (App Switcher):** `Alt + Tab` y `Super + Tab` fluido entre ventanas y aplicaciones activas.
+  - **Multi-Monitor 4K Dual & TrueSize Link:** Resoluciones independientes (`3840×2160`), escalado fraccionario independiente (`wp_fractional_scale_v1`), recarga en caliente y enlace geométrico 1:1 según densidad de píxeles (`PPI`).
+  - **Teclado y Localización:** Distribución XKB `latam` (Español Latinoamericano con `ñ`, acentos muertos y símbolos) nativa con conmutación en caliente.
+  - **Tema de cursores `macOS` integrado:** Temas oscuro y blanco integrados de serie con respaldo infalible embebido en el binario.
+  - **Prioridad de CPU adaptativa:** Scopes de systemd con `CPUWeight=1000` (ventana enfocada) y `CPUWeight=20` (fondo).
+  - **Llavero y Seguridad:** Inicialización automática de `gnome-keyring-daemon` (`secrets`, `pkcs11`, `ssh`) y Polkit (`mate-polkit`).
+- **Superficie de Escritorio e Iconos (`malus-de-wallpaper`):**
+  - Renderizado nativo de archivos y carpetas de `~/Escritorio` con iconos del sistema y miniaturas de imágenes (`gdk-pixbuf`).
+  - Disposición espacial libre y cuadrícula magnética (*Snap to Grid*).
+  - Selección simple, múltiple con `Ctrl` y elástica rectangular (*Rubberband/Marquee*).
+  - Atajos de teclado en el escritorio: `Espacio` (Quick Look), `Enter` (abrir archivo), `Delete`/`Backspace` (mover a la papelera).
+  - Arrastre y soltar Wayland 1:1 de archivos, aterrizaje animado (*Landing bounce*) y arrastre hacia carpetas con resaltado acrílico.
+  - **Pilas de macOS (*Desktop Stacks*):** Agrupación automática por tipos (*Imágenes*, *Documentos*, *Capturas*) desplegables en abanico.
+  - **Menú contextual acrílico con animaciones:** Apertura suave por fade-in VSync (150 ms) y submenús deslizantes horizontales con `GtkStack` ("Organizar por ▸" y "Nueva carpeta" con selección de texto automática).
+  - **Animación suave al organizar:** Al pulsar "Organizar escritorio", "Organizar por ▸" (Nombre, Tipo, Fecha) o conmutar "Alineación automática", los iconos **no saltan**, sino que se deslizan fluidamente por VSync (`ease_out_cubic`, 320 ms) a sus posiciones organizadas.
+  - "Alinear a la cuadrícula": desliza con suavidad a la celda más cercana los iconos desalineados (280 ms).
+- **Dock Flotante (`malus-de-dock`):**
+  - Cápsula flotante acrílica con magnificación analítica suave en hover.
+  - Separador que divide apps ancladas fijas de ventanas activas/minimizadas.
+  - Miniaturas en vivo de ventanas minimizadas con título y botón de cierre.
+  - Indicadores luminosos circulares (*running dots*) bajo aplicaciones activas.
+  - Reorganización de iconos por arrastre en tiempo real con apertura de huecos, desanclado con seguimiento 1:1 y animación de humo (*Poof*) al soltar fuera.
+  - Anclado directo arrastrando desde Spotlight al Dock.
+- **Barra Superior y Centro de Control (`malus-de-top-bar`):**
+  - Barra translúcida Layer-Shell continua con Menú Apple completo y Menú Global reactivo vía D-Bus.
+  - Menu Extras en la esquina superior derecha: Wi-Fi, Bluetooth, Sonido PipeWire, Selector de Teclado, Reloj macOS (`%a %-d %b %H:%M:%S`).
+  - Centro de Control unificado con icono de doble cápsula (`control-center-symbolic`), matriz 2x2 de módulos rápidos, deslizadores suaves de volumen y brillo, y panel de pantallas dual 4K.
+- **Lanzador Universal Spotlight (`malus-de-spotlight`):**
+  - Modal flotante centrado (`Cmd + Espacio` / `Alt + Espacio`) con estética Liquid Glass y desenfoque Dual-Kawase.
+  - Indexación de aplicaciones del sistema (nativas y Flatpak) y acciones rápidas de energía (apagar, reiniciar, cerrar sesión).
+- **Gestor de Portapapeles (`malus-de-clipboard`):**
+  - Historial persistente local de 50 elementos con `Super + V`, búsqueda en vivo, fijado de elementos y filtro heurístico de privacidad.
+- **Captura y Grabación de Pantalla (`malus-de-screenshot`):**
+  - Barra interactiva con `Super + Shift + 5`, capturas directas de pantalla completa (`Super + Shift + 3`) y de área (`Super + Shift + 4`).
+  - Grabación de pantalla en vídeo MP4 (`H.264`) con widget cronómetro en la barra superior (`● 00:00 [⏹ Detener]`).
+  - Miniatura flotante interactiva con botones de acción rápida, sonido de obturador PipeWire y destello visual blanco (*flash*).
+- **Explorador de Archivos Branches (`malus-de-branches`):**
+  - Fases 1 a 4 operativas: Unified HeaderBar, doble panel interactivo (*Split View*) con Drag & Drop, canvas de iconos libres SQLite, Columnas Miller, previsualización modal Quick Look (`Espacio`), vista de Galería con carrusel de miniaturas, etiquetas cromáticas persistentes en `xattr` y operaciones de archivo con papelera.
+
+---
+
+### 🟡 En Progreso / Funcionalidad Parcial
+- **Integración AirDrop / AWDL (`malus-de-link`):**
+  - La interfaz en el Centro de Control, el servicio D-Bus y la simulación local están implementados.
+  - El backend de radio de bajo nivel AWDL/BLE con chips Wi-Fi compatibles (`omdrop`) sigue en desarrollo; el intercambio con dispositivos Apple físicos reales no es 100% estable todavía.
+- **Menú Global Dinámico:**
+  - Funciona con aplicaciones nativas y compatibles con `com.canonical.dbusmenu` (GIMP, Inkscape, apps Qt/KDE).
+  - Ciertas aplicaciones Electron (incluyendo VS Code según su empaquetado) o navegadores bajo Linux no exportan su estructura de menús vía D-Bus, mostrando una barra simplificada o el menú interno de la app.
+- **Indexación Dinámica de Spotlight:**
+  - Lee los lanzadores `.desktop` al iniciar sesión. Nuevas aplicaciones instaladas en caliente requieren reiniciar la sesión o recargar para aparecer en las búsquedas (vigilancia `inotify` en tiempo real en desarrollo).
+- **Subsuperficies y Popups de Navegadores:**
+  - Menús desplegables `<select>` nativos en Firefox o menús hamburguesa en Brave bajo Wayland directo presentan pequeños desfases de coordenadas en depuración activa.
+
+---
+
+### ❌ No Implementado / Pendiente en el Roadmap
+- **Reconocimiento de Texto OCR en Pantalla (`Super + Shift + T`):**
+  - La integración con el motor de OCR local para extraer texto de capturas de pantalla aún no está implementada.
+- **Gestos Multitáctiles 1:1 en Touchpad:**
+  - Los deslizamientos horizontales de 3 dedos para cambiar de espacio virtual con inercia elástica y el gesto hacia arriba para Mission Control panorámico están planificados para el compositor.
+- **Bloqueo Criptográfico de Pantalla (`ext-session-lock-v1`):**
+  - El módulo `malus-de-session-lock` estilo macOS con avatar de usuario y lector de huellas dactilares (`fprintd`) está en diseño; actualmente se utiliza la pantalla de bloqueo estándar de GDM.
+- **Fondo de Pantalla Dinámico con Ciclos Solares de 24h por Vídeo:**
+  - El motor de vídeo acelerado por hardware con VA-API / `libmpv` está diferido para una fase posterior; actualmente se emplean degradados y wallpapers estáticos/SVG.
+- **Desinstalador Automatizado:**
+  - El script `install-session.sh` instala la sesión en el sistema, pero aún no dispone de un script equivalente para desinstalación automática en un solo paso.
+
 ## Características
 
 - Compositor Wayland basado en [Smithay](https://github.com/Smithay/smithay), con backend anidado Winit y backend DRM/KMS nativo.
@@ -30,7 +107,8 @@ Las funciones descritas abajo indican alcance implementado en el código, no una
 - Dock interactivo con animación de aumento/disminución, reorganización fluida de iconos por arrastre con huecos en tiempo real, desanclado con seguimiento 1:1 del cursor en el compositor y animación de nube de humo (*Poof*) radial estilo macOS al soltar fuera. Detección automática de iconos con fondo plano para extrapolación y curvatura continua squircle homogénea, así como contenedores automáticos para iconos con canal alfa.
 - Spotlight Liquid Glass integrado en el compositor: barra de búsqueda con división fluida al pasar el cursor o desplegar resultados, esquinas squircle con desenfoque de fondo, localización automática al idioma de la sesión (`LC_MESSAGES`/`LANG`), indexación de aplicaciones nativas y Flatpak (incluyendo acciones de sesión para apagar, reiniciar o cerrar sesión) y arrastre directo de aplicaciones desde la lista de resultados hacia el Dock para anclarlas.
 - Efecto Genie (Lámpara Mágica): minimización y restauración de ventanas hacia su icono en el Dock mediante una malla de deformación no lineal con continuidad suave $C^2$ (hasta 360 franjas horizontales) y recorte exacto de sombras CSD.
-- Escritorio interactivo con iconos movibles, intercambio de archivos por arrastrar y soltar con el gestor de archivos y miniaturas de imágenes.
+- **Superficie de Escritorio interactiva estilo macOS:** Visualización fluida de la carpeta del escritorio (`~/Escritorio`), selección rectangular elástica (*marquee*), atajos de teclado (`Espacio` para Quick Look, `Enter` para abrir, `Delete` para enviar a la papelera), arrastre y soltar (Drag & Drop Wayland) hacia carpetas y ventanas, Pilas de macOS (*Desktop Stacks*), menú contextual acrílico con animaciones de apertura y submenús (`GtkStack`), y **animación de desplazamiento fluido de iconos al organizar escritorio** (los iconos se deslizan suavemente por VSync a su lugar en vez de saltar).
+- **Explorador de archivos nativo Branches (`malus-de-branches`):** Reimplementación modular de macOS Finder en GTK4 / Libadwaita con vista dividida en dos paneles (*Split View*), navegación en columnas Miller, previsualización modal Quick Look (`Espacio`), vista de Galería con carrusel, etiquetas cromáticas persistentes y operaciones con papelera.
 - Conmutador visual de ventanas (App Switcher) mediante `Alt + Tab` y `Super + Tab` para recorrer y alternar fluidamente entre aplicaciones y ventanas abiertas.
 - Integración con servicios de Linux para audio, red, Bluetooth y controles multimedia.
 - **Barra interactiva de captura y grabación de pantalla (`Super + Shift + 5` / `Super + Impr Pant`):** Renderizada directamente en el compositor con estética Liquid Glass, permite elegir entre captura de pantalla completa, ventana enfocada o selección de área, así como grabación de vídeo de pantalla completa o de región en MP4 (`H.264`), con opciones de temporizador (ninguno, 5 s, 10 s), destino (Archivo o Portapapeles) e inclusión del cursor. Además mantiene los atajos directos (`Super + Shift + 3` y `Super + Shift + 4`), alerta auditiva inmediata, destello blanco suave estilo macOS, miniatura flotante interactiva y copia con `wl-copy`.
@@ -233,10 +311,11 @@ Si pruebas Malus, incluye en el reporte la distribución y versión, GPU y contr
 
 ## Documentación
 
-- [PRD y arquitectura técnica](./PRD.md)
-- [Registro de desarrollo (DEVLOG)](./docs/DEVLOG.md)
-- [Manifiesto de dependencias y paquetes](./docs/PACKAGE_MANIFEST.md)
-- [Guía de desarrollo de temas](./docs/THEME_DEVELOPMENT_GUIDE.md)
+- [PRD y Arquitectura Técnica Oficial](./PRD.md): Especificación técnica canónica y versionada de Malus DE, diagramas de arquitectura y tabla de hitos (M1-M12).
+- [Borrador Conceptual Extendido (PRD Histórico)](./prd_entorno_escritorio.md): Manifiesto inicial de diseño, lluvia de ideas y estudio comparativo conceptual con otros entornos de escritorio.
+- [Registro de desarrollo (DEVLOG)](./docs/DEVLOG.md): Bitácora técnica cronológica con diagnóstico de causa raíz y soluciones de cada avance.
+- [Manifiesto de dependencias y paquetes](./docs/PACKAGE_MANIFEST.md): Lista de paquetes y dependencias por distribución Linux.
+- [Guía de desarrollo de temas](./docs/THEME_DEVELOPMENT_GUIDE.md): Especificación y diseño de hojas de estilo CSS para componentes acrílicos.
 
 ## Créditos y Licencias
 
