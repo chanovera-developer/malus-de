@@ -13,7 +13,7 @@ use malus_de_common::{
     config::{DesktopIconsConfig, DisplaysConfig},
     logging::init_logging,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -639,13 +639,29 @@ fn show_rename_dialog(parent_widget: &impl IsA<gtk4::Widget>, current_path: Path
     popover.popup();
 }
 
-fn show_new_folder_dialog(parent_widget: &impl IsA<gtk4::Widget>, desktop_dir: PathBuf) {
-    let popover = Popover::new();
-    popover.add_css_class("desktop-popover-menu");
-    register_wallpaper_popover(&popover);
-    popover.set_parent(parent_widget);
-    popover.set_autohide(true);
+fn get_unique_folder_name(dir: &Path, base_name: &str) -> PathBuf {
+    let candidate = dir.join(base_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let mut i = 2;
+    loop {
+        let name = format!("{} {}", base_name, i);
+        let candidate = dir.join(&name);
+        if !candidate.exists() {
+            return candidate;
+        }
+        i += 1;
+    }
+}
 
+fn show_new_folder_in_popover(
+    popover: &Popover,
+    desktop_dir: PathBuf,
+    click_pos: (f64, f64),
+    icon_positions: Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
+    trigger_refresh: Rc<dyn Fn()>,
+) {
     let container = GtkBox::new(Orientation::Vertical, 8);
     container.set_margin_top(10);
     container.set_margin_bottom(10);
@@ -660,8 +676,14 @@ fn show_new_folder_dialog(parent_widget: &impl IsA<gtk4::Widget>, desktop_dir: P
         .build();
     container.append(&title_lbl);
 
+    let default_path = get_unique_folder_name(&desktop_dir, "Nueva carpeta");
+    let default_str = default_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("Nueva carpeta");
+
     let entry = Entry::builder()
-        .text("Nueva carpeta")
+        .text(default_str)
         .hexpand(true)
         .build();
     container.append(&entry);
@@ -683,23 +705,41 @@ fn show_new_folder_dialog(parent_widget: &impl IsA<gtk4::Widget>, desktop_dir: P
 
     let popover_save = popover.clone();
     let entry_save = entry.clone();
-    save_btn.connect_clicked(move |_| {
+    let desktop_dir_save = desktop_dir.clone();
+    let icon_positions_save = icon_positions.clone();
+    let trigger_save = trigger_refresh.clone();
+
+    let create_action = move || {
         let new_name = entry_save.text().trim().to_string();
         if !new_name.is_empty() {
-            let dest = desktop_dir.join(&new_name);
+            let dest = desktop_dir_save.join(&new_name);
             if let Err(err) = fs::create_dir_all(&dest) {
                 warn!("No se pudo crear carpeta {:?}: {}", dest, err);
+            } else {
+                icon_positions_save.borrow_mut().insert(dest, click_pos);
+                save_icon_positions(&icon_positions_save.borrow());
+                trigger_save();
             }
         }
         popover_save.popdown();
+    };
+
+    let create_action_rc = Rc::new(create_action);
+    let create_for_btn = create_action_rc.clone();
+    save_btn.connect_clicked(move |_| {
+        create_for_btn();
     });
     btn_box.append(&save_btn);
     container.append(&btn_box);
 
+    let create_for_entry = create_action_rc.clone();
+    entry.connect_activate(move |_| {
+        create_for_entry();
+    });
+
     popover.set_child(Some(&container));
-    apply_theme_to_popover(&popover, is_dark_mode_active());
-    popover.connect_closed(|p| p.unparent());
-    popover.popup();
+    entry.grab_focus();
+    entry.select_region(0, -1);
 }
 
 struct DesktopItemData {
@@ -1093,42 +1133,6 @@ fn render_single_icon(
     }
     fixed.put(&item_box, x, y);
 
-    // Previsualización de arrastre (icono + nombre + marca de selección estilo Finder)
-    let drag_preview_box = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .spacing(4)
-        .halign(Align::Center)
-        .width_request(metrics.box_width)
-        .height_request(metrics.box_height)
-        .css_classes(["desktop-icon", "selected"])
-        .build();
-
-    let drag_icon_image = thumbnail
-        .as_ref()
-        .map(|pixbuf| {
-            let texture = gtk4::gdk::Texture::for_pixbuf(pixbuf);
-            Image::from_paintable(Some(&texture))
-        })
-        .unwrap_or_else(|| match icon {
-            Some(ref i) => Image::from_gicon(i),
-            None => Image::from_icon_name("text-x-generic"),
-        });
-    drag_icon_image.set_pixel_size(metrics.icon_size);
-
-    let drag_label = Label::builder()
-        .label(&display_name)
-        .wrap(true)
-        .max_width_chars(14)
-        .justify(gtk4::Justification::Center)
-        .css_classes(["desktop-icon-label"])
-        .build();
-
-    drag_preview_box.append(&drag_icon_image);
-    drag_preview_box.append(&drag_label);
-    fixed.put(&drag_preview_box, -2000.0, -2000.0);
-
-    let drag_preview_paintable = gtk4::WidgetPaintable::new(Some(&drag_preview_box));
-
     // Animación de aterrizaje suave estilo Finder si el archivo acaba de ser soltado
     if recently_dropped_paths.borrow().contains(&path) {
         item_box.add_css_class("landing");
@@ -1296,7 +1300,27 @@ fn render_single_icon(
     drag_source.set_actions(gtk4::gdk::DragAction::COPY | gtk4::gdk::DragAction::MOVE);
     let path_drag = path.clone();
     let sel_drag = selected_paths.clone();
-    drag_source.connect_prepare(move |_, _, _| {
+    let item_box_prep = item_box.clone();
+    let stored_click = Rc::new(Cell::new((
+        f64::from(metrics.box_width) / 2.0,
+        f64::from(metrics.box_height) / 2.0,
+    )));
+
+    // Pre-adjuntar un paintable inicial para respuesta visual inmediata al iniciar el arrastre
+    let initial_paintable = gtk4::WidgetPaintable::new(Some(&item_box));
+    drag_source.set_icon(
+        Some(&initial_paintable),
+        metrics.box_width / 2,
+        metrics.box_height / 2,
+    );
+
+    let stored_click_prep = stored_click.clone();
+    drag_source.connect_prepare(move |source, click_x, click_y| {
+        stored_click_prep.set((click_x, click_y));
+        item_box_prep.add_css_class("selected");
+        let paintable = gtk4::WidgetPaintable::new(Some(&item_box_prep));
+        source.set_icon(Some(&paintable), click_x as i32, click_y as i32);
+
         let sel = sel_drag.borrow();
         let files: Vec<gio::File> = if sel.contains(&path_drag) && sel.len() > 1 {
             sel.iter().map(|p| gio::File::for_path(p)).collect()
@@ -1307,21 +1331,14 @@ fn render_single_icon(
         Some(gtk4::gdk::ContentProvider::for_value(&file_list.to_value()))
     });
 
-    // Pre-adjuntar la miniatura completa con icono, nombre y marca de selección
-    drag_source.set_icon(
-        Some(&drag_preview_paintable),
-        metrics.box_width / 2,
-        metrics.box_height / 2,
-    );
-
     let item_box_drag = item_box.clone();
     let fixed_drag = fixed.clone();
     let path_drag_begin = path.clone();
     let sel_drag_begin = selected_paths.clone();
-    let metrics_drag = metrics.clone();
     let act_drag_begin = active_icon_drag.clone();
-    let drag_preview_paintable_begin = drag_preview_paintable.clone();
-    drag_source.connect_drag_begin(move |source, _drag| {
+    let stored_click_begin = stored_click.clone();
+    drag_source.connect_drag_begin(move |_source, _drag| {
+        let (click_x, click_y) = stored_click_begin.get();
         let sel = sel_drag_begin.borrow();
         if sel.contains(&path_drag_begin) && sel.len() > 1 {
             let mut sibling = fixed_drag.first_child();
@@ -1329,34 +1346,42 @@ fn render_single_icon(
                 sibling = child.next_sibling();
                 if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
                     if sel.contains(&PathBuf::from(p_str)) {
-                        child.add_css_class("desktop-icon-dragging");
+                        fixed_drag.move_(&child, -5000.0, -5000.0);
                     }
                 }
             }
         } else {
-            item_box_drag.add_css_class("desktop-icon-dragging");
+            fixed_drag.move_(&item_box_drag, -5000.0, -5000.0);
         }
         *act_drag_begin.borrow_mut() = Some((
             path_drag_begin.clone(),
             (0.0, 0.0),
-            (f64::from(metrics_drag.box_width) / 2.0, f64::from(metrics_drag.box_height) / 2.0),
+            (click_x, click_y),
         ));
-        source.set_icon(
-            Some(&drag_preview_paintable_begin),
-            metrics_drag.box_width / 2,
-            metrics_drag.box_height / 2,
-        );
     });
 
     let fixed_drag_end = fixed.clone();
     let act_drag_end = active_icon_drag.clone();
+    let icon_pos_drag_end = icon_positions.clone();
+    let orig_pos = (x, y);
     drag_source.connect_drag_end(move |_, _drag, _| {
+        *act_drag_end.borrow_mut() = None;
         let mut sibling = fixed_drag_end.first_child();
         while let Some(child) = sibling {
             sibling = child.next_sibling();
-            child.remove_css_class("desktop-icon-dragging");
+            let (cx, cy) = fixed_drag_end.child_position(&child);
+            if cx < 0.0 || cy < 0.0 {
+                if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
+                    let p = PathBuf::from(p_str);
+                    let target_pos = icon_pos_drag_end
+                        .borrow()
+                        .get(&p)
+                        .cloned()
+                        .unwrap_or(orig_pos);
+                    fixed_drag_end.move_(&child, target_pos.0, target_pos.1);
+                }
+            }
         }
-        *act_drag_end.borrow_mut() = None;
     });
 
     item_box.add_controller(drag_source);
@@ -1628,10 +1653,17 @@ fn create_wallpaper_window(
             let new_folder_btn = create_menu_button("Nueva carpeta", false);
             let popover_c = popover.clone();
             let d_dir = desktop_dir_menu.clone();
-            let parent_w = icons_context.clone();
+            let icon_pos_snap_c = icon_pos_snap.clone();
+            let trigger_menu_c = trigger_refresh_menu.clone();
+            let click_pos = (x, y);
             new_folder_btn.connect_clicked(move |_| {
-                popover_c.popdown();
-                show_new_folder_dialog(&parent_w, d_dir.clone());
+                show_new_folder_in_popover(
+                    &popover_c,
+                    d_dir.clone(),
+                    click_pos,
+                    icon_pos_snap_c.clone(),
+                    trigger_menu_c.clone(),
+                );
             });
             menu.append(&new_folder_btn);
 
@@ -2405,6 +2437,26 @@ mod tests {
     }
 
     #[test]
+    fn test_get_unique_folder_name() {
+        let temp_dir = std::env::temp_dir().join("malus_test_new_folder");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let f1 = super::get_unique_folder_name(&temp_dir, "Nueva carpeta");
+        assert_eq!(f1, temp_dir.join("Nueva carpeta"));
+        std::fs::create_dir_all(&f1).unwrap();
+
+        let f2 = super::get_unique_folder_name(&temp_dir, "Nueva carpeta");
+        assert_eq!(f2, temp_dir.join("Nueva carpeta 2"));
+        std::fs::create_dir_all(&f2).unwrap();
+
+        let f3 = super::get_unique_folder_name(&temp_dir, "Nueva carpeta");
+        assert_eq!(f3, temp_dir.join("Nueva carpeta 3"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
     fn test_snap_position_to_grid_mac_and_left() {
         let config = DesktopIconsConfig::default();
         let metrics = IconLayoutMetrics::from_config(&config);
@@ -2505,15 +2557,20 @@ mod tests {
             return;
         }
         let fixed = gtk4::Fixed::new();
-        let preview = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
-        preview.add_css_class("desktop-icon");
-        preview.add_css_class("selected");
+        let item_box = gtk4::Box::new(gtk4::Orientation::Vertical, 4);
+        item_box.add_css_class("desktop-icon");
+        item_box.add_css_class("selected");
         let lbl = gtk4::Label::new(Some("Archivo"));
-        preview.append(&lbl);
-        fixed.put(&preview, -2000.0, -2000.0);
-        let paintable = gtk4::WidgetPaintable::new(Some(&preview));
+        item_box.append(&lbl);
+        fixed.put(&item_box, 100.0, 100.0);
+
+        let paintable = gtk4::WidgetPaintable::new(Some(&item_box));
         let src = gtk4::DragSource::new();
-        src.set_icon(Some(&paintable), 50, 50);
+        src.set_icon(Some(&paintable), 35, 40);
+
+        // Al comenzar el arrastre se desplaza fuera de pantalla (-5000)
+        fixed.move_(&item_box, -5000.0, -5000.0);
+        assert_eq!(fixed.child_position(&item_box), (-5000.0, -5000.0));
     }
 
     #[test]

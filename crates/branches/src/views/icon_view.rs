@@ -173,7 +173,7 @@ impl IconView {
         self.fixed_canvas.set_size_request(max_x + 80, max_y + 80);
     }
 
-    fn create_spatial_icon_widget(&self, item: &FileItem, _init_x: i32, _init_y: i32) -> GtkBox {
+    fn create_spatial_icon_widget(&self, item: &FileItem, init_x: i32, init_y: i32) -> GtkBox {
         let vbox = GtkBox::new(Orientation::Vertical, 4);
         vbox.set_halign(Align::Center);
         vbox.set_valign(Align::Start);
@@ -232,49 +232,35 @@ impl IconView {
         let drag_source = gtk4::DragSource::new();
         drag_source.set_actions(gdk::DragAction::COPY | gdk::DragAction::MOVE);
         let path_for_drag = item.path.clone();
-        drag_source.connect_prepare(move |_, _x, _y| {
+
+        // Pre-adjuntar la miniatura completa inicial para respuesta inmediata al cursor
+        let initial_paintable = gtk4::WidgetPaintable::new(Some(&vbox));
+        drag_source.set_icon(Some(&initial_paintable), 40, 40);
+
+        let vbox_prep = vbox.clone();
+        drag_source.connect_prepare(move |source, click_x, click_y| {
+            vbox_prep.add_css_class("selected");
+            let paintable = gtk4::WidgetPaintable::new(Some(&vbox_prep));
+            source.set_icon(Some(&paintable), click_x as i32, click_y as i32);
+
             let file = gio::File::for_path(&path_for_drag);
             let file_list = gdk::FileList::from_array(&[file]);
             Some(gdk::ContentProvider::for_value(&file_list.to_value()))
         });
 
-        // Pre-adjuntar la miniatura completa con icono, nombre y marca de selección
-        let drag_preview = GtkBox::new(Orientation::Vertical, 4);
-        drag_preview.set_halign(Align::Center);
-        drag_preview.set_valign(Align::Start);
-        drag_preview.add_css_class("branches-icon-item");
-        drag_preview.add_css_class("selected");
-
-        let drag_img = Image::from_gicon(&item.gicon);
-        drag_img.set_pixel_size(48);
-        drag_preview.append(&drag_img);
-
-        let drag_label = Label::builder()
-            .label(&item.name)
-            .ellipsize(gtk4::pango::EllipsizeMode::Middle)
-            .max_width_chars(12)
-            .wrap(true)
-            .wrap_mode(gtk4::pango::WrapMode::WordChar)
-            .lines(2)
-            .halign(Align::Center)
-            .css_classes(["branches-icon-label"])
-            .build();
-        drag_preview.append(&drag_label);
-        self.fixed_canvas.put(&drag_preview, -2000.0, -2000.0);
-
-        let drag_paintable = gtk4::WidgetPaintable::new(Some(&drag_preview));
-        drag_source.set_icon(Some(&drag_paintable), 40, 40);
-
-        let vbox_drag_begin = vbox.clone();
-        let drag_paintable_begin = drag_paintable.clone();
-        drag_source.connect_drag_begin(move |source, _drag| {
-            vbox_drag_begin.add_css_class("branches-icon-dragging");
-            source.set_icon(Some(&drag_paintable_begin), 40, 40);
+        let fixed_drag = self.fixed_canvas.clone();
+        let vbox_drag = vbox.clone();
+        drag_source.connect_drag_begin(move |_source, _drag| {
+            fixed_drag.move_(&vbox_drag, -5000.0, -5000.0);
         });
 
-        let vbox_drag_end = vbox.clone();
+        let fixed_end = self.fixed_canvas.clone();
+        let vbox_end = vbox.clone();
         drag_source.connect_drag_end(move |_, _drag, _| {
-            vbox_drag_end.remove_css_class("branches-icon-dragging");
+            let (cx, _cy) = fixed_end.child_position(&vbox_end);
+            if cx < 0.0 {
+                fixed_end.move_(&vbox_end, init_x as f64, init_y as f64);
+            }
         });
         vbox.add_controller(drag_source);
 

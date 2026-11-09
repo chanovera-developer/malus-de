@@ -4,6 +4,31 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-08] — Anclaje de Hotspot Exacto en Arrastre (Sin Desplazamiento Abajo/Derecha), Marca de Selección Fiel a Finder y Creación Fluida de Carpeta en Menú Contextual del Escritorio
+
+### Diagnóstico de Causa Raíz
+* **Desplazamiento del Icono Flotante respecto al Cursor ("aparece a un costado abajo a la derecha"):**
+  * `DragSource::set_icon` tomaba `(box_width / 2, box_height / 2)` estático o, al depender de un widget ficticio fuera de los límites de la pantalla (`fixed.put(&box, -2000.0, -2000.0)`), GTK4 colapsaba el punto de anclaje (*hotspot*) a `(0, 0)` debido a la falta de asignación geométrica normal en la superficie. Como resultado, la miniatura no quedaba sujeta por el punto exacto donde el puntero hizo clic, sino desplazada abajo y a la derecha.
+* **Ausencia de Marca de Selección en el Objeto Arrastrado:**
+  * Al usar un widget auxiliar fuera de pantalla sin renderizado activo, GTK omitía la resolución de estilos CSS de fondo (`.desktop-icon.selected`). Además, si se aplicaba `.desktop-icon-dragging { opacity: 0.0; }` directamente al elemento mientras se apuntaba con `WidgetPaintable`, la miniatura se tornaba invisible.
+* **Fallo en "Nueva Carpeta" desde el Menú Contextual del Escritorio:**
+  * Al hacer clic en "Nueva carpeta", el manejador invocaba `popover_c.popdown()` inmediatamente antes de instanciar un nuevo `Popover` sin anclaje de posición (`set_pointing_to`). En GTK4, cerrar un popover libera los grabs del puntero en el mismo tick, provocando que cualquier nuevo popover hijo del mismo árbol de widgets sea descartado al instante antes de que el usuario pueda interactuar con él o visualizarlo. Además, la acción de creación no invocaba el refresco del escritorio ni calculaba un nombre secuencial libre ("Nueva carpeta", "Nueva carpeta 2", etc.).
+
+### Solución Implementada (`crates/wallpaper`, `crates/branches`)
+* **Anclaje de Hotspot Exacto en `connect_prepare`:**
+  * En [`crates/wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs) y [`crates/branches/src/views/icon_view.rs`](../crates/branches/src/views/icon_view.rs), se utiliza la coordenada real `(click_x, click_y)` suministrada por GTK4 en `drag_source.connect_prepare(move |source, click_x, click_y| ...)`.
+  * Se asocia `source.set_icon(Some(&paintable), click_x as i32, click_y as i32)` directamente sobre el widget `item_box` que ya posee la clase `.selected` activa (squircle azul acrílico, borde brillante y píldora en la etiqueta). De este modo, la imagen bajo el cursor coincide pixel a pixel con el objeto en el instante en que fue tomado ("tal cual como el cursor lo tomó").
+* **Desaparición Limpia sin Recortes Mediante Desplazamiento Fuera de Pantalla:**
+  * Para evitar siluetas o recortes residuales sin alterar la opacidad del `WidgetPaintable`, en `connect_drag_begin` el widget original se traslada fuera de pantalla (`fixed.move_(&item_box, -5000.0, -5000.0)`).
+  * La posición original en el escritorio queda 100% limpia sin siluetas ni fantasmas. Al terminar el arrastre (`connect_drag_end`), si la acción fue cancelada, se restituye limpiamente a sus coordenadas originales.
+* **Transición Fluida en el Popover de "Nueva Carpeta":**
+  * Se reemplazó el cierre abrupto y reapertura de popovers por una transición interna en el mismo popover (`show_new_folder_in_popover`).
+  * Al pulsar "Nueva carpeta", el popover contextual sustituye su vista por el formulario de creación, conservando el anclaje `(x, y)` donde se hizo clic derecho.
+  * Se implementó `get_unique_folder_name` para autocompletar nombres incrementales ("Nueva carpeta", "Nueva carpeta 2", etc.), seleccionando todo el texto en el `Entry` con `grab_focus()` y `select_region(0, -1)`.
+  * Se vincularon tanto el botón "Crear" como la tecla Enter (`connect_activate`) para crear el directorio en disco, registrar sus coordenadas iniciales en `icon_positions` e invocar el refresco reactivo `trigger_refresh()` al instante.
+
+---
+
 ## [2026-11-08] — Restauración de Miniatura Flotante Completa (Marca de Selección y Nombre) y Acción de Mover (`MOVE`) por Defecto sin Duplicados
 
 ### Diagnóstico de Causa Raíz
