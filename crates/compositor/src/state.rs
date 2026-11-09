@@ -193,6 +193,7 @@ pub struct MalusState {
     pub theme_transition_started_at: Option<Instant>,
     pub spotlight: crate::spotlight_visual::SpotlightState,
     pub dnd_icon: Option<WlSurface>,
+    pub dnd_icon_offset: Point<i32, Logical>,
     pub active_screen_recording: Option<crate::recording::ScreenRecordingSession>,
     pub screenshot_ui: crate::screenshot_ui::ScreenshotUiState,
     pub ssd: crate::ssd::SsdManager,
@@ -868,6 +869,7 @@ impl MalusState {
             theme_transition_started_at: None,
             spotlight: crate::spotlight_visual::SpotlightState::new(),
             dnd_icon: None,
+            dnd_icon_offset: Point::from((0, 0)),
             active_screen_recording: None,
             screenshot_ui: crate::screenshot_ui::ScreenshotUiState::new(),
             ssd: crate::ssd::SsdManager::new(),
@@ -2702,6 +2704,20 @@ impl CompositorHandler for MalusState {
         smithay::backend::renderer::utils::on_commit_buffer_handler::<Self>(surface);
         self.popups.commit(surface);
 
+        if self.dnd_icon.as_ref() == Some(surface) {
+            let delta = smithay::wayland::compositor::with_states(surface, |states| {
+                states
+                    .cached_state
+                    .get::<smithay::wayland::compositor::SurfaceAttributes>()
+                    .current()
+                    .buffer_delta
+                    .take()
+            });
+            if let Some(delta) = delta {
+                self.dnd_icon_offset += delta;
+            }
+        }
+
         let window = self.window_for_surface(surface);
 
         // Sincronizar escala fraccionaria preferida según el monitor físico en el que reside la superficie
@@ -2949,12 +2965,27 @@ impl ClientDndGrabHandler for MalusState {
         _seat: Seat<Self>,
     ) {
         tracing::info!("✨ [DnD] Drag iniciado con icono: {}", icon.is_some());
-        self.dnd_icon = icon;
+        self.dnd_icon = icon.clone();
+        self.dnd_icon_offset = Point::from((0, 0));
+        if let Some(ref surf) = icon {
+            let delta = smithay::wayland::compositor::with_states(surf, |states| {
+                states
+                    .cached_state
+                    .get::<smithay::wayland::compositor::SurfaceAttributes>()
+                    .current()
+                    .buffer_delta
+                    .take()
+            });
+            if let Some(delta) = delta {
+                self.dnd_icon_offset += delta;
+            }
+        }
     }
 
     fn dropped(&mut self, _target: Option<WlSurface>, _validated: bool, _seat: Seat<Self>) {
         tracing::info!("✨ [DnD] Drag finalizado");
         self.dnd_icon = None;
+        self.dnd_icon_offset = Point::from((0, 0));
     }
 }
 
@@ -3983,5 +4014,26 @@ mod tests {
         // Sin ventanas en fullscreen, ambos monitores deben reportar false
         assert!(!state.has_fullscreen_window_on_output(&output1));
         assert!(!state.has_fullscreen_window_on_output(&output2));
+    }
+
+    #[test]
+    fn test_dnd_icon_offset_calculation() {
+        use smithay::utils::{Logical, Point};
+        // Verificar que el cálculo de ubicación física del icono de arrastre
+        // posicione la superficie compensando exactamente el hotspot (buffer_delta)
+        let loc = Point::<f64, Logical>::from((250.0, 350.0));
+        let hotspot_offset = Point::<i32, Logical>::from((-32, -40));
+        let output_loc = Point::<i32, Logical>::from((0, 0));
+        let scale = 1.0;
+
+        let draw_x = loc.x + hotspot_offset.x as f64 - output_loc.x as f64;
+        let draw_y = loc.y + hotspot_offset.y as f64 - output_loc.y as f64;
+        let phys_x = (draw_x * scale).round() as i32;
+        let phys_y = (draw_y * scale).round() as i32;
+
+        // Si el puntero presionó a 32px del borde izquierdo y 40px del superior del icono (hotspot 32, 40),
+        // la esquina superior izquierda del icono debe renderizarse en (250 - 32, 350 - 40) = (218, 310)
+        assert_eq!(phys_x, 218);
+        assert_eq!(phys_y, 310);
     }
 }

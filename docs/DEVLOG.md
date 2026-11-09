@@ -4,6 +4,40 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-09] — Mapeo de Anclaje de Arrastre de Iconos: Compensación de Hotspot en Compositor y Fijación al Punto de Clic (`malus-de-compositor`, `malus-de-wallpaper`, `malus-de-branches`)
+
+### Diagnóstico de Causa Raíz
+* **Discontinuidad Visual y Salto al Iniciar el Arrastre:**
+  * Al hacer clic sobre cualquier icono en el escritorio para moverlo, el icono original se ocultaba y aparecía una miniatura pegada al cursor. No obstante, dicha miniatura no se anclaba donde el usuario había presionado el icono, sino que saltaba bruscamente colocando la esquina superior izquierda (o el centro) en la punta del cursor.
+  * En `malus-de-compositor` (`drm.rs` y `winit.rs`), la superficie del icono de arrastre (`dnd_icon`) se renderizaba de forma fija en la posición física del cursor `Point::from((phys_x, phys_y))`.
+  * Aunque GTK4 llamaba a `set_icon(paintable, hot_x, hot_y)` y transmitía el desplazamiento negativo a través del protocolo Wayland (`wl_surface.attach` / `wl_surface.offset`), el compositor descartaba por completo el atributo `buffer_delta` de `SurfaceAttributes`, omitiendo la traslación del hotspot.
+  * Por su parte, en `malus-de-wallpaper`, `drag_source.set_icon` se inicializaba con un anclaje estático al centro (`metrics.box_width / 2, metrics.box_height / 2`), y el controlador de clics `GestureClick` no guardaba la coordenada local `(x, y)` en el momento exacto en que se presionaba el botón del ratón.
+
+### Solución Implementada
+* **Compositor (`crates/compositor`):**
+  * **Seguimiento de Hotspot de Arrastre (`dnd_icon_offset`):**
+    * Se incorporó el campo `pub dnd_icon_offset: Point<i32, Logical>` en la estructura central `MalusState`.
+    * En `ClientDndGrabHandler::started`, se inicializa el offset y se extrae cualquier desplazamiento inicial de `SurfaceAttributes::current().buffer_delta`.
+    * En `ClientDndGrabHandler::dropped`, se restablece el offset al valor neutro `(0, 0)`.
+    * En `commit(&mut self, surface: &WlSurface)`, al confirmarse la superficie `dnd_icon`, se acumulan dinámicamente los deltas en `self.dnd_icon_offset += delta`.
+  * **Renderizado Compensado en DRM y Winit:**
+    * En los bucles de renderizado de `drm.rs` y `winit.rs`, la posición física de dibujo se calcula sumando el offset lógico del punto de anclaje: `loc.x + offset.x` y `loc.y + offset.y`.
+    * Esto alinea matemáticamente la superficie de arrastre de forma que el punto exacto presionado por el usuario coincida con la punta del cursor.
+    * Se añadió la prueba unitaria `test_dnd_icon_offset_calculation`.
+* **Escritorio (`crates/wallpaper`):**
+  * **Mapeo Inmediato al Presionar el Ratón (`click.connect_pressed`):**
+    * Se instancian `stored_click` y `drag_source` antes de los controladores de eventos.
+    * En `click.connect_pressed`, se capturan las coordenadas locales `(click_x, click_y)` del puntero dentro de la caja del icono y se preconfigura `drag_source.set_icon` con dicho hotspot de forma instantánea.
+    * En `connect_prepare` y `connect_drag_begin`, se refuerza la asignación con redondeo exacto `click_x.round() as i32, click_y.round() as i32`.
+    * Al coincidir el hotspot del cliente con la compensación en el compositor, el icono de arrastre se genera exactamente en las mismas coordenadas de pantalla que ocupaba el icono antes de ocultarse, ofreciendo la apariencia fluida de ser el mismo elemento en movimiento.
+* **Explorador Branches (`crates/branches`):**
+  * Se sincronizó la vista en cuadrícula (`icon_view.rs`) utilizando redondeo preciso en `connect_prepare` para asegurar la misma respuesta táctil.
+* **Pruebas y Verificación:**
+  * Todas las suites del espacio de trabajo pasaron exitosamente (40 pruebas en `malus-de-compositor`, 17 pruebas en `malus-de-wallpaper`, 1 prueba en `malus-de-branches`, etc.).
+  * Se generaron binarios de producción optimizados (`cargo build --release`).
+
+---
+
 ## [2026-11-09] — Armonización Visual de Selección: Ajuste de Transparencia de Iconos y Rubberband al 14% de Snap Window (`malus-de-wallpaper`, `malus-de-branches`)
 
 ### Diagnóstico y Motivación

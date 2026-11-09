@@ -1642,6 +1642,14 @@ fn render_single_icon(
         });
     }
 
+    // Arrastrar archivo/carpeta (Drag & Drop Wayland con icono mapeado al punto exacto de clic estilo macOS)
+    let stored_click = Rc::new(Cell::new((
+        f64::from(metrics.box_width) / 2.0,
+        f64::from(metrics.box_height) / 2.0,
+    )));
+    let drag_source = gtk4::DragSource::new();
+    drag_source.set_actions(gtk4::gdk::DragAction::COPY | gtk4::gdk::DragAction::MOVE);
+
     // Clic con botón 1 (Selección simple / doble clic para abrir)
     let click = GestureClick::new();
     click.set_button(1);
@@ -1651,8 +1659,15 @@ fn render_single_icon(
     let foc_path_click = focused_path.clone();
     let drag_fixed_press = fixed.clone();
     let drag_item_press = item_box.clone();
+    let stored_click_press = stored_click.clone();
+    let drag_source_press = drag_source.clone();
+    let drag_item_press_icon = item_box.clone();
 
-    click.connect_pressed(move |gesture, presses, _, _| {
+    click.connect_pressed(move |gesture, presses, click_x, click_y| {
+        stored_click_press.set((click_x, click_y));
+        let paintable = gtk4::WidgetPaintable::new(Some(&drag_item_press_icon));
+        drag_source_press.set_icon(Some(&paintable), click_x.round() as i32, click_y.round() as i32);
+
         if presses == 2 {
             gesture.set_state(gtk4::EventSequenceState::Claimed);
             launch_file(&open_file);
@@ -1794,31 +1809,15 @@ fn render_single_icon(
     });
     item_box.add_controller(context_click);
 
-    // Arrastrar archivo/carpeta (Drag & Drop Wayland con icono translúcido estilo Finder)
-    let drag_source = gtk4::DragSource::new();
-    drag_source.set_actions(gtk4::gdk::DragAction::COPY | gtk4::gdk::DragAction::MOVE);
     let path_drag = path.clone();
     let sel_drag = selected_paths.clone();
     let item_box_prep = item_box.clone();
-    let stored_click = Rc::new(Cell::new((
-        f64::from(metrics.box_width) / 2.0,
-        f64::from(metrics.box_height) / 2.0,
-    )));
-
-    // Pre-adjuntar un paintable inicial para respuesta visual inmediata al iniciar el arrastre
-    let initial_paintable = gtk4::WidgetPaintable::new(Some(&item_box));
-    drag_source.set_icon(
-        Some(&initial_paintable),
-        metrics.box_width / 2,
-        metrics.box_height / 2,
-    );
-
     let stored_click_prep = stored_click.clone();
     drag_source.connect_prepare(move |source, click_x, click_y| {
         stored_click_prep.set((click_x, click_y));
         set_desktop_icon_selected(&item_box_prep, true);
         let paintable = gtk4::WidgetPaintable::new(Some(&item_box_prep));
-        source.set_icon(Some(&paintable), click_x as i32, click_y as i32);
+        source.set_icon(Some(&paintable), click_x.round() as i32, click_y.round() as i32);
 
         let sel = sel_drag.borrow();
         let files: Vec<gio::File> = if sel.contains(&path_drag) && sel.len() > 1 {
@@ -1836,8 +1835,10 @@ fn render_single_icon(
     let sel_drag_begin = selected_paths.clone();
     let act_drag_begin = active_icon_drag.clone();
     let stored_click_begin = stored_click.clone();
-    drag_source.connect_drag_begin(move |_source, _drag| {
+    drag_source.connect_drag_begin(move |source, _drag| {
         let (click_x, click_y) = stored_click_begin.get();
+        let paintable = gtk4::WidgetPaintable::new(Some(&item_box_drag));
+        source.set_icon(Some(&paintable), click_x.round() as i32, click_y.round() as i32);
         let sel = sel_drag_begin.borrow();
         if sel.contains(&path_drag_begin) && sel.len() > 1 {
             let mut sibling = fixed_drag.first_child();

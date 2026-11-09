@@ -2487,6 +2487,7 @@ pub fn run_drm() -> Result<()> {
                 let is_dnd_alive = state.dnd_icon.as_ref().map(|s| s.alive()).unwrap_or(false);
                 if !is_dnd_alive && state.dnd_icon.is_some() {
                     state.dnd_icon = None;
+                    state.dnd_icon_offset = Point::from((0, 0));
                 }
 
                 let mut dnd_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
@@ -2494,8 +2495,11 @@ pub fn run_drm() -> Result<()> {
                     if let Some(pointer) = state.seat.get_pointer() {
                         let loc = pointer.current_location();
                         if output_geo.to_f64().contains(loc) {
-                            let phys_x = ((loc.x - output_geo.loc.x as f64) * scale).round() as i32;
-                            let phys_y = ((loc.y - output_geo.loc.y as f64) * scale).round() as i32;
+                            let offset = state.dnd_icon_offset;
+                            let draw_x = loc.x + offset.x as f64 - output_geo.loc.x as f64;
+                            let draw_y = loc.y + offset.y as f64 - output_geo.loc.y as f64;
+                            let phys_x = (draw_x * scale).round() as i32;
+                            let phys_y = (draw_y * scale).round() as i32;
                             dnd_elems = render_elements_from_surface_tree::<
                                 GlesRenderer,
                                 WaylandSurfaceRenderElement<GlesRenderer>,

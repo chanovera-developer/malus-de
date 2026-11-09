@@ -241,7 +241,7 @@ impl IconView {
         drag_source.connect_prepare(move |source, click_x, click_y| {
             vbox_prep.add_css_class("selected");
             let paintable = gtk4::WidgetPaintable::new(Some(&vbox_prep));
-            source.set_icon(Some(&paintable), click_x as i32, click_y as i32);
+            source.set_icon(Some(&paintable), click_x.round() as i32, click_y.round() as i32);
 
             let file = gio::File::for_path(&path_for_drag);
             let file_list = gdk::FileList::from_array(&[file]);

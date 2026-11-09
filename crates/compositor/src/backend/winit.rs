@@ -1190,13 +1190,18 @@ pub fn run_winit() -> Result<()> {
                 let is_dnd_alive = state.dnd_icon.as_ref().map(|s| s.alive()).unwrap_or(false);
                 if !is_dnd_alive && state.dnd_icon.is_some() {
                     state.dnd_icon = None;
+                    state.dnd_icon_offset = Point::from((0, 0));
                 }
 
                 let mut dnd_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
                 if let Some(ref dnd_surf) = state.dnd_icon {
                     if let Some(pointer) = state.seat.get_pointer() {
                         let loc = pointer.current_location();
-                        let phys_loc = Point::from((loc.x.round() as i32, loc.y.round() as i32));
+                        let offset = state.dnd_icon_offset;
+                        let phys_loc = Point::from((
+                            (loc.x + offset.x as f64).round() as i32,
+                            (loc.y + offset.y as f64).round() as i32,
+                        ));
                         dnd_elems = render_elements_from_surface_tree::<
                             GlesRenderer,
                             WaylandSurfaceRenderElement<GlesRenderer>,
