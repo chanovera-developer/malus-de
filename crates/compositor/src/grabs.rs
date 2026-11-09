@@ -601,6 +601,10 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
 
             if let Some((mode, zone)) = snap_action {
                 crate::state::snap_window(data, &self.window, mode, zone);
+            } else if let Some(surf) = self.window.wl_surface() {
+                if !self.is_snapped && win_geo.size.w > 150 && win_geo.size.h > 150 {
+                    data.window_restore_geometries.insert(surf.into_owned(), (win_loc, win_geo.size));
+                }
             }
 
             handle.unset_grab(self, data, event.serial, event.time, false);

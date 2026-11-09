@@ -1201,8 +1201,8 @@ pub fn run_drm() -> Result<()> {
     }
 
     // Centrar el puntero inmediatamente en el centro de la pantalla primaria para evitar coordenadas vacías
-    let primary_center = state.space.outputs().next().and_then(|primary| {
-        let geo = state.space.output_geometry(primary)?;
+    let primary_center = state.primary_output().and_then(|primary| {
+        let geo = state.space.output_geometry(&primary)?;
         Some(geo.loc.to_f64() + (geo.size.to_f64() / 2.0))
     });
 

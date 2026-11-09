@@ -91,7 +91,7 @@ pub fn map_window(state: &mut MalusState, surface: X11Surface) {
         return;
     }
 
-    let output = state.space.outputs().next().cloned();
+    let output = state.primary_output();
     let (location, output_geometry) = output
         .as_ref()
         .and_then(|output| {
@@ -219,7 +219,7 @@ pub fn set_window_state(state: &mut MalusState, surface: &X11Surface, fullscreen
     let Some(output) = window
         .as_ref()
         .and_then(|window| state.origin_output_for_window(window))
-        .or_else(|| state.space.outputs().next().cloned())
+        .or_else(|| state.primary_output())
     else {
         return;
     };

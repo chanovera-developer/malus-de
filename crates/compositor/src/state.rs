@@ -1509,10 +1509,8 @@ impl MalusState {
                 }
             }
         }
-        self.space
-            .outputs()
-            .next()
-            .and_then(|o| self.space.output_geometry(o))
+        self.primary_output()
+            .and_then(|o| self.space.output_geometry(&o))
     }
 
     /// Cambia la distribución de teclado XKB en vivo para toda la sesión Wayland y persiste en input.toml
@@ -2480,17 +2478,58 @@ impl MalusState {
         }
     }
 
+    /// Obtiene el monitor configurado como principal (primary = true en DisplaysConfig),
+    /// o el primer monitor disponible en Space si no se encuentra configurado.
+    pub fn primary_output(&self) -> Option<Output> {
+        let displays_cfg = malus_de_common::config::DisplaysConfig::load();
+        if let Some(primary_cfg) = displays_cfg.outputs.iter().find(|o| o.primary) {
+            // 1. Por connector name
+            if let Some(output) = self.space.outputs().find(|o| o.name() == primary_cfg.connector) {
+                return Some(output.clone());
+            }
+            // 2. Por descripción o modelo
+            if let Some(output) = self.space.outputs().find(|o| {
+                let desc = o.description();
+                desc.contains(&primary_cfg.name) || desc.contains(&primary_cfg.connector)
+            }) {
+                return Some(output.clone());
+            }
+            // 3. Por geometría
+            if let Some(output) = self.space.outputs().find(|o| {
+                if let Some(geo) = self.space.output_geometry(o) {
+                    geo.loc.x == primary_cfg.x && geo.loc.y == primary_cfg.y
+                } else {
+                    false
+                }
+            }) {
+                return Some(output.clone());
+            }
+        }
+        self.space.outputs().next().cloned()
+    }
+
+    /// Determina si un monitor dado corresponde a la pantalla principal del entorno.
+    pub fn is_primary_output(&self, output: &Output) -> bool {
+        self.primary_output().as_ref() == Some(output)
+    }
+
     /// Calcula la zona utilizable global (en coordenadas de Space) para un monitor dado
     pub fn usable_zone_for_output(&self, output: &Output) -> Rectangle<i32, Logical> {
         let output_geo = self.space.output_geometry(output).unwrap_or_default();
         let layer_map = smithay::desktop::layer_map_for_output(output);
         let zone = layer_map.non_exclusive_zone();
 
-        // En Malus DE, la Top Bar siempre ocupa de manera estricta al menos 36 píxeles lógicos
-        // superiores de la pantalla. Ninguna ventana puede invadir esa franja bajo ninguna circunstancia.
-        let top_bar_min_height = 36;
+        // En Malus DE, la Top Bar solo existe en la pantalla primaria.
+        // En la pantalla primaria ocupa de manera estricta al menos 36 píxeles lógicos superiores.
+        // En pantallas secundarias no hay Top Bar, por lo que no se impone margen superior artificial.
+        let is_primary = self.is_primary_output(output);
+        let top_bar_min_height = if is_primary { 36 } else { 0 };
         let top_offset = if zone.size.w > 0 && zone.size.h > 0 {
-            zone.loc.y.max(top_bar_min_height)
+            if is_primary {
+                zone.loc.y.max(top_bar_min_height)
+            } else {
+                zone.loc.y
+            }
         } else {
             top_bar_min_height
         };
@@ -2583,17 +2622,17 @@ impl MalusState {
             }
         }
 
-        // 5. Fallback a la lista de monitores de Smithay
+        // 5. Fallback a la lista de monitores de Smithay o monitor primario
         self.space
             .outputs_for_element(window)
             .into_iter()
             .next()
-            .or_else(|| self.space.outputs().next().cloned())
+            .or_else(|| self.primary_output())
     }
 
     /// Determina si hay una ventana en pantalla completa visible sobre un monitor específico.
     pub fn has_fullscreen_window_on_output(&self, output: &Output) -> bool {
-        let Some(output_geo) = self.space.output_geometry(output) else {
+        let Some(_output_geo) = self.space.output_geometry(output) else {
             return false;
         };
         for window in self.space.elements() {
@@ -2604,11 +2643,11 @@ impl MalusState {
                     window.x11_surface().map(|x| x.is_fullscreen()).unwrap_or(false)
                 });
             if is_fullscreen {
-                if let Some(loc) = self.space.element_location(window) {
-                    let win_rect = Rectangle::new(loc, window.geometry().size);
-                    if output_geo.overlaps(win_rect) {
-                        return true;
-                    }
+                // La ventana en pantalla completa debe pertenecer estrictamente a este monitor específico.
+                // Usamos `origin_output_for_window` para que una ventana en pantalla completa en un monitor
+                // secundario nunca oculte la Top Bar ni el Dock del monitor principal por rozar bordes limítrofes.
+                if self.origin_output_for_window(window).as_ref() == Some(output) {
+                    return true;
                 }
             }
         }
@@ -2631,6 +2670,9 @@ impl MalusState {
 
         if let Some(loc) = self.space.element_location(window) {
             if let Some(output) = self.origin_output_for_window(window) {
+                if !self.is_primary_output(&output) {
+                    return;
+                }
                 let usable_zone = self.usable_zone_for_output(&output);
                 let ssd_top = if window_uses_ssd(window) {
                     crate::ssd::SSD_TITLEBAR_HEIGHT
@@ -2944,7 +2986,7 @@ impl XdgShellHandler for MalusState {
                     })
                     .cloned()
             })
-            .or_else(|| self.space.outputs().next().cloned());
+            .or_else(|| self.primary_output());
 
         let (spawn_loc, usable_zone) = if let Some(ref output) = target_output {
             output.enter(surface.wl_surface());
@@ -3187,11 +3229,8 @@ impl XdgShellHandler for MalusState {
         tracing::info!("🪟 [XdgShell] maximize_request recibido del cliente");
         let Some(window) = self.window_for_surface(surface.wl_surface()) else { return };
         let output = self
-            .space
-            .outputs_for_element(&window)
-            .into_iter()
-            .next()
-            .or_else(|| self.space.outputs().next().cloned());
+            .origin_output_for_window(&window)
+            .or_else(|| self.primary_output());
 
         if let Some(output) = output {
             let usable_zone = self.usable_zone_for_output(&output);
@@ -3204,11 +3243,8 @@ impl XdgShellHandler for MalusState {
         let surf = surface.wl_surface();
         let Some(window) = self.window_for_surface(surf) else { return };
         let output = self
-            .space
-            .outputs_for_element(&window)
-            .into_iter()
-            .next()
-            .or_else(|| self.space.outputs().next().cloned());
+            .origin_output_for_window(&window)
+            .or_else(|| self.primary_output());
 
         if let Some(output) = output {
             let usable_zone = self.usable_zone_for_output(&output);
@@ -3230,7 +3266,7 @@ impl XdgShellHandler for MalusState {
                     .as_ref()
                     .and_then(Output::from_resource)
             })
-            .or_else(|| self.space.outputs().next().cloned());
+            .or_else(|| self.primary_output());
         let Some(output) = output else {
             tracing::warn!("⚠️ fullscreen_request ignorado: no hay una pantalla disponible");
             return;
@@ -3281,12 +3317,24 @@ impl XdgShellHandler for MalusState {
             return;
         };
         let output = self.origin_output_for_window(&window)
-            .or_else(|| self.space.outputs().next().cloned());
+            .or_else(|| self.primary_output());
         let restore = self.window_restore_geometries.get(surf).copied();
-        let (location, size) = if let Some((location, size)) = restore {
-            (location, Some(size))
-        } else if let Some(output) = output {
-            let output_geometry = self.space.output_geometry(&output).unwrap_or_default();
+        let (location, size) = if let Some((saved_loc, saved_size)) = restore {
+            // Asegurar que la posición restaurada permanezca dentro del monitor actual
+            // donde el usuario estaba visualizando la ventana a pantalla completa.
+            let output_geo = output.as_ref().and_then(|o| self.space.output_geometry(o));
+            let loc = if let Some(geo) = output_geo {
+                if geo.contains(saved_loc) {
+                    saved_loc
+                } else {
+                    Point::from((geo.loc.x + 80, geo.loc.y + 60))
+                }
+            } else {
+                saved_loc
+            };
+            (loc, Some(saved_size))
+        } else if let Some(ref output) = output {
+            let output_geometry = self.space.output_geometry(output).unwrap_or_default();
             (
                 Point::from((output_geometry.loc.x + 80, output_geometry.loc.y + 60)),
                 None,
@@ -3461,7 +3509,7 @@ impl WlrLayerShellHandler for MalusState {
         let output = output
             .as_ref()
             .and_then(Output::from_resource)
-            .or_else(|| self.space.outputs().next().cloned());
+            .or_else(|| self.primary_output());
 
         if let Some(output) = output {
             output.enter(surface.wl_surface());
@@ -3877,5 +3925,63 @@ mod tests {
             "La zona utilizable debe comenzar debajo de la Top Bar (esperado >= 36, actual = {})",
             usable.loc.y
         );
+    }
+
+    #[test]
+    fn fullscreen_on_secondary_does_not_affect_primary_fullscreen_state() {
+        use smithay::output::{Mode, Output, PhysicalProperties, Subpixel};
+        use smithay::reexports::wayland_server::Display;
+        use smithay::utils::Transform;
+
+        let display: Display<super::MalusState> = Display::new().unwrap();
+        let mut state = super::MalusState::new(&display);
+
+        // Monitor 1: Primary (0, 0) 1920x1080
+        let output1 = Output::new(
+            "DP-1".to_string(),
+            PhysicalProperties {
+                size: (1920, 1080).into(),
+                subpixel: Subpixel::Unknown,
+                make: "Malus".to_string(),
+                model: "Primary Display".to_string(),
+            },
+        );
+        let mode1 = Mode {
+            size: (1920, 1080).into(),
+            refresh: 60_000,
+        };
+        output1.change_current_state(
+            Some(mode1),
+            Some(Transform::Normal),
+            None,
+            Some((0, 0).into()),
+        );
+        state.space.map_output(&output1, (0, 0));
+
+        // Monitor 2: Secondary (1920, 0) 1920x1080
+        let output2 = Output::new(
+            "HDMI-A-1".to_string(),
+            PhysicalProperties {
+                size: (1920, 1080).into(),
+                subpixel: Subpixel::Unknown,
+                make: "Malus".to_string(),
+                model: "Secondary Display".to_string(),
+            },
+        );
+        let mode2 = Mode {
+            size: (1920, 1080).into(),
+            refresh: 60_000,
+        };
+        output2.change_current_state(
+            Some(mode2),
+            Some(Transform::Normal),
+            None,
+            Some((1920, 0).into()),
+        );
+        state.space.map_output(&output2, (1920, 0));
+
+        // Sin ventanas en fullscreen, ambos monitores deben reportar false
+        assert!(!state.has_fullscreen_window_on_output(&output1));
+        assert!(!state.has_fullscreen_window_on_output(&output2));
     }
 }
