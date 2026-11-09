@@ -33,6 +33,8 @@ const DEFAULT_GRADIENT_CSS: &str = include_str!("styles/default-gradient.css");
 
 /// Margen superior de la cuadrícula de iconos del escritorio para dejar respiración bajo la Top Bar (36px).
 pub const DESKTOP_TOP_MARGIN: f64 = 56.0;
+/// Margen superior estándar de la cuadrícula en pantallas secundarias (sin Top Bar).
+pub const DESKTOP_SECONDARY_TOP_MARGIN: f64 = 16.0;
 
 static CURRENT_IS_DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
@@ -416,10 +418,11 @@ pub fn clamp_icon_position(
     pointer_offset: (f64, f64),
     metrics: &IconLayoutMetrics,
     desktop_size: (i32, i32),
+    top_margin: f64,
 ) -> (f64, f64) {
     let min_x = 16.0;
     let max_x = (desktop_size.0 - metrics.box_width - 16).max(16) as f64;
-    let min_y = DESKTOP_TOP_MARGIN;
+    let min_y = top_margin;
     let max_y = (desktop_size.1 - metrics.box_height - 20).max(min_y as i32) as f64;
 
     (
@@ -434,6 +437,7 @@ pub fn dragged_icon_position(
     drag_offset: (f64, f64),
     metrics: &IconLayoutMetrics,
     desktop_size: (i32, i32),
+    top_margin: f64,
 ) -> (f64, f64) {
     clamp_icon_position(
         original_position.0 + pointer_offset.0 + drag_offset.0,
@@ -441,6 +445,7 @@ pub fn dragged_icon_position(
         pointer_offset,
         metrics,
         desktop_size,
+        top_margin,
     )
 }
 
@@ -449,10 +454,11 @@ pub fn snap_position_to_grid(
     metrics: &IconLayoutMetrics,
     align_left: bool,
     desktop_size: (i32, i32),
+    top_margin: f64,
 ) -> (f64, f64) {
     let cell_w = metrics.cell_width() as f64;
     let cell_h = metrics.cell_height() as f64;
-    let snapped_y = DESKTOP_TOP_MARGIN + ((pos.1 - DESKTOP_TOP_MARGIN).max(0.0) / cell_h).round() * cell_h;
+    let snapped_y = top_margin + ((pos.1 - top_margin).max(0.0) / cell_h).round() * cell_h;
 
     let snapped_x = if align_left {
         let base_x = 16.0;
@@ -466,7 +472,7 @@ pub fn snap_position_to_grid(
 
     (
         snapped_x.clamp(16.0, (desktop_size.0 - metrics.box_width - 16).max(16) as f64),
-        snapped_y.clamp(DESKTOP_TOP_MARGIN, (desktop_size.1 - metrics.box_height - 20).max(DESKTOP_TOP_MARGIN as i32) as f64),
+        snapped_y.clamp(top_margin, (desktop_size.1 - metrics.box_height - 20).max(top_margin as i32) as f64),
     )
 }
 
@@ -476,11 +482,12 @@ pub fn calculate_grid_position(
     metrics: &IconLayoutMetrics,
     align_left: bool,
     desktop_size: (i32, i32),
+    top_margin: f64,
 ) -> (f64, f64) {
     let rows = rows.max(1);
     let column = index / rows;
     let row = index % rows;
-    let y = DESKTOP_TOP_MARGIN + (row as i32 * metrics.cell_height()) as f64;
+    let y = top_margin + (row as i32 * metrics.cell_height()) as f64;
     let x = if align_left {
         16.0 + (column as i32 * metrics.cell_width()) as f64
     } else {
@@ -488,7 +495,7 @@ pub fn calculate_grid_position(
     };
     (
         x.clamp(16.0, (desktop_size.0 - metrics.box_width - 16).max(16) as f64),
-        y.clamp(DESKTOP_TOP_MARGIN, (desktop_size.1 - metrics.box_height - 20).max(DESKTOP_TOP_MARGIN as i32) as f64),
+        y.clamp(top_margin, (desktop_size.1 - metrics.box_height - 20).max(top_margin as i32) as f64),
     )
 }
 
@@ -801,6 +808,7 @@ pub fn calculate_organize_targets(
     desktop_size: (i32, i32),
     config: &DesktopIconsConfig,
     by: DesktopOrganizeBy,
+    top_margin: f64,
 ) -> HashMap<PathBuf, (f64, f64)> {
     let mut raw_paths = Vec::new();
     if let Ok(entries) = fs::read_dir(desktop_dir) {
@@ -858,11 +866,11 @@ pub fn calculate_organize_targets(
     }
 
     let metrics = IconLayoutMetrics::from_config(config);
-    let rows = ((desktop_size.1 - (DESKTOP_TOP_MARGIN as i32) - 80).max(1) / metrics.cell_height()).max(1) as usize;
+    let rows = ((desktop_size.1 - (top_margin as i32) - 80).max(1) / metrics.cell_height()).max(1) as usize;
 
     let mut targets = HashMap::new();
     for (index, path) in raw_paths.iter().enumerate() {
-        let pos = calculate_grid_position(index, rows, &metrics, config.align_left, desktop_size);
+        let pos = calculate_grid_position(index, rows, &metrics, config.align_left, desktop_size, top_margin);
         targets.insert(path.clone(), pos);
     }
     targets
@@ -874,8 +882,9 @@ pub fn organize_desktop_icons(
     config: &DesktopIconsConfig,
     icon_positions: &Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
     by: DesktopOrganizeBy,
+    top_margin: f64,
 ) {
-    let targets = calculate_organize_targets(desktop_dir, desktop_size, config, by);
+    let targets = calculate_organize_targets(desktop_dir, desktop_size, config, by, top_margin);
     let mut positions = icon_positions.borrow_mut();
     positions.clear();
     positions.extend(targets);
@@ -971,8 +980,9 @@ pub fn animate_desktop_organization(
     icon_positions: &Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
     by: DesktopOrganizeBy,
     duration_ms: i64,
+    top_margin: f64,
 ) {
-    let targets = calculate_organize_targets(desktop_dir, desktop_size, config, by);
+    let targets = calculate_organize_targets(desktop_dir, desktop_size, config, by, top_margin);
     {
         let mut positions = icon_positions.borrow_mut();
         positions.clear();
@@ -988,6 +998,7 @@ pub fn animate_desktop_snap_to_grid(
     config: &DesktopIconsConfig,
     icon_positions: &Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
     duration_ms: i64,
+    top_margin: f64,
 ) {
     let metrics = IconLayoutMetrics::from_config(config);
     let align_left = config.align_left;
@@ -995,7 +1006,7 @@ pub fn animate_desktop_snap_to_grid(
     {
         let pos = icon_positions.borrow();
         for (p, pt) in pos.iter() {
-            let snapped = snap_position_to_grid(*pt, &metrics, align_left, desktop_size);
+            let snapped = snap_position_to_grid(*pt, &metrics, align_left, desktop_size, top_margin);
             targets.insert(p.clone(), snapped);
         }
     }
@@ -1018,6 +1029,7 @@ fn build_organize_submenu(
     config: Rc<RefCell<DesktopIconsConfig>>,
     icon_positions: Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
     trigger_refresh: Rc<dyn Fn()>,
+    top_margin: f64,
 ) -> GtkBox {
     let container = GtkBox::builder()
         .orientation(Orientation::Vertical)
@@ -1046,7 +1058,7 @@ fn build_organize_submenu(
     by_name_btn.connect_clicked(move |_| {
         let cfg = cfg_c.borrow().clone();
         if cfg.use_stacks {
-            organize_desktop_icons(&dir_c, desktop_size, &cfg, &pos_c, DesktopOrganizeBy::Name);
+            organize_desktop_icons(&dir_c, desktop_size, &cfg, &pos_c, DesktopOrganizeBy::Name, top_margin);
             trig_c();
         } else {
             animate_desktop_organization(
@@ -1057,6 +1069,7 @@ fn build_organize_submenu(
                 &pos_c,
                 DesktopOrganizeBy::Name,
                 320,
+                top_margin,
             );
         }
         p_c.popdown();
@@ -1073,7 +1086,7 @@ fn build_organize_submenu(
     by_kind_btn.connect_clicked(move |_| {
         let cfg = cfg_c.borrow().clone();
         if cfg.use_stacks {
-            organize_desktop_icons(&dir_c, desktop_size, &cfg, &pos_c, DesktopOrganizeBy::Kind);
+            organize_desktop_icons(&dir_c, desktop_size, &cfg, &pos_c, DesktopOrganizeBy::Kind, top_margin);
             trig_c();
         } else {
             animate_desktop_organization(
@@ -1084,6 +1097,7 @@ fn build_organize_submenu(
                 &pos_c,
                 DesktopOrganizeBy::Kind,
                 320,
+                top_margin,
             );
         }
         p_c.popdown();
@@ -1100,7 +1114,7 @@ fn build_organize_submenu(
     by_date_btn.connect_clicked(move |_| {
         let cfg = cfg_c.borrow().clone();
         if cfg.use_stacks {
-            organize_desktop_icons(&dir_c, desktop_size, &cfg, &pos_c, DesktopOrganizeBy::DateModified);
+            organize_desktop_icons(&dir_c, desktop_size, &cfg, &pos_c, DesktopOrganizeBy::DateModified, top_margin);
             trig_c();
         } else {
             animate_desktop_organization(
@@ -1111,6 +1125,7 @@ fn build_organize_submenu(
                 &pos_c,
                 DesktopOrganizeBy::DateModified,
                 320,
+                top_margin,
             );
         }
         p_c.popdown();
@@ -1140,6 +1155,7 @@ fn refresh_desktop_icons(
     focused_path: &Rc<RefCell<Option<PathBuf>>>,
     expanded_stacks: &Rc<RefCell<HashSet<StackCategory>>>,
     recently_dropped_paths: &Rc<RefCell<HashSet<PathBuf>>>,
+    top_margin: f64,
 ) {
     let mut child = fixed.first_child();
     while let Some(current) = child {
@@ -1213,7 +1229,7 @@ fn refresh_desktop_icons(
     }
 
     let metrics = IconLayoutMetrics::from_config(config);
-    let rows = ((desktop_size.1 - (DESKTOP_TOP_MARGIN as i32) - 80).max(1) / metrics.cell_height()).max(1) as usize;
+    let rows = ((desktop_size.1 - (top_margin as i32) - 80).max(1) / metrics.cell_height()).max(1) as usize;
 
     let mut positions = icon_positions.borrow_mut();
     let current_paths_set: HashSet<PathBuf> = items.iter().map(|it| it.path.clone()).collect();
@@ -1272,7 +1288,7 @@ fn refresh_desktop_icons(
             stack_box.append(&icon_overlay);
             stack_box.append(&label);
 
-            let (x, y) = calculate_grid_position(slot_index, rows, &metrics, config.align_left, desktop_size);
+            let (x, y) = calculate_grid_position(slot_index, rows, &metrics, config.align_left, desktop_size, top_margin);
             fixed.put(&stack_box, x, y);
             slot_index += 1;
 
@@ -1311,6 +1327,7 @@ fn refresh_desktop_icons(
                     &foc_path_refresh,
                     &expanded_ref,
                     &rec_refresh,
+                    top_margin,
                 );
             });
             stack_box.add_controller(click);
@@ -1333,6 +1350,7 @@ fn refresh_desktop_icons(
                         selected_paths,
                         focused_path,
                         recently_dropped_paths,
+                        top_margin,
                     );
                     slot_index += 1;
                 }
@@ -1356,6 +1374,7 @@ fn refresh_desktop_icons(
                 selected_paths,
                 focused_path,
                 recently_dropped_paths,
+                top_margin,
             );
         }
     }
@@ -1536,6 +1555,7 @@ fn render_single_icon(
     selected_paths: &Rc<RefCell<HashSet<PathBuf>>>,
     focused_path: &Rc<RefCell<Option<PathBuf>>>,
     recently_dropped_paths: &Rc<RefCell<HashSet<PathBuf>>>,
+    top_margin: f64,
 ) {
     let path = item.path;
     let file = gio::File::for_path(&path);
@@ -1602,10 +1622,10 @@ fn render_single_icon(
     set_desktop_icon_selected(&item_box, is_selected);
 
     let (x, mut y) = *positions.entry(path.clone()).or_insert_with(|| {
-        calculate_grid_position(index, rows, metrics, config.align_left, desktop_size)
+        calculate_grid_position(index, rows, metrics, config.align_left, desktop_size, top_margin)
     });
-    if y < DESKTOP_TOP_MARGIN {
-        y = DESKTOP_TOP_MARGIN;
+    if y < top_margin {
+        y = top_margin;
         positions.insert(path.clone(), (x, y));
     }
     fixed.put(&item_box, x, y);
@@ -1942,6 +1962,7 @@ fn create_wallpaper_window(
     icon_positions: &Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
     internal_drag_paths: &Rc<RefCell<HashSet<PathBuf>>>,
     active_icon_drag: &Rc<RefCell<Option<(PathBuf, (f64, f64), (f64, f64))>>>,
+    is_primary: bool,
 ) {
     let window = ApplicationWindow::builder()
         .application(application)
@@ -1990,6 +2011,12 @@ fn create_wallpaper_window(
             })
             .unwrap_or((1920, 1080));
 
+        let top_margin = if is_primary {
+            DESKTOP_TOP_MARGIN
+        } else {
+            DESKTOP_SECONDARY_TOP_MARGIN
+        };
+
         let icons = Fixed::builder()
             .hexpand(true)
             .vexpand(true)
@@ -2029,6 +2056,7 @@ fn create_wallpaper_window(
                 &foc_path_c,
                 &exp_stacks_c,
                 &rec_c,
+                top_margin,
             );
         });
 
@@ -2149,6 +2177,7 @@ fn create_wallpaper_window(
                 cfg_menu.clone(),
                 icon_pos_snap.clone(),
                 trigger_refresh_menu.clone(),
+                top_margin,
             );
 
             let menu = GtkBox::builder()
@@ -2217,6 +2246,7 @@ fn create_wallpaper_window(
                         &cfg,
                         &pos_org,
                         DesktopOrganizeBy::Name,
+                        top_margin,
                     );
                     trigger_org();
                 } else {
@@ -2228,6 +2258,7 @@ fn create_wallpaper_window(
                         &pos_org,
                         DesktopOrganizeBy::Name,
                         320,
+                        top_margin,
                     );
                 }
                 popover_c.popdown();
@@ -2260,6 +2291,7 @@ fn create_wallpaper_window(
                         &cfg,
                         &icon_pos_c2,
                         280,
+                        top_margin,
                     );
                 }
                 popover_c.popdown();
@@ -2295,6 +2327,7 @@ fn create_wallpaper_window(
                             &cfg_clone,
                             &pos_snap_c,
                             DesktopOrganizeBy::Name,
+                            top_margin,
                         );
                         trigger_c();
                     } else {
@@ -2306,6 +2339,7 @@ fn create_wallpaper_window(
                             &pos_snap_c,
                             DesktopOrganizeBy::Name,
                             320,
+                            top_margin,
                         );
                     }
                 }
@@ -2434,6 +2468,7 @@ fn create_wallpaper_window(
                                 (0.0, 0.0),
                                 &metrics,
                                 desktop_size,
+                                top_margin,
                             );
                             move_desktop_icon(&icons_update, p, new_pos);
                         }
@@ -2515,6 +2550,7 @@ fn create_wallpaper_window(
                                 (0.0, 0.0),
                                 &metrics,
                                 desktop_size,
+                                top_margin,
                             );
                             if cfg.snap_to_grid {
                                 final_pos = snap_position_to_grid(
@@ -2522,6 +2558,7 @@ fn create_wallpaper_window(
                                     &metrics,
                                     cfg.align_left,
                                     desktop_size,
+                                    top_margin,
                                 );
                             }
                             move_desktop_icon(&icons_end, p, final_pos);
@@ -2630,9 +2667,9 @@ fn create_wallpaper_window(
                                 f64::from(metrics.box_height) / 2.0,
                             ));
                         let offset_idx = (index % 4) as f64 * 24.0;
-                        let mut position = clamp_icon_position(x + offset_idx, y + offset_idx, pointer_offset, &metrics, desktop_size);
+                        let mut position = clamp_icon_position(x + offset_idx, y + offset_idx, pointer_offset, &metrics, desktop_size, top_margin);
                         if snap {
-                            position = snap_position_to_grid(position, &metrics, align_left, desktop_size);
+                            position = snap_position_to_grid(position, &metrics, align_left, desktop_size, top_margin);
                         }
                         if move_desktop_icon(&drop_icons, &path, position) {
                             drop_positions.borrow_mut().insert(path.clone(), position);
@@ -2659,14 +2696,14 @@ fn create_wallpaper_window(
 
                 let mut position = (
                     (x + (index % 4) as f64 * 24.0)
-                        .clamp(0.0, f64::from((desktop_size.0 - metrics.box_width).max(0))),
+                        .clamp(16.0, f64::from((desktop_size.0 - metrics.box_width - 16).max(16))),
                     (y + (index % 4) as f64 * 24.0).clamp(
-                        0.0,
-                        f64::from((desktop_size.1 - metrics.box_height).max(0)),
+                        top_margin,
+                        f64::from((desktop_size.1 - metrics.box_height - 20).max(top_margin as i32)),
                     ),
                 );
                 if snap {
-                    position = snap_position_to_grid(position, &metrics, align_left, desktop_size);
+                    position = snap_position_to_grid(position, &metrics, align_left, desktop_size, top_margin);
                 }
 
                 match source.move_(
@@ -2890,30 +2927,41 @@ fn main() -> Result<()> {
         let mut created = 0;
         if let Some(display) = gtk4::gdk::Display::default() {
             let monitors = display.monitors();
-            let primary_connector = DisplaysConfig::load()
-                .outputs
-                .into_iter()
-                .find(|output| output.primary)
-                .map(|output| output.connector);
+            let displays_cfg = DisplaysConfig::load();
+            let primary_cfg = displays_cfg.outputs.iter().find(|output| output.primary).cloned();
             let monitor_list: Vec<gtk4::gdk::Monitor> = (0..monitors.n_items())
                 .filter_map(|i| monitors.item(i))
                 .filter_map(|monitor| monitor.downcast().ok())
                 .collect();
-            let primary_index = primary_connector
-                .as_deref()
-                .and_then(|connector| {
+            let primary_index = primary_cfg
+                .as_ref()
+                .and_then(|cfg| {
                     monitor_list.iter().position(|monitor| {
-                        monitor
-                            .connector()
-                            .is_some_and(|name| name.as_str() == connector)
+                        if let Some(connector) = monitor.connector() {
+                            if connector.as_str() == cfg.connector {
+                                return true;
+                            }
+                        }
+                        if let Some(model) = monitor.model() {
+                            if model.as_str() == cfg.name || model.as_str() == cfg.connector {
+                                return true;
+                            }
+                        }
+                        if let Some(desc) = monitor.description() {
+                            if desc.contains(&cfg.name) || desc.contains(&cfg.connector) {
+                                return true;
+                            }
+                        }
+                        let geo = monitor.geometry();
+                        geo.x() == cfg.x && geo.y() == cfg.y
                     })
                 })
                 .unwrap_or(0);
 
-            match (primary_connector.as_deref(), monitor_list.get(primary_index)) {
-                (Some(connector), Some(_)) => info!(
-                    "Mostrando iconos del escritorio en la pantalla principal: {}",
-                    connector
+            match (primary_cfg.as_ref(), monitor_list.get(primary_index)) {
+                (Some(cfg), Some(_)) => info!(
+                    "Mostrando iconos del escritorio en la pantalla principal: {} ({})",
+                    cfg.connector, cfg.name
                 ),
                 (_, Some(monitor)) => info!(
                     "No se encontró la pantalla principal configurada; usando {} para los iconos del escritorio.",
@@ -2926,11 +2974,12 @@ fn main() -> Result<()> {
             }
 
             for (index, monitor) in monitor_list.iter().enumerate() {
+                let is_primary = index == primary_index;
                 create_wallpaper_window(
                     application,
                     Some(monitor),
                     &resolved_path,
-                    if index == primary_index {
+                    if is_primary {
                         desktop_dir.as_deref()
                     } else {
                         None
@@ -2939,6 +2988,7 @@ fn main() -> Result<()> {
                     &icon_positions,
                     &internal_drag_paths,
                     &active_icon_drag,
+                    is_primary,
                 );
                 created += 1;
             }
@@ -2954,6 +3004,7 @@ fn main() -> Result<()> {
                 &icon_positions,
                 &internal_drag_paths,
                 &active_icon_drag,
+                true,
             );
         }
     });
@@ -2967,7 +3018,7 @@ mod tests {
     use super::{
         calculate_grid_position, clamp_icon_position, desktop_dir_from_config,
         dragged_icon_position, snap_position_to_grid, IconLayoutMetrics, StackCategory,
-        DESKTOP_TOP_MARGIN,
+        DESKTOP_SECONDARY_TOP_MARGIN, DESKTOP_TOP_MARGIN,
     };
     use gtk4::prelude::*;
     use malus_de_common::config::DesktopIconsConfig;
@@ -2982,11 +3033,11 @@ mod tests {
             spacing: 8,
         };
         assert_eq!(
-            clamp_icon_position(150.0, 100.0, (20.0, 30.0), &metrics, (800, 600)),
+            clamp_icon_position(150.0, 100.0, (20.0, 30.0), &metrics, (800, 600), DESKTOP_TOP_MARGIN),
             (130.0, 70.0)
         );
         assert_eq!(
-            clamp_icon_position(-20.0, -30.0, (20.0, 30.0), &metrics, (800, 600)),
+            clamp_icon_position(-20.0, -30.0, (20.0, 30.0), &metrics, (800, 600), DESKTOP_TOP_MARGIN),
             (16.0, DESKTOP_TOP_MARGIN)
         );
     }
@@ -3000,7 +3051,7 @@ mod tests {
             spacing: 8,
         };
         assert_eq!(
-            dragged_icon_position((130.0, 70.0), (20.0, 30.0), (15.0, -10.0), &metrics, (800, 600)),
+            dragged_icon_position((130.0, 70.0), (20.0, 30.0), (15.0, -10.0), &metrics, (800, 600), DESKTOP_TOP_MARGIN),
             (145.0, 60.0)
         );
     }
@@ -3065,6 +3116,7 @@ mod tests {
             &config,
             &icon_positions,
             super::DesktopOrganizeBy::Name,
+            DESKTOP_TOP_MARGIN,
         );
 
         let pos = icon_positions.borrow();
@@ -3074,10 +3126,10 @@ mod tests {
         let metrics = IconLayoutMetrics::from_config(&config);
         let rows = ((1080 - (DESKTOP_TOP_MARGIN as i32) - 80).max(1) / metrics.cell_height()).max(1) as usize;
 
-        let slot_0 = calculate_grid_position(0, rows, &metrics, false, (1920, 1080));
-        let slot_1 = calculate_grid_position(1, rows, &metrics, false, (1920, 1080));
-        let slot_2 = calculate_grid_position(2, rows, &metrics, false, (1920, 1080));
-        let slot_3 = calculate_grid_position(3, rows, &metrics, false, (1920, 1080));
+        let slot_0 = calculate_grid_position(0, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
+        let slot_1 = calculate_grid_position(1, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
+        let slot_2 = calculate_grid_position(2, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
+        let slot_3 = calculate_grid_position(3, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
 
         assert_eq!(pos.get(&folder_a).copied(), Some(slot_0));
         assert_eq!(pos.get(&folder_b).copied(), Some(slot_1));
@@ -3094,15 +3146,32 @@ mod tests {
 
         // Snap a la derecha estilo macOS
         let pos = (1800.0, 45.0);
-        let snapped = snap_position_to_grid(pos, &metrics, false, (1920, 1080));
+        let snapped = snap_position_to_grid(pos, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
         assert!(snapped.0 <= 1920.0 - metrics.box_width as f64);
         assert_eq!(snapped.1, DESKTOP_TOP_MARGIN);
 
         // Snap a la izquierda
         let pos_left = (25.0, 45.0);
-        let snapped_left = snap_position_to_grid(pos_left, &metrics, true, (1920, 1080));
+        let snapped_left = snap_position_to_grid(pos_left, &metrics, true, (1920, 1080), DESKTOP_TOP_MARGIN);
         assert_eq!(snapped_left.0, 16.0);
         assert_eq!(snapped_left.1, DESKTOP_TOP_MARGIN);
+    }
+
+    #[test]
+    fn test_snap_position_to_grid_secondary_display() {
+        let config = DesktopIconsConfig::default();
+        let metrics = IconLayoutMetrics::from_config(&config);
+
+        // En pantalla secundaria no hay Top Bar, el margen superior es 16.0
+        let pos = (1800.0, 5.0);
+        let snapped = snap_position_to_grid(pos, &metrics, false, (1920, 1080), DESKTOP_SECONDARY_TOP_MARGIN);
+        assert!(snapped.0 <= 1920.0 - metrics.box_width as f64);
+        assert_eq!(snapped.1, DESKTOP_SECONDARY_TOP_MARGIN);
+
+        let pos_left = (25.0, 5.0);
+        let snapped_left = snap_position_to_grid(pos_left, &metrics, true, (1920, 1080), DESKTOP_SECONDARY_TOP_MARGIN);
+        assert_eq!(snapped_left.0, 16.0);
+        assert_eq!(snapped_left.1, DESKTOP_SECONDARY_TOP_MARGIN);
     }
 
     #[test]
@@ -3141,8 +3210,8 @@ mod tests {
     fn test_calculate_grid_position_order() {
         let config = DesktopIconsConfig::default();
         let metrics = IconLayoutMetrics::from_config(&config);
-        let pos0 = calculate_grid_position(0, 5, &metrics, false, (1920, 1080));
-        let pos1 = calculate_grid_position(1, 5, &metrics, false, (1920, 1080));
+        let pos0 = calculate_grid_position(0, 5, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
+        let pos1 = calculate_grid_position(1, 5, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
         assert_eq!(pos0.0, pos1.0); // Misma columna
         assert!(pos1.1 > pos0.1); // Siguiente fila hacia abajo
     }
@@ -3235,15 +3304,16 @@ mod tests {
             (1920, 1080),
             &config,
             super::DesktopOrganizeBy::Kind,
+            DESKTOP_TOP_MARGIN,
         );
 
         assert_eq!(targets.len(), 3);
         let metrics = IconLayoutMetrics::from_config(&config);
         let rows = ((1080 - (DESKTOP_TOP_MARGIN as i32) - 80).max(1) / metrics.cell_height()).max(1) as usize;
 
-        let slot_0 = calculate_grid_position(0, rows, &metrics, false, (1920, 1080));
-        let slot_1 = calculate_grid_position(1, rows, &metrics, false, (1920, 1080));
-        let slot_2 = calculate_grid_position(2, rows, &metrics, false, (1920, 1080));
+        let slot_0 = calculate_grid_position(0, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
+        let slot_1 = calculate_grid_position(1, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
+        let slot_2 = calculate_grid_position(2, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
 
         // Subcarpeta primero (slot 0), luego jpg (slot 1 por orden alfabético de extensión), luego txt (slot 2)
         assert_eq!(targets.get(&folder).copied(), Some(slot_0));
@@ -3252,8 +3322,6 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
-
-
 
     #[test]
     fn test_truncate_desktop_name() {
