@@ -128,6 +128,7 @@ popover.desktop-popover-menu > contents.background {
     border-radius: 14px;
     padding: 5px;
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.48), 0 2px 8px rgba(0, 0, 0, 0.32), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    transition: opacity 140ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* Modo Claro (vía clase .light-popover en Popover) */
@@ -140,8 +141,10 @@ popover.light-popover > contents {
     border-radius: 14px;
     padding: 5px;
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.12), inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+    transition: opacity 140ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+stack.desktop-context-menu,
 .desktop-context-menu {
     background: transparent;
     border: none;

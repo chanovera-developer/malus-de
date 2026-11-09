@@ -4,6 +4,33 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-08] — Animaciones Fluidas de Apertura y Transición de Subsecciones con `GtkStack` (`malus-de-wallpaper`)
+
+### Diagnóstico de Causa Raíz
+* **Animación de Apertura del Popover Inactiva:**
+  * En GTK4 sobre Wayland, `GtkPopover` es una subsuperficie `GtkNative`. Modificar `set_opacity()` sobre la instancia de `Popover` no propaga la opacidad a través del árbol de renderizado GSK a los widgets hijos.
+  * Además, al invocar `popover.popup()`, el mapeo de la subsuperficie ocurre de manera asíncrona; la comprobación anterior `if elapsed > 0 && !w.is_visible() { return Break; }` se disparaba en el primer tick antes de que la subsuperficie Wayland fuera presentada en pantalla, abortando la animación de opacidad antes de comenzar.
+* **Transiciones Abruptas al Navegar entre Subsecciones:**
+  * Al reemplazar dinámicamente el widget hijo (`popover.set_child(...)`) para navegar a "Organizar por ▸" o "Nueva carpeta", la sustitución de widgets generaba un salto visual inmediato sin continuidad espacial, forzando la destrucción y recreación de vistas en cada interacción.
+
+### Solución Implementada (`crates/wallpaper`)
+* **Animación de Apertura Sincronizada con el Mapeo de la Subsuperficie:**
+  * Se optimizó `animate_widget_fade_in` en [`crates/wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs) para verificar `!w.is_mapped()`, pausando el inicio del cronómetro de animación hasta que el widget esté efectivamente mapeado y visible en el compositor Wayland.
+  * Se aplicó la animación de fade-in (`150ms`, curva `ease_out_cubic`) directamente al widget hijo raíz (`GtkStack` o contenedor interno), garantizando que el grafo GSK renderice la interpolación de opacidad de manera suave y fluida.
+* **Transición de Subsecciones con `gtk4::Stack`:**
+  * Se reemplazó el intercambio estático de hijos en el `GtkPopover` por un `gtk4::Stack` persistente configurado con:
+    * `StackTransitionType::SlideLeftRight`: animación horizontal fluida de deslizamiento nativa de GTK4.
+    * `set_transition_duration(180)`: duración de 180 ms ajustada al estándar de fluidez de macOS/iOS.
+    * `set_interpolate_size(true)`: interpolación continua y suave de las dimensiones del menú al alternar entre vistas de diferente altura o ancho.
+  * Se modularizaron las subsecciones con funciones dedicadas:
+    * `build_organize_submenu`: submenú de ordenamiento por nombre, tamaño, tipo y fecha de modificación, con botón de retroceso animado "← Volver".
+    * `build_new_folder_view`: vista de creación de nueva carpeta con campo de texto autofocus y botones Cancelar / Crear.
+  * Se vincularon las transiciones mediante `stack.set_visible_child_name("organize")`, `stack.set_visible_child_name("new_folder")` y retorno con `stack.set_visible_child_name("main")`.
+* **Estilos CSS Transparentes para el Contenedor de Pila:**
+  * En [`crates/wallpaper/src/styles/default-gradient.css`](../crates/wallpaper/src/styles/default-gradient.css), se agregó la regla `stack.desktop-context-menu` con fondo, bordes y sombras transparentes para delegar el borde acrílico y la sombra al contenedor exterior `contents.background` del popover, previniendo artefactos de recorte durante el deslizamiento.
+
+---
+
 ## [2026-11-08] — Corrección del Desfase de Geometría en Popups de Fondo de Pantalla (`malus-de-compositor`)
 
 ### Diagnóstico de Causa Raíz

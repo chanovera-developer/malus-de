@@ -6,7 +6,7 @@ use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, Entry,
     EventControllerKey, Fixed, GestureClick, GestureDrag, Image, Label, Orientation,
-    Overlay, Picture, Popover,
+    Overlay, Picture, Popover, Stack, StackTransitionType,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use malus_de_common::{
@@ -125,6 +125,15 @@ pub fn animate_widget_fade_in<W: IsA<gtk4::Widget>>(widget: &W, duration_ms: i64
     let start_time_clone = start_time.clone();
 
     widget.add_tick_callback(move |w, frame_clock| {
+        // Esperar a que el widget esté efectivamente mapeado en pantalla antes de iniciar el conteo
+        if !w.is_mapped() {
+            if start_time_clone.get().is_some() {
+                // Si ya había iniciado y se desmapeó (ej. popover cerrado por el usuario), cancelar
+                return glib::ControlFlow::Break;
+            }
+            return glib::ControlFlow::Continue;
+        }
+
         let now = frame_clock.frame_time() / 1000;
         let start = match start_time_clone.get() {
             Some(t) => t,
@@ -135,10 +144,6 @@ pub fn animate_widget_fade_in<W: IsA<gtk4::Widget>>(widget: &W, duration_ms: i64
         };
 
         let elapsed = now - start;
-        if elapsed > 0 && !w.is_visible() {
-            return glib::ControlFlow::Break;
-        }
-
         if elapsed >= duration_ms {
             w.set_opacity(1.0);
             glib::ControlFlow::Break
@@ -676,7 +681,7 @@ fn show_rename_dialog(parent_widget: &impl IsA<gtk4::Widget>, current_path: Path
     popover.set_child(Some(&container));
     apply_theme_to_popover(&popover, is_dark_mode_active());
     popover.connect_closed(|p| p.unparent());
-    animate_widget_fade_in(&popover, 140);
+    animate_widget_fade_in(&container, 140);
     popover.popup();
 }
 
@@ -696,13 +701,14 @@ fn get_unique_folder_name(dir: &Path, base_name: &str) -> PathBuf {
     }
 }
 
-fn show_new_folder_in_popover(
+fn build_new_folder_view(
     popover: &Popover,
+    stack: &Stack,
     desktop_dir: PathBuf,
-    click_pos: (f64, f64),
+    click_pos_cell: Rc<Cell<(f64, f64)>>,
     icon_positions: Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
     trigger_refresh: Rc<dyn Fn()>,
-) {
+) -> (GtkBox, Entry) {
     let container = GtkBox::new(Orientation::Vertical, 8);
     container.set_margin_top(10);
     container.set_margin_bottom(10);
@@ -734,9 +740,9 @@ fn show_new_folder_in_popover(
 
     let cancel_btn = Button::with_label("Cancelar");
     cancel_btn.add_css_class("desktop-context-btn");
-    let popover_close = popover.clone();
+    let stack_back = stack.clone();
     cancel_btn.connect_clicked(move |_| {
-        popover_close.popdown();
+        stack_back.set_visible_child_name("main");
     });
     btn_box.append(&cancel_btn);
 
@@ -749,6 +755,7 @@ fn show_new_folder_in_popover(
     let desktop_dir_save = desktop_dir.clone();
     let icon_positions_save = icon_positions.clone();
     let trigger_save = trigger_refresh.clone();
+    let click_pos_save = click_pos_cell.clone();
 
     let create_action = move || {
         let new_name = entry_save.text().trim().to_string();
@@ -757,7 +764,7 @@ fn show_new_folder_in_popover(
             if let Err(err) = fs::create_dir_all(&dest) {
                 warn!("No se pudo crear carpeta {:?}: {}", dest, err);
             } else {
-                icon_positions_save.borrow_mut().insert(dest, click_pos);
+                icon_positions_save.borrow_mut().insert(dest, click_pos_save.get());
                 save_icon_positions(&icon_positions_save.borrow());
                 trigger_save();
             }
@@ -778,10 +785,7 @@ fn show_new_folder_in_popover(
         create_for_entry();
     });
 
-    popover.set_child(Some(&container));
-    animate_widget_fade_in(&container, 120);
-    entry.grab_focus();
-    entry.select_region(0, -1);
+    (container, entry)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -865,15 +869,15 @@ pub fn organize_desktop_icons(
     save_icon_positions(&positions);
 }
 
-fn show_organize_submenu(
+fn build_organize_submenu(
     popover: &Popover,
-    main_menu: &GtkBox,
+    stack: &Stack,
     desktop_dir: PathBuf,
     desktop_size: (i32, i32),
     config: Rc<RefCell<DesktopIconsConfig>>,
     icon_positions: Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
     trigger_refresh: Rc<dyn Fn()>,
-) {
+) -> GtkBox {
     let container = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(2)
@@ -881,11 +885,9 @@ fn show_organize_submenu(
         .build();
 
     let back_btn = create_menu_button("← Volver", false);
-    let popover_back = popover.clone();
-    let main_menu_clone = main_menu.clone();
+    let stack_back = stack.clone();
     back_btn.connect_clicked(move |_| {
-        popover_back.set_child(Some(&main_menu_clone));
-        animate_widget_fade_in(&main_menu_clone, 120);
+        stack_back.set_visible_child_name("main");
     });
     container.append(&back_btn);
 
@@ -932,9 +934,7 @@ fn show_organize_submenu(
     });
     container.append(&by_date_btn);
 
-    apply_theme_to_popover(popover, is_dark_mode_active());
-    popover.set_child(Some(&container));
-    animate_widget_fade_in(&container, 120);
+    container
 }
 
 struct DesktopItemData {
@@ -1480,13 +1480,14 @@ fn render_single_icon(
     let context_click = GestureClick::new();
     context_click.set_button(3);
     let p_click = popover.clone();
+    let menu_click = menu.clone();
     context_click.connect_pressed(move |gesture, _, x, y| {
         gesture.set_state(gtk4::EventSequenceState::Claimed);
         let is_dark = is_dark_mode_active();
         apply_theme_to_popover(&p_click, is_dark);
         let rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
         p_click.set_pointing_to(Some(&rect));
-        animate_widget_fade_in(&p_click, 140);
+        animate_widget_fade_in(&menu_click, 140);
         p_click.popup();
     });
     item_box.add_controller(context_click);
@@ -1839,6 +1840,34 @@ fn create_wallpaper_window(
             let pointing_rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
             popover.set_pointing_to(Some(&pointing_rect));
 
+            let stack = Stack::builder()
+                .transition_type(StackTransitionType::SlideLeftRight)
+                .transition_duration(180)
+                .interpolate_size(true)
+                .css_classes(["desktop-context-menu"])
+                .build();
+
+            let click_pos_cell = Rc::new(Cell::new((x, y)));
+
+            let (new_folder_box, new_folder_entry) = build_new_folder_view(
+                &popover,
+                &stack,
+                desktop_dir_menu.clone(),
+                click_pos_cell.clone(),
+                icon_pos_snap.clone(),
+                trigger_refresh_menu.clone(),
+            );
+
+            let organize_box = build_organize_submenu(
+                &popover,
+                &stack,
+                desktop_dir_menu.clone(),
+                desktop_size,
+                cfg_menu.clone(),
+                icon_pos_snap.clone(),
+                trigger_refresh_menu.clone(),
+            );
+
             let menu = GtkBox::builder()
                 .orientation(Orientation::Vertical)
                 .spacing(2)
@@ -1847,19 +1876,19 @@ fn create_wallpaper_window(
 
             // 1. Nueva Carpeta
             let new_folder_btn = create_menu_button("Nueva carpeta", false);
-            let popover_c = popover.clone();
+            let stack_nf = stack.clone();
+            let entry_nf = new_folder_entry.clone();
             let d_dir = desktop_dir_menu.clone();
-            let icon_pos_snap_c = icon_pos_snap.clone();
-            let trigger_menu_c = trigger_refresh_menu.clone();
-            let click_pos = (x, y);
             new_folder_btn.connect_clicked(move |_| {
-                show_new_folder_in_popover(
-                    &popover_c,
-                    d_dir.clone(),
-                    click_pos,
-                    icon_pos_snap_c.clone(),
-                    trigger_menu_c.clone(),
-                );
+                let default_path = get_unique_folder_name(&d_dir, "Nueva carpeta");
+                let default_str = default_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("Nueva carpeta");
+                entry_nf.set_text(default_str);
+                stack_nf.set_visible_child_name("new_folder");
+                entry_nf.grab_focus();
+                entry_nf.select_region(0, -1);
             });
             menu.append(&new_folder_btn);
 
@@ -1908,24 +1937,11 @@ fn create_wallpaper_window(
             });
             menu.append(&organize_btn);
 
-            // 4. Organizar por ▸ (Submenú con criterios de orden)
+            // 4. Organizar por ▸ (Submenú animado con criterios de orden)
             let organize_by_btn = create_menu_button("Organizar por ▸", false);
-            let popover_c = popover.clone();
-            let menu_clone = menu.clone();
-            let d_dir_sub = desktop_dir_menu.clone();
-            let cfg_sub = cfg_menu.clone();
-            let pos_sub = icon_pos_snap.clone();
-            let trigger_sub = trigger_refresh_menu.clone();
+            let stack_org = stack.clone();
             organize_by_btn.connect_clicked(move |_| {
-                show_organize_submenu(
-                    &popover_c,
-                    &menu_clone,
-                    d_dir_sub.clone(),
-                    desktop_size,
-                    cfg_sub.clone(),
-                    pos_sub.clone(),
-                    trigger_sub.clone(),
-                );
+                stack_org.set_visible_child_name("organize");
             });
             menu.append(&organize_by_btn);
 
@@ -1989,7 +2005,7 @@ fn create_wallpaper_window(
             sep2.add_css_class("desktop-context-separator");
             menu.append(&sep2);
 
-            // 5. Cambiar fondo de pantalla...
+            // 7. Cambiar fondo de pantalla...
             let wp_btn = create_menu_button("Fondo de pantalla y Estilo...", false);
             let popover_c = popover.clone();
             wp_btn.connect_clicked(move |_| {
@@ -2000,10 +2016,15 @@ fn create_wallpaper_window(
             });
             menu.append(&wp_btn);
 
-            popover.set_child(Some(&menu));
+            stack.add_named(&menu, Some("main"));
+            stack.add_named(&organize_box, Some("organize"));
+            stack.add_named(&new_folder_box, Some("new_folder"));
+            stack.set_visible_child_name("main");
+
+            popover.set_child(Some(&stack));
             apply_theme_to_popover(&popover, is_dark_mode_active());
             popover.connect_closed(|p| p.unparent());
-            animate_widget_fade_in(&popover, 140);
+            animate_widget_fade_in(&stack, 150);
             popover.popup();
         });
         overlay.add_controller(bg_context);
@@ -2438,7 +2459,7 @@ fn create_wallpaper_window(
             popover.set_child(Some(&menu));
             apply_theme_to_popover(&popover, is_dark_mode_active());
             popover.connect_closed(|p| p.unparent());
-            animate_widget_fade_in(&popover, 140);
+            animate_widget_fade_in(&menu, 140);
             popover.popup();
         });
         overlay.add_controller(bg_context);
