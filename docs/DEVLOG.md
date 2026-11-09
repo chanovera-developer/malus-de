@@ -4,6 +4,27 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-08] — Corrección del Desfase de Geometría en Popups de Fondo de Pantalla (`malus-de-compositor`)
+
+### Diagnóstico de Causa Raíz
+* **Desfase entre el Rectángulo de Blur/Sombra del Compositor y el Contenido GTK4 (`crop_popover_4k.png`):**
+  * Al inspeccionar la captura de pantalla a nivel de píxel, se determinó que la caja translúcida exterior desfasada es en realidad el pase de desenfoque GPU Dual Kawase (`blur.render_blur`) y la sombra que `malus-de-compositor` dibuja para las superficies emergentes (`wallpaper_popups`).
+  * En [`crates/compositor/src/backend/drm.rs`](../crates/compositor/src/backend/drm.rs) y [`crates/compositor/src/backend/winit.rs`](../crates/compositor/src/backend/winit.rs), `popup_rect` se calculaba erróneamente como `layer_loc + offset`, donde `offset = popup_offset - popup_geometry.loc`.
+  * Como `popup_geometry.loc` representa la distancia entre el origen de la subsuperficie Wayland y el área útil de la ventana (márgenes de sombra de GTK4), al usar `offset` en lugar de `popup_offset`, el pase de blur y sombra se desplazaba hacia arriba y a la izquierda en exactamente esa cantidad de píxeles.
+* **Corte Inapropiado del Menú por el Shader de Recorte Squircle:**
+  * El pase de renderizado utilizaba `shader.apply_to_frame` con un radio hardcodeado de `32px` y el offset desfasado, recortando el menú en el borde superior e izquierdo y truncando el contenido por la derecha y abajo (por ejemplo `✓ Alineación automátic...`).
+  * A diferencia de `wallpaper_popups`, los menús de la barra superior (`topbar_popups`) ya utilizaban la fórmula correcta `layer_loc + popup_offset.to_physical_precise_round(scale)` y `shader.apply_clip_to_frame(..., menu_radius)`.
+
+### Solución Implementada (`crates/compositor`)
+* **Alineación Exacta de `popup_rect`:**
+  * Se corrigió el cálculo de `popup_rect` en `drm.rs` y `winit.rs` para utilizar `layer_loc + popup_offset.to_physical_precise_round(scale)`, posicionando el desenfoque GPU y la sombra exactamente en las coordenadas reales de los elementos del menú.
+* **Pipeline Homogéneo de Popups:**
+  * Se reemplazó `render_shadow` por `render_menu_shadow(..., menu_radius, scale)` y se utilizó `shader.apply_clip_to_frame(..., menu_radius)`, garantizando un recorte suave idéntico al de los menús de la barra de menús superior de macOS.
+* **Compilación y Despliegue:**
+  * Se recompiló `malus-de-compositor` en modo release (`cargo build --release -p malus-de-compositor`). Al ser el compositor el proceso que gestiona la sesión Wayland, al cerrar e iniciar sesión el sistema carga automáticamente este nuevo binario corregido.
+
+---
+
 ## [2026-11-08] — Corrección del Desfase de Contenedor y Animación VSync por Frame-Clock para Menús Contextuales
 
 ### Diagnóstico de Causa Raíz

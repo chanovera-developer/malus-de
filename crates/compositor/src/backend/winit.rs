@@ -1287,7 +1287,7 @@ pub fn run_winit() -> Result<()> {
                                 }
                             } else if surface.namespace() == "malus-wallpaper" {
                                 let popup_rect = Rectangle::new(
-                                    layer_loc + offset,
+                                    layer_loc + popup_offset.to_physical_precise_round(1.0),
                                     popup_geometry.size.to_physical_precise_round(1.0),
                                 );
                                 wallpaper_popups.push((elems, popup_rect));
@@ -2311,20 +2311,6 @@ pub fn run_winit() -> Result<()> {
                     }
 
                     for (popup_elems, popup_rect) in &wallpaper_popups {
-                        if let Some(shadow) = shadow_pipeline.as_ref() {
-                            let shadow_r = win_phys_r.unwrap_or(22) as f32;
-                            let _ = frame.with_context(|gl| {
-                                shadow.render_shadow(
-                                    gl,
-                                    &projection,
-                                    *popup_rect,
-                                    shadow_r,
-                                    true,
-                                    1.0,
-                                );
-                            });
-                        }
-
                         if let Some(blur) = blur_pipeline.as_mut() {
                             let _ = frame.with_context(|gl| {
                                 blur.render_blur(
@@ -2337,15 +2323,27 @@ pub fn run_winit() -> Result<()> {
                             });
                         }
 
+                        if let Some(shadow) = shadow_pipeline.as_ref() {
+                            let _ = frame.with_context(|gl| {
+                                shadow.render_menu_shadow(
+                                    gl,
+                                    &projection,
+                                    *popup_rect,
+                                    menu_radius as f32,
+                                    1.0,
+                                );
+                            });
+                        }
+
                         for elem in popup_elems.iter().rev() {
                             if let Some(shader) = window_squircle_shader.as_ref() {
                                 let elem_geo = elem.geometry(Scale::from(1.0));
-                                shader.apply_to_frame(
+                                shader.apply_clip_to_frame(
                                     &mut frame,
                                     elem_geo.size,
                                     popup_rect.loc - elem_geo.loc,
                                     popup_rect.size,
-                                    32,
+                                    menu_radius,
                                 );
                             }
                             let _ = draw_render_elements(
