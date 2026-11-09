@@ -108,6 +108,33 @@ label.desktop-icon-label {
     border-radius: 4px;
 }
 
+/* Animación de apertura elástica estilo macOS Finder */
+@keyframes macos-popover-appear {
+    0% {
+        opacity: 0.0;
+        transform: scale(0.92);
+    }
+    70% {
+        opacity: 1.0;
+        transform: scale(1.015);
+    }
+    100% {
+        opacity: 1.0;
+        transform: scale(1.0);
+    }
+}
+
+@keyframes macos-submenu-slide {
+    0% {
+        opacity: 0.0;
+        transform: translateY(3px);
+    }
+    100% {
+        opacity: 1.0;
+        transform: translateY(0);
+    }
+}
+
 /* Menús emergentes (Popovers) del escritorio con diseño nativo acrílico / Nautilus */
 popover.desktop-popover-menu,
 popover.desktop-popover-menu.background,
@@ -120,14 +147,15 @@ popover.desktop-popover-menu > arrow {
     box-shadow: none;
 }
 
-/* Modo Oscuro (Por defecto - Acrílico Nautilus) */
+/* Modo Oscuro (Por defecto - Acrílico Nautilus con sombra flotante profunda macOS) */
 popover.desktop-popover-menu > contents,
 popover.desktop-popover-menu > contents.background {
     background-color: rgba(30, 30, 36, 0.82);
     border: 1px solid rgba(255, 255, 255, 0.14);
     border-radius: 14px;
     padding: 5px;
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.48), 0 2px 8px rgba(0, 0, 0, 0.32), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    animation: macos-popover-appear 150ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 /* Modo Claro (vía clase .light-popover en Popover) */
@@ -139,7 +167,8 @@ popover.light-popover > contents {
     border: 1px solid rgba(0, 0, 0, 0.14);
     border-radius: 14px;
     padding: 5px;
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.12), inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+    animation: macos-popover-appear 150ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 .desktop-context-menu {
@@ -149,6 +178,7 @@ popover.light-popover > contents {
     padding: 0;
     margin: 0;
     box-shadow: none;
+    animation: macos-submenu-slide 130ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 .desktop-context-btn {
@@ -163,6 +193,16 @@ popover.light-popover > contents {
     font-weight: 500;
     text-shadow: none;
     color: #f1f5f9;
+    transition: background-color 100ms cubic-bezier(0.16, 1, 0.3, 1), color 100ms cubic-bezier(0.16, 1, 0.3, 1), transform 80ms ease;
+}
+
+.desktop-context-btn:hover {
+    background-color: #007aff;
+    color: #ffffff;
+}
+
+.desktop-context-btn:active {
+    transform: scale(0.97);
 }
 
 popover.desktop-popover-menu.light-popover .desktop-context-btn,

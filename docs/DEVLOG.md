@@ -4,6 +4,32 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-08] — Animaciones Fluidas del Menú Contextual del Escritorio (Apertura Elástica macOS, Sombra Flotante Profunda y Transición de Submenús)
+
+### Diagnóstico de Causa Raíz
+* **Aparición Rígida e Instantánea de Menús Emergentes:**
+  * Al hacer clic derecho en el escritorio o sobre un archivo, el popover (`popover.desktop-popover-menu`) se mostraba sin ninguna interpolación de escala ni opacidad, resultando en una aparición tosca y poco orgánica en comparación con la interfaz de macOS Finder.
+* **Falta de Dinamismo en Transiciones de Submenús:**
+  * Al ingresar a formularios secundarios ("Nueva carpeta" o "Organizar por ▸") o retornar con "← Volver", el reemplazo del widget hijo del popover ocurría de forma instantánea sin suavizado.
+
+### Solución Implementada (`crates/wallpaper`)
+* **Animación de Apertura Elástica (`@keyframes macos-popover-appear`):**
+  * Se configuró en [`crates/wallpaper/src/styles/default-gradient.css`](../crates/wallpaper/src/styles/default-gradient.css) una curva elástica sutil idéntica a macOS:
+    * Escala inicial: `scale(0.92)` y `opacity: 0.0`.
+    * Sobrepaso elástico: `scale(1.015)` y `opacity: 1.0` al 70% de la animación.
+    * Reposo final: `scale(1.0)` al 100%.
+    * Duración y curva: `150ms cubic-bezier(0.16, 1, 0.3, 1)`.
+* **Sombra Flotante Profunda de Ventana Emergente:**
+  * Se aplicó elevación multicapa con difusión acrílica:
+    * Modo Oscuro: `box-shadow: 0 12px 32px rgba(0, 0, 0, 0.48), 0 2px 8px rgba(0, 0, 0, 0.32), inset 0 0 0 1px rgba(255, 255, 255, 0.08);`
+    * Modo Claro: `box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.12), inset 0 0 0 1px rgba(255, 255, 255, 0.35);`
+* **Transición Suave de Vistas y Submenús (`@keyframes macos-submenu-slide`):**
+  * Se asignó una animación de deslizamiento y desvanecimiento vertical de `130ms` al alternar vistas en el popover (`transform: translateY(3px) -> translateY(0)`).
+* **Feedback Táctil en Ítems de Menú:**
+  * Los botones (`.desktop-context-btn`) ahora cuentan con transición suave de hover de `100ms` y un efecto de presión táctil al hacer clic (`transform: scale(0.97)` en estado `:active`).
+
+---
+
 ## [2026-11-08] — Implementación de "Organizar escritorio" (Carpetas Primero y Criterios por Nombre/Tipo/Fecha) y Alineación Automática Reactiva
 
 ### Diagnóstico de Causa Raíz

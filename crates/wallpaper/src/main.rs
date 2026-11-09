@@ -2784,6 +2784,10 @@ mod tests {
         assert!(css.contains("#1e293b"));
         // Hover azul macOS
         assert!(css.contains("#007aff"));
+        // Animaciones de apertura elástica y transiciones de submenús estilo macOS
+        assert!(css.contains("@keyframes macos-popover-appear"));
+        assert!(css.contains("@keyframes macos-submenu-slide"));
+        assert!(css.contains("cubic-bezier(0.16, 1, 0.3, 1)"));
         // GTK4 CSS no soporta !important ni queries @media condicionales
         assert!(!css.contains("!important"));
         assert!(!css.contains("@media"));
