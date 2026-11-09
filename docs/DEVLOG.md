@@ -4,6 +4,32 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-08] — Implementación de "Organizar escritorio" (Carpetas Primero y Criterios por Nombre/Tipo/Fecha) y Alineación Automática Reactiva
+
+### Diagnóstico de Causa Raíz
+* **Comportamiento Confuso y Pasivo de "Alineación automática":**
+  * La opción "Alineación automática" únicamente conmutaba el booleano `snap_to_grid` en `desktop.toml`, afectando de forma pasiva sólo a futuras operaciones de arrastrar y soltar manual. No ejecutaba ninguna acción sobre las carpetas y archivos ya existentes en el escritorio, provocando la sensación lógica en el usuario de que la opción "no hacía nada" o estaba rota.
+* **Limitación de "Alinear a la cuadrícula":**
+  * Esta opción sólo redondeaba las coordenadas libres individuales de cada icono a su celda geométrica más próxima (`snap_position_to_grid`), pero no reorganizaba ni compactaba los elementos. Si los iconos estaban dispersos en zonas distantes de la pantalla, continuaban desparramados y con huecos vacíos.
+* **Inexistencia de una Opción Real para Organizar el Escritorio:**
+  * No existía en el menú contextual una acción análoga a "Limpiar" / "Organizar por..." (*Clean Up / Sort By*) de macOS Finder que reagrupase secuencialmente todas las carpetas y archivos en columnas limpias y compactas.
+
+### Solución Implementada (`crates/wallpaper`)
+* **Nueva Acción Directa "Organizar escritorio":**
+  * Se añadió la opción "Organizar escritorio" en [`crates/wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs), la cual ejecuta `organize_desktop_icons(..., DesktopOrganizeBy::Name)`.
+  * Compacta y recoloca instantáneamente todas las carpetas y archivos en la cuadrícula en columnas secuenciales comenzando desde la esquina superior derecha (o izquierda si `align_left = true`), priorizando carpetas primero y luego archivos ordenados alfabéticamente (A-Z).
+* **Submenú "Organizar por ▸":**
+  * Despliega una vista secundaria en el popover contextual con opciones especializadas:
+    * **Por Nombre (Carpetas primero):** Agrupa carpetas arriba y ordena alfabéticamente.
+    * **Por Tipo / Clase:** Agrupa por extensión y categoría funcional (carpetas, imágenes, documentos, etc.).
+    * **Por Fecha de modificación:** Ubica los archivos editados más recientemente en los primeros casilleros.
+* **Alineación Automática Reactiva:**
+  * Al conmutar "Alineación automática" a activo (`true`), no sólo se guarda la configuración, sino que se dispara automáticamente `organize_desktop_icons`, alineando y organizando en ese mismo instante todos los iconos de la pantalla.
+* **Cobertura con Pruebas Unitarias:**
+  * Se incorporó `test_organize_desktop_icons_folders_first_and_alphabetical` en `wallpaper::tests`, verificando la precedencia de carpetas sobre archivos comunes y el cálculo determinista de las celdas en la cuadrícula.
+
+---
+
 ## [2026-11-08] — Anclaje de Hotspot Exacto en Arrastre (Sin Desplazamiento Abajo/Derecha), Marca de Selección Fiel a Finder y Creación Fluida de Carpeta en Menú Contextual del Escritorio
 
 ### Diagnóstico de Causa Raíz

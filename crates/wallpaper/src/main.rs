@@ -742,6 +742,157 @@ fn show_new_folder_in_popover(
     entry.select_region(0, -1);
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DesktopOrganizeBy {
+    Name,
+    Kind,
+    DateModified,
+}
+
+pub fn organize_desktop_icons(
+    desktop_dir: &Path,
+    desktop_size: (i32, i32),
+    config: &DesktopIconsConfig,
+    icon_positions: &Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
+    by: DesktopOrganizeBy,
+) {
+    let mut raw_paths = Vec::new();
+    if let Ok(entries) = fs::read_dir(desktop_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if let Some(file_name) = p.file_name() {
+                if file_name.to_string_lossy().starts_with('.') {
+                    continue;
+                }
+            }
+            raw_paths.push(p);
+        }
+    }
+
+    match by {
+        DesktopOrganizeBy::Name => {
+            raw_paths.sort_by(|a, b| {
+                let a_is_dir = a.is_dir();
+                let b_is_dir = b.is_dir();
+                // Carpetas primero (is_dir true antes de false)
+                if a_is_dir != b_is_dir {
+                    return b_is_dir.cmp(&a_is_dir);
+                }
+                let a_name = a.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+                let b_name = b.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+                a_name.cmp(&b_name)
+            });
+        }
+        DesktopOrganizeBy::Kind => {
+            raw_paths.sort_by(|a, b| {
+                let a_is_dir = a.is_dir();
+                let b_is_dir = b.is_dir();
+                if a_is_dir != b_is_dir {
+                    return b_is_dir.cmp(&a_is_dir);
+                }
+                let a_ext = a.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+                let b_ext = b.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+                let ext_cmp = a_ext.cmp(&b_ext);
+                if ext_cmp != std::cmp::Ordering::Equal {
+                    return ext_cmp;
+                }
+                let a_name = a.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+                let b_name = b.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+                a_name.cmp(&b_name)
+            });
+        }
+        DesktopOrganizeBy::DateModified => {
+            raw_paths.sort_by(|a, b| {
+                let a_time = fs::metadata(a).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+                let b_time = fs::metadata(b).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+                // Más recientes primero
+                b_time.cmp(&a_time)
+            });
+        }
+    }
+
+    let metrics = IconLayoutMetrics::from_config(config);
+    let rows = ((desktop_size.1 - (DESKTOP_TOP_MARGIN as i32) - 80).max(1) / metrics.cell_height()).max(1) as usize;
+
+    let mut positions = icon_positions.borrow_mut();
+    positions.clear();
+    for (index, path) in raw_paths.iter().enumerate() {
+        let pos = calculate_grid_position(index, rows, &metrics, config.align_left, desktop_size);
+        positions.insert(path.clone(), pos);
+    }
+    save_icon_positions(&positions);
+}
+
+fn show_organize_submenu(
+    popover: &Popover,
+    main_menu: &GtkBox,
+    desktop_dir: PathBuf,
+    desktop_size: (i32, i32),
+    config: Rc<RefCell<DesktopIconsConfig>>,
+    icon_positions: Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
+    trigger_refresh: Rc<dyn Fn()>,
+) {
+    let container = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .css_classes(["desktop-context-menu"])
+        .build();
+
+    let back_btn = create_menu_button("← Volver", false);
+    let popover_back = popover.clone();
+    let main_menu_clone = main_menu.clone();
+    back_btn.connect_clicked(move |_| {
+        popover_back.set_child(Some(&main_menu_clone));
+    });
+    container.append(&back_btn);
+
+    let sep = GtkBox::new(Orientation::Horizontal, 0);
+    sep.add_css_class("desktop-context-separator");
+    container.append(&sep);
+
+    let by_name_btn = create_menu_button("Por Nombre (Carpetas primero)", false);
+    let p_c = popover.clone();
+    let dir_c = desktop_dir.clone();
+    let cfg_c = config.clone();
+    let pos_c = icon_positions.clone();
+    let trig_c = trigger_refresh.clone();
+    by_name_btn.connect_clicked(move |_| {
+        organize_desktop_icons(&dir_c, desktop_size, &cfg_c.borrow(), &pos_c, DesktopOrganizeBy::Name);
+        trig_c();
+        p_c.popdown();
+    });
+    container.append(&by_name_btn);
+
+    let by_kind_btn = create_menu_button("Por Tipo / Clase", false);
+    let p_c = popover.clone();
+    let dir_c = desktop_dir.clone();
+    let cfg_c = config.clone();
+    let pos_c = icon_positions.clone();
+    let trig_c = trigger_refresh.clone();
+    by_kind_btn.connect_clicked(move |_| {
+        organize_desktop_icons(&dir_c, desktop_size, &cfg_c.borrow(), &pos_c, DesktopOrganizeBy::Kind);
+        trig_c();
+        p_c.popdown();
+    });
+    container.append(&by_kind_btn);
+
+    let by_date_btn = create_menu_button("Por Fecha de modificación", false);
+    let p_c = popover.clone();
+    let dir_c = desktop_dir;
+    let cfg_c = config;
+    let pos_c = icon_positions;
+    let trig_c = trigger_refresh;
+    by_date_btn.connect_clicked(move |_| {
+        organize_desktop_icons(&dir_c, desktop_size, &cfg_c.borrow(), &pos_c, DesktopOrganizeBy::DateModified);
+        trig_c();
+        p_c.popdown();
+    });
+    container.append(&by_date_btn);
+
+    apply_theme_to_popover(popover, is_dark_mode_active());
+    popover.set_child(Some(&container));
+}
+
 struct DesktopItemData {
     path: PathBuf,
     display_name: String,
@@ -1692,28 +1843,48 @@ fn create_wallpaper_window(
             });
             menu.append(&stacks_btn);
 
-            // 3. Alineación automática (Toggle snap_to_grid)
-            let is_snap = cfg_menu.borrow().snap_to_grid;
-            let snap_label = if is_snap {
-                "✓ Alineación automática"
-            } else {
-                "Alineación automática"
-            };
-            let snap_btn = create_menu_button(snap_label, false);
+            // 3. Organizar escritorio (Acción directa: limpia y ordena carpetas y archivos en la cuadrícula)
+            let organize_btn = create_menu_button("Organizar escritorio", false);
             let popover_c = popover.clone();
-            let cfg_c4 = cfg_menu.clone();
-            let trigger_c = trigger_refresh_menu.clone();
-            snap_btn.connect_clicked(move |_| {
-                let mut c = cfg_c4.borrow_mut();
-                c.snap_to_grid = !c.snap_to_grid;
-                let _ = c.save();
-                drop(c);
-                trigger_c();
+            let d_dir_org = desktop_dir_menu.clone();
+            let cfg_org = cfg_menu.clone();
+            let pos_org = icon_pos_snap.clone();
+            let trigger_org = trigger_refresh_menu.clone();
+            organize_btn.connect_clicked(move |_| {
+                organize_desktop_icons(
+                    &d_dir_org,
+                    desktop_size,
+                    &cfg_org.borrow(),
+                    &pos_org,
+                    DesktopOrganizeBy::Name,
+                );
+                trigger_org();
                 popover_c.popdown();
             });
-            menu.append(&snap_btn);
+            menu.append(&organize_btn);
 
-            // 4. Alinear a la cuadrícula (Snap all)
+            // 4. Organizar por ▸ (Submenú con criterios de orden)
+            let organize_by_btn = create_menu_button("Organizar por ▸", false);
+            let popover_c = popover.clone();
+            let menu_clone = menu.clone();
+            let d_dir_sub = desktop_dir_menu.clone();
+            let cfg_sub = cfg_menu.clone();
+            let pos_sub = icon_pos_snap.clone();
+            let trigger_sub = trigger_refresh_menu.clone();
+            organize_by_btn.connect_clicked(move |_| {
+                show_organize_submenu(
+                    &popover_c,
+                    &menu_clone,
+                    d_dir_sub.clone(),
+                    desktop_size,
+                    cfg_sub.clone(),
+                    pos_sub.clone(),
+                    trigger_sub.clone(),
+                );
+            });
+            menu.append(&organize_by_btn);
+
+            // 5. Alinear a la cuadrícula (Snap individual de cada elemento a la celda más cercana)
             let snap_all_btn = create_menu_button("Alinear a la cuadrícula", false);
             let popover_c = popover.clone();
             let cfg_c3 = cfg_menu.clone();
@@ -1735,6 +1906,39 @@ fn create_wallpaper_window(
                 popover_c.popdown();
             });
             menu.append(&snap_all_btn);
+
+            // 6. Alineación automática (Toggle snap_to_grid + auto-organiza en cuadrícula al activarse)
+            let is_snap = cfg_menu.borrow().snap_to_grid;
+            let snap_label = if is_snap {
+                "✓ Alineación automática"
+            } else {
+                "Alineación automática"
+            };
+            let snap_btn = create_menu_button(snap_label, false);
+            let popover_c = popover.clone();
+            let cfg_c4 = cfg_menu.clone();
+            let d_dir_snap = desktop_dir_menu.clone();
+            let pos_snap_c = icon_pos_snap.clone();
+            let trigger_c = trigger_refresh_menu.clone();
+            snap_btn.connect_clicked(move |_| {
+                let mut c = cfg_c4.borrow_mut();
+                let will_snap = !c.snap_to_grid;
+                c.snap_to_grid = will_snap;
+                let _ = c.save();
+                drop(c);
+                if will_snap {
+                    organize_desktop_icons(
+                        &d_dir_snap,
+                        desktop_size,
+                        &cfg_c4.borrow(),
+                        &pos_snap_c,
+                        DesktopOrganizeBy::Name,
+                    );
+                }
+                trigger_c();
+                popover_c.popdown();
+            });
+            menu.append(&snap_btn);
 
             let sep2 = GtkBox::new(Orientation::Horizontal, 0);
             sep2.add_css_class("desktop-context-separator");
@@ -2452,6 +2656,53 @@ mod tests {
 
         let f3 = super::get_unique_folder_name(&temp_dir, "Nueva carpeta");
         assert_eq!(f3, temp_dir.join("Nueva carpeta 3"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_organize_desktop_icons_folders_first_and_alphabetical() {
+        let temp_dir = std::env::temp_dir().join("malus_test_organize_desktop");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        let folder_b = temp_dir.join("Carpeta B");
+        let folder_a = temp_dir.join("Carpeta A");
+        let file_z = temp_dir.join("archivo_z.txt");
+        let file_a = temp_dir.join("archivo_a.txt");
+
+        std::fs::create_dir_all(&folder_b).unwrap();
+        std::fs::create_dir_all(&folder_a).unwrap();
+        std::fs::write(&file_z, "test").unwrap();
+        std::fs::write(&file_a, "test").unwrap();
+
+        let config = DesktopIconsConfig::default();
+        let icon_positions = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+
+        super::organize_desktop_icons(
+            &temp_dir,
+            (1920, 1080),
+            &config,
+            &icon_positions,
+            super::DesktopOrganizeBy::Name,
+        );
+
+        let pos = icon_positions.borrow();
+        assert_eq!(pos.len(), 4);
+
+        // Carpetas primero (Carpeta A en slot 0, Carpeta B en slot 1, archivo_a en slot 2, archivo_z en slot 3)
+        let metrics = IconLayoutMetrics::from_config(&config);
+        let rows = ((1080 - (DESKTOP_TOP_MARGIN as i32) - 80).max(1) / metrics.cell_height()).max(1) as usize;
+
+        let slot_0 = calculate_grid_position(0, rows, &metrics, false, (1920, 1080));
+        let slot_1 = calculate_grid_position(1, rows, &metrics, false, (1920, 1080));
+        let slot_2 = calculate_grid_position(2, rows, &metrics, false, (1920, 1080));
+        let slot_3 = calculate_grid_position(3, rows, &metrics, false, (1920, 1080));
+
+        assert_eq!(pos.get(&folder_a).copied(), Some(slot_0));
+        assert_eq!(pos.get(&folder_b).copied(), Some(slot_1));
+        assert_eq!(pos.get(&file_a).copied(), Some(slot_2));
+        assert_eq!(pos.get(&file_z).copied(), Some(slot_3));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
