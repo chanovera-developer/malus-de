@@ -4,6 +4,37 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-08] — Animación Fluida de Desplazamiento al Organizar Iconos del Escritorio (`malus-de-wallpaper`)
+
+### Diagnóstico de Causa Raíz
+* **Salto Instantáneo de los Iconos al Organizar ("Clean Up / Organize Jump"):**
+  * Al hacer clic en "Organizar escritorio", "Organizar por ▸" (Nombre, Tipo, Fecha) o conmutar "Alineación automática", el sistema invocaba `organize_desktop_icons` seguido de `trigger_refresh()`.
+  * `trigger_refresh()` purgaba y destruía todos los widgets hijos del contenedor `Fixed` (`fixed.remove(&current)`), para luego reconstruirlos instantáneamente en sus nuevas coordenadas de destino.
+  * Este comportamiento provocaba un parpadeo y un salto abrupto en la pantalla, en lugar de una transición física continua donde los iconos se deslicen orgánicamente a sus casillas correspondientes como en macOS Finder.
+
+### Solución Implementada (`crates/wallpaper`)
+* **Cálculo Desacoplado de Posiciones Destino (`calculate_organize_targets`):**
+  * Se extrajo el cálculo de posiciones ordenadas en `calculate_organize_targets`, permitiendo conocer las coordenadas destino `(x_target, y_target)` de cada archivo antes de alterar los widgets en pantalla.
+* **Transición de Movimiento VSync Interpolado (`animate_desktop_layout_transition`):**
+  * Se implementó una animación continua sincronizada con el frame clock de la pantalla (`widget.add_tick_callback`) gobernada por `ease_out_cubic` durante 320 ms.
+  * Para cada icono en el contenedor `Fixed`, se obtiene su coordenada actual en píxeles mediante `fixed.child_position(&item)`.
+  * Si la distancia euclidiana entre la posición actual y el destino supera 0.5 px, el elemento se añade al lote de animación.
+  * En cada tick de refresco vertical (60Hz / 120Hz), el sistema calcula `cx = start.0 + (target.0 - start.0) * eased` y `cy = start.1 + (target.1 - start.1) * eased`, actualizando la posición suavemente con `fixed.move_(widget, cx, cy)`.
+  * Los widgets existentes nunca se destruyen ni recrean: conservan intactos sus estados de selección, controladores de clic, drag-and-drop y estilos CSS.
+* **Control de Generación de Animación (`DESKTOP_LAYOUT_ANIM_GEN`):**
+  * Se introdujo un contador de generación thread-local para cancelar automáticamente cualquier animación previa si el usuario activa otra ordenación mientras una animación previa está en curso. La nueva transición arranca fluidamente desde la posición intermedia exacta donde se encontraban los iconos, eliminando cualquier discontinuidad visual.
+* **Integración Global en el Menú Contextual del Escritorio:**
+  * **"Organizar escritorio"**: ejecuta `animate_desktop_organization` con duración de 320 ms.
+  * **"Organizar por ▸"** (Nombre, Tipo / Clase, Fecha de modificación): ejecuta `animate_desktop_organization` con el criterio seleccionado.
+  * **"Alinear a la cuadrícula"**: ejecuta `animate_desktop_snap_to_grid` (280 ms), deslizando a la celda más cercana únicamente los iconos desalineados.
+  * **"Alineación automática"**: al activarse, dispara la animación suave organizando toda la cuadrícula en tiempo real.
+* **Pruebas y Verificación:**
+  * Se añadió `test_calculate_organize_targets_by_kind` verificando la prelación de directorios y ordenamiento por extensión de archivo.
+  * Todas las 15 pruebas unitarias pasan con éxito (`cargo test -p malus-de-wallpaper`).
+  * Compilación exitosa en modo release (`cargo build --release -p malus-de-wallpaper`).
+
+---
+
 ## [2026-11-08] — Animaciones Fluidas de Apertura y Transición de Subsecciones con `GtkStack` (`malus-de-wallpaper`)
 
 ### Diagnóstico de Causa Raíz
