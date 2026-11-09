@@ -4,6 +4,58 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-09] — Corrección del Salto de Pantalla al Salir de Pantalla Completa, Ocultación Indebida de Top Bar/Dock Multimonitor y Adaptación de Margen Superior de la Rejilla en Pantallas Secundarias (`malus-de-compositor`, `malus-de-wallpaper`)
+
+### Diagnóstico de Causa Raíz
+* **Salto de Ventanas / Videos al Salir de Pantalla Completa hacia el Monitor Secundario:**
+  * En configuraciones multimonitor (por ejemplo, `DP-1` como pantalla primaria y `HDMI-A-1` como pantalla secundaria), el subsistema DRM enumera los conectores físicos según el orden de escaneo del kernel/GPU (`HDMI-A-1` como conector 0 y `DP-1` como conector 1).
+  * En `malus-de-compositor`, `self.space.outputs().next()` devolvía el primer conector enumerado (`HDMI-A-1`), en lugar de respetar la pantalla marcada con `primary = true` en `DisplaysConfig` (`monitors.toml`).
+  * En `unfullscreen_request` y `unmaximize_request`, el compositor obtenía la pantalla de la ventana mediante `self.space.outputs_for_element(&window).into_iter().next()`. Al estar una ventana maximizada o en pantalla completa en el borde de `DP-1` colindando con `HDMI-A-1`, el elemento se intersectaba con ambos monitores y seleccionaba erróneamente `HDMI-A-1`.
+  * Además, `unfullscreen_request` restauraba la ventana a `saved_loc` ciegamente sin comprobar si esas coordenadas caían dentro del área visible del monitor actual (`output_geo.contains(saved_loc)`).
+  * Por último, al arrastrar y soltar ventanas entre monitores sin Aero Snap, `grabs.rs` no actualizaba `window_restore_geometries`, dejando coordenadas desfasadas asociadas al monitor inicial.
+* **Ocultación Errónea de Top Bar y Dock en la Pantalla Primaria al Reproducir Video Fullscreen en la Secundaria:**
+  * En `has_fullscreen_window_on_output(&self, output: &Output)`, el compositor comprobaba si una ventana en pantalla completa se solapaba con la geometría del monitor evaluado mediante `output_geo.overlaps(win_rect)`.
+  * Como `DP-1` y `HDMI-A-1` son pantallas adyacentes contiguas (coincidiendo exactamente en `x = 2327`), cualquier redondeo por escalado fraccional (`scale = 1.65` / `scale = 1.465`), sombra de ventana del cliente o desbordamiento limítrofe provocaba que `output_geo.overlaps(win_rect)` devolviera `true` para la pantalla primaria `DP-1` a pesar de que el vídeo residía de forma inequívoca en la pantalla secundaria `HDMI-A-1`.
+  * Como consecuencia de este falso positivo, el compositor ocultaba la Top Bar y el Dock en la pantalla primaria y bloqueaba la interactividad del puntero (`Layer::Top`) en dicha pantalla.
+* **Espaciado Superior Innecesario (Top Bar Spacing) en la Rejilla de Pantallas Secundarias:**
+  * En `malus-de-wallpaper`, la constante `DESKTOP_TOP_MARGIN = 56.0` estaba cableada en todos los cálculos de cuadrícula (`calculate_grid_position`, `snap_position_to_grid`, `clamp_icon_position`, `calculate_organize_targets`, etc.).
+  * En la pantalla primaria, 56px de margen superior es indispensable para dejar respiración bajo la Top Bar (36px de barra + 20px de margen). No obstante, las pantallas secundarias no tienen Top Bar, dejando un vacío antiestético de 56px antes de la primera fila de iconos.
+  * Por su parte, la resolución de `primary_index` en el daemon de wallpaper dependía de `monitor.connector()`, el cual bajo GTK4 Wayland puede retornar `None`, provocando un fallback a `0` (`HDMI-A-1`). Esto causaba que la pantalla secundaria fuera tratada como primaria y viceversa.
+  * En `malus-de-compositor`, `usable_zone_for_output` y `ensure_window_below_topbar` restringían incondicionalmente los primeros 36px en todos los monitores, en vez de aplicar la reserva de la Top Bar exclusivamente a la pantalla primaria.
+
+### Solución Implementada
+* **Compositor (`crates/compositor`):**
+  * **Identificación Robusta del Monitor Primario (`primary_output` & `is_primary_output`):**
+    * Se implementó `primary_output(&self) -> Option<Output>` en `state.rs`, que consulta `DisplaysConfig::load()`, identifica el monitor con `primary == true` comparando conector, modelo/descripción y coordenadas `(x, y)`, y solo recurre a `self.space.outputs().next()` como último recurso.
+    * `is_primary_output` delega de forma directa y consistente en `self.primary_output().as_ref() == Some(output)`.
+  * **Aislamiento Multimonitor Estricto de Pantalla Completa (`has_fullscreen_window_on_output`):**
+    * Se refactorizó `has_fullscreen_window_on_output` para verificar `self.origin_output_for_window(window).as_ref() == Some(output)`.
+    * Al utilizar `origin_output_for_window` (que calcula la intersección de mayor área física), se garantiza que una ventana a pantalla completa en la pantalla secundaria pertenezca única y exclusivamente a dicha pantalla secundaria, evitando cualquier interferencia o falso positivo en la pantalla primaria.
+    * La Top Bar y el Dock en la pantalla primaria permanecen plenamente visibles, reactivos e interactivos cuando se reproduce un vídeo a pantalla completa en la pantalla secundaria.
+  * **Reserva de Top Bar Exclusiva para la Pantalla Primaria:**
+    * En `usable_zone_for_output`, se evalúa `self.is_primary_output(output)`. En monitores secundarios, `top_bar_min_height` es `0` y `top_offset` coincide con `zone.loc.y`, permitiendo aprovechar el 100% de la altura vertical de la pantalla secundaria.
+    * En `ensure_window_below_topbar`, se aborta inmediatamente si el monitor no es el primario.
+  * **Preservación Estricta del Monitor en Maximizar / Desmaximizar / Pantalla Completa:**
+    * En `maximize_request` y `unmaximize_request`, se sustituyó la selección por coincidencia de bordes por `self.origin_output_for_window(&window).or_else(|| self.primary_output())`.
+    * En `unfullscreen_request`, se verifica `output_geo.contains(saved_loc)`. Si las coordenadas guardadas pertenecían a otro monitor o estaban desfasadas, la ventana se reubica de forma segura dentro del monitor donde se encontraba en pantalla completa.
+    * En `grabs.rs`, al soltar una ventana arrastrada, se actualiza inmediatamente `window_restore_geometries` con la nueva ubicación en el espacio.
+    * En `drm.rs` y `xwayland.rs`, se actualizaron los centrado de puntero y ubicación de nuevas ventanas para usar `state.primary_output()`.
+* **Fondo de Pantalla y Rejilla (`crates/wallpaper`):**
+  * **Margen Superior Secundario Estándar (`DESKTOP_SECONDARY_TOP_MARGIN = 16.0`):**
+    * Se definió `DESKTOP_SECONDARY_TOP_MARGIN = 16.0` para alinear el margen superior con los márgenes laterales (`16.0`), eliminando el hueco de 56px en pantallas sin Top Bar.
+    * Se parametrizó `top_margin: f64` en todas las funciones de la rejilla: `calculate_grid_position`, `snap_position_to_grid`, `clamp_icon_position`, `calculate_organize_targets`, `organize_desktop_icons`, `animate_desktop_organization`, `animate_desktop_snap_to_grid`, `render_single_icon` y `refresh_desktop_icons`.
+    * `create_wallpaper_window` recibe `is_primary: bool` y asigna `let top_margin = if is_primary { DESKTOP_TOP_MARGIN } else { DESKTOP_SECONDARY_TOP_MARGIN };`.
+  * **Resolución Multi-Atributo del Monitor Primario:**
+    * En `main()`, la detección del monitor primario compara conector, modelo (`model()`), descripción (`description()`) y geometría física (`geometry()`), garantizando la correcta asignación de la pantalla primaria incluso si el compositor no expone el nombre del conector a través de GDK.
+* **Pruebas y Verificación:**
+  * Todas las pruebas unitarias pasaron con éxito:
+    * 39 pruebas en `malus-de-compositor` (`cargo test -p malus-de-compositor`), incluyendo `fullscreen_on_secondary_does_not_affect_primary_fullscreen_state`.
+    * 17 pruebas en `malus-de-wallpaper` (`cargo test -p malus-de-wallpaper`), incluyendo `test_snap_position_to_grid_secondary_display`.
+    * Suite completa del workspace sin errores (`cargo test --workspace`).
+  * Compilación en modo release completada exitosamente (`cargo build --release -p malus-de-compositor -p malus-de-wallpaper`).
+
+---
+
 ## [2026-11-09] — Truncado Central (Middle Ellipsis) de Nombres en el Escritorio y Expansión al Seleccionar (`malus-de-wallpaper`)
 
 ### Diagnóstico de Causa Raíz
