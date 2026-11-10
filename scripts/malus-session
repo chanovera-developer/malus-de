@@ -93,18 +93,21 @@ if [ -f "$HOST_XDG_CONFIG_HOME/gtk-4.0/settings.ini" ] && grep -q "close,minimiz
 fi
 
 # Limpiar valores que versiones anteriores filtraron al entorno global de systemd.
+unset GTK_USE_PORTAL 2>/dev/null || true
 if command -v systemctl >/dev/null 2>&1; then
-    MANAGER_ENV="$(systemctl --user show-environment 2>/dev/null || true)"
-    if grep -Fxq "XDG_CONFIG_HOME=$HOME/.config/malus-de" <<< "$MANAGER_ENV" \
-        || grep -Fxq "GSETTINGS_BACKEND=keyfile" <<< "$MANAGER_ENV" \
-        || grep -Fxq "GTK_USE_PORTAL=1" <<< "$MANAGER_ENV"; then
-        systemctl --user unset-environment XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL \
-            || echo "⚠️ No se pudieron limpiar variables de configuración heredadas de Malus."
-    fi
+    systemctl --user unset-environment GTK_USE_PORTAL 2>/dev/null || true
 fi
 
 # Asegurar archivos de configuración aislados de GNOME (respetando elecciones previas del usuario)
-mkdir -p "$XDG_CONFIG_HOME/glib-2.0/settings" "$XDG_CONFIG_HOME/gtk-3.0" "$XDG_CONFIG_HOME/gtk-4.0"
+mkdir -p "$XDG_CONFIG_HOME/glib-2.0/settings" "$XDG_CONFIG_HOME/gtk-3.0" "$XDG_CONFIG_HOME/gtk-4.0" "$XDG_CONFIG_HOME/xdg-desktop-portal"
+
+cat << 'EOF' > "$XDG_CONFIG_HOME/xdg-desktop-portal/portals.conf"
+[preferred]
+default=gtk;gnome;
+org.freedesktop.impl.portal.Settings=gtk;gnome;
+EOF
+cp -f "$XDG_CONFIG_HOME/xdg-desktop-portal/portals.conf" "$XDG_CONFIG_HOME/xdg-desktop-portal/malus-portals.conf"
+cp -f "$XDG_CONFIG_HOME/xdg-desktop-portal/portals.conf" "$XDG_CONFIG_HOME/xdg-desktop-portal/Malus-portals.conf"
 
 # Mantener disponible el tema declarativo instalado para componentes que lo consuman.
 if [ ! -d "$XDG_CONFIG_HOME/themes/default-dark" ] \
@@ -439,8 +442,9 @@ done
 dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER QT_QPA_PLATFORM XCURSOR_THEME XCURSOR_SIZE SSH_AUTH_SOCK XDG_CONFIG_HOME GSETTINGS_BACKEND 2>/dev/null || true
 if command -v systemctl >/dev/null 2>&1; then
     systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER QT_QPA_PLATFORM XCURSOR_THEME XCURSOR_SIZE SSH_AUTH_SOCK XDG_CONFIG_HOME GSETTINGS_BACKEND || echo "⚠️ No se pudo importar el entorno de Malus a systemd --user."
+    systemctl --user unset-environment GTK_USE_PORTAL 2>/dev/null || true
     systemctl --user start malus-session.target || echo "⚠️ No se pudo iniciar malus-session.target."
-    systemctl --user start xdg-desktop-portal || echo "⚠️ No se pudo iniciar xdg-desktop-portal."
+    systemctl --user restart xdg-desktop-portal-gtk xdg-desktop-portal 2>/dev/null || true
 fi
 
 # ------------------------------------------------------------------------------
@@ -478,7 +482,9 @@ cleanup() {
     echo "🛑 Finalizando sesión de Malus DE..."
     # Limpiar las variables aisladas en systemd para que una sesión posterior de GNOME no las herede
     if command -v systemctl >/dev/null 2>&1; then
-        systemctl --user unset-environment XDG_CONFIG_HOME GSETTINGS_BACKEND 2>/dev/null || true
+        systemctl --user unset-environment XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL 2>/dev/null || true
+        dbus-update-activation-environment --systemd XDG_CONFIG_HOME="" GSETTINGS_BACKEND="" GTK_USE_PORTAL="" 2>/dev/null || true
+        systemctl --user restart xdg-desktop-portal 2>/dev/null || true
     fi
     [ -n "$POLKIT_AGENT_PID" ] && kill "$POLKIT_AGENT_PID" 2>/dev/null || true
     [ -n "$XWAYLAND_PID" ] && kill "$XWAYLAND_PID" 2>/dev/null || true

@@ -30,6 +30,9 @@ fn main() {
     init_logging("malus_de_dock");
     info!("Iniciando Malus DE Floating Dock (GTK4 / Layer Shell)...");
 
+    // Inicializar entorno aislado de Malus DE y limpiar variables residuales
+    let _ = malus_de_common::config::setup_isolated_session_environment();
+
     // Esperar de forma activa a que el compositor esté listo y aceptando conexiones
     malus_de_common::wayland::wait_for_wayland(10);
 

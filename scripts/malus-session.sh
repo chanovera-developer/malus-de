@@ -281,6 +281,8 @@ done
 dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER SSH_AUTH_SOCK XDG_CONFIG_HOME GSETTINGS_BACKEND 2>/dev/null || true
 if command -v systemctl >/dev/null 2>&1; then
     systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER SSH_AUTH_SOCK XDG_CONFIG_HOME GSETTINGS_BACKEND 2>/dev/null || true
+    systemctl --user unset-environment GTK_USE_PORTAL 2>/dev/null || true
+    systemctl --user restart xdg-desktop-portal-gtk xdg-desktop-portal 2>/dev/null || true
 fi
 
 
@@ -324,7 +326,9 @@ cleanup() {
     echo ""
     echo "🛑 Cerrando sesión de Malus DE..."
     if command -v systemctl >/dev/null 2>&1; then
-        systemctl --user unset-environment XDG_CONFIG_HOME GSETTINGS_BACKEND 2>/dev/null || true
+        systemctl --user unset-environment XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL 2>/dev/null || true
+        dbus-update-activation-environment --systemd XDG_CONFIG_HOME="" GSETTINGS_BACKEND="" GTK_USE_PORTAL="" 2>/dev/null || true
+        systemctl --user restart xdg-desktop-portal 2>/dev/null || true
     fi
     [ -n "$POLKIT_AGENT_PID" ] && kill "$POLKIT_AGENT_PID" 2>/dev/null || true
     kill "$CALC_PID" 2>/dev/null || true

@@ -241,6 +241,7 @@ pub fn setup_isolated_session_environment() -> std::io::Result<PathBuf> {
 
     std::env::set_var("XDG_CONFIG_HOME", &malus_config_dir);
     std::env::set_var("GSETTINGS_BACKEND", "keyfile");
+    std::env::remove_var("GTK_USE_PORTAL");
 
     // 1. Directorio glib-2.0/settings para el backend GSettings keyfile (preservar si ya existe)
     let keyfile_dir = malus_config_dir.join("glib-2.0").join("settings");
@@ -264,6 +265,47 @@ overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
     } else {
         let _ = ensure_keyfile_button_layout(&keyfile_path);
     }
+
+    // 1.1. Configuración de portales para Malus DE (~/.config/malus-de/xdg-desktop-portal/portals.conf)
+    // Dirigir Settings hacia xdg-desktop-portal-gtk para evitar contaminación desde el host GNOME.
+    let portal_dir = malus_config_dir.join("xdg-desktop-portal");
+    let _ = std::fs::create_dir_all(&portal_dir);
+    let portal_content = r#"[preferred]
+default=gtk;gnome;
+org.freedesktop.impl.portal.Settings=gtk;gnome;
+"#;
+    let _ = std::fs::write(portal_dir.join("portals.conf"), portal_content);
+    let _ = std::fs::write(portal_dir.join("malus-portals.conf"), portal_content);
+    let _ = std::fs::write(portal_dir.join("Malus-portals.conf"), portal_content);
+
+    // 1.2. Propagar variables de entorno aisladas a D-Bus y systemd --user para demonios y servicios
+    let _ = std::process::Command::new("dbus-update-activation-environment")
+        .args([
+            "--systemd",
+            &format!("XDG_CONFIG_HOME={}", malus_config_dir.display()),
+            "GSETTINGS_BACKEND=keyfile",
+        ])
+        .status();
+    let _ = std::process::Command::new("systemctl")
+        .args([
+            "--user",
+            "import-environment",
+            "XDG_CONFIG_HOME",
+            "GSETTINGS_BACKEND",
+        ])
+        .status();
+    let _ = std::process::Command::new("systemctl")
+        .args(["--user", "unset-environment", "GTK_USE_PORTAL"])
+        .status();
+    let _ = std::process::Command::new("systemctl")
+        .args([
+            "--user",
+            "restart",
+            "xdg-desktop-portal-gtk",
+            "xdg-desktop-portal",
+        ])
+        .status();
+
     let (cursor_theme, cursor_size) = load_cursor_config();
 
     // 2. Archivos settings.ini para GTK3 y GTK4 (preservar configuraciones existentes del usuario)
@@ -750,6 +792,7 @@ pub fn apply_isolated_environment(command: &mut std::process::Command) {
     command.env("GSETTINGS_BACKEND", "keyfile");
     command.env("XDG_CURRENT_DESKTOP", "Malus:GNOME");
     command.env("GDK_BACKEND", "wayland");
+    command.env_remove("GTK_USE_PORTAL");
     if let Ok(wayland_disp) = std::env::var("WAYLAND_DISPLAY") {
         command.env("WAYLAND_DISPLAY", wayland_disp);
     }
