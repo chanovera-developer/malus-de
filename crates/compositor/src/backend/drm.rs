@@ -60,10 +60,13 @@ use smithay::render_elements;
 render_elements! {
     pub MalusDrmElement<='a, GlesRenderer>;
     Wayland = &'a WaylandSurfaceRenderElement<GlesRenderer>,
+    WaylandSquircle = crate::window_corners::SquircleSurfaceRenderElement<'a>,
     Memory = &'a MemoryRenderBufferRenderElement<GlesRenderer>,
+    MemorySquircle = crate::window_corners::SquircleMemoryRenderElement<'a>,
     Shadow = crate::shadow::WindowShadowRenderElement,
     DockShadow = crate::shadow::DockShadowRenderElement,
     MenuShadow = crate::shadow::MenuShadowRenderElement,
+    Blur = crate::blur::BlurRenderElement,
 }
 
 fn send_presentation_feedback_surface_tree(
@@ -2191,8 +2194,8 @@ pub fn run_drm() -> Result<()> {
         smithay::input::pointer::CursorIcon,
         Option<ThemedCursor>,
     > = std::collections::HashMap::new();
-    let mut blur_pipeline: Option<crate::blur::GaussianBlur> = None;
-    let mut window_squircle_shader: Option<crate::window_corners::WindowSquircleShader> = None;
+    let mut blur_pipeline: Option<std::sync::Arc<std::sync::Mutex<crate::blur::GaussianBlur>>> = None;
+    let mut window_squircle_shader: Option<std::sync::Arc<crate::window_corners::WindowSquircleShader>> = None;
     let mut shadow_pipeline: Option<std::sync::Arc<crate::shadow::WindowShadowPipeline>> = None;
     let mut theme_transition_pipeline: Option<crate::theme_transition::ThemeTransitionPipeline> =
         None;
@@ -2940,10 +2943,25 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
 
-                // Inicializar shader de recorte squircle para ventanas si aún no existe
+                // Inicializar shaders y pipelines declarativos de renderizado si aún no existen
                 if window_squircle_shader.is_none() {
                     window_squircle_shader =
-                        crate::window_corners::WindowSquircleShader::new(&mut renderer);
+                        crate::window_corners::WindowSquircleShader::new(&mut renderer)
+                            .map(std::sync::Arc::new);
+                }
+                if shadow_pipeline.is_none() {
+                    shadow_pipeline = renderer
+                        .with_context(|gl| crate::shadow::WindowShadowPipeline::new(gl))
+                        .ok()
+                        .flatten()
+                        .map(std::sync::Arc::new);
+                }
+                if blur_pipeline.is_none() {
+                    blur_pipeline = renderer
+                        .with_context(|gl| crate::blur::GaussianBlur::new(gl))
+                        .ok()
+                        .flatten()
+                        .map(|b| std::sync::Arc::new(std::sync::Mutex::new(b)));
                 }
 
                 let spotlight_frame = if state
@@ -3018,6 +3036,20 @@ pub fn run_drm() -> Result<()> {
                     tracker_elements.push(MalusDrmElement::Wayland(elem));
                 }
                 for (popups, popup_rect) in &topbar_popups {
+                    for elem in popups {
+                        tracker_elements.push(MalusDrmElement::Wayland(elem));
+                    }
+                    if let Some(blur) = blur_pipeline.as_ref() {
+                        let menu_blur = crate::blur::BlurRenderElement::for_popup(
+                            smithay::backend::renderer::element::Id::new(),
+                            smithay::backend::renderer::utils::CommitCounter::default(),
+                            blur.clone(),
+                            *popup_rect,
+                            (32.0 * scale).round() as f32,
+                            out_surface.size,
+                        );
+                        tracker_elements.push(MalusDrmElement::Blur(menu_blur));
+                    }
                     if let Some(pipeline) = shadow_pipeline.as_ref() {
                         let menu_shadow = crate::shadow::MenuShadowRenderElement::new(
                             smithay::backend::renderer::element::Id::new(),
@@ -3028,12 +3060,24 @@ pub fn run_drm() -> Result<()> {
                             scale,
                         );
                         tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
-                    }
-                    for elem in popups {
-                        tracker_elements.push(MalusDrmElement::Wayland(elem));
                     }
                 }
                 for (popups, popup_rect) in &dock_popups {
+                    let blur_rect = super::dock_popover_blur_rect(*popup_rect, scale);
+                    for elem in popups {
+                        tracker_elements.push(MalusDrmElement::Wayland(elem));
+                    }
+                    if let Some(blur) = blur_pipeline.as_ref() {
+                        let menu_blur = crate::blur::BlurRenderElement::for_popup(
+                            smithay::backend::renderer::element::Id::new(),
+                            smithay::backend::renderer::utils::CommitCounter::default(),
+                            blur.clone(),
+                            blur_rect,
+                            (32.0 * scale).round() as f32,
+                            out_surface.size,
+                        );
+                        tracker_elements.push(MalusDrmElement::Blur(menu_blur));
+                    }
                     if let Some(pipeline) = shadow_pipeline.as_ref() {
                         let menu_shadow = crate::shadow::MenuShadowRenderElement::new(
                             smithay::backend::renderer::element::Id::new(),
@@ -3044,12 +3088,23 @@ pub fn run_drm() -> Result<()> {
                             scale,
                         );
                         tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
-                    }
-                    for elem in popups {
-                        tracker_elements.push(MalusDrmElement::Wayland(elem));
                     }
                 }
                 for (popups, popup_rect) in &wallpaper_popups {
+                    for elem in popups {
+                        tracker_elements.push(MalusDrmElement::Wayland(elem));
+                    }
+                    if let Some(blur) = blur_pipeline.as_ref() {
+                        let menu_blur = crate::blur::BlurRenderElement::for_popup(
+                            smithay::backend::renderer::element::Id::new(),
+                            smithay::backend::renderer::utils::CommitCounter::default(),
+                            blur.clone(),
+                            *popup_rect,
+                            (32.0 * scale).round() as f32,
+                            out_surface.size,
+                        );
+                        tracker_elements.push(MalusDrmElement::Blur(menu_blur));
+                    }
                     if let Some(pipeline) = shadow_pipeline.as_ref() {
                         let menu_shadow = crate::shadow::MenuShadowRenderElement::new(
                             smithay::backend::renderer::element::Id::new(),
@@ -3060,9 +3115,6 @@ pub fn run_drm() -> Result<()> {
                             scale,
                         );
                         tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
-                    }
-                    for elem in popups {
-                        tracker_elements.push(MalusDrmElement::Wayland(elem));
                     }
                 }
                 for elem in &upper_elements {
@@ -3070,48 +3122,181 @@ pub fn run_drm() -> Result<()> {
                         .iter()
                         .find(|(root_id, _)| *elem.id() == *root_id)
                         .map(|(_, rect)| *rect);
-                    if let (Some(rect), Some(pipeline)) = (dock_rect, shadow_pipeline.as_ref()) {
-                        let dock_shadow = crate::shadow::DockShadowRenderElement::new(
-                            smithay::backend::renderer::element::Id::new(),
-                            smithay::backend::renderer::utils::CommitCounter::default(),
-                            pipeline.clone(),
-                            rect,
-                            32.0 * scale as f32,
-                            scale,
+                    if let Some(rect) = dock_rect {
+                        let squircle_dock = crate::window_corners::SquircleSurfaceRenderElement::with_dock_clip(
+                            elem,
+                            window_squircle_shader.clone(),
+                            elem.geometry(smithay::utils::Scale::from(scale)).size,
+                            smithay::utils::Point::from((0, 0)),
+                            rect.size,
+                            (32.0 * scale).round() as i32,
                         );
-                        tracker_elements.push(MalusDrmElement::DockShadow(dock_shadow));
+                        tracker_elements.push(MalusDrmElement::WaylandSquircle(squircle_dock));
+
+                        if let Some(blur) = blur_pipeline.as_ref() {
+                            let dock_blur = crate::blur::BlurRenderElement::for_dock(
+                                smithay::backend::renderer::element::Id::new(),
+                                smithay::backend::renderer::utils::CommitCounter::default(),
+                                blur.clone(),
+                                rect,
+                                32.0 * scale as f32,
+                                out_surface.size,
+                            );
+                            tracker_elements.push(MalusDrmElement::Blur(dock_blur));
+                        }
+
+                        if let Some(pipeline) = shadow_pipeline.as_ref() {
+                            let dock_shadow = crate::shadow::DockShadowRenderElement::new(
+                                smithay::backend::renderer::element::Id::new(),
+                                smithay::backend::renderer::utils::CommitCounter::default(),
+                                pipeline.clone(),
+                                rect,
+                                32.0 * scale as f32,
+                                scale,
+                            );
+                            tracker_elements.push(MalusDrmElement::DockShadow(dock_shadow));
+                        }
+                    } else {
+                        tracker_elements.push(MalusDrmElement::Wayland(elem));
                     }
-                    tracker_elements.push(MalusDrmElement::Wayland(elem));
                 }
                 for (
                     root_id,
                     win_elems,
                     popups,
-                    _,
+                    popup_shadow_rects,
                     should_round,
                     is_active,
                     win_screen_rect,
-                    _,
-                    _,
-                    _,
-                    _,
+                    content_offset,
+                    content_size,
+                    is_firefox,
+                    is_translucent,
                     _,
                     _,
                     ssd_elem,
                     _,
-                    _,
+                    is_branches,
                 ) in window_render_data.iter().rev()
                 {
-                    for (popup_elems, _, _) in popups {
+                    for (popup_elems, popup_rect, popup_effects) in popups {
                         for elem in popup_elems {
                             tracker_elements.push(MalusDrmElement::Wayland(elem));
                         }
+                        if *popup_effects {
+                            if let Some(blur) = blur_pipeline.as_ref() {
+                                let menu_blur = crate::blur::BlurRenderElement::for_popup(
+                                    smithay::backend::renderer::element::Id::new(),
+                                    smithay::backend::renderer::utils::CommitCounter::default(),
+                                    blur.clone(),
+                                    *popup_rect,
+                                    (32.0 * scale).round() as f32,
+                                    out_surface.size,
+                                );
+                                tracker_elements.push(MalusDrmElement::Blur(menu_blur));
+                            }
+                        }
                     }
+                    if let Some(pipeline) = shadow_pipeline.as_ref() {
+                        for popup_rect in popup_shadow_rects {
+                            let menu_shadow = crate::shadow::MenuShadowRenderElement::new(
+                                smithay::backend::renderer::element::Id::new(),
+                                smithay::backend::renderer::utils::CommitCounter::default(),
+                                pipeline.clone(),
+                                *popup_rect,
+                                32.0 * scale as f32,
+                                scale,
+                            );
+                            tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
+                        }
+                    }
+
                     if let Some(ssd) = ssd_elem {
-                        tracker_elements.push(MalusDrmElement::Memory(ssd));
+                        if *should_round && (*is_firefox || ssd_elem.is_some()) {
+                            let tb_geo = ssd.geometry(smithay::utils::Scale::from(1.0));
+                            let sub_offset = smithay::utils::Point::from((
+                                win_screen_rect.loc.x - tb_geo.loc.x,
+                                win_screen_rect.loc.y - tb_geo.loc.y,
+                            ));
+                            let ssd_squircle = crate::window_corners::SquircleMemoryRenderElement::new(
+                                ssd,
+                                window_squircle_shader.clone(),
+                                tb_geo.size,
+                                sub_offset,
+                                win_screen_rect.size,
+                                win_phys_r.unwrap_or(0),
+                            );
+                            tracker_elements.push(MalusDrmElement::MemorySquircle(ssd_squircle));
+                        } else {
+                            tracker_elements.push(MalusDrmElement::Memory(ssd));
+                        }
                     }
+
                     for elem in win_elems {
-                        tracker_elements.push(MalusDrmElement::Wayland(elem));
+                        if *should_round {
+                            if *is_firefox || ssd_elem.is_some() {
+                                let elem_geo = elem.geometry(smithay::utils::Scale::from(scale));
+                                let sub_offset = smithay::utils::Point::from((
+                                    win_screen_rect.loc.x - elem_geo.loc.x,
+                                    win_screen_rect.loc.y - elem_geo.loc.y,
+                                ));
+                                let win_squircle = crate::window_corners::SquircleSurfaceRenderElement::new(
+                                    elem,
+                                    window_squircle_shader.clone(),
+                                    elem_geo.size,
+                                    sub_offset,
+                                    win_screen_rect.size,
+                                    win_phys_r.unwrap_or(0),
+                                );
+                                tracker_elements.push(MalusDrmElement::WaylandSquircle(win_squircle));
+                            } else if elem.id() == root_id {
+                                let elem_geo = elem.geometry(smithay::utils::Scale::from(scale));
+                                let win_squircle = crate::window_corners::SquircleSurfaceRenderElement::new(
+                                    elem,
+                                    window_squircle_shader.clone(),
+                                    elem_geo.size,
+                                    *content_offset,
+                                    *content_size,
+                                    win_phys_r.unwrap_or(0),
+                                );
+                                tracker_elements.push(MalusDrmElement::WaylandSquircle(win_squircle));
+                            } else {
+                                tracker_elements.push(MalusDrmElement::Wayland(elem));
+                            }
+                        } else {
+                            tracker_elements.push(MalusDrmElement::Wayland(elem));
+                        }
+                    }
+
+                    if *is_translucent {
+                        let blur_rect = if *is_branches {
+                            let sidebar_blur_w = ((212.0 * scale).round() as i32
+                                + win_phys_r.unwrap_or(0) as i32
+                                + 4)
+                                .min(win_screen_rect.size.w);
+                            Rectangle::new(
+                                win_screen_rect.loc,
+                                (sidebar_blur_w, win_screen_rect.size.h).into(),
+                            )
+                        } else {
+                            *win_screen_rect
+                        };
+                        let corner_radius = if *should_round {
+                            win_phys_r.unwrap_or(0) as f32
+                        } else {
+                            0.0
+                        };
+                        if let Some(blur) = blur_pipeline.as_ref() {
+                            let win_blur = crate::blur::BlurRenderElement::for_window(
+                                root_id.clone(),
+                                smithay::backend::renderer::utils::CommitCounter::default(),
+                                blur.clone(),
+                                blur_rect,
+                                corner_radius,
+                                out_surface.size,
+                            );
+                            tracker_elements.push(MalusDrmElement::Blur(win_blur));
+                        }
                     }
 
                     // Sombra proyectada como RenderElement declarativo en el tracker de daño
@@ -3217,7 +3402,7 @@ pub fn run_drm() -> Result<()> {
                 // Las sombras de ventana ya están modeladas como RenderElement declarativo y el blur está desacoplado,
                 // pero mientras las capas del Dock y menús superiores sigan en modo inmediato con glScissor manual,
                 // el scissor directo desincroniza los 3 buffers físicos de KMS (flickering en dock y popups).
-                const ENABLE_DAMAGE_TRACKING: bool = false;
+                const ENABLE_DAMAGE_TRACKING: bool = true;
 
                 let age_to_use = if out_surface.full_damage_pending {
                     0
@@ -3309,10 +3494,11 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
 
-                // Daño por animaciones activas (Genie, Snap Preview, transiciones)
+                // Daño por animaciones activas (Genie, Snap Preview, transiciones de tema)
                 if !anim_data.is_empty()
                     || !state.snap_transitions.is_empty()
                     || state.snap_preview.is_some()
+                    || state.theme_transition_started_at.is_some()
                 {
                     this_frame_extra_damage.push(Rectangle::from_size(out_surface.size));
                 }
@@ -3322,7 +3508,7 @@ pub fn run_drm() -> Result<()> {
                     this_frame_extra_damage.push(Rectangle::from_size(out_surface.size));
                 }
 
-                // Daño por solicitud explícita de captura de pantalla o transición de tema
+                // Daño por solicitud explícita de captura de pantalla o captura inicial de transición de tema
                 let screenshot_active = state
                     .pending_screenshot_requests
                     .iter()
@@ -3331,7 +3517,7 @@ pub fn run_drm() -> Result<()> {
                             .as_deref()
                             .map_or(true, |name| name == out_surface.output.name())
                     });
-                if screenshot_active || theme_capture_request.is_some() {
+                if screenshot_active || theme_capture_request.is_some() || state.theme_transition_started_at.is_some() {
                     this_frame_extra_damage.push(Rectangle::from_size(out_surface.size));
                 }
 
@@ -3528,7 +3714,8 @@ pub fn run_drm() -> Result<()> {
                             blur_pipeline = frame
                                 .with_context(|gl| crate::blur::GaussianBlur::new(gl))
                                 .ok()
-                                .flatten();
+                                .flatten()
+                                .map(|b| std::sync::Arc::new(std::sync::Mutex::new(b)));
                         }
 
                         let projection = *frame.projection();
@@ -3536,7 +3723,7 @@ pub fn run_drm() -> Result<()> {
                         // 1.1. Capturar el fondo limpio DESPUÉS de dibujar el wallpaper y ANTES de dibujar ventanas o sombras.
                         // Esto garantiza que el desenfoque Dual-Kawase nunca lea fragmentos de ventanas ni sombras,
                         // eliminando el feedback loop y el parpadeo en ventanas translúcidas.
-                        if let Some(ref mut blur) = blur_pipeline {
+                        if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
                             let _ = frame.with_context(|gl| {
                                 blur.capture_background(gl, &projection, out_surface.size);
                             });
@@ -3599,7 +3786,7 @@ pub fn run_drm() -> Result<()> {
                                                 local_preview.to_physical_precise_round(scale);
                                             let target_r = win_phys_r.unwrap_or((22.0 * scale).round() as i32) as f32;
 
-                                            if let Some(ref mut blur) = blur_pipeline {
+                                            if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
                                                 let _ = frame.with_context(|gl| {
                                                     blur.render_snap_preview(
                                                         gl,
@@ -3632,7 +3819,11 @@ pub fn run_drm() -> Result<()> {
 
                             // 2.1. SOMBRA PROYECTADA (Window Drop Shadow con Squircle SDF n=4.2)
                             // Se dibuja para ventanas no en pantalla completa inmediatamente antes de su superficie
-                            let shadow_is_damaged = window_needs_shadow_blur[idx];
+                            let raw_shadow_rect = Rectangle::new(
+                                (win_rect.loc.x - shadow_pad, win_rect.loc.y - shadow_pad).into(),
+                                (win_rect.size.w + shadow_pad * 2, win_rect.size.h + shadow_pad * 2).into(),
+                            );
+                            let shadow_is_damaged = window_needs_shadow_blur[idx] || damage.iter().any(|d| d.overlaps(raw_shadow_rect));
                             if *should_round && !is_shadow_occluded && shadow_is_damaged {
                                 if let (Some(r), Some(ref shadow)) =
                                     (win_phys_r, shadow_pipeline.as_ref())
@@ -3653,7 +3844,7 @@ pub fn run_drm() -> Result<()> {
                             let win_is_damaged = damage.iter().any(|d| d.overlaps(*win_rect));
 
                             if *is_system_monitor && !is_body_occluded && win_is_damaged {
-                                if let Some(ref mut blur) = blur_pipeline {
+                                if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
                                     let corner_radius = if *should_round {
                                         win_phys_r.unwrap_or(0) as f32
                                     } else {
@@ -3686,9 +3877,9 @@ pub fn run_drm() -> Result<()> {
                             } else {
                                 *win_rect
                             };
-                            let blur_is_damaged = window_needs_shadow_blur[idx];
+                            let blur_is_damaged = window_needs_shadow_blur[idx] || damage.iter().any(|d| d.overlaps(blur_rect));
                             if *is_translucent && !is_body_occluded && blur_is_damaged {
-                                if let Some(ref mut blur) = blur_pipeline {
+                                if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
                                     let corner_radius = if *should_round {
                                         win_phys_r.unwrap_or(0) as f32
                                     } else {
@@ -3846,7 +4037,7 @@ pub fn run_drm() -> Result<()> {
                                         local_preview.to_physical_precise_round(scale);
                                     let target_r = win_phys_r.unwrap_or((22.0 * scale).round() as i32) as f32;
 
-                                    if let Some(ref mut blur) = blur_pipeline {
+                                    if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
                                         let _ = frame.with_context(|gl| {
                                             blur.render_snap_preview(
                                                 gl,
@@ -3873,10 +4064,11 @@ pub fn run_drm() -> Result<()> {
                             blur_pipeline = frame
                                 .with_context(|gl| crate::blur::GaussianBlur::new(gl))
                                 .ok()
-                                .flatten();
+                                .flatten()
+                                .map(|b| std::sync::Arc::new(std::sync::Mutex::new(b)));
                         }
 
-                        if let Some(ref mut blur) = blur_pipeline {
+                        if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
                             let screen_size = out_surface.size;
                             let mut layer_blur_items: Vec<(Rectangle<i32, Physical>, f32, bool)> =
                                 Vec::new();
@@ -4071,7 +4263,7 @@ pub fn run_drm() -> Result<()> {
                                     continue;
                                 }
                                 if *popup_effects_enabled {
-                                    if let Some(blur) = blur_pipeline.as_mut() {
+                                    if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
                                         let _ = frame.with_context(|gl| {
                                             blur.capture_background_region(
                                                 gl,
@@ -4173,7 +4365,7 @@ pub fn run_drm() -> Result<()> {
                             if !damage.iter().any(|d| d.overlaps(*popup_rect)) {
                                 continue;
                             }
-                            if let Some(blur) = blur_pipeline.as_mut() {
+                            if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
                                 let blur_rect = super::dock_popover_blur_rect(*popup_rect, scale);
                                 let _ = frame.with_context(|gl| {
                                     blur.capture_background_region(
@@ -4218,7 +4410,7 @@ pub fn run_drm() -> Result<()> {
                             if !damage.iter().any(|d| d.overlaps(*popup_rect)) {
                                 continue;
                             }
-                            if let Some(blur) = blur_pipeline.as_mut() {
+                            if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
                                 let _ = frame.with_context(|gl| {
                                     blur.capture_background_region(
                                         gl,
@@ -4274,7 +4466,7 @@ pub fn run_drm() -> Result<()> {
                             if !damage.iter().any(|d| d.overlaps(*popup_rect)) {
                                 continue;
                             }
-                            if let Some(blur) = blur_pipeline.as_mut() {
+                            if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
                                 let _ = frame.with_context(|gl| {
                                     blur.capture_background_region(
                                         gl,
@@ -4335,7 +4527,7 @@ pub fn run_drm() -> Result<()> {
                             ref spot_elem,
                         )) = spotlight_frame
                         {
-                            if let Some(blur) = blur_pipeline.as_mut() {
+                            if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
                                 let _ = frame.with_context(|gl| {
                                     blur.render_blur_masked(
                                         gl,
@@ -4374,7 +4566,7 @@ pub fn run_drm() -> Result<()> {
                             ref ui_elem,
                         )) = screenshot_ui_frame
                         {
-                            if let Some(blur) = blur_pipeline.as_mut() {
+                            if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
                                 let _ = frame.with_context(|gl| {
                                     blur.render_blur_masked(
                                         gl,

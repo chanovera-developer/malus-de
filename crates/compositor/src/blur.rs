@@ -3,9 +3,15 @@
 //! Usa una reducción a media resolución y un filtro gaussiano separable para limitar
 //! el coste de renderizado, con soporte para recorte squircle y anclaje proyectado.
 
+use std::sync::{Arc, Mutex};
+
 use smithay::{
-    backend::renderer::gles::ffi,
-    utils::{Physical, Rectangle, Size},
+    backend::renderer::{
+        element::{Element, Id, Kind, RenderElement},
+        gles::{ffi, GlesError, GlesFrame, GlesRenderer},
+        utils::{CommitCounter, DamageSet, OpaqueRegions},
+    },
+    utils::{Buffer, Physical, Rectangle, Scale, Size},
 };
 use tracing::{error, info};
 
@@ -171,7 +177,7 @@ void main() {
 
 const BLUR_SLOT_COUNT: usize = 12;
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct BlurSlot {
     source_tex: ffi::types::GLuint,
     source_tex_size: (i32, i32),
@@ -181,6 +187,7 @@ struct BlurSlot {
     last_used: u64,
 }
 
+#[derive(Debug)]
 pub struct GaussianBlur {
     down_program: ffi::types::GLuint,
     gaussian_program: ffi::types::GLuint,
@@ -536,7 +543,7 @@ impl GaussianBlur {
         );
     }
 
-    fn render_blur_with_exponent(
+    pub fn render_blur_with_exponent(
         &mut self,
         gl: &ffi::Gles2,
         projection: &[f32; 9],
@@ -1390,4 +1397,155 @@ unsafe fn link_program(
         return None;
     }
     Some(program)
+}
+
+/// RenderElement declarativo para desenfoque de fondo Dual Kawase en Smithay.
+///
+/// Permite que `OutputDamageTracker` gestione automáticamente el ciclo de vida,
+/// las regiones dañadas y la captura progresiva de fondo antes de renderizar
+/// superficies translúcidas (ventanas con acrílico, dock y popups).
+#[derive(Debug, Clone)]
+pub struct BlurRenderElement {
+    id: Id,
+    commit: CommitCounter,
+    pipeline: Arc<Mutex<GaussianBlur>>,
+    rect: Rectangle<i32, Physical>,
+    corner_radius: f32,
+    corner_exponent: f32,
+    screen_size: Size<i32, Physical>,
+    geometry: Rectangle<i32, Physical>,
+    src: Rectangle<f64, Buffer>,
+}
+
+impl BlurRenderElement {
+    pub fn new(
+        id: impl Into<Id>,
+        commit: CommitCounter,
+        pipeline: Arc<Mutex<GaussianBlur>>,
+        rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        corner_exponent: f32,
+        screen_size: Size<i32, Physical>,
+    ) -> Self {
+        let geometry = rect;
+        let src = Rectangle::from_size((rect.size.w as f64, rect.size.h as f64).into());
+        Self {
+            id: id.into(),
+            commit,
+            pipeline,
+            rect,
+            corner_radius,
+            corner_exponent,
+            screen_size,
+            geometry,
+            src,
+        }
+    }
+
+    /// Blur acrílico con squircle (n=4.2) para ventanas translúcidas (Nautilus, Branches, etc.).
+    pub fn for_window(
+        id: impl Into<Id>,
+        commit: CommitCounter,
+        pipeline: Arc<Mutex<GaussianBlur>>,
+        rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        screen_size: Size<i32, Physical>,
+    ) -> Self {
+        Self::new(id, commit, pipeline, rect, corner_radius, 4.2, screen_size)
+    }
+
+    /// Blur para menús emergentes y popups (esquinas redondeadas estándar n=2.0).
+    pub fn for_popup(
+        id: impl Into<Id>,
+        commit: CommitCounter,
+        pipeline: Arc<Mutex<GaussianBlur>>,
+        rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        screen_size: Size<i32, Physical>,
+    ) -> Self {
+        Self::new(id, commit, pipeline, rect, corner_radius, 2.0, screen_size)
+    }
+
+    /// Blur para la barra de tareas / Dock.
+    pub fn for_dock(
+        id: impl Into<Id>,
+        commit: CommitCounter,
+        pipeline: Arc<Mutex<GaussianBlur>>,
+        rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        screen_size: Size<i32, Physical>,
+    ) -> Self {
+        Self::new(id, commit, pipeline, rect, corner_radius, 2.0, screen_size)
+    }
+}
+
+impl Element for BlurRenderElement {
+    fn id(&self) -> &Id {
+        &self.id
+    }
+
+    fn current_commit(&self) -> CommitCounter {
+        self.commit
+    }
+
+    fn src(&self) -> Rectangle<f64, Buffer> {
+        self.src
+    }
+
+    fn geometry(&self, _scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        self.geometry
+    }
+
+    fn opaque_regions(&self, _scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
+        // El blur es translúcido, por lo que nunca ocluye capas subyacentes
+        OpaqueRegions::default()
+    }
+
+    fn alpha(&self) -> f32 {
+        1.0
+    }
+
+    fn kind(&self) -> Kind {
+        Kind::Unspecified
+    }
+
+    fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
+        if commit != Some(self.current_commit()) {
+            DamageSet::from_slice(&[Rectangle::from_size(self.geometry(scale).size)])
+        } else {
+            DamageSet::default()
+        }
+    }
+}
+
+impl RenderElement<GlesRenderer> for BlurRenderElement {
+    fn draw(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        _src: Rectangle<f64, Buffer>,
+        _dst: Rectangle<i32, Physical>,
+        _damage: &[Rectangle<i32, Physical>],
+        _opaque_regions: &[Rectangle<i32, Physical>],
+    ) -> Result<(), GlesError> {
+        let projection = *frame.projection();
+        frame.with_context(|gl| {
+            if let Ok(mut blur) = self.pipeline.lock() {
+                blur.capture_background_region(
+                    gl,
+                    &projection,
+                    self.screen_size,
+                    self.rect,
+                );
+                blur.render_blur_with_exponent(
+                    gl,
+                    &projection,
+                    self.screen_size,
+                    self.rect,
+                    self.corner_radius,
+                    self.corner_exponent,
+                    true,
+                );
+            }
+        })
+    }
 }

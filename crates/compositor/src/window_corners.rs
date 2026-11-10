@@ -5,11 +5,18 @@
 //! eliminando completamente la dependencia de coordenadas de pantalla (gl_FragCoord)
 //! para garantizar cero vibración, cero desfase al mover ventanas y máxima fidelidad estética estilo macOS.
 
+use std::sync::Arc;
+
 use smithay::{
-    backend::renderer::gles::{
-        GlesFrame, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType,
+    backend::renderer::{
+        element::{
+            memory::MemoryRenderBufferRenderElement, surface::WaylandSurfaceRenderElement,
+            Element, Id, Kind, RenderElement, UnderlyingStorage,
+        },
+        gles::{GlesError, GlesFrame, GlesRenderer, GlesTexProgram, Uniform, UniformName, UniformType},
+        utils::{CommitCounter, DamageSet, OpaqueRegions},
     },
-    utils::{Physical, Point, Size},
+    utils::{Buffer, Physical, Point, Rectangle, Scale, Size},
 };
 use tracing::{error, info};
 
@@ -109,6 +116,7 @@ void main() {
 }
 "#;
 
+#[derive(Debug, Clone)]
 pub struct WindowSquircleShader {
     program: GlesTexProgram,
 }
@@ -197,5 +205,218 @@ impl WindowSquircleShader {
         ];
 
         frame.override_default_tex_program(self.program.clone(), uniforms);
+    }
+}
+
+/// RenderElement declarativo que envuelve una superficie Wayland (`WaylandSurfaceRenderElement`)
+/// y aplica el recorte Squircle (superelipse n=4.2) durante la pasada de renderizado de Smithay.
+#[derive(Debug, Clone)]
+pub struct SquircleSurfaceRenderElement<'a> {
+    element: &'a WaylandSurfaceRenderElement<GlesRenderer>,
+    shader: Option<Arc<WindowSquircleShader>>,
+    buf_size: Size<i32, Physical>,
+    offset: Point<i32, Physical>,
+    content_size: Size<i32, Physical>,
+    radius: i32,
+    dock_clip: bool,
+}
+
+impl<'a> SquircleSurfaceRenderElement<'a> {
+    pub fn new(
+        element: &'a WaylandSurfaceRenderElement<GlesRenderer>,
+        shader: Option<Arc<WindowSquircleShader>>,
+        buf_size: Size<i32, Physical>,
+        offset: Point<i32, Physical>,
+        content_size: Size<i32, Physical>,
+        radius: i32,
+    ) -> Self {
+        Self {
+            element,
+            shader,
+            buf_size,
+            offset,
+            content_size,
+            radius,
+            dock_clip: false,
+        }
+    }
+
+    pub fn with_dock_clip(
+        element: &'a WaylandSurfaceRenderElement<GlesRenderer>,
+        shader: Option<Arc<WindowSquircleShader>>,
+        buf_size: Size<i32, Physical>,
+        offset: Point<i32, Physical>,
+        content_size: Size<i32, Physical>,
+        radius: i32,
+    ) -> Self {
+        Self {
+            element,
+            shader,
+            buf_size,
+            offset,
+            content_size,
+            radius,
+            dock_clip: true,
+        }
+    }
+}
+
+impl<'a> Element for SquircleSurfaceRenderElement<'a> {
+    fn id(&self) -> &Id {
+        self.element.id()
+    }
+
+    fn current_commit(&self) -> CommitCounter {
+        self.element.current_commit()
+    }
+
+    fn src(&self) -> Rectangle<f64, Buffer> {
+        self.element.src()
+    }
+
+    fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        self.element.geometry(scale)
+    }
+
+    fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
+        if self.radius > 0 && self.shader.is_some() {
+            OpaqueRegions::default()
+        } else {
+            self.element.opaque_regions(scale)
+        }
+    }
+
+    fn alpha(&self) -> f32 {
+        self.element.alpha()
+    }
+
+    fn kind(&self) -> Kind {
+        self.element.kind()
+    }
+
+    fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
+        self.element.damage_since(scale, commit)
+    }
+}
+
+impl<'a> RenderElement<GlesRenderer> for SquircleSurfaceRenderElement<'a> {
+    fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
+        self.element.underlying_storage(renderer)
+    }
+
+    fn draw(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+    ) -> Result<(), GlesError> {
+        if let Some(shader) = &self.shader {
+            if self.dock_clip {
+                shader.apply_dock_clip_to_frame(frame, self.buf_size, self.offset, self.content_size, self.radius);
+            } else {
+                shader.apply_to_frame(frame, self.buf_size, self.offset, self.content_size, self.radius);
+            }
+            let res = self.element.draw(frame, src, dst, damage, opaque_regions);
+            frame.clear_tex_program_override();
+            res
+        } else {
+            self.element.draw(frame, src, dst, damage, opaque_regions)
+        }
+    }
+}
+
+/// RenderElement declarativo que envuelve un buffer SSD en memoria (`MemoryRenderBufferRenderElement`)
+/// y aplica el recorte Squircle (superelipse n=4.2) durante la pasada de renderizado de Smithay.
+#[derive(Debug, Clone)]
+pub struct SquircleMemoryRenderElement<'a> {
+    element: &'a MemoryRenderBufferRenderElement<GlesRenderer>,
+    shader: Option<Arc<WindowSquircleShader>>,
+    buf_size: Size<i32, Physical>,
+    offset: Point<i32, Physical>,
+    content_size: Size<i32, Physical>,
+    radius: i32,
+}
+
+impl<'a> SquircleMemoryRenderElement<'a> {
+    pub fn new(
+        element: &'a MemoryRenderBufferRenderElement<GlesRenderer>,
+        shader: Option<Arc<WindowSquircleShader>>,
+        buf_size: Size<i32, Physical>,
+        offset: Point<i32, Physical>,
+        content_size: Size<i32, Physical>,
+        radius: i32,
+    ) -> Self {
+        Self {
+            element,
+            shader,
+            buf_size,
+            offset,
+            content_size,
+            radius,
+        }
+    }
+}
+
+impl<'a> Element for SquircleMemoryRenderElement<'a> {
+    fn id(&self) -> &Id {
+        self.element.id()
+    }
+
+    fn current_commit(&self) -> CommitCounter {
+        self.element.current_commit()
+    }
+
+    fn src(&self) -> Rectangle<f64, Buffer> {
+        self.element.src()
+    }
+
+    fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        self.element.geometry(scale)
+    }
+
+    fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
+        if self.radius > 0 && self.shader.is_some() {
+            OpaqueRegions::default()
+        } else {
+            self.element.opaque_regions(scale)
+        }
+    }
+
+    fn alpha(&self) -> f32 {
+        self.element.alpha()
+    }
+
+    fn kind(&self) -> Kind {
+        self.element.kind()
+    }
+
+    fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
+        self.element.damage_since(scale, commit)
+    }
+}
+
+impl<'a> RenderElement<GlesRenderer> for SquircleMemoryRenderElement<'a> {
+    fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
+        self.element.underlying_storage(renderer)
+    }
+
+    fn draw(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        src: Rectangle<f64, Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+    ) -> Result<(), GlesError> {
+        if let Some(shader) = &self.shader {
+            shader.apply_to_frame(frame, self.buf_size, self.offset, self.content_size, self.radius);
+            let res = self.element.draw(frame, src, dst, damage, opaque_regions);
+            frame.clear_tex_program_override();
+            res
+        } else {
+            self.element.draw(frame, src, dst, damage, opaque_regions)
+        }
     }
 }
