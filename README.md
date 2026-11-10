@@ -146,7 +146,7 @@ El proyecto es un workspace de Rust. Sus componentes principales viven en `crate
   - **Conectividad y energía:** `NetworkManager`, `bluez`, `power-profiles-daemon`.
   - **Compatibilidad de clientes:** `qt5-qtwayland`, `qt6-qtwayland` y `xorg-x11-server-Xwayland`.
 
-La lista detallada de paquetes por distribución está en el [manifiesto de dependencias](./docs/PACKAGE_MANIFEST.md). Los componentes y requisitos de producto se describen en el [PRD](./PRD.md) y el avance cronológico en el [registro de desarrollo (DEVLOG)](./docs/DEVLOG.md).
+La lista detallada de paquetes por distribución está en el [manifiesto de dependencias](./docs/PACKAGE_MANIFEST.md), y la guía paso a paso para un sistema sin GNOME en la [guía de instalación standalone en Fedora Minimal](./docs/FEDORA_STANDALONE_INSTALL.md). Los componentes y requisitos de producto se describen en el [PRD](./PRD.md) y el avance cronológico en el [registro de desarrollo (DEVLOG)](./docs/DEVLOG.md).
 
 ## Compilar y Dependencias en Fedora
 
