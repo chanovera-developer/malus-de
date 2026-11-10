@@ -53,6 +53,48 @@ use crate::backend::winit::send_frames_surface_tree;
 use crate::state::{ClientState, MalusState};
 use malus_de_common::config::{DisplayModeConfig, DisplayOutputConfig, DisplaysConfig};
 use malus_de_common::ipc::IpcMessage;
+use smithay::backend::renderer::damage::OutputDamageTracker;
+use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
+use smithay::render_elements;
+
+render_elements! {
+    pub MalusDrmElement<='a, GlesRenderer>;
+    Wayland = &'a WaylandSurfaceRenderElement<GlesRenderer>,
+    Memory = &'a MemoryRenderBufferRenderElement<GlesRenderer>,
+}
+
+fn send_presentation_feedback_surface_tree(
+    surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    output: &Output,
+    time: std::time::Duration,
+    refresh: smithay::wayland::presentation::Refresh,
+    seq: u64,
+) {
+    smithay::wayland::compositor::with_surface_tree_downward(
+        surface,
+        (),
+        |_, _, &()| smithay::wayland::compositor::TraversalAction::DoChildren(()),
+        |_surf, states, &()| {
+            let callbacks = std::mem::take(
+                &mut states
+                    .cached_state
+                    .get::<smithay::wayland::presentation::PresentationFeedbackCachedState>()
+                    .current()
+                    .callbacks,
+            );
+            for callback in callbacks {
+                callback.presented(
+                    output,
+                    time,
+                    refresh,
+                    seq,
+                    smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::Kind::Vsync,
+                );
+            }
+        },
+        |_, _, &()| true,
+    );
+}
 
 struct DrmOutputSurface {
     output: Output,
@@ -60,7 +102,9 @@ struct DrmOutputSurface {
     crtc: crtc::Handle,
     modes: Vec<smithay::reexports::drm::control::Mode>,
     size: Size<i32, Physical>,
-    damage: Rectangle<i32, Physical>,
+    damage_tracker: OutputDamageTracker,
+    last_cursor_rect: Option<Rectangle<i32, Physical>>,
+    full_damage_pending: bool,
 }
 
 struct ThemedCursor {
@@ -1186,13 +1230,16 @@ pub fn run_drm() -> Result<()> {
         );
         state.space.map_output(&output, (loc_x, loc_y));
 
+        let damage_tracker = OutputDamageTracker::from_output(&output);
         surfaces.push(DrmOutputSurface {
             output,
             surface: gbm_surface,
             crtc,
             modes: conn_info.modes().to_vec(),
             size: (mode_w as i32, mode_h as i32).into(),
-            damage: Rectangle::from_size((mode_w as i32, mode_h as i32).into()),
+            damage_tracker,
+            last_cursor_rect: None,
+            full_damage_pending: true,
         });
     }
 
@@ -1274,7 +1321,7 @@ pub fn run_drm() -> Result<()> {
                     }
                     if let Ok(mut surfs) = surfaces_for_vt.lock() {
                         for s in surfs.iter_mut() {
-                            s.damage = Rectangle::from_size(s.size);
+                            s.full_damage_pending = true;
                         }
                     }
                 }
@@ -2089,7 +2136,7 @@ pub fn run_drm() -> Result<()> {
     info!("============================================================");
 
     let dark_acrylic = Color32F::new(0.094, 0.094, 0.106, 1.0);
-    let start_time = Instant::now();
+    let _start_time = Instant::now();
 
     let monitors_toml_path = std::env::var("HOME")
         .map(|h| std::path::PathBuf::from(h).join(".config/malus-de/monitors.toml"))
@@ -2221,7 +2268,8 @@ pub fn run_drm() -> Result<()> {
                                     Ok(()) => {
                                         let (width, height) = mode.size();
                                         s.size = (width as i32, height as i32).into();
-                                        s.damage = Rectangle::from_size(s.size);
+                                        s.full_damage_pending = true;
+                                        s.damage_tracker = OutputDamageTracker::from_output(&s.output);
                                         mode_update = Some(Mode {
                                             size: (width as i32, height as i32).into(),
                                             refresh: (mode.vrefresh() * 1000) as i32,
@@ -2277,7 +2325,8 @@ pub fn run_drm() -> Result<()> {
                             layer.layer_surface().send_configure();
                         }
 
-                        s.damage = Rectangle::from_size(s.size);
+                        s.full_damage_pending = true;
+                        s.damage_tracker = OutputDamageTracker::from_output(&s.output);
                         info!(
                             "   ✅ Monitor {} actualizado en vivo: pos=({}, {}), escala={:.4}x ({:.1}%)",
                             out_name,
@@ -2392,7 +2441,7 @@ pub fn run_drm() -> Result<()> {
                     .output_geometry(&out_surface.output)
                     .unwrap_or_default();
 
-                let (mut dmabuf, _age) = match out_surface.surface.next_buffer() {
+                let (mut dmabuf, age) = match out_surface.surface.next_buffer() {
                     Ok(buf) => buf,
                     Err(e) => {
                         if theme_capture_request.is_some() {
@@ -2407,8 +2456,6 @@ pub fn run_drm() -> Result<()> {
                         continue;
                     }
                 };
-
-                let damage = out_surface.damage;
 
                 // Preparar animaciones Genie activas que intersecten este monitor
                 let now = Instant::now();
@@ -2928,6 +2975,155 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
 
+                // ─── CÁLCULO DE DAMAGE TRACKING POR PANTALLA CON SMITHAY ───
+                let mut tracker_elements: Vec<MalusDrmElement> = Vec::new();
+
+                for elem in &cursor_elems {
+                    tracker_elements.push(MalusDrmElement::Wayland(elem));
+                }
+                for elem in &dnd_elems {
+                    tracker_elements.push(MalusDrmElement::Wayland(elem));
+                }
+                for (popups, _) in &topbar_popups {
+                    for elem in popups {
+                        tracker_elements.push(MalusDrmElement::Wayland(elem));
+                    }
+                }
+                for (popups, _) in &dock_popups {
+                    for elem in popups {
+                        tracker_elements.push(MalusDrmElement::Wayland(elem));
+                    }
+                }
+                for (popups, _) in &wallpaper_popups {
+                    for elem in popups {
+                        tracker_elements.push(MalusDrmElement::Wayland(elem));
+                    }
+                }
+                for elem in &upper_elements {
+                    tracker_elements.push(MalusDrmElement::Wayland(elem));
+                }
+                for (
+                    _,
+                    win_elems,
+                    popups,
+                    _,
+                    _,
+                    _,
+                    _,
+                    _,
+                    _,
+                    _,
+                    _,
+                    _,
+                    _,
+                    ssd_elem,
+                    _,
+                    _,
+                ) in window_render_data.iter().rev()
+                {
+                    for (popup_elems, _, _) in popups {
+                        for elem in popup_elems {
+                            tracker_elements.push(MalusDrmElement::Wayland(elem));
+                        }
+                    }
+                    if let Some(ssd) = ssd_elem {
+                        tracker_elements.push(MalusDrmElement::Memory(ssd));
+                    }
+                    for elem in win_elems {
+                        tracker_elements.push(MalusDrmElement::Wayland(elem));
+                    }
+                }
+                for elem in &lower_elements {
+                    tracker_elements.push(MalusDrmElement::Wayland(elem));
+                }
+
+                let age_to_use = if out_surface.full_damage_pending {
+                    0
+                } else {
+                    age as usize
+                };
+                out_surface.full_damage_pending = false;
+
+                let mut render_damage = match out_surface
+                    .damage_tracker
+                    .damage_output(age_to_use, &tracker_elements)
+                {
+                    Ok((Some(dmg), _)) => dmg.clone(),
+                    Ok((None, _)) => Vec::new(),
+                    Err(_) => vec![Rectangle::from_size(out_surface.size)],
+                };
+
+                // Daño del cursor físico (software / themed cursor)
+                let current_cursor_rect = if let Some((phys_x, phys_y)) = cursor_draw_point {
+                    let target_logical_w = cursor_size as f64;
+                    let cursor_phys_w = (target_logical_w * scale).round() as i32;
+                    let cursor_phys_h = cursor_phys_w;
+                    Some(Rectangle::new(
+                        (
+                            phys_x - (cursor_hotspot.x as f64 * scale).round() as i32,
+                            phys_y - (cursor_hotspot.y as f64 * scale).round() as i32,
+                        )
+                            .into(),
+                        (cursor_phys_w, cursor_phys_h).into(),
+                    ))
+                } else {
+                    None
+                };
+
+                if current_cursor_rect != out_surface.last_cursor_rect {
+                    if let Some(old_rect) = out_surface.last_cursor_rect {
+                        render_damage.push(old_rect);
+                    }
+                    if let Some(new_rect) = current_cursor_rect {
+                        render_damage.push(new_rect);
+                    }
+                    out_surface.last_cursor_rect = current_cursor_rect;
+                }
+
+                // Daño por animaciones activas (Genie, Snap Preview, transiciones)
+                if !anim_data.is_empty()
+                    || !state.snap_transitions.is_empty()
+                    || state.snap_preview.is_some()
+                {
+                    render_damage.push(Rectangle::from_size(out_surface.size));
+                }
+
+                // Daño por Spotlight o UI de Captura de Pantalla
+                if spotlight_frame.is_some() || screenshot_ui_frame.is_some() {
+                    render_damage.push(Rectangle::from_size(out_surface.size));
+                }
+
+                // Daño por solicitud explícita de captura de pantalla o transición de tema
+                let screenshot_active = state
+                    .pending_screenshot_requests
+                    .iter()
+                    .any(|(_, output_name)| {
+                        output_name
+                            .as_deref()
+                            .map_or(true, |name| name == out_surface.output.name())
+                    });
+                if screenshot_active || theme_capture_request.is_some() {
+                    render_damage.push(Rectangle::from_size(out_surface.size));
+                }
+
+                let screen_bounds = Rectangle::from_size(out_surface.size);
+                render_damage.retain_mut(|rect| {
+                    if let Some(clamped) = rect.intersection(screen_bounds) {
+                        *rect = clamped;
+                        !rect.is_empty()
+                    } else {
+                        false
+                    }
+                });
+                render_damage.dedup();
+
+                // Si no hay cambios en esta pantalla física, ¡evitar por completo el sobre-dibujo GPU!
+                if render_damage.is_empty() {
+                    continue;
+                }
+
+                let damage = render_damage.as_slice();
+
                 if let Ok(mut target) = renderer.bind(&mut dmabuf) {
                     let screenshot_request = state
                         .pending_screenshot_requests
@@ -3017,11 +3213,11 @@ pub fn run_drm() -> Result<()> {
                             .iter()
                             .any(|occ| occ.contains_rect(Rectangle::from_size(out_surface.size)));
 
-                        let _ = frame.clear(dark_acrylic, &[damage]);
+                        let _ = frame.clear(dark_acrylic, damage);
                         // 1. Renderizar fondo (wallpaper y capas inferiores) solo si no está 100% ocluido por una ventana pantalla completa
                         if !wallpaper_occluded && !lower_elements.is_empty() {
                             let _ =
-                                draw_render_elements(&mut frame, scale, &lower_elements, &[damage]);
+                                draw_render_elements(&mut frame, scale, &lower_elements, damage);
                         }
 
                         // Inicializar pipeline de sombras squircle si aún no existe
@@ -3132,7 +3328,12 @@ pub fn run_drm() -> Result<()> {
 
                             // 2.1. SOMBRA PROYECTADA (Window Drop Shadow con Squircle SDF n=4.2)
                             // Se dibuja para ventanas no en pantalla completa inmediatamente antes de su superficie
-                            if *should_round && !is_shadow_occluded {
+                            let raw_shadow_rect = Rectangle::new(
+                                (win_rect.loc.x - shadow_pad, win_rect.loc.y - shadow_pad).into(),
+                                (win_rect.size.w + shadow_pad * 2, win_rect.size.h + shadow_pad * 2).into(),
+                            );
+                            let shadow_is_damaged = damage.iter().any(|d| d.overlaps(raw_shadow_rect));
+                            if *should_round && !is_shadow_occluded && shadow_is_damaged {
                                 if let (Some(r), Some(ref shadow)) =
                                     (win_phys_r, shadow_pipeline.as_ref())
                                 {
@@ -3149,7 +3350,9 @@ pub fn run_drm() -> Result<()> {
                                 }
                             }
 
-                            if *is_system_monitor && !is_body_occluded {
+                            let win_is_damaged = damage.iter().any(|d| d.overlaps(*win_rect));
+
+                            if *is_system_monitor && !is_body_occluded && win_is_damaged {
                                 if let Some(ref mut blur) = blur_pipeline {
                                     let corner_radius = if *should_round {
                                         win_phys_r.unwrap_or(0) as f32
@@ -3171,24 +3374,25 @@ pub fn run_drm() -> Result<()> {
                             }
 
                             // 2.1.5. DESENFOQUE DE FONDO DUAL KAWASE (Branches, Nautilus y Ajustes del Sistema)
-                            if *is_translucent && !is_body_occluded {
+                            let blur_rect = if *is_branches {
+                                let sidebar_blur_w = ((212.0 * scale).round() as i32
+                                    + win_phys_r.unwrap_or(0) as i32
+                                    + 4)
+                                    .min(win_rect.size.w);
+                                Rectangle::new(
+                                    win_rect.loc,
+                                    (sidebar_blur_w, win_rect.size.h).into(),
+                                )
+                            } else {
+                                *win_rect
+                            };
+                            let blur_is_damaged = damage.iter().any(|d| d.overlaps(blur_rect));
+                            if *is_translucent && !is_body_occluded && blur_is_damaged {
                                 if let Some(ref mut blur) = blur_pipeline {
                                     let corner_radius = if *should_round {
                                         win_phys_r.unwrap_or(0) as f32
                                     } else {
                                         0.0
-                                    };
-                                    let blur_rect = if *is_branches {
-                                        let sidebar_blur_w = ((212.0 * scale).round() as i32
-                                            + corner_radius as i32
-                                            + 4)
-                                            .min(win_rect.size.w);
-                                        Rectangle::new(
-                                            win_rect.loc,
-                                            (sidebar_blur_w, win_rect.size.h).into(),
-                                        )
-                                    } else {
-                                        *win_rect
                                     };
                                     let screen_size = out_surface.size;
                                     let _ = frame.with_context(|gl| {
@@ -3204,7 +3408,7 @@ pub fn run_drm() -> Result<()> {
                             }
 
                             // 2.2. SUPERFICIES DE LA VENTANA (con recorte Squircle)
-                            if !is_body_occluded {
+                            if !is_body_occluded && win_is_damaged {
                                 if *should_round {
                                     if *is_firefox || ssd_elem.is_some() {
                                         // Para Firefox y ventanas con decoración SSD del servidor:
@@ -3233,7 +3437,7 @@ pub fn run_drm() -> Result<()> {
                                                     &mut frame,
                                                     scale,
                                                     std::slice::from_ref(elem),
-                                                    &[damage],
+                                                    damage,
                                                 );
 
                                                 frame.clear_tex_program_override();
@@ -3256,7 +3460,7 @@ pub fn run_drm() -> Result<()> {
                                                     &mut frame,
                                                     1.0,
                                                     std::slice::from_ref(tb_elem),
-                                                    &[damage],
+                                                    damage,
                                                 );
                                                 frame.clear_tex_program_override();
                                             }
@@ -3265,14 +3469,14 @@ pub fn run_drm() -> Result<()> {
                                                 &mut frame,
                                                 scale,
                                                 win_elems,
-                                                &[damage],
+                                                damage,
                                             );
                                             if let Some(ref tb_elem) = ssd_elem {
                                                 let _ = draw_render_elements(
                                                     &mut frame,
                                                     1.0,
                                                     std::slice::from_ref(tb_elem),
-                                                    &[damage],
+                                                    damage,
                                                 );
                                             }
                                         }
@@ -3306,7 +3510,7 @@ pub fn run_drm() -> Result<()> {
                                                 &mut frame,
                                                 scale,
                                                 std::slice::from_ref(elem),
-                                                &[damage],
+                                                damage,
                                             );
 
                                             if is_root {
@@ -3316,7 +3520,7 @@ pub fn run_drm() -> Result<()> {
                                     }
                                 } else {
                                     let _ =
-                                        draw_render_elements(&mut frame, scale, win_elems, &[damage]);
+                                        draw_render_elements(&mut frame, scale, win_elems, damage);
                                 }
                             }
                         }
@@ -3496,7 +3700,7 @@ pub fn run_drm() -> Result<()> {
                                     &mut frame,
                                     scale,
                                     std::slice::from_ref(elem),
-                                    &[damage],
+                                    damage,
                                 );
                                 frame.clear_tex_program_override();
                             }
@@ -3580,7 +3784,7 @@ pub fn run_drm() -> Result<()> {
                                         &mut frame,
                                         scale,
                                         std::slice::from_ref(elem),
-                                        &[damage],
+                                        damage,
                                     );
                                     if *popup_effects_enabled {
                                         frame.clear_tex_program_override();
@@ -3626,7 +3830,7 @@ pub fn run_drm() -> Result<()> {
                                     &mut frame,
                                     scale,
                                     std::slice::from_ref(elem),
-                                    &[damage],
+                                    damage,
                                 );
                                 if dock_rect.is_some() {
                                     frame.clear_tex_program_override();
@@ -3664,7 +3868,7 @@ pub fn run_drm() -> Result<()> {
                                     &mut frame,
                                     scale,
                                     std::slice::from_ref(elem),
-                                    &[damage],
+                                    damage,
                                 );
                                 frame.clear_tex_program_override();
                             }
@@ -3711,7 +3915,7 @@ pub fn run_drm() -> Result<()> {
                                     &mut frame,
                                     scale,
                                     std::slice::from_ref(elem),
-                                    &[damage],
+                                    damage,
                                 );
                                 frame.clear_tex_program_override();
                             }
@@ -3758,7 +3962,7 @@ pub fn run_drm() -> Result<()> {
                                     &mut frame,
                                     scale,
                                     std::slice::from_ref(elem),
-                                    &[damage],
+                                    damage,
                                 );
                                 frame.clear_tex_program_override();
                             }
@@ -3791,7 +3995,7 @@ pub fn run_drm() -> Result<()> {
                                 &mut frame,
                                 1.0,
                                 std::slice::from_ref(spot_elem),
-                                &[damage],
+                                damage,
                             );
                         }
                         if let Some(ref drag_elem) = spotlight_drag_elem {
@@ -3799,7 +4003,7 @@ pub fn run_drm() -> Result<()> {
                                 &mut frame,
                                 1.0,
                                 std::slice::from_ref(drag_elem),
-                                &[damage],
+                                damage,
                             );
                         }
 
@@ -3830,7 +4034,7 @@ pub fn run_drm() -> Result<()> {
                                 &mut frame,
                                 1.0,
                                 std::slice::from_ref(ui_elem),
-                                &[damage],
+                                damage,
                             );
                         }
 
@@ -3980,7 +4184,7 @@ pub fn run_drm() -> Result<()> {
 
                         // Dibujar el icono de Drag and Drop (dnd_icon) si hay una operación activa
                         if !dnd_elems.is_empty() {
-                            let _ = draw_render_elements(&mut frame, scale, &dnd_elems, &[damage]);
+                            let _ = draw_render_elements(&mut frame, scale, &dnd_elems, damage);
                         }
 
                         // Dibujar el puntero con el tamaño lógico configurado y el hotspot exacto
@@ -4251,7 +4455,7 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
 
-                if let Err(e) = out_surface.surface.queue_buffer(None, None, ()) {
+                if let Err(e) = out_surface.surface.queue_buffer(None, Some(render_damage.clone()), ()) {
                     warn!("Error al encolar buffer en DRM: {:?}", e);
                 }
             }
@@ -4309,7 +4513,10 @@ pub fn run_drm() -> Result<()> {
         state.snap_transitions.retain(|_, trans| !trans.is_finished(now));
 
         // Notificar fotogramas a los clientes de ventanas activas (evita despertar apps minimizadas u ocluidas a 60 Hz)
-        let now_ms = start_time.elapsed().as_millis() as u32;
+        let ts = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+        let now_ms = (ts.tv_sec as u64 * 1000 + (ts.tv_nsec as u64 / 1_000_000)) as u32;
+        let pres_time = std::time::Duration::from_nanos(ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64);
+
         for window in state.space.elements() {
             if let Some(surface) = window.wl_surface() {
                 let sid = smithay::backend::renderer::element::Id::from_wayland_resource(
@@ -4324,17 +4531,66 @@ pub fn run_drm() -> Result<()> {
                 {
                     send_frames_surface_tree(popup.wl_surface(), now_ms);
                 }
+
+                if let Some(output) = state.space.outputs_for_element(window).first() {
+                    let refresh_nanos = output
+                        .current_mode()
+                        .map(|m| 1_000_000_000_000 / m.refresh.max(1) as u64)
+                        .unwrap_or(16_666_666);
+                    let refresh = smithay::wayland::presentation::Refresh::fixed(
+                        std::time::Duration::from_nanos(refresh_nanos),
+                    );
+                    send_presentation_feedback_surface_tree(
+                        surface.as_ref(),
+                        output,
+                        pres_time,
+                        refresh,
+                        0,
+                    );
+                    for (popup, _) in
+                        smithay::desktop::PopupManager::popups_for_surface(surface.as_ref())
+                    {
+                        send_presentation_feedback_surface_tree(
+                            popup.wl_surface(),
+                            output,
+                            pres_time,
+                            refresh,
+                            0,
+                        );
+                    }
+                }
             }
         }
 
         for output in state.space.outputs() {
+            let refresh_nanos = output
+                .current_mode()
+                .map(|m| 1_000_000_000_000 / m.refresh.max(1) as u64)
+                .unwrap_or(16_666_666);
+            let refresh = smithay::wayland::presentation::Refresh::fixed(
+                std::time::Duration::from_nanos(refresh_nanos),
+            );
             let layer_map = smithay::desktop::layer_map_for_output(output);
             for layer in layer_map.layers() {
                 send_frames_surface_tree(layer.wl_surface(), now_ms);
+                send_presentation_feedback_surface_tree(
+                    layer.wl_surface(),
+                    output,
+                    pres_time,
+                    refresh,
+                    0,
+                );
                 for (popup, _) in
                     smithay::desktop::PopupManager::popups_for_surface(layer.wl_surface())
                 {
                     send_frames_surface_tree(popup.wl_surface(), now_ms);
+                    send_presentation_feedback_surface_tree(
+                        popup.wl_surface(),
+                        output,
+                        pres_time,
+                        refresh,
+                        0,
+                    );
                 }
             }
         }

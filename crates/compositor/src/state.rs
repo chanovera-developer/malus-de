@@ -7,8 +7,8 @@ use crate::cpu_priority::FocusCpuPriority;
 use malus_de_common::config::DockConfig;
 use smithay::{
     delegate_compositor, delegate_data_control, delegate_data_device, delegate_fractional_scale,
-    delegate_layer_shell, delegate_output, delegate_primary_selection, delegate_seat, delegate_shm,
-    delegate_viewporter, delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_layer_shell, delegate_output, delegate_presentation, delegate_primary_selection,
+    delegate_seat, delegate_shm, delegate_viewporter, delegate_xdg_decoration, delegate_xdg_shell,
     desktop::{
         find_popup_root_surface, get_popup_toplevel_coords, layer_map_for_output, PopupGrab,
         PopupKeyboardGrab, PopupKind, PopupManager, PopupPointerGrab, Space,
@@ -156,6 +156,7 @@ pub struct MalusState {
     pub layer_shell_state: WlrLayerShellState,
     pub fractional_scale_manager_state: FractionalScaleManagerState,
     pub viewporter_state: ViewporterState,
+    pub presentation_state: smithay::wayland::presentation::PresentationState,
     pub shm_state: ShmState,
     pub seat_state: SeatState<MalusState>,
     pub data_device_state: DataDeviceState,
@@ -811,6 +812,7 @@ impl MalusState {
         let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
         let fractional_scale_manager_state = FractionalScaleManagerState::new::<Self>(&dh);
         let viewporter_state = ViewporterState::new::<Self>(&dh);
+        let presentation_state = smithay::wayland::presentation::PresentationState::new::<Self>(&dh, 1);
         let shm_state = ShmState::new::<Self>(&dh, vec![]);
         let mut seat_state = SeatState::new();
         let seat = seat_state.new_wl_seat(&dh, "malus-seat-0");
@@ -833,6 +835,7 @@ impl MalusState {
             layer_shell_state,
             fractional_scale_manager_state,
             viewporter_state,
+            presentation_state,
             shm_state,
             seat_state,
             data_device_state,
@@ -1928,6 +1931,7 @@ delegate_primary_selection!(MalusState);
 delegate_data_control!(MalusState);
 delegate_fractional_scale!(MalusState);
 delegate_viewporter!(MalusState);
+delegate_presentation!(MalusState);
 delegate_xdg_decoration!(MalusState);
 
 impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for MalusState {

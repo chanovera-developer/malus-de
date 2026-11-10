@@ -22,5 +22,5 @@ tracing.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 png.workspace = true
-rustix = { version = "0.38", features = ["fs"] }
+rustix = { version = "0.38", features = ["fs", "time"] }
 xcursor = "0.3"
