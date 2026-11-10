@@ -19,3 +19,4 @@
 
 * **Regla estricta:** NUNCA ejecutes `git commit` sin autorización explícita previa del usuario en el turno actual.
 * **Instalación de binarios del sistema:** El binario del compositor en producción se encuentra en `/usr/local/bin/malus-de-compositor`. La copia requiere elevación de permisos fuera del sandbox (`sudo cp malus-de/target/release/malus-de-compositor /usr/local/bin/malus-de-compositor`).
+

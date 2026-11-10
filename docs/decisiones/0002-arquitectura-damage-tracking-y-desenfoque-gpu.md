@@ -23,3 +23,4 @@ Sin embargo, su activación introdujo fallos visuales críticos:
 ## Consecuencias
 * El compositor Malus DE es completamente estable, fluido a 60 Hz y fiel al diseño gráfico macOS Tahoe.
 * Todo agente de IA o desarrollador futuro debe consultar este registro antes de reintentar Damage Tracking directo sobre el framebuffer principal.
+
