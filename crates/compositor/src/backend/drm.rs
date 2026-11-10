@@ -61,6 +61,9 @@ render_elements! {
     pub MalusDrmElement<='a, GlesRenderer>;
     Wayland = &'a WaylandSurfaceRenderElement<GlesRenderer>,
     Memory = &'a MemoryRenderBufferRenderElement<GlesRenderer>,
+    Shadow = crate::shadow::WindowShadowRenderElement,
+    DockShadow = crate::shadow::DockShadowRenderElement,
+    MenuShadow = crate::shadow::MenuShadowRenderElement,
 }
 
 fn send_presentation_feedback_surface_tree(
@@ -2190,7 +2193,7 @@ pub fn run_drm() -> Result<()> {
     > = std::collections::HashMap::new();
     let mut blur_pipeline: Option<crate::blur::GaussianBlur> = None;
     let mut window_squircle_shader: Option<crate::window_corners::WindowSquircleShader> = None;
-    let mut shadow_pipeline: Option<crate::shadow::WindowShadowPipeline> = None;
+    let mut shadow_pipeline: Option<std::sync::Arc<crate::shadow::WindowShadowPipeline>> = None;
     let mut theme_transition_pipeline: Option<crate::theme_transition::ThemeTransitionPipeline> =
         None;
 
@@ -3014,32 +3017,80 @@ pub fn run_drm() -> Result<()> {
                 for elem in &dnd_elems {
                     tracker_elements.push(MalusDrmElement::Wayland(elem));
                 }
-                for (popups, _) in &topbar_popups {
+                for (popups, popup_rect) in &topbar_popups {
+                    if let Some(pipeline) = shadow_pipeline.as_ref() {
+                        let menu_shadow = crate::shadow::MenuShadowRenderElement::new(
+                            smithay::backend::renderer::element::Id::new(),
+                            smithay::backend::renderer::utils::CommitCounter::default(),
+                            pipeline.clone(),
+                            *popup_rect,
+                            32.0 * scale as f32,
+                            scale,
+                        );
+                        tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
+                    }
                     for elem in popups {
                         tracker_elements.push(MalusDrmElement::Wayland(elem));
                     }
                 }
-                for (popups, _) in &dock_popups {
+                for (popups, popup_rect) in &dock_popups {
+                    if let Some(pipeline) = shadow_pipeline.as_ref() {
+                        let menu_shadow = crate::shadow::MenuShadowRenderElement::new(
+                            smithay::backend::renderer::element::Id::new(),
+                            smithay::backend::renderer::utils::CommitCounter::default(),
+                            pipeline.clone(),
+                            *popup_rect,
+                            32.0 * scale as f32,
+                            scale,
+                        );
+                        tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
+                    }
                     for elem in popups {
                         tracker_elements.push(MalusDrmElement::Wayland(elem));
                     }
                 }
-                for (popups, _) in &wallpaper_popups {
+                for (popups, popup_rect) in &wallpaper_popups {
+                    if let Some(pipeline) = shadow_pipeline.as_ref() {
+                        let menu_shadow = crate::shadow::MenuShadowRenderElement::new(
+                            smithay::backend::renderer::element::Id::new(),
+                            smithay::backend::renderer::utils::CommitCounter::default(),
+                            pipeline.clone(),
+                            *popup_rect,
+                            32.0 * scale as f32,
+                            scale,
+                        );
+                        tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
+                    }
                     for elem in popups {
                         tracker_elements.push(MalusDrmElement::Wayland(elem));
                     }
                 }
                 for elem in &upper_elements {
+                    let dock_rect = dock_clip_roots
+                        .iter()
+                        .find(|(root_id, _)| *elem.id() == *root_id)
+                        .map(|(_, rect)| *rect);
+                    if let (Some(rect), Some(pipeline)) = (dock_rect, shadow_pipeline.as_ref()) {
+                        let dock_shadow = crate::shadow::DockShadowRenderElement::new(
+                            smithay::backend::renderer::element::Id::new(),
+                            smithay::backend::renderer::utils::CommitCounter::default(),
+                            pipeline.clone(),
+                            rect,
+                            32.0 * scale as f32,
+                            scale,
+                        );
+                        tracker_elements.push(MalusDrmElement::DockShadow(dock_shadow));
+                    }
                     tracker_elements.push(MalusDrmElement::Wayland(elem));
                 }
                 for (
-                    _,
+                    root_id,
                     win_elems,
                     popups,
                     _,
-                    _,
-                    _,
-                    _,
+                    should_round,
+                    is_active,
+                    win_screen_rect,
                     _,
                     _,
                     _,
@@ -3061,6 +3112,22 @@ pub fn run_drm() -> Result<()> {
                     }
                     for elem in win_elems {
                         tracker_elements.push(MalusDrmElement::Wayland(elem));
+                    }
+
+                    // Sombra proyectada como RenderElement declarativo en el tracker de daño
+                    if *should_round {
+                        if let (Some(r), Some(pipeline)) = (win_phys_r, shadow_pipeline.as_ref()) {
+                            let shadow_elem = crate::shadow::WindowShadowRenderElement::new(
+                                root_id.clone(),
+                                smithay::backend::renderer::utils::CommitCounter::default(),
+                                pipeline.clone(),
+                                *win_screen_rect,
+                                r as f32,
+                                *is_active,
+                                scale,
+                            );
+                            tracker_elements.push(MalusDrmElement::Shadow(shadow_elem));
+                        }
                     }
                 }
                 for elem in &lower_elements {
@@ -3146,11 +3213,10 @@ pub fn run_drm() -> Result<()> {
                     .iter()
                     .any(|occ| occ.contains_rect(screen_bounds));
 
-                // TODO: DAMAGE TRACKING TEMPORALMENTE DESHABILITADO.
-                // En un compositor de modo inmediato con desenfoque Dual-Kawase desde el framebuffer (glCopyTexSubImage2D)
-                // y sombras volumétricas SDF, el scissor por daño parcial desincroniza los 3 buffers del swapchain KMS (flickering a 20Hz)
-                // y elimina el desenfoque en ventanas estáticas cuando otra ventana commitea daño.
-                // Debe rediseñarse mediante texturas offscreen (FBO render cache) antes de reactivarse.
+                // TODO: DAMAGE TRACKING EN PROCESO DE MIGRACIÓN COMPLETA A SMITHAY RENDER_OUTPUT
+                // Las sombras de ventana ya están modeladas como RenderElement declarativo y el blur está desacoplado,
+                // pero mientras las capas del Dock y menús superiores sigan en modo inmediato con glScissor manual,
+                // el scissor directo desincroniza los 3 buffers físicos de KMS (flickering en dock y popups).
                 const ENABLE_DAMAGE_TRACKING: bool = false;
 
                 let age_to_use = if out_surface.full_damage_pending {
@@ -3453,7 +3519,8 @@ pub fn run_drm() -> Result<()> {
                             shadow_pipeline = frame
                                 .with_context(|gl| crate::shadow::WindowShadowPipeline::new(gl))
                                 .ok()
-                                .flatten();
+                                .flatten()
+                                .map(std::sync::Arc::new);
                         }
 
                         // Inicializar pipeline de desenfoque Dual Kawase si aún no existe
@@ -3465,6 +3532,15 @@ pub fn run_drm() -> Result<()> {
                         }
 
                         let projection = *frame.projection();
+
+                        // 1.1. Capturar el fondo limpio DESPUÉS de dibujar el wallpaper y ANTES de dibujar ventanas o sombras.
+                        // Esto garantiza que el desenfoque Dual-Kawase nunca lea fragmentos de ventanas ni sombras,
+                        // eliminando el feedback loop y el parpadeo en ventanas translúcidas.
+                        if let Some(ref mut blur) = blur_pipeline {
+                            let _ = frame.with_context(|gl| {
+                                blur.capture_background(gl, &projection, out_surface.size);
+                            });
+                        }
 
                         let is_pointer_grabbed = state
                             .seat
@@ -3620,7 +3696,18 @@ pub fn run_drm() -> Result<()> {
                                     };
                                     let screen_size = out_surface.size;
                                     let _ = frame.with_context(|gl| {
-                                        blur.render_blur(
+                                        // Si hay ventanas dibujadas debajo de esta ventana translúcida (idx > 0),
+                                        // actualizar la región de snapshot con el contenido de las ventanas inferiores
+                                        // para que el desenfoque refleje tanto el wallpaper como las ventanas subyacentes.
+                                        if idx > 0 {
+                                            blur.capture_background_region(
+                                                gl,
+                                                &projection,
+                                                screen_size,
+                                                blur_rect,
+                                            );
+                                        }
+                                        blur.render_captured_blur_round(
                                             gl,
                                             &projection,
                                             screen_size,

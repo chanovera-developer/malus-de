@@ -9,9 +9,15 @@
 //! - Diferenciación dinámica entre ventana activa (enfocada) e inactivas.
 //! - Cero asignación de texturas intermedias y renderizado a 60/120 FPS constante.
 
+use std::sync::Arc;
+
 use smithay::{
-    backend::renderer::gles::ffi,
-    utils::{Physical, Rectangle},
+    backend::renderer::{
+        element::{Element, Id, Kind, RenderElement},
+        gles::{ffi, GlesError, GlesFrame, GlesRenderer},
+        utils::{CommitCounter, DamageSet, OpaqueRegions},
+    },
+    utils::{Buffer, Physical, Rectangle, Scale},
 };
 use tracing::{error, info};
 
@@ -119,6 +125,7 @@ void main() {
 }
 "#;
 
+#[derive(Debug)]
 pub struct WindowShadowPipeline {
     program: ffi::types::GLuint,
     u_matrix: ffi::types::GLint,
@@ -407,4 +414,343 @@ unsafe fn compile_shader(
     }
 
     Some(shader)
+}
+
+/// RenderElement declarativo para sombras de ventana en Smithay.
+///
+/// Permite que `OutputDamageTracker` rastree los cambios de posición, tamaño,
+/// foco y commits de la ventana, calculando el daño exacto y omitiendo el
+/// redibujado de la sombra cuando la ventana está estática.
+#[derive(Debug, Clone)]
+pub struct WindowShadowRenderElement {
+    id: Id,
+    commit: CommitCounter,
+    pipeline: Arc<WindowShadowPipeline>,
+    win_rect: Rectangle<i32, Physical>,
+    corner_radius: f32,
+    is_active: bool,
+    scale: f64,
+    geometry: Rectangle<i32, Physical>,
+    src: Rectangle<f64, Buffer>,
+}
+
+impl WindowShadowRenderElement {
+    pub fn new(
+        id: impl Into<Id>,
+        commit: CommitCounter,
+        pipeline: Arc<WindowShadowPipeline>,
+        win_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        is_active: bool,
+        scale: f64,
+    ) -> Self {
+        let (blur_radius, offset_y) = if is_active {
+            (36.0 * scale as f32, 10.0 * scale as f32)
+        } else {
+            (8.0 * scale as f32, 2.0 * scale as f32)
+        };
+
+        let pad_x = (blur_radius * 2.5).round() as i32;
+        let pad_y_top = (blur_radius * 1.8).round() as i32;
+        let pad_y_bottom = (blur_radius * 2.8 + offset_y).round() as i32;
+
+        let quad_x = win_rect.loc.x - pad_x;
+        let quad_y = win_rect.loc.y - pad_y_top;
+        let quad_w = win_rect.size.w + pad_x * 2;
+        let quad_h = win_rect.size.h + pad_y_top + pad_y_bottom;
+
+        let geometry: Rectangle<i32, Physical> =
+            Rectangle::new((quad_x, quad_y).into(), (quad_w, quad_h).into());
+        let src: Rectangle<f64, Buffer> =
+            Rectangle::from_size((quad_w as f64, quad_h as f64).into());
+
+        Self {
+            id: id.into(),
+            commit,
+            pipeline,
+            win_rect,
+            corner_radius,
+            is_active,
+            scale,
+            geometry,
+            src,
+        }
+    }
+}
+
+impl Element for WindowShadowRenderElement {
+    fn id(&self) -> &Id {
+        &self.id
+    }
+
+    fn current_commit(&self) -> CommitCounter {
+        self.commit
+    }
+
+    fn src(&self) -> Rectangle<f64, Buffer> {
+        self.src
+    }
+
+    fn geometry(&self, _scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        self.geometry
+    }
+
+    fn opaque_regions(&self, _scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
+        // La sombra proyectada es translúcida en su totalidad
+        OpaqueRegions::default()
+    }
+
+    fn alpha(&self) -> f32 {
+        1.0
+    }
+
+    fn kind(&self) -> Kind {
+        Kind::Unspecified
+    }
+
+    fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
+        if commit != Some(self.current_commit()) {
+            DamageSet::from_slice(&[Rectangle::from_size(self.geometry(scale).size)])
+        } else {
+            DamageSet::default()
+        }
+    }
+}
+
+impl RenderElement<GlesRenderer> for WindowShadowRenderElement {
+    fn draw(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        _src: Rectangle<f64, Buffer>,
+        _dst: Rectangle<i32, Physical>,
+        _damage: &[Rectangle<i32, Physical>],
+        _opaque_regions: &[Rectangle<i32, Physical>],
+    ) -> Result<(), GlesError> {
+        let projection = *frame.projection();
+        frame.with_context(|gl| {
+            self.pipeline.render_shadow(
+                gl,
+                &projection,
+                self.win_rect,
+                self.corner_radius,
+                self.is_active,
+                self.scale,
+            );
+        })
+    }
+}
+
+/// RenderElement declarativo para la sombra proyectada del Dock.
+#[derive(Debug, Clone)]
+pub struct DockShadowRenderElement {
+    id: Id,
+    commit: CommitCounter,
+    pipeline: Arc<WindowShadowPipeline>,
+    dock_rect: Rectangle<i32, Physical>,
+    corner_radius: f32,
+    scale: f64,
+    geometry: Rectangle<i32, Physical>,
+    src: Rectangle<f64, Buffer>,
+}
+
+impl DockShadowRenderElement {
+    pub fn new(
+        id: impl Into<Id>,
+        commit: CommitCounter,
+        pipeline: Arc<WindowShadowPipeline>,
+        dock_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        scale: f64,
+    ) -> Self {
+        let dock_shadow_pad = (80.0 * scale).round() as i32;
+        let quad_x = dock_rect.loc.x - dock_shadow_pad;
+        let quad_y = dock_rect.loc.y - dock_shadow_pad;
+        let quad_w = dock_rect.size.w + dock_shadow_pad * 2;
+        let quad_h = dock_rect.size.h + dock_shadow_pad * 2;
+
+        let geometry: Rectangle<i32, Physical> =
+            Rectangle::new((quad_x, quad_y).into(), (quad_w, quad_h).into());
+        let src: Rectangle<f64, Buffer> =
+            Rectangle::from_size((quad_w as f64, quad_h as f64).into());
+
+        Self {
+            id: id.into(),
+            commit,
+            pipeline,
+            dock_rect,
+            corner_radius,
+            scale,
+            geometry,
+            src,
+        }
+    }
+}
+
+impl Element for DockShadowRenderElement {
+    fn id(&self) -> &Id {
+        &self.id
+    }
+
+    fn current_commit(&self) -> CommitCounter {
+        self.commit
+    }
+
+    fn src(&self) -> Rectangle<f64, Buffer> {
+        self.src
+    }
+
+    fn geometry(&self, _scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        self.geometry
+    }
+
+    fn opaque_regions(&self, _scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
+        OpaqueRegions::default()
+    }
+
+    fn alpha(&self) -> f32 {
+        1.0
+    }
+
+    fn kind(&self) -> Kind {
+        Kind::Unspecified
+    }
+
+    fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
+        if commit != Some(self.current_commit()) {
+            DamageSet::from_slice(&[Rectangle::from_size(self.geometry(scale).size)])
+        } else {
+            DamageSet::default()
+        }
+    }
+}
+
+impl RenderElement<GlesRenderer> for DockShadowRenderElement {
+    fn draw(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        _src: Rectangle<f64, Buffer>,
+        _dst: Rectangle<i32, Physical>,
+        _damage: &[Rectangle<i32, Physical>],
+        _opaque_regions: &[Rectangle<i32, Physical>],
+    ) -> Result<(), GlesError> {
+        let projection = *frame.projection();
+        frame.with_context(|gl| {
+            self.pipeline.render_dock_shadow(
+                gl,
+                &projection,
+                self.dock_rect,
+                self.corner_radius,
+                self.scale,
+            );
+        })
+    }
+}
+
+/// RenderElement declarativo para sombras de menús contextuales y popups.
+#[derive(Debug, Clone)]
+pub struct MenuShadowRenderElement {
+    id: Id,
+    commit: CommitCounter,
+    pipeline: Arc<WindowShadowPipeline>,
+    menu_rect: Rectangle<i32, Physical>,
+    corner_radius: f32,
+    scale: f64,
+    geometry: Rectangle<i32, Physical>,
+    src: Rectangle<f64, Buffer>,
+}
+
+impl MenuShadowRenderElement {
+    pub fn new(
+        id: impl Into<Id>,
+        commit: CommitCounter,
+        pipeline: Arc<WindowShadowPipeline>,
+        menu_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        scale: f64,
+    ) -> Self {
+        let blur_radius = 28.0 * scale as f32;
+        let pad_x = (blur_radius * 2.5).round() as i32;
+        let pad_y = (blur_radius * 2.5).round() as i32;
+
+        let quad_x = menu_rect.loc.x - pad_x;
+        let quad_y = menu_rect.loc.y - pad_y;
+        let quad_w = menu_rect.size.w + pad_x * 2;
+        let quad_h = menu_rect.size.h + pad_y * 2;
+
+        let geometry: Rectangle<i32, Physical> =
+            Rectangle::new((quad_x, quad_y).into(), (quad_w, quad_h).into());
+        let src: Rectangle<f64, Buffer> =
+            Rectangle::from_size((quad_w as f64, quad_h as f64).into());
+
+        Self {
+            id: id.into(),
+            commit,
+            pipeline,
+            menu_rect,
+            corner_radius,
+            scale,
+            geometry,
+            src,
+        }
+    }
+}
+
+impl Element for MenuShadowRenderElement {
+    fn id(&self) -> &Id {
+        &self.id
+    }
+
+    fn current_commit(&self) -> CommitCounter {
+        self.commit
+    }
+
+    fn src(&self) -> Rectangle<f64, Buffer> {
+        self.src
+    }
+
+    fn geometry(&self, _scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        self.geometry
+    }
+
+    fn opaque_regions(&self, _scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
+        OpaqueRegions::default()
+    }
+
+    fn alpha(&self) -> f32 {
+        1.0
+    }
+
+    fn kind(&self) -> Kind {
+        Kind::Unspecified
+    }
+
+    fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
+        if commit != Some(self.current_commit()) {
+            DamageSet::from_slice(&[Rectangle::from_size(self.geometry(scale).size)])
+        } else {
+            DamageSet::default()
+        }
+    }
+}
+
+impl RenderElement<GlesRenderer> for MenuShadowRenderElement {
+    fn draw(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        _src: Rectangle<f64, Buffer>,
+        _dst: Rectangle<i32, Physical>,
+        _damage: &[Rectangle<i32, Physical>],
+        _opaque_regions: &[Rectangle<i32, Physical>],
+    ) -> Result<(), GlesError> {
+        let projection = *frame.projection();
+        frame.with_context(|gl| {
+            self.pipeline.render_menu_shadow(
+                gl,
+                &projection,
+                self.menu_rect,
+                self.corner_radius,
+                self.scale,
+            );
+        })
+    }
 }

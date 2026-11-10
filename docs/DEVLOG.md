@@ -6,6 +6,30 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ## [2026-11-10] — Estabilización del Compositor DRM: Incompatibilidad de Damage Tracking Directo y Hoja de Ruta FBO Cache
 
+### Fundamento Conceptual: Renderizado Completo vs. Actualización por Deltas
+* **El Problema Fundamental del Compositor:**
+  Actualmente, el compositor dibuja toda la pantalla píxel a píxel 60 veces por segundo en cada ciclo de refresco:
+  1. *Limpieza total:* Ejecuta `glClear` sobre la totalidad de la resolución (p. ej. millones de píxeles en pantallas 4K o configuraciones multimonitor).
+  2. *Wallpaper completo:* Dibuja el fondo de pantalla íntegro.
+  3. *Ventanas y sombras:* Para cada ventana (esté estática o en movimiento), calcula y rasteriza sus sombras volumétricas squircle SDF y sus superficies Wayland.
+  4. *Captura y desenfoque:* Para ventanas translúcidas (sidebar de Nautilus o Branches), la GPU toma una instantánea del fondo con `glCopyTexSubImage2D`, ejecuta 4 pasadas del shader Dual-Kawase para desenfocarlo y lo aplica encima.
+  5. *Capas superiores (Dock y Top Bar):* Aplica sus recortes squircle y sombras en cada pase.
+  6. *Presentación:* Envía el búfer finalizado a KMS para escaneo del monitor.
+  Este modelo produce una imagen impecable y sin artefactos gracias a la potencia de las GPUs modernas, pero desperdicia ciclos de procesamiento y ancho de banda de memoria cuando el escritorio está prácticamente estático.
+
+* **Por Qué "Actualizar Solo los Píxeles que Cambian" (Damage Tracking) Falló en este Compositor:**
+  En compositores convencionales sin efectos de desenfoque ni shaders volumétricos (como Openbox o Weston básico), el daño parcial es trivial: si el ratón se desplaza $5\text{ px}$, se recorta un rectángulo con tijera OpenGL (`glScissor`) de $32 \times 32$ píxeles y se actualiza únicamente ese parche. Sin embargo, en Malus DE esta aproximación directa colisionó con dos barreras arquitectónicas:
+
+  1. **El Desenfoque Dual-Kawase Requiere Leer el Fondo Limpio:**
+     El desenfoque acrílico no es un color plano, sino una transformación matemática sobre los píxeles que residen detrás.
+     * Si el compositor solo actualiza una franja dañada (p. ej., un video de YouTube en Brave en la mitad derecha), la tijera de OpenGL no toca la mitad izquierda donde está Nautilus.
+     * Si el pipeline intentaba redibujar el desenfoque en cada fotograma, `glCopyTexSubImage2D` leía del framebuffer píxeles que *ya habían sido desenfocados en el fotograma anterior*, re-desenfocándolos sucesivamente en un bucle acumulativo (feedback loop) que volvía opaca y oscura la barra lateral.
+     * Si, para evitar el feedback loop, se restringía el redibujado del blur únicamente a cuando la ventana se movía (`geom_changed`), en el instante en que otra ventana adyacente enviaba daño, el limpiado parcial borraba el área circundante y la ventana estática perdía su desenfoque y su sombra (volviendo la barra lateral 100% transparente y mostrando el contenido trasero sin filtro).
+
+  2. **La Cadena de 3 Búferes Físicos de la GPU (Triple Buffering en DRM KMS):**
+     La tarjeta gráfica no dibuja sobre la pantalla visible, sino que alterna cíclicamente entre 3 ranuras de búferes (`Buffer 0` en pantalla, `Buffer 1` encolado, `Buffer 2` en renderizado).
+     Al enviar parches parciales en instantes temporales distintos, cada uno de los 3 búferes recibía fragmentos desacoplados. Al rotar entre ellos a 60 Hz, el monitor mostraba imágenes discordantes alternándose a ~20 Hz, produciendo el parpadeo constante (*flickering*) apreciable en grabaciones externas.
+
 ### Diagnóstico de Causa Raíz
 * **Parpadeos a 20 Hz (Flickering en Swapchain DRM):**
   * Al intentar activar `OutputDamageTracker` con tijera de renderizado parcial (`glScissor`) en `crates/compositor/src/backend/drm.rs`, el buffer swapchain KMS/GBM de 3 ranuras (`Buffer 0`, `Buffer 1`, `Buffer 2`) se desincronizaba.
