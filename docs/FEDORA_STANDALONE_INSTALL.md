@@ -167,3 +167,4 @@ Si necesitas revisar la salida o depurar el inicio de sesión:
 * Registro general de sesión: `~/.local/share/malus-de/session.log`
 * Estado de los servicios de usuario: `systemctl --user status malus-session.target`
 * Monitoreo de socket Wayland: `echo $WAYLAND_DISPLAY` (debe reportar `wayland-0` o `wayland-1`).
+
