@@ -4,6 +4,26 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-10] — Estabilización del Compositor DRM: Incompatibilidad de Damage Tracking Directo y Hoja de Ruta FBO Cache
+
+### Diagnóstico de Causa Raíz
+* **Parpadeos a 20 Hz (Flickering en Swapchain DRM):**
+  * Al intentar activar `OutputDamageTracker` con tijera de renderizado parcial (`glScissor`) en `crates/compositor/src/backend/drm.rs`, el buffer swapchain KMS/GBM de 3 ranuras (`Buffer 0`, `Buffer 1`, `Buffer 2`) se desincronizaba.
+  * Debido a que el daño personalizado del compositor (sombras volumétricas y desenfoque Dual-Kawase) solo se aplicaba al buffer en curso en el frame de cambio, los otros dos buffers recibían estados obsoletos, alternando imágenes a 60 Hz que el ojo y la cámara registraban como parpadeo continuo a ~20 Hz.
+* **Pérdida de Desenfoque Dual-Kawase y Sombras al Estabilizar Ventanas:**
+  * El desenfoque acrílico (`GaussianBlur::render_blur`) realiza `glCopyTexSubImage2D` sobre el framebuffer. Si se recalcula cada frame, se produce un bucle de retroalimentación que ensucia el fondo.
+  * Al intentar restringir el cálculo a cambios de geometría (`geom_changed`), cualquier actualización adyacente (como reproducción de video en navegador o parpadeo del cursor) limpiaba el área con `frame.clear(dark_acrylic, damage)`. Al estar la ventana estática, el desenfoque y las sombras no se redibujaban, dejando la barra lateral 100% transparente sin blur y las ventanas sin sombra.
+
+### Solución y Decisión Arquitectónica
+* **Desactivación de Damage Tracking Directo en Modo Inmediato:**
+  * Se fijó `ENABLE_DAMAGE_TRACKING = false` en `crates/compositor/src/backend/drm.rs`.
+  * Se restauró el redibujado completo y limpio en cada pase activo (`window_needs_shadow_blur = true`), eliminando por completo cualquier parpadeo y garantizando que las sombras squircle SDF y el desenfoque Dual-Kawase capturen siempre el fondo prístino.
+* **Documentación y Hoja de Ruta para Agentes Futuros:**
+  * Creación del Architectural Decision Record [`docs/decisiones/0002-arquitectura-damage-tracking-y-desenfoque-gpu.md`](decisiones/0002-arquitectura-damage-tracking-y-desenfoque-gpu.md).
+  * Creación del archivo de reglas [`AGENTS.md`](../AGENTS.md) para que cualquier agente de IA asistente conozca las limitaciones del modo inmediato con framebuffer capture y la hoja de ruta requerida (Offscreen FBO Render Cache o Idle Output Sleeping).
+
+---
+
 ## [2026-11-09] — Aislamiento Bidireccional Estricto Malus DE ↔ GNOME: Blindaje de Botones Semáforo y Neutralización de Fugas D-Bus/dconf/GTK
 
 ### Diagnóstico de Causa Raíz
