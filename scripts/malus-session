@@ -4,6 +4,18 @@
 # ==============================================================================
 set -euo pipefail
 
+# Si se ejecuta desde /usr/local/bin, delegar al script del repositorio si existe
+SELF_REAL="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+for pdir in "${MALUS_DE_PROJECT_DIR:-}" "$HOME/Proyectos/malus-de" "$HOME/Apps/malus-de"; do
+    if [ -n "$pdir" ] && [ -x "$pdir/scripts/malus-session" ]; then
+        DEV_SCRIPT="$(readlink -f "$pdir/scripts/malus-session" 2>/dev/null || echo "$pdir/scripts/malus-session")"
+        if [ "$SELF_REAL" != "$DEV_SCRIPT" ]; then
+            exec "$DEV_SCRIPT" "$@"
+        fi
+        break
+    fi
+done
+
 LOG_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/malus-de"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/session.log"
@@ -421,11 +433,12 @@ for agent_bin in \
     fi
 done
 
-# Propagar solo variables de ejecución necesarias para el display. La configuración
-# XDG, el backend GSettings y GTK_USE_PORTAL deben seguir siendo propios del proceso.
-dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER QT_QPA_PLATFORM XCURSOR_THEME XCURSOR_SIZE SSH_AUTH_SOCK 2>/dev/null || true
+# Propagar el entorno Wayland y la configuración aislada de Malus DE a D-Bus y systemd --user,
+# asegurando que aplicaciones lanzadas vía activación D-Bus (Nautilus, Ptyxis, etc.) o portales
+# respeten los botones semáforo a la izquierda y el backend keyfile.
+dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER QT_QPA_PLATFORM XCURSOR_THEME XCURSOR_SIZE SSH_AUTH_SOCK XDG_CONFIG_HOME GSETTINGS_BACKEND 2>/dev/null || true
 if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER QT_QPA_PLATFORM XCURSOR_THEME XCURSOR_SIZE SSH_AUTH_SOCK || echo "⚠️ No se pudo importar el entorno de Malus a systemd --user."
+    systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER QT_QPA_PLATFORM XCURSOR_THEME XCURSOR_SIZE SSH_AUTH_SOCK XDG_CONFIG_HOME GSETTINGS_BACKEND || echo "⚠️ No se pudo importar el entorno de Malus a systemd --user."
     systemctl --user start malus-session.target || echo "⚠️ No se pudo iniciar malus-session.target."
     systemctl --user start xdg-desktop-portal || echo "⚠️ No se pudo iniciar xdg-desktop-portal."
 fi
@@ -463,6 +476,10 @@ echo "============================================================"
 cleanup() {
     echo ""
     echo "🛑 Finalizando sesión de Malus DE..."
+    # Limpiar las variables aisladas en systemd para que una sesión posterior de GNOME no las herede
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl --user unset-environment XDG_CONFIG_HOME GSETTINGS_BACKEND 2>/dev/null || true
+    fi
     [ -n "$POLKIT_AGENT_PID" ] && kill "$POLKIT_AGENT_PID" 2>/dev/null || true
     [ -n "$XWAYLAND_PID" ] && kill "$XWAYLAND_PID" 2>/dev/null || true
     kill "$LINK_PID" 2>/dev/null || true

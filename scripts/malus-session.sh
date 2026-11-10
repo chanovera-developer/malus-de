@@ -277,10 +277,11 @@ for agent_bin in \
     fi
 done
 
-# Actualizar el entorno D-Bus con el display Wayland de Malus DE
-# Propagar solo variables de ejecución necesarias para el display. La configuración
-# XDG, el backend GSettings y GTK_USE_PORTAL deben seguir siendo propios del proceso.
-dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER SSH_AUTH_SOCK 2>/dev/null || true
+# Actualizar el entorno D-Bus con el display Wayland y configuración aislada de Malus DE
+dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER SSH_AUTH_SOCK XDG_CONFIG_HOME GSETTINGS_BACKEND 2>/dev/null || true
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER SSH_AUTH_SOCK XDG_CONFIG_HOME GSETTINGS_BACKEND 2>/dev/null || true
+fi
 
 
 # 2. Iniciar Demonio de Fondo de Pantalla (Layer Background)
@@ -322,6 +323,9 @@ echo "============================================================"
 cleanup() {
     echo ""
     echo "🛑 Cerrando sesión de Malus DE..."
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl --user unset-environment XDG_CONFIG_HOME GSETTINGS_BACKEND 2>/dev/null || true
+    fi
     [ -n "$POLKIT_AGENT_PID" ] && kill "$POLKIT_AGENT_PID" 2>/dev/null || true
     kill "$CALC_PID" 2>/dev/null || true
     kill "$LINK_PID" 2>/dev/null || true
