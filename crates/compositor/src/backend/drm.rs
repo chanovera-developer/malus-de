@@ -4073,7 +4073,13 @@ pub fn run_drm() -> Result<()> {
                                 if *popup_effects_enabled {
                                     if let Some(blur) = blur_pipeline.as_mut() {
                                         let _ = frame.with_context(|gl| {
-                                            blur.render_blur(
+                                            blur.capture_background_region(
+                                                gl,
+                                                &projection,
+                                                out_surface.size,
+                                                *popup_rect,
+                                            );
+                                            blur.render_captured_blur_round(
                                                 gl,
                                                 &projection,
                                                 out_surface.size,
@@ -4170,7 +4176,13 @@ pub fn run_drm() -> Result<()> {
                             if let Some(blur) = blur_pipeline.as_mut() {
                                 let blur_rect = super::dock_popover_blur_rect(*popup_rect, scale);
                                 let _ = frame.with_context(|gl| {
-                                    blur.render_blur(
+                                    blur.capture_background_region(
+                                        gl,
+                                        &projection,
+                                        out_surface.size,
+                                        blur_rect,
+                                    );
+                                    blur.render_captured_blur_round(
                                         gl,
                                         &projection,
                                         out_surface.size,
@@ -4208,7 +4220,13 @@ pub fn run_drm() -> Result<()> {
                             }
                             if let Some(blur) = blur_pipeline.as_mut() {
                                 let _ = frame.with_context(|gl| {
-                                    blur.render_blur(
+                                    blur.capture_background_region(
+                                        gl,
+                                        &projection,
+                                        out_surface.size,
+                                        *popup_rect,
+                                    );
+                                    blur.render_captured_blur_round(
                                         gl,
                                         &projection,
                                         out_surface.size,
@@ -4258,7 +4276,13 @@ pub fn run_drm() -> Result<()> {
                             }
                             if let Some(blur) = blur_pipeline.as_mut() {
                                 let _ = frame.with_context(|gl| {
-                                    blur.render_blur(
+                                    blur.capture_background_region(
+                                        gl,
+                                        &projection,
+                                        out_surface.size,
+                                        *popup_rect,
+                                    );
+                                    blur.render_captured_blur_round(
                                         gl,
                                         &projection,
                                         out_surface.size,
