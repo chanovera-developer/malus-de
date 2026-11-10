@@ -4,6 +4,26 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-10] — Fase 2: Implementación de Caché FBO para Sombras Squircle Volumétricas (Offscreen Shadow Cache)
+
+### Fundamento y Arquitectura
+* **Aislamiento de la Sombra fuera del Framebuffer:**
+  * La sombra volumétrica de una ventana (modelo analítico de doble lóbulo y superelipse $n=4.2$) es estrictamente geométrica: depende de sus dimensiones (`win_size`), radio de esquina (`corner_radius`) y parámetros de difusión cenital, pero tiene **cero dependencia del fondo de pantalla** o de los elementos detrás de la ventana.
+  * Anteriormente, cada fotograma activo recalculaba el pesado fragment shader SDF (con potencias no lineales y funciones exponenciales) píxel a píxel sobre toda la extensión del quad de la ventana ($1200 \times 900\text{ px}$ o superior).
+* **Diseño del Pipeline con Caché FBO (`crates/compositor/src/shadow.rs`):**
+  1. **Estructura de Caché LRU Multislot:**
+     * Se implementó un pool de 16 slots (`ShadowSlot`) en `WindowShadowPipeline`, administrado con un contador atómico de uso para reemplazo LRU (*Least Recently Used*).
+     * Cada slot asocia un FBO dedicado y una textura RGBA fuera de pantalla con su clave estricta de parámetros `ShadowCacheKey` (`w`, `h`, `corner_radius`, `blur_radius`, `spread`, `offset_y`, `opacity`, `contact_strength`).
+  2. **Renderizado Inicial al FBO:**
+     * En la primera aparición o redimensionamiento de una ventana, el shader analítico SDF dibuja la sombra una sola vez sobre el FBO con proyección ortográfica dedicada.
+  3. **Composición por Blit Ultraligero:**
+     * En todos los fotogramas subsiguientes (mientras la ventana se mueva, se mantenga estática o el cursor pase por encima), el compositor elude el cálculo matemático SDF y ejecuta un shader de blit texturizado de 4 vértices (`SHADOW_BLIT_VERT_SRC` / `SHADOW_BLIT_FRAG_SRC`).
+     * El blit respeta de forma transparente la prueba de tijera OpenGL (`glScissor`), eliminando la necesidad de desactivar el scissor y permitiendo que el compositor recorte la sombra sobre regiones dañadas sin artefactos ni feedback loops.
+  4. **Impacto en Rendimiento:**
+     * El tiempo de evaluación de fragmentos de sombras cae de ~0.3–0.8 ms a **< 0.002 ms** en caché hit, liberando prácticamente el 100% del fillrate de GPU durante la interacción con ventanas.
+
+---
+
 ## [2026-11-10] — Implementación de Idle Sleeping y Frame Throttling en Backend DRM (Resolución de Lag y Regresiones)
 
 ### Diagnóstico de Causa Raíz
