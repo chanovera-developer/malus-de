@@ -4,6 +4,32 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-10] — Implementación de Idle Sleeping y Frame Throttling en Backend DRM (Resolución de Lag y Regresiones)
+
+### Diagnóstico de Causa Raíz
+* **Desincronización de Búferes DRM KMS y Micro-bloqueos:**
+  * En `crates/compositor/src/backend/drm.rs`, la llamada a `out_surface.surface.next_buffer()` se ejecutaba incondicionalmente al inicio del ciclo de cada monitor. Cuando la comprobación de daño evaluaba `render_damage.is_empty()`, se ejecutaba `continue;`, descartando el búfer adquirido sin invocar `queue_buffer()`.
+  * En la arquitectura de triple-buffering DRM/KMS, descartar búferes sin encolar el *page flip* desincroniza las ranuras de KMS y provoca esperas de *timeout* de vblank en llamadas posteriores, causando micro-stutters constantes y lag de entrada percibido en el cursor.
+* **Sobrecarga de Fragment Shaders Volumétricos por Daño de Cursor:**
+  * El movimiento del ratón genera eventos de daño de $32 \times 32\text{ px}$. Como la condición de sombra evaluaba la intersección con la ventana completa, cada píxel de desplazamiento disparaba el redibujado de la sombra volumétrica squircle ($n=4.2$) y pases Dual-Kawase sin recorte tijera (`gl.Disable(SCISSOR_TEST)`), saturando el *fillrate* de la GPU a la tasa de sondeo del ratón (hasta 1000 Hz).
+* **Regresiones Visuales por Daño Parcial en Modo Inmediato:**
+  * Al intentar excluir el daño de cursor para mitigar la sobrecarga, `frame.clear(dark_acrylic, damage)` limpiaba el área bajo el ratón pero la sombra y el blur no se redibujaban en esa zona, dejando estelas y huecos transparentes. Adicionalmente, al dibujarse con *blending* `SRC_ALPHA` sobre píxeles no limpiados, la penumbra se acumulaba volviéndose negra.
+
+### Solución Implementada (Opción B: Idle Sleeping / Frame Throttling)
+1. **Verificación de Daño Previa a la Adquisición de Búferes (`next_buffer`):**
+   * Se reubicó `out_surface.surface.next_buffer()` para ejecutarse **únicamente tras confirmar que la pantalla física tiene cambios pendientes**.
+   * Si la pantalla está estática (sin commits Wayland, sin movimiento de ratón, sin cambios geométricos de ventanas y sin animaciones activas), el compositor omite la llamada a DRM (**0% de uso de GPU en reposo**). KMS mantiene de forma nativa el escaneo del búfer frontal sin interrupciones.
+2. **Garantía Estricta del Ciclo de Búferes DRM:**
+   * Al ejecutarse el renderizado, se garantiza que cada búfer adquirido mediante `next_buffer()` es enviado a KMS mediante `queue_buffer()`. Jamás se descartan búferes con `continue`.
+3. **Rastreo Global de Commits Wayland (`surface_commit_counter`):**
+   * Se incorporó `surface_commit_counter: usize` en `MalusState` (`crates/compositor/src/state.rs`), incrementado en cada llamada de `commit()`. Toda actividad de clientes (videos, terminales, navegadores o widgets de la barra superior) despierta inmediatamente el ciclo de renderizado para 3 búferes consecutivos (cubriendo el ciclo completo de triple-buffering).
+4. **Throttling Dinámico del Bucle de Eventos (`event_loop.dispatch`):**
+   * En reposo, el tiempo de espera de `event_loop.dispatch` se eleva a `8 ms` (permitiendo a `epoll` despertar en microsegundos ante cualquier interrupción de hardware o socket Wayland). Durante animaciones (Genie o transiciones de color), se reduce a `1 ms` para máxima fluidez.
+5. **Renderizado Limpio y Prístino (`ENABLE_DAMAGE_TRACKING = false`):**
+   * Durante los fotogramas activos, se realiza el redibujado completo y limpio, garantizando que las sombras volumétricas SDF ($n=4.2$) y el desenfoque Dual-Kawase acrílico capturen siempre el fondo limpio sin artefactos, estelas ni parpadeos.
+
+---
+
 ## [2026-11-10] — Estabilización del Compositor DRM: Incompatibilidad de Damage Tracking Directo y Hoja de Ruta FBO Cache
 
 ### Fundamento Conceptual: Renderizado Completo vs. Actualización por Deltas

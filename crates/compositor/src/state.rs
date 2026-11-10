@@ -198,6 +198,7 @@ pub struct MalusState {
     pub active_screen_recording: Option<crate::recording::ScreenRecordingSession>,
     pub screenshot_ui: crate::screenshot_ui::ScreenshotUiState,
     pub ssd: crate::ssd::SsdManager,
+    pub surface_commit_counter: usize,
 }
 
 pub fn guess_icon_name(app_id: &str, title: &str) -> String {
@@ -876,6 +877,7 @@ impl MalusState {
             active_screen_recording: None,
             screenshot_ui: crate::screenshot_ui::ScreenshotUiState::new(),
             ssd: crate::ssd::SsdManager::new(),
+            surface_commit_counter: 0,
         }
     }
 
@@ -2705,6 +2707,7 @@ impl CompositorHandler for MalusState {
     }
 
     fn commit(&mut self, surface: &WlSurface) {
+        self.surface_commit_counter = self.surface_commit_counter.wrapping_add(1);
         smithay::backend::renderer::utils::on_commit_buffer_handler::<Self>(surface);
         self.popups.commit(surface);
 

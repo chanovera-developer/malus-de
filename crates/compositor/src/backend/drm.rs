@@ -121,6 +121,10 @@ struct DrmOutputSurface {
     >,
     dock_redraw_buffers: usize,
     full_damage_pending: bool,
+    last_commit_counter: usize,
+    pending_damage_buffers: usize,
+    last_cursor_draw_point: Option<(i32, i32)>,
+    last_cursor_status: smithay::input::pointer::CursorImageStatus,
 }
 
 struct ThemedCursor {
@@ -1260,6 +1264,10 @@ pub fn run_drm() -> Result<()> {
             window_redraw_shadow_blur: std::collections::HashMap::new(),
             dock_redraw_buffers: 3,
             full_damage_pending: true,
+            last_commit_counter: 0,
+            pending_damage_buffers: 3,
+            last_cursor_draw_point: None,
+            last_cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
         });
     }
 
@@ -2299,6 +2307,7 @@ pub fn run_drm() -> Result<()> {
                                         s.last_window_geometries.clear();
                                         s.window_redraw_shadow_blur.clear();
                                         s.dock_redraw_buffers = 3;
+                                        s.pending_damage_buffers = 3;
                                         s.damage_tracker = OutputDamageTracker::from_output(&s.output);
                                         mode_update = Some(Mode {
                                             size: (width as i32, height as i32).into(),
@@ -2446,8 +2455,16 @@ pub fn run_drm() -> Result<()> {
             }
         }
 
-        // Despachar eventos de hardware (libinput, sesión, vblank)
-        let _ = event_loop.dispatch(Some(Duration::from_millis(1)), &mut state);
+        // Despachar eventos de hardware (libinput, sesión, vblank) con throttling dinámico
+        let dispatch_timeout = if state.active_animations.is_empty()
+            && state.theme_transition_started_at.is_none()
+            && state.pending_theme_transition_capture.is_none()
+        {
+            Duration::from_millis(8)
+        } else {
+            Duration::from_millis(1)
+        };
+        let _ = event_loop.dispatch(Some(dispatch_timeout), &mut state);
         let _ = display.flush_clients();
 
         state.process_ipc_messages();
@@ -2477,22 +2494,6 @@ pub fn run_drm() -> Result<()> {
                     .output_geometry(&out_surface.output)
                     .unwrap_or_default();
 
-                let (mut dmabuf, age) = match out_surface.surface.next_buffer() {
-                    Ok(buf) => buf,
-                    Err(e) => {
-                        if theme_capture_request.is_some() {
-                            theme_capture_succeeded = false;
-                        }
-                        // Si no hay slots libres, la GPU aún está en escaneo de buffer anterior (esperar vblank)
-                        warn!(
-                            "Buffer no disponible para {}: {:?}",
-                            out_surface.output.name(),
-                            e
-                        );
-                        continue;
-                    }
-                };
-
                 // Preparar animaciones Genie activas que intersecten este monitor
                 let now = Instant::now();
                 let mut anim_data = Vec::new();
@@ -2500,11 +2501,6 @@ pub fn run_drm() -> Result<()> {
                     if anim.waiting_for_dock_slot {
                         continue;
                     }
-                    visible_surface_ids.insert(
-                        smithay::backend::renderer::element::Id::from_wayland_resource(
-                            &anim.surface,
-                        ),
-                    );
                     let anim_bbox = anim.window_rect.merge(anim.dock_slot_rect);
                     if output_geo.overlaps(anim_bbox) {
                         let elems = render_elements_from_surface_tree::<
@@ -3387,7 +3383,92 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
 
-                // Registrar las ventanas visibles (no ocluidas completamente) en el monitor
+                // Verificación y sincronización de Idle Sleeping / Frame Throttling (Opción B)
+                let has_commits = state.surface_commit_counter != out_surface.last_commit_counter;
+                if has_commits {
+                    out_surface.pending_damage_buffers = 3;
+                }
+
+                let cursor_changed = cursor_draw_point != out_surface.last_cursor_draw_point
+                    || state.cursor_status != out_surface.last_cursor_status;
+                if cursor_changed {
+                    out_surface.pending_damage_buffers = 3;
+                }
+
+                let mut window_geoms_changed = window_render_data.len() != out_surface.last_window_geometries.len();
+                if !window_geoms_changed {
+                    for (root_id, _, _, _, _, is_active, win_rect, ..) in &window_render_data {
+                        match out_surface.last_window_geometries.get(root_id) {
+                            Some((prev_rect, prev_active)) => {
+                                if *prev_rect != *win_rect || *prev_active != *is_active {
+                                    window_geoms_changed = true;
+                                    break;
+                                }
+                            }
+                            None => {
+                                window_geoms_changed = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if window_geoms_changed {
+                    out_surface.pending_damage_buffers = 3;
+                }
+
+                let screenshot_active = state
+                    .pending_screenshot_requests
+                    .iter()
+                    .any(|(_, output_name)| {
+                        output_name
+                            .as_deref()
+                            .map_or(true, |name| name == out_surface.output.name())
+                    });
+
+                let has_active_effects = !anim_data.is_empty()
+                    || !state.snap_transitions.is_empty()
+                    || state.snap_preview.is_some()
+                    || state.theme_transition_started_at.is_some()
+                    || theme_capture_request.is_some()
+                    || screenshot_active
+                    || spotlight_frame.is_some()
+                    || screenshot_ui_frame.is_some()
+                    || !topbar_popups.is_empty()
+                    || !dock_popups.is_empty()
+                    || !wallpaper_popups.is_empty()
+                    || !state.active_popups.is_empty()
+                    || out_surface.dock_redraw_buffers > 0
+                    || out_surface.full_damage_pending;
+
+                let needs_render = has_active_effects || out_surface.pending_damage_buffers > 0;
+                if !needs_render {
+                    continue;
+                }
+
+                // 🌟 IDLE SLEEPING: Solo si hay cambios reales en esta pantalla física solicitamos un búfer a DRM
+                let (mut dmabuf, age) = match out_surface.surface.next_buffer() {
+                    Ok(buf) => buf,
+                    Err(e) => {
+                        if theme_capture_request.is_some() {
+                            theme_capture_succeeded = false;
+                        }
+                        warn!(
+                            "Buffer no disponible para {}: {:?}",
+                            out_surface.output.name(),
+                            e
+                        );
+                        continue;
+                    }
+                };
+
+                // Registrar las ventanas y animaciones visibles en el monitor una vez confirmado el render
+                for (anim, _) in &anim_data {
+                    visible_surface_ids.insert(
+                        smithay::backend::renderer::element::Id::from_wayland_resource(
+                            &anim.surface,
+                        ),
+                    );
+                }
                 for (idx, (root_id, ..)) in window_render_data.iter().enumerate() {
                     if !body_occluded[idx] {
                         visible_surface_ids.insert(root_id.clone());
@@ -3398,11 +3479,8 @@ pub fn run_drm() -> Result<()> {
                     .iter()
                     .any(|occ| occ.contains_rect(screen_bounds));
 
-                // TODO: DAMAGE TRACKING EN PROCESO DE MIGRACIÓN COMPLETA A SMITHAY RENDER_OUTPUT
-                // Las sombras de ventana ya están modeladas como RenderElement declarativo y el blur está desacoplado,
-                // pero mientras las capas del Dock y menús superiores sigan en modo inmediato con glScissor manual,
-                // el scissor directo desincroniza los 3 buffers físicos de KMS (flickering en dock y popups).
-                const ENABLE_DAMAGE_TRACKING: bool = true;
+                // Redibujado limpio sin tijera destructiva (Opción B: Idle Sleeping / Frame Throttling)
+                const ENABLE_DAMAGE_TRACKING: bool = false;
 
                 let age_to_use = if out_surface.full_damage_pending {
                     0
@@ -3508,15 +3586,6 @@ pub fn run_drm() -> Result<()> {
                     this_frame_extra_damage.push(Rectangle::from_size(out_surface.size));
                 }
 
-                // Daño por solicitud explícita de captura de pantalla o captura inicial de transición de tema
-                let screenshot_active = state
-                    .pending_screenshot_requests
-                    .iter()
-                    .any(|(_, output_name)| {
-                        output_name
-                            .as_deref()
-                            .map_or(true, |name| name == out_surface.output.name())
-                    });
                 if screenshot_active || theme_capture_request.is_some() || state.theme_transition_started_at.is_some() {
                     this_frame_extra_damage.push(Rectangle::from_size(out_surface.size));
                 }
@@ -5008,6 +5077,13 @@ pub fn run_drm() -> Result<()> {
                 if let Err(e) = out_surface.surface.queue_buffer(None, None, ()) {
                     warn!("Error al encolar buffer en DRM: {:?}", e);
                 } else if frame_rendered {
+                    out_surface.last_commit_counter = state.surface_commit_counter;
+                    out_surface.last_cursor_draw_point = cursor_draw_point;
+                    out_surface.last_cursor_status = state.cursor_status.clone();
+                    if out_surface.pending_damage_buffers > 0 {
+                        out_surface.pending_damage_buffers -= 1;
+                    }
+
                     if let Some(new_rect) = current_cursor_rect {
                         out_surface.cursor_history.push_front(new_rect);
                     } else if !out_surface.cursor_history.is_empty() {
