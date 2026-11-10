@@ -412,6 +412,50 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-10] — Migración Arquitectónica del Compositor a Scene Graph Declarativo y Damage Tracking Nativo (Smithay RenderElements)
+
+### Diagnóstico de Causa Raíz
+* **Parpadeo a ~20 Hz y Pérdida de Sombras/Acrílico con KMS Triple-Buffering:**
+  * En el backend DRM de Smithay, el hardware KMS rota continuamente entre 3 buffers físicos (`Buffer 0, 1, 2`).
+  * Anteriormente, el bucle de renderizado intentaba recortar el sobre-dibujo mediante tijeras manuales de OpenGL (`glScissor`) calculadas únicamente a partir del movimiento de las ventanas (`*prev_rect != *win_rect`).
+  * Cuando se abría un menú emergente o menú contextual (e.g., Nautilus con un área dañada de $200 \times 300\text{ px}$), la ventana subyacente no cambiaba de geometría, provocando que su sombra y su desenfoque acrílico quedaran marcados como `shadow_is_damaged = false` y `blur_is_damaged = false`.
+  * La llamada a `frame.clear(dark_acrylic, damage)` limpiaba esa región en el buffer actual, pero la sombra y el blur nunca eran redibujados, dejando parches negros o transparentes. Además, los buffers rotativos con tijeras dispares perdían sincronización, generando un parpadeo constante a ~20 Hz.
+* **Fallo de Caching FBO con `glBindFramebuffer` en el Bucle Activo:**
+  * El intento de conmutar framebuffers secundarios en caliente dentro de `GlesFrame::with_context` interfería con el estado EGL/GBM administrado por Smithay, provocando la desconfiguración del framebuffer principal.
+* **Omisión de Animación de Transición de Tema de Color:**
+  * Al activar el rastreador de daño, la animación circular expansiva de 620 ms (`ThemeTransitionPipeline`) no registraba daño en los fotogramas subsiguientes a la captura inicial, causando que `render_damage.is_empty()` saltara los frames y el efecto no se visualizara.
+
+### Solución Implementada (`crates/compositor`)
+* **Modelo Declarativo de Sombras (`crates/compositor/src/shadow.rs`):**
+  * Creación de `WindowShadowRenderElement`, `DockShadowRenderElement` y `MenuShadowRenderElement`, implementando los traits `Element` y `RenderElement<GlesRenderer>`.
+  * Generación analítica de la sombra de doble lóbulo (macOS dual-lobe SDF) en espacio de coordenadas físicas con recorte interior (*inner cutout*) para preservar la transparencia y acrílico.
+* **Modelo Declarativo de Desenfoque Acrílico (`crates/compositor/src/blur.rs`):**
+  * Creación de `BlurRenderElement` con constructores específicos:
+    * `for_window(...)`: Superelipse continua ($n=4.2$) para Nautilus, Branches y ventanas translúcidas.
+    * `for_dock(...)`: Curvatura suave ($n=2.0$) para la barra Dock.
+    * `for_popup(...)`: Radio de curvatura adaptativo para popovers, menús y centro de control.
+  * Desacoplamiento del ciclo Dual Kawase: captura progresiva de la región subyacente (`capture_background_region`) y desenfoque blit con squircle en su método `draw()`.
+* **Recorte Squircle Declarativo en Superficies (`crates/compositor/src/window_corners.rs`):**
+  * Creación de `SquircleSurfaceRenderElement` (para superficies Wayland) y `SquircleMemoryRenderElement` (para decoraciones SSD del servidor).
+  * Envoltura transparente que aplica `WindowSquircleShader` durante el `draw()` y restaura el estado con `frame.clear_tex_program_override()`.
+* **Scene Graph Unificado y Orden *Front-to-Back* (`crates/compositor/src/backend/drm.rs`):**
+  * Ensamblado estricto de todas las capas en `tracker_elements` para `OutputDamageTracker`:
+    1. Cursor y Drag & Drop
+    2. Menús emergentes (superficie $\rightarrow$ blur $\rightarrow$ sombra)
+    3. Capas superiores: Dock y Top Bar (superficies squircle $\rightarrow$ blur $\rightarrow$ sombra)
+    4. Ventanas en orden Z (decoración SSD $\rightarrow$ superficies squircle $\rightarrow$ blur acrílico $\rightarrow$ sombra proyectada)
+    5. Fondo de pantalla (Wallpaper)
+* **Propagación Robusta de Daño:**
+  * Corrección de detección de daño para sombras y blur: `damage.iter().any(|d| d.overlaps(rect))`.
+  * Integración de `state.theme_transition_started_at.is_some()` en `this_frame_extra_damage`, garantizando que la onda expansiva de cambio de tema se renderice a 60 FPS continuos sin omisiones.
+
+### Resultados de Validación
+* **Cero Parpadeo y Cero Glitches:** Ni el Dock, ni las sombras de ventana, ni los menús contextuales de Nautilus presentan recortes o desaparición al interactuar sobre el escritorio o sobre otras ventanas.
+* **Transparencia X-Ray Corregida:** Ventanas translúcidas superpuestas desenfocan correctamente las ventanas debajo de ellas y no únicamente el fondo de pantalla.
+* **Eficiencia GPU/CPU:** Con el escritorio estático, `damage_output` reporta 0 rectángulos de daño, evitando sobre-dibujo innecesario en la GPU.
+
+---
+
 ## [2026-11-08] — Restauración de Miniatura Flotante Completa (Marca de Selección y Nombre) y Acción de Mover (`MOVE`) por Defecto sin Duplicados
 
 ### Diagnóstico de Causa Raíz
