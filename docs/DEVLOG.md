@@ -4,23 +4,38 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
-## [2026-11-10] — Fase 2: Implementación de Caché FBO para Sombras Squircle Volumétricas (Offscreen Shadow Cache)
+## [2026-11-10] — Estabilización de Sombras Procedurales y Plan de Optimización de Latencia (Comparativa con GNOME)
 
-### Fundamento y Arquitectura
-* **Aislamiento de la Sombra fuera del Framebuffer:**
-  * La sombra volumétrica de una ventana (modelo analítico de doble lóbulo y superelipse $n=4.2$) es estrictamente geométrica: depende de sus dimensiones (`win_size`), radio de esquina (`corner_radius`) y parámetros de difusión cenital, pero tiene **cero dependencia del fondo de pantalla** o de los elementos detrás de la ventana.
-  * Anteriormente, cada fotograma activo recalculaba el pesado fragment shader SDF (con potencias no lineales y funciones exponenciales) píxel a píxel sobre toda la extensión del quad de la ventana ($1200 \times 900\text{ px}$ o superior).
-* **Diseño del Pipeline con Caché FBO (`crates/compositor/src/shadow.rs`):**
-  1. **Estructura de Caché LRU Multislot:**
-     * Se implementó un pool de 16 slots (`ShadowSlot`) en `WindowShadowPipeline`, administrado con un contador atómico de uso para reemplazo LRU (*Least Recently Used*).
-     * Cada slot asocia un FBO dedicado y una textura RGBA fuera de pantalla con su clave estricta de parámetros `ShadowCacheKey` (`w`, `h`, `corner_radius`, `blur_radius`, `spread`, `offset_y`, `opacity`, `contact_strength`).
-  2. **Renderizado Inicial al FBO:**
-     * En la primera aparición o redimensionamiento de una ventana, el shader analítico SDF dibuja la sombra una sola vez sobre el FBO con proyección ortográfica dedicada.
-  3. **Composición por Blit Ultraligero:**
-     * En todos los fotogramas subsiguientes (mientras la ventana se mueva, se mantenga estática o el cursor pase por encima), el compositor elude el cálculo matemático SDF y ejecuta un shader de blit texturizado de 4 vértices (`SHADOW_BLIT_VERT_SRC` / `SHADOW_BLIT_FRAG_SRC`).
-     * El blit respeta de forma transparente la prueba de tijera OpenGL (`glScissor`), eliminando la necesidad de desactivar el scissor y permitiendo que el compositor recorte la sombra sobre regiones dañadas sin artefactos ni feedback loops.
-  4. **Impacto en Rendimiento:**
-     * El tiempo de evaluación de fragmentos de sombras cae de ~0.3–0.8 ms a **< 0.002 ms** en caché hit, liberando prácticamente el 100% del fillrate de GPU durante la interacción con ventanas.
+### Diagnóstico de Regresión y Estabilización de Sombras
+* **Causa Raíz de Textos Fantasma y Parpadeo (Secuestro de FBO):**
+  * En el intento inicial de caché FBO offscreen (`crates/compositor/src/shadow.rs`), se enlazó el FBO del slot de sombra antes de consultar `FRAMEBUFFER_BINDING` previo. Como consecuencia, el compositor creía que el framebuffer principal de pantalla era el FBO de la sombra, canalizando el renderizado de ventanas, títulos y fuentes tipográficas directamente a la textura de sombra.
+  * Al proyectarse la sombra, se dibujaban duplicados fantasma de los menús y títulos (`Archivos Archivo Edición...`) bajo las ventanas.
+* **Resolución y Retorno a Pipeline Procedural Limpio:**
+  * Se revirtió `crates/compositor/src/shadow.rs` al renderizado procedural analítico directo vía `gl_VertexID` y fragment shader con superelipse $n=4.2$.
+  * Se verificó visualmente la eliminación total de textos fantasma, triángulos negros de esquina y parpadeo a 20 Hz, conservando la fidelidad visual de macOS intacta.
+
+### Análisis Técnico: Por Qué Malus Presenta Latencia Residual Respecto a GNOME (Mutter)
+A pesar de eliminar el parpadeo y reducir el lag general mediante Idle Sleeping en DRM, el entorno aún se percibía ligeramente más lento que GNOME Shell. La auditoría del loop principal en `crates/compositor/src/backend/drm.rs` identificó las tres causas precisas:
+
+1. **Retardo Artificial en el Bucle de Eventos (`dispatch_timeout = 8 ms`):**
+   * En `crates/compositor/src/backend/drm.rs` (línea 2459), cuando no hay animaciones activas (`active_animations.is_empty()`), el bucle dormía hasta `8 ms` en `event_loop.dispatch`.
+   * A 60 Hz (16.6 ms por fotograma), 8 ms representa medio cuadro de puro retardo de entrada (*input lag*); a 120 Hz (8.3 ms), equivale a un fotograma completo de desfasaje.
+   * Además, si existían búferes DRM pendientes de sincronizar (`pending_damage_buffers > 0`), el loop continuaba durmiendo 8 ms en lugar de despacharlos de inmediato (`Duration::ZERO`).
+2. **Copia de Pantalla Completa en GPU en Cada Movimiento del Ratón (`blur.capture_background`):**
+   * En la línea 3795 de `drm.rs`, cada fotograma ejecutaba `blur.capture_background(gl, ...)`, que invoca `glCopyTexSubImage2D` sobre la totalidad de la resolución (de 8.3 MB en 1080p a 33.2 MB en 4K) desde el framebuffer DRM hacia `snapshot_tex`.
+   * Esto impone un bloqueo síncrono en la GPU (*GPU pipeline stall*) de 2 a 5 ms por cuadro, a pesar de que el fondo de pantalla (wallpaper) es 100% estático.
+3. **Saturación del Swapchain DRM por Daño de Cursor:**
+   * Al moverse el ratón, `cursor_changed` asignaba `pending_damage_buffers = 3`. Con renderizado completo (`ENABLE_DAMAGE_TRACKING = false`), esto forzaba tres redibujados completos de pantalla consecutivos por cada micro-evento de libinput, generando una cola de trabajo artificial en DRM KMS.
+
+### Hoja de Ruta de Optimización Quirúrgica (Plan de Mejoras para Fase 2)
+1. **Despacho Reactivo sin Bloqueo en Event Loop:**
+   * Si existen búferes pendientes en cola DRM (`surfs.iter().any(|s| s.pending_damage_buffers > 0)`), establecer `dispatch_timeout = Duration::ZERO`.
+   * En reposo absoluto (sin animaciones ni búferes pendientes), reducir el tiempo de espera a `1 ms` (o dinámico), eliminando los 8 ms de latencia artificial.
+2. **Caché Persistente del Fondo en `blur.capture_background`:**
+   * Condicionar `blur.capture_background` a un flag `background_dirty` (activo únicamente al iniciar, redimensionar resolución, cambiar de tema o cuando el cliente `malus-wallpaper` / capas inferiores emitan un nuevo commit Wayland).
+   * Al mover el cursor o interactuar con ventanas, el fondo no cambia, por lo que se omite completamente el `glCopyTexSubImage2D` de millones de píxeles, ahorrando 2–5 ms de GPU por fotograma.
+3. **Throttle Responsivo de Puntero:**
+   * Al registrarse `cursor_changed` sin commits de clientes, solicitar un único fotograma (`pending_damage_buffers = pending_damage_buffers.max(1)`), garantizando que el cursor se dibuje al instante sin saturar el triple-buffering de DRM KMS.
 
 ---
 

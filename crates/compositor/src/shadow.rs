@@ -125,65 +125,6 @@ void main() {
 }
 "#;
 
-const SHADOW_BLIT_VERT_SRC: &str = r#"#version 300 es
-precision highp float;
-
-uniform mat3 u_matrix;
-uniform vec4 u_quad_rect;
-
-out vec2 v_uv;
-
-void main() {
-    float u = (gl_VertexID == 1 || gl_VertexID == 3) ? 1.0 : 0.0;
-    float v = (gl_VertexID == 2 || gl_VertexID == 3) ? 1.0 : 0.0;
-
-    vec2 pos = u_quad_rect.xy + vec2(u * u_quad_rect.z, v * u_quad_rect.w);
-    v_uv = vec2(u, v);
-
-    vec3 ndc = u_matrix * vec3(pos, 1.0);
-    gl_Position = vec4(ndc.xy, 0.0, 1.0);
-}
-"#;
-
-const SHADOW_BLIT_FRAG_SRC: &str = r#"#version 300 es
-precision highp float;
-
-in vec2 v_uv;
-out vec4 frag_color;
-
-uniform sampler2D u_texture;
-
-void main() {
-    frag_color = texture(u_texture, v_uv);
-}
-"#;
-
-const SHADOW_SLOT_COUNT: usize = 16;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ShadowCacheKey {
-    w: i32,
-    h: i32,
-    corner_radius: u32,
-    blur_radius: u32,
-    spread: u32,
-    offset_y: u32,
-    opacity: u32,
-    contact_strength: u32,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct ShadowSlot {
-    texture: ffi::types::GLuint,
-    fbo: ffi::types::GLuint,
-    tex_size: (i32, i32),
-    key: Option<ShadowCacheKey>,
-    pad_x: i32,
-    pad_y_top: i32,
-    pad_y_bottom: i32,
-    last_used: u64,
-}
-
 #[derive(Debug)]
 pub struct WindowShadowPipeline {
     program: ffi::types::GLuint,
@@ -198,14 +139,6 @@ pub struct WindowShadowPipeline {
     u_offset_y: ffi::types::GLint,
     u_opacity: ffi::types::GLint,
     u_contact_strength: ffi::types::GLint,
-
-    blit_program: ffi::types::GLuint,
-    blit_u_matrix: ffi::types::GLint,
-    blit_u_quad_rect: ffi::types::GLint,
-    blit_u_texture: ffi::types::GLint,
-
-    slots: std::sync::Mutex<Vec<ShadowSlot>>,
-    use_counter: std::sync::atomic::AtomicU64,
 }
 
 impl WindowShadowPipeline {
@@ -249,36 +182,7 @@ impl WindowShadowPipeline {
                 c"u_contact_strength".as_ptr() as *const ffi::types::GLchar,
             );
 
-            // Compilar shader de blit rápido para la caché FBO de sombras
-            let blit_vert = compile_shader(gl, ffi::VERTEX_SHADER, SHADOW_BLIT_VERT_SRC)?;
-            let blit_frag = compile_shader(gl, ffi::FRAGMENT_SHADER, SHADOW_BLIT_FRAG_SRC)?;
-
-            let blit_program = gl.CreateProgram();
-            gl.AttachShader(blit_program, blit_vert);
-            gl.AttachShader(blit_program, blit_frag);
-            gl.LinkProgram(blit_program);
-
-            gl.DeleteShader(blit_vert);
-            gl.DeleteShader(blit_frag);
-
-            let mut blit_status = 0;
-            gl.GetProgramiv(blit_program, ffi::LINK_STATUS, &mut blit_status);
-            if blit_status == 0 {
-                let mut len = 0;
-                gl.GetProgramiv(blit_program, ffi::INFO_LOG_LENGTH, &mut len);
-                let mut buffer = vec![0u8; len as usize];
-                gl.GetProgramInfoLog(blit_program, len, std::ptr::null_mut(), buffer.as_mut_ptr() as *mut ffi::types::GLchar);
-                error!("❌ [WindowShadowPipeline] Error en enlace de shader blit: {}", String::from_utf8_lossy(&buffer));
-                gl.DeleteProgram(program);
-                gl.DeleteProgram(blit_program);
-                return None;
-            }
-
-            let blit_u_matrix = gl.GetUniformLocation(blit_program, c"u_matrix".as_ptr() as *const ffi::types::GLchar);
-            let blit_u_quad_rect = gl.GetUniformLocation(blit_program, c"u_quad_rect".as_ptr() as *const ffi::types::GLchar);
-            let blit_u_texture = gl.GetUniformLocation(blit_program, c"u_texture".as_ptr() as *const ffi::types::GLchar);
-
-            info!("✨ [WindowShadowPipeline] Pipeline de sombras squircle superelípticas (n=4.2) con caché FBO inicializado en GPU");
+            info!("✨ [WindowShadowPipeline] Pipeline de sombras squircle superelípticas (n=4.2) inicializado en GPU");
 
             Some(Self {
                 program,
@@ -293,12 +197,6 @@ impl WindowShadowPipeline {
                 u_offset_y,
                 u_opacity,
                 u_contact_strength,
-                blit_program,
-                blit_u_matrix,
-                blit_u_quad_rect,
-                blit_u_texture,
-                slots: std::sync::Mutex::new(Vec::with_capacity(SHADOW_SLOT_COUNT)),
-                use_counter: std::sync::atomic::AtomicU64::new(0),
             })
         }
     }
@@ -405,193 +303,22 @@ impl WindowShadowPipeline {
         let pad_y_top = (blur_radius * 1.8).round() as i32;
         let pad_y_bottom = (blur_radius * 2.8 + offset_y).round() as i32;
 
+        let quad_x = win_rect.loc.x - pad_x;
+        let quad_y = win_rect.loc.y - pad_y_top;
         let quad_w = win_rect.size.w + pad_x * 2;
         let quad_h = win_rect.size.h + pad_y_top + pad_y_bottom;
-        if quad_w <= 0 || quad_h <= 0 {
-            return;
-        }
-
-        let key = ShadowCacheKey {
-            w: win_rect.size.w,
-            h: win_rect.size.h,
-            corner_radius: corner_radius.to_bits(),
-            blur_radius: blur_radius.to_bits(),
-            spread: spread.to_bits(),
-            offset_y: offset_y.to_bits(),
-            opacity: opacity.to_bits(),
-            contact_strength: contact_strength.to_bits(),
-        };
-
-        let current_use = self
-            .use_counter
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            + 1;
-
-        let mut slots_guard = match self.slots.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-
-        // 1. Buscar si la sombra exacta ya está renderizada en la caché FBO
-        let found_idx = slots_guard
-            .iter()
-            .position(|s| s.key == Some(key) && s.tex_size == (quad_w, quad_h));
-
-        let slot_idx = if let Some(idx) = found_idx {
-            slots_guard[idx].last_used = current_use;
-            idx
-        } else {
-            // 2. Si no existe, seleccionar un slot disponible o el menos recientemente usado (LRU)
-            let chosen_idx = if slots_guard.len() < SHADOW_SLOT_COUNT {
-                let mut texture = 0;
-                let mut fbo = 0;
-                unsafe {
-                    gl.GenTextures(1, &mut texture);
-                    gl.GenFramebuffers(1, &mut fbo);
-                }
-                slots_guard.push(ShadowSlot {
-                    texture,
-                    fbo,
-                    tex_size: (0, 0),
-                    key: None,
-                    pad_x,
-                    pad_y_top,
-                    pad_y_bottom,
-                    last_used: current_use,
-                });
-                slots_guard.len() - 1
-            } else {
-                let mut lru_idx = 0;
-                let mut oldest = u64::MAX;
-                for (i, s) in slots_guard.iter().enumerate() {
-                    if s.last_used < oldest {
-                        oldest = s.last_used;
-                        lru_idx = i;
-                    }
-                }
-                slots_guard[lru_idx].last_used = current_use;
-                lru_idx
-            };
-
-            let slot = &mut slots_guard[chosen_idx];
-
-            unsafe {
-                // Asegurar tamaño exacto de la textura del FBO
-                if slot.tex_size != (quad_w, quad_h) {
-                    gl.BindTexture(ffi::TEXTURE_2D, slot.texture);
-                    gl.TexImage2D(
-                        ffi::TEXTURE_2D,
-                        0,
-                        ffi::RGBA as i32,
-                        quad_w,
-                        quad_h,
-                        0,
-                        ffi::RGBA,
-                        ffi::UNSIGNED_BYTE,
-                        std::ptr::null(),
-                    );
-                    gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MIN_FILTER, ffi::LINEAR as i32);
-                    gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MAG_FILTER, ffi::LINEAR as i32);
-                    gl.TexParameteri(
-                        ffi::TEXTURE_2D,
-                        ffi::TEXTURE_WRAP_S,
-                        ffi::CLAMP_TO_EDGE as i32,
-                    );
-                    gl.TexParameteri(
-                        ffi::TEXTURE_2D,
-                        ffi::TEXTURE_WRAP_T,
-                        ffi::CLAMP_TO_EDGE as i32,
-                    );
-
-                    gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbo);
-                    gl.FramebufferTexture2D(
-                        ffi::FRAMEBUFFER,
-                        ffi::COLOR_ATTACHMENT0,
-                        ffi::TEXTURE_2D,
-                        slot.texture,
-                        0,
-                    );
-                    slot.tex_size = (quad_w, quad_h);
-                }
-
-                // Guardar estado GL previo
-                let mut prev_fbo = 0;
-                gl.GetIntegerv(ffi::FRAMEBUFFER_BINDING, &mut prev_fbo);
-                let mut prev_viewport = [0; 4];
-                gl.GetIntegerv(ffi::VIEWPORT, prev_viewport.as_mut_ptr());
-                let prev_scissor = gl.IsEnabled(ffi::SCISSOR_TEST);
-
-                // Renderizar la sombra SDF analítica en el FBO
-                gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbo);
-                gl.Viewport(0, 0, quad_w, quad_h);
-                gl.Disable(ffi::SCISSOR_TEST);
-                gl.Disable(ffi::BLEND);
-                gl.ClearColor(0.0, 0.0, 0.0, 0.0);
-                gl.Clear(ffi::COLOR_BUFFER_BIT);
-
-                gl.UseProgram(self.program);
-
-                let fbo_matrix: [f32; 9] = [
-                    2.0 / quad_w as f32, 0.0, 0.0,
-                    0.0, 2.0 / quad_h as f32, 0.0,
-                    -1.0, -1.0, 1.0,
-                ];
-
-                gl.UniformMatrix3fv(self.u_matrix, 1, ffi::FALSE, fbo_matrix.as_ptr());
-                gl.Uniform4f(self.u_quad_rect, 0.0, 0.0, quad_w as f32, quad_h as f32);
-                gl.Uniform2f(self.u_win_size, win_rect.size.w as f32, win_rect.size.h as f32);
-                gl.Uniform2f(self.u_pad, pad_x as f32, pad_y_top as f32);
-                gl.Uniform1f(self.u_corner_radius, corner_radius);
-                gl.Uniform1f(self.u_exponent, 4.2f32);
-                gl.Uniform1f(self.u_blur_radius, blur_radius);
-                gl.Uniform1f(self.u_spread, spread);
-                gl.Uniform1f(self.u_offset_y, offset_y);
-                gl.Uniform1f(self.u_opacity, opacity);
-                gl.Uniform1f(self.u_contact_strength, contact_strength);
-
-                if gl.VertexAttribDivisor.is_loaded() {
-                    gl.VertexAttribDivisor(0, 0);
-                    gl.VertexAttribDivisor(1, 0);
-                }
-                gl.DisableVertexAttribArray(0);
-                gl.DisableVertexAttribArray(1);
-                gl.BindBuffer(ffi::ARRAY_BUFFER, 0);
-
-                gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
-
-                // Restaurar FBO y viewport de la pantalla
-                gl.BindFramebuffer(ffi::FRAMEBUFFER, prev_fbo as u32);
-                gl.Viewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
-                if prev_scissor != ffi::FALSE {
-                    gl.Enable(ffi::SCISSOR_TEST);
-                }
-            }
-
-            slot.key = Some(key);
-            slot.pad_x = pad_x;
-            slot.pad_y_top = pad_y_top;
-            slot.pad_y_bottom = pad_y_bottom;
-            chosen_idx
-        };
-
-        let cached_slot = slots_guard[slot_idx];
-        drop(slots_guard);
-
-        // 3. Proyectar la sombra cacheada como quad texturizado ultraligero
-        let quad_x = win_rect.loc.x - cached_slot.pad_x;
-        let quad_y = win_rect.loc.y - cached_slot.pad_y_top;
 
         unsafe {
+            // Guardar estado GL previo sin consultas síncronas costosas al hardware de la GPU
             let prev_blend = gl.IsEnabled(ffi::BLEND);
-            let mut prev_src_rgb = 0;
-            let mut prev_dst_rgb = 0;
-            let mut prev_src_alpha = 0;
-            let mut prev_dst_alpha = 0;
-            gl.GetIntegerv(ffi::BLEND_SRC_RGB, &mut prev_src_rgb);
-            gl.GetIntegerv(ffi::BLEND_DST_RGB, &mut prev_dst_rgb);
-            gl.GetIntegerv(ffi::BLEND_SRC_ALPHA, &mut prev_src_alpha);
-            gl.GetIntegerv(ffi::BLEND_DST_ALPHA, &mut prev_dst_alpha);
+            let prev_scissor = gl.IsEnabled(ffi::SCISSOR_TEST);
+            let prev_cull = gl.IsEnabled(ffi::CULL_FACE);
 
+            // Desactivar scissor previo para que la penumbra no sea recortada
+            gl.Disable(ffi::SCISSOR_TEST);
+            gl.Disable(ffi::CULL_FACE);
+
+            // Blending que oscurece el fondo suavemente según alpha sin degradar el canal alfa del framebuffer (mantiene 1.0)
             gl.Enable(ffi::BLEND);
             gl.BlendFuncSeparate(
                 ffi::SRC_ALPHA,
@@ -600,20 +327,22 @@ impl WindowShadowPipeline {
                 ffi::ONE,
             );
 
-            gl.UseProgram(self.blit_program);
-            gl.UniformMatrix3fv(self.blit_u_matrix, 1, ffi::FALSE, projection.as_ptr());
-            gl.Uniform4f(
-                self.blit_u_quad_rect,
-                quad_x as f32,
-                quad_y as f32,
-                cached_slot.tex_size.0 as f32,
-                cached_slot.tex_size.1 as f32,
-            );
+            gl.UseProgram(self.program);
 
-            gl.ActiveTexture(ffi::TEXTURE0);
-            gl.BindTexture(ffi::TEXTURE_2D, cached_slot.texture);
-            gl.Uniform1i(self.blit_u_texture, 0);
+            gl.UniformMatrix3fv(self.u_matrix, 1, ffi::FALSE, projection.as_ptr());
+            gl.Uniform4f(self.u_quad_rect, quad_x as f32, quad_y as f32, quad_w as f32, quad_h as f32);
+            gl.Uniform2f(self.u_win_size, win_rect.size.w as f32, win_rect.size.h as f32);
+            gl.Uniform2f(self.u_pad, pad_x as f32, pad_y_top as f32);
+            gl.Uniform1f(self.u_corner_radius, corner_radius);
+            gl.Uniform1f(self.u_exponent, 4.2f32);
+            gl.Uniform1f(self.u_blur_radius, blur_radius);
+            gl.Uniform1f(self.u_spread, spread);
+            gl.Uniform1f(self.u_offset_y, offset_y);
+            gl.Uniform1f(self.u_opacity, opacity);
+            gl.Uniform1f(self.u_contact_strength, contact_strength);
 
+            // Desactivar atributos previos para renderizar directamente vía gl_VertexID procedural
+            // e impedir cualquier interferencia de VertexAttribDivisor previo de Smithay
             if gl.VertexAttribDivisor.is_loaded() {
                 gl.VertexAttribDivisor(0, 0);
                 gl.VertexAttribDivisor(1, 0);
@@ -624,16 +353,23 @@ impl WindowShadowPipeline {
 
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
 
+            // Restaurar estado GL previo canónico de Smithay
             gl.UseProgram(0);
 
             gl.BlendFuncSeparate(
-                prev_src_rgb as u32,
-                prev_dst_rgb as u32,
-                prev_src_alpha as u32,
-                prev_dst_alpha as u32,
+                ffi::ONE,
+                ffi::ONE_MINUS_SRC_ALPHA,
+                ffi::ONE,
+                ffi::ONE_MINUS_SRC_ALPHA,
             );
             if prev_blend == ffi::FALSE {
                 gl.Disable(ffi::BLEND);
+            }
+            if prev_scissor != ffi::FALSE {
+                gl.Enable(ffi::SCISSOR_TEST);
+            }
+            if prev_cull != ffi::FALSE {
+                gl.Enable(ffi::CULL_FACE);
             }
         }
     }
