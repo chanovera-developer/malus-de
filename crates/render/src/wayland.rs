@@ -683,7 +683,9 @@ impl WaylandTopBarApp {
             }
             10 => {
                 info!("🛍️ Abriendo Software...");
-                let _ = std::process::Command::new("gnome-software").spawn();
+                let mut cmd = std::process::Command::new("gnome-software");
+                malus_de_common::config::apply_isolated_environment(&mut cmd);
+                let _ = cmd.spawn();
             }
             11 => {
                 info!("🕒 Abriendo Ítems recientes...");
@@ -702,7 +704,10 @@ impl WaylandTopBarApp {
             }
             202 => {
                 info!("🌐 Abriendo Preferencias de Wi-Fi");
-                let _ = std::process::Command::new("gnome-control-center").arg("wifi").spawn();
+                let mut cmd = std::process::Command::new("gnome-control-center");
+                cmd.arg("wifi");
+                malus_de_common::config::apply_isolated_environment(&mut cmd);
+                let _ = cmd.spawn();
             }
             212 => {
                 info!("🔊 Alternando silencio de audio");
@@ -710,15 +715,23 @@ impl WaylandTopBarApp {
             }
             213 => {
                 info!("🔊 Abriendo Preferencias de Sonido");
-                let _ = std::process::Command::new("gnome-control-center").arg("sound").spawn();
+                let mut cmd = std::process::Command::new("gnome-control-center");
+                cmd.arg("sound");
+                malus_de_common::config::apply_isolated_environment(&mut cmd);
+                let _ = cmd.spawn();
             }
             223 => {
                 info!("🔋 Abriendo Preferencias de Batería y Energía");
-                let _ = std::process::Command::new("gnome-control-center").arg("power").spawn();
+                let mut cmd = std::process::Command::new("gnome-control-center");
+                cmd.arg("power");
+                malus_de_common::config::apply_isolated_environment(&mut cmd);
+                let _ = cmd.spawn();
             }
             235 => {
                 info!("⚙️ Abriendo Configuración del Sistema");
-                let _ = std::process::Command::new("malus-de-settings").spawn();
+                let mut cmd = std::process::Command::new("malus-de-settings");
+                malus_de_common::config::apply_isolated_environment(&mut cmd);
+                let _ = cmd.spawn();
             }
             _ => {
                 info!("Ejecutando acción de menú con id={}", item_id);
@@ -1165,10 +1178,13 @@ impl PointerHandler for WaylandTopBarApp {
                             let _ = self.render();
                         } else if tag == "cc:dark_mode" {
                             let is_dark = !self.model.is_dark_background;
-                            let scheme = if is_dark { "prefer-dark" } else { "default" };
-                            let _ = std::process::Command::new("gsettings")
-                                .args(["set", "org.gnome.desktop.interface", "color-scheme", scheme])
-                                .spawn();
+                            malus_de_common::config::sync_system_appearance(is_dark);
+                            let _ = malus_de_common::ipc::IpcClient::send_command(
+                                malus_de_common::ipc::IpcMessage::ThemeChanged {
+                                    theme_name: if is_dark { "Adwaita-Dark".to_string() } else { "Adwaita-Light".to_string() },
+                                    is_dark,
+                                },
+                            );
                             let _ = self.set_dark_background(is_dark);
                             if let Some(ref mut p) = self.model.active_popover {
                                 if let Some(ref mut cc) = p.control_center {

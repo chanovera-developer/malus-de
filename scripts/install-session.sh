@@ -145,16 +145,16 @@ EOF
 chmod 644 /usr/lib/systemd/user/malus-session.target
 echo "   ✔ /usr/lib/systemd/user/malus-session.target"
 
-# Instalar preferencia de backend para xdg-desktop-portal
-# xdg-desktop-portal solo lee el archivo llamado portals.conf; si se instala con otro nombre,
-# el backend preferido nunca se aplica y los navegadores no pueden abrir el diálogo de guardar archivo.
+# Instalar preferencia de backend para xdg-desktop-portal específico de Malus DE
 echo "🗂️ Instalando preferencia de portal para Malus DE..."
 mkdir -p /etc/xdg/xdg-desktop-portal /usr/share/xdg-desktop-portal
-cp -f "$PROJECT_DIR/data/malus-portals.conf" /etc/xdg/xdg-desktop-portal/portals.conf
-cp -f "$PROJECT_DIR/data/malus-portals.conf" /usr/share/xdg-desktop-portal/portals.conf
-chmod 644 /etc/xdg/xdg-desktop-portal/portals.conf /usr/share/xdg-desktop-portal/portals.conf
-echo "   ✔ /etc/xdg/xdg-desktop-portal/portals.conf"
-echo "   ✔ /usr/share/xdg-desktop-portal/portals.conf"
+for name in malus-portals.conf Malus-portals.conf; do
+    cp -f "$PROJECT_DIR/data/malus-portals.conf" "/etc/xdg/xdg-desktop-portal/$name"
+    cp -f "$PROJECT_DIR/data/malus-portals.conf" "/usr/share/xdg-desktop-portal/$name"
+    chmod 644 "/etc/xdg/xdg-desktop-portal/$name" "/usr/share/xdg-desktop-portal/$name"
+done
+echo "   ✔ /etc/xdg/xdg-desktop-portal/malus-portals.conf"
+echo "   ✔ /usr/share/xdg-desktop-portal/malus-portals.conf"
 
 # Asegurar que el servicio de llavero (org.freedesktop.secrets) esté instalado
 if ! command -v gnome-keyring-daemon >/dev/null 2>&1; then

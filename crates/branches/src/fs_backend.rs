@@ -181,11 +181,10 @@ pub fn open_in_terminal(path: &Path) {
 
     let terminals = ["ghostty", "ptyxis", "gnome-terminal", "alacritty", "kitty", "xterm"];
     for term in terminals {
-        if std::process::Command::new(term)
-            .current_dir(target)
-            .spawn()
-            .is_ok()
-        {
+        let mut cmd = std::process::Command::new(term);
+        cmd.current_dir(target);
+        malus_de_common::config::apply_isolated_environment(&mut cmd);
+        if cmd.spawn().is_ok() {
             return;
         }
     }

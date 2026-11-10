@@ -2184,14 +2184,18 @@ fn set_system_appearance_mode(to_dark: bool) {
 }
 
 fn set_cursor_theme_and_size(theme: &str, size: u32) {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let malus_config_dir = PathBuf::from(&home).join(".config/malus-de");
     let _ = Command::new("gsettings")
+        .env("XDG_CONFIG_HOME", &malus_config_dir)
+        .env("GSETTINGS_BACKEND", "keyfile")
         .args(["set", "org.gnome.desktop.interface", "cursor-theme", theme])
         .status();
     let _ = Command::new("gsettings")
+        .env("XDG_CONFIG_HOME", &malus_config_dir)
+        .env("GSETTINGS_BACKEND", "keyfile")
         .args(["set", "org.gnome.desktop.interface", "cursor-size", &size.to_string()])
         .status();
-
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     let dark_num = if is_dark_mode_active() { "1" } else { "0" };
     let cur_gtk_theme = get_current_gtk_theme();
 
@@ -3005,16 +3009,24 @@ fn apply_system_wallpaper(source: Option<&std::path::Path>) {
 
         let uri = format!("file://{}", target.to_str().unwrap_or(""));
         let _ = Command::new("gsettings")
+            .env("XDG_CONFIG_HOME", &malus_dir)
+            .env("GSETTINGS_BACKEND", "keyfile")
             .args(["set", "org.gnome.desktop.background", "picture-uri", &uri])
             .status();
         let _ = Command::new("gsettings")
+            .env("XDG_CONFIG_HOME", &malus_dir)
+            .env("GSETTINGS_BACKEND", "keyfile")
             .args(["set", "org.gnome.desktop.background", "picture-uri-dark", &uri])
             .status();
     } else {
         let _ = Command::new("gsettings")
+            .env("XDG_CONFIG_HOME", &malus_dir)
+            .env("GSETTINGS_BACKEND", "keyfile")
             .args(["reset", "org.gnome.desktop.background", "picture-uri"])
             .status();
         let _ = Command::new("gsettings")
+            .env("XDG_CONFIG_HOME", &malus_dir)
+            .env("GSETTINGS_BACKEND", "keyfile")
             .args(["reset", "org.gnome.desktop.background", "picture-uri-dark"])
             .status();
     }

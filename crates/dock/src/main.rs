@@ -2851,7 +2851,7 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
     btn.set_child(Some(&trash_overlay));
 
     btn.connect_clicked(|_| {
-        let _ = Command::new("nautilus").arg("trash://").spawn();
+        spawn_dock_app("Archivos", "nautilus", &["trash://"]);
     });
 
     // Menú Popover de Clic Derecho para la Papelera
@@ -2885,7 +2885,7 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
     let p_open = popover.clone();
     btn_open.connect_clicked(move |_| {
         p_open.popdown();
-        let _ = Command::new("nautilus").arg("trash://").spawn();
+        spawn_dock_app("Archivos", "nautilus", &["trash://"]);
     });
 
     let btn_empty = Button::builder()
@@ -3271,15 +3271,7 @@ fn spawn_dock_app(name: &str, cmd: &str, extra_args: &[&str]) {
             .unwrap_or_else(|| std::path::PathBuf::from(target_exe));
         let mut command = Command::new(&resolved_exe);
         command.args(args).args(extra_args);
-        malus_de_common::config::set_cursor_environment(&mut command);
-        if let Ok(wayland_disp) = std::env::var("WAYLAND_DISPLAY") {
-            command.env("WAYLAND_DISPLAY", wayland_disp);
-        }
-        command.env("XDG_CURRENT_DESKTOP", "Malus");
-        command.env("GDK_BACKEND", "wayland");
-        if let Ok(xdg_rt) = std::env::var("XDG_RUNTIME_DIR") {
-            command.env("XDG_RUNTIME_DIR", xdg_rt);
-        }
+        malus_de_common::config::apply_isolated_environment(&mut command);
         match command.spawn() {
             Ok(mut child) => {
                 let pid = child.id();

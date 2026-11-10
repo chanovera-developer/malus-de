@@ -63,7 +63,6 @@ export LIBSEAT_BACKEND="logind"
 HOST_XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 export XDG_CONFIG_HOME="$HOME/.config/malus-de"
 export GSETTINGS_BACKEND="keyfile"
-export GTK_USE_PORTAL=1
 export UBUNTU_MENUPROXY=1
 export GTK_MODULES="${GTK_MODULES:+$GTK_MODULES:}appmenu-gtk-module"
 export GDK_BACKEND="wayland"
@@ -72,6 +71,14 @@ export QT_QPA_PLATFORM="wayland;xcb"
 export SDL_VIDEODRIVER="wayland"
 export CLUTTER_BACKEND="wayland"
 export MOZ_ENABLE_WAYLAND=1
+
+# Limpiar configuraciones que versiones anteriores pudieron haber filtrado al host GNOME
+if [ -f "$HOST_XDG_CONFIG_HOME/gtk-3.0/settings.ini" ] && grep -q "close,minimize,maximize:" "$HOST_XDG_CONFIG_HOME/gtk-3.0/settings.ini" 2>/dev/null; then
+    rm -f "$HOST_XDG_CONFIG_HOME/gtk-3.0/settings.ini" 2>/dev/null || true
+fi
+if [ -f "$HOST_XDG_CONFIG_HOME/gtk-4.0/settings.ini" ] && grep -q "close,minimize,maximize:" "$HOST_XDG_CONFIG_HOME/gtk-4.0/settings.ini" 2>/dev/null; then
+    rm -f "$HOST_XDG_CONFIG_HOME/gtk-4.0/settings.ini" 2>/dev/null || true
+fi
 
 # Limpiar valores que versiones anteriores filtraron al entorno global de systemd.
 if command -v systemctl >/dev/null 2>&1; then
@@ -202,7 +209,7 @@ cat << 'EOF' > "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile"
 button-layout='close,minimize,maximize:'
 
 [org/gnome/desktop/interface]
-color-scheme='prefer-light'
+color-scheme='prefer-dark'
 cursor-theme='macOS'
 cursor-size=24
 gtk-theme='Adwaita'
@@ -213,7 +220,7 @@ overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
 EOF
 fi
 
-# Aplicar el diseño macOS también si el keyfile ya existía con el valor de GNOME.
+# Aplicar y asegurar el diseño macOS en el keyfile aislado de Malus DE
 gsettings set org.gnome.desktop.wm.preferences button-layout "close,minimize,maximize:" || true
 
 # Nautilus usa esta configuración aislada para montar medios extraíbles.
@@ -269,26 +276,28 @@ if [ ! -f "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" ]; then
 cat << EOF > "$XDG_CONFIG_HOME/gtk-3.0/settings.ini"
 [Settings]
 gtk-decoration-layout=close,minimize,maximize:
-gtk-application-prefer-dark-theme=0
+gtk-application-prefer-dark-theme=1
 gtk-cursor-theme-name=$CURSOR_THEME
 gtk-cursor-theme-size=$CURSOR_SIZE
 gtk-theme-name=Adwaita
 EOF
 else
     sed -i "s/^gtk-cursor-theme-name=.*/gtk-cursor-theme-name=$CURSOR_THEME/" "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" 2>/dev/null || true
+    sed -i "s/^gtk-decoration-layout=.*/gtk-decoration-layout=close,minimize,maximize:/" "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" 2>/dev/null || true
 fi
 
 if [ ! -f "$XDG_CONFIG_HOME/gtk-4.0/settings.ini" ]; then
 cat << EOF > "$XDG_CONFIG_HOME/gtk-4.0/settings.ini"
 [Settings]
 gtk-decoration-layout=close,minimize,maximize:
-gtk-application-prefer-dark-theme=0
+gtk-application-prefer-dark-theme=1
 gtk-cursor-theme-name=$CURSOR_THEME
 gtk-cursor-theme-size=$CURSOR_SIZE
 gtk-theme-name=Adwaita
 EOF
 else
     sed -i "s/^gtk-cursor-theme-name=.*/gtk-cursor-theme-name=$CURSOR_THEME/" "$XDG_CONFIG_HOME/gtk-4.0/settings.ini" 2>/dev/null || true
+    sed -i "s/^gtk-decoration-layout=.*/gtk-decoration-layout=close,minimize,maximize:/" "$XDG_CONFIG_HOME/gtk-4.0/settings.ini" 2>/dev/null || true
 fi
 
 for GTK_SETTINGS in "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" "$XDG_CONFIG_HOME/gtk-4.0/settings.ini"; do

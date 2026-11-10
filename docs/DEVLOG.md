@@ -4,6 +4,42 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-09] — Aislamiento Bidireccional Estricto Malus DE ↔ GNOME: Blindaje de Botones Semáforo y Neutralización de Fugas D-Bus/dconf/GTK
+
+### Diagnóstico de Causa Raíz
+* **Contaminación del Shell de GNOME (Topbar y Menús Blancos al Entrar a GNOME):**
+  * En `crates/common/src/config.rs`, la rutina `sync_system_appearance` ejecutaba explícitamente comandos `dconf write /org/gnome/desktop/interface/color-scheme` y `gsettings set org.gnome.desktop.interface color-scheme` con `env_remove("XDG_CONFIG_HOME")`, modificando la base de datos de dconf del usuario anfitrión (`~/.config/dconf/user`) fuera del entorno aislado de Malus DE.
+  * Además, `sync_system_appearance` iteraba sobre un arreglo `ini_paths` que escribía activamente `gtk-application-prefer-dark-theme=0` y `gtk-theme-name=Adwaita` en `$HOME/.config/gtk-3.0/settings.ini` y `$HOME/.config/gtk-4.0/settings.ini` del host. Al iniciar sesión en GNOME Shell o abrir aplicaciones GTK4/Libadwaita en el host, éstas leían la preferencia clara forzada de dicho archivo y de dconf, tiñendo el panel superior y los menús flotantes de blanco.
+* **Injerencia de GNOME Retoques ("Tweaks") sobre los Botones en Malus DE:**
+  * Al ajustar la posición o visibilidad de los botones de ventana en Retoques (GNOME Tweaks), la aplicación modificaba el registro dconf `/org/gnome/desktop/wm/preferences/button-layout`.
+  * En `scripts/malus-session`, se exportaba globalmente `GTK_USE_PORTAL=1`. Dicha variable forzaba a todas las aplicaciones GTK a eludir su backend local `keyfile` y consultar el servicio D-Bus `org.freedesktop.portal.Settings`. Éste era atendido por `xdg-desktop-portal-gnome` (ejecutado bajo `systemd --user` en el entorno global del host), el cual retransmitía los cambios de dconf del host a las aplicaciones en ejecución dentro de Malus DE.
+  * En `crates/compositor/src/spotlight_visual.rs`, la función `toggle_desktop_theme()` sobreescribía el archivo `glib-2.0/settings/keyfile` escribiendo exclusivamente `[org/gnome/desktop/interface]`, eliminando por completo la sección `[org/gnome/desktop/wm/preferences]` con `button-layout='close,minimize,maximize:'`.
+  * En `crates/dock`, `crates/wallpaper` y `crates/render`, algunos subprocesos lanzados (`nautilus trash://`, terminales, etc.) no inyectaban de forma explícita y centralizada las variables de aislamiento `XDG_CONFIG_HOME` y `GSETTINGS_BACKEND="keyfile"`.
+
+### Solución Implementada
+* **Configuración Común (`crates/common/src/config.rs`):**
+  * Se eliminaron todas las escrituras a `dconf` del host, `gsettings` del host y a las rutas `$HOME/.config/gtk-3.0` y `$HOME/.config/gtk-4.0`. Malus DE opera de forma 100% aislada dentro de `$HOME/.config/malus-de`.
+  * Se creó la función centralizada `apply_isolated_environment(&mut Command)`, la cual inyecta consistentemente `XDG_CONFIG_HOME`, `GSETTINGS_BACKEND=keyfile`, `XDG_CURRENT_DESKTOP=Malus:GNOME`, `GDK_BACKEND=wayland`, display Wayland y variables de cursor a cualquier comando o proceso hijo generado.
+  * Se implementó `ensure_keyfile_button_layout(keyfile_path: &Path)`, la cual asegura y repara atómicamente la sección `[org/gnome/desktop/wm/preferences]` con `button-layout='close,minimize,maximize:'` en el keyfile de GSettings, protegiéndola contra modificaciones externas.
+  * Se parametrizó `set_gsettings_button_layout(config_dir: &Path)` para operar exclusivamente sobre el backend keyfile aislado de Malus DE.
+  * Se desacopló `is_dark_mode_active()`, consultando únicamente el keyfile y `settings.ini` de Malus DE sin depender jamás de dconf del host.
+* **Lanzadores de Aplicaciones y Shell:**
+  * **Compositor (`crates/compositor/src/spotlight_visual.rs`):** `toggle_desktop_theme()` ahora delega en `sync_system_appearance` y preserva la configuración de botones intacta. `apply_malus_app_env` unifica el aislamiento con `apply_isolated_environment`.
+  * **Dock (`crates/dock/src/main.rs`):** `spawn_dock_app` y los accesos a la papelera (`nautilus trash://`) utilizan `apply_isolated_environment`.
+  * **Escritorio (`crates/wallpaper/src/main.rs`):** `launch_file` y las invocaciones contextuales de configuración utilizan `apply_isolated_environment`.
+  * **Top Bar (`crates/render/src/wayland.rs`):** Se eliminó la ejecución de `gsettings` crudo en `cc:dark_mode`, sustituyéndola por `sync_system_appearance(is_dark)`. Las aplicaciones del menú global se lanzan con aislamiento de entorno.
+  * **Branches (`crates/branches`):** `open_in_terminal` y llamadas de compartición utilizan `apply_isolated_environment`.
+* **Sesión e Integración de Portales (`scripts/`, `data/`):**
+  * En `scripts/malus-session` y `scripts/malus-session.sh`: se retiró `export GTK_USE_PORTAL=1` para evitar que GTK consulte el portal de ajustes del host. Se añadió limpieza automática de archivos `settings.ini` residuales en el host creados por versiones previas. Se establecieron por defecto los valores del tema oscuro (`gtk-application-prefer-dark-theme=1`, `color-scheme='prefer-dark'`).
+  * En `data/malus-portals.conf`: se configuró `org.freedesktop.impl.portal.Settings=none` y se direccionó el preferido a `gtk`, evitando que `xdg-desktop-portal` consulte a `xdg-desktop-portal-gnome`.
+  * En `scripts/install-session.sh`: el archivo de portales se instala como `malus-portals.conf` y `Malus-portals.conf` específico de la sesión, sin sobreescribir el archivo global `portals.conf` del sistema.
+* **Pruebas y Verificación:**
+  * Se incorporó la prueba unitaria `test_ensure_keyfile_button_layout_enforces_left_traffic_lights`.
+  * Se ejecutaron las 115+ pruebas unitarias e integración en todo el workspace con resultado 100% satisfactorio.
+  * Se compilaron con éxito todos los binarios de producción optimizados (`cargo build --release`).
+
+---
+
 ## [2026-11-09] — Mapeo de Anclaje de Arrastre de Iconos: Compensación de Hotspot en Compositor y Fijación al Punto de Clic (`malus-de-compositor`, `malus-de-wallpaper`, `malus-de-branches`)
 
 ### Diagnóstico de Causa Raíz

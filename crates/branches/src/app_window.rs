@@ -719,9 +719,10 @@ impl BranchesWindow {
                 bw_email.active_pane().current_path()
             };
             let mailto = format!("mailto:?subject=Compartido desde Malus DE&body={}", path.to_string_lossy());
-            let _ = std::process::Command::new("xdg-open")
-                .arg(mailto)
-                .spawn();
+            let mut cmd = std::process::Command::new("xdg-open");
+            cmd.arg(mailto);
+            malus_de_common::config::apply_isolated_environment(&mut cmd);
+            let _ = cmd.spawn();
         });
         actions.add_action(&act_email);
 

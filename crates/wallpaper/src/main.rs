@@ -565,16 +565,7 @@ fn launch_file(file: &gio::File) {
         .unwrap_or_else(|| file.uri().to_string());
     let mut cmd = std::process::Command::new("xdg-open");
     cmd.arg(&target);
-    malus_de_common::config::set_cursor_environment(&mut cmd);
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let malus_config_dir = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(&home).join(".config/malus-de"));
-    cmd.env("XDG_CONFIG_HOME", malus_config_dir);
-    cmd.env("GSETTINGS_BACKEND", "keyfile");
-    cmd.env("GTK_USE_PORTAL", "1");
-    cmd.env("XDG_CURRENT_DESKTOP", "Malus:GNOME");
-    cmd.env("GDK_BACKEND", "wayland");
+    malus_de_common::config::apply_isolated_environment(&mut cmd);
     if let Err(error) = cmd.spawn() {
         warn!("No se pudo abrir {:?}: {}", file, error);
     }
@@ -2358,6 +2349,7 @@ fn create_wallpaper_window(
             wp_btn.connect_clicked(move |_| {
                 let mut cmd = std::process::Command::new("malus-de-settings");
                 cmd.arg("--panel").arg("wallpaper");
+                malus_de_common::config::apply_isolated_environment(&mut cmd);
                 let _ = cmd.spawn();
                 popover_c.popdown();
             });
@@ -2801,6 +2793,7 @@ fn create_wallpaper_window(
             wp_btn.connect_clicked(move |_| {
                 let mut cmd = std::process::Command::new("malus-de-settings");
                 cmd.arg("--panel").arg("wallpaper");
+                malus_de_common::config::apply_isolated_environment(&mut cmd);
                 let _ = cmd.spawn();
                 popover_c.popdown();
             });

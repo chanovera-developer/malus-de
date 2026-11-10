@@ -3442,38 +3442,13 @@ fn execute_template_action(tpl: &ActionTemplateState) {
 }
 
 fn toggle_desktop_theme() {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"));
-    let keyfile_path = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".config/malus-de"))
-        .join("glib-2.0/settings/keyfile");
-
-    let current = fs::read_to_string(&keyfile_path).unwrap_or_default();
-    let is_currently_dark = !current.contains("prefer-light");
-    let next_scheme = if is_currently_dark {
-        "prefer-light"
-    } else {
-        "prefer-dark"
-    };
-    let next_theme = if is_currently_dark {
-        "Adwaita"
-    } else {
-        "Adwaita-dark"
-    };
-
-    if let Some(parent) = keyfile_path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let updated = format!(
-        "[org/gnome/desktop/interface]\ncolor-scheme='{next_scheme}'\ngtk-theme='{next_theme}'\n"
-    );
-    let _ = fs::write(&keyfile_path, updated);
+    let is_currently_dark = malus_de_common::config::is_dark_mode_active();
+    let to_dark = !is_currently_dark;
+    malus_de_common::config::sync_system_appearance(to_dark);
     let _ = malus_de_common::ipc::IpcClient::send_command(
         malus_de_common::ipc::IpcMessage::ThemeChanged {
-            theme_name: next_theme.to_string(),
-            is_dark: !is_currently_dark,
+            theme_name: if to_dark { "Adwaita-dark".to_string() } else { "Adwaita".to_string() },
+            is_dark: to_dark,
         },
     );
 }
@@ -3540,22 +3515,7 @@ fn launch_desktop_app(desktop_file: &str, fallback_exec: &str) {
 }
 
 fn apply_malus_app_env(command: &mut Command) {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let malus_config_dir = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(&home).join(".config/malus-de"));
-    malus_de_common::config::set_cursor_environment(command);
-    command.env("XDG_CONFIG_HOME", malus_config_dir);
-    command.env("GSETTINGS_BACKEND", "keyfile");
-    command.env("GTK_USE_PORTAL", "1");
-    command.env("XDG_CURRENT_DESKTOP", "Malus:GNOME");
-    command.env("GDK_BACKEND", "wayland");
-    if let Ok(wayland_disp) = std::env::var("WAYLAND_DISPLAY") {
-        command.env("WAYLAND_DISPLAY", wayland_disp);
-    }
-    if let Ok(xdg_rt) = std::env::var("XDG_RUNTIME_DIR") {
-        command.env("XDG_RUNTIME_DIR", xdg_rt);
-    }
+    malus_de_common::config::apply_isolated_environment(command);
 }
 
 fn spawn_shell_command(command_line: &str) {

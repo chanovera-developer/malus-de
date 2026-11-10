@@ -170,8 +170,51 @@ fn set_gtk_decoration_layout(config_dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn set_gsettings_button_layout() {
+pub fn ensure_keyfile_button_layout(keyfile_path: &Path) -> std::io::Result<()> {
+    if !keyfile_path.exists() {
+        return Ok(());
+    }
+    let content = std::fs::read_to_string(keyfile_path)?;
+    let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
+    let mut in_wm_section = false;
+    let mut found_wm_section = false;
+    let mut found_button_layout = false;
+
+    for i in 0..lines.len() {
+        let trimmed = lines[i].trim();
+        if trimmed.starts_with('[') {
+            if trimmed == "[org/gnome/desktop/wm/preferences]" {
+                in_wm_section = true;
+                found_wm_section = true;
+            } else if in_wm_section {
+                in_wm_section = false;
+            }
+        } else if in_wm_section && trimmed.starts_with("button-layout=") {
+            lines[i] = "button-layout='close,minimize,maximize:'".to_string();
+            found_button_layout = true;
+            break;
+        }
+    }
+
+    if !found_wm_section {
+        lines.push(String::new());
+        lines.push("[org/gnome/desktop/wm/preferences]".to_string());
+        lines.push("button-layout='close,minimize,maximize:'".to_string());
+    } else if !found_button_layout {
+        if let Some(pos) = lines.iter().position(|l| l.trim() == "[org/gnome/desktop/wm/preferences]") {
+            lines.insert(pos + 1, "button-layout='close,minimize,maximize:'".to_string());
+        }
+    }
+
+    std::fs::write(keyfile_path, lines.join("\n") + "\n")
+}
+
+pub fn set_gsettings_button_layout(config_dir: &Path) {
+    let keyfile_path = config_dir.join("glib-2.0/settings/keyfile");
+    let _ = ensure_keyfile_button_layout(&keyfile_path);
     match std::process::Command::new("gsettings")
+        .env("XDG_CONFIG_HOME", config_dir)
+        .env("GSETTINGS_BACKEND", "keyfile")
         .args([
             "set",
             "org.gnome.desktop.wm.preferences",
@@ -198,7 +241,6 @@ pub fn setup_isolated_session_environment() -> std::io::Result<PathBuf> {
 
     std::env::set_var("XDG_CONFIG_HOME", &malus_config_dir);
     std::env::set_var("GSETTINGS_BACKEND", "keyfile");
-    std::env::set_var("GTK_USE_PORTAL", "1");
 
     // 1. Directorio glib-2.0/settings para el backend GSettings keyfile (preservar si ya existe)
     let keyfile_dir = malus_config_dir.join("glib-2.0").join("settings");
@@ -219,6 +261,8 @@ gtk-theme='Adwaita'
 overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
 "#;
         std::fs::write(&keyfile_path, keyfile_content)?;
+    } else {
+        let _ = ensure_keyfile_button_layout(&keyfile_path);
     }
     let (cursor_theme, cursor_size) = load_cursor_config();
 
@@ -246,7 +290,7 @@ overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
     }
 
     set_gtk_decoration_layout(&malus_config_dir)?;
-    set_gsettings_button_layout();
+    set_gsettings_button_layout(&malus_config_dir);
 
     // 2.1. Hojas de estilo GTK exclusivas de Malus DE
     let light_css = get_malus_gtk_css(false);
@@ -254,14 +298,7 @@ overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
     let light_gtk3_css = get_malus_gtk3_css(false);
     let dark_gtk3_css = get_malus_gtk3_css(true);
 
-    let is_dark = if let Ok(out) = std::process::Command::new("gsettings")
-        .args(["get", "org.gnome.desktop.interface", "color-scheme"])
-        .output()
-    {
-        String::from_utf8_lossy(&out.stdout).contains("prefer-dark")
-    } else {
-        true
-    };
+    let is_dark = is_dark_mode_active();
 
     let active_css = if is_dark { &dark_css } else { &light_css };
     let active_gtk3 = if is_dark { &dark_gtk3_css } else { &light_gtk3_css };
@@ -701,52 +738,61 @@ pub fn set_cursor_environment(command: &mut std::process::Command) {
         .env("XCURSOR_SIZE", size.to_string());
 }
 
-/// Consulta el modo oscuro actual combinando dconf del host, gsettings y el keyfile aislado de Malus DE.
-pub fn is_dark_mode_active() -> bool {
-    // 1. Dconf del host (fuente de verdad directa para xdg-desktop-portal y aplicaciones Libadwaita/GTK4)
-    if let Ok(out) = std::process::Command::new("dconf")
-        .env_remove("XDG_CONFIG_HOME")
-        .args(["read", "/org/gnome/desktop/interface/color-scheme"])
-        .output()
-    {
-        let s = String::from_utf8_lossy(&out.stdout);
-        if s.contains("prefer-dark") {
-            return true;
-        } else if s.contains("prefer-light") || s.contains("default") {
-            return false;
-        }
-    }
-
-    // 2. GSettings del host
-    if let Ok(out) = std::process::Command::new("gsettings")
-        .env_remove("GSETTINGS_BACKEND")
-        .env_remove("XDG_CONFIG_HOME")
-        .args(["get", "org.gnome.desktop.interface", "color-scheme"])
-        .output()
-    {
-        let s = String::from_utf8_lossy(&out.stdout);
-        if s.contains("prefer-dark") {
-            return true;
-        } else if s.contains("prefer-light") || s.contains("default") {
-            return false;
-        }
-    }
-
-    // 3. Keyfile aislado de Malus DE
+/// Aplica el entorno completamente aislado de Malus DE a cualquier subproceso o aplicación lanzada.
+/// Garantiza que ninguna aplicación herede ni consulte dconf/GSettings del host GNOME.
+pub fn apply_isolated_environment(command: &mut std::process::Command) {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let keyfile_path = std::path::PathBuf::from(home).join(".config/malus-de/glib-2.0/settings/keyfile");
-    if let Ok(content) = std::fs::read_to_string(keyfile_path) {
-        if content.contains("color-scheme='prefer-dark'") {
-            return true;
-        }
+    let malus_config_dir = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(&home).join(".config/malus-de"));
+    set_cursor_environment(command);
+    command.env("XDG_CONFIG_HOME", &malus_config_dir);
+    command.env("GSETTINGS_BACKEND", "keyfile");
+    command.env("XDG_CURRENT_DESKTOP", "Malus:GNOME");
+    command.env("GDK_BACKEND", "wayland");
+    if let Ok(wayland_disp) = std::env::var("WAYLAND_DISPLAY") {
+        command.env("WAYLAND_DISPLAY", wayland_disp);
     }
-
-    false
+    if let Ok(xdg_rt) = std::env::var("XDG_RUNTIME_DIR") {
+        command.env("XDG_RUNTIME_DIR", xdg_rt);
+    }
 }
 
-/// Sincroniza el modo claro/oscuro tanto en la configuración aislada de Malus DE
-/// como en el sistema host (dconf / gsettings) para que xdg-desktop-portal notifique
-/// inmediatamente a todas las aplicaciones Libadwaita y GTK (Nautilus, Monitor del Sistema, etc.).
+/// Consulta el modo oscuro actual exclusivamente desde la configuración aislada de Malus DE.
+/// NUNCA consulta dconf ni GSettings del host GNOME para evitar contaminación mutua.
+pub fn is_dark_mode_active() -> bool {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let malus_config_dir = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(&home).join(".config/malus-de"));
+
+    // 1. Keyfile aislado de Malus DE
+    let keyfile_path = malus_config_dir.join("glib-2.0/settings/keyfile");
+    if let Ok(content) = std::fs::read_to_string(&keyfile_path) {
+        if content.contains("color-scheme='prefer-dark'") {
+            return true;
+        } else if content.contains("color-scheme='prefer-light'") {
+            return false;
+        }
+    }
+
+    // 2. Settings.ini de GTK4 / GTK3 aislado de Malus DE
+    let gtk4_ini = malus_config_dir.join("gtk-4.0/settings.ini");
+    if let Ok(content) = std::fs::read_to_string(&gtk4_ini) {
+        if content.contains("gtk-application-prefer-dark-theme=1") {
+            return true;
+        } else if content.contains("gtk-application-prefer-dark-theme=0") {
+            return false;
+        }
+    }
+
+    // Valor predeterminado en Malus DE: modo oscuro
+    true
+}
+
+/// Sincroniza el modo claro/oscuro EXCLUSIVAMENTE dentro del entorno aislado de Malus DE
+/// (~/.config/malus-de). NUNCA modifica dconf del host, ni GSettings global, ni ~/.config/gtk-*.0
+/// del sistema anfitrión, garantizando independencia bidireccional absoluta frente a GNOME.
 pub fn sync_system_appearance(to_dark: bool) {
     let target = if to_dark { "prefer-dark" } else { "prefer-light" };
     let dark_val = if to_dark { "1" } else { "0" };
@@ -754,46 +800,24 @@ pub fn sync_system_appearance(to_dark: bool) {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     let malus_config_dir = std::path::PathBuf::from(&home).join(".config/malus-de");
 
-    // 1. Sincronizar en DCONF del host directamente (requerido por xdg-desktop-portal en Fedora/GNOME/Wayland)
-    let dconf_scheme = format!("'{}'", target);
-    let _ = std::process::Command::new("dconf")
-        .env_remove("XDG_CONFIG_HOME")
-        .args(["write", "/org/gnome/desktop/interface/color-scheme", &dconf_scheme])
-        .status();
-
-    let dconf_theme = format!("'{}'", gtk_theme_target);
-    let _ = std::process::Command::new("dconf")
-        .env_remove("XDG_CONFIG_HOME")
-        .args(["write", "/org/gnome/desktop/interface/gtk-theme", &dconf_theme])
-        .status();
-
-    // 2. Sincronizar GSettings del host (sin sobreescritura de backend)
-    let _ = std::process::Command::new("gsettings")
-        .env_remove("GSETTINGS_BACKEND")
-        .env_remove("XDG_CONFIG_HOME")
-        .args(["set", "org.gnome.desktop.interface", "color-scheme", target])
-        .status();
-
-    let _ = std::process::Command::new("gsettings")
-        .env_remove("GSETTINGS_BACKEND")
-        .env_remove("XDG_CONFIG_HOME")
-        .args(["set", "org.gnome.desktop.interface", "gtk-theme", gtk_theme_target])
-        .status();
-
-    // 3. Establecer variables de entorno para la configuración aislada de Malus DE
+    // 1. Establecer variables de entorno para la configuración aislada de Malus DE
     std::env::set_var("XDG_CONFIG_HOME", &malus_config_dir);
     std::env::set_var("GSETTINGS_BACKEND", "keyfile");
 
-    // 4. GSettings usa el backend keyfile aislado de Malus DE.
+    // 2. GSettings usa el backend keyfile aislado de Malus DE
     let _ = std::process::Command::new("gsettings")
+        .env("XDG_CONFIG_HOME", &malus_config_dir)
+        .env("GSETTINGS_BACKEND", "keyfile")
         .args(["set", "org.gnome.desktop.interface", "color-scheme", target])
         .status();
     let _ = std::process::Command::new("gsettings")
+        .env("XDG_CONFIG_HOME", &malus_config_dir)
+        .env("GSETTINGS_BACKEND", "keyfile")
         .args(["set", "org.gnome.desktop.interface", "gtk-theme", gtk_theme_target])
         .status();
 
-    // 5. Keyfile de sesión aislada de Malus DE (~/.config/malus-de/glib-2.0/settings/keyfile)
-    let keyfile_path = std::path::PathBuf::from(&home).join(".config/malus-de/glib-2.0/settings/keyfile");
+    // 3. Keyfile de sesión aislada de Malus DE (~/.config/malus-de/glib-2.0/settings/keyfile)
+    let keyfile_path = malus_config_dir.join("glib-2.0/settings/keyfile");
     if keyfile_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&keyfile_path) {
             let mut lines = Vec::new();
@@ -819,18 +843,17 @@ pub fn sync_system_appearance(to_dark: bool) {
             let _ = std::fs::write(&keyfile_path, lines.join("\n") + "\n");
         }
     }
+    let _ = ensure_keyfile_button_layout(&keyfile_path);
 
-    // 6. Archivos settings.ini (GTK3 y GTK4) de Malus DE y del host
+    // 4. Archivos settings.ini (GTK3 y GTK4) EXCLUSIVAMENTE de Malus DE
     let ini_paths = [
         format!("{}/.config/malus-de/gtk-3.0/settings.ini", home),
         format!("{}/.config/malus-de/gtk-4.0/settings.ini", home),
-        format!("{}/.config/gtk-3.0/settings.ini", home),
-        format!("{}/.config/gtk-4.0/settings.ini", home),
     ];
     if let Err(error) = set_gtk_decoration_layout(&malus_config_dir) {
         tracing::warn!("No se pudo actualizar la posición de botones GTK de Malus DE: {error}");
     }
-    set_gsettings_button_layout();
+    set_gsettings_button_layout(&malus_config_dir);
 
     for path_str in &ini_paths {
         let p = std::path::PathBuf::from(path_str);
@@ -2432,5 +2455,45 @@ image/png=org.gnome.Loupe.desktop;
         assert!(content.contains("application/x-deb=gnome-software-local-file-packagekit.desktop"));
 
         let _ = std::fs::remove_dir_all(&config_dir);
+    }
+
+    #[test]
+    fn test_ensure_keyfile_button_layout_enforces_left_traffic_lights() {
+        let temp_dir = std::env::temp_dir().join("malus_test_keyfile_isolation");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let keyfile_path = temp_dir.join("keyfile");
+
+        // Caso 1: Archivo con sección GNOME modificada por GNOME Tweaks (controles a la derecha)
+        let gnometweaks_content = r#"[org/gnome/desktop/wm/preferences]
+button-layout=':minimize,maximize,close'
+
+[org/gnome/desktop/interface]
+color-scheme='prefer-dark'
+gtk-theme='Adwaita'
+"#;
+        std::fs::write(&keyfile_path, gnometweaks_content).unwrap();
+
+        ensure_keyfile_button_layout(&keyfile_path).unwrap();
+
+        let updated = std::fs::read_to_string(&keyfile_path).unwrap();
+        assert!(updated.contains("button-layout='close,minimize,maximize:'"));
+        assert!(!updated.contains(":minimize,maximize,close"));
+        assert!(updated.contains("color-scheme='prefer-dark'"));
+        assert!(updated.contains("gtk-theme='Adwaita'"));
+
+        // Caso 2: Archivo sin sección de wm preferences
+        let no_wm_content = r#"[org/gnome/desktop/interface]
+color-scheme='prefer-dark'
+"#;
+        std::fs::write(&keyfile_path, no_wm_content).unwrap();
+        ensure_keyfile_button_layout(&keyfile_path).unwrap();
+
+        let updated2 = std::fs::read_to_string(&keyfile_path).unwrap();
+        assert!(updated2.contains("[org/gnome/desktop/wm/preferences]"));
+        assert!(updated2.contains("button-layout='close,minimize,maximize:'"));
+        assert!(updated2.contains("color-scheme='prefer-dark'"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
