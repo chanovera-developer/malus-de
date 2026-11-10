@@ -156,6 +156,18 @@ done
 echo "   ✔ /etc/xdg/xdg-desktop-portal/malus-portals.conf"
 echo "   ✔ /usr/share/xdg-desktop-portal/malus-portals.conf"
 
+# Asegurar que xdg-desktop-portal-gtk esté instalado (requerido para portales aislados sin dependencias de Mutter)
+if [ ! -f "/usr/libexec/xdg-desktop-portal-gtk" ] && [ ! -f "/usr/lib/xdg-desktop-portal-gtk" ]; then
+    echo "🗂️ Instalando portal GTK independiente (xdg-desktop-portal-gtk)..."
+    if command -v dnf >/dev/null 2>&1; then
+        dnf install -y xdg-desktop-portal-gtk
+    elif command -v apt-get >/dev/null 2>&1; then
+        apt-get update && apt-get install -y xdg-desktop-portal-gtk
+    elif command -v pacman >/dev/null 2>&1; then
+        pacman -S --noconfirm --needed xdg-desktop-portal-gtk
+    fi
+fi
+
 # Asegurar que el servicio de llavero (org.freedesktop.secrets) esté instalado
 if ! command -v gnome-keyring-daemon >/dev/null 2>&1; then
     echo "🔐 Instalando servicio de llavero del sistema (gnome-keyring)..."
