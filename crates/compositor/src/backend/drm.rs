@@ -3037,6 +3037,13 @@ pub fn run_drm() -> Result<()> {
                     tracker_elements.push(MalusDrmElement::Wayland(elem));
                 }
 
+                // TODO: DAMAGE TRACKING TEMPORALMENTE DESHABILITADO.
+                // Debe terminarse y/o corregirse:
+                // 1. Sincronización estricta del scissor box GL (GL_SCISSOR_BOX) en shaders personalizados (sombras proyectadas y Dual Kawase blur).
+                // 2. Damage tracking del cursor por software sincronizado con el historial de rotación de buffers DRM (buffer age).
+                // 3. Consolidación y fusión de rectángulos de daño superpuestos para evitar sobre-dibujo o doble blending en áreas translúcidas.
+                const ENABLE_DAMAGE_TRACKING: bool = false;
+
                 let age_to_use = if out_surface.full_damage_pending {
                     0
                 } else {
@@ -3044,13 +3051,17 @@ pub fn run_drm() -> Result<()> {
                 };
                 out_surface.full_damage_pending = false;
 
-                let mut render_damage = match out_surface
-                    .damage_tracker
-                    .damage_output(age_to_use, &tracker_elements)
-                {
-                    Ok((Some(dmg), _)) => dmg.clone(),
-                    Ok((None, _)) => Vec::new(),
-                    Err(_) => vec![Rectangle::from_size(out_surface.size)],
+                let mut render_damage = if ENABLE_DAMAGE_TRACKING {
+                    match out_surface
+                        .damage_tracker
+                        .damage_output(age_to_use, &tracker_elements)
+                    {
+                        Ok((Some(dmg), _)) => dmg.clone(),
+                        Ok((None, _)) => Vec::new(),
+                        Err(_) => vec![Rectangle::from_size(out_surface.size)],
+                    }
+                } else {
+                    vec![Rectangle::from_size(out_surface.size)]
                 };
 
                 // Daño del cursor físico (software / themed cursor)
@@ -3070,7 +3081,7 @@ pub fn run_drm() -> Result<()> {
                     None
                 };
 
-                if current_cursor_rect != out_surface.last_cursor_rect {
+                if ENABLE_DAMAGE_TRACKING && current_cursor_rect != out_surface.last_cursor_rect {
                     if let Some(old_rect) = out_surface.last_cursor_rect {
                         render_damage.push(old_rect);
                     }
@@ -4455,7 +4466,12 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
 
-                if let Err(e) = out_surface.surface.queue_buffer(None, Some(render_damage.clone()), ()) {
+                let kms_damage = if ENABLE_DAMAGE_TRACKING {
+                    Some(render_damage.clone())
+                } else {
+                    None
+                };
+                if let Err(e) = out_surface.surface.queue_buffer(None, kms_damage, ()) {
                     warn!("Error al encolar buffer en DRM: {:?}", e);
                 }
             }
