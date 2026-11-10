@@ -46,3 +46,4 @@ Para igualar y superar la fluidez y respuesta de GNOME sin comprometer la fideli
 * Eliminación inmediata de la latencia percibida, igualando la respuesta inmediata de Mutter/GNOME Shell.
 * Reducción radical del consumo de ancho de banda de memoria GPU en movimiento de puntero.
 * Cero regresiones en la geometría squircle de sombras volumétricas y cero parpadeos en KMS.
+

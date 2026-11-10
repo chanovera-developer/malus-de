@@ -125,6 +125,9 @@ struct DrmOutputSurface {
     pending_damage_buffers: usize,
     last_cursor_draw_point: Option<(i32, i32)>,
     last_cursor_status: smithay::input::pointer::CursorImageStatus,
+    last_background_commit_counter: usize,
+    last_background_size: (i32, i32),
+    background_dirty: bool,
 }
 
 struct ThemedCursor {
@@ -1268,6 +1271,9 @@ pub fn run_drm() -> Result<()> {
             pending_damage_buffers: 3,
             last_cursor_draw_point: None,
             last_cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
+            last_background_commit_counter: usize::MAX,
+            last_background_size: (0, 0),
+            background_dirty: true,
         });
     }
 
@@ -2308,6 +2314,7 @@ pub fn run_drm() -> Result<()> {
                                         s.window_redraw_shadow_blur.clear();
                                         s.dock_redraw_buffers = 3;
                                         s.pending_damage_buffers = 3;
+                                        s.background_dirty = true;
                                         s.damage_tracker = OutputDamageTracker::from_output(&s.output);
                                         mode_update = Some(Mode {
                                             size: (width as i32, height as i32).into(),
@@ -2455,12 +2462,21 @@ pub fn run_drm() -> Result<()> {
             }
         }
 
-        // Despachar eventos de hardware (libinput, sesión, vblank) con throttling dinámico
-        let dispatch_timeout = if state.active_animations.is_empty()
-            && state.theme_transition_started_at.is_none()
-            && state.pending_theme_transition_capture.is_none()
+        // Despachar eventos de hardware (libinput, sesión, vblank) sin retraso artificial.
+        // El frame pacing se regula al final de cada ciclo con el frame_interval del monitor.
+        // Si hay búferes pendientes de renderizar o animaciones activas, despachar de inmediato (Duration::ZERO).
+        // En reposo absoluto (pantalla estática), usar 1 ms de espera para máxima reactividad.
+        let has_pending_work = if let Ok(surfs) = shared_surfaces.lock() {
+            surfs.iter().any(|s| s.pending_damage_buffers > 0)
+        } else {
+            false
+        };
+        let dispatch_timeout = if has_pending_work
+            || !state.active_animations.is_empty()
+            || state.theme_transition_started_at.is_some()
+            || state.pending_theme_transition_capture.is_some()
         {
-            Duration::from_millis(8)
+            Duration::ZERO
         } else {
             Duration::from_millis(1)
         };
@@ -3392,7 +3408,7 @@ pub fn run_drm() -> Result<()> {
                 let cursor_changed = cursor_draw_point != out_surface.last_cursor_draw_point
                     || state.cursor_status != out_surface.last_cursor_status;
                 if cursor_changed {
-                    out_surface.pending_damage_buffers = 3;
+                    out_surface.pending_damage_buffers = out_surface.pending_damage_buffers.max(1);
                 }
 
                 let mut window_geoms_changed = window_render_data.len() != out_surface.last_window_geometries.len();
@@ -3790,12 +3806,25 @@ pub fn run_drm() -> Result<()> {
                         let projection = *frame.projection();
 
                         // 1.1. Capturar el fondo limpio DESPUÉS de dibujar el wallpaper y ANTES de dibujar ventanas o sombras.
-                        // Esto garantiza que el desenfoque Dual-Kawase nunca lea fragmentos de ventanas ni sombras,
-                        // eliminando el feedback loop y el parpadeo en ventanas translúcidas.
-                        if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
-                            let _ = frame.with_context(|gl| {
-                                blur.capture_background(gl, &projection, out_surface.size);
-                            });
+                        // Esto garantiza que el desenfoque Dual-Kawase nunca lea fragmentos de ventanas ni sombras.
+                        // Se ejecuta ÚNICAMENTE cuando el fondo cambia (inicio, commits de malus-wallpaper, cambio de modo o tema).
+                        // En animaciones de navegador web, carga de páginas o movimiento de cursor, el fondo no cambia,
+                        // omitiendo glCopyTexSubImage2D de toda la pantalla y liberando varios milisegundos de GPU por cuadro.
+                        let background_dirty = out_surface.background_dirty
+                            || out_surface.last_background_commit_counter != state.background_commit_counter
+                            || out_surface.last_background_size != (out_surface.size.w, out_surface.size.h)
+                            || state.theme_transition_started_at.is_some()
+                            || theme_capture_request.is_some();
+
+                        if background_dirty {
+                            if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
+                                let _ = frame.with_context(|gl| {
+                                    blur.capture_background(gl, &projection, out_surface.size);
+                                });
+                                out_surface.background_dirty = false;
+                                out_surface.last_background_commit_counter = state.background_commit_counter;
+                                out_surface.last_background_size = (out_surface.size.w, out_surface.size.h);
+                            }
                         }
 
                         let is_pointer_grabbed = state

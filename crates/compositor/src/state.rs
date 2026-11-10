@@ -199,6 +199,7 @@ pub struct MalusState {
     pub screenshot_ui: crate::screenshot_ui::ScreenshotUiState,
     pub ssd: crate::ssd::SsdManager,
     pub surface_commit_counter: usize,
+    pub background_commit_counter: usize,
 }
 
 pub fn guess_icon_name(app_id: &str, title: &str) -> String {
@@ -878,6 +879,7 @@ impl MalusState {
             screenshot_ui: crate::screenshot_ui::ScreenshotUiState::new(),
             ssd: crate::ssd::SsdManager::new(),
             surface_commit_counter: 0,
+            background_commit_counter: 0,
         }
     }
 
@@ -2708,6 +2710,21 @@ impl CompositorHandler for MalusState {
 
     fn commit(&mut self, surface: &WlSurface) {
         self.surface_commit_counter = self.surface_commit_counter.wrapping_add(1);
+        let is_background = self.space.outputs().any(|output| {
+            let layer_map = smithay::desktop::layer_map_for_output(output);
+            let found = layer_map.layers().any(|l| {
+                l.wl_surface() == surface
+                    && matches!(
+                        l.layer(),
+                        smithay::wayland::shell::wlr_layer::Layer::Background
+                            | smithay::wayland::shell::wlr_layer::Layer::Bottom
+                    )
+            });
+            found
+        });
+        if is_background {
+            self.background_commit_counter = self.background_commit_counter.wrapping_add(1);
+        }
         smithay::backend::renderer::utils::on_commit_buffer_handler::<Self>(surface);
         self.popups.commit(surface);
 
