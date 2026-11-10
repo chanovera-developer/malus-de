@@ -292,25 +292,45 @@ INJECTION_SCRIPT = """
 
     if (!window._malusControlsInstalled) {
         window._malusControlsInstalled = true;
-        const observer = new MutationObserver(() => {
+
+        // Reubicar durante el arranque inicial y detener el temporizador inmediatamente al tener éxito
+        let attempts = 0;
+        const initInterval = setInterval(() => {
             ensureStyle();
-            relocate();
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
-        setInterval(() => {
-            ensureStyle();
-            relocate();
-        }, 200);
+            if (relocate() || ++attempts > 20) {
+                clearInterval(initInterval);
+            }
+        }, 100);
+
+        // Observar ÚNICAMENTE el contenedor de la barra de título sin subtree profundo,
+        // garantizando 0% de sobrecarga en el editor Monaco, terminal o chat de IA.
+        const attachObserver = () => {
+            const titlebar = document.querySelector('.part.titlebar') || document.querySelector('.titlebar-left');
+            if (titlebar) {
+                const observer = new MutationObserver(() => {
+                    ensureStyle();
+                    relocate();
+                });
+                observer.observe(titlebar, { childList: true, subtree: false });
+                return true;
+            }
+            return false;
+        };
+
+        if (!attachObserver()) {
+            const domReadyInterval = setInterval(() => {
+                if (attachObserver()) {
+                    clearInterval(domReadyInterval);
+                }
+            }, 300);
+        }
     }
 })()
 """
 
-REINJECT_INTERVAL = 3.0  # segundos; el script inyectado es idempotente
-
 def watcher(port, stop_event, state):
-    # tid -> momento de la última inyección. Se reinyecta periódicamente para
-    # sobrevivir a "Reload Window", que conserva el mismo id de target pero
-    # descarta el DOM (y con él los estilos inyectados).
+    # tid -> url del workbench. Se inyecta una sola vez por carga/recarga de ventana,
+    # eliminando por completo la reevaluación continua en bucle por WebSocket CDP.
     injected_targets = {}
     url = f"http://127.0.0.1:{port}/json"
 
@@ -320,20 +340,19 @@ def watcher(port, stop_event, state):
                 targets = json.loads(resp.read().decode('utf-8'))
                 state["last_alive"] = time.time()
                 state["ever_alive"] = True
-                now = time.time()
                 for t in targets:
                     tid = t.get("id")
                     t_url = t.get("url", "")
                     if t.get("type") != "page" or "workbench" not in t_url:
                         continue
-                    if now - injected_targets.get(tid, 0) < REINJECT_INTERVAL:
+                    if injected_targets.get(tid) == t_url:
                         continue
                     ws_url = t.get("webSocketDebuggerUrl")
                     if ws_url and send_cdp_eval(ws_url, INJECTION_SCRIPT):
-                        injected_targets[tid] = now
+                        injected_targets[tid] = t_url
         except Exception:
             pass
-        time.sleep(0.5)
+        time.sleep(1.5)
 
 def main():
     target_cmd = find_target_command(sys.argv[0], sys.argv[1:])
