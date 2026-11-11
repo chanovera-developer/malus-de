@@ -179,65 +179,214 @@ fn set_gtk_decoration_layout(config_dir: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+static ATOMIC_TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Escribe un archivo de forma atómica (temporal en el mismo directorio + `rename`)
+/// únicamente si el contenido difiere del actual. Devuelve `true` si el archivo cambió.
+pub fn write_file_atomic_if_changed(path: &Path, content: &str) -> std::io::Result<bool> {
+    if let Ok(existing) = std::fs::read_to_string(path) {
+        if existing == content {
+            return Ok(false);
+        }
+    }
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let seq = ATOMIC_TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("malus");
+    let tmp_path = path.with_file_name(format!(".{file_name}.tmp.{}.{seq}", std::process::id()));
+
+    if let Err(err) = std::fs::write(&tmp_path, content) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(err);
+    }
+
+    if let Err(err) = std::fs::rename(&tmp_path, path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(err);
+    }
+
+    Ok(true)
+}
+
+/// Actualiza o inserta pares `clave=valor` por sección dentro de un archivo INI/keyfile
+/// y lo persiste atómicamente solo cuando hubo cambios reales.
+pub fn upsert_keyfile_entries(
+    keyfile_path: &Path,
+    updates: &[(&str, &[(&str, &str)])],
+) -> std::io::Result<bool> {
+    let existing = match std::fs::read_to_string(keyfile_path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err),
+    };
+
+    let mut sections: Vec<(Option<String>, Vec<String>)> = Vec::new();
+    let mut current_header: Option<String> = None;
+    let mut current_lines: Vec<String> = Vec::new();
+
+    for line in existing.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') && trimmed.len() >= 2 {
+            if current_header.is_some() || !current_lines.is_empty() {
+                sections.push((current_header.take(), std::mem::take(&mut current_lines)));
+            }
+            current_header = Some(trimmed[1..trimmed.len() - 1].to_string());
+        } else {
+            current_lines.push(line.to_string());
+        }
+    }
+    if current_header.is_some() || !current_lines.is_empty() {
+        sections.push((current_header, current_lines));
+    }
+
+    for &(section_name, kv_pairs) in updates {
+        let target_idx = sections
+            .iter()
+            .position(|(hdr, _)| hdr.as_deref() == Some(section_name));
+
+        let idx = match target_idx {
+            Some(i) => i,
+            None => {
+                if let Some((_, prev_lines)) = sections.last_mut() {
+                    if !prev_lines.last().is_some_and(|l| l.trim().is_empty()) {
+                        prev_lines.push(String::new());
+                    }
+                }
+                sections.push((Some(section_name.to_string()), Vec::new()));
+                sections.len() - 1
+            }
+        };
+
+        let lines = &mut sections[idx].1;
+        for &(key, val) in kv_pairs {
+            let formatted = format!("{key}={val}");
+            if let Some(pos) = lines.iter().position(|l| {
+                let t = l.trim_start();
+                t.strip_prefix(key)
+                    .is_some_and(|rest| rest.trim_start().starts_with('='))
+            }) {
+                lines[pos] = formatted;
+            } else {
+                let insert_at = lines
+                    .iter()
+                    .rposition(|l| !l.trim().is_empty())
+                    .map_or(0, |last_non_empty| last_non_empty + 1);
+                lines.insert(insert_at, formatted);
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    for (hdr, lines) in sections {
+        if let Some(name) = hdr {
+            out.push(format!("[{name}]"));
+        }
+        out.extend(lines);
+    }
+
+    let content = if out.is_empty() {
+        String::new()
+    } else {
+        out.join("\n") + "\n"
+    };
+
+    write_file_atomic_if_changed(keyfile_path, &content)
+}
+
+fn update_gtk_ini_appearance(
+    ini_path: &Path,
+    dark_val: &str,
+    gtk_theme: &str,
+) -> std::io::Result<bool> {
+    upsert_keyfile_entries(
+        ini_path,
+        &[(
+            "Settings",
+            &[
+                ("gtk-decoration-layout", "close,minimize,maximize:"),
+                ("gtk-application-prefer-dark-theme", dark_val),
+                ("gtk-theme-name", gtk_theme),
+            ],
+        )],
+    )
+}
+
+fn propagate_isolated_portal_environment_once(malus_config_dir: &Path) {
+    if std::env::var_os("MALUS_ISOLATED_ENV_READY").is_some() {
+        return;
+    }
+
+    let sentinel_path = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .map(|dir| dir.join("malus-isolated-env-ready"));
+
+    if sentinel_path.as_ref().is_some_and(|p| p.exists()) {
+        std::env::set_var("MALUS_ISOLATED_ENV_READY", "1");
+        return;
+    }
+
+    std::env::set_var("MALUS_ISOLATED_ENV_READY", "1");
+    if let Some(ref sentinel) = sentinel_path {
+        let _ = std::fs::write(sentinel, b"1\n");
+    }
+
+    let config_dir = malus_config_dir.to_path_buf();
+    let _ = std::thread::Builder::new()
+        .name("malus-portal-env".to_string())
+        .spawn(move || {
+            let _ = std::process::Command::new("dbus-update-activation-environment")
+                .args([
+                    "--systemd",
+                    &format!("XDG_CONFIG_HOME={}", config_dir.display()),
+                    "GSETTINGS_BACKEND=keyfile",
+                ])
+                .status();
+            let _ = std::process::Command::new("systemctl")
+                .args([
+                    "--user",
+                    "import-environment",
+                    "XDG_CONFIG_HOME",
+                    "GSETTINGS_BACKEND",
+                ])
+                .status();
+            let _ = std::process::Command::new("systemctl")
+                .args(["--user", "unset-environment", "GTK_USE_PORTAL"])
+                .status();
+            let _ = std::process::Command::new("systemctl")
+                .args([
+                    "--user",
+                    "restart",
+                    "xdg-desktop-portal-gtk",
+                    "xdg-desktop-portal",
+                ])
+                .status();
+        });
+}
+
 pub fn ensure_keyfile_button_layout(keyfile_path: &Path) -> std::io::Result<()> {
     if !keyfile_path.exists() {
         return Ok(());
     }
-    let content = std::fs::read_to_string(keyfile_path)?;
-    let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
-    let mut in_wm_section = false;
-    let mut found_wm_section = false;
-    let mut found_button_layout = false;
-
-    for i in 0..lines.len() {
-        let trimmed = lines[i].trim();
-        if trimmed.starts_with('[') {
-            if trimmed == "[org/gnome/desktop/wm/preferences]" {
-                in_wm_section = true;
-                found_wm_section = true;
-            } else if in_wm_section {
-                in_wm_section = false;
-            }
-        } else if in_wm_section && trimmed.starts_with("button-layout=") {
-            lines[i] = "button-layout='close,minimize,maximize:'".to_string();
-            found_button_layout = true;
-            break;
-        }
-    }
-
-    if !found_wm_section {
-        lines.push(String::new());
-        lines.push("[org/gnome/desktop/wm/preferences]".to_string());
-        lines.push("button-layout='close,minimize,maximize:'".to_string());
-    } else if !found_button_layout {
-        if let Some(pos) = lines.iter().position(|l| l.trim() == "[org/gnome/desktop/wm/preferences]") {
-            lines.insert(pos + 1, "button-layout='close,minimize,maximize:'".to_string());
-        }
-    }
-
-    std::fs::write(keyfile_path, lines.join("\n") + "\n")
+    upsert_keyfile_entries(
+        keyfile_path,
+        &[(
+            "org/gnome/desktop/wm/preferences",
+            &[("button-layout", "'close,minimize,maximize:'")],
+        )],
+    )
+    .map(|_| ())
 }
 
 pub fn set_gsettings_button_layout(config_dir: &Path) {
     let keyfile_path = config_dir.join("glib-2.0/settings/keyfile");
-    let _ = ensure_keyfile_button_layout(&keyfile_path);
-    match std::process::Command::new("gsettings")
-        .env("XDG_CONFIG_HOME", config_dir)
-        .env("GSETTINGS_BACKEND", "keyfile")
-        .args([
-            "set",
-            "org.gnome.desktop.wm.preferences",
-            "button-layout",
-            "close,minimize,maximize:",
-        ])
-        .status()
-    {
-        Ok(status) if status.success() => {}
-        Ok(status) => tracing::warn!(
-            "No se pudo aplicar el layout aislado de botones en GSettings (código: {:?})",
-            status.code()
-        ),
-        Err(error) => tracing::warn!("No se pudo ejecutar gsettings para el layout de botones: {error}"),
+    if let Err(error) = ensure_keyfile_button_layout(&keyfile_path) {
+        tracing::warn!("No se pudo escribir el layout de botones en keyfile: {error}");
     }
 }
 
@@ -270,7 +419,7 @@ gtk-theme='Adwaita'
 [org/gnome/settings-daemon/plugins/xsettings]
 overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
 "#;
-        std::fs::write(&keyfile_path, keyfile_content)?;
+        write_file_atomic_if_changed(&keyfile_path, keyfile_content)?;
     } else {
         let _ = ensure_keyfile_button_layout(&keyfile_path);
     }
@@ -283,37 +432,12 @@ overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
 default=gtk;gnome;
 org.freedesktop.impl.portal.Settings=gtk;gnome;
 "#;
-    let _ = std::fs::write(portal_dir.join("portals.conf"), portal_content);
-    let _ = std::fs::write(portal_dir.join("malus-portals.conf"), portal_content);
-    let _ = std::fs::write(portal_dir.join("Malus-portals.conf"), portal_content);
+    let _ = write_file_atomic_if_changed(&portal_dir.join("portals.conf"), portal_content);
+    let _ = write_file_atomic_if_changed(&portal_dir.join("malus-portals.conf"), portal_content);
+    let _ = write_file_atomic_if_changed(&portal_dir.join("Malus-portals.conf"), portal_content);
 
-    // 1.2. Propagar variables de entorno aisladas a D-Bus y systemd --user para demonios y servicios
-    let _ = std::process::Command::new("dbus-update-activation-environment")
-        .args([
-            "--systemd",
-            &format!("XDG_CONFIG_HOME={}", malus_config_dir.display()),
-            "GSETTINGS_BACKEND=keyfile",
-        ])
-        .status();
-    let _ = std::process::Command::new("systemctl")
-        .args([
-            "--user",
-            "import-environment",
-            "XDG_CONFIG_HOME",
-            "GSETTINGS_BACKEND",
-        ])
-        .status();
-    let _ = std::process::Command::new("systemctl")
-        .args(["--user", "unset-environment", "GTK_USE_PORTAL"])
-        .status();
-    let _ = std::process::Command::new("systemctl")
-        .args([
-            "--user",
-            "restart",
-            "xdg-desktop-portal-gtk",
-            "xdg-desktop-portal",
-        ])
-        .status();
+    // 1.2. Propagar variables de entorno aisladas a D-Bus/systemd solo una vez por sesión y sin bloquear UI
+    propagate_isolated_portal_environment_once(&malus_config_dir);
 
     let (cursor_theme, cursor_size) = load_cursor_config();
 
@@ -326,7 +450,7 @@ org.freedesktop.impl.portal.Settings=gtk;gnome;
             "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme=1\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-theme-name=Adwaita\n",
             cursor_theme, cursor_size
         );
-        std::fs::write(&gtk3_ini, gtk_ini_content)?;
+        write_file_atomic_if_changed(&gtk3_ini, &gtk_ini_content)?;
     }
 
     let gtk4_dir = malus_config_dir.join("gtk-4.0");
@@ -337,29 +461,28 @@ org.freedesktop.impl.portal.Settings=gtk;gnome;
             "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme=1\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-theme-name=Adwaita\n",
             cursor_theme, cursor_size
         );
-        std::fs::write(&gtk4_ini, gtk_ini_content)?;
+        write_file_atomic_if_changed(&gtk4_ini, &gtk_ini_content)?;
     }
 
     set_gtk_decoration_layout(&malus_config_dir)?;
     set_gsettings_button_layout(&malus_config_dir);
 
-    // 2.1. Hojas de estilo GTK exclusivas de Malus DE
-    let light_css = get_malus_gtk_css(false);
-    let dark_css = get_malus_gtk_css(true);
-    let light_gtk3_css = get_malus_gtk3_css(false);
-    let dark_gtk3_css = get_malus_gtk3_css(true);
-
+    // 2.1. Hojas de estilo GTK exclusivas de Malus DE (generar y escribir solo la activa)
     let is_dark = is_dark_mode_active();
-
-    let active_css = if is_dark { &dark_css } else { &light_css };
-    let active_gtk3 = if is_dark { &dark_gtk3_css } else { &light_gtk3_css };
+    let active_gtk3 = get_malus_gtk3_css(is_dark);
+    let active_css = get_malus_gtk_css(is_dark);
 
     // GTK 3
-    let _ = std::fs::write(gtk3_dir.join("gtk.css"), active_gtk3);
+    let _ = write_file_atomic_if_changed(&gtk3_dir.join("gtk.css"), &active_gtk3);
 
     // GTK 4
-    let _ = std::fs::write(gtk4_dir.join("gtk.css"), active_css);
-    let _ = std::fs::write(gtk4_dir.join("gtk-dark.css"), &dark_css);
+    let _ = write_file_atomic_if_changed(&gtk4_dir.join("gtk.css"), &active_css);
+    let gtk4_dark_path = gtk4_dir.join("gtk-dark.css");
+    if is_dark {
+        let _ = write_file_atomic_if_changed(&gtk4_dark_path, &active_css);
+    } else if !gtk4_dark_path.exists() {
+        let _ = write_file_atomic_if_changed(&gtk4_dark_path, &get_malus_gtk_css(true));
+    }
 
     // 3. Configuración de monitores y escalado fraccionario (~/.config/malus-de/monitors.toml)
     let monitors_path = malus_config_dir.join("monitors.toml");
@@ -847,138 +970,61 @@ pub fn is_dark_mode_active() -> bool {
 /// del sistema anfitrión, garantizando independencia bidireccional absoluta frente a GNOME.
 pub fn sync_system_appearance(to_dark: bool) {
     let target = if to_dark { "prefer-dark" } else { "prefer-light" };
+    let color_scheme_val = format!("'{}'", target);
     let dark_val = if to_dark { "1" } else { "0" };
     let gtk_theme_target = "Adwaita";
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     let malus_config_dir = std::path::PathBuf::from(&home).join(".config/malus-de");
 
-    // 1. Establecer variables de entorno para la configuración aislada de Malus DE
+    // 1. Mantener variables de entorno aisladas en el proceso actual
     std::env::set_var("XDG_CONFIG_HOME", &malus_config_dir);
     std::env::set_var("GSETTINGS_BACKEND", "keyfile");
 
-    // 2. GSettings usa el backend keyfile aislado de Malus DE
-    let _ = std::process::Command::new("gsettings")
-        .env("XDG_CONFIG_HOME", &malus_config_dir)
-        .env("GSETTINGS_BACKEND", "keyfile")
-        .args(["set", "org.gnome.desktop.interface", "color-scheme", target])
-        .status();
-    let _ = std::process::Command::new("gsettings")
-        .env("XDG_CONFIG_HOME", &malus_config_dir)
-        .env("GSETTINGS_BACKEND", "keyfile")
-        .args(["set", "org.gnome.desktop.interface", "gtk-theme", gtk_theme_target])
-        .status();
-
-    // 3. Keyfile de sesión aislada de Malus DE (~/.config/malus-de/glib-2.0/settings/keyfile)
+    // 2. Actualizar keyfile en una sola escritura atómica (dispara GLib/portal en ~0.4 ms sin subprocesos)
     let keyfile_path = malus_config_dir.join("glib-2.0/settings/keyfile");
-    if keyfile_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&keyfile_path) {
-            let mut lines = Vec::new();
-            let mut found_color = false;
-            let mut found_theme = false;
-            for line in content.lines() {
-                if line.starts_with("color-scheme=") {
-                    lines.push(format!("color-scheme='{}'", target));
-                    found_color = true;
-                } else if line.starts_with("gtk-theme=") {
-                    lines.push(format!("gtk-theme='{}'", gtk_theme_target));
-                    found_theme = true;
-                } else {
-                    lines.push(line.to_string());
-                }
-            }
-            if !found_color {
-                lines.push(format!("color-scheme='{}'", target));
-            }
-            if !found_theme {
-                lines.push(format!("gtk-theme='{}'", gtk_theme_target));
-            }
-            let _ = std::fs::write(&keyfile_path, lines.join("\n") + "\n");
-        }
-    }
-    let _ = ensure_keyfile_button_layout(&keyfile_path);
+    let _ = upsert_keyfile_entries(
+        &keyfile_path,
+        &[
+            (
+                "org/gnome/desktop/interface",
+                &[
+                    ("color-scheme", color_scheme_val.as_str()),
+                    ("gtk-theme", "'Adwaita'"),
+                ],
+            ),
+            (
+                "org/gnome/desktop/wm/preferences",
+                &[("button-layout", "'close,minimize,maximize:'")],
+            ),
+        ],
+    );
 
-    // 4. Archivos settings.ini (GTK3 y GTK4) EXCLUSIVAMENTE de Malus DE
-    let ini_paths = [
-        format!("{}/.config/malus-de/gtk-3.0/settings.ini", home),
-        format!("{}/.config/malus-de/gtk-4.0/settings.ini", home),
-    ];
-    if let Err(error) = set_gtk_decoration_layout(&malus_config_dir) {
-        tracing::warn!("No se pudo actualizar la posición de botones GTK de Malus DE: {error}");
-    }
-    set_gsettings_button_layout(&malus_config_dir);
-
-    for path_str in &ini_paths {
-        let p = std::path::PathBuf::from(path_str);
-        if let Some(parent) = p.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if p.exists() {
-            if let Ok(content) = std::fs::read_to_string(&p) {
-                let mut lines: Vec<String> = Vec::new();
-                let mut found_dark = false;
-                let mut found_theme = false;
-                for line in content.lines() {
-                    if line.starts_with("gtk-application-prefer-dark-theme=") {
-                        lines.push(format!("gtk-application-prefer-dark-theme={}", dark_val));
-                        found_dark = true;
-                    } else if line.starts_with("gtk-theme-name=") {
-                        lines.push(format!("gtk-theme-name={}", gtk_theme_target));
-                        found_theme = true;
-                    } else {
-                        lines.push(line.to_string());
-                    }
-                }
-                if !found_dark {
-                    lines.push(format!("gtk-application-prefer-dark-theme={}", dark_val));
-                }
-                if !found_theme {
-                    lines.push(format!("gtk-theme-name={}", gtk_theme_target));
-                }
-                let _ = std::fs::write(&p, lines.join("\n") + "\n");
-            }
-        } else {
-            let content = format!(
-                "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme={}\ngtk-cursor-theme-name=macOS\ngtk-cursor-theme-size=24\ngtk-theme-name={}\n",
-                dark_val, gtk_theme_target
-            );
-            let _ = std::fs::write(&p, content);
-        }
+    // 3. Actualizar settings.ini de GTK3 y GTK4 en una sola pasada atómica por archivo
+    for ini_path in [
+        malus_config_dir.join("gtk-3.0/settings.ini"),
+        malus_config_dir.join("gtk-4.0/settings.ini"),
+    ] {
+        let _ = update_gtk_ini_appearance(&ini_path, dark_val, gtk_theme_target);
     }
 
-    // 7. Generar y escribir CSS actualizado en la configuración de Malus DE
-    let light_css = get_malus_gtk_css(false);
-    let dark_css = get_malus_gtk_css(true);
-    let light_gtk3_css = get_malus_gtk3_css(false);
-    let dark_gtk3_css = get_malus_gtk3_css(true);
+    // 4. Generar y escribir únicamente la hoja CSS activa (y gtk-dark.css solo si hace falta)
+    let active_gtk3 = get_malus_gtk3_css(to_dark);
+    let active_gtk4 = get_malus_gtk_css(to_dark);
 
-    let active_gtk3 = if to_dark { &dark_gtk3_css } else { &light_gtk3_css };
-
-    let gtk3_paths = [
-        format!("{}/.config/malus-de/gtk-3.0/gtk.css", home),
-    ];
-    for p in &gtk3_paths {
-        let _ = std::fs::write(p, active_gtk3);
+    let _ = write_file_atomic_if_changed(
+        &malus_config_dir.join("gtk-3.0/gtk.css"),
+        &active_gtk3,
+    );
+    let _ = write_file_atomic_if_changed(
+        &malus_config_dir.join("gtk-4.0/gtk.css"),
+        &active_gtk4,
+    );
+    let gtk4_dark_path = malus_config_dir.join("gtk-4.0/gtk-dark.css");
+    if to_dark {
+        let _ = write_file_atomic_if_changed(&gtk4_dark_path, &active_gtk4);
+    } else if !gtk4_dark_path.exists() {
+        let _ = write_file_atomic_if_changed(&gtk4_dark_path, &get_malus_gtk_css(true));
     }
-
-    let gtk4_css_paths = [
-        format!("{}/.config/malus-de/gtk-4.0/gtk.css", home),
-    ];
-    for p in &gtk4_css_paths {
-        let _ = std::fs::write(p, if to_dark { &dark_css } else { &light_css });
-    }
-
-    let gtk4_dark_paths = [
-        format!("{}/.config/malus-de/gtk-4.0/gtk-dark.css", home),
-    ];
-    for p in &gtk4_dark_paths {
-        let _ = std::fs::write(p, &dark_css);
-    }
-
-    // Notificar a GTK tocando los archivos CSS
-    for p in gtk3_paths.iter().chain(gtk4_css_paths.iter()).chain(gtk4_dark_paths.iter()) {
-        let _ = std::process::Command::new("touch").arg(p).status();
-    }
-
 }
 
 /// Configuración de una aplicación anclada en el Dock
@@ -2557,6 +2603,89 @@ color-scheme='prefer-dark'
         assert!(updated2.contains("[org/gnome/desktop/wm/preferences]"));
         assert!(updated2.contains("button-layout='close,minimize,maximize:'"));
         assert!(updated2.contains("color-scheme='prefer-dark'"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_write_file_atomic_if_changed_skips_unchanged_and_updates_modified() {
+        let temp_dir = std::env::temp_dir().join("malus_test_atomic_write");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let file_path = temp_dir.join("sub").join("config.css");
+
+        // Primera escritura: crea directorios padre y devuelve true
+        assert!(write_file_atomic_if_changed(&file_path, "body { color: white; }\n").unwrap());
+        assert_eq!(
+            std::fs::read_to_string(&file_path).unwrap(),
+            "body { color: white; }\n"
+        );
+
+        // Contenido idéntico: no-op, devuelve false y no deja archivos temporales
+        assert!(!write_file_atomic_if_changed(&file_path, "body { color: white; }\n").unwrap());
+
+        // Contenido distinto: actualiza atómicamente y devuelve true
+        assert!(write_file_atomic_if_changed(&file_path, "body { color: black; }\n").unwrap());
+        assert_eq!(
+            std::fs::read_to_string(&file_path).unwrap(),
+            "body { color: black; }\n"
+        );
+
+        let left_tmp = std::fs::read_dir(temp_dir.join("sub"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|e| e.file_name().to_string_lossy().contains(".tmp."));
+        assert!(!left_tmp);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_upsert_keyfile_entries_preserves_unrelated_keys_and_skips_noop() {
+        let temp_dir = std::env::temp_dir().join("malus_test_upsert_keyfile");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let keyfile_path = temp_dir.join("keyfile");
+
+        let initial = r#"[org/gnome/desktop/wm/preferences]
+button-layout='close,minimize,maximize:'
+focus-mode='click'
+
+[org/gnome/desktop/interface]
+cursor-theme='macOS'
+color-scheme='prefer-light'
+
+[org/gnome/settings-daemon/plugins/xsettings]
+overrides={'Gtk/ShellShowsAppMenu': <1>}
+"#;
+        std::fs::write(&keyfile_path, initial).unwrap();
+
+        let changed = upsert_keyfile_entries(
+            &keyfile_path,
+            &[(
+                "org/gnome/desktop/interface",
+                &[("color-scheme", "'prefer-dark'"), ("gtk-theme", "'Adwaita'")],
+            )],
+        )
+        .unwrap();
+        assert!(changed);
+
+        let after = std::fs::read_to_string(&keyfile_path).unwrap();
+        assert!(after.contains("color-scheme='prefer-dark'"));
+        assert!(after.contains("gtk-theme='Adwaita'"));
+        assert!(after.contains("cursor-theme='macOS'"));
+        assert!(after.contains("focus-mode='click'"));
+        assert!(after.contains("overrides={'Gtk/ShellShowsAppMenu': <1>}"));
+
+        // Segunda llamada idéntica: devuelve false (sin reescritura ni inotify extra)
+        let changed_again = upsert_keyfile_entries(
+            &keyfile_path,
+            &[(
+                "org/gnome/desktop/interface",
+                &[("color-scheme", "'prefer-dark'"), ("gtk-theme", "'Adwaita'")],
+            )],
+        )
+        .unwrap();
+        assert!(!changed_again);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

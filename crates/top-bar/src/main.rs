@@ -23,7 +23,13 @@ fn main() {
     if let Err(err) = adw::init() {
         tracing::warn!("Aviso al inicializar libadwaita: {:?}", err);
     }
-    adw::StyleManager::default().set_color_scheme(adw::ColorScheme::Default);
+    adw::StyleManager::default().set_color_scheme(
+        if malus_de_common::config::is_dark_mode_active() {
+            adw::ColorScheme::ForceDark
+        } else {
+            adw::ColorScheme::ForceLight
+        },
+    );
 
     let app = Application::builder()
         .application_id("org.malus_de.TopBar")
@@ -179,9 +185,6 @@ fn build_ui(app: &Application) {
                         adw::ColorScheme::ForceLight
                     });
                     ui::theme::update_all_popovers_theme(is_dark);
-                    glib::idle_add_local_once(|| {
-                        adw::StyleManager::default().set_color_scheme(adw::ColorScheme::Default);
-                    });
                 }
                 _ => {}
             }

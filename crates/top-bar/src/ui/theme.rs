@@ -21,6 +21,11 @@ pub fn ensure_theme_monitor() {
         let settings = Settings::new("org.gnome.desktop.interface");
         settings.connect_changed(Some("color-scheme"), |_, _| {
             let is_dark = malus_de_common::config::is_dark_mode_active();
+            libadwaita::StyleManager::default().set_color_scheme(if is_dark {
+                libadwaita::ColorScheme::ForceDark
+            } else {
+                libadwaita::ColorScheme::ForceLight
+            });
             update_all_popovers_theme(is_dark);
         });
         current.replace(Some(settings));

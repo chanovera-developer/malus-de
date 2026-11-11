@@ -284,6 +284,10 @@ if command -v systemctl >/dev/null 2>&1; then
     systemctl --user unset-environment GTK_USE_PORTAL 2>/dev/null || true
     systemctl --user restart xdg-desktop-portal-gtk xdg-desktop-portal 2>/dev/null || true
 fi
+export MALUS_ISOLATED_ENV_READY=1
+if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+    : > "$XDG_RUNTIME_DIR/malus-isolated-env-ready" 2>/dev/null || true
+fi
 
 
 # 2. Iniciar Demonio de Fondo de Pantalla (Layer Background)

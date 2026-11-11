@@ -2588,7 +2588,7 @@ pub fn apply_system_appearance_mode(to_dark: bool) {
     // 1. Sincronizar las preferencias aisladas de GSettings, GTK y CSS de Malus DE.
     malus_de_common::config::sync_system_appearance(to_dark);
 
-    // 2. Actualizar AdwStyleManager en el proceso actual.
+    // 2. Actualizar AdwStyleManager y popovers en el proceso actual sin doble recálculo CSS.
     libadwaita::StyleManager::default().set_color_scheme(
         if to_dark {
             libadwaita::ColorScheme::ForceDark
@@ -2596,9 +2596,7 @@ pub fn apply_system_appearance_mode(to_dark: bool) {
             libadwaita::ColorScheme::ForceLight
         }
     );
-    glib::idle_add_local_once(|| {
-        libadwaita::StyleManager::default().set_color_scheme(libadwaita::ColorScheme::Default);
-    });
+    crate::ui::theme::update_all_popovers_theme(to_dark);
 
     // 3. Notificar a otros módulos mediante IPC
     let _ = malus_de_common::ipc::IpcClient::send_command(

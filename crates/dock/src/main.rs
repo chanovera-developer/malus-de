@@ -39,7 +39,13 @@ fn main() {
     if let Err(err) = adw::init() {
         warn!("Aviso al inicializar libadwaita: {:?}", err);
     }
-    adw::StyleManager::default().set_color_scheme(adw::ColorScheme::Default);
+    adw::StyleManager::default().set_color_scheme(
+        if malus_de_common::config::is_dark_mode_active() {
+            adw::ColorScheme::ForceDark
+        } else {
+            adw::ColorScheme::ForceLight
+        },
+    );
 
     let app = Application::builder()
         .application_id("org.malus_de.Dock")
@@ -1565,9 +1571,6 @@ fn build_dock_ui(app: &Application) {
                     queue_dock_icon_backgrounds(apps_box_ipc.upcast_ref());
                     dock_root_ref.queue_draw();
                     win_ref.queue_draw();
-                    glib::idle_add_local_once(|| {
-                        adw::StyleManager::default().set_color_scheme(adw::ColorScheme::Default);
-                    });
                 }
                 _ => {}
             }
