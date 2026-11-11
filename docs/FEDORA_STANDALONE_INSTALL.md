@@ -141,7 +141,7 @@ Si prefieres construir todo directamente en la máquina limpia:
    ```bash
    git clone https://github.com/chanovera-dev/malus-de.git
    cd malus-de
-   cargo build --release
+   cargo build --release --workspace
    sudo ./scripts/install-session.sh --skip-build
    ```
 
@@ -165,6 +165,6 @@ Con Malus DE no necesitas aplicaciones pesadas de GNOME, pues ya dispones de her
 
 Si necesitas revisar la salida o depurar el inicio de sesión:
 * Registro general de sesión: `~/.local/share/malus-de/session.log`
-* Estado de los servicios de usuario: `systemctl --user status malus-session.target`
+* Procesos activos del entorno: `pgrep -af "malus-de"`
 * Monitoreo de socket Wayland: `echo $WAYLAND_DISPLAY` (debe reportar `wayland-0` o `wayland-1`).
 

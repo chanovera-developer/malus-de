@@ -4,20 +4,20 @@ Este documento detalla la lista exacta de paquetes requeridos para construir una
 
 La sesión fuerza a GTK a usar xdg-desktop-portal y prefiere el selector de archivos del backend GNOME, con GTK como alternativa. Instala `xdg-desktop-portal`, `xdg-desktop-portal-gtk` y `xdg-desktop-portal-gnome`. El portapapeles y el copiado de capturas requieren también `wl-clipboard` (`wl-copy` y `wl-paste`).
 
-Para que Nautilus monte medios extraíbles, instala GVfs con su monitor UDisks y `udisks2`. Malus configura `org.gnome.desktop.media-handling.automount=true` en el perfil aislado de la sesión; GVfs activa sus monitores mediante systemd/D-Bus y UDisks proporciona el servicio del sistema. No hace falta iniciar manualmente el monitor desde el script de sesión.
+Para que el gestor de archivos monte medios extraíbles, instala GVfs con su monitor UDisks y `udisks2`. Malus configura `org.gnome.desktop.media-handling.automount=true` en el perfil aislado de la sesión; GVfs activa sus monitores mediante systemd/D-Bus y UDisks proporciona el servicio del sistema. No hace falta iniciar manualmente el monitor desde el script de sesión.
 
 ---
 
 ## 1. Arquitectura de Paquetes
 
-Malus DE divide sus requerimientos en tres categorías esenciales:
+Malus DE divide sus requerimientos en cuatro niveles esenciales:
 
 ```mermaid
 flowchart TD
     A["Hardware & Kernel Linux"] --> B["Nivel 1: Servicios del Sistema"]
     B --> C["Nivel 2: Bibliotecas Gráficas (Runtime)"]
-    C --> D["Nivel 3: Malus DE (Binarios en Rust)"]
-    D --> E["Nivel 4: Apps Core de Usuario (macOS Experience)"]
+    C --> D["Nivel 3: Malus DE (16 Crates Nativos en Rust)"]
+    D --> E["Nivel 4: Apps Complementarias Opcionales"]
 
     subgraph "Nivel 1: Servicios del Sistema"
         B1["PipeWire + WirePlumber (Audio)"]
@@ -35,13 +35,17 @@ flowchart TD
         C4["xdg-desktop-portal"]
     end
 
-    subgraph "Nivel 4: Apps Core de Usuario"
-        E1["Nautilus (Finder)"]
-        E2["Ptyxis (Terminal macOS-like)"]
-        E3["gnome-control-center (Preferencias)"]
-        E4["gnome-system-monitor (Monitor de Actividad)"]
-        E5["gnome-text-editor (TextEdit)"]
-        E6["Loupe (Vista Previa de Imágenes)"]
+    subgraph "Nivel 3: Apps y Shell Nativas en Rust"
+        D1["Compositor, Top Bar, Dock, Spotlight, Wallpaper"]
+        D2["malus-de-branches (Explorador Finder nativo)"]
+        D3["malus-de-settings (Preferencias nativas)"]
+    end
+
+    subgraph "Nivel 4: Apps Complementarias Opcionales"
+        E1["Ptyxis (Terminal)"]
+        E2["Firefox / Navegador Wayland"]
+        E3["Nautilus / gnome-control-center (Compatibilidad opcional)"]
+        E4["gnome-system-monitor / gnome-text-editor / Loupe"]
     end
 ```
 
@@ -52,6 +56,8 @@ flowchart TD
 Para una imagen limpia construida sobre **Fedora Minimal / Everything**:
 
 ### A. Runtime para Usuario Final (Ejecutar Malus DE)
+> **Nota:** `malus-de-branches` (explorador de archivos) y `malus-de-settings` (configuración del sistema) se compilan e instalan de forma nativa desde el workspace; `nautilus` y `gnome-control-center` ya no son requeridos como base del escritorio (pueden instalarse opcionalmente para compatibilidad).
+
 ```bash
 sudo dnf install -y \
     mesa-dri-drivers \
@@ -82,9 +88,7 @@ sudo dnf install -y \
     ffmpeg-free \
     gvfs \
     udisks2 \
-    nautilus \
     ptyxis \
-    gnome-control-center \
     gnome-system-monitor \
     gnome-text-editor \
     loupe \
@@ -108,7 +112,8 @@ sudo dnf install -y \
     libseat-devel \
     libxkbcommon-devel \
     systemd-devel \
-    dbus-devel
+    dbus-devel \
+    sqlite-devel
 ```
 
 ---
@@ -147,9 +152,7 @@ sudo apt install -y \
     gvfs \
     gvfs-backends \
     udisks2 \
-    nautilus \
     ptyxis \
-    gnome-control-center \
     gnome-system-monitor \
     gnome-text-editor \
     loupe \
@@ -173,7 +176,8 @@ sudo apt install -y \
     libseat-dev \
     libxkbcommon-dev \
     libsystemd-dev \
-    libdbus-1-dev
+    libdbus-1-dev \
+    libsqlite3-dev
 ```
 
 ---
@@ -208,9 +212,7 @@ sudo pacman -S --needed \
     ffmpeg \
     gvfs \
     udisks2 \
-    nautilus \
     ptyxis \
-    gnome-control-center \
     gnome-system-monitor \
     gnome-text-editor \
     loupe \

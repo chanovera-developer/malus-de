@@ -63,10 +63,12 @@ Para máxima transparencia técnica, el siguiente desglose detalla el estado rea
   - Historial persistente local de 50 elementos con `Super + V`, búsqueda en vivo, fijado de elementos y filtro heurístico de privacidad.
 - **Captura y Grabación de Pantalla (`malus-de-screenshot`):**
   - Barra interactiva con `Super + Shift + 5`, capturas directas de pantalla completa (`Super + Shift + 3`) y de área (`Super + Shift + 4`).
-  - Grabación de pantalla en vídeo MP4 (`H.264`) con widget cronómetro en la barra superior (`● 00:00 [⏹ Detener]`).
+  - Grabación de pantalla en vídeo WebM (`VP8`/`Opus`) con widget cronómetro en la barra superior (`● 00:00 [⏹ Detener]`).
   - Miniatura flotante interactiva con botones de acción rápida, sonido de obturador PipeWire y destello visual blanco (*flash*).
 - **Explorador de Archivos Branches (`malus-de-branches`):**
   - Fases 1 a 4 operativas: Unified HeaderBar, doble panel interactivo (*Split View*) con Drag & Drop, canvas de iconos libres SQLite, Columnas Miller, previsualización modal Quick Look (`Espacio`), vista de Galería con carrusel de miniaturas, etiquetas cromáticas persistentes en `xattr` y operaciones de archivo con papelera.
+- **Configuración Nativa (`malus-de-settings`):**
+  - Aplicación GTK4 / Libadwaita dedicada que reemplaza a `gnome-control-center` y persiste ajustes aislados para Malus DE.
 
 ---
 
@@ -81,6 +83,8 @@ Para máxima transparencia técnica, el siguiente desglose detalla el estado rea
   - Lee los lanzadores `.desktop` al iniciar sesión. Nuevas aplicaciones instaladas en caliente requieren reiniciar la sesión o recargar para aparecer en las búsquedas (vigilancia `inotify` en tiempo real en desarrollo).
 - **Subsuperficies y Popups de Navegadores:**
   - Menús desplegables `<select>` nativos en Firefox o menús hamburguesa en Brave bajo Wayland directo presentan pequeños desfases de coordenadas en depuración activa.
+- **Bloqueo de Pantalla y Polkit (`malus-de-session-lock`):**
+  - Existe el cliente nativo (`Layer::Overlay`) y el agente Polkit (`polkit.rs`), mientras la integración completa con el protocolo criptográfico `ext-session-lock-v1` y lector de huellas (`fprintd`) continúa en desarrollo.
 
 ---
 
@@ -89,8 +93,8 @@ Para máxima transparencia técnica, el siguiente desglose detalla el estado rea
   - La integración con el motor de OCR local para extraer texto de capturas de pantalla aún no está implementada.
 - **Gestos Multitáctiles 1:1 en Touchpad:**
   - Los deslizamientos horizontales de 3 dedos para cambiar de espacio virtual con inercia elástica y el gesto hacia arriba para Mission Control panorámico están planificados para el compositor.
-- **Bloqueo Criptográfico de Pantalla (`ext-session-lock-v1`):**
-  - El módulo `malus-de-session-lock` estilo macOS con avatar de usuario y lector de huellas dactilares (`fprintd`) está en diseño; actualmente se utiliza la pantalla de bloqueo estándar de GDM.
+- **Migración Completa de Shell UI a WGPU (`malus-de-render`):**
+  - La biblioteca base en `wgpu` + `taffy` + `cosmic-text` + `glyphon` + `smithay-client-toolkit` ya forma parte del workspace (`ADR-0001`), con migración progresiva de los clientes de barra, dock, Spotlight y notificaciones en curso.
 - **Fondo de Pantalla Dinámico con Ciclos Solares de 24h por Vídeo:**
   - El motor de vídeo acelerado por hardware con VA-API / `libmpv` está diferido para una fase posterior; actualmente se emplean degradados y wallpapers estáticos/SVG.
 - **Desinstalador Automatizado:**
@@ -111,7 +115,7 @@ Para máxima transparencia técnica, el siguiente desglose detalla el estado rea
 - **Explorador de archivos nativo Branches (`malus-de-branches`):** Reimplementación modular de macOS Finder en GTK4 / Libadwaita con vista dividida en dos paneles (*Split View*), navegación en columnas Miller, previsualización modal Quick Look (`Espacio`), vista de Galería con carrusel, etiquetas cromáticas persistentes y operaciones con papelera.
 - Conmutador visual de ventanas (App Switcher) mediante `Alt + Tab` y `Super + Tab` para recorrer y alternar fluidamente entre aplicaciones y ventanas abiertas.
 - Integración con servicios de Linux para audio, red, Bluetooth y controles multimedia.
-- **Barra interactiva de captura y grabación de pantalla (`Super + Shift + 5` / `Super + Impr Pant`):** Renderizada directamente en el compositor con estética Liquid Glass, permite elegir entre captura de pantalla completa, ventana enfocada o selección de área, así como grabación de vídeo de pantalla completa o de región en MP4 (`H.264`), con opciones de temporizador (ninguno, 5 s, 10 s), destino (Archivo o Portapapeles) e inclusión del cursor. Además mantiene los atajos directos (`Super + Shift + 3` y `Super + Shift + 4`), alerta auditiva inmediata, destello blanco suave estilo macOS, miniatura flotante interactiva y copia con `wl-copy`.
+- **Barra interactiva de captura y grabación de pantalla (`Super + Shift + 5` / `Super + Impr Pant`):** Renderizada directamente en el compositor con estética Liquid Glass, permite elegir entre captura de pantalla completa, ventana enfocada o selección de área, así como grabación de vídeo de pantalla completa o de región en formato WebM (`VP8`/`Opus`), con opciones de temporizador (ninguno, 5 s, 10 s), destino (Archivo o Portapapeles) e inclusión del cursor. Además mantiene los atajos directos (`Super + Shift + 3` y `Super + Shift + 4`), alerta auditiva inmediata, destello blanco suave estilo macOS, miniatura flotante interactiva y copia con `wl-copy`.
 - Historial local persistente de hasta 50 elementos de texto, imágenes, documentos y URI de archivos, accesible con `Super + V`. Admite búsqueda, fijar elementos, volver a copiarlos y borrarlos; ocupa como máximo 50 MiB (10 MiB por elemento). La sincronización con la selección primaria de Wayland es opcional y está desactivada por defecto. El filtro automático de credenciales está activado por defecto y se puede configurar desde la interfaz; es heurístico y no detecta todos los secretos. Los datos se guardan localmente con permisos privados, se conservan entre sesiones y se eliminan al borrar el historial. Requiere `wl-clipboard`.
 - Efectos gráficos con shaders GLSL, esquinas squircle y animaciones fluidas de ventanas.
 - Detección de pantallas y modos compatibles por DRM/KMS, con resolución, disposición y escala fraccionaria configurables en caliente.
@@ -119,11 +123,12 @@ Para máxima transparencia técnica, el siguiente desglose detalla el estado rea
 
 ## Arquitectura
 
-El proyecto es un workspace de Rust. Sus componentes principales viven en `crates/`:
+El proyecto es un workspace de Rust con **16 crates** en `crates/`:
 
 | Componente | Paquete |
 | --- | --- |
 | Compositor Wayland | `malus-de-compositor` |
+| Base GPU compartida (WGPU / Taffy / SCTK) | `malus-de-render` |
 | Barra superior y centro de control | `malus-de-top-bar` |
 | Dock | `malus-de-dock` |
 | Lanzador Spotlight | `malus-de-spotlight` |
@@ -131,16 +136,16 @@ El proyecto es un workspace de Rust. Sus componentes principales viven en `crate
 | Notificaciones | `malus-de-notifications` |
 | Fondo de pantalla | `malus-de-wallpaper` |
 | Ajustes | `malus-de-settings` |
-| Servicios comunes | `malus-de-common` |
+| Servicios comunes y diálogos compartidos | `malus-de-common`, `malus-de-dialogs` |
 | Bloqueo de sesión, captura, portapapeles, enlace y CLI | `malus-de-session-lock`, `malus-de-screenshot`, `malus-de-clipboard`, `malus-de-link`, `malus-de-ctl` |
 
 ## Requisitos
 
 - Linux con soporte para Wayland.
 - Rust y Cargo (edición 2021).
-- Bibliotecas de desarrollo de GTK4, libadwaita, gtk4-layer-shell, Mesa/GBM, libinput, libseat, systemd, libxkbcommon y D-Bus.
+- Bibliotecas de desarrollo de GTK4, libadwaita, gtk4-layer-shell, SQLite (`sqlite-devel`), Mesa/GBM, libinput, libseat, systemd, libxkbcommon y D-Bus.
 - Servicios y utilidades de sesión para que Malus DE funcione de forma completa:
-  - **Audio y multimedia:** `pipewire`, `pipewire-pulseaudio`, `pipewire-utils` (`pw-play`), `wireplumber`, `libcanberra-gtk3` y `ffmpeg` (para grabación de pantalla en MP4).
+  - **Audio y multimedia:** `pipewire`, `pipewire-pulseaudio`, `pipewire-utils` (`pw-play`), `wireplumber`, `libcanberra-gtk3` y `ffmpeg` (para grabación de pantalla en WebM).
   - **Seguridad, permisos y llavero (`org.freedesktop.secrets`):** `polkit`, `mate-polkit` (agente de autenticación gráfica para instalación de apps y permisos de administrador), `gnome-keyring`, `gnome-keyring-pam` y `libsecret`.
   - **Portales, portapapeles y montaje de medios:** `xdg-desktop-portal`, `xdg-desktop-portal-gnome`, `xdg-desktop-portal-gtk`, `wl-clipboard` (`wl-copy` / `wl-paste`), `gvfs` y `udisks2`.
   - **Conectividad y energía:** `NetworkManager`, `bluez`, `power-profiles-daemon`.
@@ -169,6 +174,7 @@ sudo dnf install -y \
     systemd-devel \
     dbus-devel \
     libxkbcommon-devel \
+    sqlite-devel \
     polkit \
     mate-polkit \
     gnome-keyring \
@@ -279,13 +285,13 @@ En **Ajustes del Sistema → Pantallas**, cada monitor conectado muestra sus mod
 
 ## Instalación de la sesión
 
-El script [install-session.sh](./scripts/install-session.sh) compila los binarios e instala la sesión de Malus DE para GDM en el sistema. Es una instalación manual para desarrollo y pruebas, no un instalador empaquetado para distribución: requiere privilegios de administrador y modifica rutas del sistema, incluidas preferencias globales de `xdg-desktop-portal`. **No hay un desinstalador automático documentado.** Revisa el script, confirma las dependencias de tu distribución y prepara una forma de revertir los cambios antes de ejecutarlo:
+El script [install-session.sh](./scripts/install-session.sh) compila los binarios en modo release como usuario normal y luego solicita privilegios de administrador para instalar la sesión de Malus DE en el sistema (`malus-session`, `malus-ide-wrapper`, lanzadores `.desktop`, cursores, temas y `malus-portals.conf`). Es una instalación manual para desarrollo y pruebas, no un instalador empaquetado para distribución. **No hay un desinstalador automático documentado.** Revisa el script, confirma las dependencias de tu distribución y prepara una forma de revertir los cambios antes de ejecutarlo:
 
 ```bash
-sudo ./scripts/install-session.sh
+./scripts/install-session.sh
 ```
 
-La instalación no modifica los archivos ni las preferencias de VS Code, Antigravity, Firefox o Brave. Malus usa `~/.config/malus-de` como `XDG_CONFIG_HOME` y el backend `keyfile` de GSettings; sus ajustes GTK y el diseño de los botones quedan separados de GNOME. Por defecto, las aplicaciones GTK/Libadwaita que respetan la configuración de la sesión muestran los controles estilo macOS a la izquierda. La personalización de su posición se añadirá más adelante; por ahora Malus mantiene ese diseño. Las aplicaciones que dibujan sus propios controles pueden ignorar el estilo GTK. El lanzador solo propaga al entorno de activación compartido las variables necesarias para el display: no exporta allí `XDG_CONFIG_HOME`, `GSETTINGS_BACKEND` ni `GTK_USE_PORTAL`, para que los servicios de GNOME no hereden la configuración de Malus.
+La instalación no modifica los archivos ni las preferencias de VS Code, Antigravity, Firefox o Brave. Malus usa `~/.config/malus-de` como `XDG_CONFIG_HOME` y el backend `keyfile` de GSettings; sus ajustes GTK y el diseño de los botones quedan separados de GNOME. Por defecto, las aplicaciones GTK/Libadwaita que respetan la configuración de la sesión muestran los controles estilo macOS a la izquierda. Las aplicaciones que dibujan sus propios controles pueden ignorar el estilo GTK (y editores Electron como VS Code / Antigravity emplean `malus-ide-wrapper` sin alterar sus binarios). El lanzador solo propaga al entorno de activación compartido las variables necesarias para el display: no exporta allí `XDG_CONFIG_HOME`, `GSETTINGS_BACKEND` ni `GTK_USE_PORTAL`, para que los servicios de GNOME no hereden la configuración de Malus.
 
 Nautilus puede mostrar las carpetas personales XDG del usuario en Lugares; estas se determinan mediante `~/.config/user-dirs.dirs`, no mediante los marcadores. El lanzador copia ese archivo y los marcadores GTK a la configuración aislada de Malus si aún no existen. Cierra cualquier otra sesión GNOME para evitar que Nautilus reutilice una instancia abierta. Tras actualizar desde una versión que propagaba todo el entorno a D-Bus/systemd, cierra por completo las sesiones gráficas y vuelve a entrar para que los servicios activados con el entorno anterior se reinicien.
 
@@ -294,7 +300,7 @@ El lanzador crea las carpetas personales XDG estándar si faltan y añade sus ub
 La [guía de manifiesto](./docs/PACKAGE_MANIFEST.md) documenta dependencias de ejecución, compilación y servicios que deben habilitarse.
 Los selectores de archivos de GTK y aplicaciones compatibles (por ejemplo, VS Code) usan xdg-desktop-portal. Malus prefiere el backend GNOME para estos diálogos, con GTK como alternativa; instala ambos backends.
 
-> **Flujo de desarrollo rápido:** El script lanzador de sesión (`malus-session`) prioriza automáticamente los binarios recién compilados en `$HOME/Proyectos/malus-de/target/release/`. Por lo tanto, durante el desarrollo diario no necesitas volver a ejecutar `install-session.sh` para probar cambios de código: basta con compilar con `cargo build --release` y reiniciar la sesión gráfica. Solo es necesario reejecutar el instalador si se modifican archivos del sistema (iconos, fondos SVG compartidos, targets de systemd, configuraciones de portal o el archivo `.desktop` de GDM).
+> **Flujo de desarrollo rápido:** El script lanzador de sesión (`malus-session`) prioriza automáticamente los binarios recién compilados en `$HOME/Proyectos/malus-de/target/release/`. Por lo tanto, durante el desarrollo diario no necesitas volver a ejecutar `install-session.sh` para probar cambios de código: basta con compilar con `cargo build --release --workspace` y reiniciar la sesión gráfica. Solo es necesario reejecutar el instalador si se modifican scripts o recursos del sistema (`malus-session`, `malus-ide-wrapper`, iconos, fondos SVG compartidos, configuraciones de portal o archivos `.desktop`).
 
 El menú global solo puede mostrar y ejecutar menús que la aplicación publique mediante `com.canonical.dbusmenu` y `com.canonical.AppMenu.Registrar`. Malus no inventa menús aproximados para aplicaciones que no los publican; algunas aplicaciones Electron, incluida VS Code según su versión y configuración, pueden no exponerlos en Linux.
 
@@ -311,8 +317,8 @@ Si pruebas Malus, incluye en el reporte la distribución y versión, GPU y contr
 
 ## Documentación
 
-- [PRD y Arquitectura Técnica Oficial](./PRD.md): Especificación técnica canónica y versionada de Malus DE, diagramas de arquitectura y tabla de hitos (M1-M12).
-- [Borrador Conceptual Extendido (PRD Histórico)](./prd_entorno_escritorio.md): Manifiesto inicial de diseño, lluvia de ideas y estudio comparativo conceptual con otros entornos de escritorio.
+- [PRD y Arquitectura Técnica Oficial](./PRD.md): Especificación técnica canónica y versionada de Malus DE, diagramas de arquitectura (16 crates) y tabla de hitos (M1-M15).
+- [PRD & Arquitectura Técnica Extendida](./prd_entorno_escritorio.md): Especificación detallada de módulos, fórmulas matemáticas de shaders/animaciones, estructura del workspace y roadmap actual.
 - [Registro de desarrollo (DEVLOG)](./docs/DEVLOG.md): Bitácora técnica cronológica con diagnóstico de causa raíz y soluciones de cada avance.
 - [Manifiesto de dependencias y paquetes](./docs/PACKAGE_MANIFEST.md): Lista de paquetes y dependencias por distribución Linux.
 - [Guía de desarrollo de temas](./docs/THEME_DEVELOPMENT_GUIDE.md): Especificación y diseño de hojas de estilo CSS para componentes acrílicos.

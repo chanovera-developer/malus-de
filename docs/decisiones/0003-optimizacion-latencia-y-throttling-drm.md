@@ -1,7 +1,7 @@
 # ADR 0003: Optimización de Latencia de Entrada, Bucle de Eventos y Throttling en Backend DRM
 
 ## Estado
-Propuesto / Aceptado como Hoja de Ruta para Fase 2.
+Implementado (mergeado en `master`; detalles en [DEVLOG.md](../DEVLOG.md)).
 
 ## Contexto
 Tras la implementación de Idle Sleeping y Frame Throttling en el backend DRM ([commit 18f9e17](../DEVLOG.md#2026-11-10--implementación-de-idle-sleeping-y-frame-throttling-en-backend-drm-resolución-de-lag-y-regresiones)) y la reversión a la implementación limpia y directa de sombras procedurales squircle ($n=4.2$), el compositor eliminó por completo el parpadeo a 20 Hz, las caídas de búferes en KMS y los textos fantasma en las sombras.

@@ -1,8 +1,8 @@
-# PRD & Arquitectura Técnica: Entorno de Escritorio Wayland
+# PRD & Arquitectura Técnica: Entorno de Escritorio Wayland (Malus DE)
 
-**Estado:** Borrador Revisado  
-**Fecha:** Septiembre 2026  
-**Stack Principal:** Rust, Smithay, Wayland Protocols, GLSL Shaders (libmpv / VA-API diferido para fase posterior)  
+**Estado:** Actualizado a Arquitectura Actual (`master`)  
+**Fecha:** Noviembre 2026  
+**Stack Principal:** Rust (Workspace de 16 crates), Smithay 0.7 (DRM/KMS, Winit, XWayland), Wayland Protocols, Shaders GLSL/WGPU, GTK4 / Libadwaita + Base `malus-de-render` (WGPU + Taffy + Cosmic-Text + Glyphon + SCTK)  
 
 ---
 
@@ -10,7 +10,7 @@
 
 > [!IMPORTANT]
 > **Filosofía y Manifiesto Arquitectónico:**  
-> Este proyecto **NO es una extensión ni adaptación de `gnome-shell`**, evitando la fragilidad de scripts en JavaScript, fugas de memoria y limitaciones de Mutter. Se trata de un **entorno de escritorio autónomo y ultraligero compilado en Rust nativo sobre Smithay**, que aprovecha estratégicamente las tecnologías más robustas del ecosistema GNOME (GTK4, Libadwaita, Nautilus, indexación semántica Tracker Miner FS, demonios de sistema) y las fusiona con la elegancia visual, ergonomía y fluidez de macOS (Barra Superior transparente con Global Menu, Dock acrílico con Genie Effect y Lanzador Universal Spotlight con Quick Look).
+> Este proyecto **NO es una extensión ni adaptación de `gnome-shell`**, evitando la fragilidad de scripts en JavaScript, fugas de memoria y limitaciones de Mutter. Se trata de un **entorno de escritorio autónomo y ultraligero compilado en Rust nativo sobre Smithay 0.7**, que combina compatibilidad estratégica con demonios del sistema y aplicaciones GTK4/Libadwaita/XWayland con **aislamiento estricto respecto a la sesión GNOME** (`XDG_CONFIG_HOME` propio, backend `keyfile` y portales dedicados), mientras reemplaza progresivamente piezas externas por herramientas nativas en Rust (`malus-de-settings`, `malus-de-branches`, `malus-de-render`) inspiradas en la ergonomía y fluidez de macOS.
 
 Crear un entorno de escritorio moderno, minimalista, ultra seguro y eficiente en recursos para Linux, caracterizado por:
 1. **Identidad visual fluida y bordes redondeados globales:** 
@@ -89,27 +89,33 @@ El entorno adopta un diseño **modular y desacoplado**. El compositor se enfoca 
 
 ```mermaid
 graph TD
-    subgraph Core ["Núcleo del Sistema (Smithay / Rust)"]
-        Compositor["Compositor Wayland (Smithay)"]
-        Shaders["Pipeline GLSL:\n- Ventanas Squircle SDF\n- Screen Border-Radius Mask\n- Dual-Kawase Blur (Acrílico)\n- Selector Sólido/Acrílico\n- Shader Lámpara de Aladín (Genie Effect)"]
-        Protocols["Protocolos Wayland:\n- xdg-shell & zxdg_decoration_v1\n- wlr-layer-shell\n- wp_fractional_scale_v1 & wp_viewporter\n- ext-foreign-toplevel-list-v1\n- ext-session-lock-v1"]
-        Keybindings["Gestor de Atajos Globales (Alt + Espacio / Super + L / libinput)"]
-        TilingEngine["Motor Híbrido Auto-Tiling & PiP (Super+Y / Super+P)"]
-        DockIPC["Servicio IPC Dock / Toplevel\n(Animación Aladín & Coordenadas Slot)"]
+    subgraph Core ["Núcleo del Sistema (Smithay 0.7 / Rust)"]
+        Compositor["Compositor Wayland (malus-de-compositor)\nDRM/KMS (Idle Sleeping + 0ms Dispatch) + Winit + XWayland"]
+        Shaders["Pipeline GLSL / FBO:\n- Ventanas Squircle SDF & Sombras (shadow.rs)\n- Screen Border-Radius Mask\n- Dual-Kawase Blur + Caché Estática\n- Shader Lámpara de Aladín (genie.rs / magic_lamp.rs)\n- Transición de Tema (theme_transition.rs)"]
+        Protocols["Protocolos Wayland:\n- xdg-shell & zxdg_decoration_v1 (SSD)\n- wlr-layer-shell & viewporter / fractional_scale\n- ext-foreign-toplevel-list-v1 & ext-session-lock-v1\n- zwlr_screencopy_manager_v1 & linux_dmabuf_v1"]
+        Keybindings["Atajos Globales, Grabación y CPU Priority\n(Alt+Espacio, Super+L, cpu_priority.rs)"]
+        TilingEngine["Motor de Espacios, Window Grab & Tiling\n(state.rs, grabs.rs)"]
+        DockIPC["IPC Unix / Protocolo Shell\n(Animación Aladín, Toplevels y Caché de Miniaturas)"]
         MutterDBus["Backend D-Bus DisplayConfig\n(org.gnome.Mutter.DisplayConfig)"]
         PortalTheme["Portal de Apariencia D-Bus\n(color-scheme Claro/Oscuro)"]
         GlobalMenuService["Servicio Global Menu D-Bus\n(com.canonical.dbusmenu / kappmenu)"]
     end
 
-    subgraph DesktopClients ["Componentes Shell & Configuración"]
-        Wallpaper["Fondo de Pantalla Estático\n(wlr-layer-shell: Background)"]
-        TopBar["Barra Superior Estilo macOS\n(Global Menu, Auto-Tiling Toggle, Malus Link Applet, Reloj)"]
-        NotificationCenter["Centro de Notificaciones & Widgets\n(Drawer Lateral, Notificaciones Móviles, EDS, Widgets)"]
-        Dock["Dock Estilo macOS\n(Apps, Carpetas Stacks, Miniaturas, Papelera & Widgets)"]
-        Spotlight["Lanzador Spotlight (Alt + Espacio)\n(Split View, Portapapeles Super+V, Emojis Super+.)"]
-        ScreenshotTool["Herramienta Captura & OCR\n(Impr Pant, Foto/Vídeo, OCR Super+Shift+T)"]
-        LockScreen["Pantalla de Bloqueo Segura\n(ext-session-lock-v1, Avatar, PAM & Huella)"]
-        SettingsApp["GNOME Control Center Modular\n(11 paneles filtrados + Malus Link)"]
+    subgraph DesktopClients ["Componentes Shell, Apps Nativas y Base Render"]
+        RenderCore["Base GPU Compartida (malus-de-render)\nWGPU 24 + Taffy 0.15 + Cosmic-Text + Glyphon + SCTK"]
+        Wallpaper["Fondo de Pantalla (malus-de-wallpaper)\n(wlr-layer-shell: Background)"]
+        TopBar["Barra Superior (malus-de-top-bar)\n(Global Menu, Estado, Malus Link, Reloj)"]
+        NotificationCenter["Centro de Notificaciones (malus-de-notifications)\n(Drawer Lateral, Notificaciones, EDS, UPower)"]
+        Dock["Dock (malus-de-dock)\n(Apps, Stacks, Miniaturas, Papelera)"]
+        Spotlight["Lanzador Spotlight (malus-de-spotlight)\n(Alt+Espacio, Portapapeles, Quick Look)"]
+        Clipboard["Historial Portapapeles (malus-de-clipboard)"]
+        ScreenshotTool["Captura y Grabación (malus-de-screenshot)"]
+        LockScreen["Pantalla de Bloqueo (malus-de-session-lock)\n(ext-session-lock-v1, PAM & Huella)"]
+        Dialogs["Diálogos Polkit/Sistema (malus-de-dialogs)"]
+        LinkDaemon["Malus Link (malus-de-link)"]
+        CtlCLI["CLI de Control (malus-de-ctl)"]
+        SettingsApp["Configuración Nativa (malus-de-settings)\n(GTK4/Adwaita, Pantallas, Tema, Atajos, Dock)"]
+        BranchesApp["Gestor de Archivos Nativo (malus-de-branches)\n(GTK4/Adwaita, Tabs, Dual-Pane, Git, Terminal)"]
     end
 
     subgraph SystemDaemons ["Demonios del Sistema"]
@@ -125,20 +131,22 @@ graph TD
         MalusLink["Malus Link Daemon (Protocolo KDE Connect / Móviles)"]
     end
 
-    subgraph LoginManager ["Gestores de Acceso (Display Managers)"]
-        GDM["GDM / greetd / SDDM\n(wayland-sessions/malus-de.desktop)"]
+    subgraph LoginManager ["Gestores de Acceso & Sesión Aislada"]
+        GDM["GDM / greetd / SDDM\n(malus-de.desktop -> scripts/malus-session)"]
+        Isolation["Aislamiento GNOME & Wrappers\n(XDG_CONFIG_HOME=~/.config/malus-de,\nGSETTINGS_BACKEND=keyfile, malus-ide-wrapper)"]
     end
 
     subgraph Apps ["Aplicaciones de Usuario"]
-        Nautilus["Nautilus (GNOME Files / GTK4)"]
-        OtherApps["Terminales / Navegadores / etc."]
+        Nautilus["Nautilus / Apps GTK4 (Compatibilidad XDG)"]
+        OtherApps["IDEs Electron / Navegadores / XWayland"]
     end
 
-    subgraph Deferred ["Fases Posteriores"]
+    subgraph Deferred ["Migración Progresiva & Fases Posteriores"]
         VideoEngine["Motor de Vídeo Dinámico (libmpv + Solar Sync)"]
     end
 
-    GDM -.->|Arranca Sesión| Compositor
+    GDM -.->|Arranca Sesión| Isolation
+    Isolation -->|Env Aislado + Portales| Compositor
     Wallpaper -->|Layer Shell| Protocols
     TopBar -->|Layer Shell| Protocols
     TopBar -->|D-Bus Menus| GlobalMenuService
@@ -154,17 +162,21 @@ graph TD
     Keybindings -->|IPC Toggle| Spotlight
     Spotlight -->|Layer Shell: Overlay| Protocols
     Spotlight -->|D-Bus SPARQL| TrackerDaemon
+    Clipboard -->|Layer Shell / IPC| Protocols
+    Dialogs -->|Polkit / Layer Shell| Protocols
     LockScreen -->|Session Lock Protocol| Protocols
     LockScreen -->|D-Bus Usuario| AccountsDaemon
     LockScreen -->|PAM / Biometría| PAM
     SettingsApp -->|D-Bus DisplayConfig| MutterDBus
-    SettingsApp -->|D-Bus| PortalTheme
+    SettingsApp -->|D-Bus / Config TOML| PortalTheme
     SettingsApp -->|D-Bus| SystemDaemons
     MutterDBus --> Compositor
     PortalTheme --> Shaders
+    BranchesApp -->|XDG Shell| Protocols
     Nautilus -->|XDG Shell| Protocols
-    OtherApps -->|XDG Shell| Protocols
+    OtherApps -->|XDG Shell / XWayland| Protocols
     OtherApps -->|D-Bus Notificaciones| NotificationCenter
+    RenderCore -.->|Base WGPU/Taffy ADR-0001| DesktopClients
     Protocols --> Shaders
     Shaders --> Compositor
     VideoEngine -.->|Reemplazará a Wallpaper| Protocols
@@ -174,22 +186,24 @@ graph TD
 
 ## 3. Especificaciones de Módulos
 
-### Módulo 1: Compositor Wayland (`compositor/`)
-* **Framework:** [Smithay](https://github.com/Smithay/smithay) (Rust).
-* **Backends:**
-  * **Winit Backend:** Para pruebas y desarrollo rápido dentro de una ventana en tu sesión actual de Linux (sin necesidad de reiniciar ni cambiar de TTY).
-  * **DRM/KMS + libinput Backend:** Para la sesión nativa de escritorio independiente.
-* **Pipeline de Renderizado:**
-  * Renderizador OpenGL ES / Glow integrado en Smithay.
+### Módulo 1: Compositor Wayland (`crates/compositor/` — `malus-de-compositor`)
+* **Framework:** [Smithay 0.7](https://github.com/Smithay/smithay) (Rust).
+* **Backends (`src/backend/`):**
+  * **Winit Backend (`winit.rs`):** Para pruebas y desarrollo rápido dentro de una ventana en tu sesión actual de Linux (sin necesidad de reiniciar ni cambiar de TTY).
+  * **DRM/KMS + libinput Backend (`drm.rs`):** Para la sesión nativa de escritorio independiente, con bucle Calloop optimizado (`Duration::ZERO` cuando hay clientes Wayland activos o animaciones en curso) y **Idle Sleeping** basado en timer de VBlank / página pendiente para evitar sobrecarga de CPU/GPU en reposo.
+  * **XWayland (`xwayland.rs`):** Integración nativa para compatibilidad transparente con aplicaciones X11 heredadas o Electron en modo X11.
+* **Pipeline de Renderizado y Módulos de Composición:**
+  * Renderizador OpenGL ES / Glow integrado en Smithay + módulos especializados (`window_corners.rs`, `shadow.rs`, `blur.rs`, `genie.rs`, `magic_lamp.rs`, `theme_transition.rs`, `spotlight_visual.rs`).
+  * **Sombras Suaves Procedurales (`shadow.rs`):** Sombras dinámicas adaptadas a la geometría squircle ($n = 4.2$) de ventanas activas, inactivas y superficies flotantes.
   * **Efecto de Bordes Redondeados del Escritorio (`Screen Border-Radius Overlay`):**
     * Pase final de post-procesado (post-processing shader) aplicado sobre el framebuffer del monitor (output).
     * Dibuja una máscara en las 4 esquinas de la pantalla mediante cálculo analítico por distancia con signo (SDF):
       $$\text{dist}(p) = \left\|\max\left(|p - c| - (\text{size} - r), 0\right)\right\|_n - r$$
     * Genera la ilusión visual de que la pantalla física tiene biseles con esquinas redondeadas orgánicas (`border-radius`), con curvatura configurable (radio en píxeles y factor squircle $n \approx 4.0$).
     * Antialiasing subpíxel mediante `smoothstep()` para bordes nítidos y continuos en cualquier resolución (1080p, 2K, 4K).
-  * **Shader Squircle de Ventanas:** Recorte analítico universal para cualquier ventana (`xdg-shell`), garantizando bordes redondeados idénticos en aplicaciones GTK, Qt, Chrome, Firefox o Electron.
-  * **Pipeline de Material Acrílico (Dual-Kawase Blur):**
-    * Captura del framebuffer inferior antes de componer superficies translúcidas.
+  * **Shader Squircle de Ventanas (`window_corners.rs`):** Recorte analítico universal para cualquier ventana (`xdg-shell` / `XWayland`), garantizando bordes redondeados idénticos en aplicaciones GTK, Qt, Chrome, Firefox o Electron.
+  * **Pipeline de Material Acrílico (`blur.rs` — Dual-Kawase Blur + Caché Estática):**
+    * Captura del framebuffer inferior antes de componer superficies translúcidas con **caché estática del fondo** (*background blur cache*) para evitar recomputar pases Kawase cuando la escena inferior no cambia.
     * 2 a 3 pases de reducción (*downsample*) y ampliación (*upsample*) por GPU en submilisegundos (<0.5 ms).
     * Mezcla con tinte según el tema activo:
       * **Tema Claro:** Tinte blanco lechoso translúcido (`rgba(255, 255, 255, 0.70)`).
@@ -710,16 +724,20 @@ graph TD
 
 ---
 
-### Módulo 6: Compatibilidad con el Ecosistema GNOME (Nautilus, Tracker Miner y GTK4)
-* **Gestión de Ventana:** Nautilus GTK4 ejecuta sin problemas sobre `xdg-shell`.
-* **Configuración del Entorno:**
-  * Declaración de variables de entorno estándar: `GDK_BACKEND=wayland`, `XDG_CURRENT_DESKTOP=MalusDE`.
-  * Integración con `xdg-desktop-portal` para selección de archivos y diálogos nativos.
+### Módulo 6: Aislamiento GNOME, Compatibilidad GTK4/Electron e Integración de Sesión
+* **Aislamiento Bidireccional respecto a GNOME (`scripts/malus-session`):**
+  * La sesión aísla sus configuraciones respecto al escritorio GNOME clásico usando `XDG_CONFIG_HOME=~/.config/malus-de` (con `MALUS_USER_REAL_CONFIG` preservado para preferencias propias del usuario) y **`GSETTINGS_BACKEND=keyfile`**, almacenando preferencias GTK/WM en `~/.config/malus-de/glib-2.0/settings/keyfile` sin sobrescribir `dconf` de GNOME.
+  * Declaración de variables de entorno: `GDK_BACKEND=wayland`, `XDG_CURRENT_DESKTOP=MalusDE:GNOME`, `XDG_SESSION_TYPE=wayland`, `XDG_SESSION_DESKTOP=malus-de`.
+  * Portales dedicados mediante [`data/malus-portals.conf`](data/malus-portals.conf) para selección de archivos, capturas y diálogos nativos sin conflictos de sesión.
+* **Explorador Nativo y Compatibilidad con Nautilus:**
+  * **Branches (`crates/branches/` — `malus-de-branches`):** Gestor de archivos nativo en Rust/GTK4/Libadwaita (Fases 1–4 implementadas: árbol/barra de ruta, pestañas, vista dual, panel Git y terminal embebida) que reemplaza progresivamente la dependencia de Nautilus.
+  * Aplicaciones externas GTK4/Libadwaita (incluido Nautilus si está instalado) ejecutan de forma transparente sobre `xdg-shell`.
+* **Controles Semáforo en Electron/IDEs sin Modificar Binarios (`scripts/malus-ide-wrapper`):**
+  * Para VS Code / Antigravity y aplicaciones Electron donde modificar archivos internos dispara alertas de integridad, [`scripts/malus-ide-wrapper`](scripts/malus-ide-wrapper) aplica la detección ligera en un único paso por archivo (sin subshells ni bucles pesados de `python3` al abrir) manteniendo `CSD`/semáforo nativos sin penalización de arranque ni lag de interfaz.
 * **Indexador Semántico Tracker Miner FS:**
-  * Servicio de indexación en segundo plano de GNOME (`tracker-miner-fs-3`).
-  * Expone la interfaz SPARQL sobre D-Bus para que el lanzador Spotlight consulte archivos, fotos y documentos instantáneamente con bajo consumo de CPU.
-* **Sincronización de Controles de Ventana (CSD en Nautilus y Apps GTK):**
-  * Gobernado mediante el esquema de GSettings `org.gnome.desktop.wm.preferences button-layout`.
+  * Servicio de indexación opcional en segundo plano (`tracker-miner-fs-3`) consultado vía SPARQL/D-Bus por Spotlight cuando está disponible.
+* **Sincronización de Controles de Ventana (CSD en Apps GTK):**
+  * Gobernado mediante el esquema de GSettings `org.gnome.desktop.wm.preferences button-layout` dentro del backend `keyfile` aislado de Malus DE.
   * **Modo Izquierda (Estilo macOS):**
     ```bash
     gsettings set org.gnome.desktop.wm.preferences button-layout "close,minimize,maximize:"
@@ -729,12 +747,12 @@ graph TD
     ```bash
     gsettings set org.gnome.desktop.wm.preferences button-layout ":minimize,maximize,close"
     ```
-  * La actualización es en tiempo real, propagándose al instante a ventanas abiertas de Nautilus y aplicaciones GTK3/GTK4/Libadwaita.
+  * La actualización es en tiempo real dentro de la sesión Malus DE sin afectar a GNOME Shell.
 
 ---
 
-### Módulo 7: Configuración del Sistema (GNOME Control Center Modular)
-Se aprovecha la robustez de **GNOME Control Center (`gnome-control-center`)** filtrando su vista mediante directivas de panel para presentar **únicamente las 11 secciones esenciales**:
+### Módulo 7: Configuración del Sistema Nativa (`crates/settings/` — `malus-de-settings`)
+Reemplaza a `gnome-control-center` por una aplicación nativa dedicada compilada en Rust (**GTK4 + Libadwaita**) que escribe directamente en la configuración aislada de Malus DE (`~/.config/malus-de/`), D-Bus del sistema y backend `keyfile`, articulando las secciones esenciales de control:
 
 1. **Inalámbrica (Wi-Fi):** Búsqueda, conexión y autenticación WPA/WPA3 mediante el backend D-Bus de `NetworkManager`.
 2. **Red:** Control de interfaces cableadas (Ethernet), túneles VPN y configuraciones de proxy vía `NetworkManager`.
@@ -1000,130 +1018,83 @@ El proyecto se estructura como un **monorepo en Rust con Cargo Workspace**, gara
 
 ```text
 malus-de/
-├── Cargo.toml                          # Manifiesto raíz del Cargo Workspace
+├── Cargo.toml                          # Manifiesto raíz del Cargo Workspace (16 crates)
 ├── Cargo.lock                          # Bloqueo de dependencias reproducibles
-├── Makefile / Justfile                  # Comandos de compilación, ejecución local e instalación
+├── PRD.md                              # PRD maestro actualizado de Malus DE
+├── prd_entorno_escritorio.md           # Especificación técnica y matemática extendida
+├── README.md                           # Guía general del proyecto
 │
-├── assets/                             # Recursos gráficos y predeterminados
-│   ├── icons/                          # Glifos e iconos del sistema en formato SVG
-│   ├── sounds/                         # Efectos acústicos de feedback (trash, snapshot, lock)
-│   └── themes/                         # Temas predeterminados de fábrica
-│       ├── default-light/              # tokens.css, bar.css, dock.css, popovers.css
-│       └── default-dark/
+├── assets/                             # Recursos gráficos, fuentes y temas CSS
 │
-├── data/                               # Integración con el sistema operativo Linux
-│   ├── malus-de.desktop               # Archivo de sesión Wayland para GDM/SDDM
-│   ├── malus-de-session               # Script ejecutable de arranque de sesión
-│   └── systemd/                        # Archivos de servicio para systemd --user
-│       ├── malus-de-session.target
-│       ├── malus-de-compositor.service
-│       ├── malus-de-top-bar.service
-│       ├── malus-de-dock.service
-│       └── malus-de-spotlight.service
+├── data/                               # Descriptores de sesión, iconos y portales
+│   ├── icons/                          # Glifos SVG simbólicos de barra y menú del sistema
+│   ├── dev.malus.Branches.desktop      # Lanzador desktop de malus-de-branches
+│   ├── dev.malus.Settings.desktop      # Lanzador desktop de malus-de-settings
+│   ├── malus-de.desktop                # Archivo de sesión Wayland para GDM/SDDM
+│   ├── malus-de-session                # Script auxiliar de sesión
+│   └── malus-portals.conf              # Configuración de xdg-desktop-portal para MalusDE
+│
+├── docs/                               # Documentación y Registros de Decisiones (ADRs)
+│   ├── DEVLOG.md                       # Bitácora técnica de desarrollo
+│   ├── FEDORA_STANDALONE_INSTALL.md    # Guía de instalación standalone en Fedora
+│   ├── PACKAGE_MANIFEST.md             # Manifiesto de paquetes del sistema
+│   ├── THEME_DEVELOPMENT_GUIDE.md      # Guía de temas y estilos
+│   └── decisiones/
+│       ├── 0001-migracion-shell-gtk4-a-wgpu-taffy.md
+│       ├── 0002-arquitectura-damage-tracking-y-desenfoque-gpu.md
+│       └── 0003-optimizacion-latencia-y-throttling-drm.md
+│
+├── scripts/                            # Scripts de instalación, sesión aislada y wrappers
+│   ├── install-session.sh              # Instalador completo de binarios, sesión y wrappers
+│   ├── malus-session                   # Arranque de sesión aislada (XDG_CONFIG_HOME + keyfile)
+│   ├── malus-session.sh                # Script auxiliar de arranque de sesión
+│   ├── malus.desktop                   # Entrada de sesión para Display Managers
+│   ├── malus-ide-wrapper               # Wrapper optimizado sin modificación de binarios IDE
+│   ├── antigravity-ide-wrapper         # Wrapper específico para Antigravity IDE
+│   └── code-wrapper                    # Wrapper específico para VS Code
 │
 ├── shaders/                            # Shaders GLSL reutilizables y acelerados por GPU
 │   ├── squircle_sdf.frag               # Curvatura analítica squircle n=4.2 con subpixel AA
 │   ├── screen_border_radius.frag       # Máscara analítica para esquinas redondeadas de pantalla
 │   ├── dual_kawase_down.frag           # Pase de reducción (downsample) Dual-Kawase
 │   ├── dual_kawase_up.frag             # Pase de ampliación (upsample) Dual-Kawase
-│   └── genie_deform.vert / .frag       # Malla paramétrica y distorsión para Efecto Aladín
+│   ├── genie_deform.vert               # Malla paramétrica de vértices para Efecto Aladín
+│   └── genie_deform.frag               # Distorsión y composición para Efecto Aladín
 │
-└── crates/                             # Módulos y Crates del Workspace de Rust
-    ├── common/                         # [malus-de-common] Biblioteca compartida
+└── crates/                             # 16 Crates del Workspace de Rust
+    ├── common/                         # [malus-de-common] Config TOML, IPC, temas, Wayland helpers y logging
+    ├── dialogs/                        # [malus-de-dialogs] Biblioteca compartida de diálogos nativos
+    ├── render/                         # [malus-de-render] Base GPU WGPU 24 + Taffy + Cosmic-Text + Glyphon + SCTK
+    │   └── src/                        # renderer.rs, squircle.rs, layout.rs, text.rs, luminance.rs, top_bar.rs, popover.rs, dbus_menu.rs, status_notifier.rs, wayland.rs
+    │
+    ├── compositor/                     # [malus-de-compositor] Compositor Smithay 0.7 Wayland
     │   ├── src/
-    │   │   ├── config.rs               # Estructuras de configuración serializables (TOML)
-    │   │   ├── ipc.rs                  # Definición de mensajes IPC (Unix Domain Sockets)
-    │   │   ├── theme.rs                # Gestión de tokens y esquemas de color
-    │   │   └── logging.rs              # Configuración unificada de tracing y logs
+    │   │   ├── backend/                # drm.rs (DRM/KMS + libinput + Idle Sleeping), winit.rs, xwayland.rs, mod.rs
+    │   │   ├── blur.rs                 # Dual-Kawase Blur y caché estática de fondo
+    │   │   ├── shadow.rs               # Sombras suaves procedurales squircle n=4.2
+    │   │   ├── window_corners.rs       # Recorte analítico squircle de ventanas
+    │   │   ├── ssd.rs                  # Decoraciones SSD con botones semáforo
+    │   │   ├── genie.rs / magic_lamp.rs # Animación Genie Effect / Lámpara de Aladín
+    │   │   ├── theme_transition.rs     # Transiciones animadas de cambio de tema
+    │   │   ├── spotlight_visual.rs     # Efectos visuales de Spotlight en el compositor
+    │   │   ├── screenshot_ui.rs / capture.rs / recording.rs # Captura, screencopy y grabación
+    │   │   ├── grabs.rs / state.rs     # Estado del compositor, foco, grabs e IPC
+    │   │   ├── cpu_priority.rs         # Gestión de prioridad de CPU / baja latencia
+    │   │   └── main.rs                 # Punto de entrada CLI (--backend drm|winit)
     │   └── Cargo.toml
     │
-    ├── compositor/                     # [malus-de-compositor] Compositor Smithay Wayland
-    │   ├── src/
-    │   │   ├── backend/                # Abstracción Winit (desarrollo) y DRM/KMS + libinput (nativo)
-    │   │   ├── render/                 # Pipeline Glow / OpenGL ES, shaders y FBOs
-    │   │   ├── input/                  # libinput gesture engine 1:1, keybindings y atajos
-    │   │   ├── protocols/              # Manejo de xdg-shell, layer-shell, fractional-scale
-    │   │   ├── workspaces/             # Gestor de espacios, tiling híbrido, PiP y Mission Control
-    │   │   └── dbus/                   # org.gnome.Mutter.DisplayConfig y portal color-scheme
-    │   └── Cargo.toml
-    │
-    ├── top-bar/                        # [malus-de-top-bar] Barra Superior estilo macOS
-    │   ├── src/
-    │   │   ├── app_menu.rs             # Menú del sistema y com.canonical.dbusmenu
-    │   │   ├── tray.rs                 # StatusNotifierWatcher (SNI tray)
-    │   │   ├── control_center.rs       # Popover de controles rápidos (Wi-Fi, Bluetooth, brillo)
-    │   │   ├── tiling_button.rs        # Botón conmutador de modo mosaico (Auto-Tiling)
-    │   │   ├── link_applet.rs          # Applet de dispositivo móvil (batería, estado, timbrado)
-    │   │   └── clock.rs                # Reloj y disparador del Drawer lateral
-    │   └── Cargo.toml
-    │
+    ├── top-bar/                        # [malus-de-top-bar] Barra Superior estilo macOS (services/, ui/, styles/)
     ├── dock/                           # [malus-de-dock] Dock Inteligente Flotante
-    │   ├── src/
-    │   │   ├── pill.rs                 # Contenedor acrílico flotante squircle
-    │   │   ├── style.rs                # Gestión de geometría (cápsula vs panel), opacidades y CSS
-    │   │   ├── position.rs             # Lógica de orientación y anclaje (inferior, izquierda, derecha)
-    │   │   ├── magnification.rs        # Motor gaussiano de ampliación analítica
-    │   │   ├── favorites.rs            # Lanzadores .desktop y badges
-    │   │   ├── stacks.rs               # Carpetas ancladas (Fan View y Grid View)
-    │   │   ├── thumbnails.rs           # Ranuras de ventanas minimizadas con FBO capture
-    │   │   ├── trash.rs                # Monitor de papelera y Wayland Drag & Drop
-    │   │   └── widget_slot.rs          # Trait y slots para widgets modulares
-    │   └── Cargo.toml
-    │
-    ├── spotlight/                      # [malus-de-spotlight] Buscador Universal Modal
-    │   ├── src/
-    │   │   ├── ui.rs                   # Modal centrado flotante en Split View
-    │   │   ├── fuzzy.rs                # Algoritmo difuso en memoria para apps .desktop
-    │   │   ├── tracker.rs              # Consultas D-Bus SPARQL a Tracker Miner FS
-    │   │   ├── parser.rs               # Calculadora matemática y conversor en tiempo real
-    │   │   └── quick_look.rs           # Previsualización modal a gran escala (Espacio)
-    │   └── Cargo.toml
-    │
-    ├── notifications/                  # [malus-de-notifications] Notificaciones y Drawer
-    │   ├── src/
-    │   │   ├── daemon.rs               # Servicio org.freedesktop.Notifications
-    │   │   ├── banners.rs              # Tarjetas flotantes temporales (Toasts)
-    │   │   ├── drawer.rs               # Panel lateral deslizante derecho
-    │   │   └── widgets/                # Widgets oficiales (Calendario EDS, Clima, Baterías)
-    │   └── Cargo.toml
-    │
-    ├── session-lock/                   # [malus-de-session-lock] Bloqueo de Pantalla y Agente Polkit
-    │   ├── src/
-    │   │   ├── protocol.rs             # Implementación de ext-session-lock-v1
-    │   │   ├── polkit.rs               # org.freedesktop.PolicyKit1.AuthenticationAgent
-    │   │   ├── pam.rs                  # Módulo de autenticación PAM
-    │   │   ├── biometric.rs            # Integración D-Bus con fprintd
-    │   │   └── ui.rs                   # Interfaz de bloqueo y diálogo Polkit con shake animation
-    │   └── Cargo.toml
-    │
-    ├── screenshot/                     # [malus-de-screenshot] Captura y Grabación de Pantalla
-    │   ├── src/
-    │   │   ├── capture.rs              # Protocolo zwlr_screencopy_v1 y recorte
-    │   │   ├── recorder.rs             # Grabación de pantalla PipeWire / VA-API
-    │   │   ├── ocr.rs                  # Extractor de texto en pantalla OCR (Super + Shift + T)
-    │   │   ├── thumbnail.rs            # Miniatura squircle flotante interactiva (Drag & Drop)
-    │   │   └── ui.rs                   # Barra flotante y capa interactiva de selección
-    │   └── Cargo.toml
-    │
-    ├── link/                           # [malus-de-link] Integración Móvil (KDE Connect Protocol)
-    │   ├── src/
-    │   │   ├── discovery.rs            # Descubrimiento UDP y enlace TLS seguro
-    │   │   ├── clipboard.rs            # Sincronización de portapapeles con el móvil
-    │   │   ├── share.rs                # Transferencia de archivos AirDrop Linux
-    │   │   ├── notifications.rs        # Proyección de alertas móviles y respuesta
-    │   │   └── telephony.rs            # Detección de llamadas y pausa multimedia
-    │   └── Cargo.toml
-    │
-    ├── wallpaper/                      # [malus-de-wallpaper] Fondo de Pantalla Ligero
-    │   ├── src/
-    │   │   ├── loader.rs               # Decodificación y carga de imágenes a textura GPU
-    │   │   └── surface.rs              # Layer Shell background con escalado de aspecto
-    │   └── Cargo.toml
-    │
-    └── ctl/                            # [malus-de-ctl] Herramienta CLI de Administración
-        ├── src/
-        │   └── main.rs                 # Órdenes de control (theme, dock, lock, display)
-        └── Cargo.toml
+    ├── spotlight/                      # [malus-de-spotlight] Buscador Universal Modal (calculator.rs, indexer.rs)
+    ├── notifications/                  # [malus-de-notifications] Demonio de notificaciones y Drawer lateral
+    ├── session-lock/                   # [malus-de-session-lock] Bloqueo ext-session-lock-v1 y Agente Polkit (polkit.rs)
+    ├── screenshot/                     # [malus-de-screenshot] Captura, barra flotante y grabador (recorder.rs, toolbar.rs)
+    ├── clipboard/                      # [malus-de-clipboard] Servicio e historial de portapapeles
+    ├── link/                           # [malus-de-link] Integración móvil (protocol.rs)
+    ├── wallpaper/                      # [malus-de-wallpaper] Fondo de pantalla layer-shell
+    ├── ctl/                            # [malus-de-ctl] CLI de control en caliente
+    ├── settings/                       # [malus-de-settings] App nativa de Configuración (GTK4 / Libadwaita)
+    └── branches/                       # [malus-de-branches] Gestor de archivos nativo (app_window.rs, folder_pane.rs, fs_backend.rs, db.rs, quick_look.rs, views/, sidebar.rs, path_bar.rs, status_bar.rs, operations.rs)
 ```
 
 ### Configuración del Workspace Raíz (`Cargo.toml`)
@@ -1132,6 +1103,7 @@ malus-de/
 resolver = "2"
 members = [
     "crates/common",
+    "crates/dialogs",
     "crates/compositor",
     "crates/top-bar",
     "crates/dock",
@@ -1139,27 +1111,63 @@ members = [
     "crates/notifications",
     "crates/session-lock",
     "crates/screenshot",
+    "crates/clipboard",
     "crates/link",
     "crates/wallpaper",
     "crates/ctl",
+    "crates/settings",
+    "crates/render",
+    "crates/branches",
 ]
 
 [workspace.package]
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 authors = ["MalusDE Team"]
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
+# Dependencias internas del Workspace
+malus-de-common = { path = "crates/common" }
+malus-de-dialogs = { path = "crates/dialogs" }
+malus-de-render = { path = "crates/render" }
+
+# Renderizado GPU Nativo & Shell
+wgpu = "24"
+bytemuck = { version = "1.25", features = ["derive"] }
+taffy = "0.15"
+glyphon = "0.8.0"
+cosmic-text = "0.12"
+smithay-client-toolkit = "0.19"
+raw-window-handle = "0.6"
+calloop = "0.13"
+calloop-wayland-source = "0.3"
+
 # GUI & Shell
 gtk4 = { version = "0.9", features = ["v4_12"] }
+gdk-pixbuf = "0.20"
 libadwaita = { version = "0.7", features = ["v1_5"] }
 gtk4-layer-shell = "0.4"
 
-# Wayland & Compositor
-smithay = { version = "0.3", features = ["backend_winit", "backend_drm", "backend_libinput", "renderer_glow"] }
+# Wayland Compositor & Smithay
+smithay = { version = "0.7", default-features = false, features = [
+    "backend_winit",
+    "backend_drm",
+    "backend_egl",
+    "backend_udev",
+    "backend_libinput",
+    "backend_session_libseat",
+    "backend_gbm",
+    "renderer_glow",
+    "desktop",
+    "wayland_frontend",
+    "xwayland",
+] }
+wayland-server = "0.31"
 wayland-client = "0.31"
-wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-protocols = { version = "0.32", features = ["client", "server"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client", "server"] }
+wayland-protocols-misc = { version = "0.3", features = ["client", "server"] }
 
 # D-Bus & Ecosistema GNOME
 zbus = { version = "4.2", default-features = false, features = ["async-io"] }
@@ -1172,10 +1180,13 @@ serde_json = "1.0"
 toml = "0.8"
 
 # Utilidades & Rendimiento
+clap = { version = "4.5", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "1.0"
 anyhow = "1.0"
+async-channel = "2.3"
+png = "0.17"
 
 # Optimizaciones globales de compilación para Release
 [profile.release]
@@ -1186,19 +1197,26 @@ panic = "abort"
 strip = true
 ```
 
-### Flujo de Desarrollo y Pruebas Locales (Sin Reiniciar Sesión)
+### Flujo de Desarrollo, Pruebas e Instalación Local
 * **Compositor en Ventana (Backend Winit):**
   ```bash
   cargo run -p malus-de-compositor -- --backend winit
   ```
   Permite probar los shaders GLSL, los bordes squircle, el efecto Aladín y el escalado fraccionario directamente dentro de tu sesión actual de GNOME / Ubuntu / Fedora sin reiniciar ni cambiar de TTY.
-* **Prueba aislada de componentes UI:**
+* **Prueba aislada de componentes UI y aplicaciones:**
   ```bash
   cargo run -p malus-de-dock
   cargo run -p malus-de-spotlight
   cargo run -p malus-de-top-bar
   cargo run -p malus-de-notifications
+  cargo run -p malus-de-settings
+  cargo run -p malus-de-branches
   ```
+* **Instalación de sesión standalone:**
+  ```bash
+  ./scripts/install-session.sh
+  ```
+  Compila los binarios en modo release, instala la sesión aislada (`malus-session`, `malus-ide-wrapper`, `malus.desktop`, `malus-portals.conf`) y registra `Malus DE` en el gestor de acceso.
 
 ---
 
@@ -1206,53 +1224,34 @@ strip = true
 
 ```mermaid
 flowchart LR
-    Fase1["Fase 1:\nEsqueleto Compositor (Smithay + Winit)\n+ Squircle, Screen Border-Radius\n+ Acrílico Dual-Kawase\n+ HiDPI Fraccionario Nativo"] --> Fase2["Fase 2:\nHiDPI Fraccionario\n+ XDG Shell (Nautilus)\n+ D-Bus DisplayConfig & Color-Scheme\n+ Decoraciones Semáforo macOS"]
-    Fase2 --> Fase3["Fase 3:\nLayer Shell\n+ Fondo Estático + Barra Superior macOS\n+ Dock Inteligente & Genie Effect\n+ Spotlight (Alt+Espacio, Split View, Tracker & Quick Look)\n+ Mission Control & Gestos 1:1"]
-    Fase3 --> Fase4["Fase 4:\nGNOME Control Center Modular (11 paneles)\n+ Sesión Nativa DRM/KMS\n+ Pantalla de Bloqueo ext-session-lock-v1 & GDM"]
-    Fase4 -.-> FaseFutura["Fase Futura:\nMotor de Vídeo Dinámico\n(libmpv + Solar Sync)"]
+    Fase1["Fase 1 (Completada):\nEsqueleto Compositor (Smithay + Winit)\n+ Squircle, Screen Border-Radius\n+ Acrílico Dual-Kawase + Caché\n+ HiDPI Fraccionario Nativo"] --> Fase2["Fase 2 (Completada):\nHiDPI Fraccionario\n+ XDG Shell & XWayland\n+ D-Bus DisplayConfig & Color-Scheme\n+ Decoraciones Semáforo macOS"]
+    Fase2 --> Fase3["Fase 3 (Completada):\nLayer Shell & Shell Completa\n+ Top Bar, Dock (Genie Effect), Spotlight\n+ Notificaciones, Captura, Link, Clipboard\n+ Aislamiento GNOME & Wrappers IDE"]
+    Fase3 --> Fase4["Fase 4 (Completada):\nmalus-de-settings Nativa + Dialogs\n+ Sesión Nativa DRM/KMS (Idle Sleeping)\n+ Pantalla de Bloqueo ext-session-lock-v1\n+ Branches (Fases 1–4)"]
+    Fase4 -.-> FaseFutura["Fase 5 / En Curso:\nMigración Shell WGPU/Taffy (ADR-0001)\n+ Branches Fase 5 Escritorio\n+ Motor Vídeo Dinámico"]
 ```
 
-| Fase | Tarea | Entregable |
+| Fase | Estado | Tarea / Entregable Actual |
 | :--- | :--- | :--- |
-| **Fase 1** | Workspace Smithay (backend Winit), shaders squircle SDF, screen border-radius, pipeline Dual-Kawase Blur y **protocolos de escalado fraccionario (`wp_fractional_scale_v1` + `wp_viewporter`)**. | Ventana base en Wayland/X11 que soporta escalado fraccionario al píxel (125%, 150%), esquinas redondeadas globales de pantalla y conmutación sólido/acrílico. |
-| **Fase 2** | Integrar `xdg-shell`, protocolo de decoraciones `zxdg_decoration_manager_v1` (layout configurable: izquierda macOS `close,minimize,maximize` / derecha tradicional), implementar servicio D-Bus `org.gnome.Mutter.DisplayConfig` y portal `color-scheme`. | Ejecución nítida de Nautilus y apps GTK/SSD con botones semáforo a la izquierda en orden macOS, capacidad de conmutar Tema Claro/Oscuro y backend de pantallas listo para recibir órdenes de configuración. |
-| **Fase 3** | Implementar `wlr-layer-shell`, fondo estático, Barra Superior estilo macOS (con Control Center y Drawer lateral de Notificaciones y Widgets), **Dock Inteligente** (shader *Genie Effect*, miniaturas FBO, carpetas, papelera Drag&Drop), **Lanzador Universal Spotlight** (`Alt + Barra Espaciadora`, Split View, Tracker & Quick Look) y **Mission Control con Motor de Gestos Táctiles 1:1** (`libinput`, cambio de espacio fluido con 3 dedos, App Exposé). | Shell de escritorio completo y autónomo con experiencia fluida idéntica a macOS, animación Aladín por GPU, navegación por gestos multitáctiles 1:1 sin latencia, notificaciones D-Bus y búsqueda universal instantánea. |
-| **Fase 4** | Integrar `gnome-control-center` filtrado con los 11 paneles seleccionados (incluyendo selector de temas CSS, personalización del Dock y panel de gestos táctiles), **Pantalla de Bloqueo Segura (`ext-session-lock-v1` + PAM / fprintd)**, entrada de sesión para GDM (`malus-de.desktop`) y habilitar backend DRM/KMS + libinput. | Entorno de escritorio completo y autónomo con gestión gráfica total de pantallas, Wi-Fi, Bluetooth, sonido, energía, inicio de sesión transparente desde GDM y bloqueo seguro. |
-| **Fase Futura** | Reactivación del reproductor de fondo en vídeo con `libmpv`. | Vídeo dinámico acelerado por GPU como fondo de pantalla según la hora del día o ciclo solar. |
+| **Fase 1** | Completada | Workspace Rust + Smithay 0.7 (Winit y DRM/KMS), shaders squircle SDF, screen border-radius, sombras procedurales (`shadow.rs`), Dual-Kawase Blur con caché estática de fondo y escalado fraccionario (`wp_fractional_scale_v1` + `wp_viewporter`). |
+| **Fase 2** | Completada | `xdg-shell`, `XWayland`, protocolo de decoraciones `zxdg_decoration_manager_v1` (layout macOS configurable), servicio D-Bus `org.gnome.Mutter.DisplayConfig`, portal `color-scheme`, transición de tema (`theme_transition.rs`) y wrapper ligero `scripts/malus-ide-wrapper`. |
+| **Fase 3** | Completada | `wlr-layer-shell`, `malus-de-wallpaper`, `malus-de-top-bar`, `malus-de-dock` (Genie Effect GPU y miniaturas), `malus-de-spotlight`, `malus-de-notifications`, `malus-de-screenshot`, `malus-de-clipboard`, `malus-de-link`, `malus-de-ctl` y aislamiento bidireccional GNOME (`XDG_CONFIG_HOME` + `GSETTINGS_BACKEND=keyfile`). |
+| **Fase 4** | Completada | Aplicación nativa `malus-de-settings` (en lugar de `gnome-control-center`), `malus-de-dialogs`, `malus-de-session-lock` (`ext-session-lock-v1` + PAM + Polkit), sesión standalone DRM/KMS (`scripts/install-session.sh`) con bucle `Duration::ZERO` + Idle Sleeping y gestor de archivos nativo `malus-de-branches` (Fases 1–4). |
+| **Fase 5 / Futura** | En curso / Planificada | Adopción progresiva de la base GPU compartida `malus-de-render` (`wgpu` + `taffy` + `cosmic-text` + `glyphon` + SCTK, según ADR-0001), Branches Fase 5 (escritorio espacial y registro por defecto) y motor dinámico de vídeo. |
 
 ---
 
-## 6. Backlog de Ideas Futuras
-- [ ] **Explorador de Archivos Nativo Branches (`malus-de-branches`):**
-  - **Reemplazo Progresivo de Nautilus:** Desarrollar **Branches** (bautizado por las ramas del árbol de manzanas *Malus* y las ramas del árbol de directorios), un explorador de archivos autónomo, rápido y ligero escrito 100% en Rust sobre **GTK4 / Libadwaita** (`tokio` + `notify`), plenamente integrado con el compositor y la shell de Malus DE, diseñado para desplazar a Nautilus fase por fase.
-  - **Diseño Idéntico a macOS Finder:**
-    - Barra de herramientas unificada con semáforos, navegación histórica, selector de 4 modos, conmutador de división de pantalla, menús de agrupación/acción/compartir/tags y búsqueda.
-    - Barra de ruta (*breadcrumbs*) interactiva inferior y barra de estado con conteo y espacio disponible.
-    - Barra lateral acrílica (*Sidebar*) con Favoritos, Ubicaciones y Etiquetas.
-  - **División de Pantalla (*Split View / Dual Pane*):** Vista en dos paneles simultáneos (`GtkPaned`) independientes para operaciones ágiles de navegación y drag-and-drop entre carpetas.
-  - **Modo de Iconos Libre (*Freeform Canvas / Spatial Desktop & Folders*):** Posicionamiento arbitrario de iconos con coordenadas `(x, y)` persistidas en SQLite (`branches_views.sqlite`), snap-to-grid magnético y selección elástica de área.
-  - **4 Modos de Vista Branches:**
-    1. *Iconos:* Cuadrícula espacial con colocación y ordenación libre, alineación magnética (*snap to grid*) y persistencia de posiciones espaciales.
-    2. *Lista Jerárquica:* Visualización tabular multicolumna con triángulos de revelado en línea para expandir y colapsar subcarpetas sin abandonar el directorio actual.
-    3. *Columnas Miller (*Miller Columns*):* Navegación en cascada horizontal multinivel con panel final de previsualización y metadatos detallados (EXIF, códecs, fechas, permisos).
-    4. *Galería / Carrusel:* Vista enfocada en medios con carrusel inferior de miniaturas y lienzo superior de gran tamaño.
-  - **Quick Look Integrado (`Espacio`):** Ventana modal flotante acrílica instantánea para inspeccionar imágenes, vídeo, audio, PDFs, documentos y código fuente con resaltado de sintaxis sin lanzar aplicaciones externas pesadas.
-  - **Etiquetas de Color (*Color Tags / Labels*):** Marcado visual con puntos cromáticos (Rojo, Naranja, Amarillo, Verde, Azul, Púrpura, Gris) persistido en atributos extendidos (`xattr`) del sistema de archivos y sincronizado con Spotlight para búsquedas instantáneas por etiqueta.
-  - **Drag and Drop Wayland de Primera Clase:** Soporte visual completo con miniatura `dnd_icon` translúcida flotando junto al cursor para arrastres fluidos entre ventanas, paneles, escritorio y el Dock.
-  - **Fases de Implementación:**
-    1. *Fase 1 (MVP):* Ventana GTK4, HeaderBar unificada, backend async Tokio + notify, lista básica y apertura de archivos.
-    2. *Fase 2:* Split View (`GtkPaned`) y canvas de iconos con coordenadas libres `(x, y)` persistidas en SQLite.
-    3. *Fase 3:* Columnas Miller y visor modal Quick Look (`Espacio`).
-    4. *Fase 4:* Etiquetas de color (`xattr`), visor de galería y gestor de operaciones asíncronas con progreso.
-    5. *Fase 5:* Registro como explorador predeterminado del sistema (`malus-de-branches.desktop`), gestión de iconos sobre el escritorio Wayland y desacople de demonios GNOME.
+## 6. Estado de Backlog y Próximos Hitos
+
+- [x] **Explorador de Archivos Nativo Branches (`malus-de-branches` — Fases 1 a 4 Implementadas):**
+  - Implementado en Rust sobre **GTK4 / Libadwaita** con backend de sistema de archivos asíncrono (`fs_backend.rs`), persistencia SQLite (`db.rs`), barra de ruta (`path_bar.rs`), barra lateral (`sidebar.rs`), barra de estado (`status_bar.rs`), operaciones de archivo (`operations.rs`), múltiples modos de vista (`views/`), panel dual (`folder_pane.rs`) y Quick Look integrado (`quick_look.rs`).
+  - [ ] **Branches Fase 5 (Pendiente):** Registro como explorador predeterminado del sistema (`dev.malus.Branches.desktop` / MIME `inode/directory`), gestión de iconos sobre el escritorio Wayland y desacople total de Nautilus.
+- [x] **Aplicación Nativa de Configuración (`malus-de-settings`):** Sustitución de `gnome-control-center` por interfaz nativa en GTK4/Libadwaita sincronizada con el entorno aislado de Malus DE.
+- [x] **Sombras suaves procedurales adaptadas a la geometría squircle:** Implementadas en [`crates/compositor/src/shadow.rs`](crates/compositor/src/shadow.rs).
+- [x] **Servicio independiente de historial de portapapeles (`malus-de-clipboard`)** y diálogos compartidos (`malus-de-dialogs`).
+- [ ] **Migración Progresiva de Shell a `malus-de-render` (`WGPU 24` + `Taffy 0.15`):** Migrar `top-bar`, `dock`, `spotlight` y `notifications` desde GTK4 a la base compartida GPU según [`docs/decisiones/0001-migracion-shell-gtk4-a-wgpu-taffy.md`](docs/decisiones/0001-migracion-shell-gtk4-a-wgpu-taffy.md).
 - [ ] **Widgets Interactivos en el Escritorio (Estilo macOS Sonoma / Sequoia):**
-  - Capacidad de colocar y anclar libremente en cualquier posición de la cuadrícula del escritorio los mismos widgets modulares (1x1, 2x1, 2x2) desarrollados para el Centro de Notificaciones (Calendario EDS, Tiempo, Baterías Bluetooth, Notas adhesivas, Reproductor MPRIS).
-  - **Atenuación Inteligente y Fusión con el Fondo (*Intelligent Background Fade*):** Cuando una ventana de aplicación entra en primer plano o se sitúa sobre el escritorio, los widgets se atenúan automáticamente convirtiéndose en siluetas monocromáticas sutiles que armonizan con el wallpaper para evitar distracciones visuales. Al hacer clic en el escritorio o minimizar las ventanas, recuperan su color vivo e interactividad completa.
-  - **Galería de Widgets Integrada:** Diálogo modal flotante acrílico accesible con clic secundario en el escritorio (*"Añadir widgets..."*).
-- [ ] **Motor de Fondo Dinámico en Vídeo:** Reactivar `libmpv` con decodificación VA-API/NVDEC por hardware y transiciones suaves según franja solar.
-- [ ] **Ecosistema Ampliado de Widgets para el Dock:** Sistema abierto de plugins en WebAssembly/IPC para widgets comunitarios en el Dock (reproductor MPRIS expandido, métricas de red, monitor de GPU/sensores térmicos).
-- [ ] Sombras suaves procedurales adaptadas a la geometría squircle.
-- [ ] **Monitoreo Reactivo de Aplicaciones en Spotlight (`malus-de-spotlight`):** Implementar un observador de sistema de archivos reactivo (`notify` / `inotify`) sobre `/usr/share/applications` y `~/.local/share/applications` para actualizar dinámicamente el catálogo de aplicaciones instaladas o eliminadas al vuelo sin requerir reiniciar la sesión gráfica.
-- [ ] Gesto de pellizco inverso con 4/5 dedos para separar ventanas y mostrar escritorio (*Show Desktop*).
-- [ ] Sistema de plugins en WebAssembly o IPC Unix Domain Sockets para widgets de la barra y escritorio.
-- [ ] Integración con geolocalización automática para cálculo solar exacto del fondo de pantalla.
+  - Colocación en cuadrícula sobre el fondo de pantalla (Calendario EDS, Tiempo, Baterías Bluetooth, Notas adhesivas, Reproductor MPRIS) con atenuación automática cuando hay ventanas en primer plano.
+- [ ] **Motor de Fondo Dinámico en Vídeo:** Reproductor acelerado por GPU con transiciones suaves según franja solar.
+- [ ] **Ecosistema Ampliado de Widgets y Plugins:** Sistema de plugins en WebAssembly/IPC Unix Domain Sockets para barra, Dock y widgets de escritorio.
+- [ ] **Monitoreo Reactivo de Aplicaciones en Spotlight (`malus-de-spotlight`):** Observador `notify`/`inotify` sobre `/usr/share/applications` y `~/.local/share/applications` para actualizar el índice en caliente.
+- [ ] **Gesto de pellizco inverso (Show Desktop) y geolocalización automática** para cálculo solar exacto.
