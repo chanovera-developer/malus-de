@@ -1856,17 +1856,11 @@ pub fn run_drm() -> Result<()> {
                             }
                         }
 
-                        // Si hay popups activos pero NO hay un grab explícito (o el grab ya finalizó)
-                        // y el clic fue fuera del popup, descartamos los popups. Si hay un grab
-                        // explícito activo, PopupPointerGrab gestionará el clic y el cierre protocolar.
-                        if !clicked_on_popup && !state.active_popups.is_empty() && !state.popup_grab_active() {
-                            state.dismiss_all_popups();
-                        }
-
-                        if pointer.is_grabbed() && !state.popup_grab_active() {
-                            state.snap_preview = None;
-                            pointer.unset_grab(state, btn_serial, event.time_msec());
-                        }
+                        state.prepare_pointer_press_grabs(
+                            clicked_on_popup,
+                            btn_serial,
+                            event.time_msec(),
+                        );
 
                         let (has_super, has_alt) = state
                             .seat
@@ -1977,10 +1971,6 @@ pub fn run_drm() -> Result<()> {
                         }
 
                         if let Some(keyboard) = state.seat.get_keyboard() {
-                            if keyboard.is_grabbed() && !state.popup_grab_active() {
-                                keyboard.unset_grab(state);
-                            }
-
                             if let Some((surf, _ns, can_kb)) = layer_info {
                                 if can_kb {
                                     keyboard.set_focus(state, Some(surf), btn_serial);
@@ -1992,7 +1982,9 @@ pub fn run_drm() -> Result<()> {
                                 }
                                 if let Some(surface) = window.wl_surface() {
                                     if keyboard.current_focus().as_ref() != Some(surface.as_ref()) {
+                                        state.defer_activation_configure = true;
                                         keyboard.set_focus(state, Some(surface.clone().into_owned()), btn_serial);
+                                        state.defer_activation_configure = false;
                                         state.notify_active_app(Some(&surface));
                                     }
                                 }
@@ -2133,6 +2125,9 @@ pub fn run_drm() -> Result<()> {
                         state.snap_preview = None;
                     }
                     pointer.frame(state);
+                    if !is_pressed {
+                        state.flush_pending_activation_configures();
+                    }
                 }
             }
             InputEvent::PointerAxis { event } => {

@@ -170,6 +170,10 @@ pub struct MalusState {
     pub active_popups: Vec<PopupSurface>,
     /// Grab explícito (`xdg_popup.grab`) activo de un popup de ventana de aplicación.
     pub popup_grab: Option<PopupGrab<MalusState>>,
+    /// Evita enviar `xdg_toplevel.configure` de activación durante `ButtonState::Pressed` para no cancelar gestos en GTK4.
+    pub defer_activation_configure: bool,
+    /// Superficies cuyo `xdg_toplevel.configure` de activación quedó diferido hasta `ButtonState::Released`.
+    pub pending_activation_configures: Vec<WlSurface>,
     pub window_restore_geometries: HashMap<WlSurface, (Point<i32, Logical>, Size<i32, Logical>)>,
     pub centered_transient_windows: HashMap<WlSurface, (Point<i32, Logical>, Size<i32, Logical>)>,
     pub minimized_windows: HashMap<WlSurface, (smithay::desktop::Window, Point<i32, Logical>)>,
@@ -850,6 +854,8 @@ impl MalusState {
             popups: PopupManager::default(),
             active_popups: Vec::new(),
             popup_grab: None,
+            defer_activation_configure: false,
+            pending_activation_configures: Vec::new(),
             window_restore_geometries: HashMap::new(),
             centered_transient_windows: HashMap::new(),
             minimized_windows: HashMap::new(),
@@ -1229,10 +1235,8 @@ impl MalusState {
                 .filter(|candidate| candidate.wl_surface().as_deref() != Some(&surf))
                 .last()
                 .and_then(|w| w.wl_surface().map(|s| s.into_owned()));
-            if let Some(kb) = self.seat.get_keyboard() {
-                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-                kb.set_focus(self, next_focus.clone(), serial);
-            }
+            let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+            self.set_keyboard_focus_with_sync(next_focus.clone(), serial);
             if let Some(next_win) = self.space.elements().last() {
                 if let Some(toplevel) = next_win.toplevel() {
                     toplevel.send_configure();
@@ -1589,6 +1593,7 @@ impl MalusState {
 
     pub fn dismiss_all_popups(&mut self) {
         if self.active_popups.is_empty() {
+            self.popup_grab = None;
             return;
         }
         tracing::info!("🧹 Descartando {} popups activos", self.active_popups.len());
@@ -1602,6 +1607,122 @@ impl MalusState {
         // Los popups con grab acaban de cerrarse: el grab termina con ellos.
         // El llamador (manejador de clic) se encarga de soltar los grabs de puntero/teclado.
         self.popup_grab = None;
+    }
+
+    /// Libera grabs de popup (cuando el clic ocurre fuera de ellos) o grabs residuales antes de
+    /// aplicar el foco a la ventana o superficie objetivo.
+    pub fn prepare_pointer_press_grabs(
+        &mut self,
+        clicked_on_popup: bool,
+        serial: Serial,
+        time_msec: u32,
+    ) {
+        let has_any_popup = !self.active_popups.is_empty() || self.popup_grab.is_some();
+        if !clicked_on_popup && has_any_popup {
+            // Soltar primero el grab de teclado para que `PopupPointerGrab::unset` no devuelva
+            // el foco a `self.root` y pise el foco de la ventana que se va a seleccionar.
+            if let Some(kb) = self.seat.get_keyboard() {
+                if kb.is_grabbed() {
+                    kb.unset_grab(self);
+                }
+            }
+            if let Some(pointer) = self.seat.get_pointer() {
+                if pointer.is_grabbed() {
+                    self.snap_preview = None;
+                    pointer.unset_grab(self, serial, time_msec);
+                }
+            }
+            self.dismiss_all_popups();
+            return;
+        }
+
+        if !self.popup_grab_active() {
+            if let Some(pointer) = self.seat.get_pointer() {
+                if pointer.is_grabbed() {
+                    self.snap_preview = None;
+                    pointer.unset_grab(self, serial, time_msec);
+                }
+            }
+            if let Some(kb) = self.seat.get_keyboard() {
+                if kb.is_grabbed() {
+                    kb.unset_grab(self);
+                }
+            }
+        }
+    }
+
+    /// Sincroniza el estado `Activated` de las ventanas en `Space`, difiriendo el `send_configure()`
+    /// de activación cuando estamos en medio de `ButtonState::Pressed`.
+    pub fn sync_window_activation(&mut self, focused: Option<&WlSurface>) {
+        let activated_flag =
+            smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated;
+        for win in self.space.elements() {
+            let is_focused = focused.map(|s| win.wl_surface().as_deref() == Some(s)).unwrap_or(false);
+            win.set_activated(is_focused);
+            if let Some(toplevel) = win.toplevel() {
+                let mut changed = false;
+                toplevel.with_pending_state(|state| {
+                    let was_activated = state.states.contains(activated_flag);
+                    if is_focused && !was_activated {
+                        state.states.set(activated_flag);
+                        changed = true;
+                    } else if !is_focused && was_activated {
+                        state.states.unset(activated_flag);
+                        changed = true;
+                    }
+                });
+                if changed {
+                    if self.defer_activation_configure && is_focused {
+                        let surf = toplevel.wl_surface().clone();
+                        if !self.pending_activation_configures.contains(&surf) {
+                            self.pending_activation_configures.push(surf);
+                        }
+                    } else {
+                        toplevel.send_configure();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Cambia el foco de teclado y garantiza la actualización de `Activated` incluso cuando `focus` es `None`
+    /// (Smithay no invoca `SeatHandler::focus_changed` al limpiar el foco con `None`).
+    pub fn set_keyboard_focus_with_sync(&mut self, focus: Option<WlSurface>, serial: Serial) {
+        let Some(kb) = self.seat.get_keyboard() else {
+            return;
+        };
+        let is_none = focus.is_none();
+        kb.set_focus(self, focus, serial);
+        if is_none {
+            self.focus_cpu_priority.set_focused_pid(None);
+            set_data_device_focus(&self.display_handle, &self.seat, None);
+            set_primary_focus(&self.display_handle, &self.seat, None);
+            self.cursor_status = smithay::input::pointer::CursorImageStatus::default_named();
+            self.sync_window_activation(None);
+        }
+    }
+
+    /// Envía los `xdg_toplevel.configure` de activación que fueron diferidos durante `ButtonState::Pressed`.
+    pub fn flush_pending_activation_configures(&mut self) {
+        if self.pending_activation_configures.is_empty() {
+            return;
+        }
+        use smithay::utils::IsAlive;
+        let pending: Vec<WlSurface> = self.pending_activation_configures.drain(..).collect();
+        for surf in pending {
+            if !surf.alive() {
+                continue;
+            }
+            if let Some(win) = self
+                .space
+                .elements()
+                .find(|w| w.wl_surface().as_deref() == Some(&surf))
+            {
+                if let Some(toplevel) = win.toplevel() {
+                    toplevel.send_configure();
+                }
+            }
+        }
     }
 
     /// Indica si hay un grab explícito de popup (`xdg_popup.grab`) todavía vigente.
@@ -1625,6 +1746,15 @@ impl MalusState {
                 let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                 keyboard.unset_grab(self);
                 keyboard.set_focus(self, grab.current_grab().filter(|s| s.alive()), serial);
+            }
+        }
+        if let Some(pointer) = self.seat.get_pointer() {
+            let previous = grab.previous_serial().unwrap_or(grab.serial());
+            if pointer.is_grabbed()
+                && (pointer.has_grab(grab.serial()) || pointer.has_grab(previous))
+            {
+                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                pointer.unset_grab(self, serial, 0);
             }
         }
     }
@@ -2208,6 +2338,7 @@ impl MalusState {
         }
         let occluded_by_top_ui = self.spotlight.is_open()
             || self.screenshot_ui.is_open()
+            || self.popup_grab_active()
             || self.popup_under(point).is_some()
             || self.space.outputs().any(|output| {
                 let layer_map = smithay::desktop::layer_map_for_output(output);
@@ -2925,28 +3056,7 @@ impl SeatHandler for MalusState {
         }
 
         // Actualizar el estado Activated de las ventanas cuyo foco haya cambiado realmente
-        let activated_flag =
-            smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated;
-        for win in self.space.elements() {
-            let is_focused = focused.map(|s| win.wl_surface().as_deref() == Some(s)).unwrap_or(false);
-            win.set_activated(is_focused);
-            if let Some(toplevel) = win.toplevel() {
-                let mut changed = false;
-                toplevel.with_pending_state(|state| {
-                    let was_activated = state.states.contains(activated_flag);
-                    if is_focused && !was_activated {
-                        state.states.set(activated_flag);
-                        changed = true;
-                    } else if !is_focused && was_activated {
-                        state.states.unset(activated_flag);
-                        changed = true;
-                    }
-                });
-                if changed {
-                    toplevel.send_configure();
-                }
-            }
-        }
+        self.sync_window_activation(focused);
     }
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: smithay::input::pointer::CursorImageStatus) {
         // IMPORTANTE: Nunca invocar métodos de `PointerHandle` (`is_grabbed`, `current_location`, etc.)
@@ -3471,16 +3581,14 @@ impl XdgShellHandler for MalusState {
         self.space.refresh();
 
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-        if let Some(kb) = self.seat.get_keyboard() {
-            let next_win = self.space.elements().rev().next().cloned();
-            let next_surface = next_win.as_ref().and_then(|w| w.wl_surface().map(|s| s.into_owned()));
-            if let Some(ref win) = next_win {
-                if let Some(toplevel) = win.toplevel() {
-                    toplevel.send_configure();
-                }
+        let next_win = self.space.elements().rev().next().cloned();
+        let next_surface = next_win.as_ref().and_then(|w| w.wl_surface().map(|s| s.into_owned()));
+        if let Some(ref win) = next_win {
+            if let Some(toplevel) = win.toplevel() {
+                toplevel.send_configure();
             }
-            kb.set_focus(self, next_surface, serial);
         }
+        self.set_keyboard_focus_with_sync(next_surface, serial);
 
         if let Some(pointer) = self.seat.get_pointer() {
             if pointer.is_grabbed() {
@@ -3597,7 +3705,9 @@ impl WlrLayerShellHandler for MalusState {
     }
 
     fn layer_destroyed(&mut self, surface: LayerSurface) {
+        use smithay::utils::IsAlive;
         tracing::info!("🗑️ [LayerShell] Layer surface destruida");
+        let destroyed_wl = surface.wl_surface().clone();
         for output in self.space.outputs() {
             let mut map = layer_map_for_output(output);
             let layer = map
@@ -3612,9 +3722,27 @@ impl WlrLayerShellHandler for MalusState {
         }
 
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-        if let Some(kb) = self.seat.get_keyboard() {
-            let top_win_surface = self.space.elements().next().and_then(|w| w.wl_surface().map(|s| s.into_owned()));
-            kb.set_focus(self, top_win_surface, serial);
+        let should_restore_focus = self
+            .seat
+            .get_keyboard()
+            .and_then(|kb| kb.current_focus())
+            .is_some_and(|focused| {
+                if focused == destroyed_wl || !focused.alive() {
+                    return true;
+                }
+                if let Some(popup) = self.popups.find_popup(&focused) {
+                    return find_popup_root_surface(&popup).ok().as_ref() == Some(&destroyed_wl);
+                }
+                false
+            });
+        if should_restore_focus {
+            let top_win_surface = self
+                .space
+                .elements()
+                .last()
+                .and_then(|w| w.wl_surface().map(|s| s.into_owned()));
+            self.set_keyboard_focus_with_sync(top_win_surface.clone(), serial);
+            self.notify_active_app(top_win_surface.as_ref());
         }
 
         if let Some(pointer) = self.seat.get_pointer() {
@@ -4059,5 +4187,176 @@ mod tests {
         // la esquina superior izquierda del icono debe renderizarse en (250 - 32, 350 - 40) = (218, 310)
         assert_eq!(phys_x, 218);
         assert_eq!(phys_y, 310);
+    }
+
+    #[test]
+    fn prepare_pointer_press_grabs_clears_residual_grabs_and_sync_none_clears_focus() {
+        use smithay::{
+            input::{
+                keyboard::{GrabStartData as KbGrabStartData, KeyboardGrab, KeyboardInnerHandle},
+                pointer::{GrabStartData, PointerGrab, PointerInnerHandle},
+                SeatHandler,
+            },
+            reexports::wayland_server::Display,
+            utils::SERIAL_COUNTER,
+        };
+
+        struct DummyKbGrab(KbGrabStartData<super::MalusState>);
+        impl KeyboardGrab<super::MalusState> for DummyKbGrab {
+            fn input(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut KeyboardInnerHandle<'_, super::MalusState>,
+                keycode: smithay::backend::input::Keycode,
+                key_state: smithay::backend::input::KeyState,
+                modifiers: Option<smithay::input::keyboard::ModifiersState>,
+                serial: smithay::utils::Serial,
+                time: u32,
+            ) {
+                handle.input(data, keycode, key_state, modifiers, serial, time);
+            }
+            fn set_focus(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut KeyboardInnerHandle<'_, super::MalusState>,
+                focus: Option<<super::MalusState as SeatHandler>::KeyboardFocus>,
+                serial: smithay::utils::Serial,
+            ) {
+                handle.set_focus(data, focus, serial);
+            }
+            fn start_data(&self) -> &KbGrabStartData<super::MalusState> {
+                &self.0
+            }
+            fn unset(&mut self, _data: &mut super::MalusState) {}
+        }
+
+        struct DummyPtrGrab(GrabStartData<super::MalusState>);
+        impl PointerGrab<super::MalusState> for DummyPtrGrab {
+            fn motion(
+                &mut self,
+                _data: &mut super::MalusState,
+                _handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                _focus: Option<(
+                    <super::MalusState as SeatHandler>::PointerFocus,
+                    smithay::utils::Point<f64, smithay::utils::Logical>,
+                )>,
+                _event: &smithay::input::pointer::MotionEvent,
+            ) {}
+            fn relative_motion(
+                &mut self,
+                _data: &mut super::MalusState,
+                _handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                _focus: Option<(
+                    <super::MalusState as SeatHandler>::PointerFocus,
+                    smithay::utils::Point<f64, smithay::utils::Logical>,
+                )>,
+                _event: &smithay::input::pointer::RelativeMotionEvent,
+            ) {}
+            fn button(
+                &mut self,
+                _data: &mut super::MalusState,
+                _handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                _event: &smithay::input::pointer::ButtonEvent,
+            ) {}
+            fn axis(
+                &mut self,
+                _data: &mut super::MalusState,
+                _handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                _details: smithay::input::pointer::AxisFrame,
+            ) {}
+            fn frame(
+                &mut self,
+                _data: &mut super::MalusState,
+                _handle: &mut PointerInnerHandle<'_, super::MalusState>,
+            ) {}
+            fn gesture_swipe_begin(
+                &mut self,
+                _data: &mut super::MalusState,
+                _handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                _event: &smithay::input::pointer::GestureSwipeBeginEvent,
+            ) {}
+            fn gesture_swipe_update(
+                &mut self,
+                _data: &mut super::MalusState,
+                _handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                _event: &smithay::input::pointer::GestureSwipeUpdateEvent,
+            ) {}
+            fn gesture_swipe_end(
+                &mut self,
+                _data: &mut super::MalusState,
+                _handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                _event: &smithay::input::pointer::GestureSwipeEndEvent,
+            ) {}
+            fn gesture_pinch_begin(
+                &mut self,
+                _data: &mut super::MalusState,
+                _handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                _event: &smithay::input::pointer::GesturePinchBeginEvent,
+            ) {}
+            fn gesture_pinch_update(
+                &mut self,
+                _data: &mut super::MalusState,
+                _handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                _event: &smithay::input::pointer::GesturePinchUpdateEvent,
+            ) {}
+            fn gesture_pinch_end(
+                &mut self,
+                _data: &mut super::MalusState,
+                _handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                _event: &smithay::input::pointer::GesturePinchEndEvent,
+            ) {}
+            fn gesture_hold_begin(
+                &mut self,
+                _data: &mut super::MalusState,
+                _handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                _event: &smithay::input::pointer::GestureHoldBeginEvent,
+            ) {}
+            fn gesture_hold_end(
+                &mut self,
+                _data: &mut super::MalusState,
+                _handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                _event: &smithay::input::pointer::GestureHoldEndEvent,
+            ) {}
+            fn start_data(&self) -> &GrabStartData<super::MalusState> {
+                &self.0
+            }
+            fn unset(&mut self, _data: &mut super::MalusState) {}
+        }
+
+        let display: Display<super::MalusState> = Display::new().unwrap();
+        let mut state = super::MalusState::new(&display);
+        let kb = state.seat.add_keyboard(Default::default(), 200, 25).unwrap();
+        let ptr = state.seat.add_pointer();
+        let serial = SERIAL_COUNTER.next_serial();
+
+        kb.set_grab(&mut state, DummyKbGrab(KbGrabStartData { focus: None }), serial);
+        ptr.set_grab(
+            &mut state,
+            DummyPtrGrab(GrabStartData {
+                focus: None,
+                button: 0x110,
+                location: (50.0, 50.0).into(),
+            }),
+            serial,
+            smithay::input::pointer::Focus::Clear,
+        );
+        assert!(kb.is_grabbed());
+        assert!(ptr.is_grabbed());
+
+        state.prepare_pointer_press_grabs(false, SERIAL_COUNTER.next_serial(), 100);
+        assert!(!kb.is_grabbed());
+        assert!(!ptr.is_grabbed());
+
+        state.cursor_status = smithay::input::pointer::CursorImageStatus::Named(
+            smithay::input::pointer::CursorIcon::Pointer,
+        );
+        state.set_keyboard_focus_with_sync(None, SERIAL_COUNTER.next_serial());
+        assert!(kb.current_focus().is_none());
+        assert!(matches!(
+            state.cursor_status,
+            smithay::input::pointer::CursorImageStatus::Named(
+                smithay::input::pointer::CursorIcon::Default
+            )
+        ));
     }
 }

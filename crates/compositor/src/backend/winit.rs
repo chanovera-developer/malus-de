@@ -785,20 +785,11 @@ pub fn run_winit() -> Result<()> {
                             }
                         }
 
-                        if !clicked_on_popup && !state.active_popups.is_empty() && !state.popup_grab_active() {
-                            state.dismiss_all_popups();
-                        }
-
-                        // Liberar cualquier grab residual para que los clics nunca se queden congelados
-                        if pointer.is_grabbed() && !state.popup_grab_active() {
-                            tracing::warn!("⚠️ Grab de puntero residual detectado al hacer clic; liberando grab");
-                            state.snap_preview = None;
-                            pointer.unset_grab(&mut state, btn_serial, event.time_msec());
-                        }
-                        if keyboard.is_grabbed() && !state.popup_grab_active() {
-                            tracing::warn!("⚠️ Grab de teclado residual detectado al hacer clic; liberando grab");
-                            keyboard.unset_grab(&mut state);
-                        }
+                        state.prepare_pointer_press_grabs(
+                            clicked_on_popup,
+                            btn_serial,
+                            event.time_msec(),
+                        );
 
                         let has_super = keyboard.modifier_state().logo;
                         let has_alt = keyboard.modifier_state().alt;
@@ -915,7 +906,9 @@ pub fn run_winit() -> Result<()> {
                             }
                             if let Some(surface) = window.wl_surface() {
                                 if keyboard.current_focus().as_ref() != Some(surface.as_ref()) {
+                                    state.defer_activation_configure = true;
                                     keyboard.set_focus(&mut state, Some(surface.clone().into_owned()), btn_serial);
+                                    state.defer_activation_configure = false;
                                     state.notify_active_app(Some(&surface));
                                 }
                             }
@@ -1061,6 +1054,9 @@ pub fn run_winit() -> Result<()> {
                         state.snap_preview = None;
                     }
                     pointer.frame(&mut state);
+                    if !is_pressed {
+                        state.flush_pending_activation_configures();
+                    }
                 }
                 InputEvent::PointerAxis { event } => {
                     if state.spotlight.is_open() {

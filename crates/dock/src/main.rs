@@ -345,6 +345,25 @@ fn dock_popover_svg_path() -> Option<std::path::PathBuf> {
         .filter(|path| path.is_file())
 }
 
+fn resize_switcher_window(
+    window: &Window,
+    surface: &Overlay,
+    switcher_box: &GtkBox,
+    background: &DrawingArea,
+) {
+    switcher_box.queue_resize();
+    surface.queue_resize();
+
+    let (_, width, _, _) = surface.measure(Orientation::Horizontal, -1);
+    let width = width.max(1);
+    let (_, height, _, _) = surface.measure(Orientation::Vertical, width);
+    let height = height.max(1);
+
+    window.set_default_size(width, height);
+    window.queue_resize();
+    background.queue_draw();
+}
+
 fn queue_dock_resize(window: &ApplicationWindow, dock_root: &GtkBox, dock_bar: &Overlay) {
     dock_bar.queue_resize();
     dock_root.queue_resize();
@@ -1186,6 +1205,8 @@ fn build_dock_ui(app: &Application) {
     let refresh_pending_ipc = Rc::new(Cell::new(false));
     let headroom_ipc = magnification_headroom.clone();
     let switcher_win_ipc = switcher_window.clone();
+    let switcher_surface_ipc = switcher_surface.clone();
+    let switcher_bg_ipc = switcher_background.clone();
     let switcher_box_ipc = switcher_box.clone();
     let switcher_cards_ipc: Rc<RefCell<Vec<(DrawingArea, Rc<std::cell::Cell<bool>>)>>> =
         Rc::new(RefCell::new(Vec::new()));
@@ -1532,7 +1553,15 @@ fn build_dock_ui(app: &Application) {
                             .push((card_background, selected));
                     }
                     switcher_box_ipc.set_visible(true);
-                    switcher_win_ipc.set_visible(true);
+                    resize_switcher_window(
+                        &switcher_win_ipc,
+                        &switcher_surface_ipc,
+                        &switcher_box_ipc,
+                        &switcher_bg_ipc,
+                    );
+                    if !switcher_win_ipc.is_visible() {
+                        switcher_win_ipc.set_visible(true);
+                    }
                     switcher_win_ipc.present();
                 }
                 IpcMessage::UpdateAppSwitcher { selected_index } => {
@@ -1560,6 +1589,12 @@ fn build_dock_ui(app: &Application) {
                     while let Some(c) = switcher_box_ipc.first_child() {
                         switcher_box_ipc.remove(&c);
                     }
+                    // No llamar set_visible(false) sobre una LayerSurface de gtk4-layer-shell:
+                    // GTK4 envía wl_surface.attach(nil)+commit() tras destruir zwlr_layer_surface_v1,
+                    // y Smithay 0.7.0 dispara Error::InvalidSize cerrando todo el cliente (Dock + Switcher).
+                    switcher_win_ipc.set_default_size(1, 1);
+                    switcher_win_ipc.queue_resize();
+                    switcher_bg_ipc.queue_draw();
                 }
                 IpcMessage::ThemeChanged { is_dark, .. } => {
                     info!("🎨 [Dock] IPC ThemeChanged recibido: is_dark={}", is_dark);

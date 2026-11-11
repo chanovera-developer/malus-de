@@ -4,6 +4,27 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-11] — Corrección del Selector Alt+Tab (`malus-de-dock`) y Avance/Pendiente de Foco en Compositor
+
+### 1. Estabilización de Tamaño, Opacidad y Ciclo de Vida del `Alt+Tab` (`malus-de-dock`)
+* **Diagnóstico de Causa Raíz:**
+  * **Tamaño estancado:** `HideAppSwitcher` ocultaba y vaciaba `switcher_box`, pero dejaba la ventana `malus-app-switcher` mapeada con su tamaño máximo previo; `ShowAppSwitcher` tampoco recalculaba el tamaño requerido antes de presentar el switcher.
+  * **Opacidad:** `.switcher-card` definía `opacity: 0.65` para tarjetas no seleccionadas en `crates/dock/src/styles/dock.css`.
+  * **Colapso completo del Dock y del Alt+Tab:** Al llamar `switcher_win_ipc.set_visible(false)` en `HideAppSwitcher` sobre una `LayerSurface` de `gtk4-layer-shell`, GTK4 envía `wl_surface.attach(nil)` + `wl_surface.commit()` justo después de destruir `zwlr_layer_surface_v1`. En `smithay 0.7.0` (`wlr_layer/handlers.rs`), el *pre-commit hook* de `wl_surface` permanece activo tras reiniciar el estado pendiente a `0×0` sin anclas y dispara `Error::InvalidSize`, cerrando la conexión Wayland de todo el cliente `malus-de-dock` (destruyendo tanto `malus-app-switcher` como `malus-dock`).
+* **Solución Implementada (`crates/dock/src/main.rs`, `crates/dock/src/styles/dock.css`):**
+  * Se agregó `resize_switcher_window` para medir `switcher_surface` mediante `surface.measure(...)`, aplicar `window.set_default_size(width, height)` + `window.queue_resize()` y redibujar el fondo al abrir o actualizar `ShowAppSwitcher`.
+  * En `HideAppSwitcher`, en lugar de `set_visible(false)`, se oculta/vacía `switcher_box_ipc` y se encoge la ventana a `1×1` (`set_default_size(1, 1)`, `queue_resize()`, `queue_draw()`), manteniendo mapeada la `LayerSurface` sin disparar `InvalidSize` (el compositor ya omite renderizado, blur y *hit-testing* de `malus-app-switcher` mientras `!app_switcher.is_active`).
+  * Se ajustó `.switcher-card` a `opacity: 1.0`.
+* **Resultado:** El dock dejó de colapsar al cambiar o cerrar ventanas y el `Alt+Tab` crece/encoge correctamente en las pruebas.
+
+### 2. Mitigaciones de Foco de Ventanas y Botones del Semáforo (`malus-de-compositor`) — Pendiente
+* **Cambios aplicados (`crates/compositor/src/state.rs`, `drm.rs`, `winit.rs`):**
+  * Incorporación de `sync_window_activation`, `set_keyboard_focus_with_sync`, `defer_activation_configure` / `flush_pending_activation_configures`, `prepare_pointer_press_grabs`, alineación de `update_ssd_hover` con `popup_grab_active()`, y ajuste de restauración de foco en `layer_destroyed` usando `.last()`.
+  * Prueba unitaria `prepare_pointer_press_grabs_clears_residual_grabs_and_sync_none_clears_focus` agregada y aprobada (41/41 tests en `malus-de-compositor`, 9/9 tests en `malus-de-dock`).
+* **Estado Pendiente:** En pruebas de sesión en vivo persiste el comportamiento de ventanas elevadas que conservan apariencia fuera de foco y botones del semáforo sin respuesta al clic tras mostrar *hover*. Se deja anotado para investigación y reparación posterior en [`docs/decisiones/0004-foco-ventanas-y-botones-semaforo-pendiente.md`](decisiones/0004-foco-ventanas-y-botones-semaforo-pendiente.md).
+
+---
+
 ## [2026-11-10] — Fase 2: Optimización de Latencia en Compositor DRM y Aislamiento de Rendimiento en Wrapper de Electron (Antigravity IDE)
 
 ### 1. Eliminación de la Doble Espera y Despacho Inmediato en DRM KMS
