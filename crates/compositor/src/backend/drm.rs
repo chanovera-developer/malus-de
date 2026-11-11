@@ -4328,23 +4328,20 @@ pub fn run_drm() -> Result<()> {
 
                         // 3. Renderizar menús contextuales y popups de ventanas (siempre ENCIMA de las superficies de ventana)
                         let menu_radius = (32.0 * scale).round() as i32;
-                        for (idx, (_, _, _, popup_shadow_rects, _, is_active, ..)) in
+                        for (idx, (_, _, _, popup_shadow_rects, ..)) in
                             window_render_data.iter().enumerate()
                         {
                             if body_occluded[idx] {
                                 continue;
                             }
-                            if let (Some(radius), Some(shadow)) =
-                                (win_phys_r, shadow_pipeline.as_ref())
-                            {
+                            if let Some(shadow) = shadow_pipeline.as_ref() {
                                 for popup_rect in popup_shadow_rects {
                                     let _ = frame.with_context(|gl| {
-                                        shadow.render_shadow(
+                                        shadow.render_menu_shadow(
                                             gl,
                                             &projection,
                                             *popup_rect,
-                                            radius as f32,
-                                            *is_active,
+                                            menu_radius as f32,
                                             scale,
                                         );
                                     });
@@ -4390,7 +4387,7 @@ pub fn run_drm() -> Result<()> {
                                                 elem_geo.size,
                                                 popup_rect.loc - elem_geo.loc,
                                                 popup_rect.size,
-                                                (32.0 * scale).round() as i32,
+                                                menu_radius,
                                             );
                                         }
                                     }
@@ -4542,7 +4539,7 @@ pub fn run_drm() -> Result<()> {
                                 if let Some(shader) = window_squircle_shader.as_ref() {
                                     let elem_geo =
                                         elem.geometry(smithay::utils::Scale::from(scale));
-                                    shader.apply_clip_to_frame(
+                                    shader.apply_to_frame(
                                         &mut frame,
                                         elem_geo.size,
                                         popup_rect.loc - elem_geo.loc,
@@ -4598,7 +4595,7 @@ pub fn run_drm() -> Result<()> {
                                 if let Some(shader) = window_squircle_shader.as_ref() {
                                     let elem_geo =
                                         elem.geometry(smithay::utils::Scale::from(scale));
-                                    shader.apply_clip_to_frame(
+                                    shader.apply_to_frame(
                                         &mut frame,
                                         elem_geo.size,
                                         popup_rect.loc - elem_geo.loc,

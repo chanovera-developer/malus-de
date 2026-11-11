@@ -2173,7 +2173,7 @@ pub fn run_winit() -> Result<()> {
                                             elem_geo.size,
                                             popup_rect.loc - elem_geo.loc,
                                             popup_rect.size,
-                                            32,
+                                            menu_radius,
                                         );
                                     }
                                 }
@@ -2297,7 +2297,7 @@ pub fn run_winit() -> Result<()> {
                         for elem in popup_elems.iter().rev() {
                             if let Some(shader) = window_squircle_shader.as_ref() {
                                 let elem_geo = elem.geometry(Scale::from(1.0));
-                                shader.apply_clip_to_frame(
+                                shader.apply_to_frame(
                                     &mut frame,
                                     elem_geo.size,
                                     popup_rect.loc - elem_geo.loc,
@@ -2343,7 +2343,7 @@ pub fn run_winit() -> Result<()> {
                         for elem in popup_elems.iter().rev() {
                             if let Some(shader) = window_squircle_shader.as_ref() {
                                 let elem_geo = elem.geometry(Scale::from(1.0));
-                                shader.apply_clip_to_frame(
+                                shader.apply_to_frame(
                                     &mut frame,
                                     elem_geo.size,
                                     popup_rect.loc - elem_geo.loc,
