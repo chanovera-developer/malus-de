@@ -5,13 +5,72 @@ window.macos-settings-window {
     box-shadow: none;
 }
 
+window.macos-settings-window popover,
+window.macos-settings-window popover.menu,
+window.macos-settings-window popover.background {
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    padding: 0;
+    margin: 0;
+    border-radius: 0;
+}
+
+window.macos-settings-window popover > arrow,
+window.macos-settings-window popover.menu > arrow,
+window.macos-settings-window popover.background > arrow {
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: transparent;
+}
+
 window.macos-settings-window popover > contents,
 window.macos-settings-window popover.menu > contents,
 window.macos-settings-window popover.background > contents,
 window.macos-settings-window menu,
 window.macos-settings-window .menu {
-    background-color: alpha(@window_bg_color, 0.84);
-    border-color: alpha(@borders, 0.75);
+    background-color: alpha(@window_bg_color, 0.78);
+    border: none;
+    box-shadow: none;
+    border-radius: 0;
+    margin: 0;
+    padding: 5px;
+}
+
+window.macos-settings-window popover modelbutton,
+window.macos-settings-window popover.menu modelbutton,
+window.macos-settings-window popover listview > row,
+window.macos-settings-window popover listbox > row {
+    border-radius: 6px;
+    min-height: 24px;
+    padding: 3px 8px;
+    margin: 1px 2px;
+    font-size: 13px;
+    font-weight: 500;
+    transition: background-color 100ms ease, color 100ms ease;
+}
+
+window.macos-settings-window popover modelbutton *,
+window.macos-settings-window popover.menu modelbutton *,
+window.macos-settings-window popover listview > row *,
+window.macos-settings-window popover listbox > row * {
+    transition: color 100ms ease;
+}
+
+window.macos-settings-window popover modelbutton:hover:not(:disabled),
+window.macos-settings-window popover modelbutton:selected:not(:disabled),
+window.macos-settings-window popover.menu modelbutton:hover:not(:disabled),
+window.macos-settings-window popover.menu modelbutton:selected:not(:disabled),
+window.macos-settings-window popover listview > row:hover:not(:disabled),
+window.macos-settings-window popover listview > row:selected:not(:disabled),
+window.macos-settings-window popover listbox > row:hover:not(:disabled),
+window.macos-settings-window popover listbox > row:selected:not(:disabled) {
+    background-color: rgba(0, 122, 255, 0.70);
+    color: #ffffff;
 }
 
 overlay-split-view {

@@ -108,7 +108,7 @@ label.desktop-icon-label {
     border-radius: 4px;
 }
 
-/* Menús emergentes (Popovers) del escritorio con diseño nativo acrílico / Nautilus */
+/* Menús emergentes (Popovers) del escritorio unificados con el diseño del Top Bar */
 popover.desktop-popover-menu,
 popover.desktop-popover-menu.background,
 popover.desktop-popover-menu > arrow {
@@ -120,14 +120,15 @@ popover.desktop-popover-menu > arrow {
     box-shadow: none;
 }
 
-/* Modo Oscuro (Por defecto - Acrílico Nautilus con sombra flotante profunda macOS) */
+/* Modo Oscuro (Idéntico al Top Bar; el compositor aplica recorte squircle n=4.2, blur, sombra y borde continuo) */
 popover.desktop-popover-menu > contents,
 popover.desktop-popover-menu > contents.background {
-    background-color: rgba(30, 30, 36, 0.82);
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 14px;
+    background-color: rgba(30, 30, 36, 0.78);
+    border: none;
+    border-radius: 0;
     padding: 5px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.48), 0 2px 8px rgba(0, 0, 0, 0.32), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    box-shadow: none;
+    color: #f4f4f5;
     transition: opacity 140ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -136,11 +137,12 @@ popover.desktop-popover-menu.light-popover > contents,
 popover.desktop-popover-menu.light-popover > contents.background,
 popover.light-popover.desktop-popover-menu > contents,
 popover.light-popover > contents {
-    background-color: rgba(246, 246, 248, 0.85);
-    border: 1px solid rgba(0, 0, 0, 0.14);
-    border-radius: 14px;
+    background-color: rgba(244, 246, 250, 0.76);
+    border: none;
+    border-radius: 0;
     padding: 5px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.12), inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+    box-shadow: none;
+    color: #1d1d1f;
     transition: opacity 140ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -156,47 +158,52 @@ stack.desktop-context-menu,
 
 .desktop-context-btn {
     background: transparent;
+    background-color: transparent;
     border: none;
     box-shadow: none;
-    border-radius: 8px;
-    padding: 4px 10px;
+    border-radius: 6px;
+    padding: 3px 8px;
     margin: 1px 2px;
-    min-height: 28px;
+    min-height: 24px;
     font-size: 13px;
     font-weight: 500;
     text-shadow: none;
-    color: #f1f5f9;
-    transition: background-color 100ms cubic-bezier(0.16, 1, 0.3, 1), color 100ms cubic-bezier(0.16, 1, 0.3, 1);
+    color: #e4e4e7;
+    transition: background-color 100ms ease, color 100ms ease;
+}
+
+.desktop-context-btn *,
+.desktop-context-btn label,
+.desktop-context-btn image,
+.desktop-context-btn label.menu-dark-text,
+.desktop-context-btn label.menu-light-text {
+    transition: color 100ms ease;
 }
 
 .desktop-context-btn:hover {
-    background-color: #007aff;
+    background-color: rgba(0, 122, 255, 0.70);
+    border-radius: 6px;
     color: #ffffff;
 }
 
 .desktop-context-btn:active {
-    background-color: #0062cc;
+    background-color: rgba(0, 122, 255, 0.85);
     color: #ffffff;
 }
 
 popover.desktop-popover-menu.light-popover .desktop-context-btn,
 popover.light-popover .desktop-context-btn,
 .light-popover .desktop-context-btn {
-    color: #1e293b;
+    color: #1d1d1f;
 }
 
 /* Clases directas de texto en Label para máxima reactividad */
 label.menu-dark-text {
-    color: #f1f5f9;
+    color: #f4f4f5;
 }
 
 label.menu-light-text {
-    color: #1e293b;
-}
-
-.desktop-context-btn:hover {
-    background-color: #007aff;
-    color: #ffffff;
+    color: #1d1d1f;
 }
 
 .desktop-context-btn:hover label,
@@ -206,7 +213,8 @@ label.menu-light-text {
 }
 
 .desktop-context-btn.destructive:hover {
-    background-color: #e11d48;
+    background-color: rgba(0, 122, 255, 0.70);
+    border-radius: 6px;
     color: #ffffff;
 }
 
@@ -217,17 +225,17 @@ label.menu-light-text {
 }
 
 .desktop-context-btn.suggested-action {
-    background-color: #007aff;
+    background-color: rgba(0, 122, 255, 0.70);
     color: #ffffff;
 }
 
 .desktop-context-btn.suggested-action:hover {
-    background-color: #0062cc;
+    background-color: rgba(0, 122, 255, 0.85);
     color: #ffffff;
 }
 
 .desktop-context-separator {
-    background-color: rgba(255, 255, 255, 0.12);
+    background-color: rgba(255, 255, 255, 0.10);
     min-height: 1px;
     margin: 4px 6px;
 }
@@ -235,24 +243,24 @@ label.menu-light-text {
 popover.desktop-popover-menu.light-popover .desktop-context-separator,
 popover.light-popover .desktop-context-separator,
 .light-popover .desktop-context-separator {
-    background-color: rgba(0, 0, 0, 0.10);
+    background-color: rgba(0, 0, 0, 0.08);
 }
 
 .card-section-title {
     font-size: 13px;
     font-weight: 600;
-    color: #f1f5f9;
+    color: #f4f4f5;
 }
 
 popover.desktop-popover-menu.light-popover .card-section-title,
 popover.light-popover .card-section-title,
 .light-popover .card-section-title {
-    color: #1e293b;
+    color: #1d1d1f;
 }
 
 popover.desktop-popover-menu entry {
     background-color: rgba(255, 255, 255, 0.10);
-    color: #f1f5f9;
+    color: #f4f4f5;
     border: 1px solid rgba(255, 255, 255, 0.16);
     border-radius: 6px;
     padding: 4px 8px;
@@ -262,6 +270,6 @@ popover.desktop-popover-menu.light-popover entry,
 popover.light-popover entry,
 .light-popover entry {
     background-color: rgba(0, 0, 0, 0.05);
-    color: #1e293b;
+    color: #1d1d1f;
     border: 1px solid rgba(0, 0, 0, 0.16);
 }

@@ -8,13 +8,91 @@
 @define-color accent_fg_color @theme_selected_fg_color;
 
 popover,
+popover.menu,
 popover.background,
+popover.background.menu {
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    padding: 0;
+    margin: 0;
+    border-radius: 0;
+}
+
+popover > arrow,
+popover.menu > arrow,
+popover.background > arrow {
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+}
+
 popover > contents,
+popover.menu > contents,
+popover.background > contents,
 menu,
 .menu {
-    background-color: alpha(@window_bg_color, __POPUP_OPACITY__);
-    border-color: alpha(@window_fg_color, __POPUP_BORDER_OPACITY__);
-    padding: 0;
+    background-color: __POPUP_BG__;
+    border: none;
+    box-shadow: none;
+    color: __POPUP_FG__;
+    border-radius: 0;
+    margin: 0;
+    padding: 5px;
+}
+
+popover modelbutton,
+menu menuitem,
+.menu menuitem {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    border-radius: 6px;
+    min-height: 24px;
+    padding: 3px 8px;
+    margin: 1px 2px;
+    font-size: 13px;
+    font-weight: 500;
+    color: __POPUP_FG__;
+    transition: background-color 100ms ease, color 100ms ease;
+}
+
+popover modelbutton *,
+menu menuitem *,
+.menu menuitem * {
+    transition: color 100ms ease;
+}
+
+popover modelbutton:hover:not(:disabled),
+popover modelbutton:selected:not(:disabled),
+menu menuitem:hover:not(:disabled),
+menu menuitem:selected:not(:disabled),
+.menu menuitem:hover:not(:disabled),
+.menu menuitem:selected:not(:disabled) {
+    background-color: rgba(0, 122, 255, 0.70);
+    background-image: none;
+    border-radius: 6px;
+    color: #ffffff;
+}
+
+popover modelbutton:hover:not(:disabled) label,
+menu menuitem:hover:not(:disabled) label,
+.menu menuitem:hover:not(:disabled) label {
+    color: #ffffff;
+}
+
+menu separator,
+.menu separator {
+    background-color: __POPUP_SEP__;
+    min-height: 1px;
+    margin: 4px 6px;
 }
 
 /* Controles de ventana macOS para GTK 3 y libdecor (Traffic Lights) */

@@ -97,35 +97,44 @@ pub fn get_malus_gtk_css(dark: bool) -> String {
 
 /// Hoja de estilos CSS nativa y válida para GTK 3 (Firefox, LibreOffice, GIMP, diálogos GTK3)
 pub fn get_malus_gtk3_css(dark: bool) -> String {
-    let (bg_color, fg_color, sidebar_bg, border_color, popup_opacity, popup_border_opacity) =
-        if dark {
-            (
-                "rgb(30, 30, 34)",
-                "rgb(255, 255, 255)",
-                "rgb(30, 30, 34)",
-                "rgba(255, 255, 255, 0.08)",
-                "0.82",
-                "0.14",
-            )
-        } else {
-            (
-                "rgb(246, 246, 248)",
-                "rgb(0, 0, 0)",
-                "rgb(246, 246, 248)",
-                "rgba(0, 0, 0, 0.08)",
-                "0.82",
-                "0.12",
-            )
-        };
+    let (
+        bg_color,
+        fg_color,
+        sidebar_bg,
+        border_color,
+        popup_bg,
+        popup_fg,
+        popup_sep,
+    ) = if dark {
+        (
+            "rgb(30, 30, 34)",
+            "rgb(255, 255, 255)",
+            "rgb(30, 30, 34)",
+            "rgba(255, 255, 255, 0.08)",
+            "rgba(30, 30, 36, 0.78)",
+            "#f4f4f5",
+            "rgba(255, 255, 255, 0.10)",
+        )
+    } else {
+        (
+            "rgb(246, 246, 248)",
+            "rgb(0, 0, 0)",
+            "rgb(246, 246, 248)",
+            "rgba(0, 0, 0, 0.08)",
+            "rgba(244, 246, 250, 0.76)",
+            "#1d1d1f",
+            "rgba(0, 0, 0, 0.08)",
+        )
+    };
 
-    let css = include_str!("styles/gtk3.css")
+    include_str!("styles/gtk3.css")
         .replace("__BG_COLOR__", bg_color)
         .replace("__FG_COLOR__", fg_color)
         .replace("__SIDEBAR_BG__", sidebar_bg)
         .replace("__BORDER_COLOR__", border_color)
-        .replace("__POPUP_OPACITY__", popup_opacity)
-        .replace("__POPUP_BORDER_OPACITY__", popup_border_opacity);
-    css
+        .replace("__POPUP_BG__", popup_bg)
+        .replace("__POPUP_FG__", popup_fg)
+        .replace("__POPUP_SEP__", popup_sep)
 }
 
 fn set_gtk_decoration_layout(config_dir: &Path) -> std::io::Result<()> {
@@ -2084,7 +2093,8 @@ mod tests {
             css.rfind("window.view popover > contents").unwrap()
                 > css.find("window.view popover > contents").unwrap()
         );
-        assert!(css.contains("border-radius: 14px;\n    padding: 0;"));
+        assert!(css.contains("border-radius: 0;\n    margin: 0;\n    padding: 5px;"));
+        assert!(css.contains("min-height: 24px;\n    padding: 3px 8px;"));
         assert!(!css.contains("background-color: alpha(@window_bg_color, 0.84);"));
         assert!(!css.contains("\nwindow.background {\n"));
         assert!(!css.contains("\n.sidebar-pane,\n"));
@@ -2092,16 +2102,28 @@ mod tests {
 
     #[test]
     fn nautilus_popup_background_overrides_transparency_in_both_themes() {
-        for (dark, background) in [
-            (true, "background-color: alpha(@window_bg_color, 0.82);"),
-            (false, "background-color: alpha(@window_bg_color, 0.82);"),
+        for (dark, background, opposite_media, opposite_bg) in [
+            (
+                true,
+                "background-color: rgba(30, 30, 36, 0.78);",
+                "@media (prefers-color-scheme: light)",
+                "background-color: rgba(244, 246, 250, 0.76);",
+            ),
+            (
+                false,
+                "background-color: rgba(244, 246, 250, 0.76);",
+                "@media (prefers-color-scheme: dark)",
+                "background-color: rgba(30, 30, 36, 0.78);",
+            ),
         ] {
             let css = get_malus_gtk_css(dark);
-            let transparent_rule = css.find("window.view popover > contents").unwrap();
-            let themed_rule = css.rfind("window.view popover > contents").unwrap();
+            let squircle_rule = css.find("window.view popover > contents").unwrap();
+            let media_idx = css.find(opposite_media).unwrap();
 
-            assert!(themed_rule > transparent_rule);
-            assert!(css[themed_rule..].contains(background));
+            assert!(media_idx > squircle_rule);
+            assert!(css[squircle_rule..media_idx].contains(background));
+            assert!(css[media_idx..].contains(opposite_bg));
+            assert!(css.contains("background-color: rgba(0, 122, 255, 0.70);"));
         }
     }
 
@@ -2112,19 +2134,18 @@ mod tests {
         let dark_gtk3 = get_malus_gtk3_css(true);
         let light_gtk3 = get_malus_gtk3_css(false);
 
-        for (css, opacity, border_opacity) in [
-            (&dark_gtk4, "0.82", "0.14"),
-            (&light_gtk4, "0.82", "0.12"),
-            (&dark_gtk3, "0.82", "0.14"),
-            (&light_gtk3, "0.82", "0.12"),
+        for (css, bg, fg) in [
+            (&dark_gtk4, "rgba(30, 30, 36, 0.78)", "#f4f4f5"),
+            (&light_gtk4, "rgba(244, 246, 250, 0.76)", "#1d1d1f"),
+            (&dark_gtk3, "rgba(30, 30, 36, 0.78)", "#f4f4f5"),
+            (&light_gtk3, "rgba(244, 246, 250, 0.76)", "#1d1d1f"),
         ] {
-            assert!(css.contains(&format!(
-                "background-color: alpha(@window_bg_color, {opacity});"
-            )));
-            assert!(css.contains(&format!(
-                "border-color: alpha(@window_fg_color, {border_opacity});"
-            )));
-            assert!(css.contains("padding: 0;"));
+            assert!(css.contains(&format!("background-color: {bg};")));
+            assert!(css.contains(&format!("color: {fg};")));
+            assert!(css.contains("border: none;"));
+            assert!(css.contains("box-shadow: none;"));
+            assert!(css.contains("padding: 5px;"));
+            assert!(css.contains("background-color: rgba(0, 122, 255, 0.70);"));
         }
     }
 

@@ -492,6 +492,8 @@ impl IconViewWeak {
     }
 }
 
+use super::make_context_menu_button;
+
 fn show_canvas_context_menu(
     parent: &impl IsA<gtk4::Widget>,
     x: f64,
@@ -500,17 +502,16 @@ fn show_canvas_context_menu(
     layout_ref: Rc<RefCell<LayoutMode>>,
     view_weak: &IconViewWeak,
 ) {
-    let popover = Popover::new();
+    let popover = Popover::builder()
+        .has_arrow(false)
+        .css_classes(["malus-popover-menu"])
+        .build();
     popover.set_parent(parent);
 
     let rect = gdk::Rectangle::new(x as i32, y as i32, 1, 1);
     popover.set_pointing_to(Some(&rect));
 
-    let vbox = GtkBox::new(Orientation::Vertical, 4);
-    vbox.set_margin_start(6);
-    vbox.set_margin_end(6);
-    vbox.set_margin_top(6);
-    vbox.set_margin_bottom(6);
+    let vbox = GtkBox::new(Orientation::Vertical, 2);
 
     let lbl_layout = Label::builder()
         .label("Disposición de iconos")
@@ -523,7 +524,7 @@ fn show_canvas_context_menu(
     let pop_clone = popover.clone();
     let l_ref = layout_ref.clone();
     let f_ref = folder_ref.clone();
-    let btn_snap = gtk4::Button::with_label("Alinear a la cuadrícula (Snap to Grid)");
+    let btn_snap = make_context_menu_button("Alinear a la cuadrícula (Snap to Grid)");
     btn_snap.connect_clicked(move |_| {
         pop_clone.popdown();
         *l_ref.borrow_mut() = LayoutMode::SnapToGrid;
@@ -536,7 +537,7 @@ fn show_canvas_context_menu(
     let pop_clone2 = popover.clone();
     let l_ref2 = layout_ref.clone();
     let f_ref2 = folder_ref.clone();
-    let btn_free = gtk4::Button::with_label("Colocación libre (Freeform)");
+    let btn_free = make_context_menu_button("Colocación libre (Freeform)");
     btn_free.connect_clicked(move |_| {
         pop_clone2.popdown();
         *l_ref2.borrow_mut() = LayoutMode::Freeform;
@@ -555,7 +556,7 @@ fn show_canvas_context_menu(
     let cur_folder = folder_ref.borrow().clone();
     let item_widgets_clean = view_weak.item_widgets.clone();
 
-    let btn_clean = gtk4::Button::with_label("Reordenar cuadrícula");
+    let btn_clean = make_context_menu_button("Reordenar cuadrícula");
     btn_clean.connect_clicked(move |_| {
         pop_clone3.popdown();
         let weak_helper = IconViewWeak {
@@ -573,18 +574,17 @@ fn show_canvas_context_menu(
 }
 
 fn show_context_menu(widget: &impl IsA<gtk4::Widget>, path: &PathBuf, is_dir: bool) {
-    let popover = Popover::new();
+    let popover = Popover::builder()
+        .has_arrow(false)
+        .css_classes(["malus-popover-menu"])
+        .build();
     popover.set_parent(widget);
 
     let vbox = GtkBox::new(Orientation::Vertical, 2);
-    vbox.set_margin_start(4);
-    vbox.set_margin_end(4);
-    vbox.set_margin_top(4);
-    vbox.set_margin_bottom(4);
 
     let p = path.clone();
     let pop_clone = popover.clone();
-    let open_btn = gtk4::Button::with_label(if is_dir { "Abrir carpeta" } else { "Abrir" });
+    let open_btn = make_context_menu_button(if is_dir { "Abrir carpeta" } else { "Abrir" });
     open_btn.connect_clicked(move |_| {
         pop_clone.popdown();
         let _ = open_file(&p);
@@ -593,7 +593,7 @@ fn show_context_menu(widget: &impl IsA<gtk4::Widget>, path: &PathBuf, is_dir: bo
 
     let p_term = path.clone();
     let pop_clone = popover.clone();
-    let term_btn = gtk4::Button::with_label("Abrir en Terminal");
+    let term_btn = make_context_menu_button("Abrir en Terminal");
     term_btn.connect_clicked(move |_| {
         pop_clone.popdown();
         open_in_terminal(&p_term);
@@ -602,7 +602,7 @@ fn show_context_menu(widget: &impl IsA<gtk4::Widget>, path: &PathBuf, is_dir: bo
 
     let p_copy = path.clone();
     let pop_clone = popover.clone();
-    let copy_btn = gtk4::Button::with_label("Copiar ruta");
+    let copy_btn = make_context_menu_button("Copiar ruta");
     copy_btn.connect_clicked(move |_| {
         pop_clone.popdown();
         if let Some(display) = gdk::Display::default() {

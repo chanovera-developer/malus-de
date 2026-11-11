@@ -1,25 +1,134 @@
 popover,
+popover.menu,
 popover.background,
-popover > arrow,
+popover.background.menu,
 window.view popover,
+window.view popover.menu,
 window.view popover.background,
-window.view popover > arrow {
+window.view popover.background.menu {
     background-color: transparent;
     background-image: none;
     border: none;
     box-shadow: none;
+    padding: 0;
+    margin: 0;
+    border-radius: 0;
+}
+
+popover > arrow,
+popover.menu > arrow,
+popover.background > arrow,
+popover.background.menu > arrow,
+window.view popover > arrow,
+window.view popover.menu > arrow,
+window.view popover.background > arrow,
+window.view popover.background.menu > arrow {
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+    -gtk-icon-size: 0;
 }
 
 popover > contents,
 popover.menu > contents,
 popover.background > contents,
+popover.background.menu > contents,
 menu,
 .menu,
 window.view popover > contents,
 window.view popover.menu > contents,
 window.view popover.background > contents,
+window.view popover.background.menu > contents,
 window.view menu,
 window.view .menu {
-    background-color: alpha(@window_bg_color, 0.82);
-    border-color: alpha(@window_fg_color, 0.12);
+    background-color: rgba(244, 246, 250, 0.76);
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    color: #1d1d1f;
+    margin: 0;
+    padding: 5px;
+}
+
+popover modelbutton,
+popover.menu modelbutton,
+window.view popover modelbutton,
+window.view popover.menu modelbutton,
+popover .popover-menu-item,
+popover.malus-popover-menu button {
+    color: #1d1d1f;
+}
+
+popover modelbutton accelerator,
+popover.menu modelbutton accelerator,
+window.view popover modelbutton accelerator {
+    color: rgba(0, 0, 0, 0.28);
+}
+
+popover modelbutton:hover:not(:disabled) accelerator,
+popover.menu modelbutton:hover:not(:disabled) accelerator,
+window.view popover modelbutton:hover:not(:disabled) accelerator {
+    color: rgba(255, 255, 255, 0.90);
+}
+
+popover separator,
+popover.menu separator,
+window.view popover separator,
+menu separator,
+.menu separator {
+    background-color: rgba(0, 0, 0, 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+    popover > contents,
+    popover.menu > contents,
+    popover.background > contents,
+    popover.background.menu > contents,
+    menu,
+    .menu,
+    window.view popover > contents,
+    window.view popover.menu > contents,
+    window.view popover.background > contents,
+    window.view popover.background.menu > contents,
+    window.view menu,
+    window.view .menu {
+        background-color: rgba(30, 30, 36, 0.78);
+        border: none;
+        box-shadow: none;
+        color: #f4f4f5;
+    }
+
+    popover modelbutton,
+    popover.menu modelbutton,
+    window.view popover modelbutton,
+    window.view popover.menu modelbutton,
+    popover .popover-menu-item,
+    popover.malus-popover-menu button {
+        color: #e4e4e7;
+    }
+
+    popover modelbutton accelerator,
+    popover.menu modelbutton accelerator,
+    window.view popover modelbutton accelerator {
+        color: rgba(255, 255, 255, 0.30);
+    }
+
+    popover modelbutton:hover:not(:disabled) accelerator,
+    popover.menu modelbutton:hover:not(:disabled) accelerator,
+    window.view popover modelbutton:hover:not(:disabled) accelerator {
+        color: rgba(255, 255, 255, 0.85);
+    }
+
+    popover separator,
+    popover.menu separator,
+    window.view popover separator,
+    menu separator,
+    .menu separator {
+        background-color: rgba(255, 255, 255, 0.10);
+    }
 }

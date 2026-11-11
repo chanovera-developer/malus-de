@@ -23,3 +23,22 @@ window.view overlay-split-view > .sidebar-pane:dir(ltr) {
 window.view overlay-split-view > .sidebar-pane:dir(rtl) {
     box-shadow: inset 1px 0 rgba(255, 255, 255, 0.08);
 }
+
+@media (prefers-color-scheme: light) {
+    window.view overlay-split-view > .sidebar-pane {
+        background-color: rgba(246, 246, 248, 0.82);
+        color: @window_fg_color;
+    }
+
+    window.view overlay-split-view > .sidebar-pane:backdrop {
+        background-color: rgba(240, 240, 242, 0.88);
+    }
+
+    window.view overlay-split-view > .sidebar-pane:dir(ltr) {
+        box-shadow: inset -1px 0 rgba(0, 0, 0, 0.08);
+    }
+
+    window.view overlay-split-view > .sidebar-pane:dir(rtl) {
+        box-shadow: inset 1px 0 rgba(0, 0, 0, 0.08);
+    }
+}

@@ -4,14 +4,16 @@ window.view.background {
 }
 
 window.view popover,
-window.view popover > contents,
-window.view popover.menu > contents,
-window.view popover.background > contents,
-window.view menu,
-window.view .menu {
+window.view popover.menu,
+window.view popover.background,
+window.view popover > arrow,
+window.view popover.menu > arrow,
+window.view popover.background > arrow {
     background-color: transparent;
     border-color: transparent;
     box-shadow: none;
+    margin: 0;
+    padding: 0;
 }
 
 /* Mantener fondo opaco sólido para vistas de contenido y ventanas generales */

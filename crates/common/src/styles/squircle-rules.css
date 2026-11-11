@@ -58,25 +58,180 @@ window.fullscreen headerbar {
     border-radius: 0px;
 }
 
-/* Menús emergentes, popovers y context menus estilo Squircle macOS */
+/* Menús emergentes, popovers y context menus estilo Squircle macOS (unificado con Top Bar) */
+popover,
+popover.menu,
+popover.background,
+popover.background.menu,
+window.view popover,
+window.view popover.menu,
+window.view popover.background,
+window.view popover.background.menu {
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    padding: 0;
+    margin: 0;
+    border-radius: 0;
+}
+
+popover > arrow,
+popover.menu > arrow,
+popover.background > arrow,
+popover.background.menu > arrow,
+window.view popover > arrow,
+window.view popover.menu > arrow,
+window.view popover.background > arrow,
+window.view popover.background.menu > arrow {
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+    -gtk-icon-size: 0;
+}
+
 popover > contents,
 popover.menu > contents,
 popover.background > contents,
+popover.background.menu > contents,
+window.view popover > contents,
+window.view popover.menu > contents,
+window.view popover.background > contents,
+window.view popover.background.menu > contents,
 menu,
 .menu {
-    border-radius: 14px;
-    padding: 0;
+    border-radius: 0;
+    margin: 0;
+    padding: 5px;
 }
 
-/* Elementos de menú con squircle highlight */
+/* Elementos de menú unificados con la barra superior */
 popover modelbutton,
+popover.menu modelbutton,
+popover.background modelbutton,
+window.view popover modelbutton,
+window.view popover.menu modelbutton,
+window.view popover.background modelbutton,
 popover .popover-menu-item,
+popover.malus-popover-menu button,
+popover.malus-popover-menu button.flat,
+popover menuitem,
+popover listview > row,
+popover listbox > row,
 menu menuitem,
 .menu menuitem {
-    border-radius: 8px;
-    min-height: 26px;
-    padding: 4px 10px;
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    border-radius: 6px;
+    min-height: 24px;
+    padding: 3px 8px;
     margin: 1px 2px;
+    font-size: 13px;
+    font-weight: 500;
+    box-shadow: none;
+    transition: background-color 100ms ease, color 100ms ease;
+}
+
+popover modelbutton *,
+popover.menu modelbutton *,
+popover.background modelbutton *,
+window.view popover modelbutton *,
+window.view popover.menu modelbutton *,
+window.view popover.background modelbutton *,
+popover .popover-menu-item *,
+popover.malus-popover-menu button *,
+popover.malus-popover-menu button.flat *,
+popover menuitem *,
+popover listview > row *,
+popover listbox > row *,
+menu menuitem *,
+.menu menuitem *,
+popover modelbutton accelerator,
+popover.menu modelbutton accelerator,
+window.view popover modelbutton accelerator {
+    transition: color 100ms ease;
+}
+
+popover modelbutton:hover:not(:disabled),
+popover modelbutton:selected:not(:disabled),
+popover.menu modelbutton:hover:not(:disabled),
+popover.menu modelbutton:selected:not(:disabled),
+popover.background modelbutton:hover:not(:disabled),
+popover.background modelbutton:selected:not(:disabled),
+window.view popover modelbutton:hover:not(:disabled),
+window.view popover modelbutton:selected:not(:disabled),
+window.view popover.menu modelbutton:hover:not(:disabled),
+window.view popover.menu modelbutton:selected:not(:disabled),
+window.view popover.background modelbutton:hover:not(:disabled),
+window.view popover.background modelbutton:selected:not(:disabled),
+popover .popover-menu-item:hover:not(:disabled),
+popover.malus-popover-menu button:hover:not(:disabled),
+popover.malus-popover-menu button.flat:hover:not(:disabled),
+popover menuitem:hover:not(:disabled),
+popover menuitem:selected:not(:disabled),
+popover listview > row:hover:not(:disabled),
+popover listview > row:selected:not(:disabled),
+popover listbox > row:hover:not(:disabled),
+popover listbox > row:selected:not(:disabled),
+menu menuitem:hover:not(:disabled),
+menu menuitem:selected:not(:disabled),
+.menu menuitem:hover:not(:disabled),
+.menu menuitem:selected:not(:disabled) {
+    background-color: rgba(0, 122, 255, 0.70);
+    background-image: none;
+    border-radius: 6px;
+    color: #ffffff;
+    box-shadow: none;
+}
+
+popover modelbutton:active:not(:disabled),
+popover.menu modelbutton:active:not(:disabled),
+popover .popover-menu-item:active:not(:disabled),
+popover.malus-popover-menu button:active:not(:disabled),
+menu menuitem:active:not(:disabled),
+.menu menuitem:active:not(:disabled) {
+    background-color: rgba(0, 122, 255, 0.85);
+    color: #ffffff;
+}
+
+popover modelbutton:hover:not(:disabled) label,
+popover modelbutton:hover:not(:disabled) image,
+popover modelbutton:selected:not(:disabled) label,
+popover modelbutton:selected:not(:disabled) image,
+popover.menu modelbutton:hover:not(:disabled) label,
+popover.menu modelbutton:hover:not(:disabled) image,
+popover.menu modelbutton:selected:not(:disabled) label,
+popover.menu modelbutton:selected:not(:disabled) image,
+window.view popover modelbutton:hover:not(:disabled) label,
+window.view popover modelbutton:hover:not(:disabled) image,
+window.view popover.menu modelbutton:hover:not(:disabled) label,
+window.view popover.menu modelbutton:hover:not(:disabled) image,
+popover .popover-menu-item:hover:not(:disabled) label,
+popover .popover-menu-item:hover:not(:disabled) image,
+popover.malus-popover-menu button:hover:not(:disabled) label,
+popover.malus-popover-menu button:hover:not(:disabled) image,
+popover listview > row:hover:not(:disabled) label,
+popover listview > row:selected:not(:disabled) label,
+popover listbox > row:hover:not(:disabled) label,
+popover listbox > row:selected:not(:disabled) label,
+menu menuitem:hover:not(:disabled) label,
+.menu menuitem:hover:not(:disabled) label {
+    color: #ffffff;
+}
+
+popover separator,
+popover.menu separator,
+menu separator,
+.menu separator {
+    min-height: 1px;
+    margin: 4px 6px;
 }
 
 /* Enlaces estilo macOS con squircle hover */

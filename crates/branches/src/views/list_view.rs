@@ -278,19 +278,20 @@ fn create_list_row(item: &FileItem, on_navigate: NavigateCallback) -> ListBoxRow
     row
 }
 
+use super::make_context_menu_button;
+
 fn show_context_menu(widget: &impl IsA<gtk4::Widget>, path: &PathBuf, is_dir: bool) {
-    let popover = gtk4::Popover::new();
+    let popover = gtk4::Popover::builder()
+        .has_arrow(false)
+        .css_classes(["malus-popover-menu"])
+        .build();
     popover.set_parent(widget);
 
     let vbox = GtkBox::new(Orientation::Vertical, 2);
-    vbox.set_margin_start(4);
-    vbox.set_margin_end(4);
-    vbox.set_margin_top(4);
-    vbox.set_margin_bottom(4);
 
     let p = path.clone();
     let pop_clone = popover.clone();
-    let open_btn = gtk4::Button::with_label(if is_dir { "Abrir carpeta" } else { "Abrir" });
+    let open_btn = make_context_menu_button(if is_dir { "Abrir carpeta" } else { "Abrir" });
     open_btn.connect_clicked(move |_| {
         pop_clone.popdown();
         let _ = open_file(&p);
@@ -299,7 +300,7 @@ fn show_context_menu(widget: &impl IsA<gtk4::Widget>, path: &PathBuf, is_dir: bo
 
     let p_term = path.clone();
     let pop_clone = popover.clone();
-    let term_btn = gtk4::Button::with_label("Abrir en Terminal");
+    let term_btn = make_context_menu_button("Abrir en Terminal");
     term_btn.connect_clicked(move |_| {
         pop_clone.popdown();
         open_in_terminal(&p_term);
@@ -308,7 +309,7 @@ fn show_context_menu(widget: &impl IsA<gtk4::Widget>, path: &PathBuf, is_dir: bo
 
     let p_copy = path.clone();
     let pop_clone = popover.clone();
-    let copy_btn = gtk4::Button::with_label("Copiar ruta");
+    let copy_btn = make_context_menu_button("Copiar ruta");
     copy_btn.connect_clicked(move |_| {
         pop_clone.popdown();
         if let Some(display) = gdk::Display::default() {

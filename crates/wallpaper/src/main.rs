@@ -3216,20 +3216,22 @@ mod tests {
     #[test]
     fn test_desktop_context_menu_css_has_acrylic_colors_for_both_themes() {
         let css = super::DEFAULT_GRADIENT_CSS;
-        // Fondo oscuro acrílico de popover
-        assert!(css.contains("rgba(30, 30, 36, 0.82)"));
-        // Fondo claro acrílico de popover
-        assert!(css.contains("rgba(246, 246, 248, 0.85)"));
+        // Fondo oscuro acrílico de popover unificado con Top Bar
+        assert!(css.contains("rgba(30, 30, 36, 0.78)"));
+        // Fondo claro acrílico de popover unificado con Top Bar
+        assert!(css.contains("rgba(244, 246, 250, 0.76)"));
         // Clase reactiva light-popover y selectores
         assert!(css.contains("popover.desktop-popover-menu.light-popover > contents"));
         assert!(css.contains("popover.light-popover > contents"));
         assert!(css.contains(".desktop-context-btn"));
         assert!(css.contains(".desktop-context-separator"));
-        // Colores de texto oscuro (#f1f5f9) y claro (#1e293b)
-        assert!(css.contains("#f1f5f9"));
-        assert!(css.contains("#1e293b"));
-        // Hover azul macOS
-        assert!(css.contains("#007aff"));
+        // Colores de texto oscuro (#f4f4f5 / #e4e4e7) y claro (#1d1d1f)
+        assert!(css.contains("#f4f4f5"));
+        assert!(css.contains("#1d1d1f"));
+        // Hover azul semitransparente y altura compacta del Top Bar
+        assert!(css.contains("rgba(0, 122, 255, 0.70)"));
+        assert!(css.contains("padding: 3px 8px;"));
+        assert!(css.contains("min-height: 24px;"));
         // Transiciones suaves de hover y activación en botones estilo macOS
         assert!(css.contains("cubic-bezier(0.16, 1, 0.3, 1)"));
         // GTK4 CSS no soporta !important ni queries @media condicionales
