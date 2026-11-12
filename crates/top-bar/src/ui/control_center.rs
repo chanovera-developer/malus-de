@@ -2713,10 +2713,12 @@ fn format_monitors_summary(cfg: &malus_de_common::config::DisplaysConfig) -> Str
         .iter()
         .map(|o| {
             let (lw, lh) = o.logical_size();
-            let short_name = if o.connector.contains("DP") || o.effective_diagonal() >= 26.5 {
-                "LG 27\""
+            let short_name = if let Some(diag) = o.effective_diagonal() {
+                format!("{} {:.0}\"", o.connector, diag)
+            } else if !o.name.is_empty() && o.name != o.connector {
+                o.name.clone()
             } else {
-                "Mi 24\""
+                o.connector.clone()
             };
             format!(
                 "{}{} ({}): {:.1}% · {}×{} @({}, {})",

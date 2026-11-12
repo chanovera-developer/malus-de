@@ -1627,39 +1627,39 @@ pub struct DisplayModeConfig {
 }
 
 impl DisplayOutputConfig {
-    /// Obtiene la diagonal real o estimada en pulgadas
-    pub fn effective_diagonal(&self) -> f64 {
-        if let Some(d) = self.diagonal_inches {
-            return d;
-        }
-        let n = self.name.to_lowercase();
-        if n.contains("27") {
-            27.0
-        } else if n.contains("24") || n.contains("mi monitor") {
-            24.0
-        } else if n.contains("32") {
-            32.0
-        } else {
-            27.0
-        }
+    /// Obtiene la diagonal física configurada o detectada por EDID en pulgadas, si se conoce.
+    pub fn effective_diagonal(&self) -> Option<f64> {
+        self.diagonal_inches.filter(|&d| d > 0.0)
     }
 
-    /// Calcula la densidad física de píxeles por pulgada (PPI)
-    pub fn ppi(&self) -> f64 {
-        let diag = self.effective_diagonal();
-        if diag <= 0.0 {
-            return 163.0;
-        }
+    /// Calcula la densidad física de píxeles por pulgada (PPI) si se conoce la diagonal real.
+    pub fn ppi(&self) -> Option<f64> {
+        let diag = self.effective_diagonal()?;
         let diag_px = ((self.width as f64).powi(2) + (self.height as f64).powi(2)).sqrt();
-        diag_px / diag
+        Some(diag_px / diag)
     }
 
-    /// Dimensiones físicas aproximadas del panel en milímetros
-    pub fn physical_size_mm(&self) -> (f64, f64) {
-        let ppi = self.ppi();
+    /// Dimensiones físicas aproximadas del panel en milímetros si se conoce la diagonal real.
+    pub fn physical_size_mm(&self) -> Option<(f64, f64)> {
+        let ppi = self.ppi()?;
         let w_mm = (self.width as f64 / ppi) * 25.4;
         let h_mm = (self.height as f64 / ppi) * 25.4;
-        (w_mm, h_mm)
+        Some((w_mm, h_mm))
+    }
+
+    /// Calcula una escala inicial coherente a partir de la densidad PPI detectada
+    /// (tomando ~109 PPI como referencia 1x), ajustada a incrementos de 0.25 en [1.0, 2.0].
+    pub fn recommended_scale(width: u32, height: u32, diagonal_inches: Option<f64>) -> f64 {
+        if let Some(diag) = diagonal_inches.filter(|&d| d > 0.0) {
+            let diag_px = ((width as f64).powi(2) + (height as f64).powi(2)).sqrt();
+            let ppi = diag_px / diag;
+            let raw = (ppi / 109.0).clamp(1.0, 2.0);
+            ((raw * 4.0).round() / 4.0).clamp(1.0, 2.0)
+        } else if width >= 3840 {
+            2.0
+        } else {
+            1.0
+        }
     }
 
     /// Resolución lógica en el espacio virtual del compositor
@@ -1759,6 +1759,24 @@ impl DisplaysConfig {
         }
     }
 
+    /// Sincroniza la escala proporcional 1:1 del resto de monitores que tengan PPI conocido
+    /// respecto al monitor `ref_idx`. Los paneles sin diagonal conocida conservan su escala.
+    fn sync_linked_scales_from(&mut self, ref_idx: usize) {
+        let Some(ref_ppi) = self.outputs.get(ref_idx).and_then(|o| o.ppi()) else {
+            return;
+        };
+        let ref_scale = self.outputs[ref_idx].scale;
+        for i in 0..self.outputs.len() {
+            if i == ref_idx {
+                continue;
+            }
+            if let Some(i_ppi) = self.outputs[i].ppi() {
+                let linked = (ref_scale * (i_ppi / ref_ppi)).clamp(0.75, 3.0);
+                self.outputs[i].scale = (linked * 10000.0).round() / 10000.0;
+            }
+        }
+    }
+
     /// Aplica un preset de escala enlazada a partir de la pantalla principal.
     pub fn apply_linked_preset(&mut self, preset: u8) {
         let scale = match preset {
@@ -1767,20 +1785,13 @@ impl DisplaysConfig {
             _ => return,
         };
         self.linked_physical_1to1 = true;
+        self.master_scale = scale;
         if self.outputs.is_empty() {
-            self.master_scale = scale;
             return;
         }
         let primary_idx = self.outputs.iter().position(|output| output.primary).unwrap_or(0);
-        let primary_ppi = self.outputs[primary_idx].ppi();
-        self.master_scale = scale;
-        for (idx, output) in self.outputs.iter_mut().enumerate() {
-            output.scale = if idx == primary_idx {
-                scale
-            } else {
-                (scale * (output.ppi() / primary_ppi)).clamp(0.75, 3.0)
-            };
-        }
+        self.outputs[primary_idx].scale = scale;
+        self.sync_linked_scales_from(primary_idx);
         self.recalculate_layout();
     }
 
@@ -1799,21 +1810,10 @@ impl DisplaysConfig {
         }
 
         let primary_idx = self.outputs.iter().position(|o| o.primary).unwrap_or(0);
-        let primary_ppi = self.outputs[primary_idx].ppi();
         let primary_scale = self.master_scale.clamp(0.75, 3.0);
         self.master_scale = (primary_scale * 10000.0).round() / 10000.0;
         self.outputs[primary_idx].scale = self.master_scale;
-
-        for (i, output) in self.outputs.iter_mut().enumerate() {
-            if i == primary_idx {
-                continue;
-            }
-            let out_ppi = output.ppi();
-            // Escala 1:1 exacta en base a PPI: Escala_i = Escala_primaria * (PPI_i / PPI_primaria)
-            let linked_scale = (primary_scale * (out_ppi / primary_ppi)).clamp(0.75, 3.0);
-            output.scale = (linked_scale * 10000.0).round() / 10000.0;
-        }
-
+        self.sync_linked_scales_from(primary_idx);
         self.recalculate_layout();
     }
 
@@ -1841,14 +1841,7 @@ impl DisplaysConfig {
         self.outputs[output_idx].scale = clamped;
 
         if self.linked_physical_1to1 {
-            let ref_ppi = self.outputs[output_idx].ppi();
-            for i in 0..self.outputs.len() {
-                if i != output_idx {
-                    let i_ppi = self.outputs[i].ppi();
-                    let linked = (clamped * (i_ppi / ref_ppi)).clamp(0.75, 3.0);
-                    self.outputs[i].scale = (linked * 10000.0).round() / 10000.0;
-                }
-            }
+            self.sync_linked_scales_from(output_idx);
             let primary_idx = self.outputs.iter().position(|o| o.primary).unwrap_or(0);
             self.master_scale = self.outputs[primary_idx].scale;
         } else if self.outputs[output_idx].primary {
@@ -1993,13 +1986,9 @@ impl DisplaysConfig {
             let height = extract_tag_value(part, "height").and_then(|v| v.parse::<u32>().ok()).unwrap_or(2160);
             let rate = extract_tag_value(part, "rate").and_then(|v| v.parse::<f64>().ok()).unwrap_or(60.0);
 
-            let diagonal_inches = if product.contains("27") || product.contains("LG") {
-                Some(27.0)
-            } else if product.contains("24") || product.contains("Mi") {
-                Some(24.0)
-            } else {
-                None
-            };
+            // No inferir pulgadas por marca/modelo (evita tratar portátiles o paneles desconocidos como 27").
+            // DRM/EDID rellenará `diagonal_inches` al inicializar la salida física.
+            let diagonal_inches = None;
 
             if primary {
                 master_scale = scale;
@@ -2410,6 +2399,57 @@ mod tests {
         });
         assert!(cfg.find_for_connector("card0-DP-1").is_some());
         assert!(cfg.find_for_connector("DP-2").is_none());
+    }
+
+    #[test]
+    fn test_unknown_diagonal_does_not_assume_27_inches_or_distort_1to1_link() {
+        let mut cfg = DisplaysConfig::default();
+        cfg.outputs = vec![
+            DisplayOutputConfig {
+                connector: "DP-1".to_string(),
+                name: "Monitor 27".to_string(),
+                width: 3840,
+                height: 2160,
+                refresh_rate: 60.0,
+                modes: Vec::new(),
+                x: 0,
+                y: 0,
+                scale: 1.5,
+                primary: true,
+                diagonal_inches: Some(27.0),
+            },
+            DisplayOutputConfig {
+                connector: "eDP-1".to_string(),
+                name: "Laptop Panel".to_string(),
+                width: 1920,
+                height: 1080,
+                refresh_rate: 60.0,
+                modes: Vec::new(),
+                x: 2560,
+                y: 0,
+                scale: 1.25,
+                primary: false,
+                diagonal_inches: None,
+            },
+        ];
+
+        assert_eq!(cfg.outputs[1].effective_diagonal(), None);
+        assert_eq!(cfg.outputs[1].ppi(), None);
+        assert_eq!(cfg.outputs[1].physical_size_mm(), None);
+
+        cfg.set_output_scale(0, 1.5);
+        // Al desconocerse la diagonal de eDP-1, no debe recalcular su escala asumiendo 27".
+        assert!((cfg.outputs[1].scale - 1.25).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_recommended_scale_from_detected_ppi() {
+        assert_eq!(DisplayOutputConfig::recommended_scale(3840, 2160, Some(27.0)), 1.5);
+        assert_eq!(DisplayOutputConfig::recommended_scale(1920, 1080, Some(15.6)), 1.25);
+        assert_eq!(DisplayOutputConfig::recommended_scale(1920, 1080, Some(24.0)), 1.0);
+        assert_eq!(DisplayOutputConfig::recommended_scale(5120, 2880, Some(27.0)), 2.0);
+        assert_eq!(DisplayOutputConfig::recommended_scale(1920, 1080, None), 1.0);
+        assert_eq!(DisplayOutputConfig::recommended_scale(3840, 2160, None), 2.0);
     }
 
     #[test]

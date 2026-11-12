@@ -23,6 +23,13 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
   * Prueba unitaria `prepare_pointer_press_grabs_clears_residual_grabs_and_sync_none_clears_focus` agregada y aprobada (41/41 tests en `malus-de-compositor`, 9/9 tests en `malus-de-dock`).
 * **Estado Pendiente:** En pruebas de sesión en vivo persiste el comportamiento de ventanas elevadas que conservan apariencia fuera de foco y botones del semáforo sin respuesta al clic tras mostrar *hover*. Se deja anotado para investigación y reparación posterior en [`docs/decisiones/0004-foco-ventanas-y-botones-semaforo-pendiente.md`](decisiones/0004-foco-ventanas-y-botones-semaforo-pendiente.md).
 
+### 3. Escalado de Pantallas: Corrección de PPI/Diagonal Física y Registro de Pendientes (`malus-de-common`, `malus-de-compositor`, `malus-de-settings`, `malus-de-ctl`, `malus-de-top-bar`)
+* **Corrección aplicada (Problema 4):**
+  * `DisplayOutputConfig::effective_diagonal()`, `ppi()` y `physical_size_mm()` ahora devuelven `Option` si falta `diagonal_inches`, eliminando el fallback silencioso a `27.0"` y la inferencia por nombre en `from_gnome_xml`.
+  * En `DisplaysConfig::sync_linked_scales_from`, el enlace 1:1 no recalcula escalas de pantallas sin PPI conocido; en `drm.rs`, `Output::new` preserva los milímetros reales del EDID (`conn_info.size()`) salvo override manual explícito (`> 0.5"`) e inicializa pantallas nuevas con `DisplayOutputConfig::recommended_scale`.
+  * UI y CLI actualizados (`malus-de-settings`, `malus-de-ctl`, `malus-de-top-bar`) y pruebas unitarias añadidas (`test_unknown_diagonal_does_not_assume_27_inches_or_distort_1to1_link`, `test_recommended_scale_from_detected_ppi`), con compilación y tests aprobados (`malus-de-common` 36/36, `malus-de-compositor` 41/41, `malus-de-top-bar` 10/10).
+* **Pendientes restantes (`docs/decisiones/0005-escalado-pantallas-pendiente.md`):** escalado XWayland (`Xft.dpi`/X11), clientes sin `wp_fractional_scale_v1` (incluyendo `malus-de-render`), redondeo lógico/físico de ±1 px, layout forzado en `recalculate_layout`, selección del primer monitor en `start_screen_recording` multimonitor y brecha de escala entre `drm.rs` y `winit.rs`.
+
 ---
 
 ## [2026-11-10] — Fase 2: Optimización de Latencia en Compositor DRM y Aislamiento de Rendimiento en Wrapper de Electron (Antigravity IDE)

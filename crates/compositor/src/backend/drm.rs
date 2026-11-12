@@ -1033,8 +1033,6 @@ pub fn run_drm() -> Result<()> {
             continue;
         };
         let (width, height) = selected_mode.size();
-        let scale = previous.as_ref().map(|output| output.scale).unwrap_or(2.0);
-        let logical_width = (width as f64 / scale.max(0.5)).round() as i32;
         let (physical_width_mm, physical_height_mm) = conn_info.size().unwrap_or((0, 0));
         let detected_diagonal = if physical_width_mm > 0 && physical_height_mm > 0 {
             Some(
@@ -1047,6 +1045,10 @@ pub fn run_drm() -> Result<()> {
         } else {
             None
         };
+        let scale = previous.as_ref().map(|output| output.scale).unwrap_or_else(|| {
+            DisplayOutputConfig::recommended_scale(width as u32, height as u32, detected_diagonal)
+        });
+        let logical_width = (width as f64 / scale.max(0.5)).round() as i32;
         detected_outputs.push(DisplayOutputConfig {
             connector: conn_name.clone(),
             name: previous
@@ -1190,23 +1192,42 @@ pub fn run_drm() -> Result<()> {
         };
 
         let (mode_w, mode_h) = mode.size();
+        let edid_mm = conn_info
+            .size()
+            .filter(|&(w, h)| w > 0 && h > 0)
+            .map(|(w, h)| (w as i32, h as i32));
+        let edid_diag = edid_mm.map(|(w, h)| {
+            ((w as f64).powi(2) + (h as f64).powi(2)).sqrt() / 25.4
+        });
         let (loc_x, loc_y, scale, phys_mm, model_label) = if let Some(cfg) = cfg_output {
-            let (w_mm, h_mm) = cfg.physical_size_mm();
+            // Preservar los milímetros reales reportados por EDID salvo que el usuario
+            // haya configurado manualmente una diagonal distinta (para corregir EDID defectuosos).
+            let use_edid_mm = match (edid_mm, edid_diag, cfg.diagonal_inches) {
+                (Some(_), Some(ed), Some(manual_diag)) if (ed - manual_diag).abs() > 0.5 => false,
+                (Some(_), _, _) => true,
+                (None, _, _) => false,
+            };
+            let phys_mm = if use_edid_mm {
+                edid_mm.unwrap()
+            } else {
+                cfg.physical_size_mm()
+                    .map(|(w_mm, h_mm)| (w_mm.round() as i32, h_mm.round() as i32))
+                    .unwrap_or((0, 0))
+            };
             (
                 cfg.x,
                 cfg.y,
                 cfg.scale.max(0.5),
-                (w_mm.round() as i32, h_mm.round() as i32),
+                phys_mm,
                 cfg.name.clone(),
             )
         } else {
             let fallback_scale = displays_cfg.master_scale.max(1.0);
-            let raw_mm = conn_info.size().unwrap_or((600, 340));
             (
                 next_auto_x,
                 0,
                 fallback_scale,
-                (raw_mm.0 as i32, raw_mm.1 as i32),
+                edid_mm.unwrap_or((0, 0)),
                 conn_name.clone(),
             )
         };

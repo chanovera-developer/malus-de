@@ -323,17 +323,23 @@ fn main() -> Result<()> {
                     println!(" 🪟 Radio de Esquinas (Border-Radius Ventanas):   {:.1} px", cfg.window_corner_radius);
                     println!("─────────────────────────────────────────────────────────────────────────────────");
                     for (i, o) in cfg.outputs.iter().enumerate() {
-                        let diag = o.effective_diagonal();
-                        let ppi = o.ppi();
-                        let (w_mm, h_mm) = o.physical_size_mm();
                         let (lw, lh) = o.logical_size();
                         let primary_badge = if o.primary { " [PRIMARIO]" } else { "" };
                         println!(" Monitor #{}: {} ({}){}", i + 1, o.name, o.connector, primary_badge);
-                        println!("   • Panel Físico:   {:.1}\" diagonal | {:.1} x {:.1} mm | {:.2} PPI", diag, w_mm, h_mm, ppi);
-                        println!("   • Resolución:     {}x{} física @ {:.1} Hz", o.width, o.height, o.refresh_rate);
-                        println!("   • Escala Activa:  {:.4}x ({:.1}%)", o.scale, o.scale * 100.0);
-                        println!("   • Espacio Lógico: {}x{} en coords ({}, {})", lw, lh, o.x, o.y);
-                        println!("   • Densidad Real:  100 puntos lógicos = {:.1} mm reales en vidrio", (100.0 * o.scale / ppi) * 25.4);
+                        if let (Some(diag), Some(ppi), Some((w_mm, h_mm))) =
+                            (o.effective_diagonal(), o.ppi(), o.physical_size_mm())
+                        {
+                            println!("   • Panel Físico:   {:.1}\" diagonal | {:.1} x {:.1} mm | {:.2} PPI", diag, w_mm, h_mm, ppi);
+                            println!("   • Resolución:     {}x{} física @ {:.1} Hz", o.width, o.height, o.refresh_rate);
+                            println!("   • Escala Activa:  {:.4}x ({:.1}%)", o.scale, o.scale * 100.0);
+                            println!("   • Espacio Lógico: {}x{} en coords ({}, {})", lw, lh, o.x, o.y);
+                            println!("   • Densidad Real:  100 puntos lógicos = {:.1} mm reales en vidrio", (100.0 * o.scale / ppi) * 25.4);
+                        } else {
+                            println!("   • Panel Físico:   Tamaño físico desconocido (sin EDID ni diagonal manual)");
+                            println!("   • Resolución:     {}x{} física @ {:.1} Hz", o.width, o.height, o.refresh_rate);
+                            println!("   • Escala Activa:  {:.4}x ({:.1}%)", o.scale, o.scale * 100.0);
+                            println!("   • Espacio Lógico: {}x{} en coords ({}, {})", lw, lh, o.x, o.y);
+                        }
                         println!();
                     }
                 }

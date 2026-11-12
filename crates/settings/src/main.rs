@@ -761,18 +761,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     }
     for output in &initial_displays_cfg.outputs {
         let title = format!("{} · {}", output.connector, output.name);
-        let diagonal = output
-            .diagonal_inches
-            .map(|inches| format!("{inches:.1}\""))
-            .unwrap_or_else(|| "tamaño desconocido".to_string());
-        let specs = format!(
-            "{} × {} @ {:.2} Hz · {} · {:.1} PPI",
-            output.width,
-            output.height,
-            output.refresh_rate,
-            diagonal,
-            output.ppi()
-        );
+        let specs = format_monitor_specs_label(output);
         let presets: Vec<(String, String, f64)> = [2.0, 1.75, 1.5, 1.25, 1.0]
             .iter()
             .map(|scale| {
@@ -1082,11 +1071,15 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
 
             cr.set_source_rgba(0.65, 0.82, 1.0, 0.90);
             cr.set_font_size(10.5);
+            let ppi_str = o
+                .ppi()
+                .map(|p| format!("{p:.1} PPI"))
+                .unwrap_or_else(|| "PPI desconocido".to_string());
             let pos_str = format!(
-                "pos=({}, {}) · {:.1} PPI{}",
+                "pos=({}, {}) · {}{}",
                 o.x,
                 o.y,
-                o.ppi(),
+                ppi_str,
                 if o.primary { " · ★ Principal" } else { "" }
             );
             cr.move_to(rx + 12.0, ry + 61.0);
@@ -1164,17 +1157,23 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         if cfg.outputs.len() >= 2 {
             let o0 = &cfg.outputs[0];
             let o1 = &cfg.outputs[1];
-            let mm0 = (100.0 * o0.scale / o0.ppi()) * 25.4;
-            let mm1 = (100.0 * o1.scale / o1.ppi()) * 25.4;
-            ts_math_ref.set_label(&format!(
-                "📐 Regla Física Actual: 100 pt lógicos = {:.1} mm en {} ({:.1}%)  |  {:.1} mm en {} ({:.1}%)",
-                mm0,
-                o0.connector,
-                o0.scale * 100.0,
-                mm1,
-                o1.connector,
-                o1.scale * 100.0
-            ));
+            if let (Some(ppi0), Some(ppi1)) = (o0.ppi(), o1.ppi()) {
+                let mm0 = (100.0 * o0.scale / ppi0) * 25.4;
+                let mm1 = (100.0 * o1.scale / ppi1) * 25.4;
+                ts_math_ref.set_label(&format!(
+                    "📐 Regla Física Actual: 100 pt lógicos = {:.1} mm en {} ({:.1}%)  |  {:.1} mm en {} ({:.1}%)",
+                    mm0,
+                    o0.connector,
+                    o0.scale * 100.0,
+                    mm1,
+                    o1.connector,
+                    o1.scale * 100.0
+                ));
+            } else {
+                ts_math_ref.set_label(
+                    "📐 Regla Física Actual: falta el tamaño físico real (EDID/pulgadas) en al menos una pantalla para enlazar 1:1",
+                );
+            }
         }
 
         for (idx, widgets) in monitor_widgets_ref.iter().enumerate() {
@@ -1667,19 +1666,23 @@ fn create_macos_monitor_scaling_card(
     )
 }
 
+fn format_monitor_specs_label(o: &malus_de_common::config::DisplayOutputConfig) -> String {
+    let physical_summary = match (o.diagonal_inches, o.ppi()) {
+        (Some(inches), Some(ppi)) => format!("{inches:.1}\" · {ppi:.1} PPI"),
+        _ => "tamaño desconocido".to_string(),
+    };
+    format!(
+        "{} × {} @ {:.2} Hz · {}",
+        o.width, o.height, o.refresh_rate, physical_summary
+    )
+}
+
 fn update_monitor_card_ui(
     w: &MonitorCardWidgets,
     o: &malus_de_common::config::DisplayOutputConfig,
 ) {
     let (lw, lh) = o.logical_size();
-    let diagonal = o
-        .diagonal_inches
-        .map(|inches| format!("{inches:.1}\""))
-        .unwrap_or_else(|| "tamaño desconocido".to_string());
-    w.details_lbl.set_label(&format!(
-        "{} × {} @ {:.2} Hz · {} · {:.1} PPI",
-        o.width, o.height, o.refresh_rate, diagonal, o.ppi()
-    ));
+    w.details_lbl.set_label(&format_monitor_specs_label(o));
     w.active_info_lbl
         .set_label(&format!("{:.1}% · {} × {}", o.scale * 100.0, lw, lh));
     w.scale_slider
