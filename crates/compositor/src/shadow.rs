@@ -291,10 +291,26 @@ impl WindowShadowPipeline {
         corner_radius: f32,
         scale: f64,
     ) {
+        self.render_menu_shadow_alpha(gl, projection, menu_rect, corner_radius, scale, 1.0);
+    }
+
+    pub fn render_menu_shadow_alpha(
+        &self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        menu_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        scale: f64,
+        alpha: f32,
+    ) {
+        let a = alpha.clamp(0.0, 1.0);
+        if a <= 0.001 {
+            return;
+        }
         let blur_radius = 28.0 * scale as f32;
         let spread = 0.0f32;
-        let offset_y = 0.0f32; // Sombra central uniforme y difusa
-        let opacity = 0.12f32;
+        let offset_y = 6.0 * scale as f32;
+        let opacity = 0.15f32 * a;
         self.render_shadow_with_style(
             gl,
             projection,
@@ -304,7 +320,7 @@ impl WindowShadowPipeline {
             spread,
             offset_y,
             opacity,
-            0.15,
+            0.18 * a,
         );
     }
 

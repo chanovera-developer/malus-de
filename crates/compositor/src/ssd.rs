@@ -31,7 +31,7 @@ pub const SSD_TITLEBAR_HEIGHT: i32 = 38;
 pub const BTN_Y: f64 = 19.0;
 pub const BTN_CLOSE_X: f64 = 20.0;
 const BTN_MIN_X: f64 = 40.0;
-const BTN_MAX_X: f64 = 60.0;
+pub const BTN_MAX_X: f64 = 60.0;
 const BTN_RADIUS: f64 = 6.5;
 const BTN_HIT_RADIUS: f64 = 8.0;
 

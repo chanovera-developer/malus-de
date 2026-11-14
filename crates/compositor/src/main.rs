@@ -10,6 +10,7 @@ pub mod magic_lamp;
 pub mod recording;
 pub mod screenshot_ui;
 pub mod shadow;
+pub mod snap_layouts;
 pub mod spotlight_visual;
 pub mod ssd;
 pub mod state;

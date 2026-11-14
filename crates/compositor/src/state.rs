@@ -234,6 +234,7 @@ pub struct MalusState {
     pub dnd_icon_offset: Point<i32, Logical>,
     pub active_screen_recording: Option<crate::recording::ScreenRecordingSession>,
     pub screenshot_ui: crate::screenshot_ui::ScreenshotUiState,
+    pub snap_layouts: crate::snap_layouts::SnapLayoutsState,
     pub ssd: crate::ssd::SsdManager,
     pub expose: crate::expose::ExposeState,
     pub workspaces: crate::workspaces::WorkspaceManager,
@@ -620,8 +621,169 @@ pub fn system_monitor_backdrop_color() -> [f32; 3] {
 pub enum SnapMode {
     LeftHalf,
     RightHalf,
+    LeftTwoThirds,
+    RightOneThird,
+    LeftThird,
+    CenterThird,
+    RightThird,
+    TopLeftQuarter,
+    TopRightQuarter,
+    BottomLeftQuarter,
+    BottomRightQuarter,
+    LeftQuarter,
+    CenterHalf,
+    RightQuarter,
     Maximize,
     CenterRestore,
+}
+
+/// Devuelve `true` si la ventana tiene actualmente algún estado XDG de maximizado o anclaje (tile).
+pub fn is_window_snapped(window: &smithay::desktop::Window) -> bool {
+    window.toplevel().is_some_and(|t| {
+        let cur = &t.current_state().states;
+        let cur_snapped = cur.contains(XdgState::Maximized)
+            || cur.contains(XdgState::TiledLeft)
+            || cur.contains(XdgState::TiledRight)
+            || cur.contains(XdgState::TiledTop)
+            || cur.contains(XdgState::TiledBottom)
+            || cur.contains(XdgState::Fullscreen);
+        let pend_snapped = t.with_pending_state(|p| {
+            p.states.contains(XdgState::Maximized)
+                || p.states.contains(XdgState::TiledLeft)
+                || p.states.contains(XdgState::TiledRight)
+                || p.states.contains(XdgState::TiledTop)
+                || p.states.contains(XdgState::TiledBottom)
+                || p.states.contains(XdgState::Fullscreen)
+        });
+        cur_snapped || pend_snapped
+    })
+}
+
+/// Limpia todos los estados XDG de maximizado y anclaje en mosaico.
+pub fn unset_snap_states(top_state: &mut smithay::wayland::shell::xdg::ToplevelState) {
+    top_state.states.unset(XdgState::Maximized);
+    top_state.states.unset(XdgState::TiledLeft);
+    top_state.states.unset(XdgState::TiledRight);
+    top_state.states.unset(XdgState::TiledTop);
+    top_state.states.unset(XdgState::TiledBottom);
+}
+
+#[inline]
+fn split_interval(start: i32, total: i32, num_start: i32, num_end: i32, den: i32) -> (i32, i32) {
+    let p0 = start + (total * num_start) / den;
+    let p1 = start + (total * num_end) / den;
+    (p0, (p1 - p0).max(100))
+}
+
+/// Calcula ubicación destino, tamaño cliente y estados XDG para cualquier sección de Snap Layouts.
+pub fn snap_target_geometry(
+    mode: SnapMode,
+    usable_zone: Rectangle<i32, Logical>,
+    ssd_top: i32,
+) -> (Point<i32, Logical>, Option<Size<i32, Logical>>, Vec<XdgState>) {
+    let ux = usable_zone.loc.x;
+    let uy = usable_zone.loc.y;
+    let uw = usable_zone.size.w;
+    let uh = usable_zone.size.h;
+    let full_y = uy + ssd_top;
+    let full_h = (uh - ssd_top).max(100);
+
+    let (top_y, top_visual_h) = split_interval(uy, uh, 0, 1, 2);
+    let top_row_y = top_y + ssd_top;
+    let top_row_h = (top_visual_h - ssd_top).max(100);
+
+    let (bot_y, bot_visual_h) = split_interval(uy, uh, 1, 2, 2);
+    let bot_row_y = bot_y + ssd_top;
+    let bot_row_h = (bot_visual_h - ssd_top).max(100);
+
+    match mode {
+        SnapMode::LeftHalf => {
+            let (x, w) = split_interval(ux, uw, 0, 1, 2);
+            (Point::from((x, full_y)), Some(Size::from((w, full_h))), vec![XdgState::TiledLeft])
+        }
+        SnapMode::RightHalf => {
+            let (x, w) = split_interval(ux, uw, 1, 2, 2);
+            (Point::from((x, full_y)), Some(Size::from((w, full_h))), vec![XdgState::TiledRight])
+        }
+        SnapMode::LeftTwoThirds => {
+            let (x, w) = split_interval(ux, uw, 0, 2, 3);
+            (Point::from((x, full_y)), Some(Size::from((w, full_h))), vec![XdgState::TiledLeft])
+        }
+        SnapMode::RightOneThird => {
+            let (x, w) = split_interval(ux, uw, 2, 3, 3);
+            (Point::from((x, full_y)), Some(Size::from((w, full_h))), vec![XdgState::TiledRight])
+        }
+        SnapMode::LeftThird => {
+            let (x, w) = split_interval(ux, uw, 0, 1, 3);
+            (Point::from((x, full_y)), Some(Size::from((w, full_h))), vec![XdgState::TiledLeft])
+        }
+        SnapMode::CenterThird => {
+            let (x, w) = split_interval(ux, uw, 1, 2, 3);
+            (
+                Point::from((x, full_y)),
+                Some(Size::from((w, full_h))),
+                vec![XdgState::TiledTop, XdgState::TiledBottom],
+            )
+        }
+        SnapMode::RightThird => {
+            let (x, w) = split_interval(ux, uw, 2, 3, 3);
+            (Point::from((x, full_y)), Some(Size::from((w, full_h))), vec![XdgState::TiledRight])
+        }
+        SnapMode::TopLeftQuarter => {
+            let (x, w) = split_interval(ux, uw, 0, 1, 2);
+            (
+                Point::from((x, top_row_y)),
+                Some(Size::from((w, top_row_h))),
+                vec![XdgState::TiledLeft, XdgState::TiledTop],
+            )
+        }
+        SnapMode::TopRightQuarter => {
+            let (x, w) = split_interval(ux, uw, 1, 2, 2);
+            (
+                Point::from((x, top_row_y)),
+                Some(Size::from((w, top_row_h))),
+                vec![XdgState::TiledRight, XdgState::TiledTop],
+            )
+        }
+        SnapMode::BottomLeftQuarter => {
+            let (x, w) = split_interval(ux, uw, 0, 1, 2);
+            (
+                Point::from((x, bot_row_y)),
+                Some(Size::from((w, bot_row_h))),
+                vec![XdgState::TiledLeft, XdgState::TiledBottom],
+            )
+        }
+        SnapMode::BottomRightQuarter => {
+            let (x, w) = split_interval(ux, uw, 1, 2, 2);
+            (
+                Point::from((x, bot_row_y)),
+                Some(Size::from((w, bot_row_h))),
+                vec![XdgState::TiledRight, XdgState::TiledBottom],
+            )
+        }
+        SnapMode::LeftQuarter => {
+            let (x, w) = split_interval(ux, uw, 0, 1, 4);
+            (Point::from((x, full_y)), Some(Size::from((w, full_h))), vec![XdgState::TiledLeft])
+        }
+        SnapMode::CenterHalf => {
+            let (x, w) = split_interval(ux, uw, 1, 3, 4);
+            (
+                Point::from((x, full_y)),
+                Some(Size::from((w, full_h))),
+                vec![XdgState::TiledTop, XdgState::TiledBottom],
+            )
+        }
+        SnapMode::RightQuarter => {
+            let (x, w) = split_interval(ux, uw, 3, 4, 4);
+            (Point::from((x, full_y)), Some(Size::from((w, full_h))), vec![XdgState::TiledRight])
+        }
+        SnapMode::Maximize => (
+            Point::from((ux, full_y)),
+            Some(Size::from((uw, full_h))),
+            vec![XdgState::Maximized],
+        ),
+        SnapMode::CenterRestore => (Point::from((ux + 80, uy + 80 + ssd_top)), None, vec![]),
+    }
 }
 
 impl MalusState {
@@ -664,6 +826,7 @@ impl MalusState {
     }
 
     pub fn start_interactive_screenshot(&mut self) {
+        self.snap_layouts.close();
         if self.screenshot_ui.is_open() {
             self.screenshot_ui.close();
             return;
@@ -929,6 +1092,7 @@ impl MalusState {
             dnd_icon_offset: Point::from((0, 0)),
             active_screen_recording: None,
             screenshot_ui: crate::screenshot_ui::ScreenshotUiState::new(),
+            snap_layouts: crate::snap_layouts::SnapLayoutsState::new(),
             ssd: crate::ssd::SsdManager::new(),
             expose: crate::expose::ExposeState::default(),
             workspaces: crate::workspaces::WorkspaceManager::default(),
@@ -1235,6 +1399,7 @@ impl MalusState {
 
     pub fn minimize_toplevel(&mut self, surface: &ToplevelSurface) {
         tracing::info!("🪟 [XdgShell] minimize_request recibido del cliente");
+        self.snap_layouts.close();
         let surf = surface.wl_surface().clone();
 
         // 1. Evitar minimizar si ya está en la lista de minimizadas
@@ -1565,6 +1730,7 @@ impl MalusState {
     /// Alterna Spotlight vinculándolo exclusivamente al monitor donde fue invocado
     /// (el monitor bajo el cursor, o el de la ventana activa, o el primer monitor conectado).
     pub fn toggle_spotlight(&mut self) {
+        self.snap_layouts.close();
         if self.spotlight.is_open() {
             self.spotlight.close();
             return;
@@ -1996,6 +2162,7 @@ impl MalusState {
 
     /// Alterna el modo Exposé / Mission Control (Global o filtrado por aplicación).
     pub fn toggle_expose(&mut self, mode: crate::expose::ExposeMode) {
+        self.snap_layouts.close();
         if self.expose.active && self.expose.target_open {
             if self.expose.mode == mode {
                 self.close_expose(None);
@@ -2702,20 +2869,7 @@ pub fn snap_window(
         (cur_loc, cur_geo.size)
     };
 
-    let is_currently_snapped = window.toplevel().map(|t| {
-        let cur = &t.current_state().states;
-        let cur_snapped = cur.contains(XdgState::Maximized)
-            || cur.contains(XdgState::TiledLeft)
-            || cur.contains(XdgState::TiledRight)
-            || cur.contains(XdgState::Fullscreen);
-        let pend_snapped = t.with_pending_state(|p| {
-            p.states.contains(XdgState::Maximized)
-                || p.states.contains(XdgState::TiledLeft)
-                || p.states.contains(XdgState::TiledRight)
-                || p.states.contains(XdgState::Fullscreen)
-        });
-        cur_snapped || pend_snapped
-    }).unwrap_or(false);
+    let is_currently_snapped = is_window_snapped(window);
 
     // Guardar geometría previa flotante SOLO si la ventana no estaba ya snapped y su tamaño actual es válido
     if mode != SnapMode::CenterRestore && !is_currently_snapped && cur_geo.size.w > 150 && cur_geo.size.h > 150 {
@@ -2728,47 +2882,19 @@ pub fn snap_window(
         0
     };
 
-    let (target_loc, target_size, xdg_states) = match mode {
-        SnapMode::LeftHalf => (
-            Point::from((usable_zone.loc.x, usable_zone.loc.y + ssd_top)),
-            Some(Size::from((
-                usable_zone.size.w / 2,
-                (usable_zone.size.h - ssd_top).max(100),
-            ))),
-            vec![XdgState::TiledLeft],
-        ),
-        SnapMode::RightHalf => (
-            Point::from((
-                usable_zone.loc.x + usable_zone.size.w / 2,
-                usable_zone.loc.y + ssd_top,
-            )),
-            Some(Size::from((
-                usable_zone.size.w - usable_zone.size.w / 2,
-                (usable_zone.size.h - ssd_top).max(100),
-            ))),
-            vec![XdgState::TiledRight],
-        ),
-        SnapMode::Maximize => (
-            Point::from((usable_zone.loc.x, usable_zone.loc.y + ssd_top)),
-            Some(Size::from((
-                usable_zone.size.w,
-                (usable_zone.size.h - ssd_top).max(100),
-            ))),
-            vec![XdgState::Maximized],
-        ),
-        SnapMode::CenterRestore => {
-            if let Some((saved_loc, saved_size)) = state.window_restore_geometries.get(&surface).copied() {
-                let size_opt = if saved_size.w > 100 && saved_size.h > 100 {
-                    Some(saved_size)
-                } else {
-                    None
-                };
-                (saved_loc, size_opt, vec![])
+    let (target_loc, target_size, xdg_states) = if mode == SnapMode::CenterRestore {
+        if let Some((saved_loc, saved_size)) = state.window_restore_geometries.get(&surface).copied() {
+            let size_opt = if saved_size.w > 100 && saved_size.h > 100 {
+                Some(saved_size)
             } else {
-                let default_loc = Point::from((usable_zone.loc.x + 80, usable_zone.loc.y + 80 + ssd_top));
-                (default_loc, None, vec![])
-            }
+                None
+            };
+            (saved_loc, size_opt, vec![])
+        } else {
+            snap_target_geometry(mode, usable_zone, ssd_top)
         }
+    } else {
+        snap_target_geometry(mode, usable_zone, ssd_top)
     };
 
     let min_y = usable_zone.loc.y + ssd_top;
@@ -2805,9 +2931,7 @@ pub fn snap_window(
     if let Some(toplevel) = window.toplevel() {
         toplevel.with_pending_state(|top_state| {
             top_state.size = target_size;
-            top_state.states.unset(XdgState::Maximized);
-            top_state.states.unset(XdgState::TiledLeft);
-            top_state.states.unset(XdgState::TiledRight);
+            unset_snap_states(top_state);
             for s in xdg_states {
                 top_state.states.set(s);
             }
@@ -3101,10 +3225,12 @@ impl MalusState {
     /// Actualiza el estado de hover de los botones semáforo SSD y el icono de redimensión perimetral.
     pub fn update_ssd_hover(&mut self, point: Point<f64, Logical>) {
         if self.ssd.grab_active {
+            self.snap_layouts.close();
             return;
         }
         let occluded_by_top_ui = self.spotlight.is_open()
             || self.screenshot_ui.is_open()
+            || self.expose.active
             || self.popup_grab_active()
             || self.popup_under(point).is_some()
             || self.space.outputs().any(|output| {
@@ -3138,7 +3264,20 @@ impl MalusState {
                 })
             });
 
+        self.snap_layouts.update_pointer_motion(
+            &self.space,
+            point,
+            occluded_by_top_ui,
+            Instant::now(),
+        );
+
         if !occluded_by_top_ui {
+            if self.snap_layouts.contains_point(point) {
+                self.cursor_status = smithay::input::pointer::CursorImageStatus::default_named();
+                self.ssd.cursor_override = false;
+                self.ssd.update_hover(None, 0.0, 0.0, 0.0);
+                return;
+            }
             if let Some((_win, edge, _loc)) =
                 crate::grabs::find_window_resize_edge_under(&self.space, point, 8.0)
             {
@@ -3165,6 +3304,79 @@ impl MalusState {
         }
     }
 
+    /// Avanza los temporizadores de apertura/cierre por hover del menú Snap Layouts.
+    pub fn tick_snap_layouts(&mut self, now: Instant) {
+        if self.spotlight.is_open() || self.screenshot_ui.is_open() || self.expose.active || self.ssd.grab_active {
+            self.snap_layouts.close();
+            return;
+        }
+        let outputs: Vec<Output> = self.space.outputs().cloned().collect();
+        let output_zones: Vec<(String, Rectangle<i32, Logical>, Rectangle<i32, Logical>)> = outputs
+            .iter()
+            .filter_map(|o| {
+                self.space
+                    .output_geometry(o)
+                    .map(|geo| (o.name(), geo, self.usable_zone_for_output(o)))
+            })
+            .collect();
+        let space = &self.space;
+        self.snap_layouts.tick(space, now, |window, anchor_center| {
+            let win_output = space.outputs_for_element(window).into_iter().next();
+            let chosen = output_zones
+                .iter()
+                .find(|(_, geo, _)| geo.contains(anchor_center))
+                .or_else(|| {
+                    win_output.and_then(|wo| {
+                        let wname = wo.name();
+                        output_zones.iter().find(|(n, _, _)| *n == wname)
+                    })
+                })
+                .or_else(|| output_zones.first())?;
+            Some((chosen.0.clone(), chosen.2))
+        });
+    }
+
+    /// Procesa clics del ratón sobre el menú flotante Snap Layouts.
+    /// Devuelve `true` si el evento fue consumido por el menú.
+    pub fn handle_snap_layouts_pointer_button(
+        &mut self,
+        point: Point<f64, Logical>,
+        button_code: u32,
+        is_pressed: bool,
+    ) -> bool {
+        match self
+            .snap_layouts
+            .handle_pointer_button(point, button_code, is_pressed)
+        {
+            crate::snap_layouts::SnapLayoutClickResult::Ignored => false,
+            crate::snap_layouts::SnapLayoutClickResult::Consumed => true,
+            crate::snap_layouts::SnapLayoutClickResult::Snap { window, mode } => {
+                let target_output = self
+                    .space
+                    .outputs_for_element(&window)
+                    .into_iter()
+                    .next()
+                    .or_else(|| {
+                        self.space
+                            .outputs()
+                            .find(|o| {
+                                self.space
+                                    .output_geometry(o)
+                                    .is_some_and(|g| g.to_f64().contains(point))
+                            })
+                            .cloned()
+                    })
+                    .or_else(|| self.space.outputs().next().cloned());
+                let usable_zone = target_output
+                    .as_ref()
+                    .map(|o| self.usable_zone_for_output(o))
+                    .unwrap_or_else(|| Rectangle::new((0, 32).into(), (1920, 1000).into()));
+                snap_window(self, &window, mode, usable_zone);
+                true
+            }
+        }
+    }
+
     /// Procesa clics sobre la barra de título SSD (botones de cerrar, minimizar, maximizar, doble clic y arrastre).
     /// Devuelve `true` si el evento fue consumido por la decoración SSD.
     pub fn handle_ssd_pointer_button(
@@ -3179,6 +3391,7 @@ impl MalusState {
         let Some((window, loc, hit, _, _, _)) = self.ssd_titlebar_under(point) else {
             return false;
         };
+        self.snap_layouts.close();
 
         let was_already_top = self
             .space
@@ -3273,15 +3486,7 @@ impl MalusState {
                 }
 
                 if let Some(pointer) = self.seat.get_pointer() {
-                    let is_snapped = window
-                        .toplevel()
-                        .map(|t| {
-                            let states = &t.current_state().states;
-                            states.contains(XdgState::Maximized)
-                                || states.contains(XdgState::TiledLeft)
-                                || states.contains(XdgState::TiledRight)
-                        })
-                        .unwrap_or(false);
+                    let is_snapped = is_window_snapped(&window);
                     let start_data = smithay::input::pointer::GrabStartData {
                         focus: None,
                         button: button_code,
@@ -3781,13 +3986,7 @@ impl CompositorHandler for MalusState {
                 }
             }
 
-            let is_currently_snapped = window.toplevel().map(|t| {
-                let states = &t.current_state().states;
-                states.contains(XdgState::Maximized)
-                    || states.contains(XdgState::TiledLeft)
-                    || states.contains(XdgState::TiledRight)
-                    || states.contains(XdgState::Fullscreen)
-            }).unwrap_or(false);
+            let is_currently_snapped = is_window_snapped(&window);
 
             if !is_currently_snapped {
                 self.ensure_window_below_topbar(&window);
@@ -4157,12 +4356,7 @@ impl XdgShellHandler for MalusState {
             return;
         };
 
-        let is_snapped = window.toplevel().map(|t| {
-            let states = &t.current_state().states;
-            states.contains(XdgState::Maximized)
-                || states.contains(XdgState::TiledLeft)
-                || states.contains(XdgState::TiledRight)
-        }).unwrap_or(false);
+        let is_snapped = is_window_snapped(&window);
 
         let initial_window_location = self.space.element_location(&window).unwrap_or_default();
 
@@ -4199,13 +4393,7 @@ impl XdgShellHandler for MalusState {
 
         let Some(window) = self.window_for_surface(surface.wl_surface()) else { return };
 
-        let is_maximized_or_snapped = window.toplevel().map(|t| {
-            let states = &t.current_state().states;
-            states.contains(XdgState::Maximized)
-                || states.contains(XdgState::Fullscreen)
-                || states.contains(XdgState::TiledLeft)
-                || states.contains(XdgState::TiledRight)
-        }).unwrap_or(false);
+        let is_maximized_or_snapped = is_window_snapped(&window);
 
         if is_maximized_or_snapped {
             tracing::info!("⚠️ [XdgShell] resize_request ignorado: la ventana está maximizada, a pantalla completa o anclada");
@@ -4321,9 +4509,7 @@ impl XdgShellHandler for MalusState {
 
         toplevel.with_pending_state(|state| {
             state.size = Some(output_geometry.size);
-            state.states.unset(XdgState::Maximized);
-            state.states.unset(XdgState::TiledLeft);
-            state.states.unset(XdgState::TiledRight);
+            unset_snap_states(state);
             state.states.set(XdgState::Fullscreen);
         });
         self.space
@@ -4387,6 +4573,7 @@ impl XdgShellHandler for MalusState {
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         tracing::info!("🗑️ [XdgShell] Ventana toplevel destruida");
+        self.snap_layouts.close();
         let surf = surface.wl_surface();
         self.centered_transient_windows.remove(surf);
 
@@ -4403,6 +4590,8 @@ impl XdgShellHandler for MalusState {
                 let is_snapped = states.contains(XdgState::Maximized)
                     || states.contains(XdgState::TiledLeft)
                     || states.contains(XdgState::TiledRight)
+                    || states.contains(XdgState::TiledTop)
+                    || states.contains(XdgState::TiledBottom)
                     || states.contains(XdgState::Fullscreen);
 
                 if !is_snapped {
@@ -5314,5 +5503,43 @@ mod tests {
                 smithay::input::pointer::CursorIcon::Default
             )
         ));
+    }
+
+    #[test]
+    fn snap_target_geometry_partitions_usable_zone_seamlessly() {
+        let usable = smithay::utils::Rectangle::new((0, 32).into(), (1920, 1000).into());
+        let ssd_top = crate::ssd::SSD_TITLEBAR_HEIGHT;
+
+        // 2/3 + 1/3
+        let (l_loc, l_sz, _) = super::snap_target_geometry(super::SnapMode::LeftTwoThirds, usable, 0);
+        let (r_loc, r_sz, _) = super::snap_target_geometry(super::SnapMode::RightOneThird, usable, 0);
+        assert_eq!(l_loc.x, 0);
+        assert_eq!(l_sz.unwrap().w + r_sz.unwrap().w, 1920);
+        assert_eq!(l_loc.x + l_sz.unwrap().w, r_loc.x);
+
+        // 3 columnas iguales
+        let (c1, s1, _) = super::snap_target_geometry(super::SnapMode::LeftThird, usable, 0);
+        let (c2, s2, _) = super::snap_target_geometry(super::SnapMode::CenterThird, usable, 0);
+        let (c3, s3, _) = super::snap_target_geometry(super::SnapMode::RightThird, usable, 0);
+        assert_eq!(c1.x + s1.unwrap().w, c2.x);
+        assert_eq!(c2.x + s2.unwrap().w, c3.x);
+        assert_eq!(s1.unwrap().w + s2.unwrap().w + s3.unwrap().w, 1920);
+
+        // 25 / 50 / 25
+        let (q1, qs1, _) = super::snap_target_geometry(super::SnapMode::LeftQuarter, usable, 0);
+        let (q2, qs2, _) = super::snap_target_geometry(super::SnapMode::CenterHalf, usable, 0);
+        let (q3, qs3, _) = super::snap_target_geometry(super::SnapMode::RightQuarter, usable, 0);
+        assert_eq!(q1.x + qs1.unwrap().w, q2.x);
+        assert_eq!(q2.x + qs2.unwrap().w, q3.x);
+        assert_eq!(qs1.unwrap().w, 480);
+        assert_eq!(qs2.unwrap().w, 960);
+        assert_eq!(qs3.unwrap().w, 480);
+
+        // Cuartos verticales con barra SSD (sin solapamiento de barra de título)
+        let (tl_loc, tl_sz, _) = super::snap_target_geometry(super::SnapMode::TopLeftQuarter, usable, ssd_top);
+        let (bl_loc, bl_sz, _) = super::snap_target_geometry(super::SnapMode::BottomLeftQuarter, usable, ssd_top);
+        assert_eq!(tl_loc.y - ssd_top, 32);
+        assert_eq!(tl_loc.y + tl_sz.unwrap().h, bl_loc.y - ssd_top);
+        assert_eq!(bl_loc.y + bl_sz.unwrap().h, 1032);
     }
 }

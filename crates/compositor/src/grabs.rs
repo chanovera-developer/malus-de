@@ -178,9 +178,7 @@ impl PointerGrab<MalusState> for ResizeSurfaceGrab {
             if let Some(toplevel) = self.window.toplevel() {
                 toplevel.with_pending_state(|top_state| {
                     top_state.size = Some(new_size);
-                    top_state.states.unset(XdgState::Maximized);
-                    top_state.states.unset(XdgState::TiledLeft);
-                    top_state.states.unset(XdgState::TiledRight);
+                    crate::state::unset_snap_states(top_state);
                     top_state.states.set(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Resizing);
                 });
                 toplevel.send_configure();
@@ -410,9 +408,7 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
                 if let Some(toplevel) = self.window.toplevel() {
                     toplevel.with_pending_state(|top_state| {
                         top_state.size = restore_size;
-                        top_state.states.unset(XdgState::Maximized);
-                        top_state.states.unset(XdgState::TiledLeft);
-                        top_state.states.unset(XdgState::TiledRight);
+                        crate::state::unset_snap_states(top_state);
                     });
                     toplevel.send_configure();
                 }
@@ -754,21 +750,15 @@ pub fn preview_for_snap(
     mode: crate::state::SnapMode,
     usable_zone: Rectangle<i32, Logical>,
 ) -> Option<Rectangle<i32, Logical>> {
-    match mode {
-        crate::state::SnapMode::Maximize => Some(Rectangle::new(
-            (usable_zone.loc.x + 8, usable_zone.loc.y + 8).into(),
-            (usable_zone.size.w - 16, usable_zone.size.h - 16).into(),
-        )),
-        crate::state::SnapMode::LeftHalf => Some(Rectangle::new(
-            (usable_zone.loc.x + 8, usable_zone.loc.y + 8).into(),
-            (usable_zone.size.w / 2 - 12, usable_zone.size.h - 16).into(),
-        )),
-        crate::state::SnapMode::RightHalf => Some(Rectangle::new(
-            (usable_zone.loc.x + usable_zone.size.w / 2 + 4, usable_zone.loc.y + 8).into(),
-            (usable_zone.size.w - usable_zone.size.w / 2 - 12, usable_zone.size.h - 16).into(),
-        )),
-        crate::state::SnapMode::CenterRestore => None,
+    if mode == crate::state::SnapMode::CenterRestore {
+        return None;
     }
+    let (loc, size_opt, _) = crate::state::snap_target_geometry(mode, usable_zone, 0);
+    let size = size_opt?;
+    Some(Rectangle::new(
+        (loc.x + 8, loc.y + 8).into(),
+        ((size.w - 16).max(32), (size.h - 16).max(32)).into(),
+    ))
 }
 
 /// Determina si un punto global de ratón cae dentro de la zona de borde perimetral de redimensión (8 px) de una ventana.

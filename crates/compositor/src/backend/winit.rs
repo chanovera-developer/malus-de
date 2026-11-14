@@ -240,6 +240,8 @@ pub fn run_winit() -> Result<()> {
     while state.is_running {
         let frame_start = Instant::now();
         state.resume_timed_out_dock_animations(frame_start);
+        state.tick_snap_layouts(frame_start);
+        let _ = state.snap_layouts.take_closed_dirty();
 
         let status = winit_event_loop.dispatch_new_events(|event| match event {
             WinitEvent::CloseRequested => {
@@ -313,6 +315,10 @@ pub fn run_winit() -> Result<()> {
                                     if state.screenshot_ui.handle_key_press(sym, *modifiers) {
                                         state.execute_screenshot_ui_action();
                                     }
+                                    return FilterResult::Intercept(());
+                                }
+
+                                if is_esc && state.snap_layouts.handle_escape() {
                                     return FilterResult::Intercept(());
                                 }
 
@@ -812,6 +818,10 @@ pub fn run_winit() -> Result<()> {
                             }
                         }
 
+                        if state.handle_snap_layouts_pointer_button(point, event.button_code(), true) {
+                            return;
+                        }
+
                         if state.app_switcher.is_active {
                             info!("🖱️ Click detectado mientras AppSwitcher está activo -> cerrando AppSwitcher");
                             state.app_switcher.is_active = false;
@@ -1104,6 +1114,9 @@ pub fn run_winit() -> Result<()> {
                                 }
                                 return;
                             }
+                        }
+                        if state.handle_snap_layouts_pointer_button(point, event.button_code(), false) {
+                            return;
                         }
                         state.snap_preview = None;
                     }
@@ -1673,6 +1686,22 @@ pub fn run_winit() -> Result<()> {
                             .screenshot_ui
                             .create_render_element(renderer, ui_rect.loc.to_f64())
                             .map(|elem| (ui_rect, mask_vec, mask_sz, ui_alpha, elem))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let snap_layouts_frame = if state.snap_layouts.should_render_on_output(&output.name()) {
+                    if let Some((card_rect, mask_opt, mask_sz, snap_alpha)) =
+                        state.snap_layouts.prepare_frame(&output.name(), output_geo, 1.0, is_dark_theme)
+                    {
+                        let mask_vec = mask_opt.map(|s| s.to_vec());
+                        state
+                            .snap_layouts
+                            .create_render_element(renderer, card_rect.loc, snap_alpha)
+                            .map(|elem| (card_rect, mask_vec, mask_sz, snap_alpha, elem))
                     } else {
                         None
                     }
@@ -2445,6 +2474,49 @@ pub fn run_winit() -> Result<()> {
                             &mut frame,
                             1.0,
                             std::slice::from_ref(ui_elem),
+                            &[damage],
+                        );
+                    }
+
+                    // Renderizar menú flotante Snap Layouts (hover sobre maximizar estilo Windows 11)
+                    if let Some((
+                        snap_rect,
+                        ref mask_vec,
+                        (mask_w, mask_h),
+                        snap_alpha,
+                        ref snap_elem,
+                    )) = snap_layouts_frame
+                    {
+                        if let Some(shadow) = shadow_pipeline.as_ref() {
+                            let _ = frame.with_context(|gl| {
+                                shadow.render_menu_shadow_alpha(
+                                    gl,
+                                    &projection,
+                                    snap_rect,
+                                    crate::snap_layouts::POPUP_CORNER_RADIUS as f32,
+                                    1.0,
+                                    snap_alpha,
+                                );
+                            });
+                        }
+                        if let Some(blur) = blur_pipeline.as_mut() {
+                            let _ = frame.with_context(|gl| {
+                                blur.render_blur_masked(
+                                    gl,
+                                    &projection,
+                                    size,
+                                    snap_rect,
+                                    mask_vec.as_deref(),
+                                    mask_w,
+                                    mask_h,
+                                    snap_alpha,
+                                );
+                            });
+                        }
+                        let _ = draw_render_elements(
+                            &mut frame,
+                            1.0,
+                            std::slice::from_ref(snap_elem),
                             &[damage],
                         );
                     }

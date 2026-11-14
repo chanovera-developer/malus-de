@@ -1553,6 +1553,10 @@ pub fn run_drm() -> Result<()> {
                                     return FilterResult::Intercept(());
                                 }
 
+                                if sym == keysyms::KEY_Escape.into() && state.snap_layouts.handle_escape() {
+                                    return FilterResult::Intercept(());
+                                }
+
                                 if (is_print && has_super) || (has_super && has_shift && is_5) {
                                     info!("📸 Atajo de barra interactiva de captura detectado (Super+Shift+5, Super+Print)");
                                     state.start_interactive_screenshot();
@@ -2004,6 +2008,10 @@ pub fn run_drm() -> Result<()> {
                             }
                         }
 
+                        if state.handle_snap_layouts_pointer_button(point, event.button_code(), true) {
+                            return;
+                        }
+
                         if state.app_switcher.is_active {
                             info!("🖱️ Click detectado mientras AppSwitcher está activo -> cerrando AppSwitcher");
                             state.app_switcher.is_active = false;
@@ -2281,6 +2289,9 @@ pub fn run_drm() -> Result<()> {
                                 }
                             }
                         }
+                        if state.handle_snap_layouts_pointer_button(point, event.button_code(), false) {
+                            return;
+                        }
                         state.snap_preview = None;
                     }
 
@@ -2427,6 +2438,14 @@ pub fn run_drm() -> Result<()> {
     while state.is_running {
         let frame_start = Instant::now();
         state.resume_timed_out_dock_animations(frame_start);
+        state.tick_snap_layouts(frame_start);
+        if state.snap_layouts.take_closed_dirty() {
+            if let Ok(mut surfs) = shared_surfaces.lock() {
+                for s in surfs.iter_mut() {
+                    s.pending_damage_buffers = s.pending_damage_buffers.max(1);
+                }
+            }
+        }
 
         // Si la sesión TTY no está activa (VT switch away), pausar renderizado para no saturar GPU
         if !session.is_active() {
@@ -2683,6 +2702,7 @@ pub fn run_drm() -> Result<()> {
             || !active_black_holes.is_empty()
             || !state.snap_transitions.is_empty()
             || state.expose.is_animating()
+            || state.snap_layouts.is_open()
             || state.theme_transition_started_at.is_some()
             || state.pending_theme_transition_capture.is_some();
         let has_ready_output = if let Ok(surfs) = shared_surfaces.lock() {
@@ -3311,6 +3331,26 @@ pub fn run_drm() -> Result<()> {
                     None
                 };
 
+                let snap_layouts_frame = if state
+                    .snap_layouts
+                    .should_render_on_output(&out_surface.output.name())
+                {
+                    if let Some((card_rect, mask_opt, mask_sz, snap_alpha)) = state
+                        .snap_layouts
+                        .prepare_frame(&out_surface.output.name(), output_geo, scale, is_dark_theme)
+                    {
+                        let mask_vec = mask_opt.map(|s| s.to_vec());
+                        state
+                            .snap_layouts
+                            .create_render_element(&mut renderer, card_rect.loc, snap_alpha)
+                            .map(|elem| (card_rect, mask_vec, mask_sz, snap_alpha, elem))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 if let CursorImageStatus::Named(icon) = state.cursor_status {
                     if icon != smithay::input::pointer::CursorIcon::Default
                         && !named_cursor_cache.contains_key(&icon)
@@ -3762,6 +3802,7 @@ pub fn run_drm() -> Result<()> {
                     || screenshot_active
                     || spotlight_frame.is_some()
                     || screenshot_ui_frame.is_some()
+                    || snap_layouts_frame.is_some()
                     || expose_animating
                     || expose_just_closed
                     || expose_rev_changed
@@ -4127,8 +4168,11 @@ pub fn run_drm() -> Result<()> {
                     this_frame_extra_damage.push(Rectangle::from_size(out_surface.size));
                 }
 
-                // Daño por Spotlight o UI de Captura de Pantalla
-                if spotlight_frame.is_some() || screenshot_ui_frame.is_some() {
+                // Daño por Spotlight, UI de Captura o Snap Layouts
+                if spotlight_frame.is_some()
+                    || screenshot_ui_frame.is_some()
+                    || snap_layouts_frame.is_some()
+                {
                     this_frame_extra_damage.push(Rectangle::from_size(out_surface.size));
                 }
 
@@ -5220,6 +5264,49 @@ pub fn run_drm() -> Result<()> {
                                 &mut frame,
                                 1.0,
                                 std::slice::from_ref(ui_elem),
+                                damage,
+                            );
+                        }
+
+                        // Renderizar menú flotante Snap Layouts (hover sobre maximizar estilo Windows 11)
+                        if let Some((
+                            snap_rect,
+                            ref mask_vec,
+                            (mask_w, mask_h),
+                            snap_alpha,
+                            ref snap_elem,
+                        )) = snap_layouts_frame
+                        {
+                            if let Some(shadow) = shadow_pipeline.as_ref() {
+                                let _ = frame.with_context(|gl| {
+                                    shadow.render_menu_shadow_alpha(
+                                        gl,
+                                        &projection,
+                                        snap_rect,
+                                        (crate::snap_layouts::POPUP_CORNER_RADIUS * scale) as f32,
+                                        scale,
+                                        snap_alpha,
+                                    );
+                                });
+                            }
+                            if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
+                                let _ = frame.with_context(|gl| {
+                                    blur.render_blur_masked(
+                                        gl,
+                                        &projection,
+                                        out_surface.size,
+                                        snap_rect,
+                                        mask_vec.as_deref(),
+                                        mask_w,
+                                        mask_h,
+                                        snap_alpha,
+                                    );
+                                });
+                            }
+                            let _ = draw_render_elements(
+                                &mut frame,
+                                1.0,
+                                std::slice::from_ref(snap_elem),
                                 damage,
                             );
                         }
