@@ -209,6 +209,12 @@ pub struct MalusState {
     pub next_window_id: u64,
     pub dock_slots: HashMap<u64, Rectangle<i32, Logical>>,
     pub active_animations: Vec<GenieAnimation>,
+    pub close_button_hints: HashMap<WlSurface, (Point<f64, Logical>, Instant)>,
+    pub renderer_context_id:
+        Option<smithay::backend::renderer::ContextId<smithay::backend::renderer::gles::GlesTexture>>,
+    pub cached_close_snapshots:
+        HashMap<WlSurface, (Vec<crate::black_hole::CachedSurfaceLayer>, Instant)>,
+    pub pending_black_holes: Vec<crate::black_hole::PendingBlackHoleClose>,
     pub snap_transitions: HashMap<WlSurface, SnapTransition>,
     pub snap_preview: Option<Rectangle<i32, Logical>>,
     pub moving_window_surface: Option<WlSurface>,
@@ -900,6 +906,10 @@ impl MalusState {
             next_window_id: 0,
             dock_slots: HashMap::new(),
             active_animations: Vec::new(),
+            close_button_hints: HashMap::new(),
+            renderer_context_id: None,
+            cached_close_snapshots: HashMap::new(),
+            pending_black_holes: Vec::new(),
             snap_transitions: HashMap::new(),
             snap_preview: None,
             moving_window_surface: None,
@@ -1641,6 +1651,27 @@ impl MalusState {
             }
         }
         self.space.elements().last().cloned()
+    }
+
+    fn record_close_button_hint(&mut self, window: &smithay::desktop::Window) {
+        let Some(surf) = window.wl_surface() else {
+            return;
+        };
+        let Some(loc) = self.space.element_location(window) else {
+            return;
+        };
+        let uses_ssd = window_uses_ssd(window);
+        let top_y = if uses_ssd {
+            (loc.y - crate::ssd::SSD_TITLEBAR_HEIGHT) as f64
+        } else {
+            loc.y as f64
+        };
+        let origin = Point::from((
+            loc.x as f64 + crate::ssd::BTN_CLOSE_X,
+            top_y + crate::ssd::BTN_Y,
+        ));
+        self.close_button_hints
+            .insert(surf.into_owned(), (origin, Instant::now()));
     }
 
     pub fn close_active_window(&mut self) {
@@ -2621,6 +2652,7 @@ impl MalusState {
         }).cloned();
 
         if let Some(win) = target {
+            self.record_close_button_hint(&win);
             if let Some(toplevel) = win.toplevel() {
                 toplevel.send_close();
             }
@@ -3184,6 +3216,7 @@ impl MalusState {
 
         match hit {
             crate::ssd::SsdHit::Button(crate::ssd::SsdButton::Close) => {
+                self.record_close_button_hint(&window);
                 if let Some(toplevel) = window.toplevel() {
                     toplevel.send_close();
                 }
@@ -3283,6 +3316,7 @@ impl MalusState {
         self.snap_transitions.retain(|s, _| s.alive());
         self.centered_transient_windows.retain(|s, _| s.alive());
         self.minimized_windows.retain(|s, _| s.alive());
+        self.cached_close_snapshots.retain(|s, _| s.alive());
         self.workspaces.retain_alive();
         let dock_slots = &mut self.dock_slots;
         let minimized_thumbnails = &mut self.minimized_window_thumbnails;
@@ -3603,6 +3637,38 @@ impl CompositorHandler for MalusState {
         if is_background {
             self.background_commit_counter = self.background_commit_counter.wrapping_add(1);
         }
+
+        let is_buffer_removed =
+            smithay::wayland::compositor::with_states(surface, |states| {
+                let mut guard = states
+                    .cached_state
+                    .get::<smithay::wayland::compositor::SurfaceAttributes>();
+                matches!(
+                    guard.current().buffer,
+                    Some(smithay::wayland::compositor::BufferAssignment::Removed)
+                )
+            });
+        if is_buffer_removed {
+            if let Some(ctx_id) = self.renderer_context_id.clone() {
+                if let Some(win) = self.window_for_surface(surface) {
+                    if self.space.element_location(&win).is_some() {
+                        if let Some(root_surf) = win.wl_surface() {
+                            if !self.cached_close_snapshots.contains_key(root_surf.as_ref()) {
+                                let layers = crate::black_hole::capture_surface_tree_snapshot(
+                                    root_surf.as_ref(),
+                                    ctx_id,
+                                );
+                                if !layers.is_empty() {
+                                    self.cached_close_snapshots
+                                        .insert(root_surf.into_owned(), (layers, Instant::now()));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         smithay::backend::renderer::utils::on_commit_buffer_handler::<Self>(surface);
         self.popups.commit(surface);
 
@@ -4355,6 +4421,97 @@ impl XdgShellHandler for MalusState {
                 }
             }
         }
+
+        let hint_entry = self.close_button_hints.remove(surf);
+        if let Some(ref win) = window {
+            let geo = win.geometry();
+            if !self.expose.active
+                && !self.minimized_windows.contains_key(surf)
+                && geo.size.w >= 80
+                && geo.size.h >= 48
+            {
+                if let Some(loc) = self.space.element_location(win) {
+                    let uses_ssd = window_uses_ssd(win);
+                    let states = &surface.current_state().states;
+                    let is_fullscreen = states.contains(XdgState::Fullscreen);
+                    let is_active = states.contains(XdgState::Activated)
+                        || self
+                            .seat
+                            .get_keyboard()
+                            .and_then(|k| k.current_focus())
+                            .as_ref()
+                            == Some(surf);
+                    let top_y = if uses_ssd && !is_fullscreen {
+                        (loc.y - crate::ssd::SSD_TITLEBAR_HEIGHT) as f64
+                    } else {
+                        loc.y as f64
+                    };
+                    let fallback_origin = Point::from((
+                        loc.x as f64 + crate::ssd::BTN_CLOSE_X,
+                        top_y + crate::ssd::BTN_Y,
+                    ));
+
+                    let origin_logical = if let Some((hint_pt, hint_at)) = hint_entry {
+                        if hint_at.elapsed() < std::time::Duration::from_secs(5) {
+                            hint_pt
+                        } else {
+                            fallback_origin
+                        }
+                    } else if let Some(ptr_loc) =
+                        self.seat.get_pointer().map(|p| p.current_location())
+                    {
+                        let in_upper_band = ptr_loc.x >= loc.x as f64 - 8.0
+                            && ptr_loc.x <= (loc.x + geo.size.w) as f64 + 8.0
+                            && ptr_loc.y >= top_y - 8.0
+                            && ptr_loc.y <= (loc.y + 96).min(loc.y + geo.size.h) as f64;
+                        if in_upper_band {
+                            ptr_loc
+                        } else {
+                            fallback_origin
+                        }
+                    } else {
+                        fallback_origin
+                    };
+
+                    let cached_layers = self
+                        .cached_close_snapshots
+                        .remove(surf)
+                        .map(|(layers, _)| layers)
+                        .or_else(|| {
+                            self.renderer_context_id.clone().map(|ctx_id| {
+                                crate::black_hole::capture_surface_tree_snapshot(surf, ctx_id)
+                            })
+                        })
+                        .unwrap_or_default();
+
+                    tracing::info!(
+                        "🕳️ [BlackHole] Encolando cierre de '{}' ({}x{}, cached_layers={})",
+                        window_title_for_ssd(win),
+                        geo.size.w,
+                        geo.size.h,
+                        cached_layers.len()
+                    );
+
+                    self.pending_black_holes
+                        .push(crate::black_hole::PendingBlackHoleClose {
+                            window: win.clone(),
+                            geometry: geo,
+                            location: loc,
+                            origin_logical,
+                            uses_ssd,
+                            is_fullscreen,
+                            is_active,
+                            is_firefox: is_firefox_window(win),
+                            is_translucent: is_translucent_window(win),
+                            title: window_title_for_ssd(win),
+                            cached_layers,
+                        });
+                }
+            }
+        }
+        self.cached_close_snapshots.remove(surf);
+        self.close_button_hints
+            .retain(|_, (_, at)| at.elapsed() < std::time::Duration::from_secs(10));
 
         self.window_restore_geometries.remove(surf);
         self.snap_transitions.remove(surf);

@@ -1,4 +1,5 @@
 pub mod backend;
+pub mod black_hole;
 pub mod blur;
 pub mod capture;
 mod cpu_priority;

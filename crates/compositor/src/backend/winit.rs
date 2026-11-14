@@ -232,6 +232,8 @@ pub fn run_winit() -> Result<()> {
     let mut blur_pipeline: Option<crate::blur::GaussianBlur> = None;
     let mut window_squircle_shader: Option<crate::window_corners::WindowSquircleShader> = None;
     let mut shadow_pipeline: Option<crate::shadow::WindowShadowPipeline> = None;
+    let mut black_hole_pipeline: Option<crate::black_hole::BlackHolePipeline> = None;
+    let mut active_black_holes: Vec<crate::black_hole::ActiveBlackHoleClose> = Vec::new();
     let mut theme_transition_pipeline: Option<crate::theme_transition::ThemeTransitionPipeline> =
         None;
 
@@ -1450,6 +1452,20 @@ pub fn run_winit() -> Result<()> {
                                     1.0,
                                     Kind::Unspecified,
                                 );
+                            if !is_transitioning {
+                                let snap_root_id =
+                                    smithay::backend::renderer::element::Id::from_wayland_resource(
+                                        main_surface.as_ref(),
+                                    );
+                                crate::black_hole::update_cached_window_snapshot(
+                                    &mut state.cached_close_snapshots,
+                                    main_surface.as_ref(),
+                                    &win_surfaces,
+                                    &snap_root_id,
+                                    phys_loc,
+                                    1.0,
+                                );
+                            }
 
                             let mut popup_elems: Vec<(
                                 Vec<WaylandSurfaceRenderElement<GlesRenderer>>,
@@ -1588,12 +1604,40 @@ pub fn run_winit() -> Result<()> {
                 }
 
                 // Inicializar shader de recorte squircle para ventanas si aún no existe
+                if state.renderer_context_id.is_none() {
+                    state.renderer_context_id = Some(renderer.context_id());
+                }
                 if window_squircle_shader.is_none() {
                     window_squircle_shader =
                         crate::window_corners::WindowSquircleShader::new(renderer);
                 }
+                if black_hole_pipeline.is_none() {
+                    black_hole_pipeline = renderer
+                        .with_context(|gl| crate::black_hole::BlackHolePipeline::new(gl))
+                        .ok()
+                        .flatten();
+                }
 
                 let output_geo = state.space.output_geometry(&output).unwrap_or_default();
+                if !state.pending_black_holes.is_empty() {
+                    let out_name = output.name();
+                    for pending in &state.pending_black_holes {
+                        if let Some(active) = crate::black_hole::capture_closing_window_texture(
+                            renderer,
+                            &mut state.ssd,
+                            window_squircle_shader.as_ref(),
+                            pending,
+                            &out_name,
+                            output_geo,
+                            1.0,
+                            win_phys_r,
+                            is_dark_theme,
+                        ) {
+                            active_black_holes.push(active);
+                        }
+                    }
+                    state.pending_black_holes.clear();
+                }
                 let spotlight_frame = if state.spotlight.is_open() {
                     if let Some((spot_rect, mask_opt, mask_sz, spot_alpha)) =
                         state.spotlight.prepare_frame(output_geo, 1.0, is_dark_theme)
@@ -2556,6 +2600,18 @@ pub fn run_winit() -> Result<()> {
                         }
                     }
 
+                    // 🕳️ EFECTO AGUJERO NEGRO AL CERRAR VENTANAS
+                    if !active_black_holes.is_empty() {
+                        if let Some(ref bh_pipeline) = black_hole_pipeline {
+                            let bh_now = Instant::now();
+                            let _ = frame.with_context(|gl| {
+                                for bh in &active_black_holes {
+                                    bh_pipeline.render_effect(gl, &projection, bh, bh_now);
+                                }
+                            });
+                        }
+                    }
+
                     // 🖥 ESQUINAS SQUIRCLE SUPERELÍPTICAS (n=4.2) DEL ESCRITORIO
                     if let Some(r) = phys_r {
                         if let Some(textures) = squircle_corner_cache.get(&r) {
@@ -2640,6 +2696,7 @@ pub fn run_winit() -> Result<()> {
                     }
 
                     let mut finished = Vec::new();
+                    active_black_holes.retain(|bh| !bh.is_finished(now));
                     state.active_animations.retain(|anim| {
                         if anim.waiting_for_dock_slot {
                             return true;

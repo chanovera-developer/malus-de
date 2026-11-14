@@ -2419,6 +2419,8 @@ pub fn run_drm() -> Result<()> {
     let mut blur_pipeline: Option<std::sync::Arc<std::sync::Mutex<crate::blur::GaussianBlur>>> = None;
     let mut window_squircle_shader: Option<std::sync::Arc<crate::window_corners::WindowSquircleShader>> = None;
     let mut shadow_pipeline: Option<std::sync::Arc<crate::shadow::WindowShadowPipeline>> = None;
+    let mut black_hole_pipeline: Option<crate::black_hole::BlackHolePipeline> = None;
+    let mut active_black_holes: Vec<crate::black_hole::ActiveBlackHoleClose> = Vec::new();
     let mut theme_transition_pipeline: Option<crate::theme_transition::ThemeTransitionPipeline> =
         None;
 
@@ -2677,6 +2679,8 @@ pub fn run_drm() -> Result<()> {
         // Si algún monitor NO tiene un flip pendiente y ya acumula trabajo listo para pintar, se despacha sin espera.
         // En caso contrario, calloop duerme sin consumir CPU y despierta al instante cuando llega un VBlank, entrada o commit.
         let compositor_anim_active = !state.active_animations.is_empty()
+            || !state.pending_black_holes.is_empty()
+            || !active_black_holes.is_empty()
             || !state.snap_transitions.is_empty()
             || state.expose.is_animating()
             || state.theme_transition_started_at.is_some()
@@ -3059,6 +3063,20 @@ pub fn run_drm() -> Result<()> {
                                     1.0,
                                     Kind::Unspecified,
                                 );
+                            if !is_transitioning {
+                                let snap_root_id =
+                                    smithay::backend::renderer::element::Id::from_wayland_resource(
+                                        main_surface.as_ref(),
+                                    );
+                                crate::black_hole::update_cached_window_snapshot(
+                                    &mut state.cached_close_snapshots,
+                                    main_surface.as_ref(),
+                                    &win_surfaces,
+                                    &snap_root_id,
+                                    phys_loc,
+                                    scale,
+                                );
+                            }
 
                             let mut popup_elems: Vec<(
                                 Vec<WaylandSurfaceRenderElement<GlesRenderer>>,
@@ -3198,6 +3216,9 @@ pub fn run_drm() -> Result<()> {
                 }
 
                 // Inicializar shaders y pipelines declarativos de renderizado si aún no existen
+                if state.renderer_context_id.is_none() {
+                    state.renderer_context_id = Some(renderer.context_id());
+                }
                 if window_squircle_shader.is_none() {
                     window_squircle_shader =
                         crate::window_corners::WindowSquircleShader::new(&mut renderer)
@@ -3216,6 +3237,30 @@ pub fn run_drm() -> Result<()> {
                         .ok()
                         .flatten()
                         .map(|b| std::sync::Arc::new(std::sync::Mutex::new(b)));
+                }
+                if black_hole_pipeline.is_none() {
+                    black_hole_pipeline = renderer
+                        .with_context(|gl| crate::black_hole::BlackHolePipeline::new(gl))
+                        .ok()
+                        .flatten();
+                }
+                if !state.pending_black_holes.is_empty() {
+                    let out_name = out_surface.output.name();
+                    for pending in &state.pending_black_holes {
+                        if let Some(active) = crate::black_hole::capture_closing_window_texture(
+                            &mut renderer,
+                            &mut state.ssd,
+                            window_squircle_shader.as_deref(),
+                            pending,
+                            &out_name,
+                            output_geo,
+                            scale,
+                            win_phys_r,
+                            is_dark_theme,
+                        ) {
+                            active_black_holes.push(active);
+                        }
+                    }
                 }
 
                 let spotlight_frame = if state
@@ -3704,7 +3749,12 @@ pub fn run_drm() -> Result<()> {
                             .map_or(true, |name| name == out_surface.output.name())
                     });
 
+                let black_hole_active_on_output = active_black_holes
+                    .iter()
+                    .any(|bh| bh.output_name == out_surface.output.name());
+
                 let has_active_effects = !anim_data.is_empty()
+                    || black_hole_active_on_output
                     || !state.snap_transitions.is_empty()
                     || state.snap_preview.is_some()
                     || state.theme_transition_started_at.is_some()
@@ -5318,6 +5368,21 @@ pub fn run_drm() -> Result<()> {
                             }
                         }
 
+                        // 🕳️ EFECTO AGUJERO NEGRO AL CERRAR VENTANAS
+                        if black_hole_active_on_output {
+                            if let Some(ref bh_pipeline) = black_hole_pipeline {
+                                let out_name = out_surface.output.name();
+                                let bh_now = Instant::now();
+                                let _ = frame.with_context(|gl| {
+                                    for bh in &active_black_holes {
+                                        if bh.output_name == out_name {
+                                            bh_pipeline.render_effect(gl, &projection, bh, bh_now);
+                                        }
+                                    }
+                                });
+                            }
+                        }
+
                         // Dibujar el icono de Drag and Drop (dnd_icon) si hay una operación activa
                         if !dnd_elems.is_empty() {
                             let _ = draw_render_elements(&mut frame, scale, &dnd_elems, damage);
@@ -5653,9 +5718,11 @@ pub fn run_drm() -> Result<()> {
                 }
             }
         }
+        state.pending_black_holes.clear();
 
         // Completar animaciones Genie (minimizar / restaurar) tras renderizar el frame
         let now = Instant::now();
+        active_black_holes.retain(|bh| !bh.is_finished(now));
         let mut finished_anims = Vec::new();
         state.active_animations.retain(|anim| {
             if anim.waiting_for_dock_slot {
