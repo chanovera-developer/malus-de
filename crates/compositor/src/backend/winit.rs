@@ -1405,7 +1405,7 @@ pub fn run_winit() -> Result<()> {
 
                         let win_global_rect = Rectangle::new(effective_loc, effective_size);
                         if output_geo.overlaps(win_global_rect) {
-                            let (phys_loc, win_scale, content_offset, content_size, win_screen_rect) = if is_transitioning {
+                            let (phys_loc, transition_rescale, content_offset, content_size, win_screen_rect) = if is_transitioning {
                                 let sx = effective_size.w as f64 / geo.size.w.max(1) as f64;
                                 let sy = effective_size.h as f64 / geo.size.h.max(1) as f64;
                                 let surface_origin_x = effective_loc.x as f64 - geo.loc.x as f64 * sx;
@@ -1429,7 +1429,7 @@ pub fn run_winit() -> Result<()> {
                                     )),
                                     c_sz,
                                 );
-                                (pl, smithay::utils::Scale { x: sx, y: sy }, c_off, c_sz, w_rect)
+                                (pl, Some((pl, smithay::utils::Scale { x: sx, y: sy })), c_off, c_sz, w_rect)
                             } else {
                                 let pl = (loc - geo.loc - output_geo.loc).to_physical_precise_round(1.0);
                                 let c_off = geo.loc.to_physical_precise_round(1.0);
@@ -1438,7 +1438,7 @@ pub fn run_winit() -> Result<()> {
                                     (loc - output_geo.loc).to_physical_precise_round(1.0),
                                     geo.size.to_physical_precise_round(1.0),
                                 );
-                                (pl, smithay::utils::Scale::from(1.0), c_off, c_sz, w_rect)
+                                (pl, None, c_off, c_sz, w_rect)
                             };
 
                             let win_surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
@@ -1446,7 +1446,7 @@ pub fn run_winit() -> Result<()> {
                                     renderer,
                                     main_surface.as_ref(),
                                     phys_loc,
-                                    win_scale,
+                                    smithay::utils::Scale::from(1.0),
                                     1.0,
                                     Kind::Unspecified,
                                 );
@@ -1522,6 +1522,19 @@ pub fn run_winit() -> Result<()> {
                                 );
                             let should_round = win_phys_r.is_some() && !is_fullscreen;
 
+                            let win_screen_rect = if transition_rescale.is_none() && !uses_ssd {
+                                crate::window_corners::effective_shadow_rect_for_window(
+                                    &win_surfaces,
+                                    &root_id,
+                                    win_screen_rect,
+                                    1.0,
+                                    is_translucent,
+                                    uses_ssd,
+                                )
+                            } else {
+                                win_screen_rect
+                            };
+
                             let (win_screen_rect, ssd_elem) = if uses_ssd && !is_fullscreen {
                                 let tb_phys_h = crate::ssd::SSD_TITLEBAR_HEIGHT;
                                 let tb_loc = Point::from((
@@ -1565,7 +1578,7 @@ pub fn run_winit() -> Result<()> {
                                 is_firefox,
                                 is_translucent,
                                 is_system_monitor,
-                                is_transitioning,
+                                transition_rescale,
                                 ssd_elem,
                                 is_maximized,
                                 is_branches,
@@ -1645,7 +1658,7 @@ pub fn run_winit() -> Result<()> {
                         let should_round = win.4;
                         let is_translucent = win.10;
                         let is_system_monitor = win.11;
-                        let is_transitioning = win.12;
+                        let is_transitioning = win.12.is_some();
                         let is_maximized = win.14;
                         let is_branches = win.15;
                         let target_r = if should_round {
@@ -1749,12 +1762,12 @@ pub fn run_winit() -> Result<()> {
                             should_round,
                             is_active,
                             win_rect,
-                            content_offset,
-                            content_size,
+                            _content_offset,
+                            _content_size,
                             is_firefox,
                             is_translucent,
                             is_system_monitor,
-                            _is_transitioning,
+                            transition_rescale,
                             ssd_elem,
                             _is_maximized,
                             is_branches,
@@ -1883,120 +1896,20 @@ pub fn run_winit() -> Result<()> {
 
                         // 2.2. SUPERFICIES DE LA VENTANA (con recorte Squircle)
                         if !is_body_occluded {
-                            if *should_round {
-                                if *is_firefox || ssd_elem.is_some() {
-                                    // Para Firefox y ventanas con decoración SSD del servidor:
-                                    // se aplica el shader a todo el árbol de subsuperficies y barra SSD
-                                    // respecto al contenedor unificado `win_rect`.
-                                    if let (Some(r), Some(ref shader)) =
-                                        (win_phys_r, window_squircle_shader.as_ref())
-                                    {
-                                        for elem in win_elems.iter().rev() {
-                                            let elem_geo =
-                                                elem.geometry(smithay::utils::Scale::from(1.0));
-                                            let sub_offset = smithay::utils::Point::from((
-                                                win_rect.loc.x - elem_geo.loc.x,
-                                                win_rect.loc.y - elem_geo.loc.y,
-                                            ));
-                                            shader.apply_to_frame(
-                                                &mut frame,
-                                                elem_geo.size,
-                                                sub_offset,
-                                                win_rect.size,
-                                                r,
-                                            );
-
-                                            let _ = draw_render_elements(
-                                                &mut frame,
-                                                1.0,
-                                                std::slice::from_ref(elem),
-                                                &[damage],
-                                            );
-
-                                            frame.clear_tex_program_override();
-                                        }
-                                        if let Some(ref tb_elem) = ssd_elem {
-                                            let tb_geo =
-                                                tb_elem.geometry(smithay::utils::Scale::from(1.0));
-                                            let sub_offset = smithay::utils::Point::from((
-                                                win_rect.loc.x - tb_geo.loc.x,
-                                                win_rect.loc.y - tb_geo.loc.y,
-                                            ));
-                                            shader.apply_to_frame(
-                                                &mut frame,
-                                                tb_geo.size,
-                                                sub_offset,
-                                                win_rect.size,
-                                                r,
-                                            );
-                                            let _ = draw_render_elements(
-                                                &mut frame,
-                                                1.0,
-                                                std::slice::from_ref(tb_elem),
-                                                &[damage],
-                                            );
-                                            frame.clear_tex_program_override();
-                                        }
-                                    } else {
-                                        let _ = draw_render_elements(
-                                            &mut frame,
-                                            1.0,
-                                            win_elems,
-                                            &[damage],
-                                        );
-                                        if let Some(ref tb_elem) = ssd_elem {
-                                            let _ = draw_render_elements(
-                                                &mut frame,
-                                                1.0,
-                                                std::slice::from_ref(tb_elem),
-                                                &[damage],
-                                            );
-                                        }
-                                    }
-                                } else {
-                                    // Para las demás apps (GTK, Electron, etc.): comportamiento intacto original,
-                                    // SOLO se aplica el recorte a la superficie raíz para no distorsionar widgets GTK
-                                    for elem in win_elems.iter().rev() {
-                                        let is_root = elem.id() == root_id;
-                                        if is_root {
-                                            if let (Some(r), Some(ref shader)) =
-                                                (win_phys_r, window_squircle_shader.as_ref())
-                                            {
-                                                let elem_geo =
-                                                    elem.geometry(smithay::utils::Scale::from(1.0));
-                                                shader.apply_to_frame(
-                                                    &mut frame,
-                                                    elem_geo.size,
-                                                    *content_offset,
-                                                    *content_size,
-                                                    r,
-                                                );
-                                            }
-                                        }
-
-                                        let _ = draw_render_elements(
-                                            &mut frame,
-                                            1.0,
-                                            std::slice::from_ref(elem),
-                                            &[damage],
-                                        );
-
-                                        if is_root {
-                                            frame.clear_tex_program_override();
-                                        }
-                                    }
-                                }
-                            } else {
-                                let _ = draw_render_elements(&mut frame, 1.0, win_elems, &[damage]);
-                                if let Some(ref tb_elem) = ssd_elem {
-                                    let _ = draw_render_elements(
-                                        &mut frame,
-                                        1.0,
-                                        std::slice::from_ref(tb_elem),
-                                        &[damage],
-                                    );
-                                }
-                            }
+                            crate::window_corners::render_window_elements(
+                                &mut frame,
+                                1.0,
+                                &[damage],
+                                window_squircle_shader.as_ref(),
+                                root_id,
+                                win_elems,
+                                ssd_elem.as_ref(),
+                                *win_rect,
+                                win_phys_r,
+                                *should_round,
+                                *is_firefox,
+                                *transition_rescale,
+                            );
                         }
                     }
 

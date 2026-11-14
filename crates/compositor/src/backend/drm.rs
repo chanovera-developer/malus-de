@@ -3014,7 +3014,7 @@ pub fn run_drm() -> Result<()> {
                             Size::from((effective_size.w, effective_size.h + ssd_top)),
                         );
                         if output_geo.overlaps(win_global_rect) {
-                            let (phys_loc, win_scale, content_offset, content_size, win_screen_rect) = if is_transitioning {
+                            let (phys_loc, transition_rescale, content_offset, content_size, win_screen_rect) = if is_transitioning {
                                 let sx = effective_size.w as f64 / geo.size.w.max(1) as f64;
                                 let sy = effective_size.h as f64 / geo.size.h.max(1) as f64;
                                 let surface_origin_x = effective_loc.x as f64 - geo.loc.x as f64 * sx;
@@ -3038,7 +3038,7 @@ pub fn run_drm() -> Result<()> {
                                     )),
                                     c_sz,
                                 );
-                                (pl, smithay::utils::Scale { x: scale * sx, y: scale * sy }, c_off, c_sz, w_rect)
+                                (pl, Some((pl, smithay::utils::Scale { x: sx, y: sy })), c_off, c_sz, w_rect)
                             } else {
                                 let pl = (loc - geo.loc - output_geo.loc).to_physical_precise_round(scale);
                                 let c_off = geo.loc.to_physical_precise_round(scale);
@@ -3047,7 +3047,7 @@ pub fn run_drm() -> Result<()> {
                                     (loc - output_geo.loc).to_physical_precise_round(scale),
                                     geo.size.to_physical_precise_round(scale),
                                 );
-                                (pl, smithay::utils::Scale::from(scale), c_off, c_sz, w_rect)
+                                (pl, None, c_off, c_sz, w_rect)
                             };
 
                             let win_surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
@@ -3055,7 +3055,7 @@ pub fn run_drm() -> Result<()> {
                                     &mut renderer,
                                     main_surface.as_ref(),
                                     phys_loc,
-                                    win_scale,
+                                    smithay::utils::Scale::from(scale),
                                     1.0,
                                     Kind::Unspecified,
                                 );
@@ -3131,6 +3131,19 @@ pub fn run_drm() -> Result<()> {
 
                             let should_round = win_phys_r.is_some() && !is_fullscreen;
 
+                            let win_screen_rect = if transition_rescale.is_none() && !uses_ssd {
+                                crate::window_corners::effective_shadow_rect_for_window(
+                                    &win_surfaces,
+                                    &root_id,
+                                    win_screen_rect,
+                                    scale,
+                                    is_translucent,
+                                    uses_ssd,
+                                )
+                            } else {
+                                win_screen_rect
+                            };
+
                             let (win_screen_rect, ssd_elem) = if uses_ssd {
                                 let tb_phys_h =
                                     (crate::ssd::SSD_TITLEBAR_HEIGHT as f64 * scale).round() as i32;
@@ -3175,7 +3188,7 @@ pub fn run_drm() -> Result<()> {
                                 is_firefox,
                                 is_translucent,
                                 is_system_monitor,
-                                is_transitioning,
+                                transition_rescale,
                                 ssd_elem,
                                 is_maximized,
                                 is_branches,
@@ -3588,7 +3601,7 @@ pub fn run_drm() -> Result<()> {
                     let should_round = win.4;
                     let is_translucent = win.10;
                     let is_system_monitor = win.11;
-                    let is_transitioning = win.12;
+                    let is_transitioning = win.12.is_some();
                     let is_maximized = win.14;
                     let is_branches = win.15;
                     let target_r = if should_round {
@@ -3924,16 +3937,21 @@ pub fn run_drm() -> Result<()> {
                         let scaled_elems: Vec<_> = raw_elems
                             .into_iter()
                             .map(|elem| {
+                                let tex_params =
+                                    crate::window_corners::SurfaceTexParams::from_wayland_element(
+                                        &elem,
+                                    );
                                 let rescaled = smithay::backend::renderer::element::utils::RescaleRenderElement::from_element(
                                     elem,
                                     orig_phys_loc,
                                     smithay::utils::Scale::from(k),
                                 );
-                                smithay::backend::renderer::element::utils::RelocateRenderElement::from_element(
+                                let relocated = smithay::backend::renderer::element::utils::RelocateRenderElement::from_element(
                                     rescaled,
                                     card_phys_loc - orig_phys_loc,
                                     smithay::backend::renderer::element::utils::Relocate::Relative,
-                                )
+                                );
+                                (relocated, tex_params)
                             })
                             .collect();
 
@@ -4353,19 +4371,22 @@ pub fn run_drm() -> Result<()> {
                                         );
                                     }
                                     if let Some(ref shader) = window_squircle_shader.as_ref() {
-                                        for elem in scaled_elems.iter().rev() {
+                                        for (elem, tex_params) in scaled_elems.iter().rev() {
                                             let elem_geo = elem
                                                 .geometry(smithay::utils::Scale::from(scale));
                                             let sub_offset = Point::from((
                                                 card_phys.loc.x - elem_geo.loc.x,
                                                 card_phys.loc.y - elem_geo.loc.y,
                                             ));
-                                            shader.apply_to_frame(
+                                            shader.apply_surface_to_frame(
                                                 &mut frame,
+                                                *tex_params,
                                                 elem_geo.size,
                                                 sub_offset,
                                                 card_phys.size,
                                                 card_radius,
+                                                1.0,
+                                                false,
                                             );
                                             let _ = draw_render_elements(
                                                 &mut frame,
@@ -4376,12 +4397,14 @@ pub fn run_drm() -> Result<()> {
                                             frame.clear_tex_program_override();
                                         }
                                     } else {
-                                        let _ = draw_render_elements(
-                                            &mut frame,
-                                            scale,
-                                            scaled_elems,
-                                            damage,
-                                        );
+                                        for (elem, _) in scaled_elems.iter().rev() {
+                                            let _ = draw_render_elements(
+                                                &mut frame,
+                                                scale,
+                                                std::slice::from_ref(elem),
+                                                damage,
+                                            );
+                                        }
                                     }
                                     if let Some(ref lbl) = label_elem {
                                         let _ = draw_render_elements(
@@ -4413,12 +4436,12 @@ pub fn run_drm() -> Result<()> {
                                 should_round,
                                 is_active,
                                 win_rect,
-                                content_offset,
-                                content_size,
+                                _content_offset,
+                                _content_size,
                                 is_firefox,
                                 is_translucent,
                                 is_system_monitor,
-                                _is_transitioning,
+                                transition_rescale,
                                 ssd_elem,
                                 _is_maximized,
                                 is_branches,
@@ -4573,119 +4596,20 @@ pub fn run_drm() -> Result<()> {
 
                             // 2.2. SUPERFICIES DE LA VENTANA (con recorte Squircle)
                             if !is_body_occluded && win_is_damaged {
-                                if *should_round {
-                                    if *is_firefox || ssd_elem.is_some() {
-                                        // Para Firefox y ventanas con decoración SSD del servidor:
-                                        // aplicar recorte squircle unificado a todo su árbol de superficies
-                                        // (y a la barra de título SSD superior) respecto al contenedor completo `win_rect`.
-                                        if let (Some(r), Some(ref shader)) =
-                                            (win_phys_r, window_squircle_shader.as_ref())
-                                        {
-                                            // Orden de atrás hacia adelante (ver nota en la rama general).
-                                            for elem in win_elems.iter().rev() {
-                                                let elem_geo =
-                                                    elem.geometry(smithay::utils::Scale::from(scale));
-                                                let sub_offset = smithay::utils::Point::from((
-                                                    win_rect.loc.x - elem_geo.loc.x,
-                                                    win_rect.loc.y - elem_geo.loc.y,
-                                                ));
-                                                shader.apply_to_frame(
-                                                    &mut frame,
-                                                    elem_geo.size,
-                                                    sub_offset,
-                                                    win_rect.size,
-                                                    r,
-                                                );
-
-                                                let _ = draw_render_elements(
-                                                    &mut frame,
-                                                    scale,
-                                                    std::slice::from_ref(elem),
-                                                    damage,
-                                                );
-
-                                                frame.clear_tex_program_override();
-                                            }
-                                            if let Some(ref tb_elem) = ssd_elem {
-                                                let tb_geo =
-                                                    tb_elem.geometry(smithay::utils::Scale::from(1.0));
-                                                let sub_offset = smithay::utils::Point::from((
-                                                    win_rect.loc.x - tb_geo.loc.x,
-                                                    win_rect.loc.y - tb_geo.loc.y,
-                                                ));
-                                                shader.apply_to_frame(
-                                                    &mut frame,
-                                                    tb_geo.size,
-                                                    sub_offset,
-                                                    win_rect.size,
-                                                    r,
-                                                );
-                                                let _ = draw_render_elements(
-                                                    &mut frame,
-                                                    1.0,
-                                                    std::slice::from_ref(tb_elem),
-                                                    damage,
-                                                );
-                                                frame.clear_tex_program_override();
-                                            }
-                                        } else {
-                                            let _ = draw_render_elements(
-                                                &mut frame,
-                                                scale,
-                                                win_elems,
-                                                damage,
-                                            );
-                                            if let Some(ref tb_elem) = ssd_elem {
-                                                let _ = draw_render_elements(
-                                                    &mut frame,
-                                                    1.0,
-                                                    std::slice::from_ref(tb_elem),
-                                                    damage,
-                                                );
-                                            }
-                                        }
-                                    } else {
-                                        // Para el resto de ventanas (GTK, Electron, etc.): comportamiento intacto original.
-                                        // Solo se recorta la superficie raíz (is_root), sin alterar widgets ni subsuperficies GTK.
-                                        // `render_elements_from_surface_tree` devuelve los elementos de adelante hacia atrás
-                                        // (la subsuperficie superior primero, la raíz al final). Al dibujarlos uno a uno hay
-                                        // que recorrerlos al revés (painter's algorithm); de lo contrario la raíz se pinta
-                                        // encima de sus subsuperficies y oculta, p. ej., las burbujas de Chromium/Brave
-                                        // (descargas, permisos, extensiones), que son `wl_subsurface`.
-                                        for elem in win_elems.iter().rev() {
-                                            let is_root = elem.id() == root_id;
-                                            if is_root {
-                                                if let (Some(r), Some(ref shader)) =
-                                                    (win_phys_r, window_squircle_shader.as_ref())
-                                                {
-                                                    let elem_geo = elem
-                                                        .geometry(smithay::utils::Scale::from(scale));
-                                                    shader.apply_to_frame(
-                                                        &mut frame,
-                                                        elem_geo.size,
-                                                        *content_offset,
-                                                        *content_size,
-                                                        r,
-                                                    );
-                                                }
-                                            }
-
-                                            let _ = draw_render_elements(
-                                                &mut frame,
-                                                scale,
-                                                std::slice::from_ref(elem),
-                                                damage,
-                                            );
-
-                                            if is_root {
-                                                frame.clear_tex_program_override();
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    let _ =
-                                        draw_render_elements(&mut frame, scale, win_elems, damage);
-                                }
+                                crate::window_corners::render_window_elements(
+                                    &mut frame,
+                                    scale,
+                                    damage,
+                                    window_squircle_shader.as_deref(),
+                                    root_id,
+                                    win_elems,
+                                    ssd_elem.as_ref(),
+                                    *win_rect,
+                                    win_phys_r,
+                                    *should_round,
+                                    *is_firefox,
+                                    *transition_rescale,
+                                );
                             }
                         }
 
@@ -4999,12 +4923,15 @@ pub fn run_drm() -> Result<()> {
                                     let elem_geo =
                                         elem.geometry(smithay::utils::Scale::from(scale));
                                     if let Some(shader) = window_squircle_shader.as_ref() {
-                                        shader.apply_dock_clip_to_frame(
+                                        shader.apply_wayland_element_to_frame(
                                             &mut frame,
+                                            elem,
                                             elem_geo.size,
                                             rect.loc - elem_geo.loc,
                                             rect.size,
                                             (32.0 * scale).round() as i32,
+                                            0.0,
+                                            true,
                                         );
                                     }
                                 }
