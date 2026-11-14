@@ -234,6 +234,23 @@ pub fn active_card_indices(usable_width: i32) -> &'static [usize] {
     }
 }
 
+/// Resuelve el `SnapMode` de una sección dentro de la cuadrícula de tarjetas del menú.
+pub fn mode_for_zone(usable_width: i32, slot_idx: usize, zone_idx: usize) -> Option<SnapMode> {
+    let cards = active_card_indices(usable_width);
+    let &card_id = cards.get(slot_idx)?;
+    WINDOWS_LAYOUT_CARDS[card_id].zones.get(zone_idx).map(|z| z.mode)
+}
+
+/// Calcula el rectángulo de previsualización en escritorio para una sección del menú.
+pub fn preview_rect_for_zone(
+    usable_zone: Rectangle<i32, Logical>,
+    slot_idx: usize,
+    zone_idx: usize,
+) -> Option<Rectangle<i32, Logical>> {
+    let mode = mode_for_zone(usable_zone.size.w, slot_idx, zone_idx)?;
+    crate::grabs::preview_for_snap(mode, usable_zone)
+}
+
 #[derive(Debug, Clone)]
 pub struct MaximizeButtonTarget {
     pub window: Window,
@@ -335,6 +352,17 @@ impl SnapLayoutsState {
         self.active
             .as_ref()
             .is_some_and(|p| p.output_name == output_name)
+    }
+
+    /// Devuelve el rectángulo de previsualización (estilo Aero Snap) en coordenadas lógicas globales
+    /// para la sección actualmente bajo el cursor dentro del menú en este monitor.
+    pub fn hovered_preview_rect(&self, output_name: &str) -> Option<Rectangle<i32, Logical>> {
+        let active = self.active.as_ref()?;
+        if active.output_name != output_name {
+            return None;
+        }
+        let (slot_idx, zone_idx) = active.hovered_zone?;
+        preview_rect_for_zone(active.usable_zone, slot_idx, zone_idx)
     }
 
     /// Devuelve `true` si el punto está dentro de la tarjeta activa del menú flotante.
@@ -515,17 +543,13 @@ impl SnapLayoutsState {
         if let Some((slot_idx, zone_idx)) =
             hit_test_popup_zone(active.card_rect, active.usable_zone.size.w, point)
         {
-            let cards = active_card_indices(active.usable_zone.size.w);
-            if let Some(&card_id) = cards.get(slot_idx) {
-                if let Some(zone) = WINDOWS_LAYOUT_CARDS[card_id].zones.get(zone_idx) {
-                    let target_window = active.window.clone();
-                    let mode = zone.mode;
-                    self.close();
-                    return SnapLayoutClickResult::Snap {
-                        window: target_window,
-                        mode,
-                    };
-                }
+            if let Some(mode) = mode_for_zone(active.usable_zone.size.w, slot_idx, zone_idx) {
+                let target_window = active.window.clone();
+                self.close();
+                return SnapLayoutClickResult::Snap {
+                    window: target_window,
+                    mode,
+                };
             }
         }
 
@@ -1110,5 +1134,26 @@ mod tests {
 
         let local_card = localize_popup_rect(card_rect, output_geo);
         assert_eq!(local_card.loc.y, card_rect.loc.y - 420);
+    }
+
+    #[test]
+    fn preview_rect_for_zone_matches_manual_aero_snap_preview() {
+        let usable = Rectangle::new((0, 32).into(), (1920, 1000).into());
+
+        let left_half = preview_rect_for_zone(usable, 0, 0);
+        assert_eq!(left_half, crate::grabs::preview_for_snap(SnapMode::LeftHalf, usable));
+
+        let bottom_right = preview_rect_for_zone(usable, 4, 3);
+        assert_eq!(
+            bottom_right,
+            crate::grabs::preview_for_snap(SnapMode::BottomRightQuarter, usable)
+        );
+
+        let center_half = preview_rect_for_zone(usable, 5, 1);
+        assert_eq!(
+            center_half,
+            crate::grabs::preview_for_snap(SnapMode::CenterHalf, usable)
+        );
+        assert_eq!(preview_rect_for_zone(usable, 99, 0), None);
     }
 }

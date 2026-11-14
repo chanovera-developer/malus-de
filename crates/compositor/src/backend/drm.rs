@@ -2445,7 +2445,8 @@ pub fn run_drm() -> Result<()> {
         if state.snap_layouts.take_closed_dirty() {
             if let Ok(mut surfs) = shared_surfaces.lock() {
                 for s in surfs.iter_mut() {
-                    s.pending_damage_buffers = s.pending_damage_buffers.max(1);
+                    s.full_damage_pending = true;
+                    s.pending_damage_buffers = s.pending_damage_buffers.max(3);
                 }
             }
         }
@@ -3360,6 +3361,10 @@ pub fn run_drm() -> Result<()> {
                 } else {
                     None
                 };
+                let snap_layouts_preview = state
+                    .snap_layouts
+                    .hovered_preview_rect(&out_surface.output.name())
+                    .filter(|preview| output_geo.overlaps(*preview));
 
                 if let CursorImageStatus::Named(icon) = state.cursor_status {
                     if icon != smithay::input::pointer::CursorIcon::Default
@@ -4578,30 +4583,17 @@ pub fn run_drm() -> Result<()> {
                                 if is_target_window {
                                     if let Some(preview) = state.snap_preview {
                                         if output_geo.overlaps(preview) {
-                                            let local_preview =
-                                                Rectangle::new(preview.loc - output_geo.loc, preview.size);
-                                            let preview_phys =
-                                                local_preview.to_physical_precise_round(scale);
-                                            let target_r = win_phys_r.unwrap_or((22.0 * scale).round() as i32) as f32;
-
-                                            if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
-                                                let _ = frame.with_context(|gl| {
-                                                    blur.render_snap_preview(
-                                                        gl,
-                                                        &projection,
-                                                        out_surface.size,
-                                                        preview_phys,
-                                                        target_r,
-                                                        scale,
-                                                    );
-                                                });
-                                            } else {
-                                                let _ = frame.draw_solid(
-                                                    preview_phys,
-                                                    &[Rectangle::from_size(preview_phys.size)],
-                                                    Color32F::new(0.0, 0.48, 1.0, 0.14),
-                                                );
-                                            }
+                                            let mut blur_guard = blur_pipeline.as_ref().and_then(|b| b.lock().ok());
+                                            crate::blur::render_snap_preview_overlay(
+                                                &mut frame,
+                                                blur_guard.as_deref_mut(),
+                                                &projection,
+                                                out_surface.size,
+                                                preview,
+                                                output_geo.loc,
+                                                scale,
+                                                win_phys_r,
+                                            );
                                         }
                                     }
                                     snap_preview_drawn = true;
@@ -4730,30 +4722,17 @@ pub fn run_drm() -> Result<()> {
                         if !snap_preview_drawn && is_pointer_grabbed {
                             if let Some(preview) = state.snap_preview {
                                 if output_geo.overlaps(preview) {
-                                    let local_preview =
-                                        Rectangle::new(preview.loc - output_geo.loc, preview.size);
-                                    let preview_phys =
-                                        local_preview.to_physical_precise_round(scale);
-                                    let target_r = win_phys_r.unwrap_or((22.0 * scale).round() as i32) as f32;
-
-                                    if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
-                                        let _ = frame.with_context(|gl| {
-                                            blur.render_snap_preview(
-                                                gl,
-                                                &projection,
-                                                out_surface.size,
-                                                preview_phys,
-                                                target_r,
-                                                scale,
-                                            );
-                                        });
-                                    } else {
-                                        let _ = frame.draw_solid(
-                                            preview_phys,
-                                            &[Rectangle::from_size(preview_phys.size)],
-                                            Color32F::new(0.0, 0.48, 1.0, 0.14),
-                                        );
-                                    }
+                                    let mut blur_guard = blur_pipeline.as_ref().and_then(|b| b.lock().ok());
+                                    crate::blur::render_snap_preview_overlay(
+                                        &mut frame,
+                                        blur_guard.as_deref_mut(),
+                                        &projection,
+                                        out_surface.size,
+                                        preview,
+                                        output_geo.loc,
+                                        scale,
+                                        win_phys_r,
+                                    );
                                 }
                             }
                         }
@@ -5003,6 +4982,23 @@ pub fn run_drm() -> Result<()> {
                                 }
                             }
                         }
+                        }
+
+                        // Previsualización de destino al pasar el cursor por las plantillas de Snap Layouts
+                        if !is_pointer_grabbed {
+                            if let Some(preview) = snap_layouts_preview {
+                                let mut blur_guard = blur_pipeline.as_ref().and_then(|b| b.lock().ok());
+                                crate::blur::render_snap_preview_overlay(
+                                    &mut frame,
+                                    blur_guard.as_deref_mut(),
+                                    &projection,
+                                    out_surface.size,
+                                    preview,
+                                    output_geo.loc,
+                                    scale,
+                                    win_phys_r,
+                                );
+                            }
                         }
 
                         // 4. Renderizar capas superiores translúcidas (Dock, Top Bar, Popovers)

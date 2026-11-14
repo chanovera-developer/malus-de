@@ -10,8 +10,9 @@ use smithay::{
         element::{Element, Id, Kind, RenderElement},
         gles::{ffi, GlesError, GlesFrame, GlesRenderer},
         utils::{CommitCounter, DamageSet, OpaqueRegions},
+        Color32F,
     },
-    utils::{Buffer, Physical, Rectangle, Scale, Size},
+    utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size},
 };
 use tracing::{error, info};
 
@@ -1319,6 +1320,34 @@ impl GaussianBlur {
                 gl.Disable(ffi::BLEND);
             }
         }
+    }
+}
+
+/// Dibuja la previsualización lógica de ajuste de ventana (Snap Preview) en el monitor indicado.
+pub fn render_snap_preview_overlay(
+    frame: &mut GlesFrame<'_, '_>,
+    blur: Option<&mut GaussianBlur>,
+    projection: &[f32; 9],
+    screen_size: Size<i32, Physical>,
+    preview_logical: Rectangle<i32, Logical>,
+    output_origin: Point<i32, Logical>,
+    scale: f64,
+    win_phys_r: Option<i32>,
+) {
+    let local_preview = Rectangle::new(preview_logical.loc - output_origin, preview_logical.size);
+    let preview_phys = local_preview.to_physical_precise_round(scale);
+    let target_r = win_phys_r.unwrap_or((22.0 * scale).round() as i32) as f32;
+
+    if let Some(blur) = blur {
+        let _ = frame.with_context(|gl| {
+            blur.render_snap_preview(gl, projection, screen_size, preview_phys, target_r, scale);
+        });
+    } else {
+        let _ = frame.draw_solid(
+            preview_phys,
+            &[Rectangle::from_size(preview_phys.size)],
+            Color32F::new(0.0, 0.48, 1.0, 0.14),
+        );
     }
 }
 

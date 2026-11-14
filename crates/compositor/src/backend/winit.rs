@@ -1711,6 +1711,7 @@ pub fn run_winit() -> Result<()> {
                 } else {
                     None
                 };
+                let snap_layouts_preview = state.snap_layouts.hovered_preview_rect(&output.name());
 
                 let screenshot_request = state
                     .pending_screenshot_requests
@@ -1867,27 +1868,16 @@ pub fn run_winit() -> Result<()> {
                             );
                             if is_target_window {
                                 if let Some(preview) = state.snap_preview {
-                                    let preview_phys = preview.to_physical_precise_round(1.0);
-                                    let target_r = win_phys_r.unwrap_or(22) as f32;
-
-                                    if let Some(ref mut blur) = blur_pipeline {
-                                        let _ = frame.with_context(|gl| {
-                                            blur.render_snap_preview(
-                                                gl,
-                                                &projection,
-                                                size,
-                                                preview_phys,
-                                                target_r,
-                                                1.0,
-                                            );
-                                        });
-                                    } else {
-                                        let _ = frame.draw_solid(
-                                            preview_phys,
-                                            &[Rectangle::from_size(preview_phys.size)],
-                                            Color32F::new(0.0, 0.48, 1.0, 0.14),
-                                        );
-                                    }
+                                    crate::blur::render_snap_preview_overlay(
+                                        &mut frame,
+                                        blur_pipeline.as_mut(),
+                                        &projection,
+                                        size,
+                                        preview,
+                                        output_geo.loc,
+                                        1.0,
+                                        win_phys_r,
+                                    );
                                 }
                                 snap_preview_drawn = true;
                             }
@@ -1993,27 +1983,16 @@ pub fn run_winit() -> Result<()> {
                     // Si no se dibujó antes (por ejemplo, si no hay ventanas en este monitor), dibujarlo sobre el fondo
                     if !snap_preview_drawn && is_pointer_grabbed {
                         if let Some(preview) = state.snap_preview {
-                            let preview_phys = preview.to_physical_precise_round(1.0);
-                            let target_r = win_phys_r.unwrap_or(22) as f32;
-
-                            if let Some(ref mut blur) = blur_pipeline {
-                                let _ = frame.with_context(|gl| {
-                                    blur.render_snap_preview(
-                                        gl,
-                                        &projection,
-                                        size,
-                                        preview_phys,
-                                        target_r,
-                                        1.0,
-                                    );
-                                });
-                            } else {
-                                let _ = frame.draw_solid(
-                                    preview_phys,
-                                    &[Rectangle::from_size(preview_phys.size)],
-                                    Color32F::new(0.0, 0.48, 1.0, 0.14),
-                                );
-                            }
+                            crate::blur::render_snap_preview_overlay(
+                                &mut frame,
+                                blur_pipeline.as_mut(),
+                                &projection,
+                                size,
+                                preview,
+                                output_geo.loc,
+                                1.0,
+                                win_phys_r,
+                            );
                         }
                     }
 
@@ -2238,6 +2217,22 @@ pub fn run_winit() -> Result<()> {
                                     frame.clear_tex_program_override();
                                 }
                             }
+                        }
+                    }
+
+                    // Previsualización de destino al pasar el cursor por las plantillas de Snap Layouts
+                    if !is_pointer_grabbed {
+                        if let Some(preview) = snap_layouts_preview {
+                            crate::blur::render_snap_preview_overlay(
+                                &mut frame,
+                                blur_pipeline.as_mut(),
+                                &projection,
+                                size,
+                                preview,
+                                output_geo.loc,
+                                1.0,
+                                win_phys_r,
+                            );
                         }
                     }
 
