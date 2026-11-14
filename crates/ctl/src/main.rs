@@ -548,6 +548,7 @@ fn main() -> Result<()> {
         }
         Commands::Logout => {
             println!("👋 Cerrando sesión de Malus DE...");
+            malus_de_common::crash::mark_clean_session_exit();
             let _ = Command::new("pkill")
                 .args(["-TERM", "-x", "malus-de-compositor"])
                 .status();

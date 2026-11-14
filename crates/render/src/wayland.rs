@@ -675,10 +675,12 @@ impl WaylandTopBarApp {
             }
             6 => {
                 info!("⚡ Invocando reinicio del sistema...");
+                malus_de_common::crash::mark_clean_session_exit();
                 let _ = std::process::Command::new("systemctl").arg("reboot").spawn();
             }
             7 => {
                 info!("🛑 Invocando apagado del equipo...");
+                malus_de_common::crash::mark_clean_session_exit();
                 let _ = std::process::Command::new("systemctl").arg("poweroff").spawn();
             }
             10 => {

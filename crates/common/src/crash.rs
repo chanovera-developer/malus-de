@@ -42,6 +42,24 @@ pub fn session_log_path() -> PathBuf {
         .join("session.log")
 }
 
+/// Ruta al marcador de cierre de sesión intencional (`~/.local/share/malus-de/clean-exit`).
+pub fn clean_exit_marker_path() -> PathBuf {
+    crash_reports_dir()
+        .parent()
+        .unwrap_or_else(|| Path::new("/tmp"))
+        .join("clean-exit")
+}
+
+/// Marca que la sesión actual está finalizando intencionalmente (cerrar sesión, reiniciar o apagar)
+/// para que `malus-session` no genere un reporte de fallo al cerrarse el compositor.
+pub fn mark_clean_session_exit() {
+    let path = clean_exit_marker_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(&path, b"clean\n");
+}
+
 /// Instala el hook global de panics una sola vez para el binario indicado.
 pub fn install_panic_hook(component: &str) {
     if std::env::var_os("MALUS_DISABLE_CRASH_HOOK").is_some()

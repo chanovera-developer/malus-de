@@ -1412,14 +1412,17 @@ impl SpotlightState {
                 self.close();
             }
             ResultExecuteAction::SystemLogout => {
+                malus_de_common::crash::mark_clean_session_exit();
                 spawn_shell_command("malus-de-ctl logout");
                 self.close();
             }
             ResultExecuteAction::SystemReboot => {
+                malus_de_common::crash::mark_clean_session_exit();
                 spawn_shell_command("systemctl reboot");
                 self.close();
             }
             ResultExecuteAction::SystemPowerOff => {
+                malus_de_common::crash::mark_clean_session_exit();
                 spawn_shell_command("systemctl poweroff");
                 self.close();
             }

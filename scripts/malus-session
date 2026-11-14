@@ -19,6 +19,8 @@ done
 LOG_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/malus-de"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/session.log"
+CLEAN_EXIT_MARKER="$LOG_DIR/clean-exit"
+rm -f "$CLEAN_EXIT_MARKER"
 
 # Redirigir toda la salida al archivo de registro para diagnóstico
 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -592,10 +594,17 @@ trap on_signal INT TERM
 
 COMP_EXIT=0
 wait "$COMPOSITOR_PID" || COMP_EXIT=$?
-if [ "$COMP_EXIT" -ne 0 ] && [ "$SESSION_INTERRUPTED" -eq 0 ]; then
+
+IS_CLEAN_SIGNAL=0
+case "$COMP_EXIT" in
+    0|129|130|143) IS_CLEAN_SIGNAL=1 ;;
+esac
+
+if [ "$IS_CLEAN_SIGNAL" -eq 0 ] && [ "$SESSION_INTERRUPTED" -eq 0 ] && [ ! -f "$CLEAN_EXIT_MARKER" ]; then
     echo "💥 Compositor terminó con error ($COMP_EXIT); generando volcado de fallo..."
     write_native_crash_dump "$COMP_EXIT"
     if [ "$BACKEND_FLAG" = "--backend winit" ]; then
         launch_crash_reporter_pending
     fi
 fi
+rm -f "$CLEAN_EXIT_MARKER"

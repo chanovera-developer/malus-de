@@ -238,6 +238,7 @@ pub fn create_system_menu() -> MenuButton {
             parent.as_ref(),
             || {
                 info!("Reiniciando el sistema...");
+                malus_de_common::crash::mark_clean_session_exit();
                 let _ = std::process::Command::new("systemctl").arg("reboot").spawn();
             },
         );
@@ -266,6 +267,7 @@ pub fn create_system_menu() -> MenuButton {
             parent.as_ref(),
             || {
                 info!("Apagando el sistema...");
+                malus_de_common::crash::mark_clean_session_exit();
                 let _ = std::process::Command::new("systemctl").arg("poweroff").spawn();
             },
         );
@@ -317,6 +319,7 @@ pub fn create_system_menu() -> MenuButton {
             parent.as_ref(),
             || {
                 info!("Cerrando sesión de Malus DE...");
+                malus_de_common::crash::mark_clean_session_exit();
                 let _ = std::process::Command::new("pkill")
                     .args(["-TERM", "-x", "malus-de-compositor"])
                     .status();
