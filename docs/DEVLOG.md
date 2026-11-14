@@ -4,6 +4,38 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-14] — Snap Layouts Estilo Windows 11, Animación de Cierre "Agujero Negro", Refuerzo de Blur Acrílico, Sincronización Squircle y Manifiesto Arch
+
+### 1. Menú Flotante Snap Layouts Estilo Windows 11 (`crates/compositor/src/snap_layouts.rs`, `state.rs`, `shadow.rs`, `grabs.rs`, `ssd.rs`, `drm.rs`, `winit.rs`)
+* **Comportamiento y secciones:**
+  * Se mantiene intacto el ajuste por arrastre a bordes de pantalla y se añade un menú flotante *Liquid Glass* que aparece al mantener el cursor sobre el botón de maximizar (`HOVER_OPEN_DELAY = 240ms`, histéresis de `4px`, retardo de cierre `260ms` y corredor continuo entre botón y tarjeta).
+  * Incluye las 6 distribuciones estándar de Windows 11 (`50/50`, `67/33`, `33/33/33`, `50% + 2 cuartos`, `4 cuartos 2×2` y `25/50/25`, adaptándose a 4 tarjetas en pantallas `< 1024px` lógicos) y extiende `SnapMode` y `snap_target_geometry` en `state.rs` a todas las 16 zonas resultantes.
+* **Coordenadas multimonitor, detección CSD/SSD y sombra GPU difusa:**
+  * [`SnapLayoutsState::prepare_frame`](../crates/compositor/src/snap_layouts.rs) convierte `card_rect` a coordenadas locales del monitor mediante `localize_popup_rect(card_rect, output_geo)` para alinear exactamente el blur acrílico y el renderizado Cairo debajo del botón de maximizar en configuraciones multimonitor y con escalado fraccionario (`compute_popup_rect` centrado bajo el botón).
+  * [`detect_maximize_button_under`](../crates/compositor/src/snap_layouts.rs) cubre tanto barras SSD (`(60, 19)`) como controles CSD superiores (`!window_uses_ssd(window)` con `lx ∈ [53, 78]`, `ly ∈ [7, 34]`, incluyendo GTK4/libadwaita como Nautilus alrededor de `(+69, +22)`).
+  * Se sustituyó la sombra multicapa en Cairo por [`WindowShadowPipeline::render_menu_shadow_alpha`](../crates/compositor/src/shadow.rs), proyectando sombra SDF gaussiana difusa por GPU en `drm.rs` y `winit.rs`.
+
+### 2. Animación de Cierre de Ventanas "Agujero Negro" (`crates/compositor/src/black_hole.rs`, `state.rs`, `ssd.rs`, `drm.rs`, `winit.rs`)
+* **Pipeline GPU en 3 fases (`BLACK_HOLE_DURATION = 680ms`):**
+  * Nuevo módulo [`black_hole.rs`](../crates/compositor/src/black_hole.rs) con `BlackHolePipeline` (OpenGL ES 3.0): ignición en el centro exacto del botón de cierre con horizonte de sucesos del tamaño del botón y disco de acreción inclinado, deformación/succión gravitacional mediante malla teselada `36×36` (`7,776` vértices vía `gl_VertexID`) directamente hacia esa esquina sin efecto túnel, y colapso final con implosión.
+  * Captura *offscreen* de textura `GlesTexture` combinada con caché ligero de instantáneas por `CommitCounter` (`update_cached_window_snapshot`), permitiendo que aplicaciones que destruyen o desacoplan su superficie antes de `toplevel_destroyed` (como clientes GTK/ZapFast o cierres desde switcher/CSD superior) animen de forma consistente en ambos backends (`drm.rs` y `winit.rs`).
+
+### 3. Refuerzo del Desenfoque Acrílico en Fondos Semitransparentes (`crates/compositor/src/blur.rs`)
+* Se refactorizó la cadena de desenfoque en `run_blur_passes` incrementando la escala gaussiana en el shader (`BLUR_RADIUS_SCALE = 1.75`) y el soporte de múltiples pasadas separables a resolución reducida (`downsampled_size`), logrando un acabado esmerilado más intenso sin artefactos en bordes (`CAPTURE_PAD_PX`).
+
+### 4. Sincronización de Esquinas *Squircle*, Sombras en Resize y Corte del Dock (`crates/compositor/src/window_corners.rs`, `state.rs`, `drm.rs`, `winit.rs`)
+* En [`window_corners.rs`](../crates/compositor/src/window_corners.rs), `WindowSquircleShader` reemplaza `u_buf_size` por `u_inv_tex_matrix` para invertir la matriz de textura de Smithay (`wp_viewporter`, rotaciones y DMA-BUFs `y_inverted`) desde el fotograma 0.
+* Se ajustó `effective_shadow_rect_for_window` durante redimensionados y `SnapTransition` (`RescaleRenderElement`), además de corregir el clipping/límite que generaba una línea de corte en el Dock y sus iconos al hacer zoom (`802707e`).
+
+### 5. Documentación de Compilación para Arch Linux (`docs/PACKAGE_MANIFEST.md`)
+* Se añadió la subsección **Dependencias de Compilación (`pacman` para desarrolladores)** en la sección de Arch Linux de [`docs/PACKAGE_MANIFEST.md`](PACKAGE_MANIFEST.md) junto con la recomendación de compilar vía `cargo build --release --locked`.
+
+### 6. Validación
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-compositor`: **60 passed, 0 failed**.
+* `cargo check --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --workspace` y `cargo build --release --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-compositor`: compilación exitosa.
+
+---
+
 ## [2026-11-14] — Soporte `zwp_linux_dmabuf_v1` (Zero-Copy GPU), Sincronización DRM por Monitor y Reducción de Overdraw
 
 ### 1. Diagnóstico de Causa Raíz en Animaciones Web y Multimonitor
