@@ -106,9 +106,14 @@ void main() {
         float effective_r = min(u_corner_radius, min(half_size.x, half_size.y));
         float dist = squircle_sdf(p, half_size, effective_r, u_exponent);
 
-        // Suavizado subpixel analítico (anti-aliasing nítido y libre de artefactos a 1px físico)
+        // Suavizado subpixel analítico (anti-aliasing nítido y libre de artefactos a 1px físico).
+        // Cuando `u_preserve_outside > 0.5` (Dock con headroom), no atenuar el interior (`dist <= 0.0`):
+        // de lo contrario la transición en `dist in [-edge_aa, 0]` dibuja una línea invisible de 1 px
+        // justo en el borde superior donde los iconos con zoom cruzan hacia el headroom.
         float edge_aa = 1.0;
-        float mask = 1.0 - smoothstep(-edge_aa, 0.0, dist);
+        float mask = (u_preserve_outside > 0.5)
+            ? (1.0 - smoothstep(0.0, edge_aa, dist))
+            : (1.0 - smoothstep(-edge_aa, 0.0, dist));
 
         // Fino bisel reflectante continuo estilo macOS (1px en el contorno exterior)
         float border_mask = smoothstep(-1.2 - edge_aa, -1.2, dist);

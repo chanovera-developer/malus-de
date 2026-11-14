@@ -4013,7 +4013,7 @@ impl XdgShellHandler for MalusState {
                 tracing::warn!("⚠️ Error al registrar popup en PopupManager: {:?}", err);
             }
         }
-        if surface.parent().is_some() {
+        if surface.get_parent_surface().is_some() {
             if let Err(err) = surface.send_configure() {
                 tracing::warn!("⚠️ Error al enviar configure a popup: {:?}", err);
             }
