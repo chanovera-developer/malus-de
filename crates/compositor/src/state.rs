@@ -2487,8 +2487,11 @@ impl MalusState {
             if let Some(space_target) = self.expose.hit_test_space_bar(point) {
                 match space_target {
                     crate::expose::SpaceDropTarget::Workspace(idx) => {
-                        self.switch_workspace(idx);
-                        self.close_expose(None);
+                        if idx == self.workspaces.active_index {
+                            self.close_expose(None);
+                        } else {
+                            self.switch_workspace(idx);
+                        }
                     }
                     crate::expose::SpaceDropTarget::NewSpace => {
                         if let Some(new_idx) = self.workspaces.add_workspace() {
@@ -2555,23 +2558,19 @@ impl MalusState {
     }
 
     /// Solicita el cambio al espacio de trabajo indicado, capturando antes el cuadro saliente
-    /// para animar la transición horizontal salvo cuando Exposé está abierto.
+    /// para animar la transición horizontal (incluyendo cambios desde la barra de Exposé).
     pub fn switch_workspace(&mut self, target_index: usize) {
         if target_index >= self.workspaces.count() {
-            return;
-        }
-        if self.expose.active {
-            self.pending_workspace_switch = None;
-            self.workspace_transition = None;
-            self.apply_workspace_switch(target_index);
             return;
         }
         if target_index == self.workspaces.active_index {
             self.pending_workspace_switch = None;
             return;
         }
-        self.pending_workspace_switch =
-            Some(crate::workspace_transition::PendingWorkspaceSwitch { target_index });
+        self.pending_workspace_switch = Some(crate::workspace_transition::PendingWorkspaceSwitch {
+            target_index,
+            close_expose_immediately: self.expose.active,
+        });
     }
 
     /// Completa un cambio de espacio pendiente tras capturar el fotograma saliente e inicia
@@ -2590,13 +2589,14 @@ impl MalusState {
         } else {
             -1.0
         };
+        if pending.close_expose_immediately {
+            self.expose.close_immediately();
+        }
         self.apply_workspace_switch(pending.target_index);
         if captured_any_output {
-            self.workspace_transition =
-                Some(crate::workspace_transition::WorkspaceTransitionState {
-                    started_at: Instant::now(),
-                    direction,
-                });
+            self.workspace_transition = Some(
+                crate::workspace_transition::WorkspaceTransitionState::new(direction),
+            );
         }
         true
     }

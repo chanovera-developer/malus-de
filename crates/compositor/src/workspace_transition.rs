@@ -40,33 +40,55 @@ void main() {
     float out_u = v_tex_coords.x + shift;
     float in_u = v_tex_coords.x + shift - u_direction * (1.0 + u_gap);
 
-    float out_dim = mix(1.0, 0.88, u_progress);
-    float in_dim = mix(0.92, 1.0, u_progress);
+    float out_dim = mix(1.0, 0.80, u_progress);
+    float in_dim = mix(0.86, 1.0, u_progress);
 
-    vec3 color = vec3(0.025, 0.028, 0.035);
+    vec3 color = vec3(0.02, 0.022, 0.03);
     if (out_u >= 0.0 && out_u <= 1.0) {
-        color = texture(u_outgoing, vec2(out_u, v_tex_coords.y)).rgb * out_dim;
+        vec3 s = texture(u_outgoing, vec2(out_u, v_tex_coords.y)).rgb * out_dim;
+        float edge_dist = min(out_u, 1.0 - out_u);
+        float edge_shade = smoothstep(0.0, 0.008, edge_dist);
+        color = mix(vec3(0.015, 0.018, 0.024), s, 0.35 + 0.65 * edge_shade);
     } else if (in_u >= 0.0 && in_u <= 1.0) {
-        color = texture(u_incoming, vec2(in_u, v_tex_coords.y)).rgb * in_dim;
+        vec3 s = texture(u_incoming, vec2(in_u, v_tex_coords.y)).rgb * in_dim;
+        float edge_dist = min(in_u, 1.0 - in_u);
+        float edge_shade = smoothstep(0.0, 0.008, edge_dist);
+        color = mix(vec3(0.015, 0.018, 0.024), s, 0.35 + 0.65 * edge_shade);
     }
 
     frag_color = vec4(color, 1.0);
 }
 "#;
 
-pub const DURATION: Duration = Duration::from_millis(340);
-pub const DESKTOP_GAP_RATIO: f32 = 0.022;
+pub const DURATION: Duration = Duration::from_millis(460);
+pub const DESKTOP_GAP_RATIO: f32 = 0.028;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PendingWorkspaceSwitch {
     pub target_index: usize,
+    pub close_expose_immediately: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct WorkspaceTransitionState {
-    pub started_at: Instant,
+    /// Se fija en el primer fotograma realmente renderizado tras la captura del espacio saliente.
+    pub started_at: Option<Instant>,
     /// `+1.0` al avanzar hacia la derecha (el saliente sale a la izquierda), `-1.0` al retroceder.
     pub direction: f32,
+}
+
+impl WorkspaceTransitionState {
+    pub fn new(direction: f32) -> Self {
+        Self {
+            started_at: None,
+            direction,
+        }
+    }
+
+    pub fn is_finished(&self, now: Instant) -> bool {
+        self.started_at
+            .is_some_and(|start| now.saturating_duration_since(start) >= DURATION)
+    }
 }
 
 struct OutputSnapshots {
@@ -113,7 +135,7 @@ impl WorkspaceTransitionPipeline {
         gl: &ffi::Gles2,
         output_name: &str,
         size: Size<i32, Physical>,
-        is_drm: bool,
+        _is_drm: bool,
     ) -> bool {
         if size.w <= 0 || size.h <= 0 {
             return false;
@@ -123,6 +145,8 @@ impl WorkspaceTransitionPipeline {
             let mut previous_active_texture = 0;
             let mut previous_texture = 0;
             let mut previous_read_buffer = 0;
+            let mut current_fbo = 0;
+            gl.GetIntegerv(ffi::FRAMEBUFFER_BINDING, &mut current_fbo);
             gl.GetIntegerv(ffi::ACTIVE_TEXTURE, &mut previous_active_texture);
             gl.ActiveTexture(ffi::TEXTURE0);
             gl.GetIntegerv(ffi::TEXTURE_BINDING_2D, &mut previous_texture);
@@ -144,7 +168,7 @@ impl WorkspaceTransitionPipeline {
 
             ensure_snapshot_textures(gl, entry, size);
             gl.BindTexture(ffi::TEXTURE_2D, entry.outgoing_tex);
-            gl.ReadBuffer(if is_drm {
+            gl.ReadBuffer(if current_fbo != 0 {
                 ffi::COLOR_ATTACHMENT0
             } else {
                 ffi::BACK
@@ -166,20 +190,22 @@ impl WorkspaceTransitionPipeline {
         gl: &ffi::Gles2,
         output_name: &str,
         size: Size<i32, Physical>,
-        is_drm: bool,
-        transition: WorkspaceTransitionState,
+        _is_drm: bool,
+        transition: &mut WorkspaceTransitionState,
         now: Instant,
     ) -> bool {
         let Some(entry) = self.snapshots.get_mut(output_name) else {
             return false;
         };
-        let elapsed = now.saturating_duration_since(transition.started_at);
-        if elapsed >= DURATION
-            || !entry.has_outgoing
-            || size.w <= 0
-            || size.h <= 0
-            || entry.size != (size.w, size.h)
-        {
+        if !entry.has_outgoing || size.w <= 0 || size.h <= 0 || entry.size != (size.w, size.h) {
+            entry.has_outgoing = false;
+            return false;
+        }
+        let started_at = *transition
+            .started_at
+            .get_or_insert_with(|| now - Duration::from_millis(16));
+        let elapsed = now.saturating_duration_since(started_at);
+        if elapsed >= DURATION {
             entry.has_outgoing = false;
             return false;
         }
@@ -191,6 +217,8 @@ impl WorkspaceTransitionPipeline {
             let mut previous_viewport = [0; 4];
             let mut previous_active_texture = 0;
             let mut previous_read_buffer = 0;
+            let mut current_fbo = 0;
+            gl.GetIntegerv(ffi::FRAMEBUFFER_BINDING, &mut current_fbo);
             gl.GetIntegerv(ffi::CURRENT_PROGRAM, &mut previous_program);
             gl.GetIntegerv(ffi::VIEWPORT, previous_viewport.as_mut_ptr());
             gl.GetIntegerv(ffi::ACTIVE_TEXTURE, &mut previous_active_texture);
@@ -206,10 +234,11 @@ impl WorkspaceTransitionPipeline {
 
             let previous_blend = gl.IsEnabled(ffi::BLEND);
             let previous_scissor = gl.IsEnabled(ffi::SCISSOR_TEST);
+            let previous_cull = gl.IsEnabled(ffi::CULL_FACE);
 
             // Capturar el escritorio entrante recién renderizado en el framebuffer actual
             gl.BindTexture(ffi::TEXTURE_2D, entry.incoming_tex);
-            gl.ReadBuffer(if is_drm {
+            gl.ReadBuffer(if current_fbo != 0 {
                 ffi::COLOR_ATTACHMENT0
             } else {
                 ffi::BACK
@@ -218,8 +247,17 @@ impl WorkspaceTransitionPipeline {
 
             gl.Viewport(0, 0, size.w, size.h);
             gl.Disable(ffi::SCISSOR_TEST);
+            gl.Disable(ffi::CULL_FACE);
             gl.Disable(ffi::BLEND);
             gl.UseProgram(self.program);
+
+            if gl.VertexAttribDivisor.is_loaded() {
+                gl.VertexAttribDivisor(0, 0);
+                gl.VertexAttribDivisor(1, 0);
+            }
+            gl.DisableVertexAttribArray(0);
+            gl.DisableVertexAttribArray(1);
+            gl.BindBuffer(ffi::ARRAY_BUFFER, 0);
 
             gl.ActiveTexture(ffi::TEXTURE0);
             gl.BindTexture(ffi::TEXTURE_2D, entry.outgoing_tex);
@@ -247,6 +285,9 @@ impl WorkspaceTransitionPipeline {
                 previous_viewport[2],
                 previous_viewport[3],
             );
+            if previous_cull != ffi::FALSE {
+                gl.Enable(ffi::CULL_FACE);
+            }
             if previous_blend != ffi::FALSE {
                 gl.Enable(ffi::BLEND);
             }
@@ -288,10 +329,12 @@ unsafe fn ensure_snapshot_textures(
     entry.size = (size.w, size.h);
 }
 
-/// Curva `ease-out` cuártica para arranque instantáneo y frenado suave al cambiar de espacio.
+/// Curva suave combinada (`smoothstep` + `ease-out` cúbica) para arranque nítido y recorrido claramente visible.
 pub fn eased_progress(elapsed: Duration) -> f32 {
     let t = (elapsed.as_secs_f32() / DURATION.as_secs_f32()).clamp(0.0, 1.0);
-    1.0 - (1.0 - t).powi(4)
+    let smoothstep = t * t * (3.0 - 2.0 * t);
+    let ease_out = 1.0 - (1.0 - t).powi(3);
+    0.35 * smoothstep + 0.65 * ease_out
 }
 
 #[cfg(test)]

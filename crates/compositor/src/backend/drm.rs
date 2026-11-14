@@ -2764,6 +2764,8 @@ pub fn run_drm() -> Result<()> {
             let workspace_switch_pending = state.pending_workspace_switch.is_some();
             let mut ws_capture_outputs = 0usize;
             let mut ws_transition_finished = false;
+            let mut ws_transition_attempted = false;
+            let mut ws_transition_drawn = false;
             for out_surface in surfs.iter_mut() {
                 let scale = out_surface.output.current_scale().fractional_scale();
                 let output_geo = state
@@ -5680,20 +5682,21 @@ pub fn run_drm() -> Result<()> {
                         if let Some(ws_pipeline) = workspace_transition_pipeline.as_mut() {
                             let output_name = out_surface.output.name();
                             let ws_result = frame.with_context(|gl| {
-                                if let Some(ws_transition) = state.workspace_transition {
+                                if let Some(mut ws_transition) = state.workspace_transition {
+                                    ws_transition_attempted = true;
                                     let now = Instant::now();
                                     let drawn = ws_pipeline.draw(
                                         gl,
                                         &output_name,
                                         out_surface.size,
                                         true,
-                                        ws_transition,
+                                        &mut ws_transition,
                                         now,
                                     );
-                                    if !drawn
-                                        && now.duration_since(ws_transition.started_at)
-                                            >= crate::workspace_transition::DURATION
-                                    {
+                                    if drawn {
+                                        ws_transition_drawn = true;
+                                        state.workspace_transition = Some(ws_transition);
+                                    } else if ws_transition.is_finished(now) {
                                         ws_transition_finished = true;
                                     }
                                 }
@@ -5865,7 +5868,7 @@ pub fn run_drm() -> Result<()> {
                     warn!("No se guardaron todos los fotogramas DRM para la transición de tema");
                 }
             }
-            if ws_transition_finished {
+            if ws_transition_finished || (ws_transition_attempted && !ws_transition_drawn) {
                 state.workspace_transition = None;
                 for s in surfs.iter_mut() {
                     s.full_damage_pending = true;

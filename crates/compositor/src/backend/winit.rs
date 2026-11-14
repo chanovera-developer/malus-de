@@ -2769,10 +2769,18 @@ pub fn run_winit() -> Result<()> {
                     if let Some(ws_pipeline) = workspace_transition_pipeline.as_mut() {
                         let output_name = output.name();
                         let ws_result = frame.with_context(|gl| {
-                            if let Some(ws_transition) = state.workspace_transition {
+                            if let Some(mut ws_transition) = state.workspace_transition {
                                 let now = Instant::now();
-                                if !ws_pipeline.draw(gl, &output_name, size, false, ws_transition, now)
-                                {
+                                if ws_pipeline.draw(
+                                    gl,
+                                    &output_name,
+                                    size,
+                                    false,
+                                    &mut ws_transition,
+                                    now,
+                                ) {
+                                    state.workspace_transition = Some(ws_transition);
+                                } else {
                                     state.workspace_transition = None;
                                 }
                             }

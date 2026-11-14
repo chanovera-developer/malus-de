@@ -277,6 +277,12 @@ impl ExposeState {
         true
     }
 
+    /// Cierra Exposé al instante sin animación zoom-out (usado al deslizar hacia otro escritorio).
+    pub fn close_immediately(&mut self) {
+        self.anim_started_at = None;
+        self.reset_closed();
+    }
+
     fn reset_closed(&mut self) {
         self.active = false;
         self.target_open = false;
