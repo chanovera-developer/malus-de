@@ -345,6 +345,30 @@ pub fn run_winit() -> Result<()> {
                                     return FilterResult::Intercept(());
                                 }
 
+                                let is_up = sym == keysyms::KEY_Up.into();
+                                let is_down = sym == keysyms::KEY_Down.into();
+                                if has_ctrl && !has_super && !has_alt && is_up {
+                                    state.toggle_expose(crate::expose::ExposeMode::Global);
+                                    return FilterResult::Intercept(());
+                                }
+                                if has_ctrl && !has_super && !has_alt && is_down {
+                                    state.toggle_app_expose();
+                                    return FilterResult::Intercept(());
+                                }
+
+                                if state.handle_expose_key(sym, *modifiers) {
+                                    return FilterResult::Intercept(());
+                                }
+
+                                if has_ctrl && !has_super && !has_alt && is_left {
+                                    state.switch_workspace_delta(-1);
+                                    return FilterResult::Intercept(());
+                                }
+                                if has_ctrl && !has_super && !has_alt && is_right {
+                                    state.switch_workspace_delta(1);
+                                    return FilterResult::Intercept(());
+                                }
+
                                 // 2. Navegación en el App Switcher (Selector Visual ⌘Tab) mientras está activo
                                 if state.app_switcher.is_active {
                                     if is_return {
@@ -556,6 +580,21 @@ pub fn run_winit() -> Result<()> {
                     }
                     state.update_spotlight_drag_dock_hover(point);
 
+                    if state.handle_expose_pointer_motion(point) {
+                        let serial = SERIAL_COUNTER.next_serial();
+                        pointer.motion(
+                            &mut state,
+                            None,
+                            &MotionEvent {
+                                location: point,
+                                serial,
+                                time: event.time_msec(),
+                            },
+                        );
+                        pointer.frame(&mut state);
+                        return;
+                    }
+
                     let has_fullscreen = state.has_fullscreen_window_on_output(&output);
                     let layer_target = {
                         let layer_map = smithay::desktop::layer_map_for_output(&output);
@@ -634,6 +673,9 @@ pub fn run_winit() -> Result<()> {
                 InputEvent::PointerButton { event } => {
                     let is_pressed = event.state() == ButtonState::Pressed;
                     let point = pointer.current_location();
+                    if state.handle_expose_pointer_button(point, event.button_code(), is_pressed) {
+                        return;
+                    }
 
                     let has_fullscreen = state.has_fullscreen_window_on_output(&output);
                     let layer_target = {
@@ -1017,6 +1059,21 @@ pub fn run_winit() -> Result<()> {
                                 )
                             {
                                 state.update_spotlight_drag_dock_hover(point);
+
+                    if state.handle_expose_pointer_motion(point) {
+                        let serial = SERIAL_COUNTER.next_serial();
+                        pointer.motion(
+                            &mut state,
+                            None,
+                            &MotionEvent {
+                                location: point,
+                                serial,
+                                time: event.time_msec(),
+                            },
+                        );
+                        pointer.frame(&mut state);
+                        return;
+                    }
                     state.update_ssd_hover(point);
                                 if let crate::spotlight_visual::SpotlightPointerReleaseOutcome::PinToDock {
                                     app,

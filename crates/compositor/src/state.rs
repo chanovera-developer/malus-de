@@ -148,6 +148,27 @@ pub struct ThemeTransitionCapture {
     pub origin: Point<f64, Logical>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SwipeGestureKind {
+    #[default]
+    Undecided,
+    ExposeVertical,
+    WorkspaceHorizontal,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SwipeGestureState {
+    pub active: bool,
+    pub fingers: u32,
+    pub accum_x: f64,
+    pub accum_y: f64,
+    pub last_dx: f64,
+    pub last_dy: f64,
+    pub kind: SwipeGestureKind,
+    pub was_open_at_start: bool,
+    pub app_expose_gesture: bool,
+}
+
 pub struct MalusState {
     pub display_handle: DisplayHandle,
     pub compositor_state: CompositorState,
@@ -202,6 +223,10 @@ pub struct MalusState {
     pub active_screen_recording: Option<crate::recording::ScreenRecordingSession>,
     pub screenshot_ui: crate::screenshot_ui::ScreenshotUiState,
     pub ssd: crate::ssd::SsdManager,
+    pub expose: crate::expose::ExposeState,
+    pub workspaces: crate::workspaces::WorkspaceManager,
+    pub workspace_revision: u64,
+    pub swipe_gesture: SwipeGestureState,
     pub surface_commit_counter: usize,
     pub background_commit_counter: usize,
 }
@@ -884,6 +909,10 @@ impl MalusState {
             active_screen_recording: None,
             screenshot_ui: crate::screenshot_ui::ScreenshotUiState::new(),
             ssd: crate::ssd::SsdManager::new(),
+            expose: crate::expose::ExposeState::default(),
+            workspaces: crate::workspaces::WorkspaceManager::default(),
+            workspace_revision: 0,
+            swipe_gesture: SwipeGestureState::default(),
             surface_commit_counter: 0,
             background_commit_counter: 0,
         }
@@ -1073,6 +1102,7 @@ impl MalusState {
                     .find(|(win, _)| win.wl_surface().as_deref() == Some(surface))
                     .map(|(win, _)| win.clone())
             })
+            .or_else(|| self.workspaces.window_for_surface(surface))
     }
 
     pub fn dock_surface_geometry(&self) -> Option<(Rectangle<i32, Logical>, Output)> {
@@ -1423,6 +1453,19 @@ impl MalusState {
                 IpcMessage::ToggleSpotlight => {
                     tracing::info!("📥 IPC ToggleSpotlight recibido");
                     self.toggle_spotlight();
+                }
+                IpcMessage::SwitchWorkspace { index } => {
+                    tracing::info!("📥 IPC SwitchWorkspace recibido: {}", index);
+                    self.switch_workspace(index);
+                }
+                IpcMessage::ToggleMissionControl => {
+                    tracing::info!("📥 IPC ToggleMissionControl recibido");
+                    self.toggle_expose(crate::expose::ExposeMode::Global);
+                }
+                IpcMessage::MissionControlFilter { query } => {
+                    if self.expose.active {
+                        self.expose.apply_filter(query);
+                    }
                 }
                 IpcMessage::HideSpotlight => {
                     self.spotlight.close();
@@ -1877,6 +1920,670 @@ impl MalusState {
                 self.notify_active_app(Some(&surf));
             }
         }
+    }
+
+    /// Alterna App Exposé filtrando por la aplicación actualmente enfocada (o Global si no hay app).
+    pub fn toggle_app_expose(&mut self) {
+        let app_id = self
+            .get_active_window()
+            .and_then(|w| w.wl_surface().and_then(|s| toplevel_info(&s).0))
+            .unwrap_or_default();
+        let mode = if app_id.is_empty() {
+            crate::expose::ExposeMode::Global
+        } else {
+            crate::expose::ExposeMode::AppOnly { app_id }
+        };
+        self.toggle_expose(mode);
+    }
+
+    /// Alterna el modo Exposé / Mission Control (Global o filtrado por aplicación).
+    pub fn toggle_expose(&mut self, mode: crate::expose::ExposeMode) {
+        if self.expose.active && self.expose.target_open {
+            if self.expose.mode == mode {
+                self.close_expose(None);
+                return;
+            }
+        }
+        self.open_expose(mode);
+    }
+
+    /// Calcula slots de Exposé y hitboxes de la Barra de Espacios para todos los monitores.
+    fn compute_expose_slots_and_hitboxes(
+        &self,
+        mode: &crate::expose::ExposeMode,
+    ) -> (Vec<crate::expose::ExposeSlot>, Vec<crate::expose::SpaceBarHitbox>) {
+        let outputs: Vec<Output> = self.space.outputs().cloned().collect();
+        let elements: Vec<smithay::desktop::Window> = self.space.elements().cloned().collect();
+        let mut slots = Vec::new();
+        let mut hitboxes = Vec::new();
+        let space_count = self.workspaces.count();
+        let can_add = space_count < crate::workspaces::MAX_WORKSPACES;
+
+        for output in &outputs {
+            let Some(out_geo) = self.space.output_geometry(output) else {
+                continue;
+            };
+            let usable_raw = self.usable_zone_for_output(output);
+            hitboxes.extend(crate::expose::compute_spaces_bar_hitboxes(
+                &output.name(),
+                usable_raw,
+                space_count,
+                can_add,
+            ));
+            let usable = crate::expose::expose_usable_zone_with_spaces_bar(usable_raw);
+            let mut per_output: Vec<(usize, smithay::desktop::Window, u64, String, String, Rectangle<i32, Logical>)> = Vec::new();
+
+            for (idx, win) in elements.iter().enumerate() {
+                let Some(loc) = self.space.element_location(win) else {
+                    continue;
+                };
+                let geo = win.geometry();
+                let center = Point::<i32, Logical>::from((
+                    loc.x + geo.size.w.max(1) / 2,
+                    loc.y + geo.size.h.max(1) / 2,
+                ));
+                let belongs = out_geo.contains(center)
+                    || (outputs.len() == 1)
+                    || (!outputs.iter().any(|o| {
+                        self.space
+                            .output_geometry(o)
+                            .is_some_and(|g| g.contains(center))
+                    }) && outputs.first() == Some(output));
+                if !belongs {
+                    continue;
+                }
+
+                let (raw_app, raw_title) = win
+                    .wl_surface()
+                    .map(|s| toplevel_info(&s))
+                    .unwrap_or((None, None));
+                let app_id = raw_app.unwrap_or_default();
+                let norm_app = normalize_app_id(&app_id);
+
+                if let crate::expose::ExposeMode::AppOnly { app_id: ref target_app } = mode {
+                    if norm_app != normalize_app_id(target_app) {
+                        continue;
+                    }
+                }
+
+                let title = raw_title
+                    .filter(|t| !t.trim().is_empty())
+                    .unwrap_or_else(|| {
+                        if !app_id.is_empty() {
+                            app_id.clone()
+                        } else {
+                            "Ventana".to_string()
+                        }
+                    });
+                let window_id = win
+                    .wl_surface()
+                    .as_ref()
+                    .and_then(|s| self.window_ids.get(s.as_ref()).copied())
+                    .unwrap_or(0);
+                let orig_rect = Rectangle::new(loc, geo.size);
+                per_output.push((idx, win.clone(), window_id, app_id, title, orig_rect));
+            }
+
+            let layout_input: Vec<(usize, Rectangle<i32, Logical>)> = per_output
+                .iter()
+                .enumerate()
+                .map(|(local_i, (_, _, _, _, _, r))| (local_i, *r))
+                .collect();
+            let laid_out = crate::expose::compute_expose_layout(usable, &layout_input);
+
+            for (local_i, target_rect) in laid_out {
+                let (_, win, window_id, app_id, title, original_rect) = &per_output[local_i];
+                slots.push(crate::expose::ExposeSlot {
+                    window: win.clone(),
+                    window_id: *window_id,
+                    output_name: output.name(),
+                    app_id: app_id.clone(),
+                    title: title.clone(),
+                    original_rect: *original_rect,
+                    target_rect,
+                    matches_filter: true,
+                });
+            }
+        }
+
+        (slots, hitboxes)
+    }
+
+    fn refresh_expose_layout(&mut self) {
+        if !self.expose.active {
+            return;
+        }
+        let mode = self.expose.mode.clone();
+        let (slots, hitboxes) = self.compute_expose_slots_and_hitboxes(&mode);
+        self.expose.slots = slots;
+        self.expose.spaces_bar_hitboxes = hitboxes;
+        if let Some(sel) = self.expose.selected_index {
+            if sel >= self.expose.slots.len() {
+                self.expose.selected_index = (!self.expose.slots.is_empty()).then_some(0);
+            }
+        } else {
+            self.expose.selected_index = (!self.expose.slots.is_empty()).then_some(0);
+        }
+        self.expose.hovered_index = None;
+        self.expose.quick_look_index = None;
+        if !self.expose.filter_query.is_empty() {
+            let q = self.expose.filter_query.clone();
+            self.expose.apply_filter(q);
+        }
+        self.workspace_revision = self.workspace_revision.wrapping_add(1);
+        self.expose.bump_revision();
+    }
+
+    /// Abre Exposé calculando el mosaico de ventanas por monitor.
+    pub fn open_expose(&mut self, mode: crate::expose::ExposeMode) {
+        if self.spotlight.is_open() {
+            self.spotlight.close();
+            self.ipc_broadcaster.broadcast(&IpcMessage::HideSpotlight);
+        }
+        if self.app_switcher.is_active {
+            self.app_switcher.is_active = false;
+            self.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
+        }
+
+        let previous_focus = self.get_active_window();
+        let (slots, hitboxes) = self.compute_expose_slots_and_hitboxes(&mode);
+
+        if slots.is_empty() && matches!(mode, crate::expose::ExposeMode::AppOnly { .. }) {
+            if self.expose.active {
+                self.close_expose(None);
+            }
+            return;
+        }
+
+        tracing::info!("🪟 Exposé abierto ({:?}) con {} ventanas", mode, slots.len());
+        self.expose.open(mode, slots, previous_focus);
+        self.expose.spaces_bar_hitboxes = hitboxes;
+    }
+
+    /// Cierra Exposé; si `activate_index` es `Some`, eleva y enfoca esa ventana.
+    pub fn close_expose(&mut self, activate_index: Option<usize>) {
+        if !self.expose.active {
+            return;
+        }
+        let chosen_win = activate_index
+            .and_then(|idx| self.expose.slots.get(idx))
+            .map(|s| s.window.clone())
+            .or_else(|| {
+                self.expose
+                    .previous_focus
+                    .as_ref()
+                    .filter(|w| self.space.elements().any(|e| e == *w))
+                    .cloned()
+            });
+
+        self.expose.start_close();
+
+        if let Some(win) = chosen_win {
+            self.space.raise_element(&win, true);
+            if let Some(surf) = win.wl_surface() {
+                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                self.set_keyboard_focus_with_sync(Some(surf.clone().into_owned()), serial);
+            }
+        }
+    }
+
+    /// Procesa eventos de teclado mientras Exposé está activo.
+    pub fn handle_expose_key(
+        &mut self,
+        sym: smithay::input::keyboard::Keysym,
+        modifiers: smithay::input::keyboard::ModifiersState,
+    ) -> bool {
+        if !self.expose.active || !self.expose.target_open {
+            return false;
+        }
+        use smithay::input::keyboard::keysyms;
+
+        if sym == keysyms::KEY_Escape.into() {
+            if !self.expose.filter_query.is_empty() {
+                self.expose.apply_filter(String::new());
+            } else {
+                self.close_expose(None);
+            }
+            return true;
+        }
+
+        if sym == keysyms::KEY_Return.into() || sym == keysyms::KEY_KP_Enter.into() {
+            let target = self
+                .expose
+                .selected_index
+                .or(self.expose.hovered_index)
+                .filter(|&idx| self.expose.slots.get(idx).is_some_and(|s| s.matches_filter))
+                .or_else(|| self.expose.slots.iter().position(|s| s.matches_filter));
+            self.close_expose(target);
+            return true;
+        }
+
+        if sym == keysyms::KEY_Left.into() || sym == keysyms::KEY_Up.into() || sym == keysyms::KEY_ISO_Left_Tab.into() {
+            self.expose.move_selection(-1);
+            return true;
+        }
+        if sym == keysyms::KEY_Right.into() || sym == keysyms::KEY_Down.into() || sym == keysyms::KEY_Tab.into() {
+            self.expose.move_selection(1);
+            return true;
+        }
+
+        if sym == keysyms::KEY_space.into() && self.expose.filter_query.is_empty() {
+            let target = self.expose.selected_index.or(self.expose.hovered_index);
+            if self.expose.quick_look_index == target {
+                self.expose.quick_look_index = None;
+            } else {
+                self.expose.quick_look_index = target;
+            }
+            self.expose.bump_revision();
+            return true;
+        }
+
+        if sym == keysyms::KEY_BackSpace.into() {
+            let mut q = self.expose.filter_query.clone();
+            q.pop();
+            self.expose.apply_filter(q);
+            return true;
+        }
+
+        if !modifiers.ctrl && !modifiers.alt && !modifiers.logo {
+            if let Some(ch) = sym.key_char() {
+                if !ch.is_control() {
+                    let mut q = self.expose.filter_query.clone();
+                    q.push(ch);
+                    self.expose.apply_filter(q);
+                    return true;
+                }
+            }
+        }
+
+        true
+    }
+
+    /// Actualiza la tarjeta resaltada o el arrastre en curso mientras Exposé está activo.
+    pub fn handle_expose_pointer_motion(&mut self, point: Point<f64, Logical>) -> bool {
+        if !self.expose.active || !self.expose.target_open {
+            return false;
+        }
+        let space_hit = self.expose.hit_test_space_bar(point);
+        if let Some(ref mut drag) = self.expose.dragging {
+            drag.current_pointer = point;
+            let dx = point.x - drag.start_pointer.x;
+            let dy = point.y - drag.start_pointer.y;
+            if (dx * dx + dy * dy).sqrt() >= 8.0 {
+                drag.has_moved = true;
+            }
+            drag.hovered_target = space_hit.clone();
+            self.expose.hovered_space_target = space_hit;
+            self.expose.bump_revision();
+            return true;
+        }
+
+        let hit = if space_hit.is_some() {
+            None
+        } else {
+            self.expose.hit_test(point)
+        };
+        let prev_hover = self.expose.hovered_index;
+        let prev_sel = self.expose.selected_index;
+        let prev_space_hover = self.expose.hovered_space_target.clone();
+        self.expose.hovered_index = hit;
+        self.expose.hovered_space_target = space_hit;
+        if hit.is_some() {
+            self.expose.selected_index = hit;
+        }
+        if self.expose.hovered_index != prev_hover
+            || self.expose.selected_index != prev_sel
+            || self.expose.hovered_space_target != prev_space_hover
+        {
+            self.expose.bump_revision();
+        }
+        true
+    }
+
+    /// Procesa clics y Drag & Drop en Exposé y su Barra de Espacios superior.
+    pub fn handle_expose_pointer_button(
+        &mut self,
+        point: Point<f64, Logical>,
+        button_code: u32,
+        is_pressed: bool,
+    ) -> bool {
+        if !self.expose.active || !self.expose.target_open {
+            return false;
+        }
+        if button_code != 0x110 {
+            return true;
+        }
+
+        if is_pressed {
+            if let Some(space_target) = self.expose.hit_test_space_bar(point) {
+                match space_target {
+                    crate::expose::SpaceDropTarget::Workspace(idx) => {
+                        self.switch_workspace(idx);
+                        self.close_expose(None);
+                    }
+                    crate::expose::SpaceDropTarget::NewSpace => {
+                        if let Some(new_idx) = self.workspaces.add_workspace() {
+                            tracing::info!("🖥️ Nuevo espacio de trabajo creado: Escritorio {}", new_idx + 1);
+                            self.refresh_expose_layout();
+                        }
+                    }
+                }
+                return true;
+            }
+
+            if let Some(hit) = self.expose.hit_test(point) {
+                if let Some(slot) = self.expose.slots.get(hit) {
+                    let t = self.expose.eased_progress();
+                    let cur_rect = slot.current_rect(t);
+                    self.expose.dragging = Some(crate::expose::ExposeDragState {
+                        slot_index: hit,
+                        window: slot.window.clone(),
+                        window_id: slot.window_id,
+                        orig_rect: slot.original_rect,
+                        start_rect: cur_rect,
+                        start_pointer: point,
+                        current_pointer: point,
+                        has_moved: false,
+                        hovered_target: None,
+                    });
+                    self.expose.selected_index = Some(hit);
+                    self.expose.bump_revision();
+                    return true;
+                }
+            }
+
+            self.close_expose(None);
+            return true;
+        }
+
+        // ButtonState::Released
+        if let Some(drag) = self.expose.dragging.take() {
+            self.expose.hovered_space_target = None;
+            if !drag.has_moved {
+                self.close_expose(Some(drag.slot_index));
+                return true;
+            }
+            let drop_target = drag
+                .hovered_target
+                .or_else(|| self.expose.hit_test_space_bar(point));
+            match drop_target {
+                Some(crate::expose::SpaceDropTarget::Workspace(target_idx)) => {
+                    self.move_window_to_workspace(drag.window, drag.orig_rect.loc, target_idx);
+                }
+                Some(crate::expose::SpaceDropTarget::NewSpace) => {
+                    if let Some(new_idx) = self.workspaces.add_workspace() {
+                        self.move_window_to_workspace(drag.window, drag.orig_rect.loc, new_idx);
+                    } else {
+                        self.expose.bump_revision();
+                    }
+                }
+                None => {
+                    self.expose.bump_revision();
+                }
+            }
+        }
+        true
+    }
+
+    /// Cambia el espacio de trabajo activo al índice indicado.
+    pub fn switch_workspace(&mut self, target_index: usize) {
+        if target_index >= self.workspaces.count() || target_index == self.workspaces.active_index {
+            return;
+        }
+        let old_index = self.workspaces.active_index;
+        let current_windows: Vec<(smithay::desktop::Window, Point<i32, Logical>)> = self
+            .space
+            .elements()
+            .filter_map(|w| self.space.element_location(w).map(|loc| (w.clone(), loc)))
+            .collect();
+
+        for (win, _) in &current_windows {
+            self.space.unmap_elem(win);
+        }
+        self.workspaces.workspaces[old_index].hidden_windows = current_windows
+            .into_iter()
+            .map(|(window, location)| crate::workspaces::WorkspaceWindow { window, location })
+            .collect();
+
+        let incoming = std::mem::take(&mut self.workspaces.workspaces[target_index].hidden_windows);
+        let mut top_win: Option<smithay::desktop::Window> = None;
+        for entry in incoming {
+            self.space.map_element(entry.window.clone(), entry.location, false);
+            top_win = Some(entry.window);
+        }
+        self.space.refresh();
+        self.workspaces.active_index = target_index;
+        self.workspace_revision = self.workspace_revision.wrapping_add(1);
+
+        let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+        let next_surf = top_win.and_then(|w| w.wl_surface().map(|s| s.into_owned()));
+        self.set_keyboard_focus_with_sync(next_surf.clone(), serial);
+        self.notify_active_app(next_surf.as_ref());
+        self.notify_running_apps();
+        if self.expose.active {
+            self.refresh_expose_layout();
+        }
+        tracing::info!(
+            "🖥️ Espacio cambiado: Escritorio {} -> Escritorio {}",
+            old_index + 1,
+            target_index + 1
+        );
+    }
+
+    /// Navega al espacio de trabajo relativo (`delta`: `-1` anterior, `+1` siguiente).
+    pub fn switch_workspace_delta(&mut self, delta: isize) {
+        let count = self.workspaces.count() as isize;
+        if count <= 1 {
+            return;
+        }
+        let next = (self.workspaces.active_index as isize + delta).clamp(0, count - 1) as usize;
+        if next != self.workspaces.active_index {
+            self.switch_workspace(next);
+        }
+    }
+
+    /// Mueve una ventana desde el espacio activo hacia `target_index` (reubicándola en Exposé).
+    pub fn move_window_to_workspace(
+        &mut self,
+        window: smithay::desktop::Window,
+        orig_loc: Point<i32, Logical>,
+        target_index: usize,
+    ) {
+        if target_index >= self.workspaces.count() || target_index == self.workspaces.active_index {
+            self.expose.bump_revision();
+            return;
+        }
+        let loc = self.space.element_location(&window).unwrap_or(orig_loc);
+        self.space.unmap_elem(&window);
+        self.space.refresh();
+        self.workspaces.workspaces[target_index]
+            .hidden_windows
+            .push(crate::workspaces::WorkspaceWindow {
+                window,
+                location: loc,
+            });
+        self.workspace_revision = self.workspace_revision.wrapping_add(1);
+        self.notify_running_apps();
+        if self.expose.active {
+            self.refresh_expose_layout();
+        }
+        tracing::info!("🪟 Ventana movida a Escritorio {}", target_index + 1);
+    }
+
+    /// Construye los datos resumidos de miniaturas para la Barra de Espacios en `output`.
+    pub fn space_thumbnails_for_output(
+        &self,
+        output: &Output,
+    ) -> Vec<crate::expose::SpaceThumbnailInfo> {
+        let out_geo = self.space.output_geometry(output).unwrap_or_default();
+        let ow = out_geo.size.w.max(1) as f64;
+        let oh = out_geo.size.h.max(1) as f64;
+        let to_norm = |loc: Point<i32, Logical>, size: Size<i32, Logical>| -> Option<(f64, f64, f64, f64)> {
+            let cx = loc.x + size.w.max(1) / 2;
+            let cy = loc.y + size.h.max(1) / 2;
+            if self.space.outputs().count() > 1 && !out_geo.contains((cx, cy)) {
+                return None;
+            }
+            let nx = ((loc.x - out_geo.loc.x) as f64 / ow).clamp(0.0, 0.95);
+            let ny = ((loc.y - out_geo.loc.y) as f64 / oh).clamp(0.0, 0.95);
+            let nw = (size.w.max(60) as f64 / ow).clamp(0.08, 1.0);
+            let nh = (size.h.max(40) as f64 / oh).clamp(0.08, 1.0);
+            Some((nx, ny, nw, nh))
+        };
+
+        self.workspaces
+            .workspaces
+            .iter()
+            .enumerate()
+            .map(|(idx, ws)| {
+                let is_active = idx == self.workspaces.active_index;
+                let mini_rects: Vec<(f64, f64, f64, f64)> = if is_active {
+                    self.space
+                        .elements()
+                        .filter_map(|w| {
+                            let loc = self.space.element_location(w)?;
+                            to_norm(loc, w.geometry().size)
+                        })
+                        .collect()
+                } else {
+                    ws.hidden_windows
+                        .iter()
+                        .filter_map(|entry| to_norm(entry.location, entry.window.geometry().size))
+                        .collect()
+                };
+                crate::expose::SpaceThumbnailInfo {
+                    index: idx,
+                    name: ws.name.clone(),
+                    is_active,
+                    mini_rects,
+                }
+            })
+            .collect()
+    }
+
+    /// Inicia el seguimiento de gesto multitáctil de deslizamiento (`libinput` 3+ dedos).
+    pub fn handle_gesture_swipe_begin(&mut self, fingers: u32) -> bool {
+        if fingers < 3 {
+            self.swipe_gesture.active = false;
+            return false;
+        }
+        self.swipe_gesture = SwipeGestureState {
+            active: true,
+            fingers,
+            accum_x: 0.0,
+            accum_y: 0.0,
+            last_dx: 0.0,
+            last_dy: 0.0,
+            kind: SwipeGestureKind::Undecided,
+            was_open_at_start: self.expose.active && self.expose.target_open,
+            app_expose_gesture: false,
+        };
+        true
+    }
+
+    /// Actualiza 1:1 el progreso de Exposé o el cambio de espacio durante un deslizamiento de 3+ dedos.
+    pub fn handle_gesture_swipe_update(&mut self, dx: f64, dy: f64) -> bool {
+        if !self.swipe_gesture.active {
+            return false;
+        }
+        self.swipe_gesture.accum_x += dx;
+        self.swipe_gesture.accum_y += dy;
+        self.swipe_gesture.last_dx = dx;
+        self.swipe_gesture.last_dy = dy;
+
+        if self.swipe_gesture.kind == SwipeGestureKind::Undecided {
+            let ax = self.swipe_gesture.accum_x.abs();
+            let ay = self.swipe_gesture.accum_y.abs();
+            if ax.max(ay) < 10.0 {
+                return true;
+            }
+            if ay >= ax {
+                self.swipe_gesture.kind = SwipeGestureKind::ExposeVertical;
+                if !self.swipe_gesture.was_open_at_start {
+                    if self.swipe_gesture.accum_y < 0.0 {
+                        // 3 dedos arriba -> Mission Control (Exposé Global)
+                        self.open_expose(crate::expose::ExposeMode::Global);
+                    } else {
+                        // 3 dedos abajo -> App Exposé de la app activa
+                        self.swipe_gesture.app_expose_gesture = true;
+                        let app_id = self
+                            .get_active_window()
+                            .and_then(|w| w.wl_surface().and_then(|s| toplevel_info(&s).0))
+                            .unwrap_or_default();
+                        let mode = if app_id.is_empty() {
+                            crate::expose::ExposeMode::Global
+                        } else {
+                            crate::expose::ExposeMode::AppOnly { app_id }
+                        };
+                        self.open_expose(mode);
+                    }
+                    if self.expose.active {
+                        self.expose.begin_gesture_scrub();
+                    }
+                } else {
+                    self.expose.begin_gesture_scrub();
+                }
+            } else {
+                self.swipe_gesture.kind = SwipeGestureKind::WorkspaceHorizontal;
+            }
+        }
+
+        if self.swipe_gesture.kind == SwipeGestureKind::ExposeVertical && self.expose.active {
+            let drag_span = 140.0;
+            let progress = if self.swipe_gesture.was_open_at_start {
+                1.0 - (self.swipe_gesture.accum_y / drag_span)
+            } else if self.swipe_gesture.app_expose_gesture {
+                self.swipe_gesture.accum_y / drag_span
+            } else {
+                -self.swipe_gesture.accum_y / drag_span
+            };
+            self.expose.set_gesture_progress(progress as f32);
+        }
+
+        true
+    }
+
+    /// Finaliza el gesto de deslizamiento decidiendo confirmar o revertir según umbral y velocidad.
+    pub fn handle_gesture_swipe_end(&mut self, cancelled: bool) -> bool {
+        if !self.swipe_gesture.active {
+            return false;
+        }
+        let g = std::mem::take(&mut self.swipe_gesture);
+        if cancelled {
+            if g.kind == SwipeGestureKind::ExposeVertical && self.expose.active {
+                self.expose.finish_gesture_scrub(g.was_open_at_start);
+            }
+            return true;
+        }
+
+        match g.kind {
+            SwipeGestureKind::ExposeVertical => {
+                if self.expose.active {
+                    let p = self.expose.progress;
+                    let commit_open = if g.was_open_at_start {
+                        !(p < 0.70 || g.last_dy > 4.0)
+                    } else if g.app_expose_gesture {
+                        p >= 0.30 || (g.last_dy > 4.0 && p >= 0.12)
+                    } else {
+                        p >= 0.30 || (g.last_dy < -4.0 && p >= 0.12)
+                    };
+                    if commit_open {
+                        self.expose.finish_gesture_scrub(true);
+                    } else {
+                        self.close_expose(None);
+                    }
+                }
+            }
+            SwipeGestureKind::WorkspaceHorizontal => {
+                if g.accum_x <= -60.0 {
+                    self.switch_workspace_delta(1);
+                } else if g.accum_x >= 60.0 {
+                    self.switch_workspace_delta(-1);
+                }
+            }
+            SwipeGestureKind::Undecided => {}
+        }
+        true
     }
 
     /// Cierra la ventana especificada por su window_id
@@ -2548,6 +3255,7 @@ impl MalusState {
         self.snap_transitions.retain(|s, _| s.alive());
         self.centered_transient_windows.retain(|s, _| s.alive());
         self.minimized_windows.retain(|s, _| s.alive());
+        self.workspaces.retain_alive();
         let dock_slots = &mut self.dock_slots;
         let minimized_thumbnails = &mut self.minimized_window_thumbnails;
         let minimized_windows = &self.minimized_windows;
@@ -2656,8 +3364,17 @@ impl MalusState {
 
     /// Calcula la zona utilizable global (en coordenadas de Space) para un monitor dado
     pub fn usable_zone_for_output(&self, output: &Output) -> Rectangle<i32, Logical> {
-        let output_geo = self.space.output_geometry(output).unwrap_or_default();
         let layer_map = smithay::desktop::layer_map_for_output(output);
+        self.usable_zone_from_layer_map(output, &layer_map)
+    }
+
+    /// Calcula la zona utilizable reutilizando un `LayerMap` ya bloqueado.
+    pub fn usable_zone_from_layer_map(
+        &self,
+        output: &Output,
+        layer_map: &smithay::desktop::LayerMap,
+    ) -> Rectangle<i32, Logical> {
+        let output_geo = self.space.output_geometry(output).unwrap_or_default();
         let zone = layer_map.non_exclusive_zone();
 
         // En Malus DE, la Top Bar solo existe en la pantalla primaria.
@@ -3564,6 +4281,7 @@ impl XdgShellHandler for MalusState {
         self.window_restore_geometries.remove(surf);
         self.snap_transitions.remove(surf);
         self.minimized_windows.remove(surf);
+        let removed_from_ws = self.workspaces.remove_surface(surf);
         if let Some(window_id) = self.window_ids.remove(surf) {
             self.dock_slots.remove(&window_id);
             self.remove_minimized_thumbnail(window_id);
@@ -3571,8 +4289,11 @@ impl XdgShellHandler for MalusState {
         self.active_animations.retain(|a| &a.surface != surf);
         self.notify_minimized_windows();
 
-        if let Some(window) = window {
+        if let Some(window) = window.or(removed_from_ws) {
             self.space.unmap_elem(&window);
+            if self.expose.active {
+                self.refresh_expose_layout();
+            }
             tracing::info!("🧹 Ventana desmapeada de Space tras destruirse");
         } else {
             tracing::warn!("⚠️ No se encontró la ventana en Space al destruir toplevel");

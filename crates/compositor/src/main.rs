@@ -2,6 +2,7 @@ pub mod backend;
 pub mod blur;
 pub mod capture;
 mod cpu_priority;
+pub mod expose;
 pub mod genie;
 pub mod grabs;
 pub mod magic_lamp;
@@ -13,6 +14,7 @@ pub mod ssd;
 pub mod state;
 pub mod theme_transition;
 pub mod window_corners;
+pub mod workspaces;
 
 use malus_de_common::logging::init_logging;
 use std::process::{Child, Command};

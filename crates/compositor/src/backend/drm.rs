@@ -8,8 +8,9 @@ use smithay::{
         drm::{DrmDevice, DrmDeviceFd, DrmEvent, GbmBufferedSurface},
         egl::{EGLContext, EGLDisplay},
         input::{
-            AbsolutePositionEvent, Axis, ButtonState, Event, InputEvent, KeyState,
-            KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
+            AbsolutePositionEvent, Axis, ButtonState, Event, GestureBeginEvent, GestureEndEvent,
+            GestureSwipeUpdateEvent, InputEvent, KeyState, KeyboardKeyEvent, PointerAxisEvent,
+            PointerButtonEvent, PointerMotionEvent,
         },
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         renderer::{
@@ -128,6 +129,8 @@ struct DrmOutputSurface {
     last_background_commit_counter: usize,
     last_background_size: (i32, i32),
     background_dirty: bool,
+    last_expose_revision: u64,
+    last_workspace_revision: u64,
 }
 
 struct ThemedCursor {
@@ -1295,6 +1298,8 @@ pub fn run_drm() -> Result<()> {
             last_background_commit_counter: usize::MAX,
             last_background_size: (0, 0),
             background_dirty: true,
+            last_expose_revision: 0,
+            last_workspace_revision: 0,
         });
     }
 
@@ -1642,6 +1647,33 @@ pub fn run_drm() -> Result<()> {
                                     return FilterResult::Intercept(());
                                 }
 
+                                let is_up = sym == keysyms::KEY_Up.into();
+                                let is_down = sym == keysyms::KEY_Down.into();
+
+                                // Exposé / Mission Control (Ctrl+Flecha Arriba) y App Exposé (Ctrl+Flecha Abajo)
+                                if has_ctrl && !has_super && !has_alt && is_up {
+                                    state.toggle_expose(crate::expose::ExposeMode::Global);
+                                    return FilterResult::Intercept(());
+                                }
+                                if has_ctrl && !has_super && !has_alt && is_down {
+                                    state.toggle_app_expose();
+                                    return FilterResult::Intercept(());
+                                }
+
+                                if state.handle_expose_key(sym, *modifiers) {
+                                    return FilterResult::Intercept(());
+                                }
+
+                                // Cambiar espacio de trabajo virtual (Ctrl+Flecha Izquierda / Derecha)
+                                if has_ctrl && !has_super && !has_alt && is_left {
+                                    state.switch_workspace_delta(-1);
+                                    return FilterResult::Intercept(());
+                                }
+                                if has_ctrl && !has_super && !has_alt && is_right {
+                                    state.switch_workspace_delta(1);
+                                    return FilterResult::Intercept(());
+                                }
+
                                 // Cerrar ventana activa (Super+W / Super+Q / Alt+F4)
                                 let is_f4 = sym == keysyms::KEY_F4.into();
                                 if (has_super && (is_w || is_q)) || (has_alt && is_f4) {
@@ -1729,6 +1761,21 @@ pub fn run_drm() -> Result<()> {
                     }
                     state.update_spotlight_drag_dock_hover(point);
 
+                    if state.handle_expose_pointer_motion(point) {
+                        let serial = SERIAL_COUNTER.next_serial();
+                        pointer.motion(
+                            state,
+                            None,
+                            &MotionEvent {
+                                location: point,
+                                serial,
+                                time: event.time_msec(),
+                            },
+                        );
+                        pointer.frame(state);
+                        return;
+                    }
+
                     let (under_target, _, _, _) = resolve_target_under(state, point);
 
                     let serial = SERIAL_COUNTER.next_serial();
@@ -1780,6 +1827,21 @@ pub fn run_drm() -> Result<()> {
                         }
                         state.update_spotlight_drag_dock_hover(point);
 
+                        if state.handle_expose_pointer_motion(point) {
+                            let serial = SERIAL_COUNTER.next_serial();
+                            pointer.motion(
+                                state,
+                                None,
+                                &MotionEvent {
+                                    location: point,
+                                    serial,
+                                    time: event.time_msec(),
+                                },
+                            );
+                            pointer.frame(state);
+                            return;
+                        }
+
                         let (under_target, _, _, _) = resolve_target_under(state, point);
 
                         let serial = SERIAL_COUNTER.next_serial();
@@ -1816,6 +1878,9 @@ pub fn run_drm() -> Result<()> {
                     );
 
                     let btn_serial = SERIAL_COUNTER.next_serial();
+                    if state.handle_expose_pointer_button(point, event.button_code(), is_pressed) {
+                        return;
+                    }
                     if is_pressed {
                         if state.screenshot_ui.is_open() {
                             let output_geo = state
@@ -2181,6 +2246,47 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
             }
+            InputEvent::GestureSwipeBegin { event } => {
+                if !state.handle_gesture_swipe_begin(event.fingers()) {
+                    if let Some(pointer) = state.seat.get_pointer() {
+                        pointer.gesture_swipe_begin(
+                            state,
+                            &smithay::input::pointer::GestureSwipeBeginEvent {
+                                serial: SERIAL_COUNTER.next_serial(),
+                                time: event.time_msec(),
+                                fingers: event.fingers(),
+                            },
+                        );
+                    }
+                }
+            }
+            InputEvent::GestureSwipeUpdate { event } => {
+                if !state.handle_gesture_swipe_update(event.delta_x(), event.delta_y()) {
+                    if let Some(pointer) = state.seat.get_pointer() {
+                        pointer.gesture_swipe_update(
+                            state,
+                            &smithay::input::pointer::GestureSwipeUpdateEvent {
+                                time: event.time_msec(),
+                                delta: (event.delta_x(), event.delta_y()).into(),
+                            },
+                        );
+                    }
+                }
+            }
+            InputEvent::GestureSwipeEnd { event } => {
+                if !state.handle_gesture_swipe_end(event.cancelled()) {
+                    if let Some(pointer) = state.seat.get_pointer() {
+                        pointer.gesture_swipe_end(
+                            state,
+                            &smithay::input::pointer::GestureSwipeEndEvent {
+                                serial: SERIAL_COUNTER.next_serial(),
+                                time: event.time_msec(),
+                                cancelled: event.cancelled(),
+                            },
+                        );
+                    }
+                }
+            }
             _ => {}
         }
     }).map_err(|e| anyhow::anyhow!("Error al registrar libinput event source: {e:?}"))?;
@@ -2489,6 +2595,7 @@ pub fn run_drm() -> Result<()> {
         };
         let dispatch_timeout = if has_pending_work
             || !state.active_animations.is_empty()
+            || state.expose.is_animating()
             || state.theme_transition_started_at.is_some()
             || state.pending_theme_transition_capture.is_some()
         {
@@ -2502,6 +2609,9 @@ pub fn run_drm() -> Result<()> {
         state.process_ipc_messages();
         display.dispatch_clients(&mut state)?;
         state.space.refresh();
+        let expose_was_active = state.expose.active;
+        let expose_animating = state.expose.tick();
+        let expose_just_closed = expose_was_active && !state.expose.active;
 
         for output in state.space.outputs() {
             let mut map = smithay::desktop::layer_map_for_output(output);
@@ -3054,6 +3164,15 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
 
+                let expose_rev_changed =
+                    out_surface.last_expose_revision != state.expose.render_revision;
+                let workspace_rev_changed =
+                    out_surface.last_workspace_revision != state.workspace_revision;
+                if expose_just_closed || expose_rev_changed || workspace_rev_changed {
+                    out_surface.full_damage_pending = true;
+                    out_surface.pending_damage_buffers = 3;
+                }
+
                 // ─── CÁLCULO DE DAMAGE TRACKING POR PANTALLA CON SMITHAY ───
                 let mut tracker_elements: Vec<MalusDrmElement> = Vec::new();
 
@@ -3465,6 +3584,10 @@ pub fn run_drm() -> Result<()> {
                     || screenshot_active
                     || spotlight_frame.is_some()
                     || screenshot_ui_frame.is_some()
+                    || expose_animating
+                    || expose_just_closed
+                    || expose_rev_changed
+                    || workspace_rev_changed
                     || !topbar_popups.is_empty()
                     || !dock_popups.is_empty()
                     || !wallpaper_popups.is_empty()
@@ -3507,9 +3630,8 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
 
-                let wallpaper_occluded = occluders
-                    .iter()
-                    .any(|occ| occ.contains_rect(screen_bounds));
+                let wallpaper_occluded = !state.expose.active
+                    && occluders.iter().any(|occ| occ.contains_rect(screen_bounds));
 
                 // Redibujado limpio sin tijera destructiva (Opción B: Idle Sleeping / Frame Throttling)
                 const ENABLE_DAMAGE_TRACKING: bool = false;
@@ -3529,6 +3651,216 @@ pub fn run_drm() -> Result<()> {
                         out_surface.window_redraw_shadow_blur.insert(root_id.clone(), 3);
                     }
                 }
+
+                let expose_render_bundle = if state.expose.active {
+                    let eased = state.expose.eased_progress();
+                    let usable =
+                        state.usable_zone_from_layer_map(&out_surface.output, &layer_map);
+                    let usable_cards = crate::expose::expose_usable_zone_with_spaces_bar(usable);
+                    let out_name = out_surface.output.name();
+                    let hovered_idx = state.expose.hovered_index;
+                    let selected_idx = state.expose.selected_index;
+                    let quick_look_idx = state.expose.quick_look_index;
+                    let show_overlays = !expose_animating || eased >= 0.85;
+                    let active_drag = state
+                        .expose
+                        .dragging
+                        .as_ref()
+                        .filter(|d| d.has_moved)
+                        .map(|d| (d.slot_index, crate::expose::drag_card_rect(d)));
+                    let spaces_info = state.space_thumbnails_for_output(&out_surface.output);
+                    let active_ws = state.workspaces.active_index;
+                    let can_add_ws =
+                        state.workspaces.count() < crate::workspaces::MAX_WORKSPACES;
+                    let ws_rev = state.workspace_revision;
+
+                    let slots_snapshot: Vec<_> = state
+                        .expose
+                        .slots
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, s)| s.output_name == out_name)
+                        .map(|(idx, s)| {
+                            let is_dragged = active_drag.map_or(false, |(di, _)| di == idx);
+                            let slot_rect = if let Some((di, dr)) = active_drag {
+                                if di == idx {
+                                    dr
+                                } else {
+                                    s.current_rect(eased)
+                                }
+                            } else {
+                                let target = if quick_look_idx == Some(idx) {
+                                    crate::expose::quick_look_rect(usable_cards, s.original_rect)
+                                } else {
+                                    s.target_rect
+                                };
+                                let t = eased as f64;
+                                Rectangle::new(
+                                    (
+                                        (s.original_rect.loc.x as f64
+                                            + (target.loc.x - s.original_rect.loc.x) as f64 * t)
+                                            .round() as i32,
+                                        (s.original_rect.loc.y as f64
+                                            + (target.loc.y - s.original_rect.loc.y) as f64 * t)
+                                            .round() as i32,
+                                    )
+                                        .into(),
+                                    (
+                                        (s.original_rect.size.w as f64
+                                            + (target.size.w - s.original_rect.size.w) as f64 * t)
+                                            .round()
+                                            .max(1.0) as i32,
+                                        (s.original_rect.size.h as f64
+                                            + (target.size.h - s.original_rect.size.h) as f64 * t)
+                                            .round()
+                                            .max(1.0) as i32,
+                                    )
+                                        .into(),
+                                )
+                            };
+                            (
+                                idx,
+                                is_dragged,
+                                s.window.clone(),
+                                s.original_rect,
+                                slot_rect,
+                                s.title.clone(),
+                                s.matches_filter,
+                            )
+                        })
+                        .collect();
+
+                    let spaces_bar_elem = if show_overlays || active_drag.is_some() {
+                        state.expose.render_spaces_bar(
+                            &mut renderer,
+                            output_geo,
+                            usable,
+                            scale,
+                            &spaces_info,
+                            active_ws,
+                            can_add_ws,
+                            ws_rev,
+                        )
+                    } else {
+                        None
+                    };
+
+                    let filter_elem = if show_overlays {
+                        state
+                            .expose
+                            .render_filter_pill(&mut renderer, out_surface.size, scale)
+                    } else {
+                        None
+                    };
+
+                    let mut cards = Vec::with_capacity(slots_snapshot.len());
+                    for (
+                        idx,
+                        is_dragged,
+                        win,
+                        orig_rect,
+                        slot_rect,
+                        title,
+                        matches_filter,
+                    ) in slots_snapshot
+                    {
+                        let win_geo_loc = win.geometry().loc;
+                        let orig_phys_loc = (orig_rect.loc - output_geo.loc)
+                            .to_f64()
+                            .to_physical(scale)
+                            .to_i32_round();
+                        let surf_phys_loc = (orig_rect.loc - win_geo_loc - output_geo.loc)
+                            .to_f64()
+                            .to_physical(scale)
+                            .to_i32_round();
+                        let card_phys_loc = (slot_rect.loc - output_geo.loc)
+                            .to_f64()
+                            .to_physical(scale)
+                            .to_i32_round();
+                        let card_phys_size = slot_rect
+                            .size
+                            .to_f64()
+                            .to_physical(scale)
+                            .to_i32_round();
+                        let card_phys = Rectangle::new(card_phys_loc, card_phys_size);
+                        let k = ((slot_rect.size.w as f64 / orig_rect.size.w.max(1) as f64)
+                            .min(slot_rect.size.h as f64 / orig_rect.size.h.max(1) as f64))
+                        .clamp(0.02, 4.0);
+                        let alpha = if is_dragged {
+                            0.92
+                        } else if matches_filter {
+                            1.0
+                        } else {
+                            0.28
+                        };
+
+                        let raw_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                            if let Some(surf) = win.wl_surface() {
+                                render_elements_from_surface_tree(
+                                    &mut renderer,
+                                    &surf,
+                                    surf_phys_loc,
+                                    smithay::utils::Scale::from(scale),
+                                    alpha,
+                                    Kind::Unspecified,
+                                )
+                            } else {
+                                Vec::new()
+                            };
+                        let scaled_elems: Vec<_> = raw_elems
+                            .into_iter()
+                            .map(|elem| {
+                                let rescaled = smithay::backend::renderer::element::utils::RescaleRenderElement::from_element(
+                                    elem,
+                                    orig_phys_loc,
+                                    smithay::utils::Scale::from(k),
+                                );
+                                smithay::backend::renderer::element::utils::RelocateRenderElement::from_element(
+                                    rescaled,
+                                    card_phys_loc - orig_phys_loc,
+                                    smithay::backend::renderer::element::utils::Relocate::Relative,
+                                )
+                            })
+                            .collect();
+
+                        let is_selected = selected_idx == Some(idx);
+                        let is_highlighted =
+                            !is_dragged && (is_selected || hovered_idx == Some(idx));
+                        let highlight_elem = if show_overlays && is_highlighted {
+                            state.expose.render_highlight(
+                                &mut renderer,
+                                card_phys,
+                                scale,
+                                is_selected,
+                            )
+                        } else {
+                            None
+                        };
+                        let label_elem = if show_overlays && !is_dragged {
+                            state.expose.render_card_label(
+                                &mut renderer,
+                                card_phys,
+                                scale,
+                                &title,
+                                is_highlighted,
+                            )
+                        } else {
+                            None
+                        };
+                        cards.push((
+                            idx == quick_look_idx.unwrap_or(usize::MAX),
+                            is_dragged,
+                            card_phys,
+                            scaled_elems,
+                            highlight_elem,
+                            label_elem,
+                        ));
+                    }
+                    cards.sort_by_key(|(is_ql, is_dragged, ..)| (*is_dragged, *is_ql));
+                    Some((eased, cards, filter_elem, spaces_bar_elem))
+                } else {
+                    None
+                };
 
                 let mut this_frame_extra_damage: Vec<Rectangle<i32, Physical>> = Vec::new();
 
@@ -3832,14 +4164,21 @@ pub fn run_drm() -> Result<()> {
                             || state.theme_transition_started_at.is_some()
                             || theme_capture_request.is_some();
 
-                        if background_dirty {
+                        // En Exposé siempre recapturamos el fondo limpio recién pintado porque otras capas
+                        // (Dock, Spotlight, popups, ventanas translúcidas) usan `capture_background_region`
+                        // sobre `snapshot_tex` en cuadros previos y dejarían restos de ventanas en el blur.
+                        if (background_dirty || expose_render_bundle.is_some()) && !wallpaper_occluded {
                             if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
                                 let _ = frame.with_context(|gl| {
                                     blur.capture_background(gl, &projection, out_surface.size);
                                 });
-                                out_surface.background_dirty = false;
-                                out_surface.last_background_commit_counter = state.background_commit_counter;
-                                out_surface.last_background_size = (out_surface.size.w, out_surface.size.h);
+                                if background_dirty {
+                                    out_surface.background_dirty = false;
+                                    out_surface.last_background_commit_counter =
+                                        state.background_commit_counter;
+                                    out_surface.last_background_size =
+                                        (out_surface.size.w, out_surface.size.h);
+                                }
                             }
                         }
 
@@ -3854,6 +4193,101 @@ pub fn run_drm() -> Result<()> {
                         }
                         let mut snap_preview_drawn = false;
 
+                        let menu_radius = (32.0 * scale).round() as i32;
+                        if let Some((eased, ref expose_cards, ref filter_elem, ref spaces_bar_elem)) =
+                            expose_render_bundle
+                        {
+                            if let Some(mut blur) =
+                                blur_pipeline.as_ref().and_then(|b| b.lock().ok())
+                            {
+                                let _ = frame.with_context(|gl| {
+                                    blur.render_captured_blur_round(
+                                        gl,
+                                        &projection,
+                                        out_surface.size,
+                                        Rectangle::from_size(out_surface.size),
+                                        0.0,
+                                    );
+                                });
+                            }
+                            let _ = frame.draw_solid(
+                                screen_bounds,
+                                damage,
+                                Color32F::new(0.04, 0.05, 0.08, 0.44 * eased),
+                            );
+                            let card_radius = crate::expose::card_corner_radius_phys(scale);
+                            for draw_dragged in [false, true] {
+                                if draw_dragged {
+                                    if let Some(ref sb) = spaces_bar_elem {
+                                        let _ = draw_render_elements(
+                                            &mut frame,
+                                            1.0,
+                                            std::slice::from_ref(sb),
+                                            damage,
+                                        );
+                                    }
+                                }
+                                for (_, _, card_phys, scaled_elems, highlight_elem, label_elem) in
+                                    expose_cards.iter().filter(|(_, d, ..)| *d == draw_dragged)
+                                {
+                                    if let Some(ref hl) = highlight_elem {
+                                        let _ = draw_render_elements(
+                                            &mut frame,
+                                            1.0,
+                                            std::slice::from_ref(hl),
+                                            damage,
+                                        );
+                                    }
+                                    if let Some(ref shader) = window_squircle_shader.as_ref() {
+                                        for elem in scaled_elems.iter().rev() {
+                                            let elem_geo = elem
+                                                .geometry(smithay::utils::Scale::from(scale));
+                                            let sub_offset = Point::from((
+                                                card_phys.loc.x - elem_geo.loc.x,
+                                                card_phys.loc.y - elem_geo.loc.y,
+                                            ));
+                                            shader.apply_to_frame(
+                                                &mut frame,
+                                                elem_geo.size,
+                                                sub_offset,
+                                                card_phys.size,
+                                                card_radius,
+                                            );
+                                            let _ = draw_render_elements(
+                                                &mut frame,
+                                                scale,
+                                                std::slice::from_ref(elem),
+                                                damage,
+                                            );
+                                            frame.clear_tex_program_override();
+                                        }
+                                    } else {
+                                        let _ = draw_render_elements(
+                                            &mut frame,
+                                            scale,
+                                            scaled_elems,
+                                            damage,
+                                        );
+                                    }
+                                    if let Some(ref lbl) = label_elem {
+                                        let _ = draw_render_elements(
+                                            &mut frame,
+                                            1.0,
+                                            std::slice::from_ref(lbl),
+                                            damage,
+                                        );
+                                    }
+                                }
+                            }
+                            if let Some(ref fp) = filter_elem {
+                                let _ = draw_render_elements(
+                                    &mut frame,
+                                    1.0,
+                                    std::slice::from_ref(fp),
+                                    damage,
+                                );
+                            }
+                        } else {
                         // 2. Renderizar superficies de cada ventana con sus sombras proyectadas, desenfoque de fondo y esquinas squircle
                         for (
                             idx,
@@ -4343,7 +4777,6 @@ pub fn run_drm() -> Result<()> {
                         }
 
                         // 3. Renderizar menús contextuales y popups de ventanas (siempre ENCIMA de las superficies de ventana)
-                        let menu_radius = (32.0 * scale).round() as i32;
                         for (idx, (_, _, _, popup_shadow_rects, ..)) in
                             window_render_data.iter().enumerate()
                         {
@@ -4418,6 +4851,7 @@ pub fn run_drm() -> Result<()> {
                                     }
                                 }
                             }
+                        }
                         }
 
                         // 4. Renderizar capas superiores translúcidas (Dock, Top Bar, Popovers)
@@ -5122,6 +5556,8 @@ pub fn run_drm() -> Result<()> {
                     out_surface.last_commit_counter = state.surface_commit_counter;
                     out_surface.last_cursor_draw_point = cursor_draw_point;
                     out_surface.last_cursor_status = state.cursor_status.clone();
+                    out_surface.last_expose_revision = state.expose.render_revision;
+                    out_surface.last_workspace_revision = state.workspace_revision;
                     if out_surface.pending_damage_buffers > 0 {
                         out_surface.pending_damage_buffers -= 1;
                     }
