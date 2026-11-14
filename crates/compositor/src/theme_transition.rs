@@ -243,7 +243,7 @@ impl ThemeTransitionPipeline {
     }
 }
 
-unsafe fn compile_shader(
+pub(crate) unsafe fn compile_shader(
     gl: &ffi::Gles2,
     shader_type: ffi::types::GLenum,
     source: &str,
@@ -276,7 +276,7 @@ unsafe fn compile_shader(
     }
 }
 
-unsafe fn link_program(
+pub(crate) unsafe fn link_program(
     gl: &ffi::Gles2,
     vertex: ffi::types::GLuint,
     fragment: ffi::types::GLuint,

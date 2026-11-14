@@ -2434,6 +2434,9 @@ pub fn run_drm() -> Result<()> {
     let mut active_black_holes: Vec<crate::black_hole::ActiveBlackHoleClose> = Vec::new();
     let mut theme_transition_pipeline: Option<crate::theme_transition::ThemeTransitionPipeline> =
         None;
+    let mut workspace_transition_pipeline: Option<
+        crate::workspace_transition::WorkspaceTransitionPipeline,
+    > = None;
 
     while state.is_running {
         let frame_start = Instant::now();
@@ -2704,7 +2707,9 @@ pub fn run_drm() -> Result<()> {
             || state.expose.is_animating()
             || state.snap_layouts.is_open()
             || state.theme_transition_started_at.is_some()
-            || state.pending_theme_transition_capture.is_some();
+            || state.pending_theme_transition_capture.is_some()
+            || state.workspace_transition.is_some()
+            || state.pending_workspace_switch.is_some();
         let has_ready_output = if let Ok(surfs) = shared_surfaces.lock() {
             surfs.iter().any(|s| {
                 if s.is_flip_pending() {
@@ -2756,6 +2761,9 @@ pub fn run_drm() -> Result<()> {
             let mut theme_capture_succeeded = theme_capture_request.is_some();
             let mut theme_capture_outputs = 0usize;
             let expected_theme_outputs = surfs.len();
+            let workspace_switch_pending = state.pending_workspace_switch.is_some();
+            let mut ws_capture_outputs = 0usize;
+            let mut ws_transition_finished = false;
             for out_surface in surfs.iter_mut() {
                 let scale = out_surface.output.current_scale().fractional_scale();
                 let output_geo = state
@@ -3799,6 +3807,8 @@ pub fn run_drm() -> Result<()> {
                     || state.snap_preview.is_some()
                     || state.theme_transition_started_at.is_some()
                     || theme_capture_request.is_some()
+                    || state.workspace_transition.is_some()
+                    || workspace_switch_pending
                     || screenshot_active
                     || spotlight_frame.is_some()
                     || screenshot_ui_frame.is_some()
@@ -4176,7 +4186,12 @@ pub fn run_drm() -> Result<()> {
                     this_frame_extra_damage.push(Rectangle::from_size(out_surface.size));
                 }
 
-                if screenshot_active || theme_capture_request.is_some() || state.theme_transition_started_at.is_some() {
+                if screenshot_active
+                    || theme_capture_request.is_some()
+                    || state.theme_transition_started_at.is_some()
+                    || workspace_switch_pending
+                    || state.workspace_transition.is_some()
+                {
                     this_frame_extra_damage.push(Rectangle::from_size(out_surface.size));
                 }
 
@@ -4388,7 +4403,9 @@ pub fn run_drm() -> Result<()> {
                             || out_surface.last_background_commit_counter != state.background_commit_counter
                             || out_surface.last_background_size != (out_surface.size.w, out_surface.size.h)
                             || state.theme_transition_started_at.is_some()
-                            || theme_capture_request.is_some();
+                            || theme_capture_request.is_some()
+                            || state.workspace_transition.is_some()
+                            || workspace_switch_pending;
 
                         // En Exposé siempre recapturamos el fondo limpio recién pintado porque otras capas
                         // (Dock, Spotlight, popups, ventanas translúcidas) usan `capture_background_region`
@@ -5652,6 +5669,50 @@ pub fn run_drm() -> Result<()> {
                             theme_capture_succeeded = false;
                         }
 
+                        if workspace_transition_pipeline.is_none() {
+                            workspace_transition_pipeline = frame
+                                .with_context(
+                                    crate::workspace_transition::WorkspaceTransitionPipeline::new,
+                                )
+                                .ok()
+                                .flatten();
+                        }
+                        if let Some(ws_pipeline) = workspace_transition_pipeline.as_mut() {
+                            let output_name = out_surface.output.name();
+                            let ws_result = frame.with_context(|gl| {
+                                if let Some(ws_transition) = state.workspace_transition {
+                                    let now = Instant::now();
+                                    let drawn = ws_pipeline.draw(
+                                        gl,
+                                        &output_name,
+                                        out_surface.size,
+                                        true,
+                                        ws_transition,
+                                        now,
+                                    );
+                                    if !drawn
+                                        && now.duration_since(ws_transition.started_at)
+                                            >= crate::workspace_transition::DURATION
+                                    {
+                                        ws_transition_finished = true;
+                                    }
+                                }
+                                if workspace_switch_pending
+                                    && ws_pipeline.capture_outgoing(
+                                        gl,
+                                        &output_name,
+                                        out_surface.size,
+                                        true,
+                                    )
+                                {
+                                    ws_capture_outputs += 1;
+                                }
+                            });
+                            if let Err(error) = ws_result {
+                                warn!("No se pudo dibujar la transición de escritorio: {error:?}");
+                            }
+                        }
+
                         let _ = frame.finish();
                     }
                     if let Some(destination) = screenshot_request {
@@ -5802,6 +5863,18 @@ pub fn run_drm() -> Result<()> {
                         });
                 } else {
                     warn!("No se guardaron todos los fotogramas DRM para la transición de tema");
+                }
+            }
+            if ws_transition_finished {
+                state.workspace_transition = None;
+                for s in surfs.iter_mut() {
+                    s.full_damage_pending = true;
+                }
+            }
+            if workspace_switch_pending && (ws_capture_outputs > 0 || surfs.is_empty()) {
+                state.commit_pending_workspace_switch(ws_capture_outputs > 0);
+                for s in surfs.iter_mut() {
+                    s.full_damage_pending = true;
                 }
             }
         }

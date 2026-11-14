@@ -4,6 +4,32 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-14] — Transición Animada entre Escritorios y Reporteador de Fallos (`.txt` + Cloudflare Worker)
+
+### 1. Animación Horizontal de Cambio de Escritorio (`crates/compositor/src/workspace_transition.rs`, `theme_transition.rs`, `state.rs`, `drm.rs`, `winit.rs`)
+* **Pipeline GPU de doble captura (`DURATION = 340ms`, `DESKTOP_GAP_RATIO = 0.022`):**
+  * Nuevo módulo [`workspace_transition.rs`](../crates/compositor/src/workspace_transition.rs) con `WorkspaceTransitionPipeline` (OpenGL ES 3.0), reutilizando `compile_shader` y `link_program` desde [`theme_transition.rs`](../crates/compositor/src/theme_transition.rs).
+  * Antes de intercambiar las ventanas en `Space`, `switch_workspace` agenda `pending_workspace_switch` (encadenable ante pulsaciones o gestos consecutivos) para capturar el escritorio saliente mediante `capture_outgoing` antes de ejecutar `commit_pending_workspace_switch` / `apply_workspace_switch`.
+  * En cada fotograma de la transición, el compositor renderiza el escritorio entrante vivo en el framebuffer, lo copia a textura y ejecuta el shader de deslizamiento horizontal estilo macOS Spaces con curva `ease-out` cuártica (`eased_progress`), separador oscuro del `2.2%` y atenuación sutil de profundidad.
+* **Compatibilidad con Exposé y ambos backends:**
+  * Cuando Exposé está abierto (`expose.active`), `switch_workspace` aplica el cambio de inmediato para no interferir con la animación propia de Exposé.
+  * Integración completa en [`drm.rs`](../crates/compositor/src/backend/drm.rs) (despertar por VBlank, daño completo en pantalla y limpieza final de los 3 búferes DRM) y [`winit.rs`](../crates/compositor/src/backend/winit.rs).
+
+### 2. Reporteador de Fallos en `.txt` y Envío Directo vía Cloudflare Worker (`crates/common/src/crash.rs`, `logging.rs`, `crates/dialogs`, `scripts/malus-session`, `services/crash-worker`)
+* **Captura automática de `panic` y cierres anómalos de sesión (`70240c2`):**
+  * [`crash.rs`](../crates/common/src/crash.rs) conectado desde `init_logging` en [`logging.rs`](../crates/common/src/logging.rs) instala un *panic hook* global para todos los binarios de Malus DE, guardando volcados `.txt` sanitizados (`$HOME` ocultado como `~`) en `${XDG_DATA_HOME:-$HOME/.local/share}/malus-de/crashes/`.
+  * [`malus-session`](../scripts/malus-session) registra cierres inesperados de `malus-de-compositor` (`pending-*.txt` con señal/código, versión, `coredumpctl info -1` y cola de `session.log`) y lanza `malus-de-crash-reporter --pending` al iniciar la siguiente sesión; [`install-session.sh`](../scripts/install-session.sh) instala `malus-de-crash-reporter` en `/usr/local/bin`.
+* **Diálogo GTK4 y entrega directa a `malus-de@chano.dev`:**
+  * [`malus-de-crash-reporter`](../crates/dialogs/src/bin/malus-de-crash-reporter.rs) y [`show_crash_report_dialog`](../crates/dialogs/src/lib.rs) muestran el `.txt` generado con acciones para **Enviar reporte** (`POST` JSON en segundo plano vía `curl` hacia `https://crash.chano.dev/report`, configurable con `MALUS_CRASH_ENDPOINT` o `~/.config/malus-de/crash-reporter.toml`), **Guardar .txt...**, **Copiar informe**, **Cerrar** y respaldo **Abrir en correo** (`mailto:malus-de@chano.dev`).
+  * Nuevo Worker sin dependencias externas en [`services/crash-worker/`](../services/crash-worker/README.md) (`index.js` + `wrangler.toml`) usando `cloudflare:email` para entregar el informe con el `.txt` adjunto a `malus-de@chano.dev` sin exponer credenciales SMTP en el binario cliente.
+
+### 3. Validación
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-common -p malus-de-dialogs`: **41 passed, 0 failed** en `malus-de-common`; **1 passed, 0 failed** en `malus-de-dialogs`.
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-compositor`: **61 passed, 0 failed**.
+* `cargo build --release --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --workspace` (previo a la animación de espacios) y `cargo build --release --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-compositor`: compilaciones exitosas sin errores.
+
+---
+
 ## [2026-11-14] — Snap Layouts Estilo Windows 11, Animación de Cierre "Agujero Negro", Refuerzo de Blur Acrílico, Sincronización Squircle y Manifiesto Arch
 
 ### 1. Menú Flotante Snap Layouts Estilo Windows 11 (`crates/compositor/src/snap_layouts.rs`, `state.rs`, `shadow.rs`, `grabs.rs`, `ssd.rs`, `drm.rs`, `winit.rs`)

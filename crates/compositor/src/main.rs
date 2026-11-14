@@ -16,6 +16,7 @@ pub mod ssd;
 pub mod state;
 pub mod theme_transition;
 pub mod window_corners;
+pub mod workspace_transition;
 pub mod workspaces;
 
 use malus_de_common::logging::init_logging;

@@ -236,6 +236,9 @@ pub fn run_winit() -> Result<()> {
     let mut active_black_holes: Vec<crate::black_hole::ActiveBlackHoleClose> = Vec::new();
     let mut theme_transition_pipeline: Option<crate::theme_transition::ThemeTransitionPipeline> =
         None;
+    let mut workspace_transition_pipeline: Option<
+        crate::workspace_transition::WorkspaceTransitionPipeline,
+    > = None;
 
     while state.is_running {
         let frame_start = Instant::now();
@@ -1714,6 +1717,7 @@ pub fn run_winit() -> Result<()> {
                     .pop_front()
                     .map(|(destination, _)| destination);
                 let theme_capture_request = state.pending_theme_transition_capture.clone();
+                let workspace_switch_pending = state.pending_workspace_switch.is_some();
                 let mut frame_rendered = false;
                 if let Ok(mut frame) =
                     renderer.render(&mut framebuffer, size, Transform::Flipped180)
@@ -2753,7 +2757,39 @@ pub fn run_winit() -> Result<()> {
                         }
                     }
 
+                    let mut ws_capture_succeeded = false;
+                    if workspace_transition_pipeline.is_none() {
+                        workspace_transition_pipeline = frame
+                            .with_context(
+                                crate::workspace_transition::WorkspaceTransitionPipeline::new,
+                            )
+                            .ok()
+                            .flatten();
+                    }
+                    if let Some(ws_pipeline) = workspace_transition_pipeline.as_mut() {
+                        let output_name = output.name();
+                        let ws_result = frame.with_context(|gl| {
+                            if let Some(ws_transition) = state.workspace_transition {
+                                let now = Instant::now();
+                                if !ws_pipeline.draw(gl, &output_name, size, false, ws_transition, now)
+                                {
+                                    state.workspace_transition = None;
+                                }
+                            }
+                            if workspace_switch_pending {
+                                ws_capture_succeeded =
+                                    ws_pipeline.capture_outgoing(gl, &output_name, size, false);
+                            }
+                        });
+                        if let Err(error) = ws_result {
+                            warn!("No se pudo dibujar la transición de escritorio: {error:?}");
+                        }
+                    }
+
                     let _ = frame.finish();
+                    if workspace_switch_pending {
+                        state.commit_pending_workspace_switch(ws_capture_succeeded);
+                    }
                     if let Some(request) = theme_capture_request {
                         state.pending_theme_transition_capture = None;
                         if theme_capture_succeeded {

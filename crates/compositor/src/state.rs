@@ -229,6 +229,8 @@ pub struct MalusState {
     pub pending_screenshot_requests: std::collections::VecDeque<(std::path::PathBuf, Option<String>)>,
     pub pending_theme_transition_capture: Option<ThemeTransitionCapture>,
     pub theme_transition_started_at: Option<Instant>,
+    pub pending_workspace_switch: Option<crate::workspace_transition::PendingWorkspaceSwitch>,
+    pub workspace_transition: Option<crate::workspace_transition::WorkspaceTransitionState>,
     pub spotlight: crate::spotlight_visual::SpotlightState,
     pub dnd_icon: Option<WlSurface>,
     pub dnd_icon_offset: Point<i32, Logical>,
@@ -1087,6 +1089,8 @@ impl MalusState {
             pending_screenshot_requests: std::collections::VecDeque::new(),
             pending_theme_transition_capture: None,
             theme_transition_started_at: None,
+            pending_workspace_switch: None,
+            workspace_transition: None,
             spotlight: crate::spotlight_visual::SpotlightState::new(),
             dnd_icon: None,
             dnd_icon_offset: Point::from((0, 0)),
@@ -2550,8 +2554,55 @@ impl MalusState {
         true
     }
 
-    /// Cambia el espacio de trabajo activo al índice indicado.
+    /// Solicita el cambio al espacio de trabajo indicado, capturando antes el cuadro saliente
+    /// para animar la transición horizontal salvo cuando Exposé está abierto.
     pub fn switch_workspace(&mut self, target_index: usize) {
+        if target_index >= self.workspaces.count() {
+            return;
+        }
+        if self.expose.active {
+            self.pending_workspace_switch = None;
+            self.workspace_transition = None;
+            self.apply_workspace_switch(target_index);
+            return;
+        }
+        if target_index == self.workspaces.active_index {
+            self.pending_workspace_switch = None;
+            return;
+        }
+        self.pending_workspace_switch =
+            Some(crate::workspace_transition::PendingWorkspaceSwitch { target_index });
+    }
+
+    /// Completa un cambio de espacio pendiente tras capturar el fotograma saliente e inicia
+    /// la animación de deslizamiento horizontal si hubo captura válida.
+    pub fn commit_pending_workspace_switch(&mut self, captured_any_output: bool) -> bool {
+        let Some(pending) = self.pending_workspace_switch.take() else {
+            return false;
+        };
+        if pending.target_index >= self.workspaces.count()
+            || pending.target_index == self.workspaces.active_index
+        {
+            return false;
+        }
+        let direction = if pending.target_index > self.workspaces.active_index {
+            1.0
+        } else {
+            -1.0
+        };
+        self.apply_workspace_switch(pending.target_index);
+        if captured_any_output {
+            self.workspace_transition =
+                Some(crate::workspace_transition::WorkspaceTransitionState {
+                    started_at: Instant::now(),
+                    direction,
+                });
+        }
+        true
+    }
+
+    /// Intercambia inmediatamente las ventanas del espacio saliente y entrante en `Space`.
+    pub fn apply_workspace_switch(&mut self, target_index: usize) {
         if target_index >= self.workspaces.count() || target_index == self.workspaces.active_index {
             return;
         }
@@ -2601,8 +2652,12 @@ impl MalusState {
         if count <= 1 {
             return;
         }
-        let next = (self.workspaces.active_index as isize + delta).clamp(0, count - 1) as usize;
-        if next != self.workspaces.active_index {
+        let current = self
+            .pending_workspace_switch
+            .map(|p| p.target_index)
+            .unwrap_or(self.workspaces.active_index);
+        let next = (current as isize + delta).clamp(0, count - 1) as usize;
+        if next != current || next != self.workspaces.active_index {
             self.switch_workspace(next);
         }
     }
