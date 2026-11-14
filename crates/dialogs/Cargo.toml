@@ -6,5 +6,6 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+malus-de-common.workspace = true
 gtk4.workspace = true
 glib.workspace = true

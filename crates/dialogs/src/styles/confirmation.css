@@ -42,3 +42,45 @@ window.malus-confirmation-window {
     color: alpha(@window_fg_color, 0.78);
     font-size: 14px;
 }
+
+.malus-crash-card {
+    min-width: 560px;
+    max-width: 720px;
+}
+
+.malus-crash-scroll {
+    background-color: alpha(@window_fg_color, 0.05);
+    border: 1px solid alpha(@window_fg_color, 0.14);
+    border-radius: 10px;
+    min-height: 220px;
+}
+
+.malus-crash-text {
+    background-color: transparent;
+    color: alpha(@window_fg_color, 0.90);
+    font-family: monospace;
+    font-size: 12px;
+    padding: 10px;
+}
+
+.malus-crash-status {
+    color: alpha(@window_fg_color, 0.65);
+    font-size: 12px;
+}
+
+.malus-crash-primary {
+    color: #ffffff;
+    background-color: #0a84ff;
+    background-image: none;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: none;
+    font-weight: 600;
+}
+
+.malus-crash-primary:hover {
+    background-color: #2190ff;
+}
+
+.malus-crash-primary:active {
+    background-color: #0070e0;
+}

@@ -1,0 +1,12 @@
+name = "malus-de-crash-worker"
+main = "src/index.js"
+compatibility_date = "2026-01-01"
+
+[[send_email]]
+name = "SEND_EMAIL"
+destination_address = "malus-de@chano.dev"
+
+[vars]
+FROM_EMAIL = "crash-reporter@chano.dev"
+TO_EMAIL = "malus-de@chano.dev"
+

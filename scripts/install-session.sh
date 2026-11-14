@@ -60,6 +60,7 @@ BINARIES=(
     "malus-de-ctl"
     "malus-de-settings"
     "malus-de-branches"
+    "malus-de-crash-reporter"
 )
 
 for bin in "${BINARIES[@]}"; do

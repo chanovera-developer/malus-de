@@ -480,6 +480,92 @@ echo "   PID del Compositor: $COMPOSITOR_PID"
 echo "   Registro de sesión: $LOG_FILE"
 echo "============================================================"
 
+CRASH_DIR="$LOG_DIR/crashes"
+mkdir -p "$CRASH_DIR"
+
+launch_crash_reporter_pending() {
+    if ! ls "$CRASH_DIR"/pending-*.txt >/dev/null 2>&1; then
+        return 0
+    fi
+    if [ -x "$BIN_DIR/malus-de-crash-reporter" ]; then
+        (sleep 1.2 && "$BIN_DIR/malus-de-crash-reporter" --pending >/dev/null 2>&1) &
+    elif command -v malus-de-crash-reporter >/dev/null 2>&1; then
+        (sleep 1.2 && malus-de-crash-reporter --pending >/dev/null 2>&1) &
+    fi
+}
+
+# Si la sesión anterior dejó un reporte de fallo pendiente, abrir el diálogo ahora que el entorno está listo
+launch_crash_reporter_pending
+
+write_native_crash_dump() {
+    local exit_code="$1"
+    # Si el hook de panics de Rust ya creó un reporte del compositor en los últimos 15s, no duplicar
+    if find "$CRASH_DIR" -maxdepth 1 -name 'pending-*-malus_de_compositor.txt' -newermt '-15 seconds' 2>/dev/null | grep -q .; then
+        return 0
+    fi
+
+    local sig_label="código $exit_code"
+    case "$exit_code" in
+        132) sig_label="132 (SIGILL)" ;;
+        134) sig_label="134 (SIGABRT)" ;;
+        136) sig_label="136 (SIGFPE)" ;;
+        137) sig_label="137 (SIGKILL)" ;;
+        139) sig_label="139 (SIGSEGV)" ;;
+        101) sig_label="101 (Panic de Rust)" ;;
+    esac
+
+    local stamp
+    stamp="$(date -u '+%s')"
+    local out_file="$CRASH_DIR/pending-${stamp}-malus_de_compositor.txt"
+    local utc_now distro kernel_info git_rev coredump_info log_tail
+    utc_now="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+    distro="$(awk -F= '/^PRETTY_NAME=/{gsub(/"/,"",$2); print $2; exit}' /etc/os-release 2>/dev/null || echo 'Linux')"
+    kernel_info="$(uname -srmo 2>/dev/null || echo 'desconocido')"
+    git_rev="desconocido"
+    for pdir in "${PROJECT_DIRS[@]}"; do
+        if [ -d "$pdir/.git" ] && command -v git >/dev/null 2>&1; then
+            git_rev="$(git -C "$pdir" log -1 --oneline 2>/dev/null || echo 'desconocido')"
+            break
+        fi
+    done
+
+    coredump_info="(coredumpctl no disponible o sin volcado reciente)"
+    if command -v coredumpctl >/dev/null 2>&1; then
+        coredump_info="$(coredumpctl info -1 --no-pager 2>/dev/null | head -n 60 || true)"
+        [ -z "$coredump_info" ] && coredump_info="(sin volcado en coredumpctl)"
+    fi
+
+    log_tail="$(tail -n 150 "$LOG_FILE" 2>/dev/null || echo '(session.log no disponible)')"
+
+    {
+        echo "============================================================"
+        echo "MALUS DE - INFORME DE FALLO (CRASH DUMP)"
+        echo "============================================================"
+        echo "Fecha (UTC):   $utc_now"
+        echo "Componente:    malus-de-compositor"
+        echo "Señal / Código:$sig_label"
+        echo "Backend:       $BACKEND_FLAG"
+        echo "Distro:        $distro"
+        echo "Kernel:        $kernel_info"
+        echo "Commit repo:   $git_rev"
+        echo ""
+        echo "--- MENSAJE DEL ERROR ---"
+        echo "El compositor finalizó inesperadamente con $sig_label."
+        echo ""
+        echo "--- COREDUMP (coredumpctl info -1) ---"
+        echo "$coredump_info"
+        echo ""
+        echo "--- ÚLTIMAS LÍNEAS DE session.log ---"
+        echo "$log_tail"
+    } | sed "s|$HOME|~|g" > "$out_file"
+}
+
+SESSION_INTERRUPTED=0
+on_signal() {
+    SESSION_INTERRUPTED=1
+    cleanup
+}
+
 # Manejo de señales de cierre de sesión
 cleanup() {
     echo ""
@@ -501,6 +587,15 @@ cleanup() {
     echo "Sesión finalizada limpiamente: $(date '+%Y-%m-%d %H:%M:%S')"
 }
 
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap on_signal INT TERM
 
-wait "$COMPOSITOR_PID"
+COMP_EXIT=0
+wait "$COMPOSITOR_PID" || COMP_EXIT=$?
+if [ "$COMP_EXIT" -ne 0 ] && [ "$SESSION_INTERRUPTED" -eq 0 ]; then
+    echo "💥 Compositor terminó con error ($COMP_EXIT); generando volcado de fallo..."
+    write_native_crash_dump "$COMP_EXIT"
+    if [ "$BACKEND_FLAG" = "--backend winit" ]; then
+        launch_crash_reporter_pending
+    fi
+fi

@@ -4,6 +4,7 @@
 //! para sockets Unix, gestión de temas y configuración de logging estructurado.
 
 pub mod config;
+pub mod crash;
 pub mod ipc;
 pub mod theme;
 pub mod logging;
