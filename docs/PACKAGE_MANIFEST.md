@@ -222,6 +222,37 @@ sudo pacman -S --needed \
     xorg-xwayland
 ```
 
+### B. Dependencias de Compilación (`pacman` para desarrolladores)
+> **Nota:** En Arch Linux los archivos de cabecera (`-dev`/`-devel`) vienen incluidos en los paquetes principales. Si ya instalaste Rust mediante `rustup`, puedes omitir el paquete `rust`.
+
+```bash
+sudo pacman -S --needed \
+    base-devel \
+    clang \
+    pkgconf \
+    rust \
+    gtk4 \
+    libadwaita \
+    gtk4-layer-shell \
+    mesa \
+    wayland \
+    wayland-protocols \
+    cairo \
+    gdk-pixbuf2 \
+    libinput \
+    seatd \
+    libxkbcommon \
+    systemd-libs \
+    dbus \
+    sqlite
+```
+
+Luego compila respetando exactamente las versiones fijadas en `Cargo.lock`:
+
+```bash
+cargo build --release --locked
+```
+
 ---
 
 ## 5. Servicios Systemd que deben habilitarse al instalar la Distro
