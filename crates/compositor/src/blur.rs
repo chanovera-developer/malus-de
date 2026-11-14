@@ -61,7 +61,7 @@ uniform vec2 u_texel_size;
 uniform vec2 u_direction;
 
 void main() {
-    const float BLUR_RADIUS_SCALE = 1.5;
+    const float BLUR_RADIUS_SCALE = 1.75;
     vec2 offset = u_texel_size * u_direction;
     vec4 sum = texture(u_texture, v_tex_coords) * 0.227027;
     sum += texture(u_texture, v_tex_coords + offset * (1.384615 * BLUR_RADIUS_SCALE)) * 0.316216;
@@ -176,6 +176,17 @@ void main() {
 "#;
 
 const BLUR_SLOT_COUNT: usize = 12;
+const BLUR_DOWNSAMPLE_DIVISOR: i32 = 3;
+const BLUR_GAUSSIAN_PASSES: usize = 3;
+const CAPTURE_PAD_PX: i32 = 12;
+
+#[inline]
+fn downsampled_size(w: i32, h: i32) -> (i32, i32) {
+    (
+        (w / BLUR_DOWNSAMPLE_DIVISOR).max(2),
+        (h / BLUR_DOWNSAMPLE_DIVISOR).max(2),
+    )
+}
 
 #[derive(Debug, Clone, Copy)]
 struct BlurSlot {
@@ -360,6 +371,61 @@ impl GaussianBlur {
         idx
     }
 
+    /// Ejecuta el downsample inicial y `BLUR_GAUSSIAN_PASSES` pasadas ping-pong H+V
+    /// dejando el resultado final en `slot.fbo_textures[0]` con tamaño `(w0, h0)`.
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn run_blur_passes(
+        &self,
+        gl: &ffi::Gles2,
+        slot: &BlurSlot,
+        source_tex: ffi::types::GLuint,
+        source_size: (i32, i32),
+        source_rect: [f32; 4],
+        w0: i32,
+        h0: i32,
+    ) {
+        // PASO 1: Downsample inicial hacia FBO 0
+        gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbos[0]);
+        gl.Viewport(0, 0, w0, h0);
+        gl.UseProgram(self.down_program);
+        gl.ActiveTexture(ffi::TEXTURE0);
+        gl.BindTexture(ffi::TEXTURE_2D, source_tex);
+        gl.Uniform1i(self.down_u_texture, 0);
+        gl.Uniform2f(
+            self.down_u_halfpixel,
+            0.5 / source_size.0 as f32,
+            0.5 / source_size.1 as f32,
+        );
+        gl.Uniform1f(self.down_u_offset, 5.0);
+        gl.Uniform4f(
+            self.down_u_source_rect,
+            source_rect[0],
+            source_rect[1],
+            source_rect[2],
+            source_rect[3],
+        );
+        gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
+
+        // PASOS 2..N: Múltiples pasadas gaussianas separables H+V en baja resolución
+        // para lograr un vidrio esmerilado denso y suave sin banding ni costuras.
+        gl.UseProgram(self.gaussian_program);
+        gl.Uniform1i(self.gaussian_u_texture, 0);
+        gl.Uniform2f(self.gaussian_u_texel_size, 1.0 / w0 as f32, 1.0 / h0 as f32);
+        for _ in 0..BLUR_GAUSSIAN_PASSES {
+            gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbos[1]);
+            gl.Viewport(0, 0, w0, h0);
+            gl.BindTexture(ffi::TEXTURE_2D, slot.fbo_textures[0]);
+            gl.Uniform2f(self.gaussian_u_direction, 1.0, 0.0);
+            gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
+
+            gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbos[0]);
+            gl.Viewport(0, 0, w0, h0);
+            gl.BindTexture(ffi::TEXTURE_2D, slot.fbo_textures[1]);
+            gl.Uniform2f(self.gaussian_u_direction, 0.0, 1.0);
+            gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
+        }
+    }
+
     /// Aplica desenfoque gaussiano a la región de pantalla de la ventana dada
     pub fn render_blur(
         &mut self,
@@ -426,10 +492,13 @@ impl GaussianBlur {
         if screen_size.w < 1 || screen_size.h < 1 {
             return;
         }
-        let pad = 8;
         let expanded = Rectangle::new(
-            (region.loc.x - pad, region.loc.y - pad).into(),
-            (region.size.w + pad * 2, region.size.h + pad * 2).into(),
+            (region.loc.x - CAPTURE_PAD_PX, region.loc.y - CAPTURE_PAD_PX).into(),
+            (
+                region.size.w + CAPTURE_PAD_PX * 2,
+                region.size.h + CAPTURE_PAD_PX * 2,
+            )
+                .into(),
         );
         let screen_rect = Rectangle::from_size(screen_size);
         let Some(visible) = expanded.intersection(screen_rect) else {
@@ -561,8 +630,7 @@ impl GaussianBlur {
 
         let w = visible_rect.size.w;
         let h = visible_rect.size.h;
-        let w0 = (w / 2).max(2);
-        let h0 = (h / 2).max(2);
+        let (w0, h0) = downsampled_size(w, h);
 
         // En DRM (Transform::Normal), la matriz de proyección mapea Y positivo hacia abajo en NDC
         // y el framebuffer tiene origen superior (y = 0 en la parte superior de pantalla).
@@ -711,51 +779,12 @@ impl GaussianBlur {
             gl.Disable(ffi::CULL_FACE);
             gl.Disable(ffi::BLEND);
 
-            // PASO 1: Downsample inicial desde source_tex -> FBO 0
-            gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbos[0]);
-            gl.Viewport(0, 0, w0, h0);
-            gl.UseProgram(self.down_program);
-            gl.ActiveTexture(ffi::TEXTURE0);
-            gl.BindTexture(
-                ffi::TEXTURE_2D,
-                if from_capture {
-                    self.snapshot_tex
-                } else {
-                    slot.source_tex
-                },
-            );
-            gl.Uniform1i(self.down_u_texture, 0);
-            gl.Uniform2f(
-                self.down_u_halfpixel,
-                0.5 / source_size.0 as f32,
-                0.5 / source_size.1 as f32,
-            );
-            gl.Uniform1f(self.down_u_offset, 5.0);
-            gl.Uniform4f(
-                self.down_u_source_rect,
-                source_rect[0],
-                source_rect[1],
-                source_rect[2],
-                source_rect[3],
-            );
-            gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
-
-            // PASO 2: Filtro gaussiano horizontal a media resolución
-            gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbos[1]);
-            gl.Viewport(0, 0, w0, h0);
-            gl.BindTexture(ffi::TEXTURE_2D, slot.fbo_textures[0]);
-            gl.UseProgram(self.gaussian_program);
-            gl.Uniform1i(self.gaussian_u_texture, 0);
-            gl.Uniform2f(self.gaussian_u_texel_size, 1.0 / w0 as f32, 1.0 / h0 as f32);
-            gl.Uniform2f(self.gaussian_u_direction, 1.0, 0.0);
-            gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
-
-            // PASO 3: Filtro gaussiano vertical a media resolución
-            gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbos[0]);
-            gl.Viewport(0, 0, w0, h0);
-            gl.BindTexture(ffi::TEXTURE_2D, slot.fbo_textures[1]);
-            gl.Uniform2f(self.gaussian_u_direction, 0.0, 1.0);
-            gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
+            let source_tex = if from_capture {
+                self.snapshot_tex
+            } else {
+                slot.source_tex
+            };
+            self.run_blur_passes(gl, &slot, source_tex, source_size, source_rect, w0, h0);
 
             // PASO 4: Blit final desde FBO 0 hacia la pantalla con soporte squircle y anclaje proyectado
             gl.BindFramebuffer(ffi::FRAMEBUFFER, prev_fbo as u32);
@@ -856,8 +885,7 @@ impl GaussianBlur {
 
         let w = visible_rect.size.w;
         let h = visible_rect.size.h;
-        let w0 = (w / 2).max(2);
-        let h0 = (h / 2).max(2);
+        let (w0, h0) = downsampled_size(w, h);
 
         let is_drm = projection[4] > 0.0;
         let copy_x = visible_rect.loc.x;
@@ -1040,34 +1068,7 @@ impl GaussianBlur {
             gl.Disable(ffi::CULL_FACE);
             gl.Disable(ffi::BLEND);
 
-            // PASO 1: Downsample unificado
-            gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbos[0]);
-            gl.Viewport(0, 0, w0, h0);
-            gl.UseProgram(self.down_program);
-            gl.ActiveTexture(ffi::TEXTURE0);
-            gl.BindTexture(ffi::TEXTURE_2D, slot.source_tex);
-            gl.Uniform1i(self.down_u_texture, 0);
-            gl.Uniform2f(self.down_u_halfpixel, 0.5 / w as f32, 0.5 / h as f32);
-            gl.Uniform1f(self.down_u_offset, 5.0);
-            gl.Uniform4f(self.down_u_source_rect, 0.0, 0.0, 1.0, 1.0);
-            gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
-
-            // PASO 2: Gaussiano horizontal
-            gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbos[1]);
-            gl.Viewport(0, 0, w0, h0);
-            gl.BindTexture(ffi::TEXTURE_2D, slot.fbo_textures[0]);
-            gl.UseProgram(self.gaussian_program);
-            gl.Uniform1i(self.gaussian_u_texture, 0);
-            gl.Uniform2f(self.gaussian_u_texel_size, 1.0 / w0 as f32, 1.0 / h0 as f32);
-            gl.Uniform2f(self.gaussian_u_direction, 1.0, 0.0);
-            gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
-
-            // PASO 3: Gaussiano vertical
-            gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbos[0]);
-            gl.Viewport(0, 0, w0, h0);
-            gl.BindTexture(ffi::TEXTURE_2D, slot.fbo_textures[1]);
-            gl.Uniform2f(self.gaussian_u_direction, 0.0, 1.0);
-            gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
+            self.run_blur_passes(gl, &slot, slot.source_tex, (w, h), [0.0, 0.0, 1.0, 1.0], w0, h0);
 
             // PASO 4: Blit enmascarado por silueta exacta
             gl.BindFramebuffer(ffi::FRAMEBUFFER, prev_fbo as u32);
@@ -1547,5 +1548,29 @@ impl RenderElement<GlesRenderer> for BlurRenderElement {
                 );
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        BLUR_DOWNSAMPLE_DIVISOR, BLUR_GAUSSIAN_PASSES, CAPTURE_PAD_PX, GAUSSIAN_BLUR_SRC,
+        downsampled_size,
+    };
+
+    #[test]
+    fn downsampled_size_clamps_minimum_to_two() {
+        assert_eq!(downsampled_size(4, 4), (2, 2));
+        assert_eq!(downsampled_size(5, 8), (2, 2));
+        assert_eq!(downsampled_size(1920, 32), (1920 / BLUR_DOWNSAMPLE_DIVISOR, 10));
+        assert_eq!(downsampled_size(900, 600), (300, 200));
+    }
+
+    #[test]
+    fn blur_configuration_uses_multipass_frosted_strength() {
+        assert!(BLUR_GAUSSIAN_PASSES >= 2);
+        assert!(BLUR_DOWNSAMPLE_DIVISOR >= 2);
+        assert!(CAPTURE_PAD_PX >= 8);
+        assert!(GAUSSIAN_BLUR_SRC.contains("BLUR_RADIUS_SCALE = 1.75"));
     }
 }
