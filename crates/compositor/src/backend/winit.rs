@@ -19,7 +19,7 @@ use smithay::{
             },
             gles::GlesRenderer,
             utils::draw_render_elements,
-            Color32F, ExportMem, Frame, Renderer, Texture,
+            Color32F, ExportMem, Frame, ImportDma, Renderer, Texture,
         },
         winit::{self, WinitEvent},
     },
@@ -178,6 +178,14 @@ pub fn run_winit() -> Result<()> {
     // Inicializar backend gráfico de Winit en ventana anidada
     let (mut backend, mut winit_event_loop) = winit::init::<GlesRenderer>()
         .map_err(|e| anyhow::anyhow!("Error al inicializar WinitGraphicsBackend: {e:?}"))?;
+
+    let dmabuf_formats = backend.renderer().dmabuf_formats();
+    if dmabuf_formats.iter().next().is_some() {
+        let global = state
+            .dmabuf_state
+            .create_global::<MalusState>(&state.display_handle, dmabuf_formats);
+        state.dmabuf_global = Some(global);
+    }
 
     let mode = Mode {
         size: backend.window_size(),
@@ -2923,6 +2931,7 @@ pub fn run_winit() -> Result<()> {
 
         state.process_ipc_messages();
         display.dispatch_clients(&mut state)?;
+        state.process_pending_dmabuf_imports(backend.renderer());
         state.space.refresh();
         for output in state.space.outputs() {
             let mut map = smithay::desktop::layer_map_for_output(output);

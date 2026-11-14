@@ -6,9 +6,11 @@ use std::time::{Duration, Instant};
 use crate::cpu_priority::FocusCpuPriority;
 use malus_de_common::config::DockConfig;
 use smithay::{
-    delegate_compositor, delegate_data_control, delegate_data_device, delegate_fractional_scale,
-    delegate_layer_shell, delegate_output, delegate_presentation, delegate_primary_selection,
-    delegate_seat, delegate_shm, delegate_viewporter, delegate_xdg_decoration, delegate_xdg_shell,
+    backend::allocator::dmabuf::Dmabuf,
+    delegate_compositor, delegate_data_control, delegate_data_device, delegate_dmabuf,
+    delegate_fractional_scale, delegate_layer_shell, delegate_output, delegate_presentation,
+    delegate_primary_selection, delegate_seat, delegate_shm, delegate_viewporter,
+    delegate_xdg_decoration, delegate_xdg_shell,
     desktop::{
         find_popup_root_surface, get_popup_toplevel_coords, layer_map_for_output, PopupGrab,
         PopupKeyboardGrab, PopupKind, PopupManager, PopupPointerGrab, Space,
@@ -29,6 +31,7 @@ use smithay::{
     wayland::{
         buffer::BufferHandler,
         compositor::{CompositorClientState, CompositorHandler, CompositorState},
+        dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
         fractional_scale::{with_fractional_scale, FractionalScaleHandler, FractionalScaleManagerState},
         output::{OutputHandler, OutputManagerState},
         selection::{
@@ -179,6 +182,9 @@ pub struct MalusState {
     pub viewporter_state: ViewporterState,
     pub presentation_state: smithay::wayland::presentation::PresentationState,
     pub shm_state: ShmState,
+    pub dmabuf_state: DmabufState,
+    pub dmabuf_global: Option<DmabufGlobal>,
+    pub pending_dmabuf_imports: Vec<(Dmabuf, ImportNotifier)>,
     pub seat_state: SeatState<MalusState>,
     pub data_device_state: DataDeviceState,
     pub primary_selection_state: PrimarySelectionState,
@@ -228,6 +234,7 @@ pub struct MalusState {
     pub workspace_revision: u64,
     pub swipe_gesture: SwipeGestureState,
     pub surface_commit_counter: usize,
+    pub output_commit_counters: HashMap<String, usize>,
     pub background_commit_counter: usize,
 }
 
@@ -845,6 +852,7 @@ impl MalusState {
         let viewporter_state = ViewporterState::new::<Self>(&dh);
         let presentation_state = smithay::wayland::presentation::PresentationState::new::<Self>(&dh, 1);
         let shm_state = ShmState::new::<Self>(&dh, vec![]);
+        let dmabuf_state = DmabufState::new();
         let mut seat_state = SeatState::new();
         let seat = seat_state.new_wl_seat(&dh, "malus-seat-0");
         let data_device_state = DataDeviceState::new::<Self>(&dh);
@@ -868,6 +876,9 @@ impl MalusState {
             viewporter_state,
             presentation_state,
             shm_state,
+            dmabuf_state,
+            dmabuf_global: None,
+            pending_dmabuf_imports: Vec::new(),
             seat_state,
             data_device_state,
             primary_selection_state,
@@ -914,6 +925,7 @@ impl MalusState {
             workspace_revision: 0,
             swipe_gesture: SwipeGestureState::default(),
             surface_commit_counter: 0,
+            output_commit_counters: HashMap::new(),
             background_commit_counter: 0,
         }
     }
@@ -1103,6 +1115,21 @@ impl MalusState {
                     .map(|(win, _)| win.clone())
             })
             .or_else(|| self.workspaces.window_for_surface(surface))
+    }
+
+    pub fn output_commit_counter(&self, output_name: &str) -> usize {
+        self.output_commit_counters
+            .get(output_name)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub fn bump_output_commit_counter(&mut self, output_name: &str) {
+        let entry = self
+            .output_commit_counters
+            .entry(output_name.to_string())
+            .or_insert(0);
+        *entry = entry.wrapping_add(1);
     }
 
     pub fn dock_surface_geometry(&self) -> Option<(Rectangle<i32, Logical>, Output)> {
@@ -2763,6 +2790,7 @@ pub fn snap_window(
 // Delegaciones de protocolos de Smithay
 delegate_compositor!(MalusState);
 delegate_shm!(MalusState);
+delegate_dmabuf!(MalusState);
 delegate_seat!(MalusState);
 delegate_xdg_shell!(MalusState);
 delegate_layer_shell!(MalusState);
@@ -3557,19 +3585,21 @@ impl CompositorHandler for MalusState {
     }
 
     fn commit(&mut self, surface: &WlSurface) {
-        self.surface_commit_counter = self.surface_commit_counter.wrapping_add(1);
-        let is_background = self.space.outputs().any(|output| {
+        let mut matched_outputs: Vec<String> = Vec::new();
+        let mut is_background = false;
+        for output in self.space.outputs() {
             let layer_map = smithay::desktop::layer_map_for_output(output);
-            let found = layer_map.layers().any(|l| {
-                l.wl_surface() == surface
-                    && matches!(
-                        l.layer(),
-                        smithay::wayland::shell::wlr_layer::Layer::Background
-                            | smithay::wayland::shell::wlr_layer::Layer::Bottom
-                    )
-            });
-            found
-        });
+            if let Some(layer) = layer_map.layers().find(|l| l.wl_surface() == surface) {
+                matched_outputs.push(output.name());
+                if matches!(
+                    layer.layer(),
+                    smithay::wayland::shell::wlr_layer::Layer::Background
+                        | smithay::wayland::shell::wlr_layer::Layer::Bottom
+                ) {
+                    is_background = true;
+                }
+            };
+        }
         if is_background {
             self.background_commit_counter = self.background_commit_counter.wrapping_add(1);
         }
@@ -3591,6 +3621,20 @@ impl CompositorHandler for MalusState {
         }
 
         let window = self.window_for_surface(surface);
+        if matched_outputs.is_empty() {
+            if let Some(ref win) = window {
+                for output in self.space.outputs_for_element(win) {
+                    matched_outputs.push(output.name());
+                }
+            }
+        }
+        if !matched_outputs.is_empty() && !self.expose.active {
+            for out_name in matched_outputs {
+                self.bump_output_commit_counter(&out_name);
+            }
+        } else if window.is_none() || self.expose.active {
+            self.surface_commit_counter = self.surface_commit_counter.wrapping_add(1);
+        }
 
         // Sincronizar escala fraccionaria preferida según el monitor físico en el que reside la superficie
         let preferred_scale =
@@ -3742,6 +3786,40 @@ impl BufferHandler for MalusState {
 impl ShmHandler for MalusState {
     fn shm_state(&self) -> &ShmState {
         &self.shm_state
+    }
+}
+
+impl DmabufHandler for MalusState {
+    fn dmabuf_state(&mut self) -> &mut DmabufState {
+        &mut self.dmabuf_state
+    }
+
+    fn dmabuf_imported(&mut self, _global: &DmabufGlobal, dmabuf: Dmabuf, notifier: ImportNotifier) {
+        self.pending_dmabuf_imports.push((dmabuf, notifier));
+    }
+}
+
+impl MalusState {
+    /// Importa en el renderer los DMA-BUFs recién solicitados por clientes Wayland y notifica el resultado.
+    pub fn process_pending_dmabuf_imports(
+        &mut self,
+        renderer: &mut impl smithay::backend::renderer::ImportDma,
+    ) -> bool {
+        if self.pending_dmabuf_imports.is_empty() {
+            return false;
+        }
+        for (dmabuf, notifier) in self.pending_dmabuf_imports.drain(..) {
+            match renderer.import_dmabuf(&dmabuf, None) {
+                Ok(_) => {
+                    let _ = notifier.successful::<Self>();
+                }
+                Err(err) => {
+                    tracing::warn!("⚠️ Falló importación DMA-BUF en renderer GPU: {:?}", err);
+                    notifier.failed();
+                }
+            }
+        }
+        true
     }
 }
 

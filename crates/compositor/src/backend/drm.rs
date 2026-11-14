@@ -103,6 +103,8 @@ fn send_presentation_feedback_surface_tree(
     );
 }
 
+const ENABLE_DAMAGE_TRACKING: bool = false;
+
 struct DrmOutputSurface {
     output: Output,
     surface: GbmBufferedSurface<GbmAllocator<DrmDeviceFd>, ()>,
@@ -123,7 +125,9 @@ struct DrmOutputSurface {
     dock_redraw_buffers: usize,
     full_damage_pending: bool,
     last_commit_counter: usize,
+    last_output_commit_counter: usize,
     pending_damage_buffers: usize,
+    flip_pending: Option<Instant>,
     last_cursor_draw_point: Option<(i32, i32)>,
     last_cursor_status: smithay::input::pointer::CursorImageStatus,
     last_background_commit_counter: usize,
@@ -131,6 +135,13 @@ struct DrmOutputSurface {
     background_dirty: bool,
     last_expose_revision: u64,
     last_workspace_revision: u64,
+}
+
+impl DrmOutputSurface {
+    fn is_flip_pending(&self) -> bool {
+        self.flip_pending
+            .map_or(false, |submitted_at| submitted_at.elapsed() < Duration::from_millis(250))
+    }
 }
 
 struct ThemedCursor {
@@ -915,6 +926,57 @@ pub fn run_drm() -> Result<()> {
 
     info!("🎨 Renderer OpenGL ES acelerado por hardware listo");
 
+    // Exponer protocolo Wayland zwp_linux_dmabuf_v1 para compartición zero-copy en GPU (Chrome, Firefox, Electron)
+    let dmabuf_formats = renderer.dmabuf_formats();
+    let drm_render_node = smithay::backend::drm::DrmNode::from_file(
+        std::os::fd::AsFd::as_fd(&drm_device),
+    )
+    .ok()
+    .and_then(|node| {
+        node.node_with_type(smithay::backend::drm::NodeType::Render)
+            .and_then(Result::ok)
+            .or(Some(node))
+    });
+    if let Some(render_node) = drm_render_node {
+        match smithay::wayland::dmabuf::DmabufFeedbackBuilder::new(
+            render_node.dev_id(),
+            dmabuf_formats.iter().copied(),
+        )
+        .build()
+        {
+            Ok(default_feedback) => {
+                let global = state
+                    .dmabuf_state
+                    .create_global_with_default_feedback::<MalusState>(
+                        &state.display_handle,
+                        &default_feedback,
+                    );
+                state.dmabuf_global = Some(global);
+                info!(
+                    "🚀 linux-dmabuf v5 (zero-copy GPU) habilitado en {:?}",
+                    render_node
+                );
+            }
+            Err(err) => {
+                warn!(
+                    "⚠️ No se pudo construir DmabufFeedback ({:?}); usando linux-dmabuf v3",
+                    err
+                );
+                let global = state.dmabuf_state.create_global::<MalusState>(
+                    &state.display_handle,
+                    dmabuf_formats,
+                );
+                state.dmabuf_global = Some(global);
+            }
+        }
+    } else {
+        let global = state
+            .dmabuf_state
+            .create_global::<MalusState>(&state.display_handle, dmabuf_formats);
+        state.dmabuf_global = Some(global);
+        info!("🚀 linux-dmabuf v3 (zero-copy GPU) habilitado");
+    }
+
     let (mut cursor_theme, mut cursor_size) = malus_de_common::config::load_cursor_config();
     let mut cursor_texture = create_cursor_texture(&mut renderer, &cursor_theme, cursor_size);
 
@@ -1289,10 +1351,12 @@ pub fn run_drm() -> Result<()> {
             extra_damage_history: std::collections::VecDeque::with_capacity(4),
             last_window_geometries: std::collections::HashMap::new(),
             window_redraw_shadow_blur: std::collections::HashMap::new(),
-            dock_redraw_buffers: 3,
+            dock_redraw_buffers: if ENABLE_DAMAGE_TRACKING { 3 } else { 0 },
             full_damage_pending: true,
             last_commit_counter: 0,
-            pending_damage_buffers: 3,
+            last_output_commit_counter: 0,
+            pending_damage_buffers: 1,
+            flip_pending: None,
             last_cursor_draw_point: None,
             last_cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
             last_background_commit_counter: usize::MAX,
@@ -1382,11 +1446,13 @@ pub fn run_drm() -> Result<()> {
                     if let Ok(mut surfs) = surfaces_for_vt.lock() {
                         for s in surfs.iter_mut() {
                             s.full_damage_pending = true;
+                            s.flip_pending = None;
+                            s.pending_damage_buffers = 1;
                             s.cursor_history.clear();
                             s.extra_damage_history.clear();
                             s.last_window_geometries.clear();
                             s.window_redraw_shadow_blur.clear();
-                            s.dock_redraw_buffers = 3;
+                            s.dock_redraw_buffers = if ENABLE_DAMAGE_TRACKING { 3 } else { 0 };
                         }
                     }
                 }
@@ -1404,6 +1470,7 @@ pub fn run_drm() -> Result<()> {
                         for s in surfs.iter_mut() {
                             if s.crtc == crtc {
                                 let _ = s.surface.frame_submitted();
+                                s.flip_pending = None;
                             }
                         }
                     }
@@ -1414,6 +1481,25 @@ pub fn run_drm() -> Result<()> {
             },
         )
         .map_err(|e| anyhow::anyhow!("Error al registrar notificador DRM: {e:?}"))?;
+
+    // Despertar inmediatamente cuando algún cliente Wayland escriba commits o frame requests
+    let display_poll_fd = display
+        .backend()
+        .poll_fd()
+        .try_clone_to_owned()
+        .context("No se pudo clonar fd de Wayland Display para calloop")?;
+    loop_handle
+        .insert_source(
+            smithay::reexports::calloop::generic::Generic::new(
+                display_poll_fd,
+                smithay::reexports::calloop::Interest::READ,
+                smithay::reexports::calloop::Mode::Level,
+            ),
+            |_readiness, _fd, _state| {
+                Ok(smithay::reexports::calloop::PostAction::Continue)
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("Error al registrar Wayland Display en calloop: {e:?}"))?;
 
     // Despacho de eventos de Libinput con soporte para ratón, touchpad y atajos completos
     let mut session_vt = session.clone();
@@ -2430,12 +2516,13 @@ pub fn run_drm() -> Result<()> {
                                         let (width, height) = mode.size();
                                         s.size = (width as i32, height as i32).into();
                                         s.full_damage_pending = true;
+                                        s.flip_pending = None;
                                         s.cursor_history.clear();
                                         s.extra_damage_history.clear();
                                         s.last_window_geometries.clear();
                                         s.window_redraw_shadow_blur.clear();
-                                        s.dock_redraw_buffers = 3;
-                                        s.pending_damage_buffers = 3;
+                                        s.dock_redraw_buffers = if ENABLE_DAMAGE_TRACKING { 3 } else { 0 };
+                                        s.pending_damage_buffers = 1;
                                         s.background_dirty = true;
                                         s.damage_tracker = OutputDamageTracker::from_output(&s.output);
                                         mode_update = Some(Mode {
@@ -2494,11 +2581,13 @@ pub fn run_drm() -> Result<()> {
                         }
 
                         s.full_damage_pending = true;
+                        s.flip_pending = None;
+                        s.pending_damage_buffers = 1;
                         s.cursor_history.clear();
                         s.extra_damage_history.clear();
                         s.last_window_geometries.clear();
                         s.window_redraw_shadow_blur.clear();
-                        s.dock_redraw_buffers = 3;
+                        s.dock_redraw_buffers = if ENABLE_DAMAGE_TRACKING { 3 } else { 0 };
                         s.damage_tracker = OutputDamageTracker::from_output(&s.output);
                         info!(
                             "   ✅ Monitor {} actualizado en vivo: pos=({}, {}), escala={:.4}x ({:.1}%)",
@@ -2584,30 +2673,44 @@ pub fn run_drm() -> Result<()> {
             }
         }
 
-        // Despachar eventos de hardware (libinput, sesión, vblank) sin retraso artificial.
-        // El frame pacing se regula al final de cada ciclo con el frame_interval del monitor.
-        // Si hay búferes pendientes de renderizar o animaciones activas, despachar de inmediato (Duration::ZERO).
-        // En reposo absoluto (pantalla estática), usar 1 ms de espera para máxima reactividad.
-        let has_pending_work = if let Ok(surfs) = shared_surfaces.lock() {
-            surfs.iter().any(|s| s.pending_damage_buffers > 0)
+        // Despachar eventos de hardware (libinput, sesión, VBlank, socket Wayland) dirigidos por VBlank por monitor.
+        // Si algún monitor NO tiene un flip pendiente y ya acumula trabajo listo para pintar, se despacha sin espera.
+        // En caso contrario, calloop duerme sin consumir CPU y despierta al instante cuando llega un VBlank, entrada o commit.
+        let compositor_anim_active = !state.active_animations.is_empty()
+            || !state.snap_transitions.is_empty()
+            || state.expose.is_animating()
+            || state.theme_transition_started_at.is_some()
+            || state.pending_theme_transition_capture.is_some();
+        let has_ready_output = if let Ok(surfs) = shared_surfaces.lock() {
+            surfs.iter().any(|s| {
+                if s.is_flip_pending() {
+                    return false;
+                }
+                let out_name = s.output.name();
+                compositor_anim_active
+                    || s.pending_damage_buffers > 0
+                    || s.full_damage_pending
+                    || s.last_commit_counter != state.surface_commit_counter
+                    || s.last_output_commit_counter != state.output_commit_counter(&out_name)
+                    || s.last_expose_revision != state.expose.render_revision
+                    || s.last_workspace_revision != state.workspace_revision
+            })
         } else {
             false
         };
-        let dispatch_timeout = if has_pending_work
-            || !state.active_animations.is_empty()
-            || state.expose.is_animating()
-            || state.theme_transition_started_at.is_some()
-            || state.pending_theme_transition_capture.is_some()
-        {
+        let dispatch_timeout = if has_ready_output {
             Duration::ZERO
         } else {
-            Duration::from_millis(1)
+            Duration::from_millis(8)
         };
         let _ = event_loop.dispatch(Some(dispatch_timeout), &mut state);
         let _ = display.flush_clients();
 
         state.process_ipc_messages();
         display.dispatch_clients(&mut state)?;
+        if state.process_pending_dmabuf_imports(&mut renderer) {
+            let _ = display.flush_clients();
+        }
         state.space.refresh();
         let expose_was_active = state.expose.active;
         let expose_animating = state.expose.tick();
@@ -3164,17 +3267,20 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
 
+                let damage_buffers_per_event = if ENABLE_DAMAGE_TRACKING { 3 } else { 1 };
                 let expose_rev_changed =
                     out_surface.last_expose_revision != state.expose.render_revision;
                 let workspace_rev_changed =
                     out_surface.last_workspace_revision != state.workspace_revision;
                 if expose_just_closed || expose_rev_changed || workspace_rev_changed {
                     out_surface.full_damage_pending = true;
-                    out_surface.pending_damage_buffers = 3;
+                    out_surface.pending_damage_buffers =
+                        out_surface.pending_damage_buffers.max(damage_buffers_per_event);
                 }
 
                 // ─── CÁLCULO DE DAMAGE TRACKING POR PANTALLA CON SMITHAY ───
-                let mut tracker_elements: Vec<MalusDrmElement> = Vec::new();
+                let tracker_elements: Vec<MalusDrmElement> = if ENABLE_DAMAGE_TRACKING {
+                    let mut tracker_elements: Vec<MalusDrmElement> = Vec::new();
 
                 for elem in &cursor_elems {
                     tracker_elements.push(MalusDrmElement::Wayland(elem));
@@ -3465,6 +3571,10 @@ pub fn run_drm() -> Result<()> {
                 for elem in &lower_elements {
                     tracker_elements.push(MalusDrmElement::Wayland(elem));
                 }
+                    tracker_elements
+                } else {
+                    Vec::new()
+                };
 
                 // Precomputar oclusión (Occlusion Culling) de arriba hacia abajo para evitar overdraw masivo
                 let screen_bounds = Rectangle::from_size(out_surface.size);
@@ -3534,10 +3644,14 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
 
-                // Verificación y sincronización de Idle Sleeping / Frame Throttling (Opción B)
-                let has_commits = state.surface_commit_counter != out_surface.last_commit_counter;
+                // Verificación y sincronización por monitor (evita que commits de una pantalla redibujen la otra)
+                let current_output_commit_counter =
+                    state.output_commit_counter(&out_surface.output.name());
+                let has_commits = state.surface_commit_counter != out_surface.last_commit_counter
+                    || current_output_commit_counter != out_surface.last_output_commit_counter;
                 if has_commits {
-                    out_surface.pending_damage_buffers = 3;
+                    out_surface.pending_damage_buffers =
+                        out_surface.pending_damage_buffers.max(damage_buffers_per_event);
                 }
 
                 let cursor_changed = cursor_draw_point != out_surface.last_cursor_draw_point
@@ -3564,7 +3678,8 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
                 if window_geoms_changed {
-                    out_surface.pending_damage_buffers = 3;
+                    out_surface.pending_damage_buffers =
+                        out_surface.pending_damage_buffers.max(damage_buffers_per_event);
                 }
 
                 let screenshot_active = state
@@ -3596,7 +3711,7 @@ pub fn run_drm() -> Result<()> {
                     || out_surface.full_damage_pending;
 
                 let needs_render = has_active_effects || out_surface.pending_damage_buffers > 0;
-                if !needs_render {
+                if !needs_render || out_surface.is_flip_pending() {
                     continue;
                 }
 
@@ -3633,9 +3748,6 @@ pub fn run_drm() -> Result<()> {
                 let wallpaper_occluded = !state.expose.active
                     && occluders.iter().any(|occ| occ.contains_rect(screen_bounds));
 
-                // Redibujado limpio sin tijera destructiva (Opción B: Idle Sleeping / Frame Throttling)
-                const ENABLE_DAMAGE_TRACKING: bool = false;
-
                 let age_to_use = if out_surface.full_damage_pending {
                     0
                 } else {
@@ -3646,9 +3758,11 @@ pub fn run_drm() -> Result<()> {
                 if age_to_use == 0 {
                     out_surface.cursor_history.clear();
                     out_surface.extra_damage_history.clear();
-                    out_surface.dock_redraw_buffers = 3;
+                    out_surface.dock_redraw_buffers = if ENABLE_DAMAGE_TRACKING { 3 } else { 0 };
                     for (root_id, ..) in &window_render_data {
-                        out_surface.window_redraw_shadow_blur.insert(root_id.clone(), 3);
+                        out_surface
+                            .window_redraw_shadow_blur
+                            .insert(root_id.clone(), if ENABLE_DAMAGE_TRACKING { 3 } else { 0 });
                     }
                 }
 
@@ -5553,7 +5667,9 @@ pub fn run_drm() -> Result<()> {
                 if let Err(e) = out_surface.surface.queue_buffer(None, None, ()) {
                     warn!("Error al encolar buffer en DRM: {:?}", e);
                 } else if frame_rendered {
+                    out_surface.flip_pending = Some(Instant::now());
                     out_surface.last_commit_counter = state.surface_commit_counter;
+                    out_surface.last_output_commit_counter = current_output_commit_counter;
                     out_surface.last_cursor_draw_point = cursor_draw_point;
                     out_surface.last_cursor_status = state.cursor_status.clone();
                     out_surface.last_expose_revision = state.expose.render_revision;
@@ -5589,6 +5705,7 @@ pub fn run_drm() -> Result<()> {
 
                     rendered_outputs.insert(out_surface.output.clone());
 
+                    out_surface.last_window_geometries.clear();
                     for (root_id, _, _, _, _, is_active, win_rect, ..) in &window_render_data {
                         out_surface
                             .last_window_geometries
@@ -5702,6 +5819,9 @@ pub fn run_drm() -> Result<()> {
         }
 
         for output in state.space.outputs() {
+            if !rendered_outputs.contains(output) {
+                continue;
+            }
             let refresh_nanos = output
                 .current_mode()
                 .map(|m| 1_000_000_000_000 / m.refresh.max(1) as u64)
@@ -5712,51 +5832,29 @@ pub fn run_drm() -> Result<()> {
             let layer_map = smithay::desktop::layer_map_for_output(output);
             for layer in layer_map.layers() {
                 send_frames_surface_tree(layer.wl_surface(), now_ms);
-                if rendered_outputs.contains(output) {
+                send_presentation_feedback_surface_tree(
+                    layer.wl_surface(),
+                    output,
+                    pres_time,
+                    refresh,
+                    0,
+                );
+                for (popup, _) in
+                    smithay::desktop::PopupManager::popups_for_surface(layer.wl_surface())
+                {
+                    send_frames_surface_tree(popup.wl_surface(), now_ms);
                     send_presentation_feedback_surface_tree(
-                        layer.wl_surface(),
+                        popup.wl_surface(),
                         output,
                         pres_time,
                         refresh,
                         0,
                     );
                 }
-                for (popup, _) in
-                    smithay::desktop::PopupManager::popups_for_surface(layer.wl_surface())
-                {
-                    send_frames_surface_tree(popup.wl_surface(), now_ms);
-                    if rendered_outputs.contains(output) {
-                        send_presentation_feedback_surface_tree(
-                            popup.wl_surface(),
-                            output,
-                            pres_time,
-                            refresh,
-                            0,
-                        );
-                    }
-                }
             }
         }
 
         display.flush_clients()?;
-        let refresh_millihz = state
-            .space
-            .outputs()
-            .filter_map(|output| output.current_mode())
-            .map(|mode| mode.refresh)
-            .max()
-            .unwrap_or(60_000);
-        let interval = crate::backend::frame_interval(refresh_millihz);
-        loop {
-            let remaining = interval.saturating_sub(frame_start.elapsed());
-            if remaining.is_zero() {
-                break;
-            }
-            let _ = event_loop.dispatch(Some(remaining), &mut state);
-            if interval.saturating_sub(frame_start.elapsed()).is_zero() {
-                break;
-            }
-        }
     }
 
     info!("Compositor Malus DE DRM finalizado limpiamente.");

@@ -4,6 +4,37 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-14] — Soporte `zwp_linux_dmabuf_v1` (Zero-Copy GPU), Sincronización DRM por Monitor y Reducción de Overdraw
+
+### 1. Diagnóstico de Causa Raíz en Animaciones Web y Multimonitor
+* **Ausencia de `zwp_linux_dmabuf_v1` en el compositor (`crates/compositor/src/state.rs`):**
+  * `MalusState` exponía únicamente `ShmState` (`wl_shm`), sin `DmabufState` ni `delegate_dmabuf!`.
+  * Sin `zwp_linux_dmabuf_v1`, los navegadores basados en Chromium/Firefox y aplicaciones Electron (como Antigravity IDE) no podían compartir búferes gráficos directamente en VRAM (*zero-copy DMA-BUF*), viéndose forzados a copias de lectura hacia memoria CPU y subidas `glTexSubImage2D` por cada cuadro en ambas pantallas.
+* **Contención multimonitor y esperas bloqueantes en DRM KMS (`crates/compositor/src/backend/drm.rs`, `state.rs`):**
+  * El bucle DRM utilizaba un temporizador bloqueante fijo de `frame_interval` al final del ciclo y un único contador global `surface_commit_counter`, provocando que los commits de un monitor despertaran o bloquearan al otro monitor y que `send_frames_surface_tree` notificara capas de salidas no renderizadas.
+* **Sobrecarga de GPU y CPU por cuadro (`crates/compositor/src/shadow.rs`, `drm.rs`):**
+  * `WindowShadowPipeline::render_shadow_with_style` dibujaba un quad completo cubriendo toda la ventana + margen de sombra para luego descartar (`discard`) millones de fragmentos interiores en `squircle_sdf`.
+  * Con `ENABLE_DAMAGE_TRACKING = false`, el bucle DRM seguía construyendo el vector `tracker_elements` en CPU cada fotograma sin utilizarlo.
+
+### 2. Solución Implementada
+* **Protocolo `zwp_linux_dmabuf_v1` acelerado por hardware:**
+  * [`crates/compositor/src/state.rs`](../crates/compositor/src/state.rs): añadidos `dmabuf_state`, `dmabuf_global`, `pending_dmabuf_imports`, `delegate_dmabuf!(MalusState)`, `impl DmabufHandler for MalusState` y `MalusState::process_pending_dmabuf_imports`.
+  * [`crates/compositor/src/backend/drm.rs`](../crates/compositor/src/backend/drm.rs): registro de `zwp_linux_dmabuf_v1` v5 mediante `DmabufFeedbackBuilder` usando el nodo DRM de render y los formatos de `GlesRenderer` (con *fallback* automático a v3) e importación inmediata de DMA-BUFs tras `dispatch_clients`.
+  * [`crates/compositor/src/backend/winit.rs`](../crates/compositor/src/backend/winit.rs): habilitación de `create_global` para DMA-BUF y drenaje de `process_pending_dmabuf_imports` en modo anidado.
+* **Planificación dirigida por VBlank y aislamiento por salida en DRM:**
+  * Estado `flip_pending: Option<Instant>` e `is_flip_pending()` por salida en `DrmOutputSurface`, limpiado al recibir `DrmEvent::VBlank(crtc)`, `ActivateSession` o `use_mode`.
+  * Registro del `poll_fd()` de Wayland en `calloop`, cálculo de `has_ready_output` para espera cero cuando hay salidas listas, y eliminación del `sleep` bloqueante al final del bucle.
+  * Contadores por monitor `output_commit_counters` en `MalusState::commit()`, reducción a 1 búfer por evento (`damage_buffers_per_event = 1`) cuando `!ENABLE_DAMAGE_TRACKING`, y filtrado de `send_frames_surface_tree` en capas únicamente para `rendered_outputs`.
+* **Reducción de overdraw en sombras y asignaciones por cuadro:**
+  * [`crates/compositor/src/shadow.rs`](../crates/compositor/src/shadow.rs): `SHADOW_VERT_SRC` y `render_shadow_with_style` ahora dibujan 4 bandas perimetrales alrededor de `u_cut_rect` (24 vértices) omitiendo el interior descartado de la ventana.
+  * [`crates/compositor/src/backend/drm.rs`](../crates/compositor/src/backend/drm.rs): la construcción de `tracker_elements` queda condicionada a `ENABLE_DAMAGE_TRACKING`.
+
+### 3. Validación
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-compositor`: **48 passed, 0 failed**.
+* `cargo build --release --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-compositor`: compilación exitosa.
+
+---
+
 ## [2026-11-11] — Corrección del Selector Alt+Tab (`malus-de-dock`) y Avance/Pendiente de Foco en Compositor
 
 ### 1. Estabilización de Tamaño, Opacidad y Ciclo de Vida del `Alt+Tab` (`malus-de-dock`)

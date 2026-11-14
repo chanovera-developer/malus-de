@@ -26,20 +26,45 @@ precision highp float;
 
 uniform mat3 u_matrix;
 uniform vec4 u_quad_rect; // (loc.x, loc.y, size.w, size.h) en coordenadas físicas de pantalla
+uniform vec4 u_cut_rect;  // Región interior totalmente opaca/descartada (local x, y, w, h)
 
 out vec2 v_local_px; // Coordenadas locales en píxeles dentro del quad de sombra (0..w, 0..h)
 
 void main() {
-    // Generación analítica de quad directamente desde gl_VertexID (0..3) con TRIANGLE_STRIP:
-    // 0: (0, 0) - superior-izquierda
-    // 1: (1, 0) - superior-derecha
-    // 2: (0, 1) - inferior-izquierda
-    // 3: (1, 1) - inferior-derecha
-    float u = (gl_VertexID == 1 || gl_VertexID == 3) ? 1.0 : 0.0;
-    float v = (gl_VertexID == 2 || gl_VertexID == 3) ? 1.0 : 0.0;
+    float x0 = 0.0;
+    float y0 = 0.0;
+    float x1 = u_quad_rect.z;
+    float y1 = u_quad_rect.w;
 
-    vec2 screen_pos = u_quad_rect.xy + vec2(u * u_quad_rect.z, v * u_quad_rect.w);
-    v_local_px = vec2(u * u_quad_rect.z, v * u_quad_rect.w);
+    int quad_idx = gl_VertexID / 6;
+    int tri_v = gl_VertexID % 6;
+
+    if (u_cut_rect.z > 0.0 && u_cut_rect.w > 0.0) {
+        if (quad_idx == 0) {
+            // Banda superior
+            y1 = u_cut_rect.y;
+        } else if (quad_idx == 1) {
+            // Banda inferior
+            y0 = u_cut_rect.y + u_cut_rect.w;
+        } else if (quad_idx == 2) {
+            // Banda izquierda
+            x1 = u_cut_rect.x;
+            y0 = u_cut_rect.y;
+            y1 = u_cut_rect.y + u_cut_rect.w;
+        } else {
+            // Banda derecha
+            x0 = u_cut_rect.x + u_cut_rect.z;
+            y0 = u_cut_rect.y;
+            y1 = u_cut_rect.y + u_cut_rect.w;
+        }
+    }
+
+    float u = (tri_v == 1 || tri_v == 4 || tri_v == 5) ? 1.0 : 0.0;
+    float v = (tri_v == 2 || tri_v == 3 || tri_v == 5) ? 1.0 : 0.0;
+
+    vec2 local_px = vec2(mix(x0, x1, u), mix(y0, y1, v));
+    vec2 screen_pos = u_quad_rect.xy + local_px;
+    v_local_px = local_px;
 
     vec3 ndc = u_matrix * vec3(screen_pos, 1.0);
     gl_Position = vec4(ndc.xy, 0.0, 1.0);
@@ -130,6 +155,7 @@ pub struct WindowShadowPipeline {
     program: ffi::types::GLuint,
     u_matrix: ffi::types::GLint,
     u_quad_rect: ffi::types::GLint,
+    u_cut_rect: ffi::types::GLint,
     u_win_size: ffi::types::GLint,
     u_pad: ffi::types::GLint,
     u_corner_radius: ffi::types::GLint,
@@ -169,6 +195,7 @@ impl WindowShadowPipeline {
 
             let u_matrix = gl.GetUniformLocation(program, c"u_matrix".as_ptr() as *const ffi::types::GLchar);
             let u_quad_rect = gl.GetUniformLocation(program, c"u_quad_rect".as_ptr() as *const ffi::types::GLchar);
+            let u_cut_rect = gl.GetUniformLocation(program, c"u_cut_rect".as_ptr() as *const ffi::types::GLchar);
             let u_win_size = gl.GetUniformLocation(program, c"u_win_size".as_ptr() as *const ffi::types::GLchar);
             let u_pad = gl.GetUniformLocation(program, c"u_pad".as_ptr() as *const ffi::types::GLchar);
             let u_corner_radius = gl.GetUniformLocation(program, c"u_corner_radius".as_ptr() as *const ffi::types::GLchar);
@@ -188,6 +215,7 @@ impl WindowShadowPipeline {
                 program,
                 u_matrix,
                 u_quad_rect,
+                u_cut_rect,
                 u_win_size,
                 u_pad,
                 u_corner_radius,
@@ -308,6 +336,17 @@ impl WindowShadowPipeline {
         let quad_w = win_rect.size.w + pad_x * 2;
         let quad_h = win_rect.size.h + pad_y_top + pad_y_bottom;
 
+        // Omitir el rectángulo interior 100% descartado por `inner_mask` para evitar sobre-dibujo en ventanas grandes (ej. 4K)
+        let effective_r = corner_radius
+            .min(win_rect.size.w as f32 * 0.5)
+            .min(win_rect.size.h as f32 * 0.5);
+        let inset = (effective_r + 2.5).ceil() as i32;
+        let cut_w = win_rect.size.w - inset * 2;
+        let cut_h = win_rect.size.h - inset * 2;
+        let cut_x = pad_x + inset;
+        let cut_y = pad_y_top + inset;
+        let use_ring = cut_w > 0 && cut_h > 0;
+
         unsafe {
             // Guardar estado GL previo sin consultas síncronas costosas al hardware de la GPU
             let prev_blend = gl.IsEnabled(ffi::BLEND);
@@ -331,6 +370,11 @@ impl WindowShadowPipeline {
 
             gl.UniformMatrix3fv(self.u_matrix, 1, ffi::FALSE, projection.as_ptr());
             gl.Uniform4f(self.u_quad_rect, quad_x as f32, quad_y as f32, quad_w as f32, quad_h as f32);
+            if use_ring {
+                gl.Uniform4f(self.u_cut_rect, cut_x as f32, cut_y as f32, cut_w as f32, cut_h as f32);
+            } else {
+                gl.Uniform4f(self.u_cut_rect, 0.0, 0.0, 0.0, 0.0);
+            }
             gl.Uniform2f(self.u_win_size, win_rect.size.w as f32, win_rect.size.h as f32);
             gl.Uniform2f(self.u_pad, pad_x as f32, pad_y_top as f32);
             gl.Uniform1f(self.u_corner_radius, corner_radius);
@@ -351,7 +395,7 @@ impl WindowShadowPipeline {
             gl.DisableVertexAttribArray(1);
             gl.BindBuffer(ffi::ARRAY_BUFFER, 0);
 
-            gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
+            gl.DrawArrays(ffi::TRIANGLES, 0, if use_ring { 24 } else { 6 });
 
             // Restaurar estado GL previo canónico de Smithay
             gl.UseProgram(0);
