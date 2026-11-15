@@ -4,6 +4,35 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-15] — Branches (Sidebar y Foco desde Dock), Semáforo CSD Estático 1:1 en Snap/Maximizado y App Switcher por Pantalla y Escritorio
+
+### 1. Límite de Sidebar en Branches y Foco desde el Dock (`crates/branches/src/app_window.rs`, `sidebar.rs`, `crates/dock/src/main.rs`, `crates/compositor/src/state.rs`)
+* **Contención de barra lateral al maximizar (`MAX_SIDEBAR_WIDTH = 212`):**
+  * En [`app_window.rs`](../crates/branches/src/app_window.rs), `hpaned` ahora fija `.resize_start_child(false)` / `.resize_end_child(true)` y limita `paned.position()` a `212 px` lógicos en `connect_position_notify` para que el panel izquierdo nunca supere el rectángulo de desenfoque del compositor; en [`sidebar.rs`](../crates/branches/src/sidebar.rs), los labels aplican `EllipsizeMode::End`.
+* **Activación y elevación al pulsar Branches en el Dock:**
+  * [`dock/src/main.rs`](../crates/dock/src/main.rs) incorpora `find_matching_running_app` para enviar en `IpcMessage::ActivateApp` el identificador vivo exacto (p. ej. `dev.malus.Branches` en lugar de `matchers[0]`).
+  * [`state.rs`](../crates/compositor/src/state.rs) añade `matches_app_target` (emparejando `malus-de-*` <-> `malus.*` e IDs *reverse-DNS*) y refuerza `activate_or_restore_app` para elevar al frente incluso si ya tenía foco y sincronizar foco de teclado (`set_keyboard_focus_with_sync`).
+
+### 2. Semáforo CSD Estático 1:1 Durante Maximizado y Snap (`crates/compositor/src/state.rs`, `window_corners.rs`, `blur.rs`, `drm.rs`, `winit.rs`)
+* **Eliminación de estiramiento y zoom en transiciones (`SnapTransition::render_geometry`):**
+  * En [`state.rs`](../crates/compositor/src/state.rs), `SnapTransition::render_geometry` mantiene la superficie estrictamente a escala nativa `1:1` sin `RescaleRenderElement` y entrega `surface_clip_rect` (intersección de `win_screen_rect` con `window_geo.size`).
+  * [`render_window_elements`](../crates/compositor/src/window_corners.rs) recibe `transition_clip: Option<Rectangle<i32, Physical>>` para recortar `damage` y aplicar el shader *squircle* sobre el área real `1:1`.
+  * Cuando el búfer del cliente aún es menor que el rectángulo animado, [`render_snap_transition_backdrop`](../crates/compositor/src/blur.rs) dibuja detrás un respaldo esmerilado acorde al tema oscuro/claro en [`drm.rs`](../crates/compositor/src/backend/drm.rs) y [`winit.rs`](../crates/compositor/src/backend/winit.rs).
+
+### 3. App Switcher Independiente por Pantalla y Escritorio Activo (`crates/compositor/src/state.rs`)
+* **Aislamiento multimonitor y por escritorio:**
+  * [`open_app_switcher`](../crates/compositor/src/state.rs) selecciona el monitor destino donde se encuentra el puntero vía `target_app_switcher_output` (con respaldo en la ventana enfocada o monitor principal) y filtra [`build_app_switcher_items`](../crates/compositor/src/state.rs) usando `origin_output_for_window`.
+  * `MalusState` registra `minimized_window_workspaces` y evalúa `should_include_minimized_in_app_switcher`: las ventanas minimizadas (residentes en el Dock de la pantalla principal) solo se muestran en el Alt+Tab del monitor principal y únicamente si pertenecen al escritorio activo.
+
+### 4. Validación
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-compositor -p malus-de-dock -p malus-de-branches`:
+  * `malus-de-compositor`: **70 passed; 0 failed**.
+  * `malus-de-dock`: **10 passed; 0 failed**.
+  * `malus-de-branches`: **1 passed; 0 failed**.
+* `cargo check --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --workspace`: compilación completa sin errores (`exit 0`, únicamente los warnings previos de `gtk4::FileChooserNative` en `crates/settings`).
+
+---
+
 ## [2026-11-15] — Pipeline GPU Único para Genie Effect, Restauración Inversa, Eliminación de Parpadeo y Blur Offscreen en Animaciones
 
 ### 1. Rasterización GPU Única para Genie Effect (Malla `36×64` + Snapshot Offscreen) (`crates/compositor/src/magic_lamp.rs`, `capture.rs`, `drm.rs`, `winit.rs`)
