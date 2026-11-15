@@ -447,6 +447,28 @@ impl GaussianBlur {
         );
     }
 
+    /// Aplica desenfoque gaussiano a la región de pantalla con opacidad configurable (`0.0..=1.0`).
+    pub fn render_blur_alpha(
+        &mut self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        screen_size: Size<i32, Physical>,
+        win_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        alpha: f32,
+    ) {
+        self.render_blur_with_exponent_alpha(
+            gl,
+            projection,
+            screen_size,
+            win_rect,
+            corner_radius,
+            4.2,
+            false,
+            alpha,
+        );
+    }
+
     /// Aplica desenfoque con esquinas circulares a la región de pantalla indicada.
     pub fn render_blur_round(
         &mut self,
@@ -622,6 +644,30 @@ impl GaussianBlur {
         corner_radius: f32,
         corner_exponent: f32,
         from_capture: bool,
+    ) {
+        self.render_blur_with_exponent_alpha(
+            gl,
+            projection,
+            screen_size,
+            win_rect,
+            corner_radius,
+            corner_exponent,
+            from_capture,
+            1.0,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_blur_with_exponent_alpha(
+        &mut self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        screen_size: Size<i32, Physical>,
+        win_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        corner_exponent: f32,
+        from_capture: bool,
+        alpha: f32,
     ) {
         let screen_rect = Rectangle::from_size(screen_size);
         let visible_rect = match win_rect.intersection(screen_rect) {
@@ -833,7 +879,7 @@ impl GaussianBlur {
             gl.Uniform1f(self.blit_u_corner_exponent, corner_exponent);
             gl.Uniform1f(self.blit_u_solid_mode, 0.0);
             gl.Uniform1i(self.blit_u_use_mask, 0);
-            gl.Uniform1f(self.blit_u_opacity, 1.0);
+            gl.Uniform1f(self.blit_u_opacity, alpha.clamp(0.0, 1.0));
 
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
 
@@ -1244,17 +1290,69 @@ impl GaussianBlur {
         corner_radius: f32,
         scale: f64,
     ) {
-        // Overlay translúcido suave con curvatura squircle y borde sutil
+        let border_w = (1.5 * scale as f32).max(1.0);
+        self.render_squircle_tint(
+            gl,
+            projection,
+            screen_size,
+            win_rect,
+            corner_radius,
+            [0.0, 0.48, 1.0, 0.14],
+            border_w,
+            [0.28, 0.65, 1.0, 0.55],
+        );
+    }
+}
+
+/// Dibuja la previsualización lógica de ajuste de ventana (Snap Preview) en el monitor indicado.
+pub fn render_snap_preview_overlay(
+    frame: &mut GlesFrame<'_, '_>,
+    blur: Option<&mut GaussianBlur>,
+    projection: &[f32; 9],
+    screen_size: Size<i32, Physical>,
+    preview_logical: Rectangle<i32, Logical>,
+    output_origin: Point<i32, Logical>,
+    scale: f64,
+    win_phys_r: Option<i32>,
+) {
+    let local_preview = Rectangle::new(preview_logical.loc - output_origin, preview_logical.size);
+    let preview_phys = local_preview.to_physical_precise_round(scale);
+    let target_r = win_phys_r.unwrap_or((22.0 * scale).round() as i32) as f32;
+
+    if let Some(blur) = blur {
+        let _ = frame.with_context(|gl| {
+            blur.render_snap_preview(gl, projection, screen_size, preview_phys, target_r, scale);
+        });
+    } else {
+        let _ = frame.draw_solid(
+            preview_phys,
+            &[Rectangle::from_size(preview_phys.size)],
+            Color32F::new(0.0, 0.48, 1.0, 0.14),
+        );
+    }
+}
+
+impl GaussianBlur {
+    /// Dibuja un tinte/borde squircle sólido con alfa configurable en coordenadas físicas.
+    pub fn render_squircle_tint(
+        &mut self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        screen_size: Size<i32, Physical>,
+        win_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        fill_rgba: [f32; 4],
+        border_width: f32,
+        border_rgba: [f32; 4],
+    ) {
         let screen_rect = Rectangle::from_size(screen_size);
         let Some(visible_rect) = win_rect.intersection(screen_rect) else {
             return;
         };
         if visible_rect.size.w < 1 || visible_rect.size.h < 1 {
             return;
-        };
-
+        }
         let is_drm = projection[4] > 0.0;
-        let border_w = (1.5 * scale as f32).max(1.0);
 
         unsafe {
             let prev_blend = gl.IsEnabled(ffi::BLEND);
@@ -1279,11 +1377,21 @@ impl GaussianBlur {
             gl.Uniform1i(self.blit_u_use_mask, 0);
             gl.Uniform1f(self.blit_u_opacity, 1.0);
             gl.Uniform1f(self.blit_u_solid_mode, 1.0);
-            // Tinte translúcido suave estilo macOS (#0078d4 con ~14% de opacidad)
-            gl.Uniform4f(self.blit_u_solid_color, 0.0, 0.48, 1.0, 0.14);
-            // Borde squircle nítido y sutil con ~55% de opacidad
-            gl.Uniform1f(self.blit_u_border_width, border_w);
-            gl.Uniform4f(self.blit_u_border_color, 0.28, 0.65, 1.0, 0.55);
+            gl.Uniform4f(
+                self.blit_u_solid_color,
+                fill_rgba[0],
+                fill_rgba[1],
+                fill_rgba[2],
+                fill_rgba[3],
+            );
+            gl.Uniform1f(self.blit_u_border_width, border_width);
+            gl.Uniform4f(
+                self.blit_u_border_color,
+                border_rgba[0],
+                border_rgba[1],
+                border_rgba[2],
+                border_rgba[3],
+            );
             gl.Uniform1f(self.blit_u_corner_exponent, 4.2);
             gl.UniformMatrix3fv(self.blit_u_matrix, 1, ffi::FALSE, projection.as_ptr());
             gl.Uniform4f(
@@ -1320,34 +1428,6 @@ impl GaussianBlur {
                 gl.Disable(ffi::BLEND);
             }
         }
-    }
-}
-
-/// Dibuja la previsualización lógica de ajuste de ventana (Snap Preview) en el monitor indicado.
-pub fn render_snap_preview_overlay(
-    frame: &mut GlesFrame<'_, '_>,
-    blur: Option<&mut GaussianBlur>,
-    projection: &[f32; 9],
-    screen_size: Size<i32, Physical>,
-    preview_logical: Rectangle<i32, Logical>,
-    output_origin: Point<i32, Logical>,
-    scale: f64,
-    win_phys_r: Option<i32>,
-) {
-    let local_preview = Rectangle::new(preview_logical.loc - output_origin, preview_logical.size);
-    let preview_phys = local_preview.to_physical_precise_round(scale);
-    let target_r = win_phys_r.unwrap_or((22.0 * scale).round() as i32) as f32;
-
-    if let Some(blur) = blur {
-        let _ = frame.with_context(|gl| {
-            blur.render_snap_preview(gl, projection, screen_size, preview_phys, target_r, scale);
-        });
-    } else {
-        let _ = frame.draw_solid(
-            preview_phys,
-            &[Rectangle::from_size(preview_phys.size)],
-            Color32F::new(0.0, 0.48, 1.0, 0.14),
-        );
     }
 }
 

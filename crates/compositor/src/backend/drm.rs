@@ -623,7 +623,7 @@ fn find_layer_under_layer(
         let layer_map = smithay::desktop::layer_map_for_output(output);
         let under_layer = layer_map
             .layer_under(target_layer, output_local_point)
-            .filter(|l| !(l.namespace() == "malus-app-switcher" && !state.app_switcher.is_active));
+            .filter(|l| !(l.namespace() == "malus-app-switcher" && !state.app_switcher_classic_active()));
 
         if let Some(layer) = under_layer {
             if let Some(geo) = layer_map.layer_geometry(layer) {
@@ -1609,7 +1609,9 @@ pub fn run_drm() -> Result<()> {
                                     }
                                 }
 
-                                let is_tab = sym == keysyms::KEY_Tab.into();
+                                let is_tab = sym == keysyms::KEY_Tab.into()
+                                    || sym == keysyms::KEY_ISO_Left_Tab.into()
+                                    || key == 23;
                                 let is_return = sym == keysyms::KEY_Return.into() || sym == keysyms::KEY_KP_Enter.into();
                                 let is_left = sym == keysyms::KEY_Left.into();
                                 let is_right = sym == keysyms::KEY_Right.into();
@@ -1619,105 +1621,45 @@ pub fn run_drm() -> Result<()> {
                                 let is_m = sym == keysyms::KEY_m.into() || sym == keysyms::KEY_M.into();
                                 let is_esc = sym == keysyms::KEY_Escape.into();
 
-                                // 2. Navegación activa dentro del App Switcher (⌘Tab HUD)
+                                // 2. Navegación activa dentro del App Switcher (⌘Tab HUD / Deck)
                                 if state.app_switcher.is_active {
                                     if is_return {
                                         info!("🎯 AppSwitcher commit vía Return/Enter, enfocando ventana");
-                                        state.app_switcher.is_active = false;
-                                        state.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
-                                        if !state.app_switcher.items.is_empty() {
-                                            let target_id = state.app_switcher.items[state.app_switcher.selected_index].window_id;
-                                            state.switch_to_window(target_id);
-                                        }
+                                        state.commit_app_switcher();
                                         return FilterResult::Intercept(());
                                     } else if is_tab {
-                                        let has_shift = modifiers.shift;
-                                        let len = state.app_switcher.items.len();
-                                        if len > 0 {
-                                            if has_shift {
-                                                state.app_switcher.selected_index = (state.app_switcher.selected_index + len - 1) % len;
-                                            } else {
-                                                state.app_switcher.selected_index = (state.app_switcher.selected_index + 1) % len;
-                                            }
-                                            state.ipc_broadcaster.broadcast(&IpcMessage::UpdateAppSwitcher {
-                                                selected_index: state.app_switcher.selected_index,
-                                            });
-                                        }
+                                        state.step_app_switcher(!modifiers.shift);
                                         return FilterResult::Intercept(());
                                     } else if is_left {
-                                        let len = state.app_switcher.items.len();
-                                        if len > 0 {
-                                            state.app_switcher.selected_index = (state.app_switcher.selected_index + len - 1) % len;
-                                            state.ipc_broadcaster.broadcast(&IpcMessage::UpdateAppSwitcher {
-                                                selected_index: state.app_switcher.selected_index,
-                                            });
-                                        }
+                                        state.step_app_switcher(false);
                                         return FilterResult::Intercept(());
                                     } else if is_right {
-                                        let len = state.app_switcher.items.len();
-                                        if len > 0 {
-                                            state.app_switcher.selected_index = (state.app_switcher.selected_index + 1) % len;
-                                            state.ipc_broadcaster.broadcast(&IpcMessage::UpdateAppSwitcher {
-                                                selected_index: state.app_switcher.selected_index,
-                                            });
-                                        }
+                                        state.step_app_switcher(true);
                                         return FilterResult::Intercept(());
                                     } else if is_q {
-                                        if !state.app_switcher.items.is_empty() {
-                                            let target_id = state.app_switcher.items[state.app_switcher.selected_index].window_id;
-                                            info!("🚪 AppSwitcher ⌘Q: cerrando ventana seleccionada id={}", target_id);
-                                            state.close_window_by_id(target_id);
-                                            state.app_switcher.items.remove(state.app_switcher.selected_index);
-                                            if state.app_switcher.items.is_empty() {
-                                                state.app_switcher.is_active = false;
-                                                state.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
-                                            } else {
-                                                state.app_switcher.selected_index = state.app_switcher.selected_index.min(state.app_switcher.items.len() - 1);
-                                                state.ipc_broadcaster.broadcast(&IpcMessage::ShowAppSwitcher {
-                                                    items: state.app_switcher.items.clone(),
-                                                    selected_index: state.app_switcher.selected_index,
-                                                });
-                                            }
-                                        }
+                                        state.close_selected_app_switcher_window();
                                         return FilterResult::Intercept(());
                                     } else if is_h {
-                                        if !state.app_switcher.items.is_empty() {
-                                            let target_id = state.app_switcher.items[state.app_switcher.selected_index].window_id;
-                                            info!("🪟 AppSwitcher ⌘H: ocultando ventana seleccionada id={}", target_id);
-                                            state.hide_window_by_id(target_id);
-                                            state.app_switcher.items[state.app_switcher.selected_index].is_minimized = true;
-                                            state.ipc_broadcaster.broadcast(&IpcMessage::ShowAppSwitcher {
-                                                items: state.app_switcher.items.clone(),
-                                                selected_index: state.app_switcher.selected_index,
-                                            });
-                                        }
+                                        state.hide_selected_app_switcher_window();
                                         return FilterResult::Intercept(());
                                     } else if is_esc {
                                         info!("❌ AppSwitcher cancelado con Escape");
-                                        state.app_switcher.is_active = false;
-                                        state.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
+                                        state.dismiss_app_switcher();
                                         return FilterResult::Intercept(());
                                     }
                                 }
 
                                 // 3. Invocación inicial de ⌘Tab / Super+Tab / Alt+Tab
                                 if (has_super || has_alt) && is_tab {
-                                    let items = state.build_app_switcher_items();
-                                    if !items.is_empty() {
-                                        let has_shift = modifiers.shift;
-                                        let initial_idx = if items.len() > 1 {
-                                            if has_shift { items.len() - 1 } else { 1 }
-                                        } else {
-                                            0
-                                        };
-                                        state.app_switcher.is_active = true;
-                                        state.app_switcher.items = items.clone();
-                                        state.app_switcher.selected_index = initial_idx;
-                                        info!("🔀 AppSwitcher activado con {} ventanas (idx={})", items.len(), initial_idx);
-                                        state.ipc_broadcaster.broadcast(&IpcMessage::ShowAppSwitcher {
-                                            items,
-                                            selected_index: initial_idx,
-                                        });
+                                    let pointer_loc =
+                                        state.seat.get_pointer().map(|p| p.current_location());
+                                    state.open_app_switcher(modifiers.shift, pointer_loc);
+                                    if state.app_switcher.is_active {
+                                        info!(
+                                            "🔀 AppSwitcher activado con {} ventanas (idx={})",
+                                            state.app_switcher.items.len(),
+                                            state.app_switcher.selected_index
+                                        );
                                         return FilterResult::Intercept(());
                                     }
                                 }
@@ -1813,12 +1755,7 @@ pub fn run_drm() -> Result<()> {
                                 // Liberación de modificadores (Super/Alt) -> Commit de App Switcher
                                 if state.app_switcher.is_active && ((!modifiers.logo && !modifiers.alt) || is_modifier_sym) {
                                     info!("🎯 AppSwitcher commit: soltado Super/Alt (is_mod={}), enfocando ventana", is_modifier_sym);
-                                    state.app_switcher.is_active = false;
-                                    state.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
-                                    if !state.app_switcher.items.is_empty() {
-                                        let target_id = state.app_switcher.items[state.app_switcher.selected_index].window_id;
-                                        state.switch_to_window(target_id);
-                                    }
+                                    state.commit_app_switcher();
                                     return FilterResult::Intercept(());
                                 }
                             }
@@ -1850,6 +1787,7 @@ pub fn run_drm() -> Result<()> {
                         state.screenshot_ui.update_pointer_motion(output_geo, point);
                     }
                     state.update_spotlight_drag_dock_hover(point);
+                    let _ = state.handle_app_switcher_deck_pointer_motion(point);
 
                     if state.handle_expose_pointer_motion(point) {
                         let serial = SERIAL_COUNTER.next_serial();
@@ -1916,6 +1854,7 @@ pub fn run_drm() -> Result<()> {
                             state.screenshot_ui.update_pointer_motion(output_geo, point);
                         }
                         state.update_spotlight_drag_dock_hover(point);
+                        let _ = state.handle_app_switcher_deck_pointer_motion(point);
 
                         if state.handle_expose_pointer_motion(point) {
                             let serial = SERIAL_COUNTER.next_serial();
@@ -2012,10 +1951,13 @@ pub fn run_drm() -> Result<()> {
                             return;
                         }
 
+                        if state.handle_app_switcher_deck_pointer_button(point, event.button_code(), true) {
+                            return;
+                        }
+
                         if state.app_switcher.is_active {
                             info!("🖱️ Click detectado mientras AppSwitcher está activo -> cerrando AppSwitcher");
-                            state.app_switcher.is_active = false;
-                            state.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
+                            state.dismiss_app_switcher();
                         }
 
                         let clicked_on_popup = is_popup
@@ -2292,6 +2234,9 @@ pub fn run_drm() -> Result<()> {
                         if state.handle_snap_layouts_pointer_button(point, event.button_code(), false) {
                             return;
                         }
+                        if state.handle_app_switcher_deck_pointer_button(point, event.button_code(), false) {
+                            return;
+                        }
                         state.snap_preview = None;
                     }
 
@@ -2314,6 +2259,11 @@ pub fn run_drm() -> Result<()> {
                 }
             }
             InputEvent::PointerAxis { event } => {
+                if let Some(vertical) = event.amount(Axis::Vertical) {
+                    if state.handle_app_switcher_deck_axis(vertical) {
+                        return;
+                    }
+                }
                 if state.spotlight.is_open() {
                     if let Some(vertical) = event.amount(Axis::Vertical) {
                         if vertical.abs() > 0.001 && state.spotlight.handle_scroll(vertical) {
@@ -2442,7 +2392,7 @@ pub fn run_drm() -> Result<()> {
         let frame_start = Instant::now();
         state.resume_timed_out_dock_animations(frame_start);
         state.tick_snap_layouts(frame_start);
-        if state.snap_layouts.take_closed_dirty() {
+        if state.snap_layouts.take_closed_dirty() || state.take_app_switcher_deck_closed_dirty() {
             if let Ok(mut surfs) = shared_surfaces.lock() {
                 for s in surfs.iter_mut() {
                     s.full_damage_pending = true;
@@ -2707,6 +2657,7 @@ pub fn run_drm() -> Result<()> {
             || !state.snap_transitions.is_empty()
             || state.expose.is_animating()
             || state.snap_layouts.is_open()
+            || state.app_switcher.deck.active
             || state.theme_transition_started_at.is_some()
             || state.pending_theme_transition_capture.is_some()
             || state.workspace_transition.is_some()
@@ -2919,7 +2870,8 @@ pub fn run_drm() -> Result<()> {
                     .layers()
                     .any(|surface| surface.namespace() == "malus-spotlight-results");
                 for surface in layer_map.layers().rev() {
-                    if surface.namespace() == "malus-app-switcher" && !state.app_switcher.is_active
+                    if surface.namespace() == "malus-app-switcher"
+                        && !state.app_switcher_classic_active()
                     {
                         continue;
                     }
@@ -3365,6 +3317,25 @@ pub fn run_drm() -> Result<()> {
                     .snap_layouts
                     .hovered_preview_rect(&out_surface.output.name())
                     .filter(|preview| output_geo.overlaps(*preview));
+                let app_switcher_deck_frame =
+                    if state.deck_should_render_on_output(&out_surface.output.name()) {
+                        let deck_windows = state.deck_windows_for_render();
+                        let app_switcher = &mut state.app_switcher;
+                        let ssd = &mut state.ssd;
+                        Some(crate::app_switcher::prepare_deck_cards(
+                            &mut renderer,
+                            &mut app_switcher.deck,
+                            ssd,
+                            &app_switcher.items,
+                            &deck_windows,
+                            output_geo,
+                            scale,
+                            is_dark_theme,
+                            now,
+                        ))
+                    } else {
+                        None
+                    };
 
                 if let CursorImageStatus::Named(icon) = state.cursor_status {
                     if icon != smithay::input::pointer::CursorIcon::Default
@@ -3820,6 +3791,7 @@ pub fn run_drm() -> Result<()> {
                     || spotlight_frame.is_some()
                     || screenshot_ui_frame.is_some()
                     || snap_layouts_frame.is_some()
+                    || app_switcher_deck_frame.is_some()
                     || expose_animating
                     || expose_just_closed
                     || expose_rev_changed
@@ -3867,6 +3839,7 @@ pub fn run_drm() -> Result<()> {
                 }
 
                 let wallpaper_occluded = !state.expose.active
+                    && app_switcher_deck_frame.is_none()
                     && occluders.iter().any(|occ| occ.contains_rect(screen_bounds));
 
                 let age_to_use = if out_surface.full_damage_pending {
@@ -4185,10 +4158,11 @@ pub fn run_drm() -> Result<()> {
                     this_frame_extra_damage.push(Rectangle::from_size(out_surface.size));
                 }
 
-                // Daño por Spotlight, UI de Captura o Snap Layouts
+                // Daño por Spotlight, UI de Captura, Snap Layouts o App Switcher Deck
                 if spotlight_frame.is_some()
                     || screenshot_ui_frame.is_some()
                     || snap_layouts_frame.is_some()
+                    || app_switcher_deck_frame.is_some()
                 {
                     this_frame_extra_damage.push(Rectangle::from_size(out_surface.size));
                 }
@@ -4566,7 +4540,7 @@ pub fn run_drm() -> Result<()> {
                             ),
                         ) in window_render_data.iter().enumerate()
                         {
-                            if win_elems.is_empty() {
+                            if app_switcher_deck_frame.is_some() || win_elems.is_empty() {
                                 continue;
                             }
 
@@ -4761,7 +4735,9 @@ pub fn run_drm() -> Result<()> {
                                         continue;
                                     }
                                     let ns = surface.namespace();
-                                    if ns == "malus-app-switcher" && !state.app_switcher.is_active {
+                                    if ns == "malus-app-switcher"
+                                        && !state.app_switcher_classic_active()
+                                    {
                                         continue;
                                     }
                                     if ns == "malus-top-bar" {
@@ -4910,7 +4886,7 @@ pub fn run_drm() -> Result<()> {
                         for (idx, (_, _, _, popup_shadow_rects, ..)) in
                             window_render_data.iter().enumerate()
                         {
-                            if body_occluded[idx] {
+                            if app_switcher_deck_frame.is_some() || body_occluded[idx] {
                                 continue;
                             }
                             if let Some(shadow) = shadow_pipeline.as_ref() {
@@ -4929,7 +4905,7 @@ pub fn run_drm() -> Result<()> {
                         }
 
                         for (idx, (_, _, popups, ..)) in window_render_data.iter().enumerate() {
-                            if body_occluded[idx] {
+                            if app_switcher_deck_frame.is_some() || body_occluded[idx] {
                                 continue;
                             }
                             for (popup_elems, popup_rect, popup_effects_enabled) in popups {
@@ -5323,6 +5299,24 @@ pub fn run_drm() -> Result<()> {
                                 1.0,
                                 std::slice::from_ref(snap_elem),
                                 damage,
+                            );
+                        }
+
+                        // Selector Visual App Switcher estilo Deck (sin blur global en el fondo)
+                        if let Some((deck_eased, ref deck_cards)) = app_switcher_deck_frame {
+                            let mut blur_guard =
+                                blur_pipeline.as_ref().and_then(|b| b.lock().ok());
+                            crate::app_switcher::render_deck_frame(
+                                &mut frame,
+                                &projection,
+                                out_surface.size,
+                                scale,
+                                damage,
+                                blur_guard.as_deref_mut(),
+                                shadow_pipeline.as_deref(),
+                                window_squircle_shader.as_deref(),
+                                deck_eased,
+                                deck_cards,
                             );
                         }
 

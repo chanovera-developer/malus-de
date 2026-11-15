@@ -1,3 +1,4 @@
+pub mod app_switcher;
 pub mod backend;
 pub mod black_hole;
 pub mod blur;

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use crate::cpu_priority::FocusCpuPriority;
-use malus_de_common::config::DockConfig;
+use malus_de_common::config::{AppSwitcherStyle, DockConfig};
 use smithay::{
     backend::allocator::dmabuf::Dmabuf,
     delegate_compositor, delegate_data_control, delegate_data_device, delegate_dmabuf,
@@ -138,11 +138,13 @@ impl SnapTransition {
 }
 
 /// Estado en memoria del selector de aplicaciones visual (⌘Tab / App Switcher HUD)
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct AppSwitcherState {
     pub is_active: bool,
     pub items: Vec<AppSwitcherItem>,
     pub selected_index: usize,
+    pub deck: crate::app_switcher::AppSwitcherDeckState,
+    pub closed_dirty: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -222,6 +224,7 @@ pub struct MalusState {
     pub is_running: bool,
     pub ipc_broadcaster: IpcBroadcaster,
     pub app_switcher: AppSwitcherState,
+    pub app_switcher_style: AppSwitcherStyle,
     pub cursor_status: smithay::input::pointer::CursorImageStatus,
     pub pending_displays_reload: bool,
     pub saved_app_window_sizes: HashMap<String, Size<i32, Logical>>,
@@ -1035,7 +1038,9 @@ impl MalusState {
         if let Err(e) = ipc_broadcaster.start_server() {
             tracing::error!("Error al iniciar servidor IPC: {:?}", e);
         }
-        let dock_blur_headroom = Self::load_dock_blur_headroom();
+        let dock_config = DockConfig::load_or_create_default();
+        let dock_blur_headroom = dock_config.headroom_height().min(i32::MAX as u32) as i32;
+        let app_switcher_style = dock_config.app_switcher_style;
 
         Self {
             display_handle: dh,
@@ -1082,6 +1087,7 @@ impl MalusState {
             is_running: true,
             ipc_broadcaster,
             app_switcher: AppSwitcherState::default(),
+            app_switcher_style,
             cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
             pending_displays_reload: false,
             saved_app_window_sizes: Self::load_saved_window_sizes(),
@@ -1108,9 +1114,15 @@ impl MalusState {
         }
     }
 
-    fn load_dock_blur_headroom() -> i32 {
+    fn reload_dock_config_fields(&mut self) {
         let config = DockConfig::load_or_create_default();
-        config.headroom_height().min(i32::MAX as u32) as i32
+        self.dock_blur_headroom = config.headroom_height().min(i32::MAX as u32) as i32;
+        if self.app_switcher_style != config.app_switcher_style
+            && (self.app_switcher.is_active || self.app_switcher.deck.active)
+        {
+            self.dismiss_app_switcher_immediately();
+        }
+        self.app_switcher_style = config.app_switcher_style;
     }
 
     /// Carga los tamaños de ventana guardados por aplicación desde ~/.config/malus-de/window_sizes.json
@@ -1697,18 +1709,16 @@ impl MalusState {
                 }
                 IpcMessage::SwitchToWindow { window_id } => {
                     tracing::info!("📥 IPC SwitchToWindow recibido para: {}", window_id);
-                    self.app_switcher.is_active = false;
-                    self.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
+                    self.dismiss_app_switcher_immediately();
                     self.switch_to_window(window_id);
                 }
                 IpcMessage::HideAppSwitcher => {
                     tracing::info!("📥 IPC HideAppSwitcher recibido");
-                    self.app_switcher.is_active = false;
-                    self.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
+                    self.dismiss_app_switcher_immediately();
                 }
                 IpcMessage::ReloadDockConfig => {
                     tracing::info!("📥 IPC ReloadDockConfig recibido — retransmitiendo a clientes shell");
-                    self.dock_blur_headroom = Self::load_dock_blur_headroom();
+                    self.reload_dock_config_fields();
                     self.ipc_broadcaster.broadcast(&IpcMessage::ReloadDockConfig);
                 }
                 msg @ (IpcMessage::PinAppToDock { .. } | IpcMessage::UnpinAppFromDock { .. }) => {
@@ -2309,9 +2319,8 @@ impl MalusState {
             self.spotlight.close();
             self.ipc_broadcaster.broadcast(&IpcMessage::HideSpotlight);
         }
-        if self.app_switcher.is_active {
-            self.app_switcher.is_active = false;
-            self.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
+        if self.app_switcher.is_active || self.app_switcher.deck.active {
+            self.dismiss_app_switcher_immediately();
         }
 
         let previous_focus = self.get_active_window();
@@ -2902,6 +2911,403 @@ impl MalusState {
             }
         }
     }
+
+    pub fn app_switcher_uses_deck(&self) -> bool {
+        self.app_switcher_style == AppSwitcherStyle::Deck
+    }
+
+    pub fn app_switcher_classic_active(&self) -> bool {
+        self.app_switcher.is_active && !self.app_switcher_uses_deck()
+    }
+
+    pub fn take_app_switcher_deck_closed_dirty(&mut self) -> bool {
+        let dirty = self.app_switcher.closed_dirty || self.app_switcher.deck.take_closed_dirty();
+        self.app_switcher.closed_dirty = false;
+        dirty
+    }
+
+    pub fn deck_should_render_on_output(&self, output_name: &str) -> bool {
+        self.app_switcher_uses_deck() && self.app_switcher.deck.should_render_on_output(output_name)
+    }
+
+    fn collect_deck_origin_rects(&self) -> HashMap<u64, Rectangle<i32, Logical>> {
+        let mut rects = HashMap::new();
+        for win in self.space.elements() {
+            let Some(loc) = self.space.element_location(win) else {
+                continue;
+            };
+            let Some(surf) = win.wl_surface() else {
+                continue;
+            };
+            let Some(&wid) = self.window_ids.get(surf.as_ref()) else {
+                continue;
+            };
+            let ssd_top = if window_uses_ssd(win) {
+                crate::ssd::SSD_TITLEBAR_HEIGHT
+            } else {
+                0
+            };
+            let sz = win.geometry().size;
+            rects.insert(
+                wid,
+                Rectangle::new(
+                    (loc.x, loc.y - ssd_top).into(),
+                    (sz.w.max(1), sz.h.max(1) + ssd_top).into(),
+                ),
+            );
+        }
+        rects
+    }
+
+    fn focus_or_unminimize_for_deck_close(&mut self, window_id: u64) {
+        let min_surf = self
+            .minimized_windows
+            .iter()
+            .find(|(s, _)| self.window_ids.get(*s) == Some(&window_id))
+            .map(|(s, _)| s.clone());
+
+        if let Some(surf) = min_surf {
+            if let Some((win, loc)) = self.minimized_windows.remove(&surf) {
+                self.remove_minimized_thumbnail(window_id);
+                self.dock_slots.remove(&window_id);
+                self.space.map_element(win.clone(), loc, true);
+                if let Some(toplevel) = win.toplevel() {
+                    toplevel.send_configure();
+                }
+                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                if let Some(kb) = self.seat.get_keyboard() {
+                    kb.set_focus(self, Some(surf.clone()), serial);
+                }
+                self.notify_active_app(Some(&surf));
+                self.notify_running_apps();
+                self.notify_minimized_windows();
+
+                let ssd_top = if window_uses_ssd(&win) {
+                    crate::ssd::SSD_TITLEBAR_HEIGHT
+                } else {
+                    0
+                };
+                let sz = win.geometry().size;
+                self.app_switcher.deck.origin_rects.insert(
+                    window_id,
+                    Rectangle::new(
+                        (loc.x, loc.y - ssd_top).into(),
+                        (sz.w.max(1), sz.h.max(1) + ssd_top).into(),
+                    ),
+                );
+                if let Some(item) = self
+                    .app_switcher
+                    .items
+                    .iter_mut()
+                    .find(|it| it.window_id == window_id)
+                {
+                    item.is_minimized = false;
+                }
+                return;
+            }
+        }
+
+        self.switch_to_window(window_id);
+    }
+
+    fn target_app_switcher_output_name(&self, pointer_loc: Option<Point<f64, Logical>>) -> Option<String> {
+        if let Some(pt) = pointer_loc {
+            if let Some(out) = self.space.outputs().find(|o| {
+                self.space
+                    .output_geometry(o)
+                    .is_some_and(|g| g.to_f64().contains(pt))
+            }) {
+                return Some(out.name());
+            }
+        }
+        if let Some(win) = self.get_active_window() {
+            if let Some(loc) = self.space.element_location(&win) {
+                let sz = win.geometry().size;
+                let center = Point::from((loc.x + sz.w.max(1) / 2, loc.y + sz.h.max(1) / 2));
+                if let Some(out) = self
+                    .space
+                    .outputs()
+                    .find(|o| self.space.output_geometry(o).is_some_and(|g| g.contains(center)))
+                {
+                    return Some(out.name());
+                }
+            }
+        }
+        self.space.outputs().next().map(|o| o.name())
+    }
+
+    pub fn open_app_switcher(&mut self, reverse: bool, pointer_loc: Option<Point<f64, Logical>>) {
+        let items = self.build_app_switcher_items();
+        if items.is_empty() {
+            tracing::info!("🔀 AppSwitcher: no hay ventanas abiertas, ignorando");
+            return;
+        }
+        let initial_idx = if items.len() > 1 {
+            if reverse { items.len() - 1 } else { 1 }
+        } else {
+            0
+        };
+        self.app_switcher.items = items;
+        self.app_switcher.selected_index = initial_idx;
+        self.app_switcher.is_active = true;
+        self.app_switcher.closed_dirty = false;
+
+        if self.app_switcher_uses_deck() {
+            let target_output = self.target_app_switcher_output_name(pointer_loc);
+            let origin_rects = self.collect_deck_origin_rects();
+            self.app_switcher.deck.reset_on_open(
+                target_output,
+                initial_idx,
+                origin_rects,
+                Instant::now(),
+            );
+            self.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
+        } else {
+            self.app_switcher.deck.clear();
+            self.ipc_broadcaster.broadcast(&IpcMessage::ShowAppSwitcher {
+                items: self.app_switcher.items.clone(),
+                selected_index: initial_idx,
+            });
+        }
+    }
+
+    pub fn step_app_switcher(&mut self, forward: bool) {
+        let len = self.app_switcher.items.len();
+        if len == 0 {
+            return;
+        }
+        let idx = if forward {
+            (self.app_switcher.selected_index + 1) % len
+        } else {
+            (self.app_switcher.selected_index + len - 1) % len
+        };
+        self.app_switcher.selected_index = idx;
+        if self.app_switcher_uses_deck() {
+            self.app_switcher.deck.retarget_focus(idx, Instant::now());
+        } else {
+            self.ipc_broadcaster
+                .broadcast(&IpcMessage::UpdateAppSwitcher { selected_index: idx });
+        }
+    }
+
+    pub fn commit_app_switcher(&mut self) {
+        let idx = self.app_switcher.selected_index;
+        self.commit_app_switcher_at(idx);
+    }
+
+    pub fn commit_app_switcher_at(&mut self, index: usize) {
+        let target_id = self.app_switcher.items.get(index).map(|i| i.window_id);
+        if self.app_switcher_uses_deck() {
+            let now = Instant::now();
+            self.app_switcher.is_active = false;
+            self.app_switcher.selected_index = index.min(self.app_switcher.items.len().saturating_sub(1));
+            self.app_switcher
+                .deck
+                .retarget_focus(self.app_switcher.selected_index, now);
+            if let Some(window_id) = target_id {
+                self.focus_or_unminimize_for_deck_close(window_id);
+            }
+            self.app_switcher.deck.begin_close(now);
+            self.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
+        } else {
+            self.dismiss_app_switcher_immediately();
+            if let Some(window_id) = target_id {
+                self.switch_to_window(window_id);
+            }
+        }
+    }
+
+    pub fn dismiss_app_switcher(&mut self) {
+        if self.app_switcher_uses_deck() {
+            self.app_switcher.is_active = false;
+            self.app_switcher.deck.begin_close(Instant::now());
+            self.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
+        } else {
+            self.dismiss_app_switcher_immediately();
+        }
+    }
+
+    pub fn dismiss_app_switcher_immediately(&mut self) {
+        let was_deck = (self.app_switcher.is_active || self.app_switcher.deck.active)
+            && self.app_switcher_uses_deck();
+        self.app_switcher.is_active = false;
+        self.app_switcher.deck.clear();
+        if was_deck {
+            self.app_switcher.closed_dirty = true;
+        }
+        self.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
+    }
+
+    pub fn close_selected_app_switcher_window(&mut self) {
+        if self.app_switcher.items.is_empty() {
+            return;
+        }
+        let idx = self
+            .app_switcher
+            .selected_index
+            .min(self.app_switcher.items.len() - 1);
+        let target_id = self.app_switcher.items[idx].window_id;
+        self.close_window_by_id(target_id);
+        self.app_switcher.items.remove(idx);
+        if self.app_switcher.items.is_empty() {
+            self.dismiss_app_switcher();
+            return;
+        }
+        let new_idx = idx.min(self.app_switcher.items.len() - 1);
+        self.app_switcher.selected_index = new_idx;
+        if self.app_switcher_uses_deck() {
+            self.app_switcher.deck.retarget_focus(new_idx, Instant::now());
+        } else {
+            self.ipc_broadcaster.broadcast(&IpcMessage::ShowAppSwitcher {
+                items: self.app_switcher.items.clone(),
+                selected_index: new_idx,
+            });
+        }
+    }
+
+    pub fn hide_selected_app_switcher_window(&mut self) {
+        if self.app_switcher.items.is_empty() {
+            return;
+        }
+        let idx = self
+            .app_switcher
+            .selected_index
+            .min(self.app_switcher.items.len() - 1);
+        let target_id = self.app_switcher.items[idx].window_id;
+        self.hide_window_by_id(target_id);
+        self.app_switcher.items[idx].is_minimized = true;
+        self.app_switcher.deck.origin_rects.remove(&target_id);
+        if !self.app_switcher_uses_deck() {
+            self.ipc_broadcaster.broadcast(&IpcMessage::ShowAppSwitcher {
+                items: self.app_switcher.items.clone(),
+                selected_index: idx,
+            });
+        }
+    }
+
+    pub fn deck_windows_for_render(
+        &self,
+    ) -> Vec<(u64, smithay::desktop::Window, Size<i32, Logical>, bool)> {
+        let mut out = Vec::new();
+        for win in self.space.elements() {
+            if let Some(surf) = win.wl_surface() {
+                if let Some(&wid) = self.window_ids.get(surf.as_ref()) {
+                    let uses_ssd = window_uses_ssd(win);
+                    let tb = if uses_ssd {
+                        crate::ssd::SSD_TITLEBAR_HEIGHT
+                    } else {
+                        0
+                    };
+                    let sz = win.geometry().size;
+                    out.push((
+                        wid,
+                        win.clone(),
+                        Size::from((sz.w.max(1), sz.h.max(1) + tb)),
+                        uses_ssd,
+                    ));
+                }
+            }
+        }
+        for (surf, (win, _)) in &self.minimized_windows {
+            if let Some(&wid) = self.window_ids.get(surf) {
+                let uses_ssd = window_uses_ssd(win);
+                let tb = if uses_ssd {
+                    crate::ssd::SSD_TITLEBAR_HEIGHT
+                } else {
+                    0
+                };
+                let sz = win.geometry().size;
+                out.push((
+                    wid,
+                    win.clone(),
+                    Size::from((sz.w.max(1), sz.h.max(1) + tb)),
+                    uses_ssd,
+                ));
+            }
+        }
+        out
+    }
+
+    fn deck_active_output_geometry(&self) -> Option<Rectangle<i32, Logical>> {
+        let target = self
+            .app_switcher
+            .deck
+            .output_name
+            .as_deref()
+            .and_then(|name| self.space.outputs().find(|o| o.name() == name))
+            .or_else(|| self.space.outputs().next())?;
+        self.space.output_geometry(target)
+    }
+
+    fn deck_layout_size_inputs(&self) -> Vec<(u64, Size<i32, Logical>)> {
+        let windows = self.deck_windows_for_render();
+        self.app_switcher
+            .items
+            .iter()
+            .map(|item| {
+                let sz = windows
+                    .iter()
+                    .find(|(id, ..)| *id == item.window_id)
+                    .map(|(_, _, sz, _)| *sz)
+                    .unwrap_or_else(|| Size::from((1080, 700)));
+                (item.window_id, sz)
+            })
+            .collect()
+    }
+
+    pub fn handle_app_switcher_deck_pointer_motion(&mut self, point: Point<f64, Logical>) -> bool {
+        if !self.app_switcher.is_active || !self.app_switcher_uses_deck() {
+            return false;
+        }
+        self.app_switcher.deck.hovered_index = self.deck_active_output_geometry().and_then(|geo| {
+            let size_inputs = self.deck_layout_size_inputs();
+            let layouts = crate::app_switcher::compute_deck_layout(
+                geo,
+                self.app_switcher.deck.visual_focus,
+                &size_inputs,
+            );
+            crate::app_switcher::hit_test_deck_card(&layouts, point)
+        });
+        true
+    }
+
+    pub fn handle_app_switcher_deck_pointer_button(
+        &mut self,
+        point: Point<f64, Logical>,
+        button_code: u32,
+        is_pressed: bool,
+    ) -> bool {
+        if !self.app_switcher.is_active || !self.app_switcher_uses_deck() {
+            return false;
+        }
+        if is_pressed && button_code == 0x110 {
+            let hit = self.deck_active_output_geometry().and_then(|geo| {
+                let size_inputs = self.deck_layout_size_inputs();
+                let layouts = crate::app_switcher::compute_deck_layout(
+                    geo,
+                    self.app_switcher.deck.visual_focus,
+                    &size_inputs,
+                );
+                crate::app_switcher::hit_test_deck_card(&layouts, point)
+            });
+            if let Some(idx) = hit {
+                self.commit_app_switcher_at(idx);
+            } else {
+                self.dismiss_app_switcher();
+            }
+        }
+        true
+    }
+
+    pub fn handle_app_switcher_deck_axis(&mut self, delta: f64) -> bool {
+        if !self.app_switcher.is_active || !self.app_switcher_uses_deck() {
+            return false;
+        }
+        if delta.abs() > 0.01 {
+            self.step_app_switcher(delta > 0.0);
+        }
+        true
+    }
 }
 
 /// Aplica un modo de Aero Snap / Tiling a una ventana de manera atómica
@@ -3293,7 +3699,7 @@ impl MalusState {
                 let under_layer = layer_map
                     .layer_under(smithay::wayland::shell::wlr_layer::Layer::Overlay, point)
                     .filter(|l| {
-                        !(l.namespace() == "malus-app-switcher" && !self.app_switcher.is_active)
+                        !(l.namespace() == "malus-app-switcher" && !self.app_switcher_classic_active())
                     })
                     .or_else(|| {
                         if !self.has_fullscreen_window_on_output(output) {

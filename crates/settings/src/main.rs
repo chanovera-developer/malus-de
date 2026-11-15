@@ -6,7 +6,9 @@ use gtk4::{
     GestureDrag, Grid, Label, Orientation, PackType, Picture, PolicyType, Scale, ScrolledWindow,
     SearchEntry, Stack, StackTransitionType, Switch, WindowControls, WindowHandle,
 };
-use malus_de_common::config::{DesktopIconsConfig, DisplayModeConfig, DisplaysConfig, DockConfig, InputConfig};
+use malus_de_common::config::{
+    AppSwitcherStyle, DesktopIconsConfig, DisplayModeConfig, DisplaysConfig, DockConfig, InputConfig,
+};
 use malus_de_common::ipc::{IpcClient, IpcMessage};
 use malus_de_common::logging::init_logging;
 use std::cell::RefCell;
@@ -3811,6 +3813,39 @@ fn create_dock_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     eff_row.append(&eff_lbl);
     eff_row.append(&eff_val);
     card.append(&eff_row);
+
+    // Estilo del selector de aplicaciones (Alt+Tab)
+    let switcher_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(16)
+        .build();
+    let switcher_lbl = Label::builder()
+        .label("Selector de aplicaciones (Alt+Tab):")
+        .css_classes(["card-section-title"])
+        .xalign(0.0)
+        .hexpand(true)
+        .build();
+    let switcher_dropdown = DropDown::from_strings(&[
+        "Tarjetas en cascada (Predeterminado)",
+        "Barra clásica de iconos",
+    ]);
+    switcher_dropdown.set_selected(match cfg.app_switcher_style {
+        AppSwitcherStyle::Deck => 0,
+        AppSwitcherStyle::Classic => 1,
+    });
+    switcher_dropdown.connect_selected_notify(|dd| {
+        let mut cfg = DockConfig::load_or_create_default();
+        cfg.app_switcher_style = if dd.selected() == 1 {
+            AppSwitcherStyle::Classic
+        } else {
+            AppSwitcherStyle::Deck
+        };
+        let _ = cfg.save();
+        let _ = IpcClient::send_command(IpcMessage::ReloadDockConfig);
+    });
+    switcher_row.append(&switcher_lbl);
+    switcher_row.append(&switcher_dropdown);
+    card.append(&switcher_row);
 
     pane.append(&card);
     scrolled.set_child(Some(&pane));

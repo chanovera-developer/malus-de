@@ -1077,7 +1077,20 @@ pub struct DockConfig {
     pub blur_strength: u32,
     pub genie_effect: bool,
     pub indicator_style: DockIndicatorStyle,
+    #[serde(default)]
+    pub app_switcher_style: AppSwitcherStyle,
     pub apps: Vec<DockAppConfig>,
+}
+
+/// Estilo visual del selector de aplicaciones (`Alt+Tab` / `Super+Tab`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppSwitcherStyle {
+    /// Tarjetas vivas en cascada 3D sobre el escritorio desenfocado (predeterminado).
+    #[default]
+    Deck,
+    /// Barra flotante clásica de iconos en `malus-app-switcher`.
+    Classic,
 }
 
 const DOCK_BOUNCE_HEADROOM: u32 = 28;
@@ -1119,6 +1132,7 @@ impl Default for DockConfig {
             blur_strength: 24,
             genie_effect: true,
             indicator_style: DockIndicatorStyle::Dot,
+            app_switcher_style: AppSwitcherStyle::Deck,
             apps: vec![
                 DockAppConfig {
                     name: "Archivos".to_string(),
@@ -2728,5 +2742,29 @@ overrides={'Gtk/ShellShowsAppMenu': <1>}
         assert!(!changed_again);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn dock_config_defaults_app_switcher_style_to_deck_when_missing() {
+        let toml_without_field = r#"
+position = "bottom"
+style = "floating"
+icon_size = 48
+magnification_enabled = true
+magnification_max_size = 62
+floating_gap = 4
+corner_radius = 24
+background_opacity = 0.7
+blur_strength = 24
+genie_effect = true
+indicator_style = "dot"
+apps = []
+"#;
+        let parsed: DockConfig = toml::from_str(toml_without_field).unwrap();
+        assert_eq!(parsed.app_switcher_style, AppSwitcherStyle::Deck);
+
+        let toml_classic = format!("{toml_without_field}app_switcher_style = \"classic\"\n");
+        let parsed_classic: DockConfig = toml::from_str(&toml_classic).unwrap();
+        assert_eq!(parsed_classic.app_switcher_style, AppSwitcherStyle::Classic);
     }
 }

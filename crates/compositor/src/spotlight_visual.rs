@@ -3150,7 +3150,7 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
     }
 }
 
-fn load_icon_surface(icon_name: &str, target_size: i32) -> Option<ImageSurface> {
+pub(crate) fn load_icon_surface(icon_name: &str, target_size: i32) -> Option<ImageSurface> {
     if icon_name.is_empty() {
         return None;
     }

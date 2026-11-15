@@ -73,7 +73,7 @@ fn find_background_layer_under(
     let layer = layer_map
         .layer_under(Layer::Background, point)
         .filter(|layer| {
-            !(layer.namespace() == "malus-app-switcher" && !state.app_switcher.is_active)
+            !(layer.namespace() == "malus-app-switcher" && !state.app_switcher_classic_active())
         })?;
     let geometry = layer_map.layer_geometry(layer)?;
     let local_point = point - geometry.loc.to_f64();
@@ -245,6 +245,7 @@ pub fn run_winit() -> Result<()> {
         state.resume_timed_out_dock_animations(frame_start);
         state.tick_snap_layouts(frame_start);
         let _ = state.snap_layouts.take_closed_dirty();
+        let _ = state.take_app_switcher_deck_closed_dirty();
 
         let status = winit_event_loop.dispatch_new_events(|event| match event {
             WinitEvent::CloseRequested => {
@@ -392,104 +393,46 @@ pub fn run_winit() -> Result<()> {
                                 if state.app_switcher.is_active {
                                     if is_return {
                                         info!("🎯 AppSwitcher commit vía Return/Enter, enfocando ventana");
-                                        state.app_switcher.is_active = false;
-                                        state.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
-                                        if !state.app_switcher.items.is_empty() {
-                                            let target_id = state.app_switcher.items[state.app_switcher.selected_index].window_id;
-                                            state.switch_to_window(target_id);
-                                        }
+                                        state.commit_app_switcher();
                                         return FilterResult::Intercept(());
                                     } else if is_tab {
-                                        let has_shift = modifiers.shift;
-                                        let len = state.app_switcher.items.len();
-                                        if len > 0 {
-                                            if has_shift {
-                                                state.app_switcher.selected_index = (state.app_switcher.selected_index + len - 1) % len;
-                                            } else {
-                                                state.app_switcher.selected_index = (state.app_switcher.selected_index + 1) % len;
-                                            }
-                                            info!("🔀 AppSwitcher ciclo: idx={}/{}", state.app_switcher.selected_index, len);
-                                            state.ipc_broadcaster.broadcast(&IpcMessage::UpdateAppSwitcher {
-                                                selected_index: state.app_switcher.selected_index,
-                                            });
-                                        }
+                                        state.step_app_switcher(!modifiers.shift);
+                                        info!(
+                                            "🔀 AppSwitcher ciclo: idx={}/{}",
+                                            state.app_switcher.selected_index,
+                                            state.app_switcher.items.len()
+                                        );
                                         return FilterResult::Intercept(());
                                     } else if is_left {
-                                        let len = state.app_switcher.items.len();
-                                        if len > 0 {
-                                            state.app_switcher.selected_index = (state.app_switcher.selected_index + len - 1) % len;
-                                            state.ipc_broadcaster.broadcast(&IpcMessage::UpdateAppSwitcher {
-                                                selected_index: state.app_switcher.selected_index,
-                                            });
-                                        }
+                                        state.step_app_switcher(false);
                                         return FilterResult::Intercept(());
                                     } else if is_right {
-                                        let len = state.app_switcher.items.len();
-                                        if len > 0 {
-                                            state.app_switcher.selected_index = (state.app_switcher.selected_index + 1) % len;
-                                            state.ipc_broadcaster.broadcast(&IpcMessage::UpdateAppSwitcher {
-                                                selected_index: state.app_switcher.selected_index,
-                                            });
-                                        }
+                                        state.step_app_switcher(true);
                                         return FilterResult::Intercept(());
                                     } else if is_q {
-                                        // Atajo secreto de macOS: ⌘Q mientras ⌘Tab está activo cierra la app seleccionada
-                                        if !state.app_switcher.items.is_empty() {
-                                            let target_id = state.app_switcher.items[state.app_switcher.selected_index].window_id;
-                                            info!("🚪 AppSwitcher ⌘Q: cerrando ventana seleccionada id={}", target_id);
-                                            state.close_window_by_id(target_id);
-                                            state.app_switcher.items.remove(state.app_switcher.selected_index);
-                                            if state.app_switcher.items.is_empty() {
-                                                state.app_switcher.is_active = false;
-                                                state.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
-                                            } else {
-                                                state.app_switcher.selected_index = state.app_switcher.selected_index.min(state.app_switcher.items.len() - 1);
-                                                state.ipc_broadcaster.broadcast(&IpcMessage::ShowAppSwitcher {
-                                                    items: state.app_switcher.items.clone(),
-                                                    selected_index: state.app_switcher.selected_index,
-                                                });
-                                            }
-                                        }
+                                        state.close_selected_app_switcher_window();
                                         return FilterResult::Intercept(());
                                     } else if is_h {
-                                        // Atajo secreto de macOS: ⌘H mientras ⌘Tab está activo oculta/minimiza la app seleccionada
-                                        if !state.app_switcher.items.is_empty() {
-                                            let target_id = state.app_switcher.items[state.app_switcher.selected_index].window_id;
-                                            info!("🪟 AppSwitcher ⌘H: ocultando ventana seleccionada id={}", target_id);
-                                            state.hide_window_by_id(target_id);
-                                            state.app_switcher.items[state.app_switcher.selected_index].is_minimized = true;
-                                            state.ipc_broadcaster.broadcast(&IpcMessage::ShowAppSwitcher {
-                                                items: state.app_switcher.items.clone(),
-                                                selected_index: state.app_switcher.selected_index,
-                                            });
-                                        }
+                                        state.hide_selected_app_switcher_window();
                                         return FilterResult::Intercept(());
                                     } else if is_esc {
                                         info!("❌ AppSwitcher cancelado con Escape");
-                                        state.app_switcher.is_active = false;
-                                        state.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
+                                        state.dismiss_app_switcher();
                                         return FilterResult::Intercept(());
                                     }
                                 }
 
                                 // 3. Invocación inicial de ⌘Tab / Super+Tab / Alt+Tab
                                 if (has_super || has_alt) && is_tab {
-                                    let items = state.build_app_switcher_items();
-                                    if !items.is_empty() {
-                                        let has_shift = modifiers.shift;
-                                        let initial_idx = if items.len() > 1 {
-                                            if has_shift { items.len() - 1 } else { 1 }
-                                        } else {
-                                            0
-                                        };
-                                        state.app_switcher.is_active = true;
-                                        state.app_switcher.items = items.clone();
-                                        state.app_switcher.selected_index = initial_idx;
-                                        info!("🔀 AppSwitcher activado con {} ventanas (idx={})", items.len(), initial_idx);
-                                        state.ipc_broadcaster.broadcast(&IpcMessage::ShowAppSwitcher {
-                                            items,
-                                            selected_index: initial_idx,
-                                        });
+                                    let pointer_loc =
+                                        state.seat.get_pointer().map(|p| p.current_location());
+                                    state.open_app_switcher(modifiers.shift, pointer_loc);
+                                    if state.app_switcher.is_active {
+                                        info!(
+                                            "🔀 AppSwitcher activado con {} ventanas (idx={})",
+                                            state.app_switcher.items.len(),
+                                            state.app_switcher.selected_index
+                                        );
                                         return FilterResult::Intercept(());
                                     }
                                 }
@@ -572,12 +515,7 @@ pub fn run_winit() -> Result<()> {
                                 // Cuando el usuario suelta Super o Alt, confirmar selección en App Switcher
                                 if state.app_switcher.is_active && ((!modifiers.logo && !modifiers.alt) || is_modifier_sym) {
                                     info!("🎯 AppSwitcher commit: soltado Super/Alt (is_mod={}), enfocando ventana", is_modifier_sym);
-                                    state.app_switcher.is_active = false;
-                                    state.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
-                                    if !state.app_switcher.items.is_empty() {
-                                        let target_id = state.app_switcher.items[state.app_switcher.selected_index].window_id;
-                                        state.switch_to_window(target_id);
-                                    }
+                                    state.commit_app_switcher();
                                     return FilterResult::Intercept(());
                                 }
                             }
@@ -598,6 +536,7 @@ pub fn run_winit() -> Result<()> {
                         state.screenshot_ui.update_pointer_motion(output_geo, point);
                     }
                     state.update_spotlight_drag_dock_hover(point);
+                    let _ = state.handle_app_switcher_deck_pointer_motion(point);
 
                     if state.handle_expose_pointer_motion(point) {
                         let serial = SERIAL_COUNTER.next_serial();
@@ -825,10 +764,13 @@ pub fn run_winit() -> Result<()> {
                             return;
                         }
 
+                        if state.handle_app_switcher_deck_pointer_button(point, event.button_code(), true) {
+                            return;
+                        }
+
                         if state.app_switcher.is_active {
                             info!("🖱️ Click detectado mientras AppSwitcher está activo -> cerrando AppSwitcher");
-                            state.app_switcher.is_active = false;
-                            state.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
+                            state.dismiss_app_switcher();
                         }
 
                         // Si hay popups activos y el clic NO fue sobre el popup, descartamos los popups
@@ -1082,6 +1024,7 @@ pub fn run_winit() -> Result<()> {
                                 )
                             {
                                 state.update_spotlight_drag_dock_hover(point);
+                    let _ = state.handle_app_switcher_deck_pointer_motion(point);
 
                     if state.handle_expose_pointer_motion(point) {
                         let serial = SERIAL_COUNTER.next_serial();
@@ -1121,6 +1064,9 @@ pub fn run_winit() -> Result<()> {
                         if state.handle_snap_layouts_pointer_button(point, event.button_code(), false) {
                             return;
                         }
+                        if state.handle_app_switcher_deck_pointer_button(point, event.button_code(), false) {
+                            return;
+                        }
                         state.snap_preview = None;
                     }
 
@@ -1142,6 +1088,11 @@ pub fn run_winit() -> Result<()> {
                     }
                 }
                 InputEvent::PointerAxis { event } => {
+                    if let Some(vertical) = event.amount(Axis::Vertical) {
+                        if state.handle_app_switcher_deck_axis(vertical) {
+                            return;
+                        }
+                    }
                     if state.spotlight.is_open() {
                         if let Some(vertical) = event.amount(Axis::Vertical) {
                             if vertical.abs() > 0.001 && state.spotlight.handle_scroll(vertical) {
@@ -1712,6 +1663,24 @@ pub fn run_winit() -> Result<()> {
                     None
                 };
                 let snap_layouts_preview = state.snap_layouts.hovered_preview_rect(&output.name());
+                let app_switcher_deck_frame = if state.deck_should_render_on_output(&output.name()) {
+                    let deck_windows = state.deck_windows_for_render();
+                    let app_switcher = &mut state.app_switcher;
+                    let ssd = &mut state.ssd;
+                    Some(crate::app_switcher::prepare_deck_cards(
+                        renderer,
+                        &mut app_switcher.deck,
+                        ssd,
+                        &app_switcher.items,
+                        &deck_windows,
+                        output_geo,
+                        1.0,
+                        is_dark_theme,
+                        now,
+                    ))
+                } else {
+                    None
+                };
 
                 let screenshot_request = state
                     .pending_screenshot_requests
@@ -1789,9 +1758,10 @@ pub fn run_winit() -> Result<()> {
                         }
                     }
 
-                    let wallpaper_occluded = occluders
-                        .iter()
-                        .any(|occ| occ.contains_rect(Rectangle::from_size(size)));
+                    let wallpaper_occluded = app_switcher_deck_frame.is_none()
+                        && occluders
+                            .iter()
+                            .any(|occ| occ.contains_rect(Rectangle::from_size(size)));
 
                     frame_rendered = true;
                     let _ = frame.clear(dark_acrylic, &[damage]);
@@ -1852,7 +1822,7 @@ pub fn run_winit() -> Result<()> {
                         ),
                     ) in window_render_data.iter().enumerate()
                     {
-                        if win_elems.is_empty() {
+                        if app_switcher_deck_frame.is_some() || win_elems.is_empty() {
                             continue;
                         }
 
@@ -2155,7 +2125,7 @@ pub fn run_winit() -> Result<()> {
                     for (idx, (_, _, _, popup_shadow_rects, _, is_active, ..)) in
                         window_render_data.iter().enumerate()
                     {
-                        if body_occluded[idx] {
+                        if app_switcher_deck_frame.is_some() || body_occluded[idx] {
                             continue;
                         }
                         if let (Some(radius), Some(shadow)) = (win_phys_r, shadow_pipeline.as_ref())
@@ -2176,7 +2146,7 @@ pub fn run_winit() -> Result<()> {
                     }
 
                     for (idx, (_, _, popups, ..)) in window_render_data.iter().enumerate() {
-                        if body_occluded[idx] {
+                        if app_switcher_deck_frame.is_some() || body_occluded[idx] {
                             continue;
                         }
                         for (popup_elems, popup_rect, popup_effects_enabled) in popups {
@@ -2517,6 +2487,22 @@ pub fn run_winit() -> Result<()> {
                             1.0,
                             std::slice::from_ref(snap_elem),
                             &[damage],
+                        );
+                    }
+
+                    // Renderizar Selector Visual App Switcher estilo Deck (sin blur global en el fondo)
+                    if let Some((deck_eased, ref deck_cards)) = app_switcher_deck_frame {
+                        crate::app_switcher::render_deck_frame(
+                            &mut frame,
+                            &projection,
+                            size,
+                            1.0,
+                            &[damage],
+                            blur_pipeline.as_mut(),
+                            shadow_pipeline.as_ref(),
+                            window_squircle_shader.as_ref(),
+                            deck_eased,
+                            deck_cards,
                         );
                     }
 
