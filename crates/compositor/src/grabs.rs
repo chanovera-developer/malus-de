@@ -33,6 +33,7 @@ impl PointerGrab<MalusState> for ResizeSurfaceGrab {
         )>,
         event: &MotionEvent,
     ) {
+        data.last_pointer_location = Some(event.location);
         if handle.current_pressed().is_empty() {
             tracing::info!("🛑 ResizeSurfaceGrab: ratón liberado durante motion, restaurando puntero");
             handle.unset_grab(self, data, event.serial, event.time, false);
@@ -221,6 +222,7 @@ impl PointerGrab<MalusState> for ResizeSurfaceGrab {
             handle.unset_grab(self, data, event.serial, event.time, false);
 
             let cur_loc = handle.current_location();
+            data.last_pointer_location = Some(cur_loc);
             let under_target = data.space.element_under(cur_loc).and_then(|(win, loc)| {
                 let local_point = cur_loc - loc.to_f64();
                 win.surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
@@ -360,6 +362,7 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
         )>,
         event: &MotionEvent,
     ) {
+        data.last_pointer_location = Some(event.location);
         if handle.current_pressed().is_empty() {
             tracing::info!("🛑 MoveSurfaceGrab: ratón liberado durante motion, restaurando puntero");
             data.snap_preview = None;
@@ -535,6 +538,7 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
             data.moving_window_surface = None;
 
             let cur_loc = handle.current_location();
+            data.last_pointer_location = Some(cur_loc);
 
             if !self.has_dragged {
                 tracing::info!("👆 MoveSurfaceGrab finalizado sin arrastre (clic simple en título/menú)");

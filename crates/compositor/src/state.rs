@@ -273,6 +273,9 @@ pub struct MalusState {
     pub snap_transitions: HashMap<WlSurface, SnapTransition>,
     pub snap_preview: Option<Rectangle<i32, Logical>>,
     pub moving_window_surface: Option<WlSurface>,
+    /// Última posición conocida del puntero; evita leer `PointerHandle::current_location()`
+    /// desde callbacks ejecutados bajo el mutex interno de Smithay (`PointerGrab`).
+    pub last_pointer_location: Option<Point<f64, Logical>>,
     pub socket_name: String,
     pub is_running: bool,
     pub ipc_broadcaster: IpcBroadcaster,
@@ -1143,6 +1146,7 @@ impl MalusState {
             snap_transitions: HashMap::new(),
             snap_preview: None,
             moving_window_surface: None,
+            last_pointer_location: None,
             socket_name: String::new(),
             is_running: true,
             ipc_broadcaster,
@@ -4231,63 +4235,30 @@ impl MalusState {
     }
 
     /// Determina la pantalla (Output) de origen donde reside principalmente una ventana.
-    /// Prioriza el monitor con mayor área de intersección física con la ventana,
-    /// seguido del monitor que contiene su centro o su posición actual, o la posición del puntero.
+    /// Prioriza el monitor con mayor área de intersección física con la ventana (incluyendo SSD),
+    /// seguido del monitor que contiene su centro o su posición actual, o la última posición del puntero.
     pub fn origin_output_for_window(&self, window: &smithay::desktop::Window) -> Option<Output> {
         let win_loc = self.space.element_location(window).unwrap_or_default();
         let win_geo = window.geometry();
-        let win_rect = Rectangle::new(win_loc, win_geo.size);
+        let ssd_top = if window_uses_ssd(window) {
+            crate::ssd::SSD_TITLEBAR_HEIGHT
+        } else {
+            0
+        };
+        let outputs: Vec<(Output, Rectangle<i32, Logical>)> = self
+            .space
+            .outputs()
+            .filter_map(|o| self.space.output_geometry(o).map(|g| (o.clone(), g)))
+            .collect();
 
-        // 1. Monitor con mayor área de solapamiento con la ventana
-        let mut best_output = None;
-        let mut max_area = 0i64;
-        for output in self.space.outputs() {
-            if let Some(out_geo) = self.space.output_geometry(output) {
-                if let Some(intersection) = win_rect.intersection(out_geo) {
-                    let area = intersection.size.w as i64 * intersection.size.h as i64;
-                    if area > max_area {
-                        max_area = area;
-                        best_output = Some(output.clone());
-                    }
-                }
-            }
-        }
-        if best_output.is_some() {
-            return best_output;
-        }
-
-        // 2. Monitor que contiene el centro de la ventana
-        let center = Point::from((
-            win_rect.loc.x + win_rect.size.w / 2,
-            win_rect.loc.y + win_rect.size.h / 2,
-        ));
-        for output in self.space.outputs() {
-            if let Some(out_geo) = self.space.output_geometry(output) {
-                if out_geo.contains(center) {
-                    return Some(output.clone());
-                }
-            }
-        }
-
-        // 3. Monitor que contiene la posición (esquina superior izquierda) de la ventana
-        for output in self.space.outputs() {
-            if let Some(out_geo) = self.space.output_geometry(output) {
-                if out_geo.contains(win_loc) {
-                    return Some(output.clone());
-                }
-            }
-        }
-
-        // 4. Monitor donde se encuentra actualmente el puntero del ratón
-        if let Some(pointer) = self.seat.get_pointer() {
-            let cur_loc = pointer.current_location();
-            for output in self.space.outputs() {
-                if let Some(out_geo) = self.space.output_geometry(output) {
-                    if out_geo.to_f64().contains(cur_loc) {
-                        return Some(output.clone());
-                    }
-                }
-            }
+        if let Some(output) = resolve_origin_output_from_bounds(
+            &outputs,
+            win_loc,
+            win_geo.size,
+            ssd_top,
+            self.last_pointer_location,
+        ) {
+            return Some(output);
         }
 
         // 5. Fallback a la lista de monitores de Smithay o monitor primario
@@ -4355,6 +4326,67 @@ impl MalusState {
             }
         }
     }
+}
+
+/// Resuelve el monitor de origen a partir de la geometría cliente, barra SSD y última posición del puntero,
+/// sin acceder al `Mutex<PointerInternal>` de Smithay (seguro bajo `PointerGrab`).
+pub fn resolve_origin_output_from_bounds(
+    outputs: &[(Output, Rectangle<i32, Logical>)],
+    win_loc: Point<i32, Logical>,
+    win_size: Size<i32, Logical>,
+    ssd_top: i32,
+    last_pointer_location: Option<Point<f64, Logical>>,
+) -> Option<Output> {
+    let win_rect = Rectangle::new(
+        Point::from((win_loc.x, win_loc.y - ssd_top)),
+        Size::from((win_size.w, win_size.h + ssd_top)),
+    );
+
+    // 1. Monitor con mayor área de solapamiento (cliente + barra SSD superior)
+    let mut best_output = None;
+    let mut max_area = 0i64;
+    for (output, out_geo) in outputs {
+        if let Some(intersection) = win_rect.intersection(*out_geo) {
+            let area = intersection.size.w as i64 * intersection.size.h as i64;
+            if area > max_area {
+                max_area = area;
+                best_output = Some(output.clone());
+            }
+        }
+    }
+    if best_output.is_some() {
+        return best_output;
+    }
+
+    // 2. Monitor que contiene el centro de la ventana
+    let center = Point::from((
+        win_rect.loc.x + win_rect.size.w / 2,
+        win_rect.loc.y + win_rect.size.h / 2,
+    ));
+    for (output, out_geo) in outputs {
+        if out_geo.contains(center) {
+            return Some(output.clone());
+        }
+    }
+
+    // 3. Monitor que contiene la esquina superior izquierda (cliente o barra SSD)
+    let ssd_top_left = Point::from((win_loc.x, win_loc.y - ssd_top));
+    for (output, out_geo) in outputs {
+        if out_geo.contains(win_loc) || (ssd_top > 0 && out_geo.contains(ssd_top_left)) {
+            return Some(output.clone());
+        }
+    }
+
+    // 4. Monitor de la última posición conocida del puntero (sin bloquear `PointerHandle`)
+    if let Some(cur_loc) = last_pointer_location {
+        for (output, out_geo) in outputs {
+            if out_geo.to_f64().contains(cur_loc) {
+                return Some(output.clone());
+            }
+        }
+    }
+
+    None
 }
 
 impl CompositorHandler for MalusState {
@@ -5189,8 +5221,9 @@ impl XdgShellHandler for MalusState {
                         } else {
                             fallback_origin
                         }
-                    } else if let Some(ptr_loc) =
-                        self.seat.get_pointer().map(|p| p.current_location())
+                    } else if let Some(ptr_loc) = self
+                        .last_pointer_location
+                        .or_else(|| self.seat.get_pointer().map(|p| p.current_location()))
                     {
                         let in_upper_band = ptr_loc.x >= loc.x as f64 - 8.0
                             && ptr_loc.x <= (loc.x + geo.size.w) as f64 + 8.0
@@ -6160,5 +6193,227 @@ mod tests {
         // Pantalla secundaria (sin Dock) -> nunca se incluyen minimizadas
         assert!(!super::should_include_minimized_in_app_switcher(false, 0, 0));
         assert!(!super::should_include_minimized_in_app_switcher(false, 1, 0));
+    }
+
+    #[test]
+    fn ssd_corner_drag_resolves_output_without_locking_pointer_mutex() {
+        use smithay::{
+            input::{
+                pointer::{
+                    AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent,
+                    GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent,
+                    GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent,
+                    GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle,
+                    RelativeMotionEvent,
+                },
+                SeatHandler,
+            },
+            output::{Mode, Output, PhysicalProperties, Subpixel},
+            reexports::wayland_server::Display,
+            utils::{Logical, Point, Rectangle, Size, Transform, SERIAL_COUNTER},
+        };
+
+        let display: Display<super::MalusState> = Display::new().unwrap();
+        let mut state = super::MalusState::new(&display);
+        let pointer = state.seat.add_pointer();
+
+        let output = Output::new(
+            "DP-1".to_string(),
+            PhysicalProperties {
+                size: (1920, 1080).into(),
+                subpixel: Subpixel::Unknown,
+                make: "Malus".to_string(),
+                model: "Test".to_string(),
+            },
+        );
+        output.change_current_state(
+            Some(Mode {
+                size: (1920, 1080).into(),
+                refresh: 60_000,
+            }),
+            Some(Transform::Normal),
+            None,
+            Some((0, 0).into()),
+        );
+        state.space.map_output(&output, (0, 0));
+
+        let outputs = vec![(output.clone(), Rectangle::new((0, 0).into(), (1920, 1080).into()))];
+        // Ventana SSD arrastrada a esquina inferior derecha: cliente en y=1100 >= 1080, barra SSD en [1062, 1100).
+        let resolved_bottom = super::resolve_origin_output_from_bounds(
+            &outputs,
+            Point::from((1400, 1100)),
+            Size::from((800, 600)),
+            crate::ssd::SSD_TITLEBAR_HEIGHT,
+            None,
+        );
+        assert_eq!(resolved_bottom, Some(output.clone()));
+
+        // Ventana arrastrada completamente fuera del borde izquierdo: cae al fallback de `last_pointer_location`.
+        let resolved_left = super::resolve_origin_output_from_bounds(
+            &outputs,
+            Point::from((-900, 50)),
+            Size::from((800, 600)),
+            crate::ssd::SSD_TITLEBAR_HEIGHT,
+            Some(Point::from((0.0, 50.0))),
+        );
+        assert_eq!(resolved_left, Some(output.clone()));
+
+        struct CornerGrab {
+            start_data: GrabStartData<super::MalusState>,
+            output: Output,
+        }
+        impl PointerGrab<super::MalusState> for CornerGrab {
+            fn motion(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                _focus: Option<(<super::MalusState as SeatHandler>::PointerFocus, Point<f64, Logical>)>,
+                event: &MotionEvent,
+            ) {
+                data.last_pointer_location = Some(event.location);
+                handle.motion(data, None, event);
+                let _ = data.has_fullscreen_window_on_output(&self.output);
+                data.update_ssd_hover(event.location);
+            }
+            fn relative_motion(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                focus: Option<(<super::MalusState as SeatHandler>::PointerFocus, Point<f64, Logical>)>,
+                event: &RelativeMotionEvent,
+            ) {
+                handle.relative_motion(data, focus, event);
+            }
+            fn button(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                event: &ButtonEvent,
+            ) {
+                data.last_pointer_location = Some(handle.current_location());
+                handle.unset_grab(self, data, event.serial, event.time, false);
+                data.update_ssd_hover(handle.current_location());
+            }
+            fn axis(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                details: AxisFrame,
+            ) {
+                handle.axis(data, details);
+            }
+            fn frame(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+            ) {
+                handle.frame(data);
+            }
+            fn gesture_swipe_begin(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                event: &GestureSwipeBeginEvent,
+            ) {
+                handle.gesture_swipe_begin(data, event);
+            }
+            fn gesture_swipe_update(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                event: &GestureSwipeUpdateEvent,
+            ) {
+                handle.gesture_swipe_update(data, event);
+            }
+            fn gesture_swipe_end(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                event: &GestureSwipeEndEvent,
+            ) {
+                handle.gesture_swipe_end(data, event);
+            }
+            fn gesture_pinch_begin(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                event: &GesturePinchBeginEvent,
+            ) {
+                handle.gesture_pinch_begin(data, event);
+            }
+            fn gesture_pinch_update(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                event: &GesturePinchUpdateEvent,
+            ) {
+                handle.gesture_pinch_update(data, event);
+            }
+            fn gesture_pinch_end(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                event: &GesturePinchEndEvent,
+            ) {
+                handle.gesture_pinch_end(data, event);
+            }
+            fn gesture_hold_begin(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                event: &GestureHoldBeginEvent,
+            ) {
+                handle.gesture_hold_begin(data, event);
+            }
+            fn gesture_hold_end(
+                &mut self,
+                data: &mut super::MalusState,
+                handle: &mut PointerInnerHandle<'_, super::MalusState>,
+                event: &GestureHoldEndEvent,
+            ) {
+                handle.gesture_hold_end(data, event);
+            }
+            fn start_data(&self) -> &GrabStartData<super::MalusState> {
+                &self.start_data
+            }
+            fn unset(&mut self, data: &mut super::MalusState) {
+                data.ssd.grab_active = false;
+            }
+        }
+
+        state.ssd.grab_active = true;
+        pointer.set_grab(
+            &mut state,
+            CornerGrab {
+                start_data: GrabStartData {
+                    focus: None,
+                    button: 0x110,
+                    location: (1800.0, 1000.0).into(),
+                },
+                output: output.clone(),
+            },
+            SERIAL_COUNTER.next_serial(),
+            smithay::input::pointer::Focus::Clear,
+        );
+        pointer.motion(
+            &mut state,
+            None,
+            &MotionEvent {
+                location: (1919.0, 1079.0).into(),
+                serial: SERIAL_COUNTER.next_serial(),
+                time: 10,
+            },
+        );
+        pointer.button(
+            &mut state,
+            &ButtonEvent {
+                button: 0x110,
+                state: smithay::backend::input::ButtonState::Released,
+                serial: SERIAL_COUNTER.next_serial(),
+                time: 20,
+            },
+        );
+        assert_eq!(state.last_pointer_location, Some(Point::from((1919.0, 1079.0))));
+        assert!(!state.ssd.grab_active);
     }
 }

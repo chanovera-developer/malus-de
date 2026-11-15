@@ -4,6 +4,21 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-15] — Corrección de Deadlock en Arrastre SSD a Esquinas (`ZapFast`)
+
+### 1. Eliminación de Re-entrada al Mutex del Puntero en `origin_output_for_window` (`crates/compositor/src/state.rs`, `grabs.rs`, `drm.rs`, `winit.rs`)
+* **Causa raíz resuelta:**
+  * Durante un arrastre (`MoveSurfaceGrab::motion`) o redimensión (`ResizeSurfaceGrab::motion`) en [`grabs.rs`](../crates/compositor/src/grabs.rs), Smithay mantiene bloqueado `Mutex<PointerInternal>` en el hilo principal del compositor.
+  * Al arrastrar una ventana con barra de título SSD de `38 px` por encima de la superficie cliente (como ZapFast) hacia esquinas inferiores o laterales hasta sacar su rectángulo cliente fuera de la pantalla, `origin_output_for_window` en [`state.rs`](../crates/compositor/src/state.rs) fallaba en los pasos de intersección/contención y llamaba a `self.seat.get_pointer().current_location()`, provocando un **deadlock** en el hilo principal (y sin disparar *panic hook* ni volcado post-`wait` en `malus-session`).
+* **Solución implementada:**
+  * Se agregó `last_pointer_location` a `MalusState` ([`state.rs`](../crates/compositor/src/state.rs)), sincronizado en eventos de puntero de [`drm.rs`](../crates/compositor/src/backend/drm.rs), [`winit.rs`](../crates/compositor/src/backend/winit.rs) y en `motion`/`button` de [`grabs.rs`](../crates/compositor/src/grabs.rs).
+  * Se extrajo [`resolve_origin_output_from_bounds`](../crates/compositor/src/state.rs) para incluir `SSD_TITLEBAR_HEIGHT` en la geometría/esquina de ventanas SSD y consultar `last_pointer_location` como respaldo sin volver a bloquear `PointerHandle`.
+
+### 2. Validación
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-compositor`: **71 passed; 0 failed** (incluyendo la nueva prueba `ssd_corner_drag_resolves_output_without_locking_pointer_mutex`).
+
+---
+
 ## [2026-11-15] — Branches (Sidebar y Foco desde Dock), Semáforo CSD Estático 1:1 en Snap/Maximizado y App Switcher por Pantalla y Escritorio
 
 ### 1. Límite de Sidebar en Branches y Foco desde el Dock (`crates/branches/src/app_window.rs`, `sidebar.rs`, `crates/dock/src/main.rs`, `crates/compositor/src/state.rs`)

@@ -530,6 +530,7 @@ pub fn run_winit() -> Result<()> {
                 InputEvent::PointerMotionAbsolute { event } => {
                     let output_geo = state.space.output_geometry(&output).unwrap_or_default();
                     let point = event.position_transformed(output_geo.size);
+                    state.last_pointer_location = Some(point);
                     let serial = SERIAL_COUNTER.next_serial();
                     state.spotlight.update_dock_drag_location(point);
 
@@ -635,6 +636,7 @@ pub fn run_winit() -> Result<()> {
                 InputEvent::PointerButton { event } => {
                     let is_pressed = event.state() == ButtonState::Pressed;
                     let point = pointer.current_location();
+                    state.last_pointer_location = Some(point);
                     if state.handle_expose_pointer_button(point, event.button_code(), is_pressed) {
                         return;
                     }

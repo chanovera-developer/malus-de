@@ -1378,6 +1378,7 @@ pub fn run_drm() -> Result<()> {
     });
 
     if let Some(center) = primary_center {
+        state.last_pointer_location = Some(center);
         if let Some(pointer) = state.seat.get_pointer() {
             let serial = SERIAL_COUNTER.next_serial();
             pointer.motion(
@@ -1770,6 +1771,7 @@ pub fn run_drm() -> Result<()> {
                     current_pos.x += event.delta_x();
                     current_pos.y += event.delta_y();
                     let point = clamp_pointer_location(state, current_pos);
+                    state.last_pointer_location = Some(point);
                     state.spotlight.update_dock_drag_location(point);
 
                     if state.spotlight.is_open() {
@@ -1842,6 +1844,7 @@ pub fn run_drm() -> Result<()> {
                         point.x += output_geo.loc.x as f64;
                         point.y += output_geo.loc.y as f64;
                         let point = clamp_pointer_location(state, point);
+                        state.last_pointer_location = Some(point);
                         state.spotlight.update_dock_drag_location(point);
 
                         if state.spotlight.is_open() {
@@ -1891,6 +1894,7 @@ pub fn run_drm() -> Result<()> {
             InputEvent::PointerButton { event } => {
                 if let Some(pointer) = state.seat.get_pointer() {
                     let point = pointer.current_location();
+                    state.last_pointer_location = Some(point);
                     let is_pressed = event.state() == ButtonState::Pressed;
 
                     let (under_target, layer_info, regular_win, is_popup) = resolve_target_under(state, point);
