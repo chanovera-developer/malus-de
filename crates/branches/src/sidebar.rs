@@ -296,6 +296,7 @@ fn create_sidebar_row(title: &str, icon_name: &str, path: PathBuf) -> ListBoxRow
         .label(title)
         .halign(Align::Start)
         .hexpand(true)
+        .ellipsize(gtk4::pango::EllipsizeMode::End)
         .build();
 
     hbox.append(&icon);
@@ -337,6 +338,7 @@ fn create_tag_row(title: &str, color_hex: &str) -> ListBoxRow {
         .label(title)
         .halign(Align::Start)
         .hexpand(true)
+        .ellipsize(gtk4::pango::EllipsizeMode::End)
         .build();
 
     hbox.append(&dot);

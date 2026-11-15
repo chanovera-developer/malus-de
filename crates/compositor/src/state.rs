@@ -286,6 +286,45 @@ pub fn toplevel_info(surface: &WlSurface) -> (Option<String>, Option<String>) {
     })
 }
 
+fn matches_app_target(target_lower: &str, app_id: Option<&str>, title: Option<&str>) -> bool {
+    if target_lower.is_empty() {
+        return false;
+    }
+
+    let id_lower = app_id.map(str::to_lowercase);
+    let title_lower = title.map(str::to_lowercase);
+
+    if id_lower
+        .as_deref()
+        .is_some_and(|id| id.contains(target_lower))
+        || title_lower
+            .as_deref()
+            .is_some_and(|t| t.contains(target_lower))
+    {
+        return true;
+    }
+
+    if let Some(ref id) = id_lower {
+        if let Some(suffix) = target_lower.strip_prefix("malus-de-") {
+            if id.contains(&format!("malus.{suffix}")) {
+                return true;
+            }
+        }
+        let compact = |s: &str| -> String {
+            s.chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .flat_map(char::to_lowercase)
+                .collect()
+        };
+        let compact_target = compact(target_lower);
+        if !compact_target.is_empty() && compact(id).ends_with(&compact_target) {
+            return true;
+        }
+    }
+
+    false
+}
+
 fn is_system_action_confirmation_surface(surface: &WlSurface) -> bool {
     toplevel_info(surface).1.as_deref() == Some("Confirmación de acción del sistema")
 }
@@ -1467,12 +1506,14 @@ impl MalusState {
         let target_lower = target.to_lowercase();
 
         // 1. Verificar si está entre las ventanas minimizadas
-        let minimized_entry = self.minimized_windows.iter().find(|(surf, _)| {
-            let (app_id, title) = toplevel_info(surf);
-            let id_match = app_id.map(|id| id.to_lowercase().contains(&target_lower)).unwrap_or(false);
-            let title_match = title.map(|t| t.to_lowercase().contains(&target_lower)).unwrap_or(false);
-            id_match || title_match
-        }).map(|(surf, _)| surf.clone());
+        let minimized_entry = self
+            .minimized_windows
+            .iter()
+            .find(|(surf, _)| {
+                let (app_id, title) = toplevel_info(surf);
+                matches_app_target(&target_lower, app_id.as_deref(), title.as_deref())
+            })
+            .map(|(surf, _)| surf.clone());
 
         if let Some(surf) = minimized_entry {
             if let Some(&id) = self.window_ids.get(&surf) {
@@ -1481,16 +1522,18 @@ impl MalusState {
         }
 
         // 2. Verificar si está entre las ventanas activas en Space
-        let visible_window = self.space.elements().find(|w| {
-            if let Some(surf) = w.wl_surface() {
-                let (app_id, title) = toplevel_info(&surf);
-                let id_match = app_id.map(|id| id.to_lowercase().contains(&target_lower)).unwrap_or(false);
-                let title_match = title.map(|t| t.to_lowercase().contains(&target_lower)).unwrap_or(false);
-                id_match || title_match
-            } else {
-                false
-            }
-        }).cloned();
+        let visible_window = self
+            .space
+            .elements()
+            .find(|w| {
+                if let Some(surf) = w.wl_surface() {
+                    let (app_id, title) = toplevel_info(&surf);
+                    matches_app_target(&target_lower, app_id.as_deref(), title.as_deref())
+                } else {
+                    false
+                }
+            })
+            .cloned();
 
         if let Some(window) = visible_window {
             let is_already_focused = self
@@ -1505,19 +1548,19 @@ impl MalusState {
                 })
                 .unwrap_or(false);
 
+            self.space.raise_element(&window, true);
+            self.ensure_window_below_topbar(&window);
+
             if is_already_focused {
-                tracing::debug!("La app solicitada ya tiene el foco; no se minimiza ni se altera");
+                tracing::debug!("La app solicitada ya tiene el foco; asegurando orden superior");
                 return true;
             }
 
-            self.space.raise_element(&window, true);
-            if let Some(toplevel) = window.toplevel() {
-                toplevel.send_configure();
-            }
             if let Some(surf) = window.wl_surface() {
-                if let Some(kb) = self.seat.get_keyboard() {
-                    let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-                    kb.set_focus(self, Some(surf.clone().into_owned()), serial);
+                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                self.set_keyboard_focus_with_sync(Some(surf.clone().into_owned()), serial);
+                if let Some(toplevel) = window.toplevel() {
+                    toplevel.send_configure();
                 }
                 self.notify_active_app(Some(&surf));
             }
@@ -5960,5 +6003,29 @@ mod tests {
         assert_eq!(tl_loc.y - ssd_top, 32);
         assert_eq!(tl_loc.y + tl_sz.unwrap().h, bl_loc.y - ssd_top);
         assert_eq!(bl_loc.y + bl_sz.unwrap().h, 1032);
+    }
+
+    #[test]
+    fn matches_app_target_handles_malus_branches_and_reverse_dns_ids() {
+        assert!(super::matches_app_target(
+            "malus-de-branches",
+            Some("dev.malus.Branches"),
+            Some("Escritorio")
+        ));
+        assert!(super::matches_app_target(
+            "dev.malus.branches",
+            Some("dev.malus.Branches"),
+            Some("Descargas")
+        ));
+        assert!(super::matches_app_target(
+            "gnome-text-editor",
+            Some("org.gnome.TextEditor"),
+            Some("notas.txt")
+        ));
+        assert!(!super::matches_app_target(
+            "malus-de-branches",
+            Some("org.gnome.Ptyxis"),
+            Some("Terminal")
+        ));
     }
 }

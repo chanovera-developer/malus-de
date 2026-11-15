@@ -534,9 +534,9 @@ fn resolve_desktop_app_info(identifier: &str) -> (String, String, String, Vec<St
             "system-file-manager".to_string(),
             "malus-de-branches".to_string(),
             vec![
-                "malus-de-branches".to_string(),
-                "dev.malus.branches".to_string(),
                 "dev.malus.Branches".to_string(),
+                "dev.malus.branches".to_string(),
+                "malus-de-branches".to_string(),
                 "branches".to_string(),
                 "files".to_string(),
             ],
@@ -802,6 +802,13 @@ fn run_dock_bounce_decay(
             });
         });
     });
+}
+
+fn find_matching_running_app(running: &[String], matchers: &[String], app_name: &str) -> Option<String> {
+    running
+        .iter()
+        .find(|identity| matches_dock_app(matchers, app_name, identity))
+        .cloned()
 }
 
 fn matches_dock_app(matchers: &[String], app_name: &str, identity: &str) -> bool {
@@ -3062,16 +3069,13 @@ fn create_dock_item(
             }
 
             let running = cache.borrow();
-            let is_currently_running = running.iter().any(|r| {
-                let r_lower = r.to_lowercase();
-                matchers.iter().any(|m| r_lower.contains(&m.to_lowercase()))
-            });
+            let matched_running = find_matching_running_app(&running, &matchers, &name);
             drop(running);
 
-            if is_currently_running && !matchers.is_empty() {
+            if let Some(running_id) = matched_running {
                 info!("App ya en ejecución, enviando IPC ActivateApp para {}", name);
                 let _ = send_ipc_message(&IpcMessage::ActivateApp {
-                    app_id: matchers[0].clone(),
+                    app_id: running_id,
                 });
                 return;
             }
@@ -3383,6 +3387,19 @@ mod tests {
             "Archivos",
             "org.gnome.Calculator"
         ));
+    }
+
+    #[test]
+    fn resolves_actual_running_identity_for_branches_activation() {
+        let (_name, _icon, _cmd, matchers) = resolve_desktop_app_info("dev.malus.Branches");
+        let running = vec![
+            "org.gnome.Ptyxis".to_string(),
+            "dev.malus.Branches".to_string(),
+        ];
+        assert_eq!(
+            find_matching_running_app(&running, &matchers, "Branches").as_deref(),
+            Some("dev.malus.Branches")
+        );
     }
 
     #[test]

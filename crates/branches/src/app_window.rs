@@ -259,15 +259,25 @@ impl BranchesWindow {
         right_header_box.append(&search_container);
 
         // 9. Paned principal (Sidebar a la izquierda y Contenido a la derecha)
+        // Mantener la barra lateral acotada a 212 px lógicos (región exacta del blur del compositor)
+        // evitando que crezca al maximizar o al arrastrar el separador.
+        const MAX_SIDEBAR_WIDTH: i32 = 212;
         let hpaned = Paned::builder()
             .orientation(Orientation::Horizontal)
             .position(210)
+            .resize_start_child(false)
+            .resize_end_child(true)
             .shrink_start_child(false)
             .shrink_end_child(false)
             .hexpand(true)
             .vexpand(true)
             .css_classes(["branches-main-paned"])
             .build();
+        hpaned.connect_position_notify(|paned| {
+            if paned.position() > MAX_SIDEBAR_WIDTH {
+                paned.set_position(MAX_SIDEBAR_WIDTH);
+            }
+        });
 
         // Barras inferiores
         let status_bar = Rc::new(StatusBar::new());
