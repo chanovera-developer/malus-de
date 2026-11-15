@@ -232,6 +232,7 @@ pub struct GaussianBlur {
 
     snapshot_tex: ffi::types::GLuint,
     snapshot_size: (i32, i32),
+    snapshot_is_drm: bool,
 
     spotlight_mask_tex: ffi::types::GLuint,
     spotlight_mask_size: (i32, i32),
@@ -341,6 +342,7 @@ impl GaussianBlur {
                 blit_u_border_color,
                 snapshot_tex,
                 snapshot_size: (0, 0),
+                snapshot_is_drm: false,
                 spotlight_mask_tex,
                 spotlight_mask_size: (0, 0),
                 slots,
@@ -581,6 +583,7 @@ impl GaussianBlur {
                 );
                 self.snapshot_size = (screen_size.w, screen_size.h);
             }
+            self.snapshot_is_drm = is_drm;
             gl.CopyTexSubImage2D(
                 ffi::TEXTURE_2D,
                 0,
@@ -669,25 +672,120 @@ impl GaussianBlur {
         from_capture: bool,
         alpha: f32,
     ) {
+        self.render_blur_internal(
+            gl,
+            projection,
+            screen_size,
+            win_rect,
+            win_rect,
+            corner_radius,
+            corner_exponent,
+            from_capture,
+            alpha,
+            false,
+        );
+    }
+
+    /// Dibuja el blur capturado del fondo (`snapshot_tex`) dentro de un FBO offscreen premultiplicado,
+    /// mapeando coordenadas de pantalla `src_win_rect` hacia coordenadas del FBO `dst_win_rect`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_captured_blur_to_offscreen(
+        &mut self,
+        gl: &ffi::Gles2,
+        target_projection: &[f32; 9],
+        screen_size: Size<i32, Physical>,
+        src_win_rect: Rectangle<i32, Physical>,
+        dst_win_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+    ) {
+        self.render_blur_internal(
+            gl,
+            target_projection,
+            screen_size,
+            src_win_rect,
+            dst_win_rect,
+            corner_radius,
+            2.0,
+            true,
+            1.0,
+            true,
+        );
+    }
+
+    /// Aplica el blur de barra lateral translúcida sobre el frame offscreen de una ventana antes de
+    /// componer sus superficies (para mantener el efecto cristal durante Genie y Black Hole).
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_translucent_offscreen_blur(
+        &mut self,
+        frame: &mut GlesFrame<'_, '_>,
+        screen_size: Size<i32, Physical>,
+        screen_win_rect: Rectangle<i32, Physical>,
+        offscreen_win_rect: Rectangle<i32, Physical>,
+        scale: f64,
+        win_phys_r: Option<i32>,
+        should_round: bool,
+    ) {
+        let src_blur_rect = translucent_window_blur_rect(screen_win_rect, scale, win_phys_r);
+        let dst_blur_rect = translucent_window_blur_rect(offscreen_win_rect, scale, win_phys_r);
+        let corner_radius = if should_round {
+            win_phys_r.unwrap_or(0) as f32
+        } else {
+            0.0
+        };
+        let offscreen_proj = *frame.projection();
+        let _ = frame.with_context(|gl| {
+            self.render_captured_blur_to_offscreen(
+                gl,
+                &offscreen_proj,
+                screen_size,
+                src_blur_rect,
+                dst_blur_rect,
+                corner_radius,
+            );
+        });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_blur_internal(
+        &mut self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        screen_size: Size<i32, Physical>,
+        src_win_rect: Rectangle<i32, Physical>,
+        dst_win_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        corner_exponent: f32,
+        from_capture: bool,
+        alpha: f32,
+        offscreen_premul: bool,
+    ) {
         let screen_rect = Rectangle::from_size(screen_size);
-        let visible_rect = match win_rect.intersection(screen_rect) {
+        let visible_src = match src_win_rect.intersection(screen_rect) {
             Some(r) if r.size.w >= 4 && r.size.h >= 4 => r,
             _ => return,
         };
+        let visible_rect = Rectangle::new(
+            dst_win_rect.loc + (visible_src.loc - src_win_rect.loc),
+            visible_src.size,
+        );
 
-        let w = visible_rect.size.w;
-        let h = visible_rect.size.h;
+        let w = visible_src.size.w;
+        let h = visible_src.size.h;
         let (w0, h0) = downsampled_size(w, h);
 
         // En DRM (Transform::Normal), la matriz de proyección mapea Y positivo hacia abajo en NDC
         // y el framebuffer tiene origen superior (y = 0 en la parte superior de pantalla).
         // En Winit (Transform::Flipped180), la coordenada GL está invertida respecto al origen Wayland.
-        let is_drm = projection[4] > 0.0;
-        let copy_x = visible_rect.loc.x;
-        let copy_y = if is_drm {
-            visible_rect.loc.y
+        let src_is_drm = if from_capture {
+            self.snapshot_is_drm
         } else {
-            screen_size.h - (visible_rect.loc.y + h)
+            projection[4] > 0.0
+        };
+        let copy_x = visible_src.loc.x;
+        let copy_y = if src_is_drm {
+            visible_src.loc.y
+        } else {
+            screen_size.h - (visible_src.loc.y + h)
         };
         if from_capture && self.snapshot_size != (screen_size.w, screen_size.h) {
             return;
@@ -765,7 +863,7 @@ impl GaussianBlur {
                 gl.BindTexture(ffi::TEXTURE_2D, slot.source_tex);
                 let mut prev_read_buffer = 0;
                 gl.GetIntegerv(ffi::READ_BUFFER, &mut prev_read_buffer);
-                gl.ReadBuffer(if is_drm {
+                gl.ReadBuffer(if src_is_drm {
                     ffi::COLOR_ATTACHMENT0
                 } else {
                     ffi::BACK
@@ -842,12 +940,21 @@ impl GaussianBlur {
                 prev_viewport[3],
             );
             gl.Enable(ffi::BLEND);
-            gl.BlendFuncSeparate(
-                ffi::SRC_ALPHA,
-                ffi::ONE_MINUS_SRC_ALPHA,
-                ffi::ZERO,
-                ffi::ONE,
-            );
+            if offscreen_premul {
+                gl.BlendFuncSeparate(
+                    ffi::SRC_ALPHA,
+                    ffi::ONE_MINUS_SRC_ALPHA,
+                    ffi::ONE,
+                    ffi::ONE_MINUS_SRC_ALPHA,
+                );
+            } else {
+                gl.BlendFuncSeparate(
+                    ffi::SRC_ALPHA,
+                    ffi::ONE_MINUS_SRC_ALPHA,
+                    ffi::ZERO,
+                    ffi::ONE,
+                );
+            }
 
             gl.UseProgram(self.blit_program);
             gl.ActiveTexture(ffi::TEXTURE0);
@@ -864,17 +971,17 @@ impl GaussianBlur {
             );
             gl.Uniform4f(
                 self.blit_u_win_rect,
-                win_rect.loc.x as f32,
-                win_rect.loc.y as f32,
-                win_rect.size.w as f32,
-                win_rect.size.h as f32,
+                dst_win_rect.loc.x as f32,
+                dst_win_rect.loc.y as f32,
+                dst_win_rect.size.w as f32,
+                dst_win_rect.size.h as f32,
             );
             gl.Uniform2f(
                 self.blit_u_win_size,
-                win_rect.size.w as f32,
-                win_rect.size.h as f32,
+                dst_win_rect.size.w as f32,
+                dst_win_rect.size.h as f32,
             );
-            gl.Uniform1i(self.blit_u_is_drm, if is_drm { 1 } else { 0 });
+            gl.Uniform1i(self.blit_u_is_drm, if src_is_drm { 1 } else { 0 });
             gl.Uniform1f(self.blit_u_corner_radius, corner_radius);
             gl.Uniform1f(self.blit_u_corner_exponent, corner_exponent);
             gl.Uniform1f(self.blit_u_solid_mode, 0.0);
@@ -1302,6 +1409,19 @@ impl GaussianBlur {
             [0.28, 0.65, 1.0, 0.55],
         );
     }
+}
+
+/// Calcula el rectángulo de desenfoque de barra lateral para ventanas translúcidas (`212pt` + margen de esquina).
+pub fn translucent_window_blur_rect(
+    win_rect: Rectangle<i32, Physical>,
+    scale: f64,
+    win_phys_r: Option<i32>,
+) -> Rectangle<i32, Physical> {
+    let sidebar_blur_w = ((212.0 * scale).round() as i32
+        + win_phys_r.unwrap_or(0) as i32
+        + 4)
+        .min(win_rect.size.w.max(0));
+    Rectangle::new(win_rect.loc, (sidebar_blur_w, win_rect.size.h).into())
 }
 
 /// Dibuja la previsualización lógica de ajuste de ventana (Snap Preview) en el monitor indicado.

@@ -295,9 +295,11 @@ pub fn capture_closing_window_texture(
     renderer: &mut GlesRenderer,
     ssd: &mut crate::ssd::SsdManager,
     squircle_shader: Option<&crate::window_corners::WindowSquircleShader>,
+    blur_pipeline: Option<&mut crate::blur::GaussianBlur>,
     pending: &PendingBlackHoleClose,
     output_name: &str,
     output_geo: Rectangle<i32, Logical>,
+    screen_size: Size<i32, Physical>,
     scale: f64,
     win_phys_r: Option<i32>,
     is_dark_theme: bool,
@@ -443,6 +445,19 @@ pub fn capture_closing_window_texture(
         };
 
         let _ = frame.clear(Color32F::new(0.0, 0.0, 0.0, 0.0), &[offscreen_rect]);
+        if pending.is_translucent {
+            if let Some(blur) = blur_pipeline {
+                blur.render_translucent_offscreen_blur(
+                    &mut frame,
+                    screen_size,
+                    final_screen_rect,
+                    offscreen_rect,
+                    scale,
+                    win_phys_r,
+                    should_round,
+                );
+            }
+        }
         if !offscreen_win_elems.is_empty() {
             crate::window_corners::render_window_elements(
                 &mut frame,
@@ -1080,7 +1095,7 @@ unsafe fn compile_shader(
     Some(shader)
 }
 
-unsafe fn link_program(
+pub(crate) unsafe fn link_program(
     gl: &ffi::Gles2,
     vert_src: &str,
     frag_src: &str,

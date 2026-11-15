@@ -13,7 +13,6 @@ use smithay::{
             element::{
                 surface::{
                     render_elements_from_surface_tree, WaylandSurfaceRenderElement,
-                    WaylandSurfaceTexture,
                 },
                 Element, Kind,
             },
@@ -234,6 +233,11 @@ pub fn run_winit() -> Result<()> {
     let mut shadow_pipeline: Option<crate::shadow::WindowShadowPipeline> = None;
     let mut black_hole_pipeline: Option<crate::black_hole::BlackHolePipeline> = None;
     let mut active_black_holes: Vec<crate::black_hole::ActiveBlackHoleClose> = Vec::new();
+    let mut genie_pipeline: Option<crate::magic_lamp::GeniePipeline> = None;
+    let mut genie_snapshots: std::collections::HashMap<
+        u64,
+        crate::capture::CapturedWindowOffscreen,
+    > = std::collections::HashMap::new();
     let mut theme_transition_pipeline: Option<crate::theme_transition::ThemeTransitionPipeline> =
         None;
     let mut workspace_transition_pipeline: Option<
@@ -1140,34 +1144,18 @@ pub fn run_winit() -> Result<()> {
         {
             if let Ok((renderer, mut framebuffer)) = backend.bind() {
                 let now = Instant::now();
-                let mut anim_data = Vec::new();
-                for anim in &state.active_animations {
-                    if anim.waiting_for_dock_slot {
-                        continue;
-                    }
+                let active_genies: Vec<crate::state::GenieAnimation> = state
+                    .active_animations
+                    .iter()
+                    .filter(|anim| !anim.waiting_for_dock_slot)
+                    .cloned()
+                    .collect();
+                for anim in &active_genies {
                     visible_surface_ids.insert(
                         smithay::backend::renderer::element::Id::from_wayland_resource(
                             &anim.surface,
                         ),
                     );
-                    let elems = render_elements_from_surface_tree::<
-                        GlesRenderer,
-                        WaylandSurfaceRenderElement<GlesRenderer>,
-                    >(
-                        renderer,
-                        &anim.surface,
-                        (0, 0),
-                        Scale::from(1.0),
-                        1.0,
-                        Kind::Unspecified,
-                    );
-                    if elems.is_empty() {
-                        warn!(
-                            "⚠️ [Genie] anim_data: elems está VACÍO para anim id={}",
-                            anim.window_id
-                        );
-                    }
-                    anim_data.push((anim.clone(), elems));
                 }
 
                 if state.pending_displays_reload {
@@ -1582,6 +1570,12 @@ pub fn run_winit() -> Result<()> {
                         .ok()
                         .flatten();
                 }
+                if genie_pipeline.is_none() {
+                    genie_pipeline = renderer
+                        .with_context(|gl| crate::magic_lamp::GeniePipeline::new(gl))
+                        .ok()
+                        .flatten();
+                }
 
                 let output_geo = state.space.output_geometry(&output).unwrap_or_default();
                 if !state.pending_black_holes.is_empty() {
@@ -1591,9 +1585,11 @@ pub fn run_winit() -> Result<()> {
                             renderer,
                             &mut state.ssd,
                             window_squircle_shader.as_ref(),
+                            blur_pipeline.as_mut(),
                             pending,
                             &out_name,
                             output_geo,
+                            size,
                             1.0,
                             win_phys_r,
                             is_dark_theme,
@@ -1603,11 +1599,15 @@ pub fn run_winit() -> Result<()> {
                     }
                     state.pending_black_holes.clear();
                 }
-                crate::capture::capture_pending_minimized_thumbnails(
+                crate::capture::capture_pending_genie_snapshots(
                     &mut state,
                     renderer,
                     window_squircle_shader.as_ref(),
-                    None,
+                    blur_pipeline.as_mut(),
+                    &mut genie_snapshots,
+                    output_geo,
+                    size,
+                    false,
                     1.0,
                     win_phys_r,
                     is_dark_theme,
@@ -1794,6 +1794,13 @@ pub fn run_winit() -> Result<()> {
                     }
 
                     let projection = *frame.projection();
+                    if !wallpaper_occluded {
+                        if let Some(ref mut blur) = blur_pipeline {
+                            let _ = frame.with_context(|gl| {
+                                blur.capture_background(gl, &projection, size);
+                            });
+                        }
+                    }
 
                     let is_pointer_grabbed = state
                         .seat
@@ -1905,6 +1912,14 @@ pub fn run_winit() -> Result<()> {
                                 };
                                 let screen_size = size;
                                 let _ = frame.with_context(|gl| {
+                                    if idx > 0 {
+                                        blur.capture_background_region(
+                                            gl,
+                                            &projection,
+                                            screen_size,
+                                            blur_rect,
+                                        );
+                                    }
                                     blur.render_blur(
                                         gl,
                                         &projection,
@@ -2501,144 +2516,75 @@ pub fn run_winit() -> Result<()> {
                         );
                     }
 
-                    // Efecto Genie: deformación por franjas hasta el slot real de la miniatura.
-                    for (anim, elems) in &anim_data {
-                        let elapsed = now.duration_since(anim.start_time);
-                        let raw_t =
-                            (elapsed.as_secs_f32() / anim.duration.as_secs_f32()).clamp(0.0, 1.0);
-                        let win_x = anim.window_rect.loc.x as f32;
-                        let win_y = anim.window_rect.loc.y as f32;
-                        let win_w = (anim.window_rect.size.w as f32).max(40.0);
-                        let win_h = (anim.window_rect.size.h as f32).max(40.0);
-
-                        let target = crate::genie::GenieRect {
-                            x: anim.dock_slot_rect.loc.x as f32,
-                            y: anim.dock_slot_rect.loc.y as f32,
-                            width: anim.dock_slot_rect.size.w as f32,
-                            height: anim.dock_slot_rect.size.h as f32,
-                        };
-                        let window = crate::genie::GenieRect {
-                            x: win_x,
-                            y: win_y,
-                            width: win_w,
-                            height: win_h,
-                        };
-                        let animation = crate::magic_lamp::MagicLampAnimation::new(
-                            window,
-                            target,
-                            raw_t,
-                            anim.is_minimizing,
-                        );
-                        let alpha = animation.alpha();
-
-                        // Ultra-alta resolución de malla adaptativa (200 - 360 rebanadas)
-                        let n_strips = ((win_h / 1.5) as usize).clamp(200, 360);
-                        let sampled_slices: Vec<(f32, f32, f32)> = (0..=n_strips)
-                            .map(|i| {
-                                let v = i as f32 / n_strips as f32;
-                                animation.deform_slice(v)
-                            })
-                            .collect();
-
-                        let content_geo = anim.window.geometry();
-                        let cw = (content_geo.size.w as f64).max(1.0);
-                        let ch = (content_geo.size.h as f64).max(1.0);
-
-                        // Renderizado de la textura de la ventana con traslape continuo anti-fisuras y recorte CSD
-                        for elem in elems.iter().rev() {
-                            let src = elem.src();
-                            let elem_geo = elem.geometry(1.0.into());
-                            if elem_geo.size.w <= 0 || elem_geo.size.h <= 0 {
-                                continue;
-                            }
-
-                            let rel_x0 = (elem_geo.loc.x - content_geo.loc.x) as f64;
-                            let rel_y0 = (elem_geo.loc.y - content_geo.loc.y) as f64;
-                            let rel_x1 = rel_x0 + elem_geo.size.w as f64;
-                            let rel_y1 = rel_y0 + elem_geo.size.h as f64;
-
-                            let vis_x0 = rel_x0.clamp(0.0, cw);
-                            let vis_y0 = rel_y0.clamp(0.0, ch);
-                            let vis_x1 = rel_x1.clamp(0.0, cw);
-                            let vis_y1 = rel_y1.clamp(0.0, ch);
-                            if vis_x1 <= vis_x0 || vis_y1 <= vis_y0 {
-                                continue;
-                            }
-
-                            let u0 = (vis_x0 / cw) as f32;
-                            let u1 = (vis_x1 / cw) as f32;
-                            let v0 = (vis_y0 / ch) as f32;
-                            let v1 = (vis_y1 / ch) as f32;
-
-                            let sx_ratio = src.size.w / (elem_geo.size.w as f64);
-                            let sy_ratio = src.size.h / (elem_geo.size.h as f64);
-                            let crop_src_x = src.loc.x + (vis_x0 - rel_x0) * sx_ratio;
-                            let crop_src_y = src.loc.y + (vis_y0 - rel_y0) * sy_ratio;
-                            let crop_src_w = (vis_x1 - vis_x0) * sx_ratio;
-                            let crop_src_h = (vis_y1 - vis_y0) * sy_ratio;
-
-                            let start_strip = ((v0 * n_strips as f32).floor() as usize).min(n_strips - 1);
-                            let end_strip = ((v1 * n_strips as f32).ceil() as usize).clamp(start_strip + 1, n_strips);
-                            let v_span = (v1 - v0).max(1e-4);
-
-                            for i in start_strip..end_strip {
-                                let slice_v0 = (i as f32 / n_strips as f32).clamp(v0, v1);
-                                let slice_v1 = ((i + 1) as f32 / n_strips as f32).clamp(v0, v1);
-                                if slice_v1 <= slice_v0 {
-                                    continue;
-                                }
-
-                                let local_t0 = ((slice_v0 - v0) / v_span) as f64;
-                                let local_t1 = ((slice_v1 - v0) / v_span) as f64;
-
-                                let y_top = sampled_slices[i].0.round() as i32;
-                                let y_bottom = sampled_slices[i + 1].0.round() as i32;
-                                let strip_y = y_top.min(y_bottom);
-                                let strip_h = (y_bottom - y_top).abs().max(1) + 1;
-
-                                let full_left = (sampled_slices[i].1 + sampled_slices[i + 1].1) * 0.5;
-                                let full_width = (sampled_slices[i].2 + sampled_slices[i + 1].2) * 0.5;
-                                let left_x = full_left + full_width * u0;
-                                let width = full_width * (u1 - u0);
-
-                                let strip_dst = Rectangle::new(
-                                    (left_x.round() as i32, strip_y).into(),
-                                    (width.round().max(1.0) as i32, strip_h).into(),
-                                );
-
-                                let src_y0 = crop_src_y + local_t0 * crop_src_h;
-                                let src_y1 = crop_src_y + local_t1 * crop_src_h;
-                                let strip_src = Rectangle::new(
-                                    (crop_src_x, src_y0).into(),
-                                    (crop_src_w.max(0.1), (src_y1 - src_y0).max(0.1)).into(),
-                                );
-
-                                match elem.texture() {
-                                    WaylandSurfaceTexture::Texture(ref texture) => {
-                                        if let Err(err) = frame.render_texture_from_to(
-                                            texture,
-                                            strip_src,
-                                            strip_dst,
-                                            &[Rectangle::from_size(strip_dst.size)],
-                                            &[],
-                                            elem.transform(),
-                                            alpha,
-                                            None,
-                                            &[],
-                                        ) {
-                                            warn!("❌ [Genie Frame] render_texture_from_to falló: {:?}", err);
-                                        }
-                                    }
-                                    WaylandSurfaceTexture::SolidColor(color) => {
-                                        let solid = *color * alpha;
-                                        let _ = frame.draw_solid(
-                                            strip_dst,
-                                            &[Rectangle::from_size(strip_dst.size)],
-                                            solid,
+                    // Efecto Genie: malla GPU única sobre snapshot offscreen (incluyendo SSD y squircle).
+                    if !active_genies.is_empty() {
+                        if let Some(ref gp) = genie_pipeline {
+                            let _ = frame.with_context(|gl| {
+                                for anim in &active_genies {
+                                    let Some(snap) = genie_snapshots.get(&anim.window_id) else {
+                                        continue;
+                                    };
+                                    let elapsed = now.duration_since(anim.start_time);
+                                    let raw_t = (elapsed.as_secs_f32()
+                                        / anim.duration.as_secs_f32())
+                                    .clamp(0.0, 1.0);
+                                    let win_rect = crate::genie::GenieRect {
+                                        x: (snap.win_rect_logical.loc.x - output_geo.loc.x) as f32,
+                                        y: (snap.win_rect_logical.loc.y - output_geo.loc.y) as f32,
+                                        width: (snap.win_rect_logical.size.w as f32).max(40.0),
+                                        height: (snap.win_rect_logical.size.h as f32).max(40.0),
+                                    };
+                                    let target = crate::genie::GenieRect {
+                                        x: (anim.dock_slot_rect.loc.x - output_geo.loc.x) as f32,
+                                        y: (anim.dock_slot_rect.loc.y - output_geo.loc.y) as f32,
+                                        width: anim.dock_slot_rect.size.w as f32,
+                                        height: anim.dock_slot_rect.size.h as f32,
+                                    };
+                                    let (k, j, alpha) = crate::magic_lamp::MagicLampAnimation::new(
+                                        win_rect,
+                                        target,
+                                        raw_t,
+                                        anim.is_minimizing,
+                                    )
+                                    .params();
+                                    let is_fullscreen_or_max = anim
+                                        .window
+                                        .toplevel()
+                                        .map(|t| {
+                                            let s = &t.current_state().states;
+                                            s.contains(
+                                                smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Fullscreen,
+                                            ) || s.contains(
+                                                smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Maximized,
+                                            )
+                                        })
+                                        .unwrap_or(false);
+                                    if let (Some(r), Some(ref shadow)) =
+                                        (win_phys_r, shadow_pipeline.as_ref())
+                                    {
+                                        shadow.render_genie_shadow(
+                                            gl,
+                                            &projection,
+                                            win_rect,
+                                            r as f32,
+                                            1.0,
+                                            k,
+                                            j,
+                                            is_fullscreen_or_max,
                                         );
                                     }
+                                    gp.render(
+                                        gl,
+                                        &projection,
+                                        &snap.texture,
+                                        win_rect,
+                                        target,
+                                        k,
+                                        j,
+                                        alpha,
+                                    );
                                 }
-                            }
+                            });
                         }
                     }
 
@@ -2790,6 +2736,9 @@ pub fn run_winit() -> Result<()> {
                             true
                         }
                     });
+                    for anim in &finished {
+                        genie_snapshots.remove(&anim.window_id);
+                    }
 
                     for anim in finished {
                         if !anim.is_minimizing {

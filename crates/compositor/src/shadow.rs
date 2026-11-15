@@ -239,6 +239,34 @@ impl WindowShadowPipeline {
         is_active: bool,
         scale: f64,
     ) {
+        self.render_shadow_alpha(
+            gl,
+            projection,
+            win_rect,
+            corner_radius,
+            is_active,
+            scale,
+            1.0,
+        );
+    }
+
+    /// Renderiza la sombra proyectada de una ventana multiplicada por un factor de opacidad `alpha` [0..1]
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_shadow_alpha(
+        &self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        win_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        is_active: bool,
+        scale: f64,
+        alpha: f32,
+    ) {
+        let a = alpha.clamp(0.0, 1.0);
+        if a <= 0.001 {
+            return;
+        }
+
         // Parámetros de sombra calibrados para un efecto más discreto y menos intenso.
         // - Opacidad reducida para que la penumbra sea más sutil
         // - Luz cenital superior: la sombra se proyecta suavemente hacia abajo (offset_y)
@@ -267,8 +295,44 @@ impl WindowShadowPipeline {
             blur_radius,
             spread,
             offset_y,
-            opacity,
-            0.28,
+            opacity * a,
+            0.28 * a,
+        );
+    }
+
+    /// Renderiza el desvanecimiento de la sombra durante la transición inicial/final del Genie
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_genie_shadow(
+        &self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        win_rect: crate::genie::GenieRect,
+        corner_radius: f32,
+        scale: f64,
+        k: f32,
+        j: f32,
+        is_fullscreen_or_max: bool,
+    ) {
+        if is_fullscreen_or_max || j > 0.0 || k >= 0.45 {
+            return;
+        }
+        let shadow_alpha = (1.0 - k / 0.45).clamp(0.0, 1.0);
+        let shadow_win_rect = Rectangle::new(
+            (win_rect.x.round() as i32, win_rect.y.round() as i32).into(),
+            (
+                win_rect.width.round() as i32,
+                win_rect.height.round() as i32,
+            )
+                .into(),
+        );
+        self.render_shadow_alpha(
+            gl,
+            projection,
+            shadow_win_rect,
+            corner_radius,
+            true,
+            scale,
+            shadow_alpha,
         );
     }
 

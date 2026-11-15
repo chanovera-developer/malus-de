@@ -1404,13 +1404,15 @@ impl MalusState {
             let geo = window.geometry();
             let window_id = self.get_or_assign_window_id(&surf);
 
-            // Determinar slot de destino en el Dock
+            // Determinar slot de destino en el Dock (estimado en el extremo derecho de minimizadas
+            // hasta que RegisterDockSlot entregue el centro exacto de la tarjeta).
+            // Nunca dejar la ventana mapeada esperando al Dock: al haber perdido el foco, el cambio
+            // de sombra/estado activo en la ventana viva causaría parpadeo antes de iniciar el Genie.
             let registered_dock_slot = self.dock_slots.get(&window_id).cloned();
-            let waiting_for_dock_slot =
-                registered_dock_slot.is_none() && self.dock_surface_geometry().is_some();
+            let waiting_for_dock_slot = false;
             let dock_slot = registered_dock_slot.unwrap_or_else(|| {
                 if let Some((dock_geo, _)) = self.dock_surface_geometry() {
-                    let slot_x = dock_geo.loc.x + (dock_geo.size.w / 2) + 20;
+                    let slot_x = (dock_geo.loc.x + dock_geo.size.w - 110).max(dock_geo.loc.x);
                     let slot_y = dock_geo.loc.y + (dock_geo.size.h / 2) - 22;
                     Rectangle::new((slot_x, slot_y).into(), (54, 44).into())
                 } else {
@@ -1440,9 +1442,7 @@ impl MalusState {
             self.active_animations.push(anim);
 
             self.minimized_windows.insert(surf.clone(), (window.clone(), loc));
-            if !waiting_for_dock_slot {
-                self.space.unmap_elem(&window);
-            }
+            self.space.unmap_elem(&window);
 
             let next_focus = self
                 .space

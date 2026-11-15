@@ -1465,7 +1465,7 @@ fn build_dock_ui(app: &Application) {
 
                     queue_dock_resize(&win_ref, &dock_root_ref, &dock_bar_ref);
                     let dock_window_weak = win_ref.downgrade();
-                    for delay in [60, 180, 320] {
+                    for delay in [16, 60, 180, 320] {
                         let cards = cards.clone();
                         let dock_window_weak = dock_window_weak.clone();
                         glib::timeout_add_local_once(Duration::from_millis(delay), move || {

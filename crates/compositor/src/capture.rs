@@ -17,6 +17,7 @@ use smithay::{
     wayland::seat::WaylandFocus,
 };
 use std::{
+    collections::{HashMap, HashSet},
     fs::{self, File, OpenOptions},
     path::Path,
     time::Duration,
@@ -91,89 +92,138 @@ where
     Ok(())
 }
 
-/// Captura las miniaturas limpias de las ventanas en curso de minimización
-/// renderizando directamente su árbol de superficies en un FBO offscreen,
-/// evitando la deformación del efecto Genie o elementos superpuestos del escritorio.
+#[derive(Clone)]
+pub struct CapturedWindowOffscreen {
+    pub texture: GlesTexture,
+    /// Rectángulo lógico completo de la textura capturada respecto a `state.space`
+    /// (incluye `SSD_TITLEBAR_HEIGHT` en la parte superior cuando usa barra SSD).
+    pub win_rect_logical: Rectangle<i32, Logical>,
+}
+
+/// Captura los snapshots GPU offscreen para las animaciones Genie activas (minimizar y restaurar)
+/// y, en minimización, exporta desde el mismo renderizado la miniatura PNG del Dock.
 #[allow(clippy::too_many_arguments)]
-pub fn capture_pending_minimized_thumbnails(
+pub fn capture_pending_genie_snapshots(
     state: &mut crate::state::MalusState,
     renderer: &mut GlesRenderer,
     squircle_shader: Option<&crate::window_corners::WindowSquircleShader>,
-    output_geo_filter: Option<Rectangle<i32, Logical>>,
+    mut blur_pipeline: Option<&mut crate::blur::GaussianBlur>,
+    snapshots: &mut HashMap<u64, CapturedWindowOffscreen>,
+    output_geo: Rectangle<i32, Logical>,
+    screen_size: Size<i32, Physical>,
+    filter_by_output: bool,
     scale: f64,
     win_phys_r: Option<i32>,
     is_dark_theme: bool,
     now: std::time::Instant,
 ) {
+    let active_ids: HashSet<u64> = state
+        .active_animations
+        .iter()
+        .map(|anim| anim.window_id)
+        .collect();
+    snapshots.retain(|id, _| active_ids.contains(id));
+
     let mut pending = Vec::new();
     for anim in &state.active_animations {
-        if !anim.is_minimizing
-            || state.minimized_window_thumbnails.contains_key(&anim.window_id)
+        let needs_snapshot = !snapshots.contains_key(&anim.window_id);
+        let needs_png = anim.is_minimizing
+            && !state.minimized_window_thumbnails.contains_key(&anim.window_id);
+        if (!needs_snapshot && !needs_png)
             || now.duration_since(anim.start_time) > Duration::from_millis(250)
         {
             continue;
         }
-        if let Some(output_geo) = output_geo_filter {
-            if !output_geo.overlaps(anim.window_rect) {
-                continue;
-            }
+        if filter_by_output && !output_geo.overlaps(anim.window_rect) {
+            continue;
         }
-        pending.push((anim.window_id, anim.window.clone()));
+        pending.push((
+            anim.window_id,
+            anim.window.clone(),
+            anim.window_rect.loc,
+            needs_snapshot,
+            needs_png,
+        ));
     }
 
-    let mut captured_any = false;
-    for (window_id, window) in pending {
-        let result = window_thumbnail_path(window_id).and_then(|path| {
-            capture_window_thumbnail_offscreen(
-                renderer,
-                &mut state.ssd,
-                squircle_shader,
-                &window,
-                scale,
-                win_phys_r,
-                is_dark_theme,
-                &path,
-            )
-            .map(|()| path)
-        });
-        match result {
-            Ok(path) => {
-                state
-                    .minimized_window_thumbnails
-                    .insert(window_id, path.display().to_string());
-                captured_any = true;
+    let mut captured_any_png = false;
+    for (window_id, window, window_loc, needs_snapshot, needs_png) in pending {
+        let png_path_opt = if needs_png {
+            match window_thumbnail_path(window_id) {
+                Ok(p) => Some(p),
+                Err(error) => {
+                    tracing::warn!(
+                        "No se pudo resolver la ruta de miniatura para {}: {error:#}",
+                        window_id
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        match capture_window_offscreen(
+            renderer,
+            &mut state.ssd,
+            squircle_shader,
+            blur_pipeline.as_deref_mut(),
+            &window,
+            window_loc,
+            output_geo.loc,
+            screen_size,
+            scale,
+            win_phys_r,
+            is_dark_theme,
+            png_path_opt.as_deref(),
+        ) {
+            Ok(captured) => {
+                if needs_snapshot {
+                    snapshots.insert(window_id, captured);
+                }
+                if let Some(path) = png_path_opt {
+                    state
+                        .minimized_window_thumbnails
+                        .insert(window_id, path.display().to_string());
+                    captured_any_png = true;
+                }
             }
             Err(error) => {
                 tracing::warn!(
-                    "No se pudo capturar la miniatura offscreen de la ventana {}: {error:#}",
+                    "No se pudo capturar snapshot offscreen de la ventana {}: {error:#}",
                     window_id
                 );
             }
         }
     }
 
-    if captured_any {
+    if captured_any_png {
         state.notify_minimized_windows();
     }
 }
 
-fn capture_window_thumbnail_offscreen(
+#[allow(clippy::too_many_arguments)]
+fn capture_window_offscreen(
     renderer: &mut GlesRenderer,
     ssd: &mut crate::ssd::SsdManager,
     squircle_shader: Option<&crate::window_corners::WindowSquircleShader>,
+    blur_pipeline: Option<&mut crate::blur::GaussianBlur>,
     window: &Window,
+    window_loc_logical: Point<i32, Logical>,
+    output_origin_logical: Point<i32, Logical>,
+    screen_size: Size<i32, Physical>,
     scale: f64,
     win_phys_r: Option<i32>,
     is_dark_theme: bool,
-    destination: &Path,
-) -> Result<()> {
+    png_destination: Option<&Path>,
+) -> Result<CapturedWindowOffscreen> {
     if !scale.is_finite() || scale <= 0.0 {
-        bail!("La escala de salida no es válida para capturar la miniatura");
+        bail!("La escala de salida no es válida para capturar el snapshot");
     }
 
     let geo = window.geometry();
     if geo.size.w <= 0 || geo.size.h <= 0 {
-        bail!("La geometría de la ventana no es válida para capturar su miniatura");
+        bail!("La geometría de la ventana no es válida para capturar el snapshot");
     }
 
     let main_surface = window
@@ -238,7 +288,7 @@ fn capture_window_thumbnail_offscreen(
     };
 
     if final_rect.size.w <= 0 || final_rect.size.h <= 0 {
-        bail!("Las dimensiones calculadas de la miniatura son inválidas");
+        bail!("Las dimensiones calculadas del snapshot son inválidas");
     }
 
     let shift = Point::from((-final_rect.loc.x, -final_rect.loc.y));
@@ -278,7 +328,7 @@ fn capture_window_thumbnail_offscreen(
     let offscreen_rect = Rectangle::from_size(final_rect.size);
     let should_round = win_phys_r.is_some() && !is_fullscreen;
 
-    let pixels = {
+    let pixels_opt = {
         let mut target = renderer
             .bind(&mut texture)
             .map_err(|error| anyhow::anyhow!("No se pudo enlazar FBO offscreen: {error:?}"))?;
@@ -287,6 +337,23 @@ fn capture_window_thumbnail_offscreen(
                 .render(&mut target, final_rect.size, Transform::Normal)
                 .map_err(|error| anyhow::anyhow!("No se pudo iniciar frame offscreen: {error:?}"))?;
             let _ = frame.clear(Color32F::new(0.0, 0.0, 0.0, 0.0), &[offscreen_rect]);
+            if is_translucent {
+                if let Some(blur) = blur_pipeline {
+                    let win_screen_origin = (window_loc_logical - output_origin_logical)
+                        .to_physical_precise_round(scale);
+                    let screen_win_rect =
+                        Rectangle::new(win_screen_origin + final_rect.loc, final_rect.size);
+                    blur.render_translucent_offscreen_blur(
+                        &mut frame,
+                        screen_size,
+                        screen_win_rect,
+                        offscreen_rect,
+                        scale,
+                        win_phys_r,
+                        should_round,
+                    );
+                }
+            }
             crate::window_corners::render_window_elements(
                 &mut frame,
                 scale,
@@ -306,56 +373,79 @@ fn capture_window_thumbnail_offscreen(
                 .map_err(|error| anyhow::anyhow!("No se pudo finalizar frame offscreen: {error:?}"))?;
         }
 
-        let region = Rectangle::from_size(buf_size);
-        let mapping = renderer
-            .copy_framebuffer(&target, region, Fourcc::Abgr8888)
-            .map_err(|error| {
-                anyhow::anyhow!("No se pudo leer el framebuffer de la ventana: {error:?}")
+        if png_destination.is_some() {
+            let region = Rectangle::from_size(buf_size);
+            let mapping = renderer
+                .copy_framebuffer(&target, region, Fourcc::Abgr8888)
+                .map_err(|error| {
+                    anyhow::anyhow!("No se pudo leer el framebuffer de la ventana: {error:?}")
+                })?;
+            let mapped = renderer.map_texture(&mapping).map_err(|error| {
+                anyhow::anyhow!("No se pudo mapear la miniatura capturada: {error:?}")
             })?;
-        let mapped = renderer.map_texture(&mapping).map_err(|error| {
-            anyhow::anyhow!("No se pudo mapear la miniatura capturada: {error:?}")
-        })?;
-        let expected_len = (final_rect.size.w as usize)
-            .checked_mul(final_rect.size.h as usize)
-            .and_then(|pixel_count| pixel_count.checked_mul(4))
-            .context("El tamaño de la miniatura excede el tamaño permitido")?;
-        if mapped.len() != expected_len {
-            bail!(
-                "La miniatura tiene un tamaño inesperado: {} bytes, se esperaban {expected_len}",
-                mapped.len()
-            );
+            let expected_len = (final_rect.size.w as usize)
+                .checked_mul(final_rect.size.h as usize)
+                .and_then(|pixel_count| pixel_count.checked_mul(4))
+                .context("El tamaño de la miniatura excede el tamaño permitido")?;
+            if mapped.len() != expected_len {
+                bail!(
+                    "La miniatura tiene un tamaño inesperado: {} bytes, se esperaban {expected_len}",
+                    mapped.len()
+                );
+            }
+            Some(unpremultiply_rgba(&mapped))
+        } else {
+            None
         }
-        unpremultiply_rgba(&mapped)
     };
 
-    let temporary = destination.with_extension("pending");
-    let file = File::create(&temporary)
-        .with_context(|| format!("No se pudo crear {}", temporary.display()))?;
-    let mut encoder =
-        png::Encoder::new(file, final_rect.size.w as u32, final_rect.size.h as u32);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder.set_compression(png::Compression::Fast);
-    let mut writer = match encoder.write_header() {
-        Ok(writer) => writer,
-        Err(error) => {
+    if let (Some(destination), Some(pixels)) = (png_destination, pixels_opt) {
+        let temporary = destination.with_extension("pending");
+        let file = File::create(&temporary)
+            .with_context(|| format!("No se pudo crear {}", temporary.display()))?;
+        let mut encoder =
+            png::Encoder::new(file, final_rect.size.w as u32, final_rect.size.h as u32);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::Fast);
+        let mut writer = match encoder.write_header() {
+            Ok(writer) => writer,
+            Err(error) => {
+                let _ = fs::remove_file(&temporary);
+                return Err(error).context("No se pudo iniciar la escritura de la miniatura PNG");
+            }
+        };
+        if let Err(error) = writer.write_image_data(&pixels) {
+            drop(writer);
             let _ = fs::remove_file(&temporary);
-            return Err(error).context("No se pudo iniciar la escritura de la miniatura PNG");
+            return Err(error).context("No se pudo escribir la miniatura PNG");
         }
-    };
-    if let Err(error) = writer.write_image_data(&pixels) {
         drop(writer);
-        let _ = fs::remove_file(&temporary);
-        return Err(error).context("No se pudo escribir la miniatura PNG");
+        if let Err(error) = fs::rename(&temporary, destination) {
+            let _ = fs::remove_file(&temporary);
+            return Err(error).with_context(|| {
+                format!("No se pudo finalizar la miniatura {}", destination.display())
+            });
+        }
     }
-    drop(writer);
-    if let Err(error) = fs::rename(&temporary, destination) {
-        let _ = fs::remove_file(&temporary);
-        return Err(error).with_context(|| {
-            format!("No se pudo finalizar la miniatura {}", destination.display())
-        });
-    }
-    Ok(())
+
+    let logical_dx = (final_rect.loc.x as f64 / scale).round() as i32;
+    let logical_dy = (final_rect.loc.y as f64 / scale).round() as i32;
+    let logical_w = (final_rect.size.w as f64 / scale).round().max(1.0) as i32;
+    let logical_h = (final_rect.size.h as f64 / scale).round().max(1.0) as i32;
+    let win_rect_logical = Rectangle::new(
+        (
+            window_loc_logical.x + logical_dx,
+            window_loc_logical.y + logical_dy,
+        )
+            .into(),
+        (logical_w, logical_h).into(),
+    );
+
+    Ok(CapturedWindowOffscreen {
+        texture,
+        win_rect_logical,
+    })
 }
 
 fn unpremultiply_rgba(pixels: &[u8]) -> Vec<u8> {

@@ -4,6 +4,31 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-15] — Pipeline GPU Único para Genie Effect, Restauración Inversa, Eliminación de Parpadeo y Blur Offscreen en Animaciones
+
+### 1. Rasterización GPU Única para Genie Effect (Malla `36×64` + Snapshot Offscreen) (`crates/compositor/src/magic_lamp.rs`, `capture.rs`, `drm.rs`, `winit.rs`)
+* **Sustitución de bandas CPU por deformación GPU continua:**
+  * [`capture_pending_genie_snapshots`](../crates/compositor/src/capture.rs) y `capture_window_offscreen` renderizan la ventana completa una sola vez al iniciar la animación a una textura `GlesTexture` premultiplicada (`CapturedWindowOffscreen`), incluyendo decoración de servidor (`SSD`), recorte *squircle* mediante [`WindowSquircleShader`](../crates/compositor/src/window_corners.rs) y, en minimización, exportación de la miniatura PNG para el Dock sin distorsión Genie.
+  * [`GeniePipeline`](../crates/compositor/src/magic_lamp.rs) dibuja esa instantánea mediante una malla teselada en `GENIE_VERT_SRC` (`36×64` celdas, instanciada por `gl_VertexID`) y `GENIE_FRAG_SRC` en una única llamada por cuadro, reemplazando las 64 bandas en CPU en [`drm.rs`](../crates/compositor/src/backend/drm.rs) y [`winit.rs`](../crates/compositor/src/backend/winit.rs) (precedido por `446b9f7`, `e705bb2` y `0602685`).
+
+### 2. Eliminación de Parpadeo al Minimizar y Restauración Inversa Fluida (`crates/compositor/src/state.rs`, `magic_lamp.rs`, `shadow.rs`, `crates/dock/src/main.rs`)
+* **Inicio inmediato sin espera de foco/slot (`minimize_toplevel`):**
+  * En [`state.rs`](../crates/compositor/src/state.rs), `minimize_toplevel` ahora estima un destino inicial en el extremo derecho del Dock y desmapea la ventana de inmediato (`waiting_for_dock_slot = false`) en lugar de mantenerla visible sin foco (`Activated = false`) esperando `RegisterDockSlot`. Así se elimina el parpadeo de sombra y cromo inactivo en ventanas no maximizadas (p. ej. Antigravity), mientras [`dock/src/main.rs`](../crates/dock/src/main.rs) registra el slot desde `16 ms` (`[16, 60, 180, 320]`).
+* **Curva inversa perceptual y cross-fade de sombra proyectada:**
+  * [`MagicLampAnimation::compute_kj`](../crates/compositor/src/magic_lamp.rs) separa `is_minimizing == false` con *ease-out* temporal: `j` desciende de `1.0` a `0.0` (`0.0 -> 0.66`) saliendo del Dock y, a partir de `0.66`, `k = (1.0 - q).powf(2.1)` retrae el cuello de inmediato sin estancarse ni golpear `win_bottom` al aterrizar.
+  * [`WindowShadowPipeline::render_shadow_alpha`](../crates/compositor/src/shadow.rs) y `render_genie_shadow` desvanecen progresivamente la sombra proyectada cuando `j == 0.0` y `k < 0.45` en ventanas no maximizadas ni en pantalla completa tanto en DRM como en Winit.
+
+### 3. Preservación de Desenfoque Dual Kawase en Ventanas Translúcidas (`crates/compositor/src/blur.rs`, `capture.rs`, `black_hole.rs`, `drm.rs`, `winit.rs`)
+* **Composición del blur de fondo dentro de snapshots offscreen (Genie, miniaturas del Dock y Agujero Negro):**
+  * [`GaussianBlur`](../crates/compositor/src/blur.rs) registra `snapshot_is_drm` en `capture_background_region` y expone `translucent_window_blur_rect`, `render_captured_blur_to_offscreen` y `render_translucent_offscreen_blur` sobre una ruta compartida `render_blur_internal` (con blending premultiplicado `SRC_ALPHA, ONE_MINUS_SRC_ALPHA, ONE, ONE_MINUS_SRC_ALPHA`).
+  * Tanto [`capture_window_offscreen`](../crates/compositor/src/capture.rs) como [`capture_closing_window_texture`](../crates/compositor/src/black_hole.rs) pintan el desenfoque Dual Kawase detrás de ventanas `is_translucent` antes de dibujar sus superficies vivas o cacheadas; [`winit.rs`](../crates/compositor/src/backend/winit.rs) también actualiza `snapshot_tex` tras el fondo y en ventanas translúcidas superpuestas.
+
+### 4. Validación
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-compositor`: **67 passed; 0 failed**.
+* `cargo check --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --workspace`: compilación completa sin errores (`exit 0`; sin advertencias en `malus-de-compositor` ni `malus-de-dock`).
+
+---
+
 ## [2026-11-14] — Transición Animada entre Escritorios y Reporteador de Fallos (`.txt` + Cloudflare Worker)
 
 ### 1. Animación Horizontal de Cambio de Escritorio (`crates/compositor/src/workspace_transition.rs`, `theme_transition.rs`, `expose.rs`, `state.rs`, `drm.rs`, `winit.rs`)
