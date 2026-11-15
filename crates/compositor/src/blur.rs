@@ -1452,6 +1452,71 @@ pub fn render_snap_preview_overlay(
     }
 }
 
+/// Dibuja un respaldo esmerilado con esquinas squircle detrás de una ventana en `SnapTransition`
+/// cuando su buffer 1:1 aún es menor que el rectángulo animado, evitando ampliar el semáforo CSD.
+#[allow(clippy::too_many_arguments)]
+pub fn render_snap_transition_backdrop(
+    frame: &mut GlesFrame<'_, '_>,
+    blur: Option<&mut GaussianBlur>,
+    projection: &[f32; 9],
+    screen_size: Size<i32, Physical>,
+    win_rect: Rectangle<i32, Physical>,
+    corner_radius: f32,
+    capture_below: bool,
+    is_translucent: bool,
+    is_branches: bool,
+    is_dark_theme: bool,
+) {
+    if win_rect.size.w <= 0 || win_rect.size.h <= 0 {
+        return;
+    }
+    let needs_blur_capture = !is_translucent || is_branches;
+    let fill_rgba = match (is_translucent && !is_branches, is_dark_theme) {
+        (true, true) => [0.09, 0.09, 0.11, 0.24],
+        (true, false) => [0.96, 0.96, 0.98, 0.26],
+        (false, true) => [0.11, 0.11, 0.13, 0.72],
+        (false, false) => [0.95, 0.95, 0.97, 0.78],
+    };
+    let border_rgba = if is_dark_theme {
+        [1.0, 1.0, 1.0, 0.14]
+    } else {
+        [0.0, 0.0, 0.0, 0.08]
+    };
+
+    if let Some(blur) = blur {
+        let _ = frame.with_context(|gl| {
+            if needs_blur_capture {
+                if capture_below {
+                    blur.capture_background_region(gl, projection, screen_size, win_rect);
+                }
+                blur.render_captured_blur_round(
+                    gl,
+                    projection,
+                    screen_size,
+                    win_rect,
+                    corner_radius,
+                );
+            }
+            blur.render_squircle_tint(
+                gl,
+                projection,
+                screen_size,
+                win_rect,
+                corner_radius,
+                fill_rgba,
+                1.0,
+                border_rgba,
+            );
+        });
+    } else {
+        let _ = frame.draw_solid(
+            win_rect,
+            &[Rectangle::from_size(win_rect.size)],
+            Color32F::new(fill_rgba[0], fill_rgba[1], fill_rgba[2], fill_rgba[3]),
+        );
+    }
+}
+
 impl GaussianBlur {
     /// Dibuja un tinte/borde squircle sólido con alfa configurable en coordenadas físicas.
     pub fn render_squircle_tint(

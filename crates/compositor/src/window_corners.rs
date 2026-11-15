@@ -12,7 +12,6 @@ use smithay::{
         element::{
             memory::MemoryRenderBufferRenderElement,
             surface::{WaylandSurfaceRenderElement, WaylandSurfaceTexture},
-            utils::RescaleRenderElement,
             Element, Id, Kind, RenderElement, UnderlyingStorage,
         },
         gles::{
@@ -495,7 +494,7 @@ impl WindowSquircleShader {
 }
 
 /// Renderiza todas las superficies (y barra SSD opcional) de una ventana aplicando recorte squircle,
-/// soporte exacto de `wp_viewporter` / `y_inverted` e interpolación uniforme en `SnapTransition`.
+/// soporte exacto de `wp_viewporter` / `y_inverted` y recorte estricto 1:1 en `SnapTransition`.
 #[allow(clippy::too_many_arguments)]
 pub fn render_window_elements(
     frame: &mut GlesFrame<'_, '_>,
@@ -509,19 +508,50 @@ pub fn render_window_elements(
     win_phys_r: Option<i32>,
     should_round: bool,
     is_firefox: bool,
-    transition_rescale: Option<(Point<i32, Physical>, Scale<f64>)>,
+    transition_clip: Option<Rectangle<i32, Physical>>,
 ) {
     let scale_f = Scale::from(scale);
+    let surface_rect = transition_clip.unwrap_or(win_rect);
+    let clipped_surface_damage: Vec<Rectangle<i32, Physical>>;
+    let surface_damage = if transition_clip.is_some() {
+        clipped_surface_damage = damage
+            .iter()
+            .filter_map(|d| d.intersection(surface_rect))
+            .collect();
+        &clipped_surface_damage[..]
+    } else {
+        damage
+    };
+    let clipped_ssd_damage: Vec<Rectangle<i32, Physical>>;
+    let ssd_damage = if transition_clip.is_some() {
+        clipped_ssd_damage = damage
+            .iter()
+            .filter_map(|d| d.intersection(win_rect))
+            .collect();
+        &clipped_ssd_damage[..]
+    } else {
+        damage
+    };
+
+    let clip_target_rect = if ssd_elem.is_some() && transition_clip.is_some() {
+        Rectangle::new(
+            win_rect.loc,
+            Size::from((
+                surface_rect.size.w,
+                (surface_rect.loc.y + surface_rect.size.h - win_rect.loc.y).max(0),
+            )),
+        )
+    } else {
+        surface_rect
+    };
 
     let draw_surface = |frame: &mut GlesFrame<'_, '_>,
                         elem: &WaylandSurfaceRenderElement<GlesRenderer>,
                         clip_params: Option<(Point<i32, Physical>, Size<i32, Physical>, i32, f32)>| {
-        let rescaled = transition_rescale
-            .map(|(origin, factor)| RescaleRenderElement::from_element(elem, origin, factor));
-        let elem_geo = match &rescaled {
-            Some(r) => r.geometry(scale_f),
-            None => elem.geometry(scale_f),
-        };
+        if surface_damage.is_empty() {
+            return;
+        }
+        let elem_geo = elem.geometry(scale_f);
         let applied_shader = if let (Some((offset, size, r, border_strength)), Some(sh)) =
             (clip_params, shader)
         {
@@ -541,11 +571,7 @@ pub fn render_window_elements(
             false
         };
 
-        if let Some(ref r_elem) = rescaled {
-            let _ = draw_render_elements(frame, scale, std::slice::from_ref(r_elem), damage);
-        } else {
-            let _ = draw_render_elements(frame, scale, std::slice::from_ref(elem), damage);
-        }
+        let _ = draw_render_elements(frame, scale, std::slice::from_ref(elem), surface_damage);
 
         if applied_shader {
             frame.clear_tex_program_override();
@@ -558,31 +584,26 @@ pub fn render_window_elements(
 
         for elem in win_elems.iter().rev() {
             let clip_params = clip_radius.and_then(|r| {
-                let elem_geo = match transition_rescale {
-                    Some((origin, factor)) => {
-                        RescaleRenderElement::from_element(elem, origin, factor).geometry(scale_f)
-                    }
-                    None => elem.geometry(scale_f),
-                };
+                let elem_geo = elem.geometry(scale_f);
                 if unified_tree_clip {
                     let sub_offset = Point::from((
-                        win_rect.loc.x - elem_geo.loc.x,
-                        win_rect.loc.y - elem_geo.loc.y,
+                        clip_target_rect.loc.x - elem_geo.loc.x,
+                        clip_target_rect.loc.y - elem_geo.loc.y,
                     ));
-                    Some((sub_offset, win_rect.size, r, 1.0))
+                    Some((sub_offset, clip_target_rect.size, r, 1.0))
                 } else {
                     let is_root = elem.id() == root_id;
-                    if is_root || should_clip_subsurface_to_window(elem_geo, win_rect) {
+                    if is_root || should_clip_subsurface_to_window(elem_geo, clip_target_rect) {
                         let sub_offset = Point::from((
-                            win_rect.loc.x - elem_geo.loc.x,
-                            win_rect.loc.y - elem_geo.loc.y,
+                            clip_target_rect.loc.x - elem_geo.loc.x,
+                            clip_target_rect.loc.y - elem_geo.loc.y,
                         ));
-                        let border_strength = if is_root || elem_geo == win_rect {
+                        let border_strength = if is_root || elem_geo == clip_target_rect {
                             1.0
                         } else {
                             0.0
                         };
-                        Some((sub_offset, win_rect.size, r, border_strength))
+                        Some((sub_offset, clip_target_rect.size, r, border_strength))
                     } else {
                         None
                     }
@@ -592,29 +613,29 @@ pub fn render_window_elements(
         }
 
         if let Some(tb_elem) = ssd_elem {
-            if let (Some(r), Some(sh)) = (clip_radius, shader) {
-                let tb_geo = tb_elem.geometry(Scale::from(1.0));
-                let sub_offset = Point::from((
-                    win_rect.loc.x - tb_geo.loc.x,
-                    win_rect.loc.y - tb_geo.loc.y,
-                ));
-                sh.apply_to_frame(frame, tb_geo.size, sub_offset, win_rect.size, r);
-                let _ = draw_render_elements(frame, 1.0, std::slice::from_ref(tb_elem), damage);
-                frame.clear_tex_program_override();
-            } else {
-                let _ = draw_render_elements(frame, 1.0, std::slice::from_ref(tb_elem), damage);
+            if !ssd_damage.is_empty() {
+                if let (Some(r), Some(sh)) = (clip_radius, shader) {
+                    let tb_geo = tb_elem.geometry(Scale::from(1.0));
+                    let sub_offset = Point::from((
+                        win_rect.loc.x - tb_geo.loc.x,
+                        win_rect.loc.y - tb_geo.loc.y,
+                    ));
+                    sh.apply_to_frame(frame, tb_geo.size, sub_offset, win_rect.size, r);
+                    let _ = draw_render_elements(frame, 1.0, std::slice::from_ref(tb_elem), ssd_damage);
+                    frame.clear_tex_program_override();
+                } else {
+                    let _ = draw_render_elements(frame, 1.0, std::slice::from_ref(tb_elem), ssd_damage);
+                }
             }
         }
     } else {
-        if transition_rescale.is_some() {
-            for elem in win_elems.iter().rev() {
-                draw_surface(frame, elem, None);
-            }
-        } else {
-            let _ = draw_render_elements(frame, scale, win_elems, damage);
+        if !surface_damage.is_empty() {
+            let _ = draw_render_elements(frame, scale, win_elems, surface_damage);
         }
         if let Some(tb_elem) = ssd_elem {
-            let _ = draw_render_elements(frame, 1.0, std::slice::from_ref(tb_elem), damage);
+            if !ssd_damage.is_empty() {
+                let _ = draw_render_elements(frame, 1.0, std::slice::from_ref(tb_elem), ssd_damage);
+            }
         }
     }
 }

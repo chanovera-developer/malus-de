@@ -1353,50 +1353,31 @@ pub fn run_winit() -> Result<()> {
                         };
 
                         let trans_opt = state.snap_transitions.get(main_surface.as_ref()).cloned();
-                        let (effective_loc, effective_size, is_transitioning) = if let Some(ref trans) = trans_opt {
-                            let (eloc, esize) = trans.current_geometry(now);
-                            (eloc, esize, true)
-                        } else {
-                            (loc, geo.size, false)
-                        };
+                        let transition_layout = trans_opt
+                            .as_ref()
+                            .map(|trans| trans.render_geometry(geo, output_geo.loc, 1.0, now));
+                        let (effective_loc, effective_size, is_transitioning) =
+                            if let Some((eloc, esize, ..)) = transition_layout {
+                                (eloc, esize, true)
+                            } else {
+                                (loc, geo.size, false)
+                            };
 
                         let win_global_rect = Rectangle::new(effective_loc, effective_size);
                         if output_geo.overlaps(win_global_rect) {
-                            let (phys_loc, transition_rescale, content_offset, content_size, win_screen_rect) = if is_transitioning {
-                                let sx = effective_size.w as f64 / geo.size.w.max(1) as f64;
-                                let sy = effective_size.h as f64 / geo.size.h.max(1) as f64;
-                                let surface_origin_x = effective_loc.x as f64 - geo.loc.x as f64 * sx;
-                                let surface_origin_y = effective_loc.y as f64 - geo.loc.y as f64 * sy;
-                                let pl = Point::from((
-                                    (surface_origin_x - output_geo.loc.x as f64).round() as i32,
-                                    (surface_origin_y - output_geo.loc.y as f64).round() as i32,
-                                ));
-                                let c_off = Point::from((
-                                    (geo.loc.x as f64 * sx).round() as i32,
-                                    (geo.loc.y as f64 * sy).round() as i32,
-                                ));
-                                let c_sz = smithay::utils::Size::from((
-                                    effective_size.w,
-                                    effective_size.h,
-                                ));
-                                let w_rect = Rectangle::new(
-                                    Point::from((
-                                        effective_loc.x - output_geo.loc.x,
-                                        effective_loc.y - output_geo.loc.y,
-                                    )),
-                                    c_sz,
-                                );
-                                (pl, Some((pl, smithay::utils::Scale { x: sx, y: sy })), c_off, c_sz, w_rect)
-                            } else {
-                                let pl = (loc - geo.loc - output_geo.loc).to_physical_precise_round(1.0);
-                                let c_off = geo.loc.to_physical_precise_round(1.0);
-                                let c_sz = geo.size.to_physical_precise_round(1.0);
-                                let w_rect = Rectangle::new(
-                                    (loc - output_geo.loc).to_physical_precise_round(1.0),
-                                    geo.size.to_physical_precise_round(1.0),
-                                );
-                                (pl, None, c_off, c_sz, w_rect)
-                            };
+                            let (phys_loc, transition_clip, content_offset, content_size, win_screen_rect) =
+                                if let Some((_, _, pl, clip_rect, c_off, c_sz, w_rect)) = transition_layout {
+                                    (pl, clip_rect, c_off, c_sz, w_rect)
+                                } else {
+                                    let pl = (loc - geo.loc - output_geo.loc).to_physical_precise_round(1.0);
+                                    let c_off = geo.loc.to_physical_precise_round(1.0);
+                                    let c_sz = geo.size.to_physical_precise_round(1.0);
+                                    let w_rect = Rectangle::new(
+                                        (loc - output_geo.loc).to_physical_precise_round(1.0),
+                                        geo.size.to_physical_precise_round(1.0),
+                                    );
+                                    (pl, None, c_off, c_sz, w_rect)
+                                };
 
                             let win_surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
                                 render_elements_from_surface_tree(
@@ -1492,7 +1473,7 @@ pub fn run_winit() -> Result<()> {
                                 );
                             let should_round = win_phys_r.is_some() && !is_fullscreen;
 
-                            let win_screen_rect = if transition_rescale.is_none() && !uses_ssd {
+                            let win_screen_rect = if transition_clip.is_none() && !uses_ssd {
                                 crate::window_corners::effective_shadow_rect_for_window(
                                     &win_surfaces,
                                     &root_id,
@@ -1547,7 +1528,7 @@ pub fn run_winit() -> Result<()> {
                                 content_size,
                                 is_firefox,
                                 is_translucent,
-                                transition_rescale,
+                                transition_clip,
                                 ssd_elem,
                                 is_maximized,
                                 is_branches,
@@ -1828,7 +1809,7 @@ pub fn run_winit() -> Result<()> {
                             _content_size,
                             is_firefox,
                             is_translucent,
-                            transition_rescale,
+                            transition_clip,
                             ssd_elem,
                             _is_maximized,
                             is_branches,
@@ -1931,7 +1912,30 @@ pub fn run_winit() -> Result<()> {
                             }
                         }
 
-                        // 2.2. SUPERFICIES DE LA VENTANA (con recorte Squircle)
+                        // 2.2. SUPERFICIES DE LA VENTANA (con respaldo 1:1 durante SnapTransition y recorte Squircle)
+                        let needs_transition_backdrop = transition_clip.is_some_and(|c| {
+                            c.size.w < win_rect.size.w
+                                || (c.loc.y + c.size.h) < (win_rect.loc.y + win_rect.size.h)
+                        });
+                        if needs_transition_backdrop && !is_body_occluded {
+                            let corner_radius = if *should_round {
+                                win_phys_r.unwrap_or(0) as f32
+                            } else {
+                                0.0
+                            };
+                            crate::blur::render_snap_transition_backdrop(
+                                &mut frame,
+                                blur_pipeline.as_mut(),
+                                &projection,
+                                size,
+                                *win_rect,
+                                corner_radius,
+                                idx > 0,
+                                *is_translucent,
+                                *is_branches,
+                                is_dark_theme,
+                            );
+                        }
                         if !is_body_occluded {
                             crate::window_corners::render_window_elements(
                                 &mut frame,
@@ -1945,7 +1949,7 @@ pub fn run_winit() -> Result<()> {
                                 win_phys_r,
                                 *should_round,
                                 *is_firefox,
-                                *transition_rescale,
+                                *transition_clip,
                             );
                         }
                     }

@@ -135,6 +135,58 @@ impl SnapTransition {
     pub fn is_finished(&self, now: Instant) -> bool {
         now.saturating_duration_since(self.start_time) >= self.duration
     }
+
+    /// Calcula la geometría física manteniendo estrictamente escala **1:1 estática** durante toda
+    /// la transición (sin ampliar el buffer ni deformar los botones del semáforo CSD) junto con el
+    /// rectángulo de recorte `surface_clip_rect` dentro del área animada de la ventana.
+    pub fn render_geometry(
+        &self,
+        window_geo: Rectangle<i32, Logical>,
+        output_origin: Point<i32, Logical>,
+        output_scale: f64,
+        now: Instant,
+    ) -> (
+        Point<i32, Logical>,
+        Size<i32, Logical>,
+        Point<i32, smithay::utils::Physical>,
+        Option<Rectangle<i32, smithay::utils::Physical>>,
+        Point<i32, smithay::utils::Physical>,
+        Size<i32, smithay::utils::Physical>,
+        Rectangle<i32, smithay::utils::Physical>,
+    ) {
+        let (effective_loc, effective_size) = self.current_geometry(now);
+        let surface_origin_x = effective_loc.x - window_geo.loc.x;
+        let surface_origin_y = effective_loc.y - window_geo.loc.y;
+        let phys_loc = Point::from((
+            ((surface_origin_x - output_origin.x) as f64 * output_scale).round() as i32,
+            ((surface_origin_y - output_origin.y) as f64 * output_scale).round() as i32,
+        ));
+        let content_offset = window_geo.loc.to_physical_precise_round(output_scale);
+        let content_size = effective_size.to_physical_precise_round(output_scale);
+        let win_screen_rect = Rectangle::new(
+            Point::from((
+                ((effective_loc.x - output_origin.x) as f64 * output_scale).round() as i32,
+                ((effective_loc.y - output_origin.y) as f64 * output_scale).round() as i32,
+            )),
+            content_size,
+        );
+        let surface_screen_rect = Rectangle::new(
+            win_screen_rect.loc,
+            window_geo.size.to_physical_precise_round(output_scale),
+        );
+        let surface_clip_rect = win_screen_rect
+            .intersection(surface_screen_rect)
+            .unwrap_or_else(|| Rectangle::new(win_screen_rect.loc, Size::from((0, 0))));
+        (
+            effective_loc,
+            effective_size,
+            phys_loc,
+            Some(surface_clip_rect),
+            content_offset,
+            content_size,
+            win_screen_rect,
+        )
+    }
 }
 
 /// Estado en memoria del selector de aplicaciones visual (⌘Tab / App Switcher HUD)
@@ -6027,5 +6079,42 @@ mod tests {
             Some("org.gnome.Ptyxis"),
             Some("Terminal")
         ));
+    }
+
+    #[test]
+    fn snap_transition_render_geometry_keeps_static_1_to_1_scale() {
+        use std::time::Duration;
+        use smithay::utils::{Logical, Point, Rectangle, Size};
+
+        let start_time = std::time::Instant::now();
+        let trans = super::SnapTransition {
+            start_time,
+            duration: Duration::from_millis(220),
+            start_loc: Point::from((100, 100)),
+            start_size: Size::from((800, 600)),
+            target_loc: Point::from((0, 32)),
+            target_size: Size::from((1920, 1048)),
+        };
+
+        let mid = start_time + Duration::from_millis(110);
+
+        // Antes de que el cliente envíe el buffer maximizado (geo = 800x600 con márgenes CSD 26px):
+        // la superficie se posiciona 1:1 (phys_loc = effective_loc - geo.loc) y se recorta a 800x600.
+        let uncommited_geo = Rectangle::<i32, Logical>::new(Point::from((26, 26)), Size::from((800, 600)));
+        let (eff_loc, eff_sz, phys_loc_before, clip_before, _, _, win_rect_before) =
+            trans.render_geometry(uncommited_geo, Point::from((0, 0)), 1.0, mid);
+        assert_eq!(phys_loc_before, Point::from((eff_loc.x - 26, eff_loc.y - 26)));
+        let clip_before = clip_before.expect("debe devolver recorte en transición");
+        assert_eq!(clip_before.loc, win_rect_before.loc);
+        assert_eq!(clip_before.size, Size::from((800, 600)));
+        assert!(eff_sz.w > 800 && eff_sz.h > 600);
+
+        // Una vez que el cliente confirma el tamaño maximizado (geo = 1920x1048 >= effective_size):
+        // el recorte coincide exactamente con win_screen_rect y mantiene escala 1:1.
+        let committed_geo = Rectangle::<i32, Logical>::new(Point::from((0, 0)), Size::from((1920, 1048)));
+        let (eff_loc2, _, phys_loc_after, clip_after, _, _, win_rect_after) =
+            trans.render_geometry(committed_geo, Point::from((0, 0)), 1.0, mid);
+        assert_eq!(phys_loc_after, eff_loc2.to_physical_precise_round(1.0));
+        assert_eq!(clip_after, Some(win_rect_after));
     }
 }
