@@ -258,6 +258,7 @@ pub struct MalusState {
     pub window_restore_geometries: HashMap<WlSurface, (Point<i32, Logical>, Size<i32, Logical>)>,
     pub centered_transient_windows: HashMap<WlSurface, (Point<i32, Logical>, Size<i32, Logical>)>,
     pub minimized_windows: HashMap<WlSurface, (smithay::desktop::Window, Point<i32, Logical>)>,
+    pub minimized_window_workspaces: HashMap<WlSurface, usize>,
     pub minimized_window_thumbnails: HashMap<u64, String>,
     pub window_ids: HashMap<WlSurface, u64>,
     pub next_window_id: u64,
@@ -1129,6 +1130,7 @@ impl MalusState {
             window_restore_geometries: HashMap::new(),
             centered_transient_windows: HashMap::new(),
             minimized_windows: HashMap::new(),
+            minimized_window_workspaces: HashMap::new(),
             minimized_window_thumbnails: HashMap::new(),
             window_ids: HashMap::new(),
             next_window_id: 0,
@@ -1429,6 +1431,7 @@ impl MalusState {
             }
 
             if let Some((window, loc)) = self.minimized_windows.remove(&surf) {
+                self.minimized_window_workspaces.remove(&surf);
                 self.remove_minimized_thumbnail(target_id);
                 let geo = window.geometry();
                 let dock_slot = self.dock_slots.remove(&target_id).unwrap_or_else(|| {
@@ -1533,6 +1536,8 @@ impl MalusState {
             self.active_animations.push(anim);
 
             self.minimized_windows.insert(surf.clone(), (window.clone(), loc));
+            self.minimized_window_workspaces
+                .insert(surf.clone(), self.workspaces.active_index);
             self.space.unmap_elem(&window);
 
             let next_focus = self
@@ -2153,42 +2158,62 @@ impl MalusState {
         })
     }
 
+    fn app_switcher_item_for_surface(&mut self, surf: &WlSurface, is_minimized: bool) -> AppSwitcherItem {
+        let window_id = self.get_or_assign_window_id(surf);
+        let (app_id_opt, title_opt) = toplevel_info(surf);
+        let app_id = app_id_opt.unwrap_or_else(|| "application-x-executable".to_string());
+        let title = title_opt.unwrap_or_else(|| app_id.clone());
+        let icon_name = guess_icon_name(&app_id, &title);
+        AppSwitcherItem {
+            window_id,
+            app_id,
+            title,
+            icon_name: Some(icon_name),
+            is_minimized,
+        }
+    }
+
     /// Construye la lista de elementos para el selector visual de aplicaciones (⌘Tab)
-    pub fn build_app_switcher_items(&mut self) -> Vec<AppSwitcherItem> {
+    /// filtrando estrictamente al monitor objetivo y al escritorio activo.
+    pub fn build_app_switcher_items(&mut self, target_output: Option<&Output>) -> Vec<AppSwitcherItem> {
         let mut items = Vec::new();
-        // 1. Ventanas activas en space, ordenadas de más reciente a más antigua
-        let windows: Vec<_> = self.space.elements().cloned().collect();
+        // 1. Ventanas activas en el escritorio actual mapeadas en `target_output` (de más reciente a más antigua)
+        let windows: Vec<_> = self
+            .space
+            .elements()
+            .filter(|win| {
+                target_output
+                    .map(|target| self.origin_output_for_window(win).as_ref() == Some(target))
+                    .unwrap_or(true)
+            })
+            .cloned()
+            .collect();
         for win in windows.into_iter().rev() {
             if let Some(surf) = win.wl_surface() {
-                let window_id = self.get_or_assign_window_id(&surf);
-                let (app_id_opt, title_opt) = toplevel_info(&surf);
-                let app_id = app_id_opt.unwrap_or_else(|| "application-x-executable".to_string());
-                let title = title_opt.unwrap_or_else(|| app_id.clone());
-                let icon_name = guess_icon_name(&app_id, &title);
-                items.push(AppSwitcherItem {
-                    window_id,
-                    app_id,
-                    title,
-                    icon_name: Some(icon_name),
-                    is_minimized: false,
-                });
+                items.push(self.app_switcher_item_for_surface(&surf, false));
             }
         }
-        // 2. Ventanas minimizadas
-        let min_surfaces: Vec<_> = self.minimized_windows.keys().cloned().collect();
+        // 2. Ventanas minimizadas del escritorio activo: solo aparecen en el Alt+Tab de la pantalla
+        // principal, porque el Dock solo reside en dicha pantalla.
+        let target_is_primary = target_output
+            .map(|o| self.is_primary_output(o))
+            .unwrap_or(true);
+        let active_ws = self.workspaces.active_index;
+        let min_surfaces: Vec<_> = self
+            .minimized_windows
+            .keys()
+            .filter(|surf| {
+                let win_ws = self
+                    .minimized_window_workspaces
+                    .get(*surf)
+                    .copied()
+                    .unwrap_or(active_ws);
+                should_include_minimized_in_app_switcher(target_is_primary, win_ws, active_ws)
+            })
+            .cloned()
+            .collect();
         for surf in min_surfaces {
-            let window_id = self.get_or_assign_window_id(&surf);
-            let (app_id_opt, title_opt) = toplevel_info(&surf);
-            let app_id = app_id_opt.unwrap_or_else(|| "application-x-executable".to_string());
-            let title = title_opt.unwrap_or_else(|| app_id.clone());
-            let icon_name = guess_icon_name(&app_id, &title);
-            items.push(AppSwitcherItem {
-                window_id,
-                app_id,
-                title,
-                icon_name: Some(icon_name),
-                is_minimized: true,
-            });
+            items.push(self.app_switcher_item_for_surface(&surf, true));
         }
         items
     }
@@ -2951,6 +2976,7 @@ impl MalusState {
             }
         } else if let Some(surf) = self.minimized_windows.keys().find(|s| self.window_ids.get(*s) == Some(&window_id)).cloned() {
             if let Some((win, _)) = self.minimized_windows.remove(&surf) {
+                self.minimized_window_workspaces.remove(&surf);
                 self.remove_minimized_thumbnail(window_id);
                 if let Some(toplevel) = win.toplevel() {
                     toplevel.send_close();
@@ -3030,6 +3056,7 @@ impl MalusState {
 
         if let Some(surf) = min_surf {
             if let Some((win, loc)) = self.minimized_windows.remove(&surf) {
+                self.minimized_window_workspaces.remove(&surf);
                 self.remove_minimized_thumbnail(window_id);
                 self.dock_slots.remove(&window_id);
                 self.space.map_element(win.clone(), loc, true);
@@ -3072,36 +3099,29 @@ impl MalusState {
         self.switch_to_window(window_id);
     }
 
-    fn target_app_switcher_output_name(&self, pointer_loc: Option<Point<f64, Logical>>) -> Option<String> {
+    fn target_app_switcher_output(&self, pointer_loc: Option<Point<f64, Logical>>) -> Option<Output> {
         if let Some(pt) = pointer_loc {
             if let Some(out) = self.space.outputs().find(|o| {
                 self.space
                     .output_geometry(o)
                     .is_some_and(|g| g.to_f64().contains(pt))
             }) {
-                return Some(out.name());
+                return Some(out.clone());
             }
         }
         if let Some(win) = self.get_active_window() {
-            if let Some(loc) = self.space.element_location(&win) {
-                let sz = win.geometry().size;
-                let center = Point::from((loc.x + sz.w.max(1) / 2, loc.y + sz.h.max(1) / 2));
-                if let Some(out) = self
-                    .space
-                    .outputs()
-                    .find(|o| self.space.output_geometry(o).is_some_and(|g| g.contains(center)))
-                {
-                    return Some(out.name());
-                }
+            if let Some(out) = self.origin_output_for_window(&win) {
+                return Some(out);
             }
         }
-        self.space.outputs().next().map(|o| o.name())
+        self.primary_output()
     }
 
     pub fn open_app_switcher(&mut self, reverse: bool, pointer_loc: Option<Point<f64, Logical>>) {
-        let items = self.build_app_switcher_items();
+        let target_output = self.target_app_switcher_output(pointer_loc);
+        let items = self.build_app_switcher_items(target_output.as_ref());
         if items.is_empty() {
-            tracing::info!("🔀 AppSwitcher: no hay ventanas abiertas, ignorando");
+            tracing::info!("🔀 AppSwitcher: no hay ventanas abiertas en la pantalla objetivo, ignorando");
             return;
         }
         let initial_idx = if items.len() > 1 {
@@ -3115,10 +3135,9 @@ impl MalusState {
         self.app_switcher.closed_dirty = false;
 
         if self.app_switcher_uses_deck() {
-            let target_output = self.target_app_switcher_output_name(pointer_loc);
             let origin_rects = self.collect_deck_origin_rects();
             self.app_switcher.deck.reset_on_open(
-                target_output,
+                target_output.map(|o| o.name()),
                 initial_idx,
                 origin_rects,
                 Instant::now(),
@@ -4044,6 +4063,7 @@ impl MalusState {
         self.snap_transitions.retain(|s, _| s.alive());
         self.centered_transient_windows.retain(|s, _| s.alive());
         self.minimized_windows.retain(|s, _| s.alive());
+        self.minimized_window_workspaces.retain(|s, _| s.alive());
         self.cached_close_snapshots.retain(|s, _| s.alive());
         self.workspaces.retain_alive();
         let dock_slots = &mut self.dock_slots;
@@ -5228,6 +5248,7 @@ impl XdgShellHandler for MalusState {
         self.window_restore_geometries.remove(surf);
         self.snap_transitions.remove(surf);
         self.minimized_windows.remove(surf);
+        self.minimized_window_workspaces.remove(surf);
         let removed_from_ws = self.workspaces.remove_surface(surf);
         if let Some(window_id) = self.window_ids.remove(surf) {
             self.dock_slots.remove(&window_id);
@@ -5435,6 +5456,15 @@ impl WlrLayerShellHandler for MalusState {
     }
 }
 
+/// Determina si una ventana minimizada debe incluirse en el App Switcher de la pantalla destino:
+/// las minimizadas solo viven en el Dock (pantalla principal) y deben pertenecer al escritorio activo.
+fn should_include_minimized_in_app_switcher(
+    target_is_primary: bool,
+    window_workspace: usize,
+    active_workspace: usize,
+) -> bool {
+    target_is_primary && window_workspace == active_workspace
+}
 
 #[cfg(test)]
 mod tests {
@@ -6116,5 +6146,19 @@ mod tests {
             trans.render_geometry(committed_geo, Point::from((0, 0)), 1.0, mid);
         assert_eq!(phys_loc_after, eff_loc2.to_physical_precise_round(1.0));
         assert_eq!(clip_after, Some(win_rect_after));
+    }
+
+    #[test]
+    fn app_switcher_isolates_minimized_windows_to_primary_output_and_active_workspace() {
+        // Pantalla principal + mismo escritorio -> sí se incluye
+        assert!(super::should_include_minimized_in_app_switcher(true, 0, 0));
+        assert!(super::should_include_minimized_in_app_switcher(true, 1, 1));
+
+        // Pantalla principal + otro escritorio -> NO se incluye
+        assert!(!super::should_include_minimized_in_app_switcher(true, 0, 1));
+
+        // Pantalla secundaria (sin Dock) -> nunca se incluyen minimizadas
+        assert!(!super::should_include_minimized_in_app_switcher(false, 0, 0));
+        assert!(!super::should_include_minimized_in_app_switcher(false, 1, 0));
     }
 }
