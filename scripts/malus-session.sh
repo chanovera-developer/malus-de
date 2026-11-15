@@ -15,6 +15,7 @@ export XDG_CURRENT_DESKTOP="Malus:GNOME"
 export XDG_SESSION_DESKTOP="malus"
 export XDG_SESSION_TYPE="wayland"
 export GSETTINGS_BACKEND="keyfile"
+export FREETYPE_PROPERTIES="${FREETYPE_PROPERTIES:-truetype:interpreter-version=40 cff:no-stem-darkening=0 autofitter:no-stem-darkening=0}"
 export UBUNTU_MENUPROXY=1
 export GTK_MODULES="${GTK_MODULES:+$GTK_MODULES:}appmenu-gtk-module"
 mkdir -p "$XDG_CONFIG_HOME/glib-2.0/settings" "$XDG_CONFIG_HOME/gtk-3.0" "$XDG_CONFIG_HOME/gtk-4.0"
@@ -149,6 +150,12 @@ button-layout='close,minimize,maximize:'
 color-scheme='prefer-dark'
 cursor-theme='macOS'
 cursor-size=24
+document-font-name='Inter 11'
+font-antialiasing='grayscale'
+font-hinting='slight'
+font-name='Inter 11'
+font-rendering='manual'
+font-rgba-order='rgb'
 gtk-theme='Adwaita'
 icon-theme='Adwaita'
 
@@ -207,6 +214,7 @@ gtk-decoration-layout=close,minimize,maximize:
 gtk-application-prefer-dark-theme=1
 gtk-cursor-theme-name=$CURSOR_THEME
 gtk-cursor-theme-size=$CURSOR_SIZE
+gtk-font-name=Inter 11
 gtk-theme-name=Adwaita
 EOF
 else
@@ -221,6 +229,7 @@ gtk-decoration-layout=close,minimize,maximize:
 gtk-application-prefer-dark-theme=1
 gtk-cursor-theme-name=$CURSOR_THEME
 gtk-cursor-theme-size=$CURSOR_SIZE
+gtk-font-name=Inter 11
 gtk-theme-name=Adwaita
 EOF
 else
@@ -232,7 +241,77 @@ for GTK_SETTINGS in "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" "$XDG_CONFIG_HOME/gt
     if ! grep -q '^gtk-icon-theme-name=' "$GTK_SETTINGS"; then
         printf '\ngtk-icon-theme-name=Adwaita\n' >> "$GTK_SETTINGS"
     fi
+    if ! grep -q '^gtk-font-name=' "$GTK_SETTINGS"; then
+        printf 'gtk-font-name=Inter 11\n' >> "$GTK_SETTINGS"
+    fi
+    for xft_kv in \
+        "gtk-xft-antialias=1" \
+        "gtk-xft-hinting=1" \
+        "gtk-xft-hintstyle=hintslight" \
+        "gtk-xft-rgba=none" \
+        "gtk-hint-font-metrics=1"; do
+        xft_key="${xft_kv%%=*}"
+        if ! grep -q "^${xft_key}=" "$GTK_SETTINGS"; then
+            printf '%s\n' "$xft_kv" >> "$GTK_SETTINGS"
+        fi
+    done
 done
+
+mkdir -p "$XDG_CONFIG_HOME/fontconfig/conf.d"
+if [ ! -f "$XDG_CONFIG_HOME/fontconfig/conf.d/10-malus-inter.conf" ] \
+    || ! grep -q 'hintslight' "$XDG_CONFIG_HOME/fontconfig/conf.d/10-malus-inter.conf" 2>/dev/null; then
+cat << 'EOF' > "$XDG_CONFIG_HOME/fontconfig/conf.d/10-malus-inter.conf"
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<fontconfig>
+  <!-- Fuente predeterminada del entorno Malus DE: Inter -->
+  <alias>
+    <family>sans-serif</family>
+    <prefer>
+      <family>Inter</family>
+    </prefer>
+  </alias>
+  <alias>
+    <family>sans</family>
+    <prefer>
+      <family>Inter</family>
+    </prefer>
+  </alias>
+  <alias>
+    <family>system-ui</family>
+    <prefer>
+      <family>Inter</family>
+    </prefer>
+  </alias>
+
+  <!-- Renderizado estilo macOS: suavizado en escala de grises sin fringing RGB,
+       hinting vertical ligero (autofitter con stem darkening) y métricas horizontales puras -->
+  <match target="font">
+    <edit name="antialias" mode="assign">
+      <bool>true</bool>
+    </edit>
+    <edit name="hinting" mode="assign">
+      <bool>true</bool>
+    </edit>
+    <edit name="hintstyle" mode="assign">
+      <const>hintslight</const>
+    </edit>
+    <edit name="autohint" mode="assign">
+      <bool>true</bool>
+    </edit>
+    <edit name="rgba" mode="assign">
+      <const>none</const>
+    </edit>
+    <edit name="lcdfilter" mode="assign">
+      <const>lcddefault</const>
+    </edit>
+    <edit name="embeddedbitmap" mode="assign">
+      <bool>false</bool>
+    </edit>
+  </match>
+</fontconfig>
+EOF
+fi
 
 echo "============================================================"
 echo "🍎 INICIANDO SESIÓN COMPLETA DE MALUS DE (MODO ANIDADO WINIT)"

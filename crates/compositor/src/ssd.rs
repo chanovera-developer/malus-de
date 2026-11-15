@@ -219,12 +219,24 @@ impl SsdManager {
     }
 }
 
+/// Configura Cairo para renderizar texto con suavizado en escala de grises,
+/// hinting vertical ligero y métricas sin cuantización horizontal (estilo macOS).
+pub fn apply_macos_font_options(cr: &Context) {
+    if let Ok(mut opts) = cairo::FontOptions::new() {
+        opts.set_antialias(cairo::Antialias::Gray);
+        opts.set_hint_style(cairo::HintStyle::Slight);
+        opts.set_hint_metrics(cairo::HintMetrics::Off);
+        cr.set_font_options(&opts);
+    }
+}
+
 fn rasterize_titlebar(key: &CacheKey, scale: f64) -> Option<Vec<u8>> {
     let w = key.width_phys;
     let h = key.height_phys;
     let mut surface = ImageSurface::create(Format::ARgb32, w, h).ok()?;
     {
         let ctx = Context::new(&surface).ok()?;
+        apply_macos_font_options(&ctx);
         let wf = w as f64;
         let hf = h as f64;
 

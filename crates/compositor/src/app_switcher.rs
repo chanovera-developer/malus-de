@@ -485,6 +485,7 @@ fn rasterize_card_header(
     }
     let mut surface = ImageSurface::create(Format::ARgb32, w_phys, h_phys).ok()?;
     let cr = Context::new(&surface).ok()?;
+    crate::ssd::apply_macos_font_options(&cr);
     cr.set_operator(cairo::Operator::Clear);
     let _ = cr.paint();
     cr.set_operator(cairo::Operator::Over);
@@ -537,7 +538,7 @@ fn rasterize_card_header(
             } else {
                 title.to_string()
             };
-            cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
+            cr.select_font_face("Inter", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
             cr.set_font_size(14.0 * scale);
             let shown = fit_text_to_width(&cr, &label, avail_text_w);
             if let Ok(ext) = cr.text_extents(&shown) {

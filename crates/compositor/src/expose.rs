@@ -969,7 +969,8 @@ fn rasterize_label_pill(
     let (display, text_w) = {
         let scratch = ImageSurface::create(Format::ARgb32, 1, 1).ok()?;
         let cr = Context::new(&scratch).ok()?;
-        cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
+        crate::ssd::apply_macos_font_options(&cr);
+        cr.select_font_face("Inter", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
         cr.set_font_size(font_size);
         let truncated = truncate_text(&cr, text, max_text_w);
         let ext_w = cr
@@ -983,6 +984,7 @@ fn rasterize_label_pill(
     let mut surface = ImageSurface::create(Format::ARgb32, w, h).ok()?;
     {
         let cr = Context::new(&surface).ok()?;
+        crate::ssd::apply_macos_font_options(&cr);
         let radius = h as f64 * 0.5;
         cairo_rounded_rect(&cr, 0.0, 0.0, w as f64, h as f64, radius);
         if highlighted {
@@ -995,7 +997,7 @@ fn rasterize_label_pill(
         cr.set_line_width((1.0 * scale).max(1.0));
         cr.stroke().ok()?;
 
-        cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
+        cr.select_font_face("Inter", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
         cr.set_font_size(font_size);
         cr.set_source_rgba(1.0, 1.0, 1.0, 0.96);
 
@@ -1039,6 +1041,7 @@ fn rasterize_spaces_bar(
     let mut surface = ImageSurface::create(Format::ARgb32, bar_w, bar_h).ok()?;
     {
         let cr = Context::new(&surface).ok()?;
+        crate::ssd::apply_macos_font_options(&cr);
         let bar_r = 20.0 * scale;
         cairo_squircle_rect(
             &cr,
@@ -1109,7 +1112,7 @@ fn rasterize_spaces_bar(
                     }
 
                     // Nombre del escritorio debajo de la miniatura
-                    cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
+                    cr.select_font_face("Inter", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
                     cr.set_font_size(10.5 * scale);
                     if space.is_active || is_drop {
                         cr.set_source_rgba(1.0, 1.0, 1.0, 0.98);

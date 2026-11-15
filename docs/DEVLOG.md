@@ -4,6 +4,34 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-15] — Tipografía Predeterminada Inter y Renderizado Nítido Estilo macOS
+
+### 1. Adopción de Inter como Tipografía Predeterminada (`crates/common/src/config.rs`, `crates/render/src/text.rs`, `crates/compositor/src/{expose.rs,app_switcher.rs}`, `scripts/malus-session*`, `docs/PACKAGE_MANIFEST.md`)
+* **Entorno aislado y migración automática:**
+  * [`config.rs`](../crates/common/src/config.rs), [`scripts/malus-session`](../scripts/malus-session) y [`scripts/malus-session.sh`](../scripts/malus-session.sh) establecen `font-name='Inter 11'` y `document-font-name='Inter 11'` en el backend `keyfile` de GSettings, `gtk-font-name=Inter 11` en GTK3/GTK4 (`settings.ini`) y prioridad para `sans-serif`, `sans` y `system-ui` hacia `Inter` en `$XDG_CONFIG_HOME/fontconfig/conf.d/10-malus-inter.conf` (`ensure_isolated_fontconfig_inter`).
+  * `ensure_default_font_settings` migra automáticamente configuraciones existentes sin fuente o con valores heredados (`Adwaita Sans`, `Cantarell`, `Sans`) hacia `Inter 11`, preservando cualquier fuente personalizada definida por el usuario.
+* **Renderizadores propios y manifiesto de dependencias:**
+  * [`detect_system_font_family`](../crates/render/src/text.rs) usa `"Inter"` como respaldo predeterminado en `cosmic-text`/`glyphon`.
+  * [`expose.rs`](../crates/compositor/src/expose.rs) y [`app_switcher.rs`](../crates/compositor/src/app_switcher.rs) pasan de `"Sans"` a `"Inter"` en Cairo, alineándose con `ssd.rs` y `spotlight_visual.rs`.
+  * [`PACKAGE_MANIFEST.md`](../docs/PACKAGE_MANIFEST.md) actualiza el paquete en Fedora a `rsms-inter-fonts` y `rsms-inter-vf-fonts` (v4.1).
+
+### 2. Suavizado y Hinting Estilo macOS (`crates/common/src/config.rs`, `crates/compositor/src/ssd.rs`, `expose.rs`, `app_switcher.rs`, `spotlight_visual.rs`, `scripts/malus-session*`)
+* **FreeType y Fontconfig aislado (`10-malus-inter.conf`):**
+  * Exportación y propagación de `FREETYPE_PROPERTIES="truetype:interpreter-version=40 cff:no-stem-darkening=0 autofitter:no-stem-darkening=0"` en sesión, portal (`dbus-update-activation-environment` / `systemctl --user import-environment`) y procesos hijos lanzados mediante `apply_isolated_environment`.
+  * Regla `<match target="font">` con `antialias=true`, `hinting=true`, `hintstyle=hintslight`, `autohint=true` (alineación vertical ligera que habilita *stem darkening* y preserva métricas horizontales puras), `rgba=none` (escala de grises sin *fringing* RGB en escalados fraccionarios ni capas alfa) y `embeddedbitmap=false`.
+* **GSettings, GTK3/GTK4 y Cairo del compositor:**
+  * `[org/gnome/desktop/interface]` configura `font-antialiasing='grayscale'`, `font-hinting='slight'`, `font-rgba-order='rgb'` y `font-rendering='manual'`; `gtk-3.0`/`gtk-4.0` añaden `gtk-xft-*` y `gtk-hint-font-metrics=1`.
+  * [`apply_macos_font_options`](../crates/compositor/src/ssd.rs) aplica `Antialias::Gray`, `HintStyle::Slight` y `HintMetrics::Off` a los contextos Cairo de [`ssd.rs`](../crates/compositor/src/ssd.rs), [`app_switcher.rs`](../crates/compositor/src/app_switcher.rs), [`expose.rs`](../crates/compositor/src/expose.rs) y [`spotlight_visual.rs`](../crates/compositor/src/spotlight_visual.rs).
+
+### 3. Validación
+* `cargo check --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --workspace`: compilación completa sin errores (`exit 0`).
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-common -p malus-de-render -p malus-de-compositor`:
+  * `malus-de-common`: **43 passed; 0 failed** (incluyendo `test_ensure_default_font_settings_and_fontconfig_inter`).
+  * `malus-de-compositor`: **71 passed; 0 failed**.
+  * `malus-de-render`: **14 passed; 0 failed** (`test_dbus_menu`: 2, `test_layout`: 1, `test_luminance`: 3, `test_popover`: 4, `test_squircle`: 1, `test_text`: 3 incluyendo `test_cosmic_text_inter_font_matching`).
+
+---
+
 ## [2026-11-15] — Corrección de Deadlock en Arrastre SSD a Esquinas (`ZapFast`)
 
 ### 1. Eliminación de Re-entrada al Mutex del Puntero en `origin_output_for_window` (`crates/compositor/src/state.rs`, `grabs.rs`, `drm.rs`, `winit.rs`)

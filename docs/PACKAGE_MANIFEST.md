@@ -92,7 +92,8 @@ sudo dnf install -y \
     gnome-system-monitor \
     gnome-text-editor \
     loupe \
-    inter-fonts \
+    rsms-inter-fonts \
+    rsms-inter-vf-fonts \
     qt5-qtwayland \
     qt6-qtwayland \
     xorg-x11-server-Xwayland

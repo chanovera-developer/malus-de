@@ -113,3 +113,34 @@ fn test_cosmic_text_system_font_matching() {
         }
     }
 }
+
+#[test]
+fn test_cosmic_text_inter_font_matching() {
+    use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Weight};
+    let mut fs = FontSystem::new();
+    fs.db_mut().set_sans_serif_family("Inter");
+    let mut buffer = Buffer::new(&mut fs, Metrics::new(14.0, 20.0));
+    buffer.set_text(
+        &mut fs,
+        "Hello World",
+        Attrs::new().family(Family::SansSerif).weight(Weight::MEDIUM),
+        Shaping::Advanced,
+    );
+    buffer.shape_until_scroll(&mut fs, false);
+    let mut matched = false;
+    for run in buffer.layout_runs() {
+        for glyph in run.glyphs {
+            let face = fs.db().face(glyph.font_id).unwrap();
+            assert!(
+                face.families
+                    .iter()
+                    .any(|(name, _)| name.eq_ignore_ascii_case("Inter")),
+                "Expected Inter font family, got {:?}",
+                face.families
+            );
+            matched = true;
+            break;
+        }
+    }
+    assert!(matched, "Expected at least one shaped glyph for Inter");
+}

@@ -2054,6 +2054,7 @@ impl SpotlightState {
         let Ok(vis_ctx) = Context::new(&vis_surface) else {
             return;
         };
+        crate::ssd::apply_macos_font_options(&vis_ctx);
         vis_ctx.scale(scale, scale);
         vis_ctx.set_operator(Operator::Source);
         vis_ctx.set_source_rgba(0.0, 0.0, 0.0, 0.0);

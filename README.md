@@ -149,6 +149,7 @@ El proyecto es un workspace de Rust con **16 crates** en `crates/`:
   - **Seguridad, permisos y llavero (`org.freedesktop.secrets`):** `polkit`, `mate-polkit` (agente de autenticación gráfica para instalación de apps y permisos de administrador), `gnome-keyring`, `gnome-keyring-pam` y `libsecret`.
   - **Portales, portapapeles y montaje de medios:** `xdg-desktop-portal`, `xdg-desktop-portal-gnome`, `xdg-desktop-portal-gtk`, `wl-clipboard` (`wl-copy` / `wl-paste`), `gvfs` y `udisks2`.
   - **Conectividad y energía:** `NetworkManager`, `bluez`, `power-profiles-daemon`.
+  - **Tipografía predeterminada:** [`Inter` (`v4.1`)](https://rsms.me/inter/) (`rsms-inter-fonts` / `rsms-inter-vf-fonts`) con suavizado en escala de grises, *stem darkening* y hinting vertical ligero estilo macOS configurados de forma aislada para la sesión.
   - **Compatibilidad de clientes:** `qt5-qtwayland`, `qt6-qtwayland` y `xorg-x11-server-Xwayland`.
 
 La lista detallada de paquetes por distribución está en el [manifiesto de dependencias](./docs/PACKAGE_MANIFEST.md), y la guía paso a paso para un sistema sin GNOME en la [guía de instalación standalone en Fedora Minimal](./docs/FEDORA_STANDALONE_INSTALL.md). Los componentes y requisitos de producto se describen en el [PRD](./PRD.md) y el avance cronológico en el [registro de desarrollo (DEVLOG)](./docs/DEVLOG.md).
@@ -191,7 +192,9 @@ sudo dnf install -y \
     udisks2 \
     qt5-qtwayland \
     qt6-qtwayland \
-    xorg-x11-server-Xwayland
+    xorg-x11-server-Xwayland \
+    rsms-inter-fonts \
+    rsms-inter-vf-fonts
 ```
 
 `systemd-devel` proporciona los archivos de desarrollo de `libudev`; `libxkbcommon-devel` es necesario para enlazar el compositor. Asegúrate también de tener Rust y Cargo instalados (edición 2021).
@@ -327,3 +330,4 @@ Si pruebas Malus, incluye en el reporte la distribución y versión, GPU y contr
 
 - **Código fuente de Malus DE:** El workspace declara las licencias **MIT OR Apache-2.0** en `Cargo.toml`.
 - **Tema de cursores `macOS` y `macOS-White` (`assets/cursors/`):** Basado en [`apple_cursor` (v2.0.1)](https://github.com/ful1e5/apple_cursor), creado y mantenido por **Abdulkaiz Khatri ([@ful1e5](https://github.com/ful1e5))**, distribuido bajo la licencia **GNU General Public License v3.0 (GPL-3.0)** (ver [`assets/cursors/LICENSE`](./assets/cursors/LICENSE)).
+- **Tipografía predeterminada `Inter` (`v4.1`):** Diseñada por **Rasmus Andersson** ([rsms.me/inter](https://rsms.me/inter/)), utilizada como fuente predeterminada de Malus DE mediante los paquetes de sistema `rsms-inter-fonts` y `rsms-inter-vf-fonts`, distribuida bajo la licencia **SIL Open Font License 1.1 (`OFL-1.1`)**.

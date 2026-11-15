@@ -340,11 +340,14 @@ fn propagate_isolated_portal_environment_once(malus_config_dir: &Path) {
     let _ = std::thread::Builder::new()
         .name("malus-portal-env".to_string())
         .spawn(move || {
+            let freetype_props = std::env::var("FREETYPE_PROPERTIES")
+                .unwrap_or_else(|_| DEFAULT_FREETYPE_PROPERTIES.to_string());
             let _ = std::process::Command::new("dbus-update-activation-environment")
                 .args([
                     "--systemd",
                     &format!("XDG_CONFIG_HOME={}", config_dir.display()),
                     "GSETTINGS_BACKEND=keyfile",
+                    &format!("FREETYPE_PROPERTIES={freetype_props}"),
                 ])
                 .status();
             let _ = std::process::Command::new("systemctl")
@@ -353,6 +356,7 @@ fn propagate_isolated_portal_environment_once(malus_config_dir: &Path) {
                     "import-environment",
                     "XDG_CONFIG_HOME",
                     "GSETTINGS_BACKEND",
+                    "FREETYPE_PROPERTIES",
                 ])
                 .status();
             let _ = std::process::Command::new("systemctl")
@@ -367,6 +371,178 @@ fn propagate_isolated_portal_environment_once(malus_config_dir: &Path) {
                 ])
                 .status();
         });
+}
+
+pub const DEFAULT_SYSTEM_FONT_NAME: &str = "Inter 11";
+const DEFAULT_KEYFILE_FONT_NAME: &str = "'Inter 11'";
+pub const DEFAULT_FREETYPE_PROPERTIES: &str =
+    "truetype:interpreter-version=40 cff:no-stem-darkening=0 autofitter:no-stem-darkening=0";
+
+fn is_unset_or_legacy_default_font(val: &str) -> bool {
+    let cleaned = val.trim().trim_matches(|c| c == '\'' || c == '"').trim();
+    cleaned.is_empty()
+        || cleaned == "Adwaita Sans"
+        || cleaned.starts_with("Adwaita Sans ")
+        || cleaned == "Cantarell"
+        || cleaned.starts_with("Cantarell ")
+        || cleaned == "Sans"
+        || cleaned.starts_with("Sans ")
+}
+
+fn read_section_key_value(path: &Path, section_name: &str, key: &str) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let mut in_section = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_section = &trimmed[1..trimmed.len() - 1] == section_name;
+            continue;
+        }
+        if in_section {
+            if let Some(rest) = trimmed.strip_prefix(key) {
+                let rest = rest.trim_start();
+                if let Some(val) = rest.strip_prefix('=') {
+                    return Some(val.trim().to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Asegura que la fuente predeterminada del entorno Malus DE sea `Inter 11`
+/// en el keyfile de GSettings y en `settings.ini` de GTK3/GTK4 cuando no está definida
+/// o conserva valores heredados por defecto (`Adwaita Sans`, `Cantarell`, `Sans`).
+pub fn ensure_default_font_settings(
+    keyfile_path: &Path,
+    gtk3_ini: &Path,
+    gtk4_ini: &Path,
+) -> std::io::Result<()> {
+    if keyfile_path.exists() {
+        let mut updates: Vec<(&str, &str)> = Vec::new();
+        let needs_font = read_section_key_value(keyfile_path, "org/gnome/desktop/interface", "font-name")
+            .is_none_or(|v| is_unset_or_legacy_default_font(&v));
+        let needs_doc_font =
+            read_section_key_value(keyfile_path, "org/gnome/desktop/interface", "document-font-name")
+                .is_none_or(|v| is_unset_or_legacy_default_font(&v));
+        if needs_font {
+            updates.push(("font-name", DEFAULT_KEYFILE_FONT_NAME));
+        }
+        if needs_doc_font {
+            updates.push(("document-font-name", DEFAULT_KEYFILE_FONT_NAME));
+        }
+        for (key, default_val) in [
+            ("font-antialiasing", "'grayscale'"),
+            ("font-hinting", "'slight'"),
+            ("font-rgba-order", "'rgb'"),
+            ("font-rendering", "'manual'"),
+        ] {
+            let current = read_section_key_value(keyfile_path, "org/gnome/desktop/interface", key);
+            let missing_or_auto = current.is_none()
+                || (key == "font-rendering"
+                    && current
+                        .as_deref()
+                        .is_some_and(|v| v.trim().trim_matches('\'') == "automatic"));
+            if missing_or_auto {
+                updates.push((key, default_val));
+            }
+        }
+        if !updates.is_empty() {
+            let _ = upsert_keyfile_entries(
+                keyfile_path,
+                &[("org/gnome/desktop/interface", &updates)],
+            )?;
+        }
+    }
+
+    for ini_path in [gtk3_ini, gtk4_ini] {
+        if ini_path.exists() {
+            let mut gtk_updates: Vec<(&str, &str)> = Vec::new();
+            let needs_gtk_font = read_section_key_value(ini_path, "Settings", "gtk-font-name")
+                .is_none_or(|v| is_unset_or_legacy_default_font(&v));
+            if needs_gtk_font {
+                gtk_updates.push(("gtk-font-name", DEFAULT_SYSTEM_FONT_NAME));
+            }
+            for (key, default_val) in [
+                ("gtk-xft-antialias", "1"),
+                ("gtk-xft-hinting", "1"),
+                ("gtk-xft-hintstyle", "hintslight"),
+                ("gtk-xft-rgba", "none"),
+                ("gtk-hint-font-metrics", "1"),
+            ] {
+                if read_section_key_value(ini_path, "Settings", key).is_none() {
+                    gtk_updates.push((key, default_val));
+                }
+            }
+            if !gtk_updates.is_empty() {
+                let _ = upsert_keyfile_entries(ini_path, &[("Settings", &gtk_updates)])?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Configura Fontconfig aislado en `$XDG_CONFIG_HOME/fontconfig/conf.d/10-malus-inter.conf`
+/// para que `sans-serif`, `sans` y `system-ui` prefieran `Inter` dentro de Malus DE
+/// y utilicen suavizado en escala de grises + hinting vertical ligero estilo macOS,
+/// sin modificar la configuración global de GNOME del usuario.
+pub fn ensure_isolated_fontconfig_inter(malus_config_dir: &Path) -> std::io::Result<()> {
+    let conf_dir = malus_config_dir.join("fontconfig").join("conf.d");
+    std::fs::create_dir_all(&conf_dir)?;
+    let conf_path = conf_dir.join("10-malus-inter.conf");
+    let content = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+<fontconfig>
+  <!-- Fuente predeterminada del entorno Malus DE: Inter -->
+  <alias>
+    <family>sans-serif</family>
+    <prefer>
+      <family>Inter</family>
+    </prefer>
+  </alias>
+  <alias>
+    <family>sans</family>
+    <prefer>
+      <family>Inter</family>
+    </prefer>
+  </alias>
+  <alias>
+    <family>system-ui</family>
+    <prefer>
+      <family>Inter</family>
+    </prefer>
+  </alias>
+
+  <!-- Renderizado estilo macOS: suavizado en escala de grises sin fringing RGB,
+       hinting vertical ligero (autofitter con stem darkening) y métricas horizontales puras -->
+  <match target="font">
+    <edit name="antialias" mode="assign">
+      <bool>true</bool>
+    </edit>
+    <edit name="hinting" mode="assign">
+      <bool>true</bool>
+    </edit>
+    <edit name="hintstyle" mode="assign">
+      <const>hintslight</const>
+    </edit>
+    <edit name="autohint" mode="assign">
+      <bool>true</bool>
+    </edit>
+    <edit name="rgba" mode="assign">
+      <const>none</const>
+    </edit>
+    <edit name="lcdfilter" mode="assign">
+      <const>lcddefault</const>
+    </edit>
+    <edit name="embeddedbitmap" mode="assign">
+      <bool>false</bool>
+    </edit>
+  </match>
+</fontconfig>
+"#;
+    write_file_atomic_if_changed(&conf_path, content)?;
+    Ok(())
 }
 
 pub fn ensure_keyfile_button_layout(keyfile_path: &Path) -> std::io::Result<()> {
@@ -400,6 +576,9 @@ pub fn setup_isolated_session_environment() -> std::io::Result<PathBuf> {
     std::env::set_var("XDG_CONFIG_HOME", &malus_config_dir);
     std::env::set_var("GSETTINGS_BACKEND", "keyfile");
     std::env::remove_var("GTK_USE_PORTAL");
+    if std::env::var_os("FREETYPE_PROPERTIES").is_none() {
+        std::env::set_var("FREETYPE_PROPERTIES", DEFAULT_FREETYPE_PROPERTIES);
+    }
 
     // 1. Directorio glib-2.0/settings para el backend GSettings keyfile (preservar si ya existe)
     let keyfile_dir = malus_config_dir.join("glib-2.0").join("settings");
@@ -413,6 +592,12 @@ button-layout='close,minimize,maximize:'
 color-scheme='prefer-dark'
 cursor-theme='macOS'
 cursor-size=24
+document-font-name='Inter 11'
+font-antialiasing='grayscale'
+font-hinting='slight'
+font-name='Inter 11'
+font-rendering='manual'
+font-rgba-order='rgb'
 icon-theme='Adwaita'
 gtk-theme='Adwaita'
 
@@ -447,8 +632,8 @@ org.freedesktop.impl.portal.Settings=gtk;gnome;
     let gtk3_ini = gtk3_dir.join("settings.ini");
     if !gtk3_ini.exists() {
         let gtk_ini_content = format!(
-            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme=1\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-theme-name=Adwaita\n",
-            cursor_theme, cursor_size
+            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme=1\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-font-name={}\ngtk-xft-antialias=1\ngtk-xft-hinting=1\ngtk-xft-hintstyle=hintslight\ngtk-xft-rgba=none\ngtk-hint-font-metrics=1\ngtk-theme-name=Adwaita\n",
+            cursor_theme, cursor_size, DEFAULT_SYSTEM_FONT_NAME
         );
         write_file_atomic_if_changed(&gtk3_ini, &gtk_ini_content)?;
     }
@@ -458,11 +643,14 @@ org.freedesktop.impl.portal.Settings=gtk;gnome;
     let gtk4_ini = gtk4_dir.join("settings.ini");
     if !gtk4_ini.exists() {
         let gtk_ini_content = format!(
-            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme=1\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-theme-name=Adwaita\n",
-            cursor_theme, cursor_size
+            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme=1\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-font-name={}\ngtk-xft-antialias=1\ngtk-xft-hinting=1\ngtk-xft-hintstyle=hintslight\ngtk-xft-rgba=none\ngtk-hint-font-metrics=1\ngtk-theme-name=Adwaita\n",
+            cursor_theme, cursor_size, DEFAULT_SYSTEM_FONT_NAME
         );
         write_file_atomic_if_changed(&gtk4_ini, &gtk_ini_content)?;
     }
+
+    let _ = ensure_default_font_settings(&keyfile_path, &gtk3_ini, &gtk4_ini);
+    let _ = ensure_isolated_fontconfig_inter(&malus_config_dir);
 
     set_gtk_decoration_layout(&malus_config_dir)?;
     set_gsettings_button_layout(&malus_config_dir);
@@ -924,6 +1112,9 @@ pub fn apply_isolated_environment(command: &mut std::process::Command) {
     command.env("GSETTINGS_BACKEND", "keyfile");
     command.env("XDG_CURRENT_DESKTOP", "Malus:GNOME");
     command.env("GDK_BACKEND", "wayland");
+    let freetype_props = std::env::var("FREETYPE_PROPERTIES")
+        .unwrap_or_else(|_| DEFAULT_FREETYPE_PROPERTIES.to_string());
+    command.env("FREETYPE_PROPERTIES", freetype_props);
     command.env_remove("GTK_USE_PORTAL");
     if let Ok(wayland_disp) = std::env::var("WAYLAND_DISPLAY") {
         command.env("WAYLAND_DISPLAY", wayland_disp);
@@ -2766,5 +2957,62 @@ apps = []
         let toml_classic = format!("{toml_without_field}app_switcher_style = \"classic\"\n");
         let parsed_classic: DockConfig = toml::from_str(&toml_classic).unwrap();
         assert_eq!(parsed_classic.app_switcher_style, AppSwitcherStyle::Classic);
+    }
+
+    #[test]
+    fn test_ensure_default_font_settings_and_fontconfig_inter() {
+        let temp_dir = std::env::temp_dir().join("malus_test_font_inter");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let keyfile_path = temp_dir.join("keyfile");
+        let gtk3_ini = temp_dir.join("gtk3.ini");
+        let gtk4_ini = temp_dir.join("gtk4.ini");
+
+        // Caso 1: keyfile sin font-name y gtk3 con valor legado "Adwaita Sans 11"
+        std::fs::write(
+            &keyfile_path,
+            "[org/gnome/desktop/interface]\ncolor-scheme='prefer-dark'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &gtk3_ini,
+            "[Settings]\ngtk-font-name=Adwaita Sans 11\n",
+        )
+        .unwrap();
+        // Caso 2: gtk4 ya tiene una fuente personalizada del usuario, debe preservarse
+        std::fs::write(&gtk4_ini, "[Settings]\ngtk-font-name=IBM Plex Sans 10\n").unwrap();
+
+        ensure_default_font_settings(&keyfile_path, &gtk3_ini, &gtk4_ini).unwrap();
+        ensure_isolated_fontconfig_inter(&temp_dir).unwrap();
+
+        let kf_after = std::fs::read_to_string(&keyfile_path).unwrap();
+        assert!(kf_after.contains("font-name='Inter 11'"));
+        assert!(kf_after.contains("document-font-name='Inter 11'"));
+        assert!(kf_after.contains("font-antialiasing='grayscale'"));
+        assert!(kf_after.contains("font-hinting='slight'"));
+        assert!(kf_after.contains("font-rendering='manual'"));
+        assert!(kf_after.contains("font-rgba-order='rgb'"));
+
+        let gtk3_after = std::fs::read_to_string(&gtk3_ini).unwrap();
+        assert!(gtk3_after.contains("gtk-font-name=Inter 11"));
+        assert!(gtk3_after.contains("gtk-xft-hintstyle=hintslight"));
+        assert!(gtk3_after.contains("gtk-xft-rgba=none"));
+        assert!(gtk3_after.contains("gtk-hint-font-metrics=1"));
+
+        let gtk4_after = std::fs::read_to_string(&gtk4_ini).unwrap();
+        assert!(gtk4_after.contains("gtk-font-name=IBM Plex Sans 10"));
+        assert!(gtk4_after.contains("gtk-xft-hintstyle=hintslight"));
+        assert!(gtk4_after.contains("gtk-hint-font-metrics=1"));
+
+        let fc_conf = temp_dir.join("fontconfig/conf.d/10-malus-inter.conf");
+        let fc_content = std::fs::read_to_string(&fc_conf).unwrap();
+        assert!(fc_content.contains("<family>Inter</family>"));
+        assert!(fc_content.contains("<family>sans-serif</family>"));
+        assert!(fc_content.contains("<const>hintslight</const>"));
+        assert!(fc_content.contains("<const>none</const>"));
+        assert!(fc_content.contains("<bool>true</bool>"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

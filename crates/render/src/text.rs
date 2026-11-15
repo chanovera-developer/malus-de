@@ -134,7 +134,7 @@ pub fn detect_system_font_family() -> String {
             .trim_matches('\'')
             .to_string();
         if !raw.is_empty() {
-            // "Adwaita Sans 11" -> "Adwaita Sans"
+            // "Inter 11" -> "Inter"
             if let Some((family, size_str)) = raw.rsplit_once(' ') {
                 if size_str.chars().all(|c| c.is_ascii_digit() || c == '.') {
                     return family.to_string();
@@ -143,7 +143,7 @@ pub fn detect_system_font_family() -> String {
             return raw;
         }
     }
-    "Adwaita Sans".to_string()
+    "Inter".to_string()
 }
 
 /// Subsistema gráfico de texto para Malus DE impulsado por `cosmic-text` y `glyphon`.
