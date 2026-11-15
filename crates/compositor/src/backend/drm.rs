@@ -2973,7 +2973,7 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
 
-                let is_dark_theme = crate::state::system_monitor_backdrop_color()[0] < 0.5;
+                let is_dark_theme = crate::state::is_dark_color_scheme();
                 let mut window_render_data = Vec::new();
                 for window in state.space.elements() {
                     if let Some(loc) = state.space.element_location(window) {
@@ -3124,7 +3124,6 @@ pub fn run_drm() -> Result<()> {
                             let is_firefox = crate::state::is_firefox_window(&window);
                             let is_translucent = crate::state::is_translucent_window(&window);
                             let is_branches = crate::state::is_branches_window(&window);
-                            let is_system_monitor = crate::state::is_system_monitor_window(&window);
                             let root_id =
                                 smithay::backend::renderer::element::Id::from_wayland_resource(
                                     main_surface.as_ref(),
@@ -3188,7 +3187,6 @@ pub fn run_drm() -> Result<()> {
                                 content_size,
                                 is_firefox,
                                 is_translucent,
-                                is_system_monitor,
                                 transition_rescale,
                                 ssd_elem,
                                 is_maximized,
@@ -3510,7 +3508,6 @@ pub fn run_drm() -> Result<()> {
                     is_firefox,
                     is_translucent,
                     _,
-                    _,
                     ssd_elem,
                     _,
                     is_branches,
@@ -3671,10 +3668,9 @@ pub fn run_drm() -> Result<()> {
                     let win_rect = win.6;
                     let should_round = win.4;
                     let is_translucent = win.10;
-                    let is_system_monitor = win.11;
-                    let is_transitioning = win.12.is_some();
-                    let is_maximized = win.14;
-                    let is_branches = win.15;
+                    let is_transitioning = win.11.is_some();
+                    let is_maximized = win.13;
+                    let is_branches = win.14;
                     let target_r = if should_round {
                         win_phys_r.unwrap_or(0)
                     } else {
@@ -3706,7 +3702,7 @@ pub fn run_drm() -> Result<()> {
                         }
                     }
 
-                    if !is_translucent && !is_system_monitor && !is_transitioning {
+                    if !is_translucent && !is_transitioning {
                         occluders.push(super::OpaqueOccluder {
                             rect: win_rect,
                             corner_radius: target_r,
@@ -4532,7 +4528,6 @@ pub fn run_drm() -> Result<()> {
                                 _content_size,
                                 is_firefox,
                                 is_translucent,
-                                is_system_monitor,
                                 transition_rescale,
                                 ssd_elem,
                                 _is_maximized,
@@ -4607,28 +4602,7 @@ pub fn run_drm() -> Result<()> {
 
                             let win_is_damaged = damage.iter().any(|d| d.overlaps(*win_rect));
 
-                            if *is_system_monitor && !is_body_occluded && win_is_damaged {
-                                if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
-                                    let corner_radius = if *should_round {
-                                        win_phys_r.unwrap_or(0) as f32
-                                    } else {
-                                        0.0
-                                    };
-                                    let color = crate::state::system_monitor_backdrop_color();
-                                    let _ = frame.with_context(|gl| {
-                                        blur.render_solid(
-                                            gl,
-                                            &projection,
-                                            out_surface.size,
-                                            *win_rect,
-                                            corner_radius,
-                                            color,
-                                        );
-                                    });
-                                }
-                            }
-
-                            // 2.1.5. DESENFOQUE DE FONDO DUAL KAWASE (Branches, Nautilus y Ajustes del Sistema)
+                            // 2.1.5. DESENFOQUE DE FONDO DUAL KAWASE (Branches y Ajustes del Sistema)
                             let blur_rect = if *is_branches || *is_translucent {
                                 let sidebar_blur_w = ((212.0 * scale).round() as i32
                                     + win_phys_r.unwrap_or(0) as i32

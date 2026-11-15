@@ -1,19 +1,19 @@
 /* Estilos de panel lateral para Tema Oscuro */
-@define-color sidebar_bg_color rgba(30, 30, 34, 0.82);
-@define-color sidebar_backdrop_color rgba(25, 25, 28, 0.88);
+@define-color sidebar_bg_color rgb(30, 30, 34);
+@define-color sidebar_backdrop_color rgb(25, 25, 28);
 
 :root {
-    --sidebar-bg-color: rgba(30, 30, 34, 0.82);
-    --sidebar-backdrop-color: rgba(25, 25, 28, 0.88);
+    --sidebar-bg-color: rgb(30, 30, 34);
+    --sidebar-backdrop-color: rgb(25, 25, 28);
 }
 
 window.view overlay-split-view > .sidebar-pane {
-    background-color: rgba(30, 30, 34, 0.82);
+    background-color: rgb(30, 30, 34);
     color: @window_fg_color;
 }
 
 window.view overlay-split-view > .sidebar-pane:backdrop {
-    background-color: rgba(25, 25, 28, 0.88);
+    background-color: rgb(25, 25, 28);
 }
 
 window.view overlay-split-view > .sidebar-pane:dir(ltr) {
@@ -26,12 +26,12 @@ window.view overlay-split-view > .sidebar-pane:dir(rtl) {
 
 @media (prefers-color-scheme: light) {
     window.view overlay-split-view > .sidebar-pane {
-        background-color: rgba(246, 246, 248, 0.82);
+        background-color: rgb(246, 246, 248);
         color: @window_fg_color;
     }
 
     window.view overlay-split-view > .sidebar-pane:backdrop {
-        background-color: rgba(240, 240, 242, 0.88);
+        background-color: rgb(240, 240, 242);
     }
 
     window.view overlay-split-view > .sidebar-pane:dir(ltr) {

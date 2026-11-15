@@ -480,8 +480,7 @@ pub fn is_translucent_window(window: &smithay::desktop::Window) -> bool {
     let check = |app_id: &Option<String>, title: &Option<String>| -> bool {
         if let Some(ref id) = app_id {
             let lower = id.to_lowercase();
-            if lower.contains("nautilus")
-                || lower.contains("malus.settings")
+            if lower.contains("malus.settings")
                 || lower.contains("malus-de-settings")
                 || lower.contains("malus_de_settings")
                 || lower == "branches"
@@ -521,33 +520,6 @@ pub fn is_translucent_window(window: &smithay::desktop::Window) -> bool {
 }
 
 
-fn is_system_monitor_identity(app_id: Option<&str>, title: Option<&str>) -> bool {
-    let app_matches = app_id.is_some_and(|id| {
-        let lower = id.to_lowercase();
-        lower.contains("gnome-system-monitor")
-            || lower.contains("org.gnome.systemmonitor")
-            || lower.contains("systemmonitor")
-    });
-    let title_matches = title.is_some_and(|title| {
-        let lower = title.to_lowercase();
-        lower.contains("system monitor") || lower.contains("monitor del sistema")
-    });
-    app_matches || title_matches
-}
-
-/// Identifica el Monitor del Sistema para dibujarle un fondo opaco sin modificar otras ventanas.
-pub fn is_system_monitor_window(window: &smithay::desktop::Window) -> bool {
-    let matches = |surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface| {
-        let (app_id, title) = toplevel_info(surface);
-        is_system_monitor_identity(app_id.as_deref(), title.as_deref())
-    };
-
-    window.wl_surface().is_some_and(|surface| matches(surface.as_ref()))
-        || window
-            .toplevel()
-            .is_some_and(|toplevel| matches(toplevel.wl_surface()))
-}
-
 fn parse_color_scheme(settings: &str) -> Option<bool> {
     let mut in_interface_section = false;
     for line in settings.lines().map(str::trim) {
@@ -579,14 +551,14 @@ fn read_system_dark_mode(settings_path: & std::path::Path) -> Option<bool> {
         Ok(settings) => parse_color_scheme(&settings),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {
-            tracing::warn!("No se pudo leer el tema GTK para el fondo del Monitor del Sistema en {:?}: {error}", settings_path);
+            tracing::warn!("No se pudo leer el tema GTK en {:?}: {error}", settings_path);
             None
         }
     }
 }
 
-/// Devuelve el fondo base de Adwaita para el modo de color GTK activo en la sesión.
-pub fn system_monitor_backdrop_color() -> [f32; 3] {
+/// Indica si el esquema de color GTK activo en la sesión es oscuro (`prefer-dark`).
+pub fn is_dark_color_scheme() -> bool {
     static THEME_CACHE: OnceLock<Mutex<Option<(Instant, Option<std::time::SystemTime>, bool)>>> =
         OnceLock::new();
     let cache = THEME_CACHE.get_or_init(|| Mutex::new(None));
@@ -614,12 +586,7 @@ pub fn system_monitor_backdrop_color() -> [f32; 3] {
         *cached_theme = Some((Instant::now(), current_mtime, is_dark));
     }
 
-    let is_dark = cached_theme.as_ref().is_some_and(|(_, _, is_dark)| *is_dark);
-    if is_dark {
-        [36.0 / 255.0, 36.0 / 255.0, 36.0 / 255.0]
-    } else {
-        [250.0 / 255.0, 250.0 / 255.0, 250.0 / 255.0]
-    }
+    cached_theme.as_ref().is_some_and(|(_, _, is_dark)| *is_dark)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5376,7 +5343,7 @@ impl WlrLayerShellHandler for MalusState {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_browser_identifier, is_system_monitor_identity, parse_color_scheme};
+    use super::{is_browser_identifier, parse_color_scheme};
 
     #[test]
     fn recognizes_browser_identifiers() {
@@ -5409,15 +5376,6 @@ mod tests {
         assert!(!is_browser_identifier("knowledge"));
         assert!(!is_browser_identifier("privilege"));
         assert!(!is_browser_identifier("recuperacion"));
-    }
-
-    #[test]
-    fn recognizes_system_monitor_app_ids_and_localized_titles() {
-        assert!(is_system_monitor_identity(Some("org.gnome.SystemMonitor"), None));
-        assert!(is_system_monitor_identity(Some("gnome-system-monitor"), None));
-        assert!(is_system_monitor_identity(None, Some("Monitor del sistema")));
-        assert!(is_system_monitor_identity(None, Some("System Monitor")));
-        assert!(!is_system_monitor_identity(Some("org.gnome.Nautilus"), Some("Archivos")));
     }
 
     #[test]

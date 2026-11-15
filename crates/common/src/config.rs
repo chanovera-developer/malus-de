@@ -2128,16 +2128,16 @@ mod tests {
     }
 
     #[test]
-    fn test_gtk4_transparency_is_scoped_to_nautilus_and_menus_keep_their_background() {
+    fn test_gtk4_sidebar_is_solid_and_menus_keep_their_background() {
         let css = get_malus_gtk_css(false);
 
-        assert!(css.contains("window.view.background"));
+        assert!(!css.contains("window.view.background"));
         assert!(css.contains("window.view overlay-split-view > .sidebar-pane"));
-        assert!(css.contains("window.view .sidebar-pane *"));
+        assert!(css.contains("background-color: rgb(246, 246, 248);"));
+        assert!(!css.contains("rgba(246, 246, 248, 0.82)"));
+        assert!(!css.contains("rgba(30, 30, 34, 0.82)"));
+        assert!(!css.contains("window.view .sidebar-pane *"));
         assert!(css.contains("window.view popover > contents"));
-        assert!(css.contains(
-            "background-color: transparent;\n    border-color: transparent;\n    box-shadow: none;"
-        ));
         assert!(
             css.rfind("window.view popover > contents").unwrap()
                 > css.find("window.view popover > contents").unwrap()

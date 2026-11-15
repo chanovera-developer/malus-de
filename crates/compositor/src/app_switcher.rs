@@ -634,7 +634,6 @@ pub struct PreparedDeckCard {
     pub card_radius_phys: i32,
     pub card_alpha: f32,
     pub blur_rect_phys: Option<Rectangle<i32, Physical>>,
-    pub is_system_monitor: bool,
     pub depth_dim: f32,
     pub is_front: bool,
     pub ssd_elem: Option<MemoryRenderBufferRenderElement<GlesRenderer>>,
@@ -720,7 +719,6 @@ pub fn prepare_deck_cards(
         let mut ssd_elem = None;
         let mut scaled_elems = Vec::new();
         let mut blur_rect_phys = None;
-        let mut is_system_monitor = false;
 
         if card_alpha > 0.02 {
             if let Some((_, win, orig_total_sz, uses_ssd)) = win_entry {
@@ -731,7 +729,6 @@ pub fn prepare_deck_cards(
                 let tb_logical = if *uses_ssd { SSD_TITLEBAR_HEIGHT } else { 0 };
                 let scaled_tb_phys = ((tb_logical as f64 * k * scale).round() as i32).max(0);
 
-                is_system_monitor = crate::state::is_system_monitor_window(win);
                 if crate::state::is_translucent_window(win) {
                     blur_rect_phys = Some(if crate::state::is_branches_window(win) {
                         let sb_w = ((212.0 * k * scale).round() as i32 + card_radius_phys + 4)
@@ -807,7 +804,6 @@ pub fn prepare_deck_cards(
             card_radius_phys,
             card_alpha,
             blur_rect_phys,
-            is_system_monitor,
             depth_dim: layout.depth_dim * header_alpha,
             is_front,
             ssd_elem,
@@ -876,21 +872,6 @@ pub fn render_deck_frame(
             }
         } else {
             if let Some(ref mut b) = blur {
-                if card.is_system_monitor {
-                    let color = crate::state::system_monitor_backdrop_color();
-                    let _ = frame.with_context(|gl| {
-                        b.render_squircle_tint(
-                            gl,
-                            projection,
-                            screen_size,
-                            card.card_phys,
-                            card.card_radius_phys as f32,
-                            [color[0], color[1], color[2], card.card_alpha],
-                            0.0,
-                            [0.0; 4],
-                        );
-                    });
-                }
                 if let Some(blur_rect) = card.blur_rect_phys {
                     let _ = frame.with_context(|gl| {
                         b.render_blur_alpha(

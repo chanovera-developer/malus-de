@@ -1,7 +1,4 @@
-/* Malus DE - Paneles laterales semitransparentes estilo macOS (Sidebar / Split View) */
-window.view.background {
-    background-color: transparent;
-}
+/* Malus DE - Paneles laterales sólidos estilo macOS (Sidebar / Split View) */
 
 window.view popover,
 window.view popover.menu,
@@ -140,21 +137,6 @@ filechooser .navigation-sidebar {
     background-color: @window_bg_color;
 }
 
-/* Transparencia de los componentes internos de la barra lateral de Nautilus */
-window.view .sidebar-pane,
-window.view .sidebar-pane *,
-window.view .navigation-sidebar,
-window.view .navigation-sidebar *,
-window.view placessidebar,
-window.view placessidebar *,
-window.view .macos-sidebar,
-window.view .macos-sidebar * {
-    background: transparent;
-    background-color: transparent;
-    border-color: transparent;
-    box-shadow: none;
-}
-
 /* Preservar la visibilidad de los controles de ventana (semáforo) en el headerbar de la barra lateral de Nautilus */
 window.view .sidebar-pane windowcontrols > button,
 window.view .sidebar-pane headerbar button.titlebutton {
@@ -179,17 +161,6 @@ window.view .sidebar-pane windowcontrols > button.maximize,
 window.view .sidebar-pane headerbar button.titlebutton.maximize {
     background-color: #27c93f;
     border-color: #1aab29;
-}
-
-window.view .sidebar-pane listview > row,
-window.view .sidebar-pane list > row,
-window.view .sidebar-pane listbox > row,
-window.view .navigation-sidebar row,
-window.view .navigation-sidebar > row,
-window.view placessidebar row,
-window.view placessidebar > row {
-    background: transparent;
-    background-color: transparent;
 }
 
 window.view .sidebar-pane listview > row:hover,
