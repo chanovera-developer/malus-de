@@ -4,6 +4,35 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-16] — Renombrado (`F2`), Submenú «Crear nuevo ›», Drag & Drop al Sidebar y Marcadores en Branches
+
+### 1. Renombrado de Carpetas, Archivos e Iconos (`crates/branches`)
+* **Validación y migración de metadatos ([`operations.rs`](../crates/branches/src/operations.rs), [`db.rs`](../crates/branches/src/db.rs)):**
+  * Añadidos `validate_rename_target`, `rename_item` y `rename_selection_end` (preselecciona el nombre sin la extensión en archivos y completo en carpetas/dotfiles, rechazando nombres vacíos, `/`, `\0` o colisiones).
+  * Añadido `rename_item_metadata` en SQLite para conservar posiciones espaciales (`folder_positions`), etiquetas (`file_tags`), ajustes por carpeta/subcarpetas (`folder_settings`) y marcadores (`sidebar_bookmarks`).
+* **Popover de renombrado y atajo `F2` en las 4 vistas ([`views/mod.rs`](../crates/branches/src/views/mod.rs), [`icon_view.rs`](../crates/branches/src/views/icon_view.rs), [`list_view.rs`](../crates/branches/src/views/list_view.rs), [`column_view.rs`](../crates/branches/src/views/column_view.rs), [`gallery_view.rs`](../crates/branches/src/views/gallery_view.rs), [`folder_pane.rs`](../crates/branches/src/folder_pane.rs), [`app_window.rs`](../crates/branches/src/app_window.rs)):**
+  * Integrados `show_rename_popover` y la opción `"Renombrar…"` en `show_item_context_menu` (oculta dentro de `Trash/files`), además de `get_selected_item_and_widget`, `rename_selected` y el atajo `F2` (sin interceptar eventos cuando un `gtk4::Editable` tiene el foco).
+
+### 2. Submenú «Crear nuevo ›» (Carpeta y Documento de texto) (`crates/branches`)
+* **Creación con nombres únicos ([`operations.rs`](../crates/branches/src/operations.rs)):** Añadidos `unique_target_path`, `create_new_folder` (`Nueva carpeta`, `Nueva carpeta 2`, …) y `create_new_text_document` (`Nuevo documento.txt`, `Nuevo documento 2.txt`, …).
+* **Menú contextual en todas las vistas ([`views/mod.rs`](../crates/branches/src/views/mod.rs), [`icon_view.rs`](../crates/branches/src/views/icon_view.rs), [`list_view.rs`](../crates/branches/src/views/list_view.rs), [`column_view.rs`](../crates/branches/src/views/column_view.rs), [`gallery_view.rs`](../crates/branches/src/views/gallery_view.rs), [`folder_pane.rs`](../crates/branches/src/folder_pane.rs)):**
+  * Añadidos `can_create_in_folder`, `append_create_new_submenu` (con `gtk4::Stack` deslizable hacia `← Volver`, `Carpeta` y `Documento de texto`) y `show_background_create_menu`. En vista de iconos posiciona el elemento creado en el punto del clic derecho cuando el modo es `SnapToGrid` o `Freeform` y lo deja seleccionado.
+
+### 3. Drag & Drop al Sidebar y Marcadores Persistentes (`crates/branches`)
+* **Arrastrar hacia carpetas, Papelera y etiquetas ([`operations.rs`](../crates/branches/src/operations.rs), [`sidebar.rs`](../crates/branches/src/sidebar.rs), [`macos-branches.css`](../crates/branches/src/styles/macos-branches.css)):**
+  * Añadidos `move_paths_into_folder` y `drop_files_into_folder` (protegiendo contra mover sobre el mismo padre o dentro de subcarpetas propias y usando `trash_item` en **Papelera**), junto con `attach_folder_drop_target` y `attach_tag_drop_target`.
+  * En [`macos-branches.css`](../crates/branches/src/styles/macos-branches.css), `.branches-sidebar-row.folder-drop-hover` usa `border: none; transform: none; box-shadow: inset 0 0 0 1.5px @accent_bg_color;` para resaltar la carpeta destino sin agrandar la fila y suprimiendo `:drop(active)` en el contenedor del sidebar.
+* **Marcadores de carpetas y archivos con renombrado propio ([`db.rs`](../crates/branches/src/db.rs), [`sidebar.rs`](../crates/branches/src/sidebar.rs), [`views/mod.rs`](../crates/branches/src/views/mod.rs)):**
+  * Tabla `sidebar_bookmarks` en SQLite con `get_bookmarks`, `is_bookmark`, `add_bookmark`, `remove_bookmark` y `rename_bookmark` (cambia el título del marcador sin renombrar la carpeta/archivo en disco).
+  * Zona vacía dedicada `empty_drop_zone` debajo de `list_box` (`vexpand(false)`) para crear marcadores arrastrando carpetas o archivos a una zona vacía sin iluminar la sección al pasar sobre carpetas; la cabecera **Marcadores** solo se muestra cuando existe al menos un marcador (`!bookmarks.is_empty()`), e incluye menú contextual (**Abrir**, **Renombrar marcador…**, **Quitar de marcadores**).
+
+### 4. Validación
+* `cargo check --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --workspace`: compilación sin errores ni warnings en `malus-de-branches` (`exit 0`).
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-branches`:
+  * `malus-de-branches`: **21 passed; 0 failed** (`rename_selection_end_keeps_extension_unselected_for_files`, `validate_and_rename_item_handles_folders_and_conflicts`, `rename_item_metadata_preserves_positions_and_subfolder_settings`, `create_new_folder_and_text_document_generate_unique_names`, `move_paths_into_folder_moves_files_and_guards_descendants`, `bookmarks_crud_and_rename_preserve_order`).
+
+---
+
 ## [2026-11-16] — Nueva Ventana de Branches en el Menú del Dock y Semáforo de Antigravity en Primera Apertura
 
 ### 1. Opción «Abrir nueva ventana» para Branches en el Dock (`crates/branches`, `crates/dock`)
