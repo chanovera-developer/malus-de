@@ -113,6 +113,42 @@ def get_free_port():
         s.bind(('127.0.0.1', 0))
         return s.getsockname()[1]
 
+def recv_exact(sock, n):
+    buf = bytearray()
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            return None
+        buf.extend(chunk)
+    return bytes(buf)
+
+def read_ws_text_frame(sock):
+    header = recv_exact(sock, 2)
+    if not header:
+        return None
+    length = header[1] & 0x7F
+    if length == 126:
+        ext = recv_exact(sock, 2)
+        if not ext:
+            return None
+        length = int.from_bytes(ext, 'big')
+    elif length == 127:
+        ext = recv_exact(sock, 8)
+        if not ext:
+            return None
+        length = int.from_bytes(ext, 'big')
+    if header[1] & 0x80:
+        mask = recv_exact(sock, 4)
+        payload = recv_exact(sock, length)
+        if not mask or payload is None:
+            return None
+        payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+    else:
+        payload = recv_exact(sock, length)
+        if payload is None:
+            return None
+    return payload.decode('utf-8', errors='replace')
+
 def send_cdp_eval(ws_url, expr):
     try:
         u = urllib.parse.urlparse(ws_url)
@@ -154,12 +190,22 @@ def send_cdp_eval(ws_url, expr):
         s.sendall(header + mask + masked)
 
         s.settimeout(2)
+        ready = False
         try:
-            s.recv(4096)
+            reply_raw = read_ws_text_frame(s)
+            if reply_raw:
+                reply = json.loads(reply_raw)
+                res_obj = reply.get("result", {})
+                if (
+                    "error" not in reply
+                    and "exceptionDetails" not in res_obj
+                    and res_obj.get("result", {}).get("value") is True
+                ):
+                    ready = True
         except Exception:
             pass
         s.close()
-        return True
+        return ready
     except Exception:
         return False
 
@@ -171,22 +217,26 @@ INJECTION_SCRIPT = """
         if (left && controls) {
             if (controls.parentElement !== left || left.firstElementChild !== controls) {
                 left.prepend(controls);
-                return true;
             }
+            return true;
         }
         return false;
     }
 
     function ensureStyle() {
+        const host = document.head || document.documentElement;
+        if (!host) {
+            return false;
+        }
         let style = document.getElementById('malus-left-controls-style');
-        if (style && style.parentElement === document.head && document.head.lastElementChild !== style) {
-            document.head.appendChild(style);
+        if (style && style.parentElement === host && host.lastElementChild !== style) {
+            host.appendChild(style);
         }
         if (!style || style.dataset.malusVersion !== 'ssd-v2') {
             if (!style) {
                 style = document.createElement('style');
                 style.id = 'malus-left-controls-style';
-                document.head.appendChild(style);
+                host.appendChild(style);
             }
             style.dataset.malusVersion = 'ssd-v2';
             style.textContent = `
@@ -396,52 +446,70 @@ INJECTION_SCRIPT = """
                 }
             `;
         }
+        return true;
     }
 
-    ensureStyle();
-    relocate();
+    const styled = ensureStyle();
+    const placed = relocate();
 
     if (!window._malusControlsInstalled) {
         window._malusControlsInstalled = true;
 
-        // Reubicar durante el arranque inicial y detener el temporizador inmediatamente al tener éxito
-        let attempts = 0;
-        const initInterval = setInterval(() => {
-            ensureStyle();
-            if (relocate() || ++attempts > 20) {
-                clearInterval(initInterval);
-            }
-        }, 100);
+        let observedTitlebar = null;
+        let titlebarObserver = null;
 
-        // Observar ÚNICAMENTE el contenedor de la barra de título sin subtree profundo,
-        // garantizando 0% de sobrecarga en el editor Monaco, terminal o chat de IA.
         const attachObserver = () => {
-            const titlebar = document.querySelector('.part.titlebar') || document.querySelector('.titlebar-left');
-            if (titlebar) {
-                const observer = new MutationObserver(() => {
+            const titlebar = document.querySelector('.part.titlebar');
+            if (!titlebar) {
+                return false;
+            }
+            if (observedTitlebar !== titlebar) {
+                if (titlebarObserver) {
+                    titlebarObserver.disconnect();
+                }
+                observedTitlebar = titlebar;
+                titlebarObserver = new MutationObserver(() => {
                     ensureStyle();
                     relocate();
                 });
-                observer.observe(titlebar, { childList: true, subtree: false });
-                return true;
+                // Observar la barra de título completa (incluyendo .titlebar-left/.titlebar-right),
+                // manteniendo fuera editor Monaco, terminal y panel de chat IA.
+                titlebarObserver.observe(titlebar, { childList: true, subtree: true });
             }
-            return false;
+            ensureStyle();
+            return relocate();
         };
 
-        if (!attachObserver()) {
-            const domReadyInterval = setInterval(() => {
-                if (attachObserver()) {
-                    clearInterval(domReadyInterval);
-                }
-            }, 300);
-        }
+        // Durante el arranque en frío de la sesión puede tardar varios segundos en montar el workbench.
+        let attempts = 0;
+        const initInterval = setInterval(() => {
+            const ok = attachObserver();
+            if ((ok && observedTitlebar) || ++attempts > 300) {
+                clearInterval(initInterval);
+            }
+        }, 200);
+
+        // Salvaguarda periódica ligera por si la barra de título se reemplaza tras iniciar sesión.
+        setInterval(() => {
+            if (!observedTitlebar || !observedTitlebar.isConnected) {
+                attachObserver();
+            } else {
+                ensureStyle();
+                relocate();
+            }
+        }, 1500);
     }
+
+    return Boolean(styled && placed);
 })()
 """
 
+REINJECT_INTERVAL = 3.0  # segundos; el script inyectado es idempotente
+
 def watcher(port, stop_event, state):
-    # tid -> url del workbench. Se inyecta una sola vez por carga/recarga de ventana,
-    # eliminando por completo la reevaluación continua en bucle por WebSocket CDP.
+    # tid -> timestamp de la última confirmación exitosa. Reintenta rápido (0.5s)
+    # durante el arranque en frío hasta confirmar montaje, y luego verifica cada
+    # 3s para sobrevivir a "Reload Window" o recreaciones de DOM manteniendo el tid.
     injected_targets = {}
     url = f"http://127.0.0.1:{port}/json"
 
@@ -451,19 +519,21 @@ def watcher(port, stop_event, state):
                 targets = json.loads(resp.read().decode('utf-8'))
                 state["last_alive"] = time.time()
                 state["ever_alive"] = True
+                now = time.time()
                 for t in targets:
                     tid = t.get("id")
                     t_url = t.get("url", "")
                     if t.get("type") != "page" or "workbench" not in t_url:
                         continue
-                    if injected_targets.get(tid) == t_url:
+                    last_ok = injected_targets.get(tid, 0.0)
+                    if last_ok > 0.0 and (now - last_ok) < REINJECT_INTERVAL:
                         continue
                     ws_url = t.get("webSocketDebuggerUrl")
                     if ws_url and send_cdp_eval(ws_url, INJECTION_SCRIPT):
-                        injected_targets[tid] = t_url
+                        injected_targets[tid] = now
         except Exception:
             pass
-        time.sleep(1.5)
+        time.sleep(0.5)
 
 def main():
     target_cmd = find_target_command(sys.argv[0], sys.argv[1:])
