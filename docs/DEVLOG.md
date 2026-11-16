@@ -4,6 +4,36 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-15] — Aplicaciones de Spotlight en Branches con Iconos Propios y Arrastre al Dock
+
+### 1. Indexador `.desktop` Compartido y Resolución de Iconos (`crates/common/src/apps.rs`, `lib.rs`)
+* **Módulo [`apps.rs`](../crates/common/src/apps.rs):**
+  * [`index_applications`](../crates/common/src/apps.rs) y [`application_dirs_from`](../crates/common/src/apps.rs) indexan lanzadores visibles (`NoDisplay=false`, `Hidden=false`, `Type=Application`) en `$XDG_DATA_HOME/applications`, exports Flatpak de usuario/sistema y `$XDG_DATA_DIRS/*/applications`, resolviendo `Name`/`Comment` localizados y limpiando `%u`/`%F` en `Exec`.
+  * [`resolve_icon_file_path`](../crates/common/src/apps.rs) y [`extra_icon_search_paths`](../crates/common/src/apps.rs) localizan iconos `.svg`/`.png` en rutas absolutas, `~/`, temas `hicolor`/`Adwaita`, exports Flatpak y `pixmaps`, evitando caer al icono genérico cuando la caché del tema aislado no incluye apps instaladas.
+  * [`desktop_file_to_dock_app`](../crates/common/src/apps.rs) convierte archivos `.desktop` en `DockAppConfig` con `matchers` listos para el Dock.
+
+### 2. Sección Aplicaciones, Lanzamiento Directo y Drag & Drop en Branches (`crates/branches`)
+* **Vista virtual Aplicaciones ([`sidebar.rs`](../crates/branches/src/sidebar.rs), [`folder_pane.rs`](../crates/branches/src/folder_pane.rs), [`app_window.rs`](../crates/branches/src/app_window.rs), [`fs_backend.rs`](../crates/branches/src/fs_backend.rs)):**
+  * **Aplicaciones** en Favoritos abre `VirtualFolder::Applications` (`show_applications()`), mostrando las aplicaciones indexadas con nombres legibles, iconos propios (`resolve_desktop_gicon` -> `gio::FileIcon` para iconos en disco y `resolve_kind_and_icon` para `.desktop` en carpetas ordinarias) y filtrado desde el campo de búsqueda.
+  * `open_file()` detecta archivos `.desktop` y lanza directamente la aplicación con `apply_isolated_environment` al hacer doble clic; [`main.rs`](../crates/branches/src/main.rs) registra las rutas de iconos adicionales en `gtk4::IconTheme::for_display`.
+* **Interoperabilidad Wayland DnD ([`views/mod.rs`](../crates/branches/src/views/mod.rs), `icon_view.rs`, `list_view.rs`, `column_view.rs`):**
+  * Unificado `build_file_drag_content_provider()` combinando `GdkFileList` y `text/uri-list` explícito (`gdk::ContentProvider::new_union`), habilitando arrastre desde Vista de Iconos, Lista y Columnas.
+
+### 3. Recepción Drag & Drop en el Dock (`crates/dock`)
+* **Anclaje por arrastre ([`dock/src/main.rs`](../crates/dock/src/main.rs)):**
+  * [`attach_dock_drop_target`](../crates/dock/src/main.rs) registra un `gtk4::DropTarget` en fase `Capture` sobre `dock_root` que reutiliza `update_dock_drop_placeholder()` para abrir el hueco animado al pasar un `.desktop` y lo ancla en la posición del puntero mediante `DockConfig::pin_app_at()` + `save()`.
+* **Limpieza visual de `:drop(active)` ([`dock.css`](../crates/dock/src/styles/dock.css)):**
+  * Se añadieron reglas para `window.malus-dock-window:drop(active)`, `.dock-root:drop(active)` y `.dock-items:drop(active)` con `border: none; outline: none; box-shadow: none;`, eliminando la línea superior que dibujaba Libadwaita/GTK4 durante el hover de arrastre.
+
+### 4. Validación
+* `cargo check --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --workspace`: compilación completa sin errores (`exit 0`).
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-common -p malus-de-branches -p malus-de-dock`:
+  * `malus-de-common`: **46 passed; 0 failed** (incluyendo `apps::tests::application_dirs_include_xdg_and_flatpak_exports`, `parse_desktop_file_respects_nodisplay_and_builds_dock_app` y `resolve_icon_file_path_finds_hicolor_flatpak_and_pixmap_icons`).
+  * `malus-de-branches`: **5 passed; 0 failed** (incluyendo `fs_backend::tests::test_desktop_file_resolves_app_gicon`).
+  * `malus-de-dock`: **12 passed; 0 failed** (incluyendo `pin_desktop_apps_from_branches_drop_inserts_into_dock_config` y `dock_css_suppresses_gtk_drop_active_outline_and_border`).
+
+---
+
 ## [2026-11-15] — Rediseño Finder en Branches, Corrección de Panic en Historial y Fondo Sólido en Ventana de Errores
 
 ### 1. Interfaz de Branches Inspirada en macOS Finder (`crates/branches/src/{app_window.rs,folder_pane.rs,fs_backend.rs,main.rs,sidebar.rs,styles/macos-branches.css}`)
