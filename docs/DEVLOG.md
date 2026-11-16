@@ -4,6 +4,22 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-16] — Alineación Concéntrica de Glifos en los Semáforos CSD
+
+### 1. Centrado Exacto de Glifos en GTK4, GTK3, Firefox y Electron (`crates/common`, `assets`, `scripts`)
+* **Caja de imagen `12 × 12 px` concéntrica con el botón CSD ([`windowcontrols-common.css`](../crates/common/src/styles/windowcontrols-common.css), [`gtk3.css`](../crates/common/src/styles/gtk3.css)):**
+  * En GTK4/GTK3, el contenido del `button` CSD mide `12.00 × 12.00 px` (centro en `(6.0, 6.0)`), mientras que `button > image` tenía `11 × 11 px` (`(5.5, 5.5)`), desplazando los glifos hacia arriba y a la izquierda junto con `viewBox='1 1 11 11'`.
+  * Ajustado `button > image` a `min-width: 12px; min-height: 12px; background-size: 12px 12px;` y actualizados los 3 SVG inline a `width='12' height='12' viewBox='0 0 12 12'` con trazos centrados en `(6.0, 6.0)`.
+* **Normalización de `viewBox` e iconos simbólicos ([`firefox-userchrome.css`](../crates/common/src/styles/firefox-userchrome.css), [`electron-window-controls.css`](../assets/themes/electron-window-controls.css), [`malus-ide-wrapper`](../scripts/malus-ide-wrapper), `assets/icons/*/actions/symbolic/window-*.svg`):**
+  * Normalizados los SVG de `11 × 11 px` en Firefox y Electron a `viewBox='0 0 11 11'` (centro en `(5.5, 5.5)`) y reemplazados los `fill` fijos (`#363636` / `#dedede`) por `fill="currentColor"` en `window-*.svg` para que `color: transparent` oculte por completo el icono interno de `GtkImage`.
+
+### 2. Validación
+* Medición en vivo sobre `gtk4-broadwayd` (`Gtk.WidgetPaintable` + `GskRenderer`): `btn = (-0.75, -0.75, 13.50 × 13.50)` e `img = (0.00, 0.00, 12.00 × 12.00)` con centro exacto en `(6.00, 6.00)`.
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-common`: **50 passed; 0 failed**.
+* `cargo check --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --workspace`: compilación sin errores (`exit 0`).
+
+---
+
 ## [2026-11-16] — Renombrado (`F2`), Submenú «Crear nuevo ›», Drag & Drop al Sidebar y Marcadores en Branches
 
 ### 1. Renombrado de Carpetas, Archivos e Iconos (`crates/branches`)
