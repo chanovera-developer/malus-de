@@ -696,6 +696,8 @@ impl BranchesWindow {
 
         let folder_name = if path == &PathBuf::from("/") {
             "Macintosh HD".to_string()
+        } else if path.ends_with("Trash/files") {
+            "Papelera".to_string()
         } else {
             path.file_name()
                 .map(|n| n.to_string_lossy().to_string())

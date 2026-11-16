@@ -334,6 +334,9 @@ fn resolve_kind_and_icon(path: &Path, is_dir: bool, name: &str) -> (String, gio:
             "music" | "música" => "folder-music",
             "pictures" | "imágenes" => "folder-pictures",
             "videos" | "vídeos" => "folder-videos",
+            "public" | "público" | "publico" => "folder-publicshare",
+            "projects" | "proyectos" => "folder-projects",
+            "templates" | "plantillas" => "folder-templates",
             "trash" | "papelera" => "user-trash",
             _ => "folder",
         };
@@ -386,7 +389,7 @@ fn resolve_kind_and_icon(path: &Path, is_dir: bool, name: &str) -> (String, gio:
     (desc.to_string(), icon.upcast())
 }
 
-fn percent_decode_file_uri(uri: &str) -> Option<PathBuf> {
+pub(crate) fn percent_decode_file_uri(uri: &str) -> Option<PathBuf> {
     let raw = uri.strip_prefix("file://")?;
     let bytes = raw.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -483,9 +486,9 @@ pub fn load_recent_files(home: &Path, search_dirs: &[PathBuf], limit: usize) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{load_recent_files, percent_decode_file_uri, FileItem};
+    use super::{load_recent_files, percent_decode_file_uri, resolve_kind_and_icon, FileItem};
     use gio::prelude::{Cast, FileExt};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn test_percent_decode_file_uri_and_load_recent_files() {
@@ -538,5 +541,152 @@ mod tests {
         assert_eq!(file_icon.file().path(), Some(icon_file));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_special_folder_themed_icons() {
+        let cases = [
+            ("Público", "folder-publicshare"),
+            ("Publico", "folder-publicshare"),
+            ("Public", "folder-publicshare"),
+            ("Proyectos", "folder-projects"),
+            ("Projects", "folder-projects"),
+            ("Plantillas", "folder-templates"),
+            ("Templates", "folder-templates"),
+            ("Escritorio", "user-desktop"),
+            ("Desktop", "user-desktop"),
+        ];
+
+        for (name, expected_icon) in cases {
+            let (kind, gicon) = resolve_kind_and_icon(Path::new(name), true, name);
+            assert_eq!(kind, "Carpeta");
+            let themed = gicon
+                .downcast_ref::<gio::ThemedIcon>()
+                .expect("las carpetas deben resolver a ThemedIcon");
+            assert_eq!(themed.names().first().map(|s| s.as_str()), Some(expected_icon));
+        }
+    }
+
+    #[test]
+    fn test_malus_icon_theme_resolves_color_folders_and_documents_not_symbolic() {
+        let icons_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/icons");
+        assert!(icons_root.is_dir(), "assets/icons debe existir");
+
+        let folder_icons = [
+            "folder",
+            "folder-documents",
+            "folder-projects",
+            "folder-publicshare",
+            "folder-templates",
+            "user-desktop",
+        ];
+
+        for theme_name in ["Malus-Dark", "Malus"] {
+            let theme_dir = icons_root.join(theme_name);
+            let index_content = std::fs::read_to_string(theme_dir.join("index.theme"))
+                .expect("index.theme debe existir");
+            assert!(
+                !index_content.contains("places/16"),
+                "{theme_name} no debe incluir places/16 monocromo sobre places/scalable"
+            );
+
+            for folder_icon in folder_icons {
+                let p = theme_dir.join("places/scalable").join(format!("{folder_icon}.svg"));
+                assert!(p.is_file(), "{theme_name} debe resolver {} en places/scalable", p.display());
+            }
+            for doc_icon in ["text-plain", "text-x-generic", "application-pdf"] {
+                let p = theme_dir.join("mimetypes/scalable").join(format!("{doc_icon}.svg"));
+                assert!(p.is_file(), "{theme_name} debe resolver {} en mimetypes/scalable", p.display());
+            }
+            for sym_rel in [
+                "places/symbolic/folder-documents-symbolic.svg",
+                "actions/symbolic/go-previous-symbolic.svg",
+                "status/symbolic/control-center-symbolic.svg",
+            ] {
+                let p = theme_dir.join(sym_rel);
+                assert!(p.is_file(), "{theme_name} debe incluir {}", p.display());
+            }
+        }
+
+        if gtk4::init().is_err() {
+            return;
+        }
+
+        for theme_name in ["Malus-Dark", "Malus"] {
+            let theme = gtk4::IconTheme::new();
+            theme.set_search_path(&[&icons_root]);
+            theme.set_theme_name(Some(theme_name));
+
+            for folder_icon in folder_icons {
+                let gicon = gio::ThemedIcon::new(folder_icon);
+                for size in [20, 64] {
+                    let paintable = theme.lookup_by_gicon(
+                        &gicon,
+                        size,
+                        1,
+                        gtk4::TextDirection::Ltr,
+                        gtk4::IconLookupFlags::empty(),
+                    );
+                    assert!(
+                        !paintable.is_symbolic(),
+                        "{theme_name} {folder_icon} ({size}px) no debe resolverse como simbólico"
+                    );
+                    let path = paintable
+                        .file()
+                        .and_then(|f| f.path())
+                        .expect("debe resolver a archivo SVG");
+                    let path_str = path.to_string_lossy();
+                    assert!(
+                        path_str.contains("/places/scalable/"),
+                        "{theme_name} {folder_icon} ({size}px) resolvió a ruta inesperada: {path_str}"
+                    );
+                }
+            }
+
+            for mime in ["text/plain", "application/pdf"] {
+                let gicon = gio::content_type_get_icon(mime);
+                let paintable = theme.lookup_by_gicon(
+                    &gicon,
+                    64,
+                    1,
+                    gtk4::TextDirection::Ltr,
+                    gtk4::IconLookupFlags::empty(),
+                );
+                assert!(
+                    !paintable.is_symbolic(),
+                    "{theme_name} {mime} no debe resolverse como simbólico"
+                );
+                let path = paintable
+                    .file()
+                    .and_then(|f| f.path())
+                    .expect("debe resolver a archivo SVG");
+                let path_str = path.to_string_lossy();
+                assert!(
+                    (path_str.contains("/mimetypes/scalable/")
+                        || path_str.contains("/apps/scalable/"))
+                        && !path_str.contains("/symbolic"),
+                    "{theme_name} {mime} resolvió a ruta inesperada: {path_str}"
+                );
+            }
+
+            for sym_icon in [
+                "folder-documents-symbolic",
+                "go-previous-symbolic",
+                "control-center-symbolic",
+            ] {
+                let gicon = gio::ThemedIcon::new(sym_icon);
+                let paintable = theme.lookup_by_gicon(
+                    &gicon,
+                    16,
+                    1,
+                    gtk4::TextDirection::Ltr,
+                    gtk4::IconLookupFlags::empty(),
+                );
+                assert!(
+                    paintable.is_symbolic(),
+                    "{theme_name} {sym_icon} sí debe ser simbólico"
+                );
+            }
+        }
     }
 }

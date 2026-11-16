@@ -9,5 +9,5 @@ Type=Application
 StartupNotify=true
 StartupWMClass=dev.malus.Branches
 Categories=System;FileTools;FileManager;GTK;
-MimeType=inode/directory;
+MimeType=inode/directory;x-scheme-handler/trash;
 Keywords=Archivos;Carpetas;Explorador;Files;FileManager;Finder;Branches;

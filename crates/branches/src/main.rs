@@ -13,13 +13,14 @@ mod views;
 use app_window::BranchesWindow;
 use clap::Parser;
 use gtk4::gdk::Display;
+use gtk4::gio;
 use gtk4::prelude::*;
 use gtk4::{Application, CssProvider};
 use malus_de_common::logging::init_logging;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use quick_look::QuickLook;
-use fs_backend::FileItem;
+use fs_backend::{percent_decode_file_uri, FileItem};
 
 const APP_ID: &str = "dev.malus.Branches";
 
@@ -31,9 +32,43 @@ struct Args {
     #[arg(short = 'q', long = "quick-look", value_name = "ARCHIVO")]
     quick_look: Option<PathBuf>,
 
-    /// Ruta del directorio inicial a abrir (por defecto: $HOME)
+    /// Ruta o URI inicial a abrir (ej: /ruta, file:///..., trash:///, por defecto: $HOME)
     #[arg(value_name = "RUTA")]
-    path: Option<PathBuf>,
+    path: Option<String>,
+}
+
+fn trash_files_dir(home: &Path, xdg_data_home: Option<&Path>) -> PathBuf {
+    let data_home = xdg_data_home
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| home.join(".local/share"));
+    data_home.join("Trash/files")
+}
+
+fn is_trash_uri(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    trimmed.eq_ignore_ascii_case("trash://")
+        || trimmed.eq_ignore_ascii_case("trash:///")
+        || trimmed.to_ascii_lowercase().starts_with("trash:///")
+}
+
+fn resolve_cli_target_path(raw: &str, home: &Path, xdg_data_home: Option<&Path>) -> PathBuf {
+    let trimmed = raw.trim();
+    if is_trash_uri(trimmed) {
+        return trash_files_dir(home, xdg_data_home);
+    }
+    if trimmed.starts_with("file://") {
+        if let Some(decoded) = percent_decode_file_uri(trimmed) {
+            return decoded;
+        }
+    }
+    if trimmed == "~" {
+        return home.to_path_buf();
+    }
+    if let Some(rest) = trimmed.strip_prefix("~/") {
+        return home.join(rest);
+    }
+    PathBuf::from(trimmed)
 }
 
 fn main() {
@@ -66,27 +101,58 @@ fn main() {
         return;
     }
 
-    let initial_path = args.path.unwrap_or_else(|| {
-        std::env::var("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/"))
+    let home = std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/"));
+    let xdg_data_home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from);
+    let requested_arg = args.path.as_deref().map(|raw| {
+        let resolved = resolve_cli_target_path(raw, &home, xdg_data_home.as_deref());
+        if is_trash_uri(raw) {
+            let _ = std::fs::create_dir_all(&resolved);
+        }
+        resolved
     });
 
     let app = Application::builder()
         .application_id(APP_ID)
+        .flags(gio::ApplicationFlags::HANDLES_OPEN)
         .build();
 
-    let init_path_clone = initial_path.clone();
+    let default_home = home.clone();
     app.connect_startup(|_| {
         load_custom_css();
     });
 
     app.connect_activate(move |app| {
-        let window = BranchesWindow::new(app, init_path_clone.clone());
+        let window = BranchesWindow::new(app, default_home.clone());
         window.present();
     });
 
-    app.run_with_args::<&str>(&[]);
+    let open_home = home;
+    let open_data_home = xdg_data_home;
+    app.connect_open(move |app, files, _hint| {
+        for file in files {
+            let uri = file.uri();
+            let resolved = if is_trash_uri(uri.as_str()) {
+                let trash = trash_files_dir(&open_home, open_data_home.as_deref());
+                let _ = std::fs::create_dir_all(&trash);
+                trash
+            } else if let Some(path) = file.path() {
+                path
+            } else {
+                resolve_cli_target_path(uri.as_str(), &open_home, open_data_home.as_deref())
+            };
+            let window = BranchesWindow::new(app, resolved);
+            window.present();
+        }
+    });
+
+    if let Some(target_path) = requested_arg {
+        let arg_str = target_path.to_string_lossy().to_string();
+        app.run_with_args(&["malus-de-branches", arg_str.as_str()]);
+    } else {
+        app.run_with_args::<&str>(&[]);
+    }
 }
 
 fn load_custom_css() {
@@ -177,6 +243,32 @@ mod tests {
             .expect("Debe existir button.branches-nav-btn");
         assert!(nav_btn_block.contains("min-height: 26px;"));
         assert!(nav_btn_block.contains("min-width: 26px;"));
-        assert!(nav_btn_block.contains("padding: 0;"));
+        assert_eq!(nav_btn_block.contains("padding: 0;"), true);
+    }
+
+    #[test]
+    fn test_resolve_cli_target_path_handles_trash_file_uri_and_tilde() {
+        use super::resolve_cli_target_path;
+        use std::path::{Path, PathBuf};
+
+        let home = Path::new("/home/cristian");
+        let custom_data = Path::new("/tmp/xdg-data");
+
+        assert_eq!(
+            resolve_cli_target_path("trash://", home, None),
+            PathBuf::from("/home/cristian/.local/share/Trash/files")
+        );
+        assert_eq!(
+            resolve_cli_target_path("trash:///", home, Some(custom_data)),
+            PathBuf::from("/tmp/xdg-data/Trash/files")
+        );
+        assert_eq!(
+            resolve_cli_target_path("file:///home/cristian/Mi%20Carpeta", home, None),
+            PathBuf::from("/home/cristian/Mi Carpeta")
+        );
+        assert_eq!(
+            resolve_cli_target_path("~/Descargas", home, None),
+            PathBuf::from("/home/cristian/Descargas")
+        );
     }
 }

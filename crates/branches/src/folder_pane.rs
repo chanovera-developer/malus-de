@@ -292,6 +292,8 @@ impl FolderPane {
 
         let folder_name = if current_path == PathBuf::from("/") {
             "Macintosh HD".to_string()
+        } else if current_path.ends_with("Trash/files") {
+            "Papelera".to_string()
         } else {
             current_path
                 .file_name()

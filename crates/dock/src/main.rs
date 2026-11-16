@@ -3067,7 +3067,7 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
     btn.set_child(Some(&trash_overlay));
 
     btn.connect_clicked(|_| {
-        spawn_dock_app("Archivos", "nautilus", &["trash://"]);
+        spawn_dock_app("Branches", "malus-de-branches", &["trash:///"]);
     });
 
     // Menú Popover de Clic Derecho para la Papelera
@@ -3095,13 +3095,13 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
     menu_box.append(&sep);
 
     let btn_open = Button::builder()
-        .label("Abrir en Archivos")
+        .label("Abrir en Branches")
         .css_classes(["popover-menu-item"])
         .build();
     let p_open = popover.clone();
     btn_open.connect_clicked(move |_| {
         p_open.popdown();
-        spawn_dock_app("Archivos", "nautilus", &["trash://"]);
+        spawn_dock_app("Branches", "malus-de-branches", &["trash:///"]);
     });
 
     let btn_empty = Button::builder()
