@@ -195,6 +195,19 @@ impl FolderPane {
         self.view_stack.set_visible_child_name(mode_name);
     }
 
+    /// Aplica cambios de configuración de Branches en vivo (tamaño de carpetas/iconos y espaciado).
+    pub fn apply_branches_config(&self, cfg: &malus_de_common::config::BranchesConfig) {
+        let icon_size = cfg.clamped_icon_size();
+        let grid_spacing = cfg.clamped_grid_spacing();
+        {
+            let mut s = self.state.borrow_mut();
+            s.icon_size = icon_size;
+            s.grid_spacing = grid_spacing;
+        }
+        self.icon_view.set_layout_preferences(icon_size, grid_spacing);
+        self.list_view.set_icon_size(cfg.clamped_list_icon_size());
+    }
+
     pub fn navigate_to(&self, target: PathBuf) {
         if !target.exists() {
             let _ = std::fs::create_dir_all(&target);

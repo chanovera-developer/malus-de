@@ -36,6 +36,7 @@ pub struct BranchesWindow {
     btn_gallery_view: ToggleButton,
     quick_look: Rc<QuickLook>,
     search_toggle_btn: ToggleButton,
+    _config_monitor: Option<gio::FileMonitor>,
 }
 
 impl BranchesWindow {
@@ -499,6 +500,11 @@ impl BranchesWindow {
 
         window.set_child(Some(&hpaned));
 
+        let config_file = gio::File::for_path(malus_de_common::config::BranchesConfig::config_path());
+        let config_monitor = config_file
+            .monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
+            .ok();
+
         let branches_window = Rc::new(Self {
             window,
             sidebar,
@@ -519,9 +525,20 @@ impl BranchesWindow {
             btn_gallery_view,
             quick_look,
             search_toggle_btn,
+            _config_monitor: config_monitor.clone(),
         });
 
         *win_weak_holder.borrow_mut() = Some(branches_window.clone());
+
+        if let Some(ref monitor) = config_monitor {
+            let bw_cfg = Rc::downgrade(&branches_window);
+            monitor.connect_changed(move |_, _, _, _| {
+                if let Some(bw) = bw_cfg.upgrade() {
+                    let cfg = malus_de_common::config::BranchesConfig::load();
+                    bw.apply_branches_config(&cfg);
+                }
+            });
+        }
 
         // Conectar botones de navegación
         let bw_back = branches_window.clone();
@@ -597,6 +614,11 @@ impl BranchesWindow {
 
     pub fn present(&self) {
         self.window.present();
+    }
+
+    pub fn apply_branches_config(&self, cfg: &malus_de_common::config::BranchesConfig) {
+        self.primary_pane.apply_branches_config(cfg);
+        self.secondary_pane.apply_branches_config(cfg);
     }
 
     pub fn active_pane(&self) -> Rc<FolderPane> {
@@ -933,6 +955,7 @@ impl BranchesWindow {
             btn_gallery_view: self.btn_gallery_view.clone(),
             quick_look: self.quick_look.clone(),
             search_toggle_btn: self.search_toggle_btn.clone(),
+            _config_monitor: self._config_monitor.clone(),
         })
     }
 }

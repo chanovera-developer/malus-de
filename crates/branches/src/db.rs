@@ -54,7 +54,8 @@ pub fn open_db() -> Result<Connection, rusqlite::Error> {
         );
         CREATE TABLE IF NOT EXISTS folder_settings (
             folder_path TEXT PRIMARY KEY,
-            layout_mode TEXT NOT NULL DEFAULT 'auto'
+            layout_mode TEXT NOT NULL DEFAULT 'auto',
+            icon_size INTEGER
         );
         CREATE TABLE IF NOT EXISTS file_tags (
             file_path TEXT NOT NULL,
@@ -63,6 +64,9 @@ pub fn open_db() -> Result<Connection, rusqlite::Error> {
             PRIMARY KEY (file_path, tag_name)
         );",
     )?;
+
+    // Migración no destructiva para bases existentes sin columna icon_size
+    let _ = conn.execute("ALTER TABLE folder_settings ADD COLUMN icon_size INTEGER", []);
 
     Ok(conn)
 }
@@ -168,6 +172,34 @@ pub fn set_layout_mode(conn: &Connection, folder: &Path, mode: LayoutMode) -> Re
     Ok(())
 }
 
+/// Obtiene un tamaño de icono personalizado por carpeta (si el usuario lo sobrescribió respecto a `BranchesConfig`).
+pub fn get_folder_icon_size(conn: &Connection, folder: &Path) -> Option<i32> {
+    let folder_str = folder.to_string_lossy();
+    let mut stmt = conn
+        .prepare("SELECT icon_size FROM folder_settings WHERE folder_path = ?1")
+        .ok()?;
+    stmt.query_row(params![folder_str], |row| row.get::<_, Option<i32>>(0))
+        .ok()
+        .flatten()
+}
+
+/// Guarda o limpia (`None`) el tamaño de icono personalizado por carpeta en `folder_settings`.
+#[allow(dead_code)]
+pub fn set_folder_icon_size(
+    conn: &Connection,
+    folder: &Path,
+    icon_size: Option<i32>,
+) -> Result<(), rusqlite::Error> {
+    let folder_str = folder.to_string_lossy();
+    conn.execute(
+        "INSERT INTO folder_settings (folder_path, icon_size)
+         VALUES (?1, ?2)
+         ON CONFLICT(folder_path) DO UPDATE SET icon_size = excluded.icon_size",
+        params![folder_str, icon_size],
+    )?;
+    Ok(())
+}
+
 pub fn set_file_tag(
     conn: &Connection,
     file_path: &Path,
@@ -221,5 +253,31 @@ pub fn get_files_by_tag(conn: &Connection, tag_name: &str) -> Vec<PathBuf> {
         Ok(PathBuf::from(p))
     });
     rows.map(|iter| iter.flatten().collect()).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{get_folder_icon_size, open_db, set_folder_icon_size};
+    use std::path::Path;
+
+    #[test]
+    fn folder_icon_size_persists_and_clears_cleanly() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS folder_settings (
+                folder_path TEXT PRIMARY KEY,
+                layout_mode TEXT NOT NULL DEFAULT 'auto',
+                icon_size INTEGER
+            );",
+        )
+        .unwrap();
+        let folder = Path::new("/tmp/test_branches_folder");
+        assert_eq!(get_folder_icon_size(&conn, folder), None);
+        set_folder_icon_size(&conn, folder, Some(80)).unwrap();
+        assert_eq!(get_folder_icon_size(&conn, folder), Some(80));
+        set_folder_icon_size(&conn, folder, None).unwrap();
+        assert_eq!(get_folder_icon_size(&conn, folder), None);
+        let _ = open_db;
+    }
 }
 

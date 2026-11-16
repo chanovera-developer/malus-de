@@ -1,3 +1,4 @@
+use malus_de_common::config::{BranchesConfig, IconGridMetrics};
 use std::path::PathBuf;
 
 #[allow(dead_code)]
@@ -37,21 +38,31 @@ pub struct AppState {
     pub sort_order: SortOrder,
     pub split_view_active: bool,
     pub search_query: String,
+    pub icon_size: i32,
+    pub grid_spacing: i32,
 }
 
 impl AppState {
     pub fn new(initial_path: PathBuf) -> Self {
+        let cfg = BranchesConfig::load();
         Self {
             current_path: initial_path,
             history_back: Vec::new(),
             history_forward: Vec::new(),
-            show_hidden: false,
+            show_hidden: cfg.show_hidden,
             view_mode: ViewMode::Icons,
             sort_by: SortBy::Name,
             sort_order: SortOrder::Ascending,
             split_view_active: false,
             search_query: String::new(),
+            icon_size: cfg.clamped_icon_size(),
+            grid_spacing: cfg.clamped_grid_spacing(),
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn icon_grid_metrics(&self) -> IconGridMetrics {
+        IconGridMetrics::from_icon_size(self.icon_size, self.grid_spacing)
     }
 
     pub fn navigate_to(&mut self, target: PathBuf) -> bool {

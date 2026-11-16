@@ -6,10 +6,14 @@ use gtk4::{
     Align, Box as GtkBox, GestureClick, Image, Label, ListBox, ListBoxRow, Orientation, PolicyType,
     ScrolledWindow,
 };
+use malus_de_common::config::BranchesConfig;
+use std::cell::Cell;
+use std::rc::Rc;
 
 pub struct ListView {
     container: GtkBox,
     list_box: ListBox,
+    icon_size: Rc<Cell<i32>>,
     on_navigate: NavigateCallback,
     #[allow(dead_code)]
     on_selection_changed: SelectionCallback,
@@ -17,6 +21,7 @@ pub struct ListView {
 
 impl ListView {
     pub fn new(on_navigate: NavigateCallback, on_selection_changed: SelectionCallback) -> Self {
+        let icon_size = Rc::new(Cell::new(BranchesConfig::load().clamped_list_icon_size()));
         let container = GtkBox::new(Orientation::Vertical, 0);
         container.add_css_class("branches-list-view");
 
@@ -46,9 +51,18 @@ impl ListView {
         Self {
             container,
             list_box,
+            icon_size,
             on_navigate,
             on_selection_changed,
         }
+    }
+
+    pub fn set_icon_size(&self, size: i32) {
+        let clamped = size.clamp(
+            BranchesConfig::MIN_LIST_ICON_SIZE as i32,
+            BranchesConfig::MAX_LIST_ICON_SIZE as i32,
+        );
+        self.icon_size.set(clamped);
     }
 
     pub fn widget(&self) -> &GtkBox {
@@ -60,8 +74,9 @@ impl ListView {
             self.list_box.remove(&child);
         }
 
+        let icon_size = self.icon_size.get();
         for item in items {
-            let row = create_list_row(item, self.on_navigate.clone());
+            let row = create_list_row(item, icon_size, self.on_navigate.clone());
             self.list_box.append(&row);
         }
     }
@@ -103,7 +118,7 @@ fn create_list_header() -> GtkBox {
     hbox
 }
 
-fn create_list_row(item: &FileItem, on_navigate: NavigateCallback) -> ListBoxRow {
+fn create_list_row(item: &FileItem, icon_size: i32, on_navigate: NavigateCallback) -> ListBoxRow {
     let hbox = GtkBox::new(Orientation::Horizontal, 8);
     hbox.add_css_class("branches-list-row");
 
@@ -113,7 +128,7 @@ fn create_list_row(item: &FileItem, on_navigate: NavigateCallback) -> ListBoxRow
     name_box.set_halign(Align::Start);
 
     let icon = Image::from_gicon(&item.gicon);
-    icon.set_pixel_size(18);
+    icon.set_pixel_size(icon_size);
     name_box.append(&icon);
 
     let label_name = Label::builder()
