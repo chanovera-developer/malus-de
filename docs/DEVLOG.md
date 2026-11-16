@@ -4,6 +4,27 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-16] — Nueva Ventana de Branches en el Menú del Dock y Semáforo de Antigravity en Primera Apertura
+
+### 1. Opción «Abrir nueva ventana» para Branches en el Dock (`crates/branches`, `crates/dock`)
+* **Soporte `--new-window` en [`branches/src/main.rs`](../crates/branches/src/main.rs):** Añadido el flag `--new-window` en `Args` para resolver `$HOME` como ruta solicitada y abrir una nueva ventana mediante `gio::ApplicationFlags::HANDLES_OPEN` / `connect_open` cuando Branches ya tiene una instancia activa.
+* **Menú contextual dinámico en [`dock/src/main.rs`](../crates/dock/src/main.rs):**
+  * Actualizado `dock_app_context_actions` para ofrecer `"Abrir nueva ventana"` (`--new-window`) cuando Branches está en ejecución.
+  * Extraídos `is_dock_item_running` y `populate_dock_app_menu_box` e invocados dentro de `right_click.connect_pressed` justo antes de `popover.popup()`. Esto corrige que las apps ancladas iniciadas después del Dock conservaran un popover estático inicial (`is_running == false`) y refleja en vivo `"Traer al frente"`, `"Abrir nueva ventana"` y `"Forzar salida"`.
+
+### 2. Semáforo Confiable en Antigravity / Electron Desde la Primera Apertura (`scripts/malus-ide-wrapper`)
+* **Confirmación real de CDP (`send_cdp_eval`):** Añadidos `recv_exact` y `read_ws_text_frame` en [`malus-ide-wrapper`](../scripts/malus-ide-wrapper) para verificar la respuesta JSON de `Runtime.evaluate` sin `error` ni `exceptionDetails` y confirmar `value === true` (hoja `ssd-v2` presente y `.window-controls-container` reubicado en `.titlebar-left`), evitando dar por inyectada una ventana cuyo `document.head` o barra de título aún no existían durante el arranque en frío de la sesión.
+* **Observación de barra de título y reintento en arranque frío:** Guardado `document.head || document.documentElement` en `ensureStyle()`, ampliado el temporizador de montaje inicial (`200 ms × 300`), configurado el `MutationObserver` sobre `.part.titlebar` con `subtree: true` (manteniendo fuera editor Monaco, terminal y panel de chat) junto con salvaguarda ligera cada `1500 ms`, y restaurados el sondeo de `0.5 s` mientras no se confirma el montaje y `REINJECT_INTERVAL = 3.0` en `watcher`.
+
+### 3. Validación
+* `cargo check --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --workspace`: compilación sin errores (`exit 0`).
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-branches -p malus-de-dock`:
+  * `malus-de-branches`: **15 passed; 0 failed**.
+  * `malus-de-dock`: **14 passed; 0 failed** (`branches_has_new_window_action_when_running`, `is_dock_item_running_tracks_live_running_cache`).
+* `python3 -m py_compile scripts/malus-ide-wrapper`: sin errores (`exit 0`) y prueba de decodificación WebSocket con `socket.socketpair()`.
+
+---
+
 ## [2026-11-16] — Cambio de Licencia a GPLv3, Temas de Iconos Malus (Colloid + Phosphor), Semáforos SSD Unificados y Papelera en Branches
 
 ### 1. Cambio de Licencia a `GPL-3.0-or-later` (`Cargo.toml`, `LICENSE`, `README.md`, `crates/top-bar`)
