@@ -1,8 +1,13 @@
 window.malus-dock-window,
 window.malus-dock-window.background,
-window.malus-dock-window decoration {
+window.malus-dock-window decoration,
+window.malus-dock-window:drop(active),
+window.malus-dock-window .dock-root,
+window.malus-dock-window .dock-root:drop(active),
+window.malus-dock-window .dock-items:drop(active) {
     background-color: transparent;
     background: transparent;
+    background-image: none;
     border: none;
     outline: none;
     box-shadow: none;

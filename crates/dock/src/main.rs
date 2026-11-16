@@ -1,5 +1,6 @@
 use gio::prelude::*;
 use gdk_pixbuf::prelude::*;
+use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4::{
     Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea,
@@ -847,6 +848,7 @@ fn build_dock_ui(app: &Application) {
     }
 
     let dock_root = GtkBox::new(Orientation::Vertical, 0);
+    dock_root.add_css_class("dock-root");
     dock_root.set_overflow(gtk4::Overflow::Visible);
     let magnification_headroom = GtkBox::new(Orientation::Horizontal, 0);
     magnification_headroom.set_size_request(-1, dock_headroom_height(&initial_cfg));
@@ -1032,8 +1034,17 @@ fn build_dock_ui(app: &Application) {
 
     let drop_placeholder: Rc<RefCell<Option<GtkBox>>> = Rc::new(RefCell::new(None));
     let drop_placeholder_ipc = drop_placeholder.clone();
-
     let drop_placeholder_rf = drop_placeholder.clone();
+
+    attach_dock_drop_target(
+        &window,
+        &dock_root,
+        &dock_bar,
+        &apps_box,
+        &dock_config,
+        &drop_placeholder,
+        &on_refresh,
+    );
 
     glib::spawn_future_local(async move {
         while let Ok(refresh_pinned) = refresh_rx.recv().await {
@@ -1296,39 +1307,23 @@ fn build_dock_ui(app: &Application) {
                     }
                 }
                 IpcMessage::PreviewDockDropGap { dock_x } => {
-                    let mut placeholder_guard = drop_placeholder_ipc.borrow_mut();
-                    if let Some(x) = dock_x {
-                        let pt = win_ref.compute_point(
+                    let local_x = dock_x.and_then(|x| {
+                        win_ref
+                            .compute_point(
+                                &apps_box_ipc,
+                                &gtk4::graphene::Point::new(x as f32, 0.0),
+                            )
+                            .map(|p| p.x() as f64)
+                    });
+                    if dock_x.is_some() {
+                        update_dock_drop_placeholder(
                             &apps_box_ipc,
-                            &gtk4::graphene::Point::new(x as f32, 0.0),
+                            &drop_placeholder_ipc,
+                            &cfg_ipc,
+                            local_x,
                         );
-                        let cfg = cfg_ipc.borrow();
-                        let target_idx = pt
-                            .map(|p| {
-                                compute_pinned_insert_index(
-                                    &apps_box_ipc,
-                                    placeholder_guard
-                                        .as_ref()
-                                        .map(|w| w.upcast_ref::<gtk4::Widget>()),
-                                    cfg.apps.len(),
-                                    p.x() as f64,
-                                )
-                            })
-                            .unwrap_or(cfg.apps.len());
-                        drop(cfg);
-
-                        if let Some(ref placeholder) = *placeholder_guard {
-                            insert_or_reorder_box_child(&apps_box_ipc, placeholder.upcast_ref(), target_idx);
-                        } else {
-                            let icon_size = cfg_ipc.borrow().icon_size as i32;
-                            let placeholder = create_drop_placeholder(icon_size);
-                            insert_or_reorder_box_child(&apps_box_ipc, placeholder.upcast_ref(), target_idx);
-                            *placeholder_guard = Some(placeholder);
-                        }
-                    } else if let Some(placeholder) = placeholder_guard.take() {
-                        if placeholder.parent().as_ref() == Some(apps_box_ipc.as_ref()) {
-                            apps_box_ipc.remove(&placeholder);
-                        }
+                    } else {
+                        clear_dock_drop_placeholder(&apps_box_ipc, &drop_placeholder_ipc);
                     }
                 }
                 IpcMessage::UnpinAppFromDock { name } => {
@@ -1651,6 +1646,179 @@ fn build_dock_ui(app: &Application) {
 
     window.set_child(Some(&dock_root));
     window.present();
+}
+
+fn clear_dock_drop_placeholder(apps_box: &GtkBox, drop_placeholder: &Rc<RefCell<Option<GtkBox>>>) {
+    if let Some(placeholder) = drop_placeholder.borrow_mut().take() {
+        if placeholder.parent().as_ref() == Some(apps_box.as_ref()) {
+            apps_box.remove(&placeholder);
+        }
+    }
+}
+
+fn update_dock_drop_placeholder(
+    apps_box: &GtkBox,
+    drop_placeholder: &Rc<RefCell<Option<GtkBox>>>,
+    dock_config: &Rc<RefCell<DockConfig>>,
+    local_x: Option<f64>,
+) {
+    let mut placeholder_guard = drop_placeholder.borrow_mut();
+    let cfg = dock_config.borrow();
+    let total_pinned = cfg.apps.len();
+    let icon_size = cfg.icon_size as i32;
+    let target_idx = local_x
+        .map(|x| {
+            compute_pinned_insert_index(
+                apps_box,
+                placeholder_guard
+                    .as_ref()
+                    .map(|w| w.upcast_ref::<gtk4::Widget>()),
+                total_pinned,
+                x,
+            )
+        })
+        .unwrap_or(total_pinned);
+    drop(cfg);
+
+    if let Some(ref placeholder) = *placeholder_guard {
+        insert_or_reorder_box_child(apps_box, placeholder.upcast_ref(), target_idx);
+    } else {
+        let placeholder = create_drop_placeholder(icon_size);
+        insert_or_reorder_box_child(apps_box, placeholder.upcast_ref(), target_idx);
+        *placeholder_guard = Some(placeholder);
+    }
+}
+
+fn extract_dropped_desktop_apps(file_list: &gdk::FileList) -> Vec<DockAppConfig> {
+    file_list
+        .files()
+        .into_iter()
+        .filter_map(|file| file.path())
+        .filter_map(|path| malus_de_common::apps::desktop_file_to_dock_app(&path))
+        .collect()
+}
+
+fn drop_has_desktop_file(target: &gtk4::DropTarget) -> Option<bool> {
+    let value = target.value()?;
+    let file_list = value.get::<gdk::FileList>().ok()?;
+    let has_desktop = file_list.files().into_iter().any(|f| {
+        f.path()
+            .and_then(|p| p.extension().and_then(|e| e.to_str()).map(|s| s == "desktop"))
+            .unwrap_or(false)
+    });
+    Some(has_desktop)
+}
+
+fn pin_desktop_apps_at(
+    cfg: &mut DockConfig,
+    apps: Vec<DockAppConfig>,
+    mut insert_idx: usize,
+) -> bool {
+    let mut changed = false;
+    for app in apps {
+        if cfg.pin_app_at(app, Some(insert_idx)) {
+            changed = true;
+        }
+        insert_idx = insert_idx.saturating_add(1).min(cfg.apps.len());
+    }
+    changed
+}
+
+fn attach_dock_drop_target(
+    window: &ApplicationWindow,
+    dock_root: &GtkBox,
+    dock_bar: &Overlay,
+    apps_box: &GtkBox,
+    dock_config: &Rc<RefCell<DockConfig>>,
+    drop_placeholder: &Rc<RefCell<Option<GtkBox>>>,
+    on_refresh: &Rc<dyn Fn()>,
+) {
+    let drop_target = gtk4::DropTarget::new(
+        gdk::FileList::static_type(),
+        gdk::DragAction::COPY | gdk::DragAction::MOVE,
+    );
+    drop_target.set_propagation_phase(gtk4::PropagationPhase::Capture);
+    drop_target.set_preload(true);
+
+    let update_hover = {
+        let window = window.clone();
+        let dock_root = dock_root.clone();
+        let dock_bar = dock_bar.clone();
+        let apps_box = apps_box.clone();
+        let dock_config = dock_config.clone();
+        let drop_placeholder = drop_placeholder.clone();
+        move |target: &gtk4::DropTarget, x: f64, y: f64| -> gdk::DragAction {
+            if drop_has_desktop_file(target) == Some(false) {
+                clear_dock_drop_placeholder(&apps_box, &drop_placeholder);
+                queue_dock_resize(&window, &dock_root, &dock_bar);
+                return gdk::DragAction::empty();
+            }
+            let local_x = dock_root
+                .compute_point(&apps_box, &gtk4::graphene::Point::new(x as f32, y as f32))
+                .map(|p| p.x() as f64);
+            update_dock_drop_placeholder(&apps_box, &drop_placeholder, &dock_config, local_x);
+            queue_dock_resize(&window, &dock_root, &dock_bar);
+            gdk::DragAction::COPY
+        }
+    };
+
+    let enter_hover = update_hover.clone();
+    drop_target.connect_enter(move |target, x, y| {
+        info!("📥 [Dock DnD] Enter sobre el Dock en ({:.1}, {:.1})", x, y);
+        enter_hover(target, x, y)
+    });
+
+    let motion_hover = update_hover;
+    drop_target.connect_motion(move |target, x, y| motion_hover(target, x, y));
+
+    let window_leave = window.clone();
+    let dock_root_leave = dock_root.clone();
+    let dock_bar_leave = dock_bar.clone();
+    let apps_box_leave = apps_box.clone();
+    let placeholder_leave = drop_placeholder.clone();
+    drop_target.connect_leave(move |_| {
+        clear_dock_drop_placeholder(&apps_box_leave, &placeholder_leave);
+        queue_dock_resize(&window_leave, &dock_root_leave, &dock_bar_leave);
+    });
+
+    let dock_root_drop = dock_root.clone();
+    let apps_box_drop = apps_box.clone();
+    let cfg_drop = dock_config.clone();
+    let placeholder_drop = drop_placeholder.clone();
+    let on_refresh_drop = on_refresh.clone();
+    drop_target.connect_drop(move |_, value, x, y| {
+        clear_dock_drop_placeholder(&apps_box_drop, &placeholder_drop);
+        let Ok(file_list) = value.get::<gdk::FileList>() else {
+            return false;
+        };
+        let apps = extract_dropped_desktop_apps(&file_list);
+        info!("📥 [Dock DnD] Drop recibido en ({:.1}, {:.1}) con {} apps .desktop", x, y, apps.len());
+        if apps.is_empty() {
+            return false;
+        }
+
+        let mut cfg = cfg_drop.borrow_mut();
+        let target_idx = dock_root_drop
+            .compute_point(&apps_box_drop, &gtk4::graphene::Point::new(x as f32, y as f32))
+            .map(|pt| {
+                compute_pinned_insert_index(
+                    &apps_box_drop,
+                    None,
+                    cfg.apps.len(),
+                    pt.x() as f64,
+                )
+            })
+            .unwrap_or(cfg.apps.len());
+
+        if pin_desktop_apps_at(&mut cfg, apps, target_idx) {
+            let _ = cfg.save();
+            drop(cfg);
+            on_refresh_drop();
+        }
+        true
+    });
+
+    dock_root.add_controller(drop_target);
 }
 
 struct DockItemDragState {
@@ -3528,5 +3696,54 @@ mod tests {
         assert_eq!(name, "Nonexistent-unpinned-app-test");
         assert_eq!(icon, "nonexistent-unpinned-app-test");
         assert_eq!(exec, "nonexistent-unpinned-app-test");
+    }
+
+    #[test]
+    fn pin_desktop_apps_from_branches_drop_inserts_into_dock_config() {
+        let temp_dir = std::env::temp_dir().join("malus_dock_drop_test");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let desktop_path = temp_dir.join("org.example.BranchesDrop.desktop");
+        std::fs::write(
+            &desktop_path,
+            "[Desktop Entry]\nType=Application\nName=Drop App\nExec=drop-app %u\nIcon=drop-app-icon\n",
+        )
+        .unwrap();
+
+        let file_list = gdk::FileList::from_array(&[gio::File::for_path(&desktop_path)]);
+        let apps = extract_dropped_desktop_apps(&file_list);
+        assert_eq!(apps.len(), 1);
+
+        let mut cfg = DockConfig {
+            apps: vec![DockAppConfig {
+                name: "Existing".to_string(),
+                icon: "existing".to_string(),
+                command: "existing".to_string(),
+                matchers: vec!["existing".to_string()],
+                icon_appearance: DockIconAppearance::Auto,
+            }],
+            ..DockConfig::default()
+        };
+
+        assert!(pin_desktop_apps_at(&mut cfg, apps, 0));
+        assert_eq!(cfg.apps.len(), 2);
+        assert_eq!(cfg.apps[0].name, "Drop App");
+        assert_eq!(cfg.apps[0].command, "drop-app");
+        assert_eq!(cfg.apps[0].icon, "drop-app-icon");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn dock_css_suppresses_gtk_drop_active_outline_and_border() {
+        assert!(DOCK_CSS.contains(".dock-root:drop(active)"));
+        let block = DOCK_CSS
+            .split(".dock-root:drop(active)")
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .expect("Debe existir regla :drop(active) en dock.css");
+        assert!(block.contains("border: none;"));
+        assert!(block.contains("outline: none;"));
+        assert!(block.contains("box-shadow: none;"));
     }
 }
