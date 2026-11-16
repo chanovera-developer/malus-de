@@ -157,7 +157,7 @@ font-name='Inter 11'
 font-rendering='manual'
 font-rgba-order='rgb'
 gtk-theme='Adwaita'
-icon-theme='Adwaita'
+icon-theme='Malus-Dark'
 
 [org/gnome/settings-daemon/plugins/xsettings]
 overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
@@ -176,6 +176,25 @@ if ! gsettings set org.gnome.desktop.media-handling automount-open false; then
     echo "No se pudo desactivar la apertura automática de ventanas para medios montados." >&2
     exit 1
 fi
+
+# Asegurar que los temas de iconos integrados (Malus + Phosphor + Colloid) estén disponibles en el entorno del usuario
+mkdir -p "$HOME/.local/share/icons" "$HOME/.icons"
+for icon_theme in "Colloid-Light" "Colloid-Dark" "Malus" "Malus-Dark"; do
+    if [ -f "$DIR/assets/icons/$icon_theme/index.theme" ]; then
+        if [ ! -f "$HOME/.local/share/icons/$icon_theme/index.theme" ]; then
+            cp -a "$DIR/assets/icons/$icon_theme" "$HOME/.local/share/icons/" 2>/dev/null || true
+            if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+                gtk-update-icon-cache -f -t "$HOME/.local/share/icons/$icon_theme" 2>/dev/null || true
+            fi
+        elif [ "$icon_theme" = "Malus" ] || [ "$icon_theme" = "Malus-Dark" ]; then
+            rm -rf "$HOME/.local/share/icons/$icon_theme"
+            cp -a "$DIR/assets/icons/$icon_theme" "$HOME/.local/share/icons/" 2>/dev/null || true
+            if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+                gtk-update-icon-cache -f -t "$HOME/.local/share/icons/$icon_theme" 2>/dev/null || true
+            fi
+        fi
+    fi
+done
 
 # Asegurar que el tema de cursores macOS integrado esté disponible en el entorno del usuario
 mkdir -p "$HOME/.local/share/icons" "$HOME/.icons"
@@ -239,7 +258,9 @@ fi
 
 for GTK_SETTINGS in "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" "$XDG_CONFIG_HOME/gtk-4.0/settings.ini"; do
     if ! grep -q '^gtk-icon-theme-name=' "$GTK_SETTINGS"; then
-        printf '\ngtk-icon-theme-name=Adwaita\n' >> "$GTK_SETTINGS"
+        printf '\ngtk-icon-theme-name=Malus-Dark\n' >> "$GTK_SETTINGS"
+    else
+        sed -i 's/^gtk-icon-theme-name=Adwaita$/gtk-icon-theme-name=Malus-Dark/' "$GTK_SETTINGS" 2>/dev/null || true
     fi
     if ! grep -q '^gtk-font-name=' "$GTK_SETTINGS"; then
         printf 'gtk-font-name=Inter 11\n' >> "$GTK_SETTINGS"

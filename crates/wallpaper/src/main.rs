@@ -3156,6 +3156,12 @@ fn main() -> Result<()> {
         let provider = CssProvider::new();
         provider.load_from_string(DEFAULT_GRADIENT_CSS);
         if let Some(display) = gtk4::gdk::Display::default() {
+            let icon_theme = gtk4::IconTheme::for_display(&display);
+            for icon_dir in malus_de_common::apps::extra_icon_search_paths() {
+                if icon_dir.is_dir() {
+                    icon_theme.add_search_path(&icon_dir);
+                }
+            }
             gtk4::style_context_add_provider_for_display(
                 &display,
                 &provider,

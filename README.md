@@ -328,6 +328,8 @@ Si pruebas Malus, incluye en el reporte la distribución y versión, GPU y contr
 
 ## Créditos y Licencias
 
-- **Código fuente de Malus DE:** El workspace declara las licencias **MIT OR Apache-2.0** en `Cargo.toml`.
+- **Código fuente de Malus DE:** El workspace está licenciado bajo **GNU General Public License v3.0 o posterior (`GPL-3.0-or-later`)** en `Cargo.toml` y [`LICENSE`](./LICENSE).
+- **Tema de iconos `Colloid-Light` y `Colloid-Dark` (`assets/icons/`):** Basado en [`Colloid-icon-theme`](https://github.com/vinceliuice/Colloid-icon-theme) por **vinceliuice**, distribuido bajo la licencia **GNU General Public License v3.0 (GPL-3.0)** (ver [`assets/icons/Colloid-LICENSE`](./assets/icons/Colloid-LICENSE)).
+- **Glifos simbólicos de interfaz (`assets/icons/Malus*/symbolic/`):** Basados en [`Phosphor Icons`](https://github.com/phosphor-icons/core), distribuidos bajo la licencia **MIT** (ver [`assets/icons/Phosphor-LICENSE`](./assets/icons/Phosphor-LICENSE)).
 - **Tema de cursores `macOS` y `macOS-White` (`assets/cursors/`):** Basado en [`apple_cursor` (v2.0.1)](https://github.com/ful1e5/apple_cursor), creado y mantenido por **Abdulkaiz Khatri ([@ful1e5](https://github.com/ful1e5))**, distribuido bajo la licencia **GNU General Public License v3.0 (GPL-3.0)** (ver [`assets/cursors/LICENSE`](./assets/cursors/LICENSE)).
 - **Tipografía predeterminada `Inter` (`v4.1`):** Diseñada por **Rasmus Andersson** ([rsms.me/inter](https://rsms.me/inter/)), utilizada como fuente predeterminada de Malus DE mediante los paquetes de sistema `rsms-inter-fonts` y `rsms-inter-vf-fonts`, distribuida bajo la licencia **SIL Open Font License 1.1 (`OFL-1.1`)**.

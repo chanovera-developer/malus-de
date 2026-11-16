@@ -273,7 +273,21 @@ pub fn extra_icon_search_paths() -> Vec<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let xdg_data_home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from);
     let xdg_data_dirs = std::env::var_os("XDG_DATA_DIRS");
-    icon_root_dirs_from(home.as_deref(), xdg_data_home.as_deref(), xdg_data_dirs.as_deref())
+    let mut dirs =
+        icon_root_dirs_from(home.as_deref(), xdg_data_home.as_deref(), xdg_data_dirs.as_deref());
+    if let Some(ref home) = home {
+        push_unique_path(&mut dirs, home.join(".config/malus-de/icons"));
+    }
+    push_unique_path(&mut dirs, PathBuf::from("/usr/local/share/malus-de/icons"));
+    push_unique_path(&mut dirs, PathBuf::from("/usr/share/malus-de/icons"));
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            push_unique_path(&mut dirs, parent.join("assets/icons"));
+            push_unique_path(&mut dirs, parent.join("../../assets/icons"));
+            push_unique_path(&mut dirs, parent.join("../../data/icons"));
+        }
+    }
+    dirs
 }
 
 fn icon_root_dirs_from(
@@ -365,15 +379,28 @@ pub fn resolve_icon_file_path_in_dirs(
 
     let subdirs: &[&str] = if stem.ends_with("-symbolic") {
         &[
-            "scalable/apps",
+            "symbolic/actions",
             "symbolic/apps",
+            "symbolic/categories",
+            "symbolic/devices",
+            "symbolic/mimetypes",
+            "symbolic/places",
+            "symbolic/status",
+            "actions/symbolic",
+            "apps/symbolic",
+            "categories/symbolic",
+            "devices/symbolic",
+            "mimetypes/symbolic",
+            "places/symbolic",
+            "status/symbolic",
+            "scalable/apps",
             "scalable/categories",
             "scalable/places",
             "scalable/status",
-            "symbolic/status",
         ]
     } else {
         &[
+            "apps/scalable",
             "scalable/apps",
             "512x512/apps",
             "256x256/apps",
@@ -384,14 +411,26 @@ pub fn resolve_icon_file_path_in_dirs(
             "32x32/apps",
             "24x24/apps",
             "16x16/apps",
+            "categories/32",
             "scalable/categories",
+            "places/scalable",
             "scalable/places",
+            "status/32",
             "scalable/status",
+            "devices/scalable",
             "48x48/devices",
         ]
     };
 
-    let themes = ["hicolor", "Adwaita"];
+    let themes = [
+        "Malus-Dark",
+        "Malus",
+        "Colloid-Dark",
+        "Colloid-Light",
+        "Colloid",
+        "hicolor",
+        "Adwaita",
+    ];
     for root in icon_roots {
         for theme in &themes {
             let theme_dir = root.join(theme);
@@ -437,9 +476,7 @@ pub fn resolve_icon_file_path_in_dirs(
 /// Resuelve el archivo de icono (`.svg` o `.png`) para un nombre de icono de `.desktop`.
 pub fn resolve_icon_file_path(icon_name: &str) -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let xdg_data_home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from);
-    let xdg_data_dirs = std::env::var_os("XDG_DATA_DIRS");
-    let icon_roots = icon_root_dirs_from(home.as_deref(), xdg_data_home.as_deref(), xdg_data_dirs.as_deref());
+    let icon_roots = extra_icon_search_paths();
     let pixmap_dirs = pixmap_dirs_from(home.as_deref());
     resolve_icon_file_path_in_dirs(icon_name, &icon_roots, &pixmap_dirs, home.as_deref())
 }
@@ -553,6 +590,42 @@ mod tests {
                 None,
             ),
             Some(png_pixmap)
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn resolve_icon_file_path_prefers_malus_and_colloid_themes() {
+        let temp_dir = std::env::temp_dir().join("malus_common_colloid_resolve_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        let malus_symbolic = temp_dir.join("Malus-Dark/symbolic/actions");
+        let colloid_apps = temp_dir.join("Colloid-Dark/apps/scalable");
+        let adwaita_apps = temp_dir.join("Adwaita/scalable/apps");
+        fs::create_dir_all(&malus_symbolic).unwrap();
+        fs::create_dir_all(&colloid_apps).unwrap();
+        fs::create_dir_all(&adwaita_apps).unwrap();
+
+        let sym_path = malus_symbolic.join("go-previous-symbolic.svg");
+        let app_colloid = colloid_apps.join("firefox.svg");
+        let app_adwaita = adwaita_apps.join("firefox.svg");
+        fs::write(&sym_path, b"<svg/>").unwrap();
+        fs::write(&app_colloid, b"<svg/>").unwrap();
+        fs::write(&app_adwaita, b"<svg/>").unwrap();
+
+        assert_eq!(
+            resolve_icon_file_path_in_dirs(
+                "go-previous-symbolic",
+                &[temp_dir.clone()],
+                &[],
+                None,
+            ),
+            Some(sym_path)
+        );
+        assert_eq!(
+            resolve_icon_file_path_in_dirs("firefox", &[temp_dir.clone()], &[], None),
+            Some(app_colloid)
         );
 
         let _ = fs::remove_dir_all(&temp_dir);

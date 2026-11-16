@@ -56,6 +56,11 @@ fn load_css() {
         );
 
         let icon_theme = gtk4::IconTheme::for_display(&display);
+        for icon_dir in malus_de_common::apps::extra_icon_search_paths() {
+            if icon_dir.is_dir() {
+                icon_theme.add_search_path(&icon_dir);
+            }
+        }
         icon_theme.add_search_path("/usr/local/share/malus-de/icons");
         icon_theme.add_search_path("/usr/share/malus-de/icons");
         if let Ok(home) = std::env::var("HOME") {

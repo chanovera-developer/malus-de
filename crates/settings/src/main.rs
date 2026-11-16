@@ -96,6 +96,12 @@ fn load_macos_settings_css() {
     let css = include_str!("styles/macos-settings.css");
     provider.load_from_string(css);
     if let Some(display) = gtk4::gdk::Display::default() {
+        let icon_theme = gtk4::IconTheme::for_display(&display);
+        for icon_dir in malus_de_common::apps::extra_icon_search_paths() {
+            if icon_dir.is_dir() {
+                icon_theme.add_search_path(&icon_dir);
+            }
+        }
         gtk4::style_context_add_provider_for_display(
             &display,
             &provider,
@@ -2201,10 +2207,16 @@ fn set_cursor_theme_and_size(theme: &str, size: u32) {
         .env("GSETTINGS_BACKEND", "keyfile")
         .args(["set", "org.gnome.desktop.interface", "cursor-size", &size.to_string()])
         .status();
-    let dark_num = if is_dark_mode_active() { "1" } else { "0" };
+    let dark_active = is_dark_mode_active();
+    let dark_num = if dark_active { "1" } else { "0" };
     let cur_gtk_theme = get_current_gtk_theme();
+    let icon_theme_name = if dark_active {
+        malus_de_common::config::DEFAULT_ICON_THEME_DARK
+    } else {
+        malus_de_common::config::DEFAULT_ICON_THEME_LIGHT
+    };
 
-    // Actualizar los settings.ini aislados de GTK3/GTK4 preservando el tema GTK.
+    // Actualizar los settings.ini aislados de GTK3/GTK4 preservando el tema GTK y de iconos.
     for ini_path in [
         format!("{}/.config/malus-de/gtk-3.0/settings.ini", home),
         format!("{}/.config/malus-de/gtk-4.0/settings.ini", home),
@@ -2214,8 +2226,8 @@ fn set_cursor_theme_and_size(theme: &str, size: u32) {
             let _ = std::fs::create_dir_all(parent);
         }
         let body = format!(
-            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme={}\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-theme-name={}\n",
-            dark_num, theme, size, cur_gtk_theme
+            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme={}\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-theme-name={}\ngtk-icon-theme-name={}\n",
+            dark_num, theme, size, cur_gtk_theme, icon_theme_name
         );
         let _ = std::fs::write(p, body);
     }
