@@ -4,6 +4,29 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-15] — Menús Contextuales en Branches y Alineación Squircle del Blur en DRM
+
+### 1. Menús Contextuales Unificados y Acciones en Aplicaciones (`crates/branches/src/views/`)
+* **Causas resueltas en las vistas ([`icon_view.rs`](../crates/branches/src/views/icon_view.rs), [`list_view.rs`](../crates/branches/src/views/list_view.rs), [`column_view.rs`](../crates/branches/src/views/column_view.rs), [`gallery_view.rs`](../crates/branches/src/views/gallery_view.rs)):**
+  * En Icon, List y Gallery View, `GestureClick` filtraba únicamente clic izquierdo por defecto (`button == 1`), impidiendo abrir menús contextuales con clic secundario; en Column View tampoco existía controlador de clic secundario por fila.
+  * Activado `set_button(0)` en `IconView`/`ListView`/`GalleryView` (y `GestureClick::set_button(gdk::BUTTON_SECONDARY)` en `ColumnView`), reclamando el evento con `EventSequenceState::Claimed`, anclando `pointing_to` al puntero y liberando el `Popover` con `unparent()` al cerrar.
+* **Menú unificado ([`views/mod.rs`](../crates/branches/src/views/mod.rs)):**
+  * Extraídos [`show_item_context_menu`](../crates/branches/src/views/mod.rs), [`is_dock_app_pinned`](../crates/branches/src/views/mod.rs) y [`set_app_pinned_in_dock`](../crates/branches/src/views/mod.rs).
+  * Para lanzadores `.desktop` (carpeta **Aplicaciones** y archivos `.desktop`), el menú muestra **Abrir aplicación**, **Fijar en el Dock** / **Quitar del Dock** (vía IPC `PinAppToDock`/`UnpinAppFromDock` con respaldo directo a `DockConfig`), **Mostrar carpeta contenedora** y **Copiar ruta**, conservando **Abrir** / **Abrir carpeta** y **Abrir en Terminal** para elementos ordinarios.
+
+### 2. Alineación Squircle (`n = 4.2`) en la Capa de Blur del Backend DRM (`crates/compositor`)
+* **Causa raíz resuelta:**
+  * Tanto los popovers/menús contextuales (`popup_elems`, `dock_popups`, `topbar_popups`, `wallpaper_popups`) como las ventanas translúcidas (*Branches* y *Ajustes del Sistema*) utilizan [`WindowSquircleShader`](../crates/compositor/src/window_corners.rs) (`u_exponent = 4.2`) y [`shadow.rs`](../crates/compositor/src/shadow.rs) (`4.2`), mientras las pasadas directas en [`drm.rs`](../crates/compositor/src/backend/drm.rs) invocaban [`render_captured_blur_round`](../crates/compositor/src/blur.rs) (`corner_exponent = 2.0`, recorte circular más cerrado que dejaba visibles esquinas recortadas bajo las zonas translúcidas).
+* **Solución:**
+  * Sustituido `render_captured_blur_round` por [`render_captured_blur`](../crates/compositor/src/blur.rs) (`4.2`) en ventanas translúcidas, `popup_elems`, `dock_popups`, `topbar_popups` y `wallpaper_popups` dentro de [`drm.rs`](../crates/compositor/src/backend/drm.rs), así como en `render_snap_transition_backdrop` y `BlurRenderElement::for_popup` dentro de [`blur.rs`](../crates/compositor/src/blur.rs).
+
+### 3. Validación
+* `cargo check --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --workspace`: compilación completa sin errores (`exit 0`).
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-compositor`: **71 passed; 0 failed**.
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-branches`: **6 passed; 0 failed** (incluyendo `views::tests::dock_app_pinned_detection_matches_by_name_or_command`).
+
+---
+
 ## [2026-11-15] — Aplicaciones de Spotlight en Branches con Iconos Propios y Arrastre al Dock
 
 ### 1. Indexador `.desktop` Compartido y Resolución de Iconos (`crates/common/src/apps.rs`, `lib.rs`)
