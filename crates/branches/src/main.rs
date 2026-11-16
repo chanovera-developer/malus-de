@@ -116,4 +116,56 @@ mod tests {
         assert!(css.contains("@keyframes macos-drop-landing"));
         assert!(css.contains("cubic-bezier(0.16, 1, 0.3, 1)"));
     }
+
+    #[test]
+    fn test_branches_finder_sidebar_and_toolbar_pills() {
+        let css = include_str!("styles/macos-branches.css");
+        // Secciones de barra lateral en Title Case (sin text-transform: uppercase)
+        let title_block = css
+            .split(".branches-sidebar-section-title")
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .expect("Debe existir .branches-sidebar-section-title");
+        assert!(!title_block.contains("text-transform: uppercase"));
+
+        // Colores de iconos en barra lateral (Favoritos azul macOS, Ubicaciones gris neutro)
+        assert!(css.contains(".branches-sidebar-row-favorite .branches-sidebar-icon"));
+        assert!(css.contains("#0a84ff"));
+        assert!(css.contains(".branches-sidebar-row-location .branches-sidebar-icon"));
+
+        // Contenedores squircle afilados en barra superior con altura uniforme + input 999px
+        let pill_block = css
+            .split(".branches-toolbar-pill {")
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .expect("Debe existir .branches-toolbar-pill");
+        assert!(pill_block.contains("border-radius: 8px;"));
+
+        let search_btn_block = css
+            .split("button.branches-search-btn {")
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .expect("Debe existir button.branches-search-btn");
+        assert!(search_btn_block.contains("border-radius: 8px;"));
+
+        let search_entry_block = css
+            .split(".branches-search-entry {")
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .expect("Debe existir .branches-search-entry");
+        assert!(search_entry_block.contains("border-radius: 999px;"));
+
+        assert!(css.contains("border-radius: 5px;"));
+        assert!(css.contains("menubutton.branches-tool-btn"));
+        assert!(!css.contains("\nbutton.branches-tool-btn"));
+
+        let nav_btn_block = css
+            .split("button.branches-nav-btn {")
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .expect("Debe existir button.branches-nav-btn");
+        assert!(nav_btn_block.contains("min-height: 26px;"));
+        assert!(nav_btn_block.contains("min-width: 26px;"));
+        assert!(nav_btn_block.contains("padding: 0;"));
+    }
 }

@@ -47,11 +47,13 @@ fn resolve_user_dir(home: &Path, xdg_key: &str, spanish_name: &str, english_name
 }
 
 impl Sidebar {
-    pub fn new<F: Fn(PathBuf) + 'static, T: Fn(String) + 'static>(
+    pub fn new<F: Fn(PathBuf) + 'static, R: Fn() + 'static, T: Fn(String) + 'static>(
         on_navigate: F,
+        on_recents: R,
         on_tag_selected: T,
     ) -> Self {
         let on_navigate = Rc::new(on_navigate);
+        let on_recents = Rc::new(on_recents);
         let on_tag_selected = Rc::new(on_tag_selected);
 
         let list_box = ListBox::builder()
@@ -64,10 +66,49 @@ impl Sidebar {
 
         let es = malus_de_common::is_spanish_locale();
 
+        let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/"));
+        let shared_path = resolve_user_dir(&home, "XDG_PUBLICSHARE_DIR", "Público", "Public");
+
+        // 0. Accesos superiores sin encabezado (Recientes y Compartidos, estilo Finder)
+        let recents_row = create_recents_row(if es { "Recientes" } else { "Recents" });
+        {
+            let cb = on_recents.clone();
+            let click = GestureClick::new();
+            let cb_c = cb.clone();
+            click.connect_released(move |_, _, _, _| {
+                cb_c();
+            });
+            recents_row.add_controller(click);
+            recents_row.connect_activate(move |_| {
+                cb();
+            });
+        }
+        list_box.append(&recents_row);
+
+        let shared_row = create_sidebar_row(
+            if es { "Compartidos" } else { "Shared" },
+            "folder-publicshare-symbolic",
+            shared_path.clone(),
+            true,
+        );
+        {
+            let cb = on_navigate.clone();
+            let p = shared_path;
+            let click = GestureClick::new();
+            let cb_c = cb.clone();
+            let p_c = p.clone();
+            click.connect_released(move |_, _, _, _| {
+                cb_c(p_c.clone());
+            });
+            shared_row.add_controller(click);
+            shared_row.connect_activate(move |_| {
+                cb(p.clone());
+            });
+        }
+        list_box.append(&shared_row);
+
         // 1. Sección Favoritos
         add_section_title(&list_box, if es { "Favoritos" } else { "Favorites" });
-
-        let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/"));
         let desktop_path = resolve_user_dir(&home, "XDG_DESKTOP_DIR", "Escritorio", "Desktop");
         let docs_path = resolve_user_dir(&home, "XDG_DOCUMENTS_DIR", "Documentos", "Documents");
         let downloads_path = resolve_user_dir(&home, "XDG_DOWNLOAD_DIR", "Descargas", "Downloads");
@@ -83,11 +124,6 @@ impl Sidebar {
                 title: if es { "Aplicaciones".to_string() } else { "Applications".to_string() },
                 icon_name: "system-software-install-symbolic",
                 path: apps_path,
-            },
-            SidebarEntry {
-                title: if es { "Inicio".to_string() } else { "Home".to_string() },
-                icon_name: "user-home-symbolic",
-                path: home.clone(),
             },
             SidebarEntry {
                 title: if es { "Escritorio".to_string() } else { "Desktop".to_string() },
@@ -124,15 +160,10 @@ impl Sidebar {
                 icon_name: "folder-projects-symbolic",
                 path: projects_path,
             },
-            SidebarEntry {
-                title: if es { "Papelera".to_string() } else { "Trash".to_string() },
-                icon_name: "user-trash-symbolic",
-                path: trash_path,
-            },
         ];
 
         for entry in favorites {
-            let row = create_sidebar_row(&entry.title, entry.icon_name, entry.path.clone());
+            let row = create_sidebar_row(&entry.title, entry.icon_name, entry.path.clone(), true);
             let cb = on_navigate.clone();
             let p = entry.path;
 
@@ -153,9 +184,19 @@ impl Sidebar {
             list_box.append(&row);
         }
 
-        // 2. Sección Ubicaciones
+        // 2. Sección Ubicaciones (estilo macOS Finder: usuario, equipo, red, papelera)
         add_section_title(&list_box, if es { "Ubicaciones" } else { "Locations" });
+        let home_label = home
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| if es { "Inicio".to_string() } else { "Home".to_string() });
         let locations = [
+            SidebarEntry {
+                title: home_label,
+                icon_name: "user-home-symbolic",
+                path: home.clone(),
+            },
             SidebarEntry {
                 title: if es { "Este Equipo".to_string() } else { "This Computer".to_string() },
                 icon_name: "drive-harddisk-symbolic",
@@ -166,10 +207,15 @@ impl Sidebar {
                 icon_name: "network-workgroup-symbolic",
                 path: PathBuf::from("/mnt"),
             },
+            SidebarEntry {
+                title: if es { "Papelera".to_string() } else { "Trash".to_string() },
+                icon_name: "user-trash-symbolic",
+                path: trash_path,
+            },
         ];
 
         for entry in locations {
-            let row = create_sidebar_row(&entry.title, entry.icon_name, entry.path.clone());
+            let row = create_sidebar_row(&entry.title, entry.icon_name, entry.path.clone(), false);
             let cb = on_navigate.clone();
             let p = entry.path;
 
@@ -222,9 +268,12 @@ impl Sidebar {
 
         // Manejador centralizado de activación de filas del ListBox
         let nav_for_lb = on_navigate.clone();
+        let recents_for_lb = on_recents.clone();
         let tag_for_lb = on_tag_selected.clone();
         list_box.connect_row_activated(move |_lb, row| {
-            if let Some(path_obj) = unsafe { row.data::<PathBuf>("target_path") } {
+            if unsafe { row.data::<bool>("target_recents") }.is_some() {
+                recents_for_lb();
+            } else if let Some(path_obj) = unsafe { row.data::<PathBuf>("target_path") } {
                 let p = unsafe { path_obj.as_ref() }.clone();
                 nav_for_lb(p);
             } else if let Some(tag_obj) = unsafe { row.data::<String>("target_tag") } {
@@ -283,7 +332,46 @@ fn add_section_title(list_box: &ListBox, title: &str) {
     list_box.append(&row);
 }
 
-fn create_sidebar_row(title: &str, icon_name: &str, path: PathBuf) -> ListBoxRow {
+fn create_recents_row(title: &str) -> ListBoxRow {
+    let hbox = GtkBox::new(Orientation::Horizontal, 8);
+    hbox.set_margin_start(4);
+    hbox.set_margin_end(4);
+
+    let icon = Image::from_icon_name("document-open-recent-symbolic");
+    icon.set_pixel_size(16);
+    icon.add_css_class("branches-sidebar-icon");
+
+    let label = Label::builder()
+        .label(title)
+        .halign(Align::Start)
+        .hexpand(true)
+        .ellipsize(gtk4::pango::EllipsizeMode::End)
+        .css_classes(["branches-sidebar-label"])
+        .build();
+
+    hbox.append(&icon);
+    hbox.append(&label);
+
+    let row = ListBoxRow::builder()
+        .child(&hbox)
+        .activatable(true)
+        .selectable(true)
+        .css_classes(["branches-sidebar-row", "branches-sidebar-row-favorite"])
+        .build();
+
+    unsafe {
+        row.set_data("target_recents", true);
+    }
+
+    row
+}
+
+fn create_sidebar_row(
+    title: &str,
+    icon_name: &str,
+    path: PathBuf,
+    is_favorite: bool,
+) -> ListBoxRow {
     let hbox = GtkBox::new(Orientation::Horizontal, 8);
     hbox.set_margin_start(4);
     hbox.set_margin_end(4);
@@ -297,6 +385,7 @@ fn create_sidebar_row(title: &str, icon_name: &str, path: PathBuf) -> ListBoxRow
         .halign(Align::Start)
         .hexpand(true)
         .ellipsize(gtk4::pango::EllipsizeMode::End)
+        .css_classes(["branches-sidebar-label"])
         .build();
 
     hbox.append(&icon);
@@ -306,7 +395,14 @@ fn create_sidebar_row(title: &str, icon_name: &str, path: PathBuf) -> ListBoxRow
         .child(&hbox)
         .activatable(true)
         .selectable(true)
-        .css_classes(["branches-sidebar-row"])
+        .css_classes([
+            "branches-sidebar-row",
+            if is_favorite {
+                "branches-sidebar-row-favorite"
+            } else {
+                "branches-sidebar-row-location"
+            },
+        ])
         .build();
 
     unsafe {

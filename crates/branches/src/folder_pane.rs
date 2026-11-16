@@ -202,34 +202,29 @@ impl FolderPane {
         }
     }
 
+    fn step_history(&self, target: Option<PathBuf>) -> bool {
+        let Some(path) = target else {
+            return false;
+        };
+        self.reload();
+        (self.on_path_changed)(self.id, path);
+        true
+    }
+
     pub fn go_back(&self) -> bool {
-        if let Some(prev) = self.state.borrow_mut().go_back() {
-            self.reload();
-            (self.on_path_changed)(self.id, prev);
-            true
-        } else {
-            false
-        }
+        // Soltar el RefMut antes de reload() y callbacks para evitar RefCell already mutably borrowed.
+        let prev = self.state.borrow_mut().go_back();
+        self.step_history(prev)
     }
 
     pub fn go_forward(&self) -> bool {
-        if let Some(next) = self.state.borrow_mut().go_forward() {
-            self.reload();
-            (self.on_path_changed)(self.id, next);
-            true
-        } else {
-            false
-        }
+        let next = self.state.borrow_mut().go_forward();
+        self.step_history(next)
     }
 
     pub fn go_up(&self) -> bool {
-        if let Some(parent) = self.state.borrow_mut().go_up() {
-            self.reload();
-            (self.on_path_changed)(self.id, parent);
-            true
-        } else {
-            false
-        }
+        let parent = self.state.borrow_mut().go_up();
+        self.step_history(parent)
     }
 
     pub fn toggle_hidden(&self) {
@@ -322,6 +317,20 @@ impl FolderPane {
         }
     }
 
+    fn apply_items_snapshot(&self, items: Vec<FileItem>) {
+        let (current_path, show_hidden, sort_by, sort_order) = {
+            let s = self.state.borrow();
+            (s.current_path.clone(), s.show_hidden, s.sort_by, s.sort_order)
+        };
+        let count = items.len();
+        self.icon_view.set_items(&items);
+        self.list_view.set_items(&items);
+        self.column_view.set_root(&current_path, &items, show_hidden, sort_by, sort_order);
+        self.gallery_view.set_items(&items);
+        *self.items_cache.borrow_mut() = items;
+        (self.on_selection_changed)(self.id, count, current_path);
+    }
+
     pub fn show_tag_filter(&self, tag_name: &str) {
         if let Ok(conn) = crate::db::open_db() {
             let paths = crate::db::get_files_by_tag(&conn, tag_name);
@@ -332,15 +341,36 @@ impl FolderPane {
                 }
             }
             self.pane_title.set_label(&format!("Etiqueta: {}", tag_name));
-            let count = items.len();
-            self.icon_view.set_items(&items);
-            self.list_view.set_items(&items);
-            let s = self.state.borrow();
-            self.column_view.set_root(&s.current_path, &items, s.show_hidden, s.sort_by, s.sort_order);
-            self.gallery_view.set_items(&items);
-            *self.items_cache.borrow_mut() = items;
-            (self.on_selection_changed)(self.id, count, s.current_path.clone());
+            self.apply_items_snapshot(items);
         }
+    }
+
+    pub fn show_recents(&self) {
+        let home = std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/"));
+        let search_dirs = [
+            home.join("Escritorio"),
+            home.join("Desktop"),
+            home.join("Documentos"),
+            home.join("Documents"),
+            home.join("Descargas"),
+            home.join("Downloads"),
+            home.join("Imágenes"),
+            home.join("Pictures"),
+            home.join("Música"),
+            home.join("Music"),
+            home.join("Vídeos"),
+            home.join("Videos"),
+        ];
+        let items = crate::fs_backend::load_recent_files(&home, &search_dirs, 60);
+        let title = if malus_de_common::is_spanish_locale() {
+            "Recientes"
+        } else {
+            "Recents"
+        };
+        self.pane_title.set_label(title);
+        self.apply_items_snapshot(items);
     }
 
     pub fn set_tag_on_selected(&self, tag_name: &str, tag_color: &str) {
@@ -391,4 +421,36 @@ fn setup_drop_target<F: Fn() + 'static>(
     });
 
     widget.add_controller(drop_target);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_navigation_releases_borrow_before_reload() {
+        let src = include_str!("folder_pane.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap_or_default();
+        assert!(!src.contains("if let Some(prev) = self.state.borrow_mut().go_back()"));
+        assert!(!src.contains("if let Some(next) = self.state.borrow_mut().go_forward()"));
+        assert!(!src.contains("if let Some(parent) = self.state.borrow_mut().go_up()"));
+
+        let state = RefCell::new(AppState::new(PathBuf::from("/tmp/a")));
+        assert!(state.borrow_mut().navigate_to(PathBuf::from("/tmp/a/b")));
+
+        let prev = state.borrow_mut().go_back();
+        assert_eq!(prev, Some(PathBuf::from("/tmp/a")));
+        assert!(!state.borrow().can_go_back());
+        assert!(state.borrow().can_go_forward());
+
+        let next = state.borrow_mut().go_forward();
+        assert_eq!(next, Some(PathBuf::from("/tmp/a/b")));
+        assert!(state.borrow().can_go_back());
+
+        let parent = state.borrow_mut().go_up();
+        assert_eq!(parent, Some(PathBuf::from("/tmp/a")));
+        assert_eq!(state.borrow().current_path, PathBuf::from("/tmp/a"));
+    }
 }

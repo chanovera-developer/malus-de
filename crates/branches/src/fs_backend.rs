@@ -240,3 +240,129 @@ fn resolve_kind_and_icon(path: &Path, is_dir: bool, name: &str) -> (String, gio:
     let icon = gio::ThemedIcon::new(icon_name);
     (desc.to_string(), icon.upcast())
 }
+
+fn percent_decode_file_uri(uri: &str) -> Option<PathBuf> {
+    let raw = uri.strip_prefix("file://")?;
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (
+                (bytes[i + 1] as char).to_digit(16),
+                (bytes[i + 2] as char).to_digit(16),
+            ) {
+                out.push(((hi << 4) | lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).ok().map(PathBuf::from)
+}
+
+fn collect_recent_candidates(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    if depth == 0 || !dir.is_dir() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name.starts_with('.') {
+            continue;
+        }
+        if path.is_dir() {
+            if depth > 1 && !matches!(name, "target" | "node_modules" | ".git") {
+                collect_recent_candidates(&path, depth - 1, out);
+            }
+        } else {
+            out.push(path);
+        }
+    }
+}
+
+/// Carga los archivos recientes del usuario combinando `recently-used.xbel`
+/// y las carpetas personales recientes, ordenados del más reciente al más antiguo.
+pub fn load_recent_files(home: &Path, search_dirs: &[PathBuf], limit: usize) -> Vec<FileItem> {
+    use std::collections::HashSet;
+
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut items: Vec<FileItem> = Vec::new();
+
+    let xbel_path = home.join(".local/share/recently-used.xbel");
+    if let Ok(content) = fs::read_to_string(&xbel_path) {
+        for segment in content.split("href=\"").skip(1) {
+            if let Some((uri, _)) = segment.split_once('"') {
+                if let Some(path) = percent_decode_file_uri(uri) {
+                    if path.is_file() && seen.insert(path.clone()) {
+                        if let Some(item) = FileItem::from_path(&path) {
+                            if !item.is_hidden && !item.is_dir {
+                                items.push(item);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut scanned = Vec::new();
+    for dir in search_dirs {
+        collect_recent_candidates(dir, 2, &mut scanned);
+    }
+    for path in scanned {
+        if seen.insert(path.clone()) {
+            if let Some(item) = FileItem::from_path(&path) {
+                if !item.is_hidden && !item.is_dir {
+                    items.push(item);
+                }
+            }
+        }
+    }
+
+    items.sort_by(|a, b| {
+        let a_time = a.modified.unwrap_or(SystemTime::UNIX_EPOCH);
+        let b_time = b.modified.unwrap_or(SystemTime::UNIX_EPOCH);
+        b_time.cmp(&a_time).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+    items.truncate(limit);
+    items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{load_recent_files, percent_decode_file_uri};
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_percent_decode_file_uri_and_load_recent_files() {
+        assert_eq!(
+            percent_decode_file_uri("file:///home/user/Mi%20Documento.pdf"),
+            Some(PathBuf::from("/home/user/Mi Documento.pdf"))
+        );
+
+        let temp_dir = std::env::temp_dir().join("malus_branches_recents_test");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let docs = temp_dir.join("Docs");
+        let sub = docs.join("Sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(docs.join("nota.txt"), "hola").unwrap();
+        std::fs::write(sub.join("oculto"), "x").unwrap();
+        std::fs::write(docs.join(".hidden"), "h").unwrap();
+
+        let recent = load_recent_files(&temp_dir, &[docs], 10);
+        let names: Vec<&str> = recent.iter().map(|i| i.name.as_str()).collect();
+        assert!(names.contains(&"nota.txt"));
+        assert!(names.contains(&"oculto"));
+        assert!(!names.contains(&".hidden"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+}

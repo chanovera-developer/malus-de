@@ -56,10 +56,11 @@ impl BranchesWindow {
         let dummy_titlebar = GtkBox::builder().visible(false).build();
         window.set_titlebar(Some(&dummy_titlebar));
 
-        // 1. Botones de navegación [ < ] y [ > ] (Chevron macOS)
-        let nav_box = GtkBox::new(Orientation::Horizontal, 2);
+        // 1. Botones de navegación [ < | > ] agrupados en cápsula estilo Finder
+        let nav_box = GtkBox::new(Orientation::Horizontal, 0);
         nav_box.set_valign(Align::Center);
         nav_box.add_css_class("linked");
+        nav_box.add_css_class("branches-toolbar-pill");
         nav_box.add_css_class("branches-nav-group");
 
         let back_btn = Button::builder()
@@ -76,7 +77,12 @@ impl BranchesWindow {
             .sensitive(false)
             .build();
 
+        let nav_divider = GtkBox::new(Orientation::Vertical, 0);
+        nav_divider.add_css_class("branches-pill-divider");
+        nav_divider.set_valign(Align::Center);
+
         nav_box.append(&back_btn);
+        nav_box.append(&nav_divider);
         nav_box.append(&forward_btn);
 
         // 2. Título de directorio alineado a la izquierda junto a la navegación
@@ -109,9 +115,10 @@ impl BranchesWindow {
             .hexpand(true)
             .build();
 
-        // 3. Selector segmentado de 4 modos de vista
+        // 3. Selector segmentado de 4 modos de vista en cápsula estilo Finder
         let view_box = GtkBox::new(Orientation::Horizontal, 0);
         view_box.add_css_class("linked");
+        view_box.add_css_class("branches-toolbar-pill");
         view_box.add_css_class("branches-view-toggle");
         view_box.set_valign(Align::Center);
 
@@ -144,13 +151,26 @@ impl BranchesWindow {
         view_box.append(&btn_col_view);
         view_box.append(&btn_gallery_view);
 
-        // 4. Botón de división de pantalla (Split View Dual Pane)
+        // 4. Botón de división de pantalla (Split View Dual Pane) en su propia cápsula
+        let split_pill_box = GtkBox::new(Orientation::Horizontal, 0);
+        split_pill_box.add_css_class("branches-toolbar-pill");
+        split_pill_box.add_css_class("branches-toolbar-solo-pill");
+        split_pill_box.set_valign(Align::Center);
+
         let split_btn = Button::builder()
             .icon_name("sidebar-show-right-symbolic")
             .tooltip_text("Dividir pantalla (Dual Pane - F3)")
             .valign(Align::Center)
             .css_classes(["branches-tool-btn", "branches-split-btn"])
             .build();
+        split_pill_box.append(&split_btn);
+
+        // 5-7. Cápsula agrupada de Compartir, Información / Quick Look y Acciones (...)
+        let actions_pill_box = GtkBox::new(Orientation::Horizontal, 0);
+        actions_pill_box.add_css_class("linked");
+        actions_pill_box.add_css_class("branches-toolbar-pill");
+        actions_pill_box.add_css_class("branches-action-pill");
+        actions_pill_box.set_valign(Align::Center);
 
         // 5. Botón de Compartir (Share)
         let share_menu_btn = MenuButton::builder()
@@ -222,6 +242,7 @@ impl BranchesWindow {
             .tooltip_text("Buscar archivos (Ctrl+F)")
             .valign(Align::Center)
             .css_classes(["branches-tool-btn", "branches-search-btn"])
+            .css_classes(["branches-search-btn"])
             .build();
 
         let se_toggle = search_entry.clone();
@@ -244,18 +265,20 @@ impl BranchesWindow {
         search_container.append(&search_revealer);
         search_container.append(&search_toggle_btn);
 
-        // Contenedor derecho del header (Vistas + Herramientas + Búsqueda)
+        actions_pill_box.append(&share_menu_btn);
+        actions_pill_box.append(&info_btn);
+        actions_pill_box.append(&action_menu_btn);
+
+        // Contenedor derecho del header (Cápsulas: Vistas + Split + Acciones + Búsqueda)
         let right_header_box = GtkBox::builder()
             .orientation(Orientation::Horizontal)
-            .spacing(6)
+            .spacing(8)
             .valign(Align::Center)
             .halign(Align::End)
             .build();
         right_header_box.append(&view_box);
-        right_header_box.append(&split_btn);
-        right_header_box.append(&share_menu_btn);
-        right_header_box.append(&info_btn);
-        right_header_box.append(&action_menu_btn);
+        right_header_box.append(&split_pill_box);
+        right_header_box.append(&actions_pill_box);
         right_header_box.append(&search_container);
 
         // 9. Paned principal (Sidebar a la izquierda y Contenido a la derecha)
@@ -292,6 +315,14 @@ impl BranchesWindow {
                 move |p| {
                     if let Some(w) = w_clone.borrow().as_ref() {
                         w.active_pane().navigate_to(p);
+                    }
+                }
+            },
+            {
+                let w_clone = win_weak_for_nav.clone();
+                move || {
+                    if let Some(w) = w_clone.borrow().as_ref() {
+                        w.show_recents();
                     }
                 }
             },
@@ -586,6 +617,16 @@ impl BranchesWindow {
     pub fn toggle_quick_look(&self) {
         let item = self.active_pane().get_selected_item();
         self.quick_look.toggle(&self.window, item);
+    }
+
+    pub fn show_recents(&self) {
+        self.active_pane().show_recents();
+        let title = if malus_de_common::is_spanish_locale() {
+            "Recientes"
+        } else {
+            "Recents"
+        };
+        self.title_label.set_label(title);
     }
 
     pub fn set_split_view(&self, active: bool) {
