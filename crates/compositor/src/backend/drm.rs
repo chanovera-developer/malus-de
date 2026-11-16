@@ -4648,7 +4648,7 @@ pub fn run_drm() -> Result<()> {
                                                 blur_rect,
                                             );
                                         }
-                                        blur.render_captured_blur_round(
+                                        blur.render_captured_blur(
                                             gl,
                                             &projection,
                                             screen_size,
@@ -4934,7 +4934,7 @@ pub fn run_drm() -> Result<()> {
                                                 out_surface.size,
                                                 *popup_rect,
                                             );
-                                            blur.render_captured_blur_round(
+                                            blur.render_captured_blur(
                                                 gl,
                                                 &projection,
                                                 out_surface.size,
@@ -5058,7 +5058,7 @@ pub fn run_drm() -> Result<()> {
                                         out_surface.size,
                                         blur_rect,
                                     );
-                                    blur.render_captured_blur_round(
+                                    blur.render_captured_blur(
                                         gl,
                                         &projection,
                                         out_surface.size,
@@ -5102,7 +5102,7 @@ pub fn run_drm() -> Result<()> {
                                         out_surface.size,
                                         *popup_rect,
                                     );
-                                    blur.render_captured_blur_round(
+                                    blur.render_captured_blur(
                                         gl,
                                         &projection,
                                         out_surface.size,
@@ -5158,7 +5158,7 @@ pub fn run_drm() -> Result<()> {
                                         out_surface.size,
                                         *popup_rect,
                                     );
-                                    blur.render_captured_blur_round(
+                                    blur.render_captured_blur(
                                         gl,
                                         &projection,
                                         out_surface.size,

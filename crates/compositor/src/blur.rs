@@ -1489,7 +1489,7 @@ pub fn render_snap_transition_backdrop(
                 if capture_below {
                     blur.capture_background_region(gl, projection, screen_size, win_rect);
                 }
-                blur.render_captured_blur_round(
+                blur.render_captured_blur(
                     gl,
                     projection,
                     screen_size,
@@ -1749,7 +1749,7 @@ impl BlurRenderElement {
         Self::new(id, commit, pipeline, rect, corner_radius, 4.2, screen_size)
     }
 
-    /// Blur para menús emergentes y popups (esquinas redondeadas estándar n=2.0).
+    /// Blur para menús emergentes y popups con squircle (n=4.2) alineado con WindowSquircleShader.
     pub fn for_popup(
         id: impl Into<Id>,
         commit: CommitCounter,
@@ -1758,7 +1758,7 @@ impl BlurRenderElement {
         corner_radius: f32,
         screen_size: Size<i32, Physical>,
     ) -> Self {
-        Self::new(id, commit, pipeline, rect, corner_radius, 2.0, screen_size)
+        Self::new(id, commit, pipeline, rect, corner_radius, 4.2, screen_size)
     }
 
     /// Blur para la barra de tareas / Dock.
