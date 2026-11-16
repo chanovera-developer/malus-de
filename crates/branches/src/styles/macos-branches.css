@@ -61,6 +61,21 @@ paned:not(.branches-split-paned) > separator {
     margin-left: 10px;
 }
 
+.branches-sidebar-add-btn {
+    min-width: 20px;
+    min-height: 20px;
+    padding: 2px;
+    margin-top: 8px;
+    margin-right: 6px;
+    border-radius: 6px;
+    color: alpha(@window_fg_color, 0.55);
+}
+
+.branches-sidebar-add-btn:hover {
+    background-color: alpha(@window_fg_color, 0.08);
+    color: @window_fg_color;
+}
+
 .branches-sidebar-row {
     border-radius: 9px;
     padding: 5px 10px;
@@ -395,7 +410,17 @@ button.branches-search-btn:checked {
 .branches-list-view:drop(active),
 .branches-list-view:drop(active):focus,
 .branches-column-view:drop(active),
-.branches-column-view:drop(active):focus {
+.branches-column-view:drop(active):focus,
+.branches-sidebar-scroll:drop(active),
+.branches-sidebar-scroll:drop(active):focus,
+.branches-sidebar:drop(active),
+.branches-sidebar:drop(active):focus,
+.branches-sidebar row:drop(active),
+.branches-sidebar row:drop(active):focus,
+.branches-sidebar-row:drop(active),
+.branches-sidebar-row:drop(active):focus,
+.branches-sidebar-empty-drop:drop(active),
+.branches-sidebar-empty-drop:drop(active):focus {
     outline: none;
     border-style: none;
     border-width: 0;
@@ -406,14 +431,26 @@ button.branches-search-btn:checked {
 .folder-drop-hover,
 .branches-folder-pane.folder-drop-hover,
 .branches-icon-item.folder-drop-hover,
-.branches-list-row.folder-drop-hover,
-.branches-sidebar-row.folder-drop-hover {
+.branches-list-row.folder-drop-hover {
     background-color: alpha(@accent_bg_color, 0.25);
     border: 2px solid @accent_bg_color;
     box-shadow: 0 0 16px alpha(@accent_bg_color, 0.45);
     border-radius: 12px;
     transform: scale(1.05);
     transition: all 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.branches-sidebar-row.folder-drop-hover {
+    background-color: alpha(@accent_bg_color, 0.22);
+    border: none;
+    box-shadow: inset 0 0 0 1.5px @accent_bg_color;
+    border-radius: 9px;
+    transform: none;
+    transition: background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.branches-sidebar-section-drop-hover .branches-sidebar-section-title {
+    color: @accent_bg_color;
 }
 
 .branches-icon-item.landing,

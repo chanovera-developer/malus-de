@@ -1,11 +1,44 @@
+use gtk4::gdk;
 use gtk4::prelude::*;
-use gtk4::{Align, Box as GtkBox, GestureClick, Image, Label, ListBox, ListBoxRow, Orientation, PolicyType, ScrolledWindow};
+use gtk4::{
+    Align, Box as GtkBox, Button, DropTarget, Entry, GestureClick, Image, Label, ListBox,
+    ListBoxRow, Orientation, PolicyType, Popover, ScrolledWindow,
+};
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
+
+thread_local! {
+    static SIDEBAR_INSTANCES: RefCell<Vec<Weak<SidebarInner>>> = const { RefCell::new(Vec::new()) };
+}
+
+pub fn refresh_all_sidebars() {
+    SIDEBAR_INSTANCES.with(|instances| {
+        let mut list = instances.borrow_mut();
+        list.retain(|weak| {
+            if let Some(inner) = weak.upgrade() {
+                inner.rebuild_bookmarks();
+                true
+            } else {
+                false
+            }
+        });
+    });
+}
+
+struct SidebarInner {
+    list_box: ListBox,
+    bookmarks_header: ListBoxRow,
+    bookmark_rows: RefCell<Vec<ListBoxRow>>,
+    on_navigate: Rc<dyn Fn(PathBuf)>,
+    on_files_dropped: Rc<dyn Fn()>,
+}
 
 pub struct Sidebar {
     container: ScrolledWindow,
     list_box: ListBox,
+    #[allow(dead_code)]
+    inner: Rc<SidebarInner>,
 }
 
 struct SidebarEntry {
@@ -52,23 +85,29 @@ impl Sidebar {
         R: Fn() + 'static,
         A: Fn() + 'static,
         T: Fn(String) + 'static,
+        D: Fn() + 'static,
+        C: Fn() -> PathBuf + 'static,
     >(
         on_navigate: F,
         on_recents: R,
         on_applications: A,
         on_tag_selected: T,
+        on_files_dropped: D,
+        get_current_folder: C,
     ) -> Self {
-        let on_navigate = Rc::new(on_navigate);
+        let on_navigate: Rc<dyn Fn(PathBuf)> = Rc::new(on_navigate);
         let on_recents = Rc::new(on_recents);
         let on_applications = Rc::new(on_applications);
         let on_tag_selected = Rc::new(on_tag_selected);
+        let on_files_dropped: Rc<dyn Fn()> = Rc::new(on_files_dropped);
+        let get_current_folder: Rc<dyn Fn() -> PathBuf> = Rc::new(get_current_folder);
 
         let list_box = ListBox::builder()
             .selection_mode(gtk4::SelectionMode::Single)
             .activate_on_single_click(true)
             .css_classes(["branches-sidebar"])
             .hexpand(true)
-            .vexpand(true)
+            .vexpand(false)
             .build();
 
         let es = malus_de_common::is_spanish_locale();
@@ -91,24 +130,13 @@ impl Sidebar {
             shared_path.clone(),
             true,
         );
-        {
-            let cb = on_navigate.clone();
-            let p = shared_path;
-            let click = GestureClick::new();
-            let cb_c = cb.clone();
-            let p_c = p.clone();
-            click.connect_released(move |_, _, _, _| {
-                cb_c(p_c.clone());
-            });
-            shared_row.add_controller(click);
-            shared_row.connect_activate(move |_| {
-                cb(p.clone());
-            });
-        }
+        attach_folder_navigation_handlers(&shared_row, &on_navigate, shared_path.clone());
+        attach_folder_drop_target(&shared_row, shared_path, &on_files_dropped);
         list_box.append(&shared_row);
 
         // 1. Sección Favoritos
-        add_section_title(&list_box, if es { "Favoritos" } else { "Favorites" });
+        let favorites_header = add_section_title(&list_box, if es { "Favoritos" } else { "Favorites" });
+        attach_bookmark_drop_target(&favorites_header);
         let apps_row = create_virtual_row(
             if es { "Aplicaciones" } else { "Applications" },
             "system-software-install-symbolic",
@@ -166,28 +194,22 @@ impl Sidebar {
 
         for entry in favorites {
             let row = create_sidebar_row(&entry.title, entry.icon_name, entry.path.clone(), true);
-            let cb = on_navigate.clone();
-            let p = entry.path;
-
-            // Controlador de clic directo de ratón
-            let click = GestureClick::new();
-            let cb_c = cb.clone();
-            let p_c = p.clone();
-            click.connect_released(move |_, _, _, _| {
-                cb_c(p_c.clone());
-            });
-            row.add_controller(click);
-
-            // Controlador de teclado (Enter)
-            row.connect_activate(move |_| {
-                cb(p.clone());
-            });
-
+            attach_folder_navigation_handlers(&row, &on_navigate, entry.path.clone());
+            attach_folder_drop_target(&row, entry.path, &on_files_dropped);
             list_box.append(&row);
         }
 
-        // 2. Sección Ubicaciones (estilo macOS Finder: usuario, equipo, red, papelera)
-        add_section_title(&list_box, if es { "Ubicaciones" } else { "Locations" });
+        // 2. Sección Marcadores (personalizados por el usuario)
+        let bookmarks_header = add_bookmarks_section_header(
+            &list_box,
+            if es { "Marcadores" } else { "Bookmarks" },
+            &get_current_folder,
+        );
+        attach_bookmark_drop_target(&bookmarks_header);
+
+        // 3. Sección Ubicaciones (estilo macOS Finder: usuario, equipo, red, papelera)
+        let locations_header = add_section_title(&list_box, if es { "Ubicaciones" } else { "Locations" });
+        attach_bookmark_drop_target(&locations_header);
         let home_label = home
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -218,26 +240,16 @@ impl Sidebar {
 
         for entry in locations {
             let row = create_sidebar_row(&entry.title, entry.icon_name, entry.path.clone(), false);
-            let cb = on_navigate.clone();
-            let p = entry.path;
-
-            let click = GestureClick::new();
-            let cb_c = cb.clone();
-            let p_c = p.clone();
-            click.connect_released(move |_, _, _, _| {
-                cb_c(p_c.clone());
-            });
-            row.add_controller(click);
-
-            row.connect_activate(move |_| {
-                cb(p.clone());
-            });
-
+            attach_folder_navigation_handlers(&row, &on_navigate, entry.path.clone());
+            if entry.path != Path::new("/") {
+                attach_folder_drop_target(&row, entry.path, &on_files_dropped);
+            }
             list_box.append(&row);
         }
 
-        // 3. Sección Etiquetas (Tags)
-        add_section_title(&list_box, if es { "Etiquetas" } else { "Tags" });
+        // 4. Sección Etiquetas (Tags)
+        let tags_header = add_section_title(&list_box, if es { "Etiquetas" } else { "Tags" });
+        attach_bookmark_drop_target(&tags_header);
         let tags = [
             (if es { "Rojo" } else { "Red" }, "#ff3b30"),
             (if es { "Naranja" } else { "Orange" }, "#ff9500"),
@@ -265,6 +277,7 @@ impl Sidebar {
             row.connect_activate(move |_| {
                 tag_cb(t_a.clone());
             });
+            attach_tag_drop_target(&row, tag_name, color_hex.to_string(), &on_files_dropped);
             list_box.append(&row);
         }
 
@@ -280,12 +293,33 @@ impl Sidebar {
                 apps_for_lb();
             } else if let Some(path_obj) = unsafe { row.data::<PathBuf>("target_path") } {
                 let p = unsafe { path_obj.as_ref() }.clone();
-                nav_for_lb(p);
+                if p.is_dir() {
+                    nav_for_lb(p);
+                } else {
+                    let _ = crate::fs_backend::open_file(&p);
+                }
             } else if let Some(tag_obj) = unsafe { row.data::<String>("target_tag") } {
                 let t = unsafe { tag_obj.as_ref() }.clone();
                 tag_for_lb(t);
             }
         });
+
+        let sidebar_content = GtkBox::new(Orientation::Vertical, 0);
+        sidebar_content.set_vexpand(true);
+        sidebar_content.set_hexpand(true);
+        sidebar_content.append(&list_box);
+
+        // Zona vacía exclusiva debajo de las filas: recibe carpetas o archivos arrastrados
+        // para añadirlos como marcadores sin iluminar el resto del sidebar.
+        let empty_drop_zone = GtkBox::builder()
+            .orientation(Orientation::Vertical)
+            .vexpand(true)
+            .hexpand(true)
+            .css_classes(["branches-sidebar-empty-drop"])
+            .build();
+        empty_drop_zone.set_size_request(-1, 64);
+        attach_bookmark_drop_target(&empty_drop_zone);
+        sidebar_content.append(&empty_drop_zone);
 
         let container = ScrolledWindow::builder()
             .hscrollbar_policy(PolicyType::Never)
@@ -293,10 +327,38 @@ impl Sidebar {
             .css_classes(["branches-sidebar-scroll"])
             .hexpand(true)
             .vexpand(true)
-            .child(&list_box)
+            .child(&sidebar_content)
             .build();
 
-        Self { container, list_box }
+        // Clic derecho en el área libre del sidebar permite añadir marcadores sin afectar drag & drop
+        let bg_right_click = GestureClick::new();
+        bg_right_click.set_button(gdk::BUTTON_SECONDARY);
+        let empty_zone_menu = empty_drop_zone.clone();
+        let get_cur_bg = get_current_folder.clone();
+        bg_right_click.connect_pressed(move |g, _n, x, y| {
+            g.set_state(gtk4::EventSequenceState::Claimed);
+            show_add_bookmark_popover(&empty_zone_menu, Some((x, y)), &get_cur_bg);
+        });
+        empty_drop_zone.add_controller(bg_right_click);
+
+        let inner = Rc::new(SidebarInner {
+            list_box: list_box.clone(),
+            bookmarks_header,
+            bookmark_rows: RefCell::new(Vec::new()),
+            on_navigate,
+            on_files_dropped,
+        });
+        inner.rebuild_bookmarks();
+
+        SIDEBAR_INSTANCES.with(|instances| {
+            instances.borrow_mut().push(Rc::downgrade(&inner));
+        });
+
+        Self {
+            container,
+            list_box,
+            inner,
+        }
     }
 
     pub fn widget(&self) -> &ScrolledWindow {
@@ -335,7 +397,57 @@ impl Sidebar {
     }
 }
 
-fn add_section_title(list_box: &ListBox, title: &str) {
+impl SidebarInner {
+    fn rebuild_bookmarks(&self) {
+        for old_row in self.bookmark_rows.borrow_mut().drain(..) {
+            self.list_box.remove(&old_row);
+        }
+
+        let base_idx = self.bookmarks_header.index();
+        if base_idx < 0 {
+            return;
+        }
+
+        let bookmarks = crate::db::open_db()
+            .map(|conn| crate::db::get_bookmarks(&conn))
+            .unwrap_or_default();
+
+        self.bookmarks_header.set_visible(!bookmarks.is_empty());
+
+        let mut rows = Vec::with_capacity(bookmarks.len());
+        for (offset, entry) in bookmarks.into_iter().enumerate() {
+            let is_dir = entry.folder_path.is_dir();
+            let icon_name = if is_dir {
+                "folder-symbolic"
+            } else {
+                "text-x-generic-symbolic"
+            };
+            let row = create_sidebar_row(
+                &entry.title,
+                icon_name,
+                entry.folder_path.clone(),
+                true,
+            );
+            attach_bookmark_activation_handlers(&row, &self.on_navigate, entry.folder_path.clone());
+            if is_dir {
+                attach_folder_drop_target(&row, entry.folder_path.clone(), &self.on_files_dropped);
+            }
+            attach_bookmark_context_menu(&row, entry.folder_path, entry.title, &self.on_navigate);
+            self.list_box.insert(&row, base_idx + 1 + offset as i32);
+            rows.push(row);
+        }
+        *self.bookmark_rows.borrow_mut() = rows;
+    }
+}
+
+fn can_bookmark_path(path: &Path) -> bool {
+    path != Path::new("/")
+        && !path.ends_with("Trash/files")
+        && !path.parent().is_some_and(|p| p.ends_with("Trash/files"))
+        && (path.is_dir() || path.is_file())
+}
+
+fn add_section_title(list_box: &ListBox, title: &str) -> ListBoxRow {
     let label = Label::builder()
         .label(title)
         .halign(Align::Start)
@@ -349,6 +461,521 @@ fn add_section_title(list_box: &ListBox, title: &str) {
         .build();
 
     list_box.append(&row);
+    row
+}
+
+fn show_add_bookmark_popover(
+    anchor: &impl IsA<gtk4::Widget>,
+    pointing_to: Option<(f64, f64)>,
+    get_current_folder: &Rc<dyn Fn() -> PathBuf>,
+) {
+    let es = malus_de_common::is_spanish_locale();
+    let current = get_current_folder();
+    let pop = Popover::builder()
+        .has_arrow(false)
+        .css_classes(["malus-popover-menu"])
+        .build();
+    pop.set_parent(anchor);
+    if let Some((x, y)) = pointing_to {
+        let rect = gdk::Rectangle::new(x.round() as i32, y.round() as i32, 1, 1);
+        pop.set_pointing_to(Some(&rect));
+    }
+    pop.connect_closed(|p| p.unparent());
+
+    let vbox = GtkBox::new(Orientation::Vertical, 2);
+
+    if can_bookmark_path(&current) {
+        let folder_name = current
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| current.to_string_lossy().into_owned());
+        let cur_lbl = if es {
+            format!("Añadir carpeta actual («{}»)", folder_name)
+        } else {
+            format!("Bookmark Current Folder (“{}”)", folder_name)
+        };
+        let btn_cur = Button::builder()
+            .label(&cur_lbl)
+            .has_frame(false)
+            .css_classes(["popover-menu-item"])
+            .build();
+        if let Some(lbl) = btn_cur.child().and_then(|c| c.downcast::<Label>().ok()) {
+            lbl.set_xalign(0.0);
+        }
+        let pop_c = pop.clone();
+        let cur_p = current;
+        btn_cur.connect_clicked(move |_| {
+            pop_c.popdown();
+            if let Ok(conn) = crate::db::open_db() {
+                let _ = crate::db::add_bookmark(&conn, &cur_p, None);
+                refresh_all_sidebars();
+            }
+        });
+        vbox.append(&btn_cur);
+    }
+
+    let btn_pick = Button::builder()
+        .label(if es { "Elegir carpeta…" } else { "Choose Folder…" })
+        .has_frame(false)
+        .css_classes(["popover-menu-item"])
+        .build();
+    if let Some(lbl) = btn_pick.child().and_then(|c| c.downcast::<Label>().ok()) {
+        lbl.set_xalign(0.0);
+    }
+    let pop_p = pop.clone();
+    let parent_for_dialog = anchor.clone().upcast::<gtk4::Widget>();
+    btn_pick.connect_clicked(move |_| {
+        pop_p.popdown();
+        let dialog = gtk4::FileDialog::builder()
+            .title(if es {
+                "Seleccionar carpeta para marcador"
+            } else {
+                "Select Folder to Bookmark"
+            })
+            .modal(true)
+            .build();
+        let win = parent_for_dialog
+            .root()
+            .and_then(|r| r.downcast::<gtk4::Window>().ok());
+        dialog.select_folder(win.as_ref(), gio::Cancellable::NONE, |res| {
+            if let Ok(file) = res {
+                if let Some(path) = file.path() {
+                    if can_bookmark_path(&path) {
+                        if let Ok(conn) = crate::db::open_db() {
+                            let _ = crate::db::add_bookmark(&conn, &path, None);
+                            refresh_all_sidebars();
+                        }
+                    }
+                }
+            }
+        });
+    });
+    vbox.append(&btn_pick);
+
+    pop.set_child(Some(&vbox));
+    pop.popup();
+}
+
+fn add_bookmarks_section_header(
+    list_box: &ListBox,
+    title: &str,
+    get_current_folder: &Rc<dyn Fn() -> PathBuf>,
+) -> ListBoxRow {
+    let es = malus_de_common::is_spanish_locale();
+    let header_box = GtkBox::new(Orientation::Horizontal, 4);
+    let label = Label::builder()
+        .label(title)
+        .halign(Align::Start)
+        .hexpand(true)
+        .css_classes(["branches-sidebar-section-title"])
+        .build();
+
+    let add_btn = Button::builder()
+        .icon_name("list-add-symbolic")
+        .has_frame(false)
+        .tooltip_text(if es { "Añadir marcador" } else { "Add Bookmark" })
+        .css_classes(["branches-sidebar-add-btn"])
+        .valign(Align::Center)
+        .build();
+
+    let get_cur = get_current_folder.clone();
+    let anchor_btn = add_btn.clone();
+    add_btn.connect_clicked(move |_| {
+        show_add_bookmark_popover(&anchor_btn, None, &get_cur);
+    });
+
+    header_box.append(&label);
+    header_box.append(&add_btn);
+
+    let row = ListBoxRow::builder()
+        .activatable(false)
+        .selectable(false)
+        .child(&header_box)
+        .build();
+
+    list_box.append(&row);
+    row
+}
+
+fn attach_folder_navigation_handlers(
+    row: &ListBoxRow,
+    on_navigate: &Rc<dyn Fn(PathBuf)>,
+    path: PathBuf,
+) {
+    let cb = on_navigate.clone();
+    let click = GestureClick::new();
+    click.set_button(gdk::BUTTON_PRIMARY);
+    let cb_c = cb.clone();
+    let p_c = path.clone();
+    click.connect_released(move |_, _, _, _| {
+        cb_c(p_c.clone());
+    });
+    row.add_controller(click);
+    row.connect_activate(move |_| {
+        cb(path.clone());
+    });
+}
+
+fn attach_bookmark_activation_handlers(
+    row: &ListBoxRow,
+    on_navigate: &Rc<dyn Fn(PathBuf)>,
+    path: PathBuf,
+) {
+    let cb = on_navigate.clone();
+    let click = GestureClick::new();
+    click.set_button(gdk::BUTTON_PRIMARY);
+    let cb_c = cb.clone();
+    let p_c = path.clone();
+    click.connect_released(move |_, _, _, _| {
+        if p_c.is_dir() {
+            cb_c(p_c.clone());
+        } else {
+            let _ = crate::fs_backend::open_file(&p_c);
+        }
+    });
+    row.add_controller(click);
+    row.connect_activate(move |_| {
+        if path.is_dir() {
+            cb(path.clone());
+        } else {
+            let _ = crate::fs_backend::open_file(&path);
+        }
+    });
+}
+
+fn attach_folder_drop_target(
+    row: &ListBoxRow,
+    dest_dir: PathBuf,
+    on_files_dropped: &Rc<dyn Fn()>,
+) {
+    let drop_target = DropTarget::new(
+        gdk::FileList::static_type(),
+        gdk::DragAction::COPY | gdk::DragAction::MOVE,
+    );
+    let r_enter = row.clone();
+    drop_target.connect_enter(move |_, _, _| {
+        r_enter.add_css_class("folder-drop-hover");
+        gdk::DragAction::MOVE
+    });
+    drop_target.connect_motion(move |_, _, _| gdk::DragAction::MOVE);
+    let r_leave = row.clone();
+    drop_target.connect_leave(move |_| {
+        r_leave.remove_css_class("folder-drop-hover");
+    });
+
+    let r_drop = row.clone();
+    let reload_cb = on_files_dropped.clone();
+    drop_target.connect_drop(move |_, value, _, _| {
+        r_drop.remove_css_class("folder-drop-hover");
+        if let Ok(file_list) = value.get::<gdk::FileList>() {
+            if crate::operations::drop_files_into_folder(&file_list.files(), &dest_dir) {
+                refresh_all_sidebars();
+                reload_cb();
+                return true;
+            }
+        }
+        false
+    });
+    row.add_controller(drop_target);
+}
+
+fn attach_bookmark_drop_target(widget: &impl IsA<gtk4::Widget>) {
+    let drop_target = DropTarget::new(
+        gdk::FileList::static_type(),
+        gdk::DragAction::COPY | gdk::DragAction::MOVE,
+    );
+    let w_enter = widget.clone();
+    drop_target.connect_enter(move |_, _, _| {
+        w_enter.add_css_class("branches-sidebar-section-drop-hover");
+        gdk::DragAction::COPY
+    });
+    drop_target.connect_motion(move |_, _, _| gdk::DragAction::COPY);
+    let w_leave = widget.clone();
+    drop_target.connect_leave(move |_| {
+        w_leave.remove_css_class("branches-sidebar-section-drop-hover");
+    });
+    let w_drop = widget.clone();
+    drop_target.connect_drop(move |_, value, _, _| {
+        w_drop.remove_css_class("branches-sidebar-section-drop-hover");
+        if let Ok(file_list) = value.get::<gdk::FileList>() {
+            let mut added_any = false;
+            if let Ok(conn) = crate::db::open_db() {
+                for file in file_list.files() {
+                    if let Some(path) = file.path() {
+                        if can_bookmark_path(&path)
+                            && crate::db::add_bookmark(&conn, &path, None).unwrap_or(false)
+                        {
+                            added_any = true;
+                        }
+                    }
+                }
+            }
+            if added_any {
+                refresh_all_sidebars();
+                return true;
+            }
+        }
+        false
+    });
+    widget.add_controller(drop_target);
+}
+
+fn attach_tag_drop_target(
+    row: &ListBoxRow,
+    tag_name: String,
+    color_hex: String,
+    on_files_dropped: &Rc<dyn Fn()>,
+) {
+    let drop_target = DropTarget::new(
+        gdk::FileList::static_type(),
+        gdk::DragAction::COPY | gdk::DragAction::MOVE,
+    );
+    let r_enter = row.clone();
+    drop_target.connect_enter(move |_, _, _| {
+        r_enter.add_css_class("folder-drop-hover");
+        gdk::DragAction::COPY
+    });
+    drop_target.connect_motion(move |_, _, _| gdk::DragAction::COPY);
+    let r_leave = row.clone();
+    drop_target.connect_leave(move |_| {
+        r_leave.remove_css_class("folder-drop-hover");
+    });
+    let r_drop = row.clone();
+    let reload_cb = on_files_dropped.clone();
+    drop_target.connect_drop(move |_, value, _, _| {
+        r_drop.remove_css_class("folder-drop-hover");
+        if let Ok(file_list) = value.get::<gdk::FileList>() {
+            let mut tagged = false;
+            if let Ok(conn) = crate::db::open_db() {
+                for file in file_list.files() {
+                    if let Some(path) = file.path() {
+                        if crate::db::set_file_tag(&conn, &path, &tag_name, &color_hex).is_ok() {
+                            tagged = true;
+                        }
+                    }
+                }
+            }
+            if tagged {
+                reload_cb();
+                return true;
+            }
+        }
+        false
+    });
+    row.add_controller(drop_target);
+}
+
+fn show_rename_bookmark_popover(
+    anchor: &impl IsA<gtk4::Widget>,
+    folder_path: PathBuf,
+    current_title: String,
+    pointing_to: Option<(f64, f64)>,
+) {
+    if anchor.root().is_none() {
+        return;
+    }
+
+    let es = malus_de_common::is_spanish_locale();
+    let pop = Popover::builder()
+        .has_arrow(false)
+        .autohide(true)
+        .css_classes(["malus-popover-menu"])
+        .build();
+    pop.set_parent(anchor);
+    if let Some((x, y)) = pointing_to {
+        let rect = gdk::Rectangle::new(x.round() as i32, y.round() as i32, 1, 1);
+        pop.set_pointing_to(Some(&rect));
+    }
+    pop.connect_closed(|p| p.unparent());
+
+    let container = GtkBox::new(Orientation::Vertical, 8);
+    container.set_margin_top(10);
+    container.set_margin_bottom(10);
+    container.set_margin_start(10);
+    container.set_margin_end(10);
+    container.set_width_request(220);
+
+    let title_lbl = Label::builder()
+        .label(if es {
+            "Renombrar marcador"
+        } else {
+            "Rename Bookmark"
+        })
+        .halign(Align::Start)
+        .css_classes(["popover-menu-header"])
+        .build();
+    container.append(&title_lbl);
+
+    let entry = Entry::builder()
+        .text(&current_title)
+        .hexpand(true)
+        .width_chars(22)
+        .build();
+    container.append(&entry);
+
+    let btn_box = GtkBox::new(Orientation::Horizontal, 6);
+    btn_box.set_halign(Align::End);
+
+    let cancel_btn = Button::builder()
+        .label(if es { "Cancelar" } else { "Cancel" })
+        .css_classes(["popover-menu-item"])
+        .build();
+    {
+        let p_c = pop.clone();
+        cancel_btn.connect_clicked(move |_| p_c.popdown());
+    }
+    btn_box.append(&cancel_btn);
+
+    let save_btn = Button::builder()
+        .label(if es { "Guardar" } else { "Save" })
+        .css_classes(["popover-menu-item", "suggested-action"])
+        .build();
+    {
+        let p_s = pop.clone();
+        let entry_ref = entry.clone();
+        save_btn.connect_clicked(move |_| {
+            let new_title = entry_ref.text();
+            let trimmed = new_title.trim();
+            if trimmed.is_empty() {
+                entry_ref.grab_focus();
+                return;
+            }
+            p_s.popdown();
+            if trimmed != current_title {
+                if let Ok(conn) = crate::db::open_db() {
+                    if crate::db::rename_bookmark(&conn, &folder_path, trimmed).unwrap_or(false) {
+                        refresh_all_sidebars();
+                    }
+                }
+            }
+        });
+    }
+    btn_box.append(&save_btn);
+    container.append(&btn_box);
+
+    {
+        let submit = save_btn.clone();
+        entry.connect_activate(move |_| {
+            submit.emit_clicked();
+        });
+    }
+
+    pop.set_child(Some(&container));
+    pop.popup();
+
+    let entry_focus = entry;
+    glib::idle_add_local_once(move || {
+        entry_focus.grab_focus();
+        entry_focus.select_region(0, -1);
+    });
+}
+
+fn attach_bookmark_context_menu(
+    row: &ListBoxRow,
+    folder_path: PathBuf,
+    current_title: String,
+    on_navigate: &Rc<dyn Fn(PathBuf)>,
+) {
+    let right_click = GestureClick::new();
+    right_click.set_button(gdk::BUTTON_SECONDARY);
+    let row_ref = row.clone();
+    let nav_cb = on_navigate.clone();
+    right_click.connect_pressed(move |g, _n, x, y| {
+        g.set_state(gtk4::EventSequenceState::Claimed);
+        let es = malus_de_common::is_spanish_locale();
+        let pop = Popover::builder()
+            .has_arrow(false)
+            .css_classes(["malus-popover-menu"])
+            .build();
+        pop.set_parent(&row_ref);
+        let rect = gdk::Rectangle::new(x.round() as i32, y.round() as i32, 1, 1);
+        pop.set_pointing_to(Some(&rect));
+        pop.connect_closed(|p| p.unparent());
+
+        let vbox = GtkBox::new(Orientation::Vertical, 2);
+
+        let open_btn = Button::builder()
+            .label(if es { "Abrir" } else { "Open" })
+            .has_frame(false)
+            .css_classes(["popover-menu-item"])
+            .build();
+        if let Some(lbl) = open_btn.child().and_then(|c| c.downcast::<Label>().ok()) {
+            lbl.set_xalign(0.0);
+        }
+        {
+            let p_open = pop.clone();
+            let nav = nav_cb.clone();
+            let target = folder_path.clone();
+            open_btn.connect_clicked(move |_| {
+                p_open.popdown();
+                if target.is_dir() {
+                    nav(target.clone());
+                } else {
+                    let _ = crate::fs_backend::open_file(&target);
+                }
+            });
+        }
+        vbox.append(&open_btn);
+
+        let rename_btn = Button::builder()
+            .label(if es {
+                "Renombrar marcador…"
+            } else {
+                "Rename Bookmark…"
+            })
+            .has_frame(false)
+            .css_classes(["popover-menu-item"])
+            .build();
+        if let Some(lbl) = rename_btn.child().and_then(|c| c.downcast::<Label>().ok()) {
+            lbl.set_xalign(0.0);
+        }
+        {
+            let p_ren = pop.clone();
+            let r_anchor = row_ref.clone();
+            let target = folder_path.clone();
+            let title_init = current_title.clone();
+            rename_btn.connect_clicked(move |_| {
+                p_ren.popdown();
+                let aw = r_anchor.clone();
+                let tp = target.clone();
+                let ti = title_init.clone();
+                glib::idle_add_local_once(move || {
+                    show_rename_bookmark_popover(&aw, tp, ti, Some((x, y)));
+                });
+            });
+        }
+        vbox.append(&rename_btn);
+
+        let remove_btn = Button::builder()
+            .label(if es {
+                "Quitar de marcadores"
+            } else {
+                "Remove Bookmark"
+            })
+            .has_frame(false)
+            .css_classes(["popover-menu-item"])
+            .build();
+        if let Some(lbl) = remove_btn.child().and_then(|c| c.downcast::<Label>().ok()) {
+            lbl.set_xalign(0.0);
+        }
+        {
+            let p_rem = pop.clone();
+            let target = folder_path.clone();
+            remove_btn.connect_clicked(move |_| {
+                p_rem.popdown();
+                if let Ok(conn) = crate::db::open_db() {
+                    if crate::db::remove_bookmark(&conn, &target).unwrap_or(false) {
+                        refresh_all_sidebars();
+                    }
+                }
+            });
+        }
+        vbox.append(&remove_btn);
+
+        pop.set_child(Some(&vbox));
+        pop.popup();
+    });
+    row.add_controller(right_click);
 }
 
 fn attach_virtual_row_handlers(row: &ListBoxRow, cb: Rc<dyn Fn()>) {

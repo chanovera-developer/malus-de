@@ -7,12 +7,15 @@ use gtk4::{
     ScrolledWindow,
 };
 use malus_de_common::config::BranchesConfig;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 pub struct ListView {
     container: GtkBox,
     list_box: ListBox,
+    items: RefCell<Vec<FileItem>>,
+    current_folder: Rc<RefCell<Option<PathBuf>>>,
     icon_size: Rc<Cell<i32>>,
     on_navigate: NavigateCallback,
     #[allow(dead_code)]
@@ -39,6 +42,8 @@ impl ListView {
             sel_cb(count);
         });
 
+        let current_folder = Rc::new(RefCell::new(None::<PathBuf>));
+
         let scrolled = ScrolledWindow::builder()
             .hscrollbar_policy(PolicyType::Automatic)
             .vscrollbar_policy(PolicyType::Automatic)
@@ -46,15 +51,43 @@ impl ListView {
             .child(&list_box)
             .build();
 
+        let bg_click = GestureClick::new();
+        bg_click.set_button(gdk::BUTTON_SECONDARY);
+        let scrolled_menu = scrolled.clone();
+        let folder_bg = current_folder.clone();
+        let on_nav_bg = on_navigate.clone();
+        bg_click.connect_pressed(move |g, _n, x, y| {
+            let Some(dir) = folder_bg.borrow().clone() else {
+                return;
+            };
+            g.set_state(gtk4::EventSequenceState::Claimed);
+            let nav = on_nav_bg.clone();
+            let dir_reload = dir.clone();
+            crate::views::show_background_create_menu(
+                &scrolled_menu,
+                x,
+                y,
+                dir,
+                Rc::new(move |_| nav(dir_reload.clone())),
+            );
+        });
+        scrolled.add_controller(bg_click);
+
         container.append(&scrolled);
 
         Self {
             container,
             list_box,
+            items: RefCell::new(Vec::new()),
+            current_folder,
             icon_size,
             on_navigate,
             on_selection_changed,
         }
+    }
+
+    pub fn set_current_folder(&self, folder: Option<&Path>) {
+        *self.current_folder.borrow_mut() = folder.map(Path::to_path_buf);
     }
 
     pub fn set_icon_size(&self, size: i32) {
@@ -69,10 +102,18 @@ impl ListView {
         &self.container
     }
 
+    pub fn get_selected_item_and_widget(&self) -> Option<(FileItem, gtk4::Widget)> {
+        let row = self.list_box.selected_rows().into_iter().next()?;
+        let idx = row.index() as usize;
+        let item = self.items.borrow().get(idx).cloned()?;
+        Some((item, row.upcast()))
+    }
+
     pub fn set_items(&self, items: &[FileItem]) {
         while let Some(child) = self.list_box.first_child() {
             self.list_box.remove(&child);
         }
+        *self.items.borrow_mut() = items.to_vec();
 
         let icon_size = self.icon_size.get();
         for item in items {
@@ -176,6 +217,7 @@ fn create_list_row(item: &FileItem, icon_size: i32, on_navigate: NavigateCallbac
     let is_dir = item.is_dir;
     let on_nav_click = on_navigate.clone();
 
+    let row_for_menu = row.clone();
     gesture.connect_pressed(move |g, n_press, x, y| {
         let button = g.current_button();
 
@@ -187,7 +229,13 @@ fn create_list_row(item: &FileItem, icon_size: i32, on_navigate: NavigateCallbac
             }
         } else if button == gdk::BUTTON_SECONDARY {
             g.set_state(gtk4::EventSequenceState::Claimed);
-            show_item_context_menu(&hbox, &path, is_dir, Some((x, y)), Some(&on_nav_click));
+            if let Some(lb) = row_for_menu.parent().and_then(|p| p.downcast::<ListBox>().ok()) {
+                if !row_for_menu.is_selected() {
+                    lb.unselect_all();
+                    lb.select_row(Some(&row_for_menu));
+                }
+            }
+            show_item_context_menu(&hbox, &path, is_dir, Some((x, y)), Some(&on_nav_click), None);
         }
     });
 

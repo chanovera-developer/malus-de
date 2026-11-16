@@ -31,6 +31,7 @@ struct ColumnViewInner {
     columns: RefCell<Vec<ColumnData>>,
     preview_box: RefCell<Option<GtkBox>>,
     current_root: RefCell<PathBuf>,
+    can_create: std::cell::Cell<bool>,
     show_hidden: RefCell<bool>,
     sort_by: RefCell<SortBy>,
     sort_order: RefCell<SortOrder>,
@@ -60,6 +61,7 @@ impl ColumnView {
             columns: RefCell::new(Vec::new()),
             preview_box: RefCell::new(None),
             current_root: RefCell::new(PathBuf::from("/")),
+            can_create: std::cell::Cell::new(false),
             show_hidden: RefCell::new(false),
             sort_by: RefCell::new(SortBy::Name),
             sort_order: RefCell::new(SortOrder::Ascending),
@@ -72,6 +74,12 @@ impl ColumnView {
 
     pub fn widget(&self) -> &ScrolledWindow {
         &self.inner.scrolled
+    }
+
+    pub fn set_current_folder(&self, folder: Option<&Path>) {
+        self.inner
+            .can_create
+            .set(folder.is_some_and(crate::views::can_create_in_folder));
     }
 
     pub fn set_root(
@@ -91,12 +99,13 @@ impl ColumnView {
         self.inner.push_column(0, path.to_path_buf(), items.to_vec());
     }
 
-    pub fn get_selected_item(&self) -> Option<FileItem> {
+    pub fn get_selected_item_and_widget(&self) -> Option<(FileItem, gtk4::Widget)> {
         let columns = self.inner.columns.borrow();
         let last_col = columns.last()?;
         let selected_row = last_col.list_box.selected_row()?;
         let idx = selected_row.index() as usize;
-        last_col.items.get(idx).cloned()
+        let item = last_col.items.get(idx).cloned()?;
+        Some((item, selected_row.upcast()))
     }
 }
 
@@ -137,7 +146,7 @@ impl ColumnViewInner {
     fn create_column_widget(
         self: &Rc<Self>,
         col_idx: usize,
-        _path: PathBuf,
+        path: PathBuf,
         items: Vec<FileItem>,
     ) -> (GtkBox, ListBox) {
         let col_box = GtkBox::new(Orientation::Vertical, 0);
@@ -161,6 +170,28 @@ impl ColumnViewInner {
             .vexpand(true)
             .child(&list_box)
             .build();
+
+        let bg_click = GestureClick::new();
+        bg_click.set_button(gdk::BUTTON_SECONDARY);
+        let self_bg = self.clone();
+        let scrolled_bg = scrolled.clone();
+        let col_dir = path.clone();
+        bg_click.connect_pressed(move |g, _n, x, y| {
+            if !self_bg.can_create.get() {
+                return;
+            }
+            g.set_state(gtk4::EventSequenceState::Claimed);
+            let nav = self_bg.on_navigate.clone();
+            let dir_reload = col_dir.clone();
+            crate::views::show_background_create_menu(
+                &scrolled_bg,
+                x,
+                y,
+                col_dir.clone(),
+                Rc::new(move |_| nav(dir_reload.clone())),
+            );
+        });
+        scrolled.add_controller(bg_click);
 
         col_box.append(&scrolled);
 
@@ -439,12 +470,18 @@ fn create_column_row(item: &FileItem, on_navigate: &NavigateCallback) -> ListBox
     let row_for_menu = row.clone();
     right_click.connect_pressed(move |g, _n, x, y| {
         g.set_state(gtk4::EventSequenceState::Claimed);
+        if let Some(lb) = row_for_menu.parent().and_then(|p| p.downcast::<ListBox>().ok()) {
+            if !row_for_menu.is_selected() {
+                lb.select_row(Some(&row_for_menu));
+            }
+        }
         show_item_context_menu(
             &row_for_menu,
             &path_for_menu,
             is_dir_for_menu,
             Some((x, y)),
             Some(&on_nav_menu),
+            None,
         );
     });
     row.add_controller(right_click);

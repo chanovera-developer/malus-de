@@ -62,6 +62,11 @@ pub fn open_db() -> Result<Connection, rusqlite::Error> {
             tag_name TEXT NOT NULL,
             tag_color TEXT NOT NULL,
             PRIMARY KEY (file_path, tag_name)
+        );
+        CREATE TABLE IF NOT EXISTS sidebar_bookmarks (
+            folder_path TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0
         );",
     )?;
 
@@ -268,9 +273,204 @@ pub fn get_files_by_tag(conn: &Connection, tag_name: &str) -> Vec<PathBuf> {
     rows.map(|iter| iter.flatten().collect()).unwrap_or_default()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BookmarkEntry {
+    pub folder_path: PathBuf,
+    pub title: String,
+}
+
+fn default_bookmark_title(folder: &Path) -> String {
+    if folder == Path::new("/") {
+        "Macintosh HD".to_string()
+    } else {
+        folder
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| folder.to_string_lossy().into_owned())
+    }
+}
+
+pub fn get_bookmarks(conn: &Connection) -> Vec<BookmarkEntry> {
+    let mut stmt = match conn.prepare(
+        "SELECT folder_path, title FROM sidebar_bookmarks ORDER BY sort_order ASC, rowid ASC",
+    ) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let rows = stmt.query_map([], |row| {
+        let p: String = row.get(0)?;
+        let title: String = row.get(1)?;
+        Ok(BookmarkEntry {
+            folder_path: PathBuf::from(p),
+            title,
+        })
+    });
+    rows.map(|iter| iter.flatten().collect()).unwrap_or_default()
+}
+
+pub fn is_bookmark(conn: &Connection, folder: &Path) -> bool {
+    let p_str = folder.to_string_lossy();
+    conn.query_row(
+        "SELECT 1 FROM sidebar_bookmarks WHERE folder_path = ?1 LIMIT 1",
+        params![p_str],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
+pub fn add_bookmark(
+    conn: &Connection,
+    folder: &Path,
+    title: Option<&str>,
+) -> Result<bool, rusqlite::Error> {
+    let clean_title = title
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| default_bookmark_title(folder));
+    let p_str = folder.to_string_lossy();
+    let next_order: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM sidebar_bookmarks",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(1);
+    let inserted = conn.execute(
+        "INSERT OR IGNORE INTO sidebar_bookmarks (folder_path, title, sort_order)
+         VALUES (?1, ?2, ?3)",
+        params![p_str, clean_title, next_order],
+    )?;
+    Ok(inserted > 0)
+}
+
+pub fn remove_bookmark(conn: &Connection, folder: &Path) -> Result<bool, rusqlite::Error> {
+    let p_str = folder.to_string_lossy();
+    let removed = conn.execute(
+        "DELETE FROM sidebar_bookmarks WHERE folder_path = ?1",
+        params![p_str],
+    )?;
+    Ok(removed > 0)
+}
+
+/// Cambia únicamente el título visible de un marcador en el sidebar sin renombrar el elemento en disco.
+pub fn rename_bookmark(
+    conn: &Connection,
+    folder: &Path,
+    new_title: &str,
+) -> Result<bool, rusqlite::Error> {
+    let clean = new_title.trim();
+    if clean.is_empty() {
+        return Ok(false);
+    }
+    let p_str = folder.to_string_lossy();
+    let updated = conn.execute(
+        "UPDATE sidebar_bookmarks SET title = ?1 WHERE folder_path = ?2",
+        params![clean, p_str],
+    )?;
+    Ok(updated > 0)
+}
+
+/// Migra posiciones, ajustes de carpeta y etiquetas cuando un archivo o carpeta cambia de nombre.
+pub fn rename_item_metadata(
+    conn: &mut Connection,
+    old_path: &Path,
+    new_path: &Path,
+    is_dir: bool,
+) -> Result<(), rusqlite::Error> {
+    let tx = conn.transaction()?;
+
+    if let (Some(parent), Some(old_name), Some(new_name)) = (
+        old_path.parent(),
+        old_path.file_name().map(|n| n.to_string_lossy().to_string()),
+        new_path.file_name().map(|n| n.to_string_lossy().to_string()),
+    ) {
+        let parent_str = parent.to_string_lossy().to_string();
+        tx.execute(
+            "DELETE FROM folder_positions WHERE folder_path = ?1 AND file_name = ?2",
+            params![parent_str, new_name],
+        )?;
+        tx.execute(
+            "UPDATE folder_positions SET file_name = ?1 WHERE folder_path = ?2 AND file_name = ?3",
+            params![new_name, parent_str, old_name],
+        )?;
+    }
+
+    let old_str = old_path.to_string_lossy().to_string();
+    let new_str = new_path.to_string_lossy().to_string();
+    let old_leaf = old_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let new_leaf = new_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    tx.execute(
+        "UPDATE OR REPLACE file_tags SET file_path = ?1 WHERE file_path = ?2",
+        params![new_str, old_str],
+    )?;
+    if !is_dir && old_str != new_str {
+        let _ = tx.execute(
+            "UPDATE OR REPLACE sidebar_bookmarks
+             SET folder_path = ?1,
+                 title = CASE WHEN title = ?2 THEN ?3 ELSE title END
+             WHERE folder_path = ?4",
+            params![new_str, old_leaf, new_leaf, old_str],
+        );
+    }
+
+    if is_dir && old_str != new_str {
+        let old_base = old_str.trim_end_matches('/');
+        let new_base = new_str.trim_end_matches('/');
+        let child_like = format!("{}/%", old_base);
+        let prefix_len = old_base.chars().count() as i64;
+
+        tx.execute(
+            "UPDATE OR REPLACE folder_settings
+             SET folder_path = CASE
+                 WHEN folder_path = ?1 THEN ?2
+                 ELSE ?2 || substr(folder_path, ?3 + 1)
+             END
+             WHERE folder_path = ?1 OR folder_path LIKE ?4",
+            params![old_base, new_base, prefix_len, child_like],
+        )?;
+        tx.execute(
+            "UPDATE OR REPLACE folder_positions
+             SET folder_path = CASE
+                 WHEN folder_path = ?1 THEN ?2
+                 ELSE ?2 || substr(folder_path, ?3 + 1)
+             END
+             WHERE folder_path = ?1 OR folder_path LIKE ?4",
+            params![old_base, new_base, prefix_len, child_like],
+        )?;
+        let _ = tx.execute(
+            "UPDATE OR REPLACE sidebar_bookmarks
+             SET folder_path = CASE
+                 WHEN folder_path = ?1 THEN ?2
+                 ELSE ?2 || substr(folder_path, ?3 + 1)
+             END,
+             title = CASE
+                 WHEN folder_path = ?1 AND title = ?5 THEN ?6
+                 ELSE title
+             END
+             WHERE folder_path = ?1 OR folder_path LIKE ?4",
+            params![old_base, new_base, prefix_len, child_like, old_leaf, new_leaf],
+        );
+    }
+
+    tx.commit()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{get_folder_icon_size, open_db, set_folder_icon_size};
+    use super::{
+        add_bookmark, get_bookmarks, get_folder_icon_size, get_layout_mode, get_positions,
+        is_bookmark, open_db, remove_bookmark, rename_bookmark, rename_item_metadata,
+        save_position, set_folder_icon_size, set_layout_mode, LayoutMode,
+    };
     use std::path::Path;
 
     #[test]
@@ -291,6 +491,101 @@ mod tests {
         set_folder_icon_size(&conn, folder, None).unwrap();
         assert_eq!(get_folder_icon_size(&conn, folder), None);
         let _ = open_db;
+    }
+
+    #[test]
+    fn rename_item_metadata_preserves_positions_and_subfolder_settings() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE folder_positions (
+                folder_path TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                pos_x INTEGER NOT NULL,
+                pos_y INTEGER NOT NULL,
+                PRIMARY KEY (folder_path, file_name)
+            );
+            CREATE TABLE folder_settings (
+                folder_path TEXT PRIMARY KEY,
+                layout_mode TEXT NOT NULL DEFAULT 'auto',
+                icon_size INTEGER
+            );
+            CREATE TABLE file_tags (
+                file_path TEXT NOT NULL,
+                tag_name TEXT NOT NULL,
+                tag_color TEXT NOT NULL,
+                PRIMARY KEY (file_path, tag_name)
+            );",
+        )
+        .unwrap();
+
+        let parent = Path::new("/tmp/parent");
+        let old_dir = parent.join("Antes");
+        let new_dir = parent.join("Después");
+        save_position(&conn, parent, "Antes", 120, 240).unwrap();
+        set_layout_mode(&conn, &old_dir, LayoutMode::Freeform).unwrap();
+        save_position(&conn, &old_dir, "nota.txt", 40, 60).unwrap();
+
+        rename_item_metadata(&mut conn, &old_dir, &new_dir, true).unwrap();
+
+        let parent_positions = get_positions(&conn, parent);
+        assert_eq!(parent_positions.get("Antes"), None);
+        assert_eq!(parent_positions.get("Después"), Some(&(120, 240)));
+        assert_eq!(get_layout_mode(&conn, &new_dir), LayoutMode::Freeform);
+        assert_eq!(get_positions(&conn, &new_dir).get("nota.txt"), Some(&(40, 60)));
+    }
+
+    #[test]
+    fn bookmarks_crud_and_rename_preserve_order() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE folder_positions (
+                folder_path TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                pos_x INTEGER NOT NULL,
+                pos_y INTEGER NOT NULL,
+                PRIMARY KEY (folder_path, file_name)
+            );
+            CREATE TABLE folder_settings (
+                folder_path TEXT PRIMARY KEY,
+                layout_mode TEXT NOT NULL DEFAULT 'auto',
+                icon_size INTEGER
+            );
+            CREATE TABLE file_tags (
+                file_path TEXT NOT NULL,
+                tag_name TEXT NOT NULL,
+                tag_color TEXT NOT NULL,
+                PRIMARY KEY (file_path, tag_name)
+            );
+            CREATE TABLE sidebar_bookmarks (
+                folder_path TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0
+            );",
+        )
+        .unwrap();
+
+        let p1 = Path::new("/home/cristian/Alfa");
+        let p2 = Path::new("/home/cristian/Beta");
+        assert!(add_bookmark(&conn, p1, None).unwrap());
+        assert!(!add_bookmark(&conn, p1, None).unwrap());
+        assert!(add_bookmark(&conn, p2, Some("Trabajo")).unwrap());
+        assert!(is_bookmark(&conn, p1));
+
+        let p1_renamed = Path::new("/home/cristian/Gamma");
+        rename_item_metadata(&mut conn, p1, p1_renamed, true).unwrap();
+        let list = get_bookmarks(&conn);
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].folder_path, p1_renamed);
+        assert_eq!(list[0].title, "Gamma");
+        assert_eq!(list[1].folder_path, p2);
+        assert_eq!(list[1].title, "Trabajo");
+
+        assert!(rename_bookmark(&conn, p2, "  Proyecto X  ").unwrap());
+        assert_eq!(get_bookmarks(&conn)[1].title, "Proyecto X");
+        assert_eq!(get_bookmarks(&conn)[1].folder_path, p2);
+
+        assert!(remove_bookmark(&conn, p1_renamed).unwrap());
+        assert!(!is_bookmark(&conn, p1_renamed));
     }
 }
 

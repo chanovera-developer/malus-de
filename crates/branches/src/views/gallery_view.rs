@@ -10,6 +10,7 @@ use gtk4::{
 };
 use std::cell::RefCell;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 pub struct GalleryView {
@@ -19,6 +20,7 @@ pub struct GalleryView {
     #[allow(dead_code)]
     carousel_scrolled: ScrolledWindow,
     items: RefCell<Vec<FileItem>>,
+    current_folder: RefCell<Option<PathBuf>>,
     current_index: RefCell<Option<usize>>,
     carousel_widgets: RefCell<Vec<GtkBox>>,
     on_navigate: NavigateCallback,
@@ -67,11 +69,32 @@ impl GalleryView {
             carousel_box,
             carousel_scrolled,
             items: RefCell::new(Vec::new()),
+            current_folder: RefCell::new(None),
             current_index: RefCell::new(None),
             carousel_widgets: RefCell::new(Vec::new()),
             on_navigate,
             on_selection_changed,
         });
+
+        let bg_click = GestureClick::new();
+        bg_click.set_button(gdk::BUTTON_SECONDARY);
+        let g_bg = gallery.clone();
+        bg_click.connect_pressed(move |g, _n, x, y| {
+            let Some(dir) = g_bg.current_folder.borrow().clone() else {
+                return;
+            };
+            g.set_state(gtk4::EventSequenceState::Claimed);
+            let nav = g_bg.on_navigate.clone();
+            let dir_reload = dir.clone();
+            crate::views::show_background_create_menu(
+                &g_bg.canvas_holder,
+                x,
+                y,
+                dir,
+                Rc::new(move |_| nav(dir_reload.clone())),
+            );
+        });
+        gallery.canvas_holder.add_controller(bg_click);
 
         // Controlador de teclado: Flecha Izq / Der navega el carrusel
         let key_controller = EventControllerKey::new();
@@ -109,6 +132,22 @@ impl GalleryView {
 
     pub fn widget(&self) -> &GtkBox {
         &self.container
+    }
+
+    pub fn set_current_folder(&self, folder: Option<&Path>) {
+        *self.current_folder.borrow_mut() = folder.map(Path::to_path_buf);
+    }
+
+    pub fn get_selected_item_and_widget(&self) -> Option<(FileItem, gtk4::Widget)> {
+        let idx = (*self.current_index.borrow())?;
+        let item = self.items.borrow().get(idx).cloned()?;
+        let widget = self
+            .carousel_widgets
+            .borrow()
+            .get(idx)
+            .map(|w| w.clone().upcast())
+            .unwrap_or_else(|| self.container.clone().upcast());
+        Some((item, widget))
     }
 
     pub fn set_items(self: &Rc<Self>, items: &[FileItem]) {
@@ -373,6 +412,7 @@ impl GalleryView {
                     is_dir,
                     Some((x, y)),
                     Some(&on_nav),
+                    None,
                 );
             } else if n_press == 1 {
                 self_click.select_index(index);

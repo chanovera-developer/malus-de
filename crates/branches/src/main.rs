@@ -197,6 +197,14 @@ mod tests {
         assert!(css.contains("@keyframes macos-drop-landing"));
         assert!(css.contains("cubic-bezier(0.16, 1, 0.3, 1)"));
         assert!(css.contains(".branches-icon-canvas:drop(active)"));
+        assert!(css.contains(".branches-sidebar-scroll:drop(active)"));
+        let sidebar_hover_block = css
+            .split(".branches-sidebar-row.folder-drop-hover {")
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .expect("Debe existir .branches-sidebar-row.folder-drop-hover");
+        assert!(sidebar_hover_block.contains("transform: none;"));
+        assert!(sidebar_hover_block.contains("border: none;"));
         assert!(css.contains(".branches-folder-pane.branches-split-mode.branches-pane-active"));
         assert!(css.contains("border: 1.5px solid alpha(@accent_bg_color, 0.55);"));
         assert!(!css.contains("outline: 2px solid alpha(@accent_bg_color, 0.55);"));

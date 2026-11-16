@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 pub type NavigateCallback = std::rc::Rc<dyn Fn(PathBuf)>;
 pub type SelectionCallback = std::rc::Rc<dyn Fn(usize)>;
+pub type RenameCallback = std::rc::Rc<dyn Fn(PathBuf)>;
 
 /// Crea un botón de menú contextual estilizado como ítem unificado de Malus DE.
 pub(super) fn make_context_menu_button(label: &str) -> gtk4::Button {
@@ -111,6 +112,283 @@ fn set_app_pinned_in_dock(app: malus_de_common::config::DockAppConfig, pin: bool
     }
 }
 
+fn is_inside_trash(path: &std::path::Path) -> bool {
+    path.parent().is_some_and(|p| p.ends_with("Trash/files"))
+}
+
+pub(super) fn can_create_in_folder(folder: &std::path::Path) -> bool {
+    !folder.ends_with("Trash/files") && folder.is_dir()
+}
+
+fn make_submenu_trigger_button(label: &str) -> gtk4::Button {
+    use gtk4::prelude::*;
+
+    let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
+    let title = gtk4::Label::builder()
+        .label(label)
+        .halign(gtk4::Align::Start)
+        .hexpand(true)
+        .build();
+    let chevron = gtk4::Label::builder()
+        .label("›")
+        .css_classes(["dim-label"])
+        .build();
+    row.append(&title);
+    row.append(&chevron);
+
+    gtk4::Button::builder()
+        .has_frame(false)
+        .css_classes(["popover-menu-item"])
+        .child(&row)
+        .build()
+}
+
+/// Agrega la entrada «Crear nuevo ›» y su submenú (Carpeta / Documento de texto) al Stack del menú contextual.
+pub(super) fn append_create_new_submenu(
+    popover: &gtk4::Popover,
+    main_box: &gtk4::Box,
+    stack: &gtk4::Stack,
+    target_dir: PathBuf,
+    on_created: RenameCallback,
+) {
+    use gtk4::prelude::*;
+
+    let es = malus_de_common::is_spanish_locale();
+    let trigger_btn = make_submenu_trigger_button(if es { "Crear nuevo" } else { "Create New" });
+    {
+        let st = stack.clone();
+        trigger_btn.connect_clicked(move |_| {
+            st.set_visible_child_name("create_new");
+        });
+    }
+    main_box.append(&trigger_btn);
+
+    let sub_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
+
+    let back_btn = make_context_menu_button(if es { "← Volver" } else { "← Back" });
+    {
+        let st = stack.clone();
+        back_btn.connect_clicked(move |_| {
+            st.set_visible_child_name("main");
+        });
+    }
+    sub_box.append(&back_btn);
+    sub_box.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
+
+    let folder_btn = make_context_menu_button(if es { "Carpeta" } else { "Folder" });
+    {
+        let pop = popover.clone();
+        let dir = target_dir.clone();
+        let cb = on_created.clone();
+        let default_name = if es { "Nueva carpeta" } else { "New Folder" };
+        folder_btn.connect_clicked(move |_| {
+            pop.popdown();
+            if let Ok(created) = crate::operations::create_new_folder(&dir, default_name) {
+                cb(created);
+            }
+        });
+    }
+    sub_box.append(&folder_btn);
+
+    let doc_btn = make_context_menu_button(if es {
+        "Documento de texto"
+    } else {
+        "Text Document"
+    });
+    {
+        let pop = popover.clone();
+        let dir = target_dir;
+        let cb = on_created;
+        let default_stem = if es {
+            "Nuevo documento"
+        } else {
+            "Untitled Document"
+        };
+        doc_btn.connect_clicked(move |_| {
+            pop.popdown();
+            if let Ok(created) = crate::operations::create_new_text_document(&dir, default_stem) {
+                cb(created);
+            }
+        });
+    }
+    sub_box.append(&doc_btn);
+
+    stack.add_named(&sub_box, Some("create_new"));
+}
+
+/// Menú contextual genérico de fondo para vistas sin opciones espaciales (Lista, Columnas, Galería).
+pub(super) fn show_background_create_menu(
+    anchor: &impl gtk4::prelude::IsA<gtk4::Widget>,
+    x: f64,
+    y: f64,
+    target_dir: PathBuf,
+    on_created: RenameCallback,
+) {
+    use gtk4::gdk;
+    use gtk4::prelude::*;
+
+    if anchor.root().is_none() || !can_create_in_folder(&target_dir) {
+        return;
+    }
+
+    let popover = gtk4::Popover::builder()
+        .has_arrow(false)
+        .css_classes(["malus-popover-menu"])
+        .build();
+    popover.set_parent(anchor);
+    let rect = gdk::Rectangle::new(x.round() as i32, y.round() as i32, 1, 1);
+    popover.set_pointing_to(Some(&rect));
+    popover.connect_closed(|p| p.unparent());
+
+    let stack = gtk4::Stack::builder()
+        .transition_type(gtk4::StackTransitionType::SlideLeftRight)
+        .transition_duration(160)
+        .vhomogeneous(false)
+        .build();
+    let main_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
+    stack.add_named(&main_box, Some("main"));
+
+    append_create_new_submenu(&popover, &main_box, &stack, target_dir, on_created);
+
+    stack.set_visible_child_name("main");
+    popover.set_child(Some(&stack));
+    popover.popup();
+}
+
+/// Muestra un popover compacto estilo macOS sobre el elemento para cambiar su nombre.
+pub(crate) fn show_rename_popover(
+    anchor: &impl gtk4::prelude::IsA<gtk4::Widget>,
+    path: PathBuf,
+    is_dir: bool,
+    pointing_to: Option<(f64, f64)>,
+    on_renamed: Option<RenameCallback>,
+) {
+    use gtk4::gdk;
+    use gtk4::prelude::*;
+
+    if anchor.root().is_none() || is_inside_trash(&path) {
+        return;
+    }
+
+    let es = malus_de_common::is_spanish_locale();
+    let initial_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if initial_name.is_empty() {
+        return;
+    }
+
+    let popover = gtk4::Popover::builder()
+        .has_arrow(false)
+        .autohide(true)
+        .css_classes(["malus-popover-menu"])
+        .build();
+    popover.set_parent(anchor);
+    if let Some((x, y)) = pointing_to {
+        let rect = gdk::Rectangle::new(x.round() as i32, y.round() as i32, 1, 1);
+        popover.set_pointing_to(Some(&rect));
+    }
+    popover.connect_closed(|p| p.unparent());
+
+    let container = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+    container.set_margin_top(10);
+    container.set_margin_bottom(10);
+    container.set_margin_start(10);
+    container.set_margin_end(10);
+    container.set_width_request(240);
+
+    let title_lbl = gtk4::Label::builder()
+        .label(if es { "Renombrar" } else { "Rename" })
+        .halign(gtk4::Align::Start)
+        .css_classes(["popover-menu-header"])
+        .build();
+    container.append(&title_lbl);
+
+    let entry = gtk4::Entry::builder()
+        .text(&initial_name)
+        .hexpand(true)
+        .width_chars(24)
+        .build();
+    container.append(&entry);
+
+    let error_lbl = gtk4::Label::builder()
+        .halign(gtk4::Align::Start)
+        .wrap(true)
+        .visible(false)
+        .css_classes(["error"])
+        .build();
+    container.append(&error_lbl);
+
+    let btn_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
+    btn_box.set_halign(gtk4::Align::End);
+
+    let cancel_btn = gtk4::Button::builder()
+        .label(if es { "Cancelar" } else { "Cancel" })
+        .css_classes(["popover-menu-item"])
+        .build();
+    {
+        let pop = popover.clone();
+        cancel_btn.connect_clicked(move |_| pop.popdown());
+    }
+    btn_box.append(&cancel_btn);
+
+    let save_btn = gtk4::Button::builder()
+        .label(if es { "Renombrar" } else { "Rename" })
+        .css_classes(["popover-menu-item", "suggested-action"])
+        .build();
+    {
+        let pop = popover.clone();
+        let entry_ref = entry.clone();
+        let err_ref = error_lbl.clone();
+        let old_path = path.clone();
+        save_btn.connect_clicked(move |_| {
+            let candidate = entry_ref.text();
+            match crate::operations::rename_item(&old_path, candidate.as_str()) {
+                Ok(new_path) => {
+                    pop.popdown();
+                    if new_path != old_path {
+                        crate::sidebar::refresh_all_sidebars();
+                        if let Some(ref cb) = on_renamed {
+                            cb(new_path);
+                        }
+                    }
+                }
+                Err(msg) => {
+                    err_ref.set_text(&msg);
+                    err_ref.set_visible(true);
+                    entry_ref.grab_focus();
+                }
+            }
+        });
+    }
+    btn_box.append(&save_btn);
+    container.append(&btn_box);
+
+    {
+        let err_clear = error_lbl.clone();
+        entry.connect_changed(move |_| {
+            err_clear.set_visible(false);
+        });
+    }
+    {
+        let submit_btn = save_btn.clone();
+        entry.connect_activate(move |_| {
+            submit_btn.emit_clicked();
+        });
+    }
+
+    popover.set_child(Some(&container));
+    popover.popup();
+
+    let entry_focus = entry.clone();
+    let sel_end = crate::operations::rename_selection_end(&initial_name, is_dir);
+    glib::idle_add_local_once(move || {
+        entry_focus.grab_focus();
+        entry_focus.select_region(0, sel_end);
+    });
+}
+
 /// Menú contextual unificado para elementos en Branches (archivos, carpetas y aplicaciones `.desktop`).
 pub(super) fn show_item_context_menu(
     anchor: &impl gtk4::prelude::IsA<gtk4::Widget>,
@@ -118,6 +396,7 @@ pub(super) fn show_item_context_menu(
     is_dir: bool,
     pointing_to: Option<(f64, f64)>,
     on_navigate: Option<&NavigateCallback>,
+    on_renamed: Option<RenameCallback>,
 ) {
     use gtk4::gdk;
     use gtk4::prelude::*;
@@ -227,7 +506,70 @@ pub(super) fn show_item_context_menu(
         vbox.append(&term_btn);
     }
 
-    // 5. Copiar ruta
+    // 5. Renombrar carpeta, archivo o icono
+    if !is_inside_trash(path) && path.parent().is_some() {
+        let rename_btn = make_context_menu_button(if es { "Renombrar…" } else { "Rename…" });
+        let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
+        let p_rename = path.to_path_buf();
+        let pop = popover.clone();
+        let nav_opt = on_navigate.cloned();
+        let rename_cb = on_renamed.or_else(|| {
+            let parent = p_rename.parent().map(|p| p.to_path_buf());
+            match (parent, nav_opt) {
+                (Some(parent_dir), Some(nav)) => Some(std::rc::Rc::new(move |_new_path| {
+                    nav(parent_dir.clone());
+                }) as RenameCallback),
+                _ => None,
+            }
+        });
+        rename_btn.connect_clicked(move |_| {
+            pop.popdown();
+            let aw = anchor_widget.clone();
+            let pr = p_rename.clone();
+            let cb = rename_cb.clone();
+            glib::idle_add_local_once(move || {
+                show_rename_popover(&aw, pr, is_dir, pointing_to, cb);
+            });
+        });
+        vbox.append(&rename_btn);
+    }
+
+    // 6. Añadir / Quitar de marcadores (para carpetas y archivos)
+    if !is_inside_trash(path) && path != std::path::Path::new("/") {
+        let already_bookmarked = crate::db::open_db()
+            .map(|conn| crate::db::is_bookmark(&conn, path))
+            .unwrap_or(false);
+        let bm_label = if already_bookmarked {
+            if es {
+                "Quitar de marcadores"
+            } else {
+                "Remove Bookmark"
+            }
+        } else if es {
+            "Añadir a marcadores"
+        } else {
+            "Add to Bookmarks"
+        };
+        let bm_btn = make_context_menu_button(bm_label);
+        let p_bm = path.to_path_buf();
+        let pop = popover.clone();
+        bm_btn.connect_clicked(move |_| {
+            pop.popdown();
+            if let Ok(conn) = crate::db::open_db() {
+                let changed = if already_bookmarked {
+                    crate::db::remove_bookmark(&conn, &p_bm).unwrap_or(false)
+                } else {
+                    crate::db::add_bookmark(&conn, &p_bm, None).unwrap_or(false)
+                };
+                if changed {
+                    crate::sidebar::refresh_all_sidebars();
+                }
+            }
+        });
+        vbox.append(&bm_btn);
+    }
+
+    // 7. Copiar ruta
     let copy_btn = make_context_menu_button(if es { "Copiar ruta" } else { "Copy Path" });
     {
         let p_copy = path.to_path_buf();

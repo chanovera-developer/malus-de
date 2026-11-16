@@ -256,6 +256,7 @@ pub struct IconView {
     container: ScrolledWindow,
     fixed_canvas: Fixed,
     current_folder: Rc<RefCell<PathBuf>>,
+    can_create_here: Rc<Cell<bool>>,
     layout_mode: Rc<RefCell<LayoutMode>>,
     default_icon_size: Rc<Cell<i32>>,
     active_icon_size: Rc<Cell<i32>>,
@@ -293,6 +294,7 @@ impl IconView {
             .build();
 
         let current_folder = Rc::new(RefCell::new(PathBuf::from("/")));
+        let can_create_here = Rc::new(Cell::new(false));
         let layout_mode = Rc::new(RefCell::new(LayoutMode::Auto));
         let default_icon_size = Rc::new(Cell::new(initial_icon_size));
         let active_icon_size = Rc::new(Cell::new(initial_icon_size));
@@ -311,6 +313,7 @@ impl IconView {
             container,
             fixed_canvas,
             current_folder,
+            can_create_here,
             layout_mode,
             default_icon_size,
             active_icon_size,
@@ -333,6 +336,39 @@ impl IconView {
         view.setup_resize_reflow();
 
         view
+    }
+
+    pub fn set_current_folder(&self, folder: Option<&std::path::Path>) {
+        if let Some(dir) = folder {
+            *self.current_folder.borrow_mut() = dir.to_path_buf();
+            self.can_create_here
+                .set(crate::views::can_create_in_folder(dir));
+        } else {
+            self.can_create_here.set(false);
+        }
+    }
+
+    pub fn queue_select_name(&self, name: &str) {
+        self.pending_select_names.borrow_mut().insert(name.to_string());
+    }
+
+    pub fn get_selected_item_and_widget(&self, items: &[FileItem]) -> Option<(FileItem, gtk4::Widget)> {
+        let sel = self.selected_items.borrow();
+        if sel.is_empty() {
+            return None;
+        }
+        let order = self.item_order.borrow();
+        let selected_name = order
+            .iter()
+            .find(|name| sel.contains(*name))
+            .or_else(|| sel.iter().next())?;
+        let item = items.iter().find(|it| &it.name == selected_name)?.clone();
+        let widget = self
+            .item_widgets
+            .borrow()
+            .get(selected_name)
+            .map(|data| data.borrow().widget.clone().upcast())?;
+        Some((item, widget))
     }
 
     fn viewport_width(&self) -> i32 {
@@ -373,6 +409,7 @@ impl IconView {
             container: self.container.clone(),
             fixed: self.fixed_canvas.clone(),
             current_folder: self.current_folder.clone(),
+            can_create_here: self.can_create_here.clone(),
             layout_mode: self.layout_mode.clone(),
             active_icon_size: self.active_icon_size.clone(),
             grid_spacing: self.grid_spacing.clone(),
@@ -381,6 +418,8 @@ impl IconView {
             is_animating: self.is_animating.clone(),
             item_order: self.item_order.clone(),
             item_widgets: self.item_widgets.clone(),
+            pending_select_names: self.pending_select_names.clone(),
+            on_navigate: self.on_navigate.clone(),
         }
     }
 
@@ -680,6 +719,8 @@ impl IconView {
         let name_for_click = item.name.clone();
         let vbox_for_click = vbox.clone();
         let on_sel_cb = self.on_selection_changed.clone();
+        let pending_for_menu = self.pending_select_names.clone();
+        let folder_for_menu = self.current_folder.clone();
 
         click_gesture.connect_pressed(move |g, n_press, x, y| {
             let button = g.current_button();
@@ -701,7 +742,34 @@ impl IconView {
                 }
             } else if button == gdk::BUTTON_SECONDARY {
                 g.set_state(gtk4::EventSequenceState::Claimed);
-                show_item_context_menu(&vbox_for_click, &path, is_dir, Some((x, y)), Some(&on_nav));
+                if !sel_items.borrow().contains(&name_for_click) {
+                    select_single_spatial_item(
+                        &widgets_for_click.borrow(),
+                        &sel_items,
+                        &name_for_click,
+                        &on_sel_cb,
+                    );
+                }
+                let pending_cb = pending_for_menu.clone();
+                let folder_cb = folder_for_menu.clone();
+                let on_nav_rename = on_nav.clone();
+                let on_renamed: crate::views::RenameCallback = Rc::new(move |new_path| {
+                    if let Some(new_name) = new_path.file_name() {
+                        pending_cb
+                            .borrow_mut()
+                            .insert(new_name.to_string_lossy().into_owned());
+                    }
+                    let reload_dir = folder_cb.borrow().clone();
+                    on_nav_rename(reload_dir);
+                });
+                show_item_context_menu(
+                    &vbox_for_click,
+                    &path,
+                    is_dir,
+                    Some((x, y)),
+                    Some(&on_nav),
+                    Some(on_renamed),
+                );
             }
         });
         vbox.add_controller(click_gesture);
@@ -1030,6 +1098,7 @@ struct IconViewWeak {
     container: ScrolledWindow,
     fixed: Fixed,
     current_folder: Rc<RefCell<PathBuf>>,
+    can_create_here: Rc<Cell<bool>>,
     layout_mode: Rc<RefCell<LayoutMode>>,
     active_icon_size: Rc<Cell<i32>>,
     grid_spacing: Rc<Cell<i32>>,
@@ -1038,6 +1107,8 @@ struct IconViewWeak {
     is_animating: Rc<Cell<bool>>,
     item_order: Rc<RefCell<Vec<String>>>,
     item_widgets: Rc<RefCell<HashMap<String, Rc<RefCell<ItemWidgetData>>>>>,
+    pending_select_names: Rc<RefCell<HashSet<String>>>,
+    on_navigate: NavigateCallback,
 }
 
 impl IconViewWeak {
@@ -1259,7 +1330,49 @@ fn show_canvas_context_menu(
     let rect = gdk::Rectangle::new(x as i32, y as i32, 1, 1);
     popover.set_pointing_to(Some(&rect));
 
+    let stack = gtk4::Stack::builder()
+        .transition_type(gtk4::StackTransitionType::SlideLeftRight)
+        .transition_duration(160)
+        .vhomogeneous(false)
+        .build();
+
     let vbox = GtkBox::new(Orientation::Vertical, 2);
+    stack.add_named(&vbox, Some("main"));
+
+    let target_dir = folder_ref.borrow().clone();
+    if view_weak.can_create_here.get() && crate::views::can_create_in_folder(&target_dir) {
+        let pending_create = view_weak.pending_select_names.clone();
+        let nav_create = view_weak.on_navigate.clone();
+        let layout_create = *layout_ref.borrow();
+        let metrics = IconGridMetrics::from_icon_size(
+            view_weak.active_icon_size.get(),
+            view_weak.grid_spacing.get(),
+        );
+        let dir_create = target_dir.clone();
+        let on_created: crate::views::RenameCallback = Rc::new(move |created_path| {
+            if let Some(new_name) = created_path.file_name().map(|n| n.to_string_lossy().into_owned()) {
+                if layout_create != LayoutMode::Auto {
+                    let (px, py) = if layout_create == LayoutMode::SnapToGrid {
+                        snap_to_grid_cell(
+                            x.round() as i32,
+                            y.round() as i32,
+                            metrics.cell_width(),
+                            metrics.cell_height(),
+                        )
+                    } else {
+                        ((x.round() as i32).max(MARGIN_LEFT), (y.round() as i32).max(MARGIN_TOP))
+                    };
+                    if let Ok(conn) = db::open_db() {
+                        let _ = db::save_position(&conn, &dir_create, &new_name, px, py);
+                    }
+                }
+                pending_create.borrow_mut().insert(new_name);
+            }
+            nav_create(dir_create.clone());
+        });
+        crate::views::append_create_new_submenu(&popover, &vbox, &stack, target_dir, on_created);
+        vbox.append(&gtk4::Separator::new(Orientation::Horizontal));
+    }
 
     let lbl_layout = Label::builder()
         .label("Disposición de iconos")
@@ -1351,7 +1464,8 @@ fn show_canvas_context_menu(
     });
     vbox.append(&btn_clean);
 
-    popover.set_child(Some(&vbox));
+    stack.set_visible_child_name("main");
+    popover.set_child(Some(&stack));
     popover.popup();
 }
 

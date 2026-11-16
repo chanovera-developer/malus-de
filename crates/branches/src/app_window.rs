@@ -343,6 +343,27 @@ impl BranchesWindow {
                     }
                 }
             },
+            {
+                let w_clone = win_weak_for_nav.clone();
+                move || {
+                    if let Some(w) = w_clone.borrow().as_ref() {
+                        w.primary_pane.reload();
+                        if *w.split_view_active.borrow() {
+                            w.secondary_pane.reload();
+                        }
+                    }
+                }
+            },
+            {
+                let w_clone = win_weak_for_nav.clone();
+                move || {
+                    w_clone
+                        .borrow()
+                        .as_ref()
+                        .map(|w| w.active_pane().current_path())
+                        .unwrap_or_else(|| PathBuf::from("/"))
+                }
+            },
         ));
 
         let path_bar = Rc::new(PathBar::new({
@@ -869,7 +890,14 @@ impl BranchesWindow {
                 return glib::Propagation::Stop;
             }
 
-            if keyval == gdk::Key::space {
+            let focus_is_editable = gtk4::prelude::GtkWindowExt::focus(&bw.window)
+                .is_some_and(|w| w.is::<gtk4::Editable>());
+            if !focus_is_editable && keyval == gdk::Key::F2 {
+                bw.active_pane().rename_selected();
+                return glib::Propagation::Stop;
+            }
+
+            if !focus_is_editable && keyval == gdk::Key::space {
                 bw.toggle_quick_look();
                 return glib::Propagation::Stop;
             }
@@ -882,7 +910,7 @@ impl BranchesWindow {
                 bw.active_pane().go_forward();
                 return glib::Propagation::Stop;
             }
-            if (is_alt && keyval == gdk::Key::Up) || keyval == gdk::Key::BackSpace {
+            if (is_alt && keyval == gdk::Key::Up) || (!focus_is_editable && keyval == gdk::Key::BackSpace) {
                 bw.active_pane().go_up();
                 return glib::Propagation::Stop;
             }
@@ -899,7 +927,7 @@ impl BranchesWindow {
                 bw.active_pane().duplicate_selected();
                 return glib::Propagation::Stop;
             }
-            if keyval == gdk::Key::Delete {
+            if !focus_is_editable && keyval == gdk::Key::Delete {
                 bw.active_pane().trash_selected();
                 return glib::Propagation::Stop;
             }

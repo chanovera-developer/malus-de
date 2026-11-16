@@ -305,6 +305,10 @@ impl FolderPane {
         match load_directory(&current_path, show_hidden, sort_by, sort_order, &search_query) {
             Ok(items) => {
                 let count = items.len();
+                self.icon_view.set_current_folder(Some(&current_path));
+                self.list_view.set_current_folder(Some(&current_path));
+                self.column_view.set_current_folder(Some(&current_path));
+                self.gallery_view.set_current_folder(Some(&current_path));
                 self.icon_view.set_items(&items);
                 self.list_view.set_items(&items);
                 self.column_view.set_root(&current_path, &items, show_hidden, sort_by, sort_order);
@@ -334,13 +338,48 @@ impl FolderPane {
         self.items_cache.borrow().len()
     }
 
-    pub fn get_selected_item(&self) -> Option<FileItem> {
+    fn get_selected_item_and_widget(&self) -> Option<(FileItem, gtk4::Widget)> {
         let mode = self.view_stack.visible_child_name().unwrap_or_default();
-        if mode == "columns" {
-            self.column_view.get_selected_item()
-        } else {
-            self.items_cache.borrow().first().cloned()
+        match mode.as_str() {
+            "icons" => self
+                .icon_view
+                .get_selected_item_and_widget(&self.items_cache.borrow()),
+            "list" => self.list_view.get_selected_item_and_widget(),
+            "columns" => self.column_view.get_selected_item_and_widget(),
+            "gallery" => self.gallery_view.get_selected_item_and_widget(),
+            _ => None,
         }
+    }
+
+    pub fn get_selected_item(&self) -> Option<FileItem> {
+        self.get_selected_item_and_widget()
+            .map(|(item, _)| item)
+            .or_else(|| self.items_cache.borrow().first().cloned())
+    }
+
+    pub fn rename_selected(self: &Rc<Self>) {
+        if self.current_path().ends_with("Trash/files") {
+            return;
+        }
+        let Some((item, widget)) = self.get_selected_item_and_widget() else {
+            return;
+        };
+        let pane = Rc::clone(self);
+        let is_icons = self.view_stack.visible_child_name().as_deref() == Some("icons");
+        crate::views::show_rename_popover(
+            &widget,
+            item.path,
+            item.is_dir,
+            None,
+            Some(Rc::new(move |new_path| {
+                if is_icons {
+                    if let Some(new_name) = new_path.file_name() {
+                        pane.icon_view.queue_select_name(&new_name.to_string_lossy());
+                    }
+                }
+                pane.reload();
+            })),
+        );
     }
 
     pub fn duplicate_selected(&self) {
@@ -365,6 +404,10 @@ impl FolderPane {
             (s.current_path.clone(), s.show_hidden, s.sort_by, s.sort_order)
         };
         let count = items.len();
+        self.icon_view.set_current_folder(None);
+        self.list_view.set_current_folder(None);
+        self.column_view.set_current_folder(None);
+        self.gallery_view.set_current_folder(None);
         self.icon_view.set_items(&items);
         self.list_view.set_items(&items);
         self.column_view.set_root(&current_path, &items, show_hidden, sort_by, sort_order);
