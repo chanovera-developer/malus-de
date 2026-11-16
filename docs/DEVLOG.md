@@ -4,6 +4,42 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-16] — Animación de Rejilla, Drag & Drop Exacto Entre Branches y Escritorio, y Fluidez DRM
+
+### 1. Reordenamiento Animado sin Vibraciones y Selección en Branches (`crates/branches`)
+* **Animación de cuadrícula (`animate_grid_moves` en [`icon_view.rs`](../crates/branches/src/views/icon_view.rs)):**
+  * Implementada interpolación `ease_out_cubic` (`240 ms`) al reordenar iconos y cambiar ancho de ventana, protegida por `is_animating` para interpolar únicamente los widgets cuya posición cambia y evitar vibraciones en iconos estacionarios.
+* **Selección inmediata y CSS válido para GTK4 ([`icon_view.rs`](../crates/branches/src/views/icon_view.rs), [`macos-branches.css`](../crates/branches/src/styles/macos-branches.css), [`folder_pane.rs`](../crates/branches/src/folder_pane.rs), [`main.rs`](../crates/branches/src/main.rs)):**
+  * El `GestureClick` del lienzo verifica `is_point_over_spatial_icon` antes de deseleccionar el fondo para que el clic simple sobre un icono mantenga su marca `.selected` sin esperar a moverlo.
+  * Eliminados todos los `!important` inválidos en GTK4 CSS dentro de [`macos-branches.css`](../crates/branches/src/styles/macos-branches.css) (que provocaban que `GtkCssProvider` descartara las reglas), suprimido el borde azul `:drop(active)` / `:focus:drop(active)` en los contenedores del lienzo, restringido el borde de panel activo a `.branches-split-mode` y cambiado `.branches-icon-item.selected` de `outline` exterior a `border: 1.5px solid` interior sin transición para que `WidgetPaintable` capture el diseño completo desde el inicio del arrastre.
+
+### 2. Consistencia de Movimiento y Colocación Exacta Entre Procesos (`crates/common`, `crates/branches`, `crates/wallpaper`)
+* **Punto de agarre compartido ([`common/src/lib.rs`](../crates/common/src/lib.rs)):**
+  * Añadidos `write_drag_anchor` y `read_drag_anchor` (con respaldo en `$XDG_RUNTIME_DIR` y `/tmp`) para preservar el offset exacto del puntero al arrastrar entre **Branches** y el **Escritorio**.
+* **Suelta exacta y migración (`db.rs`, `icon_view.rs`, `list_view.rs`, `column_view.rs`, `folder_pane.rs`):**
+  * Migradas carpetas con `snap_to_grid` heredado a `freeform` (`PRAGMA user_version = 1` en [`db.rs`](../crates/branches/src/db.rs)) y aplicada colocación exacta con `exact_drop_position` / `resolve_drop_coords` (cambiando `Auto` → `Freeform` al soltar archivos internos o externos), conservando seleccionado el icono recién soltado mediante `pending_select_names`.
+  * Priorizado `DragAction::MOVE | DragAction::COPY` en fuentes y destinos de arrastre, agregado [`refresh_if_moved_out`](../crates/branches/src/views/mod.rs) en `connect_drag_end` de Icon/List/Column View (para retirar el icono origen al moverlo hacia el escritorio u otra ventana) y unificado `folder_pane.rs` sobre `gio::File::move_` con respaldo en `std::fs::rename`.
+
+### 3. Fluidez del Escritorio y Entrega Sincronizada en el Compositor (`crates/wallpaper`, `crates/compositor`)
+* **Escritorio sin saltos ni parpadeos ([`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs), [`default-gradient.css`](../crates/wallpaper/src/styles/default-gradient.css)):**
+  * Redondeo de `clamp_icon_position`, eliminación de `set_icon` prematuro en `connect_pressed`, transición instantánea y `box-shadow: inset` en `.desktop-icon.selected`.
+  * Al arrastrar hacia Branches, `connect_drag_end` retira inmediatamente el widget movido sin devolverlo temporalmente al escritorio; al recibir desde Branches, `connect_drop` dibuja y selecciona el icono en el mismo frame mientras `monitor_directory` evita reconstrucciones redundantes.
+  * Pre-escalado/recorte *Cover* único de imagen (`build_scaled_wallpaper_texture`), pre-rasterización del degradado por defecto (`build_default_gradient_texture`) con `.has-wallpaper-texture`, ordenamiento sin syscalls repetidas en `calculate_organize_targets` y duración alineada a `240 ms` (`DESKTOP_ORGANIZE_ANIM_MS`) difiriendo el guardado de JSON y evitando reconstruir widgets cuando solo cambia `snap_to_grid`.
+* **Compositor DRM y handoff DnD ([`state.rs`](../crates/compositor/src/state.rs), [`backend/mod.rs`](../crates/compositor/src/backend/mod.rs), [`drm.rs`](../crates/compositor/src/backend/drm.rs), [`winit.rs`](../crates/compositor/src/backend/winit.rs)):**
+  * Añadido `dnd_drop_hold` usando `last_pointer_location` en `dropped()` (evitando deadlock con `PointerInternal`) para sostener el icono flotante hasta el `commit` destino (o 80 ms máximo).
+  * Planificación selectiva del snapshot de blur de fondo (`plan_background_blur_capture` + `background_snapshot_stale`) para omitir `glCopyTexSubImage2D` de pantalla completa durante animaciones del escritorio sin blur afectado, y envío continuo de `send_frames_surface_tree` a capas visibles en DRM para evitar caídas de FPS en `GdkFrameClock`.
+
+### 4. Validación
+* Validación con `gtk4::CssProvider` sobre [`macos-branches.css`](../crates/branches/src/styles/macos-branches.css) y [`default-gradient.css`](../crates/wallpaper/src/styles/default-gradient.css): **0 errores de parseo**.
+* `cargo check --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --workspace`: compilación completa sin errores (`exit 0`).
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-common -p malus-de-branches -p malus-de-wallpaper -p malus-de-compositor`:
+  * `malus-de-common`: **48 passed; 0 failed** (`shared_drag_anchor_roundtrips_matching_path`).
+  * `malus-de-branches`: **12 passed; 0 failed** (`exact_drop_position_preserves_pointer_grab_offset`, `ease_out_cubic_and_interpolation_follow_macos_curve`, `canvas_hit_test_distinguishes_icons_from_empty_space`, `test_branches_macos_drag_and_drop_styles`).
+  * `malus-de-wallpaper`: **18 passed; 0 failed** (`keeps_pointer_offset_and_clamps_icon_to_desktop`, `test_compute_cover_crop_geometry_and_gradient_texture`).
+  * `malus-de-compositor`: **72 passed; 0 failed** (`background_blur_capture_skips_desktop_animation_without_translucent_overlap`).
+
+---
+
 ## [2026-11-15] — Estandarización de Tamaño de Iconos/Carpetas y Cuadrícula Responsiva en Branches
 
 ### 1. Métricas Compartidas y Configuración `BranchesConfig` (`crates/common/src/config.rs`, `crates/wallpaper/src/main.rs`)
