@@ -182,9 +182,7 @@ fn create_list_row(item: &FileItem, on_navigate: NavigateCallback) -> ListBoxRow
     drag_source.set_actions(gdk::DragAction::COPY | gdk::DragAction::MOVE);
     let path_for_drag = item.path.clone();
     drag_source.connect_prepare(move |_, _x, _y| {
-        let file = gio::File::for_path(&path_for_drag);
-        let file_list = gdk::FileList::from_array(&[file]);
-        Some(gdk::ContentProvider::for_value(&file_list.to_value()))
+        Some(crate::views::build_file_drag_content_provider(&path_for_drag))
     });
 
     // Pre-adjuntar el icono para respuesta visual instantánea (sin lapso de cursor vacío)

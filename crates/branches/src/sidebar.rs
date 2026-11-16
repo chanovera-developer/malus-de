@@ -47,13 +47,20 @@ fn resolve_user_dir(home: &Path, xdg_key: &str, spanish_name: &str, english_name
 }
 
 impl Sidebar {
-    pub fn new<F: Fn(PathBuf) + 'static, R: Fn() + 'static, T: Fn(String) + 'static>(
+    pub fn new<
+        F: Fn(PathBuf) + 'static,
+        R: Fn() + 'static,
+        A: Fn() + 'static,
+        T: Fn(String) + 'static,
+    >(
         on_navigate: F,
         on_recents: R,
+        on_applications: A,
         on_tag_selected: T,
     ) -> Self {
         let on_navigate = Rc::new(on_navigate);
         let on_recents = Rc::new(on_recents);
+        let on_applications = Rc::new(on_applications);
         let on_tag_selected = Rc::new(on_tag_selected);
 
         let list_box = ListBox::builder()
@@ -70,19 +77,12 @@ impl Sidebar {
         let shared_path = resolve_user_dir(&home, "XDG_PUBLICSHARE_DIR", "Público", "Public");
 
         // 0. Accesos superiores sin encabezado (Recientes y Compartidos, estilo Finder)
-        let recents_row = create_recents_row(if es { "Recientes" } else { "Recents" });
-        {
-            let cb = on_recents.clone();
-            let click = GestureClick::new();
-            let cb_c = cb.clone();
-            click.connect_released(move |_, _, _, _| {
-                cb_c();
-            });
-            recents_row.add_controller(click);
-            recents_row.connect_activate(move |_| {
-                cb();
-            });
-        }
+        let recents_row = create_virtual_row(
+            if es { "Recientes" } else { "Recents" },
+            "document-open-recent-symbolic",
+            "target_recents",
+        );
+        attach_virtual_row_handlers(&recents_row, on_recents.clone());
         list_box.append(&recents_row);
 
         let shared_row = create_sidebar_row(
@@ -109,6 +109,14 @@ impl Sidebar {
 
         // 1. Sección Favoritos
         add_section_title(&list_box, if es { "Favoritos" } else { "Favorites" });
+        let apps_row = create_virtual_row(
+            if es { "Aplicaciones" } else { "Applications" },
+            "system-software-install-symbolic",
+            "target_applications",
+        );
+        attach_virtual_row_handlers(&apps_row, on_applications.clone());
+        list_box.append(&apps_row);
+
         let desktop_path = resolve_user_dir(&home, "XDG_DESKTOP_DIR", "Escritorio", "Desktop");
         let docs_path = resolve_user_dir(&home, "XDG_DOCUMENTS_DIR", "Documentos", "Documents");
         let downloads_path = resolve_user_dir(&home, "XDG_DOWNLOAD_DIR", "Descargas", "Downloads");
@@ -117,14 +125,8 @@ impl Sidebar {
         let videos_path = resolve_user_dir(&home, "XDG_VIDEOS_DIR", "Vídeos", "Videos");
         let projects_path = resolve_user_dir(&home, "XDG_PROJECTS_DIR", "Proyectos", "Projects");
         let trash_path = home.join(".local/share/Trash/files");
-        let apps_path = PathBuf::from("/usr/share/applications");
 
         let favorites = [
-            SidebarEntry {
-                title: if es { "Aplicaciones".to_string() } else { "Applications".to_string() },
-                icon_name: "system-software-install-symbolic",
-                path: apps_path,
-            },
             SidebarEntry {
                 title: if es { "Escritorio".to_string() } else { "Desktop".to_string() },
                 icon_name: "user-desktop-symbolic",
@@ -269,10 +271,13 @@ impl Sidebar {
         // Manejador centralizado de activación de filas del ListBox
         let nav_for_lb = on_navigate.clone();
         let recents_for_lb = on_recents.clone();
+        let apps_for_lb = on_applications.clone();
         let tag_for_lb = on_tag_selected.clone();
         list_box.connect_row_activated(move |_lb, row| {
             if unsafe { row.data::<bool>("target_recents") }.is_some() {
                 recents_for_lb();
+            } else if unsafe { row.data::<bool>("target_applications") }.is_some() {
+                apps_for_lb();
             } else if let Some(path_obj) = unsafe { row.data::<PathBuf>("target_path") } {
                 let p = unsafe { path_obj.as_ref() }.clone();
                 nav_for_lb(p);
@@ -314,6 +319,20 @@ impl Sidebar {
         }
         self.list_box.unselect_all();
     }
+
+    pub fn highlight_virtual(&self, data_key: &str) {
+        let mut child = self.list_box.first_child();
+        while let Some(widget) = child {
+            if let Some(row) = widget.downcast_ref::<ListBoxRow>() {
+                if unsafe { row.data::<bool>(data_key) }.is_some() {
+                    self.list_box.select_row(Some(row));
+                    return;
+                }
+            }
+            child = widget.next_sibling();
+        }
+        self.list_box.unselect_all();
+    }
 }
 
 fn add_section_title(list_box: &ListBox, title: &str) {
@@ -332,12 +351,24 @@ fn add_section_title(list_box: &ListBox, title: &str) {
     list_box.append(&row);
 }
 
-fn create_recents_row(title: &str) -> ListBoxRow {
+fn attach_virtual_row_handlers(row: &ListBoxRow, cb: Rc<dyn Fn()>) {
+    let click = GestureClick::new();
+    let cb_c = cb.clone();
+    click.connect_released(move |_, _, _, _| {
+        cb_c();
+    });
+    row.add_controller(click);
+    row.connect_activate(move |_| {
+        cb();
+    });
+}
+
+fn create_virtual_row(title: &str, icon_name: &str, data_key: &'static str) -> ListBoxRow {
     let hbox = GtkBox::new(Orientation::Horizontal, 8);
     hbox.set_margin_start(4);
     hbox.set_margin_end(4);
 
-    let icon = Image::from_icon_name("document-open-recent-symbolic");
+    let icon = Image::from_icon_name(icon_name);
     icon.set_pixel_size(16);
     icon.add_css_class("branches-sidebar-icon");
 
@@ -360,7 +391,7 @@ fn create_recents_row(title: &str) -> ListBoxRow {
         .build();
 
     unsafe {
-        row.set_data("target_recents", true);
+        row.set_data(data_key, true);
     }
 
     row

@@ -167,9 +167,143 @@ pub fn get_free_space(path: &Path) -> String {
 }
 
 pub fn open_file(path: &Path) -> Result<(), String> {
+    if path.extension().and_then(|s| s.to_str()) == Some("desktop") {
+        return launch_desktop_file(path);
+    }
     let uri = format!("file://{}", path.display());
     gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>)
         .map_err(|e| format!("Error al abrir archivo: {}", e))
+}
+
+fn launch_desktop_file(path: &Path) -> Result<(), String> {
+    if path.file_name().is_some_and(|name| name == "io.mpv.Mpv.desktop") {
+        return spawn_desktop_command(
+            "flatpak run io.mpv.Mpv --gpu-context=wayland --player-operation-mode=pseudo-gui",
+        );
+    }
+
+    if let Some(entry) = malus_de_common::apps::parse_desktop_file_any(path) {
+        if !entry.exec.trim().is_empty() {
+            return spawn_desktop_command(&entry.exec);
+        }
+    }
+
+    if let Some(app_info) = gio::DesktopAppInfo::from_filename(path) {
+        app_info
+            .launch(&[], None::<&gio::AppLaunchContext>)
+            .map_err(|e| format!("Error al iniciar aplicación: {}", e))?;
+        return Ok(());
+    }
+
+    Err("No se pudo iniciar la aplicación seleccionada".to_string())
+}
+
+fn spawn_desktop_command(command_line: &str) -> Result<(), String> {
+    let parts: Vec<&str> = command_line.split_whitespace().collect();
+    let Some((exe, args)) = parts.split_first() else {
+        return Err("Comando de aplicación vacío".to_string());
+    };
+
+    let target_path_buf;
+    let target_exe = if *exe == "gnome-control-center" {
+        "malus-de-settings"
+    } else if let Some(wrapper) = malus_de_common::config::resolve_electron_ide_wrapper(exe) {
+        target_path_buf = wrapper.to_string_lossy().to_string();
+        &target_path_buf
+    } else {
+        *exe
+    };
+
+    let local_bin = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join(target_exe)))
+        .filter(|p| p.is_file());
+
+    let mut command = if let Some(bin) = local_bin {
+        std::process::Command::new(bin)
+    } else {
+        std::process::Command::new(target_exe)
+    };
+    command.args(args);
+    malus_de_common::config::apply_isolated_environment(&mut command);
+
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("Error al ejecutar {}: {}", target_exe, e))?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+fn resolve_desktop_gicon(icon: &str) -> gio::Icon {
+    let trimmed = icon.trim().trim_matches('"').trim_matches('\'');
+    if trimmed.is_empty() {
+        return gio::ThemedIcon::new("application-x-executable").upcast();
+    }
+    let path = Path::new(trimmed);
+    if path.is_absolute() && path.is_file() {
+        return gio::FileIcon::new(&gio::File::for_path(path)).upcast();
+    }
+    if !trimmed.ends_with("-symbolic") {
+        if let Some(resolved_path) = malus_de_common::apps::resolve_icon_file_path(trimmed) {
+            return gio::FileIcon::new(&gio::File::for_path(&resolved_path)).upcast();
+        }
+    }
+    gio::ThemedIcon::from_names(&[trimmed, "application-x-executable"]).upcast()
+}
+
+/// Convierte una entrada de aplicación de escritorio al modelo `FileItem` de Branches.
+pub fn file_item_from_desktop_entry(app: &malus_de_common::apps::DesktopAppEntry) -> FileItem {
+    let metadata = fs::symlink_metadata(&app.desktop_file).ok();
+    let is_symlink = metadata
+        .as_ref()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false);
+    let target_meta = fs::metadata(&app.desktop_file).ok().or(metadata);
+    let size = target_meta.as_ref().map(|m| m.len()).unwrap_or(0);
+    let modified = target_meta.as_ref().and_then(|m| m.modified().ok());
+    let modified_str = modified
+        .map(format_modified)
+        .unwrap_or_else(|| "--".to_string());
+    let kind_str = if malus_de_common::is_spanish_locale() {
+        "Aplicación".to_string()
+    } else {
+        "Application".to_string()
+    };
+
+    FileItem {
+        name: app.name.clone(),
+        path: app.desktop_file.clone(),
+        is_dir: false,
+        is_hidden: false,
+        is_symlink,
+        size,
+        size_str: if size > 0 {
+            format_size(size)
+        } else {
+            "--".to_string()
+        },
+        modified,
+        modified_str,
+        kind_str,
+        gicon: resolve_desktop_gicon(&app.icon),
+    }
+}
+
+/// Carga las aplicaciones visibles indexadas igual que la sección Aplicaciones de Spotlight.
+pub fn load_applications_items(filter_query: &str) -> Vec<FileItem> {
+    let query = filter_query.trim().to_lowercase();
+    malus_de_common::apps::index_applications()
+        .into_iter()
+        .filter(|app| {
+            query.is_empty()
+                || app.name.to_lowercase().contains(&query)
+                || app.comment.to_lowercase().contains(&query)
+                || app.search_terms.contains(&query)
+        })
+        .map(|app| file_item_from_desktop_entry(&app))
+        .collect()
 }
 
 pub fn open_in_terminal(path: &Path) {
@@ -205,6 +339,17 @@ fn resolve_kind_and_icon(path: &Path, is_dir: bool, name: &str) -> (String, gio:
         };
         let icon = gio::ThemedIcon::new(folder_icon_name);
         return ("Carpeta".to_string(), icon.upcast());
+    }
+
+    if !is_dir && path.extension().and_then(|e| e.to_str()) == Some("desktop") {
+        if let Some(entry) = malus_de_common::apps::parse_desktop_file_any(path) {
+            let kind = if malus_de_common::is_spanish_locale() {
+                "Aplicación".to_string()
+            } else {
+                "Application".to_string()
+            };
+            return (kind, resolve_desktop_gicon(&entry.icon));
+        }
     }
 
     // Archivo ordinario: consultar tipo MIME mediante GIO
@@ -338,7 +483,8 @@ pub fn load_recent_files(home: &Path, search_dirs: &[PathBuf], limit: usize) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{load_recent_files, percent_decode_file_uri};
+    use super::{load_recent_files, percent_decode_file_uri, FileItem};
+    use gio::prelude::{Cast, FileExt};
     use std::path::PathBuf;
 
     #[test]
@@ -362,6 +508,34 @@ mod tests {
         assert!(names.contains(&"nota.txt"));
         assert!(names.contains(&"oculto"));
         assert!(!names.contains(&".hidden"));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_desktop_file_resolves_app_gicon() {
+        let temp_dir = std::env::temp_dir().join("malus_branches_desktop_icon_test");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        let icon_file = temp_dir.join("demo-app.svg");
+        std::fs::write(&icon_file, b"<svg/>").unwrap();
+        let desktop_file = temp_dir.join("demo.desktop");
+        std::fs::write(
+            &desktop_file,
+            format!(
+                "[Desktop Entry]\nType=Application\nName=Demo\nExec=/bin/true\nIcon={}\n",
+                icon_file.display()
+            ),
+        )
+        .unwrap();
+
+        let item = FileItem::from_path(&desktop_file).expect("desktop item");
+        let file_icon = item
+            .gicon
+            .downcast_ref::<gio::FileIcon>()
+            .expect("debe usar FileIcon para icono propio de .desktop");
+        assert_eq!(file_icon.file().path(), Some(icon_file));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

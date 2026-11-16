@@ -95,6 +95,12 @@ fn load_custom_css() {
     provider.load_from_string(css);
 
     if let Some(display) = Display::default() {
+        let icon_theme = gtk4::IconTheme::for_display(&display);
+        for icon_dir in malus_de_common::apps::extra_icon_search_paths() {
+            if icon_dir.is_dir() {
+                icon_theme.add_search_path(&icon_dir);
+            }
+        }
         gtk4::style_context_add_provider_for_display(
             &display,
             &provider,

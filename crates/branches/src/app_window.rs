@@ -328,6 +328,14 @@ impl BranchesWindow {
             },
             {
                 let w_clone = win_weak_for_nav.clone();
+                move || {
+                    if let Some(w) = w_clone.borrow().as_ref() {
+                        w.show_applications();
+                    }
+                }
+            },
+            {
+                let w_clone = win_weak_for_nav.clone();
                 move |tag_name| {
                     if let Some(w) = w_clone.borrow().as_ref() {
                         w.active_pane().show_tag_filter(&tag_name);
@@ -627,6 +635,18 @@ impl BranchesWindow {
             "Recents"
         };
         self.title_label.set_label(title);
+        self.sidebar.highlight_virtual("target_recents");
+    }
+
+    pub fn show_applications(&self) {
+        self.active_pane().show_applications();
+        let title = if malus_de_common::is_spanish_locale() {
+            "Aplicaciones"
+        } else {
+            "Applications"
+        };
+        self.title_label.set_label(title);
+        self.sidebar.highlight_virtual("target_applications");
     }
 
     pub fn set_split_view(&self, active: bool) {

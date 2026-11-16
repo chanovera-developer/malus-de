@@ -19,9 +19,16 @@ pub enum PaneId {
     Secondary,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VirtualFolder {
+    Recents,
+    Applications,
+}
+
 pub struct FolderPane {
     pub id: PaneId,
     pub state: Rc<RefCell<AppState>>,
+    virtual_folder: RefCell<Option<VirtualFolder>>,
     container: GtkBox,
     view_stack: Stack,
     icon_view: Rc<IconView>,
@@ -146,6 +153,7 @@ impl FolderPane {
         let folder_pane = Rc::new(Self {
             id,
             state,
+            virtual_folder: RefCell::new(None),
             container,
             view_stack,
             icon_view,
@@ -191,8 +199,9 @@ impl FolderPane {
         if !target.exists() {
             let _ = std::fs::create_dir_all(&target);
         }
+        let was_virtual = self.virtual_folder.borrow_mut().take().is_some();
         let changed = self.state.borrow_mut().navigate_to(target.clone());
-        if changed {
+        if changed || was_virtual {
             (self.on_activated)(self.id);
             self.reload();
             (self.on_path_changed)(self.id, target);
@@ -206,6 +215,7 @@ impl FolderPane {
         let Some(path) = target else {
             return false;
         };
+        *self.virtual_folder.borrow_mut() = None;
         self.reload();
         (self.on_path_changed)(self.id, path);
         true
@@ -239,6 +249,18 @@ impl FolderPane {
     }
 
     pub fn reload(&self) {
+        match *self.virtual_folder.borrow() {
+            Some(VirtualFolder::Applications) => {
+                self.reload_applications();
+                return;
+            }
+            Some(VirtualFolder::Recents) => {
+                self.reload_recents();
+                return;
+            }
+            None => {}
+        }
+
         let (current_path, show_hidden, sort_by, sort_order, search_query) = {
             let s = self.state.borrow();
             (
@@ -332,6 +354,7 @@ impl FolderPane {
     }
 
     pub fn show_tag_filter(&self, tag_name: &str) {
+        *self.virtual_folder.borrow_mut() = None;
         if let Ok(conn) = crate::db::open_db() {
             let paths = crate::db::get_files_by_tag(&conn, tag_name);
             let mut items = Vec::new();
@@ -346,6 +369,12 @@ impl FolderPane {
     }
 
     pub fn show_recents(&self) {
+        *self.virtual_folder.borrow_mut() = Some(VirtualFolder::Recents);
+        self.reload_recents();
+    }
+
+    fn reload_recents(&self) {
+        let query = self.state.borrow().search_query.trim().to_lowercase();
         let home = std::env::var("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("/"));
@@ -363,11 +392,31 @@ impl FolderPane {
             home.join("Vídeos"),
             home.join("Videos"),
         ];
-        let items = crate::fs_backend::load_recent_files(&home, &search_dirs, 60);
+        let mut items = crate::fs_backend::load_recent_files(&home, &search_dirs, 60);
+        if !query.is_empty() {
+            items.retain(|item| item.name.to_lowercase().contains(&query));
+        }
         let title = if malus_de_common::is_spanish_locale() {
             "Recientes"
         } else {
             "Recents"
+        };
+        self.pane_title.set_label(title);
+        self.apply_items_snapshot(items);
+    }
+
+    pub fn show_applications(&self) {
+        *self.virtual_folder.borrow_mut() = Some(VirtualFolder::Applications);
+        self.reload_applications();
+    }
+
+    fn reload_applications(&self) {
+        let query = self.state.borrow().search_query.clone();
+        let items = crate::fs_backend::load_applications_items(&query);
+        let title = if malus_de_common::is_spanish_locale() {
+            "Aplicaciones"
+        } else {
+            "Applications"
         };
         self.pane_title.set_label(title);
         self.apply_items_snapshot(items);

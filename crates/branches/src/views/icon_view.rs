@@ -243,9 +243,7 @@ impl IconView {
             let paintable = gtk4::WidgetPaintable::new(Some(&vbox_prep));
             source.set_icon(Some(&paintable), click_x.round() as i32, click_y.round() as i32);
 
-            let file = gio::File::for_path(&path_for_drag);
-            let file_list = gdk::FileList::from_array(&[file]);
-            Some(gdk::ContentProvider::for_value(&file_list.to_value()))
+            Some(crate::views::build_file_drag_content_provider(&path_for_drag))
         });
 
         let fixed_drag = self.fixed_canvas.clone();

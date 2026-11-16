@@ -2,7 +2,7 @@ use crate::fs_backend::{load_directory, open_file, open_in_terminal, FileItem};
 use crate::state::{SortBy, SortOrder};
 use crate::views::{NavigateCallback, SelectionCallback};
 use gdk_pixbuf::Pixbuf;
-use gtk4::gdk::{Key, Texture};
+use gtk4::gdk::{self, Key, Texture};
 use gtk4::pango;
 use gtk4::prelude::*;
 use gtk4::{
@@ -430,6 +430,26 @@ fn create_column_row(item: &FileItem) -> ListBoxRow {
     }
 
     row.set_child(Some(&hbox));
+
+    let drag_source = gtk4::DragSource::new();
+    drag_source.set_actions(gdk::DragAction::COPY | gdk::DragAction::MOVE);
+    let path_for_drag = item.path.clone();
+    drag_source.connect_prepare(move |_, _x, _y| {
+        Some(crate::views::build_file_drag_content_provider(&path_for_drag))
+    });
+    if let Some(display) = gdk::Display::default() {
+        let theme = gtk4::IconTheme::for_display(&display);
+        let paintable = theme.lookup_by_gicon(
+            &item.gicon,
+            24,
+            1,
+            gtk4::TextDirection::Ltr,
+            gtk4::IconLookupFlags::empty(),
+        );
+        drag_source.set_icon(Some(&paintable), 12, 12);
+    }
+    row.add_controller(drag_source);
+
     row
 }
 
