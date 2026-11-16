@@ -32,6 +32,10 @@ struct Args {
     #[arg(short = 'q', long = "quick-look", value_name = "ARCHIVO")]
     quick_look: Option<PathBuf>,
 
+    /// Abrir una nueva ventana de Branches aunque ya exista una instancia abierta
+    #[arg(long = "new-window")]
+    new_window: bool,
+
     /// Ruta o URI inicial a abrir (ej: /ruta, file:///..., trash:///, por defecto: $HOME)
     #[arg(value_name = "RUTA")]
     path: Option<String>,
@@ -105,13 +109,17 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/"));
     let xdg_data_home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from);
-    let requested_arg = args.path.as_deref().map(|raw| {
+    let requested_arg = if let Some(raw) = args.path.as_deref() {
         let resolved = resolve_cli_target_path(raw, &home, xdg_data_home.as_deref());
         if is_trash_uri(raw) {
             let _ = std::fs::create_dir_all(&resolved);
         }
-        resolved
-    });
+        Some(resolved)
+    } else if args.new_window {
+        Some(home.clone())
+    } else {
+        None
+    };
 
     let app = Application::builder()
         .application_id(APP_ID)
@@ -248,6 +256,7 @@ mod tests {
 
     #[test]
     fn test_resolve_cli_target_path_handles_trash_file_uri_and_tilde() {
+        use clap::Parser;
         use super::resolve_cli_target_path;
         use std::path::{Path, PathBuf};
 
@@ -270,5 +279,10 @@ mod tests {
             resolve_cli_target_path("~/Descargas", home, None),
             PathBuf::from("/home/cristian/Descargas")
         );
+
+        let parsed = super::Args::try_parse_from(["malus-de-branches", "--new-window"])
+            .expect("--new-window debe ser aceptado por clap");
+        assert!(parsed.new_window);
+        assert!(parsed.path.is_none());
     }
 }

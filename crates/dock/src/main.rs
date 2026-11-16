@@ -599,7 +599,10 @@ fn resolve_desktop_app_info(identifier: &str) -> (String, String, String, Vec<St
     (name, icon, exec, matchers)
 }
 
-fn dock_app_context_actions(app_cfg: &DockAppConfig) -> Vec<(&'static str, &'static [&'static str])> {
+fn dock_app_context_actions(
+    app_cfg: &DockAppConfig,
+    is_running: bool,
+) -> Vec<(&'static str, &'static [&'static str])> {
     let identity = [
         app_cfg.name.as_str(),
         app_cfg.icon.as_str(),
@@ -612,7 +615,12 @@ fn dock_app_context_actions(app_cfg: &DockAppConfig) -> Vec<(&'static str, &'sta
     .to_lowercase();
 
     let mut actions = Vec::new();
-    if identity.contains("nautilus") {
+    let is_branches = identity.contains("dev.malus.branches")
+        || identity.contains("malus-de-branches")
+        || identity
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|part| part == "branches");
+    if identity.contains("nautilus") || (is_branches && is_running) {
         actions.push(("Abrir nueva ventana", &["--new-window"][..]));
     }
 
@@ -3148,134 +3156,29 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
     (item_container, trash_img)
 }
 
-fn create_dock_item(
+fn is_dock_item_running(
+    running_cache: &Rc<RefCell<Vec<String>>>,
+    app_cfg: &DockAppConfig,
+) -> bool {
+    find_matching_running_app(&running_cache.borrow(), &app_cfg.matchers, &app_cfg.name).is_some()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn populate_dock_app_menu_box(
+    menu_box: &GtkBox,
+    popover: &Popover,
     app_cfg: &DockAppConfig,
     is_pinned: bool,
     idx: usize,
     total_pinned: usize,
-    icon_size: i32,
     is_running: bool,
-    running_cache: Rc<RefCell<Vec<String>>>,
-    active_app_cache: Rc<RefCell<Vec<String>>>,
-    dock_config: Rc<RefCell<DockConfig>>,
-    on_refresh: Rc<dyn Fn()>,
-) -> (GtkBox, Label) {
-    let item_container = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .css_classes(["dock-item-box"])
-        .spacing(1)
-        .valign(gtk4::Align::End)
-        .build();
-    item_container.set_overflow(gtk4::Overflow::Visible);
-
-    let btn = Button::builder()
-        .css_classes(["dock-item-btn"])
-        .focusable(false)
-        .valign(gtk4::Align::End)
-        .build();
-    btn.set_overflow(gtk4::Overflow::Visible);
-
-    let icon_name = match app_cfg.icon.as_str() {
-        "system-file-manager" => "org.gnome.Nautilus",
-        "utilities-terminal" => "org.gnome.Ptyxis",
-        "accessories-text-editor" => "org.gnome.TextEditor",
-        icon_name => icon_name,
-    };
-    let icon = if icon_name.starts_with('/') {
-        Image::builder()
-            .file(icon_name)
-            .pixel_size(icon_size)
-            .valign(gtk4::Align::End)
-            .build()
-    } else {
-        Image::builder()
-            .icon_name(icon_name)
-            .pixel_size(icon_size)
-            .valign(gtk4::Align::End)
-            .build()
-    };
-    let render_mode = resolve_dock_icon_render_mode(
-        app_cfg.icon_appearance,
-        icon_name,
-        &icon,
-        icon_size,
-    );
-    if matches!(render_mode, DockIconRenderMode::ContainerBackdrop) {
-        icon.add_css_class("dock-icon-inset");
-        icon.set_pixel_size((icon_size - 10).max(1));
-        icon.set_margin_bottom(5);
+    activate_or_spawn: &Rc<dyn Fn()>,
+    dock_config: &Rc<RefCell<DockConfig>>,
+    on_refresh: &Rc<dyn Fn()>,
+) {
+    while let Some(child) = menu_box.first_child() {
+        menu_box.remove(&child);
     }
-    let icon_container = create_magnifiable_icon(
-        &icon,
-        icon_size,
-        render_mode,
-    );
-    btn.set_child(Some(&icon_container));
-    icon_container.add_css_class("dock-bounce-target");
-    let animation_id = Rc::new(Cell::new(0_u64));
-    let cmd = app_cfg.command.clone();
-    let name = app_cfg.name.clone();
-    let matchers = app_cfg.matchers.clone();
-    let cache = running_cache;
-
-    let activate_or_spawn = {
-        let cmd = cmd.clone();
-        let name = name.clone();
-        let matchers = matchers.clone();
-        let cache = cache.clone();
-        let active_app_cache = active_app_cache.clone();
-        let icon_container = icon_container.clone().upcast::<gtk4::Widget>();
-        let animation_id = animation_id.clone();
-        Rc::new(move || {
-            let active_app_matches = active_app_cache
-                .borrow()
-                .iter()
-                .any(|identity| matches_dock_app(&matchers, &name, identity));
-            if active_app_matches {
-                info!("{} ya tiene el foco; no se envía acción de dock", name);
-                return;
-            }
-
-            let running = cache.borrow();
-            let matched_running = find_matching_running_app(&running, &matchers, &name);
-            drop(running);
-
-            if let Some(running_id) = matched_running {
-                info!("App ya en ejecución, enviando IPC ActivateApp para {}", name);
-                let _ = send_ipc_message(&IpcMessage::ActivateApp {
-                    app_id: running_id,
-                });
-                return;
-            }
-
-            bounce_dock_icon(
-                &icon_container,
-                animation_id.clone(),
-                Some(cache.clone()),
-                matchers.clone(),
-            );
-            info!("Lanzando aplicación desde Dock: {} (`{}`)", name, cmd);
-            spawn_dock_app(&name, &cmd, &[]);
-        })
-    };
-
-    let act_click = activate_or_spawn.clone();
-    btn.connect_clicked(move |_| {
-        act_click();
-    });
-
-    // Menú Popover de Clic Derecho (macOS Style Context Menu)
-    let popover = Popover::builder()
-        .css_classes(["malus-popover-menu"])
-        .has_arrow(false)
-        .position(gtk4::PositionType::Top)
-        .build();
-    popover.set_offset(0, POPOVER_SHADOW_GUTTER);
-
-    let menu_box = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .spacing(2)
-        .build();
 
     // 1. Título de la app en la cabecera
     let header = Label::builder()
@@ -3295,21 +3198,21 @@ fn create_dock_item(
         .css_classes(["popover-menu-item"])
         .build();
     let p_open = popover.clone();
-    let act_open = activate_or_spawn;
+    let act_open = activate_or_spawn.clone();
     btn_open.connect_clicked(move |_| {
         p_open.popdown();
         act_open();
     });
     menu_box.append(&btn_open);
 
-    for (label, args) in dock_app_context_actions(app_cfg) {
+    for (label, args) in dock_app_context_actions(app_cfg, is_running) {
         let btn_action = Button::builder()
             .label(label)
             .css_classes(["popover-menu-item"])
             .build();
         let p_action = popover.clone();
-        let action_name = name.clone();
-        let action_command = cmd.clone();
+        let action_name = app_cfg.name.clone();
+        let action_command = app_cfg.command.clone();
         btn_action.connect_clicked(move |_| {
             p_action.popdown();
             spawn_dock_app(&action_name, &action_command, args);
@@ -3409,9 +3312,9 @@ fn create_dock_item(
             .css_classes(["popover-menu-item", "popover-menu-item-danger"])
             .build();
         let p_fq = popover.clone();
-        let matchers_fq = matchers.clone();
-        let cmd_fq = cmd.clone();
-        let app_name_fq = name.clone();
+        let matchers_fq = app_cfg.matchers.clone();
+        let cmd_fq = app_cfg.command.clone();
+        let app_name_fq = app_cfg.name.clone();
         btn_force_quit.connect_clicked(move |_| {
             p_fq.popdown();
             info!("🛑 Forzando salida de {}", app_name_fq);
@@ -3426,6 +3329,154 @@ fn create_dock_item(
         menu_box.append(&btn_force_quit);
     }
 
+    if let Some(last_item) = menu_box.last_child() {
+        last_item.set_margin_bottom(10);
+    }
+}
+
+fn create_dock_item(
+    app_cfg: &DockAppConfig,
+    is_pinned: bool,
+    idx: usize,
+    total_pinned: usize,
+    icon_size: i32,
+    is_running: bool,
+    running_cache: Rc<RefCell<Vec<String>>>,
+    active_app_cache: Rc<RefCell<Vec<String>>>,
+    dock_config: Rc<RefCell<DockConfig>>,
+    on_refresh: Rc<dyn Fn()>,
+) -> (GtkBox, Label) {
+    let item_container = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .css_classes(["dock-item-box"])
+        .spacing(1)
+        .valign(gtk4::Align::End)
+        .build();
+    item_container.set_overflow(gtk4::Overflow::Visible);
+
+    let btn = Button::builder()
+        .css_classes(["dock-item-btn"])
+        .focusable(false)
+        .valign(gtk4::Align::End)
+        .build();
+    btn.set_overflow(gtk4::Overflow::Visible);
+
+    let icon_name = match app_cfg.icon.as_str() {
+        "system-file-manager" => "org.gnome.Nautilus",
+        "utilities-terminal" => "org.gnome.Ptyxis",
+        "accessories-text-editor" => "org.gnome.TextEditor",
+        icon_name => icon_name,
+    };
+    let icon = if icon_name.starts_with('/') {
+        Image::builder()
+            .file(icon_name)
+            .pixel_size(icon_size)
+            .valign(gtk4::Align::End)
+            .build()
+    } else {
+        Image::builder()
+            .icon_name(icon_name)
+            .pixel_size(icon_size)
+            .valign(gtk4::Align::End)
+            .build()
+    };
+    let render_mode = resolve_dock_icon_render_mode(
+        app_cfg.icon_appearance,
+        icon_name,
+        &icon,
+        icon_size,
+    );
+    if matches!(render_mode, DockIconRenderMode::ContainerBackdrop) {
+        icon.add_css_class("dock-icon-inset");
+        icon.set_pixel_size((icon_size - 10).max(1));
+        icon.set_margin_bottom(5);
+    }
+    let icon_container = create_magnifiable_icon(
+        &icon,
+        icon_size,
+        render_mode,
+    );
+    btn.set_child(Some(&icon_container));
+    icon_container.add_css_class("dock-bounce-target");
+    let animation_id = Rc::new(Cell::new(0_u64));
+    let cmd = app_cfg.command.clone();
+    let name = app_cfg.name.clone();
+    let matchers = app_cfg.matchers.clone();
+    let cache = running_cache;
+
+    let activate_or_spawn: Rc<dyn Fn()> = {
+        let cmd = cmd.clone();
+        let name = name.clone();
+        let matchers = matchers.clone();
+        let cache = cache.clone();
+        let active_app_cache = active_app_cache.clone();
+        let icon_container = icon_container.clone().upcast::<gtk4::Widget>();
+        let animation_id = animation_id.clone();
+        Rc::new(move || {
+            let active_app_matches = active_app_cache
+                .borrow()
+                .iter()
+                .any(|identity| matches_dock_app(&matchers, &name, identity));
+            if active_app_matches {
+                info!("{} ya tiene el foco; no se envía acción de dock", name);
+                return;
+            }
+
+            let running = cache.borrow();
+            let matched_running = find_matching_running_app(&running, &matchers, &name);
+            drop(running);
+
+            if let Some(running_id) = matched_running {
+                info!("App ya en ejecución, enviando IPC ActivateApp para {}", name);
+                let _ = send_ipc_message(&IpcMessage::ActivateApp {
+                    app_id: running_id,
+                });
+                return;
+            }
+
+            bounce_dock_icon(
+                &icon_container,
+                animation_id.clone(),
+                Some(cache.clone()),
+                matchers.clone(),
+            );
+            info!("Lanzando aplicación desde Dock: {} (`{}`)", name, cmd);
+            spawn_dock_app(&name, &cmd, &[]);
+        })
+    };
+
+    let act_click = activate_or_spawn.clone();
+    btn.connect_clicked(move |_| {
+        act_click();
+    });
+
+    // Menú Popover de Clic Derecho (macOS Style Context Menu)
+    let popover = Popover::builder()
+        .css_classes(["malus-popover-menu"])
+        .has_arrow(false)
+        .position(gtk4::PositionType::Top)
+        .build();
+    popover.set_offset(0, POPOVER_SHADOW_GUTTER);
+
+    let menu_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .build();
+
+    let app_cfg_menu = app_cfg.clone();
+    populate_dock_app_menu_box(
+        &menu_box,
+        &popover,
+        &app_cfg_menu,
+        is_pinned,
+        idx,
+        total_pinned,
+        is_running,
+        &activate_or_spawn,
+        &dock_config,
+        &on_refresh,
+    );
+
     let popover_surface = create_popover_surface(&menu_box);
     popover.set_child(Some(&popover_surface));
     popover.set_parent(&btn);
@@ -3437,7 +3488,25 @@ fn create_dock_item(
     let right_click = GestureClick::new();
     right_click.set_button(3); // Clic derecho
     let p_rc = popover.clone();
+    let menu_box_rc = menu_box.clone();
+    let cache_rc = cache.clone();
+    let cfg_rc = dock_config.clone();
+    let on_rf_rc = on_refresh.clone();
+    let act_rc = activate_or_spawn.clone();
     right_click.connect_pressed(move |_, _, _, _| {
+        let live_running = is_dock_item_running(&cache_rc, &app_cfg_menu);
+        populate_dock_app_menu_box(
+            &menu_box_rc,
+            &p_rc,
+            &app_cfg_menu,
+            is_pinned,
+            idx,
+            total_pinned,
+            live_running,
+            &act_rc,
+            &cfg_rc,
+            &on_rf_rc,
+        );
         p_rc.popup();
     });
     btn.add_controller(right_click);
@@ -3517,7 +3586,7 @@ mod tests {
     #[test]
     fn brave_has_incognito_action() {
         assert_eq!(
-            dock_app_context_actions(&app("Brave", "brave-browser")),
+            dock_app_context_actions(&app("Brave", "brave-browser"), false),
             vec![("Abrir en modo incógnito", &["--incognito"][..])]
         );
     }
@@ -3529,7 +3598,7 @@ mod tests {
             app("Antigravity", "antigravity"),
         ] {
             assert_eq!(
-                dock_app_context_actions(&app),
+                dock_app_context_actions(&app, false),
                 vec![("Abrir nueva ventana vacía", &["--new-window"][..])]
             );
         }
@@ -3538,7 +3607,42 @@ mod tests {
     #[test]
     fn nautilus_has_new_window_action() {
         assert_eq!(
-            dock_app_context_actions(&app("Archivos", "nautilus")),
+            dock_app_context_actions(&app("Archivos", "nautilus"), false),
+            vec![("Abrir nueva ventana", &["--new-window"][..])]
+        );
+    }
+
+    #[test]
+    fn branches_has_new_window_action_when_running() {
+        let branches = app("Branches", "malus-de-branches");
+        assert!(dock_app_context_actions(&branches, false).is_empty());
+        assert_eq!(
+            dock_app_context_actions(&branches, true),
+            vec![("Abrir nueva ventana", &["--new-window"][..])]
+        );
+    }
+
+    #[test]
+    fn is_dock_item_running_tracks_live_running_cache() {
+        let branches = DockAppConfig {
+            name: "Branches".to_string(),
+            icon: "system-file-manager".to_string(),
+            command: "malus-de-branches".to_string(),
+            matchers: vec!["dev.malus.Branches".to_string()],
+            icon_appearance: DockIconAppearance::Auto,
+        };
+        let running_cache = Rc::new(RefCell::new(Vec::new()));
+
+        assert!(!is_dock_item_running(&running_cache, &branches));
+        assert!(dock_app_context_actions(&branches, is_dock_item_running(&running_cache, &branches)).is_empty());
+
+        running_cache
+            .borrow_mut()
+            .push("dev.malus.Branches".to_string());
+        let live_running = is_dock_item_running(&running_cache, &branches);
+        assert!(live_running);
+        assert_eq!(
+            dock_app_context_actions(&branches, live_running),
             vec![("Abrir nueva ventana", &["--new-window"][..])]
         );
     }
