@@ -42,6 +42,34 @@ pub(super) fn build_file_drag_content_provider(path: &std::path::Path) -> gtk4::
     ])
 }
 
+/// Refresca la vista origen si un archivo arrastrado fue movido fuera de la carpeta actual
+/// (por ejemplo, hacia el escritorio o la otra vista en Split View).
+pub(super) fn refresh_if_moved_out(
+    drag: &gtk4::gdk::Drag,
+    item_path: &std::path::Path,
+    reload_dir: &std::path::Path,
+    on_navigate: &NavigateCallback,
+) -> bool {
+    use gtk4::prelude::*;
+
+    if !item_path.exists() {
+        on_navigate(reload_dir.to_path_buf());
+        return true;
+    }
+
+    if drag.selected_action() == gtk4::gdk::DragAction::MOVE {
+        let path_check = item_path.to_path_buf();
+        let dir_reload = reload_dir.to_path_buf();
+        let nav_cb = on_navigate.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(80), move || {
+            if !path_check.exists() {
+                nav_cb(dir_reload);
+            }
+        });
+    }
+    false
+}
+
 pub(super) fn is_dock_app_pinned(
     cfg: &malus_de_common::config::DockConfig,
     app: &malus_de_common::config::DockAppConfig,

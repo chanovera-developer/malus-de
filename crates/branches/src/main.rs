@@ -115,12 +115,17 @@ mod tests {
     fn test_branches_macos_drag_and_drop_styles() {
         let css = include_str!("styles/macos-branches.css");
         assert!(css.contains(".branches-icon-dragging"));
-        assert!(css.contains("opacity: 0.0 !important;"));
-        assert!(css.contains("transition: none !important;"));
+        assert!(css.contains("opacity: 0.0;"));
+        assert!(css.contains("transition: none;"));
+        assert!(!css.contains("!important"));
         assert!(css.contains(".folder-drop-hover"));
         assert!(css.contains(".branches-icon-item.landing"));
         assert!(css.contains("@keyframes macos-drop-landing"));
         assert!(css.contains("cubic-bezier(0.16, 1, 0.3, 1)"));
+        assert!(css.contains(".branches-icon-canvas:drop(active)"));
+        assert!(css.contains(".branches-folder-pane.branches-split-mode.branches-pane-active"));
+        assert!(css.contains("border: 1.5px solid alpha(@accent_bg_color, 0.55);"));
+        assert!(!css.contains("outline: 2px solid alpha(@accent_bg_color, 0.55);"));
     }
 
     #[test]

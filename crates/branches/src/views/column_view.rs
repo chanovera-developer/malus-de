@@ -450,10 +450,17 @@ fn create_column_row(item: &FileItem, on_navigate: &NavigateCallback) -> ListBox
     row.add_controller(right_click);
 
     let drag_source = gtk4::DragSource::new();
-    drag_source.set_actions(gdk::DragAction::COPY | gdk::DragAction::MOVE);
+    drag_source.set_actions(gdk::DragAction::MOVE | gdk::DragAction::COPY);
     let path_for_drag = item.path.clone();
     drag_source.connect_prepare(move |_, _x, _y| {
         Some(crate::views::build_file_drag_content_provider(&path_for_drag))
+    });
+    let path_end = item.path.clone();
+    let on_nav_end = on_navigate.clone();
+    drag_source.connect_drag_end(move |_, drag, _| {
+        if let Some(parent) = path_end.parent() {
+            let _ = crate::views::refresh_if_moved_out(drag, &path_end, parent, &on_nav_end);
+        }
     });
     if let Some(display) = gdk::Display::default() {
         let theme = gtk4::IconTheme::for_display(&display);

@@ -181,6 +181,11 @@ impl FolderPane {
 
     pub fn set_split_mode_active(&self, active: bool) {
         self.pane_header.set_visible(active);
+        if active {
+            self.container.add_css_class("branches-split-mode");
+        } else {
+            self.container.remove_css_class("branches-split-mode");
+        }
     }
 
     pub fn set_is_active(&self, active: bool) {
@@ -450,7 +455,9 @@ fn setup_drop_target<F: Fn() + 'static>(
     state: Rc<RefCell<AppState>>,
     on_reload: F,
 ) {
-    let drop_target = gtk4::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY | gdk::DragAction::MOVE);
+    let drop_target = gtk4::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::MOVE | gdk::DragAction::COPY);
+    drop_target.connect_enter(move |_, _, _| gdk::DragAction::MOVE);
+    drop_target.connect_motion(move |_, _, _| gdk::DragAction::MOVE);
     let on_reload = Rc::new(on_reload);
 
     drop_target.connect_drop(move |_, value, _x, _y| {
@@ -463,10 +470,17 @@ fn setup_drop_target<F: Fn() + 'static>(
                     if let Some(file_name) = src_path.file_name() {
                         let target_path = dest_dir.join(file_name);
                         if target_path != src_path {
-                            // Intentar renombrar (mover), o copiar si están en distintos sistemas de archivos
-                            if std::fs::rename(&src_path, &target_path).is_ok() {
-                                moved_any = true;
-                            } else if std::fs::copy(&src_path, &target_path).is_ok() {
+                            let dest_file = gio::File::for_path(&target_path);
+                            if file
+                                .move_(
+                                    &dest_file,
+                                    gio::FileCopyFlags::NONE,
+                                    gio::Cancellable::NONE,
+                                    None,
+                                )
+                                .is_ok()
+                                || std::fs::rename(&src_path, &target_path).is_ok()
+                            {
                                 moved_any = true;
                             }
                         }

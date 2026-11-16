@@ -68,6 +68,19 @@ pub fn open_db() -> Result<Connection, rusqlite::Error> {
     // Migración no destructiva para bases existentes sin columna icon_size
     let _ = conn.execute("ALTER TABLE folder_settings ADD COLUMN icon_size INTEGER", []);
 
+    // Migración v1: carpetas con snap_to_grid implícito de versiones previas pasan a freeform
+    // para que los iconos permanezcan exactamente donde se sueltan (el usuario puede elegir SnapToGrid si lo desea).
+    let user_ver: i32 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap_or(0);
+    if user_ver < 1 {
+        let _ = conn.execute(
+            "UPDATE folder_settings SET layout_mode = 'freeform' WHERE layout_mode = 'snap_to_grid'",
+            [],
+        );
+        let _ = conn.execute("PRAGMA user_version = 1", []);
+    }
+
     Ok(conn)
 }
 

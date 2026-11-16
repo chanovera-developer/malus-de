@@ -195,7 +195,7 @@ fn create_list_row(item: &FileItem, icon_size: i32, on_navigate: NavigateCallbac
 
     // Arrastrar archivo (Drag & Drop con icono translúcido estilo macOS Finder)
     let drag_source = gtk4::DragSource::new();
-    drag_source.set_actions(gdk::DragAction::COPY | gdk::DragAction::MOVE);
+    drag_source.set_actions(gdk::DragAction::MOVE | gdk::DragAction::COPY);
     let path_for_drag = item.path.clone();
     drag_source.connect_prepare(move |_, _x, _y| {
         Some(crate::views::build_file_drag_content_provider(&path_for_drag))
@@ -227,8 +227,13 @@ fn create_list_row(item: &FileItem, icon_size: i32, on_navigate: NavigateCallbac
     });
 
     let row_drag_end = row.clone();
-    drag_source.connect_drag_end(move |_, _, _| {
+    let path_end = item.path.clone();
+    let on_nav_end = on_navigate.clone();
+    drag_source.connect_drag_end(move |_, drag, _| {
         row_drag_end.remove_css_class("branches-icon-dragging");
+        if let Some(parent) = path_end.parent() {
+            let _ = crate::views::refresh_if_moved_out(drag, &path_end, parent, &on_nav_end);
+        }
     });
     row.add_controller(drag_source);
 
