@@ -3,6 +3,7 @@
 //! Contiene estructuras de configuración serializables, tipos de mensajes IPC
 //! para sockets Unix, gestión de temas y configuración de logging estructurado.
 
+pub mod apps;
 pub mod config;
 pub mod crash;
 pub mod ipc;
