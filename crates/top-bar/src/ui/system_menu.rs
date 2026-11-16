@@ -423,7 +423,7 @@ fn show_about_dialog() {
         .comments(comments)
         .website("https://github.com/cristian/malus-de")
         .issue_url("https://github.com/cristian/malus-de/issues")
-        .license_type(gtk4::License::MitX11)
+        .license_type(gtk4::License::Gpl30)
         .build();
 
     about_window.present(None as Option<&gtk4::Window>);
