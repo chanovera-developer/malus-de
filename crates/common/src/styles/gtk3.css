@@ -180,29 +180,29 @@ headerbar button.minimize > image,
 headerbar button.maximize > image {
     padding: 0;
     margin: 0;
-    min-width: 11px;
-    min-height: 11px;
+    min-width: 12px;
+    min-height: 12px;
     opacity: 0;
     transition: opacity 120ms ease;
     background-color: transparent;
     background-repeat: no-repeat;
     background-position: center;
-    background-size: 11px 11px;
+    background-size: 12px 12px;
     color: transparent;
     -gtk-icon-source: none;
 }
 
 headerbar button.titlebutton.close > image,
 headerbar button.close > image {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='1 1 11 11'%3E%3Cpath d='M3.9 3.9 L9.1 9.1 M9.1 3.9 L3.9 9.1' fill='none' stroke='rgba(77,0,0,0.85)' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3.4 3.4 L8.6 8.6 M8.6 3.4 L3.4 8.6' fill='none' stroke='rgba(77,0,0,0.85)' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
 }
 headerbar button.titlebutton.minimize > image,
 headerbar button.minimize > image {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='1 1 11 11'%3E%3Cpath d='M3.3 6.5 L9.7 6.5' fill='none' stroke='rgba(97,56,0,0.88)' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.8 6 L9.2 6' fill='none' stroke='rgba(97,56,0,0.88)' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
 }
 headerbar button.titlebutton.maximize > image,
 headerbar button.maximize > image {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='1 1 11 11'%3E%3Cpath d='M3.5 6.5 L9.5 6.5 M6.5 3.5 L6.5 9.5' fill='none' stroke='rgba(0,71,10,0.88)' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 6 L9 6 M6 3 L6 9' fill='none' stroke='rgba(0,71,10,0.88)' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
 }
 
 headerbar:not(:hover) button.titlebutton:backdrop,
