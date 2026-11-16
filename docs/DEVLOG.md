@@ -4,6 +4,36 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-15] — Estandarización de Tamaño de Iconos/Carpetas y Cuadrícula Responsiva en Branches
+
+### 1. Métricas Compartidas y Configuración `BranchesConfig` (`crates/common/src/config.rs`, `crates/wallpaper/src/main.rs`)
+* **Métricas compartidas (`IconGridMetrics`):**
+  * Extraído `IconGridMetrics` (`box_width = icon_size + 44`, `box_height = icon_size + 48`, `spacing = 8 + extra_spacing`) en [`config.rs`](../crates/common/src/config.rs), utilizado tanto por `DesktopIconsConfig` ([`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs)) como por Branches para garantizar dimensiones idénticas (`64 px` de icono, cajas de `108×112 px` y celdas de `116×120 px` por defecto).
+* **Configuración persistente de Branches (`BranchesConfig`):**
+  * Añadido `BranchesConfig` (`~/.config/malus-de/branches.toml`) con `icon_size` (`32..=128`, predeterminado `64` igual al Escritorio), `grid_spacing` (`0..=48`), `text_size` (`10..=16`), `list_icon_size` (`16..=32`) y `show_hidden`, preparando la persistencia para futuros ajustes de Branches estilo Finder.
+
+### 2. Preparación por Carpeta, Recarga en Vivo y Estilos (`crates/branches`)
+* **Base de datos y estado ([`db.rs`](../crates/branches/src/db.rs), [`state.rs`](../crates/branches/src/state.rs), [`folder_pane.rs`](../crates/branches/src/folder_pane.rs), [`app_window.rs`](../crates/branches/src/app_window.rs)):**
+  * Añadida columna opcional `icon_size` en `folder_settings` (con migración no destructiva) y `get_folder_icon_size` / `set_folder_icon_size` para personalización por carpeta.
+  * `AppState` inicializa `icon_size`, `grid_spacing` y `show_hidden` desde `BranchesConfig::load()`, mientras `BranchesWindow` monitoriza `branches.toml` mediante `gio::FileMonitor` para aplicar cambios en tiempo real sobre ambos paneles (`apply_branches_config`) y [`list_view.rs`](../crates/branches/src/views/list_view.rs) respeta `list_icon_size`.
+  * Alinear `.branches-icon-item` (`padding: 6px; margin: 0; border-radius: 10px;`) y `.branches-icon-label` (`font-size: 12px; margin-top: 4px;`) en [`macos-branches.css`](../crates/branches/src/styles/macos-branches.css) con `.desktop-icon`.
+
+### 3. Cuadrícula Adaptativa al Ancho de Ventana y Movimiento Libre (`crates/branches/src/views/icon_view.rs`)
+* **Reflow dinámico según el ancho visible:**
+  * Reemplazado el límite fijo de `8` columnas (`48 px`) por [`columns_for_width`](../crates/branches/src/views/icon_view.rs) y [`setup_resize_reflow`](../crates/branches/src/views/icon_view.rs) escuchando `hadjustment::notify::page-size`, redistribuyendo automáticamente la cuadrícula en `LayoutMode::Auto` al redimensionar la ventana o alternar Split View.
+* **Movimiento libre preservado y menú del lienzo:**
+  * [`show_canvas_context_menu`](../crates/branches/src/views/icon_view.rs) ofrece **Cuadrícula automática**, **Alinear a la cuadrícula (Snap to Grid)**, **Colocación libre (Freeform)** (marcando el modo activo con `✓`) y **Reordenar cuadrícula**.
+  * Arrastrar un icono dentro del lienzo funciona libremente incluso cuando estaba activa **Cuadrícula automática** (transicionando la carpeta a `SnapToGrid` y guardando las posiciones actuales), y `connect_drag_end` utiliza `pos: Rc<Cell<(i32, i32)>>` para restaurar la posición vigente ante arrastres cancelados.
+
+### 4. Validación
+* `cargo check --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --workspace`: compilación completa sin errores (`exit 0`).
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-common -p malus-de-branches -p malus-de-wallpaper`:
+  * `malus-de-common`: **47 passed; 0 failed** (`branches_config_defaults_match_desktop_icon_size_and_metrics`).
+  * `malus-de-branches`: **9 passed; 0 failed** (`folder_icon_size_persists_and_clears_cleanly`, `grid_columns_adapt_to_window_and_pane_width`, `snap_to_grid_cell_aligns_freely_dragged_icon_to_nearest_slot`).
+  * `malus-de-wallpaper`: **17 passed; 0 failed**.
+
+---
+
 ## [2026-11-15] — Menús Contextuales en Branches y Alineación Squircle del Blur en DRM
 
 ### 1. Menús Contextuales Unificados y Acciones en Aplicaciones (`crates/branches/src/views/`)
