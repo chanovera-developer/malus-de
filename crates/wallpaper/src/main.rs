@@ -35,6 +35,89 @@ const DEFAULT_GRADIENT_CSS: &str = include_str!("styles/default-gradient.css");
 pub const DESKTOP_TOP_MARGIN: f64 = 56.0;
 /// Margen superior estándar de la cuadrícula en pantallas secundarias (sin Top Bar).
 pub const DESKTOP_SECONDARY_TOP_MARGIN: f64 = 16.0;
+/// Duración de la animación de reorganización del escritorio (alineada con `GRID_REORDER_ANIM_MS` de Branches).
+const DESKTOP_ORGANIZE_ANIM_MS: i64 = 240;
+
+#[inline]
+pub fn compute_cover_crop_geometry(
+    src_w: i32,
+    src_h: i32,
+    target_w: i32,
+    target_h: i32,
+) -> (i32, i32, i32, i32) {
+    let target_w = target_w.max(1);
+    let target_h = target_h.max(1);
+    if src_w <= 0 || src_h <= 0 {
+        return (target_w, target_h, 0, 0);
+    }
+    let scale = (target_w as f64 / src_w as f64).max(target_h as f64 / src_h as f64);
+    let scaled_w = ((src_w as f64 * scale).ceil() as i32).max(target_w);
+    let scaled_h = ((src_h as f64 * scale).ceil() as i32).max(target_h);
+    let crop_x = ((scaled_w - target_w) / 2).max(0);
+    let crop_y = ((scaled_h - target_h) / 2).max(0);
+    (scaled_w, scaled_h, crop_x, crop_y)
+}
+
+fn build_scaled_wallpaper_texture(
+    path: &Path,
+    target_w: i32,
+    target_h: i32,
+) -> Option<gtk4::gdk::Texture> {
+    let target_w = target_w.max(1);
+    let target_h = target_h.max(1);
+    let loaded = gdk_pixbuf::Pixbuf::from_file(path).ok()?;
+    let pixbuf = loaded.apply_embedded_orientation().unwrap_or(loaded);
+    let src_w = pixbuf.width();
+    let src_h = pixbuf.height();
+    let final_pixbuf = if src_w == target_w && src_h == target_h {
+        pixbuf
+    } else {
+        let (scaled_w, scaled_h, crop_x, crop_y) =
+            compute_cover_crop_geometry(src_w, src_h, target_w, target_h);
+        let scaled = if src_w == scaled_w && src_h == scaled_h {
+            pixbuf
+        } else {
+            pixbuf.scale_simple(scaled_w, scaled_h, gdk_pixbuf::InterpType::Bilinear)?
+        };
+        if scaled.width() == target_w && scaled.height() == target_h {
+            scaled
+        } else {
+            let sub = scaled.new_subpixbuf(crop_x, crop_y, target_w, target_h);
+            sub.copy()?
+        }
+    };
+    Some(gtk4::gdk::Texture::for_pixbuf(&final_pixbuf))
+}
+
+fn build_default_gradient_texture(target_w: i32, target_h: i32) -> Option<gtk4::gdk::Texture> {
+    let target_w = target_w.max(1);
+    let target_h = target_h.max(1);
+    let surface =
+        gtk4::cairo::ImageSurface::create(gtk4::cairo::Format::ARgb32, target_w, target_h).ok()?;
+    {
+        let cr = gtk4::cairo::Context::new(&surface).ok()?;
+        let cx = target_w as f64 * 0.35;
+        let cy = target_h as f64 * 0.25;
+        let radius = (target_w as f64 - cx).hypot(target_h as f64 - cy);
+        let grad = gtk4::cairo::RadialGradient::new(cx, cy, 0.0, cx, cy, radius);
+        grad.add_color_stop_rgba(0.0, 0x2e as f64 / 255.0, 0x10 as f64 / 255.0, 0x65 as f64 / 255.0, 1.0);
+        grad.add_color_stop_rgba(0.35, 0x17 as f64 / 255.0, 0x25 as f64 / 255.0, 0x54 as f64 / 255.0, 1.0);
+        grad.add_color_stop_rgba(0.70, 0x0f as f64 / 255.0, 0x17 as f64 / 255.0, 0x2a as f64 / 255.0, 1.0);
+        grad.add_color_stop_rgba(1.0, 0x0d as f64 / 255.0, 0x15 as f64 / 255.0, 0x26 as f64 / 255.0, 1.0);
+        let _ = cr.set_source(&grad);
+        let _ = cr.paint();
+    }
+    let data = surface.take_data().ok()?;
+    let bytes = glib::Bytes::from_owned(data.to_vec());
+    let tex = gtk4::gdk::MemoryTexture::new(
+        target_w,
+        target_h,
+        gtk4::gdk::MemoryFormat::B8g8r8a8Premultiplied,
+        &bytes,
+        (target_w as usize) * 4,
+    );
+    Some(tex.upcast())
+}
 
 static CURRENT_IS_DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
@@ -147,6 +230,9 @@ pub fn animate_widget_fade_in<W: IsA<gtk4::Widget>>(widget: &W, duration_ms: i64
         };
 
         let elapsed = now - start;
+        if elapsed == 0 {
+            return glib::ControlFlow::Continue;
+        }
         if elapsed >= duration_ms {
             w.set_opacity(1.0);
             glib::ControlFlow::Break
@@ -423,8 +509,8 @@ pub fn clamp_icon_position(
     let max_y = (desktop_size.1 - metrics.box_height - 20).max(min_y as i32) as f64;
 
     (
-        (x - pointer_offset.0).clamp(min_x, max_x),
-        (y - pointer_offset.1).clamp(min_y, max_y),
+        (x - pointer_offset.0).round().clamp(min_x, max_x),
+        (y - pointer_offset.1).round().clamp(min_y, max_y),
     )
 }
 
@@ -798,68 +884,81 @@ pub fn calculate_organize_targets(
     by: DesktopOrganizeBy,
     top_margin: f64,
 ) -> HashMap<PathBuf, (f64, f64)> {
-    let mut raw_paths = Vec::new();
+    struct SortEntry {
+        path: PathBuf,
+        is_dir: bool,
+        name_lower: String,
+        ext_lower: String,
+        modified: std::time::SystemTime,
+    }
+
+    let mut entries_list = Vec::new();
     if let Ok(entries) = fs::read_dir(desktop_dir) {
         for entry in entries.flatten() {
             let p = entry.path();
-            if let Some(file_name) = p.file_name() {
-                if file_name.to_string_lossy().starts_with('.') {
-                    continue;
-                }
+            let Some(file_name) = p.file_name() else {
+                continue;
+            };
+            let name_str = file_name.to_string_lossy();
+            if name_str.starts_with('.') {
+                continue;
             }
-            raw_paths.push(p);
+            let is_dir = matches!(entry.file_type(), Ok(ft) if ft.is_dir())
+                || (matches!(entry.file_type(), Ok(ft) if ft.is_symlink()) && p.is_dir());
+            let modified = if by == DesktopOrganizeBy::DateModified {
+                entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::UNIX_EPOCH)
+            } else {
+                std::time::UNIX_EPOCH
+            };
+            let ext_lower = if by == DesktopOrganizeBy::Kind {
+                p.extension()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_lowercase()
+            } else {
+                String::new()
+            };
+            entries_list.push(SortEntry {
+                name_lower: name_str.to_lowercase(),
+                path: p,
+                is_dir,
+                ext_lower,
+                modified,
+            });
         }
     }
 
     match by {
         DesktopOrganizeBy::Name => {
-            raw_paths.sort_by(|a, b| {
-                let a_is_dir = a.is_dir();
-                let b_is_dir = b.is_dir();
-                // Carpetas primero (is_dir true antes de false)
-                if a_is_dir != b_is_dir {
-                    return b_is_dir.cmp(&a_is_dir);
-                }
-                let a_name = a.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
-                let b_name = b.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
-                a_name.cmp(&b_name)
+            entries_list.sort_by(|a, b| {
+                b.is_dir
+                    .cmp(&a.is_dir)
+                    .then_with(|| a.name_lower.cmp(&b.name_lower))
             });
         }
         DesktopOrganizeBy::Kind => {
-            raw_paths.sort_by(|a, b| {
-                let a_is_dir = a.is_dir();
-                let b_is_dir = b.is_dir();
-                if a_is_dir != b_is_dir {
-                    return b_is_dir.cmp(&a_is_dir);
-                }
-                let a_ext = a.extension().unwrap_or_default().to_string_lossy().to_lowercase();
-                let b_ext = b.extension().unwrap_or_default().to_string_lossy().to_lowercase();
-                let ext_cmp = a_ext.cmp(&b_ext);
-                if ext_cmp != std::cmp::Ordering::Equal {
-                    return ext_cmp;
-                }
-                let a_name = a.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
-                let b_name = b.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
-                a_name.cmp(&b_name)
+            entries_list.sort_by(|a, b| {
+                b.is_dir
+                    .cmp(&a.is_dir)
+                    .then_with(|| a.ext_lower.cmp(&b.ext_lower))
+                    .then_with(|| a.name_lower.cmp(&b.name_lower))
             });
         }
         DesktopOrganizeBy::DateModified => {
-            raw_paths.sort_by(|a, b| {
-                let a_time = fs::metadata(a).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
-                let b_time = fs::metadata(b).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
-                // Más recientes primero
-                b_time.cmp(&a_time)
-            });
+            entries_list.sort_by(|a, b| b.modified.cmp(&a.modified));
         }
     }
 
     let metrics = IconLayoutMetrics::from_config(config);
     let rows = ((desktop_size.1 - (top_margin as i32) - 80).max(1) / metrics.cell_height()).max(1) as usize;
 
-    let mut targets = HashMap::new();
-    for (index, path) in raw_paths.iter().enumerate() {
+    let mut targets = HashMap::with_capacity(entries_list.len());
+    for (index, entry) in entries_list.into_iter().enumerate() {
         let pos = calculate_grid_position(index, rows, &metrics, config.align_left, desktop_size, top_margin);
-        targets.insert(path.clone(), pos);
+        targets.insert(entry.path, pos);
     }
     targets
 }
@@ -883,6 +982,15 @@ pub fn animate_desktop_layout_transition(
     fixed: &Fixed,
     targets: &HashMap<PathBuf, (f64, f64)>,
     duration_ms: i64,
+) {
+    animate_desktop_layout_transition_with_completion(fixed, targets, duration_ms, None);
+}
+
+fn animate_desktop_layout_transition_with_completion(
+    fixed: &Fixed,
+    targets: &HashMap<PathBuf, (f64, f64)>,
+    duration_ms: i64,
+    on_complete: Option<Box<dyn FnOnce()>>,
 ) {
     let mut moves: Vec<(gtk4::Widget, (f64, f64), (f64, f64))> = Vec::new();
     let mut child = fixed.first_child();
@@ -908,12 +1016,18 @@ pub fn animate_desktop_layout_transition(
     }
 
     if moves.is_empty() {
+        if let Some(cb) = on_complete {
+            cb();
+        }
         return;
     }
 
-    if fixed.root().is_none() {
+    if fixed.root().is_none() || duration_ms <= 0 {
         for (widget, _, target) in &moves {
             fixed.move_(widget, target.0, target.1);
+        }
+        if let Some(cb) = on_complete {
+            cb();
         }
         return;
     }
@@ -926,6 +1040,7 @@ pub fn animate_desktop_layout_transition(
 
     let start_time: Rc<Cell<Option<i64>>> = Rc::new(Cell::new(None));
     let fixed_clone = fixed.clone();
+    let completion = Rc::new(RefCell::new(on_complete));
 
     fixed.add_tick_callback(move |_, frame_clock| {
         if DESKTOP_LAYOUT_ANIM_GEN.with(|g| g.get()) != anim_gen {
@@ -942,9 +1057,15 @@ pub fn animate_desktop_layout_transition(
         };
 
         let elapsed = now - start;
+        if elapsed == 0 {
+            return glib::ControlFlow::Continue;
+        }
         if elapsed >= duration_ms {
             for (widget, _, target) in &moves {
                 fixed_clone.move_(widget, target.0, target.1);
+            }
+            if let Some(cb) = completion.borrow_mut().take() {
+                cb();
             }
             glib::ControlFlow::Break
         } else {
@@ -975,9 +1096,16 @@ pub fn animate_desktop_organization(
         let mut positions = icon_positions.borrow_mut();
         positions.clear();
         positions.extend(targets.clone());
-        save_icon_positions(&positions);
     }
-    animate_desktop_layout_transition(fixed, &targets, duration_ms);
+    let pos_for_save = icon_positions.clone();
+    animate_desktop_layout_transition_with_completion(
+        fixed,
+        &targets,
+        duration_ms,
+        Some(Box::new(move || {
+            save_icon_positions(&pos_for_save.borrow());
+        })),
+    );
 }
 
 pub fn animate_desktop_snap_to_grid(
@@ -1003,9 +1131,16 @@ pub fn animate_desktop_snap_to_grid(
         for (p, pt) in &targets {
             positions.insert(p.clone(), *pt);
         }
-        save_icon_positions(&positions);
     }
-    animate_desktop_layout_transition(fixed, &targets, duration_ms);
+    let pos_for_save = icon_positions.clone();
+    animate_desktop_layout_transition_with_completion(
+        fixed,
+        &targets,
+        duration_ms,
+        Some(Box::new(move || {
+            save_icon_positions(&pos_for_save.borrow());
+        })),
+    );
 }
 
 fn build_organize_submenu(
@@ -1056,7 +1191,7 @@ fn build_organize_submenu(
                 &cfg,
                 &pos_c,
                 DesktopOrganizeBy::Name,
-                320,
+                DESKTOP_ORGANIZE_ANIM_MS,
                 top_margin,
             );
         }
@@ -1084,7 +1219,7 @@ fn build_organize_submenu(
                 &cfg,
                 &pos_c,
                 DesktopOrganizeBy::Kind,
-                320,
+                DESKTOP_ORGANIZE_ANIM_MS,
                 top_margin,
             );
         }
@@ -1112,7 +1247,7 @@ fn build_organize_submenu(
                 &cfg,
                 &pos_c,
                 DesktopOrganizeBy::DateModified,
-                320,
+                DESKTOP_ORGANIZE_ANIM_MS,
                 top_margin,
             );
         }
@@ -1129,6 +1264,49 @@ struct DesktopItemData {
     icon: Option<gio::Icon>,
     content_type: Option<String>,
     category: StackCategory,
+}
+
+fn has_desktop_icon_widget(fixed: &Fixed, path: &Path) -> bool {
+    let expected = path.to_string_lossy();
+    let mut child = fixed.first_child();
+    while let Some(item) = child {
+        child = item.next_sibling();
+        if item.has_css_class("desktop-rubberband") {
+            continue;
+        }
+        if item.property::<Option<String>>("tooltip-text").as_deref() == Some(expected.as_ref()) {
+            return true;
+        }
+    }
+    false
+}
+
+fn build_desktop_item_data(path: &Path) -> Option<DesktopItemData> {
+    let file = gio::File::for_path(path);
+    let file_info = file.query_info(
+        "standard::display-name,standard::icon,standard::content-type",
+        gio::FileQueryInfoFlags::NONE,
+        gio::Cancellable::NONE,
+    );
+    match file_info {
+        Ok(info) => {
+            let display_name = info.display_name().to_string();
+            let icon = info.icon();
+            let content_type = info.content_type().map(|value| value.to_string());
+            let category = StackCategory::categorize(path, content_type.as_deref());
+            Some(DesktopItemData {
+                path: path.to_path_buf(),
+                display_name,
+                icon,
+                content_type,
+                category,
+            })
+        }
+        Err(error) => {
+            warn!("No se pudo obtener información de {:?}: {}", path, error);
+            None
+        }
+    }
 }
 
 fn refresh_desktop_icons(
@@ -1187,33 +1365,9 @@ fn refresh_desktop_icons(
 
     let mut items = Vec::new();
     for path in raw_paths {
-        let file = gio::File::for_path(&path);
-        let file_info = file.query_info(
-            "standard::display-name,standard::icon,standard::content-type",
-            gio::FileQueryInfoFlags::NONE,
-            gio::Cancellable::NONE,
-        );
-        let (display_name, icon, content_type) = match file_info {
-            Ok(info) => {
-                let display_name = info.display_name().to_string();
-                let icon = info.icon();
-                let content_type = info.content_type().map(|value| value.to_string());
-                (display_name, icon, content_type)
-            }
-            Err(error) => {
-                warn!("No se pudo obtener información de {:?}: {}", path, error);
-                continue;
-            }
-        };
-
-        let category = StackCategory::categorize(&path, content_type.as_deref());
-        items.push(DesktopItemData {
-            path,
-            display_name,
-            icon,
-            content_type,
-            category,
-        });
+        if let Some(item) = build_desktop_item_data(&path) {
+            items.push(item);
+        }
     }
 
     let metrics = IconLayoutMetrics::from_config(config);
@@ -1617,18 +1771,7 @@ fn render_single_icon(
         positions.insert(path.clone(), (x, y));
     }
     fixed.put(&item_box, x, y);
-
-    // Animación de aterrizaje suave estilo Finder si el archivo acaba de ser soltado
-    if recently_dropped_paths.borrow().contains(&path) {
-        item_box.add_css_class("landing");
-        let box_landing = item_box.clone();
-        let path_landing = path.clone();
-        let rec_landing = recently_dropped_paths.clone();
-        glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
-            box_landing.remove_css_class("landing");
-            rec_landing.borrow_mut().remove(&path_landing);
-        });
-    }
+    let _ = recently_dropped_paths.borrow_mut().remove(&path);
 
     // Arrastrar archivo/carpeta (Drag & Drop Wayland con icono mapeado al punto exacto de clic estilo macOS)
     let stored_click = Rc::new(Cell::new((
@@ -1636,7 +1779,7 @@ fn render_single_icon(
         f64::from(metrics.box_height) / 2.0,
     )));
     let drag_source = gtk4::DragSource::new();
-    drag_source.set_actions(gtk4::gdk::DragAction::COPY | gtk4::gdk::DragAction::MOVE);
+    drag_source.set_actions(gtk4::gdk::DragAction::MOVE | gtk4::gdk::DragAction::COPY);
 
     // Clic con botón 1 (Selección simple / doble clic para abrir)
     let click = GestureClick::new();
@@ -1647,14 +1790,8 @@ fn render_single_icon(
     let foc_path_click = focused_path.clone();
     let drag_fixed_press = fixed.clone();
     let drag_item_press = item_box.clone();
-    let stored_click_press = stored_click.clone();
-    let drag_source_press = drag_source.clone();
-    let drag_item_press_icon = item_box.clone();
 
-    click.connect_pressed(move |gesture, presses, click_x, click_y| {
-        stored_click_press.set((click_x, click_y));
-        let paintable = gtk4::WidgetPaintable::new(Some(&drag_item_press_icon));
-        drag_source_press.set_icon(Some(&paintable), click_x.round() as i32, click_y.round() as i32);
+    click.connect_pressed(move |gesture, presses, _click_x, _click_y| {
 
         if presses == 2 {
             gesture.set_state(gtk4::EventSequenceState::Claimed);
@@ -1802,14 +1939,19 @@ fn render_single_icon(
     let item_box_prep = item_box.clone();
     let stored_click_prep = stored_click.clone();
     drag_source.connect_prepare(move |source, click_x, click_y| {
-        stored_click_prep.set((click_x, click_y));
+        let rounded_click = (click_x.round(), click_y.round());
+        stored_click_prep.set(rounded_click);
+        malus_de_common::write_drag_anchor(&path_drag, rounded_click.0, rounded_click.1);
         set_desktop_icon_selected(&item_box_prep, true);
         let paintable = gtk4::WidgetPaintable::new(Some(&item_box_prep));
-        source.set_icon(Some(&paintable), click_x.round() as i32, click_y.round() as i32);
+        source.set_icon(Some(&paintable), rounded_click.0 as i32, rounded_click.1 as i32);
 
         let sel = sel_drag.borrow();
         let files: Vec<gio::File> = if sel.contains(&path_drag) && sel.len() > 1 {
-            sel.iter().map(|p| gio::File::for_path(p)).collect()
+            std::iter::once(&path_drag)
+                .chain(sel.iter().filter(|p| *p != &path_drag))
+                .map(|p| gio::File::for_path(p))
+                .collect()
         } else {
             vec![gio::File::for_path(&path_drag)]
         };
@@ -1823,10 +1965,8 @@ fn render_single_icon(
     let sel_drag_begin = selected_paths.clone();
     let act_drag_begin = active_icon_drag.clone();
     let stored_click_begin = stored_click.clone();
-    drag_source.connect_drag_begin(move |source, _drag| {
+    drag_source.connect_drag_begin(move |_source, _drag| {
         let (click_x, click_y) = stored_click_begin.get();
-        let paintable = gtk4::WidgetPaintable::new(Some(&item_box_drag));
-        source.set_icon(Some(&paintable), click_x.round() as i32, click_y.round() as i32);
         let sel = sel_drag_begin.borrow();
         if sel.contains(&path_drag_begin) && sel.len() > 1 {
             let mut sibling = fixed_drag.first_child();
@@ -1851,9 +1991,11 @@ fn render_single_icon(
     let fixed_drag_end = fixed.clone();
     let act_drag_end = active_icon_drag.clone();
     let icon_pos_drag_end = icon_positions.clone();
+    let sel_drag_end = selected_paths.clone();
     let orig_pos = (x, y);
-    drag_source.connect_drag_end(move |_, _drag, _| {
+    drag_source.connect_drag_end(move |_, drag, _| {
         *act_drag_end.borrow_mut() = None;
+        let mut removed_moved_out = false;
         let mut sibling = fixed_drag_end.first_child();
         while let Some(child) = sibling {
             sibling = child.next_sibling();
@@ -1861,6 +2003,13 @@ fn render_single_icon(
             if cx < 0.0 || cy < 0.0 {
                 if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
                     let p = PathBuf::from(p_str);
+                    if !p.exists() {
+                        fixed_drag_end.remove(&child);
+                        icon_pos_drag_end.borrow_mut().remove(&p);
+                        sel_drag_end.borrow_mut().remove(&p);
+                        removed_moved_out = true;
+                        continue;
+                    }
                     let target_pos = icon_pos_drag_end
                         .borrow()
                         .get(&p)
@@ -1870,6 +2019,35 @@ fn render_single_icon(
                 }
             }
         }
+        if removed_moved_out {
+            save_icon_positions(&icon_pos_drag_end.borrow());
+        } else if drag.selected_action() == gtk4::gdk::DragAction::MOVE {
+            let fixed_check = fixed_drag_end.clone();
+            let pos_check = icon_pos_drag_end.clone();
+            let sel_check = sel_drag_end.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(80), move || {
+                let mut changed = false;
+                let mut child_opt = fixed_check.first_child();
+                while let Some(child) = child_opt {
+                    child_opt = child.next_sibling();
+                    if child.has_css_class("desktop-rubberband") {
+                        continue;
+                    }
+                    if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
+                        let p = PathBuf::from(p_str);
+                        if !p.exists() {
+                            fixed_check.remove(&child);
+                            pos_check.borrow_mut().remove(&p);
+                            sel_check.borrow_mut().remove(&p);
+                            changed = true;
+                        }
+                    }
+                }
+                if changed {
+                    save_icon_positions(&pos_check.borrow());
+                }
+            });
+        }
     });
 
     item_box.add_controller(drag_source);
@@ -1878,7 +2056,7 @@ fn render_single_icon(
     if path.is_dir() {
         let folder_drop = gtk4::DropTarget::new(
             gtk4::gdk::FileList::static_type(),
-            gtk4::gdk::DragAction::COPY | gtk4::gdk::DragAction::MOVE,
+            gtk4::gdk::DragAction::MOVE | gtk4::gdk::DragAction::COPY,
         );
         let item_box_hover = item_box.clone();
         folder_drop.connect_enter(move |_, _, _| {
@@ -1979,17 +2157,40 @@ fn create_wallpaper_window(
     }
 
     let overlay = Overlay::new();
-    if let Some(ref img_path) = resolved_path {
-        if img_path.exists() {
-            info!("Cargando imagen de fondo: {:?}", img_path);
-            let picture = Picture::for_filename(img_path);
-            picture.set_content_fit(gtk4::ContentFit::Cover);
-            picture.set_hexpand(true);
-            picture.set_vexpand(true);
-            picture.set_halign(Align::Fill);
-            picture.set_valign(Align::Fill);
-            overlay.set_child(Some(&picture));
+    let (target_phys_w, target_phys_h) = monitor
+        .map(|m| {
+            let geometry = m.geometry();
+            let scale = m.scale_factor().max(1);
+            (geometry.width() * scale, geometry.height() * scale)
+        })
+        .unwrap_or((1920, 1080));
+
+    let bg_picture = if let Some(ref img_path) = resolved_path.as_ref().filter(|p| p.exists()) {
+        info!("Cargando imagen de fondo: {:?}", img_path);
+        if let Some(tex) = build_scaled_wallpaper_texture(img_path, target_phys_w, target_phys_h) {
+            let pic = Picture::for_paintable(&tex);
+            pic.set_content_fit(gtk4::ContentFit::Fill);
+            Some(pic)
+        } else {
+            let pic = Picture::for_filename(img_path);
+            pic.set_content_fit(gtk4::ContentFit::Cover);
+            Some(pic)
         }
+    } else {
+        build_default_gradient_texture(target_phys_w, target_phys_h).map(|tex| {
+            let pic = Picture::for_paintable(&tex);
+            pic.set_content_fit(gtk4::ContentFit::Fill);
+            pic
+        })
+    };
+
+    if let Some(picture) = bg_picture {
+        picture.set_hexpand(true);
+        picture.set_vexpand(true);
+        picture.set_halign(Align::Fill);
+        picture.set_valign(Align::Fill);
+        window.add_css_class("has-wallpaper-texture");
+        overlay.set_child(Some(&picture));
     }
 
     if let Some(desktop_dir) = desktop_dir {
@@ -2246,7 +2447,7 @@ fn create_wallpaper_window(
                         &cfg,
                         &pos_org,
                         DesktopOrganizeBy::Name,
-                        320,
+                        DESKTOP_ORGANIZE_ANIM_MS,
                         top_margin,
                     );
                 }
@@ -2279,7 +2480,7 @@ fn create_wallpaper_window(
                         desktop_size,
                         &cfg,
                         &icon_pos_c2,
-                        280,
+                        DESKTOP_ORGANIZE_ANIM_MS,
                         top_margin,
                     );
                 }
@@ -2327,7 +2528,7 @@ fn create_wallpaper_window(
                             &cfg_clone,
                             &pos_snap_c,
                             DesktopOrganizeBy::Name,
-                            320,
+                            DESKTOP_ORGANIZE_ANIM_MS,
                             top_margin,
                         );
                     }
@@ -2598,7 +2799,7 @@ fn create_wallpaper_window(
         // Destino para soltar archivos arrastrados al escritorio (DropTarget)
         let drop_target = gtk4::DropTarget::new(
             gtk4::gdk::FileList::static_type(),
-            gtk4::gdk::DragAction::COPY | gtk4::gdk::DragAction::MOVE,
+            gtk4::gdk::DragAction::MOVE | gtk4::gdk::DragAction::COPY,
         );
         let drop_dir = desktop_dir.to_path_buf();
         let drop_positions = icon_positions.clone();
@@ -2618,6 +2819,8 @@ fn create_wallpaper_window(
         let drop_icons = icons.clone();
         let cfg_drop = current_config.clone();
         let rec_drop = recently_dropped_paths.clone();
+        let sel_drop = selected_paths.clone();
+        let foc_drop = focused_path.clone();
 
         drop_target.connect_drop(move |_, value, x, y| {
             let files = match value.get::<gtk4::gdk::FileList>() {
@@ -2631,11 +2834,14 @@ fn create_wallpaper_window(
                 }
             };
 
-            let metrics = IconLayoutMetrics::from_config(&cfg_drop.borrow());
-            let snap = cfg_drop.borrow().snap_to_grid;
-            let align_left = cfg_drop.borrow().align_left;
+            let cfg_snapshot = cfg_drop.borrow().clone();
+            let metrics = IconLayoutMetrics::from_config(&cfg_snapshot);
+            let snap = cfg_snapshot.snap_to_grid;
+            let align_left = cfg_snapshot.align_left;
+            let rows = ((desktop_size.1 - (top_margin as i32) - 80).max(1) / metrics.cell_height()).max(1) as usize;
 
             let mut moved_any = false;
+            let mut cleared_selection_for_external = false;
             for (index, source) in files.files().into_iter().enumerate() {
                 let Some(name) = source.basename() else {
                     warn!(
@@ -2664,33 +2870,27 @@ fn create_wallpaper_window(
                         if move_desktop_icon(&drop_icons, &path, position) {
                             drop_positions.borrow_mut().insert(path.clone(), position);
                             internal_paths_drop.borrow_mut().insert(path.clone());
-                            let mut sibling = drop_icons.first_child();
-                            while let Some(child) = sibling {
-                                sibling = child.next_sibling();
-                                if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
-                                    if p_str == path.to_string_lossy() {
-                                        child.add_css_class("landing");
-                                        let c = child.clone();
-                                        glib::timeout_add_local_once(std::time::Duration::from_millis(300), move || {
-                                            c.remove_css_class("landing");
-                                        });
-                                        break;
-                                    }
-                                }
-                            }
                             moved_any = true;
                         }
                     }
                     continue;
                 }
 
-                let mut position = (
-                    (x + (index % 4) as f64 * 24.0)
-                        .clamp(16.0, f64::from((desktop_size.0 - metrics.box_width - 16).max(16))),
-                    (y + (index % 4) as f64 * 24.0).clamp(
-                        top_margin,
-                        f64::from((desktop_size.1 - metrics.box_height - 20).max(top_margin as i32)),
-                    ),
+                let pointer_offset = source
+                    .path()
+                    .and_then(|src_path| malus_de_common::read_drag_anchor(&src_path))
+                    .unwrap_or((
+                        f64::from(metrics.box_width) / 2.0,
+                        f64::from(metrics.icon_size) / 2.0,
+                    ));
+                let offset_idx = (index % 4) as f64 * 24.0;
+                let mut position = clamp_icon_position(
+                    x + offset_idx,
+                    y + offset_idx,
+                    pointer_offset,
+                    &metrics,
+                    desktop_size,
+                    top_margin,
                 );
                 if snap {
                     position = snap_position_to_grid(position, &metrics, align_left, desktop_size, top_margin);
@@ -2706,7 +2906,43 @@ fn create_wallpaper_window(
                         if let Some(path) = destination.path() {
                             drop_positions.borrow_mut().insert(path.clone(), position);
                             internal_paths_drop.borrow_mut().insert(path.clone());
-                            rec_drop.borrow_mut().insert(path);
+                            rec_drop.borrow_mut().insert(path.clone());
+
+                            if !cfg_snapshot.use_stacks {
+                                if !cleared_selection_for_external {
+                                    let mut sibling = drop_icons.first_child();
+                                    while let Some(child) = sibling {
+                                        sibling = child.next_sibling();
+                                        set_desktop_icon_selected(&child, false);
+                                    }
+                                    sel_drop.borrow_mut().clear();
+                                    cleared_selection_for_external = true;
+                                }
+                                sel_drop.borrow_mut().insert(path.clone());
+                                *foc_drop.borrow_mut() = Some(path.clone());
+                                if !has_desktop_icon_widget(&drop_icons, &path) {
+                                    if let Some(item_data) = build_desktop_item_data(&path) {
+                                        let mut pos_map = drop_positions.borrow_mut();
+                                        render_single_icon(
+                                            &drop_icons,
+                                            0,
+                                            rows,
+                                            item_data,
+                                            &metrics,
+                                            &cfg_snapshot,
+                                            desktop_size,
+                                            &mut pos_map,
+                                            &drop_positions,
+                                            &internal_paths_drop,
+                                            &active_drag_drop,
+                                            &sel_drop,
+                                            &foc_drop,
+                                            &rec_drop,
+                                            top_margin,
+                                        );
+                                    }
+                                }
+                            }
                         }
                         moved_any = true;
                     }
@@ -2732,7 +2968,35 @@ fn create_wallpaper_window(
         match desktop_file.monitor_directory(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE) {
             Ok(monitor) => {
                 let trigger_c = trigger_refresh.clone();
-                monitor.connect_changed(move |_, _, _, _| {
+                let icons_mon = icons.clone();
+                let rec_mon = recently_dropped_paths.clone();
+                let pos_mon = icon_positions.clone();
+                monitor.connect_changed(move |_, file, _other_file, event_type| {
+                    let event_path = file.path();
+                    match event_type {
+                        gio::FileMonitorEvent::Deleted | gio::FileMonitorEvent::MovedOut => {
+                            if let Some(ref p) = event_path {
+                                if !has_desktop_icon_widget(&icons_mon, p) {
+                                    pos_mon.borrow_mut().remove(p);
+                                    return;
+                                }
+                            }
+                        }
+                        gio::FileMonitorEvent::Created
+                        | gio::FileMonitorEvent::MovedIn
+                        | gio::FileMonitorEvent::ChangesDoneHint
+                        | gio::FileMonitorEvent::AttributeChanged
+                        | gio::FileMonitorEvent::Changed => {
+                            if let Some(ref p) = event_path {
+                                if rec_mon.borrow_mut().remove(p)
+                                    || has_desktop_icon_widget(&icons_mon, p)
+                                {
+                                    return;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
                     trigger_c();
                 });
                 desktop_monitors.borrow_mut().push(monitor);
@@ -2751,8 +3015,18 @@ fn create_wallpaper_window(
             let cfg_holder = current_config.clone();
             let trigger_c = trigger_refresh.clone();
             cfg_monitor.connect_changed(move |_, _, _, _| {
-                *cfg_holder.borrow_mut() = DesktopIconsConfig::load();
-                trigger_c();
+                let new_cfg = DesktopIconsConfig::load();
+                let needs_rebuild = {
+                    let prev = cfg_holder.borrow();
+                    prev.show_icons != new_cfg.show_icons
+                        || prev.icon_size != new_cfg.icon_size
+                        || prev.align_left != new_cfg.align_left
+                        || prev.use_stacks != new_cfg.use_stacks
+                };
+                *cfg_holder.borrow_mut() = new_cfg;
+                if needs_rebuild {
+                    trigger_c();
+                }
             });
             desktop_monitors.borrow_mut().push(cfg_monitor);
         }
@@ -3033,6 +3307,10 @@ mod tests {
         assert_eq!(
             clamp_icon_position(-20.0, -30.0, (20.0, 30.0), &metrics, (800, 600), DESKTOP_TOP_MARGIN),
             (16.0, DESKTOP_TOP_MARGIN)
+        );
+        assert_eq!(
+            clamp_icon_position(150.7, 100.4, (20.0, 30.0), &metrics, (800, 600), DESKTOP_TOP_MARGIN),
+            (131.0, 70.0)
         );
     }
 
@@ -3366,5 +3644,25 @@ mod tests {
         if let Some(ref p) = paintable {
             src.set_icon(Some(p), 24, 24);
         }
+    }
+
+    #[test]
+    fn test_compute_cover_crop_geometry_and_gradient_texture() {
+        assert_eq!(
+            super::compute_cover_crop_geometry(3840, 2160, 1920, 1080),
+            (1920, 1080, 0, 0)
+        );
+        assert_eq!(
+            super::compute_cover_crop_geometry(2000, 1000, 1920, 1080),
+            (2160, 1080, 120, 0)
+        );
+        assert_eq!(
+            super::compute_cover_crop_geometry(1000, 2000, 1920, 1080),
+            (1920, 3840, 0, 1380)
+        );
+        let tex = super::build_default_gradient_texture(64, 36)
+            .expect("Debe poder pre-rasterizar el fondo degradado");
+        assert_eq!(tex.width(), 64);
+        assert_eq!(tex.height(), 36);
     }
 }
