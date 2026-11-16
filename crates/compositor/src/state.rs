@@ -293,6 +293,7 @@ pub struct MalusState {
     pub spotlight: crate::spotlight_visual::SpotlightState,
     pub dnd_icon: Option<WlSurface>,
     pub dnd_icon_offset: Point<i32, Logical>,
+    pub dnd_drop_hold: Option<(WlSurface, Point<f64, Logical>, Instant)>,
     pub active_screen_recording: Option<crate::recording::ScreenRecordingSession>,
     pub screenshot_ui: crate::screenshot_ui::ScreenshotUiState,
     pub snap_layouts: crate::snap_layouts::SnapLayoutsState,
@@ -1164,6 +1165,7 @@ impl MalusState {
             spotlight: crate::spotlight_visual::SpotlightState::new(),
             dnd_icon: None,
             dnd_icon_offset: Point::from((0, 0)),
+            dnd_drop_hold: None,
             active_screen_recording: None,
             screenshot_ui: crate::screenshot_ui::ScreenshotUiState::new(),
             snap_layouts: crate::snap_layouts::SnapLayoutsState::new(),
@@ -4465,6 +4467,13 @@ impl CompositorHandler for MalusState {
                 self.dnd_icon_offset += delta;
             }
         }
+        if self
+            .dnd_drop_hold
+            .as_ref()
+            .is_some_and(|(target, _, _)| target == surface)
+        {
+            self.clear_dnd_icon();
+        }
 
         let window = self.window_for_surface(surface);
         if matched_outputs.is_empty() {
@@ -4734,6 +4743,7 @@ impl ClientDndGrabHandler for MalusState {
         _seat: Seat<Self>,
     ) {
         tracing::info!("✨ [DnD] Drag iniciado con icono: {}", icon.is_some());
+        self.dnd_drop_hold = None;
         self.dnd_icon = icon.clone();
         self.dnd_icon_offset = Point::from((0, 0));
         if let Some(ref surf) = icon {
@@ -4751,10 +4761,48 @@ impl ClientDndGrabHandler for MalusState {
         }
     }
 
-    fn dropped(&mut self, _target: Option<WlSurface>, _validated: bool, _seat: Seat<Self>) {
+    fn dropped(&mut self, target: Option<WlSurface>, validated: bool, _seat: Seat<Self>) {
         tracing::info!("✨ [DnD] Drag finalizado");
+        if validated {
+            if let (Some(target_surf), true) = (target, self.dnd_icon.is_some()) {
+                // Smithay invoca `dropped` desde PointerGrab::button con PointerInternal bloqueado;
+                // consultar `last_pointer_location` evita deadlock re-entrante en `seat.get_pointer()`.
+                let drop_loc = self.last_pointer_location.unwrap_or_default();
+                self.dnd_drop_hold = Some((target_surf, drop_loc, Instant::now()));
+                return;
+            }
+        }
+        self.clear_dnd_icon();
+    }
+}
+
+impl MalusState {
+    pub fn clear_dnd_icon(&mut self) {
         self.dnd_icon = None;
         self.dnd_icon_offset = Point::from((0, 0));
+        self.dnd_drop_hold = None;
+    }
+
+    pub fn active_dnd_icon_draw_location(&mut self) -> Option<Point<f64, Logical>> {
+        if let Some((_, drop_loc, started)) = self.dnd_drop_hold {
+            if started.elapsed() >= std::time::Duration::from_millis(80) {
+                self.clear_dnd_icon();
+                return None;
+            }
+            if self.dnd_icon.as_ref().is_some_and(|s| s.alive()) {
+                return Some(drop_loc);
+            }
+            self.clear_dnd_icon();
+            return None;
+        }
+        let is_dnd_alive = self.dnd_icon.as_ref().map(|s| s.alive()).unwrap_or(false);
+        if !is_dnd_alive {
+            if self.dnd_icon.is_some() {
+                self.clear_dnd_icon();
+            }
+            return None;
+        }
+        self.seat.get_pointer().map(|p| p.current_location())
     }
 }
 
@@ -6291,6 +6339,12 @@ mod tests {
                 event: &ButtonEvent,
             ) {
                 data.last_pointer_location = Some(handle.current_location());
+                smithay::wayland::selection::data_device::ClientDndGrabHandler::dropped(
+                    data,
+                    None,
+                    true,
+                    data.seat.clone(),
+                );
                 handle.unset_grab(self, data, event.serial, event.time, false);
                 data.update_ssd_hover(handle.current_location());
             }

@@ -133,6 +133,7 @@ struct DrmOutputSurface {
     last_background_commit_counter: usize,
     last_background_size: (i32, i32),
     background_dirty: bool,
+    background_snapshot_stale: bool,
     last_expose_revision: u64,
     last_workspace_revision: u64,
 }
@@ -1362,6 +1363,7 @@ pub fn run_drm() -> Result<()> {
             last_background_commit_counter: usize::MAX,
             last_background_size: (0, 0),
             background_dirty: true,
+            background_snapshot_stale: true,
             last_expose_revision: 0,
             last_workspace_revision: 0,
         });
@@ -2797,16 +2799,9 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
 
-                let is_dnd_alive = state.dnd_icon.as_ref().map(|s| s.alive()).unwrap_or(false);
-                if !is_dnd_alive && state.dnd_icon.is_some() {
-                    state.dnd_icon = None;
-                    state.dnd_icon_offset = Point::from((0, 0));
-                }
-
                 let mut dnd_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
-                if let Some(ref dnd_surf) = state.dnd_icon {
-                    if let Some(pointer) = state.seat.get_pointer() {
-                        let loc = pointer.current_location();
+                if let Some(loc) = state.active_dnd_icon_draw_location() {
+                    if let Some(ref dnd_surf) = state.dnd_icon {
                         if output_geo.to_f64().contains(loc) {
                             let offset = state.dnd_icon_offset;
                             let draw_x = loc.x + offset.x as f64 - output_geo.loc.x as f64;
@@ -4385,31 +4380,119 @@ pub fn run_drm() -> Result<()> {
 
                         // 1.1. Capturar el fondo limpio DESPUÉS de dibujar el wallpaper y ANTES de dibujar ventanas o sombras.
                         // Esto garantiza que el desenfoque Dual-Kawase nunca lea fragmentos de ventanas ni sombras.
-                        // Se ejecuta ÚNICAMENTE cuando el fondo cambia (inicio, commits de malus-wallpaper, cambio de modo o tema).
-                        // En animaciones de navegador web, carga de páginas o movimiento de cursor, el fondo no cambia,
-                        // omitiendo glCopyTexSubImage2D de toda la pantalla y liberando varios milisegundos de GPU por cuadro.
-                        let background_dirty = out_surface.background_dirty
-                            || out_surface.last_background_commit_counter != state.background_commit_counter
+                        // Cuando solo cambian iconos del escritorio (`malus-wallpaper`), omitimos la copia completa de pantalla
+                        // salvo en el área dañada de la ventana translúcida inferior (si existe), evitando stalls de GPU por cuadro.
+                        let force_full_bg_capture = out_surface.background_dirty
                             || out_surface.last_background_size != (out_surface.size.w, out_surface.size.h)
+                            || expose_render_bundle.is_some()
                             || state.theme_transition_started_at.is_some()
                             || theme_capture_request.is_some()
                             || state.workspace_transition.is_some()
                             || workspace_switch_pending;
+                        let bg_committed =
+                            out_surface.last_background_commit_counter != state.background_commit_counter;
 
-                        // En Exposé siempre recapturamos el fondo limpio recién pintado porque otras capas
-                        // (Dock, Spotlight, popups, ventanas translúcidas) usan `capture_background_region`
-                        // sobre `snapshot_tex` en cuadros previos y dejarían restos de ventanas en el blur.
-                        if (background_dirty || expose_render_bundle.is_some()) && !wallpaper_occluded {
-                            if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
-                                let _ = frame.with_context(|gl| {
-                                    blur.capture_background(gl, &projection, out_surface.size);
-                                });
-                                if background_dirty {
-                                    out_surface.background_dirty = false;
-                                    out_surface.last_background_commit_counter =
-                                        state.background_commit_counter;
-                                    out_surface.last_background_size =
-                                        (out_surface.size.w, out_surface.size.h);
+                        let (bottom_translucent_rect, bottom_needs_shadow_blur) =
+                            if app_switcher_deck_frame.is_none() {
+                                if let Some((
+                                    _,
+                                    win_elems,
+                                    _,
+                                    _,
+                                    _,
+                                    _,
+                                    win_rect,
+                                    _,
+                                    _,
+                                    _,
+                                    is_translucent,
+                                    transition_clip,
+                                    _,
+                                    _,
+                                    is_branches,
+                                )) = window_render_data.first()
+                                {
+                                    let needs_transition_backdrop =
+                                        transition_clip.is_some_and(|c| {
+                                            c.size.w < win_rect.size.w
+                                                || (c.loc.y + c.size.h)
+                                                    < (win_rect.loc.y + win_rect.size.h)
+                                        });
+                                    let is_visible = !win_elems.is_empty() && !body_occluded[0];
+                                    if is_visible && (*is_translucent || needs_transition_backdrop) {
+                                        let rect = if needs_transition_backdrop && !*is_translucent {
+                                            *win_rect
+                                        } else {
+                                            super::translucent_window_blur_rect(
+                                                *win_rect,
+                                                *is_branches,
+                                                *is_translucent,
+                                                win_phys_r,
+                                                scale,
+                                            )
+                                        };
+                                        (Some(rect), window_needs_shadow_blur[0])
+                                    } else {
+                                        (None, false)
+                                    }
+                                } else {
+                                    (None, false)
+                                }
+                            } else {
+                                (None, false)
+                            };
+
+                        let capture_plan = super::plan_background_blur_capture(
+                            force_full_bg_capture,
+                            bg_committed,
+                            out_surface.background_snapshot_stale,
+                            bottom_translucent_rect,
+                            bottom_needs_shadow_blur,
+                            damage,
+                        );
+
+                        if !wallpaper_occluded {
+                            match capture_plan {
+                                super::BackgroundBlurCapturePlan::FullScreen => {
+                                    if let Some(mut blur) =
+                                        blur_pipeline.as_ref().and_then(|b| b.lock().ok())
+                                    {
+                                        let _ = frame.with_context(|gl| {
+                                            blur.capture_background(gl, &projection, out_surface.size);
+                                        });
+                                        out_surface.background_dirty = false;
+                                        out_surface.background_snapshot_stale = false;
+                                        out_surface.last_background_commit_counter =
+                                            state.background_commit_counter;
+                                        out_surface.last_background_size =
+                                            (out_surface.size.w, out_surface.size.h);
+                                    }
+                                }
+                                super::BackgroundBlurCapturePlan::Region(capture_rect) => {
+                                    if let Some(mut blur) =
+                                        blur_pipeline.as_ref().and_then(|b| b.lock().ok())
+                                    {
+                                        let _ = frame.with_context(|gl| {
+                                            blur.capture_background_region(
+                                                gl,
+                                                &projection,
+                                                out_surface.size,
+                                                capture_rect,
+                                            );
+                                        });
+                                        if bg_committed {
+                                            out_surface.background_snapshot_stale = true;
+                                            out_surface.last_background_commit_counter =
+                                                state.background_commit_counter;
+                                        }
+                                    }
+                                }
+                                super::BackgroundBlurCapturePlan::None => {
+                                    if bg_committed {
+                                        out_surface.background_snapshot_stale = true;
+                                        out_surface.last_background_commit_counter =
+                                            state.background_commit_counter;
+                                    }
                                 }
                             }
                         }
@@ -4615,18 +4698,13 @@ pub fn run_drm() -> Result<()> {
                             let win_is_damaged = damage.iter().any(|d| d.overlaps(*win_rect));
 
                             // 2.1.5. DESENFOQUE DE FONDO DUAL KAWASE (Branches y Ajustes del Sistema)
-                            let blur_rect = if *is_branches || *is_translucent {
-                                let sidebar_blur_w = ((212.0 * scale).round() as i32
-                                    + win_phys_r.unwrap_or(0) as i32
-                                    + 4)
-                                    .min(win_rect.size.w);
-                                Rectangle::new(
-                                    win_rect.loc,
-                                    (sidebar_blur_w, win_rect.size.h).into(),
-                                )
-                            } else {
-                                *win_rect
-                            };
+                            let blur_rect = super::translucent_window_blur_rect(
+                                *win_rect,
+                                *is_branches,
+                                *is_translucent,
+                                win_phys_r,
+                                scale,
+                            );
                             let blur_is_damaged = window_needs_shadow_blur[idx] || damage.iter().any(|d| d.overlaps(blur_rect));
                             if *is_translucent && !is_body_occluded && blur_is_damaged {
                                 if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
@@ -5893,9 +5971,8 @@ pub fn run_drm() -> Result<()> {
         }
 
         for output in state.space.outputs() {
-            if !rendered_outputs.contains(output) {
-                continue;
-            }
+            let output_rendered = rendered_outputs.contains(output);
+            let has_fullscreen = state.has_fullscreen_window_on_output(output);
             let refresh_nanos = output
                 .current_mode()
                 .map(|m| 1_000_000_000_000 / m.refresh.max(1) as u64)
@@ -5905,25 +5982,34 @@ pub fn run_drm() -> Result<()> {
             );
             let layer_map = smithay::desktop::layer_map_for_output(output);
             for layer in layer_map.layers() {
-                send_frames_surface_tree(layer.wl_surface(), now_ms);
-                send_presentation_feedback_surface_tree(
-                    layer.wl_surface(),
-                    output,
-                    pres_time,
-                    refresh,
-                    0,
-                );
-                for (popup, _) in
-                    smithay::desktop::PopupManager::popups_for_surface(layer.wl_surface())
+                if has_fullscreen
+                    && !matches!(layer.layer(), smithay::wayland::shell::wlr_layer::Layer::Overlay)
                 {
-                    send_frames_surface_tree(popup.wl_surface(), now_ms);
+                    continue;
+                }
+                send_frames_surface_tree(layer.wl_surface(), now_ms);
+                if output_rendered {
                     send_presentation_feedback_surface_tree(
-                        popup.wl_surface(),
+                        layer.wl_surface(),
                         output,
                         pres_time,
                         refresh,
                         0,
                     );
+                }
+                for (popup, _) in
+                    smithay::desktop::PopupManager::popups_for_surface(layer.wl_surface())
+                {
+                    send_frames_surface_tree(popup.wl_surface(), now_ms);
+                    if output_rendered {
+                        send_presentation_feedback_surface_tree(
+                            popup.wl_surface(),
+                            output,
+                            pres_time,
+                            refresh,
+                            0,
+                        );
+                    }
                 }
             }
         }

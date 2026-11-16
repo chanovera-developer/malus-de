@@ -31,7 +31,7 @@ use smithay::{
         wayland_server::{protocol::wl_surface::WlSurface, Display, ListeningSocket},
         winit::platform::pump_events::PumpStatus,
     },
-    utils::{IsAlive, Logical, Physical, Point, Rectangle, Scale, Transform, SERIAL_COUNTER},
+    utils::{Logical, Physical, Point, Rectangle, Scale, Transform, SERIAL_COUNTER},
     wayland::{
         compositor::{with_surface_tree_downward, SurfaceAttributes, TraversalAction},
         seat::WaylandFocus,
@@ -1207,16 +1207,9 @@ pub fn run_winit() -> Result<()> {
                 let mut dock_popups = Vec::new();
                 let mut topbar_popups = Vec::new();
                 let mut wallpaper_popups = Vec::new();
-                let is_dnd_alive = state.dnd_icon.as_ref().map(|s| s.alive()).unwrap_or(false);
-                if !is_dnd_alive && state.dnd_icon.is_some() {
-                    state.dnd_icon = None;
-                    state.dnd_icon_offset = Point::from((0, 0));
-                }
-
                 let mut dnd_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
-                if let Some(ref dnd_surf) = state.dnd_icon {
-                    if let Some(pointer) = state.seat.get_pointer() {
-                        let loc = pointer.current_location();
+                if let Some(loc) = state.active_dnd_icon_draw_location() {
+                    if let Some(ref dnd_surf) = state.dnd_icon {
                         let offset = state.dnd_icon_offset;
                         let phys_loc = Point::from((
                             (loc.x + offset.x as f64).round() as i32,

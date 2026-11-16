@@ -58,6 +58,57 @@ pub fn spotlight_component_blur_rect(
     )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundBlurCapturePlan {
+    None,
+    FullScreen,
+    Region(Rectangle<i32, Physical>),
+}
+
+/// Calcula el rectángulo de desenfoque de una ventana translúcida (p. ej. barra lateral de 212 px).
+pub fn translucent_window_blur_rect(
+    win_rect: Rectangle<i32, Physical>,
+    is_branches: bool,
+    is_translucent: bool,
+    win_phys_r: Option<i32>,
+    scale: f64,
+) -> Rectangle<i32, Physical> {
+    if is_branches || is_translucent {
+        let sidebar_blur_w = ((212.0 * scale).round() as i32
+            + win_phys_r.unwrap_or(0) as i32
+            + 4)
+            .min(win_rect.size.w);
+        Rectangle::new(win_rect.loc, (sidebar_blur_w, win_rect.size.h).into())
+    } else {
+        win_rect
+    }
+}
+
+/// Planifica si es necesario recapturar el snapshot del fondo para el desenfoque GPU en este cuadro.
+pub fn plan_background_blur_capture(
+    force_full_screen: bool,
+    bg_committed: bool,
+    snapshot_stale: bool,
+    bottom_translucent_rect: Option<Rectangle<i32, Physical>>,
+    bottom_needs_shadow_blur: bool,
+    damage: &[Rectangle<i32, Physical>],
+) -> BackgroundBlurCapturePlan {
+    if force_full_screen {
+        return BackgroundBlurCapturePlan::FullScreen;
+    }
+    if !bg_committed && !snapshot_stale {
+        return BackgroundBlurCapturePlan::None;
+    }
+    let Some(blur_rect) = bottom_translucent_rect else {
+        return BackgroundBlurCapturePlan::None;
+    };
+    if bottom_needs_shadow_blur || damage.iter().any(|d| d.overlaps(blur_rect)) {
+        BackgroundBlurCapturePlan::Region(blur_rect)
+    } else {
+        BackgroundBlurCapturePlan::None
+    }
+}
+
 /// Comprueba si un rectángulo exterior contiene completamente a un rectángulo interior.
 #[inline]
 pub fn rect_contains_rect(
@@ -227,5 +278,43 @@ mod tests {
 
         assert_eq!(clipped.loc, (80, 124).into());
         assert_eq!(clipped.size, (860, 108).into());
+    }
+
+    #[test]
+    fn background_blur_capture_skips_desktop_animation_without_translucent_overlap() {
+        let damage = [Rectangle::new((1400, 100).into(), (240, 320).into())];
+        assert_eq!(
+            plan_background_blur_capture(false, true, false, None, false, &damage),
+            BackgroundBlurCapturePlan::None
+        );
+
+        let sidebar_blur = translucent_window_blur_rect(
+            Rectangle::new((40, 40).into(), (900, 600).into()),
+            true,
+            true,
+            Some(28),
+            1.0,
+        );
+        assert_eq!(
+            plan_background_blur_capture(false, true, false, Some(sidebar_blur), false, &damage),
+            BackgroundBlurCapturePlan::None
+        );
+
+        let overlapping_damage = [Rectangle::new((120, 120).into(), (180, 180).into())];
+        assert_eq!(
+            plan_background_blur_capture(
+                false,
+                true,
+                false,
+                Some(sidebar_blur),
+                false,
+                &overlapping_damage
+            ),
+            BackgroundBlurCapturePlan::Region(sidebar_blur)
+        );
+        assert_eq!(
+            plan_background_blur_capture(true, false, false, None, false, &damage),
+            BackgroundBlurCapturePlan::FullScreen
+        );
     }
 }
