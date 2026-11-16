@@ -4,6 +4,33 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-15] — Rediseño Finder en Branches, Corrección de Panic en Historial y Fondo Sólido en Ventana de Errores
+
+### 1. Interfaz de Branches Inspirada en macOS Finder (`crates/branches/src/{app_window.rs,folder_pane.rs,fs_backend.rs,main.rs,sidebar.rs,styles/macos-branches.css}`)
+* **Barra lateral reestructurada (`sidebar.rs`, `fs_backend.rs`, `folder_pane.rs`):**
+  * Añadidos accesos superiores sin encabezado **Recientes** (`create_recents_row` + `load_recent_files` combinando `recently-used.xbel` y carpetas personales en [`fs_backend.rs`](../crates/branches/src/fs_backend.rs)) y **Compartidos** (`XDG_PUBLICSHARE_DIR`) encima de **Favoritos**, **Ubicaciones** y **Etiquetas**.
+  * Títulos de sección en *Title Case* (`font-size: 11.5px; font-weight: 600;` sin `text-transform: uppercase`), iconos azules `#0a84ff` en favoritos/accesos superiores y grises neutros en ubicaciones (`Este Equipo`, `Red`, `Papelera` y carpeta de usuario).
+* **Contenedores *squircle* uniformes en barra superior (`app_window.rs`, `styles/macos-branches.css`):**
+  * Agrupación en contenedores *Liquid Glass* con alto uniforme (`32 px`) para navegación `[ < | > ]` (botones cuadrados de `26×26 px`), selector segmentado de vista, botón de vista dividida y grupo `Compartir / Información / Acciones`.
+  * Aislamiento de reglas `menubutton.branches-tool-btn` y `button.branches-search-btn` para evitar doble padding en `GtkMenuButton` y mantener altura uniforme en el botón de búsqueda.
+  * Radios *squircle* afilados y concéntricos (`border-radius: 8px` en contenedores exteriores, `5px` en botones internos) conservando `border-radius: 999px` en `.branches-search-entry`, junto con fondo aclarado adaptable a tema claro (`alpha(@window_fg_color, 0.025)`) y oscuro (`@media (prefers-color-scheme: dark)` con `alpha(@window_fg_color, 0.10)`). La barra inferior [`path_bar.rs`](../crates/branches/src/path_bar.rs) se conserva intacta.
+
+### 2. Corrección de Panic `RefCell already mutably borrowed` al Navegar (`crates/branches/src/folder_pane.rs`)
+* **Causa raíz resuelta:** En `go_back()`, `go_forward()` y `go_up()`, el patrón `if let Some(...) = self.state.borrow_mut().go_...()` mantenía vivo el `RefMut<'_, AppState>` durante todo el bloque, chocando con `self.state.borrow()` dentro de `self.reload()` (`folder_pane.rs:248`) y `update_chrome()` (`can_go_back`/`can_go_forward`).
+* **Solución:** Extraídos [`step_history`](../crates/branches/src/folder_pane.rs) y [`apply_items_snapshot`](../crates/branches/src/folder_pane.rs) para liberar el préstamo de `self.state` antes de recargar vistas o invocar callbacks UI.
+
+### 3. Fondo Sólido en Ventana de Reporte de Errores (`crates/dialogs`)
+* **Causa raíz resuelta:** `window.malus-confirmation-window` usaba `background-color: transparent` y `.malus-confirmation-card` usaba `alpha(@window_bg_color, 0.82)`, mientras [`malus-de-crash-reporter.rs`](../crates/dialogs/src/bin/malus-de-crash-reporter.rs) tampoco inicializaba `libadwaita`, dejando `@window_bg_color` sin definir al ejecutarse de forma independiente.
+* **Solución:** Añadida dependencia `libadwaita` en [`crates/dialogs/Cargo.toml`](../crates/dialogs/Cargo.toml), inicialización de `setup_isolated_session_environment()` + `libadwaita::init()` en `malus-de-crash-reporter` y `ensure_dialog_css_loaded()`, clase dedicada `.malus-crash-window` en [`lib.rs`](../crates/dialogs/src/lib.rs) y fondo sólido `@window_bg_color` en [`confirmation.css`](../crates/dialogs/src/styles/confirmation.css).
+
+### 4. Validación
+* `cargo check --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --workspace`: compilación completa sin errores (`exit 0`).
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-branches -p malus-de-dialogs`:
+  * `malus-de-branches`: **4 passed; 0 failed** (`history_navigation_releases_borrow_before_reload`, `test_branches_finder_sidebar_and_toolbar_pills`, `test_branches_macos_drag_and_drop_styles`, `test_percent_decode_file_uri_and_load_recent_files`).
+  * `malus-de-dialogs`: **2 passed; 0 failed** (`crash_window_and_card_have_solid_background_in_css`, `extract_report_field_and_summary_parse_dump_text`).
+
+---
+
 ## [2026-11-15] — Tipografía Predeterminada Inter y Renderizado Nítido Estilo macOS
 
 ### 1. Adopción de Inter como Tipografía Predeterminada (`crates/common/src/config.rs`, `crates/render/src/text.rs`, `crates/compositor/src/{expose.rs,app_switcher.rs}`, `scripts/malus-session*`, `docs/PACKAGE_MANIFEST.md`)
