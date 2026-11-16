@@ -1,0 +1,270 @@
+/* Controles de ventana estilo macOS canónicos de Malus DE (idénticos al SSD del compositor) */
+windowcontrols {
+    border-spacing: 6px;
+    padding: 0;
+    margin-top: 10px;
+    margin-bottom: 10px;
+}
+
+windowcontrols.start {
+    margin-left: 10px;
+    margin-right: 12px;
+}
+
+windowcontrols.end {
+    margin-right: 10px;
+    margin-left: 12px;
+}
+
+windowcontrols > button,
+headerbar button.titlebutton,
+window.view windowcontrols > button,
+window.view headerbar button.titlebutton,
+.sidebar-pane windowcontrols > button,
+.sidebar-pane headerbar button.titlebutton,
+window.view .sidebar-pane windowcontrols > button,
+window.view .sidebar-pane headerbar button.titlebutton {
+    min-width: 11.5px;
+    min-height: 11.5px;
+    padding: 0;
+    margin: 0;
+    border-radius: 9999px;
+    border-style: solid;
+    border-width: 0.75px;
+    box-shadow: none;
+    outline: none;
+    background-clip: padding-box;
+    transition: background-color 100ms ease, border-color 100ms ease, opacity 100ms ease;
+}
+
+windowcontrols > button > image,
+headerbar button.titlebutton > image,
+window.view windowcontrols > button > image,
+window.view headerbar button.titlebutton > image,
+.sidebar-pane windowcontrols > button > image,
+.sidebar-pane headerbar button.titlebutton > image,
+window.view .sidebar-pane windowcontrols > button > image,
+window.view .sidebar-pane headerbar button.titlebutton > image {
+    padding: 0;
+    margin: 0;
+    min-width: 11px;
+    min-height: 11px;
+    border-radius: 9999px;
+    opacity: 0;
+    transition: opacity 120ms ease;
+    background-color: transparent;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 11px 11px;
+    box-shadow: none;
+    color: transparent;
+    -gtk-icon-source: none;
+    -gtk-icon-size: 1px;
+}
+
+windowcontrols:hover > button > image,
+windowcontrols > button:hover > image,
+headerbar:hover button.titlebutton > image,
+headerbar button.titlebutton:hover > image,
+window.view windowcontrols:hover > button > image,
+window.view windowcontrols > button:hover > image,
+window.view headerbar:hover button.titlebutton > image,
+window.view headerbar button.titlebutton:hover > image,
+.sidebar-pane windowcontrols:hover > button > image,
+.sidebar-pane windowcontrols > button:hover > image,
+.sidebar-pane headerbar:hover button.titlebutton > image,
+.sidebar-pane headerbar button.titlebutton:hover > image,
+window.view .sidebar-pane windowcontrols:hover > button > image,
+window.view .sidebar-pane windowcontrols > button:hover > image,
+window.view .sidebar-pane headerbar:hover button.titlebutton > image,
+window.view .sidebar-pane headerbar button.titlebutton:hover > image,
+window:backdrop windowcontrols:hover > button > image,
+.backdrop windowcontrols:hover > button > image,
+window:backdrop headerbar:hover button.titlebutton > image,
+.backdrop headerbar:hover button.titlebutton > image,
+window.view window:backdrop windowcontrols:hover > button > image,
+window.view .backdrop windowcontrols:hover > button > image,
+.sidebar-pane window:backdrop windowcontrols:hover > button > image,
+.sidebar-pane .backdrop windowcontrols:hover > button > image,
+window.view .sidebar-pane window:backdrop windowcontrols:hover > button > image,
+window.view .sidebar-pane .backdrop windowcontrols:hover > button > image {
+    opacity: 1;
+}
+
+/* Cerrar */
+windowcontrols > button.close,
+headerbar button.titlebutton.close,
+window.view windowcontrols > button.close,
+window.view headerbar button.titlebutton.close,
+.sidebar-pane windowcontrols > button.close,
+.sidebar-pane headerbar button.titlebutton.close,
+window.view .sidebar-pane windowcontrols > button.close,
+window.view .sidebar-pane headerbar button.titlebutton.close,
+window:backdrop windowcontrols:hover > button.close,
+.backdrop windowcontrols:hover > button.close,
+window:backdrop headerbar:hover button.titlebutton.close,
+.backdrop headerbar:hover button.titlebutton.close,
+window.view .sidebar-pane window:backdrop windowcontrols:hover > button.close,
+window.view .sidebar-pane .backdrop windowcontrols:hover > button.close {
+    background-color: #ff5f56;
+    border-color: rgba(224, 68, 62, 0.9);
+}
+windowcontrols > button.close:hover,
+headerbar button.titlebutton.close:hover,
+window.view windowcontrols > button.close:hover,
+window.view headerbar button.titlebutton.close:hover,
+.sidebar-pane windowcontrols > button.close:hover,
+.sidebar-pane headerbar button.titlebutton.close:hover,
+window.view .sidebar-pane windowcontrols > button.close:hover,
+window.view .sidebar-pane headerbar button.titlebutton.close:hover,
+window:backdrop windowcontrols > button.close:hover,
+.backdrop windowcontrols > button.close:hover {
+    background-color: #ff6e66;
+    border-color: rgba(224, 68, 62, 0.9);
+}
+windowcontrols > button.close:active,
+headerbar button.titlebutton.close:active,
+window.view windowcontrols > button.close:active,
+window.view headerbar button.titlebutton.close:active,
+.sidebar-pane windowcontrols > button.close:active,
+.sidebar-pane headerbar button.titlebutton.close:active,
+window.view .sidebar-pane windowcontrols > button.close:active,
+window.view .sidebar-pane headerbar button.titlebutton.close:active {
+    background-color: #bf3933;
+    border-color: #a82f2a;
+}
+windowcontrols > button.close > image,
+headerbar button.titlebutton.close > image,
+window.view windowcontrols > button.close > image,
+window.view headerbar button.titlebutton.close > image,
+.sidebar-pane windowcontrols > button.close > image,
+.sidebar-pane headerbar button.titlebutton.close > image,
+window.view .sidebar-pane windowcontrols > button.close > image,
+window.view .sidebar-pane headerbar button.titlebutton.close > image {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='1 1 11 11'%3E%3Cpath d='M3.9 3.9 L9.1 9.1 M9.1 3.9 L3.9 9.1' fill='none' stroke='rgba(77,0,0,0.85)' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
+}
+
+/* Minimizar */
+windowcontrols > button.minimize,
+headerbar button.titlebutton.minimize,
+window.view windowcontrols > button.minimize,
+window.view headerbar button.titlebutton.minimize,
+.sidebar-pane windowcontrols > button.minimize,
+.sidebar-pane headerbar button.titlebutton.minimize,
+window.view .sidebar-pane windowcontrols > button.minimize,
+window.view .sidebar-pane headerbar button.titlebutton.minimize,
+window:backdrop windowcontrols:hover > button.minimize,
+.backdrop windowcontrols:hover > button.minimize,
+window:backdrop headerbar:hover button.titlebutton.minimize,
+.backdrop headerbar:hover button.titlebutton.minimize,
+window.view .sidebar-pane window:backdrop windowcontrols:hover > button.minimize,
+window.view .sidebar-pane .backdrop windowcontrols:hover > button.minimize {
+    background-color: #ffbd2e;
+    border-color: rgba(222, 161, 35, 0.9);
+}
+windowcontrols > button.minimize:hover,
+headerbar button.titlebutton.minimize:hover,
+window.view windowcontrols > button.minimize:hover,
+window.view headerbar button.titlebutton.minimize:hover,
+.sidebar-pane windowcontrols > button.minimize:hover,
+.sidebar-pane headerbar button.titlebutton.minimize:hover,
+window.view .sidebar-pane windowcontrols > button.minimize:hover,
+window.view .sidebar-pane headerbar button.titlebutton.minimize:hover,
+window:backdrop windowcontrols > button.minimize:hover,
+.backdrop windowcontrols > button.minimize:hover {
+    background-color: #ffcc3d;
+    border-color: rgba(222, 161, 35, 0.9);
+}
+windowcontrols > button.minimize:active,
+headerbar button.titlebutton.minimize:active,
+window.view windowcontrols > button.minimize:active,
+window.view headerbar button.titlebutton.minimize:active,
+.sidebar-pane windowcontrols > button.minimize:active,
+.sidebar-pane headerbar button.titlebutton.minimize:active,
+window.view .sidebar-pane windowcontrols > button.minimize:active,
+window.view .sidebar-pane headerbar button.titlebutton.minimize:active {
+    background-color: #bf8516;
+    border-color: #9e6d0f;
+}
+windowcontrols > button.minimize > image,
+headerbar button.titlebutton.minimize > image,
+window.view windowcontrols > button.minimize > image,
+window.view headerbar button.titlebutton.minimize > image,
+.sidebar-pane windowcontrols > button.minimize > image,
+.sidebar-pane headerbar button.titlebutton.minimize > image,
+window.view .sidebar-pane windowcontrols > button.minimize > image,
+window.view .sidebar-pane headerbar button.titlebutton.minimize > image {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='1 1 11 11'%3E%3Cpath d='M3.3 6.5 L9.7 6.5' fill='none' stroke='rgba(97,56,0,0.88)' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
+}
+
+/* Maximizar */
+windowcontrols > button.maximize,
+headerbar button.titlebutton.maximize,
+window.view windowcontrols > button.maximize,
+window.view headerbar button.titlebutton.maximize,
+.sidebar-pane windowcontrols > button.maximize,
+.sidebar-pane headerbar button.titlebutton.maximize,
+window.view .sidebar-pane windowcontrols > button.maximize,
+window.view .sidebar-pane headerbar button.titlebutton.maximize,
+window:backdrop windowcontrols:hover > button.maximize,
+.backdrop windowcontrols:hover > button.maximize,
+window:backdrop headerbar:hover button.titlebutton.maximize,
+.backdrop headerbar:hover button.titlebutton.maximize,
+window.view .sidebar-pane window:backdrop windowcontrols:hover > button.maximize,
+window.view .sidebar-pane .backdrop windowcontrols:hover > button.maximize {
+    background-color: #27c93f;
+    border-color: rgba(26, 171, 41, 0.9);
+}
+windowcontrols > button.maximize:hover,
+headerbar button.titlebutton.maximize:hover,
+window.view windowcontrols > button.maximize:hover,
+window.view headerbar button.titlebutton.maximize:hover,
+.sidebar-pane windowcontrols > button.maximize:hover,
+.sidebar-pane headerbar button.titlebutton.maximize:hover,
+window.view .sidebar-pane windowcontrols > button.maximize:hover,
+window.view .sidebar-pane headerbar button.titlebutton.maximize:hover,
+window:backdrop windowcontrols > button.maximize:hover,
+.backdrop windowcontrols > button.maximize:hover {
+    background-color: #36d84e;
+    border-color: rgba(26, 171, 41, 0.9);
+}
+windowcontrols > button.maximize:active,
+headerbar button.titlebutton.maximize:active,
+window.view windowcontrols > button.maximize:active,
+window.view headerbar button.titlebutton.maximize:active,
+.sidebar-pane windowcontrols > button.maximize:active,
+.sidebar-pane headerbar button.titlebutton.maximize:active,
+window.view .sidebar-pane windowcontrols > button.maximize:active,
+window.view .sidebar-pane headerbar button.titlebutton.maximize:active {
+    background-color: #158a25;
+    border-color: #0f6c1a;
+}
+windowcontrols > button.maximize > image,
+headerbar button.titlebutton.maximize > image,
+window.view windowcontrols > button.maximize > image,
+window.view headerbar button.titlebutton.maximize > image,
+.sidebar-pane windowcontrols > button.maximize > image,
+.sidebar-pane headerbar button.titlebutton.maximize > image,
+window.view .sidebar-pane windowcontrols > button.maximize > image,
+window.view .sidebar-pane headerbar button.titlebutton.maximize > image {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='1 1 11 11'%3E%3Cpath d='M3.5 6.5 L9.5 6.5 M6.5 3.5 L6.5 9.5' fill='none' stroke='rgba(0,71,10,0.88)' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
+}
+
+window:backdrop windowcontrols:not(:hover) > button > image,
+.backdrop windowcontrols:not(:hover) > button > image,
+window:backdrop headerbar:not(:hover) button.titlebutton > image,
+.backdrop headerbar:not(:hover) button.titlebutton > image,
+window.view window:backdrop windowcontrols:not(:hover) > button > image,
+window.view .backdrop windowcontrols:not(:hover) > button > image,
+window.view window:backdrop headerbar:not(:hover) button.titlebutton > image,
+window.view .backdrop headerbar:not(:hover) button.titlebutton > image,
+.sidebar-pane window:backdrop windowcontrols:not(:hover) > button > image,
+.sidebar-pane .backdrop windowcontrols:not(:hover) > button > image,
+.sidebar-pane window:backdrop headerbar:not(:hover) button.titlebutton > image,
+.sidebar-pane .backdrop headerbar:not(:hover) button.titlebutton > image,
+window.view .sidebar-pane window:backdrop windowcontrols:not(:hover) > button > image,
+window.view .sidebar-pane .backdrop windowcontrols:not(:hover) > button > image,
+window.view .sidebar-pane window:backdrop headerbar:not(:hover) button.titlebutton > image,
+window.view .sidebar-pane .backdrop headerbar:not(:hover) button.titlebutton > image {
+    opacity: 0;
+}

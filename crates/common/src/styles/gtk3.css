@@ -95,34 +95,37 @@ menu separator,
     margin: 4px 6px;
 }
 
-/* Controles de ventana macOS para GTK 3 y libdecor (Traffic Lights) */
+/* Controles de ventana macOS para GTK 3 y libdecor (Traffic Lights idénticos al SSD) */
 headerbar button.titlebutton,
 headerbar button.close,
 headerbar button.minimize,
 headerbar button.maximize {
-    min-width: 13px;
-    min-height: 13px;
+    min-width: 11.5px;
+    min-height: 11.5px;
     padding: 0;
-    margin: 0 4px;
+    margin: 0 3.5px;
     border-radius: 9999px;
     border-style: solid;
-    border-width: 0.5px;
+    border-width: 0.75px;
     box-shadow: none;
     outline: none;
     background-clip: padding-box;
-    transition: background-color 100ms ease, border-color 100ms ease;
+    transition: background-color 100ms ease, border-color 100ms ease, opacity 100ms ease;
 }
 
 headerbar button.titlebutton.close,
-headerbar button.close {
+headerbar button.close,
+headerbar:hover button.titlebutton.close:backdrop,
+headerbar:hover button.close:backdrop {
     background-color: #ff5f56;
-    border-color: #e0443e;
-    color: #4c0000;
+    border-color: rgba(224, 68, 62, 0.9);
 }
 headerbar button.titlebutton.close:hover,
-headerbar button.close:hover {
-    background-color: #ff473d;
-    border-color: #c93630;
+headerbar button.close:hover,
+headerbar button.titlebutton.close:backdrop:hover,
+headerbar button.close:backdrop:hover {
+    background-color: #ff6e66;
+    border-color: rgba(224, 68, 62, 0.9);
 }
 headerbar button.titlebutton.close:active,
 headerbar button.close:active {
@@ -131,15 +134,18 @@ headerbar button.close:active {
 }
 
 headerbar button.titlebutton.minimize,
-headerbar button.minimize {
+headerbar button.minimize,
+headerbar:hover button.titlebutton.minimize:backdrop,
+headerbar:hover button.minimize:backdrop {
     background-color: #ffbd2e;
-    border-color: #e09e16;
-    color: #593b00;
+    border-color: rgba(222, 161, 35, 0.9);
 }
 headerbar button.titlebutton.minimize:hover,
-headerbar button.minimize:hover {
-    background-color: #ffb219;
-    border-color: #bf8516;
+headerbar button.minimize:hover,
+headerbar button.titlebutton.minimize:backdrop:hover,
+headerbar button.minimize:backdrop:hover {
+    background-color: #ffcc3d;
+    border-color: rgba(222, 161, 35, 0.9);
 }
 headerbar button.titlebutton.minimize:active,
 headerbar button.minimize:active {
@@ -148,15 +154,18 @@ headerbar button.minimize:active {
 }
 
 headerbar button.titlebutton.maximize,
-headerbar button.maximize {
+headerbar button.maximize,
+headerbar:hover button.titlebutton.maximize:backdrop,
+headerbar:hover button.maximize:backdrop {
     background-color: #27c93f;
-    border-color: #1aab29;
-    color: #004d11;
+    border-color: rgba(26, 171, 41, 0.9);
 }
 headerbar button.titlebutton.maximize:hover,
-headerbar button.maximize:hover {
-    background-color: #1fbd36;
-    border-color: #159322;
+headerbar button.maximize:hover,
+headerbar button.titlebutton.maximize:backdrop:hover,
+headerbar button.maximize:backdrop:hover {
+    background-color: #36d84e;
+    border-color: rgba(26, 171, 41, 0.9);
 }
 headerbar button.titlebutton.maximize:active,
 headerbar button.maximize:active {
@@ -164,14 +173,51 @@ headerbar button.maximize:active {
     border-color: #0f6c1a;
 }
 
-/* Ocultar iconos por defecto y revelarlos sutilmente en hover estilo macOS */
+/* Glifos vectoriales idénticos al SSD revelados en hover */
 headerbar button.titlebutton > image,
 headerbar button.close > image,
 headerbar button.minimize > image,
 headerbar button.maximize > image {
+    padding: 0;
+    margin: 0;
+    min-width: 11px;
+    min-height: 11px;
     opacity: 0;
     transition: opacity 120ms ease;
-    -gtk-icon-size: 8px;
+    background-color: transparent;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 11px 11px;
+    color: transparent;
+    -gtk-icon-source: none;
+}
+
+headerbar button.titlebutton.close > image,
+headerbar button.close > image {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='1 1 11 11'%3E%3Cpath d='M3.9 3.9 L9.1 9.1 M9.1 3.9 L3.9 9.1' fill='none' stroke='rgba(77,0,0,0.85)' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
+}
+headerbar button.titlebutton.minimize > image,
+headerbar button.minimize > image {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='1 1 11 11'%3E%3Cpath d='M3.3 6.5 L9.7 6.5' fill='none' stroke='rgba(97,56,0,0.88)' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
+}
+headerbar button.titlebutton.maximize > image,
+headerbar button.maximize > image {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='1 1 11 11'%3E%3Cpath d='M3.5 6.5 L9.5 6.5 M6.5 3.5 L6.5 9.5' fill='none' stroke='rgba(0,71,10,0.88)' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
+}
+
+headerbar:not(:hover) button.titlebutton:backdrop,
+headerbar:not(:hover) button.close:backdrop,
+headerbar:not(:hover) button.minimize:backdrop,
+headerbar:not(:hover) button.maximize:backdrop {
+    background-color: __BACKDROP_BG__;
+    border-color: __BACKDROP_BORDER__;
+}
+
+headerbar:not(:hover) button.titlebutton:backdrop > image,
+headerbar:not(:hover) button.close:backdrop > image,
+headerbar:not(:hover) button.minimize:backdrop > image,
+headerbar:not(:hover) button.maximize:backdrop > image {
+    opacity: 0;
 }
 
 headerbar:hover button.titlebutton > image,
@@ -182,22 +228,7 @@ headerbar button.titlebutton:hover > image,
 headerbar button.close:hover > image,
 headerbar button.minimize:hover > image,
 headerbar button.maximize:hover > image {
-    opacity: 0.85;
-}
-
-headerbar button.titlebutton:backdrop,
-headerbar button.close:backdrop,
-headerbar button.minimize:backdrop,
-headerbar button.maximize:backdrop {
-    background-color: rgba(0, 0, 0, 0.12);
-    border-color: rgba(0, 0, 0, 0.08);
-}
-
-headerbar button.titlebutton:backdrop > image,
-headerbar button.close:backdrop > image,
-headerbar button.minimize:backdrop > image,
-headerbar button.maximize:backdrop > image {
-    opacity: 0;
+    opacity: 1;
 }
 
 /* Fondo plano sólido e impenetrable para diálogos modales y selectores de archivos en GTK 3 */

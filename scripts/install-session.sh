@@ -74,11 +74,29 @@ for bin in "${BINARIES[@]}"; do
     fi
 done
 
-# Instalar iconos específicos de Malus DE
-mkdir -p /usr/local/share/malus-de/icons
+# Instalar iconos específicos y temas de iconos integrados de Malus DE (Malus + Phosphor + Colloid)
+mkdir -p /usr/local/share/malus-de/icons /usr/share/icons
 cp -f "$PROJECT_DIR/assets/icons/control-center-symbolic.svg" \
     /usr/local/share/malus-de/icons/control-center-symbolic.svg
 chmod 644 /usr/local/share/malus-de/icons/control-center-symbolic.svg
+for lic in Colloid-LICENSE Phosphor-LICENSE; do
+    if [ -f "$PROJECT_DIR/assets/icons/$lic" ]; then
+        cp -f "$PROJECT_DIR/assets/icons/$lic" "/usr/local/share/malus-de/icons/$lic"
+        chmod 644 "/usr/local/share/malus-de/icons/$lic"
+    fi
+done
+for icon_theme in Colloid-Light Colloid-Dark Malus Malus-Dark; do
+    if [ -d "$PROJECT_DIR/assets/icons/$icon_theme" ]; then
+        rm -rf "/usr/local/share/malus-de/icons/$icon_theme" "/usr/share/icons/$icon_theme"
+        cp -a "$PROJECT_DIR/assets/icons/$icon_theme" "/usr/local/share/malus-de/icons/"
+        cp -a "$PROJECT_DIR/assets/icons/$icon_theme" "/usr/share/icons/"
+        if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache -f -t "/usr/share/icons/$icon_theme" 2>/dev/null || true
+            gtk-update-icon-cache -f -t "/usr/local/share/malus-de/icons/$icon_theme" 2>/dev/null || true
+        fi
+        echo "   ✔ /usr/share/icons/$icon_theme"
+    fi
+done
 
 # Instalar el fondo SVG de los popovers del dock
 mkdir -p /usr/local/share/malus-de/dock
@@ -127,6 +145,18 @@ if [ -f "$SCRIPT_DIR/malus-ide-wrapper" ]; then
     ln -sf "/usr/local/bin/malus-ide-wrapper" "/usr/local/bin/antigravity-ide-wrapper"
     ln -sf "/usr/local/bin/malus-ide-wrapper" "/usr/local/bin/code-wrapper"
     echo "   ✔ /usr/local/bin/malus-ide-wrapper (antigravity-ide-wrapper, code-wrapper)"
+
+    # Si existe una copia previa en ~/.local/bin del usuario, reemplazarla para que no sombree /usr/local/bin
+    REAL_USER="${SUDO_USER:-$USER}"
+    REAL_HOME="$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6 || true)"
+    if [ -n "$REAL_HOME" ] && [ -d "$REAL_HOME/.local/bin" ]; then
+        for user_wrap in malus-ide-wrapper antigravity-ide-wrapper code-wrapper; do
+            if [ -e "$REAL_HOME/.local/bin/$user_wrap" ] || [ -L "$REAL_HOME/.local/bin/$user_wrap" ]; then
+                ln -sf "/usr/local/bin/malus-ide-wrapper" "$REAL_HOME/.local/bin/$user_wrap"
+                echo "   ✔ Actualizado enlace de usuario $REAL_HOME/.local/bin/$user_wrap"
+            fi
+        done
+    fi
 elif [ -f "$SCRIPT_DIR/antigravity-ide-wrapper" ]; then
     cp -f "$SCRIPT_DIR/antigravity-ide-wrapper" "/usr/local/bin/antigravity-ide-wrapper"
     chmod 755 "/usr/local/bin/antigravity-ide-wrapper"

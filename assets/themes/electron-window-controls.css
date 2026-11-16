@@ -8,17 +8,16 @@
     flex-direction: row !important;
     align-items: center !important;
     justify-content: flex-start !important;
-    padding-left: 12px !important;
+    padding-left: 14px !important;
     padding-right: 12px !important;
     margin-right: 6px !important;
     width: auto !important;
-    min-width: 66px !important;
-    max-width: 66px !important;
+    min-width: 79px !important;
     height: 100% !important;
     order: -1 !important;
     z-index: 3000 !important;
     -webkit-app-region: no-drag !important;
-    gap: 8px !important;
+    gap: 7px !important;
     box-sizing: border-box !important;
 }
 
@@ -27,100 +26,156 @@
     display: none !important;
 }
 
-/* Botones circulares estilo macOS */
+/* Botones circulares idénticos al SSD de Malus DE (13px, borde 0.75px, separación 7px) */
 .monaco-workbench .part.titlebar .window-controls-container > .window-icon {
-    width: 12px !important;
-    height: 12px !important;
-    min-width: 12px !important;
-    min-height: 12px !important;
-    max-width: 12px !important;
-    max-height: 12px !important;
-    border-radius: 999px !important;
+    width: 13px !important;
+    height: 13px !important;
+    min-width: 13px !important;
+    min-height: 13px !important;
+    max-width: 13px !important;
+    max-height: 13px !important;
+    border-radius: 9999px !important;
+    border-style: solid !important;
+    border-width: 0.75px !important;
     padding: 0 !important;
     margin: 0 !important;
     box-sizing: border-box !important;
     cursor: pointer !important;
-    transition: filter 120ms ease, transform 120ms ease !important;
+    transition: background-color 100ms ease, border-color 100ms ease, opacity 100ms ease !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
     position: relative !important;
     opacity: 1 !important;
+    font-size: 0 !important;
 }
 
-/* Orden correcto: 1. Cerrar (Rojo), 2. Minimizar (Amarillo), 3. Maximizar (Verde) */
-.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-close {
+/* Orden y colores del SSD: 1. Cerrar (Rojo), 2. Minimizar (Amarillo), 3. Maximizar (Verde) */
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-close,
+.monaco-workbench .part.titlebar.inactive .window-controls-container:hover > .window-icon.window-close {
     order: 1 !important;
-    background-color: #ff5f57 !important;
-    border: 0.5px solid rgba(0, 0, 0, 0.20) !important;
+    background-color: #ff5f56 !important;
+    border-color: rgba(224, 68, 62, 0.9) !important;
+}
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-close:hover,
+.monaco-workbench .part.titlebar.inactive .window-controls-container > .window-icon.window-close:hover {
+    background-color: #ff6e66 !important;
+    border-color: rgba(224, 68, 62, 0.9) !important;
+}
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-close:active {
+    background-color: #bf3933 !important;
+    border-color: #a82f2a !important;
 }
 
-.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-minimize {
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-minimize,
+.monaco-workbench .part.titlebar.inactive .window-controls-container:hover > .window-icon.window-minimize {
     order: 2 !important;
-    background-color: #febc2e !important;
-    border: 0.5px solid rgba(0, 0, 0, 0.20) !important;
+    background-color: #ffbd2e !important;
+    border-color: rgba(222, 161, 35, 0.9) !important;
+}
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-minimize:hover,
+.monaco-workbench .part.titlebar.inactive .window-controls-container > .window-icon.window-minimize:hover {
+    background-color: #ffcc3d !important;
+    border-color: rgba(222, 161, 35, 0.9) !important;
+}
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-minimize:active {
+    background-color: #bf8516 !important;
+    border-color: #9e6d0f !important;
 }
 
-.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-max-restore {
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-max-restore,
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-maximize,
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-unmaximize,
+.monaco-workbench .part.titlebar.inactive .window-controls-container:hover > .window-icon.window-max-restore,
+.monaco-workbench .part.titlebar.inactive .window-controls-container:hover > .window-icon.window-maximize,
+.monaco-workbench .part.titlebar.inactive .window-controls-container:hover > .window-icon.window-unmaximize {
     order: 3 !important;
-    background-color: #28c840 !important;
-    border: 0.5px solid rgba(0, 0, 0, 0.20) !important;
+    background-color: #27c93f !important;
+    border-color: rgba(26, 171, 41, 0.9) !important;
+}
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-max-restore:hover,
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-maximize:hover,
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-unmaximize:hover,
+.monaco-workbench .part.titlebar.inactive .window-controls-container > .window-icon.window-max-restore:hover,
+.monaco-workbench .part.titlebar.inactive .window-controls-container > .window-icon.window-maximize:hover,
+.monaco-workbench .part.titlebar.inactive .window-controls-container > .window-icon.window-unmaximize:hover {
+    background-color: #36d84e !important;
+    border-color: rgba(26, 171, 41, 0.9) !important;
+}
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-max-restore:active,
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-maximize:active,
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-unmaximize:active {
+    background-color: #158a25 !important;
+    border-color: #0f6c1a !important;
 }
 
-/* Ocultar iconos codicon de Windows por defecto */
-.monaco-workbench .part.titlebar .window-controls-container > .window-icon:before {
-    content: "" !important;
+/* Glifos vectoriales idénticos al SSD revelados al hacer hover en el grupo */
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon > *,
+.part.titlebar .window-controls-container > .window-icon > * {
     display: none !important;
-    font-size: 8px !important;
-    font-weight: 800 !important;
-    line-height: 1 !important;
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif !important;
-    color: rgba(0, 0, 0, 0.65) !important;
-    text-align: center !important;
 }
-
-/* Efecto hover estilo macOS: mostrar símbolos al pasar el mouse por el grupo */
-.monaco-workbench .part.titlebar .window-controls-container:hover > .window-icon:before {
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon::after,
+.part.titlebar .window-controls-container > .window-icon::after {
+    content: none !important;
+    display: none !important;
+}
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.codicon::before,
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon::before,
+.part.titlebar .window-controls-container > .window-icon.codicon::before,
+.part.titlebar .window-controls-container > .window-icon::before {
+    content: "" !important;
+    font: 0/0 sans-serif !important;
+    font-size: 0 !important;
+    line-height: 0 !important;
+    color: transparent !important;
+    width: 11px !important;
+    height: 11px !important;
+    opacity: 0 !important;
+    background-repeat: no-repeat !important;
+    background-position: center !important;
+    background-size: 11px 11px !important;
+    transition: opacity 120ms ease !important;
     display: block !important;
 }
 
-.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-close:hover {
-    background-color: #ff7b74 !important;
-    filter: brightness(1.08) !important;
-}
-.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-close:hover:before {
-    content: "×" !important;
-    font-size: 11px !important;
-    line-height: 10px !important;
+.monaco-workbench .part.titlebar .window-controls-container:hover > .window-icon::before,
+.monaco-workbench .part.titlebar .window-controls-container:hover > .window-icon.codicon::before,
+.monaco-workbench .part.titlebar.inactive .window-controls-container:hover > .window-icon::before {
+    opacity: 1 !important;
 }
 
-.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-minimize:hover {
-    background-color: #ffd066 !important;
-    filter: brightness(1.08) !important;
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-close.codicon::before,
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-close::before,
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.codicon-chrome-close::before {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='1 1 11 11'%3E%3Cpath d='M3.9 3.9 L9.1 9.1 M9.1 3.9 L3.9 9.1' fill='none' stroke='%234d0000' stroke-opacity='0.85' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E") !important;
 }
-.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-minimize:hover:before {
-    content: "–" !important;
-    font-size: 10px !important;
-    line-height: 10px !important;
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-minimize.codicon::before,
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-minimize::before,
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.codicon-chrome-minimize::before {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='1 1 11 11'%3E%3Cpath d='M3.3 6.5 L9.7 6.5' fill='none' stroke='%23613800' stroke-opacity='0.88' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E") !important;
+}
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-max-restore.codicon::before,
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-maximize.codicon::before,
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-unmaximize.codicon::before,
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-max-restore::before,
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-maximize::before,
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-unmaximize::before,
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.codicon-chrome-maximize::before,
+.monaco-workbench .part.titlebar .window-controls-container > .window-icon.codicon-chrome-restore::before {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='1 1 11 11'%3E%3Cpath d='M3.5 6.5 L9.5 6.5 M6.5 3.5 L6.5 9.5' fill='none' stroke='%2300470a' stroke-opacity='0.88' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E") !important;
 }
 
-.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-max-restore:hover {
-    background-color: #52df67 !important;
-    filter: brightness(1.08) !important;
+/* Estado inactivo idéntico al SSD */
+.monaco-workbench .part.titlebar.inactive .window-controls-container:not(:hover) > .window-icon {
+    background-color: rgba(255, 255, 255, 0.18) !important;
+    border-color: rgba(255, 255, 255, 0.08) !important;
 }
-.monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-max-restore:hover:before {
-    content: "+" !important;
-    font-size: 10px !important;
-    line-height: 10px !important;
+.monaco-workbench.vs:not(.vs-dark) .part.titlebar.inactive .window-controls-container:not(:hover) > .window-icon {
+    background-color: rgba(0, 0, 0, 0.16) !important;
+    border-color: rgba(0, 0, 0, 0.10) !important;
 }
-
-/* Estado inactivo desaturado como en macOS */
-.monaco-workbench .part.titlebar.inactive .window-controls-container > .window-icon {
-    background-color: rgba(128, 128, 128, 0.35) !important;
-    border-color: rgba(128, 128, 128, 0.20) !important;
-}
-.monaco-workbench .part.titlebar.inactive .window-controls-container > .window-icon:before {
-    display: none !important;
+.monaco-workbench .part.titlebar.inactive .window-controls-container:not(:hover) > .window-icon::before {
+    opacity: 0 !important;
 }
 
 /* Ocultar cualquier contenedor residual en la derecha */

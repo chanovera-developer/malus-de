@@ -46,6 +46,10 @@ impl AppearanceConfig {
     }
 }
 
+/// Reglas CSS compartidas de controles de ventana macOS (Traffic Lights, idénticas al SSD)
+pub const MALUS_GTK_CSS_WINDOWCONTROLS_COMMON: &str =
+    include_str!("styles/windowcontrols-common.css");
+
 /// Reglas CSS de controles de ventana macOS (Traffic Lights) para tema Claro
 pub const MALUS_GTK_CSS_WINDOWCONTROLS_LIGHT: &str = include_str!("styles/windowcontrols-light.css");
 
@@ -86,12 +90,13 @@ pub fn get_malus_gtk_css(dark: bool) -> String {
         )
     };
     format!(
-        "{}\n{}\n{}\n{}\n{}",
-        controls,
+        "{}\n{}\n{}\n{}\n{}\n{}",
         MALUS_GTK_CSS_SQUIRCLE_RULES,
         MALUS_GTK_CSS_SIDEBAR_COMMON,
         malus_gtk_css_popup(dark),
-        sidebar
+        sidebar,
+        MALUS_GTK_CSS_WINDOWCONTROLS_COMMON,
+        controls,
     )
 }
 
@@ -105,6 +110,8 @@ pub fn get_malus_gtk3_css(dark: bool) -> String {
         popup_bg,
         popup_fg,
         popup_sep,
+        backdrop_bg,
+        backdrop_border,
     ) = if dark {
         (
             "rgb(30, 30, 34)",
@@ -114,6 +121,8 @@ pub fn get_malus_gtk3_css(dark: bool) -> String {
             "rgba(30, 30, 36, 0.78)",
             "#f4f4f5",
             "rgba(255, 255, 255, 0.10)",
+            "rgba(255, 255, 255, 0.18)",
+            "rgba(255, 255, 255, 0.08)",
         )
     } else {
         (
@@ -124,6 +133,8 @@ pub fn get_malus_gtk3_css(dark: bool) -> String {
             "rgba(244, 246, 250, 0.76)",
             "#1d1d1f",
             "rgba(0, 0, 0, 0.08)",
+            "rgba(0, 0, 0, 0.16)",
+            "rgba(0, 0, 0, 0.10)",
         )
     };
 
@@ -135,6 +146,8 @@ pub fn get_malus_gtk3_css(dark: bool) -> String {
         .replace("__POPUP_BG__", popup_bg)
         .replace("__POPUP_FG__", popup_fg)
         .replace("__POPUP_SEP__", popup_sep)
+        .replace("__BACKDROP_BG__", backdrop_bg)
+        .replace("__BACKDROP_BORDER__", backdrop_border)
 }
 
 fn set_gtk_decoration_layout(config_dir: &Path) -> std::io::Result<()> {
@@ -303,6 +316,7 @@ fn update_gtk_ini_appearance(
     ini_path: &Path,
     dark_val: &str,
     gtk_theme: &str,
+    icon_theme: &str,
 ) -> std::io::Result<bool> {
     upsert_keyfile_entries(
         ini_path,
@@ -312,6 +326,7 @@ fn update_gtk_ini_appearance(
                 ("gtk-decoration-layout", "close,minimize,maximize:"),
                 ("gtk-application-prefer-dark-theme", dark_val),
                 ("gtk-theme-name", gtk_theme),
+                ("gtk-icon-theme-name", icon_theme),
             ],
         )],
     )
@@ -483,6 +498,59 @@ pub fn ensure_default_font_settings(
     Ok(())
 }
 
+pub const DEFAULT_ICON_THEME_DARK: &str = "Malus-Dark";
+pub const DEFAULT_ICON_THEME_LIGHT: &str = "Malus";
+
+fn is_unset_or_legacy_default_icon_theme(value: &str) -> bool {
+    let clean = value.trim().trim_matches('\'').trim_matches('"');
+    clean.is_empty() || clean.eq_ignore_ascii_case("Adwaita")
+}
+
+fn ensure_default_icon_theme_settings(
+    keyfile_path: &Path,
+    gtk3_ini: &Path,
+    gtk4_ini: &Path,
+    is_dark: bool,
+) -> std::io::Result<()> {
+    let default_theme = if is_dark {
+        DEFAULT_ICON_THEME_DARK
+    } else {
+        DEFAULT_ICON_THEME_LIGHT
+    };
+    let quoted_theme = format!("'{}'", default_theme);
+
+    if keyfile_path.exists() {
+        let needs_icon_theme =
+            read_section_key_value(keyfile_path, "org/gnome/desktop/interface", "icon-theme")
+                .is_none_or(|v| is_unset_or_legacy_default_icon_theme(&v));
+        if needs_icon_theme {
+            let _ = upsert_keyfile_entries(
+                keyfile_path,
+                &[(
+                    "org/gnome/desktop/interface",
+                    &[("icon-theme", quoted_theme.as_str())],
+                )],
+            )?;
+        }
+    }
+
+    for ini_path in [gtk3_ini, gtk4_ini] {
+        if ini_path.exists() {
+            let needs_icon_theme =
+                read_section_key_value(ini_path, "Settings", "gtk-icon-theme-name")
+                    .is_none_or(|v| is_unset_or_legacy_default_icon_theme(&v));
+            if needs_icon_theme {
+                let _ = upsert_keyfile_entries(
+                    ini_path,
+                    &[("Settings", &[("gtk-icon-theme-name", default_theme)])],
+                )?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Configura Fontconfig aislado en `$XDG_CONFIG_HOME/fontconfig/conf.d/10-malus-inter.conf`
 /// para que `sans-serif`, `sans` y `system-ui` prefieran `Inter` dentro de Malus DE
 /// y utilicen suavizado en escala de grises + hinting vertical ligero estilo macOS,
@@ -598,7 +666,7 @@ font-hinting='slight'
 font-name='Inter 11'
 font-rendering='manual'
 font-rgba-order='rgb'
-icon-theme='Adwaita'
+icon-theme='Malus-Dark'
 gtk-theme='Adwaita'
 
 [org/gnome/settings-daemon/plugins/xsettings]
@@ -632,8 +700,8 @@ org.freedesktop.impl.portal.Settings=gtk;gnome;
     let gtk3_ini = gtk3_dir.join("settings.ini");
     if !gtk3_ini.exists() {
         let gtk_ini_content = format!(
-            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme=1\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-font-name={}\ngtk-xft-antialias=1\ngtk-xft-hinting=1\ngtk-xft-hintstyle=hintslight\ngtk-xft-rgba=none\ngtk-hint-font-metrics=1\ngtk-theme-name=Adwaita\n",
-            cursor_theme, cursor_size, DEFAULT_SYSTEM_FONT_NAME
+            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme=1\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-font-name={}\ngtk-xft-antialias=1\ngtk-xft-hinting=1\ngtk-xft-hintstyle=hintslight\ngtk-xft-rgba=none\ngtk-hint-font-metrics=1\ngtk-theme-name=Adwaita\ngtk-icon-theme-name={}\n",
+            cursor_theme, cursor_size, DEFAULT_SYSTEM_FONT_NAME, DEFAULT_ICON_THEME_DARK
         );
         write_file_atomic_if_changed(&gtk3_ini, &gtk_ini_content)?;
     }
@@ -643,8 +711,8 @@ org.freedesktop.impl.portal.Settings=gtk;gnome;
     let gtk4_ini = gtk4_dir.join("settings.ini");
     if !gtk4_ini.exists() {
         let gtk_ini_content = format!(
-            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme=1\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-font-name={}\ngtk-xft-antialias=1\ngtk-xft-hinting=1\ngtk-xft-hintstyle=hintslight\ngtk-xft-rgba=none\ngtk-hint-font-metrics=1\ngtk-theme-name=Adwaita\n",
-            cursor_theme, cursor_size, DEFAULT_SYSTEM_FONT_NAME
+            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme=1\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-font-name={}\ngtk-xft-antialias=1\ngtk-xft-hinting=1\ngtk-xft-hintstyle=hintslight\ngtk-xft-rgba=none\ngtk-hint-font-metrics=1\ngtk-theme-name=Adwaita\ngtk-icon-theme-name={}\n",
+            cursor_theme, cursor_size, DEFAULT_SYSTEM_FONT_NAME, DEFAULT_ICON_THEME_DARK
         );
         write_file_atomic_if_changed(&gtk4_ini, &gtk_ini_content)?;
     }
@@ -657,6 +725,7 @@ org.freedesktop.impl.portal.Settings=gtk;gnome;
 
     // 2.1. Hojas de estilo GTK exclusivas de Malus DE (generar y escribir solo la activa)
     let is_dark = is_dark_mode_active();
+    let _ = ensure_default_icon_theme_settings(&keyfile_path, &gtk3_ini, &gtk4_ini, is_dark);
     let active_gtk3 = get_malus_gtk3_css(is_dark);
     let active_css = get_malus_gtk_css(is_dark);
 
@@ -973,6 +1042,8 @@ pub fn apply_firefox_profile_styles(profile_dir: &Path) {
 pub fn setup_default_mime_applications(malus_config_dir: &Path) {
     let mime_path = malus_config_dir.join("mimeapps.list");
     let default_package_associations: &[(&str, &str)] = &[
+        ("inode/directory", "dev.malus.Branches.desktop"),
+        ("x-scheme-handler/trash", "dev.malus.Branches.desktop"),
         ("application/x-rpm", "gnome-software-local-file-packagekit.desktop"),
         ("application/x-redhat-package-manager", "gnome-software-local-file-packagekit.desktop"),
         ("application/vnd.flatpak", "gnome-software-local-file-flatpak.desktop"),
@@ -1011,7 +1082,11 @@ pub fn setup_default_mime_applications(malus_config_dir: &Path) {
 
     for (mime, app) in default_package_associations {
         let prefix = format!("{}=", mime);
-        if !default_apps.iter().any(|entry| entry.starts_with(&prefix)) {
+        if let Some(existing) = default_apps.iter_mut().find(|entry| entry.starts_with(&prefix)) {
+            if *app == "dev.malus.Branches.desktop" && existing.contains("org.gnome.Nautilus.desktop") {
+                *existing = format!("{}={}", mime, app);
+            }
+        } else {
             default_apps.push(format!("{}={}", mime, app));
         }
         let added_entry = format!("{}={};", mime, app);
@@ -1164,6 +1239,12 @@ pub fn sync_system_appearance(to_dark: bool) {
     let color_scheme_val = format!("'{}'", target);
     let dark_val = if to_dark { "1" } else { "0" };
     let gtk_theme_target = "Adwaita";
+    let icon_theme_target = if to_dark {
+        DEFAULT_ICON_THEME_DARK
+    } else {
+        DEFAULT_ICON_THEME_LIGHT
+    };
+    let icon_theme_quoted = format!("'{}'", icon_theme_target);
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     let malus_config_dir = std::path::PathBuf::from(&home).join(".config/malus-de");
 
@@ -1181,6 +1262,7 @@ pub fn sync_system_appearance(to_dark: bool) {
                 &[
                     ("color-scheme", color_scheme_val.as_str()),
                     ("gtk-theme", "'Adwaita'"),
+                    ("icon-theme", icon_theme_quoted.as_str()),
                 ],
             ),
             (
@@ -1195,7 +1277,7 @@ pub fn sync_system_appearance(to_dark: bool) {
         malus_config_dir.join("gtk-3.0/settings.ini"),
         malus_config_dir.join("gtk-4.0/settings.ini"),
     ] {
-        let _ = update_gtk_ini_appearance(&ini_path, dark_val, gtk_theme_target);
+        let _ = update_gtk_ini_appearance(&ini_path, dark_val, gtk_theme_target, icon_theme_target);
     }
 
     // 4. Generar y escribir únicamente la hoja CSS activa (y gtk-dark.css solo si hace falta)
@@ -2453,6 +2535,21 @@ mod tests {
             assert!(css.contains("background-color: #ff5f56;"));
             assert!(css.contains("background-color: #ffbd2e;"));
             assert!(css.contains("background-color: #27c93f;"));
+            assert!(css.contains("background-color: #ff6e66;"));
+            assert!(css.contains("background-color: #ffcc3d;"));
+            assert!(css.contains("background-color: #36d84e;"));
+            assert!(css.contains("border-spacing: 6px;"));
+            assert!(css.contains("border-width: 0.75px;"));
+            assert!(css.contains("-gtk-icon-source: none;"));
+            assert!(!css.contains("MALUS_GTK_CSS"));
+
+            let gtk3 = get_malus_gtk3_css(dark);
+            assert!(gtk3.contains("background-color: #ff5f56;"));
+            assert!(gtk3.contains("background-color: #ffbd2e;"));
+            assert!(gtk3.contains("background-color: #27c93f;"));
+            assert!(gtk3.contains("border-width: 0.75px;"));
+            assert!(!gtk3.contains("__BACKDROP_BG__"));
+            assert!(!gtk3.contains("__BACKDROP_BORDER__"));
         }
     }
 
@@ -2927,6 +3024,7 @@ primary = true
         let initial_mime = r#"[Default Applications]
 text/html=brave-origin.desktop
 image/png=org.gnome.Loupe.desktop
+inode/directory=org.gnome.Nautilus.desktop
 
 [Added Associations]
 image/png=org.gnome.Loupe.desktop;
@@ -2939,6 +3037,9 @@ image/png=org.gnome.Loupe.desktop;
         // Verificar que preserva las asociaciones existentes del usuario
         assert!(content.contains("text/html=brave-origin.desktop"));
         assert!(content.contains("image/png=org.gnome.Loupe.desktop"));
+        // Verificar que establece Branches como predeterminado para carpetas y papelera
+        assert!(content.contains("inode/directory=dev.malus.Branches.desktop"));
+        assert!(content.contains("x-scheme-handler/trash=dev.malus.Branches.desktop"));
         // Verificar que agrega las asociaciones de paquetes hacia GNOME Software
         assert!(content.contains("application/x-rpm=gnome-software-local-file-packagekit.desktop"));
         assert!(content.contains("application/x-redhat-package-manager=gnome-software-local-file-packagekit.desktop"));
@@ -3069,6 +3170,49 @@ overrides={'Gtk/ShellShowsAppMenu': <1>}
         )
         .unwrap();
         assert!(!changed_again);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_ensure_default_icon_theme_settings_upgrades_adwaita_and_preserves_custom() {
+        let temp_dir = std::env::temp_dir().join("malus_test_icon_theme_defaults");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let keyfile = temp_dir.join("keyfile");
+        let gtk3 = temp_dir.join("gtk3.ini");
+        let gtk4 = temp_dir.join("gtk4.ini");
+
+        std::fs::write(
+            &keyfile,
+            "[org/gnome/desktop/interface]\nicon-theme='Adwaita'\n",
+        )
+        .unwrap();
+        std::fs::write(&gtk3, "[Settings]\ngtk-icon-theme-name=Adwaita\n").unwrap();
+        std::fs::write(&gtk4, "[Settings]\ngtk-theme-name=Adwaita\n").unwrap();
+
+        ensure_default_icon_theme_settings(&keyfile, &gtk3, &gtk4, true).unwrap();
+
+        assert!(std::fs::read_to_string(&keyfile)
+            .unwrap()
+            .contains("icon-theme='Malus-Dark'"));
+        assert!(std::fs::read_to_string(&gtk3)
+            .unwrap()
+            .contains("gtk-icon-theme-name=Malus-Dark"));
+        assert!(std::fs::read_to_string(&gtk4)
+            .unwrap()
+            .contains("gtk-icon-theme-name=Malus-Dark"));
+
+        // Preserva tema personalizado del usuario
+        std::fs::write(
+            &keyfile,
+            "[org/gnome/desktop/interface]\nicon-theme='Papirus'\n",
+        )
+        .unwrap();
+        ensure_default_icon_theme_settings(&keyfile, &gtk3, &gtk4, false).unwrap();
+        assert!(std::fs::read_to_string(&keyfile)
+            .unwrap()
+            .contains("icon-theme='Papirus'"));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
