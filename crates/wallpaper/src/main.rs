@@ -263,15 +263,12 @@ pub struct IconLayoutMetrics {
 
 impl IconLayoutMetrics {
     pub fn from_config(config: &DesktopIconsConfig) -> Self {
-        let icon_size = config.clamped_icon_size();
-        let box_width = (icon_size + 44).max(72);
-        let box_height = (icon_size + 48).max(76);
-        let spacing = 8;
+        let shared = config.icon_grid_metrics();
         Self {
-            icon_size,
-            box_width,
-            box_height,
-            spacing,
+            icon_size: shared.icon_size,
+            box_width: shared.box_width,
+            box_height: shared.box_height,
+            spacing: shared.spacing,
         }
     }
 

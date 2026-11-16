@@ -1486,6 +1486,41 @@ impl Default for TopBarConfig {
     }
 }
 
+/// Métricas de celda y caja calculadas a partir de un tamaño de icono lógico.
+/// Compartidas entre la superficie de Escritorio y Branches para mantener proporciones idénticas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IconGridMetrics {
+    pub icon_size: i32,
+    pub box_width: i32,
+    pub box_height: i32,
+    pub spacing: i32,
+}
+
+impl IconGridMetrics {
+    pub const DEFAULT_GRID_SPACING: i32 = 8;
+
+    pub fn from_icon_size(icon_size: i32, extra_spacing: i32) -> Self {
+        let icon_size = icon_size.max(16);
+        let box_width = (icon_size + 44).max(72);
+        let box_height = (icon_size + 48).max(76);
+        let spacing = (Self::DEFAULT_GRID_SPACING + extra_spacing).max(4);
+        Self {
+            icon_size,
+            box_width,
+            box_height,
+            spacing,
+        }
+    }
+
+    pub fn cell_width(&self) -> i32 {
+        self.box_width + self.spacing
+    }
+
+    pub fn cell_height(&self) -> i32 {
+        self.box_height + self.spacing
+    }
+}
+
 /// Configuración de la superficie de escritorio activa (archivos e iconos de `~/Escritorio`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -1506,7 +1541,7 @@ impl Default for DesktopIconsConfig {
     fn default() -> Self {
         Self {
             show_icons: true,
-            icon_size: 64,
+            icon_size: Self::DEFAULT_ICON_SIZE,
             align_left: false,
             snap_to_grid: false,
             use_stacks: false,
@@ -1515,6 +1550,7 @@ impl Default for DesktopIconsConfig {
 }
 
 impl DesktopIconsConfig {
+    pub const DEFAULT_ICON_SIZE: u32 = 64;
     pub const MIN_ICON_SIZE: u32 = 32;
     pub const MAX_ICON_SIZE: u32 = 96;
 
@@ -1546,6 +1582,108 @@ impl DesktopIconsConfig {
     pub fn clamped_icon_size(&self) -> i32 {
         self.icon_size
             .clamp(Self::MIN_ICON_SIZE, Self::MAX_ICON_SIZE) as i32
+    }
+
+    /// Métricas de celda de cuadrícula derivadas del tamaño configurado
+    pub fn icon_grid_metrics(&self) -> IconGridMetrics {
+        IconGridMetrics::from_icon_size(self.clamped_icon_size(), 0)
+    }
+}
+
+/// Configuración persistente de Branches (tamaño de carpetas/iconos y vistas, estilo macOS Finder).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BranchesConfig {
+    /// Tamaño de iconos/carpetas en Vista de Iconos en píxeles lógicos (por defecto 64, estandarizado con el Escritorio)
+    pub icon_size: u32,
+    /// Espaciado adicional de cuadrícula en Vista de Iconos (0 = estándar del Escritorio, máx. 48)
+    pub grid_spacing: u32,
+    /// Tamaño de texto de etiquetas en Vista de Iconos en px (10-16)
+    pub text_size: u32,
+    /// Tamaño de iconos en Vista de Lista en píxeles lógicos (16-32)
+    pub list_icon_size: u32,
+    /// Mostrar archivos ocultos por defecto al abrir carpetas
+    pub show_hidden: bool,
+}
+
+impl Default for BranchesConfig {
+    fn default() -> Self {
+        Self {
+            icon_size: Self::DEFAULT_ICON_SIZE,
+            grid_spacing: 0,
+            text_size: 12,
+            list_icon_size: 18,
+            show_hidden: false,
+        }
+    }
+}
+
+impl BranchesConfig {
+    pub const DEFAULT_ICON_SIZE: u32 = DesktopIconsConfig::DEFAULT_ICON_SIZE;
+    pub const MIN_ICON_SIZE: u32 = 32;
+    pub const MAX_ICON_SIZE: u32 = 128;
+    pub const MIN_GRID_SPACING: u32 = 0;
+    pub const MAX_GRID_SPACING: u32 = 48;
+    pub const MIN_TEXT_SIZE: u32 = 10;
+    pub const MAX_TEXT_SIZE: u32 = 16;
+    pub const MIN_LIST_ICON_SIZE: u32 = 16;
+    pub const MAX_LIST_ICON_SIZE: u32 = 32;
+
+    pub fn config_path() -> PathBuf {
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                PathBuf::from(home).join(".config")
+            });
+        if base.ends_with("malus-de") {
+            base.join("branches.toml")
+        } else {
+            base.join("malus-de/branches.toml")
+        }
+    }
+
+    /// Carga la configuración de Branches (o la predeterminada si no existe o es inválida)
+    pub fn load() -> Self {
+        std::fs::read_to_string(Self::config_path())
+            .ok()
+            .and_then(|content| toml::from_str::<BranchesConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let toml_str = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let header = "# Configuración de Branches (Explorador de Archivos de Malus DE)\n\n";
+        std::fs::write(path, format!("{}{}", header, toml_str))
+    }
+
+    pub fn clamped_icon_size(&self) -> i32 {
+        self.icon_size
+            .clamp(Self::MIN_ICON_SIZE, Self::MAX_ICON_SIZE) as i32
+    }
+
+    pub fn clamped_grid_spacing(&self) -> i32 {
+        self.grid_spacing
+            .clamp(Self::MIN_GRID_SPACING, Self::MAX_GRID_SPACING) as i32
+    }
+
+    pub fn clamped_text_size(&self) -> i32 {
+        self.text_size
+            .clamp(Self::MIN_TEXT_SIZE, Self::MAX_TEXT_SIZE) as i32
+    }
+
+    pub fn clamped_list_icon_size(&self) -> i32 {
+        self.list_icon_size
+            .clamp(Self::MIN_LIST_ICON_SIZE, Self::MAX_LIST_ICON_SIZE) as i32
+    }
+
+    pub fn icon_grid_metrics(&self) -> IconGridMetrics {
+        IconGridMetrics::from_icon_size(self.clamped_icon_size(), self.clamped_grid_spacing())
     }
 }
 
@@ -3014,5 +3152,27 @@ apps = []
         assert!(fc_content.contains("<bool>true</bool>"));
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn branches_config_defaults_match_desktop_icon_size_and_metrics() {
+        let branches = BranchesConfig::default();
+        let desktop = DesktopIconsConfig::default();
+
+        assert_eq!(branches.icon_size, desktop.icon_size);
+        assert_eq!(branches.icon_size, 64);
+        assert_eq!(branches.icon_grid_metrics(), desktop.icon_grid_metrics());
+
+        let custom = BranchesConfig {
+            icon_size: 200,
+            grid_spacing: 60,
+            text_size: 20,
+            list_icon_size: 8,
+            show_hidden: true,
+        };
+        assert_eq!(custom.clamped_icon_size(), BranchesConfig::MAX_ICON_SIZE as i32);
+        assert_eq!(custom.clamped_grid_spacing(), BranchesConfig::MAX_GRID_SPACING as i32);
+        assert_eq!(custom.clamped_text_size(), BranchesConfig::MAX_TEXT_SIZE as i32);
+        assert_eq!(custom.clamped_list_icon_size(), BranchesConfig::MIN_LIST_ICON_SIZE as i32);
     }
 }
