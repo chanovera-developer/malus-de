@@ -1,7 +1,7 @@
 use crate::fs_backend::{open_file, open_in_terminal, FileItem};
-use crate::views::{NavigateCallback, SelectionCallback};
+use crate::views::{show_item_context_menu, NavigateCallback, SelectionCallback};
 use gdk_pixbuf::Pixbuf;
-use gtk4::gdk::{Key, Texture};
+use gtk4::gdk::{self, Key, Texture};
 use gtk4::pango;
 use gtk4::prelude::*;
 use gtk4::{
@@ -356,13 +356,25 @@ impl GalleryView {
         card.append(&lbl);
 
         let click = GestureClick::new();
+        click.set_button(0);
         let self_click = self.clone();
         let p_for_dbl = item.path.clone();
         let is_dir = item.is_dir;
         let on_nav = self.on_navigate.clone();
+        let card_for_menu = card.clone();
 
-        click.connect_pressed(move |g, n_press, _, _| {
-            if n_press == 1 {
+        click.connect_pressed(move |g, n_press, x, y| {
+            let button = g.current_button();
+            if button == gdk::BUTTON_SECONDARY {
+                self_click.select_index(index);
+                show_item_context_menu(
+                    &card_for_menu,
+                    &p_for_dbl,
+                    is_dir,
+                    Some((x, y)),
+                    Some(&on_nav),
+                );
+            } else if n_press == 1 {
                 self_click.select_index(index);
             } else if n_press >= 2 {
                 if is_dir {

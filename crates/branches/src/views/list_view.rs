@@ -1,12 +1,11 @@
-use crate::fs_backend::{open_file, open_in_terminal, FileItem};
-use crate::views::{NavigateCallback, SelectionCallback};
+use crate::fs_backend::{open_file, FileItem};
+use crate::views::{show_item_context_menu, NavigateCallback, SelectionCallback};
 use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4::{
     Align, Box as GtkBox, GestureClick, Image, Label, ListBox, ListBoxRow, Orientation, PolicyType,
     ScrolledWindow,
 };
-use std::path::PathBuf;
 
 pub struct ListView {
     container: GtkBox,
@@ -157,11 +156,12 @@ fn create_list_row(item: &FileItem, on_navigate: NavigateCallback) -> ListBoxRow
 
     // Gestos: Doble clic y Clic derecho
     let gesture = GestureClick::new();
+    gesture.set_button(0);
     let path = item.path.clone();
     let is_dir = item.is_dir;
     let on_nav_click = on_navigate.clone();
 
-    gesture.connect_pressed(move |g, n_press, _x, _y| {
+    gesture.connect_pressed(move |g, n_press, x, y| {
         let button = g.current_button();
 
         if button == gdk::BUTTON_PRIMARY && n_press == 2 {
@@ -171,7 +171,8 @@ fn create_list_row(item: &FileItem, on_navigate: NavigateCallback) -> ListBoxRow
                 let _ = open_file(&path);
             }
         } else if button == gdk::BUTTON_SECONDARY {
-            show_context_menu(&hbox, &path, is_dir);
+            g.set_state(gtk4::EventSequenceState::Claimed);
+            show_item_context_menu(&hbox, &path, is_dir, Some((x, y)), Some(&on_nav_click));
         }
     });
 
@@ -274,48 +275,4 @@ fn create_list_row(item: &FileItem, on_navigate: NavigateCallback) -> ListBoxRow
     }
 
     row
-}
-
-use super::make_context_menu_button;
-
-fn show_context_menu(widget: &impl IsA<gtk4::Widget>, path: &PathBuf, is_dir: bool) {
-    let popover = gtk4::Popover::builder()
-        .has_arrow(false)
-        .css_classes(["malus-popover-menu"])
-        .build();
-    popover.set_parent(widget);
-
-    let vbox = GtkBox::new(Orientation::Vertical, 2);
-
-    let p = path.clone();
-    let pop_clone = popover.clone();
-    let open_btn = make_context_menu_button(if is_dir { "Abrir carpeta" } else { "Abrir" });
-    open_btn.connect_clicked(move |_| {
-        pop_clone.popdown();
-        let _ = open_file(&p);
-    });
-    vbox.append(&open_btn);
-
-    let p_term = path.clone();
-    let pop_clone = popover.clone();
-    let term_btn = make_context_menu_button("Abrir en Terminal");
-    term_btn.connect_clicked(move |_| {
-        pop_clone.popdown();
-        open_in_terminal(&p_term);
-    });
-    vbox.append(&term_btn);
-
-    let p_copy = path.clone();
-    let pop_clone = popover.clone();
-    let copy_btn = make_context_menu_button("Copiar ruta");
-    copy_btn.connect_clicked(move |_| {
-        pop_clone.popdown();
-        if let Some(display) = gdk::Display::default() {
-            display.clipboard().set_text(&p_copy.to_string_lossy());
-        }
-    });
-    vbox.append(&copy_btn);
-
-    popover.set_child(Some(&vbox));
-    popover.popup();
 }

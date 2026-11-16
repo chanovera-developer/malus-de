@@ -1,12 +1,12 @@
 use crate::fs_backend::{load_directory, open_file, open_in_terminal, FileItem};
 use crate::state::{SortBy, SortOrder};
-use crate::views::{NavigateCallback, SelectionCallback};
+use crate::views::{show_item_context_menu, NavigateCallback, SelectionCallback};
 use gdk_pixbuf::Pixbuf;
 use gtk4::gdk::{self, Key, Texture};
 use gtk4::pango;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Box as GtkBox, Button, EventControllerKey, Grid, Image, Label, ListBox,
+    Align, Box as GtkBox, Button, EventControllerKey, GestureClick, Grid, Image, Label, ListBox,
     ListBoxRow, Orientation, PolicyType, ScrolledWindow, Separator,
 };
 use std::cell::RefCell;
@@ -151,7 +151,7 @@ impl ColumnViewInner {
             .build();
 
         for item in &items {
-            let row = create_column_row(item);
+            let row = create_column_row(item, &self.on_navigate);
             list_box.append(&row);
         }
 
@@ -400,7 +400,7 @@ impl ColumnViewInner {
     }
 }
 
-fn create_column_row(item: &FileItem) -> ListBoxRow {
+fn create_column_row(item: &FileItem, on_navigate: &NavigateCallback) -> ListBoxRow {
     let row = ListBoxRow::new();
     row.add_css_class("branches-column-row");
 
@@ -430,6 +430,24 @@ fn create_column_row(item: &FileItem) -> ListBoxRow {
     }
 
     row.set_child(Some(&hbox));
+
+    let right_click = GestureClick::new();
+    right_click.set_button(gdk::BUTTON_SECONDARY);
+    let path_for_menu = item.path.clone();
+    let is_dir_for_menu = item.is_dir;
+    let on_nav_menu = on_navigate.clone();
+    let row_for_menu = row.clone();
+    right_click.connect_pressed(move |g, _n, x, y| {
+        g.set_state(gtk4::EventSequenceState::Claimed);
+        show_item_context_menu(
+            &row_for_menu,
+            &path_for_menu,
+            is_dir_for_menu,
+            Some((x, y)),
+            Some(&on_nav_menu),
+        );
+    });
+    row.add_controller(right_click);
 
     let drag_source = gtk4::DragSource::new();
     drag_source.set_actions(gdk::DragAction::COPY | gdk::DragAction::MOVE);

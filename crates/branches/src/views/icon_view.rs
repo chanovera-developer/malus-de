@@ -1,6 +1,6 @@
 use crate::db::{self, LayoutMode};
-use crate::fs_backend::{open_file, open_in_terminal, FileItem};
-use crate::views::{NavigateCallback, SelectionCallback};
+use crate::fs_backend::{open_file, FileItem};
+use crate::views::{show_item_context_menu, NavigateCallback, SelectionCallback};
 use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4::{
@@ -197,6 +197,7 @@ impl IconView {
 
         // 1. Doble clic para abrir y Clic derecho para menú contextual
         let click_gesture = GestureClick::new();
+        click_gesture.set_button(0);
         let path = item.path.clone();
         let is_dir = item.is_dir;
         let on_nav = self.on_navigate.clone();
@@ -205,7 +206,7 @@ impl IconView {
         let vbox_for_click = vbox.clone();
         let on_sel_cb = self.on_selection_changed.clone();
 
-        click_gesture.connect_pressed(move |g, n_press, _x, _y| {
+        click_gesture.connect_pressed(move |g, n_press, x, y| {
             let button = g.current_button();
 
             if button == gdk::BUTTON_PRIMARY {
@@ -223,7 +224,8 @@ impl IconView {
                     }
                 }
             } else if button == gdk::BUTTON_SECONDARY {
-                show_context_menu(&vbox_for_click, &path, is_dir);
+                g.set_state(gtk4::EventSequenceState::Claimed);
+                show_item_context_menu(&vbox_for_click, &path, is_dir, Some((x, y)), Some(&on_nav));
             }
         });
         vbox.add_controller(click_gesture);
@@ -324,6 +326,7 @@ impl IconView {
 
     fn setup_canvas_gestures(&self) {
         let click = GestureClick::new();
+        click.set_button(0);
         let sel_items = self.selected_items.clone();
         let widgets = self.item_widgets.clone();
         let sel_cb = self.on_selection_changed.clone();
@@ -505,6 +508,7 @@ fn show_canvas_context_menu(
         .css_classes(["malus-popover-menu"])
         .build();
     popover.set_parent(parent);
+    popover.connect_closed(|p| p.unparent());
 
     let rect = gdk::Rectangle::new(x as i32, y as i32, 1, 1);
     popover.set_pointing_to(Some(&rect));
@@ -566,48 +570,6 @@ fn show_canvas_context_menu(
         weak_helper.rearrange(true);
     });
     vbox.append(&btn_clean);
-
-    popover.set_child(Some(&vbox));
-    popover.popup();
-}
-
-fn show_context_menu(widget: &impl IsA<gtk4::Widget>, path: &PathBuf, is_dir: bool) {
-    let popover = Popover::builder()
-        .has_arrow(false)
-        .css_classes(["malus-popover-menu"])
-        .build();
-    popover.set_parent(widget);
-
-    let vbox = GtkBox::new(Orientation::Vertical, 2);
-
-    let p = path.clone();
-    let pop_clone = popover.clone();
-    let open_btn = make_context_menu_button(if is_dir { "Abrir carpeta" } else { "Abrir" });
-    open_btn.connect_clicked(move |_| {
-        pop_clone.popdown();
-        let _ = open_file(&p);
-    });
-    vbox.append(&open_btn);
-
-    let p_term = path.clone();
-    let pop_clone = popover.clone();
-    let term_btn = make_context_menu_button("Abrir en Terminal");
-    term_btn.connect_clicked(move |_| {
-        pop_clone.popdown();
-        open_in_terminal(&p_term);
-    });
-    vbox.append(&term_btn);
-
-    let p_copy = path.clone();
-    let pop_clone = popover.clone();
-    let copy_btn = make_context_menu_button("Copiar ruta");
-    copy_btn.connect_clicked(move |_| {
-        pop_clone.popdown();
-        if let Some(display) = gdk::Display::default() {
-            display.clipboard().set_text(&p_copy.to_string_lossy());
-        }
-    });
-    vbox.append(&copy_btn);
 
     popover.set_child(Some(&vbox));
     popover.popup();
