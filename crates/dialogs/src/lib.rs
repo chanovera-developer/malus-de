@@ -17,6 +17,7 @@ thread_local! {
 const CONFIRMATION_CSS: &str = include_str!("styles/confirmation.css");
 
 fn ensure_dialog_css_loaded() {
+    let _ = libadwaita::init();
     CONFIRMATION_CSS_LOADED.with(|loaded| {
         if loaded.get() {
             return;
@@ -147,7 +148,7 @@ pub fn show_crash_report_dialog(
     let dialog = ApplicationWindow::builder()
         .application(app)
         .title("Informe de error — Malus DE")
-        .css_classes(["malus-confirmation-window"])
+        .css_classes(["malus-confirmation-window", "malus-crash-window"])
         .decorated(false)
         .resizable(false)
         .build();
@@ -414,5 +415,26 @@ assertion failed: something went wrong\n";
             extract_report_summary(dump),
             "assertion failed: something went wrong"
         );
+    }
+
+    #[test]
+    fn crash_window_and_card_have_solid_background_in_css() {
+        let win_block = CONFIRMATION_CSS
+            .split("window.malus-crash-window.background {")
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .expect("Debe existir regla para window.malus-crash-window");
+        assert!(win_block.contains("background-color: @window_bg_color;"));
+        assert!(!win_block.contains("transparent"));
+        assert!(!win_block.contains("alpha("));
+
+        let card_block = CONFIRMATION_CSS
+            .split(".malus-crash-card {")
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .expect("Debe existir regla para .malus-crash-card");
+        assert!(card_block.contains("background-color: @window_bg_color;"));
+        assert!(!card_block.contains("transparent"));
+        assert!(!card_block.contains("alpha("));
     }
 }

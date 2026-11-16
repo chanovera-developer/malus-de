@@ -8,4 +8,5 @@ license.workspace = true
 [dependencies]
 malus-de-common.workspace = true
 gtk4.workspace = true
+libadwaita.workspace = true
 glib.workspace = true

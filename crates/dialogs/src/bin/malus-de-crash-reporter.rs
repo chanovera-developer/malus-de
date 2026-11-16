@@ -33,6 +33,9 @@ fn resolve_target_report() -> Option<(PathBuf, String, usize)> {
 
 fn main() {
     init_logging("malus_de_crash_reporter");
+    let _ = malus_de_common::config::setup_isolated_session_environment();
+    let _ = gtk4::init();
+    let _ = libadwaita::init();
 
     let Some((report_path, report_text, extra_count)) = resolve_target_report() else {
         return;

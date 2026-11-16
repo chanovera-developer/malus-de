@@ -43,9 +43,19 @@ window.malus-confirmation-window {
     font-size: 14px;
 }
 
+window.malus-crash-window,
+window.malus-crash-window.background {
+    background-color: @window_bg_color;
+    background-image: none;
+    color: @window_fg_color;
+}
+
 .malus-crash-card {
     min-width: 420px;
     max-width: 500px;
+    background-color: @window_bg_color;
+    background-image: none;
+    box-shadow: none;
 }
 
 .malus-crash-expander > title {
