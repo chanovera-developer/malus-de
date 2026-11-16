@@ -4,6 +4,43 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-16] — Cambio de Licencia a GPLv3, Temas de Iconos Malus (Colloid + Phosphor), Semáforos SSD Unificados y Papelera en Branches
+
+### 1. Cambio de Licencia a `GPL-3.0-or-later` (`Cargo.toml`, `LICENSE`, `README.md`, `crates/top-bar`)
+* **Compatibilidad legal y de monetización:** Se actualizó la licencia del workspace a `GPL-3.0-or-later` en [`Cargo.toml`](../Cargo.toml), se incorporó el texto oficial en [`LICENSE`](../LICENSE) y se actualizó [`show_about_dialog`](../crates/top-bar/src/ui/system_menu.rs) a `gtk4::License::Gpl30`, garantizando compatibilidad con dependencias `Apache-2.0` (`winit`, `gl`, etc.) y con temas de iconos `GPL-3.0`.
+* **Créditos en [`README.md`](../README.md):** Se documentaron las licencias de `Colloid-icon-theme` (`GPL-3.0` en [`Colloid-LICENSE`](../assets/icons/Colloid-LICENSE)) y `Phosphor Icons` (`MIT` en [`Phosphor-LICENSE`](../assets/icons/Phosphor-LICENSE)).
+
+### 2. Temas de Iconos `Malus` y `Malus-Dark` (Colloid + Phosphor) y Glifos de Sistema (`assets/icons`, `crates/common`, `crates/branches`, `crates/top-bar`)
+* **Glifos de carpetas faltantes en [`fs_backend.rs`](../crates/branches/src/fs_backend.rs):** Añadidos mapeos en `resolve_kind_and_icon` para `Público`/`Publico`/`Public` (`folder-publicshare`), `Proyectos`/`Projects` (`folder-projects`) y `Plantillas`/`Templates` (`folder-templates`), junto con pruebas unitarias.
+* **Integración de `Colloid` + `Phosphor Icons` (`assets/icons/`):**
+  * Generados `Colloid-Light` y `Colloid-Dark` (`-p --notint`, sin iconos de marca Apple y heredando de `Adwaita,hicolor`).
+  * Creados los temas `Malus` y `Malus-Dark` con los directorios escalables a color de Colloid enlazados directamente (`places/scalable`, `mimetypes/scalable`, `apps/scalable`, `devices/scalable`) y `MinSize=16` en `[places/scalable]` (eliminando `places/16`, `places/22`, `places/24` monocromos para evitar que carpetas y documentos caigan en `-symbolic`).
+  * Reemplazados los ~80 glifos `-symbolic` de interfaz, además de `control-center-symbolic.svg` (`sliders-horizontal-bold`) y los 10 iconos del menú del sistema (`data/icons/apple-*-symbolic.svg`), por iconos de **Phosphor Icons** (`bold`/`fill`, `width="16" height="16"`, `fill="currentColor"`).
+* **Sesión e instalador ([`common/src/config.rs`](../crates/common/src/config.rs), [`common/src/apps.rs`](../crates/common/src/apps.rs), [`scripts/malus-session`](../scripts/malus-session), [`scripts/install-session.sh`](../scripts/install-session.sh)):** Migración automática de `Adwaita` a `Malus-Dark` / `Malus` sincronizada con modo oscuro/claro (`sync_system_appearance`), registro de `extra_icon_search_paths()` en `top-bar`, `wallpaper` y `settings`, e instalación/caché automática de los temas.
+
+### 3. Estandarización de Semáforos al Estilo SSD (`crates/common`, `assets/themes`, `scripts/malus-ide-wrapper`)
+* **CSD GTK4, GTK3 y Firefox ([`windowcontrols-common.css`](../crates/common/src/styles/windowcontrols-common.css), [`windowcontrols-dark.css`](../crates/common/src/styles/windowcontrols-dark.css), [`windowcontrols-light.css`](../crates/common/src/styles/windowcontrols-light.css), [`gtk3.css`](../crates/common/src/styles/gtk3.css), [`firefox-userchrome.css`](../crates/common/src/styles/firefox-userchrome.css)):**
+  * Ajustado el modelo `content-box` de GTK a `min-width: 11.5px; min-height: 11.5px; border-width: 0.75px;` (`13.5 px` exteriores) y `border-spacing: 6px;` (`center_dx = 20.0 px` exactos, igual al SSD en [`ssd.rs`](../crates/compositor/src/ssd.rs)), cambiando `-gtk-icon-size: 0px` a `1px` para evitar advertencias `Gtk-CRITICAL`.
+  * Sustituidos los glifos del tema en hover por SVG geométricos idénticos al SSD (`×`, `–`, `+` con trazo redondeado `1.4 px`) y restaurando colores/glifos al hacer hover sobre controles en estado `:backdrop` / inactivo.
+* **Antigravity / Electron ([`scripts/malus-ide-wrapper`](../scripts/malus-ide-wrapper), [`electron-window-controls.css`](../assets/themes/electron-window-controls.css), [`install-session.sh`](../scripts/install-session.sh)):**
+  * Alineados a `13 px`, `gap: 7 px`, borde `0.75 px`, colores/hover del SSD y glifos `×`, `–`, `+` anulando `.codicon-chrome-*` y elementos hijos; `install-session.sh` además actualiza enlaces existentes en `~/.local/bin/` para evitar copias obsoletas que sombreen `/usr/local/bin/malus-ide-wrapper`.
+
+### 4. Branches como Gestor Predeterminado para Papelera y Carpetas (`crates/branches`, `crates/dock`, `crates/common`, `data`)
+* **Soporte de URIs `trash:///` y `file://` ([`branches/src/main.rs`](../crates/branches/src/main.rs), [`app_window.rs`](../crates/branches/src/app_window.rs), [`folder_pane.rs`](../crates/branches/src/folder_pane.rs)):** Añadido `resolve_cli_target_path` junto con `gio::ApplicationFlags::HANDLES_OPEN` y `connect_open` para abrir la Papelera en una ventana nueva aunque Branches ya esté ejecutándose, mostrando el título `"Papelera"` cuando la ruta apunta a `Trash/files`.
+* **Dock y MIME ([`dock/src/main.rs`](../crates/dock/src/main.rs), [`dev.malus.Branches.desktop`](../data/dev.malus.Branches.desktop), [`common/src/config.rs`](../crates/common/src/config.rs)):** Actualizada la Papelera del Dock (`malus-de-branches trash:///`) y registradas `inode/directory` y `x-scheme-handler/trash` hacia `dev.malus.Branches.desktop` en `setup_default_mime_applications`.
+
+### 5. Validación
+* Validación con `Gtk.CssProvider` para **GTK4** y **GTK3**, y medición en vivo con `gtk4-broadwayd`: botones CSD `13.5 × 13.5`, `center_dx = 20.0 px`, carpetas y documentos resolviendo a SVGs no simbólicos en `Malus` / `Malus-Dark`.
+* `cargo check --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --workspace`: compilación completa sin errores (`exit 0`).
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-common -p malus-de-branches -p malus-de-dock -p malus-de-top-bar -p malus-de-compositor`:
+  * `malus-de-common`: **50 passed; 0 failed**.
+  * `malus-de-branches`: **15 passed; 0 failed**.
+  * `malus-de-dock`: **12 passed; 0 failed**.
+  * `malus-de-top-bar`: **10 passed; 0 failed**.
+  * `malus-de-compositor`: **72 passed; 0 failed**.
+
+---
+
 ## [2026-11-16] — Animación de Rejilla, Drag & Drop Exacto Entre Branches y Escritorio, y Fluidez DRM
 
 ### 1. Reordenamiento Animado sin Vibraciones y Selección en Branches (`crates/branches`)
