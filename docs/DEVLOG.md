@@ -4,6 +4,27 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-17] — Vista de Lista de Branches: Columnas, Orden y Selección; Miniaturas Squircle en el Escritorio
+
+### 1. Columnas Redimensionables, Alineadas y Ordenables (`crates/branches`)
+* **Alineación:** Fecha, Tamaño y Clase usan anchos fijos en píxeles compartidos entre cabecera y filas ([`list_view.rs`](../crates/branches/src/views/list_view.rs)); antes se medían en caracteres con fuentes distintas (11 px vs 13 px). Texto truncado con `…` en el centro (`EllipsizeMode::Middle`) y tooltip con el texto completo.
+* **Redimensionado:** asa en el borde izquierdo de cada columna (50–600 px). Un único `GestureDrag` en fase *Capture* sobre la cabecera (que no se mueve) evita que el contenido "vibre" al arrastrar. Los anchos no se persisten.
+* **Orden por columna:** clic en el nombre alterna ascendente/descendente (▲/▼) para Nombre (carpetas primero), Fecha, Tamaño y Clase, conservando la selección. El orden vive en `ListView` mientras la ventana está abierta y se reaplica al recargar.
+* **Columnas pares:** franjas gris muy claro (`alpha(@window_fg_color, 0.035)`) en Fecha y Clase como capa inferior de un `Overlay` (hasta el final de la vista, sin separaciones); filas y scroll transparentes ([`macos-branches.css`](../crates/branches/src/styles/macos-branches.css)).
+
+### 2. Selección en Modo Lista
+* **Causa:** `SelectionMode::Multiple` con `activate_on_single_click` (por defecto) añadía cada fila pulsada a la selección sin deseleccionar las anteriores.
+* **Solución:** `activate_on_single_click(false)`: clic reemplaza, Ctrl+clic alterna, Mayús+clic extiende.
+
+### 3. Miniaturas del Escritorio con Recorte Squircle (`crates/wallpaper`)
+* Los iconos del escritorio los dibuja el crate `wallpaper`; se copió la lógica de recorte de Branches (exponente 4.2, radio 22 % del lado menor, antialiasing) en [`main.rs`](../crates/wallpaper/src/main.rs) vía `squircle_clip_pixbuf`, aplicada a las miniaturas de imagen. Test `clip_makes_corners_transparent_and_keeps_center_opaque`.
+
+### 4. Validación
+* `cargo test -p malus-de-branches`: **28 passed; 0 failed**. `cargo test -p malus-de-wallpaper`: **19 passed; 0 failed**.
+* Confirmado por el usuario en la sesión gráfica: selección en lista correcta.
+
+---
+
 ## [2026-11-17] — Discos Externos y Volúmenes en Ubicaciones de Branches
 
 ### 1. Detección en Tiempo Real con `gio::VolumeMonitor` (`crates/branches`)
