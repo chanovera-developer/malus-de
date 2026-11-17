@@ -4,6 +4,36 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-16] — Edición Inline, Navegación/Multiselección Espacial, DnD Grupal y Wrapper Antigravity
+
+### 1. Edición Inline sin Expansión, Navegación 2D y Selección Múltiple en Branches (`crates/branches`)
+* **Renombrado inline sobre la propia etiqueta ([`views/mod.rs`](../crates/branches/src/views/mod.rs), [`icon_view.rs`](../crates/branches/src/views/icon_view.rs), [`list_view.rs`](../crates/branches/src/views/list_view.rs), [`column_view.rs`](../crates/branches/src/views/column_view.rs), [`gallery_view.rs`](../crates/branches/src/views/gallery_view.rs), [`sidebar.rs`](../crates/branches/src/sidebar.rs), [`macos-branches.css`](../crates/branches/src/styles/macos-branches.css)):**
+  * Reemplazado el popover de renombrado por edición inline directa con `gtk4::Text` (`branches-inline-rename-entry`) sobre el `Label` del archivo, carpeta o marcador (activable con `F2`, `Enter`, segundo clic lento de `450 ms` o menú contextual), ocupando exactamente el espacio de la etiqueta sin expandir el layout y preservando `Malus SSD` para `/` en [`db.rs`](../crates/branches/src/db.rs), [`path_bar.rs`](../crates/branches/src/path_bar.rs) y [`folder_pane.rs`](../crates/branches/src/folder_pane.rs).
+* **Navegación 2D con teclado y multiselección en rejilla ([`icon_view.rs`](../crates/branches/src/views/icon_view.rs), [`app_window.rs`](../crates/branches/src/app_window.rs), [`folder_pane.rs`](../crates/branches/src/folder_pane.rs)):**
+  * `fixed_canvas` pasa a ser `focusable(true)` con `navigate_by_arrow` interceptando `←`, `→`, `↑`, `↓` antes de la cadena de foco GTK (reservando `Tab` / `Shift+Tab` para los controles de panel/barra).
+  * Añadida selección múltiple con `Ctrl`/`Super` + clic (`has_multi_select_modifier`), área elástica con el cursor (`GestureDrag` + `.branches-selection-marquee` usando `rects_intersect`), `Ctrl+A` y operaciones grupales (arrastre, duplicar, mover a papelera).
+
+### 2. Arrastre Espacial Grupal y Mitigación de Parpadeo entre Branches, Escritorio y Compositor (`crates/common`, `crates/branches`, `crates/wallpaper`, `crates/compositor`)
+* **Disposición espacial relativa y previsualización compuesta ([`common/src/lib.rs`](../crates/common/src/lib.rs), [`operations.rs`](../crates/branches/src/operations.rs), [`views/mod.rs`](../crates/branches/src/views/mod.rs), [`icon_view.rs`](../crates/branches/src/views/icon_view.rs), [`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs)):**
+  * Formato `v2:` en `write_drag_anchors` / `read_drag_anchor` para registrar el offset relativo de cada archivo arrastrado y preservar su geometría relativa al soltar entre Branches, carpetas (`move_paths_into_folder`) y Escritorio.
+  * Añadidos `build_multi_widget_drag_paintable` y `build_multi_desktop_drag_paintable` para renderizar todos los iconos seleccionados en su posición espacial relativa bajo el puntero durante el arrastre.
+* **Actualizaciones en sitio y caché de `dnd_icon` ([`icon_view.rs`](../crates/branches/src/views/icon_view.rs), [`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs), [`state.rs`](../crates/compositor/src/state.rs), [`backend/mod.rs`](../crates/compositor/src/backend/mod.rs), [`drm.rs`](../crates/compositor/src/backend/drm.rs), [`winit.rs`](../crates/compositor/src/backend/winit.rs)):**
+  * Actualización en sitio de `fixed_canvas` / `icons` al soltar o mover fuera (esperando la comprobación de 80 ms antes de restaurar widgets ocultos en acciones `MOVE` y filtrando eventos sobre el propio `desktop_dir` o `Deleted | MovedOut` en `monitor.connect_changed`).
+  * Añadido `CachedDndIcon` (`MemoryRenderBuffer`) en `MalusState` (`capture_dnd_icon_cache` y `build_cached_dnd_fallback`) integrado en `tracker_elements` y ciclo de daño DRM para sostener la miniatura de arrastre durante `dnd_drop_hold` tras `dnd_finished` (nota: queda pendiente de validación adicional en sesión si persiste algún parpadeo visual).
+
+### 3. Separación de «Antigravity» y «Antigravity IDE» en el Wrapper (`scripts`, `crates/common`, `crates/compositor`, `crates/dock`, `crates/branches`)
+* Exportación de `MALUS_IDE_BIN` desde [`spotlight_visual.rs`](../crates/compositor/src/spotlight_visual.rs), [`dock/src/main.rs`](../crates/dock/src/main.rs) y [`fs_backend.rs`](../crates/branches/src/fs_backend.rs), y resolución diferenciada de `antigravity` frente a `antigravity-ide` en [`malus-ide-wrapper`](../scripts/malus-ide-wrapper) y [`config.rs`](../crates/common/src/config.rs).
+
+### 4. Validación
+* `cargo check --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --workspace`: compilación sin errores (`exit 0`).
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-branches -p malus-de-wallpaper -p malus-de-compositor`:
+  * `malus-de-branches`: **21 passed; 0 failed**.
+  * `malus-de-wallpaper`: **18 passed; 0 failed**.
+  * `malus-de-compositor`: **72 passed; 0 failed**.
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-common shared_drag_anchor_roundtrips_single_and_multi_paths`: **1 passed; 0 failed** (en entorno sandbox, `test_dock_config_load_or_create_default` falla al intentar escribir en `$HOME/.config/malus-de/`).
+
+---
+
 ## [2026-11-16] — Fondo de Pantalla Predeterminado «Playa de Pacasmayo» (Pexels)
 
 ### 1. Empaquetado del Recurso, Licencia e Inicialización Automática (`assets/wallpapers`, `crates/common`, `crates/wallpaper`, `crates/settings`, `scripts`)
