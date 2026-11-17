@@ -14,8 +14,9 @@ use std::rc::Rc;
 pub struct ListView {
     container: GtkBox,
     list_box: ListBox,
-    items: RefCell<Vec<FileItem>>,
+    items: Rc<RefCell<Vec<FileItem>>>,
     current_folder: Rc<RefCell<Option<PathBuf>>>,
+    pending_select_name: Rc<RefCell<Option<String>>>,
     icon_size: Rc<Cell<i32>>,
     on_navigate: NavigateCallback,
     #[allow(dead_code)]
@@ -43,6 +44,8 @@ impl ListView {
         });
 
         let current_folder = Rc::new(RefCell::new(None::<PathBuf>));
+        let items = Rc::new(RefCell::new(Vec::<FileItem>::new()));
+        let pending_select_name = Rc::new(RefCell::new(None::<String>));
 
         let scrolled = ScrolledWindow::builder()
             .hscrollbar_policy(PolicyType::Automatic)
@@ -56,6 +59,9 @@ impl ListView {
         let scrolled_menu = scrolled.clone();
         let folder_bg = current_folder.clone();
         let on_nav_bg = on_navigate.clone();
+        let items_bg = items.clone();
+        let list_box_bg = list_box.clone();
+        let pending_bg = pending_select_name.clone();
         bg_click.connect_pressed(move |g, _n, x, y| {
             let Some(dir) = folder_bg.borrow().clone() else {
                 return;
@@ -63,12 +69,48 @@ impl ListView {
             g.set_state(gtk4::EventSequenceState::Claimed);
             let nav = on_nav_bg.clone();
             let dir_reload = dir.clone();
+            let items_lookup = items_bg.clone();
+            let lb_lookup = list_box_bg.clone();
+            let pending_create = pending_bg.clone();
             crate::views::show_background_create_menu(
                 &scrolled_menu,
                 x,
                 y,
                 dir,
-                Rc::new(move |_| nav(dir_reload.clone())),
+                Rc::new(move |created_path| {
+                    if let Some(new_name) =
+                        created_path.file_name().map(|n| n.to_string_lossy().into_owned())
+                    {
+                        *pending_create.borrow_mut() = Some(new_name);
+                    }
+                    nav(dir_reload.clone());
+
+                    let items_ref = items_lookup.clone();
+                    let lb_ref = lb_lookup.clone();
+                    let target_path = created_path;
+                    let pending_rename = pending_create.clone();
+                    let nav_rename = nav.clone();
+                    let dir_rename = dir_reload.clone();
+                    let on_renamed: crate::views::RenameCallback = Rc::new(move |renamed_path| {
+                        if let Some(renamed_name) = renamed_path.file_name() {
+                            *pending_rename.borrow_mut() =
+                                Some(renamed_name.to_string_lossy().into_owned());
+                        }
+                        nav_rename(dir_rename.clone());
+                    });
+                    crate::views::schedule_inline_rename(
+                        move || {
+                            let items_guard = items_ref.borrow();
+                            let (idx, item) = items_guard
+                                .iter()
+                                .enumerate()
+                                .find(|(_, it)| it.path == target_path)?;
+                            let row = lb_ref.row_at_index(idx as i32)?;
+                            Some((item.path.clone(), item.is_dir, row.upcast()))
+                        },
+                        Some(on_renamed),
+                    );
+                }),
             );
         });
         scrolled.add_controller(bg_click);
@@ -78,8 +120,9 @@ impl ListView {
         Self {
             container,
             list_box,
-            items: RefCell::new(Vec::new()),
+            items,
             current_folder,
+            pending_select_name,
             icon_size,
             on_navigate,
             on_selection_changed,
@@ -109,6 +152,10 @@ impl ListView {
         Some((item, row.upcast()))
     }
 
+    pub fn queue_select_name(&self, name: &str) {
+        *self.pending_select_name.borrow_mut() = Some(name.to_string());
+    }
+
     pub fn set_items(&self, items: &[FileItem]) {
         while let Some(child) = self.list_box.first_child() {
             self.list_box.remove(&child);
@@ -119,6 +166,15 @@ impl ListView {
         for item in items {
             let row = create_list_row(item, icon_size, self.on_navigate.clone());
             self.list_box.append(&row);
+        }
+
+        if let Some(target_name) = self.pending_select_name.borrow_mut().take() {
+            if let Some(idx) = items.iter().position(|it| it.name == target_name) {
+                if let Some(row) = self.list_box.row_at_index(idx as i32) {
+                    self.list_box.select_row(Some(&row));
+                    row.grab_focus();
+                }
+            }
         }
     }
 }

@@ -895,6 +895,180 @@ impl IconView {
         self.fixed_canvas.set_size_request(min_w, max_y + 80);
     }
 
+    /// Sincroniza incrementalmente el contenido de la carpeta actual (altas/bajas externas)
+    /// sin destruir ni reconstruir los widgets existentes, evitando parpadeos.
+    pub fn sync_items_incremental(&self, items: &[FileItem]) -> bool {
+        let new_by_name: HashMap<&str, &FileItem> =
+            items.iter().map(|it| (it.name.as_str(), it)).collect();
+
+        let removed_names: Vec<String> = self
+            .item_widgets
+            .borrow()
+            .keys()
+            .filter(|name| !new_by_name.contains_key(name.as_str()))
+            .cloned()
+            .collect();
+
+        let mut structure_changed = !removed_names.is_empty();
+        let mut selection_changed = false;
+
+        if !removed_names.is_empty() {
+            let removed_set: HashSet<&str> = removed_names.iter().map(|s| s.as_str()).collect();
+            for name in &removed_names {
+                if let Some(d_rc) = self.item_widgets.borrow_mut().remove(name) {
+                    let w = &d_rc.borrow().widget;
+                    if w.parent().is_some() {
+                        self.fixed_canvas.remove(w);
+                    }
+                }
+                if self.selected_items.borrow_mut().remove(name) {
+                    selection_changed = true;
+                }
+            }
+            self.item_order
+                .borrow_mut()
+                .retain(|n| !removed_set.contains(n.as_str()));
+        }
+
+        // Actualizar metadatos de elementos existentes sin recrear sus widgets
+        for (name, data_rc) in self.item_widgets.borrow().iter() {
+            if let Some(updated) = new_by_name.get(name.as_str()) {
+                data_rc.borrow_mut().item = (*updated).clone();
+            }
+        }
+
+        let new_items: Vec<&FileItem> = items
+            .iter()
+            .filter(|it| !self.item_widgets.borrow().contains_key(&it.name))
+            .collect();
+
+        if !new_items.is_empty() {
+            structure_changed = true;
+            let folder = self.current_folder.borrow().clone();
+            let current_mode = *self.layout_mode.borrow();
+            let metrics = self.current_metrics();
+            let cell_w = metrics.cell_width();
+            let cell_h = metrics.cell_height();
+            let viewport_w = self.viewport_width();
+            let cols = columns_for_width(viewport_w, cell_w);
+
+            let db_positions = if current_mode != LayoutMode::Auto {
+                db::open_db()
+                    .map(|conn| db::get_positions(&conn, &folder))
+                    .unwrap_or_default()
+            } else {
+                HashMap::new()
+            };
+
+            let mut occupied_slots: HashSet<(i32, i32)> = HashSet::new();
+            for data_rc in self.item_widgets.borrow().values() {
+                let (px, py) = data_rc.borrow().pos.get();
+                let col = ((px - MARGIN_LEFT + cell_w / 2) / cell_w).max(0);
+                let row = ((py - MARGIN_TOP + cell_h / 2) / cell_h).max(0);
+                occupied_slots.insert((col, row));
+            }
+
+            let mut next_col = 0;
+            let mut next_row = 0;
+            let mut new_positions_to_save: HashMap<String, (i32, i32)> = HashMap::new();
+            let mut pending_select = self.pending_select_names.borrow_mut();
+
+            for item in new_items {
+                let (pos_x, pos_y) =
+                    if current_mode != LayoutMode::Auto && db_positions.contains_key(&item.name) {
+                        let pos = db_positions[&item.name];
+                        if current_mode == LayoutMode::SnapToGrid {
+                            snap_to_grid_cell(pos.0, pos.1, cell_w, cell_h)
+                        } else {
+                            (pos.0, pos.1)
+                        }
+                    } else {
+                        while occupied_slots.contains(&(next_col, next_row)) {
+                            next_col += 1;
+                            if next_col >= cols {
+                                next_col = 0;
+                                row_advance(&mut next_row);
+                            }
+                        }
+                        let x = MARGIN_LEFT + next_col * cell_w;
+                        let y = MARGIN_TOP + next_row * cell_h;
+                        occupied_slots.insert((next_col, next_row));
+                        next_col += 1;
+                        if next_col >= cols {
+                            next_col = 0;
+                            row_advance(&mut next_row);
+                        }
+                        if current_mode != LayoutMode::Auto {
+                            new_positions_to_save.insert(item.name.clone(), (x, y));
+                        }
+                        (x, y)
+                    };
+
+                let pos_cell = Rc::new(Cell::new((pos_x, pos_y)));
+                let (widget, image) =
+                    self.create_spatial_icon_widget(item, pos_cell.clone(), metrics);
+                if pending_select.remove(&item.name) {
+                    widget.add_css_class("selected");
+                    self.selected_items.borrow_mut().insert(item.name.clone());
+                    selection_changed = true;
+                }
+                self.fixed_canvas.put(&widget, pos_x as f64, pos_y as f64);
+
+                self.item_order.borrow_mut().push(item.name.clone());
+                let data = Rc::new(RefCell::new(ItemWidgetData {
+                    widget,
+                    image,
+                    item: item.clone(),
+                    pos: pos_cell,
+                }));
+                self.item_widgets
+                    .borrow_mut()
+                    .insert(item.name.clone(), data);
+            }
+            drop(pending_select);
+
+            if !new_positions_to_save.is_empty() {
+                if let Ok(mut conn) = db::open_db() {
+                    let _ = db::save_all_positions(&mut conn, &folder, &new_positions_to_save);
+                }
+            }
+        }
+
+        if structure_changed {
+            let current_mode = *self.layout_mode.borrow();
+            let viewport_w = self.viewport_width();
+            if current_mode == LayoutMode::Auto {
+                *self.item_order.borrow_mut() = items.iter().map(|it| it.name.clone()).collect();
+                self.make_weak()
+                    .relayout_auto_grid_with_width(viewport_w, true);
+            } else {
+                let metrics = self.current_metrics();
+                let cell_w = metrics.cell_width();
+                let cell_h = metrics.cell_height();
+                let mut max_x = 400;
+                let mut max_y = 300;
+                for data_rc in self.item_widgets.borrow().values() {
+                    let (px, py) = data_rc.borrow().pos.get();
+                    max_x = max_x.max(px + cell_w);
+                    max_y = max_y.max(py + cell_h);
+                }
+                let min_w = if viewport_w > 0 && max_x <= viewport_w {
+                    1
+                } else {
+                    max_x + 24
+                };
+                self.fixed_canvas.set_size_request(min_w, max_y + 80);
+            }
+        }
+
+        if selection_changed {
+            let sel_count = self.selected_items.borrow().len();
+            (self.on_selection_changed)(sel_count);
+        }
+
+        structure_changed
+    }
+
     fn create_spatial_icon_widget(
         &self,
         item: &FileItem,
@@ -1189,7 +1363,8 @@ impl IconView {
         let cur_folder_end = self.current_folder.clone();
         drag_source.connect_drag_end(move |_, drag, _| {
             *active_drag_end.borrow_mut() = None;
-            if malus_de_common::apps::is_application_desktop_file(&path_end) {
+            let is_move = drag.selected_action().contains(gdk::DragAction::MOVE);
+            if !is_move && malus_de_common::apps::is_application_desktop_file(&path_end) {
                 return;
             }
             let folder = cur_folder_end.borrow().clone();
@@ -1200,7 +1375,7 @@ impl IconView {
                         .iter()
                         .filter_map(|(name, d_rc)| {
                             let d = d_rc.borrow();
-                            if !d.item.path.exists() {
+                            if d.item.path.symlink_metadata().is_err() {
                                 Some((name.clone(), d.widget.clone()))
                             } else {
                                 None
@@ -1228,7 +1403,7 @@ impl IconView {
                 true
             };
 
-            if !path_end.exists() {
+            if path_end.symlink_metadata().is_err() {
                 if vbox_end.parent().is_some() {
                     fixed_end.remove(&vbox_end);
                 }
@@ -1992,6 +2167,7 @@ fn show_canvas_context_menu(
     let target_dir = folder_ref.borrow().clone();
     if view_weak.can_create_here.get() && crate::views::can_create_in_folder(&target_dir) {
         let pending_create = view_weak.pending_select_names.clone();
+        let widgets_create = view_weak.item_widgets.clone();
         let nav_create = view_weak.on_navigate.clone();
         let layout_create = *layout_ref.borrow();
         let metrics = IconGridMetrics::from_icon_size(
@@ -2016,9 +2192,41 @@ fn show_canvas_context_menu(
                         let _ = db::save_position(&conn, &dir_create, &new_name, px, py);
                     }
                 }
-                pending_create.borrow_mut().insert(new_name);
+                pending_create.borrow_mut().insert(new_name.clone());
+                nav_create(dir_create.clone());
+
+                let widgets_lookup = widgets_create.clone();
+                let target_name = new_name;
+                let target_path = created_path;
+                let pending_rename = pending_create.clone();
+                let nav_rename = nav_create.clone();
+                let dir_rename = dir_create.clone();
+                let on_renamed: crate::views::RenameCallback = Rc::new(move |renamed_path| {
+                    if let Some(renamed_name) = renamed_path.file_name() {
+                        pending_rename
+                            .borrow_mut()
+                            .insert(renamed_name.to_string_lossy().into_owned());
+                    }
+                    nav_rename(dir_rename.clone());
+                });
+                crate::views::schedule_inline_rename(
+                    move || {
+                        let widgets = widgets_lookup.borrow();
+                        let data = widgets.get(&target_name)?.borrow();
+                        if data.item.path != target_path {
+                            return None;
+                        }
+                        Some((
+                            data.item.path.clone(),
+                            data.item.is_dir,
+                            data.widget.clone().upcast(),
+                        ))
+                    },
+                    Some(on_renamed),
+                );
+            } else {
+                nav_create(dir_create.clone());
             }
-            nav_create(dir_create.clone());
         });
         crate::views::append_create_new_submenu(&popover, &vbox, &stack, target_dir, on_created);
         vbox.append(&gtk4::Separator::new(Orientation::Horizontal));

@@ -31,6 +31,7 @@ struct ColumnViewInner {
     columns: RefCell<Vec<ColumnData>>,
     preview_box: RefCell<Option<GtkBox>>,
     current_root: RefCell<PathBuf>,
+    pending_select_name: RefCell<Option<String>>,
     can_create: std::cell::Cell<bool>,
     show_hidden: RefCell<bool>,
     sort_by: RefCell<SortBy>,
@@ -61,6 +62,7 @@ impl ColumnView {
             columns: RefCell::new(Vec::new()),
             preview_box: RefCell::new(None),
             current_root: RefCell::new(PathBuf::from("/")),
+            pending_select_name: RefCell::new(None),
             can_create: std::cell::Cell::new(false),
             show_hidden: RefCell::new(false),
             sort_by: RefCell::new(SortBy::Name),
@@ -99,13 +101,18 @@ impl ColumnView {
         self.inner.push_column(0, path.to_path_buf(), items.to_vec());
     }
 
+    pub fn queue_select_name(&self, name: &str) {
+        *self.inner.pending_select_name.borrow_mut() = Some(name.to_string());
+    }
+
     pub fn get_selected_item_and_widget(&self) -> Option<(FileItem, gtk4::Widget)> {
         let columns = self.inner.columns.borrow();
-        let last_col = columns.last()?;
-        let selected_row = last_col.list_box.selected_row()?;
-        let idx = selected_row.index() as usize;
-        let item = last_col.items.get(idx).cloned()?;
-        Some((item, selected_row.upcast()))
+        columns.iter().rev().find_map(|col| {
+            let selected_row = col.list_box.selected_row()?;
+            let idx = selected_row.index() as usize;
+            let item = col.items.get(idx).cloned()?;
+            Some((item, selected_row.upcast()))
+        })
     }
 }
 
@@ -122,12 +129,23 @@ impl ColumnViewInner {
     fn push_column(self: &Rc<Self>, col_idx: usize, path: PathBuf, items: Vec<FileItem>) {
         let (col_box, list_box) = self.create_column_widget(col_idx, path.clone(), items.clone());
         self.columns_box.append(&col_box);
+        let select_idx = self
+            .pending_select_name
+            .borrow_mut()
+            .take()
+            .and_then(|target| items.iter().position(|it| it.name == target));
         self.columns.borrow_mut().push(ColumnData {
             path,
             items,
             container: col_box,
-            list_box,
+            list_box: list_box.clone(),
         });
+        if let Some(idx) = select_idx {
+            if let Some(row) = list_box.row_at_index(idx as i32) {
+                list_box.select_row(Some(&row));
+                row.grab_focus();
+            }
+        }
         self.scroll_to_end();
     }
 
@@ -183,12 +201,48 @@ impl ColumnViewInner {
             g.set_state(gtk4::EventSequenceState::Claimed);
             let nav = self_bg.on_navigate.clone();
             let dir_reload = col_dir.clone();
+            let self_create = self_bg.clone();
             crate::views::show_background_create_menu(
                 &scrolled_bg,
                 x,
                 y,
                 col_dir.clone(),
-                Rc::new(move |_| nav(dir_reload.clone())),
+                Rc::new(move |created_path| {
+                    if let Some(new_name) =
+                        created_path.file_name().map(|n| n.to_string_lossy().into_owned())
+                    {
+                        *self_create.pending_select_name.borrow_mut() = Some(new_name);
+                    }
+                    nav(dir_reload.clone());
+
+                    let inner_lookup = self_create.clone();
+                    let target_path = created_path;
+                    let inner_rename = self_create.clone();
+                    let nav_rename = nav.clone();
+                    let dir_rename = dir_reload.clone();
+                    let on_renamed: crate::views::RenameCallback = Rc::new(move |renamed_path| {
+                        if let Some(renamed_name) = renamed_path.file_name() {
+                            *inner_rename.pending_select_name.borrow_mut() =
+                                Some(renamed_name.to_string_lossy().into_owned());
+                        }
+                        nav_rename(dir_rename.clone());
+                    });
+                    crate::views::schedule_inline_rename(
+                        move || {
+                            let cols = inner_lookup.columns.borrow();
+                            cols.iter().rev().find_map(|col| {
+                                let (idx, item) = col
+                                    .items
+                                    .iter()
+                                    .enumerate()
+                                    .find(|(_, it)| it.path == target_path)?;
+                                let row = col.list_box.row_at_index(idx as i32)?;
+                                Some((item.path.clone(), item.is_dir, row.upcast()))
+                            })
+                        },
+                        Some(on_renamed),
+                    );
+                }),
             );
         });
         scrolled.add_controller(bg_click);

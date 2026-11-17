@@ -846,19 +846,7 @@ impl BranchesWindow {
     }
 
     fn prompt_new_folder(&self) {
-        let current_path = self.active_pane().current_path();
-        let mut target = current_path.join("Nueva carpeta");
-        let mut counter = 2;
-        while target.exists() {
-            target = current_path.join(format!("Nueva carpeta {}", counter));
-            counter += 1;
-        }
-
-        if let Err(e) = std::fs::create_dir(&target) {
-            tracing::error!("Error al crear carpeta: {}", e);
-        } else {
-            self.active_pane().reload();
-        }
+        self.active_pane().create_new_folder_and_rename();
     }
 
     fn setup_keybindings(&self) {

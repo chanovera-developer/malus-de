@@ -525,6 +525,37 @@ pub(crate) fn show_rename_popover(
     });
 }
 
+/// Abre la edición inline sobre un elemento recién creado una vez que el menú se ha cerrado
+/// y el widget ya cuenta con geometría asignada en la vista activa.
+pub(crate) fn schedule_inline_rename<F>(find_target: F, on_renamed: Option<RenameCallback>)
+where
+    F: Fn() -> Option<(PathBuf, bool, gtk4::Widget)> + 'static,
+{
+    use gtk4::prelude::*;
+
+    let mut attempts = 0u8;
+    glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
+        attempts = attempts.saturating_add(1);
+        if let Some((path, is_dir, widget)) = find_target() {
+            let expected_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let ready = !expected_name.is_empty()
+                && widget.root().is_some()
+                && find_item_label_widget(&widget, &expected_name)
+                    .is_some_and(|lbl| lbl.is_visible() && lbl.width() > 0 && lbl.height() > 0);
+            if ready || attempts >= 12 {
+                show_rename_popover(&widget, path, is_dir, None, on_renamed.clone());
+                return glib::ControlFlow::Break;
+            }
+        } else if attempts >= 12 {
+            return glib::ControlFlow::Break;
+        }
+        glib::ControlFlow::Continue
+    });
+}
+
 /// Menú contextual unificado para elementos en Branches (archivos, carpetas y aplicaciones `.desktop`).
 pub(super) fn show_item_context_menu(
     anchor: &impl gtk4::prelude::IsA<gtk4::Widget>,
