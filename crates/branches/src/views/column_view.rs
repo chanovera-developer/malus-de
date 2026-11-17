@@ -450,6 +450,7 @@ fn create_column_row(item: &FileItem, on_navigate: &NavigateCallback) -> ListBox
         .halign(Align::Start)
         .hexpand(true)
         .ellipsize(pango::EllipsizeMode::End)
+        .css_classes(["branches-column-name-label"])
         .build();
     hbox.append(&label);
 
@@ -462,35 +463,86 @@ fn create_column_row(item: &FileItem, on_navigate: &NavigateCallback) -> ListBox
 
     row.set_child(Some(&hbox));
 
-    let right_click = GestureClick::new();
-    right_click.set_button(gdk::BUTTON_SECONDARY);
+    let click = GestureClick::new();
+    click.set_button(0);
     let path_for_menu = item.path.clone();
     let is_dir_for_menu = item.is_dir;
     let on_nav_menu = on_navigate.clone();
     let row_for_menu = row.clone();
-    right_click.connect_pressed(move |g, _n, x, y| {
-        g.set_state(gtk4::EventSequenceState::Claimed);
-        if let Some(lb) = row_for_menu.parent().and_then(|p| p.downcast::<ListBox>().ok()) {
-            if !row_for_menu.is_selected() {
-                lb.select_row(Some(&row_for_menu));
-            }
+    let pending_slow_rename: Rc<std::cell::Cell<Option<glib::SourceId>>> =
+        Rc::new(std::cell::Cell::new(None));
+    let pending_slow_click = pending_slow_rename.clone();
+    click.connect_pressed(move |g, n_press, x, y| {
+        let button = g.current_button();
+        if let Some(source_id) = pending_slow_click.take() {
+            source_id.remove();
         }
-        show_item_context_menu(
-            &row_for_menu,
-            &path_for_menu,
-            is_dir_for_menu,
-            Some((x, y)),
-            Some(&on_nav_menu),
-            None,
-        );
+        if button == gdk::BUTTON_PRIMARY {
+            if n_press == 1 && row_for_menu.is_selected() {
+                let row_ren = row_for_menu.clone();
+                let path_ren = path_for_menu.clone();
+                let on_nav_ren = on_nav_menu.clone();
+                let slot = pending_slow_click.clone();
+                let id = glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(450),
+                    move || {
+                        slot.set(None);
+                        if !row_ren.is_selected() {
+                            return;
+                        }
+                        let parent_dir = path_ren.parent().map(|p| p.to_path_buf());
+                        let on_renamed = parent_dir.map(|dir| {
+                            Rc::new(move |_new_path: PathBuf| {
+                                on_nav_ren(dir.clone());
+                            }) as crate::views::RenameCallback
+                        });
+                        crate::views::show_rename_popover(
+                            &row_ren,
+                            path_ren,
+                            is_dir_for_menu,
+                            None,
+                            on_renamed,
+                        );
+                    },
+                );
+                pending_slow_click.set(Some(id));
+            } else if n_press == 2 {
+                if is_dir_for_menu {
+                    on_nav_menu(path_for_menu.clone());
+                } else {
+                    let _ = open_file(&path_for_menu);
+                }
+            }
+        } else if button == gdk::BUTTON_SECONDARY {
+            g.set_state(gtk4::EventSequenceState::Claimed);
+            if let Some(lb) = row_for_menu.parent().and_then(|p| p.downcast::<ListBox>().ok()) {
+                if !row_for_menu.is_selected() {
+                    lb.select_row(Some(&row_for_menu));
+                }
+            }
+            show_item_context_menu(
+                &row_for_menu,
+                &path_for_menu,
+                is_dir_for_menu,
+                Some((x, y)),
+                Some(&on_nav_menu),
+                None,
+            );
+        }
     });
-    row.add_controller(right_click);
+    row.add_controller(click);
 
     let drag_source = gtk4::DragSource::new();
     drag_source.set_actions(gdk::DragAction::MOVE | gdk::DragAction::COPY);
     let path_for_drag = item.path.clone();
     drag_source.connect_prepare(move |_, _x, _y| {
         Some(crate::views::build_file_drag_content_provider(&path_for_drag))
+    });
+    let cancel_slow_drag = pending_slow_rename;
+    drag_source.connect_drag_begin(move |_, _| {
+        if let Some(source_id) = cancel_slow_drag.take() {
+            source_id.remove();
+        }
     });
     let path_end = item.path.clone();
     let on_nav_end = on_navigate.clone();

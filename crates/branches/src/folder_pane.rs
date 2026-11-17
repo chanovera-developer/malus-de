@@ -291,7 +291,7 @@ impl FolderPane {
         };
 
         let folder_name = if current_path == PathBuf::from("/") {
-            "Macintosh HD".to_string()
+            "Malus SSD".to_string()
         } else if current_path.ends_with("Trash/files") {
             "Papelera".to_string()
         } else {
@@ -357,6 +357,28 @@ impl FolderPane {
             .or_else(|| self.items_cache.borrow().first().cloned())
     }
 
+    pub fn open_selected(&self) {
+        if let Some((item, _)) = self.get_selected_item_and_widget() {
+            if item.is_dir {
+                self.navigate_to(item.path);
+            } else {
+                let _ = crate::fs_backend::open_file(&item.path);
+            }
+        }
+    }
+
+    pub fn is_icon_view_active(&self) -> bool {
+        self.view_stack.visible_child_name().as_deref() == Some("icons")
+    }
+
+    pub fn navigate_icon_grid(&self, key: gdk::Key) -> bool {
+        if self.is_icon_view_active() {
+            self.icon_view.navigate_by_arrow(key)
+        } else {
+            false
+        }
+    }
+
     pub fn rename_selected(self: &Rc<Self>) {
         if self.current_path().ends_with("Trash/files") {
             return;
@@ -382,19 +404,48 @@ impl FolderPane {
         );
     }
 
-    pub fn duplicate_selected(&self) {
-        if let Some(item) = self.get_selected_item() {
-            if let Ok(_) = crate::operations::duplicate_item(&item.path) {
-                self.reload();
+    pub fn get_selected_items(&self) -> Vec<FileItem> {
+        let mode = self.view_stack.visible_child_name().unwrap_or_default();
+        if mode.as_str() == "icons" {
+            let items = self.icon_view.get_selected_items(&self.items_cache.borrow());
+            if !items.is_empty() {
+                return items;
             }
+        }
+        self.get_selected_item_and_widget()
+            .map(|(item, _)| vec![item])
+            .unwrap_or_default()
+    }
+
+    pub fn select_all(&self) {
+        if self.is_icon_view_active() {
+            self.icon_view.select_all();
+        }
+    }
+
+    pub fn duplicate_selected(&self) {
+        let items = self.get_selected_items();
+        let mut changed = false;
+        for item in items {
+            if crate::operations::duplicate_item(&item.path).is_ok() {
+                changed = true;
+            }
+        }
+        if changed {
+            self.reload();
         }
     }
 
     pub fn trash_selected(&self) {
-        if let Some(item) = self.get_selected_item() {
-            if let Ok(_) = crate::operations::trash_item(&item.path) {
-                self.reload();
+        let items = self.get_selected_items();
+        let mut changed = false;
+        for item in items {
+            if crate::operations::trash_item(&item.path).is_ok() {
+                changed = true;
             }
+        }
+        if changed {
+            self.reload();
         }
     }
 

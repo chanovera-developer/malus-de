@@ -109,19 +109,6 @@ impl GalleryView {
                     g_weak.select_next();
                     glib::Propagation::Stop
                 }
-                Key::Return => {
-                    if let Some(idx) = *g_weak.current_index.borrow() {
-                        let items = g_weak.items.borrow();
-                        if let Some(item) = items.get(idx) {
-                            if item.is_dir {
-                                (g_weak.on_navigate)(item.path.clone());
-                            } else {
-                                let _ = open_file(&item.path);
-                            }
-                        }
-                    }
-                    glib::Propagation::Stop
-                }
                 _ => glib::Propagation::Proceed,
             }
         });
@@ -401,9 +388,14 @@ impl GalleryView {
         let is_dir = item.is_dir;
         let on_nav = self.on_navigate.clone();
         let card_for_menu = card.clone();
+        let pending_slow_rename: Rc<std::cell::Cell<Option<glib::SourceId>>> =
+            Rc::new(std::cell::Cell::new(None));
 
         click.connect_pressed(move |g, n_press, x, y| {
             let button = g.current_button();
+            if let Some(source_id) = pending_slow_rename.take() {
+                source_id.remove();
+            }
             if button == gdk::BUTTON_SECONDARY {
                 self_click.select_index(index);
                 show_item_context_menu(
@@ -415,7 +407,34 @@ impl GalleryView {
                     None,
                 );
             } else if n_press == 1 {
+                let was_selected = *self_click.current_index.borrow() == Some(index);
                 self_click.select_index(index);
+                if was_selected {
+                    let card_ren = card_for_menu.clone();
+                    let path_ren = p_for_dbl.clone();
+                    let on_nav_ren = on_nav.clone();
+                    let slot = pending_slow_rename.clone();
+                    let id = glib::timeout_add_local_once(
+                        std::time::Duration::from_millis(450),
+                        move || {
+                            slot.set(None);
+                            let parent_dir = path_ren.parent().map(|p| p.to_path_buf());
+                            let on_renamed = parent_dir.map(|dir| {
+                                Rc::new(move |_new_path: PathBuf| {
+                                    on_nav_ren(dir.clone());
+                                }) as crate::views::RenameCallback
+                            });
+                            crate::views::show_rename_popover(
+                                &card_ren,
+                                path_ren,
+                                is_dir,
+                                None,
+                                on_renamed,
+                            );
+                        },
+                    );
+                    pending_slow_rename.set(Some(id));
+                }
             } else if n_press >= 2 {
                 if is_dir {
                     on_nav(p_for_dbl.clone());

@@ -379,11 +379,21 @@ button.branches-search-btn:checked {
     box-shadow: 0 0 0 1.5px @accent_bg_color;
 }
 
-.branches-icon-canvas {
+.branches-icon-canvas,
+.branches-icon-canvas:focus {
     background-color: @view_bg_color;
     background: @view_bg_color;
     min-height: 400px;
     min-width: 500px;
+    outline: none;
+    border: none;
+    box-shadow: none;
+}
+
+.branches-selection-marquee {
+    background-color: alpha(@accent_bg_color, 0.20);
+    border: 1px solid alpha(@accent_bg_color, 0.72);
+    border-radius: 6px;
 }
 
 .branches-icon-dragging,
@@ -569,6 +579,34 @@ button.branches-search-btn:checked {
 .branches-icon-label {
     font-size: 12px;
     margin-top: 4px;
+}
+
+/* Edición inline de nombres de archivos, carpetas y marcadores sin expandir el layout */
+text.branches-inline-rename-entry,
+entry.branches-inline-rename-entry {
+    min-height: 0px;
+    min-width: 0px;
+    padding: 0px 2px;
+    margin: 0px;
+    border-radius: 4px;
+    background-color: @view_bg_color;
+    color: @view_fg_color;
+    border: none;
+    box-shadow: inset 0 0 0 1.25px @accent_bg_color;
+    outline: none;
+    font-weight: inherit;
+}
+
+text.branches-inline-rename-icon,
+entry.branches-inline-rename-icon {
+    font-size: 12px;
+    margin-top: 4px;
+    padding: 1px 4px;
+}
+
+text.branches-inline-rename-row,
+entry.branches-inline-rename-row {
+    font-size: 13px;
 }
 
 /* Vista de lista */

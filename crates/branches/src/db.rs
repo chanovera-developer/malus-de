@@ -281,7 +281,7 @@ pub struct BookmarkEntry {
 
 fn default_bookmark_title(folder: &Path) -> String {
     if folder == Path::new("/") {
-        "Macintosh HD".to_string()
+        "Malus SSD".to_string()
     } else {
         folder
             .file_name()

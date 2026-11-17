@@ -1,8 +1,8 @@
 use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Box as GtkBox, Button, DropTarget, Entry, GestureClick, Image, Label, ListBox,
-    ListBoxRow, Orientation, PolicyType, Popover, ScrolledWindow,
+    Align, Box as GtkBox, Button, DropTarget, GestureClick, Image, Label, ListBox, ListBoxRow,
+    Orientation, PolicyType, Popover, ScrolledWindow,
 };
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -395,6 +395,39 @@ impl Sidebar {
         }
         self.list_box.unselect_all();
     }
+
+    /// Si la fila seleccionada en el sidebar es un marcador, activa su edición inline y devuelve `true`.
+    pub fn rename_selected_bookmark(&self) -> bool {
+        let Some(row) = self.list_box.selected_row() else {
+            return false;
+        };
+        if unsafe { row.data::<bool>("is_bookmark") }.is_none() {
+            return false;
+        }
+        let Some(path_obj) = (unsafe { row.data::<PathBuf>("target_path") }) else {
+            return false;
+        };
+        let folder_path = unsafe { path_obj.as_ref() }.clone();
+        let current_title = row
+            .child()
+            .and_then(|c| c.downcast::<GtkBox>().ok())
+            .and_then(|hbox| {
+                let mut child = hbox.first_child();
+                while let Some(w) = child {
+                    if let Ok(lbl) = w.clone().downcast::<Label>() {
+                        return Some(lbl.text().to_string());
+                    }
+                    child = w.next_sibling();
+                }
+                None
+            })
+            .unwrap_or_default();
+        if current_title.is_empty() {
+            return false;
+        }
+        show_rename_bookmark_popover(&row, folder_path, current_title, None);
+        true
+    }
 }
 
 impl SidebarInner {
@@ -428,7 +461,15 @@ impl SidebarInner {
                 entry.folder_path.clone(),
                 true,
             );
-            attach_bookmark_activation_handlers(&row, &self.on_navigate, entry.folder_path.clone());
+            unsafe {
+                row.set_data("is_bookmark", true);
+            }
+            attach_bookmark_activation_handlers(
+                &row,
+                &self.on_navigate,
+                entry.folder_path.clone(),
+                entry.title.clone(),
+            );
             if is_dir {
                 attach_folder_drop_target(&row, entry.folder_path.clone(), &self.on_files_dropped);
             }
@@ -620,17 +661,67 @@ fn attach_bookmark_activation_handlers(
     row: &ListBoxRow,
     on_navigate: &Rc<dyn Fn(PathBuf)>,
     path: PathBuf,
+    title: String,
 ) {
+    use std::cell::Cell;
+
     let cb = on_navigate.clone();
     let click = GestureClick::new();
     click.set_button(gdk::BUTTON_PRIMARY);
+    let row_press = row.clone();
+    let was_selected_on_press = Rc::new(Cell::new(false));
+    let pending_slow_rename: Rc<Cell<Option<glib::SourceId>>> = Rc::new(Cell::new(None));
+
+    {
+        let was_sel = was_selected_on_press.clone();
+        let pending = pending_slow_rename.clone();
+        click.connect_pressed(move |_, n_press, _, _| {
+            if let Some(source_id) = pending.take() {
+                source_id.remove();
+            }
+            if n_press == 1 {
+                was_sel.set(row_press.is_selected());
+            } else {
+                was_sel.set(false);
+            }
+        });
+    }
+
     let cb_c = cb.clone();
     let p_c = path.clone();
-    click.connect_released(move |_, _, _, _| {
-        if p_c.is_dir() {
-            cb_c(p_c.clone());
-        } else {
-            let _ = crate::fs_backend::open_file(&p_c);
+    let row_rel = row.clone();
+    let was_sel_rel = was_selected_on_press;
+    let pending_rel = pending_slow_rename;
+    click.connect_released(move |_, n_press, _, _| {
+        if n_press == 1 {
+            row_rel.grab_focus();
+            if was_sel_rel.get() {
+                let r_ren = row_rel.clone();
+                let p_ren = p_c.clone();
+                let t_ren = title.clone();
+                let slot = pending_rel.clone();
+                let id = glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(450),
+                    move || {
+                        slot.set(None);
+                        if !r_ren.is_selected() {
+                            return;
+                        }
+                        show_rename_bookmark_popover(&r_ren, p_ren, t_ren, None);
+                    },
+                );
+                pending_rel.set(Some(id));
+            } else if p_c.is_dir() {
+                cb_c(p_c.clone());
+            } else {
+                let _ = crate::fs_backend::open_file(&p_c);
+            }
+        } else if n_press >= 2 {
+            if p_c.is_dir() {
+                cb_c(p_c.clone());
+            } else {
+                let _ = crate::fs_backend::open_file(&p_c);
+            }
         }
     });
     row.add_controller(click);
@@ -769,99 +860,137 @@ fn show_rename_bookmark_popover(
     anchor: &impl IsA<gtk4::Widget>,
     folder_path: PathBuf,
     current_title: String,
-    pointing_to: Option<(f64, f64)>,
+    _pointing_to: Option<(f64, f64)>,
 ) {
+    use std::cell::Cell;
+
     if anchor.root().is_none() {
         return;
     }
 
-    let es = malus_de_common::is_spanish_locale();
-    let pop = Popover::builder()
-        .has_arrow(false)
-        .autohide(true)
-        .css_classes(["malus-popover-menu"])
-        .build();
-    pop.set_parent(anchor);
-    if let Some((x, y)) = pointing_to {
-        let rect = gdk::Rectangle::new(x.round() as i32, y.round() as i32, 1, 1);
-        pop.set_pointing_to(Some(&rect));
+    let anchor_widget = anchor.as_ref();
+    let Some(hbox) = anchor_widget
+        .downcast_ref::<ListBoxRow>()
+        .and_then(|r| r.child())
+        .and_then(|c| c.downcast::<GtkBox>().ok())
+    else {
+        return;
+    };
+
+    let mut label_opt: Option<Label> = None;
+    let mut child = hbox.first_child();
+    while let Some(w) = child {
+        if let Ok(lbl) = w.clone().downcast::<Label>() {
+            label_opt = Some(lbl);
+            break;
+        }
+        child = w.next_sibling();
     }
-    pop.connect_closed(|p| p.unparent());
+    let Some(label) = label_opt else {
+        return;
+    };
+    if !label.is_visible() {
+        return;
+    }
 
-    let container = GtkBox::new(Orientation::Vertical, 8);
-    container.set_margin_top(10);
-    container.set_margin_bottom(10);
-    container.set_margin_start(10);
-    container.set_margin_end(10);
-    container.set_width_request(220);
+    let label_w = label.width().max(24);
+    let label_h = label.height().max(16);
 
-    let title_lbl = Label::builder()
-        .label(if es {
-            "Renombrar marcador"
-        } else {
-            "Rename Bookmark"
-        })
-        .halign(Align::Start)
-        .css_classes(["popover-menu-header"])
-        .build();
-    container.append(&title_lbl);
-
-    let entry = Entry::builder()
+    let entry = gtk4::Text::builder()
         .text(&current_title)
         .hexpand(true)
-        .width_chars(22)
+        .halign(Align::Fill)
+        .valign(Align::Center)
+        .width_chars(1)
+        .max_width_chars(1)
+        .css_classes(["branches-inline-rename-entry", "branches-inline-rename-row"])
         .build();
-    container.append(&entry);
+    entry.set_size_request(label_w, label_h);
 
-    let btn_box = GtkBox::new(Orientation::Horizontal, 6);
-    btn_box.set_halign(Align::End);
+    label.set_visible(false);
+    hbox.insert_child_after(&entry, Some(&label));
 
-    let cancel_btn = Button::builder()
-        .label(if es { "Cancelar" } else { "Cancel" })
-        .css_classes(["popover-menu-item"])
-        .build();
-    {
-        let p_c = pop.clone();
-        cancel_btn.connect_clicked(move |_| p_c.popdown());
-    }
-    btn_box.append(&cancel_btn);
-
-    let save_btn = Button::builder()
-        .label(if es { "Guardar" } else { "Save" })
-        .css_classes(["popover-menu-item", "suggested-action"])
-        .build();
-    {
-        let p_s = pop.clone();
+    let finished = Rc::new(Cell::new(false));
+    let finish_edit: Rc<dyn Fn(bool)> = {
+        let finished = finished.clone();
         let entry_ref = entry.clone();
-        save_btn.connect_clicked(move |_| {
-            let new_title = entry_ref.text();
-            let trimmed = new_title.trim();
-            if trimmed.is_empty() {
-                entry_ref.grab_focus();
+        let label_ref = label.clone();
+        let hbox_ref = hbox.clone();
+        let initial = current_title.clone();
+        Rc::new(move |commit: bool| {
+            if finished.replace(true) {
                 return;
             }
-            p_s.popdown();
-            if trimmed != current_title {
-                if let Ok(conn) = crate::db::open_db() {
-                    if crate::db::rename_bookmark(&conn, &folder_path, trimmed).unwrap_or(false) {
-                        refresh_all_sidebars();
-                    }
+            let new_title = entry_ref.text().to_string();
+            let trimmed = new_title.trim();
+
+            if entry_ref.parent().is_some() {
+                hbox_ref.remove(&entry_ref);
+            }
+            label_ref.set_visible(true);
+            if let Some(row) = label_ref.ancestor(ListBoxRow::static_type()) {
+                row.grab_focus();
+            }
+
+            if !commit || trimmed.is_empty() || trimmed == initial {
+                return;
+            }
+            label_ref.set_label(trimmed);
+            if let Ok(conn) = crate::db::open_db() {
+                if crate::db::rename_bookmark(&conn, &folder_path, trimmed).unwrap_or(false) {
+                    refresh_all_sidebars();
                 }
             }
-        });
-    }
-    btn_box.append(&save_btn);
-    container.append(&btn_box);
+        })
+    };
 
     {
-        let submit = save_btn.clone();
+        let finish = finish_edit.clone();
         entry.connect_activate(move |_| {
-            submit.emit_clicked();
+            finish(true);
         });
     }
 
-    pop.set_child(Some(&container));
-    pop.popup();
+    {
+        let key_ctrl = gtk4::EventControllerKey::new();
+        let finish = finish_edit.clone();
+        key_ctrl.connect_key_pressed(move |_, key, _, _| {
+            if key == gdk::Key::Escape {
+                finish(false);
+                return glib::Propagation::Stop;
+            }
+            if matches!(
+                key,
+                gdk::Key::Return | gdk::Key::KP_Enter | gdk::Key::ISO_Enter
+            ) {
+                finish(true);
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        entry.add_controller(key_ctrl);
+    }
+
+    {
+        let focus_ctrl = gtk4::EventControllerFocus::new();
+        let finish = finish_edit;
+        focus_ctrl.connect_leave(move |_| {
+            let f = finish.clone();
+            glib::idle_add_local_once(move || {
+                f(true);
+            });
+        });
+        entry.add_controller(focus_ctrl);
+    }
+
+    {
+        let click_guard = GestureClick::new();
+        click_guard.set_button(0);
+        click_guard.connect_pressed(|g, _n, _x, _y| {
+            g.set_state(gtk4::EventSequenceState::Claimed);
+        });
+        entry.add_controller(click_guard);
+    }
 
     let entry_focus = entry;
     glib::idle_add_local_once(move || {

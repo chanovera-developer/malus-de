@@ -4,7 +4,7 @@ use crate::views::{show_item_context_menu, NavigateCallback, SelectionCallback};
 use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Box as GtkBox, Fixed, GestureClick, Image, Label,
+    Align, Box as GtkBox, Fixed, GestureClick, GestureDrag, Image, Label,
     Orientation, PolicyType, Popover, ScrolledWindow,
 };
 use malus_de_common::config::{BranchesConfig, IconGridMetrics};
@@ -187,6 +187,39 @@ pub(crate) fn point_in_icon_bounds(
     x >= icon_x && x <= icon_x + icon_w && y >= icon_y && y <= icon_y + icon_h
 }
 
+#[inline]
+pub(crate) fn rects_intersect(
+    ax1: f64,
+    ay1: f64,
+    ax2: f64,
+    ay2: f64,
+    bx1: f64,
+    by1: f64,
+    bx2: f64,
+    by2: f64,
+) -> bool {
+    ax1 <= bx2 && ax2 >= bx1 && ay1 <= by2 && ay2 >= by1
+}
+
+#[inline]
+pub(crate) fn has_multi_select_modifier(modifiers: gdk::ModifierType) -> bool {
+    modifiers.intersects(
+        gdk::ModifierType::CONTROL_MASK
+            | gdk::ModifierType::SUPER_MASK
+            | gdk::ModifierType::META_MASK,
+    )
+}
+
+#[inline]
+pub(crate) fn has_additive_select_modifier(modifiers: gdk::ModifierType) -> bool {
+    modifiers.intersects(
+        gdk::ModifierType::CONTROL_MASK
+            | gdk::ModifierType::SUPER_MASK
+            | gdk::ModifierType::META_MASK
+            | gdk::ModifierType::SHIFT_MASK,
+    )
+}
+
 fn select_single_spatial_item(
     widgets: &HashMap<String, Rc<RefCell<ItemWidgetData>>>,
     selected_items: &RefCell<HashSet<String>>,
@@ -206,6 +239,32 @@ fn select_single_spatial_item(
     sel.insert(target_name.to_string());
     drop(sel);
     on_selection_changed(1);
+}
+
+fn toggle_spatial_item_selection(
+    widgets: &HashMap<String, Rc<RefCell<ItemWidgetData>>>,
+    selected_items: &RefCell<HashSet<String>>,
+    target_name: &str,
+    on_selection_changed: &SelectionCallback,
+) {
+    let mut sel = selected_items.borrow_mut();
+    let now_selected = if sel.remove(target_name) {
+        false
+    } else {
+        sel.insert(target_name.to_string());
+        true
+    };
+    if let Some(data) = widgets.get(target_name) {
+        let w = &data.borrow().widget;
+        if now_selected {
+            w.add_css_class("selected");
+        } else {
+            w.remove_css_class("selected");
+        }
+    }
+    let count = sel.len();
+    drop(sel);
+    on_selection_changed(count);
 }
 
 fn is_point_over_spatial_icon(
@@ -252,6 +311,7 @@ struct ItemWidgetData {
     pos: Rc<Cell<(i32, i32)>>,
 }
 
+#[derive(Clone)]
 pub struct IconView {
     container: ScrolledWindow,
     fixed_canvas: Fixed,
@@ -283,6 +343,7 @@ impl IconView {
         let fixed_canvas = Fixed::builder()
             .hexpand(true)
             .vexpand(true)
+            .focusable(true)
             .css_classes(["branches-icon-canvas"])
             .build();
 
@@ -352,6 +413,134 @@ impl IconView {
         self.pending_select_names.borrow_mut().insert(name.to_string());
     }
 
+    /// Navega entre iconos de la rejilla con las teclas de dirección (`←`, `→`, `↑`, `↓`).
+    pub fn navigate_by_arrow(&self, key: gdk::Key) -> bool {
+        let widgets = self.item_widgets.borrow();
+        let order = self.item_order.borrow();
+        if order.is_empty() || widgets.is_empty() {
+            return false;
+        }
+
+        let current_name = {
+            let sel = self.selected_items.borrow();
+            order
+                .iter()
+                .find(|name| sel.contains(*name))
+                .or_else(|| sel.iter().next())
+                .cloned()
+        };
+
+        let target_name = if let Some(ref cur) = current_name {
+            if let Some(cur_data) = widgets.get(cur) {
+                let (cx, cy) = cur_data.borrow().pos.get();
+                let metrics = self.current_metrics();
+                let cell_h = metrics.cell_height().max(1);
+                let row_tolerance = (cell_h / 2).max(16);
+
+                match key {
+                    gdk::Key::Right | gdk::Key::Left => {
+                        let dir = if key == gdk::Key::Right { 1 } else { -1 };
+                        // 1. Buscar vecino más cercano en la misma fila visual
+                        let same_row = widgets
+                            .iter()
+                            .filter(|(name, _)| *name != cur)
+                            .filter_map(|(name, d)| {
+                                let (px, py) = d.borrow().pos.get();
+                                let dx = (px - cx) * dir;
+                                let dy = (py - cy).abs();
+                                if dx > 0 && dy <= row_tolerance {
+                                    Some((dx, dy, name.clone()))
+                                } else {
+                                    None
+                                }
+                            })
+                            .min_by_key(|(dx, dy, _)| (*dx, *dy))
+                            .map(|(_, _, n)| n);
+
+                        same_row.or_else(|| {
+                            // 2. Si está al borde de la fila, avanzar/retroceder en orden visual (y, x)
+                            let mut sorted: Vec<(i32, i32, String)> = widgets
+                                .iter()
+                                .map(|(n, d)| {
+                                    let (px, py) = d.borrow().pos.get();
+                                    let row_bucket = (py - MARGIN_TOP + row_tolerance / 2)
+                                        .div_euclid(row_tolerance.max(1));
+                                    (row_bucket, px, n.clone())
+                                })
+                                .collect();
+                            sorted.sort_by(|a, b| {
+                                a.0.cmp(&b.0)
+                                    .then_with(|| a.1.cmp(&b.1))
+                                    .then_with(|| a.2.cmp(&b.2))
+                            });
+                            let pos_idx = sorted.iter().position(|(_, _, n)| n == cur)?;
+                            let next_idx = if dir > 0 {
+                                pos_idx.checked_add(1)?
+                            } else {
+                                pos_idx.checked_sub(1)?
+                            };
+                            sorted.get(next_idx).map(|(_, _, n)| n.clone())
+                        })
+                    }
+                    gdk::Key::Down | gdk::Key::Up => {
+                        let dir = if key == gdk::Key::Down { 1 } else { -1 };
+                        widgets
+                            .iter()
+                            .filter(|(name, _)| *name != cur)
+                            .filter_map(|(name, d)| {
+                                let (px, py) = d.borrow().pos.get();
+                                let dy = (py - cy) * dir;
+                                let dx = (px - cx).abs();
+                                if dy > row_tolerance / 2 {
+                                    // Priorizar la fila inmediata siguiente/anterior y la columna más alineada
+                                    let row_steps = (dy + cell_h / 2) / cell_h;
+                                    Some((row_steps.max(1), dx, dy, name.clone()))
+                                } else {
+                                    None
+                                }
+                            })
+                            .min_by_key(|(row_steps, dx, dy, _)| (*row_steps, *dx, *dy))
+                            .map(|(_, _, _, n)| n)
+                    }
+                    _ => None,
+                }
+                .unwrap_or_else(|| cur.clone())
+            } else {
+                order[0].clone()
+            }
+        } else {
+            order[0].clone()
+        };
+
+        select_single_spatial_item(
+            &widgets,
+            &self.selected_items,
+            &target_name,
+            &self.on_selection_changed,
+        );
+
+        // Asegurar que el icono seleccionado sea visible dentro del ScrolledWindow y mantener el foco en el lienzo
+        if let Some(data_rc) = widgets.get(&target_name) {
+            let d = data_rc.borrow();
+            let (_, py) = d.pos.get();
+            let cell_h = self.current_metrics().cell_height() as f64;
+            let vadj = self.container.vadjustment();
+            let top = vadj.value();
+            let page = vadj.page_size();
+            if page > 0.0 {
+                let item_top = (py - MARGIN_TOP).max(0) as f64;
+                let item_bottom = py as f64 + cell_h + 16.0;
+                if item_top < top {
+                    vadj.set_value(item_top);
+                } else if item_bottom > top + page {
+                    vadj.set_value((item_bottom - page).max(0.0));
+                }
+            }
+        }
+        self.fixed_canvas.grab_focus();
+        true
+    }
+
     pub fn get_selected_item_and_widget(&self, items: &[FileItem]) -> Option<(FileItem, gtk4::Widget)> {
         let sel = self.selected_items.borrow();
         if sel.is_empty() {
@@ -369,6 +558,31 @@ impl IconView {
             .get(selected_name)
             .map(|data| data.borrow().widget.clone().upcast())?;
         Some((item, widget))
+    }
+
+    pub fn get_selected_items(&self, items: &[FileItem]) -> Vec<FileItem> {
+        let sel = self.selected_items.borrow();
+        if sel.is_empty() {
+            return Vec::new();
+        }
+        items
+            .iter()
+            .filter(|it| sel.contains(&it.name))
+            .cloned()
+            .collect()
+    }
+
+    pub fn select_all(&self) {
+        let widgets = self.item_widgets.borrow();
+        let mut sel = self.selected_items.borrow_mut();
+        sel.clear();
+        for (name, data) in widgets.iter() {
+            data.borrow().widget.add_css_class("selected");
+            sel.insert(name.clone());
+        }
+        let count = sel.len();
+        drop(sel);
+        (self.on_selection_changed)(count);
     }
 
     fn viewport_width(&self) -> i32 {
@@ -540,9 +754,14 @@ impl IconView {
         self.is_animating.set(false);
         *self.active_drag_offset.borrow_mut() = None;
 
-        // Limpiar widgets anteriores
-        while let Some(child) = self.fixed_canvas.first_child() {
-            self.fixed_canvas.remove(&child);
+        // Limpiar widgets anteriores (excepto el rectángulo de selección elástica si existe)
+        let mut child = self.fixed_canvas.first_child();
+        while let Some(c) = child {
+            let next = c.next_sibling();
+            if !c.has_css_class("branches-selection-marquee") {
+                self.fixed_canvas.remove(&c);
+            }
+            child = next;
         }
         self.item_widgets.borrow_mut().clear();
         self.item_order.borrow_mut().clear();
@@ -708,7 +927,8 @@ impl IconView {
             .build();
         vbox.append(&label);
 
-        // 1. Doble clic para abrir y Clic derecho para menú contextual
+        // 1. Doble clic para abrir, segundo clic lento sobre etiqueta para renombrar (estilo Finder)
+        // y Clic derecho para menú contextual
         let click_gesture = GestureClick::new();
         click_gesture.set_button(0);
         let path = item.path.clone();
@@ -718,21 +938,84 @@ impl IconView {
         let widgets_for_click = self.item_widgets.clone();
         let name_for_click = item.name.clone();
         let vbox_for_click = vbox.clone();
+        let label_for_click = label.clone();
         let on_sel_cb = self.on_selection_changed.clone();
         let pending_for_menu = self.pending_select_names.clone();
         let folder_for_menu = self.current_folder.clone();
+        let fixed_for_click = self.fixed_canvas.clone();
+        let pending_slow_rename: Rc<Cell<Option<glib::SourceId>>> = Rc::new(Cell::new(None));
+        let pending_slow_click = pending_slow_rename.clone();
+        let icon_h_for_click = metrics.icon_size as f64;
 
         click_gesture.connect_pressed(move |g, n_press, x, y| {
             let button = g.current_button();
+            if let Some(source_id) = pending_slow_click.take() {
+                source_id.remove();
+            }
 
             if button == gdk::BUTTON_PRIMARY {
+                fixed_for_click.grab_focus();
+                let modifiers = g.current_event_state();
+                let is_multi_mod = has_multi_select_modifier(modifiers);
                 if n_press == 1 {
-                    select_single_spatial_item(
-                        &widgets_for_click.borrow(),
-                        &sel_items,
-                        &name_for_click,
-                        &on_sel_cb,
-                    );
+                    if is_multi_mod {
+                        g.set_state(gtk4::EventSequenceState::Claimed);
+                        toggle_spatial_item_selection(
+                            &widgets_for_click.borrow(),
+                            &sel_items,
+                            &name_for_click,
+                            &on_sel_cb,
+                        );
+                        return;
+                    }
+                    let was_sole_selected = {
+                        let sel = sel_items.borrow();
+                        sel.len() == 1 && sel.contains(&name_for_click)
+                    };
+                    if !sel_items.borrow().contains(&name_for_click) || was_sole_selected {
+                        select_single_spatial_item(
+                            &widgets_for_click.borrow(),
+                            &sel_items,
+                            &name_for_click,
+                            &on_sel_cb,
+                        );
+                    }
+                    let clicked_on_label = label_for_click
+                        .compute_bounds(&vbox_for_click)
+                        .map(|b| y >= b.y() as f64 - 2.0)
+                        .unwrap_or(y >= icon_h_for_click);
+                    if was_sole_selected && clicked_on_label {
+                        let vbox_ren = vbox_for_click.clone();
+                        let path_ren = path.clone();
+                        let pending_cb = pending_for_menu.clone();
+                        let folder_cb = folder_for_menu.clone();
+                        let on_nav_ren = on_nav.clone();
+                        let slot = pending_slow_click.clone();
+                        let id = glib::timeout_add_local_once(
+                            std::time::Duration::from_millis(450),
+                            move || {
+                                slot.set(None);
+                                let on_renamed: crate::views::RenameCallback =
+                                    Rc::new(move |new_path| {
+                                        if let Some(new_name) = new_path.file_name() {
+                                            pending_cb
+                                                .borrow_mut()
+                                                .insert(new_name.to_string_lossy().into_owned());
+                                        }
+                                        let reload_dir = folder_cb.borrow().clone();
+                                        on_nav_ren(reload_dir);
+                                    });
+                                crate::views::show_rename_popover(
+                                    &vbox_ren,
+                                    path_ren,
+                                    is_dir,
+                                    None,
+                                    Some(on_renamed),
+                                );
+                            },
+                        );
+                        pending_slow_click.set(Some(id));
+                    }
                 } else if n_press == 2 {
                     if is_dir {
                         on_nav(path.clone());
@@ -782,55 +1065,233 @@ impl IconView {
         let vbox_prep = vbox.clone();
         let active_drag_prep = self.active_drag_offset.clone();
         let item_path_drag = item.path.clone();
+        let pos_prep = pos_cell.clone();
         let widgets_prep = self.item_widgets.clone();
+        let order_prep = self.item_order.clone();
         let sel_items_prep = self.selected_items.clone();
         let name_prep = item.name.clone();
         let on_sel_prep = self.on_selection_changed.clone();
         drag_source.connect_prepare(move |source, click_x, click_y| {
             let rounded_offset = (click_x.round(), click_y.round());
             *active_drag_prep.borrow_mut() = Some((item_path_drag.clone(), rounded_offset));
-            malus_de_common::write_drag_anchor(&item_path_drag, rounded_offset.0, rounded_offset.1);
-            select_single_spatial_item(
-                &widgets_prep.borrow(),
-                &sel_items_prep,
-                &name_prep,
-                &on_sel_prep,
-            );
-            let paintable = gtk4::WidgetPaintable::new(Some(&vbox_prep));
-            source.set_icon(Some(&paintable), rounded_offset.0 as i32, rounded_offset.1 as i32);
+            if !sel_items_prep.borrow().contains(&name_prep) {
+                select_single_spatial_item(
+                    &widgets_prep.borrow(),
+                    &sel_items_prep,
+                    &name_prep,
+                    &on_sel_prep,
+                );
+            }
 
-            Some(crate::views::build_file_drag_content_provider(&path_for_drag))
+            let (p0x, p0y) = pos_prep.get();
+            let cursor_canvas_x = p0x as f64 + rounded_offset.0;
+            let cursor_canvas_y = p0y as f64 + rounded_offset.1;
+
+            let (selected_paths, anchors, drag_widgets): (
+                Vec<PathBuf>,
+                Vec<(PathBuf, (f64, f64))>,
+                Vec<(gtk4::Widget, (f64, f64))>,
+            ) = {
+                let sel = sel_items_prep.borrow();
+                let widgets = widgets_prep.borrow();
+                let mut paths = Vec::new();
+                let mut anchor_list = Vec::new();
+                let mut widget_list = Vec::new();
+                for n in order_prep.borrow().iter().filter(|n| sel.contains(*n)) {
+                    if let Some(d_rc) = widgets.get(n) {
+                        let d = d_rc.borrow();
+                        let (ix, iy) = d.pos.get();
+                        let grab_rel = (cursor_canvas_x - ix as f64, cursor_canvas_y - iy as f64);
+                        paths.push(d.item.path.clone());
+                        anchor_list.push((d.item.path.clone(), grab_rel));
+                        widget_list.push((d.widget.clone().upcast(), (ix as f64, iy as f64)));
+                    }
+                }
+                (paths, anchor_list, widget_list)
+            };
+
+            if drag_widgets.len() > 1 {
+                if let Some((multi_paintable, hot_x, hot_y)) =
+                    crate::views::build_multi_widget_drag_paintable(
+                        &drag_widgets,
+                        cursor_canvas_x,
+                        cursor_canvas_y,
+                    )
+                {
+                    source.set_icon(Some(&multi_paintable), hot_x, hot_y);
+                } else {
+                    let paintable = gtk4::WidgetPaintable::new(Some(&vbox_prep));
+                    source.set_icon(
+                        Some(&paintable),
+                        rounded_offset.0 as i32,
+                        rounded_offset.1 as i32,
+                    );
+                }
+            } else {
+                let paintable = gtk4::WidgetPaintable::new(Some(&vbox_prep));
+                source.set_icon(
+                    Some(&paintable),
+                    rounded_offset.0 as i32,
+                    rounded_offset.1 as i32,
+                );
+            }
+
+            if anchors.is_empty() {
+                malus_de_common::write_drag_anchor(
+                    &item_path_drag,
+                    rounded_offset.0,
+                    rounded_offset.1,
+                );
+                Some(crate::views::build_file_drag_content_provider(&path_for_drag))
+            } else {
+                malus_de_common::write_drag_anchors(&anchors);
+                Some(crate::views::build_files_drag_content_provider(&selected_paths))
+            }
         });
 
         let fixed_drag = self.fixed_canvas.clone();
         let vbox_drag = vbox.clone();
+        let widgets_drag_begin = self.item_widgets.clone();
+        let sel_drag_begin = self.selected_items.clone();
+        let name_drag_begin = item.name.clone();
+        let cancel_slow_drag = pending_slow_rename;
         drag_source.connect_drag_begin(move |_source, _drag| {
-            fixed_drag.move_(&vbox_drag, -5000.0, -5000.0);
+            if let Some(source_id) = cancel_slow_drag.take() {
+                source_id.remove();
+            }
+            let sel = sel_drag_begin.borrow();
+            if sel.contains(&name_drag_begin) && sel.len() > 1 {
+                let widgets = widgets_drag_begin.borrow();
+                for sel_name in sel.iter() {
+                    if let Some(d_rc) = widgets.get(sel_name) {
+                        fixed_drag.move_(&d_rc.borrow().widget, -5000.0, -5000.0);
+                    }
+                }
+            } else {
+                fixed_drag.move_(&vbox_drag, -5000.0, -5000.0);
+            }
         });
 
         let fixed_end = self.fixed_canvas.clone();
         let vbox_end = vbox.clone();
         let pos_end = pos_cell;
+        let widgets_drag_end = self.item_widgets.clone();
+        let order_drag_end = self.item_order.clone();
+        let sel_drag_end = self.selected_items.clone();
+        let on_sel_drag_end = self.on_selection_changed.clone();
         let active_drag_end = self.active_drag_offset.clone();
         let path_end = item.path.clone();
         let cur_folder_end = self.current_folder.clone();
-        let on_nav_end = self.on_navigate.clone();
         drag_source.connect_drag_end(move |_, drag, _| {
             *active_drag_end.borrow_mut() = None;
             let folder = cur_folder_end.borrow().clone();
+            let remove_missing_in_place = || {
+                let missing_names: Vec<(String, GtkBox)> = {
+                    let widgets = widgets_drag_end.borrow();
+                    widgets
+                        .iter()
+                        .filter_map(|(name, d_rc)| {
+                            let d = d_rc.borrow();
+                            if !d.item.path.exists() {
+                                Some((name.clone(), d.widget.clone()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                };
+                if missing_names.is_empty() {
+                    return false;
+                }
+                let missing_set: HashSet<String> =
+                    missing_names.iter().map(|(n, _)| n.clone()).collect();
+                for (name, widget) in missing_names {
+                    if widget.parent().is_some() {
+                        fixed_end.remove(&widget);
+                    }
+                    widgets_drag_end.borrow_mut().remove(&name);
+                    sel_drag_end.borrow_mut().remove(&name);
+                }
+                order_drag_end
+                    .borrow_mut()
+                    .retain(|n| !missing_set.contains(n));
+                let sel_count = sel_drag_end.borrow().len();
+                on_sel_drag_end(sel_count);
+                true
+            };
+
             if !path_end.exists() {
                 if vbox_end.parent().is_some() {
                     fixed_end.remove(&vbox_end);
                 }
-                on_nav_end(folder);
+                remove_missing_in_place();
                 return;
+            }
+            if drag.selected_action().contains(gdk::DragAction::MOVE) {
+                let cur_folder_async = cur_folder_end.clone();
+                let widgets_async = widgets_drag_end.clone();
+                let order_async = order_drag_end.clone();
+                let sel_async = sel_drag_end.clone();
+                let on_sel_async = on_sel_drag_end.clone();
+                let fixed_async = fixed_end.clone();
+                glib::timeout_add_local_once(std::time::Duration::from_millis(80), move || {
+                    if *cur_folder_async.borrow() != folder {
+                        return;
+                    }
+                    let missing_names: Vec<(String, GtkBox)> = {
+                        let widgets = widgets_async.borrow();
+                        widgets
+                            .iter()
+                            .filter_map(|(name, d_rc)| {
+                                let d = d_rc.borrow();
+                                if !d.item.path.exists() {
+                                    Some((name.clone(), d.widget.clone()))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    };
+                    if !missing_names.is_empty() {
+                        let missing_set: HashSet<String> =
+                            missing_names.iter().map(|(n, _)| n.clone()).collect();
+                        for (name, widget) in missing_names {
+                            if widget.parent().is_some() {
+                                fixed_async.remove(&widget);
+                            }
+                            widgets_async.borrow_mut().remove(&name);
+                            sel_async.borrow_mut().remove(&name);
+                        }
+                        order_async
+                            .borrow_mut()
+                            .retain(|n| !missing_set.contains(n));
+                        let sel_count = sel_async.borrow().len();
+                        on_sel_async(sel_count);
+                    }
+                    for d_rc in widgets_async.borrow().values() {
+                        let d = d_rc.borrow();
+                        let (cx, _cy) = fixed_async.child_position(&d.widget);
+                        if cx < 0.0 {
+                            let (px, py) = d.pos.get();
+                            fixed_async.move_(&d.widget, px as f64, py as f64);
+                        }
+                    }
+                });
+                return;
+            }
+            for d_rc in widgets_drag_end.borrow().values() {
+                let d = d_rc.borrow();
+                let (cx, _cy) = fixed_end.child_position(&d.widget);
+                if cx < 0.0 {
+                    let (px, py) = d.pos.get();
+                    fixed_end.move_(&d.widget, px as f64, py as f64);
+                }
             }
             let (cx, _cy) = fixed_end.child_position(&vbox_end);
             if cx < 0.0 {
                 let (px, py) = pos_end.get();
                 fixed_end.move_(&vbox_end, px as f64, py as f64);
             }
-            let _ = crate::views::refresh_if_moved_out(drag, &path_end, &folder, &on_nav_end);
         });
         vbox.add_controller(drag_source);
 
@@ -856,33 +1317,45 @@ impl IconView {
 
             let vbox_drop = vbox.clone();
             let dest_dir = item.path.clone();
-            let on_nav_reload = self.on_navigate.clone();
-            let cur_folder = self.current_folder.clone();
+            let fixed_folder_drop = self.fixed_canvas.clone();
+            let widgets_folder_drop = self.item_widgets.clone();
+            let order_folder_drop = self.item_order.clone();
+            let sel_folder_drop = self.selected_items.clone();
+            let on_sel_folder_drop = self.on_selection_changed.clone();
             folder_drop.connect_drop(move |_, value, _, _| {
                 vbox_drop.remove_css_class("folder-drop-hover");
                 if let Ok(file_list) = value.get::<gdk::FileList>() {
-                    let mut moved = false;
-                    for file in file_list.files() {
-                        if let Some(src) = file.path() {
-                            if let Some(fname) = src.file_name() {
-                                let target = dest_dir.join(fname);
-                                if target != src {
-                                    let dest_file = gio::File::for_path(&target);
-                                    if file.move_(
-                                        &dest_file,
-                                        gio::FileCopyFlags::NONE,
-                                        gio::Cancellable::NONE,
-                                        None,
-                                    ).is_ok() || std::fs::rename(&src, &target).is_ok() {
-                                        moved = true;
+                    if crate::operations::drop_files_into_folder(&file_list.files(), &dest_dir) {
+                        let missing_names: Vec<(String, GtkBox)> = {
+                            let widgets = widgets_folder_drop.borrow();
+                            widgets
+                                .iter()
+                                .filter_map(|(name, d_rc)| {
+                                    let d = d_rc.borrow();
+                                    if !d.item.path.exists() {
+                                        Some((name.clone(), d.widget.clone()))
+                                    } else {
+                                        None
                                     }
+                                })
+                                .collect()
+                        };
+                        if !missing_names.is_empty() {
+                            let missing_set: HashSet<String> =
+                                missing_names.iter().map(|(n, _)| n.clone()).collect();
+                            for (name, widget) in missing_names {
+                                if widget.parent().is_some() {
+                                    fixed_folder_drop.remove(&widget);
                                 }
+                                widgets_folder_drop.borrow_mut().remove(&name);
+                                sel_folder_drop.borrow_mut().remove(&name);
                             }
+                            order_folder_drop
+                                .borrow_mut()
+                                .retain(|n| !missing_set.contains(n));
+                            let sel_count = sel_folder_drop.borrow().len();
+                            on_sel_folder_drop(sel_count);
                         }
-                    }
-                    if moved {
-                        let cf = cur_folder.borrow().clone();
-                        on_nav_reload(cf);
                         return true;
                     }
                 }
@@ -916,12 +1389,17 @@ impl IconView {
             let button = g.current_button();
 
             if button == gdk::BUTTON_PRIMARY {
-                // Clic en fondo vacío: deseleccionar todo
-                for (_, data) in widgets.borrow().iter() {
-                    data.borrow().widget.remove_css_class("selected");
+                fixed.grab_focus();
+                let modifiers = g.current_event_state();
+                let is_additive = has_additive_select_modifier(modifiers);
+                if !is_additive {
+                    // Clic en fondo vacío: deseleccionar todo
+                    for (_, data) in widgets.borrow().iter() {
+                        data.borrow().widget.remove_css_class("selected");
+                    }
+                    sel_items.borrow_mut().clear();
+                    sel_cb(0);
                 }
-                sel_items.borrow_mut().clear();
-                sel_cb(0);
             } else if button == gdk::BUTTON_SECONDARY {
                 // Menú contextual del lienzo de fondo
                 if let Some(ref w) = *weak_for_click.borrow() {
@@ -931,6 +1409,117 @@ impl IconView {
         });
 
         self.fixed_canvas.add_controller(click);
+
+        // Selección de área elástica (marquee / rubberband) arrastrando el cursor sobre el lienzo
+        let marquee_box = GtkBox::builder()
+            .visible(false)
+            .can_target(false)
+            .css_classes(["branches-selection-marquee"])
+            .build();
+        self.fixed_canvas.put(&marquee_box, 0.0, 0.0);
+
+        let marquee_drag = GestureDrag::new();
+        marquee_drag.set_button(gdk::BUTTON_PRIMARY);
+        let marquee_start: Rc<Cell<Option<(f64, f64)>>> = Rc::new(Cell::new(None));
+        let marquee_base_sel: Rc<RefCell<HashSet<String>>> = Rc::new(RefCell::new(HashSet::new()));
+
+        {
+            let fixed_m = self.fixed_canvas.clone();
+            let widgets_m = self.item_widgets.clone();
+            let sel_m = self.selected_items.clone();
+            let start_m = marquee_start.clone();
+            let base_m = marquee_base_sel.clone();
+            let m_box = marquee_box.clone();
+            marquee_drag.connect_drag_begin(move |g, x, y| {
+                if is_point_over_spatial_icon(&fixed_m, &widgets_m.borrow(), x, y) {
+                    start_m.set(None);
+                    return;
+                }
+                start_m.set(Some((x, y)));
+                let modifiers = g.current_event_state();
+                let is_additive = has_additive_select_modifier(modifiers);
+                if is_additive {
+                    *base_m.borrow_mut() = sel_m.borrow().clone();
+                } else {
+                    base_m.borrow_mut().clear();
+                }
+                m_box.set_size_request(1, 1);
+                fixed_m.move_(&m_box, x, y);
+                m_box.set_visible(false);
+            });
+        }
+
+        {
+            let fixed_m = self.fixed_canvas.clone();
+            let widgets_m = self.item_widgets.clone();
+            let sel_m = self.selected_items.clone();
+            let sel_cb_m = self.on_selection_changed.clone();
+            let start_m = marquee_start.clone();
+            let base_m = marquee_base_sel.clone();
+            let m_box = marquee_box.clone();
+            marquee_drag.connect_drag_update(move |_, offset_x, offset_y| {
+                let Some((sx, sy)) = start_m.get() else {
+                    return;
+                };
+                if offset_x.abs() < 3.0 && offset_y.abs() < 3.0 && !m_box.is_visible() {
+                    return;
+                }
+                let rx1 = sx.min(sx + offset_x).max(0.0);
+                let ry1 = sy.min(sy + offset_y).max(0.0);
+                let rx2 = sx.max(sx + offset_x);
+                let ry2 = sy.max(sy + offset_y);
+                let rw = (rx2 - rx1).round().max(1.0) as i32;
+                let rh = (ry2 - ry1).round().max(1.0) as i32;
+
+                m_box.set_size_request(rw, rh);
+                fixed_m.move_(&m_box, rx1, ry1);
+                m_box.set_visible(true);
+
+                let base = base_m.borrow();
+                let widgets = widgets_m.borrow();
+                let mut new_sel = base.clone();
+
+                for (name, data_rc) in widgets.iter() {
+                    let d = data_rc.borrow();
+                    let (px, py) = fixed_m.child_position(&d.widget);
+                    let iw = d.widget.width().max(d.widget.width_request()).max(1) as f64;
+                    let ih = d.widget.height().max(d.widget.height_request()).max(1) as f64;
+                    let hit = rects_intersect(rx1, ry1, rx2, ry2, px, py, px + iw, py + ih);
+                    if hit {
+                        if base.contains(name) {
+                            new_sel.remove(name);
+                        } else {
+                            new_sel.insert(name.clone());
+                        }
+                    }
+                }
+
+                for (name, data_rc) in widgets.iter() {
+                    let w = &data_rc.borrow().widget;
+                    if new_sel.contains(name) {
+                        w.add_css_class("selected");
+                    } else {
+                        w.remove_css_class("selected");
+                    }
+                }
+                let count = new_sel.len();
+                *sel_m.borrow_mut() = new_sel;
+                sel_cb_m(count);
+            });
+        }
+
+        {
+            let start_m = marquee_start;
+            let base_m = marquee_base_sel;
+            let m_box = marquee_box;
+            marquee_drag.connect_drag_end(move |_, _, _| {
+                start_m.set(None);
+                base_m.borrow_mut().clear();
+                m_box.set_visible(false);
+            });
+        }
+
+        self.fixed_canvas.add_controller(marquee_drag);
 
         // Destino para soltar archivos (tanto reorganización interna como desde Escritorio)
         let canvas_drop = gtk4::DropTarget::new(
@@ -951,8 +1540,7 @@ impl IconView {
         let fixed_drop_canvas = self.fixed_canvas.clone();
         let active_drag_drop_ref = self.active_drag_offset.clone();
         let widgets_drop_map = self.item_widgets.clone();
-        let pending_select_drop_ref = self.pending_select_names.clone();
-        let on_nav_drop = self.on_navigate.clone();
+        let view_drop = self.clone();
 
         canvas_drop.connect_drop(move |_, value, x, y| {
             if let Ok(file_list) = value.get::<gdk::FileList>() {
@@ -972,16 +1560,24 @@ impl IconView {
                 for (index, file) in file_list.files().into_iter().enumerate() {
                     if let Some(src) = file.path() {
                         let is_internal = src.parent().map(|p| p == cur_folder).unwrap_or(false);
-                        let offset_idx = (index % 4) as f64 * 24.0;
+                        let shared_anchor = malus_de_common::read_drag_anchor(&src);
+                        let offset_idx = if shared_anchor.is_some() {
+                            0.0
+                        } else {
+                            (index % 4) as f64 * 24.0
+                        };
                         if is_internal {
-                            // Colocar en la posición exacta donde se soltó respetando el punto de agarre (sin saltos ni rebotes)
+                            // Colocar en la posición exacta donde se soltó respetando la disposición espacial entre elementos seleccionados
                             if let Some(fname) = src.file_name() {
                                 let fname_str = fname.to_string_lossy().to_string();
-                                let grab_offset = active_drag_drop_ref
-                                    .borrow()
-                                    .as_ref()
-                                    .filter(|(dragged_path, _)| dragged_path == &src)
-                                    .map(|(_, offset)| *offset)
+                                let grab_offset = shared_anchor
+                                    .or_else(|| {
+                                        active_drag_drop_ref
+                                            .borrow()
+                                            .as_ref()
+                                            .filter(|(dragged_path, _)| dragged_path == &src)
+                                            .map(|(_, offset)| *offset)
+                                    })
                                     .unwrap_or((
                                         metrics.box_width as f64 / 2.0,
                                         metrics.icon_size as f64 / 2.0,
@@ -1019,11 +1615,10 @@ impl IconView {
                             let fname_str = fname.to_string_lossy().to_string();
                             let dest = cur_folder.join(fname);
                             if dest != src {
-                                let grab_offset = malus_de_common::read_drag_anchor(&src)
-                                    .unwrap_or((
-                                        metrics.box_width as f64 / 2.0,
-                                        metrics.icon_size as f64 / 2.0,
-                                    ));
+                                let grab_offset = shared_anchor.unwrap_or((
+                                    metrics.box_width as f64 / 2.0,
+                                    metrics.icon_size as f64 / 2.0,
+                                ));
                                 let (final_x, final_y) = resolve_drop_coords(
                                     x,
                                     y,
@@ -1052,6 +1647,7 @@ impl IconView {
                         }
                     }
                 }
+                let saved_drop_positions = dropped_positions.clone();
                 if !dropped_positions.is_empty() {
                     if mode == LayoutMode::Auto {
                         *layout_drop_ref.borrow_mut() = LayoutMode::Freeform;
@@ -1073,9 +1669,51 @@ impl IconView {
                     }
                 }
                 if moved_external {
-                    *pending_select_drop_ref.borrow_mut() =
-                        external_selected_names.into_iter().collect();
-                    on_nav_drop(cur_folder);
+                    for d_rc in view_drop.item_widgets.borrow().values() {
+                        d_rc.borrow().widget.remove_css_class("selected");
+                    }
+                    view_drop.selected_items.borrow_mut().clear();
+
+                    for name in external_selected_names {
+                        if let Some(&(fx, fy)) = saved_drop_positions.get(&name) {
+                            let dest = cur_folder.join(&name);
+                            if let Some(file_item) = FileItem::from_path(&dest) {
+                                if !view_drop.item_widgets.borrow().contains_key(&name) {
+                                    let pos_cell = Rc::new(Cell::new((fx, fy)));
+                                    let (vbox, img) = view_drop.create_spatial_icon_widget(
+                                        &file_item,
+                                        pos_cell.clone(),
+                                        metrics,
+                                    );
+                                    vbox.add_css_class("selected");
+                                    view_drop.fixed_canvas.put(&vbox, fx as f64, fy as f64);
+                                    view_drop.item_order.borrow_mut().push(name.clone());
+                                    view_drop.item_widgets.borrow_mut().insert(
+                                        name.clone(),
+                                        Rc::new(RefCell::new(ItemWidgetData {
+                                            widget: vbox,
+                                            image: img,
+                                            item: file_item,
+                                            pos: pos_cell,
+                                        })),
+                                    );
+                                }
+                                view_drop.selected_items.borrow_mut().insert(name);
+                            }
+                        }
+                    }
+                    let mut max_x = 400;
+                    let mut max_y = 300;
+                    for data_rc in view_drop.item_widgets.borrow().values() {
+                        let (px, py) = data_rc.borrow().pos.get();
+                        max_x = max_x.max(px + cell_w);
+                        max_y = max_y.max(py + cell_h);
+                    }
+                    let vw = container_drop_ref.hadjustment().page_size().floor() as i32;
+                    let min_w = if vw > 0 && max_x <= vw { 1 } else { max_x + 24 };
+                    view_drop.fixed_canvas.set_size_request(min_w, max_y + 80);
+                    let sel_count = view_drop.selected_items.borrow().len();
+                    (view_drop.on_selection_changed)(sel_count);
                     return true;
                 }
                 if moved_internal {
@@ -1472,9 +2110,11 @@ fn show_canvas_context_menu(
 #[cfg(test)]
 mod tests {
     use super::{
-        columns_for_width, ease_out_cubic, exact_drop_position, interpolate_point,
-        point_in_icon_bounds, snap_to_grid_cell, MARGIN_LEFT, MARGIN_TOP,
+        columns_for_width, ease_out_cubic, exact_drop_position, has_additive_select_modifier,
+        has_multi_select_modifier, interpolate_point, point_in_icon_bounds, rects_intersect,
+        snap_to_grid_cell, MARGIN_LEFT, MARGIN_TOP,
     };
+    use gtk4::gdk;
     use malus_de_common::config::BranchesConfig;
 
     #[test]
@@ -1531,5 +2171,15 @@ mod tests {
         assert!(point_in_icon_bounds(50.0, 60.0, 24.0, 24.0, 108.0, 112.0));
         assert!(!point_in_icon_bounds(150.0, 60.0, 24.0, 24.0, 108.0, 112.0));
         assert!(!point_in_icon_bounds(10.0, 60.0, 24.0, 24.0, 108.0, 112.0));
+
+        // Selección de área por rectángulo elástico (marquee)
+        assert!(rects_intersect(10.0, 10.0, 80.0, 80.0, 24.0, 24.0, 132.0, 136.0));
+        assert!(!rects_intersect(200.0, 200.0, 300.0, 300.0, 24.0, 24.0, 132.0, 136.0));
+
+        // Modificadores individuales (Ctrl solo, Super solo, Shift solo)
+        assert!(has_multi_select_modifier(gdk::ModifierType::CONTROL_MASK));
+        assert!(has_multi_select_modifier(gdk::ModifierType::SUPER_MASK));
+        assert!(!has_multi_select_modifier(gdk::ModifierType::empty()));
+        assert!(has_additive_select_modifier(gdk::ModifierType::SHIFT_MASK));
     }
 }

@@ -1281,6 +1281,23 @@ fn has_desktop_icon_widget(fixed: &Fixed, path: &Path) -> bool {
     false
 }
 
+fn remove_desktop_icon_widget(fixed: &Fixed, path: &Path) -> bool {
+    let expected = path.to_string_lossy();
+    let mut removed = false;
+    let mut child = fixed.first_child();
+    while let Some(item) = child {
+        child = item.next_sibling();
+        if item.has_css_class("desktop-rubberband") {
+            continue;
+        }
+        if item.property::<Option<String>>("tooltip-text").as_deref() == Some(expected.as_ref()) {
+            fixed.remove(&item);
+            removed = true;
+        }
+    }
+    removed
+}
+
 fn build_desktop_item_data(path: &Path) -> Option<DesktopItemData> {
     let file = gio::File::for_path(path);
     let file_info = file.query_info(
@@ -1681,6 +1698,55 @@ pub fn set_desktop_icon_selected<W: IsA<gtk4::Widget>>(item_box: &W, selected: b
     }
 }
 
+fn build_multi_desktop_drag_paintable(
+    items: &[(gtk4::Widget, (f64, f64))],
+    cursor_x: f64,
+    cursor_y: f64,
+) -> Option<(gtk4::gdk::Paintable, i32, i32)> {
+    if items.is_empty() {
+        return None;
+    }
+
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+
+    for (w, (ix, iy)) in items {
+        let ww = w.width().max(w.width_request()).max(72) as f64;
+        let wh = w.height().max(w.height_request()).max(76) as f64;
+        min_x = min_x.min(*ix);
+        min_y = min_y.min(*iy);
+        max_x = max_x.max(*ix + ww);
+        max_y = max_y.max(*iy + wh);
+    }
+
+    if !min_x.is_finite() || !min_y.is_finite() {
+        return None;
+    }
+
+    let snapshot = gtk4::Snapshot::new();
+    for (w, (ix, iy)) in items {
+        let wp = gtk4::WidgetPaintable::new(Some(w));
+        let ww = wp.intrinsic_width().max(w.width()).max(w.width_request()).max(72) as f64;
+        let wh = wp.intrinsic_height().max(w.height()).max(w.height_request()).max(76) as f64;
+        snapshot.save();
+        snapshot.translate(&gtk4::graphene::Point::new(
+            (*ix - min_x) as f32,
+            (*iy - min_y) as f32,
+        ));
+        wp.snapshot(&snapshot, ww, wh);
+        snapshot.restore();
+    }
+
+    let total_w = (max_x - min_x).ceil().max(1.0) as f32;
+    let total_h = (max_y - min_y).ceil().max(1.0) as f32;
+    let paintable = snapshot.to_paintable(Some(&gtk4::graphene::Size::new(total_w, total_h)))?;
+    let hot_x = (cursor_x - min_x).round() as i32;
+    let hot_y = (cursor_y - min_y).round() as i32;
+    Some((paintable, hot_x, hot_y))
+}
+
 #[allow(unused_variables)]
 fn render_single_icon(
     fixed: &Fixed,
@@ -1936,23 +2002,72 @@ fn render_single_icon(
 
     let path_drag = path.clone();
     let sel_drag = selected_paths.clone();
+    let pos_drag = icon_positions.clone();
+    let fixed_prep = fixed.clone();
     let item_box_prep = item_box.clone();
     let stored_click_prep = stored_click.clone();
     drag_source.connect_prepare(move |source, click_x, click_y| {
         let rounded_click = (click_x.round(), click_y.round());
         stored_click_prep.set(rounded_click);
-        malus_de_common::write_drag_anchor(&path_drag, rounded_click.0, rounded_click.1);
         set_desktop_icon_selected(&item_box_prep, true);
-        let paintable = gtk4::WidgetPaintable::new(Some(&item_box_prep));
-        source.set_icon(Some(&paintable), rounded_click.0 as i32, rounded_click.1 as i32);
 
         let sel = sel_drag.borrow();
+        let pos_map = pos_drag.borrow();
+        let (p0x, p0y) = pos_map
+            .get(&path_drag)
+            .copied()
+            .unwrap_or_else(|| fixed_prep.child_position(&item_box_prep));
+        let cursor_desktop_x = p0x + rounded_click.0;
+        let cursor_desktop_y = p0y + rounded_click.1;
+
         let files: Vec<gio::File> = if sel.contains(&path_drag) && sel.len() > 1 {
-            std::iter::once(&path_drag)
-                .chain(sel.iter().filter(|p| *p != &path_drag))
+            let ordered_paths: Vec<PathBuf> = std::iter::once(path_drag.clone())
+                .chain(sel.iter().filter(|p| *p != &path_drag).cloned())
+                .collect();
+            let anchors: Vec<(PathBuf, (f64, f64))> = ordered_paths
+                .iter()
+                .map(|p| {
+                    let (ix, iy) = pos_map.get(p).copied().unwrap_or((p0x, p0y));
+                    (
+                        p.clone(),
+                        (cursor_desktop_x - ix, cursor_desktop_y - iy),
+                    )
+                })
+                .collect();
+            malus_de_common::write_drag_anchors(&anchors);
+
+            let mut drag_widgets = Vec::new();
+            let mut sibling = fixed_prep.first_child();
+            while let Some(child) = sibling {
+                sibling = child.next_sibling();
+                if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
+                    let p = PathBuf::from(p_str);
+                    if sel.contains(&p) {
+                        let pos = pos_map
+                            .get(&p)
+                            .copied()
+                            .unwrap_or_else(|| fixed_prep.child_position(&child));
+                        drag_widgets.push((child, pos));
+                    }
+                }
+            }
+            if let Some((multi_paintable, hot_x, hot_y)) =
+                build_multi_desktop_drag_paintable(&drag_widgets, cursor_desktop_x, cursor_desktop_y)
+            {
+                source.set_icon(Some(&multi_paintable), hot_x, hot_y);
+            } else {
+                let paintable = gtk4::WidgetPaintable::new(Some(&item_box_prep));
+                source.set_icon(Some(&paintable), rounded_click.0 as i32, rounded_click.1 as i32);
+            }
+
+            ordered_paths
+                .iter()
                 .map(|p| gio::File::for_path(p))
                 .collect()
         } else {
+            let paintable = gtk4::WidgetPaintable::new(Some(&item_box_prep));
+            source.set_icon(Some(&paintable), rounded_click.0 as i32, rounded_click.1 as i32);
+            malus_de_common::write_drag_anchor(&path_drag, rounded_click.0, rounded_click.1);
             vec![gio::File::for_path(&path_drag)]
         };
         let file_list = gtk4::gdk::FileList::from_array(&files);
@@ -1992,9 +2107,11 @@ fn render_single_icon(
     let act_drag_end = active_icon_drag.clone();
     let icon_pos_drag_end = icon_positions.clone();
     let sel_drag_end = selected_paths.clone();
+    let internal_drag_end = internal_drag_paths.clone();
     let orig_pos = (x, y);
     drag_source.connect_drag_end(move |_, drag, _| {
         *act_drag_end.borrow_mut() = None;
+        let is_move = drag.selected_action().contains(gtk4::gdk::DragAction::MOVE);
         let mut removed_moved_out = false;
         let mut sibling = fixed_drag_end.first_child();
         while let Some(child) = sibling {
@@ -2010,18 +2127,21 @@ fn render_single_icon(
                         removed_moved_out = true;
                         continue;
                     }
-                    let target_pos = icon_pos_drag_end
-                        .borrow()
-                        .get(&p)
-                        .cloned()
-                        .unwrap_or(orig_pos);
-                    fixed_drag_end.move_(&child, target_pos.0, target_pos.1);
+                    let is_internal = internal_drag_end.borrow_mut().remove(&p);
+                    if !is_move || is_internal {
+                        let target_pos = icon_pos_drag_end
+                            .borrow()
+                            .get(&p)
+                            .cloned()
+                            .unwrap_or(orig_pos);
+                        fixed_drag_end.move_(&child, target_pos.0, target_pos.1);
+                    }
                 }
             }
         }
         if removed_moved_out {
             save_icon_positions(&icon_pos_drag_end.borrow());
-        } else if drag.selected_action() == gtk4::gdk::DragAction::MOVE {
+        } else if is_move {
             let fixed_check = fixed_drag_end.clone();
             let pos_check = icon_pos_drag_end.clone();
             let sel_check = sel_drag_end.clone();
@@ -2040,6 +2160,16 @@ fn render_single_icon(
                             pos_check.borrow_mut().remove(&p);
                             sel_check.borrow_mut().remove(&p);
                             changed = true;
+                        } else {
+                            let (cx, cy) = fixed_check.child_position(&child);
+                            if cx < 0.0 || cy < 0.0 {
+                                let target_pos = pos_check
+                                    .borrow()
+                                    .get(&p)
+                                    .cloned()
+                                    .unwrap_or(orig_pos);
+                                fixed_check.move_(&child, target_pos.0, target_pos.1);
+                            }
                         }
                     }
                 }
@@ -2851,18 +2981,28 @@ fn create_wallpaper_window(
                     continue;
                 };
                 let destination = gio::File::for_path(&drop_dir).child(&name);
+                let shared_anchor = source
+                    .path()
+                    .and_then(|src_path| malus_de_common::read_drag_anchor(&src_path));
+                let offset_idx = if shared_anchor.is_some() {
+                    0.0
+                } else {
+                    (index % 4) as f64 * 24.0
+                };
                 if source.equal(&destination) {
                     if let Some(path) = source.path() {
-                        let pointer_offset = active_drag_drop
-                            .borrow()
-                            .as_ref()
-                            .filter(|(active_path, _, _)| active_path == &path)
-                            .map(|(_, _, pointer_offset)| *pointer_offset)
+                        let pointer_offset = shared_anchor
+                            .or_else(|| {
+                                active_drag_drop
+                                    .borrow()
+                                    .as_ref()
+                                    .filter(|(active_path, _, _)| active_path == &path)
+                                    .map(|(_, _, pointer_offset)| *pointer_offset)
+                            })
                             .unwrap_or((
                                 f64::from(metrics.box_width) / 2.0,
                                 f64::from(metrics.box_height) / 2.0,
                             ));
-                        let offset_idx = (index % 4) as f64 * 24.0;
                         let mut position = clamp_icon_position(x + offset_idx, y + offset_idx, pointer_offset, &metrics, desktop_size, top_margin);
                         if snap {
                             position = snap_position_to_grid(position, &metrics, align_left, desktop_size, top_margin);
@@ -2876,14 +3016,10 @@ fn create_wallpaper_window(
                     continue;
                 }
 
-                let pointer_offset = source
-                    .path()
-                    .and_then(|src_path| malus_de_common::read_drag_anchor(&src_path))
-                    .unwrap_or((
-                        f64::from(metrics.box_width) / 2.0,
-                        f64::from(metrics.icon_size) / 2.0,
-                    ));
-                let offset_idx = (index % 4) as f64 * 24.0;
+                let pointer_offset = shared_anchor.unwrap_or((
+                    f64::from(metrics.box_width) / 2.0,
+                    f64::from(metrics.icon_size) / 2.0,
+                ));
                 let mut position = clamp_icon_position(
                     x + offset_idx,
                     y + offset_idx,
@@ -2971,13 +3107,29 @@ fn create_wallpaper_window(
                 let icons_mon = icons.clone();
                 let rec_mon = recently_dropped_paths.clone();
                 let pos_mon = icon_positions.clone();
+                let sel_mon = selected_paths.clone();
+                let foc_mon = focused_path.clone();
+                let internal_mon = internal_drag_paths.clone();
+                let desktop_dir_mon = desktop_dir.to_path_buf();
                 monitor.connect_changed(move |_, file, _other_file, event_type| {
                     let event_path = file.path();
+                    if event_path.as_ref() == Some(&desktop_dir_mon) {
+                        return;
+                    }
                     match event_type {
                         gio::FileMonitorEvent::Deleted | gio::FileMonitorEvent::MovedOut => {
                             if let Some(ref p) = event_path {
-                                if !has_desktop_icon_widget(&icons_mon, p) {
-                                    pos_mon.borrow_mut().remove(p);
+                                let removed_widget = remove_desktop_icon_widget(&icons_mon, p);
+                                let removed_pos = pos_mon.borrow_mut().remove(p).is_some();
+                                sel_mon.borrow_mut().remove(p);
+                                internal_mon.borrow_mut().remove(p);
+                                if foc_mon.borrow().as_ref() == Some(p) {
+                                    *foc_mon.borrow_mut() = None;
+                                }
+                                if removed_pos {
+                                    save_icon_positions(&pos_mon.borrow());
+                                }
+                                if removed_widget || !has_desktop_icon_widget(&icons_mon, p) {
                                     return;
                                 }
                             }

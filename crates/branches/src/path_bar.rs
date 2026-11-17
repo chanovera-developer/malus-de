@@ -59,7 +59,7 @@ impl PathBar {
             }
 
             let name = if ancestor == Path::new("/") {
-                "Macintosh HD".to_string()
+                "Malus SSD".to_string()
             } else if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
                 if ancestor == &home {
                     "Inicio".to_string()

@@ -29,11 +29,22 @@ pub(super) fn make_context_menu_button(label: &str) -> gtk4::Button {
 /// Construye el `ContentProvider` de arrastre exponiendo tanto `GdkFileList` como `text/uri-list`
 /// para garantizar interoperabilidad Wayland con otras ventanas (como el Dock).
 pub(super) fn build_file_drag_content_provider(path: &std::path::Path) -> gtk4::gdk::ContentProvider {
+    build_files_drag_content_provider(&[path.to_path_buf()])
+}
+
+/// Construye un `ContentProvider` de arrastre para uno o varios archivos/carpetas seleccionados.
+pub(super) fn build_files_drag_content_provider(paths: &[PathBuf]) -> gtk4::gdk::ContentProvider {
     use gtk4::prelude::*;
 
-    let file = gio::File::for_path(path);
-    let uri_payload = format!("{}\r\n", file.uri());
-    let file_list = gtk4::gdk::FileList::from_array(&[file]);
+    let mut files = Vec::with_capacity(paths.len());
+    let mut uri_payload = String::new();
+    for path in paths {
+        let file = gio::File::for_path(path);
+        uri_payload.push_str(&file.uri());
+        uri_payload.push_str("\r\n");
+        files.push(file);
+    }
+    let file_list = gtk4::gdk::FileList::from_array(&files);
     gtk4::gdk::ContentProvider::new_union(&[
         gtk4::gdk::ContentProvider::for_value(&file_list.to_value()),
         gtk4::gdk::ContentProvider::for_bytes(
@@ -41,6 +52,59 @@ pub(super) fn build_file_drag_content_provider(path: &std::path::Path) -> gtk4::
             &glib::Bytes::from_owned(uri_payload),
         ),
     ])
+}
+
+/// Construye un `Paintable` compuesto que incluye todos los widgets arrastrados en su disposición espacial relativa,
+/// devolviendo `(paintable, hotspot_x, hotspot_y)` para que el cursor arrastre visualmente todo el grupo.
+pub(super) fn build_multi_widget_drag_paintable(
+    items: &[(gtk4::Widget, (f64, f64))],
+    cursor_x: f64,
+    cursor_y: f64,
+) -> Option<(gtk4::gdk::Paintable, i32, i32)> {
+    use gtk4::prelude::*;
+
+    if items.is_empty() {
+        return None;
+    }
+
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+
+    for (w, (ix, iy)) in items {
+        let ww = w.width().max(w.width_request()).max(72) as f64;
+        let wh = w.height().max(w.height_request()).max(76) as f64;
+        min_x = min_x.min(*ix);
+        min_y = min_y.min(*iy);
+        max_x = max_x.max(*ix + ww);
+        max_y = max_y.max(*iy + wh);
+    }
+
+    if !min_x.is_finite() || !min_y.is_finite() {
+        return None;
+    }
+
+    let snapshot = gtk4::Snapshot::new();
+    for (w, (ix, iy)) in items {
+        let wp = gtk4::WidgetPaintable::new(Some(w));
+        let ww = wp.intrinsic_width().max(w.width()).max(w.width_request()).max(72) as f64;
+        let wh = wp.intrinsic_height().max(w.height()).max(w.height_request()).max(76) as f64;
+        snapshot.save();
+        snapshot.translate(&gtk4::graphene::Point::new(
+            (*ix - min_x) as f32,
+            (*iy - min_y) as f32,
+        ));
+        wp.snapshot(&snapshot, ww, wh);
+        snapshot.restore();
+    }
+
+    let total_w = (max_x - min_x).ceil().max(1.0) as f32;
+    let total_h = (max_y - min_y).ceil().max(1.0) as f32;
+    let paintable = snapshot.to_paintable(Some(&gtk4::graphene::Size::new(total_w, total_h)))?;
+    let hot_x = (cursor_x - min_x).round() as i32;
+    let hot_y = (cursor_y - min_y).round() as i32;
+    Some((paintable, hot_x, hot_y))
 }
 
 /// Refresca la vista origen si un archivo arrastrado fue movido fuera de la carpeta actual
@@ -255,22 +319,61 @@ pub(super) fn show_background_create_menu(
     popover.popup();
 }
 
-/// Muestra un popover compacto estilo macOS sobre el elemento para cambiar su nombre.
+fn find_item_label_widget(root: &gtk4::Widget, expected_name: &str) -> Option<gtk4::Label> {
+    use gtk4::prelude::*;
+
+    const TARGET_CLASSES: &[&str] = &[
+        "branches-icon-label",
+        "branches-list-name-label",
+        "branches-column-name-label",
+        "branches-carousel-label",
+    ];
+
+    if let Some(lbl) = root.downcast_ref::<gtk4::Label>() {
+        if TARGET_CLASSES.iter().any(|c| root.has_css_class(c)) {
+            return Some(lbl.clone());
+        }
+    }
+
+    let mut fallback: Option<gtk4::Label> = None;
+    let mut stack = vec![root.clone()];
+    while let Some(node) = stack.pop() {
+        if let Some(lbl) = node.downcast_ref::<gtk4::Label>() {
+            if TARGET_CLASSES.iter().any(|c| node.has_css_class(c)) {
+                return Some(lbl.clone());
+            }
+            if fallback.is_none() && lbl.text().as_str() == expected_name {
+                fallback = Some(lbl.clone());
+            }
+        }
+        let mut child = node.first_child();
+        while let Some(c) = child {
+            stack.push(c.clone());
+            child = c.next_sibling();
+        }
+    }
+
+    fallback
+}
+
+/// Activa la edición inline del nombre del archivo o carpeta directamente sobre su etiqueta
+/// (estilo macOS Finder: `Enter` o perder foco confirma el cambio; `Escape` cancela).
 pub(crate) fn show_rename_popover(
     anchor: &impl gtk4::prelude::IsA<gtk4::Widget>,
     path: PathBuf,
     is_dir: bool,
-    pointing_to: Option<(f64, f64)>,
+    _pointing_to: Option<(f64, f64)>,
     on_renamed: Option<RenameCallback>,
 ) {
     use gtk4::gdk;
     use gtk4::prelude::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
 
     if anchor.root().is_none() || is_inside_trash(&path) {
         return;
     }
 
-    let es = malus_de_common::is_spanish_locale();
     let initial_name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -279,109 +382,142 @@ pub(crate) fn show_rename_popover(
         return;
     }
 
-    let popover = gtk4::Popover::builder()
-        .has_arrow(false)
-        .autohide(true)
-        .css_classes(["malus-popover-menu"])
-        .build();
-    popover.set_parent(anchor);
-    if let Some((x, y)) = pointing_to {
-        let rect = gdk::Rectangle::new(x.round() as i32, y.round() as i32, 1, 1);
-        popover.set_pointing_to(Some(&rect));
+    let anchor_widget = anchor.as_ref().clone();
+    let Some(label) = find_item_label_widget(&anchor_widget, &initial_name) else {
+        return;
+    };
+    if !label.is_visible() {
+        return;
     }
-    popover.connect_closed(|p| p.unparent());
+    let Some(parent_box) = label.parent().and_then(|p| p.downcast::<gtk4::Box>().ok()) else {
+        return;
+    };
 
-    let container = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
-    container.set_margin_top(10);
-    container.set_margin_bottom(10);
-    container.set_margin_start(10);
-    container.set_margin_end(10);
-    container.set_width_request(240);
+    let is_icon_label = label.has_css_class("branches-icon-label")
+        || label.has_css_class("branches-carousel-label");
+    let label_w = label.width().max(24);
+    let label_h = label.height().max(16);
 
-    let title_lbl = gtk4::Label::builder()
-        .label(if es { "Renombrar" } else { "Rename" })
-        .halign(gtk4::Align::Start)
-        .css_classes(["popover-menu-header"])
-        .build();
-    container.append(&title_lbl);
-
-    let entry = gtk4::Entry::builder()
+    let entry = gtk4::Text::builder()
         .text(&initial_name)
-        .hexpand(true)
-        .width_chars(24)
+        .width_chars(1)
+        .max_width_chars(1)
+        .xalign(if is_icon_label { 0.5 } else { 0.0 })
+        .halign(if is_icon_label {
+            gtk4::Align::Center
+        } else {
+            gtk4::Align::Fill
+        })
+        .valign(gtk4::Align::Center)
+        .hexpand(!is_icon_label)
+        .css_classes(if is_icon_label {
+            vec!["branches-inline-rename-entry", "branches-inline-rename-icon"]
+        } else {
+            vec!["branches-inline-rename-entry", "branches-inline-rename-row"]
+        })
         .build();
-    container.append(&entry);
+    entry.set_size_request(if is_icon_label { label_w } else { -1 }, label_h);
 
-    let error_lbl = gtk4::Label::builder()
-        .halign(gtk4::Align::Start)
-        .wrap(true)
-        .visible(false)
-        .css_classes(["error"])
-        .build();
-    container.append(&error_lbl);
+    label.set_visible(false);
+    parent_box.insert_child_after(&entry, Some(&label));
 
-    let btn_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
-    btn_box.set_halign(gtk4::Align::End);
-
-    let cancel_btn = gtk4::Button::builder()
-        .label(if es { "Cancelar" } else { "Cancel" })
-        .css_classes(["popover-menu-item"])
-        .build();
-    {
-        let pop = popover.clone();
-        cancel_btn.connect_clicked(move |_| pop.popdown());
-    }
-    btn_box.append(&cancel_btn);
-
-    let save_btn = gtk4::Button::builder()
-        .label(if es { "Renombrar" } else { "Rename" })
-        .css_classes(["popover-menu-item", "suggested-action"])
-        .build();
-    {
-        let pop = popover.clone();
+    let finished = Rc::new(Cell::new(false));
+    let finish_edit: Rc<dyn Fn(bool)> = {
+        let finished = finished.clone();
         let entry_ref = entry.clone();
-        let err_ref = error_lbl.clone();
+        let label_ref = label.clone();
+        let parent_ref = parent_box.clone();
         let old_path = path.clone();
-        save_btn.connect_clicked(move |_| {
-            let candidate = entry_ref.text();
-            match crate::operations::rename_item(&old_path, candidate.as_str()) {
-                Ok(new_path) => {
-                    pop.popdown();
-                    if new_path != old_path {
-                        crate::sidebar::refresh_all_sidebars();
-                        if let Some(ref cb) = on_renamed {
-                            cb(new_path);
-                        }
+        let initial = initial_name.clone();
+        let on_renamed = on_renamed.clone();
+        Rc::new(move |commit: bool| {
+            if finished.replace(true) {
+                return;
+            }
+            let candidate = entry_ref.text().to_string();
+            let trimmed = candidate.trim();
+
+            if entry_ref.parent().is_some() {
+                parent_ref.remove(&entry_ref);
+            }
+            label_ref.set_visible(true);
+            if let Some(canvas) = label_ref.ancestor(gtk4::Fixed::static_type()) {
+                canvas.grab_focus();
+            } else if let Some(row) = label_ref.ancestor(gtk4::ListBoxRow::static_type()) {
+                row.grab_focus();
+            }
+
+            if !commit || trimmed.is_empty() || trimmed == initial {
+                return;
+            }
+
+            if let Ok(new_path) = crate::operations::rename_item(&old_path, trimmed) {
+                if new_path != old_path {
+                    if let Some(new_name) = new_path.file_name() {
+                        label_ref.set_label(&new_name.to_string_lossy());
+                    }
+                    crate::sidebar::refresh_all_sidebars();
+                    if let Some(ref cb) = on_renamed {
+                        cb(new_path);
                     }
                 }
-                Err(msg) => {
-                    err_ref.set_text(&msg);
-                    err_ref.set_visible(true);
-                    entry_ref.grab_focus();
-                }
             }
-        });
-    }
-    btn_box.append(&save_btn);
-    container.append(&btn_box);
+        })
+    };
 
+    // Confirmar con Enter
     {
-        let err_clear = error_lbl.clone();
-        entry.connect_changed(move |_| {
-            err_clear.set_visible(false);
-        });
-    }
-    {
-        let submit_btn = save_btn.clone();
+        let finish = finish_edit.clone();
         entry.connect_activate(move |_| {
-            submit_btn.emit_clicked();
+            finish(true);
         });
     }
 
-    popover.set_child(Some(&container));
-    popover.popup();
+    // Cancelar con Escape o detener propagación de teclas hacia la lista/ventana
+    {
+        let key_ctrl = gtk4::EventControllerKey::new();
+        let finish = finish_edit.clone();
+        key_ctrl.connect_key_pressed(move |_, key, _, _| {
+            if key == gdk::Key::Escape {
+                finish(false);
+                return glib::Propagation::Stop;
+            }
+            if matches!(
+                key,
+                gdk::Key::Return | gdk::Key::KP_Enter | gdk::Key::ISO_Enter
+            ) {
+                finish(true);
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        entry.add_controller(key_ctrl);
+    }
 
-    let entry_focus = entry.clone();
+    // Confirmar al hacer clic fuera (perder foco)
+    {
+        let focus_ctrl = gtk4::EventControllerFocus::new();
+        let finish = finish_edit;
+        focus_ctrl.connect_leave(move |_| {
+            let f = finish.clone();
+            glib::idle_add_local_once(move || {
+                f(true);
+            });
+        });
+        entry.add_controller(focus_ctrl);
+    }
+
+    // Reclamar clics primarios/secundarios sobre el Entry para no disparar navegación ni drag
+    {
+        let click_guard = gtk4::GestureClick::new();
+        click_guard.set_button(0);
+        click_guard.connect_pressed(|g, _n, _x, _y| {
+            g.set_state(gtk4::EventSequenceState::Claimed);
+        });
+        entry.add_controller(click_guard);
+    }
+
+    let entry_focus = entry;
     let sel_end = crate::operations::rename_selection_end(&initial_name, is_dir);
     glib::idle_add_local_once(move || {
         entry_focus.grab_focus();

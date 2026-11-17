@@ -176,6 +176,7 @@ fn create_list_row(item: &FileItem, icon_size: i32, on_navigate: NavigateCallbac
         .label(&item.name)
         .halign(Align::Start)
         .ellipsize(gtk4::pango::EllipsizeMode::End)
+        .css_classes(["branches-list-name-label"])
         .build();
     name_box.append(&label_name);
 
@@ -210,7 +211,7 @@ fn create_list_row(item: &FileItem, icon_size: i32, on_navigate: NavigateCallbac
         .child(&hbox)
         .build();
 
-    // Gestos: Doble clic y Clic derecho
+    // Gestos: Doble clic, segundo clic lento para renombrar (estilo Finder) y Clic derecho
     let gesture = GestureClick::new();
     gesture.set_button(0);
     let path = item.path.clone();
@@ -218,14 +219,56 @@ fn create_list_row(item: &FileItem, icon_size: i32, on_navigate: NavigateCallbac
     let on_nav_click = on_navigate.clone();
 
     let row_for_menu = row.clone();
+    let label_for_click = label_name.clone();
+    let pending_slow_rename: Rc<Cell<Option<glib::SourceId>>> = Rc::new(Cell::new(None));
+    let pending_slow_click = pending_slow_rename.clone();
     gesture.connect_pressed(move |g, n_press, x, y| {
         let button = g.current_button();
+        if let Some(source_id) = pending_slow_click.take() {
+            source_id.remove();
+        }
 
-        if button == gdk::BUTTON_PRIMARY && n_press == 2 {
-            if is_dir {
-                on_nav_click(path.clone());
-            } else {
-                let _ = open_file(&path);
+        if button == gdk::BUTTON_PRIMARY {
+            if n_press == 1 && row_for_menu.is_selected() {
+                let clicked_on_name = label_for_click
+                    .compute_bounds(&row_for_menu)
+                    .map(|b| x <= (b.x() + b.width().max(180.0)) as f64)
+                    .unwrap_or(true);
+                if clicked_on_name {
+                    let row_ren = row_for_menu.clone();
+                    let path_ren = path.clone();
+                    let on_nav_ren = on_nav_click.clone();
+                    let slot = pending_slow_click.clone();
+                    let id = glib::timeout_add_local_once(
+                        std::time::Duration::from_millis(450),
+                        move || {
+                            slot.set(None);
+                            if !row_ren.is_selected() {
+                                return;
+                            }
+                            let parent_dir = path_ren.parent().map(|p| p.to_path_buf());
+                            let on_renamed = parent_dir.map(|dir| {
+                                Rc::new(move |_new_path: PathBuf| {
+                                    on_nav_ren(dir.clone());
+                                }) as crate::views::RenameCallback
+                            });
+                            crate::views::show_rename_popover(
+                                &row_ren,
+                                path_ren,
+                                is_dir,
+                                None,
+                                on_renamed,
+                            );
+                        },
+                    );
+                    pending_slow_click.set(Some(id));
+                }
+            } else if n_press == 2 {
+                if is_dir {
+                    on_nav_click(path.clone());
+                } else {
+                    let _ = open_file(&path);
+                }
             }
         } else if button == gdk::BUTTON_SECONDARY {
             g.set_state(gtk4::EventSequenceState::Claimed);
@@ -267,7 +310,11 @@ fn create_list_row(item: &FileItem, icon_size: i32, on_navigate: NavigateCallbac
 
     let row_drag_begin = row.clone();
     let icon_paintable_begin = icon_paintable.clone();
+    let cancel_slow_drag = pending_slow_rename;
     drag_source.connect_drag_begin(move |source, _| {
+        if let Some(source_id) = cancel_slow_drag.take() {
+            source_id.remove();
+        }
         row_drag_begin.add_css_class("branches-icon-dragging");
         if let Some(ref paintable) = icon_paintable_begin {
             source.set_icon(Some(paintable), 16, 16);
