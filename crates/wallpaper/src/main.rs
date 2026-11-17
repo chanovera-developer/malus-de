@@ -89,6 +89,97 @@ fn build_scaled_wallpaper_texture(
     Some(gtk4::gdk::Texture::for_pixbuf(&final_pixbuf))
 }
 
+const THUMB_SQUIRCLE_EXPONENT: f32 = 4.2;
+
+fn thumb_squircle_sdf(px: f32, py: f32, half_w: f32, half_h: f32, radius: f32) -> f32 {
+    let r = radius.min(half_w.min(half_h)).max(1.0);
+    let dx = px.abs() - half_w + r;
+    let dy = py.abs() - half_h + r;
+    if dx <= 0.0 || dy <= 0.0 {
+        dx.max(dy) - r
+    } else {
+        (dx.powf(THUMB_SQUIRCLE_EXPONENT) + dy.powf(THUMB_SQUIRCLE_EXPONENT))
+            .powf(1.0 / THUMB_SQUIRCLE_EXPONENT)
+            - r
+    }
+}
+
+/// Mismo radio relativo que las miniaturas de Branches.
+fn thumb_squircle_radius(width: i32, height: i32) -> f32 {
+    let min_side = width.min(height).max(1) as f32;
+    (min_side * 0.22).clamp(3.0, min_side * 0.45)
+}
+
+/// Recorta a transparente las esquinas de un buffer RGBA (stride = width * 4) con squircle.
+fn apply_thumb_squircle_clip_rgba(rgba: &mut [u8], width: usize, height: usize, radius: f32) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let half_w = width as f32 * 0.5;
+    let half_h = height as f32 * 0.5;
+    let r = radius.min(half_w.min(half_h)).max(1.0);
+    let span = r.ceil() as usize + 1;
+    let y_top_end = span.min(height);
+    let y_bot_start = height.saturating_sub(span).max(y_top_end);
+    let x_left_end = span.min(width);
+    let x_right_start = width.saturating_sub(span).max(x_left_end);
+    for y in (0..y_top_end).chain(y_bot_start..height) {
+        let ly = (y as f32 + 0.5) - half_h;
+        for x in (0..x_left_end).chain(x_right_start..width) {
+            let lx = (x as f32 + 0.5) - half_w;
+            let dist = thumb_squircle_sdf(lx, ly, half_w, half_h, r);
+            if dist > -0.5 {
+                let idx = (y * width + x) * 4 + 3;
+                if dist >= 0.5 {
+                    rgba[idx] = 0;
+                } else {
+                    let coverage = (0.5 - dist).clamp(0.0, 1.0);
+                    rgba[idx] = (rgba[idx] as f32 * coverage).round() as u8;
+                }
+            }
+        }
+    }
+}
+
+/// Devuelve el pixbuf con las esquinas recortadas en squircle (como en Branches).
+fn squircle_clip_pixbuf(pixbuf: &gdk_pixbuf::Pixbuf) -> Option<gdk_pixbuf::Pixbuf> {
+    let width = pixbuf.width();
+    let height = pixbuf.height();
+    if width <= 0 || height <= 0 || pixbuf.n_channels() < 3 {
+        return None;
+    }
+    let (w, h) = (width as usize, height as usize);
+    let stride = pixbuf.rowstride() as usize;
+    let channels = pixbuf.n_channels() as usize;
+    let has_alpha = pixbuf.has_alpha();
+    let bytes = pixbuf.read_pixel_bytes();
+    let src = bytes.as_ref();
+    let mut rgba = vec![255u8; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let s = y * stride + x * channels;
+            let d = (y * w + x) * 4;
+            if s + channels > src.len() {
+                return None;
+            }
+            rgba[d..d + 3].copy_from_slice(&src[s..s + 3]);
+            if has_alpha {
+                rgba[d + 3] = src[s + 3];
+            }
+        }
+    }
+    apply_thumb_squircle_clip_rgba(&mut rgba, w, h, thumb_squircle_radius(width, height));
+    Some(gdk_pixbuf::Pixbuf::from_bytes(
+        &glib::Bytes::from_owned(rgba),
+        gdk_pixbuf::Colorspace::Rgb,
+        true,
+        8,
+        width,
+        height,
+        width * 4,
+    ))
+}
+
 fn build_default_gradient_texture(target_w: i32, target_h: i32) -> Option<gtk4::gdk::Texture> {
     let target_w = target_w.max(1);
     let target_h = target_h.max(1);
@@ -642,6 +733,23 @@ fn path_from_user_dir_value(value: &str, home: &Path) -> PathBuf {
 }
 
 fn launch_file(file: &gio::File) {
+    if let Some(path) = file.path() {
+        if path.extension().and_then(|s| s.to_str()) == Some("desktop") {
+            if malus_de_common::apps::spawn_desktop_entry_path(&path).is_ok() {
+                return;
+            }
+            if let Some(app_info) = gio::DesktopAppInfo::from_filename(&path) {
+                if app_info
+                    .launch(&[], None::<&gio::AppLaunchContext>)
+                    .is_ok()
+                {
+                    return;
+                }
+            }
+            warn!("No se pudo iniciar la aplicación {:?} en el escritorio", path);
+            return;
+        }
+    }
     let target = file
         .path()
         .map(|p| p.to_string_lossy().into_owned())
@@ -783,91 +891,395 @@ fn get_unique_folder_name(dir: &Path, base_name: &str) -> PathBuf {
     }
 }
 
-fn build_new_folder_view(
-    popover: &Popover,
-    stack: &Stack,
-    desktop_dir: PathBuf,
-    click_pos_cell: Rc<Cell<(f64, f64)>>,
-    icon_positions: Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
-    trigger_refresh: Rc<dyn Fn()>,
-) -> (GtkBox, Entry) {
-    let container = GtkBox::new(Orientation::Vertical, 8);
-    container.set_margin_top(10);
-    container.set_margin_bottom(10);
-    container.set_margin_start(10);
-    container.set_margin_end(10);
-    container.add_css_class("desktop-context-menu");
-
-    let title_lbl = Label::builder()
-        .label("Nueva Carpeta")
-        .halign(Align::Start)
-        .css_classes(["card-section-title"])
-        .build();
-    container.append(&title_lbl);
-
-    let default_path = get_unique_folder_name(&desktop_dir, "Nueva carpeta");
-    let default_str = default_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("Nueva carpeta");
-
-    let entry = Entry::builder()
-        .text(default_str)
-        .hexpand(true)
-        .build();
-    container.append(&entry);
-
-    let btn_box = GtkBox::new(Orientation::Horizontal, 6);
-    btn_box.set_halign(Align::End);
-
-    let cancel_btn = Button::with_label("Cancelar");
-    cancel_btn.add_css_class("desktop-context-btn");
-    let stack_back = stack.clone();
-    cancel_btn.connect_clicked(move |_| {
-        stack_back.set_visible_child_name("main");
-    });
-    btn_box.append(&cancel_btn);
-
-    let save_btn = Button::with_label("Crear");
-    save_btn.add_css_class("desktop-context-btn");
-    save_btn.add_css_class("suggested-action");
-
-    let popover_save = popover.clone();
-    let entry_save = entry.clone();
-    let desktop_dir_save = desktop_dir.clone();
-    let icon_positions_save = icon_positions.clone();
-    let trigger_save = trigger_refresh.clone();
-    let click_pos_save = click_pos_cell.clone();
-
-    let create_action = move || {
-        let new_name = entry_save.text().trim().to_string();
-        if !new_name.is_empty() {
-            let dest = desktop_dir_save.join(&new_name);
-            if let Err(err) = fs::create_dir_all(&dest) {
-                warn!("No se pudo crear carpeta {:?}: {}", dest, err);
-            } else {
-                icon_positions_save.borrow_mut().insert(dest, click_pos_save.get());
-                save_icon_positions(&icon_positions_save.borrow());
-                trigger_save();
-            }
+fn get_unique_text_document_name(dir: &Path, base_stem: &str) -> PathBuf {
+    let candidate = dir.join(format!("{}.txt", base_stem));
+    if !candidate.exists() {
+        return candidate;
+    }
+    let mut i = 2;
+    loop {
+        let candidate = dir.join(format!("{} {}.txt", base_stem, i));
+        if !candidate.exists() {
+            return candidate;
         }
-        popover_save.popdown();
+        i += 1;
+    }
+}
+
+fn desktop_rename_selection_end(file_name: &str, is_dir: bool) -> i32 {
+    if is_dir {
+        return -1;
+    }
+    match file_name.rfind('.') {
+        Some(pos) if pos > 0 => file_name[..pos].chars().count() as i32,
+        _ => -1,
+    }
+}
+
+fn find_desktop_icon_widget(fixed: &Fixed, path: &Path) -> Option<gtk4::Widget> {
+    let expected = path.to_string_lossy();
+    let mut child = fixed.first_child();
+    while let Some(item) = child {
+        child = item.next_sibling();
+        if item.has_css_class("desktop-rubberband") {
+            continue;
+        }
+        if item
+            .property::<Option<String>>("tooltip-text")
+            .as_deref()
+            == Some(expected.as_ref())
+        {
+            return Some(item);
+        }
+    }
+    None
+}
+
+fn show_desktop_inline_rename(
+    item_widget: &gtk4::Widget,
+    old_path: PathBuf,
+    is_dir: bool,
+    icon_positions: Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
+    selected_paths: Rc<RefCell<HashSet<PathBuf>>>,
+    focused_path: Rc<RefCell<Option<PathBuf>>>,
+    trigger_refresh: Rc<dyn Fn()>,
+) {
+    let Some(label) = get_icon_label(item_widget) else {
+        return;
+    };
+    if !label.is_visible() {
+        return;
+    }
+    let Some(parent_box) = label.parent().and_then(|p| p.downcast::<GtkBox>().ok()) else {
+        return;
+    };
+    let Some(initial_name) = old_path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+        return;
+    };
+    if initial_name.is_empty() {
+        return;
+    }
+
+    let label_w = label.width().max(68);
+    let label_h = label.height().max(18);
+    let entry = gtk4::Text::builder()
+        .text(&initial_name)
+        .width_chars(1)
+        .max_width_chars(1)
+        .xalign(0.5)
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .css_classes(["desktop-inline-rename-entry"])
+        .build();
+    entry.set_size_request(label_w, label_h);
+
+    label.set_visible(false);
+    parent_box.insert_child_after(&entry, Some(&label));
+
+    let finished = Rc::new(Cell::new(false));
+    let finish_edit: Rc<dyn Fn(bool)> = {
+        let finished = finished.clone();
+        let entry_ref = entry.clone();
+        let label_ref = label.clone();
+        let parent_ref = parent_box.clone();
+        let old_p = old_path.clone();
+        let initial = initial_name.clone();
+        let positions_ref = icon_positions;
+        let sel_ref = selected_paths;
+        let foc_ref = focused_path;
+        let trig_ref = trigger_refresh;
+        Rc::new(move |commit: bool| {
+            if finished.replace(true) {
+                return;
+            }
+            let candidate = entry_ref.text().to_string();
+            let trimmed = candidate.trim().to_string();
+
+            if entry_ref.parent().is_some() {
+                parent_ref.remove(&entry_ref);
+            }
+            label_ref.set_visible(true);
+            if let Some(icon_root) = label_ref.ancestor(GtkBox::static_type()) {
+                icon_root.grab_focus();
+            }
+
+            if !commit || trimmed.is_empty() || trimmed == initial || trimmed.contains('/') {
+                return;
+            }
+
+            let Some(parent_dir) = old_p.parent() else {
+                return;
+            };
+            let dest = parent_dir.join(&trimmed);
+            if dest.exists() {
+                return;
+            }
+            if let Err(err) = fs::rename(&old_p, &dest) {
+                warn!("No se pudo renombrar {:?} a {:?}: {}", old_p, dest, err);
+                return;
+            }
+
+            {
+                let mut pos_map = positions_ref.borrow_mut();
+                if let Some(pos) = pos_map.remove(&old_p) {
+                    pos_map.insert(dest.clone(), pos);
+                    save_icon_positions(&pos_map);
+                }
+            }
+            {
+                let mut sel = sel_ref.borrow_mut();
+                if sel.remove(&old_p) || sel.is_empty() {
+                    sel.insert(dest.clone());
+                }
+            }
+            *foc_ref.borrow_mut() = Some(dest);
+            trig_ref();
+        })
     };
 
-    let create_action_rc = Rc::new(create_action);
-    let create_for_btn = create_action_rc.clone();
-    save_btn.connect_clicked(move |_| {
-        create_for_btn();
-    });
-    btn_box.append(&save_btn);
-    container.append(&btn_box);
+    {
+        let finish = finish_edit.clone();
+        entry.connect_activate(move |_| {
+            finish(true);
+        });
+    }
 
-    let create_for_entry = create_action_rc.clone();
-    entry.connect_activate(move |_| {
-        create_for_entry();
-    });
+    {
+        let key_ctrl = EventControllerKey::new();
+        let finish = finish_edit.clone();
+        key_ctrl.connect_key_pressed(move |_, key, _, _| {
+            if key == Key::Escape {
+                finish(false);
+                return glib::Propagation::Stop;
+            }
+            if matches!(key, Key::Return | Key::KP_Enter | Key::ISO_Enter) {
+                finish(true);
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        entry.add_controller(key_ctrl);
+    }
 
-    (container, entry)
+    {
+        let focus_ctrl = gtk4::EventControllerFocus::new();
+        let finish = finish_edit;
+        focus_ctrl.connect_leave(move |_| {
+            let f = finish.clone();
+            glib::idle_add_local_once(move || {
+                f(true);
+            });
+        });
+        entry.add_controller(focus_ctrl);
+    }
+
+    let entry_focus = entry;
+    let sel_end = desktop_rename_selection_end(&initial_name, is_dir);
+    glib::idle_add_local_once(move || {
+        entry_focus.grab_focus();
+        entry_focus.select_region(0, sel_end);
+    });
+}
+
+fn schedule_desktop_inline_rename(
+    fixed: Fixed,
+    target_path: PathBuf,
+    is_dir: bool,
+    icon_positions: Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
+    selected_paths: Rc<RefCell<HashSet<PathBuf>>>,
+    focused_path: Rc<RefCell<Option<PathBuf>>>,
+    trigger_refresh: Rc<dyn Fn()>,
+) {
+    let mut attempts = 0u8;
+    glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
+        attempts = attempts.saturating_add(1);
+        if let Some(widget) = find_desktop_icon_widget(&fixed, &target_path) {
+            let ready = widget.root().is_some()
+                && get_icon_label(&widget)
+                    .is_some_and(|lbl| lbl.is_visible() && lbl.width() > 0 && lbl.height() > 0);
+            if ready || attempts >= 12 {
+                show_desktop_inline_rename(
+                    &widget,
+                    target_path.clone(),
+                    is_dir,
+                    icon_positions.clone(),
+                    selected_paths.clone(),
+                    focused_path.clone(),
+                    trigger_refresh.clone(),
+                );
+                return glib::ControlFlow::Break;
+            }
+        } else if attempts >= 12 {
+            return glib::ControlFlow::Break;
+        }
+        glib::ControlFlow::Continue
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn create_desktop_item_and_edit(
+    fixed: &Fixed,
+    desktop_dir: &Path,
+    desktop_size: (i32, i32),
+    config: &Rc<RefCell<DesktopIconsConfig>>,
+    icon_positions: &Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
+    selected_paths: &Rc<RefCell<HashSet<PathBuf>>>,
+    focused_path: &Rc<RefCell<Option<PathBuf>>>,
+    trigger_refresh: &Rc<dyn Fn()>,
+    click_pos: (f64, f64),
+    top_margin: f64,
+    is_dir: bool,
+) {
+    let target_path = if is_dir {
+        get_unique_folder_name(desktop_dir, "Nueva carpeta")
+    } else {
+        get_unique_text_document_name(desktop_dir, "Nuevo documento")
+    };
+
+    let create_result = if is_dir {
+        fs::create_dir_all(&target_path)
+    } else {
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target_path)
+            .map(|_| ())
+    };
+
+    if let Err(err) = create_result {
+        warn!("No se pudo crear {:?}: {}", target_path, err);
+        return;
+    }
+
+    let cfg = config.borrow().clone();
+    let metrics = IconLayoutMetrics::from_config(&cfg);
+    let mut pos = clamp_icon_position(
+        click_pos.0,
+        click_pos.1,
+        (f64::from(metrics.box_width) / 2.0, f64::from(metrics.box_height) / 2.0),
+        &metrics,
+        desktop_size,
+        top_margin,
+    );
+    if cfg.snap_to_grid {
+        pos = snap_position_to_grid(pos, &metrics, cfg.align_left, desktop_size, top_margin);
+    }
+
+    {
+        let mut pos_map = icon_positions.borrow_mut();
+        pos_map.insert(target_path.clone(), pos);
+        save_icon_positions(&pos_map);
+    }
+    {
+        let mut sel = selected_paths.borrow_mut();
+        sel.clear();
+        sel.insert(target_path.clone());
+    }
+    *focused_path.borrow_mut() = Some(target_path.clone());
+    trigger_refresh();
+
+    schedule_desktop_inline_rename(
+        fixed.clone(),
+        target_path,
+        is_dir,
+        icon_positions.clone(),
+        selected_paths.clone(),
+        focused_path.clone(),
+        trigger_refresh.clone(),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_create_new_submenu(
+    popover: &Popover,
+    stack: &Stack,
+    fixed: &Fixed,
+    desktop_dir: PathBuf,
+    desktop_size: (i32, i32),
+    config: Rc<RefCell<DesktopIconsConfig>>,
+    icon_positions: Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
+    selected_paths: Rc<RefCell<HashSet<PathBuf>>>,
+    focused_path: Rc<RefCell<Option<PathBuf>>>,
+    trigger_refresh: Rc<dyn Fn()>,
+    click_pos: (f64, f64),
+    top_margin: f64,
+) -> GtkBox {
+    let container = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .css_classes(["desktop-context-menu"])
+        .build();
+
+    let back_btn = create_menu_button("← Volver", false);
+    let stack_back = stack.clone();
+    back_btn.connect_clicked(move |_| {
+        stack_back.set_visible_child_name("main");
+    });
+    container.append(&back_btn);
+
+    let sep = GtkBox::new(Orientation::Horizontal, 0);
+    sep.add_css_class("desktop-context-separator");
+    container.append(&sep);
+
+    let folder_btn = create_menu_button("Carpeta", false);
+    {
+        let p_c = popover.clone();
+        let f_c = fixed.clone();
+        let d_c = desktop_dir.clone();
+        let cfg_c = config.clone();
+        let pos_c = icon_positions.clone();
+        let sel_c = selected_paths.clone();
+        let foc_c = focused_path.clone();
+        let trig_c = trigger_refresh.clone();
+        folder_btn.connect_clicked(move |_| {
+            p_c.popdown();
+            create_desktop_item_and_edit(
+                &f_c,
+                &d_c,
+                desktop_size,
+                &cfg_c,
+                &pos_c,
+                &sel_c,
+                &foc_c,
+                &trig_c,
+                click_pos,
+                top_margin,
+                true,
+            );
+        });
+    }
+    container.append(&folder_btn);
+
+    let doc_btn = create_menu_button("Documento de texto", false);
+    {
+        let p_c = popover.clone();
+        let f_c = fixed.clone();
+        let d_c = desktop_dir;
+        let cfg_c = config;
+        let pos_c = icon_positions;
+        let sel_c = selected_paths;
+        let foc_c = focused_path;
+        let trig_c = trigger_refresh;
+        doc_btn.connect_clicked(move |_| {
+            p_c.popdown();
+            create_desktop_item_and_edit(
+                &f_c,
+                &d_c,
+                desktop_size,
+                &cfg_c,
+                &pos_c,
+                &sel_c,
+                &foc_c,
+                &trig_c,
+                click_pos,
+                top_margin,
+                false,
+            );
+        });
+    }
+    container.append(&doc_btn);
+
+    container
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1281,7 +1693,53 @@ fn has_desktop_icon_widget(fixed: &Fixed, path: &Path) -> bool {
     false
 }
 
+fn remove_desktop_icon_widget(fixed: &Fixed, path: &Path) -> bool {
+    let expected = path.to_string_lossy();
+    let mut removed = false;
+    let mut child = fixed.first_child();
+    while let Some(item) = child {
+        child = item.next_sibling();
+        if item.has_css_class("desktop-rubberband") {
+            continue;
+        }
+        if item.property::<Option<String>>("tooltip-text").as_deref() == Some(expected.as_ref()) {
+            fixed.remove(&item);
+            removed = true;
+        }
+    }
+    removed
+}
+
+fn resolve_desktop_app_gicon(icon: &str) -> gio::Icon {
+    let trimmed = icon.trim().trim_matches('"').trim_matches('\'');
+    if trimmed.is_empty() {
+        return gio::ThemedIcon::new("application-x-executable").upcast();
+    }
+    let path = Path::new(trimmed);
+    if path.is_absolute() && path.is_file() {
+        return gio::FileIcon::new(&gio::File::for_path(path)).upcast();
+    }
+    if !trimmed.ends_with("-symbolic") {
+        if let Some(resolved_path) = malus_de_common::apps::resolve_icon_file_path(trimmed) {
+            return gio::FileIcon::new(&gio::File::for_path(&resolved_path)).upcast();
+        }
+    }
+    gio::ThemedIcon::from_names(&[trimmed, "application-x-executable"]).upcast()
+}
+
 fn build_desktop_item_data(path: &Path) -> Option<DesktopItemData> {
+    if path.extension().and_then(|s| s.to_str()) == Some("desktop") {
+        if let Some(entry) = malus_de_common::apps::parse_desktop_file_any(path) {
+            return Some(DesktopItemData {
+                path: path.to_path_buf(),
+                display_name: entry.name,
+                icon: Some(resolve_desktop_app_gicon(&entry.icon)),
+                content_type: Some("application/x-desktop".to_string()),
+                category: StackCategory::categorize(path, Some("application/x-desktop")),
+            });
+        }
+    }
+
     let file = gio::File::for_path(path);
     let file_info = file.query_info(
         "standard::display-name,standard::icon,standard::content-type",
@@ -1681,6 +2139,55 @@ pub fn set_desktop_icon_selected<W: IsA<gtk4::Widget>>(item_box: &W, selected: b
     }
 }
 
+fn build_multi_desktop_drag_paintable(
+    items: &[(gtk4::Widget, (f64, f64))],
+    cursor_x: f64,
+    cursor_y: f64,
+) -> Option<(gtk4::gdk::Paintable, i32, i32)> {
+    if items.is_empty() {
+        return None;
+    }
+
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+
+    for (w, (ix, iy)) in items {
+        let ww = w.width().max(w.width_request()).max(72) as f64;
+        let wh = w.height().max(w.height_request()).max(76) as f64;
+        min_x = min_x.min(*ix);
+        min_y = min_y.min(*iy);
+        max_x = max_x.max(*ix + ww);
+        max_y = max_y.max(*iy + wh);
+    }
+
+    if !min_x.is_finite() || !min_y.is_finite() {
+        return None;
+    }
+
+    let snapshot = gtk4::Snapshot::new();
+    for (w, (ix, iy)) in items {
+        let wp = gtk4::WidgetPaintable::new(Some(w));
+        let ww = wp.intrinsic_width().max(w.width()).max(w.width_request()).max(72) as f64;
+        let wh = wp.intrinsic_height().max(w.height()).max(w.height_request()).max(76) as f64;
+        snapshot.save();
+        snapshot.translate(&gtk4::graphene::Point::new(
+            (*ix - min_x) as f32,
+            (*iy - min_y) as f32,
+        ));
+        wp.snapshot(&snapshot, ww, wh);
+        snapshot.restore();
+    }
+
+    let total_w = (max_x - min_x).ceil().max(1.0) as f32;
+    let total_h = (max_y - min_y).ceil().max(1.0) as f32;
+    let paintable = snapshot.to_paintable(Some(&gtk4::graphene::Size::new(total_w, total_h)))?;
+    let hot_x = (cursor_x - min_x).round() as i32;
+    let hot_y = (cursor_y - min_y).round() as i32;
+    Some((paintable, hot_x, hot_y))
+}
+
 #[allow(unused_variables)]
 fn render_single_icon(
     fixed: &Fixed,
@@ -1728,7 +2235,8 @@ fn render_single_icon(
     let icon_image = thumbnail
         .as_ref()
         .map(|pixbuf| {
-            let texture = gtk4::gdk::Texture::for_pixbuf(pixbuf);
+            let clipped = squircle_clip_pixbuf(pixbuf);
+            let texture = gtk4::gdk::Texture::for_pixbuf(clipped.as_ref().unwrap_or(pixbuf));
             Image::from_paintable(Some(&texture))
         })
         .unwrap_or_else(|| match icon.as_ref() {
@@ -1936,23 +2444,72 @@ fn render_single_icon(
 
     let path_drag = path.clone();
     let sel_drag = selected_paths.clone();
+    let pos_drag = icon_positions.clone();
+    let fixed_prep = fixed.clone();
     let item_box_prep = item_box.clone();
     let stored_click_prep = stored_click.clone();
     drag_source.connect_prepare(move |source, click_x, click_y| {
         let rounded_click = (click_x.round(), click_y.round());
         stored_click_prep.set(rounded_click);
-        malus_de_common::write_drag_anchor(&path_drag, rounded_click.0, rounded_click.1);
         set_desktop_icon_selected(&item_box_prep, true);
-        let paintable = gtk4::WidgetPaintable::new(Some(&item_box_prep));
-        source.set_icon(Some(&paintable), rounded_click.0 as i32, rounded_click.1 as i32);
 
         let sel = sel_drag.borrow();
+        let pos_map = pos_drag.borrow();
+        let (p0x, p0y) = pos_map
+            .get(&path_drag)
+            .copied()
+            .unwrap_or_else(|| fixed_prep.child_position(&item_box_prep));
+        let cursor_desktop_x = p0x + rounded_click.0;
+        let cursor_desktop_y = p0y + rounded_click.1;
+
         let files: Vec<gio::File> = if sel.contains(&path_drag) && sel.len() > 1 {
-            std::iter::once(&path_drag)
-                .chain(sel.iter().filter(|p| *p != &path_drag))
+            let ordered_paths: Vec<PathBuf> = std::iter::once(path_drag.clone())
+                .chain(sel.iter().filter(|p| *p != &path_drag).cloned())
+                .collect();
+            let anchors: Vec<(PathBuf, (f64, f64))> = ordered_paths
+                .iter()
+                .map(|p| {
+                    let (ix, iy) = pos_map.get(p).copied().unwrap_or((p0x, p0y));
+                    (
+                        p.clone(),
+                        (cursor_desktop_x - ix, cursor_desktop_y - iy),
+                    )
+                })
+                .collect();
+            malus_de_common::write_drag_anchors(&anchors);
+
+            let mut drag_widgets = Vec::new();
+            let mut sibling = fixed_prep.first_child();
+            while let Some(child) = sibling {
+                sibling = child.next_sibling();
+                if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
+                    let p = PathBuf::from(p_str);
+                    if sel.contains(&p) {
+                        let pos = pos_map
+                            .get(&p)
+                            .copied()
+                            .unwrap_or_else(|| fixed_prep.child_position(&child));
+                        drag_widgets.push((child, pos));
+                    }
+                }
+            }
+            if let Some((multi_paintable, hot_x, hot_y)) =
+                build_multi_desktop_drag_paintable(&drag_widgets, cursor_desktop_x, cursor_desktop_y)
+            {
+                source.set_icon(Some(&multi_paintable), hot_x, hot_y);
+            } else {
+                let paintable = gtk4::WidgetPaintable::new(Some(&item_box_prep));
+                source.set_icon(Some(&paintable), rounded_click.0 as i32, rounded_click.1 as i32);
+            }
+
+            ordered_paths
+                .iter()
                 .map(|p| gio::File::for_path(p))
                 .collect()
         } else {
+            let paintable = gtk4::WidgetPaintable::new(Some(&item_box_prep));
+            source.set_icon(Some(&paintable), rounded_click.0 as i32, rounded_click.1 as i32);
+            malus_de_common::write_drag_anchor(&path_drag, rounded_click.0, rounded_click.1);
             vec![gio::File::for_path(&path_drag)]
         };
         let file_list = gtk4::gdk::FileList::from_array(&files);
@@ -1992,9 +2549,11 @@ fn render_single_icon(
     let act_drag_end = active_icon_drag.clone();
     let icon_pos_drag_end = icon_positions.clone();
     let sel_drag_end = selected_paths.clone();
+    let internal_drag_end = internal_drag_paths.clone();
     let orig_pos = (x, y);
     drag_source.connect_drag_end(move |_, drag, _| {
         *act_drag_end.borrow_mut() = None;
+        let is_move = drag.selected_action().contains(gtk4::gdk::DragAction::MOVE);
         let mut removed_moved_out = false;
         let mut sibling = fixed_drag_end.first_child();
         while let Some(child) = sibling {
@@ -2003,25 +2562,28 @@ fn render_single_icon(
             if cx < 0.0 || cy < 0.0 {
                 if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
                     let p = PathBuf::from(p_str);
-                    if !p.exists() {
+                    if p.symlink_metadata().is_err() {
                         fixed_drag_end.remove(&child);
                         icon_pos_drag_end.borrow_mut().remove(&p);
                         sel_drag_end.borrow_mut().remove(&p);
                         removed_moved_out = true;
                         continue;
                     }
-                    let target_pos = icon_pos_drag_end
-                        .borrow()
-                        .get(&p)
-                        .cloned()
-                        .unwrap_or(orig_pos);
-                    fixed_drag_end.move_(&child, target_pos.0, target_pos.1);
+                    let is_internal = internal_drag_end.borrow_mut().remove(&p);
+                    if !is_move || is_internal {
+                        let target_pos = icon_pos_drag_end
+                            .borrow()
+                            .get(&p)
+                            .cloned()
+                            .unwrap_or(orig_pos);
+                        fixed_drag_end.move_(&child, target_pos.0, target_pos.1);
+                    }
                 }
             }
         }
         if removed_moved_out {
             save_icon_positions(&icon_pos_drag_end.borrow());
-        } else if drag.selected_action() == gtk4::gdk::DragAction::MOVE {
+        } else if is_move {
             let fixed_check = fixed_drag_end.clone();
             let pos_check = icon_pos_drag_end.clone();
             let sel_check = sel_drag_end.clone();
@@ -2035,11 +2597,21 @@ fn render_single_icon(
                     }
                     if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
                         let p = PathBuf::from(p_str);
-                        if !p.exists() {
+                        if p.symlink_metadata().is_err() {
                             fixed_check.remove(&child);
                             pos_check.borrow_mut().remove(&p);
                             sel_check.borrow_mut().remove(&p);
                             changed = true;
+                        } else {
+                            let (cx, cy) = fixed_check.child_position(&child);
+                            if cx < 0.0 || cy < 0.0 {
+                                let target_pos = pos_check
+                                    .borrow()
+                                    .get(&p)
+                                    .cloned()
+                                    .unwrap_or(orig_pos);
+                                fixed_check.move_(&child, target_pos.0, target_pos.1);
+                            }
                         }
                     }
                 }
@@ -2120,6 +2692,8 @@ enum DesktopDragMode {
     },
 }
 
+type DesktopShortcutHandler = Rc<RefCell<Option<Rc<dyn Fn(String, f64, f64)>>>>;
+
 fn create_wallpaper_window(
     application: &Application,
     monitor: Option<&gtk4::gdk::Monitor>,
@@ -2129,6 +2703,7 @@ fn create_wallpaper_window(
     icon_positions: &Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
     internal_drag_paths: &Rc<RefCell<HashSet<PathBuf>>>,
     active_icon_drag: &Rc<RefCell<Option<(PathBuf, (f64, f64), (f64, f64))>>>,
+    shortcut_handler: &DesktopShortcutHandler,
     is_primary: bool,
 ) {
     let window = ApplicationWindow::builder()
@@ -2255,9 +2830,15 @@ fn create_wallpaper_window(
         // Controladores de teclado en la ventana del escritorio:
         // Espacio -> Quick Look, Enter -> Abrir, Delete -> Papelera
         let key_controller = EventControllerKey::new();
+        let win_key = window.clone();
         let foc_path_key = focused_path.clone();
         let sel_paths_key = selected_paths.clone();
         key_controller.connect_key_pressed(move |_, keyval, _, _| {
+            if gtk4::prelude::GtkWindowExt::focus(&win_key)
+                .is_some_and(|w| w.is::<gtk4::Editable>() || w.is::<gtk4::Text>())
+            {
+                return glib::Propagation::Proceed;
+            }
             match keyval {
                 Key::space => {
                     if let Some(path) = foc_path_key.borrow().as_ref() {
@@ -2322,6 +2903,8 @@ fn create_wallpaper_window(
         let cfg_menu = current_config.clone();
         let trigger_refresh_menu = trigger_refresh.clone();
         let icon_pos_snap = icon_positions.clone();
+        let sel_paths_ctx = selected_paths.clone();
+        let foc_path_ctx = focused_path.clone();
         let rb_check_ctx = rubberband.clone();
 
         bg_context.connect_pressed(move |gesture, _, x, y| {
@@ -2347,15 +2930,19 @@ fn create_wallpaper_window(
                 .css_classes(["desktop-context-menu"])
                 .build();
 
-            let click_pos_cell = Rc::new(Cell::new((x, y)));
-
-            let (new_folder_box, new_folder_entry) = build_new_folder_view(
+            let create_new_box = build_create_new_submenu(
                 &popover,
                 &stack,
+                &icons_context,
                 desktop_dir_menu.clone(),
-                click_pos_cell.clone(),
+                desktop_size,
+                cfg_menu.clone(),
                 icon_pos_snap.clone(),
+                sel_paths_ctx.clone(),
+                foc_path_ctx.clone(),
                 trigger_refresh_menu.clone(),
+                (x, y),
+                top_margin,
             );
 
             let organize_box = build_organize_submenu(
@@ -2376,23 +2963,13 @@ fn create_wallpaper_window(
                 .css_classes(["desktop-context-menu"])
                 .build();
 
-            // 1. Nueva Carpeta
-            let new_folder_btn = create_menu_button("Nueva carpeta", false);
-            let stack_nf = stack.clone();
-            let entry_nf = new_folder_entry.clone();
-            let d_dir = desktop_dir_menu.clone();
-            new_folder_btn.connect_clicked(move |_| {
-                let default_path = get_unique_folder_name(&d_dir, "Nueva carpeta");
-                let default_str = default_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("Nueva carpeta");
-                entry_nf.set_text(default_str);
-                stack_nf.set_visible_child_name("new_folder");
-                entry_nf.grab_focus();
-                entry_nf.select_region(0, -1);
+            // 1. Crear nuevo ▸ (Carpeta / Documento de texto con edición inline inmediata)
+            let create_new_btn = create_menu_button("Crear nuevo ▸", false);
+            let stack_cn = stack.clone();
+            create_new_btn.connect_clicked(move |_| {
+                stack_cn.set_visible_child_name("create_new");
             });
-            menu.append(&new_folder_btn);
+            menu.append(&create_new_btn);
 
             let sep1 = GtkBox::new(Orientation::Horizontal, 0);
             sep1.add_css_class("desktop-context-separator");
@@ -2555,7 +3132,7 @@ fn create_wallpaper_window(
 
             stack.add_named(&menu, Some("main"));
             stack.add_named(&organize_box, Some("organize"));
-            stack.add_named(&new_folder_box, Some("new_folder"));
+            stack.add_named(&create_new_box, Some("create_new"));
             stack.set_visible_child_name("main");
 
             popover.set_child(Some(&stack));
@@ -2851,18 +3428,28 @@ fn create_wallpaper_window(
                     continue;
                 };
                 let destination = gio::File::for_path(&drop_dir).child(&name);
+                let shared_anchor = source
+                    .path()
+                    .and_then(|src_path| malus_de_common::read_drag_anchor(&src_path));
+                let offset_idx = if shared_anchor.is_some() {
+                    0.0
+                } else {
+                    (index % 4) as f64 * 24.0
+                };
                 if source.equal(&destination) {
                     if let Some(path) = source.path() {
-                        let pointer_offset = active_drag_drop
-                            .borrow()
-                            .as_ref()
-                            .filter(|(active_path, _, _)| active_path == &path)
-                            .map(|(_, _, pointer_offset)| *pointer_offset)
+                        let pointer_offset = shared_anchor
+                            .or_else(|| {
+                                active_drag_drop
+                                    .borrow()
+                                    .as_ref()
+                                    .filter(|(active_path, _, _)| active_path == &path)
+                                    .map(|(_, _, pointer_offset)| *pointer_offset)
+                            })
                             .unwrap_or((
                                 f64::from(metrics.box_width) / 2.0,
                                 f64::from(metrics.box_height) / 2.0,
                             ));
-                        let offset_idx = (index % 4) as f64 * 24.0;
                         let mut position = clamp_icon_position(x + offset_idx, y + offset_idx, pointer_offset, &metrics, desktop_size, top_margin);
                         if snap {
                             position = snap_position_to_grid(position, &metrics, align_left, desktop_size, top_margin);
@@ -2876,14 +3463,10 @@ fn create_wallpaper_window(
                     continue;
                 }
 
-                let pointer_offset = source
-                    .path()
-                    .and_then(|src_path| malus_de_common::read_drag_anchor(&src_path))
-                    .unwrap_or((
-                        f64::from(metrics.box_width) / 2.0,
-                        f64::from(metrics.icon_size) / 2.0,
-                    ));
-                let offset_idx = (index % 4) as f64 * 24.0;
+                let pointer_offset = shared_anchor.unwrap_or((
+                    f64::from(metrics.box_width) / 2.0,
+                    f64::from(metrics.icon_size) / 2.0,
+                ));
                 let mut position = clamp_icon_position(
                     x + offset_idx,
                     y + offset_idx,
@@ -2896,12 +3479,42 @@ fn create_wallpaper_window(
                     position = snap_position_to_grid(position, &metrics, align_left, desktop_size, top_margin);
                 }
 
-                match source.move_(
-                    &destination,
-                    gio::FileCopyFlags::NONE,
-                    gio::Cancellable::NONE,
-                    None,
-                ) {
+                let is_app_shortcut = source
+                    .path()
+                    .as_deref()
+                    .is_some_and(malus_de_common::apps::is_application_desktop_file);
+
+                let transfer_result: Result<(), String> = if is_app_shortcut {
+                    if let (Some(src_path), Some(dest_path)) = (source.path(), destination.path()) {
+                        if dest_path.symlink_metadata().is_ok() {
+                            if has_desktop_icon_widget(&drop_icons, &dest_path)
+                                && move_desktop_icon(&drop_icons, &dest_path, position)
+                            {
+                                drop_positions.borrow_mut().insert(dest_path.clone(), position);
+                                internal_paths_drop.borrow_mut().insert(dest_path);
+                                moved_any = true;
+                                continue;
+                            }
+                            Err("Ya existe un acceso directo con ese nombre en el escritorio".to_string())
+                        } else {
+                            std::os::unix::fs::symlink(&src_path, &dest_path)
+                                .map_err(|e| e.to_string())
+                        }
+                    } else {
+                        Err("Ruta inválida para el acceso directo de aplicación".to_string())
+                    }
+                } else {
+                    source
+                        .move_(
+                            &destination,
+                            gio::FileCopyFlags::NONE,
+                            gio::Cancellable::NONE,
+                            None,
+                        )
+                        .map_err(|e| e.to_string())
+                };
+
+                match transfer_result {
                     Ok(()) => {
                         if let Some(path) = destination.path() {
                             drop_positions.borrow_mut().insert(path.clone(), position);
@@ -2963,6 +3576,109 @@ fn create_wallpaper_window(
         overlay.add_controller(drop_target);
         overlay.add_overlay(&icons);
 
+        // Handler IPC para accesos directos arrastrados desde Spotlight al escritorio
+        {
+            let sc_dir = desktop_dir.to_path_buf();
+            let sc_positions = icon_positions.clone();
+            let sc_internal = internal_drag_paths.clone();
+            let sc_active_drag = active_icon_drag.clone();
+            let sc_icons = icons.clone();
+            let sc_cfg = current_config.clone();
+            let sc_rec = recently_dropped_paths.clone();
+            let sc_sel = selected_paths.clone();
+            let sc_foc = focused_path.clone();
+            *shortcut_handler.borrow_mut() = Some(Rc::new(move |desktop_file, drop_x, drop_y| {
+                let src_path = PathBuf::from(&desktop_file);
+                let Some(name) = src_path.file_name() else {
+                    return;
+                };
+                let dest_path = sc_dir.join(name);
+                let cfg_snapshot = sc_cfg.borrow().clone();
+                let metrics = IconLayoutMetrics::from_config(&cfg_snapshot);
+                let rows = ((desktop_size.1 - (top_margin as i32) - 80).max(1)
+                    / metrics.cell_height())
+                .max(1) as usize;
+                let pointer_offset = (
+                    f64::from(metrics.box_width) / 2.0,
+                    f64::from(metrics.icon_size) / 2.0,
+                );
+                let mut position = clamp_icon_position(
+                    drop_x,
+                    drop_y,
+                    pointer_offset,
+                    &metrics,
+                    desktop_size,
+                    top_margin,
+                );
+                if cfg_snapshot.snap_to_grid {
+                    position = snap_position_to_grid(
+                        position,
+                        &metrics,
+                        cfg_snapshot.align_left,
+                        desktop_size,
+                        top_margin,
+                    );
+                }
+
+                if dest_path.symlink_metadata().is_ok() {
+                    if has_desktop_icon_widget(&sc_icons, &dest_path)
+                        && move_desktop_icon(&sc_icons, &dest_path, position)
+                    {
+                        sc_positions.borrow_mut().insert(dest_path.clone(), position);
+                        sc_internal.borrow_mut().insert(dest_path);
+                        save_icon_positions(&sc_positions.borrow());
+                    }
+                    return;
+                }
+
+                if let Err(err) = std::os::unix::fs::symlink(&src_path, &dest_path) {
+                    warn!(
+                        "No se pudo crear acceso directo en el escritorio {:?} -> {:?}: {}",
+                        dest_path, src_path, err
+                    );
+                    return;
+                }
+
+                sc_positions.borrow_mut().insert(dest_path.clone(), position);
+                sc_internal.borrow_mut().insert(dest_path.clone());
+                sc_rec.borrow_mut().insert(dest_path.clone());
+
+                if !cfg_snapshot.use_stacks {
+                    let mut sibling = sc_icons.first_child();
+                    while let Some(child) = sibling {
+                        sibling = child.next_sibling();
+                        set_desktop_icon_selected(&child, false);
+                    }
+                    sc_sel.borrow_mut().clear();
+                    sc_sel.borrow_mut().insert(dest_path.clone());
+                    *sc_foc.borrow_mut() = Some(dest_path.clone());
+                    if !has_desktop_icon_widget(&sc_icons, &dest_path) {
+                        if let Some(item_data) = build_desktop_item_data(&dest_path) {
+                            let mut pos_map = sc_positions.borrow_mut();
+                            render_single_icon(
+                                &sc_icons,
+                                0,
+                                rows,
+                                item_data,
+                                &metrics,
+                                &cfg_snapshot,
+                                desktop_size,
+                                &mut pos_map,
+                                &sc_positions,
+                                &sc_internal,
+                                &sc_active_drag,
+                                &sc_sel,
+                                &sc_foc,
+                                &sc_rec,
+                                top_margin,
+                            );
+                        }
+                    }
+                }
+                save_icon_positions(&sc_positions.borrow());
+            }));
+        }
+
         // Monitor en tiempo real para reflejar cambios en la carpeta ~/Escritorio
         let desktop_file = gio::File::for_path(desktop_dir);
         match desktop_file.monitor_directory(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE) {
@@ -2971,13 +3687,29 @@ fn create_wallpaper_window(
                 let icons_mon = icons.clone();
                 let rec_mon = recently_dropped_paths.clone();
                 let pos_mon = icon_positions.clone();
+                let sel_mon = selected_paths.clone();
+                let foc_mon = focused_path.clone();
+                let internal_mon = internal_drag_paths.clone();
+                let desktop_dir_mon = desktop_dir.to_path_buf();
                 monitor.connect_changed(move |_, file, _other_file, event_type| {
                     let event_path = file.path();
+                    if event_path.as_ref() == Some(&desktop_dir_mon) {
+                        return;
+                    }
                     match event_type {
                         gio::FileMonitorEvent::Deleted | gio::FileMonitorEvent::MovedOut => {
                             if let Some(ref p) = event_path {
-                                if !has_desktop_icon_widget(&icons_mon, p) {
-                                    pos_mon.borrow_mut().remove(p);
+                                let removed_widget = remove_desktop_icon_widget(&icons_mon, p);
+                                let removed_pos = pos_mon.borrow_mut().remove(p).is_some();
+                                sel_mon.borrow_mut().remove(p);
+                                internal_mon.borrow_mut().remove(p);
+                                if foc_mon.borrow().as_ref() == Some(p) {
+                                    *foc_mon.borrow_mut() = None;
+                                }
+                                if removed_pos {
+                                    save_icon_positions(&pos_mon.borrow());
+                                }
+                                if removed_widget || !has_desktop_icon_widget(&icons_mon, p) {
                                     return;
                                 }
                             }
@@ -3104,18 +3836,33 @@ fn main() -> Result<()> {
     let icon_positions = Rc::new(RefCell::new(load_icon_positions()));
     let internal_drag_paths = Rc::new(RefCell::new(HashSet::new()));
     let active_icon_drag = Rc::new(RefCell::new(None));
+    let shortcut_handler: DesktopShortcutHandler = Rc::new(RefCell::new(None));
+    let shortcut_handler_ipc = shortcut_handler.clone();
 
-    app.connect_startup(|_| {
+    app.connect_startup(move |_| {
         let initial_dark = malus_de_common::config::is_dark_mode_active();
         set_is_dark_mode(initial_dark);
 
-        // 1. Escuchar mensajes IPC del compositor (ThemeChanged entre procesos en tiempo real)
+        // 1. Escuchar mensajes IPC del compositor (ThemeChanged y accesos directos de Spotlight)
         let (tx, rx) = async_channel::unbounded::<malus_de_common::ipc::IpcMessage>();
+        let shortcut_handler_rx = shortcut_handler_ipc.clone();
         glib::spawn_future_local(async move {
             while let Ok(msg) = rx.recv().await {
-                if let malus_de_common::ipc::IpcMessage::ThemeChanged { is_dark, .. } = msg {
-                    info!("🎨 [Wallpaper] IPC ThemeChanged recibido: is_dark={}", is_dark);
-                    set_is_dark_mode(is_dark);
+                match msg {
+                    malus_de_common::ipc::IpcMessage::ThemeChanged { is_dark, .. } => {
+                        info!("🎨 [Wallpaper] IPC ThemeChanged recibido: is_dark={}", is_dark);
+                        set_is_dark_mode(is_dark);
+                    }
+                    malus_de_common::ipc::IpcMessage::CreateDesktopAppShortcut {
+                        desktop_file,
+                        drop_x,
+                        drop_y,
+                    } => {
+                        if let Some(ref handler) = *shortcut_handler_rx.borrow() {
+                            handler(desktop_file, drop_x, drop_y);
+                        }
+                    }
+                    _ => {}
                 }
             }
         });
@@ -3186,7 +3933,13 @@ fn main() -> Result<()> {
                 config_dir.join("wallpaper.webp"),
                 config_dir.join("wallpaper.svg"),
             ];
-            candidates.into_iter().find(|p| p.exists())
+            candidates.into_iter().find(|p| p.exists()).or_else(|| {
+                if config_dir.join(".wallpaper-gradient").exists() {
+                    None
+                } else {
+                    malus_de_common::config::default_bundled_wallpaper_path()
+                }
+            })
         });
 
         if let Some(desktop_dir) = &desktop_dir {
@@ -3262,6 +4015,7 @@ fn main() -> Result<()> {
                     &icon_positions,
                     &internal_drag_paths,
                     &active_icon_drag,
+                    &shortcut_handler,
                     is_primary,
                 );
                 created += 1;
@@ -3278,6 +4032,7 @@ fn main() -> Result<()> {
                 &icon_positions,
                 &internal_drag_paths,
                 &active_icon_drag,
+                &shortcut_handler,
                 true,
             );
         }
@@ -3365,6 +4120,20 @@ mod tests {
 
         let f3 = super::get_unique_folder_name(&temp_dir, "Nueva carpeta");
         assert_eq!(f3, temp_dir.join("Nueva carpeta 3"));
+
+        let d1 = super::get_unique_text_document_name(&temp_dir, "Nuevo documento");
+        assert_eq!(d1, temp_dir.join("Nuevo documento.txt"));
+        std::fs::write(&d1, "").unwrap();
+
+        let d2 = super::get_unique_text_document_name(&temp_dir, "Nuevo documento");
+        assert_eq!(d2, temp_dir.join("Nuevo documento 2.txt"));
+
+        assert_eq!(super::desktop_rename_selection_end("Nueva carpeta", true), -1);
+        assert_eq!(
+            super::desktop_rename_selection_end("Nuevo documento.txt", false),
+            "Nuevo documento".chars().count() as i32
+        );
+        assert_eq!(super::desktop_rename_selection_end(".gitignore", false), -1);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
@@ -3670,5 +4439,20 @@ mod tests {
             .expect("Debe poder pre-rasterizar el fondo degradado");
         assert_eq!(tex.width(), 64);
         assert_eq!(tex.height(), 36);
+    }
+}
+
+#[cfg(test)]
+mod squircle_thumb_tests {
+    use super::*;
+
+    #[test]
+    fn clip_makes_corners_transparent_and_keeps_center_opaque() {
+        let (w, h) = (64usize, 64usize);
+        let mut rgba = vec![255u8; w * h * 4];
+        apply_thumb_squircle_clip_rgba(&mut rgba, w, h, thumb_squircle_radius(64, 64));
+        assert_eq!(rgba[3], 0);
+        assert_eq!(rgba[((h / 2) * w + w / 2) * 4 + 3], 255);
+        assert_eq!(rgba[(w / 2) * 4 + 3], 255);
     }
 }

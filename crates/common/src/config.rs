@@ -774,6 +774,9 @@ org.freedesktop.impl.portal.Settings=gtk;gnome;
     // 8. Asociaciones MIME por defecto (paquetes .rpm, flatpak, etc. hacia GNOME Software)
     setup_default_mime_applications(&malus_config_dir);
 
+    // 8b. Asegurar el fondo de pantalla predeterminado integrado si el usuario aún no configuró uno
+    ensure_default_wallpaper(&malus_config_dir);
+
     // 9. Asegurar que el tema de cursores macOS integrado esté disponible en el entorno del usuario
     let bundled_cursor_dirs = [
         PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/cursors")),
@@ -813,11 +816,44 @@ org.freedesktop.impl.portal.Settings=gtk;gnome;
     Ok(malus_config_dir)
 }
 
-/// Configura los editores basados en VS Code / Electron (Antigravity IDE, Code) para que utilicen
+/// Nombre del archivo de fondo de pantalla predeterminado integrado en el proyecto (Pexels License).
+pub const DEFAULT_WALLPAPER_FILENAME: &str = "pexels-jbarbozameca-41027443.webp";
+
+/// Resuelve la ruta al fondo de pantalla predeterminado integrado en el repositorio o instalado en el sistema.
+pub fn default_bundled_wallpaper_path() -> Option<PathBuf> {
+    let candidates = [
+        PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/wallpapers/pexels-jbarbozameca-41027443.webp"
+        )),
+        PathBuf::from("/usr/local/share/malus-de/wallpapers/pexels-jbarbozameca-41027443.webp"),
+    ];
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+/// Instala el fondo de pantalla predeterminado en `~/.config/malus-de/wallpaper.webp`
+/// cuando no existe ningún fondo configurado por el usuario ni se eligió explícitamente el degradado.
+pub fn ensure_default_wallpaper(malus_config_dir: &Path) {
+    if malus_config_dir.join(".wallpaper-gradient").exists() {
+        return;
+    }
+    let has_custom = ["png", "jpg", "jpeg", "webp", "svg"]
+        .iter()
+        .any(|ext| malus_config_dir.join(format!("wallpaper.{}", ext)).is_file());
+    if has_custom {
+        return;
+    }
+    if let Some(bundled) = default_bundled_wallpaper_path() {
+        let _ = std::fs::create_dir_all(malus_config_dir);
+        let _ = std::fs::copy(bundled, malus_config_dir.join("wallpaper.webp"));
+    }
+}
+
+/// Configura los editores basados en VS Code / Electron (Antigravity, Antigravity IDE, Code) para que utilicen
 /// la barra personalizada pero con controles custom (`"window.controlsStyle": "custom"`), permitiendo
 /// que los controles de ventana respeten la posición y estética de macOS en Malus DE.
 pub fn setup_electron_ide_configurations(malus_config_dir: &Path) {
-    let ide_names = ["Antigravity IDE", "Code", "Code - OSS", "VSCodium"];
+    let ide_names = ["Antigravity", "Antigravity IDE", "Code", "Code - OSS", "VSCodium"];
     for ide_name in ide_names {
         let user_dir = malus_config_dir.join(ide_name).join("User");
         let settings_path = user_dir.join("settings.json");
@@ -3318,5 +3354,36 @@ apps = []
         assert_eq!(custom.clamped_grid_spacing(), BranchesConfig::MAX_GRID_SPACING as i32);
         assert_eq!(custom.clamped_text_size(), BranchesConfig::MAX_TEXT_SIZE as i32);
         assert_eq!(custom.clamped_list_icon_size(), BranchesConfig::MIN_LIST_ICON_SIZE as i32);
+    }
+
+    #[test]
+    fn default_bundled_wallpaper_exists_and_seeds_new_config_dir() {
+        let bundled = default_bundled_wallpaper_path()
+            .expect("El wallpaper predeterminado empaquetado debe existir en assets/wallpapers/");
+        assert!(bundled.is_file());
+        assert_eq!(
+            bundled.file_name().and_then(|n| n.to_str()),
+            Some(DEFAULT_WALLPAPER_FILENAME)
+        );
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "malus-wallpaper-seed-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        ensure_default_wallpaper(&temp_dir);
+        assert!(temp_dir.join("wallpaper.webp").is_file());
+
+        // Si el usuario eligió explícitamente el degradado, no debe sobrescribirse
+        let _ = std::fs::remove_file(temp_dir.join("wallpaper.webp"));
+        std::fs::write(temp_dir.join(".wallpaper-gradient"), "aurora\n").unwrap();
+        ensure_default_wallpaper(&temp_dir);
+        assert!(!temp_dir.join("wallpaper.webp").exists());
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

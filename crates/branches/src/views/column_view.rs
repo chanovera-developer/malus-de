@@ -9,7 +9,7 @@ use gtk4::{
     Align, Box as GtkBox, Button, EventControllerKey, GestureClick, Grid, Image, Label, ListBox,
     ListBoxRow, Orientation, PolicyType, ScrolledWindow, Separator,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -31,6 +31,7 @@ struct ColumnViewInner {
     columns: RefCell<Vec<ColumnData>>,
     preview_box: RefCell<Option<GtkBox>>,
     current_root: RefCell<PathBuf>,
+    pending_select_name: RefCell<Option<String>>,
     can_create: std::cell::Cell<bool>,
     show_hidden: RefCell<bool>,
     sort_by: RefCell<SortBy>,
@@ -61,6 +62,7 @@ impl ColumnView {
             columns: RefCell::new(Vec::new()),
             preview_box: RefCell::new(None),
             current_root: RefCell::new(PathBuf::from("/")),
+            pending_select_name: RefCell::new(None),
             can_create: std::cell::Cell::new(false),
             show_hidden: RefCell::new(false),
             sort_by: RefCell::new(SortBy::Name),
@@ -95,17 +97,50 @@ impl ColumnView {
         *self.inner.sort_order.borrow_mut() = sort_order;
         *self.inner.current_root.borrow_mut() = path.to_path_buf();
 
+        // Entrar a una carpeta que ya se muestra como columna: se conservan las columnas
+        // anteriores (el padre no se oculta si hay espacio). Si no caben, `scroll_to_end`
+        // desplaza el contenedor a la izquierda con animación y el padre sale de vista.
+        let existing_idx = self
+            .inner
+            .columns
+            .borrow()
+            .iter()
+            .position(|c| c.path == path)
+            .filter(|&k| k > 0);
+        if let (Some(k), true) = (
+            existing_idx,
+            self.inner.pending_select_name.borrow().is_none(),
+        ) {
+            self.inner.prune_after(k);
+            let list_box = self
+                .inner
+                .columns
+                .borrow()
+                .get(k)
+                .map(|col| col.list_box.clone());
+            if let Some(list_box) = list_box {
+                list_box.unselect_all();
+            }
+            self.inner.scroll_to_end();
+            return;
+        }
+
         self.inner.clear_all();
         self.inner.push_column(0, path.to_path_buf(), items.to_vec());
     }
 
+    pub fn queue_select_name(&self, name: &str) {
+        *self.inner.pending_select_name.borrow_mut() = Some(name.to_string());
+    }
+
     pub fn get_selected_item_and_widget(&self) -> Option<(FileItem, gtk4::Widget)> {
         let columns = self.inner.columns.borrow();
-        let last_col = columns.last()?;
-        let selected_row = last_col.list_box.selected_row()?;
-        let idx = selected_row.index() as usize;
-        let item = last_col.items.get(idx).cloned()?;
-        Some((item, selected_row.upcast()))
+        columns.iter().rev().find_map(|col| {
+            let selected_row = col.list_box.selected_row()?;
+            let idx = selected_row.index() as usize;
+            let item = col.items.get(idx).cloned()?;
+            Some((item, selected_row.upcast()))
+        })
     }
 }
 
@@ -122,12 +157,26 @@ impl ColumnViewInner {
     fn push_column(self: &Rc<Self>, col_idx: usize, path: PathBuf, items: Vec<FileItem>) {
         let (col_box, list_box) = self.create_column_widget(col_idx, path.clone(), items.clone());
         self.columns_box.append(&col_box);
+        if col_idx > 0 {
+            slide_in_from_right(&col_box, 240);
+        }
+        let select_idx = self
+            .pending_select_name
+            .borrow_mut()
+            .take()
+            .and_then(|target| items.iter().position(|it| it.name == target));
         self.columns.borrow_mut().push(ColumnData {
             path,
             items,
             container: col_box,
-            list_box,
+            list_box: list_box.clone(),
         });
+        if let Some(idx) = select_idx {
+            if let Some(row) = list_box.row_at_index(idx as i32) {
+                list_box.select_row(Some(&row));
+                row.grab_focus();
+            }
+        }
         self.scroll_to_end();
     }
 
@@ -183,12 +232,48 @@ impl ColumnViewInner {
             g.set_state(gtk4::EventSequenceState::Claimed);
             let nav = self_bg.on_navigate.clone();
             let dir_reload = col_dir.clone();
+            let self_create = self_bg.clone();
             crate::views::show_background_create_menu(
                 &scrolled_bg,
                 x,
                 y,
                 col_dir.clone(),
-                Rc::new(move |_| nav(dir_reload.clone())),
+                Rc::new(move |created_path| {
+                    if let Some(new_name) =
+                        created_path.file_name().map(|n| n.to_string_lossy().into_owned())
+                    {
+                        *self_create.pending_select_name.borrow_mut() = Some(new_name);
+                    }
+                    nav(dir_reload.clone());
+
+                    let inner_lookup = self_create.clone();
+                    let target_path = created_path;
+                    let inner_rename = self_create.clone();
+                    let nav_rename = nav.clone();
+                    let dir_rename = dir_reload.clone();
+                    let on_renamed: crate::views::RenameCallback = Rc::new(move |renamed_path| {
+                        if let Some(renamed_name) = renamed_path.file_name() {
+                            *inner_rename.pending_select_name.borrow_mut() =
+                                Some(renamed_name.to_string_lossy().into_owned());
+                        }
+                        nav_rename(dir_rename.clone());
+                    });
+                    crate::views::schedule_inline_rename(
+                        move || {
+                            let cols = inner_lookup.columns.borrow();
+                            cols.iter().rev().find_map(|col| {
+                                let (idx, item) = col
+                                    .items
+                                    .iter()
+                                    .enumerate()
+                                    .find(|(_, it)| it.path == target_path)?;
+                                let row = col.list_box.row_at_index(idx as i32)?;
+                                Some((item.path.clone(), item.is_dir, row.upcast()))
+                            })
+                        },
+                        Some(on_renamed),
+                    );
+                }),
             );
         });
         scrolled.add_controller(bg_click);
@@ -272,6 +357,7 @@ impl ColumnViewInner {
         } else {
             let preview = self.create_preview_pane(item);
             self.columns_box.append(&preview);
+            slide_in_from_right(&preview, 280);
             *self.preview_box.borrow_mut() = Some(preview);
             self.scroll_to_end();
         }
@@ -419,16 +505,83 @@ impl ColumnViewInner {
         preview_box
     }
 
+    /// Desplaza suavemente el contenedor hacia la izquierda (hasta la última columna),
+    /// de modo que la columna anterior salga de vista al entrar en una carpeta.
     fn scroll_to_end(&self) {
+        thread_local! {
+            static SCROLL_GEN: Cell<u64> = const { Cell::new(0) };
+        }
+        const DURATION_US: f64 = 320_000.0;
+
+        let generation = SCROLL_GEN.with(|g| {
+            g.set(g.get().wrapping_add(1));
+            g.get()
+        });
         let hadj = self.scrolled.hadjustment();
-        glib::idle_add_local(move || {
-            let max = hadj.upper() - hadj.page_size();
-            if max > 0.0 {
-                hadj.set_value(max);
+        let start_value = hadj.value();
+        let start_time: Cell<Option<i64>> = Cell::new(None);
+        self.scrolled.add_tick_callback(move |_, clock| {
+            if SCROLL_GEN.with(|g| g.get()) != generation {
+                return glib::ControlFlow::Break;
             }
-            glib::ControlFlow::Break
+            let now = clock.frame_time();
+            let t0 = match start_time.get() {
+                Some(v) => v,
+                None => {
+                    start_time.set(Some(now));
+                    now
+                }
+            };
+            let t = ((now - t0) as f64 / DURATION_US).clamp(0.0, 1.0);
+            let eased = 1.0 - (1.0 - t).powi(3);
+            // El destino se recalcula en cada fotograma: el layout de la nueva columna
+            // puede terminar de medirse durante la animación.
+            let target = (hadj.upper() - hadj.page_size()).max(0.0);
+            if target > start_value {
+                hadj.set_value(start_value + (target - start_value) * eased);
+            }
+            if t >= 1.0 {
+                if target > 0.0 {
+                    hadj.set_value(target);
+                }
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
         });
     }
+}
+
+/// Anima la entrada de una columna nueva: aparece deslizándose desde la derecha
+/// (y con fundido), de modo que se note que se entró a la carpeta aunque quepan todas
+/// las columnas en pantalla.
+fn slide_in_from_right(widget: &impl IsA<gtk4::Widget>, distance: i32) {
+    const DURATION_US: f64 = 300_000.0;
+    let widget = widget.as_ref();
+    widget.set_margin_start(distance);
+    widget.set_opacity(0.0);
+    let start: Cell<Option<i64>> = Cell::new(None);
+    widget.add_tick_callback(move |w, clock| {
+        let now = clock.frame_time();
+        let t0 = match start.get() {
+            Some(v) => v,
+            None => {
+                start.set(Some(now));
+                now
+            }
+        };
+        let t = ((now - t0) as f64 / DURATION_US).clamp(0.0, 1.0);
+        let eased = 1.0 - (1.0 - t).powi(3);
+        w.set_margin_start(((1.0 - eased) * distance as f64).round() as i32);
+        w.set_opacity(eased);
+        if t >= 1.0 {
+            w.set_margin_start(0);
+            w.set_opacity(1.0);
+            glib::ControlFlow::Break
+        } else {
+            glib::ControlFlow::Continue
+        }
+    });
 }
 
 fn create_column_row(item: &FileItem, on_navigate: &NavigateCallback) -> ListBoxRow {
@@ -441,8 +594,10 @@ fn create_column_row(item: &FileItem, on_navigate: &NavigateCallback) -> ListBox
     hbox.set_margin_start(4);
     hbox.set_margin_end(4);
 
-    let icon = Image::from_gicon(&item.gicon);
-    icon.set_pixel_size(16);
+    let icon = crate::views::create_item_image(item, 16, Some("branches-row-thumb"));
+    icon.set_size_request(16, 16);
+    icon.set_halign(Align::Center);
+    icon.set_valign(Align::Center);
     hbox.append(&icon);
 
     let label = Label::builder()
@@ -450,6 +605,7 @@ fn create_column_row(item: &FileItem, on_navigate: &NavigateCallback) -> ListBox
         .halign(Align::Start)
         .hexpand(true)
         .ellipsize(pango::EllipsizeMode::End)
+        .css_classes(["branches-column-name-label"])
         .build();
     hbox.append(&label);
 
@@ -462,35 +618,86 @@ fn create_column_row(item: &FileItem, on_navigate: &NavigateCallback) -> ListBox
 
     row.set_child(Some(&hbox));
 
-    let right_click = GestureClick::new();
-    right_click.set_button(gdk::BUTTON_SECONDARY);
+    let click = GestureClick::new();
+    click.set_button(0);
     let path_for_menu = item.path.clone();
     let is_dir_for_menu = item.is_dir;
     let on_nav_menu = on_navigate.clone();
     let row_for_menu = row.clone();
-    right_click.connect_pressed(move |g, _n, x, y| {
-        g.set_state(gtk4::EventSequenceState::Claimed);
-        if let Some(lb) = row_for_menu.parent().and_then(|p| p.downcast::<ListBox>().ok()) {
-            if !row_for_menu.is_selected() {
-                lb.select_row(Some(&row_for_menu));
-            }
+    let pending_slow_rename: Rc<std::cell::Cell<Option<glib::SourceId>>> =
+        Rc::new(std::cell::Cell::new(None));
+    let pending_slow_click = pending_slow_rename.clone();
+    click.connect_pressed(move |g, n_press, x, y| {
+        let button = g.current_button();
+        if let Some(source_id) = pending_slow_click.take() {
+            source_id.remove();
         }
-        show_item_context_menu(
-            &row_for_menu,
-            &path_for_menu,
-            is_dir_for_menu,
-            Some((x, y)),
-            Some(&on_nav_menu),
-            None,
-        );
+        if button == gdk::BUTTON_PRIMARY {
+            if n_press == 1 && row_for_menu.is_selected() {
+                let row_ren = row_for_menu.clone();
+                let path_ren = path_for_menu.clone();
+                let on_nav_ren = on_nav_menu.clone();
+                let slot = pending_slow_click.clone();
+                let id = glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(450),
+                    move || {
+                        slot.set(None);
+                        if !row_ren.is_selected() {
+                            return;
+                        }
+                        let parent_dir = path_ren.parent().map(|p| p.to_path_buf());
+                        let on_renamed = parent_dir.map(|dir| {
+                            Rc::new(move |_new_path: PathBuf| {
+                                on_nav_ren(dir.clone());
+                            }) as crate::views::RenameCallback
+                        });
+                        crate::views::show_rename_popover(
+                            &row_ren,
+                            path_ren,
+                            is_dir_for_menu,
+                            None,
+                            on_renamed,
+                        );
+                    },
+                );
+                pending_slow_click.set(Some(id));
+            } else if n_press == 2 {
+                if is_dir_for_menu {
+                    on_nav_menu(path_for_menu.clone());
+                } else {
+                    let _ = open_file(&path_for_menu);
+                }
+            }
+        } else if button == gdk::BUTTON_SECONDARY {
+            g.set_state(gtk4::EventSequenceState::Claimed);
+            if let Some(lb) = row_for_menu.parent().and_then(|p| p.downcast::<ListBox>().ok()) {
+                if !row_for_menu.is_selected() {
+                    lb.select_row(Some(&row_for_menu));
+                }
+            }
+            show_item_context_menu(
+                &row_for_menu,
+                &path_for_menu,
+                is_dir_for_menu,
+                Some((x, y)),
+                Some(&on_nav_menu),
+                None,
+            );
+        }
     });
-    row.add_controller(right_click);
+    row.add_controller(click);
 
     let drag_source = gtk4::DragSource::new();
     drag_source.set_actions(gdk::DragAction::MOVE | gdk::DragAction::COPY);
     let path_for_drag = item.path.clone();
     drag_source.connect_prepare(move |_, _x, _y| {
         Some(crate::views::build_file_drag_content_provider(&path_for_drag))
+    });
+    let cancel_slow_drag = pending_slow_rename;
+    drag_source.connect_drag_begin(move |_, _| {
+        if let Some(source_id) = cancel_slow_drag.take() {
+            source_id.remove();
+        }
     });
     let path_end = item.path.clone();
     let on_nav_end = on_navigate.clone();

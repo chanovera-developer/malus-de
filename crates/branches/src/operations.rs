@@ -224,6 +224,7 @@ pub fn move_paths_into_folder(paths: &[PathBuf], dest_dir: &Path) -> bool {
     }
 
     let mut moved_any = false;
+    let mut moved_pairs: Vec<(PathBuf, PathBuf)> = Vec::new();
     for src in paths {
         if is_trash_dest {
             if src.parent() != Some(dest_dir) && trash_item(src).is_ok() {
@@ -251,23 +252,68 @@ pub fn move_paths_into_folder(paths: &[PathBuf], dest_dir: &Path) -> bool {
             .symlink_metadata()
             .map(|m| m.is_dir())
             .unwrap_or_else(|_| src.is_dir());
-        let src_file = gio::File::for_path(src);
-        let dest_file = gio::File::for_path(&target);
-        let ok = src_file
-            .move_(
-                &dest_file,
-                gio::FileCopyFlags::NONE,
-                gio::Cancellable::NONE,
-                None,
-            )
-            .is_ok()
-            || fs::rename(src, &target).is_ok();
+        let ok = if malus_de_common::apps::is_application_desktop_file(src) {
+            std::os::unix::fs::symlink(src, &target).is_ok()
+        } else {
+            let src_file = gio::File::for_path(src);
+            let dest_file = gio::File::for_path(&target);
+            src_file
+                .move_(
+                    &dest_file,
+                    gio::FileCopyFlags::NONE,
+                    gio::Cancellable::NONE,
+                    None,
+                )
+                .is_ok()
+                || fs::rename(src, &target).is_ok()
+        };
 
         if ok {
             if let Ok(mut conn) = crate::db::open_db() {
                 let _ = crate::db::rename_item_metadata(&mut conn, src, &target, is_dir);
             }
+            moved_pairs.push((src.clone(), target));
             moved_any = true;
+        }
+    }
+
+    // Si los elementos arrastrados provienen de una vista espacial (con anclas relativas),
+    // conservar su disposición espacial relativa dentro de la carpeta destino.
+    if !is_trash_dest && !moved_pairs.is_empty() {
+        let anchored: Vec<(String, (f64, f64))> = moved_pairs
+            .iter()
+            .filter_map(|(src, dst)| {
+                let name = dst.file_name()?.to_string_lossy().into_owned();
+                let grab = malus_de_common::read_drag_anchor(src)?;
+                Some((name, grab))
+            })
+            .collect();
+        if anchored.len() > 1 {
+            // La posición de cada icono respecto al cursor era (-grab.0, -grab.1).
+            // Normalizamos respecto a la esquina superior izquierda del conjunto (min_x, min_y) + margen (24, 24).
+            let min_rel_x = anchored
+                .iter()
+                .map(|(_, (gx, _))| -*gx)
+                .fold(f64::INFINITY, f64::min);
+            let min_rel_y = anchored
+                .iter()
+                .map(|(_, (_, gy))| -*gy)
+                .fold(f64::INFINITY, f64::min);
+            if let Ok(conn) = crate::db::open_db() {
+                let dest_mode = crate::db::get_layout_mode(&conn, dest_dir);
+                if dest_mode == crate::db::LayoutMode::Auto {
+                    let _ = crate::db::set_layout_mode(
+                        &conn,
+                        dest_dir,
+                        crate::db::LayoutMode::Freeform,
+                    );
+                }
+                for (name, (gx, gy)) in anchored {
+                    let px = (24.0 + (-gx - min_rel_x)).round().max(24.0) as i32;
+                    let py = (24.0 + (-gy - min_rel_y)).round().max(24.0) as i32;
+                    let _ = crate::db::save_position(&conn, dest_dir, &name, px, py);
+                }
+            }
         }
     }
 

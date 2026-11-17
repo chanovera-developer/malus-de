@@ -29,11 +29,22 @@ pub(super) fn make_context_menu_button(label: &str) -> gtk4::Button {
 /// Construye el `ContentProvider` de arrastre exponiendo tanto `GdkFileList` como `text/uri-list`
 /// para garantizar interoperabilidad Wayland con otras ventanas (como el Dock).
 pub(super) fn build_file_drag_content_provider(path: &std::path::Path) -> gtk4::gdk::ContentProvider {
+    build_files_drag_content_provider(&[path.to_path_buf()])
+}
+
+/// Construye un `ContentProvider` de arrastre para uno o varios archivos/carpetas seleccionados.
+pub(super) fn build_files_drag_content_provider(paths: &[PathBuf]) -> gtk4::gdk::ContentProvider {
     use gtk4::prelude::*;
 
-    let file = gio::File::for_path(path);
-    let uri_payload = format!("{}\r\n", file.uri());
-    let file_list = gtk4::gdk::FileList::from_array(&[file]);
+    let mut files = Vec::with_capacity(paths.len());
+    let mut uri_payload = String::new();
+    for path in paths {
+        let file = gio::File::for_path(path);
+        uri_payload.push_str(&file.uri());
+        uri_payload.push_str("\r\n");
+        files.push(file);
+    }
+    let file_list = gtk4::gdk::FileList::from_array(&files);
     gtk4::gdk::ContentProvider::new_union(&[
         gtk4::gdk::ContentProvider::for_value(&file_list.to_value()),
         gtk4::gdk::ContentProvider::for_bytes(
@@ -41,6 +52,59 @@ pub(super) fn build_file_drag_content_provider(path: &std::path::Path) -> gtk4::
             &glib::Bytes::from_owned(uri_payload),
         ),
     ])
+}
+
+/// Construye un `Paintable` compuesto que incluye todos los widgets arrastrados en su disposición espacial relativa,
+/// devolviendo `(paintable, hotspot_x, hotspot_y)` para que el cursor arrastre visualmente todo el grupo.
+pub(super) fn build_multi_widget_drag_paintable(
+    items: &[(gtk4::Widget, (f64, f64))],
+    cursor_x: f64,
+    cursor_y: f64,
+) -> Option<(gtk4::gdk::Paintable, i32, i32)> {
+    use gtk4::prelude::*;
+
+    if items.is_empty() {
+        return None;
+    }
+
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+
+    for (w, (ix, iy)) in items {
+        let ww = w.width().max(w.width_request()).max(72) as f64;
+        let wh = w.height().max(w.height_request()).max(76) as f64;
+        min_x = min_x.min(*ix);
+        min_y = min_y.min(*iy);
+        max_x = max_x.max(*ix + ww);
+        max_y = max_y.max(*iy + wh);
+    }
+
+    if !min_x.is_finite() || !min_y.is_finite() {
+        return None;
+    }
+
+    let snapshot = gtk4::Snapshot::new();
+    for (w, (ix, iy)) in items {
+        let wp = gtk4::WidgetPaintable::new(Some(w));
+        let ww = wp.intrinsic_width().max(w.width()).max(w.width_request()).max(72) as f64;
+        let wh = wp.intrinsic_height().max(w.height()).max(w.height_request()).max(76) as f64;
+        snapshot.save();
+        snapshot.translate(&gtk4::graphene::Point::new(
+            (*ix - min_x) as f32,
+            (*iy - min_y) as f32,
+        ));
+        wp.snapshot(&snapshot, ww, wh);
+        snapshot.restore();
+    }
+
+    let total_w = (max_x - min_x).ceil().max(1.0) as f32;
+    let total_h = (max_y - min_y).ceil().max(1.0) as f32;
+    let paintable = snapshot.to_paintable(Some(&gtk4::graphene::Size::new(total_w, total_h)))?;
+    let hot_x = (cursor_x - min_x).round() as i32;
+    let hot_y = (cursor_y - min_y).round() as i32;
+    Some((paintable, hot_x, hot_y))
 }
 
 /// Refresca la vista origen si un archivo arrastrado fue movido fuera de la carpeta actual
@@ -255,22 +319,61 @@ pub(super) fn show_background_create_menu(
     popover.popup();
 }
 
-/// Muestra un popover compacto estilo macOS sobre el elemento para cambiar su nombre.
+fn find_item_label_widget(root: &gtk4::Widget, expected_name: &str) -> Option<gtk4::Label> {
+    use gtk4::prelude::*;
+
+    const TARGET_CLASSES: &[&str] = &[
+        "branches-icon-label",
+        "branches-list-name-label",
+        "branches-column-name-label",
+        "branches-carousel-label",
+    ];
+
+    if let Some(lbl) = root.downcast_ref::<gtk4::Label>() {
+        if TARGET_CLASSES.iter().any(|c| root.has_css_class(c)) {
+            return Some(lbl.clone());
+        }
+    }
+
+    let mut fallback: Option<gtk4::Label> = None;
+    let mut stack = vec![root.clone()];
+    while let Some(node) = stack.pop() {
+        if let Some(lbl) = node.downcast_ref::<gtk4::Label>() {
+            if TARGET_CLASSES.iter().any(|c| node.has_css_class(c)) {
+                return Some(lbl.clone());
+            }
+            if fallback.is_none() && lbl.text().as_str() == expected_name {
+                fallback = Some(lbl.clone());
+            }
+        }
+        let mut child = node.first_child();
+        while let Some(c) = child {
+            stack.push(c.clone());
+            child = c.next_sibling();
+        }
+    }
+
+    fallback
+}
+
+/// Activa la edición inline del nombre del archivo o carpeta directamente sobre su etiqueta
+/// (estilo macOS Finder: `Enter` o perder foco confirma el cambio; `Escape` cancela).
 pub(crate) fn show_rename_popover(
     anchor: &impl gtk4::prelude::IsA<gtk4::Widget>,
     path: PathBuf,
     is_dir: bool,
-    pointing_to: Option<(f64, f64)>,
+    _pointing_to: Option<(f64, f64)>,
     on_renamed: Option<RenameCallback>,
 ) {
     use gtk4::gdk;
     use gtk4::prelude::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
 
     if anchor.root().is_none() || is_inside_trash(&path) {
         return;
     }
 
-    let es = malus_de_common::is_spanish_locale();
     let initial_name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -279,113 +382,177 @@ pub(crate) fn show_rename_popover(
         return;
     }
 
-    let popover = gtk4::Popover::builder()
-        .has_arrow(false)
-        .autohide(true)
-        .css_classes(["malus-popover-menu"])
-        .build();
-    popover.set_parent(anchor);
-    if let Some((x, y)) = pointing_to {
-        let rect = gdk::Rectangle::new(x.round() as i32, y.round() as i32, 1, 1);
-        popover.set_pointing_to(Some(&rect));
+    let anchor_widget = anchor.as_ref().clone();
+    let Some(label) = find_item_label_widget(&anchor_widget, &initial_name) else {
+        return;
+    };
+    if !label.is_visible() {
+        return;
     }
-    popover.connect_closed(|p| p.unparent());
+    let Some(parent_box) = label.parent().and_then(|p| p.downcast::<gtk4::Box>().ok()) else {
+        return;
+    };
 
-    let container = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
-    container.set_margin_top(10);
-    container.set_margin_bottom(10);
-    container.set_margin_start(10);
-    container.set_margin_end(10);
-    container.set_width_request(240);
+    let is_icon_label = label.has_css_class("branches-icon-label")
+        || label.has_css_class("branches-carousel-label");
+    let label_w = label.width().max(24);
+    let label_h = label.height().max(16);
 
-    let title_lbl = gtk4::Label::builder()
-        .label(if es { "Renombrar" } else { "Rename" })
-        .halign(gtk4::Align::Start)
-        .css_classes(["popover-menu-header"])
-        .build();
-    container.append(&title_lbl);
-
-    let entry = gtk4::Entry::builder()
+    let entry = gtk4::Text::builder()
         .text(&initial_name)
-        .hexpand(true)
-        .width_chars(24)
+        .width_chars(1)
+        .max_width_chars(1)
+        .xalign(if is_icon_label { 0.5 } else { 0.0 })
+        .halign(if is_icon_label {
+            gtk4::Align::Center
+        } else {
+            gtk4::Align::Fill
+        })
+        .valign(gtk4::Align::Center)
+        .hexpand(!is_icon_label)
+        .css_classes(if is_icon_label {
+            vec!["branches-inline-rename-entry", "branches-inline-rename-icon"]
+        } else {
+            vec!["branches-inline-rename-entry", "branches-inline-rename-row"]
+        })
         .build();
-    container.append(&entry);
+    entry.set_size_request(if is_icon_label { label_w } else { -1 }, label_h);
 
-    let error_lbl = gtk4::Label::builder()
-        .halign(gtk4::Align::Start)
-        .wrap(true)
-        .visible(false)
-        .css_classes(["error"])
-        .build();
-    container.append(&error_lbl);
+    label.set_visible(false);
+    parent_box.insert_child_after(&entry, Some(&label));
 
-    let btn_box = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
-    btn_box.set_halign(gtk4::Align::End);
-
-    let cancel_btn = gtk4::Button::builder()
-        .label(if es { "Cancelar" } else { "Cancel" })
-        .css_classes(["popover-menu-item"])
-        .build();
-    {
-        let pop = popover.clone();
-        cancel_btn.connect_clicked(move |_| pop.popdown());
-    }
-    btn_box.append(&cancel_btn);
-
-    let save_btn = gtk4::Button::builder()
-        .label(if es { "Renombrar" } else { "Rename" })
-        .css_classes(["popover-menu-item", "suggested-action"])
-        .build();
-    {
-        let pop = popover.clone();
+    let finished = Rc::new(Cell::new(false));
+    let finish_edit: Rc<dyn Fn(bool)> = {
+        let finished = finished.clone();
         let entry_ref = entry.clone();
-        let err_ref = error_lbl.clone();
+        let label_ref = label.clone();
+        let parent_ref = parent_box.clone();
         let old_path = path.clone();
-        save_btn.connect_clicked(move |_| {
-            let candidate = entry_ref.text();
-            match crate::operations::rename_item(&old_path, candidate.as_str()) {
-                Ok(new_path) => {
-                    pop.popdown();
-                    if new_path != old_path {
-                        crate::sidebar::refresh_all_sidebars();
-                        if let Some(ref cb) = on_renamed {
-                            cb(new_path);
-                        }
+        let initial = initial_name.clone();
+        let on_renamed = on_renamed.clone();
+        Rc::new(move |commit: bool| {
+            if finished.replace(true) {
+                return;
+            }
+            let candidate = entry_ref.text().to_string();
+            let trimmed = candidate.trim();
+
+            if entry_ref.parent().is_some() {
+                parent_ref.remove(&entry_ref);
+            }
+            label_ref.set_visible(true);
+            if let Some(canvas) = label_ref.ancestor(gtk4::Fixed::static_type()) {
+                canvas.grab_focus();
+            } else if let Some(row) = label_ref.ancestor(gtk4::ListBoxRow::static_type()) {
+                row.grab_focus();
+            }
+
+            if !commit || trimmed.is_empty() || trimmed == initial {
+                return;
+            }
+
+            if let Ok(new_path) = crate::operations::rename_item(&old_path, trimmed) {
+                if new_path != old_path {
+                    if let Some(new_name) = new_path.file_name() {
+                        label_ref.set_label(&new_name.to_string_lossy());
+                    }
+                    crate::sidebar::refresh_all_sidebars();
+                    if let Some(ref cb) = on_renamed {
+                        cb(new_path);
                     }
                 }
-                Err(msg) => {
-                    err_ref.set_text(&msg);
-                    err_ref.set_visible(true);
-                    entry_ref.grab_focus();
-                }
             }
-        });
-    }
-    btn_box.append(&save_btn);
-    container.append(&btn_box);
+        })
+    };
 
+    // Confirmar con Enter
     {
-        let err_clear = error_lbl.clone();
-        entry.connect_changed(move |_| {
-            err_clear.set_visible(false);
-        });
-    }
-    {
-        let submit_btn = save_btn.clone();
+        let finish = finish_edit.clone();
         entry.connect_activate(move |_| {
-            submit_btn.emit_clicked();
+            finish(true);
         });
     }
 
-    popover.set_child(Some(&container));
-    popover.popup();
+    // Cancelar con Escape o detener propagación de teclas hacia la lista/ventana
+    {
+        let key_ctrl = gtk4::EventControllerKey::new();
+        let finish = finish_edit.clone();
+        key_ctrl.connect_key_pressed(move |_, key, _, _| {
+            if key == gdk::Key::Escape {
+                finish(false);
+                return glib::Propagation::Stop;
+            }
+            if matches!(
+                key,
+                gdk::Key::Return | gdk::Key::KP_Enter | gdk::Key::ISO_Enter
+            ) {
+                finish(true);
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        entry.add_controller(key_ctrl);
+    }
 
-    let entry_focus = entry.clone();
+    // Confirmar al hacer clic fuera (perder foco)
+    {
+        let focus_ctrl = gtk4::EventControllerFocus::new();
+        let finish = finish_edit;
+        focus_ctrl.connect_leave(move |_| {
+            let f = finish.clone();
+            glib::idle_add_local_once(move || {
+                f(true);
+            });
+        });
+        entry.add_controller(focus_ctrl);
+    }
+
+    // Reclamar clics primarios/secundarios sobre el Entry para no disparar navegación ni drag
+    {
+        let click_guard = gtk4::GestureClick::new();
+        click_guard.set_button(0);
+        click_guard.connect_pressed(|g, _n, _x, _y| {
+            g.set_state(gtk4::EventSequenceState::Claimed);
+        });
+        entry.add_controller(click_guard);
+    }
+
+    let entry_focus = entry;
     let sel_end = crate::operations::rename_selection_end(&initial_name, is_dir);
     glib::idle_add_local_once(move || {
         entry_focus.grab_focus();
         entry_focus.select_region(0, sel_end);
+    });
+}
+
+/// Abre la edición inline sobre un elemento recién creado una vez que el menú se ha cerrado
+/// y el widget ya cuenta con geometría asignada en la vista activa.
+pub(crate) fn schedule_inline_rename<F>(find_target: F, on_renamed: Option<RenameCallback>)
+where
+    F: Fn() -> Option<(PathBuf, bool, gtk4::Widget)> + 'static,
+{
+    use gtk4::prelude::*;
+
+    let mut attempts = 0u8;
+    glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
+        attempts = attempts.saturating_add(1);
+        if let Some((path, is_dir, widget)) = find_target() {
+            let expected_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let ready = !expected_name.is_empty()
+                && widget.root().is_some()
+                && find_item_label_widget(&widget, &expected_name)
+                    .is_some_and(|lbl| lbl.is_visible() && lbl.width() > 0 && lbl.height() > 0);
+            if ready || attempts >= 12 {
+                show_rename_popover(&widget, path, is_dir, None, on_renamed.clone());
+                return glib::ControlFlow::Break;
+            }
+        } else if attempts >= 12 {
+            return glib::ControlFlow::Break;
+        }
+        glib::ControlFlow::Continue
     });
 }
 
@@ -587,10 +754,270 @@ pub(super) fn show_item_context_menu(
     popover.popup();
 }
 
+const IMAGE_THUMB_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "webp", "gif", "svg", "bmp", "ico", "tif", "tiff", "avif", "heic", "heif",
+];
+const MAX_THUMBNAIL_FILE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_THUMBNAIL_CACHE_ENTRIES: usize = 512;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ThumbnailCacheKey {
+    path: PathBuf,
+    modified_secs: u64,
+    size: u64,
+    decode_px: i32,
+}
+
+struct DecodedThumbnail {
+    width: i32,
+    height: i32,
+    rowstride: usize,
+    has_alpha: bool,
+    bytes: glib::Bytes,
+}
+
+thread_local! {
+    static THUMBNAIL_CACHE: std::cell::RefCell<std::collections::HashMap<ThumbnailCacheKey, gtk4::gdk::Texture>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+static NEXT_THUMB_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+pub(super) fn is_image_thumbnail_candidate(item: &crate::fs_backend::FileItem) -> bool {
+    if item.is_dir || item.size > MAX_THUMBNAIL_FILE_BYTES {
+        return false;
+    }
+    item.path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|ext| IMAGE_THUMB_EXTENSIONS.iter().any(|cand| ext.eq_ignore_ascii_case(cand)))
+        .unwrap_or(false)
+}
+
+fn thumbnail_decode_target_px(pixel_size: i32) -> i32 {
+    (pixel_size.max(16) * 2).clamp(32, 512)
+}
+
+const SQUIRCLE_EXPONENT: f32 = 4.2;
+
+fn squircle_sdf(px: f32, py: f32, half_w: f32, half_h: f32, radius: f32) -> f32 {
+    let r = radius.min(half_w.min(half_h)).max(1.0);
+    let dx = px.abs() - half_w + r;
+    let dy = py.abs() - half_h + r;
+    if dx <= 0.0 || dy <= 0.0 {
+        dx.max(dy) - r
+    } else {
+        (dx.powf(SQUIRCLE_EXPONENT) + dy.powf(SQUIRCLE_EXPONENT)).powf(1.0 / SQUIRCLE_EXPONENT)
+            - r
+    }
+}
+
+fn thumbnail_squircle_radius(width: i32, height: i32) -> f32 {
+    let min_side = width.min(height).max(1) as f32;
+    (min_side * 0.22).clamp(3.0, min_side * 0.45)
+}
+
+fn apply_squircle_clip_rgba(rgba: &mut [u8], width: usize, height: usize, radius: f32) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let half_w = width as f32 * 0.5;
+    let half_h = height as f32 * 0.5;
+    let r = radius.min(half_w.min(half_h)).max(1.0);
+    let corner_span = (r.ceil() as usize + 1).min(width).min(height);
+    let y_top_end = corner_span.min(height);
+    let y_bot_start = height.saturating_sub(corner_span).max(y_top_end);
+    let x_left_end = corner_span.min(width);
+    let x_right_start = width.saturating_sub(corner_span).max(x_left_end);
+
+    for y in (0..y_top_end).chain(y_bot_start..height) {
+        let ly = (y as f32 + 0.5) - half_h;
+        let row_offset = y * width * 4;
+        for x in (0..x_left_end).chain(x_right_start..width) {
+            let lx = (x as f32 + 0.5) - half_w;
+            let dist = squircle_sdf(lx, ly, half_w, half_h, r);
+            if dist > -0.5 {
+                let alpha_idx = row_offset + x * 4 + 3;
+                if dist >= 0.5 {
+                    rgba[alpha_idx] = 0;
+                } else {
+                    let coverage = (0.5 - dist).clamp(0.0, 1.0);
+                    rgba[alpha_idx] = (rgba[alpha_idx] as f32 * coverage).round() as u8;
+                }
+            }
+        }
+    }
+}
+
+fn decode_thumbnail_bytes(path: &std::path::Path, target_px: i32) -> Option<DecodedThumbnail> {
+    let pixbuf = gdk_pixbuf::Pixbuf::from_file_at_scale(path, target_px, target_px, true).ok()?;
+    let width = pixbuf.width();
+    let height = pixbuf.height();
+    let rowstride = pixbuf.rowstride();
+    if width <= 0 || height <= 0 || rowstride <= 0 {
+        return None;
+    }
+    let src_alpha = pixbuf.has_alpha();
+    let src_bytes = pixbuf.read_pixel_bytes();
+    let src = src_bytes.as_ref();
+    let w = width as usize;
+    let h = height as usize;
+    let stride = rowstride as usize;
+    let channels = if src_alpha { 4 } else { 3 };
+    let out_stride = w * 4;
+    let mut rgba = vec![0u8; out_stride * h];
+
+    for y in 0..h {
+        let row_start = y * stride;
+        let out_start = y * out_stride;
+        if row_start + w * channels > src.len() {
+            return None;
+        }
+        if src_alpha {
+            rgba[out_start..out_start + out_stride]
+                .copy_from_slice(&src[row_start..row_start + out_stride]);
+        } else {
+            for x in 0..w {
+                let s = row_start + x * 3;
+                let d = out_start + x * 4;
+                rgba[d] = src[s];
+                rgba[d + 1] = src[s + 1];
+                rgba[d + 2] = src[s + 2];
+                rgba[d + 3] = 255;
+            }
+        }
+    }
+
+    let radius = thumbnail_squircle_radius(width, height);
+    apply_squircle_clip_rgba(&mut rgba, w, h, radius);
+
+    Some(DecodedThumbnail {
+        width,
+        height,
+        rowstride: out_stride,
+        has_alpha: true,
+        bytes: glib::Bytes::from_owned(rgba),
+    })
+}
+
+fn apply_thumbnail_texture(
+    img: &gtk4::Image,
+    texture: &gtk4::gdk::Texture,
+    pixel_size: i32,
+    thumb_css_class: Option<&str>,
+) {
+    use gtk4::prelude::*;
+
+    img.set_paintable(Some(texture));
+    img.set_pixel_size(pixel_size);
+    if let Some(css) = thumb_css_class {
+        img.add_css_class(css);
+    }
+}
+
+pub(super) fn update_item_image_thumbnail(
+    img: &gtk4::Image,
+    item: &crate::fs_backend::FileItem,
+    pixel_size: i32,
+    thumb_css_class: Option<&str>,
+) {
+    use gtk4::prelude::*;
+
+    img.set_pixel_size(pixel_size);
+    if !is_image_thumbnail_candidate(item) {
+        if let Some(css) = thumb_css_class {
+            img.remove_css_class(css);
+        }
+        img.set_widget_name("");
+        img.set_from_gicon(&item.gicon);
+        return;
+    }
+
+    let decode_px = thumbnail_decode_target_px(pixel_size);
+    let modified_secs = item
+        .modified
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let cache_key = ThumbnailCacheKey {
+        path: item.path.clone(),
+        modified_secs,
+        size: item.size,
+        decode_px,
+    };
+
+    if let Some(cached) = THUMBNAIL_CACHE.with(|cache| cache.borrow().get(&cache_key).cloned()) {
+        img.set_widget_name("");
+        apply_thumbnail_texture(img, &cached, pixel_size, thumb_css_class);
+        return;
+    }
+
+    let token = NEXT_THUMB_TOKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let marker = format!("thumb:{token}");
+    img.set_widget_name(&marker);
+
+    let img_weak = img.downgrade();
+    let path = item.path.clone();
+    let thumb_css = thumb_css_class.map(str::to_string);
+    glib::spawn_future_local(async move {
+        let decoded = gio::spawn_blocking(move || decode_thumbnail_bytes(&path, decode_px)).await;
+        let Ok(Some(data)) = decoded else {
+            return;
+        };
+
+        let format = if data.has_alpha {
+            gtk4::gdk::MemoryFormat::R8g8b8a8
+        } else {
+            gtk4::gdk::MemoryFormat::R8g8b8
+        };
+        let texture: gtk4::gdk::Texture = gtk4::gdk::MemoryTexture::new(
+            data.width,
+            data.height,
+            format,
+            &data.bytes,
+            data.rowstride,
+        )
+        .upcast();
+
+        THUMBNAIL_CACHE.with(|cache| {
+            let mut map = cache.borrow_mut();
+            if map.len() >= MAX_THUMBNAIL_CACHE_ENTRIES {
+                map.clear();
+            }
+            map.insert(cache_key, texture.clone());
+        });
+
+        if let Some(target_img) = img_weak.upgrade() {
+            if target_img.widget_name().as_str() == marker {
+                apply_thumbnail_texture(&target_img, &texture, pixel_size, thumb_css.as_deref());
+            }
+        }
+    });
+}
+
+pub(super) fn create_item_image(
+    item: &crate::fs_backend::FileItem,
+    pixel_size: i32,
+    thumb_css_class: Option<&str>,
+) -> gtk4::Image {
+    let img = gtk4::Image::from_gicon(&item.gicon);
+    img.set_pixel_size(pixel_size);
+    if is_image_thumbnail_candidate(item) {
+        update_item_image_thumbnail(&img, item, pixel_size, thumb_css_class);
+    }
+    img
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_dock_app_pinned;
+    use super::{
+        decode_thumbnail_bytes, is_dock_app_pinned, is_image_thumbnail_candidate,
+        thumbnail_decode_target_px,
+    };
+    use crate::fs_backend::FileItem;
+    use gio::prelude::Cast;
     use malus_de_common::config::{DockAppConfig, DockConfig, DockIconAppearance};
+    use std::path::PathBuf;
 
     #[test]
     fn dock_app_pinned_detection_matches_by_name_or_command() {
@@ -608,5 +1035,54 @@ mod tests {
         assert!(!is_dock_app_pinned(&cfg, &app));
         assert!(cfg.pin_app(app.clone()));
         assert!(is_dock_app_pinned(&cfg, &app));
+    }
+
+    #[test]
+    fn thumbnail_candidate_detects_images_and_ignores_directories_and_non_images() {
+        let make_item = |name: &str, is_dir: bool, size: u64| FileItem {
+            name: name.to_string(),
+            path: PathBuf::from(format!("/tmp/{name}")),
+            is_dir,
+            is_hidden: false,
+            is_symlink: false,
+            size,
+            size_str: "1 KB".to_string(),
+            modified: None,
+            modified_str: "--".to_string(),
+            kind_str: "Imagen".to_string(),
+            gicon: gio::ThemedIcon::new("image-x-generic").upcast(),
+        };
+
+        assert!(is_image_thumbnail_candidate(&make_item("foto.PNG", false, 1024)));
+        assert!(is_image_thumbnail_candidate(&make_item("fondo.webp", false, 2048)));
+        assert!(!is_image_thumbnail_candidate(&make_item("carpeta.png", true, 0)));
+        assert!(!is_image_thumbnail_candidate(&make_item("notas.txt", false, 128)));
+        assert_eq!(thumbnail_decode_target_px(64), 128);
+        assert_eq!(thumbnail_decode_target_px(512), 512);
+    }
+
+    #[test]
+    fn decode_thumbnail_bytes_decodes_valid_png_thumbnail() {
+        let temp_dir = std::env::temp_dir().join("malus_branches_thumb_test");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let img_path = temp_dir.join("sample.png");
+
+        let pixbuf = gdk_pixbuf::Pixbuf::new(gdk_pixbuf::Colorspace::Rgb, true, 8, 240, 120).unwrap();
+        pixbuf.fill(0xff44_88ff);
+        pixbuf.savev(&img_path, "png", &[]).unwrap();
+
+        let thumb = decode_thumbnail_bytes(&img_path, 128).expect("Debe decodificar miniatura PNG");
+        assert_eq!(thumb.width, 128);
+        assert_eq!(thumb.height, 64);
+        assert!(thumb.has_alpha);
+        assert!(!thumb.bytes.is_empty());
+
+        let raw = thumb.bytes.as_ref();
+        // Esquina extrema recortada a transparente por el squircle y centro completamente opaco
+        assert_eq!(raw[3], 0);
+        assert_eq!(raw[(32 * 128 + 64) * 4 + 3], 255);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

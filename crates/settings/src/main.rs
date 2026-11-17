@@ -3001,6 +3001,13 @@ fn get_current_wallpaper_file() -> Option<PathBuf> {
     candidates
         .into_iter()
         .find(|p| p.exists() && std::fs::metadata(p).map(|m| m.len() > 0).unwrap_or(false))
+        .or_else(|| {
+            if malus_dir.join(".wallpaper-gradient").exists() {
+                None
+            } else {
+                malus_de_common::config::default_bundled_wallpaper_path()
+            }
+        })
 }
 
 fn apply_system_wallpaper(source: Option<&std::path::Path>) {
@@ -3009,6 +3016,7 @@ fn apply_system_wallpaper(source: Option<&std::path::Path>) {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(&home).join(".config/malus-de"));
     let _ = std::fs::create_dir_all(&malus_dir);
+    let gradient_marker = malus_dir.join(".wallpaper-gradient");
 
     for ext in &["png", "jpg", "jpeg", "webp", "svg"] {
         let p = malus_dir.join(format!("wallpaper.{}", ext));
@@ -3016,6 +3024,7 @@ fn apply_system_wallpaper(source: Option<&std::path::Path>) {
     }
 
     if let Some(src) = source {
+        let _ = std::fs::remove_file(&gradient_marker);
         let ext = src
             .extension()
             .and_then(|e| e.to_str())
@@ -3036,6 +3045,7 @@ fn apply_system_wallpaper(source: Option<&std::path::Path>) {
             .args(["set", "org.gnome.desktop.background", "picture-uri-dark", &uri])
             .status();
     } else {
+        let _ = std::fs::write(&gradient_marker, b"1");
         let _ = Command::new("gsettings")
             .env("XDG_CONFIG_HOME", &malus_dir)
             .env("GSETTINGS_BACKEND", "keyfile")
@@ -3077,6 +3087,15 @@ fn get_available_wallpaper_presets() -> Vec<WallpaperPreset> {
     let mut list = Vec::new();
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
 
+    if let Some(default_wp) = malus_de_common::config::default_bundled_wallpaper_path() {
+        list.push(WallpaperPreset {
+            id: "default-pacasmayo".to_string(),
+            title: "Playa de Pacasmayo (Predeterminado)".to_string(),
+            subtitle: "Pexels — J. Barboza Meca".to_string(),
+            path: Some(default_wp),
+        });
+    }
+
     list.push(WallpaperPreset {
         id: "default-gradient".to_string(),
         title: "Degradado Aurora".to_string(),
@@ -3084,46 +3103,53 @@ fn get_available_wallpaper_presets() -> Vec<WallpaperPreset> {
         path: None,
     });
 
-    let user_wp_dir = PathBuf::from(&home).join("Imágenes/Wallpapers");
-    if let Ok(entries) = std::fs::read_dir(&user_wp_dir) {
-        let mut user_files: Vec<PathBuf> = entries
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| {
-                if let Some(ext) = p.extension().and_then(|x| x.to_str()) {
-                    let lext = ext.to_lowercase();
-                    lext == "jpg" || lext == "jpeg" || lext == "png" || lext == "webp"
+    for folder_name in ["Imágenes/Wallpapers", "Imágenes/Wallpaper"] {
+        let user_wp_dir = PathBuf::from(&home).join(folder_name);
+        if let Ok(entries) = std::fs::read_dir(&user_wp_dir) {
+            let mut user_files: Vec<PathBuf> = entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| {
+                    if p.file_name().and_then(|n| n.to_str())
+                        == Some(malus_de_common::config::DEFAULT_WALLPAPER_FILENAME)
+                    {
+                        return false;
+                    }
+                    if let Some(ext) = p.extension().and_then(|x| x.to_str()) {
+                        let lext = ext.to_lowercase();
+                        lext == "jpg" || lext == "jpeg" || lext == "png" || lext == "webp"
+                    } else {
+                        false
+                    }
+                })
+                .collect();
+            user_files.sort();
+            user_files.truncate(8);
+            for p in user_files {
+                let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Fondo").to_string();
+                let title = if stem.contains("beach-aerial") {
+                    "Costa de California (macOS)".to_string()
+                } else if stem.contains("Blueprint") {
+                    "macOS Blueprint".to_string()
+                } else if stem.contains("Blackprint") {
+                    "macOS Blackprint".to_string()
+                } else if stem.contains("do_more") {
+                    "Do More (Inspirational)".to_string()
+                } else if stem.contains("growing-tree") {
+                    "Growing Tree 4K".to_string()
+                } else if stem.len() > 24 {
+                    format!("{}...", &stem[..21])
                 } else {
-                    false
-                }
-            })
-            .collect();
-        user_files.sort();
-        user_files.truncate(8);
-        for p in user_files {
-            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Fondo").to_string();
-            let title = if stem.contains("beach-aerial") {
-                "Costa de California (macOS)".to_string()
-            } else if stem.contains("Blueprint") {
-                "macOS Blueprint".to_string()
-            } else if stem.contains("Blackprint") {
-                "macOS Blackprint".to_string()
-            } else if stem.contains("do_more") {
-                "Do More (Inspirational)".to_string()
-            } else if stem.contains("growing-tree") {
-                "Growing Tree 4K".to_string()
-            } else if stem.len() > 24 {
-                format!("{}...", &stem[..21])
-            } else {
-                stem
-            };
+                    stem
+                };
 
-            list.push(WallpaperPreset {
-                id: format!("user-{}", p.to_string_lossy()),
-                title,
-                subtitle: "Galería de Wallpapers".to_string(),
-                path: Some(p),
-            });
+                list.push(WallpaperPreset {
+                    id: format!("user-{}", p.to_string_lossy()),
+                    title,
+                    subtitle: "Galería de Wallpapers".to_string(),
+                    path: Some(p),
+                });
+            }
         }
     }
 
@@ -3408,7 +3434,8 @@ fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<dyn 
 
     let ref_reset = refresh_wallpaper_pane.clone();
     btn_reset.connect_clicked(move |_| {
-        apply_system_wallpaper(None);
+        let def_wp = malus_de_common::config::default_bundled_wallpaper_path();
+        apply_system_wallpaper(def_wp.as_deref());
         ref_reset();
     });
 

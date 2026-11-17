@@ -14,6 +14,7 @@ use malus_de_common::ipc::{ipc_socket_path, send_ipc_message, IpcMessage, Minimi
 use malus_de_common::logging::init_logging;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
 use std::time::Duration;
@@ -1049,6 +1050,8 @@ fn build_dock_ui(app: &Application) {
         &dock_root,
         &dock_bar,
         &apps_box,
+        &trash_widget,
+        &trash_img,
         &dock_config,
         &drop_placeholder,
         &on_refresh,
@@ -1732,11 +1735,70 @@ fn pin_desktop_apps_at(
     changed
 }
 
+fn is_trashable_path(path: &Path) -> bool {
+    if path.as_os_str().is_empty() || path == Path::new("/") {
+        return false;
+    }
+    if std::env::var_os("HOME").is_some_and(|home| path == Path::new(&home)) {
+        return false;
+    }
+    let path_str = path.to_string_lossy();
+    if path_str.contains("/.local/share/Trash") {
+        return false;
+    }
+    path.symlink_metadata().is_ok()
+}
+
+fn extract_trashable_paths(file_list: &gdk::FileList) -> Vec<PathBuf> {
+    file_list
+        .files()
+        .into_iter()
+        .filter_map(|file| file.path())
+        .filter(|path| is_trashable_path(path))
+        .collect()
+}
+
+fn drop_has_trashable_file(target: &gtk4::DropTarget) -> Option<bool> {
+    let value = target.value()?;
+    let file_list = value.get::<gdk::FileList>().ok()?;
+    Some(!extract_trashable_paths(&file_list).is_empty())
+}
+
+fn is_point_over_trash(dock_root: &GtkBox, trash_widget: &GtkBox, x: f64, y: f64) -> bool {
+    let Some(bounds) = trash_widget.compute_bounds(dock_root) else {
+        return false;
+    };
+    let bx = f64::from(bounds.x());
+    let by = f64::from(bounds.y());
+    let bw = f64::from(bounds.width());
+    let bh = f64::from(bounds.height());
+    x >= bx - 6.0 && x <= bx + bw + 6.0 && y >= by - 12.0 && y <= by + bh + 12.0
+}
+
+fn trash_dropped_paths(paths: &[PathBuf]) -> usize {
+    let mut trashed = 0usize;
+    for path in paths {
+        let file = gio::File::for_path(path);
+        match file.trash(gio::Cancellable::NONE) {
+            Ok(()) => {
+                trashed += 1;
+            }
+            Err(err) => {
+                warn!("🗑️ Error al enviar {:?} a la papelera: {}", path, err);
+            }
+        }
+    }
+    trashed
+}
+
+#[allow(clippy::too_many_arguments)]
 fn attach_dock_drop_target(
     window: &ApplicationWindow,
     dock_root: &GtkBox,
     dock_bar: &Overlay,
     apps_box: &GtkBox,
+    trash_widget: &GtkBox,
+    trash_img: &Image,
     dock_config: &Rc<RefCell<DockConfig>>,
     drop_placeholder: &Rc<RefCell<Option<GtkBox>>>,
     on_refresh: &Rc<dyn Fn()>,
@@ -1753,9 +1815,22 @@ fn attach_dock_drop_target(
         let dock_root = dock_root.clone();
         let dock_bar = dock_bar.clone();
         let apps_box = apps_box.clone();
+        let trash_widget = trash_widget.clone();
         let dock_config = dock_config.clone();
         let drop_placeholder = drop_placeholder.clone();
         move |target: &gtk4::DropTarget, x: f64, y: f64| -> gdk::DragAction {
+            if is_point_over_trash(&dock_root, &trash_widget, x, y) {
+                clear_dock_drop_placeholder(&apps_box, &drop_placeholder);
+                queue_dock_resize(&window, &dock_root, &dock_bar);
+                if drop_has_trashable_file(target) == Some(false) {
+                    trash_widget.remove_css_class("dock-trash-drop-hover");
+                    return gdk::DragAction::empty();
+                }
+                trash_widget.add_css_class("dock-trash-drop-hover");
+                return gdk::DragAction::MOVE;
+            }
+
+            trash_widget.remove_css_class("dock-trash-drop-hover");
             if drop_has_desktop_file(target) == Some(false) {
                 clear_dock_drop_placeholder(&apps_box, &drop_placeholder);
                 queue_dock_resize(&window, &dock_root, &dock_bar);
@@ -1783,22 +1858,46 @@ fn attach_dock_drop_target(
     let dock_root_leave = dock_root.clone();
     let dock_bar_leave = dock_bar.clone();
     let apps_box_leave = apps_box.clone();
+    let trash_widget_leave = trash_widget.clone();
     let placeholder_leave = drop_placeholder.clone();
     drop_target.connect_leave(move |_| {
+        trash_widget_leave.remove_css_class("dock-trash-drop-hover");
         clear_dock_drop_placeholder(&apps_box_leave, &placeholder_leave);
         queue_dock_resize(&window_leave, &dock_root_leave, &dock_bar_leave);
     });
 
     let dock_root_drop = dock_root.clone();
     let apps_box_drop = apps_box.clone();
+    let trash_widget_drop = trash_widget.clone();
+    let trash_img_drop = trash_img.clone();
     let cfg_drop = dock_config.clone();
     let placeholder_drop = drop_placeholder.clone();
     let on_refresh_drop = on_refresh.clone();
     drop_target.connect_drop(move |_, value, x, y| {
+        trash_widget_drop.remove_css_class("dock-trash-drop-hover");
         clear_dock_drop_placeholder(&apps_box_drop, &placeholder_drop);
         let Ok(file_list) = value.get::<gdk::FileList>() else {
             return false;
         };
+
+        if is_point_over_trash(&dock_root_drop, &trash_widget_drop, x, y) {
+            let paths = extract_trashable_paths(&file_list);
+            if paths.is_empty() {
+                return false;
+            }
+            let trashed = trash_dropped_paths(&paths);
+            if trashed > 0 {
+                trash_img_drop.set_icon_name(Some(if check_trash_full() {
+                    "user-trash-full"
+                } else {
+                    "user-trash"
+                }));
+                info!("🗑️ [Dock DnD] Enviados {} elementos a la papelera", trashed);
+                return true;
+            }
+            return false;
+        }
+
         let apps = extract_dropped_desktop_apps(&file_list);
         info!("📥 [Dock DnD] Drop recibido en ({:.1}, {:.1}) con {} apps .desktop", x, y, apps.len());
         if apps.is_empty() {
@@ -3529,9 +3628,11 @@ fn spawn_dock_app(name: &str, cmd: &str, extra_args: &[&str]) {
     let parts: Vec<&str> = cmd.split_whitespace().collect();
     if let Some((exe, args)) = parts.split_first() {
         let target_path_buf;
+        let mut wrapped_target_bin: Option<&str> = None;
         let target_exe = if *exe == "gnome-control-center" {
             "malus-de-settings"
         } else if let Some(wrapper) = malus_de_common::config::resolve_electron_ide_wrapper(exe) {
+            wrapped_target_bin = Some(*exe);
             target_path_buf = wrapper.to_string_lossy().to_string();
             &target_path_buf
         } else {
@@ -3554,6 +3655,9 @@ fn spawn_dock_app(name: &str, cmd: &str, extra_args: &[&str]) {
         let mut command = Command::new(&resolved_exe);
         command.args(args).args(extra_args);
         malus_de_common::config::apply_isolated_environment(&mut command);
+        if let Some(orig_exe) = wrapped_target_bin {
+            command.env("MALUS_IDE_BIN", orig_exe);
+        }
         match command.spawn() {
             Ok(mut child) => {
                 let pid = child.id();
@@ -3849,5 +3953,31 @@ mod tests {
         assert!(block.contains("border: none;"));
         assert!(block.contains("outline: none;"));
         assert!(block.contains("box-shadow: none;"));
+    }
+
+    #[test]
+    fn extract_trashable_paths_filters_root_home_and_trash_and_keeps_regular_files() {
+        let temp_dir = std::env::temp_dir().join("malus_dock_trash_extract_test");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let file_path = temp_dir.join("borrar.txt");
+        let folder_path = temp_dir.join("carpeta");
+        std::fs::write(&file_path, "hola").unwrap();
+        std::fs::create_dir_all(&folder_path).unwrap();
+
+        assert!(!is_trashable_path(Path::new("/")));
+        assert!(!is_trashable_path(Path::new("/home/user/.local/share/Trash/files/a")));
+        assert!(is_trashable_path(&file_path));
+        assert!(is_trashable_path(&folder_path));
+
+        let file_list = gdk::FileList::from_array(&[
+            gio::File::for_path(Path::new("/")),
+            gio::File::for_path(&file_path),
+            gio::File::for_path(&folder_path),
+        ]);
+        let extracted = extract_trashable_paths(&file_list);
+        assert_eq!(extracted, vec![file_path, folder_path]);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

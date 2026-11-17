@@ -716,7 +716,7 @@ impl BranchesWindow {
         self.forward_btn.set_sensitive(active.can_go_forward());
 
         let folder_name = if path == &PathBuf::from("/") {
-            "Macintosh HD".to_string()
+            "Malus SSD".to_string()
         } else if path.ends_with("Trash/files") {
             "Papelera".to_string()
         } else {
@@ -846,28 +846,20 @@ impl BranchesWindow {
     }
 
     fn prompt_new_folder(&self) {
-        let current_path = self.active_pane().current_path();
-        let mut target = current_path.join("Nueva carpeta");
-        let mut counter = 2;
-        while target.exists() {
-            target = current_path.join(format!("Nueva carpeta {}", counter));
-            counter += 1;
-        }
-
-        if let Err(e) = std::fs::create_dir(&target) {
-            tracing::error!("Error al crear carpeta: {}", e);
-        } else {
-            self.active_pane().reload();
-        }
+        self.active_pane().create_new_folder_and_rename();
     }
 
     fn setup_keybindings(&self) {
         let key_controller = EventControllerKey::new();
+        // Fase Capture para interceptar Enter/Return (como en macOS Finder) antes de que
+        // un GtkListBox hijo lo consuma como row-activated.
+        key_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
         let bw = self.clone_ref();
 
         key_controller.connect_key_pressed(move |_, keyval, _keycode, state| {
             let is_alt = state.contains(gdk::ModifierType::ALT_MASK);
             let is_ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
+            let is_shift = state.contains(gdk::ModifierType::SHIFT_MASK);
 
             if keyval == gdk::Key::Escape && bw.search_toggle_btn.is_active() {
                 bw.search_toggle_btn.set_active(false);
@@ -890,10 +882,66 @@ impl BranchesWindow {
                 return glib::Propagation::Stop;
             }
 
-            let focus_is_editable = gtk4::prelude::GtkWindowExt::focus(&bw.window)
-                .is_some_and(|w| w.is::<gtk4::Editable>());
-            if !focus_is_editable && keyval == gdk::Key::F2 {
-                bw.active_pane().rename_selected();
+            let focus_widget = gtk4::prelude::GtkWindowExt::focus(&bw.window);
+            let focus_is_editable = focus_widget
+                .as_ref()
+                .is_some_and(|w| w.is::<gtk4::Editable>() || w.is::<gtk4::Text>());
+            let focus_in_sidebar = focus_widget
+                .as_ref()
+                .and_then(|w| w.ancestor(gtk4::ListBox::static_type()))
+                .is_some_and(|lb| lb.has_css_class("branches-sidebar"));
+
+            let focus_in_header = focus_widget
+                .as_ref()
+                .and_then(|w| w.ancestor(gtk4::Box::static_type()))
+                .is_some_and(|b| b.has_css_class("branches-header-toolbar"));
+
+            // En la vista de rejilla/iconos, las teclas de dirección navegan entre carpetas/archivos
+            // en lugar de escapar el foco hacia los botones superiores o de los paneles (accesibles con Tab / Shift+Tab).
+            if !focus_is_editable
+                && !focus_in_sidebar
+                && !focus_in_header
+                && !is_alt
+                && !is_ctrl
+                && !is_shift
+                && matches!(
+                    keyval,
+                    gdk::Key::Left | gdk::Key::Right | gdk::Key::Up | gdk::Key::Down
+                )
+                && bw.active_pane().navigate_icon_grid(keyval)
+            {
+                return glib::Propagation::Stop;
+            }
+
+            // En macOS Finder, Enter / Return (y F2) activa el renombrado inline del archivo/carpeta
+            // seleccionado o del marcador seleccionado en la barra lateral.
+            if !focus_is_editable
+                && !is_alt
+                && !is_ctrl
+                && !is_shift
+                && matches!(
+                    keyval,
+                    gdk::Key::F2
+                        | gdk::Key::Return
+                        | gdk::Key::KP_Enter
+                        | gdk::Key::ISO_Enter
+                )
+            {
+                if focus_in_sidebar {
+                    if bw.sidebar.rename_selected_bookmark() {
+                        return glib::Propagation::Stop;
+                    }
+                } else {
+                    bw.active_pane().rename_selected();
+                    return glib::Propagation::Stop;
+                }
+            }
+
+            if !focus_is_editable
+                && ((is_ctrl && keyval == gdk::Key::Down)
+                    || (is_ctrl && (keyval == gdk::Key::o || keyval == gdk::Key::O)))
+            {
+                bw.active_pane().open_selected();
                 return glib::Propagation::Stop;
             }
 
@@ -920,6 +968,11 @@ impl BranchesWindow {
             }
             if (is_ctrl && (keyval == gdk::Key::r || keyval == gdk::Key::R)) || keyval == gdk::Key::F5 {
                 bw.active_pane().reload();
+                return glib::Propagation::Stop;
+            }
+
+            if !focus_is_editable && is_ctrl && (keyval == gdk::Key::a || keyval == gdk::Key::A) {
+                bw.active_pane().select_all();
                 return glib::Propagation::Stop;
             }
 

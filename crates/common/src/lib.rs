@@ -36,16 +36,34 @@ fn drag_anchor_candidate_paths() -> Vec<std::path::PathBuf> {
 /// Guarda temporalmente el punto de agarre del arrastre actual para alinear con precisión
 /// sueltas entre procesos (p. ej. Branches <-> Escritorio).
 pub fn write_drag_anchor(path: &std::path::Path, offset_x: f64, offset_y: f64) {
+    write_drag_anchors(&[(path.to_path_buf(), (offset_x, offset_y))]);
+}
+
+/// Guarda temporalmente los puntos de agarre de uno o varios elementos arrastrados simultáneamente,
+/// preservando sus desplazamientos relativos entre procesos (Branches <-> Escritorio).
+pub fn write_drag_anchors(anchors: &[(std::path::PathBuf, (f64, f64))]) {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let payload = format!("{}\n{},{}\n{}", now_ms, offset_x, offset_y, path.to_string_lossy());
+    let mut payload = format!("v2:{}\n", now_ms);
+    for (path, (ox, oy)) in anchors {
+        payload.push_str(&format!("{},{}\t{}\n", ox, oy, path.to_string_lossy()));
+    }
     for candidate in drag_anchor_candidate_paths() {
         if std::fs::write(&candidate, &payload).is_ok() {
             break;
         }
     }
+}
+
+fn paths_match(stored_path: &str, expected_path: &std::path::Path) -> bool {
+    if std::path::Path::new(stored_path) == expected_path {
+        return true;
+    }
+    let can_stored = std::fs::canonicalize(stored_path).ok();
+    let can_expected = std::fs::canonicalize(expected_path).ok();
+    can_stored.is_some() && can_stored == can_expected
 }
 
 /// Lee el punto de agarre compartido si corresponde a `expected_path` y fue registrado recientemente (< 60 s).
@@ -54,25 +72,40 @@ pub fn read_drag_anchor(expected_path: &std::path::Path) -> Option<(f64, f64)> {
         .into_iter()
         .filter_map(|candidate| std::fs::read_to_string(candidate).ok())
         .next()?;
-    let mut lines = raw.splitn(3, '\n');
-    let ts_ms: u128 = lines.next()?.trim().parse().ok()?;
-    let coords_line = lines.next()?;
-    let stored_path = lines.next()?.trim();
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    if now_ms.saturating_sub(ts_ms) > 60_000 {
+
+    if let Some(rest) = raw.strip_prefix("v2:") {
+        let mut lines = rest.lines();
+        let ts_ms: u128 = lines.next()?.trim().parse().ok()?;
+        if now_ms.saturating_sub(ts_ms) > 60_000 {
+            return None;
+        }
+        for line in lines {
+            let (coords_part, stored_path) = line.split_once('\t')?;
+            if paths_match(stored_path.trim(), expected_path) {
+                let mut xy = coords_part.split(',');
+                let ox: f64 = xy.next()?.trim().parse().ok()?;
+                let oy: f64 = xy.next()?.trim().parse().ok()?;
+                return Some((ox, oy));
+            }
+        }
         return None;
     }
 
-    if std::path::Path::new(stored_path) != expected_path {
-        let can_stored = std::fs::canonicalize(stored_path).ok();
-        let can_expected = std::fs::canonicalize(expected_path).ok();
-        if can_stored.is_none() || can_stored != can_expected {
-            return None;
-        }
+    let mut lines = raw.splitn(3, '\n');
+    let ts_ms: u128 = lines.next()?.trim().parse().ok()?;
+    let coords_line = lines.next()?;
+    let stored_path = lines.next()?.trim();
+
+    if now_ms.saturating_sub(ts_ms) > 60_000 {
+        return None;
+    }
+    if !paths_match(stored_path, expected_path) {
+        return None;
     }
 
     let mut xy = coords_line.split(',');
@@ -86,10 +119,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn shared_drag_anchor_roundtrips_matching_path() {
-        let p = std::path::Path::new("/tmp/malus_drag_anchor_test.txt");
-        write_drag_anchor(p, 38.0, 44.0);
-        assert_eq!(read_drag_anchor(p), Some((38.0, 44.0)));
+    fn shared_drag_anchor_roundtrips_single_and_multi_paths() {
+        let p1 = std::path::PathBuf::from("/tmp/malus_drag_anchor_test_1.txt");
+        let p2 = std::path::PathBuf::from("/tmp/malus_drag_anchor_test_2.txt");
+        write_drag_anchors(&[(p1.clone(), (38.0, 44.0)), (p2.clone(), (-78.0, -56.0))]);
+        assert_eq!(read_drag_anchor(&p1), Some((38.0, 44.0)));
+        assert_eq!(read_drag_anchor(&p2), Some((-78.0, -56.0)));
         assert_eq!(
             read_drag_anchor(std::path::Path::new("/tmp/other_file.txt")),
             None

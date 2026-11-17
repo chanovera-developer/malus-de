@@ -109,7 +109,10 @@ pub fn build_app_matchers(name: &str, command: &str, desktop_file: &Path) -> Vec
 
 fn clean_exec_line(raw: &str) -> String {
     raw.split_whitespace()
-        .filter(|part| !part.starts_with('%'))
+        .filter(|part| {
+            let unquoted = part.trim_matches('"').trim_matches('\'');
+            !unquoted.starts_with('%') && !matches!(unquoted, "@@" | "@@u" | "@@U" | "@@f" | "@@F")
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -232,16 +235,241 @@ pub fn desktop_file_to_dock_app(path: &Path) -> Option<DockAppConfig> {
     parse_desktop_file_any(path).map(|entry| entry.to_dock_app())
 }
 
-pub fn index_applications() -> Vec<DesktopAppEntry> {
-    let mut apps = Vec::new();
+pub fn application_dirs() -> Vec<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let xdg_data_home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from);
     let xdg_data_dirs = std::env::var_os("XDG_DATA_DIRS");
-    let dirs = application_dirs_from(
+    application_dirs_from(
         home.as_deref(),
         xdg_data_home.as_deref(),
         xdg_data_dirs.as_deref(),
-    );
+    )
+}
+
+/// Indica si `path` es un lanzador `.desktop` ubicado dentro de alguno de los directorios
+/// estándar de aplicaciones del sistema/usuario (como en la vista «Aplicaciones» de Branches).
+pub fn is_application_desktop_file(path: &Path) -> bool {
+    if path.extension().and_then(|s| s.to_str()) != Some("desktop") {
+        return false;
+    }
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let canonical_parent = fs::canonicalize(parent).ok();
+    application_dirs().into_iter().any(|dir| {
+        if dir == parent {
+            return true;
+        }
+        match (&canonical_parent, fs::canonicalize(&dir).ok()) {
+            (Some(cp), Some(cd)) => cp == &cd,
+            _ => false,
+        }
+    })
+}
+
+pub fn read_desktop_launch_metadata(path: &Path) -> (bool, Option<PathBuf>) {
+    let Ok(content) = fs::read_to_string(path) else {
+        return (false, None);
+    };
+    let mut in_entry = false;
+    let mut terminal = false;
+    let mut work_dir = None;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_entry = trimmed == "[Desktop Entry]";
+            continue;
+        }
+        if !in_entry || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some((k, v)) = trimmed.split_once('=') {
+            let key = k.trim();
+            let val = v.trim();
+            if key == "Terminal" {
+                terminal = val.eq_ignore_ascii_case("true");
+            } else if key == "Path" && !val.is_empty() {
+                let p = PathBuf::from(val);
+                if p.is_dir() {
+                    work_dir = Some(p);
+                }
+            }
+        }
+    }
+    (terminal, work_dir)
+}
+
+pub fn split_desktop_exec_args(command_line: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+    let mut has_token = false;
+
+    for ch in command_line.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            has_token = true;
+            continue;
+        }
+        match ch {
+            '\\' if !in_single => {
+                escaped = true;
+                has_token = true;
+            }
+            '\'' if !in_double => {
+                in_single = !in_single;
+                has_token = true;
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+                has_token = true;
+            }
+            c if c.is_whitespace() && !in_single && !in_double => {
+                if has_token {
+                    args.push(std::mem::take(&mut current));
+                    has_token = false;
+                }
+            }
+            c => {
+                current.push(c);
+                has_token = true;
+            }
+        }
+    }
+    if has_token {
+        args.push(current);
+    }
+    args
+}
+
+pub fn spawn_terminal_desktop_command(
+    command_line: &str,
+    working_dir: Option<&Path>,
+) -> Result<(), String> {
+    let tokens = split_desktop_exec_args(command_line);
+    if tokens.is_empty() {
+        return Err("Comando de aplicación vacío".to_string());
+    }
+    let terminals = ["ghostty", "ptyxis", "gnome-terminal", "alacritty", "kitty", "xterm"];
+    for term in terminals {
+        let mut cmd = std::process::Command::new(term);
+        if let Some(wd) = working_dir {
+            cmd.current_dir(wd);
+        }
+        if term == "gnome-terminal" {
+            cmd.arg("--");
+        } else {
+            cmd.arg("-e");
+        }
+        cmd.args(&tokens);
+        crate::config::apply_isolated_environment(&mut cmd);
+        if let Ok(mut child) = cmd.spawn() {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+            return Ok(());
+        }
+    }
+    Err("No se encontró un emulador de terminal para ejecutar la aplicación".to_string())
+}
+
+pub fn spawn_desktop_command(command_line: &str, working_dir: Option<&Path>) -> Result<(), String> {
+    let raw_parts = split_desktop_exec_args(command_line);
+    let mut env_pairs: Vec<(String, String)> = Vec::new();
+    let mut idx = 0;
+    if raw_parts.first().map(|s| s.as_str()) == Some("env") {
+        idx = 1;
+    }
+    while idx < raw_parts.len() {
+        if let Some((k, v)) = raw_parts[idx].split_once('=') {
+            if !k.is_empty() && !k.contains('/') {
+                env_pairs.push((k.to_string(), v.to_string()));
+                idx += 1;
+                continue;
+            }
+        }
+        break;
+    }
+    let remaining = &raw_parts[idx..];
+    let Some((exe, args)) = remaining.split_first() else {
+        return Err("Comando de aplicación vacío".to_string());
+    };
+
+    let target_path_buf;
+    let mut wrapped_target_bin: Option<&str> = None;
+    let target_exe = if exe == "gnome-control-center" {
+        "malus-de-settings"
+    } else if let Some(wrapper) = crate::config::resolve_electron_ide_wrapper(exe) {
+        wrapped_target_bin = Some(exe.as_str());
+        target_path_buf = wrapper.to_string_lossy().to_string();
+        &target_path_buf
+    } else {
+        exe.as_str()
+    };
+
+    let local_bin = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join(target_exe)))
+        .filter(|p| p.is_file());
+
+    let mut command = if let Some(bin) = local_bin {
+        std::process::Command::new(bin)
+    } else {
+        std::process::Command::new(target_exe)
+    };
+    command.args(args);
+    if let Some(wd) = working_dir {
+        command.current_dir(wd);
+    }
+    crate::config::apply_isolated_environment(&mut command);
+    for (k, v) in env_pairs {
+        command.env(k, v);
+    }
+    if let Some(orig_exe) = wrapped_target_bin {
+        command.env("MALUS_IDE_BIN", orig_exe);
+    }
+
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("Error al ejecutar {}: {}", target_exe, e))?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+/// Ejecuta un archivo `.desktop` respetando wrappers de Malus DE, `Terminal=true` y `Path=`.
+pub fn spawn_desktop_entry_path(path: &Path) -> Result<(), String> {
+    if path.file_name().is_some_and(|name| name == "io.mpv.Mpv.desktop") {
+        if spawn_desktop_command(
+            "flatpak run io.mpv.Mpv --gpu-context=wayland --player-operation-mode=pseudo-gui",
+            None,
+        )
+        .is_ok()
+        {
+            return Ok(());
+        }
+    }
+
+    let (wants_terminal, working_dir) = read_desktop_launch_metadata(path);
+    let entry = parse_desktop_file_any(path)
+        .ok_or_else(|| "No se pudo leer la entrada .desktop".to_string())?;
+    if entry.exec.trim().is_empty() {
+        return Err("Entrada .desktop sin comando Exec".to_string());
+    }
+    if wants_terminal {
+        spawn_terminal_desktop_command(&entry.exec, working_dir.as_deref())
+    } else {
+        spawn_desktop_command(&entry.exec, working_dir.as_deref())
+    }
+}
+
+pub fn index_applications() -> Vec<DesktopAppEntry> {
+    let mut apps = Vec::new();
+    let dirs = application_dirs();
 
     for dir in &dirs {
         if dir.exists() {
@@ -544,6 +772,20 @@ mod tests {
         assert_eq!(dock_app.icon, "demo-icon");
         assert!(dock_app.matchers.iter().any(|m| m == "org.example.Demo"));
         assert!(dock_app.matchers.iter().any(|m| m == "demo"));
+
+        assert_eq!(
+            super::clean_exec_line("/usr/bin/flatpak run --file-forwarding io.mpv.Mpv @@u %U @@"),
+            "/usr/bin/flatpak run --file-forwarding io.mpv.Mpv"
+        );
+        assert!(super::is_application_desktop_file(Path::new(
+            "/usr/share/applications/org.example.Demo.desktop"
+        )));
+        assert!(!super::is_application_desktop_file(Path::new(
+            "/home/user/Escritorio/org.example.Demo.desktop"
+        )));
+        assert!(!super::is_application_desktop_file(Path::new(
+            "/usr/share/applications/not-desktop.txt"
+        )));
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

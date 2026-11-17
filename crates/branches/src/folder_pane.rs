@@ -9,9 +9,9 @@ use gtk4::prelude::*;
 use gtk4::{
     Align, Box as GtkBox, Button, GestureClick, Image, Label, Orientation, Stack,
 };
-use std::cell::RefCell;
-use std::path::PathBuf;
-use std::rc::Rc;
+use std::cell::{Cell, RefCell};
+use std::path::{Path, PathBuf};
+use std::rc::{Rc, Weak};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaneId {
@@ -38,6 +38,9 @@ pub struct FolderPane {
     pane_header: GtkBox,
     pane_title: Label,
     items_cache: Rc<RefCell<Vec<FileItem>>>,
+    self_weak_ref: RefCell<Weak<Self>>,
+    dir_monitor: RefCell<Option<(PathBuf, gio::FileMonitor)>>,
+    pending_sync: Rc<Cell<Option<glib::SourceId>>>,
     on_activated: Rc<dyn Fn(PaneId)>,
     on_path_changed: Rc<dyn Fn(PaneId, PathBuf)>,
     on_selection_changed: Rc<dyn Fn(PaneId, usize, PathBuf)>,
@@ -145,7 +148,7 @@ impl FolderPane {
             let self_for_drop = self_weak.clone();
             move || {
                 if let Some(p) = self_for_drop.borrow().as_ref() {
-                    p.reload();
+                    p.sync_from_filesystem();
                 }
             }
         });
@@ -163,12 +166,16 @@ impl FolderPane {
             pane_header,
             pane_title,
             items_cache,
+            self_weak_ref: RefCell::new(Weak::new()),
+            dir_monitor: RefCell::new(None),
+            pending_sync: Rc::new(Cell::new(None)),
             on_activated,
             on_path_changed,
             on_selection_changed,
             on_close_split,
         });
 
+        *folder_pane.self_weak_ref.borrow_mut() = Rc::downgrade(&folder_pane);
         *self_weak.borrow_mut() = Some(folder_pane.clone());
         folder_pane.reload();
 
@@ -269,10 +276,12 @@ impl FolderPane {
     pub fn reload(&self) {
         match *self.virtual_folder.borrow() {
             Some(VirtualFolder::Applications) => {
+                self.clear_directory_monitor();
                 self.reload_applications();
                 return;
             }
             Some(VirtualFolder::Recents) => {
+                self.clear_directory_monitor();
                 self.reload_recents();
                 return;
             }
@@ -291,7 +300,7 @@ impl FolderPane {
         };
 
         let folder_name = if current_path == PathBuf::from("/") {
-            "Macintosh HD".to_string()
+            "Malus SSD".to_string()
         } else if current_path.ends_with("Trash/files") {
             "Papelera".to_string()
         } else {
@@ -314,12 +323,135 @@ impl FolderPane {
                 self.column_view.set_root(&current_path, &items, show_hidden, sort_by, sort_order);
                 self.gallery_view.set_items(&items);
                 *self.items_cache.borrow_mut() = items;
-                (self.on_selection_changed)(self.id, count, current_path);
+                (self.on_selection_changed)(self.id, count, current_path.clone());
+                self.ensure_directory_monitor(&current_path);
             }
             Err(e) => {
                 tracing::error!("Error al listar directorio en panel {:?}: {}", self.id, e);
+                self.clear_directory_monitor();
             }
         }
+    }
+
+    fn clear_directory_monitor(&self) {
+        if let Some(id) = self.pending_sync.take() {
+            id.remove();
+        }
+        *self.dir_monitor.borrow_mut() = None;
+    }
+
+    fn ensure_directory_monitor(&self, dir: &Path) {
+        if self
+            .dir_monitor
+            .borrow()
+            .as_ref()
+            .is_some_and(|(watched, _)| watched == dir)
+        {
+            return;
+        }
+        self.clear_directory_monitor();
+
+        let weak_pane = self.self_weak_ref.borrow().clone();
+        if weak_pane.strong_count() == 0 {
+            return;
+        }
+
+        let gfile = gio::File::for_path(dir);
+        let Ok(monitor) =
+            gfile.monitor_directory(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
+        else {
+            return;
+        };
+
+        let watched_dir = dir.to_path_buf();
+        let pending_sync_ref = self.pending_sync.clone();
+        monitor.connect_changed(move |_, file, _other_file, event_type| {
+            let Some(pane) = weak_pane.upgrade() else {
+                return;
+            };
+            if pane.virtual_folder.borrow().is_some()
+                || pane.state.borrow().current_path != watched_dir
+            {
+                return;
+            }
+            let event_path = file.path();
+            if event_path.as_ref() == Some(&watched_dir)
+                && matches!(
+                    event_type,
+                    gio::FileMonitorEvent::Changed
+                        | gio::FileMonitorEvent::ChangesDoneHint
+                        | gio::FileMonitorEvent::AttributeChanged
+                )
+            {
+                return;
+            }
+            if !pane.state.borrow().show_hidden {
+                if let Some(name) = event_path
+                    .as_ref()
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
+                {
+                    if name.starts_with('.') {
+                        return;
+                    }
+                }
+            }
+
+            if let Some(prev) = pending_sync_ref.take() {
+                prev.remove();
+            }
+            let weak_for_timer = Rc::downgrade(&pane);
+            let pending_for_timer = pending_sync_ref.clone();
+            let source_id = glib::timeout_add_local_once(
+                std::time::Duration::from_millis(40),
+                move || {
+                    pending_for_timer.set(None);
+                    if let Some(p) = weak_for_timer.upgrade() {
+                        p.sync_from_filesystem();
+                    }
+                },
+            );
+            pending_sync_ref.set(Some(source_id));
+        });
+
+        *self.dir_monitor.borrow_mut() = Some((dir.to_path_buf(), monitor));
+    }
+
+    pub fn sync_from_filesystem(&self) {
+        if self.virtual_folder.borrow().is_some() {
+            return;
+        }
+        let (current_path, show_hidden, sort_by, sort_order, search_query) = {
+            let s = self.state.borrow();
+            (
+                s.current_path.clone(),
+                s.show_hidden,
+                s.sort_by,
+                s.sort_order,
+                s.search_query.clone(),
+            )
+        };
+        let Ok(items) = load_directory(&current_path, show_hidden, sort_by, sort_order, &search_query)
+        else {
+            return;
+        };
+
+        let same_snapshot = {
+            let prev = self.items_cache.borrow();
+            snapshots_equal(&prev, &items)
+        };
+        if same_snapshot {
+            return;
+        }
+
+        let count = items.len();
+        self.icon_view.sync_items_incremental(&items);
+        self.list_view.set_items(&items);
+        self.column_view
+            .set_root(&current_path, &items, show_hidden, sort_by, sort_order);
+        self.gallery_view.set_items(&items);
+        *self.items_cache.borrow_mut() = items;
+        (self.on_selection_changed)(self.id, count, current_path);
     }
 
     pub fn current_path(&self) -> PathBuf {
@@ -357,6 +489,81 @@ impl FolderPane {
             .or_else(|| self.items_cache.borrow().first().cloned())
     }
 
+    pub fn open_selected(&self) {
+        if let Some((item, _)) = self.get_selected_item_and_widget() {
+            if item.is_dir {
+                self.navigate_to(item.path);
+            } else {
+                let _ = crate::fs_backend::open_file(&item.path);
+            }
+        }
+    }
+
+    pub fn is_icon_view_active(&self) -> bool {
+        self.view_stack.visible_child_name().as_deref() == Some("icons")
+    }
+
+    pub fn navigate_icon_grid(&self, key: gdk::Key) -> bool {
+        if self.is_icon_view_active() {
+            self.icon_view.navigate_by_arrow(key)
+        } else {
+            false
+        }
+    }
+
+    fn queue_select_name_active(&self, name: &str) {
+        match self.view_stack.visible_child_name().as_deref() {
+            Some("icons") => self.icon_view.queue_select_name(name),
+            Some("list") => self.list_view.queue_select_name(name),
+            Some("columns") => self.column_view.queue_select_name(name),
+            Some("gallery") => self.gallery_view.queue_select_name(name),
+            _ => self.icon_view.queue_select_name(name),
+        }
+    }
+
+    pub fn create_new_folder_and_rename(self: &Rc<Self>) {
+        let current_path = self.current_path();
+        if !crate::views::can_create_in_folder(&current_path) {
+            return;
+        }
+        let default_name = if malus_de_common::is_spanish_locale() {
+            "Nueva carpeta"
+        } else {
+            "New Folder"
+        };
+        match crate::operations::create_new_folder(&current_path, default_name) {
+            Ok(created_path) => {
+                if let Some(new_name) = created_path.file_name() {
+                    self.queue_select_name_active(&new_name.to_string_lossy());
+                }
+                self.reload();
+
+                let pane_lookup = Rc::clone(self);
+                let pane_rename = Rc::clone(self);
+                let target_path = created_path;
+                let on_renamed: crate::views::RenameCallback = Rc::new(move |new_path| {
+                    if let Some(new_name) = new_path.file_name() {
+                        pane_rename.queue_select_name_active(&new_name.to_string_lossy());
+                    }
+                    pane_rename.reload();
+                });
+                crate::views::schedule_inline_rename(
+                    move || {
+                        let (item, widget) = pane_lookup.get_selected_item_and_widget()?;
+                        if item.path != target_path {
+                            return None;
+                        }
+                        Some((item.path, item.is_dir, widget))
+                    },
+                    Some(on_renamed),
+                );
+            }
+            Err(e) => {
+                tracing::error!("Error al crear carpeta: {}", e);
+            }
+        }
+    }
+
     pub fn rename_selected(self: &Rc<Self>) {
         if self.current_path().ends_with("Trash/files") {
             return;
@@ -365,36 +572,62 @@ impl FolderPane {
             return;
         };
         let pane = Rc::clone(self);
-        let is_icons = self.view_stack.visible_child_name().as_deref() == Some("icons");
         crate::views::show_rename_popover(
             &widget,
             item.path,
             item.is_dir,
             None,
             Some(Rc::new(move |new_path| {
-                if is_icons {
-                    if let Some(new_name) = new_path.file_name() {
-                        pane.icon_view.queue_select_name(&new_name.to_string_lossy());
-                    }
+                if let Some(new_name) = new_path.file_name() {
+                    pane.queue_select_name_active(&new_name.to_string_lossy());
                 }
                 pane.reload();
             })),
         );
     }
 
-    pub fn duplicate_selected(&self) {
-        if let Some(item) = self.get_selected_item() {
-            if let Ok(_) = crate::operations::duplicate_item(&item.path) {
-                self.reload();
+    pub fn get_selected_items(&self) -> Vec<FileItem> {
+        let mode = self.view_stack.visible_child_name().unwrap_or_default();
+        if mode.as_str() == "icons" {
+            let items = self.icon_view.get_selected_items(&self.items_cache.borrow());
+            if !items.is_empty() {
+                return items;
             }
+        }
+        self.get_selected_item_and_widget()
+            .map(|(item, _)| vec![item])
+            .unwrap_or_default()
+    }
+
+    pub fn select_all(&self) {
+        if self.is_icon_view_active() {
+            self.icon_view.select_all();
+        }
+    }
+
+    pub fn duplicate_selected(&self) {
+        let items = self.get_selected_items();
+        let mut changed = false;
+        for item in items {
+            if crate::operations::duplicate_item(&item.path).is_ok() {
+                changed = true;
+            }
+        }
+        if changed {
+            self.reload();
         }
     }
 
     pub fn trash_selected(&self) {
-        if let Some(item) = self.get_selected_item() {
-            if let Ok(_) = crate::operations::trash_item(&item.path) {
-                self.reload();
+        let items = self.get_selected_items();
+        let mut changed = false;
+        for item in items {
+            if crate::operations::trash_item(&item.path).is_ok() {
+                changed = true;
             }
+        }
+        if changed {
+            self.reload();
         }
     }
 
@@ -418,6 +651,7 @@ impl FolderPane {
 
     pub fn show_tag_filter(&self, tag_name: &str) {
         *self.virtual_folder.borrow_mut() = None;
+        self.clear_directory_monitor();
         if let Ok(conn) = crate::db::open_db() {
             let paths = crate::db::get_files_by_tag(&conn, tag_name);
             let mut items = Vec::new();
@@ -544,9 +778,54 @@ fn setup_drop_target<F: Fn() + 'static>(
     widget.add_controller(drop_target);
 }
 
+impl Drop for FolderPane {
+    fn drop(&mut self) {
+        self.clear_directory_monitor();
+    }
+}
+
+fn snapshots_equal(prev: &[FileItem], next: &[FileItem]) -> bool {
+    if prev.len() != next.len() {
+        return false;
+    }
+    prev.iter().zip(next.iter()).all(|(a, b)| {
+        a.name == b.name
+            && a.path == b.path
+            && a.is_dir == b.is_dir
+            && a.is_symlink == b.is_symlink
+            && a.size == b.size
+            && a.modified == b.modified
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshots_equal_detects_content_and_metadata_changes() {
+        let mk = |name: &str, size: u64| FileItem {
+            name: name.to_string(),
+            path: PathBuf::from(format!("/tmp/{name}")),
+            is_dir: false,
+            is_hidden: false,
+            is_symlink: false,
+            size,
+            size_str: format!("{size} B"),
+            modified: None,
+            modified_str: "--".to_string(),
+            kind_str: "Archivo".to_string(),
+            gicon: gio::ThemedIcon::new("text-x-generic").upcast(),
+        };
+        let a = vec![mk("uno.txt", 10), mk("dos.txt", 20)];
+        let b = vec![mk("uno.txt", 10), mk("dos.txt", 20)];
+        let c = vec![mk("uno.txt", 10), mk("dos.txt", 25)];
+        let d = vec![mk("uno.txt", 10)];
+
+        assert!(super::snapshots_equal(&a, &b));
+        assert!(!super::snapshots_equal(&a, &c));
+        assert!(!super::snapshots_equal(&a, &d));
+    }
 
     #[test]
     fn history_navigation_releases_borrow_before_reload() {

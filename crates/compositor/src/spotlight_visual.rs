@@ -420,12 +420,16 @@ struct PendingSpotlightDrag {
     active: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SpotlightPointerReleaseOutcome {
     Consumed,
     PinToDock {
         app: SpotlightDragApp,
         insert_at_dock_x: Option<i32>,
+    },
+    CreateDesktopShortcut {
+        app: SpotlightDragApp,
+        drop_loc: Point<f64, Logical>,
     },
 }
 
@@ -1105,6 +1109,30 @@ impl SpotlightState {
             return Some(SpotlightPointerReleaseOutcome::PinToDock {
                 app: pending.app,
                 insert_at_dock_x,
+            });
+        }
+
+        let now = Instant::now();
+        let canvas = self.canvas_logical_rect(output_geo);
+        let lx = pointer_loc.x - canvas.loc.x as f64;
+        let ly = pointer_loc.y - canvas.loc.y as f64;
+        let hover_t = self.hover_transition.value_at(now);
+        let expand_t = self
+            .expand_transition
+            .value_at(now)
+            .max(self.expand_transition.target());
+        let card_h = self
+            .height_transition
+            .value_at(now)
+            .max(self.height_transition.target());
+        let (cap_x, cap_y, cap_w, cap_h, _) = self.capsule_rect_at(hover_t, expand_t, card_h);
+        let inside_card =
+            lx >= cap_x && lx <= cap_x + cap_w && ly >= cap_y && ly <= cap_y + cap_h;
+        if !inside_card {
+            self.close();
+            return Some(SpotlightPointerReleaseOutcome::CreateDesktopShortcut {
+                app: pending.app,
+                drop_loc: pointer_loc,
             });
         }
 
@@ -3529,9 +3557,11 @@ fn spawn_shell_command(command_line: &str) {
     };
 
     let target_path_buf;
+    let mut wrapped_target_bin: Option<&str> = None;
     let target_exe = if *exe == "gnome-control-center" {
         "malus-de-settings"
     } else if let Some(wrapper) = malus_de_common::config::resolve_electron_ide_wrapper(exe) {
+        wrapped_target_bin = Some(*exe);
         target_path_buf = wrapper.to_string_lossy().to_string();
         &target_path_buf
     } else {
@@ -3550,6 +3580,9 @@ fn spawn_shell_command(command_line: &str) {
     };
     command.args(args);
     apply_malus_app_env(&mut command);
+    if let Some(orig_exe) = wrapped_target_bin {
+        command.env("MALUS_IDE_BIN", orig_exe);
+    }
     if let Ok(mut child) = command.spawn() {
         std::thread::spawn(move || {
             let _ = child.wait();
@@ -4313,6 +4346,44 @@ mod tests {
                     ],
                 },
                 insert_at_dock_x: Some(180),
+            }
+        );
+        assert!(!spotlight.is_open());
+
+        // Arrastrar hacia el escritorio (fuera de la tarjeta de Spotlight y fuera del Dock)
+        spotlight.open_on_output(None);
+        spotlight.apps = vec![AppEntry {
+            name: "Antigravity".to_string(),
+            exec: "/usr/share/antigravity/antigravity".to_string(),
+            desktop_file: "/usr/share/applications/antigravity-ide.desktop".to_string(),
+            icon: "antigravity".to_string(),
+            comment: "AI IDE".to_string(),
+            categories: "Development;IDE;".to_string(),
+            search_terms: "antigravity ide".to_string(),
+        }];
+        spotlight.set_mode(SpotlightMode::Applications, Instant::now());
+        spotlight.hovered_row = Some(0);
+        assert!(spotlight.handle_pointer_button(output_geo, press_pt, 0x110));
+        let desktop_pt = Point::from((220.0, 260.0));
+        spotlight.update_pointer_motion(output_geo, desktop_pt);
+        assert!(spotlight.is_dragging_app());
+        let desktop_outcome = spotlight
+            .handle_pointer_button_release(output_geo, desktop_pt, 0x110, Some(dock_geo))
+            .expect("desktop drop outcome");
+        assert_eq!(
+            desktop_outcome,
+            SpotlightPointerReleaseOutcome::CreateDesktopShortcut {
+                app: SpotlightDragApp {
+                    name: "Antigravity".to_string(),
+                    icon: "antigravity".to_string(),
+                    command: "/usr/share/antigravity/antigravity".to_string(),
+                    desktop_file: "/usr/share/applications/antigravity-ide.desktop".to_string(),
+                    matchers: vec![
+                        "antigravity-ide".to_string(),
+                        "antigravity".to_string(),
+                    ],
+                },
+                drop_loc: desktop_pt,
             }
         );
         assert!(!spotlight.is_open());

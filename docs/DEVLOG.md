@@ -4,6 +4,194 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-17] — Vista de Columnas de Branches: Animaciones y Conservación del Padre
+
+### 1. Entrada Animada de Columnas (`crates/branches`)
+* [`slide_in_from_right`](../crates/branches/src/views/column_view.rs): las columnas nuevas y el panel de previsualización entran deslizándose desde la derecha con fundido (300 ms, *ease-out cubic*) mediante `add_tick_callback`, animando `margin_start` y `opacity`.
+* `scroll_to_end` pasó de salto instantáneo a animación de 320 ms sobre `hadjustment` (destino recalculado por fotograma y cancelación por generación). Solo tiene efecto cuando las columnas desbordan el ancho disponible (cada columna mide 240 px, la previsualización 280 px).
+
+### 2. El Padre ya no se Oculta si Hay Espacio
+* **Causa:** abrir una carpeta (doble clic/Enter) invocaba `set_root`, que reconstruía la vista con esa carpeta como raíz y eliminaba al padre sin animación.
+* **Solución:** si la carpeta destino ya es una columna visible (índice > 0) y no hay selección pendiente, `set_root` conserva las columnas anteriores, descarta las posteriores, deselecciona la carpeta abierta y llama a `scroll_to_end`. Si todo cabe no se desplaza nada; si no cabe, el contenedor se desplaza a la izquierda con animación y el padre sale de vista. Resto de navegaciones (barra lateral, atrás/adelante, subir, refrescos) siguen reconstruyendo la vista.
+
+### 3. Validación
+* `cargo test -p malus-de-branches`: **28 passed; 0 failed**. Comportamiento visual confirmado por el usuario en la sesión gráfica.
+
+---
+
+## [2026-11-17] — Vista de Lista de Branches: Columnas, Orden y Selección; Miniaturas Squircle en el Escritorio
+
+### 1. Columnas Redimensionables, Alineadas y Ordenables (`crates/branches`)
+* **Alineación:** Fecha, Tamaño y Clase usan anchos fijos en píxeles compartidos entre cabecera y filas ([`list_view.rs`](../crates/branches/src/views/list_view.rs)); antes se medían en caracteres con fuentes distintas (11 px vs 13 px). Texto truncado con `…` en el centro (`EllipsizeMode::Middle`) y tooltip con el texto completo.
+* **Redimensionado:** asa en el borde izquierdo de cada columna (50–600 px). Un único `GestureDrag` en fase *Capture* sobre la cabecera (que no se mueve) evita que el contenido "vibre" al arrastrar. Los anchos no se persisten.
+* **Orden por columna:** clic en el nombre alterna ascendente/descendente (▲/▼) para Nombre (carpetas primero), Fecha, Tamaño y Clase, conservando la selección. El orden vive en `ListView` mientras la ventana está abierta y se reaplica al recargar.
+* **Columnas pares:** franjas gris muy claro (`alpha(@window_fg_color, 0.035)`) en Fecha y Clase como capa inferior de un `Overlay` (hasta el final de la vista, sin separaciones); filas y scroll transparentes ([`macos-branches.css`](../crates/branches/src/styles/macos-branches.css)).
+
+### 2. Selección en Modo Lista
+* **Causa:** `SelectionMode::Multiple` con `activate_on_single_click` (por defecto) añadía cada fila pulsada a la selección sin deseleccionar las anteriores.
+* **Solución:** `activate_on_single_click(false)`: clic reemplaza, Ctrl+clic alterna, Mayús+clic extiende.
+
+### 3. Miniaturas del Escritorio con Recorte Squircle (`crates/wallpaper`)
+* Los iconos del escritorio los dibuja el crate `wallpaper`; se copió la lógica de recorte de Branches (exponente 4.2, radio 22 % del lado menor, antialiasing) en [`main.rs`](../crates/wallpaper/src/main.rs) vía `squircle_clip_pixbuf`, aplicada a las miniaturas de imagen. Test `clip_makes_corners_transparent_and_keeps_center_opaque`.
+
+### 4. Validación
+* `cargo test -p malus-de-branches`: **28 passed; 0 failed**. `cargo test -p malus-de-wallpaper`: **19 passed; 0 failed**.
+* Confirmado por el usuario en la sesión gráfica: selección en lista correcta.
+
+---
+
+## [2026-11-17] — Discos Externos y Volúmenes en Ubicaciones de Branches
+
+### 1. Detección en Tiempo Real con `gio::VolumeMonitor` (`crates/branches`)
+* **Causa:** la sección "Ubicaciones" de [`sidebar.rs`](../crates/branches/src/sidebar.rs) solo tenía entradas fijas (Inicio, `/`, `/mnt`, Papelera) y ninguna lógica de montajes; la sesión únicamente activa `automount` de GNOME, sin `udiskie`.
+* **Implementación:** `SidebarInner` incorpora `devices_anchor`, `device_rows`, `volume_monitor` y `signal_ids`. `rebuild_devices()` inserta las filas tras "Papelera" y se reconstruye (vía `idle_add_local_once`) con las señales `mount-added/removed/changed`, `volume-added/removed/changed` y `drive-connected/disconnected`; las señales se desconectan en `Drop`.
+* **Filtrado:** `is_system_mount_path` / `is_external_mount_path` excluyen `/`, `/boot`, `/boot/efi`, `/home`, `/var`, `/run/*` (salvo `/run/media`), etc. Se listan montajes en `/run/media` y `/media` o de unidades extraíbles, volúmenes extraíbles sin montar y, como respaldo, el contenido de `/run/media/$USER` y `/media`.
+
+### 2. Interacción
+* Clic en disco montado: navega a su raíz; admite soltar archivos.
+* Clic en volumen sin montar (fila atenuada): lo monta con `gtk4::MountOperation` (contraseñas/polkit) y navega al montaje.
+* Botón **Expulsar** (`media-eject-symbolic`, estilo `.branches-sidebar-eject-btn` en [`macos-branches.css`](../crates/branches/src/styles/macos-branches.css)) con `eject_with_operation` o `unmount_with_operation`, sin disparar la navegación de la fila.
+* **Limitaciones:** no se monta automáticamente al conectar; al expulsar el disco que se está viendo no se redirige a otra carpeta. Confirmado por el usuario en la sesión gráfica.
+
+### 3. Validación
+* `cargo test -p malus-de-branches`: **28 passed; 0 failed** (incluye `device_path_tests`).
+* `cargo build --release -p malus-de-branches`: correcto, sin advertencias.
+
+---
+
+## [2026-11-17] — Ajuste de Tamaño/Origen del Agujero Negro y Semáforo en Antigravity (Pendiente)
+
+### 1. Proporción y Origen del Efecto Agujero Negro al Cerrar (`crates/compositor`)
+* **Dimensionado sobre el botón rojo y disco compacto ([`black_hole.rs`](../crates/compositor/src/black_hole.rs)):**
+  * Ajustado `CLOSE_BUTTON_CORE_RADIUS_LOGICAL` a `6.5 * scale` (igual al radio del botón de cerrar SSD/CSD de `13 px`), acotando `quad_half` y la caída radial del disco de acreción a `2.5 * horizon_radius_px` para ceñir el efecto alrededor del botón rojo sin expandirse en exceso.
+* **Coordenadas reales por familia de ventana y clic CSD ([`state.rs`](../crates/compositor/src/state.rs), [`drm.rs`](../crates/compositor/src/backend/drm.rs), [`winit.rs`](../crates/compositor/src/backend/winit.rs)):**
+  * Añadidos `close_button_offset_for_app_id`, `close_button_center_logical` y `record_csd_close_click_hint` con los offsets exactos para SSD (`20.0, 19.0`), Branches (`28.5, 24.0`), Ajustes (`25.5, 23.5`), Electron/IDE (`20.5, 17.5`), Firefox (`16.5, 21.0`) y CSD genérico (`22.5, 23.0`), registrando el hint al cerrar con atajos (`close_active_window`) o mediante clic izquierdo CSD sin usar el respaldo genérico de la franja superior de `96 px`.
+
+### 2. Extensión de `malus-ide-wrapper` para la App Antigravity (`scripts/malus-ide-wrapper`)
+* Añadido `AGY_APP_INJECTION_SCRIPT` (`agy-ssd-v3`) y detección de páginas `http://127.0.0.1:*` / `https://127.0.0.1:*` en `watcher()` para inyectar controles semáforo en `[data-testid="title-menu-bar"]` enlazados a `window.electronNative`.
+* **Pendiente:** aunque la inyección responde por CDP (`Page.captureScreenshot` en vivo), en la sesión gráfica del usuario la ventana de **Antigravity** (standalone) sigue sin mostrar el semáforo correctamente y el ajuste visual en dicha aplicación queda pendiente para una revisión posterior.
+
+### 3. Validación
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-compositor`: **73 passed; 0 failed** (`close_button_offset_matches_ssd_and_csd_window_families`, `peak_horizon_radius_matches_close_button_across_scales`, `timeline_ignition_suction_and_collapse_phases`).
+* `cargo build --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --release -p malus-de-compositor`: compilación correcta (`exit 0`).
+* `python3 -m py_compile /home/cristian/Proyectos/malus-de/scripts/malus-ide-wrapper`: sintaxis válida (`exit 0`).
+
+---
+
+## [2026-11-17] — Miniaturas de Imágenes con Recorte Squircle en Branches
+
+### 1. Decodificación Asíncrona, Caché HiDPI y Recorte Squircle (`crates/branches`)
+* **Pipeline compartido de miniaturas ([`views/mod.rs`](../crates/branches/src/views/mod.rs), [`macos-branches.css`](../crates/branches/src/styles/macos-branches.css)):**
+  * Añadidos `is_image_thumbnail_candidate`, `decode_thumbnail_bytes`, `update_item_image_thumbnail` y `create_item_image` para cargar miniaturas de imágenes (`png`, `jpg`, `jpeg`, `webp`, `gif`, `svg`, `bmp`, `ico`, `tif`, `tiff`, `avif`, `heic`, `heif`, hasta `64 MB`) en segundo plano mediante `gio::spawn_blocking` con caché `THUMBNAIL_CACHE` (512 entradas indexadas por ruta, fecha de modificación, tamaño y resolución 2x HiDPI) y guardia por token ante cambios rápidos de tamaño o carpeta.
+  * Aplicado recorte **squircle** antialias por píxel (`apply_squircle_clip_rgba` con superelipse `n = 4.2`) directamente sobre el búfer RGBA antes de construir `gdk::MemoryTexture`, logrando esquinas continuas incluso en fotos panorámicas o verticales sin sombras rectangulares sobresalientes.
+* **Integración en todas las vistas ([`icon_view.rs`](../crates/branches/src/views/icon_view.rs), [`list_view.rs`](../crates/branches/src/views/list_view.rs), [`column_view.rs`](../crates/branches/src/views/column_view.rs), [`gallery_view.rs`](../crates/branches/src/views/gallery_view.rs)):**
+  * Activadas las miniaturas squircle alineadas en Vista de Iconos (con recarga automática al mover el control deslizante de tamaño o al modificarse un archivo vía `FileMonitor`), Lista, Columnas y carrusel de Galería.
+
+### 2. Validación
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-branches`: **26 passed; 0 failed** (`thumbnail_candidate_detects_images_and_ignores_directories_and_non_images` y `decode_thumbnail_bytes_decodes_valid_png_thumbnail`).
+* `cargo build --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --release -p malus-de-branches`: compilación correcta (`exit 0`).
+
+---
+
+## [2026-11-17] — Sincronización en Tiempo Real, Edición Inline al Crear Elementos y Papelera DnD en Dock
+
+### 1. Actualización Automática de Carpetas e Inline Rename al Crear en Branches (`crates/branches`)
+* **Monitoreo en tiempo real sin parpadeo ([`folder_pane.rs`](../crates/branches/src/folder_pane.rs), [`icon_view.rs`](../crates/branches/src/views/icon_view.rs)):**
+  * Incorporado `gio::FileMonitor` por pestaña/panel en `FolderPane` (`ensure_directory_monitor`, `clear_directory_monitor`, `sync_from_filesystem` y comparación `snapshots_equal`) con *debounce* de eventos del sistema de archivos.
+  * Añadido `IconView::sync_items_incremental` para insertar, retirar o actualizar metadatos de iconos modificados sin reconstruir ni hacer parpadear los elementos intactos.
+* **Edición inline inmediata tras «Crear nuevo ›» ([`views/mod.rs`](../crates/branches/src/views/mod.rs), [`icon_view.rs`](../crates/branches/src/views/icon_view.rs), [`list_view.rs`](../crates/branches/src/views/list_view.rs), [`column_view.rs`](../crates/branches/src/views/column_view.rs), [`gallery_view.rs`](../crates/branches/src/views/gallery_view.rs), [`folder_pane.rs`](../crates/branches/src/folder_pane.rs), [`app_window.rs`](../crates/branches/src/app_window.rs)):**
+  * Añadido `schedule_inline_rename` para activar `show_rename_popover` sobre el elemento recién creado en cuanto el menú contextual termina de cerrarse y la etiqueta cuenta con geometría asignada.
+  * Unificada la selección automática previa (`queue_select_name`) en Vista de Iconos, Lista, Columnas y Galería tanto desde el submenú **«Crear nuevo ›»** (Carpeta / Documento de texto) como desde `FolderPane::create_new_folder_and_rename` (`prompt_new_folder`).
+
+### 2. Submenú «Crear nuevo ▸» e Inline Rename en el Escritorio (`crates/wallpaper`)
+* **Creación y renombrado inline directo sobre el icono ([`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs), [`default-gradient.css`](../crates/wallpaper/src/styles/default-gradient.css)):**
+  * Reemplazado el diálogo modal anterior por el submenú **«Crear nuevo ▸»** (Carpeta y Documento de texto) en el menú contextual del escritorio (`build_create_new_submenu` y `create_desktop_item_and_edit`), respetando posición del clic y *snap-to-grid*.
+  * Tras aparecer el icono en el escritorio, `schedule_desktop_inline_rename` y `show_desktop_inline_rename` abren el campo inline `gtk4::Text` (`.desktop-inline-rename-entry`) con preselección del nombre base (manteniendo `.txt` sin seleccionar en documentos de texto), actualizando `icon_positions` al renombrar y protegiendo la edición frente a atajos globales de `Espacio` / `Enter` / `Delete` / `BackSpace`.
+
+### 3. Envío a Papelera mediante Drag & Drop en el Dock (`crates/dock`, `crates/branches`, `crates/wallpaper`)
+* **Zona de suelta sobre la Papelera del Dock ([`dock/src/main.rs`](../crates/dock/src/main.rs), [`dock.css`](../crates/dock/src/styles/dock.css)):**
+  * Extendido `attach_dock_drop_target` con detección sobre el icono de papelera (`is_point_over_trash`), retroalimentación visual `.dock-trash-drop-hover`, filtrado de rutas protegidas (`is_trashable_path` / `extract_trashable_paths`), envío vía `gio::File::trash` (`DragAction::MOVE`) y actualización inmediata de `user-trash-full`.
+  * Ajustada la limpieza al finalizar `DragAction::MOVE` en [`icon_view.rs`](../crates/branches/src/views/icon_view.rs) y [`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs) usando `symlink_metadata().is_err()` para retirar también accesos `.desktop` enviados a la papelera.
+
+### 4. Validación
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-dock -p malus-de-branches -p malus-de-wallpaper`:
+  * `malus-de-branches`: **24 passed; 0 failed** (`snapshots_equal_detects_content_and_metadata_changes`).
+  * `malus-de-dock`: **15 passed; 0 failed** (`extract_trashable_paths_filters_root_home_and_trash_and_keeps_regular_files`).
+  * `malus-de-wallpaper`: **18 passed; 0 failed**.
+* `cargo build --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --release -p malus-de-dock -p malus-de-branches -p malus-de-wallpaper`: compilación correcta (`exit 0`).
+
+---
+
+## [2026-11-17] — Ejecución y Accesos Directos de Aplicaciones en Escritorio desde Branches y Spotlight
+
+### 1. Lanzamiento Robusto de Aplicaciones `.desktop` (`crates/common`, `crates/branches`, `crates/wallpaper`)
+* **Ejecución unificada ([`apps.rs`](../crates/common/src/apps.rs), [`fs_backend.rs`](../crates/branches/src/fs_backend.rs), [`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs)):**
+  * Centralizados `split_desktop_exec_args`, `read_desktop_launch_metadata`, `spawn_desktop_command`, `spawn_terminal_desktop_command` y `spawn_desktop_entry_path` en `malus-de-common` para soportar comillas/escapes, prefijos `env`/`KEY=VAL`, `Terminal=true`, `Path=`, wrappers `MALUS_IDE_BIN` y limpieza de marcadores Flatpak (`@@`, `@@u`, `%U`, etc.) en `clean_exec_line`.
+  * En [`icon_view.rs`](../crates/branches/src/views/icon_view.rs) y [`list_view.rs`](../crates/branches/src/views/list_view.rs), el doble clic (`n_press >= 2`) reclama la secuencia antes de llamar a `open_file(&path)` y `launch_desktop_file` usa `gio::DesktopAppInfo::from_filename` como respaldo (útil para apps `DBusActivatable=true` o Flatpak).
+  * En [`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs), `launch_file` ejecuta entradas `.desktop` directamente como aplicaciones y `build_desktop_item_data` resuelve su nombre localizado e icono real mediante `resolve_desktop_app_gicon`.
+
+### 2. Enlaces Simbólicos al Arrastrar desde «Aplicaciones» y «Spotlight» al Escritorio (`crates/common`, `crates/branches`, `crates/compositor`, `crates/wallpaper`)
+* **Desde Branches → Escritorio / carpetas ([`apps.rs`](../crates/common/src/apps.rs), [`operations.rs`](../crates/branches/src/operations.rs), [`icon_view.rs`](../crates/branches/src/views/icon_view.rs), [`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs)):**
+  * Añadido `is_application_desktop_file` en `malus-de-common`: al arrastrar aplicaciones desde la carpeta virtual **Aplicaciones** hacia el **Escritorio** (o carpetas en Branches), se crea un enlace simbólico `.desktop` en destino manteniendo el icono original visible en **Aplicaciones**.
+* **Desde Spotlight → Escritorio ([`ipc.rs`](../crates/common/src/ipc.rs), [`spotlight_visual.rs`](../crates/compositor/src/spotlight_visual.rs), [`state.rs`](../crates/compositor/src/state.rs), [`drm.rs`](../crates/compositor/src/backend/drm.rs), [`winit.rs`](../crates/compositor/src/backend/winit.rs), [`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs)):**
+  * Añadido `SpotlightPointerReleaseOutcome::CreateDesktopShortcut` al soltar una aplicación fuera de la tarjeta de Spotlight y fuera del Dock, validando en `MalusState::handle_spotlight_pointer_release` que el punto de suelta no esté cubierto por otra ventana (`element_under(drop_loc).is_none()`) ni en la franja superior (`local_y >= 36.0`) antes de emitir `IpcMessage::CreateDesktopAppShortcut`.
+  * El receptor IPC de `malus-de-wallpaper` crea el enlace simbólico en `~/Escritorio` en las coordenadas soltadas (respetando `snap_to_grid`) y dibuja el acceso directo de forma incremental.
+
+### 3. Validación
+* `cargo check --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --workspace`: compilación completa sin errores (`exit 0`).
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-compositor -p malus-de-wallpaper -p malus-de-branches`:
+  * `malus-de-branches`: **23 passed; 0 failed** (`split_desktop_exec_args_handles_quotes_and_escapes`, `read_desktop_launch_metadata_detects_terminal_and_path`).
+  * `malus-de-compositor`: **72 passed; 0 failed** (`spotlight_dragging_app_onto_dock_returns_pin_outcome` con cobertura de suelta en escritorio).
+  * `malus-de-wallpaper`: **18 passed; 0 failed**.
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-common parse_desktop_file_respects_nodisplay_and_builds_dock_app`: **1 passed; 0 failed**.
+
+---
+
+## [2026-11-16] — Edición Inline, Navegación/Multiselección Espacial, DnD Grupal y Wrapper Antigravity
+
+### 1. Edición Inline sin Expansión, Navegación 2D y Selección Múltiple en Branches (`crates/branches`)
+* **Renombrado inline sobre la propia etiqueta ([`views/mod.rs`](../crates/branches/src/views/mod.rs), [`icon_view.rs`](../crates/branches/src/views/icon_view.rs), [`list_view.rs`](../crates/branches/src/views/list_view.rs), [`column_view.rs`](../crates/branches/src/views/column_view.rs), [`gallery_view.rs`](../crates/branches/src/views/gallery_view.rs), [`sidebar.rs`](../crates/branches/src/sidebar.rs), [`macos-branches.css`](../crates/branches/src/styles/macos-branches.css)):**
+  * Reemplazado el popover de renombrado por edición inline directa con `gtk4::Text` (`branches-inline-rename-entry`) sobre el `Label` del archivo, carpeta o marcador (activable con `F2`, `Enter`, segundo clic lento de `450 ms` o menú contextual), ocupando exactamente el espacio de la etiqueta sin expandir el layout y preservando `Malus SSD` para `/` en [`db.rs`](../crates/branches/src/db.rs), [`path_bar.rs`](../crates/branches/src/path_bar.rs) y [`folder_pane.rs`](../crates/branches/src/folder_pane.rs).
+* **Navegación 2D con teclado y multiselección en rejilla ([`icon_view.rs`](../crates/branches/src/views/icon_view.rs), [`app_window.rs`](../crates/branches/src/app_window.rs), [`folder_pane.rs`](../crates/branches/src/folder_pane.rs)):**
+  * `fixed_canvas` pasa a ser `focusable(true)` con `navigate_by_arrow` interceptando `←`, `→`, `↑`, `↓` antes de la cadena de foco GTK (reservando `Tab` / `Shift+Tab` para los controles de panel/barra).
+  * Añadida selección múltiple con `Ctrl`/`Super` + clic (`has_multi_select_modifier`), área elástica con el cursor (`GestureDrag` + `.branches-selection-marquee` usando `rects_intersect`), `Ctrl+A` y operaciones grupales (arrastre, duplicar, mover a papelera).
+
+### 2. Arrastre Espacial Grupal y Mitigación de Parpadeo entre Branches, Escritorio y Compositor (`crates/common`, `crates/branches`, `crates/wallpaper`, `crates/compositor`)
+* **Disposición espacial relativa y previsualización compuesta ([`common/src/lib.rs`](../crates/common/src/lib.rs), [`operations.rs`](../crates/branches/src/operations.rs), [`views/mod.rs`](../crates/branches/src/views/mod.rs), [`icon_view.rs`](../crates/branches/src/views/icon_view.rs), [`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs)):**
+  * Formato `v2:` en `write_drag_anchors` / `read_drag_anchor` para registrar el offset relativo de cada archivo arrastrado y preservar su geometría relativa al soltar entre Branches, carpetas (`move_paths_into_folder`) y Escritorio.
+  * Añadidos `build_multi_widget_drag_paintable` y `build_multi_desktop_drag_paintable` para renderizar todos los iconos seleccionados en su posición espacial relativa bajo el puntero durante el arrastre.
+* **Actualizaciones en sitio y caché de `dnd_icon` ([`icon_view.rs`](../crates/branches/src/views/icon_view.rs), [`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs), [`state.rs`](../crates/compositor/src/state.rs), [`backend/mod.rs`](../crates/compositor/src/backend/mod.rs), [`drm.rs`](../crates/compositor/src/backend/drm.rs), [`winit.rs`](../crates/compositor/src/backend/winit.rs)):**
+  * Actualización en sitio de `fixed_canvas` / `icons` al soltar o mover fuera (esperando la comprobación de 80 ms antes de restaurar widgets ocultos en acciones `MOVE` y filtrando eventos sobre el propio `desktop_dir` o `Deleted | MovedOut` en `monitor.connect_changed`).
+  * Añadido `CachedDndIcon` (`MemoryRenderBuffer`) en `MalusState` (`capture_dnd_icon_cache` y `build_cached_dnd_fallback`) integrado en `tracker_elements` y ciclo de daño DRM para sostener la miniatura de arrastre durante `dnd_drop_hold` tras `dnd_finished` (nota: queda pendiente de validación adicional en sesión si persiste algún parpadeo visual).
+
+### 3. Separación de «Antigravity» y «Antigravity IDE» en el Wrapper (`scripts`, `crates/common`, `crates/compositor`, `crates/dock`, `crates/branches`)
+* Exportación de `MALUS_IDE_BIN` desde [`spotlight_visual.rs`](../crates/compositor/src/spotlight_visual.rs), [`dock/src/main.rs`](../crates/dock/src/main.rs) y [`fs_backend.rs`](../crates/branches/src/fs_backend.rs), y resolución diferenciada de `antigravity` frente a `antigravity-ide` en [`malus-ide-wrapper`](../scripts/malus-ide-wrapper) y [`config.rs`](../crates/common/src/config.rs).
+
+### 4. Validación
+* `cargo check --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --workspace`: compilación sin errores (`exit 0`).
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-branches -p malus-de-wallpaper -p malus-de-compositor`:
+  * `malus-de-branches`: **21 passed; 0 failed**.
+  * `malus-de-wallpaper`: **18 passed; 0 failed**.
+  * `malus-de-compositor`: **72 passed; 0 failed**.
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-common shared_drag_anchor_roundtrips_single_and_multi_paths`: **1 passed; 0 failed** (en entorno sandbox, `test_dock_config_load_or_create_default` falla al intentar escribir en `$HOME/.config/malus-de/`).
+
+---
+
+## [2026-11-16] — Fondo de Pantalla Predeterminado «Playa de Pacasmayo» (Pexels)
+
+### 1. Empaquetado del Recurso, Licencia e Inicialización Automática (`assets/wallpapers`, `crates/common`, `crates/wallpaper`, `crates/settings`, `scripts`)
+* **Recurso y atribución bajo Pexels License ([`pexels-jbarbozameca-41027443.webp`](../assets/wallpapers/pexels-jbarbozameca-41027443.webp), [`Pexels-LICENSE`](../assets/wallpapers/Pexels-LICENSE), [`README.md`](../README.md)):**
+  * Integrada la fotografía panorámica [*"Vista panorámica del muelle y la playa de Pacasmayo"*](https://www.pexels.com/es-es/foto/vista-panoramica-del-muelle-y-la-playa-de-pacasmayo-41027443/) de **J. Barboza Meca (`@jbarbozameca`)** junto con su archivo de licencia y créditos en [`README.md`](../README.md).
+* **Inicialización y respaldo en sesión ([`config.rs`](../crates/common/src/config.rs), [`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs), [`settings/src/main.rs`](../crates/settings/src/main.rs), [`install-session.sh`](../scripts/install-session.sh)):**
+  * Añadidos `DEFAULT_WALLPAPER_FILENAME`, `default_bundled_wallpaper_path()` y `ensure_default_wallpaper()` en `malus-de-common` para inicializar `wallpaper.webp` en `~/.config/malus-de/` cuando no existe un fondo configurado ni el marcador `.wallpaper-gradient`.
+  * `malus-de-wallpaper` y `malus-de-settings` usan `default_bundled_wallpaper_path()` como fondo predeterminado, listando **"Playa de Pacasmayo (Predeterminado)"** como primera opción en Preferencias del Sistema y copiando `assets/wallpapers/*` a `/usr/local/share/malus-de/wallpapers/` en [`install-session.sh`](../scripts/install-session.sh).
+
+### 2. Validación
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-common`: **51 passed; 0 failed** (`default_bundled_wallpaper_exists_and_seeds_new_config_dir`).
+* `cargo check --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-wallpaper -p malus-de-settings`: compilación sin errores (`exit 0`).
+
+---
+
 ## [2026-11-16] — Alineación Concéntrica de Glifos en los Semáforos CSD
 
 ### 1. Centrado Exacto de Glifos en GTK4, GTK3, Firefox y Electron (`crates/common`, `assets`, `scripts`)

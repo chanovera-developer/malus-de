@@ -248,10 +248,10 @@ impl BlackHoleTimelineSample {
         let collapse_u = ((t - 0.76) / 0.24).clamp(0.0, 1.0);
         let collapse = smoothstep(0.0, 1.0, collapse_u);
 
-        let button_r = (6.5 * scale).max(4.0);
+        let button_r = (CLOSE_BUTTON_CORE_RADIUS_LOGICAL * scale).max(4.0);
         let grown_r = button_r + (peak_radius_px - button_r) * ignite;
         // Ligera pulsación al absorber la ventana y luego implosión a 0 px.
-        let swallow_swell = 1.0 + 0.14 * (suction * std::f32::consts::PI).sin();
+        let swallow_swell = 1.0 + 0.08 * (suction * std::f32::consts::PI).sin();
         let shrink_factor = (1.0 - collapse).powf(1.35);
         let horizon_radius_px = (grown_r * swallow_swell * shrink_factor).max(0.0);
 
@@ -283,9 +283,12 @@ impl BlackHoleTimelineSample {
     }
 }
 
-/// Radio del horizonte de sucesos dimensionado al tamaño del botón de cierre (~7.5 px lógicos).
+/// Radio lógico del núcleo oscuro del horizonte igual al radio del botón rojo (`BTN_RADIUS = 6.5 px`).
+pub const CLOSE_BUTTON_CORE_RADIUS_LOGICAL: f32 = 6.5;
+
+/// Radio del horizonte de sucesos dimensionado al tamaño del botón de cierre (`6.5 px` lógicos).
 pub fn compute_peak_horizon_radius(_win_size: Size<i32, Physical>, scale: f32) -> f32 {
-    (7.5 * scale).max(5.0)
+    (CLOSE_BUTTON_CORE_RADIUS_LOGICAL * scale).max(4.0)
 }
 
 /// Captura una instantánea offscreen RGBA premultiplicada de la ventana que acaba de cerrarse,
@@ -753,7 +756,7 @@ void main() {
     vec2 p = (v_world_pos - u_bh_center) / radius;
     float r_sphere = length(p);
 
-    if (r_sphere > 5.4) {
+    if (r_sphere > 2.5) {
         discard;
     }
 
@@ -762,7 +765,7 @@ void main() {
     float ct = cos(tilt);
     float st = sin(tilt);
     vec2 pr = vec2(p.x * ct - p.y * st, p.x * st + p.y * ct);
-    vec2 p_disk = vec2(pr.x, pr.y / 0.30);
+    vec2 p_disk = vec2(pr.x, pr.y / 0.32);
     float r_disk = length(p_disk);
 
     // Filamentos espirales keplerianos (las órbitas interiores giran más rápido)
@@ -774,17 +777,17 @@ void main() {
     float streak3 = 0.5 + 0.5 * sin(spiral_ang * 13.0 + r_disk * 16.0);
     float filaments = mix(0.45, 1.18, streak1 * 0.55 + streak2 * 0.30 + streak3 * 0.15);
 
-    // Perfil radial del disco (ISCO r = 1.08 .. borde difuso exterior)
-    float inner_edge = smoothstep(0.96, 1.24, r_disk);
-    float outer_edge = exp(-pow(max(r_disk - 1.24, 0.0) / 1.48, 1.50));
+    // Perfil radial del disco (equilibrado alrededor del botón rojo)
+    float inner_edge = smoothstep(0.95, 1.15, r_disk);
+    float outer_edge = exp(-pow(max(r_disk - 1.15, 0.0) / 0.72, 1.65));
     float disk_band = inner_edge * outer_edge * filaments;
 
     // Beaming relativista (Doppler): un lado del plasma luce más caliente y brillante
     float doppler = 1.0 + 0.42 * (p_disk.x / max(r_disk, 0.4)) * (-u_spin_dir);
     disk_band *= clamp(doppler, 0.52, 1.55);
 
-    // Arcos de lente gravitacional (luz del disco trasero curvada por encima y debajo del horizonte)
-    float lens_radial = smoothstep(0.95, 1.08, r_sphere) * exp(-pow(max(r_sphere - 1.08, 0.0) / 0.50, 1.65));
+    // Arcos de lente gravitacional alrededor del horizonte
+    float lens_radial = smoothstep(0.95, 1.06, r_sphere) * exp(-pow(max(r_sphere - 1.06, 0.0) / 0.32, 1.75));
     float lens_ang = atan(pr.y, pr.x);
     float lens_spiral = 0.5 + 0.5 * sin(lens_ang * 5.0 - u_spin_dir * u_spin_time * 5.0 + r_sphere * 9.0);
     float pole_weight = mix(0.45, 1.15, abs(pr.y) / max(r_sphere, 0.1));
@@ -802,7 +805,7 @@ void main() {
     vec3 disk_hot = vec3(1.00, 0.96, 0.84);
     vec3 disk_mid = vec3(1.00, 0.58, 0.14);
     vec3 disk_cool = vec3(0.82, 0.22, 0.05);
-    float temp = clamp(1.0 - (r_disk - 1.05) / 2.2, 0.0, 1.0);
+    float temp = clamp(1.0 - (r_disk - 1.02) / 1.05, 0.0, 1.0);
     vec3 disk_col = mix(disk_cool, mix(disk_mid, disk_hot, smoothstep(0.45, 0.95, temp)), smoothstep(0.05, 0.65, temp));
     vec3 lens_col = mix(vec3(0.98, 0.54, 0.14), vec3(1.0, 0.92, 0.72), smoothstep(1.35, 1.02, r_sphere));
     vec3 ring_col = vec3(1.0, 0.95, 0.82);
@@ -811,8 +814,8 @@ void main() {
     float spark = exp(-pow(r_sphere / 0.85, 2.0)) * u_pinch_flash * 1.65;
     vec3 spark_col = vec3(0.95, 0.97, 1.0) * spark;
 
-    // Corona sutil exterior
-    float corona = exp(-r_sphere * 0.72) * 0.16 * (1.0 - behind_sphere * 0.85);
+    // Corona sutil alrededor del disco
+    float corona = exp(-r_sphere * 1.25) * 0.15 * (1.0 - behind_sphere * 0.85);
     vec3 corona_col = vec3(0.95, 0.42, 0.12) * corona;
 
     vec3 emissive_rgb = (disk_col * disk_vis + lens_col * lensed_halo + ring_col * photon_ring + corona_col) * u_intensity + spark_col;
@@ -1012,7 +1015,7 @@ impl BlackHolePipeline {
 
             // Pase 2: Agujero negro + disco de acreción relativista sobre el punto de cierre
             if sample.horizon_radius_px > 0.25 && sample.fade > 0.002 {
-                let quad_half = sample.horizon_radius_px * 5.4;
+                let quad_half = sample.horizon_radius_px * 2.5;
                 gl.UseProgram(self.bh_program);
                 gl.UniformMatrix3fv(self.u_bh_matrix, 1, ffi::FALSE, projection.as_ptr());
                 gl.Uniform2f(
@@ -1147,7 +1150,7 @@ mod tests {
 
     #[test]
     fn timeline_ignition_suction_and_collapse_phases() {
-        let peak_r = 7.5;
+        let peak_r = CLOSE_BUTTON_CORE_RADIUS_LOGICAL;
         let s0 = BlackHoleTimelineSample::sample(0.0, peak_r, 1.0);
         assert_eq!(s0.suction, 0.0);
         assert_eq!(s0.collapse, 0.0);
@@ -1158,7 +1161,7 @@ mod tests {
         assert!(s_ignite.ignite > 0.9, "ignite={}", s_ignite.ignite);
         assert!(s_ignite.disk_intensity > 0.9, "disk={}", s_ignite.disk_intensity);
         assert!(s_ignite.suction < 0.05, "suction={}", s_ignite.suction);
-        assert!(s_ignite.horizon_radius_px > 6.5);
+        assert!(s_ignite.horizon_radius_px > 6.3 && s_ignite.horizon_radius_px <= 7.1);
 
         // Succión monótona durante fase intermedia
         let mut prev_suction = 0.0;
@@ -1192,9 +1195,9 @@ mod tests {
     #[test]
     fn peak_horizon_radius_matches_close_button_across_scales() {
         let std_dpi = compute_peak_horizon_radius(Size::from((120, 90)), 1.0);
-        assert!((std_dpi - 7.5).abs() < 1e-4);
+        assert!((std_dpi - 6.5).abs() < 1e-4);
 
         let hidpi = compute_peak_horizon_radius(Size::from((3840, 2160)), 2.0);
-        assert!((hidpi - 15.0).abs() < 1e-4);
+        assert!((hidpi - 13.0).abs() < 1e-4);
     }
 }

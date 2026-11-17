@@ -21,6 +21,7 @@ pub struct GalleryView {
     carousel_scrolled: ScrolledWindow,
     items: RefCell<Vec<FileItem>>,
     current_folder: RefCell<Option<PathBuf>>,
+    pending_select_name: RefCell<Option<String>>,
     current_index: RefCell<Option<usize>>,
     carousel_widgets: RefCell<Vec<GtkBox>>,
     on_navigate: NavigateCallback,
@@ -70,6 +71,7 @@ impl GalleryView {
             carousel_scrolled,
             items: RefCell::new(Vec::new()),
             current_folder: RefCell::new(None),
+            pending_select_name: RefCell::new(None),
             current_index: RefCell::new(None),
             carousel_widgets: RefCell::new(Vec::new()),
             on_navigate,
@@ -86,12 +88,42 @@ impl GalleryView {
             g.set_state(gtk4::EventSequenceState::Claimed);
             let nav = g_bg.on_navigate.clone();
             let dir_reload = dir.clone();
+            let g_create = g_bg.clone();
             crate::views::show_background_create_menu(
                 &g_bg.canvas_holder,
                 x,
                 y,
                 dir,
-                Rc::new(move |_| nav(dir_reload.clone())),
+                Rc::new(move |created_path| {
+                    if let Some(new_name) =
+                        created_path.file_name().map(|n| n.to_string_lossy().into_owned())
+                    {
+                        g_create.queue_select_name(&new_name);
+                    }
+                    nav(dir_reload.clone());
+
+                    let g_lookup = g_create.clone();
+                    let target_path = created_path;
+                    let g_rename = g_create.clone();
+                    let nav_rename = nav.clone();
+                    let dir_rename = dir_reload.clone();
+                    let on_renamed: crate::views::RenameCallback = Rc::new(move |renamed_path| {
+                        if let Some(renamed_name) = renamed_path.file_name() {
+                            g_rename.queue_select_name(&renamed_name.to_string_lossy());
+                        }
+                        nav_rename(dir_rename.clone());
+                    });
+                    crate::views::schedule_inline_rename(
+                        move || {
+                            let (item, widget) = g_lookup.get_selected_item_and_widget()?;
+                            if item.path != target_path {
+                                return None;
+                            }
+                            Some((item.path, item.is_dir, widget))
+                        },
+                        Some(on_renamed),
+                    );
+                }),
             );
         });
         gallery.canvas_holder.add_controller(bg_click);
@@ -107,19 +139,6 @@ impl GalleryView {
                 }
                 Key::Right => {
                     g_weak.select_next();
-                    glib::Propagation::Stop
-                }
-                Key::Return => {
-                    if let Some(idx) = *g_weak.current_index.borrow() {
-                        let items = g_weak.items.borrow();
-                        if let Some(item) = items.get(idx) {
-                            if item.is_dir {
-                                (g_weak.on_navigate)(item.path.clone());
-                            } else {
-                                let _ = open_file(&item.path);
-                            }
-                        }
-                    }
                     glib::Propagation::Stop
                 }
                 _ => glib::Propagation::Proceed,
@@ -150,6 +169,10 @@ impl GalleryView {
         Some((item, widget))
     }
 
+    pub fn queue_select_name(&self, name: &str) {
+        *self.pending_select_name.borrow_mut() = Some(name.to_string());
+    }
+
     pub fn set_items(self: &Rc<Self>, items: &[FileItem]) {
         *self.items.borrow_mut() = items.to_vec();
         *self.current_index.borrow_mut() = None;
@@ -161,6 +184,7 @@ impl GalleryView {
         self.carousel_widgets.borrow_mut().clear();
 
         if items.is_empty() {
+            self.pending_select_name.borrow_mut().take();
             self.show_empty_canvas();
             return;
         }
@@ -172,8 +196,13 @@ impl GalleryView {
             self.carousel_widgets.borrow_mut().push(card);
         }
 
-        // Seleccionar primer elemento por defecto
-        self.select_index(0);
+        let target_idx = self
+            .pending_select_name
+            .borrow_mut()
+            .take()
+            .and_then(|target| items.iter().position(|it| it.name == target))
+            .unwrap_or(0);
+        self.select_index(target_idx);
     }
 
     pub fn select_prev(self: &Rc<Self>) {
@@ -356,30 +385,11 @@ impl GalleryView {
         card.set_size_request(84, 100);
         card.set_valign(Align::Center);
 
-        let ext = item
-            .path
-            .extension()
-            .map(|e| e.to_string_lossy().to_lowercase())
-            .unwrap_or_default();
-
-        let is_img = ["png", "jpg", "jpeg", "webp", "gif", "svg", "bmp"]
-            .iter()
-            .any(|e| *e == ext);
-
-        let thumb_widget: gtk4::Widget = if is_img {
-            if let Ok(pixbuf) = Pixbuf::from_file_at_scale(&item.path, 48, 48, true) {
-                let texture = Texture::for_pixbuf(&pixbuf);
-                let img = Image::from_paintable(Some(&texture));
-                img.add_css_class("branches-carousel-thumb");
-                img.upcast()
-            } else {
-                let img = Image::from_gicon(&item.gicon);
-                img.set_pixel_size(42);
-                img.upcast()
-            }
-        } else {
-            let img = Image::from_gicon(&item.gicon);
-            img.set_pixel_size(42);
+        let thumb_widget: gtk4::Widget = {
+            let img = crate::views::create_item_image(item, 48, Some("branches-carousel-thumb"));
+            img.set_size_request(48, 48);
+            img.set_halign(Align::Center);
+            img.set_valign(Align::Center);
             img.upcast()
         };
 
@@ -401,9 +411,14 @@ impl GalleryView {
         let is_dir = item.is_dir;
         let on_nav = self.on_navigate.clone();
         let card_for_menu = card.clone();
+        let pending_slow_rename: Rc<std::cell::Cell<Option<glib::SourceId>>> =
+            Rc::new(std::cell::Cell::new(None));
 
         click.connect_pressed(move |g, n_press, x, y| {
             let button = g.current_button();
+            if let Some(source_id) = pending_slow_rename.take() {
+                source_id.remove();
+            }
             if button == gdk::BUTTON_SECONDARY {
                 self_click.select_index(index);
                 show_item_context_menu(
@@ -415,7 +430,34 @@ impl GalleryView {
                     None,
                 );
             } else if n_press == 1 {
+                let was_selected = *self_click.current_index.borrow() == Some(index);
                 self_click.select_index(index);
+                if was_selected {
+                    let card_ren = card_for_menu.clone();
+                    let path_ren = p_for_dbl.clone();
+                    let on_nav_ren = on_nav.clone();
+                    let slot = pending_slow_rename.clone();
+                    let id = glib::timeout_add_local_once(
+                        std::time::Duration::from_millis(450),
+                        move || {
+                            slot.set(None);
+                            let parent_dir = path_ren.parent().map(|p| p.to_path_buf());
+                            let on_renamed = parent_dir.map(|dir| {
+                                Rc::new(move |_new_path: PathBuf| {
+                                    on_nav_ren(dir.clone());
+                                }) as crate::views::RenameCallback
+                            });
+                            crate::views::show_rename_popover(
+                                &card_ren,
+                                path_ren,
+                                is_dir,
+                                None,
+                                on_renamed,
+                            );
+                        },
+                    );
+                    pending_slow_rename.set(Some(id));
+                }
             } else if n_press >= 2 {
                 if is_dir {
                     on_nav(p_for_dbl.clone());

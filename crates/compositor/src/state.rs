@@ -7,6 +7,7 @@ use crate::cpu_priority::FocusCpuPriority;
 use malus_de_common::config::{AppSwitcherStyle, DockConfig};
 use smithay::{
     backend::allocator::dmabuf::Dmabuf,
+    backend::renderer::element::memory::MemoryRenderBuffer,
     delegate_compositor, delegate_data_control, delegate_data_device, delegate_dmabuf,
     delegate_fractional_scale, delegate_layer_shell, delegate_output, delegate_presentation,
     delegate_primary_selection, delegate_seat, delegate_shm, delegate_viewporter,
@@ -226,6 +227,11 @@ pub struct SwipeGestureState {
     pub app_expose_gesture: bool,
 }
 
+pub struct CachedDndIcon {
+    pub buffer: MemoryRenderBuffer,
+    pub rel_offset_logical: (f64, f64),
+}
+
 pub struct MalusState {
     pub display_handle: DisplayHandle,
     pub compositor_state: CompositorState,
@@ -294,6 +300,8 @@ pub struct MalusState {
     pub dnd_icon: Option<WlSurface>,
     pub dnd_icon_offset: Point<i32, Logical>,
     pub dnd_drop_hold: Option<(WlSurface, Point<f64, Logical>, Instant)>,
+    pub dnd_icon_cache: Option<CachedDndIcon>,
+    pub dnd_icon_cache_dirty: bool,
     pub active_screen_recording: Option<crate::recording::ScreenRecordingSession>,
     pub screenshot_ui: crate::screenshot_ui::ScreenshotUiState,
     pub snap_layouts: crate::snap_layouts::SnapLayoutsState,
@@ -1166,6 +1174,8 @@ impl MalusState {
             dnd_icon: None,
             dnd_icon_offset: Point::from((0, 0)),
             dnd_drop_hold: None,
+            dnd_icon_cache: None,
+            dnd_icon_cache_dirty: false,
             active_screen_recording: None,
             screenshot_ui: crate::screenshot_ui::ScreenshotUiState::new(),
             snap_layouts: crate::snap_layouts::SnapLayoutsState::new(),
@@ -1300,6 +1310,60 @@ impl MalusState {
         if self.spotlight.set_dock_gap_preview(gap_x) {
             self.ipc_broadcaster
                 .broadcast(&IpcMessage::PreviewDockDropGap { dock_x: gap_x });
+        }
+    }
+
+    pub fn handle_spotlight_pointer_release(
+        &self,
+        spot_output_geo: Rectangle<i32, Logical>,
+        outcome: crate::spotlight_visual::SpotlightPointerReleaseOutcome,
+    ) {
+        match outcome {
+            crate::spotlight_visual::SpotlightPointerReleaseOutcome::PinToDock {
+                app,
+                insert_at_dock_x,
+            } => {
+                tracing::info!(
+                    "📌 Aplicación arrastrada desde Spotlight al Dock: '{}' (dock_x={:?})",
+                    app.name,
+                    insert_at_dock_x
+                );
+                self.ipc_broadcaster.broadcast(&IpcMessage::PinAppToDock {
+                    name: app.name,
+                    icon: app.icon,
+                    command: app.command,
+                    matchers: app.matchers,
+                    insert_at_dock_x,
+                });
+            }
+            crate::spotlight_visual::SpotlightPointerReleaseOutcome::CreateDesktopShortcut {
+                app,
+                drop_loc,
+            } => {
+                if app.desktop_file.trim().is_empty()
+                    || self.space.element_under(drop_loc).is_some()
+                {
+                    return;
+                }
+                let local_x = drop_loc.x - spot_output_geo.loc.x as f64;
+                let local_y = drop_loc.y - spot_output_geo.loc.y as f64;
+                if local_y < 36.0 {
+                    return;
+                }
+                tracing::info!(
+                    "🔗 Acceso directo creado en escritorio desde Spotlight: '{}' ({:.1}, {:.1})",
+                    app.name,
+                    local_x,
+                    local_y
+                );
+                self.ipc_broadcaster
+                    .broadcast(&IpcMessage::CreateDesktopAppShortcut {
+                        desktop_file: app.desktop_file,
+                        drop_x: local_x,
+                        drop_y: local_y,
+                    });
+            }
+            crate::spotlight_visual::SpotlightPointerReleaseOutcome::Consumed => {}
         }
     }
 
@@ -1906,6 +1970,57 @@ impl MalusState {
         self.space.elements().last().cloned()
     }
 
+    fn close_button_offset_for_app_id(
+        app_id: Option<&str>,
+        is_firefox: bool,
+        uses_ssd: bool,
+    ) -> (f64, f64) {
+        if uses_ssd {
+            return (crate::ssd::BTN_CLOSE_X, crate::ssd::BTN_Y);
+        }
+        let app_lower = app_id.unwrap_or("").trim().to_ascii_lowercase();
+        if app_lower == "dev.malus.branches" {
+            return (28.5, 24.0);
+        }
+        if app_lower == "dev.malus.settings" {
+            return (25.5, 23.5);
+        }
+        if app_lower.contains("antigravity")
+            || app_lower == "code"
+            || app_lower.contains("vscode")
+            || app_lower.contains("codium")
+            || app_lower.contains("cursor")
+        {
+            return (20.5, 17.5);
+        }
+        if is_firefox {
+            return (16.5, 21.0);
+        }
+        (22.5, 23.0)
+    }
+
+    fn close_button_center_logical(
+        window: &smithay::desktop::Window,
+        loc: Point<i32, Logical>,
+        uses_ssd: bool,
+        is_fullscreen: bool,
+    ) -> Point<f64, Logical> {
+        let top_y = if uses_ssd && !is_fullscreen {
+            (loc.y - crate::ssd::SSD_TITLEBAR_HEIGHT) as f64
+        } else {
+            loc.y as f64
+        };
+        let app_id = window
+            .wl_surface()
+            .and_then(|s| toplevel_info(&s).0);
+        let (dx, dy) = Self::close_button_offset_for_app_id(
+            app_id.as_deref(),
+            is_firefox_window(window),
+            uses_ssd,
+        );
+        Point::from((loc.x as f64 + dx, top_y + dy))
+    }
+
     fn record_close_button_hint(&mut self, window: &smithay::desktop::Window) {
         let Some(surf) = window.wl_surface() else {
             return;
@@ -1914,21 +2029,65 @@ impl MalusState {
             return;
         };
         let uses_ssd = window_uses_ssd(window);
-        let top_y = if uses_ssd {
-            (loc.y - crate::ssd::SSD_TITLEBAR_HEIGHT) as f64
-        } else {
-            loc.y as f64
-        };
-        let origin = Point::from((
-            loc.x as f64 + crate::ssd::BTN_CLOSE_X,
-            top_y + crate::ssd::BTN_Y,
-        ));
+        let is_fullscreen = window
+            .toplevel()
+            .map(|t| t.current_state().states.contains(XdgState::Fullscreen))
+            .unwrap_or(false);
+        let origin = Self::close_button_center_logical(window, loc, uses_ssd, is_fullscreen);
         self.close_button_hints
             .insert(surf.into_owned(), (origin, Instant::now()));
     }
 
+    pub fn record_csd_close_click_hint(
+        &mut self,
+        window: &smithay::desktop::Window,
+        loc: Point<i32, Logical>,
+        click_pt: Point<f64, Logical>,
+    ) {
+        if window_uses_ssd(window) {
+            return;
+        }
+        let Some(surf) = window.wl_surface() else {
+            return;
+        };
+        let geo = window.geometry();
+        let is_fullscreen = window
+            .toplevel()
+            .map(|t| t.current_state().states.contains(XdgState::Fullscreen))
+            .unwrap_or(false);
+        let canonical = Self::close_button_center_logical(window, loc, false, is_fullscreen);
+        let app_lower = toplevel_info(&surf)
+            .0
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        let is_known_malus_csd =
+            app_lower == "dev.malus.branches" || app_lower == "dev.malus.settings";
+
+        let rel_x = click_pt.x - loc.x as f64;
+        let rel_y = click_pt.y - loc.y as f64;
+        let in_left_close_zone = (4.0..=48.0).contains(&rel_x) && (0.0..=44.0).contains(&rel_y);
+        let in_right_close_zone = rel_x >= (geo.size.w as f64 - 48.0).max(48.0)
+            && rel_x <= geo.size.w as f64
+            && (0.0..=44.0).contains(&rel_y);
+
+        if in_left_close_zone {
+            let hint_pt = if is_known_malus_csd {
+                canonical
+            } else {
+                click_pt
+            };
+            self.close_button_hints
+                .insert(surf.into_owned(), (hint_pt, Instant::now()));
+        } else if in_right_close_zone {
+            self.close_button_hints
+                .insert(surf.into_owned(), (click_pt, Instant::now()));
+        }
+    }
+
     pub fn close_active_window(&mut self) {
         if let Some(win) = self.get_active_window() {
+            self.record_close_button_hint(&win);
             if let Some(toplevel) = win.toplevel() {
                 tracing::info!("📤 Cerrando ventana activa vía toplevel.send_close()");
                 toplevel.send_close();
@@ -4455,6 +4614,7 @@ impl CompositorHandler for MalusState {
         self.popups.commit(surface);
 
         if self.dnd_icon.as_ref() == Some(surface) {
+            self.dnd_icon_cache_dirty = true;
             let delta = smithay::wayland::compositor::with_states(surface, |states| {
                 states
                     .cached_state
@@ -4746,6 +4906,8 @@ impl ClientDndGrabHandler for MalusState {
         self.dnd_drop_hold = None;
         self.dnd_icon = icon.clone();
         self.dnd_icon_offset = Point::from((0, 0));
+        self.dnd_icon_cache = None;
+        self.dnd_icon_cache_dirty = icon.is_some();
         if let Some(ref surf) = icon {
             let delta = smithay::wayland::compositor::with_states(surf, |states| {
                 states
@@ -4781,6 +4943,8 @@ impl MalusState {
         self.dnd_icon = None;
         self.dnd_icon_offset = Point::from((0, 0));
         self.dnd_drop_hold = None;
+        self.dnd_icon_cache = None;
+        self.dnd_icon_cache_dirty = false;
     }
 
     pub fn active_dnd_icon_draw_location(&mut self) -> Option<Point<f64, Logical>> {
@@ -4789,7 +4953,7 @@ impl MalusState {
                 self.clear_dnd_icon();
                 return None;
             }
-            if self.dnd_icon.as_ref().is_some_and(|s| s.alive()) {
+            if self.dnd_icon.as_ref().is_some_and(|s| s.alive()) || self.dnd_icon_cache.is_some() {
                 return Some(drop_loc);
             }
             self.clear_dnd_icon();
@@ -5253,32 +5417,12 @@ impl XdgShellHandler for MalusState {
                             .and_then(|k| k.current_focus())
                             .as_ref()
                             == Some(surf);
-                    let top_y = if uses_ssd && !is_fullscreen {
-                        (loc.y - crate::ssd::SSD_TITLEBAR_HEIGHT) as f64
-                    } else {
-                        loc.y as f64
-                    };
-                    let fallback_origin = Point::from((
-                        loc.x as f64 + crate::ssd::BTN_CLOSE_X,
-                        top_y + crate::ssd::BTN_Y,
-                    ));
+                    let fallback_origin =
+                        Self::close_button_center_logical(win, loc, uses_ssd, is_fullscreen);
 
                     let origin_logical = if let Some((hint_pt, hint_at)) = hint_entry {
                         if hint_at.elapsed() < std::time::Duration::from_secs(5) {
                             hint_pt
-                        } else {
-                            fallback_origin
-                        }
-                    } else if let Some(ptr_loc) = self
-                        .last_pointer_location
-                        .or_else(|| self.seat.get_pointer().map(|p| p.current_location()))
-                    {
-                        let in_upper_band = ptr_loc.x >= loc.x as f64 - 8.0
-                            && ptr_loc.x <= (loc.x + geo.size.w) as f64 + 8.0
-                            && ptr_loc.y >= top_y - 8.0
-                            && ptr_loc.y <= (loc.y + 96).min(loc.y + geo.size.h) as f64;
-                        if in_upper_band {
-                            ptr_loc
                         } else {
                             fallback_origin
                         }
@@ -6469,5 +6613,33 @@ mod tests {
         );
         assert_eq!(state.last_pointer_location, Some(Point::from((1919.0, 1079.0))));
         assert!(!state.ssd.grab_active);
+    }
+
+    #[test]
+    fn close_button_offset_matches_ssd_and_csd_window_families() {
+        assert_eq!(
+            super::MalusState::close_button_offset_for_app_id(Some("org.test.App"), false, true),
+            (crate::ssd::BTN_CLOSE_X, crate::ssd::BTN_Y)
+        );
+        assert_eq!(
+            super::MalusState::close_button_offset_for_app_id(Some("dev.malus.Branches"), false, false),
+            (28.5, 24.0)
+        );
+        assert_eq!(
+            super::MalusState::close_button_offset_for_app_id(Some("dev.malus.Settings"), false, false),
+            (25.5, 23.5)
+        );
+        assert_eq!(
+            super::MalusState::close_button_offset_for_app_id(Some("antigravity"), false, false),
+            (20.5, 17.5)
+        );
+        assert_eq!(
+            super::MalusState::close_button_offset_for_app_id(Some("firefox"), true, false),
+            (16.5, 21.0)
+        );
+        assert_eq!(
+            super::MalusState::close_button_offset_for_app_id(Some("org.gnome.TextEditor"), false, false),
+            (22.5, 23.0)
+        );
     }
 }
