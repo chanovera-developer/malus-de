@@ -4,6 +4,21 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-17] — Vista de Columnas de Branches: Animaciones y Conservación del Padre
+
+### 1. Entrada Animada de Columnas (`crates/branches`)
+* [`slide_in_from_right`](../crates/branches/src/views/column_view.rs): las columnas nuevas y el panel de previsualización entran deslizándose desde la derecha con fundido (300 ms, *ease-out cubic*) mediante `add_tick_callback`, animando `margin_start` y `opacity`.
+* `scroll_to_end` pasó de salto instantáneo a animación de 320 ms sobre `hadjustment` (destino recalculado por fotograma y cancelación por generación). Solo tiene efecto cuando las columnas desbordan el ancho disponible (cada columna mide 240 px, la previsualización 280 px).
+
+### 2. El Padre ya no se Oculta si Hay Espacio
+* **Causa:** abrir una carpeta (doble clic/Enter) invocaba `set_root`, que reconstruía la vista con esa carpeta como raíz y eliminaba al padre sin animación.
+* **Solución:** si la carpeta destino ya es una columna visible (índice > 0) y no hay selección pendiente, `set_root` conserva las columnas anteriores, descarta las posteriores, deselecciona la carpeta abierta y llama a `scroll_to_end`. Si todo cabe no se desplaza nada; si no cabe, el contenedor se desplaza a la izquierda con animación y el padre sale de vista. Resto de navegaciones (barra lateral, atrás/adelante, subir, refrescos) siguen reconstruyendo la vista.
+
+### 3. Validación
+* `cargo test -p malus-de-branches`: **28 passed; 0 failed**. Comportamiento visual pendiente de confirmación del usuario en la sesión gráfica.
+
+---
+
 ## [2026-11-17] — Vista de Lista de Branches: Columnas, Orden y Selección; Miniaturas Squircle en el Escritorio
 
 ### 1. Columnas Redimensionables, Alineadas y Ordenables (`crates/branches`)
