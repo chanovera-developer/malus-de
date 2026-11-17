@@ -28,6 +28,30 @@ Malus DE está enfocado en desarrollo y pruebas controladas. Aun falta validar:
 
 La lista de funciones implementadas es útil para entender el alcance técnico, pero no garantiza que todo funcione igual en todas las distribuciones, GPUs o configuraciones.
 
+## Estado de progreso del proyecto
+
+El proyecto sigue una hoja de ruta incremental por hitos. La base del escritorio y la experiencia Shell ya están operativas; algunas áreas clave siguen en evolución y refinamiento.
+
+| Hito | Módulo | Estado | Nota |
+| :--- | :--- | :---: | :--- |
+| M1 | Compositor base | ✅ | Smithay, DRM/KMS, XWayland, sombras y popups. |
+| M2 | Dock flotante | ✅ | Dock, miniaturas y IPC funcionales. |
+| M3 | Menú global y Apple | ✅ | Menú completo y soporte de submenús. |
+| M4 | Centro de control | ✅ | D-Bus y controles del sistema integrados. |
+| M5 | Animación Genie | ✅ | Animaciones elásticas y efecto visual del sistema. |
+| M6 | Integración móvil / Link | 🟡 | Base de protocolo y backend en desarrollo. |
+| M7 | Sesión GDM nativa | ✅ | Launcher, aislamiento y instalación en release. |
+| M8 | Multi-monitor 4K y teclado | ✅ | Soporte dual 4K y XKB latam. |
+| M9 | Portapapeles | ✅ | Historial persistente con búsqueda y fijados. |
+| M10 | Captura y grabación | 🟡 | Captura activa, OCR y ventana individual pendientes. |
+| M11 | Explorador de archivos | 🟡 | MVP funcional y fases avanzadas en curso. |
+| M12 | Ajustes del sistema | ✅ | Implementación nativa y reemplaza la dependencia externa. |
+| M13 | Motor gráfico nativo | 🟡 | Infraestructura lista, migración progresiva en marcha. |
+| M14 | Optimización DRM | ✅ | Idle sleep y ajustes de rendimiento ya aplicados. |
+| M15 | Spotlight reactivo | 📋 | Pendiente de integración de monitorización de apps. |
+
+En conjunto, el proyecto está en una fase de maduración técnica: la infraestructura principal ya está construida y la mayor parte del trabajo actual está centrado en estabilización, validación y completitud funcional de módulos específicos.
+
 ## Arquitectura general
 
 El proyecto sigue un monorepo Rust con varios crates especializados:
