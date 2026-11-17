@@ -870,8 +870,15 @@ window.branches-quicklook-window {
 }
 
 .branches-carousel-thumb {
-    border-radius: 6px;
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+    border-radius: 10px;
+}
+
+.branches-item-thumb {
+    border-radius: 10px;
+}
+
+.branches-row-thumb {
+    border-radius: 4px;
 }
 
 .branches-carousel-label {

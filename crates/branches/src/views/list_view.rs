@@ -3,7 +3,7 @@ use crate::views::{show_item_context_menu, NavigateCallback, SelectionCallback};
 use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Box as GtkBox, GestureClick, Image, Label, ListBox, ListBoxRow, Orientation, PolicyType,
+    Align, Box as GtkBox, GestureClick, Label, ListBox, ListBoxRow, Orientation, PolicyType,
     ScrolledWindow,
 };
 use malus_de_common::config::BranchesConfig;
@@ -224,8 +224,10 @@ fn create_list_row(item: &FileItem, icon_size: i32, on_navigate: NavigateCallbac
     name_box.set_hexpand(true);
     name_box.set_halign(Align::Start);
 
-    let icon = Image::from_gicon(&item.gicon);
-    icon.set_pixel_size(icon_size);
+    let icon = crate::views::create_item_image(item, icon_size, Some("branches-row-thumb"));
+    icon.set_size_request(icon_size, icon_size);
+    icon.set_halign(Align::Center);
+    icon.set_valign(Align::Center);
     name_box.append(&icon);
 
     let label_name = Label::builder()

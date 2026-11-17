@@ -385,30 +385,11 @@ impl GalleryView {
         card.set_size_request(84, 100);
         card.set_valign(Align::Center);
 
-        let ext = item
-            .path
-            .extension()
-            .map(|e| e.to_string_lossy().to_lowercase())
-            .unwrap_or_default();
-
-        let is_img = ["png", "jpg", "jpeg", "webp", "gif", "svg", "bmp"]
-            .iter()
-            .any(|e| *e == ext);
-
-        let thumb_widget: gtk4::Widget = if is_img {
-            if let Ok(pixbuf) = Pixbuf::from_file_at_scale(&item.path, 48, 48, true) {
-                let texture = Texture::for_pixbuf(&pixbuf);
-                let img = Image::from_paintable(Some(&texture));
-                img.add_css_class("branches-carousel-thumb");
-                img.upcast()
-            } else {
-                let img = Image::from_gicon(&item.gicon);
-                img.set_pixel_size(42);
-                img.upcast()
-            }
-        } else {
-            let img = Image::from_gicon(&item.gicon);
-            img.set_pixel_size(42);
+        let thumb_widget: gtk4::Widget = {
+            let img = crate::views::create_item_image(item, 48, Some("branches-carousel-thumb"));
+            img.set_size_request(48, 48);
+            img.set_halign(Align::Center);
+            img.set_valign(Align::Center);
             img.upcast()
         };
 

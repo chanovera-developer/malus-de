@@ -676,7 +676,13 @@ impl IconView {
             drop(widgets_map);
             for data_rc in self.item_widgets.borrow().values() {
                 let d = data_rc.borrow();
-                d.image.set_pixel_size(metrics.icon_size);
+                d.image.set_size_request(metrics.icon_size, metrics.icon_size);
+                crate::views::update_item_image_thumbnail(
+                    &d.image,
+                    &d.item,
+                    metrics.icon_size,
+                    Some("branches-item-thumb"),
+                );
                 d.widget.set_width_request(metrics.box_width);
                 d.widget.set_height_request(metrics.box_height);
             }
@@ -697,7 +703,13 @@ impl IconView {
         let mut moves = Vec::new();
         for data_rc in ordered {
             let d = data_rc.borrow();
-            d.image.set_pixel_size(metrics.icon_size);
+            d.image.set_size_request(metrics.icon_size, metrics.icon_size);
+            crate::views::update_item_image_thumbnail(
+                &d.image,
+                &d.item,
+                metrics.icon_size,
+                Some("branches-item-thumb"),
+            );
             d.widget.set_width_request(metrics.box_width);
             d.widget.set_height_request(metrics.box_height);
             let (mut px, mut py) = d.pos.get();
@@ -931,9 +943,21 @@ impl IconView {
         }
 
         // Actualizar metadatos de elementos existentes sin recrear sus widgets
+        let active_icon_px = self.active_icon_size.get();
         for (name, data_rc) in self.item_widgets.borrow().iter() {
             if let Some(updated) = new_by_name.get(name.as_str()) {
-                data_rc.borrow_mut().item = (*updated).clone();
+                let mut data = data_rc.borrow_mut();
+                let content_changed =
+                    data.item.modified != updated.modified || data.item.size != updated.size;
+                data.item = (*updated).clone();
+                if content_changed {
+                    crate::views::update_item_image_thumbnail(
+                        &data.image,
+                        &data.item,
+                        active_icon_px,
+                        Some("branches-item-thumb"),
+                    );
+                }
             }
         }
 
@@ -1085,8 +1109,14 @@ impl IconView {
             .css_classes(["branches-icon-item"])
             .build();
 
-        let img = Image::from_gicon(&item.gicon);
-        img.set_pixel_size(metrics.icon_size);
+        let img = crate::views::create_item_image(
+            item,
+            metrics.icon_size,
+            Some("branches-item-thumb"),
+        );
+        img.set_size_request(metrics.icon_size, metrics.icon_size);
+        img.set_halign(Align::Center);
+        img.set_valign(Align::Center);
         vbox.append(&img);
 
         let label = Label::builder()

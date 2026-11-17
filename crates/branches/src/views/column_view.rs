@@ -495,8 +495,10 @@ fn create_column_row(item: &FileItem, on_navigate: &NavigateCallback) -> ListBox
     hbox.set_margin_start(4);
     hbox.set_margin_end(4);
 
-    let icon = Image::from_gicon(&item.gicon);
-    icon.set_pixel_size(16);
+    let icon = crate::views::create_item_image(item, 16, Some("branches-row-thumb"));
+    icon.set_size_request(16, 16);
+    icon.set_halign(Align::Center);
+    icon.set_valign(Align::Center);
     hbox.append(&icon);
 
     let label = Label::builder()
