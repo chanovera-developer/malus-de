@@ -5,6 +5,7 @@ use gtk4::{
     Orientation, PolicyType, Popover, ScrolledWindow,
 };
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 
@@ -18,6 +19,7 @@ pub fn refresh_all_sidebars() {
         list.retain(|weak| {
             if let Some(inner) = weak.upgrade() {
                 inner.rebuild_bookmarks();
+                inner.rebuild_devices();
                 true
             } else {
                 false
@@ -30,6 +32,10 @@ struct SidebarInner {
     list_box: ListBox,
     bookmarks_header: ListBoxRow,
     bookmark_rows: RefCell<Vec<ListBoxRow>>,
+    devices_anchor: ListBoxRow,
+    device_rows: RefCell<Vec<ListBoxRow>>,
+    volume_monitor: gio::VolumeMonitor,
+    signal_ids: RefCell<Vec<glib::SignalHandlerId>>,
     on_navigate: Rc<dyn Fn(PathBuf)>,
     on_files_dropped: Rc<dyn Fn()>,
 }
@@ -238,6 +244,7 @@ impl Sidebar {
             },
         ];
 
+        let mut devices_anchor: Option<ListBoxRow> = None;
         for entry in locations {
             let row = create_sidebar_row(&entry.title, entry.icon_name, entry.path.clone(), false);
             attach_folder_navigation_handlers(&row, &on_navigate, entry.path.clone());
@@ -245,7 +252,9 @@ impl Sidebar {
                 attach_folder_drop_target(&row, entry.path, &on_files_dropped);
             }
             list_box.append(&row);
+            devices_anchor = Some(row);
         }
+        let devices_anchor = devices_anchor.expect("locations no vacío");
 
         // 4. Sección Etiquetas (Tags)
         let tags_header = add_section_title(&list_box, if es { "Etiquetas" } else { "Tags" });
@@ -345,10 +354,16 @@ impl Sidebar {
             list_box: list_box.clone(),
             bookmarks_header,
             bookmark_rows: RefCell::new(Vec::new()),
+            devices_anchor,
+            device_rows: RefCell::new(Vec::new()),
+            volume_monitor: gio::VolumeMonitor::get(),
+            signal_ids: RefCell::new(Vec::new()),
             on_navigate,
             on_files_dropped,
         });
         inner.rebuild_bookmarks();
+        inner.rebuild_devices();
+        inner.connect_volume_signals();
 
         SIDEBAR_INSTANCES.with(|instances| {
             instances.borrow_mut().push(Rc::downgrade(&inner));
@@ -430,7 +445,263 @@ impl Sidebar {
     }
 }
 
+impl Drop for SidebarInner {
+    fn drop(&mut self) {
+        for id in self.signal_ids.borrow_mut().drain(..) {
+            self.volume_monitor.disconnect(id);
+        }
+    }
+}
+
+/// Puntos de montaje del sistema que nunca deben mostrarse como "disco externo".
+fn is_system_mount_path(path: &Path) -> bool {
+    const SYSTEM: [&str; 13] = [
+        "/", "/boot", "/boot/efi", "/efi", "/home", "/var", "/usr", "/tmp", "/proc", "/sys",
+        "/dev", "/nix", "/snap",
+    ];
+    if SYSTEM.iter().any(|s| path == Path::new(s)) {
+        return true;
+    }
+    // /run/* excepto /run/media/...
+    path.starts_with("/run") && !path.starts_with("/run/media")
+}
+
+/// Montajes típicos de medios extraíbles (udisks / automontaje).
+fn is_external_mount_path(path: &Path) -> bool {
+    !is_system_mount_path(path)
+        && (path.starts_with("/run/media") || path.starts_with("/media"))
+        && path != Path::new("/run/media")
+        && path != Path::new("/media")
+}
+
+fn eject_or_unmount(mount: &gio::Mount, parent: Option<gtk4::Window>) {
+    let op = gtk4::MountOperation::new(parent.as_ref());
+    let name = mount.name();
+    let report = move |res: Result<(), glib::Error>| {
+        if let Err(e) = res {
+            tracing::warn!("No se pudo expulsar {}: {}", name, e);
+        }
+    };
+    if mount.can_eject() {
+        mount.eject_with_operation(
+            gio::MountUnmountFlags::NONE,
+            Some(&op),
+            gio::Cancellable::NONE,
+            report,
+        );
+    } else {
+        mount.unmount_with_operation(
+            gio::MountUnmountFlags::NONE,
+            Some(&op),
+            gio::Cancellable::NONE,
+            report,
+        );
+    }
+}
+
+fn eject_volume(volume: &gio::Volume, parent: Option<gtk4::Window>) {
+    let op = gtk4::MountOperation::new(parent.as_ref());
+    volume.eject_with_operation(
+        gio::MountUnmountFlags::NONE,
+        Some(&op),
+        gio::Cancellable::NONE,
+        |res| {
+            if let Err(e) = res {
+                tracing::warn!("No se pudo expulsar el volumen: {}", e);
+            }
+        },
+    );
+}
+
+fn add_eject_button(row: &ListBoxRow, on_click: impl Fn() + 'static) {
+    let es = malus_de_common::is_spanish_locale();
+    let btn = Button::builder()
+        .icon_name("media-eject-symbolic")
+        .has_frame(false)
+        .valign(Align::Center)
+        .tooltip_text(if es { "Expulsar" } else { "Eject" })
+        .css_classes(["branches-sidebar-eject-btn"])
+        .build();
+    btn.connect_clicked(move |_| on_click());
+    if let Some(hbox) = row.child().and_then(|c| c.downcast::<GtkBox>().ok()) {
+        hbox.append(&btn);
+    }
+}
+
 impl SidebarInner {
+    fn connect_volume_signals(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        let rebuild: Rc<dyn Fn()> = Rc::new(move || {
+            let weak = weak.clone();
+            glib::idle_add_local_once(move || {
+                if let Some(inner) = weak.upgrade() {
+                    inner.rebuild_devices();
+                }
+            });
+        });
+        let m = &self.volume_monitor;
+        let mut ids = Vec::new();
+        let r = rebuild.clone();
+        ids.push(m.connect_mount_added(move |_, _| r()));
+        let r = rebuild.clone();
+        ids.push(m.connect_mount_removed(move |_, _| r()));
+        let r = rebuild.clone();
+        ids.push(m.connect_mount_changed(move |_, _| r()));
+        let r = rebuild.clone();
+        ids.push(m.connect_volume_added(move |_, _| r()));
+        let r = rebuild.clone();
+        ids.push(m.connect_volume_removed(move |_, _| r()));
+        let r = rebuild.clone();
+        ids.push(m.connect_volume_changed(move |_, _| r()));
+        let r = rebuild.clone();
+        ids.push(m.connect_drive_connected(move |_, _| r()));
+        let r = rebuild;
+        ids.push(m.connect_drive_disconnected(move |_, _| r()));
+        *self.signal_ids.borrow_mut() = ids;
+    }
+
+    fn rebuild_devices(&self) {
+        let selected_path = self
+            .list_box
+            .selected_row()
+            .and_then(|r| unsafe { r.data::<PathBuf>("target_path") }.map(|p| unsafe { p.as_ref() }.clone()));
+
+        for old in self.device_rows.borrow_mut().drain(..) {
+            self.list_box.remove(&old);
+        }
+        let base_idx = self.devices_anchor.index();
+        if base_idx < 0 {
+            return;
+        }
+
+        let mut rows: Vec<ListBoxRow> = Vec::new();
+        let mut seen: HashSet<PathBuf> = HashSet::new();
+
+        // 1. Montajes activos
+        for mount in self.volume_monitor.mounts() {
+            if mount.is_shadowed() {
+                continue;
+            }
+            let Some(root) = mount.root().path() else { continue };
+            if is_system_mount_path(&root) {
+                continue;
+            }
+            let removable = mount.drive().is_some_and(|d| d.is_removable());
+            if !(is_external_mount_path(&root) || removable) {
+                continue;
+            }
+            if !seen.insert(root.clone()) {
+                continue;
+            }
+            let row = create_sidebar_row(
+                mount.name().as_str(),
+                if removable { "drive-removable-media-symbolic" } else { "drive-harddisk-symbolic" },
+                root.clone(),
+                false,
+            );
+            attach_folder_navigation_handlers(&row, &self.on_navigate, root.clone());
+            attach_folder_drop_target(&row, root, &self.on_files_dropped);
+            if mount.can_eject() || mount.can_unmount() {
+                let mount = mount.clone();
+                let list_box = self.list_box.clone();
+                add_eject_button(&row, move || {
+                    eject_or_unmount(&mount, list_box.root().and_downcast::<gtk4::Window>());
+                });
+            }
+            rows.push(row);
+        }
+
+        // 2. Volúmenes sin montar (se montan al hacer clic)
+        for volume in self.volume_monitor.volumes() {
+            if volume.get_mount().is_some() || !volume.can_mount() {
+                continue;
+            }
+            if !(volume.can_eject() || volume.drive().is_some_and(|d| d.is_removable())) {
+                continue;
+            }
+            let row = create_sidebar_row(
+                volume.name().as_str(),
+                "drive-removable-media-symbolic",
+                PathBuf::new(),
+                false,
+            );
+            row.add_css_class("branches-sidebar-row-unmounted");
+            let mount_action: Rc<dyn Fn()> = {
+                let volume = volume.clone();
+                let on_navigate = self.on_navigate.clone();
+                let list_box = self.list_box.clone();
+                Rc::new(move || {
+                    let op = gtk4::MountOperation::new(
+                        list_box.root().and_downcast::<gtk4::Window>().as_ref(),
+                    );
+                    let vol = volume.clone();
+                    let on_navigate = on_navigate.clone();
+                    volume.mount(
+                        gio::MountMountFlags::NONE,
+                        Some(&op),
+                        gio::Cancellable::NONE,
+                        move |res| match res {
+                            Ok(()) => {
+                                if let Some(path) = vol.get_mount().and_then(|m| m.root().path()) {
+                                    on_navigate(path);
+                                }
+                            }
+                            Err(e) => tracing::warn!("No se pudo montar el volumen: {}", e),
+                        },
+                    );
+                })
+            };
+            let click = GestureClick::new();
+            click.set_button(gdk::BUTTON_PRIMARY);
+            let ma = mount_action.clone();
+            click.connect_released(move |_, _, _, _| ma());
+            row.add_controller(click);
+            row.connect_activate(move |_| mount_action());
+            if volume.can_eject() {
+                let volume = volume.clone();
+                let list_box = self.list_box.clone();
+                add_eject_button(&row, move || {
+                    eject_volume(&volume, list_box.root().and_downcast::<gtk4::Window>());
+                });
+            }
+            rows.push(row);
+        }
+
+        // 3. Respaldo: directorios de /run/media/$USER/* y /media/*
+        let mut scan_dirs = vec![PathBuf::from("/media")];
+        if let Ok(user) = std::env::var("USER") {
+            scan_dirs.push(PathBuf::from("/run/media").join(user));
+        }
+        for dir in scan_dirs {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if !p.is_dir() || !seen.insert(p.clone()) {
+                    continue;
+                }
+                let name = entry.file_name().to_string_lossy().to_string();
+                let row = create_sidebar_row(&name, "drive-removable-media-symbolic", p.clone(), false);
+                attach_folder_navigation_handlers(&row, &self.on_navigate, p.clone());
+                attach_folder_drop_target(&row, p, &self.on_files_dropped);
+                rows.push(row);
+            }
+        }
+
+        for (i, row) in rows.iter().enumerate() {
+            self.list_box.insert(row, base_idx + 1 + i as i32);
+        }
+        if let Some(sel) = selected_path {
+            for row in &rows {
+                if let Some(p) = unsafe { row.data::<PathBuf>("target_path") } {
+                    if unsafe { p.as_ref() } == &sel {
+                        self.list_box.select_row(Some(row));
+                    }
+                }
+            }
+        }
+        *self.device_rows.borrow_mut() = rows;
+    }
+
     fn rebuild_bookmarks(&self) {
         for old_row in self.bookmark_rows.borrow_mut().drain(..) {
             self.list_box.remove(&old_row);
@@ -1239,4 +1510,23 @@ fn create_tag_row(title: &str, color_hex: &str) -> ListBoxRow {
     }
 
     row
+}
+
+#[cfg(test)]
+mod device_path_tests {
+    use super::*;
+
+    #[test]
+    fn system_paths_are_not_external() {
+        for p in ["/", "/boot", "/boot/efi", "/home", "/run/user/1000/gvfs"] {
+            assert!(!is_external_mount_path(Path::new(p)), "{p}");
+        }
+    }
+
+    #[test]
+    fn media_paths_are_external() {
+        assert!(is_external_mount_path(Path::new("/run/media/cristian/USB")));
+        assert!(is_external_mount_path(Path::new("/media/disk")));
+        assert!(!is_external_mount_path(Path::new("/media")));
+    }
 }

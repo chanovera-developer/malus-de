@@ -76,6 +76,26 @@ paned:not(.branches-split-paned) > separator {
     color: @window_fg_color;
 }
 
+.branches-sidebar-eject-btn {
+    min-width: 20px;
+    min-height: 20px;
+    padding: 2px;
+    border-radius: 6px;
+    color: alpha(@window_fg_color, 0.50);
+    opacity: 0.72;
+    transition: background-color 140ms ease-in-out, color 140ms ease-in-out, opacity 140ms ease-in-out;
+}
+
+.branches-sidebar-eject-btn:hover {
+    background-color: alpha(@window_fg_color, 0.10);
+    color: @window_fg_color;
+    opacity: 1.0;
+}
+
+.branches-sidebar-row-unmounted {
+    opacity: 0.72;
+}
+
 .branches-sidebar-row {
     border-radius: 9px;
     padding: 5px 10px;
