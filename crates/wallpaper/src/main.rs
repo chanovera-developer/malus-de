@@ -89,6 +89,97 @@ fn build_scaled_wallpaper_texture(
     Some(gtk4::gdk::Texture::for_pixbuf(&final_pixbuf))
 }
 
+const THUMB_SQUIRCLE_EXPONENT: f32 = 4.2;
+
+fn thumb_squircle_sdf(px: f32, py: f32, half_w: f32, half_h: f32, radius: f32) -> f32 {
+    let r = radius.min(half_w.min(half_h)).max(1.0);
+    let dx = px.abs() - half_w + r;
+    let dy = py.abs() - half_h + r;
+    if dx <= 0.0 || dy <= 0.0 {
+        dx.max(dy) - r
+    } else {
+        (dx.powf(THUMB_SQUIRCLE_EXPONENT) + dy.powf(THUMB_SQUIRCLE_EXPONENT))
+            .powf(1.0 / THUMB_SQUIRCLE_EXPONENT)
+            - r
+    }
+}
+
+/// Mismo radio relativo que las miniaturas de Branches.
+fn thumb_squircle_radius(width: i32, height: i32) -> f32 {
+    let min_side = width.min(height).max(1) as f32;
+    (min_side * 0.22).clamp(3.0, min_side * 0.45)
+}
+
+/// Recorta a transparente las esquinas de un buffer RGBA (stride = width * 4) con squircle.
+fn apply_thumb_squircle_clip_rgba(rgba: &mut [u8], width: usize, height: usize, radius: f32) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let half_w = width as f32 * 0.5;
+    let half_h = height as f32 * 0.5;
+    let r = radius.min(half_w.min(half_h)).max(1.0);
+    let span = r.ceil() as usize + 1;
+    let y_top_end = span.min(height);
+    let y_bot_start = height.saturating_sub(span).max(y_top_end);
+    let x_left_end = span.min(width);
+    let x_right_start = width.saturating_sub(span).max(x_left_end);
+    for y in (0..y_top_end).chain(y_bot_start..height) {
+        let ly = (y as f32 + 0.5) - half_h;
+        for x in (0..x_left_end).chain(x_right_start..width) {
+            let lx = (x as f32 + 0.5) - half_w;
+            let dist = thumb_squircle_sdf(lx, ly, half_w, half_h, r);
+            if dist > -0.5 {
+                let idx = (y * width + x) * 4 + 3;
+                if dist >= 0.5 {
+                    rgba[idx] = 0;
+                } else {
+                    let coverage = (0.5 - dist).clamp(0.0, 1.0);
+                    rgba[idx] = (rgba[idx] as f32 * coverage).round() as u8;
+                }
+            }
+        }
+    }
+}
+
+/// Devuelve el pixbuf con las esquinas recortadas en squircle (como en Branches).
+fn squircle_clip_pixbuf(pixbuf: &gdk_pixbuf::Pixbuf) -> Option<gdk_pixbuf::Pixbuf> {
+    let width = pixbuf.width();
+    let height = pixbuf.height();
+    if width <= 0 || height <= 0 || pixbuf.n_channels() < 3 {
+        return None;
+    }
+    let (w, h) = (width as usize, height as usize);
+    let stride = pixbuf.rowstride() as usize;
+    let channels = pixbuf.n_channels() as usize;
+    let has_alpha = pixbuf.has_alpha();
+    let bytes = pixbuf.read_pixel_bytes();
+    let src = bytes.as_ref();
+    let mut rgba = vec![255u8; w * h * 4];
+    for y in 0..h {
+        for x in 0..w {
+            let s = y * stride + x * channels;
+            let d = (y * w + x) * 4;
+            if s + channels > src.len() {
+                return None;
+            }
+            rgba[d..d + 3].copy_from_slice(&src[s..s + 3]);
+            if has_alpha {
+                rgba[d + 3] = src[s + 3];
+            }
+        }
+    }
+    apply_thumb_squircle_clip_rgba(&mut rgba, w, h, thumb_squircle_radius(width, height));
+    Some(gdk_pixbuf::Pixbuf::from_bytes(
+        &glib::Bytes::from_owned(rgba),
+        gdk_pixbuf::Colorspace::Rgb,
+        true,
+        8,
+        width,
+        height,
+        width * 4,
+    ))
+}
+
 fn build_default_gradient_texture(target_w: i32, target_h: i32) -> Option<gtk4::gdk::Texture> {
     let target_w = target_w.max(1);
     let target_h = target_h.max(1);
@@ -2144,7 +2235,8 @@ fn render_single_icon(
     let icon_image = thumbnail
         .as_ref()
         .map(|pixbuf| {
-            let texture = gtk4::gdk::Texture::for_pixbuf(pixbuf);
+            let clipped = squircle_clip_pixbuf(pixbuf);
+            let texture = gtk4::gdk::Texture::for_pixbuf(clipped.as_ref().unwrap_or(pixbuf));
             Image::from_paintable(Some(&texture))
         })
         .unwrap_or_else(|| match icon.as_ref() {
@@ -4347,5 +4439,20 @@ mod tests {
             .expect("Debe poder pre-rasterizar el fondo degradado");
         assert_eq!(tex.width(), 64);
         assert_eq!(tex.height(), 36);
+    }
+}
+
+#[cfg(test)]
+mod squircle_thumb_tests {
+    use super::*;
+
+    #[test]
+    fn clip_makes_corners_transparent_and_keeps_center_opaque() {
+        let (w, h) = (64usize, 64usize);
+        let mut rgba = vec![255u8; w * h * 4];
+        apply_thumb_squircle_clip_rgba(&mut rgba, w, h, thumb_squircle_radius(64, 64));
+        assert_eq!(rgba[3], 0);
+        assert_eq!(rgba[((h / 2) * w + w / 2) * 4 + 3], 255);
+        assert_eq!(rgba[(w / 2) * 4 + 3], 255);
     }
 }
