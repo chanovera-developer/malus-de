@@ -636,13 +636,24 @@ entry.branches-inline-rename-row {
     font-size: 11px;
     font-weight: 600;
     color: alpha(@window_fg_color, 0.65);
-    padding: 4px 12px;
+    padding: 0 4px;
 }
 
 .branches-list-row {
-    padding: 4px 12px;
+    padding: 0 4px;
     border-bottom: 1px solid alpha(@borders, 0.15);
     transition: background-color 100ms ease;
+    background-color: transparent;
+}
+
+.branches-list-view .branches-list-scroll,
+.branches-list-view .branches-list-scroll viewport,
+.branches-list-view .branches-list-scroll list {
+    background-color: transparent;
+    background: transparent;
+}
+
+.branches-list-bands {
     background-color: @view_bg_color;
 }
 
@@ -653,6 +664,36 @@ entry.branches-inline-rename-row {
 .branches-list-row:selected {
     background-color: alpha(@accent_bg_color, 0.85);
     color: @accent_fg_color;
+}
+
+/* Columnas pares (Fecha y Clase) con gris muy claro; sin gaps verticales */
+.branches-list-row > *,
+.branches-list-header > * {
+    padding-top: 4px;
+    padding-bottom: 4px;
+}
+
+.branches-list-cell {
+    padding-left: 8px;
+    padding-right: 8px;
+}
+
+.branches-list-col-even {
+    background-color: alpha(@window_fg_color, 0.035);
+}
+
+row:selected .branches-list-col-even {
+    background-color: transparent;
+}
+
+/* Asa de redimensionado de columnas */
+.branches-list-col-handle {
+    border-left: 1px solid alpha(@borders, 0.35);
+    margin: 1px 0;
+}
+
+.branches-list-col-handle:hover {
+    border-left-color: alpha(@window_fg_color, 0.6);
 }
 
 /* Selector segmentado de vista en contenedor squircle Liquid Glass */
