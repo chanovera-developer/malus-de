@@ -134,24 +134,51 @@ pub fn format_size(bytes: u64) -> String {
     }
 }
 
-pub fn format_modified(time: SystemTime) -> String {
+/// Convierte fechas (año/mes/dias) a numeros absolutos de dias (Rata Die)
+fn date_to_days(year: i32, month: i32, day: i32) -> i64 {
+    let leap_month_adjustment = (14 - month) / 12;
+    let adjusted_year = year + 4800 - leap_month_adjustment;
+    let adjusted_month = month + 12 * leap_month_adjustment - 3;
+
+    day as i64 
+        + (153 * adjusted_month as i64 + 2) / 5 
+        + 365 * adjusted_year as i64 
+        + adjusted_year as i64 / 4 
+        - adjusted_year as i64 / 100 
+        + adjusted_year as i64 / 400 
+        - 32045
+}
+
+/// Lógica interna que permite inyectar el tiempo actual (`now`) para pruebas deterministas.
+fn format_modified_with_now(time: SystemTime, now: &glib::DateTime) -> String {
     let duration = time.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default();
     let secs = duration.as_secs() as i64;
 
-    let dt = glib::DateTime::from_unix_local(secs).unwrap_or_else(|_| glib::DateTime::now_local().unwrap());
-    let now = glib::DateTime::now_local().unwrap();
+    let dt = glib::DateTime::from_unix_local(secs)
+        .unwrap_or_else(|_| now.clone());
 
-    let diff_days = (now.to_unix() - dt.to_unix()) / 86400;
+    if dt > *now {
+        return dt.format("%d/%m/%Y %H:%M").unwrap_or_default().to_string();
+    }
 
-    if diff_days == 0 && now.day_of_month() == dt.day_of_month() {
+    let now_days = date_to_days(now.year(), now.month(), now.day_of_month());
+    let dt_days = date_to_days(dt.year(), dt.month(), dt.day_of_month());
+    let diff_days = now_days - dt_days;
+
+    if diff_days == 0 {
         format!("Hoy a las {}", dt.format("%H:%M").unwrap_or_default())
-    } else if diff_days <= 1 {
+    } else if diff_days == 1 {
         format!("Ayer a las {}", dt.format("%H:%M").unwrap_or_default())
     } else if diff_days < 7 {
         format!("{}", dt.format("%a %H:%M").unwrap_or_default())
     } else {
         format!("{}", dt.format("%d/%m/%Y %H:%M").unwrap_or_default())
     }
+}
+
+pub fn format_modified(time: SystemTime) -> String {
+    let now = glib::DateTime::now_local().unwrap();
+    format_modified_with_now(time, &now)
 }
 
 pub fn get_free_space(path: &Path) -> String {
@@ -443,6 +470,7 @@ mod tests {
     use super::{load_recent_files, percent_decode_file_uri, resolve_kind_and_icon, FileItem};
     use gio::prelude::{Cast, FileExt};
     use std::path::{Path, PathBuf};
+    use super::*;
 
     #[test]
     fn test_percent_decode_file_uri_and_load_recent_files() {
@@ -645,6 +673,53 @@ mod tests {
     }
 
     #[test]
+    fn test_date_to_days_calculation() {
+        let d1 = date_to_days(2026, 1, 1);
+        let d2 = date_to_days(2026, 1, 2);
+        assert_eq!(d2 - d1, 1);
+    }
+
+    #[test]
+    fn test_format_modified_today() {
+        let now = glib::DateTime::now_local().unwrap();
+        let elapsed_secs_today = now.hour() as i64 * 3600 + now.minute() as i64 * 60 + now.second() as i64;
+        
+        // Si estamos muy cerca de medianoche, usamos un desfase seguro de 1 minuto, sino 1 hora
+        let offset = if elapsed_secs_today > 120 { 60 } else { 1 };
+        let time_secs = now.to_unix() - offset;
+        let time = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(time_secs as u64);
+
+        let result = super::format_modified_with_now(time, &now);
+        assert!(result.starts_with("Hoy a las"));
+    }
+
+    #[test]
+    fn test_format_modified_yesterday() {
+        let now = glib::DateTime::now_local().unwrap();
+        let elapsed_secs_today = now.hour() as i64 * 3600 + now.minute() as i64 * 60 + now.second() as i64;
+        
+        // Restamos los segundos transcurridos hoy más 6 horas para caer siempre en la tarde de ayer
+        let time_secs = now.to_unix() - elapsed_secs_today - 6 * 3600;
+        let time = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(time_secs as u64);
+
+        let result = super::format_modified_with_now(time, &now);
+        assert!(result.starts_with("Ayer a las"));
+    }
+
+    #[test]
+    fn test_modified_future_date() {
+        let now = glib::DateTime::now_local().unwrap();
+        // 10 días en el futuro
+        let time_secs = now.to_unix() + 864000;
+        let time = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(time_secs as u64);
+
+        let result = super::format_modified_with_now(time, &now);
+        
+        assert!(result.contains('/'));
+        assert!(!result.contains("Hoy"));
+        assert!(!result.contains("Ayer"));
+    }
+
     fn split_desktop_exec_args_handles_quotes_and_escapes() {
         assert_eq!(
             malus_de_common::apps::split_desktop_exec_args(
