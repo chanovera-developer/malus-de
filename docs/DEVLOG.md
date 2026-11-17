@@ -4,6 +4,21 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-17] — Miniaturas de Imágenes con Recorte Squircle en Branches
+
+### 1. Decodificación Asíncrona, Caché HiDPI y Recorte Squircle (`crates/branches`)
+* **Pipeline compartido de miniaturas ([`views/mod.rs`](../crates/branches/src/views/mod.rs), [`macos-branches.css`](../crates/branches/src/styles/macos-branches.css)):**
+  * Añadidos `is_image_thumbnail_candidate`, `decode_thumbnail_bytes`, `update_item_image_thumbnail` y `create_item_image` para cargar miniaturas de imágenes (`png`, `jpg`, `jpeg`, `webp`, `gif`, `svg`, `bmp`, `ico`, `tif`, `tiff`, `avif`, `heic`, `heif`, hasta `64 MB`) en segundo plano mediante `gio::spawn_blocking` con caché `THUMBNAIL_CACHE` (512 entradas indexadas por ruta, fecha de modificación, tamaño y resolución 2x HiDPI) y guardia por token ante cambios rápidos de tamaño o carpeta.
+  * Aplicado recorte **squircle** antialias por píxel (`apply_squircle_clip_rgba` con superelipse `n = 4.2`) directamente sobre el búfer RGBA antes de construir `gdk::MemoryTexture`, logrando esquinas continuas incluso en fotos panorámicas o verticales sin sombras rectangulares sobresalientes.
+* **Integración en todas las vistas ([`icon_view.rs`](../crates/branches/src/views/icon_view.rs), [`list_view.rs`](../crates/branches/src/views/list_view.rs), [`column_view.rs`](../crates/branches/src/views/column_view.rs), [`gallery_view.rs`](../crates/branches/src/views/gallery_view.rs)):**
+  * Activadas las miniaturas squircle alineadas en Vista de Iconos (con recarga automática al mover el control deslizante de tamaño o al modificarse un archivo vía `FileMonitor`), Lista, Columnas y carrusel de Galería.
+
+### 2. Validación
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-branches`: **26 passed; 0 failed** (`thumbnail_candidate_detects_images_and_ignores_directories_and_non_images` y `decode_thumbnail_bytes_decodes_valid_png_thumbnail`).
+* `cargo build --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --release -p malus-de-branches`: compilación correcta (`exit 0`).
+
+---
+
 ## [2026-11-17] — Sincronización en Tiempo Real, Edición Inline al Crear Elementos y Papelera DnD en Dock
 
 ### 1. Actualización Automática de Carpetas e Inline Rename al Crear en Branches (`crates/branches`)
