@@ -1016,7 +1016,8 @@ impl IconView {
                         );
                         pending_slow_click.set(Some(id));
                     }
-                } else if n_press == 2 {
+                } else if n_press >= 2 {
+                    g.set_state(gtk4::EventSequenceState::Claimed);
                     if is_dir {
                         on_nav(path.clone());
                     } else {
@@ -1154,10 +1155,14 @@ impl IconView {
         let widgets_drag_begin = self.item_widgets.clone();
         let sel_drag_begin = self.selected_items.clone();
         let name_drag_begin = item.name.clone();
+        let path_drag_begin = item.path.clone();
         let cancel_slow_drag = pending_slow_rename;
         drag_source.connect_drag_begin(move |_source, _drag| {
             if let Some(source_id) = cancel_slow_drag.take() {
                 source_id.remove();
+            }
+            if malus_de_common::apps::is_application_desktop_file(&path_drag_begin) {
+                return;
             }
             let sel = sel_drag_begin.borrow();
             if sel.contains(&name_drag_begin) && sel.len() > 1 {
@@ -1184,6 +1189,9 @@ impl IconView {
         let cur_folder_end = self.current_folder.clone();
         drag_source.connect_drag_end(move |_, drag, _| {
             *active_drag_end.borrow_mut() = None;
+            if malus_de_common::apps::is_application_desktop_file(&path_end) {
+                return;
+            }
             let folder = cur_folder_end.borrow().clone();
             let remove_missing_in_place = || {
                 let missing_names: Vec<(String, GtkBox)> = {
@@ -1628,17 +1636,21 @@ impl IconView {
                                     cell_w,
                                     cell_h,
                                 );
-                                let dest_file = gio::File::for_path(&dest);
-                                if file
-                                    .move_(
+                                let transferred = if malus_de_common::apps::is_application_desktop_file(&src) {
+                                    dest.symlink_metadata().is_err()
+                                        && std::os::unix::fs::symlink(&src, &dest).is_ok()
+                                } else {
+                                    let dest_file = gio::File::for_path(&dest);
+                                    file.move_(
                                         &dest_file,
                                         gio::FileCopyFlags::NONE,
                                         gio::Cancellable::NONE,
                                         None,
                                     )
                                     .is_ok()
-                                    || std::fs::rename(&src, &dest).is_ok()
-                                {
+                                        || std::fs::rename(&src, &dest).is_ok()
+                                };
+                                if transferred {
                                     dropped_positions.insert(fname_str.clone(), (final_x, final_y));
                                     external_selected_names.push(fname_str);
                                     moved_external = true;

@@ -176,16 +176,8 @@ pub fn open_file(path: &Path) -> Result<(), String> {
 }
 
 fn launch_desktop_file(path: &Path) -> Result<(), String> {
-    if path.file_name().is_some_and(|name| name == "io.mpv.Mpv.desktop") {
-        return spawn_desktop_command(
-            "flatpak run io.mpv.Mpv --gpu-context=wayland --player-operation-mode=pseudo-gui",
-        );
-    }
-
-    if let Some(entry) = malus_de_common::apps::parse_desktop_file_any(path) {
-        if !entry.exec.trim().is_empty() {
-            return spawn_desktop_command(&entry.exec);
-        }
+    if malus_de_common::apps::spawn_desktop_entry_path(path).is_ok() {
+        return Ok(());
     }
 
     if let Some(app_info) = gio::DesktopAppInfo::from_filename(path) {
@@ -195,50 +187,7 @@ fn launch_desktop_file(path: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    Err("No se pudo iniciar la aplicación seleccionada".to_string())
-}
-
-fn spawn_desktop_command(command_line: &str) -> Result<(), String> {
-    let parts: Vec<&str> = command_line.split_whitespace().collect();
-    let Some((exe, args)) = parts.split_first() else {
-        return Err("Comando de aplicación vacío".to_string());
-    };
-
-    let target_path_buf;
-    let mut wrapped_target_bin: Option<&str> = None;
-    let target_exe = if *exe == "gnome-control-center" {
-        "malus-de-settings"
-    } else if let Some(wrapper) = malus_de_common::config::resolve_electron_ide_wrapper(exe) {
-        wrapped_target_bin = Some(*exe);
-        target_path_buf = wrapper.to_string_lossy().to_string();
-        &target_path_buf
-    } else {
-        *exe
-    };
-
-    let local_bin = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join(target_exe)))
-        .filter(|p| p.is_file());
-
-    let mut command = if let Some(bin) = local_bin {
-        std::process::Command::new(bin)
-    } else {
-        std::process::Command::new(target_exe)
-    };
-    command.args(args);
-    malus_de_common::config::apply_isolated_environment(&mut command);
-    if let Some(orig_exe) = wrapped_target_bin {
-        command.env("MALUS_IDE_BIN", orig_exe);
-    }
-
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("Error al ejecutar {}: {}", target_exe, e))?;
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-    Ok(())
+    malus_de_common::apps::spawn_desktop_entry_path(path)
 }
 
 fn resolve_desktop_gicon(icon: &str) -> gio::Icon {
@@ -693,5 +642,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn split_desktop_exec_args_handles_quotes_and_escapes() {
+        assert_eq!(
+            malus_de_common::apps::split_desktop_exec_args(
+                r#""/opt/My App/bin" --title="Hello World" 'single arg'"#
+            ),
+            vec!["/opt/My App/bin", "--title=Hello World", "single arg",]
+        );
+        assert_eq!(
+            malus_de_common::apps::split_desktop_exec_args(
+                r#"env FOO=bar /usr/bin/app\ name --flag"#
+            ),
+            vec!["env", "FOO=bar", "/usr/bin/app name", "--flag"]
+        );
+    }
+
+    #[test]
+    fn read_desktop_launch_metadata_detects_terminal_and_path() {
+        let dir = std::env::temp_dir().join("malus_branches_launch_meta_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let desktop_file = dir.join("term.desktop");
+        std::fs::write(
+            &desktop_file,
+            format!(
+                "[Desktop Entry]\nType=Application\nName=TermTool\nExec=btop\nTerminal=true\nPath={}\n",
+                dir.display()
+            ),
+        )
+        .unwrap();
+
+        let (term, wd) = malus_de_common::apps::read_desktop_launch_metadata(&desktop_file);
+        assert!(term);
+        assert_eq!(wd.as_deref(), Some(dir.as_path()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

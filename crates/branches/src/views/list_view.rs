@@ -263,7 +263,8 @@ fn create_list_row(item: &FileItem, icon_size: i32, on_navigate: NavigateCallbac
                     );
                     pending_slow_click.set(Some(id));
                 }
-            } else if n_press == 2 {
+            } else if n_press >= 2 {
+                g.set_state(gtk4::EventSequenceState::Claimed);
                 if is_dir {
                     on_nav_click(path.clone());
                 } else {

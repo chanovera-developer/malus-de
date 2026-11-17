@@ -252,17 +252,21 @@ pub fn move_paths_into_folder(paths: &[PathBuf], dest_dir: &Path) -> bool {
             .symlink_metadata()
             .map(|m| m.is_dir())
             .unwrap_or_else(|_| src.is_dir());
-        let src_file = gio::File::for_path(src);
-        let dest_file = gio::File::for_path(&target);
-        let ok = src_file
-            .move_(
-                &dest_file,
-                gio::FileCopyFlags::NONE,
-                gio::Cancellable::NONE,
-                None,
-            )
-            .is_ok()
-            || fs::rename(src, &target).is_ok();
+        let ok = if malus_de_common::apps::is_application_desktop_file(src) {
+            std::os::unix::fs::symlink(src, &target).is_ok()
+        } else {
+            let src_file = gio::File::for_path(src);
+            let dest_file = gio::File::for_path(&target);
+            src_file
+                .move_(
+                    &dest_file,
+                    gio::FileCopyFlags::NONE,
+                    gio::Cancellable::NONE,
+                    None,
+                )
+                .is_ok()
+                || fs::rename(src, &target).is_ok()
+        };
 
         if ok {
             if let Ok(mut conn) = crate::db::open_db() {
