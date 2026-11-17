@@ -1208,23 +1208,42 @@ pub fn run_winit() -> Result<()> {
                 let mut topbar_popups = Vec::new();
                 let mut wallpaper_popups = Vec::new();
                 let mut dnd_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
+                let mut dnd_fallback_elem: Option<
+                    smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement<
+                        GlesRenderer,
+                    >,
+                > = None;
                 if let Some(loc) = state.active_dnd_icon_draw_location() {
-                    if let Some(ref dnd_surf) = state.dnd_icon {
-                        let offset = state.dnd_icon_offset;
-                        let phys_loc = Point::from((
-                            (loc.x + offset.x as f64).round() as i32,
-                            (loc.y + offset.y as f64).round() as i32,
-                        ));
-                        dnd_elems = render_elements_from_surface_tree::<
-                            GlesRenderer,
-                            WaylandSurfaceRenderElement<GlesRenderer>,
-                        >(
+                    if let Some(dnd_surf) = state.dnd_icon.clone() {
+                        if smithay::utils::IsAlive::alive(&dnd_surf) {
+                            if state.dnd_icon_cache_dirty {
+                                super::capture_dnd_icon_cache(renderer, &mut state, &dnd_surf, 1.0);
+                            }
+                            let offset = state.dnd_icon_offset;
+                            let phys_loc = Point::from((
+                                (loc.x + offset.x as f64).round() as i32,
+                                (loc.y + offset.y as f64).round() as i32,
+                            ));
+                            dnd_elems = render_elements_from_surface_tree::<
+                                GlesRenderer,
+                                WaylandSurfaceRenderElement<GlesRenderer>,
+                            >(
+                                renderer,
+                                &dnd_surf,
+                                phys_loc,
+                                Scale::from(1.0),
+                                1.0,
+                                Kind::Unspecified,
+                            );
+                        }
+                    }
+                    if dnd_elems.is_empty() && state.dnd_drop_hold.is_some() {
+                        dnd_fallback_elem = super::build_cached_dnd_fallback(
                             renderer,
-                            dnd_surf,
-                            phys_loc,
-                            Scale::from(1.0),
+                            &state,
+                            loc.x,
+                            loc.y,
                             1.0,
-                            Kind::Unspecified,
                         );
                     }
                 }
@@ -2511,6 +2530,14 @@ pub fn run_winit() -> Result<()> {
                             &mut frame,
                             1.0,
                             &dnd_elems,
+                            &[damage],
+                        );
+                    } else if let Some(ref fallback_elem) = dnd_fallback_elem {
+                        let fallback_slice = std::slice::from_ref(fallback_elem);
+                        let _ = draw_render_elements(
+                            &mut frame,
+                            1.0,
+                            fallback_slice,
                             &[damage],
                         );
                     }

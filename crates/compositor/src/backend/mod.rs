@@ -190,6 +190,155 @@ impl OpaqueOccluder {
     }
 }
 
+pub fn capture_dnd_icon_cache(
+    renderer: &mut smithay::backend::renderer::gles::GlesRenderer,
+    state: &mut crate::state::MalusState,
+    dnd_surf: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    scale: f64,
+) {
+    use smithay::backend::allocator::Fourcc;
+    use smithay::backend::renderer::{
+        element::{
+            memory::MemoryRenderBuffer,
+            surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement},
+            Element, Kind,
+        },
+        gles::{GlesRenderer, GlesTexture},
+        utils::draw_render_elements,
+        Bind, Color32F, ExportMem, Frame, Offscreen, Renderer,
+    };
+    use smithay::utils::{Buffer as BufferCoord, Point, Scale, Size, Transform};
+
+    if !state.dnd_icon_cache_dirty {
+        return;
+    }
+    let scale = scale.max(1.0);
+    let elems = render_elements_from_surface_tree::<
+        GlesRenderer,
+        WaylandSurfaceRenderElement<GlesRenderer>,
+    >(
+        renderer,
+        dnd_surf,
+        Point::from((0, 0)),
+        Scale::from(scale),
+        1.0,
+        Kind::Unspecified,
+    );
+    if elems.is_empty() {
+        return;
+    }
+
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
+    let scale_s = Scale::from(scale);
+    for elem in &elems {
+        let g = elem.geometry(scale_s);
+        min_x = min_x.min(g.loc.x);
+        min_y = min_y.min(g.loc.y);
+        max_x = max_x.max(g.loc.x + g.size.w);
+        max_y = max_y.max(g.loc.y + g.size.h);
+    }
+    let w = (max_x - min_x).max(0);
+    let h = (max_y - min_y).max(0);
+    if w <= 0 || h <= 0 {
+        return;
+    }
+
+    let elems = render_elements_from_surface_tree::<
+        GlesRenderer,
+        WaylandSurfaceRenderElement<GlesRenderer>,
+    >(
+        renderer,
+        dnd_surf,
+        Point::from((-min_x, -min_y)),
+        scale_s,
+        1.0,
+        Kind::Unspecified,
+    );
+
+    let buf_size = Size::<i32, BufferCoord>::from((w, h));
+    let Ok(mut texture) = <GlesRenderer as Offscreen<GlesTexture>>::create_buffer(
+        renderer,
+        Fourcc::Abgr8888,
+        buf_size,
+    ) else {
+        return;
+    };
+
+    let phys_size = Size::<i32, Physical>::from((w, h));
+    let damage_rect = Rectangle::from_size(phys_size);
+    let Ok(mut target) = renderer.bind(&mut texture) else {
+        return;
+    };
+    {
+        let Ok(mut frame) = renderer.render(&mut target, phys_size, Transform::Normal) else {
+            return;
+        };
+        let _ = frame.clear(Color32F::new(0.0, 0.0, 0.0, 0.0), &[damage_rect]);
+        let _ = draw_render_elements(&mut frame, scale, &elems, &[damage_rect]);
+        if frame.finish().is_err() {
+            return;
+        }
+    }
+
+    let copy_rect = Rectangle::from_size(buf_size);
+    let Ok(mapping) = renderer.copy_framebuffer(&target, copy_rect, Fourcc::Abgr8888) else {
+        return;
+    };
+    let Ok(mapped) = renderer.map_texture(&mapping) else {
+        return;
+    };
+    let expected_len = (w as usize).saturating_mul(h as usize).saturating_mul(4);
+    if mapped.len() != expected_len {
+        return;
+    }
+
+    let buffer = MemoryRenderBuffer::from_slice(
+        &mapped,
+        Fourcc::Abgr8888,
+        buf_size,
+        1,
+        Transform::Normal,
+        None,
+    );
+    state.dnd_icon_cache = Some(crate::state::CachedDndIcon {
+        buffer,
+        rel_offset_logical: (min_x as f64 / scale, min_y as f64 / scale),
+    });
+    state.dnd_icon_cache_dirty = false;
+}
+
+pub fn build_cached_dnd_fallback(
+    renderer: &mut smithay::backend::renderer::gles::GlesRenderer,
+    state: &crate::state::MalusState,
+    draw_x: f64,
+    draw_y: f64,
+    scale: f64,
+) -> Option<smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement<smithay::backend::renderer::gles::GlesRenderer>> {
+    use smithay::backend::renderer::element::{
+        memory::MemoryRenderBufferRenderElement, Kind,
+    };
+    use smithay::utils::Point;
+
+    let cached = state.dnd_icon_cache.as_ref()?;
+    let offset = state.dnd_icon_offset;
+    let scale = scale.max(1.0);
+    let phys_x = (draw_x + offset.x as f64 + cached.rel_offset_logical.0) * scale;
+    let phys_y = (draw_y + offset.y as f64 + cached.rel_offset_logical.1) * scale;
+    MemoryRenderBufferRenderElement::from_buffer(
+        renderer,
+        Point::<f64, Physical>::from((phys_x.round(), phys_y.round())),
+        &cached.buffer,
+        Some(1.0),
+        None,
+        None,
+        Kind::Unspecified,
+    )
+    .ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

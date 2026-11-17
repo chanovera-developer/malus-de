@@ -2800,24 +2800,48 @@ pub fn run_drm() -> Result<()> {
                 }
 
                 let mut dnd_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
+                let mut dnd_fallback_elem: Option<
+                    MemoryRenderBufferRenderElement<GlesRenderer>,
+                > = None;
                 if let Some(loc) = state.active_dnd_icon_draw_location() {
-                    if let Some(ref dnd_surf) = state.dnd_icon {
-                        if output_geo.to_f64().contains(loc) {
-                            let offset = state.dnd_icon_offset;
-                            let draw_x = loc.x + offset.x as f64 - output_geo.loc.x as f64;
-                            let draw_y = loc.y + offset.y as f64 - output_geo.loc.y as f64;
-                            let phys_x = (draw_x * scale).round() as i32;
-                            let phys_y = (draw_y * scale).round() as i32;
-                            dnd_elems = render_elements_from_surface_tree::<
-                                GlesRenderer,
-                                WaylandSurfaceRenderElement<GlesRenderer>,
-                            >(
+                    if output_geo.to_f64().contains(loc) {
+                        if let Some(dnd_surf) = state.dnd_icon.clone() {
+                            if dnd_surf.alive() {
+                                if state.dnd_icon_cache_dirty {
+                                    super::capture_dnd_icon_cache(
+                                        &mut renderer,
+                                        &mut state,
+                                        &dnd_surf,
+                                        scale,
+                                    );
+                                }
+                                let offset = state.dnd_icon_offset;
+                                let draw_x = loc.x + offset.x as f64 - output_geo.loc.x as f64;
+                                let draw_y = loc.y + offset.y as f64 - output_geo.loc.y as f64;
+                                let phys_x = (draw_x * scale).round() as i32;
+                                let phys_y = (draw_y * scale).round() as i32;
+                                dnd_elems = render_elements_from_surface_tree::<
+                                    GlesRenderer,
+                                    WaylandSurfaceRenderElement<GlesRenderer>,
+                                >(
+                                    &mut renderer,
+                                    &dnd_surf,
+                                    Point::from((phys_x, phys_y)),
+                                    smithay::utils::Scale::from(scale),
+                                    1.0,
+                                    Kind::Unspecified,
+                                );
+                            }
+                        }
+                        if dnd_elems.is_empty() && state.dnd_drop_hold.is_some() {
+                            let draw_x = loc.x - output_geo.loc.x as f64;
+                            let draw_y = loc.y - output_geo.loc.y as f64;
+                            dnd_fallback_elem = super::build_cached_dnd_fallback(
                                 &mut renderer,
-                                dnd_surf,
-                                Point::from((phys_x, phys_y)),
-                                smithay::utils::Scale::from(scale),
-                                1.0,
-                                Kind::Unspecified,
+                                &state,
+                                draw_x,
+                                draw_y,
+                                scale,
                             );
                         }
                     }
@@ -3377,6 +3401,9 @@ pub fn run_drm() -> Result<()> {
                 for elem in &dnd_elems {
                     tracker_elements.push(MalusDrmElement::Wayland(elem));
                 }
+                if let Some(ref fallback_elem) = dnd_fallback_elem {
+                    tracker_elements.push(MalusDrmElement::Memory(fallback_elem));
+                }
                 for (popups, popup_rect) in &topbar_popups {
                     for elem in popups {
                         tracker_elements.push(MalusDrmElement::Wayland(elem));
@@ -3745,6 +3772,10 @@ pub fn run_drm() -> Result<()> {
                     || state.cursor_status != out_surface.last_cursor_status;
                 if cursor_changed {
                     out_surface.pending_damage_buffers = out_surface.pending_damage_buffers.max(1);
+                }
+                if state.dnd_drop_hold.is_some() {
+                    out_surface.pending_damage_buffers =
+                        out_surface.pending_damage_buffers.max(damage_buffers_per_event);
                 }
 
                 let mut window_geoms_changed = window_render_data.len() != out_surface.last_window_geometries.len();
@@ -5522,6 +5553,9 @@ pub fn run_drm() -> Result<()> {
                         // Dibujar el icono de Drag and Drop (dnd_icon) si hay una operación activa
                         if !dnd_elems.is_empty() {
                             let _ = draw_render_elements(&mut frame, scale, &dnd_elems, damage);
+                        } else if let Some(ref fallback_elem) = dnd_fallback_elem {
+                            let fallback_slice = std::slice::from_ref(fallback_elem);
+                            let _ = draw_render_elements(&mut frame, 1.0, fallback_slice, damage);
                         }
 
                         // Dibujar el puntero con el tamaño lógico configurado y el hotspot exacto

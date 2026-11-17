@@ -7,6 +7,7 @@ use crate::cpu_priority::FocusCpuPriority;
 use malus_de_common::config::{AppSwitcherStyle, DockConfig};
 use smithay::{
     backend::allocator::dmabuf::Dmabuf,
+    backend::renderer::element::memory::MemoryRenderBuffer,
     delegate_compositor, delegate_data_control, delegate_data_device, delegate_dmabuf,
     delegate_fractional_scale, delegate_layer_shell, delegate_output, delegate_presentation,
     delegate_primary_selection, delegate_seat, delegate_shm, delegate_viewporter,
@@ -226,6 +227,11 @@ pub struct SwipeGestureState {
     pub app_expose_gesture: bool,
 }
 
+pub struct CachedDndIcon {
+    pub buffer: MemoryRenderBuffer,
+    pub rel_offset_logical: (f64, f64),
+}
+
 pub struct MalusState {
     pub display_handle: DisplayHandle,
     pub compositor_state: CompositorState,
@@ -294,6 +300,8 @@ pub struct MalusState {
     pub dnd_icon: Option<WlSurface>,
     pub dnd_icon_offset: Point<i32, Logical>,
     pub dnd_drop_hold: Option<(WlSurface, Point<f64, Logical>, Instant)>,
+    pub dnd_icon_cache: Option<CachedDndIcon>,
+    pub dnd_icon_cache_dirty: bool,
     pub active_screen_recording: Option<crate::recording::ScreenRecordingSession>,
     pub screenshot_ui: crate::screenshot_ui::ScreenshotUiState,
     pub snap_layouts: crate::snap_layouts::SnapLayoutsState,
@@ -1166,6 +1174,8 @@ impl MalusState {
             dnd_icon: None,
             dnd_icon_offset: Point::from((0, 0)),
             dnd_drop_hold: None,
+            dnd_icon_cache: None,
+            dnd_icon_cache_dirty: false,
             active_screen_recording: None,
             screenshot_ui: crate::screenshot_ui::ScreenshotUiState::new(),
             snap_layouts: crate::snap_layouts::SnapLayoutsState::new(),
@@ -4455,6 +4465,7 @@ impl CompositorHandler for MalusState {
         self.popups.commit(surface);
 
         if self.dnd_icon.as_ref() == Some(surface) {
+            self.dnd_icon_cache_dirty = true;
             let delta = smithay::wayland::compositor::with_states(surface, |states| {
                 states
                     .cached_state
@@ -4746,6 +4757,8 @@ impl ClientDndGrabHandler for MalusState {
         self.dnd_drop_hold = None;
         self.dnd_icon = icon.clone();
         self.dnd_icon_offset = Point::from((0, 0));
+        self.dnd_icon_cache = None;
+        self.dnd_icon_cache_dirty = icon.is_some();
         if let Some(ref surf) = icon {
             let delta = smithay::wayland::compositor::with_states(surf, |states| {
                 states
@@ -4781,6 +4794,8 @@ impl MalusState {
         self.dnd_icon = None;
         self.dnd_icon_offset = Point::from((0, 0));
         self.dnd_drop_hold = None;
+        self.dnd_icon_cache = None;
+        self.dnd_icon_cache_dirty = false;
     }
 
     pub fn active_dnd_icon_draw_location(&mut self) -> Option<Point<f64, Logical>> {
@@ -4789,7 +4804,7 @@ impl MalusState {
                 self.clear_dnd_icon();
                 return None;
             }
-            if self.dnd_icon.as_ref().is_some_and(|s| s.alive()) {
+            if self.dnd_icon.as_ref().is_some_and(|s| s.alive()) || self.dnd_icon_cache.is_some() {
                 return Some(drop_loc);
             }
             self.clear_dnd_icon();
