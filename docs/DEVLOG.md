@@ -4,6 +4,25 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-17] — Ajuste de Tamaño/Origen del Agujero Negro y Semáforo en Antigravity (Pendiente)
+
+### 1. Proporción y Origen del Efecto Agujero Negro al Cerrar (`crates/compositor`)
+* **Dimensionado sobre el botón rojo y disco compacto ([`black_hole.rs`](../crates/compositor/src/black_hole.rs)):**
+  * Ajustado `CLOSE_BUTTON_CORE_RADIUS_LOGICAL` a `6.5 * scale` (igual al radio del botón de cerrar SSD/CSD de `13 px`), acotando `quad_half` y la caída radial del disco de acreción a `2.5 * horizon_radius_px` para ceñir el efecto alrededor del botón rojo sin expandirse en exceso.
+* **Coordenadas reales por familia de ventana y clic CSD ([`state.rs`](../crates/compositor/src/state.rs), [`drm.rs`](../crates/compositor/src/backend/drm.rs), [`winit.rs`](../crates/compositor/src/backend/winit.rs)):**
+  * Añadidos `close_button_offset_for_app_id`, `close_button_center_logical` y `record_csd_close_click_hint` con los offsets exactos para SSD (`20.0, 19.0`), Branches (`28.5, 24.0`), Ajustes (`25.5, 23.5`), Electron/IDE (`20.5, 17.5`), Firefox (`16.5, 21.0`) y CSD genérico (`22.5, 23.0`), registrando el hint al cerrar con atajos (`close_active_window`) o mediante clic izquierdo CSD sin usar el respaldo genérico de la franja superior de `96 px`.
+
+### 2. Extensión de `malus-ide-wrapper` para la App Antigravity (`scripts/malus-ide-wrapper`)
+* Añadido `AGY_APP_INJECTION_SCRIPT` (`agy-ssd-v3`) y detección de páginas `http://127.0.0.1:*` / `https://127.0.0.1:*` en `watcher()` para inyectar controles semáforo en `[data-testid="title-menu-bar"]` enlazados a `window.electronNative`.
+* **Pendiente:** aunque la inyección responde por CDP (`Page.captureScreenshot` en vivo), en la sesión gráfica del usuario la ventana de **Antigravity** (standalone) sigue sin mostrar el semáforo correctamente y el ajuste visual en dicha aplicación queda pendiente para una revisión posterior.
+
+### 3. Validación
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-compositor`: **73 passed; 0 failed** (`close_button_offset_matches_ssd_and_csd_window_families`, `peak_horizon_radius_matches_close_button_across_scales`, `timeline_ignition_suction_and_collapse_phases`).
+* `cargo build --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --release -p malus-de-compositor`: compilación correcta (`exit 0`).
+* `python3 -m py_compile /home/cristian/Proyectos/malus-de/scripts/malus-ide-wrapper`: sintaxis válida (`exit 0`).
+
+---
+
 ## [2026-11-17] — Miniaturas de Imágenes con Recorte Squircle en Branches
 
 ### 1. Decodificación Asíncrona, Caché HiDPI y Recorte Squircle (`crates/branches`)
