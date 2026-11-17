@@ -177,6 +177,12 @@ pub enum IpcMessage {
         #[serde(default)]
         insert_at_dock_x: Option<i32>,
     },
+    /// Solicitud de crear un enlace directo de aplicación en el escritorio (arrastrando desde Spotlight)
+    CreateDesktopAppShortcut {
+        desktop_file: String,
+        drop_x: f64,
+        drop_y: f64,
+    },
     /// Solicitud de desanclar una aplicación del Dock
     UnpinAppFromDock {
         name: String,

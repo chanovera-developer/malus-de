@@ -1313,6 +1313,60 @@ impl MalusState {
         }
     }
 
+    pub fn handle_spotlight_pointer_release(
+        &self,
+        spot_output_geo: Rectangle<i32, Logical>,
+        outcome: crate::spotlight_visual::SpotlightPointerReleaseOutcome,
+    ) {
+        match outcome {
+            crate::spotlight_visual::SpotlightPointerReleaseOutcome::PinToDock {
+                app,
+                insert_at_dock_x,
+            } => {
+                tracing::info!(
+                    "📌 Aplicación arrastrada desde Spotlight al Dock: '{}' (dock_x={:?})",
+                    app.name,
+                    insert_at_dock_x
+                );
+                self.ipc_broadcaster.broadcast(&IpcMessage::PinAppToDock {
+                    name: app.name,
+                    icon: app.icon,
+                    command: app.command,
+                    matchers: app.matchers,
+                    insert_at_dock_x,
+                });
+            }
+            crate::spotlight_visual::SpotlightPointerReleaseOutcome::CreateDesktopShortcut {
+                app,
+                drop_loc,
+            } => {
+                if app.desktop_file.trim().is_empty()
+                    || self.space.element_under(drop_loc).is_some()
+                {
+                    return;
+                }
+                let local_x = drop_loc.x - spot_output_geo.loc.x as f64;
+                let local_y = drop_loc.y - spot_output_geo.loc.y as f64;
+                if local_y < 36.0 {
+                    return;
+                }
+                tracing::info!(
+                    "🔗 Acceso directo creado en escritorio desde Spotlight: '{}' ({:.1}, {:.1})",
+                    app.name,
+                    local_x,
+                    local_y
+                );
+                self.ipc_broadcaster
+                    .broadcast(&IpcMessage::CreateDesktopAppShortcut {
+                        desktop_file: app.desktop_file,
+                        drop_x: local_x,
+                        drop_y: local_y,
+                    });
+            }
+            crate::spotlight_visual::SpotlightPointerReleaseOutcome::Consumed => {}
+        }
+    }
+
     pub fn notify_running_apps(&self) {
         let mut apps = Vec::new();
         for window in self.space.elements() {

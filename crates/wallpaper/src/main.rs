@@ -642,6 +642,23 @@ fn path_from_user_dir_value(value: &str, home: &Path) -> PathBuf {
 }
 
 fn launch_file(file: &gio::File) {
+    if let Some(path) = file.path() {
+        if path.extension().and_then(|s| s.to_str()) == Some("desktop") {
+            if malus_de_common::apps::spawn_desktop_entry_path(&path).is_ok() {
+                return;
+            }
+            if let Some(app_info) = gio::DesktopAppInfo::from_filename(&path) {
+                if app_info
+                    .launch(&[], None::<&gio::AppLaunchContext>)
+                    .is_ok()
+                {
+                    return;
+                }
+            }
+            warn!("No se pudo iniciar la aplicación {:?} en el escritorio", path);
+            return;
+        }
+    }
     let target = file
         .path()
         .map(|p| p.to_string_lossy().into_owned())
@@ -1298,7 +1315,36 @@ fn remove_desktop_icon_widget(fixed: &Fixed, path: &Path) -> bool {
     removed
 }
 
+fn resolve_desktop_app_gicon(icon: &str) -> gio::Icon {
+    let trimmed = icon.trim().trim_matches('"').trim_matches('\'');
+    if trimmed.is_empty() {
+        return gio::ThemedIcon::new("application-x-executable").upcast();
+    }
+    let path = Path::new(trimmed);
+    if path.is_absolute() && path.is_file() {
+        return gio::FileIcon::new(&gio::File::for_path(path)).upcast();
+    }
+    if !trimmed.ends_with("-symbolic") {
+        if let Some(resolved_path) = malus_de_common::apps::resolve_icon_file_path(trimmed) {
+            return gio::FileIcon::new(&gio::File::for_path(&resolved_path)).upcast();
+        }
+    }
+    gio::ThemedIcon::from_names(&[trimmed, "application-x-executable"]).upcast()
+}
+
 fn build_desktop_item_data(path: &Path) -> Option<DesktopItemData> {
+    if path.extension().and_then(|s| s.to_str()) == Some("desktop") {
+        if let Some(entry) = malus_de_common::apps::parse_desktop_file_any(path) {
+            return Some(DesktopItemData {
+                path: path.to_path_buf(),
+                display_name: entry.name,
+                icon: Some(resolve_desktop_app_gicon(&entry.icon)),
+                content_type: Some("application/x-desktop".to_string()),
+                category: StackCategory::categorize(path, Some("application/x-desktop")),
+            });
+        }
+    }
+
     let file = gio::File::for_path(path);
     let file_info = file.query_info(
         "standard::display-name,standard::icon,standard::content-type",
@@ -2250,6 +2296,8 @@ enum DesktopDragMode {
     },
 }
 
+type DesktopShortcutHandler = Rc<RefCell<Option<Rc<dyn Fn(String, f64, f64)>>>>;
+
 fn create_wallpaper_window(
     application: &Application,
     monitor: Option<&gtk4::gdk::Monitor>,
@@ -2259,6 +2307,7 @@ fn create_wallpaper_window(
     icon_positions: &Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
     internal_drag_paths: &Rc<RefCell<HashSet<PathBuf>>>,
     active_icon_drag: &Rc<RefCell<Option<(PathBuf, (f64, f64), (f64, f64))>>>,
+    shortcut_handler: &DesktopShortcutHandler,
     is_primary: bool,
 ) {
     let window = ApplicationWindow::builder()
@@ -3032,12 +3081,42 @@ fn create_wallpaper_window(
                     position = snap_position_to_grid(position, &metrics, align_left, desktop_size, top_margin);
                 }
 
-                match source.move_(
-                    &destination,
-                    gio::FileCopyFlags::NONE,
-                    gio::Cancellable::NONE,
-                    None,
-                ) {
+                let is_app_shortcut = source
+                    .path()
+                    .as_deref()
+                    .is_some_and(malus_de_common::apps::is_application_desktop_file);
+
+                let transfer_result: Result<(), String> = if is_app_shortcut {
+                    if let (Some(src_path), Some(dest_path)) = (source.path(), destination.path()) {
+                        if dest_path.symlink_metadata().is_ok() {
+                            if has_desktop_icon_widget(&drop_icons, &dest_path)
+                                && move_desktop_icon(&drop_icons, &dest_path, position)
+                            {
+                                drop_positions.borrow_mut().insert(dest_path.clone(), position);
+                                internal_paths_drop.borrow_mut().insert(dest_path);
+                                moved_any = true;
+                                continue;
+                            }
+                            Err("Ya existe un acceso directo con ese nombre en el escritorio".to_string())
+                        } else {
+                            std::os::unix::fs::symlink(&src_path, &dest_path)
+                                .map_err(|e| e.to_string())
+                        }
+                    } else {
+                        Err("Ruta inválida para el acceso directo de aplicación".to_string())
+                    }
+                } else {
+                    source
+                        .move_(
+                            &destination,
+                            gio::FileCopyFlags::NONE,
+                            gio::Cancellable::NONE,
+                            None,
+                        )
+                        .map_err(|e| e.to_string())
+                };
+
+                match transfer_result {
                     Ok(()) => {
                         if let Some(path) = destination.path() {
                             drop_positions.borrow_mut().insert(path.clone(), position);
@@ -3098,6 +3177,109 @@ fn create_wallpaper_window(
 
         overlay.add_controller(drop_target);
         overlay.add_overlay(&icons);
+
+        // Handler IPC para accesos directos arrastrados desde Spotlight al escritorio
+        {
+            let sc_dir = desktop_dir.to_path_buf();
+            let sc_positions = icon_positions.clone();
+            let sc_internal = internal_drag_paths.clone();
+            let sc_active_drag = active_icon_drag.clone();
+            let sc_icons = icons.clone();
+            let sc_cfg = current_config.clone();
+            let sc_rec = recently_dropped_paths.clone();
+            let sc_sel = selected_paths.clone();
+            let sc_foc = focused_path.clone();
+            *shortcut_handler.borrow_mut() = Some(Rc::new(move |desktop_file, drop_x, drop_y| {
+                let src_path = PathBuf::from(&desktop_file);
+                let Some(name) = src_path.file_name() else {
+                    return;
+                };
+                let dest_path = sc_dir.join(name);
+                let cfg_snapshot = sc_cfg.borrow().clone();
+                let metrics = IconLayoutMetrics::from_config(&cfg_snapshot);
+                let rows = ((desktop_size.1 - (top_margin as i32) - 80).max(1)
+                    / metrics.cell_height())
+                .max(1) as usize;
+                let pointer_offset = (
+                    f64::from(metrics.box_width) / 2.0,
+                    f64::from(metrics.icon_size) / 2.0,
+                );
+                let mut position = clamp_icon_position(
+                    drop_x,
+                    drop_y,
+                    pointer_offset,
+                    &metrics,
+                    desktop_size,
+                    top_margin,
+                );
+                if cfg_snapshot.snap_to_grid {
+                    position = snap_position_to_grid(
+                        position,
+                        &metrics,
+                        cfg_snapshot.align_left,
+                        desktop_size,
+                        top_margin,
+                    );
+                }
+
+                if dest_path.symlink_metadata().is_ok() {
+                    if has_desktop_icon_widget(&sc_icons, &dest_path)
+                        && move_desktop_icon(&sc_icons, &dest_path, position)
+                    {
+                        sc_positions.borrow_mut().insert(dest_path.clone(), position);
+                        sc_internal.borrow_mut().insert(dest_path);
+                        save_icon_positions(&sc_positions.borrow());
+                    }
+                    return;
+                }
+
+                if let Err(err) = std::os::unix::fs::symlink(&src_path, &dest_path) {
+                    warn!(
+                        "No se pudo crear acceso directo en el escritorio {:?} -> {:?}: {}",
+                        dest_path, src_path, err
+                    );
+                    return;
+                }
+
+                sc_positions.borrow_mut().insert(dest_path.clone(), position);
+                sc_internal.borrow_mut().insert(dest_path.clone());
+                sc_rec.borrow_mut().insert(dest_path.clone());
+
+                if !cfg_snapshot.use_stacks {
+                    let mut sibling = sc_icons.first_child();
+                    while let Some(child) = sibling {
+                        sibling = child.next_sibling();
+                        set_desktop_icon_selected(&child, false);
+                    }
+                    sc_sel.borrow_mut().clear();
+                    sc_sel.borrow_mut().insert(dest_path.clone());
+                    *sc_foc.borrow_mut() = Some(dest_path.clone());
+                    if !has_desktop_icon_widget(&sc_icons, &dest_path) {
+                        if let Some(item_data) = build_desktop_item_data(&dest_path) {
+                            let mut pos_map = sc_positions.borrow_mut();
+                            render_single_icon(
+                                &sc_icons,
+                                0,
+                                rows,
+                                item_data,
+                                &metrics,
+                                &cfg_snapshot,
+                                desktop_size,
+                                &mut pos_map,
+                                &sc_positions,
+                                &sc_internal,
+                                &sc_active_drag,
+                                &sc_sel,
+                                &sc_foc,
+                                &sc_rec,
+                                top_margin,
+                            );
+                        }
+                    }
+                }
+                save_icon_positions(&sc_positions.borrow());
+            }));
+        }
 
         // Monitor en tiempo real para reflejar cambios en la carpeta ~/Escritorio
         let desktop_file = gio::File::for_path(desktop_dir);
@@ -3256,18 +3438,33 @@ fn main() -> Result<()> {
     let icon_positions = Rc::new(RefCell::new(load_icon_positions()));
     let internal_drag_paths = Rc::new(RefCell::new(HashSet::new()));
     let active_icon_drag = Rc::new(RefCell::new(None));
+    let shortcut_handler: DesktopShortcutHandler = Rc::new(RefCell::new(None));
+    let shortcut_handler_ipc = shortcut_handler.clone();
 
-    app.connect_startup(|_| {
+    app.connect_startup(move |_| {
         let initial_dark = malus_de_common::config::is_dark_mode_active();
         set_is_dark_mode(initial_dark);
 
-        // 1. Escuchar mensajes IPC del compositor (ThemeChanged entre procesos en tiempo real)
+        // 1. Escuchar mensajes IPC del compositor (ThemeChanged y accesos directos de Spotlight)
         let (tx, rx) = async_channel::unbounded::<malus_de_common::ipc::IpcMessage>();
+        let shortcut_handler_rx = shortcut_handler_ipc.clone();
         glib::spawn_future_local(async move {
             while let Ok(msg) = rx.recv().await {
-                if let malus_de_common::ipc::IpcMessage::ThemeChanged { is_dark, .. } = msg {
-                    info!("🎨 [Wallpaper] IPC ThemeChanged recibido: is_dark={}", is_dark);
-                    set_is_dark_mode(is_dark);
+                match msg {
+                    malus_de_common::ipc::IpcMessage::ThemeChanged { is_dark, .. } => {
+                        info!("🎨 [Wallpaper] IPC ThemeChanged recibido: is_dark={}", is_dark);
+                        set_is_dark_mode(is_dark);
+                    }
+                    malus_de_common::ipc::IpcMessage::CreateDesktopAppShortcut {
+                        desktop_file,
+                        drop_x,
+                        drop_y,
+                    } => {
+                        if let Some(ref handler) = *shortcut_handler_rx.borrow() {
+                            handler(desktop_file, drop_x, drop_y);
+                        }
+                    }
+                    _ => {}
                 }
             }
         });
@@ -3420,6 +3617,7 @@ fn main() -> Result<()> {
                     &icon_positions,
                     &internal_drag_paths,
                     &active_icon_drag,
+                    &shortcut_handler,
                     is_primary,
                 );
                 created += 1;
@@ -3436,6 +3634,7 @@ fn main() -> Result<()> {
                 &icon_positions,
                 &internal_drag_paths,
                 &active_icon_drag,
+                &shortcut_handler,
                 true,
             );
         }

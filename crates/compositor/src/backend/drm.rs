@@ -2216,23 +2216,7 @@ pub fn run_drm() -> Result<()> {
                                     )
                                 {
                                     state.update_spotlight_drag_dock_hover(point);
-                                    if let crate::spotlight_visual::SpotlightPointerReleaseOutcome::PinToDock {
-                                        app,
-                                        insert_at_dock_x,
-                                    } = outcome
-                                    {
-                                        info!(
-                                            "📌 Aplicación arrastrada desde Spotlight al Dock: '{}' (dock_x={:?})",
-                                            app.name, insert_at_dock_x
-                                        );
-                                        state.ipc_broadcaster.broadcast(&IpcMessage::PinAppToDock {
-                                            name: app.name,
-                                            icon: app.icon,
-                                            command: app.command,
-                                            matchers: app.matchers,
-                                            insert_at_dock_x,
-                                        });
-                                    }
+                                    state.handle_spotlight_pointer_release(spot_output_geo, outcome);
                                     return;
                                 }
                             }
