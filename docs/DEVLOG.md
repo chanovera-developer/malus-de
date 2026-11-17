@@ -4,6 +4,25 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-17] — Discos Externos y Volúmenes en Ubicaciones de Branches
+
+### 1. Detección en Tiempo Real con `gio::VolumeMonitor` (`crates/branches`)
+* **Causa:** la sección "Ubicaciones" de [`sidebar.rs`](../crates/branches/src/sidebar.rs) solo tenía entradas fijas (Inicio, `/`, `/mnt`, Papelera) y ninguna lógica de montajes; la sesión únicamente activa `automount` de GNOME, sin `udiskie`.
+* **Implementación:** `SidebarInner` incorpora `devices_anchor`, `device_rows`, `volume_monitor` y `signal_ids`. `rebuild_devices()` inserta las filas tras "Papelera" y se reconstruye (vía `idle_add_local_once`) con las señales `mount-added/removed/changed`, `volume-added/removed/changed` y `drive-connected/disconnected`; las señales se desconectan en `Drop`.
+* **Filtrado:** `is_system_mount_path` / `is_external_mount_path` excluyen `/`, `/boot`, `/boot/efi`, `/home`, `/var`, `/run/*` (salvo `/run/media`), etc. Se listan montajes en `/run/media` y `/media` o de unidades extraíbles, volúmenes extraíbles sin montar y, como respaldo, el contenido de `/run/media/$USER` y `/media`.
+
+### 2. Interacción
+* Clic en disco montado: navega a su raíz; admite soltar archivos.
+* Clic en volumen sin montar (fila atenuada): lo monta con `gtk4::MountOperation` (contraseñas/polkit) y navega al montaje.
+* Botón **Expulsar** (`media-eject-symbolic`, estilo `.branches-sidebar-eject-btn` en [`macos-branches.css`](../crates/branches/src/styles/macos-branches.css)) con `eject_with_operation` o `unmount_with_operation`, sin disparar la navegación de la fila.
+* **Limitaciones:** no se monta automáticamente al conectar; al expulsar el disco que se está viendo no se redirige a otra carpeta. No probado con hardware físico.
+
+### 3. Validación
+* `cargo test -p malus-de-branches`: **28 passed; 0 failed** (incluye `device_path_tests`).
+* `cargo build --release -p malus-de-branches`: correcto, sin advertencias.
+
+---
+
 ## [2026-11-17] — Ajuste de Tamaño/Origen del Agujero Negro y Semáforo en Antigravity (Pendiente)
 
 ### 1. Proporción y Origen del Efecto Agujero Negro al Cerrar (`crates/compositor`)
