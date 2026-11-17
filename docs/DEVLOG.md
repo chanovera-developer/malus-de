@@ -4,6 +4,21 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-16] — Fondo de Pantalla Predeterminado «Playa de Pacasmayo» (Pexels)
+
+### 1. Empaquetado del Recurso, Licencia e Inicialización Automática (`assets/wallpapers`, `crates/common`, `crates/wallpaper`, `crates/settings`, `scripts`)
+* **Recurso y atribución bajo Pexels License ([`pexels-jbarbozameca-41027443.webp`](../assets/wallpapers/pexels-jbarbozameca-41027443.webp), [`Pexels-LICENSE`](../assets/wallpapers/Pexels-LICENSE), [`README.md`](../README.md)):**
+  * Integrada la fotografía panorámica [*"Vista panorámica del muelle y la playa de Pacasmayo"*](https://www.pexels.com/es-es/foto/vista-panoramica-del-muelle-y-la-playa-de-pacasmayo-41027443/) de **J. Barboza Meca (`@jbarbozameca`)** junto con su archivo de licencia y créditos en [`README.md`](../README.md).
+* **Inicialización y respaldo en sesión ([`config.rs`](../crates/common/src/config.rs), [`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs), [`settings/src/main.rs`](../crates/settings/src/main.rs), [`install-session.sh`](../scripts/install-session.sh)):**
+  * Añadidos `DEFAULT_WALLPAPER_FILENAME`, `default_bundled_wallpaper_path()` y `ensure_default_wallpaper()` en `malus-de-common` para inicializar `wallpaper.webp` en `~/.config/malus-de/` cuando no existe un fondo configurado ni el marcador `.wallpaper-gradient`.
+  * `malus-de-wallpaper` y `malus-de-settings` usan `default_bundled_wallpaper_path()` como fondo predeterminado, listando **"Playa de Pacasmayo (Predeterminado)"** como primera opción en Preferencias del Sistema y copiando `assets/wallpapers/*` a `/usr/local/share/malus-de/wallpapers/` en [`install-session.sh`](../scripts/install-session.sh).
+
+### 2. Validación
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-common`: **51 passed; 0 failed** (`default_bundled_wallpaper_exists_and_seeds_new_config_dir`).
+* `cargo check --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-wallpaper -p malus-de-settings`: compilación sin errores (`exit 0`).
+
+---
+
 ## [2026-11-16] — Alineación Concéntrica de Glifos en los Semáforos CSD
 
 ### 1. Centrado Exacto de Glifos en GTK4, GTK3, Firefox y Electron (`crates/common`, `assets`, `scripts`)

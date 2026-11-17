@@ -104,6 +104,14 @@ cp -f "$PROJECT_DIR/assets/dock/macos-popover.svg" \
     /usr/local/share/malus-de/dock/macos-popover.svg
 chmod 644 /usr/local/share/malus-de/dock/macos-popover.svg
 
+# Instalar el fondo de pantalla predeterminado y su licencia
+if [ -d "$PROJECT_DIR/assets/wallpapers" ]; then
+    echo "Instalando fondo de pantalla predeterminado en /usr/local/share/malus-de/wallpapers..."
+    mkdir -p /usr/local/share/malus-de/wallpapers
+    cp -rf "$PROJECT_DIR/assets/wallpapers/"* /usr/local/share/malus-de/wallpapers/
+    chmod -R 644 /usr/local/share/malus-de/wallpapers/*
+fi
+
 # Instalar los temas declarativos compartidos por los componentes de Malus DE
 mkdir -p /usr/local/share/malus-de/themes
 cp -R "$PROJECT_DIR/assets/themes/." /usr/local/share/malus-de/themes/

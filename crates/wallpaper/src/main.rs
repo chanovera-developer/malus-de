@@ -3186,7 +3186,13 @@ fn main() -> Result<()> {
                 config_dir.join("wallpaper.webp"),
                 config_dir.join("wallpaper.svg"),
             ];
-            candidates.into_iter().find(|p| p.exists())
+            candidates.into_iter().find(|p| p.exists()).or_else(|| {
+                if config_dir.join(".wallpaper-gradient").exists() {
+                    None
+                } else {
+                    malus_de_common::config::default_bundled_wallpaper_path()
+                }
+            })
         });
 
         if let Some(desktop_dir) = &desktop_dir {
