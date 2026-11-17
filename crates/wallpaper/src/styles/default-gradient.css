@@ -100,6 +100,22 @@ label.desktop-icon-label {
     border-radius: 4px;
 }
 
+text.desktop-inline-rename-entry,
+entry.desktop-inline-rename-entry {
+    min-height: 0px;
+    min-width: 0px;
+    padding: 1px 4px;
+    margin: 0px;
+    border-radius: 4px;
+    background-color: rgba(24, 26, 32, 0.92);
+    color: #ffffff;
+    border: none;
+    box-shadow: inset 0 0 0 1.5px #007aff;
+    outline: none;
+    font-size: 12px;
+    font-weight: 500;
+}
+
 .desktop-stack-badge {
     background: rgba(20, 24, 33, 0.88);
     color: #ffffff;

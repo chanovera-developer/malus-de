@@ -800,91 +800,395 @@ fn get_unique_folder_name(dir: &Path, base_name: &str) -> PathBuf {
     }
 }
 
-fn build_new_folder_view(
-    popover: &Popover,
-    stack: &Stack,
-    desktop_dir: PathBuf,
-    click_pos_cell: Rc<Cell<(f64, f64)>>,
-    icon_positions: Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
-    trigger_refresh: Rc<dyn Fn()>,
-) -> (GtkBox, Entry) {
-    let container = GtkBox::new(Orientation::Vertical, 8);
-    container.set_margin_top(10);
-    container.set_margin_bottom(10);
-    container.set_margin_start(10);
-    container.set_margin_end(10);
-    container.add_css_class("desktop-context-menu");
-
-    let title_lbl = Label::builder()
-        .label("Nueva Carpeta")
-        .halign(Align::Start)
-        .css_classes(["card-section-title"])
-        .build();
-    container.append(&title_lbl);
-
-    let default_path = get_unique_folder_name(&desktop_dir, "Nueva carpeta");
-    let default_str = default_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("Nueva carpeta");
-
-    let entry = Entry::builder()
-        .text(default_str)
-        .hexpand(true)
-        .build();
-    container.append(&entry);
-
-    let btn_box = GtkBox::new(Orientation::Horizontal, 6);
-    btn_box.set_halign(Align::End);
-
-    let cancel_btn = Button::with_label("Cancelar");
-    cancel_btn.add_css_class("desktop-context-btn");
-    let stack_back = stack.clone();
-    cancel_btn.connect_clicked(move |_| {
-        stack_back.set_visible_child_name("main");
-    });
-    btn_box.append(&cancel_btn);
-
-    let save_btn = Button::with_label("Crear");
-    save_btn.add_css_class("desktop-context-btn");
-    save_btn.add_css_class("suggested-action");
-
-    let popover_save = popover.clone();
-    let entry_save = entry.clone();
-    let desktop_dir_save = desktop_dir.clone();
-    let icon_positions_save = icon_positions.clone();
-    let trigger_save = trigger_refresh.clone();
-    let click_pos_save = click_pos_cell.clone();
-
-    let create_action = move || {
-        let new_name = entry_save.text().trim().to_string();
-        if !new_name.is_empty() {
-            let dest = desktop_dir_save.join(&new_name);
-            if let Err(err) = fs::create_dir_all(&dest) {
-                warn!("No se pudo crear carpeta {:?}: {}", dest, err);
-            } else {
-                icon_positions_save.borrow_mut().insert(dest, click_pos_save.get());
-                save_icon_positions(&icon_positions_save.borrow());
-                trigger_save();
-            }
+fn get_unique_text_document_name(dir: &Path, base_stem: &str) -> PathBuf {
+    let candidate = dir.join(format!("{}.txt", base_stem));
+    if !candidate.exists() {
+        return candidate;
+    }
+    let mut i = 2;
+    loop {
+        let candidate = dir.join(format!("{} {}.txt", base_stem, i));
+        if !candidate.exists() {
+            return candidate;
         }
-        popover_save.popdown();
+        i += 1;
+    }
+}
+
+fn desktop_rename_selection_end(file_name: &str, is_dir: bool) -> i32 {
+    if is_dir {
+        return -1;
+    }
+    match file_name.rfind('.') {
+        Some(pos) if pos > 0 => file_name[..pos].chars().count() as i32,
+        _ => -1,
+    }
+}
+
+fn find_desktop_icon_widget(fixed: &Fixed, path: &Path) -> Option<gtk4::Widget> {
+    let expected = path.to_string_lossy();
+    let mut child = fixed.first_child();
+    while let Some(item) = child {
+        child = item.next_sibling();
+        if item.has_css_class("desktop-rubberband") {
+            continue;
+        }
+        if item
+            .property::<Option<String>>("tooltip-text")
+            .as_deref()
+            == Some(expected.as_ref())
+        {
+            return Some(item);
+        }
+    }
+    None
+}
+
+fn show_desktop_inline_rename(
+    item_widget: &gtk4::Widget,
+    old_path: PathBuf,
+    is_dir: bool,
+    icon_positions: Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
+    selected_paths: Rc<RefCell<HashSet<PathBuf>>>,
+    focused_path: Rc<RefCell<Option<PathBuf>>>,
+    trigger_refresh: Rc<dyn Fn()>,
+) {
+    let Some(label) = get_icon_label(item_widget) else {
+        return;
+    };
+    if !label.is_visible() {
+        return;
+    }
+    let Some(parent_box) = label.parent().and_then(|p| p.downcast::<GtkBox>().ok()) else {
+        return;
+    };
+    let Some(initial_name) = old_path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+        return;
+    };
+    if initial_name.is_empty() {
+        return;
+    }
+
+    let label_w = label.width().max(68);
+    let label_h = label.height().max(18);
+    let entry = gtk4::Text::builder()
+        .text(&initial_name)
+        .width_chars(1)
+        .max_width_chars(1)
+        .xalign(0.5)
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .css_classes(["desktop-inline-rename-entry"])
+        .build();
+    entry.set_size_request(label_w, label_h);
+
+    label.set_visible(false);
+    parent_box.insert_child_after(&entry, Some(&label));
+
+    let finished = Rc::new(Cell::new(false));
+    let finish_edit: Rc<dyn Fn(bool)> = {
+        let finished = finished.clone();
+        let entry_ref = entry.clone();
+        let label_ref = label.clone();
+        let parent_ref = parent_box.clone();
+        let old_p = old_path.clone();
+        let initial = initial_name.clone();
+        let positions_ref = icon_positions;
+        let sel_ref = selected_paths;
+        let foc_ref = focused_path;
+        let trig_ref = trigger_refresh;
+        Rc::new(move |commit: bool| {
+            if finished.replace(true) {
+                return;
+            }
+            let candidate = entry_ref.text().to_string();
+            let trimmed = candidate.trim().to_string();
+
+            if entry_ref.parent().is_some() {
+                parent_ref.remove(&entry_ref);
+            }
+            label_ref.set_visible(true);
+            if let Some(icon_root) = label_ref.ancestor(GtkBox::static_type()) {
+                icon_root.grab_focus();
+            }
+
+            if !commit || trimmed.is_empty() || trimmed == initial || trimmed.contains('/') {
+                return;
+            }
+
+            let Some(parent_dir) = old_p.parent() else {
+                return;
+            };
+            let dest = parent_dir.join(&trimmed);
+            if dest.exists() {
+                return;
+            }
+            if let Err(err) = fs::rename(&old_p, &dest) {
+                warn!("No se pudo renombrar {:?} a {:?}: {}", old_p, dest, err);
+                return;
+            }
+
+            {
+                let mut pos_map = positions_ref.borrow_mut();
+                if let Some(pos) = pos_map.remove(&old_p) {
+                    pos_map.insert(dest.clone(), pos);
+                    save_icon_positions(&pos_map);
+                }
+            }
+            {
+                let mut sel = sel_ref.borrow_mut();
+                if sel.remove(&old_p) || sel.is_empty() {
+                    sel.insert(dest.clone());
+                }
+            }
+            *foc_ref.borrow_mut() = Some(dest);
+            trig_ref();
+        })
     };
 
-    let create_action_rc = Rc::new(create_action);
-    let create_for_btn = create_action_rc.clone();
-    save_btn.connect_clicked(move |_| {
-        create_for_btn();
-    });
-    btn_box.append(&save_btn);
-    container.append(&btn_box);
+    {
+        let finish = finish_edit.clone();
+        entry.connect_activate(move |_| {
+            finish(true);
+        });
+    }
 
-    let create_for_entry = create_action_rc.clone();
-    entry.connect_activate(move |_| {
-        create_for_entry();
-    });
+    {
+        let key_ctrl = EventControllerKey::new();
+        let finish = finish_edit.clone();
+        key_ctrl.connect_key_pressed(move |_, key, _, _| {
+            if key == Key::Escape {
+                finish(false);
+                return glib::Propagation::Stop;
+            }
+            if matches!(key, Key::Return | Key::KP_Enter | Key::ISO_Enter) {
+                finish(true);
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        entry.add_controller(key_ctrl);
+    }
 
-    (container, entry)
+    {
+        let focus_ctrl = gtk4::EventControllerFocus::new();
+        let finish = finish_edit;
+        focus_ctrl.connect_leave(move |_| {
+            let f = finish.clone();
+            glib::idle_add_local_once(move || {
+                f(true);
+            });
+        });
+        entry.add_controller(focus_ctrl);
+    }
+
+    let entry_focus = entry;
+    let sel_end = desktop_rename_selection_end(&initial_name, is_dir);
+    glib::idle_add_local_once(move || {
+        entry_focus.grab_focus();
+        entry_focus.select_region(0, sel_end);
+    });
+}
+
+fn schedule_desktop_inline_rename(
+    fixed: Fixed,
+    target_path: PathBuf,
+    is_dir: bool,
+    icon_positions: Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
+    selected_paths: Rc<RefCell<HashSet<PathBuf>>>,
+    focused_path: Rc<RefCell<Option<PathBuf>>>,
+    trigger_refresh: Rc<dyn Fn()>,
+) {
+    let mut attempts = 0u8;
+    glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
+        attempts = attempts.saturating_add(1);
+        if let Some(widget) = find_desktop_icon_widget(&fixed, &target_path) {
+            let ready = widget.root().is_some()
+                && get_icon_label(&widget)
+                    .is_some_and(|lbl| lbl.is_visible() && lbl.width() > 0 && lbl.height() > 0);
+            if ready || attempts >= 12 {
+                show_desktop_inline_rename(
+                    &widget,
+                    target_path.clone(),
+                    is_dir,
+                    icon_positions.clone(),
+                    selected_paths.clone(),
+                    focused_path.clone(),
+                    trigger_refresh.clone(),
+                );
+                return glib::ControlFlow::Break;
+            }
+        } else if attempts >= 12 {
+            return glib::ControlFlow::Break;
+        }
+        glib::ControlFlow::Continue
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn create_desktop_item_and_edit(
+    fixed: &Fixed,
+    desktop_dir: &Path,
+    desktop_size: (i32, i32),
+    config: &Rc<RefCell<DesktopIconsConfig>>,
+    icon_positions: &Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
+    selected_paths: &Rc<RefCell<HashSet<PathBuf>>>,
+    focused_path: &Rc<RefCell<Option<PathBuf>>>,
+    trigger_refresh: &Rc<dyn Fn()>,
+    click_pos: (f64, f64),
+    top_margin: f64,
+    is_dir: bool,
+) {
+    let target_path = if is_dir {
+        get_unique_folder_name(desktop_dir, "Nueva carpeta")
+    } else {
+        get_unique_text_document_name(desktop_dir, "Nuevo documento")
+    };
+
+    let create_result = if is_dir {
+        fs::create_dir_all(&target_path)
+    } else {
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&target_path)
+            .map(|_| ())
+    };
+
+    if let Err(err) = create_result {
+        warn!("No se pudo crear {:?}: {}", target_path, err);
+        return;
+    }
+
+    let cfg = config.borrow().clone();
+    let metrics = IconLayoutMetrics::from_config(&cfg);
+    let mut pos = clamp_icon_position(
+        click_pos.0,
+        click_pos.1,
+        (f64::from(metrics.box_width) / 2.0, f64::from(metrics.box_height) / 2.0),
+        &metrics,
+        desktop_size,
+        top_margin,
+    );
+    if cfg.snap_to_grid {
+        pos = snap_position_to_grid(pos, &metrics, cfg.align_left, desktop_size, top_margin);
+    }
+
+    {
+        let mut pos_map = icon_positions.borrow_mut();
+        pos_map.insert(target_path.clone(), pos);
+        save_icon_positions(&pos_map);
+    }
+    {
+        let mut sel = selected_paths.borrow_mut();
+        sel.clear();
+        sel.insert(target_path.clone());
+    }
+    *focused_path.borrow_mut() = Some(target_path.clone());
+    trigger_refresh();
+
+    schedule_desktop_inline_rename(
+        fixed.clone(),
+        target_path,
+        is_dir,
+        icon_positions.clone(),
+        selected_paths.clone(),
+        focused_path.clone(),
+        trigger_refresh.clone(),
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_create_new_submenu(
+    popover: &Popover,
+    stack: &Stack,
+    fixed: &Fixed,
+    desktop_dir: PathBuf,
+    desktop_size: (i32, i32),
+    config: Rc<RefCell<DesktopIconsConfig>>,
+    icon_positions: Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
+    selected_paths: Rc<RefCell<HashSet<PathBuf>>>,
+    focused_path: Rc<RefCell<Option<PathBuf>>>,
+    trigger_refresh: Rc<dyn Fn()>,
+    click_pos: (f64, f64),
+    top_margin: f64,
+) -> GtkBox {
+    let container = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .css_classes(["desktop-context-menu"])
+        .build();
+
+    let back_btn = create_menu_button("← Volver", false);
+    let stack_back = stack.clone();
+    back_btn.connect_clicked(move |_| {
+        stack_back.set_visible_child_name("main");
+    });
+    container.append(&back_btn);
+
+    let sep = GtkBox::new(Orientation::Horizontal, 0);
+    sep.add_css_class("desktop-context-separator");
+    container.append(&sep);
+
+    let folder_btn = create_menu_button("Carpeta", false);
+    {
+        let p_c = popover.clone();
+        let f_c = fixed.clone();
+        let d_c = desktop_dir.clone();
+        let cfg_c = config.clone();
+        let pos_c = icon_positions.clone();
+        let sel_c = selected_paths.clone();
+        let foc_c = focused_path.clone();
+        let trig_c = trigger_refresh.clone();
+        folder_btn.connect_clicked(move |_| {
+            p_c.popdown();
+            create_desktop_item_and_edit(
+                &f_c,
+                &d_c,
+                desktop_size,
+                &cfg_c,
+                &pos_c,
+                &sel_c,
+                &foc_c,
+                &trig_c,
+                click_pos,
+                top_margin,
+                true,
+            );
+        });
+    }
+    container.append(&folder_btn);
+
+    let doc_btn = create_menu_button("Documento de texto", false);
+    {
+        let p_c = popover.clone();
+        let f_c = fixed.clone();
+        let d_c = desktop_dir;
+        let cfg_c = config;
+        let pos_c = icon_positions;
+        let sel_c = selected_paths;
+        let foc_c = focused_path;
+        let trig_c = trigger_refresh;
+        doc_btn.connect_clicked(move |_| {
+            p_c.popdown();
+            create_desktop_item_and_edit(
+                &f_c,
+                &d_c,
+                desktop_size,
+                &cfg_c,
+                &pos_c,
+                &sel_c,
+                &foc_c,
+                &trig_c,
+                click_pos,
+                top_margin,
+                false,
+            );
+        });
+    }
+    container.append(&doc_btn);
+
+    container
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2166,7 +2470,7 @@ fn render_single_icon(
             if cx < 0.0 || cy < 0.0 {
                 if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
                     let p = PathBuf::from(p_str);
-                    if !p.exists() {
+                    if p.symlink_metadata().is_err() {
                         fixed_drag_end.remove(&child);
                         icon_pos_drag_end.borrow_mut().remove(&p);
                         sel_drag_end.borrow_mut().remove(&p);
@@ -2201,7 +2505,7 @@ fn render_single_icon(
                     }
                     if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
                         let p = PathBuf::from(p_str);
-                        if !p.exists() {
+                        if p.symlink_metadata().is_err() {
                             fixed_check.remove(&child);
                             pos_check.borrow_mut().remove(&p);
                             sel_check.borrow_mut().remove(&p);
@@ -2434,9 +2738,15 @@ fn create_wallpaper_window(
         // Controladores de teclado en la ventana del escritorio:
         // Espacio -> Quick Look, Enter -> Abrir, Delete -> Papelera
         let key_controller = EventControllerKey::new();
+        let win_key = window.clone();
         let foc_path_key = focused_path.clone();
         let sel_paths_key = selected_paths.clone();
         key_controller.connect_key_pressed(move |_, keyval, _, _| {
+            if gtk4::prelude::GtkWindowExt::focus(&win_key)
+                .is_some_and(|w| w.is::<gtk4::Editable>() || w.is::<gtk4::Text>())
+            {
+                return glib::Propagation::Proceed;
+            }
             match keyval {
                 Key::space => {
                     if let Some(path) = foc_path_key.borrow().as_ref() {
@@ -2501,6 +2811,8 @@ fn create_wallpaper_window(
         let cfg_menu = current_config.clone();
         let trigger_refresh_menu = trigger_refresh.clone();
         let icon_pos_snap = icon_positions.clone();
+        let sel_paths_ctx = selected_paths.clone();
+        let foc_path_ctx = focused_path.clone();
         let rb_check_ctx = rubberband.clone();
 
         bg_context.connect_pressed(move |gesture, _, x, y| {
@@ -2526,15 +2838,19 @@ fn create_wallpaper_window(
                 .css_classes(["desktop-context-menu"])
                 .build();
 
-            let click_pos_cell = Rc::new(Cell::new((x, y)));
-
-            let (new_folder_box, new_folder_entry) = build_new_folder_view(
+            let create_new_box = build_create_new_submenu(
                 &popover,
                 &stack,
+                &icons_context,
                 desktop_dir_menu.clone(),
-                click_pos_cell.clone(),
+                desktop_size,
+                cfg_menu.clone(),
                 icon_pos_snap.clone(),
+                sel_paths_ctx.clone(),
+                foc_path_ctx.clone(),
                 trigger_refresh_menu.clone(),
+                (x, y),
+                top_margin,
             );
 
             let organize_box = build_organize_submenu(
@@ -2555,23 +2871,13 @@ fn create_wallpaper_window(
                 .css_classes(["desktop-context-menu"])
                 .build();
 
-            // 1. Nueva Carpeta
-            let new_folder_btn = create_menu_button("Nueva carpeta", false);
-            let stack_nf = stack.clone();
-            let entry_nf = new_folder_entry.clone();
-            let d_dir = desktop_dir_menu.clone();
-            new_folder_btn.connect_clicked(move |_| {
-                let default_path = get_unique_folder_name(&d_dir, "Nueva carpeta");
-                let default_str = default_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("Nueva carpeta");
-                entry_nf.set_text(default_str);
-                stack_nf.set_visible_child_name("new_folder");
-                entry_nf.grab_focus();
-                entry_nf.select_region(0, -1);
+            // 1. Crear nuevo ▸ (Carpeta / Documento de texto con edición inline inmediata)
+            let create_new_btn = create_menu_button("Crear nuevo ▸", false);
+            let stack_cn = stack.clone();
+            create_new_btn.connect_clicked(move |_| {
+                stack_cn.set_visible_child_name("create_new");
             });
-            menu.append(&new_folder_btn);
+            menu.append(&create_new_btn);
 
             let sep1 = GtkBox::new(Orientation::Horizontal, 0);
             sep1.add_css_class("desktop-context-separator");
@@ -2734,7 +3040,7 @@ fn create_wallpaper_window(
 
             stack.add_named(&menu, Some("main"));
             stack.add_named(&organize_box, Some("organize"));
-            stack.add_named(&new_folder_box, Some("new_folder"));
+            stack.add_named(&create_new_box, Some("create_new"));
             stack.set_visible_child_name("main");
 
             popover.set_child(Some(&stack));
@@ -3722,6 +4028,20 @@ mod tests {
 
         let f3 = super::get_unique_folder_name(&temp_dir, "Nueva carpeta");
         assert_eq!(f3, temp_dir.join("Nueva carpeta 3"));
+
+        let d1 = super::get_unique_text_document_name(&temp_dir, "Nuevo documento");
+        assert_eq!(d1, temp_dir.join("Nuevo documento.txt"));
+        std::fs::write(&d1, "").unwrap();
+
+        let d2 = super::get_unique_text_document_name(&temp_dir, "Nuevo documento");
+        assert_eq!(d2, temp_dir.join("Nuevo documento 2.txt"));
+
+        assert_eq!(super::desktop_rename_selection_end("Nueva carpeta", true), -1);
+        assert_eq!(
+            super::desktop_rename_selection_end("Nuevo documento.txt", false),
+            "Nuevo documento".chars().count() as i32
+        );
+        assert_eq!(super::desktop_rename_selection_end(".gitignore", false), -1);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
