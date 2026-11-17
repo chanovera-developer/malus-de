@@ -15,7 +15,7 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 * **Solución:** si la carpeta destino ya es una columna visible (índice > 0) y no hay selección pendiente, `set_root` conserva las columnas anteriores, descarta las posteriores, deselecciona la carpeta abierta y llama a `scroll_to_end`. Si todo cabe no se desplaza nada; si no cabe, el contenedor se desplaza a la izquierda con animación y el padre sale de vista. Resto de navegaciones (barra lateral, atrás/adelante, subir, refrescos) siguen reconstruyendo la vista.
 
 ### 3. Validación
-* `cargo test -p malus-de-branches`: **28 passed; 0 failed**. Comportamiento visual pendiente de confirmación del usuario en la sesión gráfica.
+* `cargo test -p malus-de-branches`: **28 passed; 0 failed**. Comportamiento visual confirmado por el usuario en la sesión gráfica.
 
 ---
 
@@ -51,7 +51,7 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 * Clic en disco montado: navega a su raíz; admite soltar archivos.
 * Clic en volumen sin montar (fila atenuada): lo monta con `gtk4::MountOperation` (contraseñas/polkit) y navega al montaje.
 * Botón **Expulsar** (`media-eject-symbolic`, estilo `.branches-sidebar-eject-btn` en [`macos-branches.css`](../crates/branches/src/styles/macos-branches.css)) con `eject_with_operation` o `unmount_with_operation`, sin disparar la navegación de la fila.
-* **Limitaciones:** no se monta automáticamente al conectar; al expulsar el disco que se está viendo no se redirige a otra carpeta. No probado con hardware físico.
+* **Limitaciones:** no se monta automáticamente al conectar; al expulsar el disco que se está viendo no se redirige a otra carpeta. Confirmado por el usuario en la sesión gráfica.
 
 ### 3. Validación
 * `cargo test -p malus-de-branches`: **28 passed; 0 failed** (incluye `device_path_tests`).
