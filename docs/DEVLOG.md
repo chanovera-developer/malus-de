@@ -4,6 +4,31 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-17] — Ejecución y Accesos Directos de Aplicaciones en Escritorio desde Branches y Spotlight
+
+### 1. Lanzamiento Robusto de Aplicaciones `.desktop` (`crates/common`, `crates/branches`, `crates/wallpaper`)
+* **Ejecución unificada ([`apps.rs`](../crates/common/src/apps.rs), [`fs_backend.rs`](../crates/branches/src/fs_backend.rs), [`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs)):**
+  * Centralizados `split_desktop_exec_args`, `read_desktop_launch_metadata`, `spawn_desktop_command`, `spawn_terminal_desktop_command` y `spawn_desktop_entry_path` en `malus-de-common` para soportar comillas/escapes, prefijos `env`/`KEY=VAL`, `Terminal=true`, `Path=`, wrappers `MALUS_IDE_BIN` y limpieza de marcadores Flatpak (`@@`, `@@u`, `%U`, etc.) en `clean_exec_line`.
+  * En [`icon_view.rs`](../crates/branches/src/views/icon_view.rs) y [`list_view.rs`](../crates/branches/src/views/list_view.rs), el doble clic (`n_press >= 2`) reclama la secuencia antes de llamar a `open_file(&path)` y `launch_desktop_file` usa `gio::DesktopAppInfo::from_filename` como respaldo (útil para apps `DBusActivatable=true` o Flatpak).
+  * En [`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs), `launch_file` ejecuta entradas `.desktop` directamente como aplicaciones y `build_desktop_item_data` resuelve su nombre localizado e icono real mediante `resolve_desktop_app_gicon`.
+
+### 2. Enlaces Simbólicos al Arrastrar desde «Aplicaciones» y «Spotlight» al Escritorio (`crates/common`, `crates/branches`, `crates/compositor`, `crates/wallpaper`)
+* **Desde Branches → Escritorio / carpetas ([`apps.rs`](../crates/common/src/apps.rs), [`operations.rs`](../crates/branches/src/operations.rs), [`icon_view.rs`](../crates/branches/src/views/icon_view.rs), [`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs)):**
+  * Añadido `is_application_desktop_file` en `malus-de-common`: al arrastrar aplicaciones desde la carpeta virtual **Aplicaciones** hacia el **Escritorio** (o carpetas en Branches), se crea un enlace simbólico `.desktop` en destino manteniendo el icono original visible en **Aplicaciones**.
+* **Desde Spotlight → Escritorio ([`ipc.rs`](../crates/common/src/ipc.rs), [`spotlight_visual.rs`](../crates/compositor/src/spotlight_visual.rs), [`state.rs`](../crates/compositor/src/state.rs), [`drm.rs`](../crates/compositor/src/backend/drm.rs), [`winit.rs`](../crates/compositor/src/backend/winit.rs), [`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs)):**
+  * Añadido `SpotlightPointerReleaseOutcome::CreateDesktopShortcut` al soltar una aplicación fuera de la tarjeta de Spotlight y fuera del Dock, validando en `MalusState::handle_spotlight_pointer_release` que el punto de suelta no esté cubierto por otra ventana (`element_under(drop_loc).is_none()`) ni en la franja superior (`local_y >= 36.0`) antes de emitir `IpcMessage::CreateDesktopAppShortcut`.
+  * El receptor IPC de `malus-de-wallpaper` crea el enlace simbólico en `~/Escritorio` en las coordenadas soltadas (respetando `snap_to_grid`) y dibuja el acceso directo de forma incremental.
+
+### 3. Validación
+* `cargo check --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --workspace`: compilación completa sin errores (`exit 0`).
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-compositor -p malus-de-wallpaper -p malus-de-branches`:
+  * `malus-de-branches`: **23 passed; 0 failed** (`split_desktop_exec_args_handles_quotes_and_escapes`, `read_desktop_launch_metadata_detects_terminal_and_path`).
+  * `malus-de-compositor`: **72 passed; 0 failed** (`spotlight_dragging_app_onto_dock_returns_pin_outcome` con cobertura de suelta en escritorio).
+  * `malus-de-wallpaper`: **18 passed; 0 failed**.
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-common parse_desktop_file_respects_nodisplay_and_builds_dock_app`: **1 passed; 0 failed**.
+
+---
+
 ## [2026-11-16] — Edición Inline, Navegación/Multiselección Espacial, DnD Grupal y Wrapper Antigravity
 
 ### 1. Edición Inline sin Expansión, Navegación 2D y Selección Múltiple en Branches (`crates/branches`)
