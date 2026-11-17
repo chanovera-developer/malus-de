@@ -926,6 +926,10 @@ pub fn run_winit() -> Result<()> {
                                 }
                             }
 
+                            if !has_super && !has_alt && event.button_code() == 0x110 {
+                                state.record_csd_close_click_hint(&window, loc, point);
+                            }
+
                             if (has_super || has_alt) && event.button_code() == 0x110 {
                                 info!("🚀 Atajo Super/Alt + Clic: iniciando arrastre directo de ventana desde {:?}", loc);
                                 let initial_window_location = loc;

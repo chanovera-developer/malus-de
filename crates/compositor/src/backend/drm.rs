@@ -2117,6 +2117,10 @@ pub fn run_drm() -> Result<()> {
                                     }
                                 }
 
+                                if !has_super && !has_alt && event.button_code() == 0x110 {
+                                    state.record_csd_close_click_hint(&window, loc, point);
+                                }
+
                                 if (has_super || has_alt) && event.button_code() == 0x110 {
                                     let start_data = smithay::input::pointer::GrabStartData {
                                         focus: None,
