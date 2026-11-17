@@ -9,7 +9,7 @@ use gtk4::{
     Align, Box as GtkBox, Button, EventControllerKey, GestureClick, Grid, Image, Label, ListBox,
     ListBoxRow, Orientation, PolicyType, ScrolledWindow, Separator,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -97,6 +97,34 @@ impl ColumnView {
         *self.inner.sort_order.borrow_mut() = sort_order;
         *self.inner.current_root.borrow_mut() = path.to_path_buf();
 
+        // Entrar a una carpeta que ya se muestra como columna: se conservan las columnas
+        // anteriores (el padre no se oculta si hay espacio). Si no caben, `scroll_to_end`
+        // desplaza el contenedor a la izquierda con animación y el padre sale de vista.
+        let existing_idx = self
+            .inner
+            .columns
+            .borrow()
+            .iter()
+            .position(|c| c.path == path)
+            .filter(|&k| k > 0);
+        if let (Some(k), true) = (
+            existing_idx,
+            self.inner.pending_select_name.borrow().is_none(),
+        ) {
+            self.inner.prune_after(k);
+            let list_box = self
+                .inner
+                .columns
+                .borrow()
+                .get(k)
+                .map(|col| col.list_box.clone());
+            if let Some(list_box) = list_box {
+                list_box.unselect_all();
+            }
+            self.inner.scroll_to_end();
+            return;
+        }
+
         self.inner.clear_all();
         self.inner.push_column(0, path.to_path_buf(), items.to_vec());
     }
@@ -129,6 +157,9 @@ impl ColumnViewInner {
     fn push_column(self: &Rc<Self>, col_idx: usize, path: PathBuf, items: Vec<FileItem>) {
         let (col_box, list_box) = self.create_column_widget(col_idx, path.clone(), items.clone());
         self.columns_box.append(&col_box);
+        if col_idx > 0 {
+            slide_in_from_right(&col_box, 240);
+        }
         let select_idx = self
             .pending_select_name
             .borrow_mut()
@@ -326,6 +357,7 @@ impl ColumnViewInner {
         } else {
             let preview = self.create_preview_pane(item);
             self.columns_box.append(&preview);
+            slide_in_from_right(&preview, 280);
             *self.preview_box.borrow_mut() = Some(preview);
             self.scroll_to_end();
         }
@@ -473,16 +505,83 @@ impl ColumnViewInner {
         preview_box
     }
 
+    /// Desplaza suavemente el contenedor hacia la izquierda (hasta la última columna),
+    /// de modo que la columna anterior salga de vista al entrar en una carpeta.
     fn scroll_to_end(&self) {
+        thread_local! {
+            static SCROLL_GEN: Cell<u64> = const { Cell::new(0) };
+        }
+        const DURATION_US: f64 = 320_000.0;
+
+        let generation = SCROLL_GEN.with(|g| {
+            g.set(g.get().wrapping_add(1));
+            g.get()
+        });
         let hadj = self.scrolled.hadjustment();
-        glib::idle_add_local(move || {
-            let max = hadj.upper() - hadj.page_size();
-            if max > 0.0 {
-                hadj.set_value(max);
+        let start_value = hadj.value();
+        let start_time: Cell<Option<i64>> = Cell::new(None);
+        self.scrolled.add_tick_callback(move |_, clock| {
+            if SCROLL_GEN.with(|g| g.get()) != generation {
+                return glib::ControlFlow::Break;
             }
-            glib::ControlFlow::Break
+            let now = clock.frame_time();
+            let t0 = match start_time.get() {
+                Some(v) => v,
+                None => {
+                    start_time.set(Some(now));
+                    now
+                }
+            };
+            let t = ((now - t0) as f64 / DURATION_US).clamp(0.0, 1.0);
+            let eased = 1.0 - (1.0 - t).powi(3);
+            // El destino se recalcula en cada fotograma: el layout de la nueva columna
+            // puede terminar de medirse durante la animación.
+            let target = (hadj.upper() - hadj.page_size()).max(0.0);
+            if target > start_value {
+                hadj.set_value(start_value + (target - start_value) * eased);
+            }
+            if t >= 1.0 {
+                if target > 0.0 {
+                    hadj.set_value(target);
+                }
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
         });
     }
+}
+
+/// Anima la entrada de una columna nueva: aparece deslizándose desde la derecha
+/// (y con fundido), de modo que se note que se entró a la carpeta aunque quepan todas
+/// las columnas en pantalla.
+fn slide_in_from_right(widget: &impl IsA<gtk4::Widget>, distance: i32) {
+    const DURATION_US: f64 = 300_000.0;
+    let widget = widget.as_ref();
+    widget.set_margin_start(distance);
+    widget.set_opacity(0.0);
+    let start: Cell<Option<i64>> = Cell::new(None);
+    widget.add_tick_callback(move |w, clock| {
+        let now = clock.frame_time();
+        let t0 = match start.get() {
+            Some(v) => v,
+            None => {
+                start.set(Some(now));
+                now
+            }
+        };
+        let t = ((now - t0) as f64 / DURATION_US).clamp(0.0, 1.0);
+        let eased = 1.0 - (1.0 - t).powi(3);
+        w.set_margin_start(((1.0 - eased) * distance as f64).round() as i32);
+        w.set_opacity(eased);
+        if t >= 1.0 {
+            w.set_margin_start(0);
+            w.set_opacity(1.0);
+            glib::ControlFlow::Break
+        } else {
+            glib::ControlFlow::Continue
+        }
+    });
 }
 
 fn create_column_row(item: &FileItem, on_navigate: &NavigateCallback) -> ListBoxRow {
