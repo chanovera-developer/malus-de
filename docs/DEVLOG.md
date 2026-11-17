@@ -4,6 +4,35 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-17] — Sincronización en Tiempo Real, Edición Inline al Crear Elementos y Papelera DnD en Dock
+
+### 1. Actualización Automática de Carpetas e Inline Rename al Crear en Branches (`crates/branches`)
+* **Monitoreo en tiempo real sin parpadeo ([`folder_pane.rs`](../crates/branches/src/folder_pane.rs), [`icon_view.rs`](../crates/branches/src/views/icon_view.rs)):**
+  * Incorporado `gio::FileMonitor` por pestaña/panel en `FolderPane` (`ensure_directory_monitor`, `clear_directory_monitor`, `sync_from_filesystem` y comparación `snapshots_equal`) con *debounce* de eventos del sistema de archivos.
+  * Añadido `IconView::sync_items_incremental` para insertar, retirar o actualizar metadatos de iconos modificados sin reconstruir ni hacer parpadear los elementos intactos.
+* **Edición inline inmediata tras «Crear nuevo ›» ([`views/mod.rs`](../crates/branches/src/views/mod.rs), [`icon_view.rs`](../crates/branches/src/views/icon_view.rs), [`list_view.rs`](../crates/branches/src/views/list_view.rs), [`column_view.rs`](../crates/branches/src/views/column_view.rs), [`gallery_view.rs`](../crates/branches/src/views/gallery_view.rs), [`folder_pane.rs`](../crates/branches/src/folder_pane.rs), [`app_window.rs`](../crates/branches/src/app_window.rs)):**
+  * Añadido `schedule_inline_rename` para activar `show_rename_popover` sobre el elemento recién creado en cuanto el menú contextual termina de cerrarse y la etiqueta cuenta con geometría asignada.
+  * Unificada la selección automática previa (`queue_select_name`) en Vista de Iconos, Lista, Columnas y Galería tanto desde el submenú **«Crear nuevo ›»** (Carpeta / Documento de texto) como desde `FolderPane::create_new_folder_and_rename` (`prompt_new_folder`).
+
+### 2. Submenú «Crear nuevo ▸» e Inline Rename en el Escritorio (`crates/wallpaper`)
+* **Creación y renombrado inline directo sobre el icono ([`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs), [`default-gradient.css`](../crates/wallpaper/src/styles/default-gradient.css)):**
+  * Reemplazado el diálogo modal anterior por el submenú **«Crear nuevo ▸»** (Carpeta y Documento de texto) en el menú contextual del escritorio (`build_create_new_submenu` y `create_desktop_item_and_edit`), respetando posición del clic y *snap-to-grid*.
+  * Tras aparecer el icono en el escritorio, `schedule_desktop_inline_rename` y `show_desktop_inline_rename` abren el campo inline `gtk4::Text` (`.desktop-inline-rename-entry`) con preselección del nombre base (manteniendo `.txt` sin seleccionar en documentos de texto), actualizando `icon_positions` al renombrar y protegiendo la edición frente a atajos globales de `Espacio` / `Enter` / `Delete` / `BackSpace`.
+
+### 3. Envío a Papelera mediante Drag & Drop en el Dock (`crates/dock`, `crates/branches`, `crates/wallpaper`)
+* **Zona de suelta sobre la Papelera del Dock ([`dock/src/main.rs`](../crates/dock/src/main.rs), [`dock.css`](../crates/dock/src/styles/dock.css)):**
+  * Extendido `attach_dock_drop_target` con detección sobre el icono de papelera (`is_point_over_trash`), retroalimentación visual `.dock-trash-drop-hover`, filtrado de rutas protegidas (`is_trashable_path` / `extract_trashable_paths`), envío vía `gio::File::trash` (`DragAction::MOVE`) y actualización inmediata de `user-trash-full`.
+  * Ajustada la limpieza al finalizar `DragAction::MOVE` en [`icon_view.rs`](../crates/branches/src/views/icon_view.rs) y [`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs) usando `symlink_metadata().is_err()` para retirar también accesos `.desktop` enviados a la papelera.
+
+### 4. Validación
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-dock -p malus-de-branches -p malus-de-wallpaper`:
+  * `malus-de-branches`: **24 passed; 0 failed** (`snapshots_equal_detects_content_and_metadata_changes`).
+  * `malus-de-dock`: **15 passed; 0 failed** (`extract_trashable_paths_filters_root_home_and_trash_and_keeps_regular_files`).
+  * `malus-de-wallpaper`: **18 passed; 0 failed**.
+* `cargo build --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml --release -p malus-de-dock -p malus-de-branches -p malus-de-wallpaper`: compilación correcta (`exit 0`).
+
+---
+
 ## [2026-11-17] — Ejecución y Accesos Directos de Aplicaciones en Escritorio desde Branches y Spotlight
 
 ### 1. Lanzamiento Robusto de Aplicaciones `.desktop` (`crates/common`, `crates/branches`, `crates/wallpaper`)
