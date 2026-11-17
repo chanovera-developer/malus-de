@@ -3529,9 +3529,11 @@ fn spawn_dock_app(name: &str, cmd: &str, extra_args: &[&str]) {
     let parts: Vec<&str> = cmd.split_whitespace().collect();
     if let Some((exe, args)) = parts.split_first() {
         let target_path_buf;
+        let mut wrapped_target_bin: Option<&str> = None;
         let target_exe = if *exe == "gnome-control-center" {
             "malus-de-settings"
         } else if let Some(wrapper) = malus_de_common::config::resolve_electron_ide_wrapper(exe) {
+            wrapped_target_bin = Some(*exe);
             target_path_buf = wrapper.to_string_lossy().to_string();
             &target_path_buf
         } else {
@@ -3554,6 +3556,9 @@ fn spawn_dock_app(name: &str, cmd: &str, extra_args: &[&str]) {
         let mut command = Command::new(&resolved_exe);
         command.args(args).args(extra_args);
         malus_de_common::config::apply_isolated_environment(&mut command);
+        if let Some(orig_exe) = wrapped_target_bin {
+            command.env("MALUS_IDE_BIN", orig_exe);
+        }
         match command.spawn() {
             Ok(mut child) => {
                 let pid = child.id();

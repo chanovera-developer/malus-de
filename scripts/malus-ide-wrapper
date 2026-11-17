@@ -25,9 +25,56 @@ def is_same_file(path1, path2):
         return False
 
 def find_target_command(invoked_name, extra_args):
-    # 1. Override explícito absoluto por variable de entorno
-    if "MALUS_IDE_BIN" in os.environ:
-        return [os.environ["MALUS_IDE_BIN"]]
+    self_path = os.path.realpath(__file__)
+
+    # 1. Override explícito por variable de entorno (pasado por Spotlight, Dock o Branches
+    # con el ejecutable exacto que el usuario seleccionó: ej. 'antigravity' vs 'antigravity-ide')
+    explicit_bin = os.environ.get("MALUS_IDE_BIN", "").strip()
+    if explicit_bin:
+        base_explicit = os.path.basename(explicit_bin).lower()
+        # Si ya es una ruta absoluta válida (y no apunta a este mismo wrapper), respetarla tal cual
+        if os.path.isabs(explicit_bin) and os.path.isfile(explicit_bin) and os.access(explicit_bin, os.X_OK) and not is_same_file(explicit_bin, self_path):
+            # Si apunta a un script CLI bin/* (p. ej. /usr/share/antigravity/bin/antigravity),
+            # preferir el binario Electron hermano para mantener vivo el puerto CDP
+            parent_dir = os.path.dirname(explicit_bin)
+            if os.path.basename(parent_dir) == "bin":
+                sibling_electron = os.path.join(os.path.dirname(parent_dir), os.path.basename(explicit_bin))
+                if os.path.isfile(sibling_electron) and os.access(sibling_electron, os.X_OK):
+                    return [sibling_electron]
+            return [explicit_bin]
+
+        # Si es un nombre corto ('antigravity' vs 'antigravity-ide'), resolver su binario real sin mezclarlos
+        if base_explicit == "antigravity":
+            for cand in [
+                "/usr/share/antigravity/antigravity",
+                "/opt/antigravity/antigravity",
+                "/usr/local/share/antigravity/antigravity",
+                os.path.expanduser("~/.local/share/antigravity/antigravity"),
+            ]:
+                if os.path.isfile(cand) and os.access(cand, os.X_OK) and not is_same_file(cand, self_path):
+                    return [cand]
+            w = shutil.which("antigravity")
+            if w and not is_same_file(w, self_path):
+                return [w]
+            return [explicit_bin]
+        elif base_explicit == "antigravity-ide":
+            for cand in [
+                os.path.expanduser("~/.local/share/antigravity-ide/antigravity-ide"),
+                "/usr/local/share/antigravity-ide/antigravity-ide",
+                "/opt/antigravity-ide/antigravity-ide",
+                os.path.expanduser("~/.local/share/antigravity-ide/bin/antigravity-ide"),
+            ]:
+                if os.path.isfile(cand) and os.access(cand, os.X_OK) and not is_same_file(cand, self_path):
+                    return [cand]
+            w = shutil.which("antigravity-ide")
+            if w and not is_same_file(w, self_path):
+                return [w]
+            return [explicit_bin]
+        else:
+            w = shutil.which(explicit_bin)
+            if w and not is_same_file(w, self_path):
+                return [w]
+            return [explicit_bin]
 
     invoked_base = os.path.basename(invoked_name).lower()
     target_kind = os.environ.get("MALUS_IDE_TARGET", "").lower()
@@ -35,10 +82,10 @@ def find_target_command(invoked_name, extra_args):
     if not target_kind:
         if any(k in invoked_base for k in ["code", "codium", "oss"]):
             target_kind = "vscode"
-        elif any(k in invoked_base for k in ["antigravity"]):
+        elif "antigravity-ide" in invoked_base:
+            target_kind = "antigravity-ide"
+        elif "antigravity" in invoked_base:
             target_kind = "antigravity"
-
-    self_path = os.path.realpath(__file__)
 
     # 2. Búsqueda para Visual Studio Code / Code - OSS / VSCodium
     if target_kind == "vscode":
@@ -79,25 +126,36 @@ def find_target_command(invoked_name, extra_args):
 
         return ["code"]
 
-    # 3. Búsqueda para Antigravity IDE
+    # 3. Búsqueda para Antigravity / Antigravity IDE (respetando cuál fue invocado)
     if "MALUS_ANTIGRAVITY_BIN" in os.environ:
         return [os.environ["MALUS_ANTIGRAVITY_BIN"]]
 
-    antigravity_candidates = [
-        # Binario Electron real primero (ver nota en la sección de VS Code)
-        os.path.expanduser("~/.local/share/antigravity-ide/antigravity-ide"),
-        "/usr/local/share/antigravity-ide/antigravity-ide",
-        "/usr/share/antigravity/antigravity",
-        "/opt/antigravity-ide/antigravity-ide",
-        os.path.expanduser("~/.local/share/antigravity-ide/bin/antigravity-ide"),
-    ]
+    if target_kind == "antigravity":
+        antigravity_candidates = [
+            "/usr/share/antigravity/antigravity",
+            "/opt/antigravity/antigravity",
+            "/usr/local/share/antigravity/antigravity",
+            os.path.expanduser("~/.local/share/antigravity/antigravity"),
+            os.path.expanduser("~/.local/share/antigravity-ide/antigravity-ide"),
+            "/usr/local/share/antigravity-ide/antigravity-ide",
+            "/opt/antigravity-ide/antigravity-ide",
+        ]
+    else:
+        antigravity_candidates = [
+            os.path.expanduser("~/.local/share/antigravity-ide/antigravity-ide"),
+            "/usr/local/share/antigravity-ide/antigravity-ide",
+            "/opt/antigravity-ide/antigravity-ide",
+            os.path.expanduser("~/.local/share/antigravity-ide/bin/antigravity-ide"),
+            "/usr/share/antigravity/antigravity",
+        ]
     for candidate in antigravity_candidates:
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK) and not is_same_file(candidate, self_path):
             return [candidate]
 
-    which_ag = shutil.which("antigravity-ide")
-    if which_ag and not is_same_file(which_ag, self_path):
-        return [which_ag]
+    for bin_name in (["antigravity", "antigravity-ide"] if target_kind == "antigravity" else ["antigravity-ide", "antigravity"]):
+        which_ag = shutil.which(bin_name)
+        if which_ag and not is_same_file(which_ag, self_path):
+            return [which_ag]
 
     # Si no se especificó un tipo y Antigravity no existe, probar con Code
     if not target_kind:
@@ -106,7 +164,7 @@ def find_target_command(invoked_name, extra_args):
             if w and not is_same_file(w, self_path):
                 return [w]
 
-    return ["antigravity-ide"]
+    return ["antigravity" if target_kind == "antigravity" else "antigravity-ide"]
 
 def get_free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:

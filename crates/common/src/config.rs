@@ -849,11 +849,11 @@ pub fn ensure_default_wallpaper(malus_config_dir: &Path) {
     }
 }
 
-/// Configura los editores basados en VS Code / Electron (Antigravity IDE, Code) para que utilicen
+/// Configura los editores basados en VS Code / Electron (Antigravity, Antigravity IDE, Code) para que utilicen
 /// la barra personalizada pero con controles custom (`"window.controlsStyle": "custom"`), permitiendo
 /// que los controles de ventana respeten la posición y estética de macOS en Malus DE.
 pub fn setup_electron_ide_configurations(malus_config_dir: &Path) {
-    let ide_names = ["Antigravity IDE", "Code", "Code - OSS", "VSCodium"];
+    let ide_names = ["Antigravity", "Antigravity IDE", "Code", "Code - OSS", "VSCodium"];
     for ide_name in ide_names {
         let user_dir = malus_config_dir.join(ide_name).join("User");
         let settings_path = user_dir.join("settings.json");
