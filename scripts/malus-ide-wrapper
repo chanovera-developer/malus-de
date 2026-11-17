@@ -562,6 +562,273 @@ INJECTION_SCRIPT = """
 })()
 """
 
+AGY_APP_INJECTION_SCRIPT = """
+(() => {
+    const STYLE_ID = 'malus-agy-controls-style';
+    const BOX_ID = 'malus-agy-window-controls';
+
+    function ensureAgyStyle() {
+        const host = document.head || document.documentElement;
+        if (!host) {
+            return false;
+        }
+        let style = document.getElementById(STYLE_ID);
+        if (style && style.parentElement === host && host.lastElementChild !== style) {
+            host.appendChild(style);
+        }
+        if (!style || style.dataset.malusVersion !== 'agy-ssd-v3') {
+            if (!style) {
+                style = document.createElement('style');
+                style.id = STYLE_ID;
+                host.appendChild(style);
+            }
+            style.dataset.malusVersion = 'agy-ssd-v3';
+            style.textContent = `
+                #${BOX_ID} {
+                    display: inline-flex !important;
+                    align-items: center !important;
+                    justify-content: flex-start !important;
+                    flex-direction: row !important;
+                    gap: 7px !important;
+                    padding: 0 8px 0 6px !important;
+                    height: 100% !important;
+                    flex-shrink: 0 !important;
+                    -webkit-app-region: no-drag !important;
+                    app-region: no-drag !important;
+                }
+                #${BOX_ID} > .malus-agy-btn {
+                    width: 13px !important;
+                    height: 13px !important;
+                    min-width: 13px !important;
+                    min-height: 13px !important;
+                    max-width: 13px !important;
+                    max-height: 13px !important;
+                    border-radius: 9999px !important;
+                    padding: 0 !important;
+                    margin: 0 !important;
+                    border-style: solid !important;
+                    border-width: 0.75px !important;
+                    box-sizing: border-box !important;
+                    display: flex !important;
+                    align-items: center !important;
+                    justify-content: center !important;
+                    cursor: pointer !important;
+                    position: relative !important;
+                    outline: none !important;
+                    -webkit-app-region: no-drag !important;
+                    app-region: no-drag !important;
+                    transition: background-color 0.1s ease, border-color 0.1s ease, opacity 0.1s ease !important;
+                }
+                #${BOX_ID} > .malus-agy-btn::before {
+                    content: "" !important;
+                    width: 11px !important;
+                    height: 11px !important;
+                    opacity: 0 !important;
+                    background-repeat: no-repeat !important;
+                    background-position: center !important;
+                    background-size: 11px 11px !important;
+                    transition: opacity 0.12s ease !important;
+                    display: block !important;
+                    pointer-events: none !important;
+                }
+                #${BOX_ID}:hover > .malus-agy-btn::before {
+                    opacity: 1 !important;
+                }
+                #${BOX_ID} > .malus-agy-close,
+                #${BOX_ID}.malus-agy-inactive:hover > .malus-agy-close {
+                    background-color: #ff5f56 !important;
+                    border-color: rgba(224, 68, 62, 0.9) !important;
+                }
+                #${BOX_ID} > .malus-agy-close:hover {
+                    background-color: #ff6e66 !important;
+                }
+                #${BOX_ID} > .malus-agy-close:active {
+                    background-color: #bf3933 !important;
+                    border-color: #a82f2a !important;
+                }
+                #${BOX_ID} > .malus-agy-close::before {
+                    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='0 0 11 11'%3E%3Cpath d='M2.9 2.9 L8.1 8.1 M8.1 2.9 L2.9 8.1' fill='none' stroke='%234d0000' stroke-opacity='0.85' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E") !important;
+                }
+                #${BOX_ID} > .malus-agy-min,
+                #${BOX_ID}.malus-agy-inactive:hover > .malus-agy-min {
+                    background-color: #ffbd2e !important;
+                    border-color: rgba(222, 161, 35, 0.9) !important;
+                }
+                #${BOX_ID} > .malus-agy-min:hover {
+                    background-color: #ffcc3d !important;
+                }
+                #${BOX_ID} > .malus-agy-min:active {
+                    background-color: #bf8516 !important;
+                    border-color: #9e6d0f !important;
+                }
+                #${BOX_ID} > .malus-agy-min::before {
+                    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='0 0 11 11'%3E%3Cpath d='M2.3 5.5 L8.7 5.5' fill='none' stroke='%23613800' stroke-opacity='0.88' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E") !important;
+                }
+                #${BOX_ID} > .malus-agy-max,
+                #${BOX_ID}.malus-agy-inactive:hover > .malus-agy-max {
+                    background-color: #27c93f !important;
+                    border-color: rgba(26, 171, 41, 0.9) !important;
+                }
+                #${BOX_ID} > .malus-agy-max:hover {
+                    background-color: #36d84e !important;
+                }
+                #${BOX_ID} > .malus-agy-max:active {
+                    background-color: #158a25 !important;
+                    border-color: #0f6c1a !important;
+                }
+                #${BOX_ID} > .malus-agy-max::before {
+                    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='0 0 11 11'%3E%3Cpath d='M2.5 5.5 L8.5 5.5 M5.5 2.5 L5.5 8.5' fill='none' stroke='%2300470a' stroke-opacity='0.88' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E") !important;
+                }
+                #${BOX_ID}.malus-agy-inactive:not(:hover) > .malus-agy-btn {
+                    opacity: 0.65 !important;
+                }
+            `;
+        }
+        return true;
+    }
+
+    function syncFocusState(box) {
+        if (!box) return;
+        const darkEl = document.querySelector('.dark');
+        box.dataset.theme = darkEl ? 'dark' : 'light';
+        const ae = document.activeElement;
+        const focusInChildFrame = Boolean(ae && (ae.tagName === 'IFRAME' || ae.tagName === 'WEBVIEW'));
+        const isBlurred = Boolean(window._malusAgyBlurred) && !focusInChildFrame;
+        box.classList.toggle('malus-agy-inactive', isBlurred);
+    }
+
+    function ensureAgyControls() {
+        const bar = document.querySelector('[data-testid="title-menu-bar"]');
+        if (!bar) {
+            return false;
+        }
+        let box = document.getElementById(BOX_ID);
+        if (!box) {
+            box = document.createElement('div');
+            box.id = BOX_ID;
+            box.style.setProperty('-webkit-app-region', 'no-drag');
+            box.style.setProperty('app-region', 'no-drag');
+
+            const makeBtn = (cls, label, handler) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'malus-agy-btn ' + cls;
+                btn.setAttribute('aria-label', label);
+                btn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    handler();
+                });
+                return btn;
+            };
+
+            const closeBtn = makeBtn('malus-agy-close', 'Cerrar', () => {
+                if (window.electronNative && typeof window.electronNative.close === 'function') {
+                    window.electronNative.close();
+                } else {
+                    window.close();
+                }
+            });
+            const minBtn = makeBtn('malus-agy-min', 'Minimizar', () => {
+                if (window.electronNative && typeof window.electronNative.minimize === 'function') {
+                    window.electronNative.minimize();
+                }
+            });
+            const maxBtn = makeBtn('malus-agy-max', 'Maximizar', () => {
+                const nat = window.electronNative;
+                if (!nat) return;
+                if (typeof nat.isMaximized === 'function') {
+                    Promise.resolve(nat.isMaximized()).then((isMax) => {
+                        if (isMax && typeof nat.unmaximize === 'function') {
+                            nat.unmaximize();
+                        } else if (typeof nat.maximize === 'function') {
+                            nat.maximize();
+                        }
+                    });
+                } else if (typeof nat.maximize === 'function') {
+                    nat.maximize();
+                }
+            });
+
+            box.appendChild(closeBtn);
+            box.appendChild(minBtn);
+            box.appendChild(maxBtn);
+        }
+
+        if (box.parentElement !== bar || bar.firstElementChild !== box) {
+            bar.prepend(box);
+        }
+        syncFocusState(box);
+        return true;
+    }
+
+    const styled = ensureAgyStyle();
+    const placed = ensureAgyControls();
+
+    if (window._malusAgyControlsInstalled !== 'agy-ssd-v3') {
+        window._malusAgyControlsInstalled = 'agy-ssd-v3';
+        window._malusAgyBlurred = false;
+        syncFocusState(document.getElementById(BOX_ID));
+    }
+
+    if (!window._malusAgyListenersBound) {
+        window._malusAgyListenersBound = true;
+
+        window.addEventListener('focus', () => {
+            window._malusAgyBlurred = false;
+            syncFocusState(document.getElementById(BOX_ID));
+        });
+        document.addEventListener('pointerdown', () => {
+            window._malusAgyBlurred = false;
+            syncFocusState(document.getElementById(BOX_ID));
+        }, true);
+        window.addEventListener('blur', () => {
+            setTimeout(() => {
+                const ae = document.activeElement;
+                if (ae && (ae.tagName === 'IFRAME' || ae.tagName === 'WEBVIEW')) {
+                    window._malusAgyBlurred = false;
+                } else {
+                    window._malusAgyBlurred = true;
+                }
+                syncFocusState(document.getElementById(BOX_ID));
+            }, 0);
+        });
+
+        let observedRoot = null;
+        let agyObserver = null;
+        const attach = () => {
+            const root = document.body || document.documentElement;
+            if (!root) return false;
+            if (observedRoot !== root) {
+                if (agyObserver) agyObserver.disconnect();
+                observedRoot = root;
+                agyObserver = new MutationObserver(() => {
+                    ensureAgyStyle();
+                    ensureAgyControls();
+                });
+                agyObserver.observe(root, { childList: true, subtree: true });
+            }
+            ensureAgyStyle();
+            return ensureAgyControls();
+        };
+
+        let attempts = 0;
+        const initTimer = setInterval(() => {
+            if (attach() || ++attempts > 200) {
+                clearInterval(initTimer);
+            }
+        }, 200);
+
+        setInterval(() => {
+            ensureAgyStyle();
+            ensureAgyControls();
+        }, 1500);
+    }
+
+    return Boolean(styled && placed);
+})()
+"""
+
 REINJECT_INTERVAL = 3.0  # segundos; el script inyectado es idempotente
 
 def watcher(port, stop_event, state):
@@ -579,15 +846,21 @@ def watcher(port, stop_event, state):
                 state["ever_alive"] = True
                 now = time.time()
                 for t in targets:
+                    if t.get("type") != "page":
+                        continue
                     tid = t.get("id")
                     t_url = t.get("url", "")
-                    if t.get("type") != "page" or "workbench" not in t_url:
+                    if "workbench" in t_url:
+                        script = INJECTION_SCRIPT
+                    elif t_url.startswith("http://127.0.0.1:") or t_url.startswith("https://127.0.0.1:"):
+                        script = AGY_APP_INJECTION_SCRIPT
+                    else:
                         continue
                     last_ok = injected_targets.get(tid, 0.0)
                     if last_ok > 0.0 and (now - last_ok) < REINJECT_INTERVAL:
                         continue
                     ws_url = t.get("webSocketDebuggerUrl")
-                    if ws_url and send_cdp_eval(ws_url, INJECTION_SCRIPT):
+                    if ws_url and send_cdp_eval(ws_url, script):
                         injected_targets[tid] = now
         except Exception:
             pass
