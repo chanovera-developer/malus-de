@@ -416,6 +416,11 @@ button.branches-search-btn:checked {
     border-radius: 6px;
 }
 
+.branches-hidden-item,
+.branches-cut-item {
+    opacity: 0.5;
+}
+
 .branches-icon-dragging,
 .branches-icon-item.branches-icon-dragging,
 .branches-list-row.branches-icon-dragging {
@@ -948,5 +953,98 @@ window.branches-quicklook-window {
     color: @window_fg_color;
 }
 
+/* ========================================================= */
+/* BARRA DE PESTAÑAS ESTILO MACOS FINDER                     */
+/* ========================================================= */
 
+.branches-tab-bar {
+    padding: 4px 10px 6px 10px;
+    background-color: @view_bg_color;
+    border-bottom: 1px solid alpha(@borders, 0.22);
+}
+
+.branches-tabs-strip {
+    background-color: alpha(@window_fg_color, 0.045);
+    border: 1px solid alpha(@borders, 0.24);
+    border-radius: 8px;
+    padding: 2px;
+}
+
+.branches-tab {
+    min-height: 24px;
+    padding: 2px 6px 2px 10px;
+    border-radius: 6px;
+    background-color: transparent;
+    transition: background-color 120ms ease;
+}
+
+.branches-tab:hover {
+    background-color: alpha(@window_fg_color, 0.06);
+}
+
+.branches-tab.branches-tab-active {
+    background-color: @view_bg_color;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    border: 1px solid alpha(@borders, 0.22);
+}
+
+.branches-tab-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: alpha(@window_fg_color, 0.72);
+}
+
+.branches-tab.branches-tab-active .branches-tab-label {
+    font-weight: 600;
+    color: @window_fg_color;
+}
+
+button.branches-tab-close-btn {
+    min-width: 18px;
+    min-height: 18px;
+    padding: 0;
+    margin: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: alpha(@window_fg_color, 0.45);
+    opacity: 0.65;
+    transition: background-color 100ms ease, opacity 100ms ease;
+}
+
+.branches-tab:hover button.branches-tab-close-btn,
+.branches-tab.branches-tab-active button.branches-tab-close-btn {
+    opacity: 1.0;
+}
+
+button.branches-tab-close-btn:hover {
+    background-color: alpha(@window_fg_color, 0.12);
+    color: @window_fg_color;
+}
+
+button.branches-tab-add-btn {
+    min-width: 26px;
+    min-height: 26px;
+    padding: 0;
+    border-radius: 7px;
+    background-color: alpha(@window_fg_color, 0.045);
+    border: 1px solid alpha(@borders, 0.24);
+    color: @window_fg_color;
+}
+
+button.branches-tab-add-btn:hover {
+    background-color: alpha(@window_fg_color, 0.10);
+}
+
+@media (prefers-color-scheme: dark) {
+    .branches-tabs-strip,
+    button.branches-tab-add-btn {
+        background-color: alpha(@window_fg_color, 0.08);
+        border-color: alpha(@window_fg_color, 0.12);
+    }
+
+    .branches-tab.branches-tab-active {
+        background-color: alpha(@window_fg_color, 0.16);
+        border-color: alpha(@window_fg_color, 0.18);
+    }
+}
 

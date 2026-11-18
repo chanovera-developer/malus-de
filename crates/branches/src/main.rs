@@ -293,4 +293,39 @@ mod tests {
         assert!(parsed.new_window);
         assert!(parsed.path.is_none());
     }
+
+    #[test]
+    fn test_branches_tab_bar_styles_and_context_menu_wiring() {
+        let css = include_str!("styles/macos-branches.css");
+        assert!(css.contains(".branches-hidden-item"));
+        assert!(css.contains(".branches-cut-item"));
+        assert!(css.contains(".branches-tab-bar"));
+        assert!(css.contains(".branches-tabs-strip"));
+        assert!(css.contains(".branches-tab.branches-tab-active"));
+        assert!(css.contains("button.branches-tab-close-btn"));
+        assert!(css.contains("button.branches-tab-add-btn"));
+
+        let app_window_src = include_str!("app_window.rs");
+        assert!(app_window_src.contains("\"open_in_new_tab\""));
+        assert!(app_window_src.contains("\"new_tab\""));
+        assert!(app_window_src.contains("open_target_in_new_tab"));
+        assert!(app_window_src.contains("\"copy_item\""));
+        assert!(app_window_src.contains("\"cut_item\""));
+        assert!(app_window_src.contains("\"paste_into\""));
+        assert!(app_window_src.contains("SUPER_MASK"));
+        assert!(app_window_src.contains("META_MASK"));
+
+        let views_src = include_str!("views/mod.rs");
+        assert!(views_src.contains("Abrir en nueva pestaña"));
+        assert!(views_src.contains("win.open_in_new_tab"));
+        assert!(views_src.contains("win.copy_item"));
+        assert!(views_src.contains("win.cut_item"));
+        assert!(views_src.contains("win.paste_into"));
+
+        let sidebar_src = include_str!("sidebar.rs");
+        assert!(sidebar_src.contains("Abrir en nueva pestaña"));
+        assert!(sidebar_src.contains("win.open_in_new_tab"));
+        assert!(sidebar_src.contains("@recents"));
+        assert!(sidebar_src.contains("@applications"));
+    }
 }

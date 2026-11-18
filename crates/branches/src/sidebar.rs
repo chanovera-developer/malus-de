@@ -127,7 +127,7 @@ impl Sidebar {
             "document-open-recent-symbolic",
             "target_recents",
         );
-        attach_virtual_row_handlers(&recents_row, on_recents.clone());
+        attach_virtual_row_handlers(&recents_row, on_recents.clone(), "@recents");
         list_box.append(&recents_row);
 
         let shared_row = create_sidebar_row(
@@ -148,7 +148,7 @@ impl Sidebar {
             "system-software-install-symbolic",
             "target_applications",
         );
-        attach_virtual_row_handlers(&apps_row, on_applications.clone());
+        attach_virtual_row_handlers(&apps_row, on_applications.clone(), "@applications");
         list_box.append(&apps_row);
 
         let desktop_path = resolve_user_dir(&home, "XDG_DESKTOP_DIR", "Escritorio", "Desktop");
@@ -909,6 +909,36 @@ fn add_bookmarks_section_header(
     row
 }
 
+fn make_sidebar_menu_item(label: &str) -> Button {
+    let btn = Button::builder()
+        .label(label)
+        .has_frame(false)
+        .css_classes(["popover-menu-item"])
+        .build();
+    if let Some(lbl) = btn.child().and_then(|c| c.downcast::<Label>().ok()) {
+        lbl.set_xalign(0.0);
+    }
+    btn
+}
+
+fn open_target_in_new_tab(anchor: &impl IsA<gtk4::Widget>, target: &str) {
+    let _ = anchor.activate_action("win.open_in_new_tab", Some(&target.to_variant()));
+}
+
+fn attach_middle_click_new_tab(row: &ListBoxRow, target: String) {
+    let mid_click = GestureClick::new();
+    mid_click.set_button(gdk::BUTTON_MIDDLE);
+    mid_click.connect_pressed(|g, _n, _x, _y| {
+        g.set_state(gtk4::EventSequenceState::Claimed);
+    });
+    let row_mid = row.clone();
+    mid_click.connect_released(move |g, _n, _x, _y| {
+        g.set_state(gtk4::EventSequenceState::Claimed);
+        open_target_in_new_tab(&row_mid, &target);
+    });
+    row.add_controller(mid_click);
+}
+
 fn attach_folder_navigation_handlers(
     row: &ListBoxRow,
     on_navigate: &Rc<dyn Fn(PathBuf)>,
@@ -923,6 +953,61 @@ fn attach_folder_navigation_handlers(
         cb_c(p_c.clone());
     });
     row.add_controller(click);
+
+    attach_middle_click_new_tab(row, path.to_string_lossy().to_string());
+
+    let right_click = GestureClick::new();
+    right_click.set_button(gdk::BUTTON_SECONDARY);
+    let row_ref = row.clone();
+    let nav_menu = on_navigate.clone();
+    let p_menu = path.clone();
+    right_click.connect_pressed(move |g, _n, x, y| {
+        g.set_state(gtk4::EventSequenceState::Claimed);
+        let es = malus_de_common::is_spanish_locale();
+        let pop = Popover::builder()
+            .has_arrow(false)
+            .css_classes(["malus-popover-menu"])
+            .build();
+        pop.set_parent(&row_ref);
+        let rect = gdk::Rectangle::new(x.round() as i32, y.round() as i32, 1, 1);
+        pop.set_pointing_to(Some(&rect));
+        pop.connect_closed(|p| p.unparent());
+
+        let vbox = GtkBox::new(Orientation::Vertical, 2);
+
+        let open_btn = make_sidebar_menu_item(if es { "Abrir" } else { "Open" });
+        {
+            let p_open = pop.clone();
+            let nav = nav_menu.clone();
+            let target = p_menu.clone();
+            open_btn.connect_clicked(move |_| {
+                p_open.popdown();
+                nav(target.clone());
+            });
+        }
+        vbox.append(&open_btn);
+
+        let new_tab_btn = make_sidebar_menu_item(if es {
+            "Abrir en nueva pestaña"
+        } else {
+            "Open in New Tab"
+        });
+        {
+            let p_tab = pop.clone();
+            let r_anchor = row_ref.clone();
+            let target_str = p_menu.to_string_lossy().to_string();
+            new_tab_btn.connect_clicked(move |_| {
+                p_tab.popdown();
+                open_target_in_new_tab(&r_anchor, &target_str);
+            });
+        }
+        vbox.append(&new_tab_btn);
+
+        pop.set_child(Some(&vbox));
+        pop.popup();
+    });
+    row.add_controller(right_click);
+
     row.connect_activate(move |_| {
         cb(path.clone());
     });
@@ -996,6 +1081,9 @@ fn attach_bookmark_activation_handlers(
         }
     });
     row.add_controller(click);
+    if path.is_dir() {
+        attach_middle_click_new_tab(row, path.to_string_lossy().to_string());
+    }
     row.connect_activate(move |_| {
         if path.is_dir() {
             cb(path.clone());
@@ -1317,6 +1405,36 @@ fn attach_bookmark_context_menu(
         }
         vbox.append(&open_btn);
 
+        if folder_path.is_dir() {
+            let new_tab_btn = make_sidebar_menu_item(if es {
+                "Abrir en nueva pestaña"
+            } else {
+                "Open in New Tab"
+            });
+            let p_tab = pop.clone();
+            let r_anchor = row_ref.clone();
+            let target_str = folder_path.to_string_lossy().to_string();
+            new_tab_btn.connect_clicked(move |_| {
+                p_tab.popdown();
+                open_target_in_new_tab(&r_anchor, &target_str);
+            });
+            vbox.append(&new_tab_btn);
+        } else if let Some(parent) = folder_path.parent() {
+            let parent_tab_btn = make_sidebar_menu_item(if es {
+                "Abrir carpeta contenedora en nueva pestaña"
+            } else {
+                "Open Enclosing Folder in New Tab"
+            });
+            let p_tab = pop.clone();
+            let r_anchor = row_ref.clone();
+            let target_str = parent.to_string_lossy().to_string();
+            parent_tab_btn.connect_clicked(move |_| {
+                p_tab.popdown();
+                open_target_in_new_tab(&r_anchor, &target_str);
+            });
+            vbox.append(&parent_tab_btn);
+        }
+
         let rename_btn = Button::builder()
             .label(if es {
                 "Renombrar marcador…"
@@ -1378,13 +1496,66 @@ fn attach_bookmark_context_menu(
     row.add_controller(right_click);
 }
 
-fn attach_virtual_row_handlers(row: &ListBoxRow, cb: Rc<dyn Fn()>) {
+fn attach_virtual_row_handlers(row: &ListBoxRow, cb: Rc<dyn Fn()>, new_tab_target: &'static str) {
     let click = GestureClick::new();
+    click.set_button(gdk::BUTTON_PRIMARY);
     let cb_c = cb.clone();
     click.connect_released(move |_, _, _, _| {
         cb_c();
     });
     row.add_controller(click);
+
+    attach_middle_click_new_tab(row, new_tab_target.to_string());
+
+    let right_click = GestureClick::new();
+    right_click.set_button(gdk::BUTTON_SECONDARY);
+    let row_ref = row.clone();
+    let cb_menu = cb.clone();
+    right_click.connect_pressed(move |g, _n, x, y| {
+        g.set_state(gtk4::EventSequenceState::Claimed);
+        let es = malus_de_common::is_spanish_locale();
+        let pop = Popover::builder()
+            .has_arrow(false)
+            .css_classes(["malus-popover-menu"])
+            .build();
+        pop.set_parent(&row_ref);
+        let rect = gdk::Rectangle::new(x.round() as i32, y.round() as i32, 1, 1);
+        pop.set_pointing_to(Some(&rect));
+        pop.connect_closed(|p| p.unparent());
+
+        let vbox = GtkBox::new(Orientation::Vertical, 2);
+
+        let open_btn = make_sidebar_menu_item(if es { "Abrir" } else { "Open" });
+        {
+            let p_open = pop.clone();
+            let cb_open = cb_menu.clone();
+            open_btn.connect_clicked(move |_| {
+                p_open.popdown();
+                cb_open();
+            });
+        }
+        vbox.append(&open_btn);
+
+        let new_tab_btn = make_sidebar_menu_item(if es {
+            "Abrir en nueva pestaña"
+        } else {
+            "Open in New Tab"
+        });
+        {
+            let p_tab = pop.clone();
+            let r_anchor = row_ref.clone();
+            new_tab_btn.connect_clicked(move |_| {
+                p_tab.popdown();
+                open_target_in_new_tab(&r_anchor, new_tab_target);
+            });
+        }
+        vbox.append(&new_tab_btn);
+
+        pop.set_child(Some(&vbox));
+        pop.popup();
+    });
+    row.add_controller(right_click);
+
     row.connect_activate(move |_| {
         cb();
     });

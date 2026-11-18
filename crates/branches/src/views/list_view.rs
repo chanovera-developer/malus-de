@@ -530,6 +530,12 @@ fn create_list_row(
 ) -> ListBoxRow {
     let hbox = GtkBox::new(Orientation::Horizontal, 0);
     hbox.add_css_class("branches-list-row");
+    if item.is_hidden {
+        hbox.add_css_class("branches-hidden-item");
+    }
+    if crate::operations::is_path_cut(&item.path) {
+        hbox.add_css_class("branches-cut-item");
+    }
 
     // Columna 1: Icono + Nombre
     let name_box = GtkBox::new(Orientation::Horizontal, 8);

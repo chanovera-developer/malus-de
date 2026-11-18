@@ -207,6 +207,25 @@ impl FolderPane {
         self.view_stack.set_visible_child_name(mode_name);
     }
 
+    pub fn view_mode(&self) -> String {
+        self.view_stack
+            .visible_child_name()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "icons".to_string())
+    }
+
+    pub fn search_query(&self) -> String {
+        self.state.borrow().search_query.clone()
+    }
+
+    pub fn is_recents(&self) -> bool {
+        *self.virtual_folder.borrow() == Some(VirtualFolder::Recents)
+    }
+
+    pub fn is_applications(&self) -> bool {
+        *self.virtual_folder.borrow() == Some(VirtualFolder::Applications)
+    }
+
     /// Aplica cambios de configuración de Branches en vivo (tamaño de carpetas/iconos y espaciado).
     pub fn apply_branches_config(&self, cfg: &malus_de_common::config::BranchesConfig) {
         let icon_size = cfg.clamped_icon_size();
@@ -616,6 +635,32 @@ impl FolderPane {
         if changed {
             self.reload();
         }
+    }
+
+    pub fn copy_selected(&self) -> bool {
+        let paths: Vec<PathBuf> = self
+            .get_selected_items()
+            .into_iter()
+            .map(|i| i.path)
+            .collect();
+        if paths.is_empty() {
+            return false;
+        }
+        crate::operations::set_clipboard(crate::operations::ClipboardAction::Copy, paths);
+        true
+    }
+
+    pub fn cut_selected(&self) -> bool {
+        let paths: Vec<PathBuf> = self
+            .get_selected_items()
+            .into_iter()
+            .map(|i| i.path)
+            .collect();
+        if paths.is_empty() {
+            return false;
+        }
+        crate::operations::set_clipboard(crate::operations::ClipboardAction::Cut, paths);
+        true
     }
 
     pub fn trash_selected(&self) {

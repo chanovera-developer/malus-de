@@ -589,6 +589,12 @@ fn create_column_row(item: &FileItem, on_navigate: &NavigateCallback) -> ListBox
     row.add_css_class("branches-column-row");
 
     let hbox = GtkBox::new(Orientation::Horizontal, 8);
+    if item.is_hidden {
+        hbox.add_css_class("branches-hidden-item");
+    }
+    if crate::operations::is_path_cut(&item.path) {
+        hbox.add_css_class("branches-cut-item");
+    }
     hbox.set_margin_top(3);
     hbox.set_margin_bottom(3);
     hbox.set_margin_start(4);

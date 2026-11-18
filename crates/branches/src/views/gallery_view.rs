@@ -382,6 +382,12 @@ impl GalleryView {
     fn create_carousel_card(self: &Rc<Self>, index: usize, item: &FileItem) -> GtkBox {
         let card = GtkBox::new(Orientation::Vertical, 4);
         card.add_css_class("branches-carousel-card");
+        if item.is_hidden {
+            card.add_css_class("branches-hidden-item");
+        }
+        if crate::operations::is_path_cut(&item.path) {
+            card.add_css_class("branches-cut-item");
+        }
         card.set_size_request(84, 100);
         card.set_valign(Align::Center);
 

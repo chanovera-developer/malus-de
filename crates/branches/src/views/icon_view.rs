@@ -1108,6 +1108,12 @@ impl IconView {
             .height_request(metrics.box_height)
             .css_classes(["branches-icon-item"])
             .build();
+        if item.is_hidden {
+            vbox.add_css_class("branches-hidden-item");
+        }
+        if crate::operations::is_path_cut(&item.path) {
+            vbox.add_css_class("branches-cut-item");
+        }
 
         let img = crate::views::create_item_image(
             item,
@@ -2258,7 +2264,14 @@ fn show_canvas_context_menu(
                 nav_create(dir_create.clone());
             }
         });
-        crate::views::append_create_new_submenu(&popover, &vbox, &stack, target_dir, on_created);
+        crate::views::append_create_new_submenu(
+            &popover,
+            &vbox,
+            &stack,
+            target_dir.clone(),
+            on_created,
+        );
+        crate::views::append_paste_menu_item(&popover, &vbox, parent, &target_dir);
         vbox.append(&gtk4::Separator::new(Orientation::Horizontal));
     }
 

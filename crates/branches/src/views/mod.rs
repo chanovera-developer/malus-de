@@ -280,6 +280,31 @@ pub(super) fn append_create_new_submenu(
     stack.add_named(&sub_box, Some("create_new"));
 }
 
+/// Agrega la acción «Pegar» al menú contextual cuando hay archivos/carpetas en el portapapeles.
+pub(super) fn append_paste_menu_item(
+    popover: &gtk4::Popover,
+    container: &gtk4::Box,
+    anchor: &impl gtk4::prelude::IsA<gtk4::Widget>,
+    target_dir: &std::path::Path,
+) {
+    use gtk4::prelude::*;
+
+    if !can_create_in_folder(target_dir) || !crate::operations::has_clipboard_files() {
+        return;
+    }
+
+    let es = malus_de_common::is_spanish_locale();
+    let paste_btn = make_context_menu_button(if es { "Pegar" } else { "Paste" });
+    let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
+    let target_str = target_dir.to_string_lossy().to_string();
+    let pop = popover.clone();
+    paste_btn.connect_clicked(move |_| {
+        pop.popdown();
+        let _ = anchor_widget.activate_action("win.paste_into", Some(&target_str.to_variant()));
+    });
+    container.append(&paste_btn);
+}
+
 /// Menú contextual genérico de fondo para vistas sin opciones espaciales (Lista, Columnas, Galería).
 pub(super) fn show_background_create_menu(
     anchor: &impl gtk4::prelude::IsA<gtk4::Widget>,
@@ -312,7 +337,8 @@ pub(super) fn show_background_create_menu(
     let main_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
     stack.add_named(&main_box, Some("main"));
 
-    append_create_new_submenu(&popover, &main_box, &stack, target_dir, on_created);
+    append_create_new_submenu(&popover, &main_box, &stack, target_dir.clone(), on_created);
+    append_paste_menu_item(&popover, &main_box, anchor, &target_dir);
 
     stack.set_visible_child_name("main");
     popover.set_child(Some(&stack));
@@ -616,6 +642,22 @@ pub(super) fn show_item_context_menu(
     }
     vbox.append(&open_btn);
 
+    if is_dir {
+        let new_tab_btn = make_context_menu_button(if es {
+            "Abrir en nueva pestaña"
+        } else {
+            "Open in New Tab"
+        });
+        let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
+        let target_str = path.to_string_lossy().to_string();
+        let pop = popover.clone();
+        new_tab_btn.connect_clicked(move |_| {
+            pop.popdown();
+            let _ = anchor_widget.activate_action("win.open_in_new_tab", Some(&target_str.to_variant()));
+        });
+        vbox.append(&new_tab_btn);
+    }
+
     // 2. Acciones exclusivas para lanzadores .desktop (Aplicaciones)
     if let Some(app_cfg) = desktop_app {
         let dock_cfg = malus_de_common::config::DockConfig::load_or_create_default();
@@ -654,6 +696,21 @@ pub(super) fn show_item_context_menu(
                 nav_cb(parent_path.clone());
             });
             vbox.append(&enclosing_btn);
+
+            let enclosing_tab_btn = make_context_menu_button(if es {
+                "Abrir carpeta contenedora en nueva pestaña"
+            } else {
+                "Open Enclosing Folder in New Tab"
+            });
+            let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
+            let parent_str = parent.to_string_lossy().to_string();
+            let pop = popover.clone();
+            enclosing_tab_btn.connect_clicked(move |_| {
+                pop.popdown();
+                let _ = anchor_widget
+                    .activate_action("win.open_in_new_tab", Some(&parent_str.to_variant()));
+            });
+            vbox.append(&enclosing_tab_btn);
         }
     }
 
@@ -736,7 +793,59 @@ pub(super) fn show_item_context_menu(
         vbox.append(&bm_btn);
     }
 
-    // 7. Copiar ruta
+    // 7. Copiar / Cortar / Pegar (y Copiar ruta)
+    if path != std::path::Path::new("/") {
+        let copy_item_btn = make_context_menu_button(if es { "Copiar" } else { "Copy" });
+        {
+            let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
+            let target_str = path.to_string_lossy().to_string();
+            let pop = popover.clone();
+            copy_item_btn.connect_clicked(move |_| {
+                pop.popdown();
+                let _ =
+                    anchor_widget.activate_action("win.copy_item", Some(&target_str.to_variant()));
+            });
+        }
+        vbox.append(&copy_item_btn);
+
+        if !is_inside_trash(path) && path.parent().is_some() {
+            let cut_item_btn = make_context_menu_button(if es { "Cortar" } else { "Cut" });
+            {
+                let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
+                let target_str = path.to_string_lossy().to_string();
+                let pop = popover.clone();
+                cut_item_btn.connect_clicked(move |_| {
+                    pop.popdown();
+                    let _ = anchor_widget
+                        .activate_action("win.cut_item", Some(&target_str.to_variant()));
+                });
+            }
+            vbox.append(&cut_item_btn);
+        }
+
+        if is_dir
+            && can_create_in_folder(path)
+            && crate::operations::has_clipboard_files()
+        {
+            let paste_into_btn = make_context_menu_button(if es {
+                "Pegar en carpeta"
+            } else {
+                "Paste into Folder"
+            });
+            {
+                let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
+                let target_str = path.to_string_lossy().to_string();
+                let pop = popover.clone();
+                paste_into_btn.connect_clicked(move |_| {
+                    pop.popdown();
+                    let _ = anchor_widget
+                        .activate_action("win.paste_into", Some(&target_str.to_variant()));
+                });
+            }
+            vbox.append(&paste_into_btn);
+        }
+    }
+
     let copy_btn = make_context_menu_button(if es { "Copiar ruta" } else { "Copy Path" });
     {
         let p_copy = path.to_path_buf();
