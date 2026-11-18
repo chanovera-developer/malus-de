@@ -468,7 +468,7 @@ struct DrmOutputSurface {
         usize,
     >,
     dock_redraw_buffers: usize,
-    full_damage_pending: bool,
+    full_damage_buffers: usize,
     last_commit_counter: usize,
     last_output_commit_counter: usize,
     pending_damage_buffers: usize,
@@ -965,7 +965,7 @@ fn create_drm_output_surface_for_connector(
         last_window_geometries: std::collections::HashMap::new(),
         window_redraw_shadow_blur: std::collections::HashMap::new(),
         dock_redraw_buffers: if ENABLE_DAMAGE_TRACKING { 3 } else { 0 },
-        full_damage_pending: true,
+        full_damage_buffers: if ENABLE_DAMAGE_TRACKING { 3 } else { 1 },
         last_commit_counter: 0,
         last_output_commit_counter: 0,
         pending_damage_buffers: 1,
@@ -1011,7 +1011,7 @@ fn apply_output_config_to_surface(
                 Ok(()) => {
                     let (width, height) = mode.size();
                     s.size = (width as i32, height as i32).into();
-                    s.full_damage_pending = true;
+                    s.full_damage_buffers = if ENABLE_DAMAGE_TRACKING { 3 } else { 1 };
                     s.flip_pending = None;
                     s.cursor_history.clear();
                     s.extra_damage_history.clear();
@@ -1070,7 +1070,7 @@ fn apply_output_config_to_surface(
         layer.layer_surface().send_configure();
     }
 
-    s.full_damage_pending = true;
+    s.full_damage_buffers = if ENABLE_DAMAGE_TRACKING { 3 } else { 1 };
     s.flip_pending = None;
     s.pending_damage_buffers = 1;
     s.cursor_history.clear();
@@ -2050,7 +2050,7 @@ pub fn run_drm() -> Result<()> {
                     }
                     if let Ok(mut surfs) = surfaces_for_vt.lock() {
                         for s in surfs.iter_mut() {
-                            s.full_damage_pending = true;
+                            s.full_damage_buffers = if ENABLE_DAMAGE_TRACKING { 3 } else { 1 };
                             s.flip_pending = None;
                             s.pending_damage_buffers = 1;
                             s.cursor_history.clear();
@@ -3057,11 +3057,13 @@ pub fn run_drm() -> Result<()> {
         let frame_start = Instant::now();
         state.resume_timed_out_dock_animations(frame_start);
         state.tick_snap_layouts(frame_start);
+        state.tick_app_switcher_deck(frame_start);
         if state.snap_layouts.take_closed_dirty() || state.take_app_switcher_deck_closed_dirty() {
+            let full_bufs = if ENABLE_DAMAGE_TRACKING { 3 } else { 1 };
             if let Ok(mut surfs) = shared_surfaces.lock() {
                 for s in surfs.iter_mut() {
-                    s.full_damage_pending = true;
-                    s.pending_damage_buffers = s.pending_damage_buffers.max(3);
+                    s.full_damage_buffers = s.full_damage_buffers.max(full_bufs);
+                    s.pending_damage_buffers = s.pending_damage_buffers.max(full_bufs);
                 }
             }
         }
@@ -3259,7 +3261,7 @@ pub fn run_drm() -> Result<()> {
                 let out_name = s.output.name();
                 compositor_anim_active
                     || s.pending_damage_buffers > 0
-                    || s.full_damage_pending
+                    || s.full_damage_buffers > 0
                     || s.last_commit_counter != state.surface_commit_counter
                     || s.last_output_commit_counter != state.output_commit_counter(&out_name)
                     || s.last_expose_revision != state.expose.render_revision
@@ -3934,7 +3936,7 @@ pub fn run_drm() -> Result<()> {
                         let deck_windows = state.deck_windows_for_render();
                         let app_switcher = &mut state.app_switcher;
                         let ssd = &mut state.ssd;
-                        Some(crate::app_switcher::prepare_deck_cards(
+                        crate::app_switcher::prepare_deck_cards(
                             &mut renderer,
                             &mut app_switcher.deck,
                             ssd,
@@ -3944,7 +3946,7 @@ pub fn run_drm() -> Result<()> {
                             scale,
                             is_dark_theme,
                             now,
-                        ))
+                        )
                     } else {
                         None
                     };
@@ -3969,7 +3971,8 @@ pub fn run_drm() -> Result<()> {
                 let workspace_rev_changed =
                     out_surface.last_workspace_revision != state.workspace_revision;
                 if expose_just_closed || expose_rev_changed || workspace_rev_changed {
-                    out_surface.full_damage_pending = true;
+                    out_surface.full_damage_buffers =
+                        out_surface.full_damage_buffers.max(damage_buffers_per_event);
                     out_surface.pending_damage_buffers =
                         out_surface.pending_damage_buffers.max(damage_buffers_per_event);
                 }
@@ -4112,6 +4115,7 @@ pub fn run_drm() -> Result<()> {
                         tracker_elements.push(MalusDrmElement::Wayland(elem));
                     }
                 }
+                if app_switcher_deck_frame.is_none() {
                 for (
                     root_id,
                     win_elems,
@@ -4266,6 +4270,7 @@ pub fn run_drm() -> Result<()> {
                         }
                     }
                 }
+                }
                 for elem in &lower_elements {
                     tracker_elements.push(MalusDrmElement::Wayland(elem));
                 }
@@ -4418,7 +4423,7 @@ pub fn run_drm() -> Result<()> {
                     || !wallpaper_popups.is_empty()
                     || !state.active_popups.is_empty()
                     || out_surface.dock_redraw_buffers > 0
-                    || out_surface.full_damage_pending;
+                    || out_surface.full_damage_buffers > 0;
 
                 let needs_render = has_active_effects || out_surface.pending_damage_buffers > 0;
                 if !needs_render || out_surface.is_flip_pending() {
@@ -4459,12 +4464,11 @@ pub fn run_drm() -> Result<()> {
                     && app_switcher_deck_frame.is_none()
                     && occluders.iter().any(|occ| occ.contains_rect(screen_bounds));
 
-                let age_to_use = if out_surface.full_damage_pending {
+                let age_to_use = if out_surface.full_damage_buffers > 0 {
                     0
                 } else {
                     age as usize
                 };
-                out_surface.full_damage_pending = false;
 
                 if age_to_use == 0 {
                     out_surface.cursor_history.clear();
@@ -4999,6 +5003,7 @@ pub fn run_drm() -> Result<()> {
                         let force_full_bg_capture = out_surface.background_dirty
                             || out_surface.last_background_size != (out_surface.size.w, out_surface.size.h)
                             || expose_render_bundle.is_some()
+                            || app_switcher_deck_frame.is_some()
                             || state.theme_transition_started_at.is_some()
                             || theme_capture_request.is_some()
                             || state.workspace_transition.is_some()
@@ -6425,6 +6430,9 @@ pub fn run_drm() -> Result<()> {
                     if out_surface.pending_damage_buffers > 0 {
                         out_surface.pending_damage_buffers -= 1;
                     }
+                    if out_surface.full_damage_buffers > 0 {
+                        out_surface.full_damage_buffers -= 1;
+                    }
 
                     if let Some(new_rect) = current_cursor_rect {
                         out_surface.cursor_history.push_front(new_rect);
@@ -6474,15 +6482,17 @@ pub fn run_drm() -> Result<()> {
                 }
             }
             if ws_transition_finished || (ws_transition_attempted && !ws_transition_drawn) {
+                let full_bufs = if ENABLE_DAMAGE_TRACKING { 3 } else { 1 };
                 state.workspace_transition = None;
                 for s in surfs.iter_mut() {
-                    s.full_damage_pending = true;
+                    s.full_damage_buffers = s.full_damage_buffers.max(full_bufs);
                 }
             }
             if workspace_switch_pending && (ws_capture_outputs > 0 || surfs.is_empty()) {
+                let full_bufs = if ENABLE_DAMAGE_TRACKING { 3 } else { 1 };
                 state.commit_pending_workspace_switch(ws_capture_outputs > 0);
                 for s in surfs.iter_mut() {
-                    s.full_damage_pending = true;
+                    s.full_damage_buffers = s.full_damage_buffers.max(full_bufs);
                 }
             }
         }

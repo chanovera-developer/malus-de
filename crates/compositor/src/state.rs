@@ -3266,6 +3266,12 @@ impl MalusState {
         self.app_switcher.is_active && !self.app_switcher_uses_deck()
     }
 
+    pub fn tick_app_switcher_deck(&mut self, now: Instant) {
+        if self.app_switcher.deck.active {
+            let _ = self.app_switcher.deck.tick(now);
+        }
+    }
+
     pub fn take_app_switcher_deck_closed_dirty(&mut self) -> bool {
         let dirty = self.app_switcher.closed_dirty || self.app_switcher.deck.take_closed_dirty();
         self.app_switcher.closed_dirty = false;

@@ -432,6 +432,16 @@ impl WindowShadowPipeline {
             let prev_blend = gl.IsEnabled(ffi::BLEND);
             let prev_scissor = gl.IsEnabled(ffi::SCISSOR_TEST);
             let prev_cull = gl.IsEnabled(ffi::CULL_FACE);
+            let mut prev_program = 0;
+            let mut prev_src_rgb = 0;
+            let mut prev_dst_rgb = 0;
+            let mut prev_src_alpha = 0;
+            let mut prev_dst_alpha = 0;
+            gl.GetIntegerv(ffi::CURRENT_PROGRAM, &mut prev_program);
+            gl.GetIntegerv(ffi::BLEND_SRC_RGB, &mut prev_src_rgb);
+            gl.GetIntegerv(ffi::BLEND_DST_RGB, &mut prev_dst_rgb);
+            gl.GetIntegerv(ffi::BLEND_SRC_ALPHA, &mut prev_src_alpha);
+            gl.GetIntegerv(ffi::BLEND_DST_ALPHA, &mut prev_dst_alpha);
 
             // Desactivar scissor previo para que la penumbra no sea recortada
             gl.Disable(ffi::SCISSOR_TEST);
@@ -477,14 +487,14 @@ impl WindowShadowPipeline {
 
             gl.DrawArrays(ffi::TRIANGLES, 0, if use_ring { 24 } else { 6 });
 
-            // Restaurar estado GL previo canónico de Smithay
-            gl.UseProgram(0);
+            // Restaurar estado GL previo exacto
+            gl.UseProgram(prev_program as u32);
 
             gl.BlendFuncSeparate(
-                ffi::ONE,
-                ffi::ONE_MINUS_SRC_ALPHA,
-                ffi::ONE,
-                ffi::ONE_MINUS_SRC_ALPHA,
+                prev_src_rgb as u32,
+                prev_dst_rgb as u32,
+                prev_src_alpha as u32,
+                prev_dst_alpha as u32,
             );
             if prev_blend == ffi::FALSE {
                 gl.Disable(ffi::BLEND);

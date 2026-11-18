@@ -248,6 +248,7 @@ pub fn run_winit() -> Result<()> {
         let frame_start = Instant::now();
         state.resume_timed_out_dock_animations(frame_start);
         state.tick_snap_layouts(frame_start);
+        state.tick_app_switcher_deck(frame_start);
         let _ = state.snap_layouts.take_closed_dirty();
         let _ = state.take_app_switcher_deck_closed_dirty();
 
@@ -1674,7 +1675,7 @@ pub fn run_winit() -> Result<()> {
                     let deck_windows = state.deck_windows_for_render();
                     let app_switcher = &mut state.app_switcher;
                     let ssd = &mut state.ssd;
-                    Some(crate::app_switcher::prepare_deck_cards(
+                    crate::app_switcher::prepare_deck_cards(
                         renderer,
                         &mut app_switcher.deck,
                         ssd,
@@ -1684,7 +1685,7 @@ pub fn run_winit() -> Result<()> {
                         1.0,
                         is_dark_theme,
                         now,
-                    ))
+                    )
                 } else {
                     None
                 };

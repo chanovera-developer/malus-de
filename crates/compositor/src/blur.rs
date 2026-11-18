@@ -474,6 +474,28 @@ impl GaussianBlur {
         );
     }
 
+    /// Aplica desenfoque gaussiano sobre el fondo limpio capturado (`snapshot_tex`) con opacidad configurable.
+    pub fn render_captured_blur_alpha(
+        &mut self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        screen_size: Size<i32, Physical>,
+        win_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        alpha: f32,
+    ) {
+        self.render_blur_with_exponent_alpha(
+            gl,
+            projection,
+            screen_size,
+            win_rect,
+            corner_radius,
+            4.2,
+            true,
+            alpha,
+        );
+    }
+
     /// Aplica desenfoque gaussiano a la región de pantalla con opacidad configurable (`0.0..=1.0`).
     pub fn render_blur_alpha(
         &mut self,
@@ -839,6 +861,8 @@ impl GaussianBlur {
             // 1. Guardar estado GL previo
             let mut prev_fbo = 0;
             let mut prev_viewport = [0; 4];
+            let mut prev_active_tex = 0;
+            let mut prev_program = 0;
             let prev_blend = gl.IsEnabled(ffi::BLEND);
             let prev_scissor = gl.IsEnabled(ffi::SCISSOR_TEST);
             let prev_cull = gl.IsEnabled(ffi::CULL_FACE);
@@ -847,6 +871,8 @@ impl GaussianBlur {
             let mut prev_dst_rgb = 0;
             let mut prev_src_alpha = 0;
             let mut prev_dst_alpha = 0;
+            gl.GetIntegerv(ffi::ACTIVE_TEXTURE, &mut prev_active_tex);
+            gl.GetIntegerv(ffi::CURRENT_PROGRAM, &mut prev_program);
             gl.GetIntegerv(ffi::BLEND_SRC_RGB, &mut prev_src_rgb);
             gl.GetIntegerv(ffi::BLEND_DST_RGB, &mut prev_dst_rgb);
             gl.GetIntegerv(ffi::BLEND_SRC_ALPHA, &mut prev_src_alpha);
@@ -1029,7 +1055,8 @@ impl GaussianBlur {
 
             // 5. Restaurar estado GL previo
             gl.BindTexture(ffi::TEXTURE_2D, 0);
-            gl.UseProgram(0);
+            gl.ActiveTexture(prev_active_tex as u32);
+            gl.UseProgram(prev_program as u32);
 
             if prev_blend == ffi::FALSE {
                 gl.Disable(ffi::BLEND);
@@ -1371,15 +1398,21 @@ impl GaussianBlur {
 
         unsafe {
             let prev_blend = gl.IsEnabled(ffi::BLEND);
+            let prev_scissor = gl.IsEnabled(ffi::SCISSOR_TEST);
+            let prev_cull = gl.IsEnabled(ffi::CULL_FACE);
+            let mut prev_program = 0;
             let mut prev_src_rgb = 0;
             let mut prev_dst_rgb = 0;
             let mut prev_src_alpha = 0;
             let mut prev_dst_alpha = 0;
+            gl.GetIntegerv(ffi::CURRENT_PROGRAM, &mut prev_program);
             gl.GetIntegerv(ffi::BLEND_SRC_RGB, &mut prev_src_rgb);
             gl.GetIntegerv(ffi::BLEND_DST_RGB, &mut prev_dst_rgb);
             gl.GetIntegerv(ffi::BLEND_SRC_ALPHA, &mut prev_src_alpha);
             gl.GetIntegerv(ffi::BLEND_DST_ALPHA, &mut prev_dst_alpha);
 
+            gl.Disable(ffi::SCISSOR_TEST);
+            gl.Disable(ffi::CULL_FACE);
             gl.Enable(ffi::BLEND);
             gl.BlendFuncSeparate(
                 ffi::SRC_ALPHA,
@@ -1387,6 +1420,13 @@ impl GaussianBlur {
                 ffi::ZERO,
                 ffi::ONE,
             );
+            if gl.VertexAttribDivisor.is_loaded() {
+                gl.VertexAttribDivisor(0, 0);
+                gl.VertexAttribDivisor(1, 0);
+            }
+            gl.DisableVertexAttribArray(0);
+            gl.DisableVertexAttribArray(1);
+            gl.BindBuffer(ffi::ARRAY_BUFFER, 0);
             gl.UseProgram(self.blit_program);
             gl.Uniform1i(self.blit_u_texture, 0);
             gl.Uniform1i(self.blit_u_use_mask, 0);
@@ -1418,7 +1458,7 @@ impl GaussianBlur {
             gl.Uniform1i(self.blit_u_is_drm, if is_drm { 1 } else { 0 });
             gl.Uniform1f(self.blit_u_corner_radius, corner_radius);
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
-            gl.UseProgram(0);
+            gl.UseProgram(prev_program as u32);
 
             gl.BlendFuncSeparate(
                 prev_src_rgb as u32,
@@ -1428,6 +1468,12 @@ impl GaussianBlur {
             );
             if prev_blend == ffi::FALSE {
                 gl.Disable(ffi::BLEND);
+            }
+            if prev_scissor != ffi::FALSE {
+                gl.Enable(ffi::SCISSOR_TEST);
+            }
+            if prev_cull != ffi::FALSE {
+                gl.Enable(ffi::CULL_FACE);
             }
         }
     }
@@ -1587,15 +1633,21 @@ impl GaussianBlur {
 
         unsafe {
             let prev_blend = gl.IsEnabled(ffi::BLEND);
+            let prev_scissor = gl.IsEnabled(ffi::SCISSOR_TEST);
+            let prev_cull = gl.IsEnabled(ffi::CULL_FACE);
+            let mut prev_program = 0;
             let mut prev_src_rgb = 0;
             let mut prev_dst_rgb = 0;
             let mut prev_src_alpha = 0;
             let mut prev_dst_alpha = 0;
+            gl.GetIntegerv(ffi::CURRENT_PROGRAM, &mut prev_program);
             gl.GetIntegerv(ffi::BLEND_SRC_RGB, &mut prev_src_rgb);
             gl.GetIntegerv(ffi::BLEND_DST_RGB, &mut prev_dst_rgb);
             gl.GetIntegerv(ffi::BLEND_SRC_ALPHA, &mut prev_src_alpha);
             gl.GetIntegerv(ffi::BLEND_DST_ALPHA, &mut prev_dst_alpha);
 
+            gl.Disable(ffi::SCISSOR_TEST);
+            gl.Disable(ffi::CULL_FACE);
             gl.Enable(ffi::BLEND);
             gl.BlendFuncSeparate(
                 ffi::SRC_ALPHA,
@@ -1603,6 +1655,13 @@ impl GaussianBlur {
                 ffi::ZERO,
                 ffi::ONE,
             );
+            if gl.VertexAttribDivisor.is_loaded() {
+                gl.VertexAttribDivisor(0, 0);
+                gl.VertexAttribDivisor(1, 0);
+            }
+            gl.DisableVertexAttribArray(0);
+            gl.DisableVertexAttribArray(1);
+            gl.BindBuffer(ffi::ARRAY_BUFFER, 0);
             gl.UseProgram(self.blit_program);
             gl.Uniform1i(self.blit_u_texture, 0);
             gl.Uniform1i(self.blit_u_use_mask, 0);
@@ -1647,7 +1706,7 @@ impl GaussianBlur {
             gl.Uniform1i(self.blit_u_is_drm, if is_drm { 1 } else { 0 });
             gl.Uniform1f(self.blit_u_corner_radius, corner_radius);
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
-            gl.UseProgram(0);
+            gl.UseProgram(prev_program as u32);
 
             gl.BlendFuncSeparate(
                 prev_src_rgb as u32,
@@ -1657,6 +1716,12 @@ impl GaussianBlur {
             );
             if prev_blend == ffi::FALSE {
                 gl.Disable(ffi::BLEND);
+            }
+            if prev_scissor != ffi::FALSE {
+                gl.Enable(ffi::SCISSOR_TEST);
+            }
+            if prev_cull != ffi::FALSE {
+                gl.Enable(ffi::CULL_FACE);
             }
         }
     }

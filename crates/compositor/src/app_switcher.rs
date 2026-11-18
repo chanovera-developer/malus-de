@@ -657,8 +657,11 @@ pub fn prepare_deck_cards(
     scale: f64,
     is_dark: bool,
     now: Instant,
-) -> (f32, Vec<PreparedDeckCard>) {
+) -> Option<(f32, Vec<PreparedDeckCard>)> {
     deck.tick(now);
+    if !deck.active {
+        return None;
+    }
     let progress = deck.open_eased(now);
     let header_alpha = ((progress - 0.25) / 0.75).clamp(0.0, 1.0);
 
@@ -813,7 +816,7 @@ pub fn prepare_deck_cards(
         });
     }
 
-    (progress, prepared)
+    Some((progress, prepared))
 }
 
 /// Dibuja las tarjetas animadas del App Switcher Deck sobre el escritorio limpio (sin blur global).
@@ -875,7 +878,7 @@ pub fn render_deck_frame(
             if let Some(ref mut b) = blur {
                 if let Some(blur_rect) = card.blur_rect_phys {
                     let _ = frame.with_context(|gl| {
-                        b.render_blur_alpha(
+                        b.render_captured_blur_alpha(
                             gl,
                             projection,
                             screen_size,
@@ -901,7 +904,7 @@ pub fn render_deck_frame(
                         sub_offset,
                         card.card_phys.size,
                         card.card_radius_phys,
-                        if card.is_front { 1.0 } else { 0.4 },
+                        0.0,
                         false,
                     );
                     let _ = draw_render_elements(frame, scale, std::slice::from_ref(elem), damage);
@@ -913,7 +916,7 @@ pub fn render_deck_frame(
                         card.card_phys.loc.x - tb_geo.loc.x,
                         card.card_phys.loc.y - tb_geo.loc.y,
                     ));
-                    shader.apply_to_frame(
+                    shader.apply_clip_to_frame(
                         frame,
                         tb_geo.size,
                         sub_offset,
