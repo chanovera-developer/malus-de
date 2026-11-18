@@ -140,7 +140,7 @@ Si prefieres construir todo directamente en la máquina limpia:
    ```
 2. Clona y compila en perfil Release:
    ```bash
-   git clone https://github.com/chanovera-dev/malus-de.git
+   git clone https://github.com/chanovera-developer/malus-de.git
    cd malus-de
    cargo build --release --workspace
    sudo ./scripts/install-session.sh --skip-build
