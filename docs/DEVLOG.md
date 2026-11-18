@@ -4,6 +4,28 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-18] — Pestañas, Opacidad de Archivos Ocultos y Copiar/Cortar/Pegar en Branches (`Command + C / X / V`)
+
+### 1. Soporte Multi-Pestaña y Apertura en Nueva Pestaña (`crates/branches`)
+- **Gestión independiente por pestaña ([`app_window.rs`](../crates/branches/src/app_window.rs), [`folder_pane.rs`](../crates/branches/src/folder_pane.rs)):** Cada `BranchesTab` encapsula sus paneles primario y secundario (`Split View`), historial, vista activa y filtro de búsqueda; la barra superior, `PathBar`, `StatusBar` y selección en barra lateral se sincronizan automáticamente al alternar pestañas.
+- **Barra de pestañas estilo Finder ([`macos-branches.css`](../crates/branches/src/styles/macos-branches.css)):** Contenedor `.branches-tab-bar` visible automáticamente al tener 2 o más pestañas, con botón de cierre individual, cierre por clic central, botón `+` (`Ctrl+T`), entrada `"Nueva Pestaña"` en el menú de acciones y atajos `Ctrl+T`, `Ctrl+W`, `Ctrl+Tab` / `Ctrl+Shift+Tab` y `Ctrl+Page_Up` / `Ctrl+Page_Down`.
+- **Menús contextuales y barra lateral ([`mod.rs`](../crates/branches/src/views/mod.rs), [`sidebar.rs`](../crates/branches/src/sidebar.rs)):** Añadido `"Abrir en nueva pestaña"` (y `"Abrir carpeta contenedora en nueva pestaña"` en archivos) dentro de `show_item_context_menu`, además de menú contextual y apertura con clic central en **Favoritos**, **Compartidos**, **Ubicaciones**, **Marcadores**, **Unidades montadas**, **Recientes** (`@recents`) y **Aplicaciones** (`@applications`) mediante `win.open_in_new_tab`.
+
+### 2. Archivos Ocultos y Portapapeles de Archivos (`Copy / Cut / Paste`)
+- **Opacidad de ocultos ([`macos-branches.css`](../crates/branches/src/styles/macos-branches.css), `crates/branches/src/views/*`):** Los elementos con `item.is_hidden` reciben `.branches-hidden-item` (`opacity: 0.5`) en las 4 vistas (Iconos, Lista, Columnas y Galería), preservando `opacity: 0.0` durante el arrastre.
+- **Operaciones de portapapeles ([`operations.rs`](../crates/branches/src/operations.rs), [`mod.rs`](../crates/branches/src/views/mod.rs), [`app_window.rs`](../crates/branches/src/app_window.rs)):**
+  - Implementados `set_clipboard`, `clear_clipboard`, `has_clipboard_files`, `is_path_cut`, `paste_from_clipboard_async` y `paste_payload_into` con interoperabilidad `x-special/gnome-copied-files` y `text/uri-list` en Wayland/GTK4, resolución de colisiones (`" copia"`), protección ante copias/movimientos dentro de subcarpetas descendientes y migración de metadatos SQLite al mover por corte.
+  - Atenuación `.branches-cut-item` (`opacity: 0.5`) para elementos cortados y acciones `"Copiar"`, `"Cortar"`, `"Pegar"` y `"Pegar en carpeta"` en menú de ventana, menús contextuales de archivos/carpetas y fondo de vistas.
+- **Atajos `Command` (`Super`/`Meta`) y `Ctrl` + Liberación de `Command+V` ([`app_window.rs`](../crates/branches/src/app_window.rs), [`drm.rs`](../crates/compositor/src/backend/drm.rs), [`winit.rs`](../crates/compositor/src/backend/winit.rs)):**
+  - Activados `Command+C / X / V` (`SUPER_MASK | META_MASK`) y `Ctrl+C / X / V` en Branches cuando no hay un campo de texto enfocado.
+  - Retirada la intercepción global de `Super+V` (`ToggleClipboardHistory`) en los backends DRM y Winit del compositor para que `Command+V` llegue a las aplicaciones (el historial del portapapeles continúa disponible en Spotlight `⌘4`).
+
+### 3. Validación
+- `cargo test --offline -p malus-de-branches -p malus-de-compositor`: **34 passed** en Branches (`0 failed`) y **81 passed** en el compositor (`0 failed`).
+- `cargo build --release --offline -p malus-de-branches -p malus-de-compositor`: compilación `--release` correcta (exit `0`).
+
+---
+
 ## [2026-11-18] — Tema Claro por Defecto, Compatibilidad con `kmscon` e Instalador Fedora Minimal
 
 ### 1. Tema Claro por Defecto en Instalaciones Nuevas
