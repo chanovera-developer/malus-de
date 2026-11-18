@@ -308,6 +308,34 @@ graph TD
 * **Wrapper Optimizado para IDEs Electron (`scripts/malus-ide-wrapper`):** Inyecta estilos de botones semáforo macOS en tiempo de ejecución en **Antigravity IDE** y **VS Code** (`antigravity-ide-wrapper`, `code-wrapper`) sin alterar archivos en disco (evitando alertas de integridad). Utiliza un `MutationObserver` restringido estrictamente a `.part.titlebar` con `subtree: false` y caché de URL en Python para operar con 0% de impacto en CPU y sin provocar *reflows* en el editor.
 * **Instalador y CLI (`scripts/install-session.sh`, `crates/ctl`):** Compila el workspace completo en perfil `release` e instala los 13 binarios ejecutables, cursores macOS, temas, portales (`malus-portals.conf`), políticas de Firefox y la entrada GDM.
 
+### 3.11. Funcionalidades de Uso Común Pendientes (Alcance M16–M24)
+Revisión de capacidades estándar de escritorio esperadas en el uso diario (especialmente en portátiles, multimedia, videollamadas y juegos) que aún no están conectadas o implementadas:
+* **Teclas de Hardware (`XF86*`) y OSD Flotante (M16):**
+  - Captura en `drm.rs` / `winit.rs` de `XF86AudioRaiseVolume`, `XF86AudioLowerVolume`, `XF86AudioMute`, `XF86AudioMicMute`, controles multimedia MPRIS (`XF86AudioPlay`/`Pause`/`Next`/`Prev`), brillo de pantalla (`XF86MonBrightnessUp`/`Down`), retroiluminación de teclado (`XF86KbdBrightnessUp`/`Down` vía `UPower`/`sysfs`) y teclas de energía/pantalla (`XF86PowerOff`, `XF86Sleep`, `XF86Display`).
+  - Overlay OSD translúcido estilo macOS al variar volumen, brillo o luz de teclado.
+* **Gestos Multitáctiles, Trackpad/Ratón y Esquinas Activas (M17):**
+  - Actualmente están implementados los deslizamientos de 3+ dedos (`GestureSwipe*`: Exposé y cambio de escritorio) y `tap-to-click` fijo en `drm.rs`, mientras que `natural_scrolling`, `shake_to_find_cursor`, `show_desktop_gesture` y `hot_corners` están declarados en `InputConfig` sin efecto real en el compositor.
+  - Pendiente: gestos `GesturePinch*` (mostrar escritorio y zoom hacia clientes), `GestureHold*`, aplicación en vivo de opciones `libinput` (scroll natural, aceleración/velocidad, *disable-while-typing*, clic secundario), sacudir para agrandar el cursor, esquinas activas y eventos táctiles (`InputEvent::Touch*`).
+* **Energía, Batería, Inactividad y Tapa (M18):**
+  - Indicador de batería del sistema (`UPower`) en Barra Superior y Centro de Control (porcentaje, tiempo restante y estado de carga).
+  - Protocolos `ext-idle-notify-v1` e `idle-inhibit-unstable-v1` para atenuar pantalla, bloquear automáticamente con `malus-de-session-lock`, suspender por inactividad y respetar inhibidores (vídeo en pantalla completa / llamadas).
+  - Reacción a cierre de tapa (`SwitchToggle` / `logind` `PrepareForSleep`) para bloquear y suspender.
+* **Night Shift Real y Capacidades Avanzadas de Pantalla (M19):**
+  - Hoy `BrightnessService::set_night_shift` solo escribe una clave GSettings sin efecto visual; falta aplicar temperatura cálida real vía gamma LUT de DRM CRTC o shader post-proceso, además de programación automática, VRR (*Adaptive Sync*) y perfiles ICC/HDR.
+* **Compartición de Pantalla PipeWire (M20):**
+  - Exposición de stream PipeWire vía `xdg-desktop-portal` (`ScreenCast`) para compartir pantalla, monitor o ventana en navegadores (Meet, Discord, Zoom) y OBS.
+* **IME, Selector de Emojis y Protocolos para Juegos (M21):**
+  - Soporte de métodos de entrada (`zwp-text-input-v3`, `zwp-input-method-v2` para IBus/Fcitx5) y teclado virtual (`zwp-virtual-keyboard-v1`).
+  - Selector nativo de Emojis y Símbolos (`Cmd + Ctrl + Espacio`).
+  - Protocolos `zwp-pointer-constraints-v1` y `zwp-relative-pointer-v1` para juegos 3D/FPS y clientes de escritorio remoto.
+* **Modo Concentración (DND) y Notificaciones Enriquecidas (M22):**
+  - Conectar el interruptor *Focus / No Molestar* del Centro de Control con `malus-de-notifications`, añadir horarios, silencio por aplicación y agrupación de notificaciones.
+* **Paneles Faltantes de Ajustes, Polkit Nativo y Privacidad (M23):**
+  - Añadir a `malus-de-settings` paneles para: Red/Wi-Fi, Bluetooth, Batería/Energía, Ratón y Trackpad, Notificaciones/Concentración, Idioma/Región/Fecha y Hora, Usuarios/Huella (`fprintd`) y Aplicaciones Predeterminadas.
+  - Reemplazar `mate-polkit` por un diálogo Polkit nativo coherente con `malus-de-dialogs` y añadir indicadores de privacidad en barra superior cuando micrófono/cámara/pantalla estén activos.
+* **Accesibilidad y Mezclador por Aplicación (M24):**
+  - Zoom de pantalla accesible, alto contraste, reducir movimiento/transparencia, soporte AT-SPI/lector de pantalla, mezclador de volumen por flujo PipeWire e integración visual de actualizaciones (DNF/Flatpak).
+
 ---
 
 ## 4. Estado de Implementación & Roadmap
@@ -329,3 +357,12 @@ graph TD
 | **M13** | Motor Nativo GPU (`malus-de-render`) | 🟡 En Progreso | Infraestructura `wgpu` + `taffy` + `cosmic-text` + `glyphon` + SCTK implementada y probada (`tests/`), lista para migración progresiva de los clientes GTK4. |
 | **M14** | Optimización DRM KMS & Electron | ✅ Hecho | Idle sleeping (0% GPU en reposo), despacho `Duration::ZERO` para animaciones web a 60/120 Hz, caché estática de fondo para blur y wrapper Electron sin *layout thrashing*. |
 | **M15** | Indexación Reactiva Spotlight | 📋 Planificado | Monitoreo reactivo de directorios `.desktop` (`/usr/share/applications`, `~/.local/share/applications`) con `inotify`/`notify` para reflejar aplicaciones instaladas/eliminadas sin reiniciar sesión. |
+| **M16** | Teclas Multimedia (`XF86*`) & OSD | 📋 Planificado | Hotkeys de volumen, micrófono, MPRIS, brillo de pantalla, luz de teclado (`KbdBrightness`) y OSD flotante estilo macOS. |
+| **M17** | Gestos, Trackpad & Hot Corners | 📋 Planificado | Pellizco (`GesturePinch*`), configuración `libinput` en vivo (scroll natural, velocidad, DWT), *shake cursor*, eventos táctiles y esquinas activas. |
+| **M18** | Energía, Batería & Inactividad | 📋 Planificado | Indicador de batería (`UPower`), `ext-idle-notify-v1`, `idle-inhibit`, bloqueo/suspensión automática y soporte de cierre de tapa. |
+| **M19** | Night Shift Real & Display | 📋 Planificado | Temperatura cálida real vía gamma LUT DRM o shader, programación por horario, VRR (*Adaptive Sync*) y gestión de color/HDR. |
+| **M20** | ScreenCast PipeWire (`Portal`) | 📋 Planificado | Flujo PipeWire vía `xdg-desktop-portal` para compartir pantalla o ventanas en navegadores y OBS. |
+| **M21** | IME, Selector de Emojis & Juegos | 📋 Planificado | Protocolos `text-input-v3`/`input-method-v2`/`virtual-keyboard`, selector de emojis (`Cmd+Ctrl+Espacio`) y `pointer-constraints`/`relative-pointer`. |
+| **M22** | Concentración (DND) & Avisos | 📋 Planificado | Integración real de Modo No Molestar entre Centro de Control y `malus-de-notifications`, reglas por app y agrupación. |
+| **M23** | Ajustes Completos & Seguridad | 📋 Planificado | Paneles de Red, Bluetooth, Energía, Trackpad, Región/Hora y Huella (`fprintd`); agente Polkit nativo e indicadores de cámara/micrófono. |
+| **M24** | Accesibilidad & Mezclador | 📋 Planificado | Zoom accesible, reducir movimiento/transparencia, AT-SPI/lector de pantalla, volumen por aplicación PipeWire y actualizaciones del sistema. |

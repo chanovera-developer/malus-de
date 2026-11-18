@@ -49,6 +49,15 @@ El proyecto sigue una hoja de ruta incremental por hitos. La base del escritorio
 | M13 | Motor gráfico nativo | 🟡 | Infraestructura lista, migración progresiva en marcha. |
 | M14 | Optimización DRM | ✅ | Idle sleep y ajustes de rendimiento ya aplicados. |
 | M15 | Spotlight reactivo | 📋 | Pendiente de integración de monitorización de apps. |
+| M16 | Hotkeys (`XF86*`) y OSD | 📋 | Teclas de volumen, micrófono, brillo, retroiluminación de teclado, MPRIS y OSD flotante. |
+| M17 | Gestos, Trackpad y Hot Corners | 📋 | Pellizco (`pinch`), scroll natural/aceleración reales, *shake cursor*, táctil y esquinas activas. |
+| M18 | Energía, Batería e Inactividad | 📋 | Indicador de batería (`UPower`), `ext-idle-notify`, inhibición, cierre de tapa y suspensión. |
+| M19 | Night Shift real y Display | 📋 | LUT gamma DRM/shader para Modo Noche real, horario y VRR / gestión de color. |
+| M20 | ScreenCast PipeWire | 📋 | Compartición de pantalla/ventana vía `xdg-desktop-portal` para navegadores y OBS. |
+| M21 | IME, Emojis y Juegos | 📋 | `text-input-v3`/Fcitx5, selector de emojis y `pointer-constraints`/`relative-pointer`. |
+| M22 | Concentración (DND) y Avisos | 📋 | Modo No Molestar real conectado al daemon de notificaciones y agrupación por app. |
+| M23 | Ajustes completos y Polkit | 📋 | Paneles de Red, BT, Energía, Trackpad, Usuarios/Huella, Polkit nativo e indicadores cámara/mic. |
+| M24 | Accesibilidad y Mezclador | 📋 | Zoom de pantalla, reducir movimiento/transparencia, AT-SPI y volumen por aplicación. |
 
 En conjunto, el proyecto está en una fase de maduración técnica: la infraestructura principal ya está construida y la mayor parte del trabajo actual está centrado en estabilización, validación y completitud funcional de módulos específicos.
 
