@@ -4,6 +4,29 @@ Esta guía documenta el procedimiento completo para desplegar **Malus DE como un
 
 ---
 
+## Instalación Rápida en Un Solo Comando (Estilo Brave)
+
+Si ya estás en la terminal de **Fedora Minimal** con conexión a internet, puedes instalar todas las dependencias, clonar el repositorio, compilar Malus DE en perfil `Release` e instalar la sesión en un único comando:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/scripts/install-fedora-minimal.sh | bash
+```
+
+Si además quieres dejar configurado el arranque automático en `tty1` o instalar `greetd` + `tuigreet` directamente desde el mismo comando:
+
+```bash
+# Con arranque automático en TTY1 (~/.bash_profile)
+curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/scripts/install-fedora-minimal.sh | bash -s -- --tty-autostart
+
+# O con gestor visual ligero greetd + tuigreet
+curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/scripts/install-fedora-minimal.sh | bash -s -- --greetd
+```
+
+> [!NOTE]
+> El script [install-fedora-minimal.sh](../scripts/install-fedora-minimal.sh) descarga el código en `~/malus-de` (configurable con `--dir`), ejecuta `cargo build --release --workspace` y despliega los binarios en `/usr/local/bin/`. Al terminar, inicia el entorno con `/usr/local/bin/malus-session` (o reinicia si activaste `--tty-autostart` / `--greetd`). Si prefieres ejecutar o revisar cada paso manualmente, sigue las secciones detalladas a continuación.
+
+---
+
 ## 1. Filosofía y Objetivos
 
 * **Autonomía Total:** Demostrar que Malus DE opera como un entorno de primera clase, equivalente a Sway o Hyprland, autogestionando toda la capa gráfica sobre Smithay.
@@ -134,9 +157,9 @@ Si prefieres construir todo directamente en la máquina limpia:
 1. Instala las herramientas de desarrollo y bibliotecas header:
    ```bash
    sudo dnf install -y \
-       rust cargo gcc clang pkgconf-pkg-config git \
-       gtk4-devel libadwaita-devel gtk4-layer-shell-devel \
-       'pkgconfig(gbm)' libinput-devel libseat-devel \
+       rust cargo gcc clang pkgconf-pkg-config git curl pam \
+       gtk4-devel libadwaita-devel gtk4-layer-shell-devel gdk-pixbuf2-devel \
+       'pkgconfig(gbm)' libdrm-devel wayland-devel libinput-devel libseat-devel \
        systemd-devel dbus-devel libxkbcommon-devel sqlite-devel
    ```
 2. Clona y compila en perfil Release:
