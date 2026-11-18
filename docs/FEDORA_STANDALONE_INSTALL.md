@@ -103,7 +103,14 @@ En Fedora, el paquete `gdm` depende directamente de `gnome-shell`. Para evitarlo
 
 ### Opción A: Inicio Directo desde la TTY (Recomendada para pruebas y máxima ligereza)
 
-Esta opción no requiere ningún Display Manager. Al iniciar sesión en la consola negra `tty1`, arranca Malus DE automáticamente:
+Esta opción no requiere ningún Display Manager. Al iniciar sesión en la consola `tty1`, arranca Malus DE automáticamente:
+
+> [!IMPORTANT]
+> **Nota para Fedora 45+ (`kmscon` / `(pts/0)`):** Fedora 45 sustituyó la consola clásica del kernel (`fbcon`) por **`kmscon`**, el cual mantiene bloqueado el dispositivo DRM de la GPU (`/dev/dri/card*` devuelve `Device or resource busy`). `malus-session` detecta `kmscon` y se envuelve automáticamente con `kmscon-launch-gui` para que libere la GPU antes de arrancar el compositor; si necesitas lanzarlo manualmente desde la consola también puedes ejecutar:
+> ```bash
+> kmscon-launch-gui /usr/local/bin/malus-session
+> ```
+> O restaurar la TTY clásica en `tty1`: `sudo systemctl disable kmsconvt@tty1.service && sudo systemctl enable getty@tty1.service`.
 
 Edita o crea tu archivo `~/.bash_profile`:
 ```bash

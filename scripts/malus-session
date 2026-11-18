@@ -16,6 +16,31 @@ for pdir in "${MALUS_DE_PROJECT_DIR:-}" "$HOME/Proyectos/malus-de" "$HOME/Apps/m
     fi
 done
 
+# En Fedora 45+ la consola usa kmscon (pts/N) y retiene el DRM master de la GPU.
+# Si ejecutamos desde kmscon sin envolver todavía, delegar en kmscon-launch-gui
+# ANTES de redirigir stdout a tee para que kmscon reciba el escape OSC y libere la GPU.
+if [ -z "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ] && [ -z "${MALUS_KMSCON_WRAPPED:-}" ]; then
+    if command -v kmscon-launch-gui >/dev/null 2>&1 && [ -t 1 ]; then
+        is_kmscon_pty=0
+        case "${TERM:-}" in
+            kmscon*) is_kmscon_pty=1 ;;
+        esac
+        if [ "$is_kmscon_pty" -eq 0 ] && [ -n "${XDG_VTNR:-}" ]; then
+            case "$(tty 2>/dev/null || true)" in
+                /dev/pts/*)
+                    if pgrep -x kmscon >/dev/null 2>&1; then
+                        is_kmscon_pty=1
+                    fi
+                    ;;
+            esac
+        fi
+        if [ "$is_kmscon_pty" -eq 1 ]; then
+            export MALUS_KMSCON_WRAPPED=1
+            exec kmscon-launch-gui "$SELF_REAL" "$@"
+        fi
+    fi
+fi
+
 LOG_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/malus-de"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/session.log"
