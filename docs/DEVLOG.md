@@ -4,6 +4,33 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-18] — Lockscreen estilo macOS Sequoia, Autenticación PAM y Atajo `Super + L`
+
+### 1. Lockscreen Real, Multi-Monitor y *Vibrancy* (`crates/session-lock`)
+- **Autenticación con Linux-PAM (`src/auth.rs`):** Resolución del usuario activo mediante `libc::getpwuid(libc::getuid())` (`current_username`) y verificación asíncrona de contraseña vía `gio::spawn_blocking` cargando `libpam.so.0` (`verify_user_password`, probando los servicios `system-auth`, `login` y `passwd`).
+- **Desenfoque y *Vibrancy* del fondo (`src/blur_bg.rs`):** Detección del wallpaper activo (`wallpaper.{png,jpg,jpeg,webp,svg}` o respaldo por defecto/gradiente), textura nítida HiDPI para la pantalla principal y buffer pre-desenfocado (`box_blur_rgba_3_pass` a 720 px, radio 9) con realce de saturación (`1.60x`) y brillo (`1.04x`, `apply_vibrancy_rgba`) para el fondo translúcido de los controles.
+- **Animaciones estilo macOS Sequoia (`src/scale_fade.rs`, `src/main.rs`, `src/styles/lock.css`):**
+  - Pantalla en reposo limpia con fecha y hora arriba; al hacer clic o pulsar cualquier tecla aparece el formulario inferior con viñeta suave, resorte `sequoia_spring` y crecimiento animado del avatar (`38 px -> 58 px`). `Escape` oculta el formulario cuando está vacío.
+  - Entrada (`animate_lock_enter`: cross-dissolve del wallpaper en `240 ms` + UI `scale 1.04 -> 1.0` y `opacity 0 -> 1` en `320 ms` usando `ScaleFadeBox`) y salida al desbloquear (`animate_unlock_and_quit`: UI `scale 1.0 -> 1.045` y `opacity 1 -> 0` en `190 ms`, wallpaper `opacity 1 -> 0` en `240 ms`).
+  - Controles *squircle* (`n = 4.2` en Cairo) de `34 px` de alto (estrictamente `<= 37 px`): entrada `232 x 34 px` y botón `34 x 34 px`, vidrio esmerilado en tiempo real (`paint_frosted_backdrop`), borde especular, espaciado ajustado para el icono de mostrar/ocultar contraseña y animación de sacudida con mensaje de error si la validación falla.
+  - Cobertura multi-monitor (`Layer::Overlay`, namespace `malus-lock`): ventana en cada monitor conectado con reconstrucción dinámica (`connect_items_changed`); solo el monitor primario recibe `KeyboardMode::Exclusive` y el UI interactivo, mientras las pantallas secundarias muestran únicamente el wallpaper y al hacer clic despiertan el login en la pantalla principal. `close_request` bloqueado hasta desbloqueo válido.
+
+### 2. Integración en el Compositor, Atajos y Barra Superior (`crates/compositor`, `crates/top-bar`)
+- **Protección de sesión bloqueada (`crates/compositor/src/state.rs`, `drm.rs`, `winit.rs`):**
+  - Añadidos `is_session_locked()` y `lock_focus_surface()` con guardia en `set_keyboard_focus_with_sync`, cierre de modales al aparecer el layer `malus-lock` y bloqueo de atajos del entorno mientras la sesión está bloqueada (conservando `Ctrl+Alt+BackSpace` y `Ctrl+Alt+F1..F12` en `drm.rs`).
+  - Eliminación del doble blur `lock_blur_roots` en `drm.rs` y `winit.rs` para renderizar el fondo limpio del lockscreen.
+- **Atajo de bloqueo (`crates/compositor/src/state.rs`, `crates/top-bar/src/ui/global_menu.rs`):**
+  - Añadido `MalusState::lock_session()` enlazado a `Super + L` y `Ctrl + Super + Q` (registrado antes que `Super + Q`).
+  - Actualizada la etiqueta visual del menú Apple en `"Bloquear pantalla"` de `"⌃⌘L"` a `"⌘L"`.
+
+### 3. Validación y Estado
+- **`malus-de-session-lock`:** `cargo test -p malus-de-session-lock` (`8 passed; 0 failed`) y `cargo build --release -p malus-de-session-lock` (exit 0, sin advertencias).
+- **`malus-de-compositor`:** `cargo test -p malus-de-compositor` (`80 passed; 0 failed`) y `cargo build --release -p malus-de-compositor` (exit 0, sin advertencias).
+- **`malus-de-top-bar`:** `cargo build --release -p malus-de-top-bar` (exit 0) y `cargo test -p malus-de-top-bar` (`9 passed; 1 failed`, fallo previo ajeno en `services::tests::test_brightness_service`: `80.0` vs `85.0`).
+- *Pendiente:* verificación visual y flujo PAM completo en vivo dentro de la sesión gráfica.
+
+---
+
 ## [2026-11-18] — Selección Multi-GPU en DRM y Arranque TTY en Fedora Minimal
 
 ### 1. Sondeo y Prioridad Multi-GPU (`crates/compositor`)
