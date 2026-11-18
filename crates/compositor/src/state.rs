@@ -250,6 +250,7 @@ pub struct MalusState {
     pub ext_lock_handle: Option<ExtSessionLockV1>,
     pub ext_lock_client_pid: Option<i32>,
     pub ext_lock_surfaces: HashMap<String, LockSurface>,
+    pub malus_lock_layers: Vec<(Output, smithay::desktop::LayerSurface)>,
     pub lockscreen_respawn_at: Option<Instant>,
     pub session_locked_flag: Arc<AtomicBool>,
     pub fractional_scale_manager_state: FractionalScaleManagerState,
@@ -1210,6 +1211,7 @@ impl MalusState {
             ext_lock_handle: None,
             ext_lock_client_pid: None,
             ext_lock_surfaces: HashMap::new(),
+            malus_lock_layers: Vec::new(),
             lockscreen_respawn_at: None,
             session_locked_flag: Arc::new(AtomicBool::new(false)),
             fractional_scale_manager_state,
@@ -2296,13 +2298,14 @@ impl MalusState {
 
     /// Cambia el foco de teclado y garantiza la actualización de `Activated` incluso cuando `focus` es `None`
     /// (Smithay no invoca `SeatHandler::focus_changed` al limpiar el foco con `None`).
+    /// Indica si la sesión está bloqueada sin adquirir `layer_map_for_output` (evita interbloqueos
+    /// cuando el bucle de renderizado mantiene bloqueado el `Mutex<LayerMap>` de una pantalla).
     pub fn is_session_locked(&self) -> bool {
         self.ext_session_locked
-            || self.space.outputs().any(|output| {
-                let map = layer_map_for_output(output);
-                let locked = map.layers().any(|layer| layer.namespace() == "malus-lock");
-                locked
-            })
+            || self
+                .malus_lock_layers
+                .iter()
+                .any(|(_, layer)| layer.alive())
     }
 
     /// Verifica la salud del bloqueo `ext-session-lock-v1` y sincroniza el indicador atómico
@@ -2310,6 +2313,7 @@ impl MalusState {
     /// mantiene el estado bloqueado (pantalla negra) y relanza `malus-de-session-lock`.
     pub fn check_session_lock_liveness(&mut self) {
         self.ext_lock_surfaces.retain(|_, surf| surf.alive());
+        self.malus_lock_layers.retain(|(_, layer)| layer.alive());
         if self.ext_session_locked {
             let owner_dead = self
                 .ext_lock_handle
@@ -2357,16 +2361,13 @@ impl MalusState {
                 }
             }
         }
-        for output in self.space.outputs() {
-            let map = layer_map_for_output(output);
-            for layer in map.layers() {
-                if layer.namespace() == "malus-lock" && layer.can_receive_keyboard_focus() {
-                    if self.is_primary_output(output) {
-                        return Some(layer.wl_surface().clone());
-                    }
-                    if fallback.is_none() {
-                        fallback = Some(layer.wl_surface().clone());
-                    }
+        for (output, layer) in &self.malus_lock_layers {
+            if layer.alive() && layer.can_receive_keyboard_focus() {
+                if self.is_primary_output(output) {
+                    return Some(layer.wl_surface().clone());
+                }
+                if fallback.is_none() {
+                    fallback = Some(layer.wl_surface().clone());
                 }
             }
         }
@@ -4417,6 +4418,8 @@ impl MalusState {
         self.minimized_windows.retain(|s, _| s.alive());
         self.minimized_window_workspaces.retain(|s, _| s.alive());
         self.cached_close_snapshots.retain(|s, _| s.alive());
+        self.ext_lock_surfaces.retain(|_, surf| surf.alive());
+        self.malus_lock_layers.retain(|(_, layer)| layer.alive());
         self.workspaces.retain_alive();
         let dock_slots = &mut self.dock_slots;
         let minimized_thumbnails = &mut self.minimized_window_thumbnails;
@@ -6022,7 +6025,12 @@ impl WlrLayerShellHandler for MalusState {
                     fractional_scale.set_preferred_scale(scale);
                 });
             });
+            let is_malus_lock = namespace == "malus-lock";
             let desktop_surface = smithay::desktop::LayerSurface::new(surface, namespace);
+            if is_malus_lock {
+                self.malus_lock_layers
+                    .push((output.clone(), desktop_surface.clone()));
+            }
             let mut map = layer_map_for_output(&output);
             let _ = map.map_layer(&desktop_surface);
             map.arrange();
@@ -6048,6 +6056,10 @@ impl WlrLayerShellHandler for MalusState {
         use smithay::utils::IsAlive;
         tracing::info!("🗑️ [LayerShell] Layer surface destruida");
         let destroyed_wl = surface.wl_surface().clone();
+        self.malus_lock_layers
+            .retain(|(_, layer)| layer.layer_surface() != &surface && layer.alive());
+        self.session_locked_flag
+            .store(self.is_session_locked(), Ordering::SeqCst);
         for output in self.space.outputs() {
             let mut map = layer_map_for_output(output);
             let layer = map
@@ -7244,5 +7256,44 @@ mod tests {
         );
         assert_eq!(state.space.outputs().count(), 1);
         let _ = Size::<i32, smithay::utils::Logical>::from((0, 0));
+    }
+
+    #[test]
+    fn session_lock_queries_do_not_deadlock_while_output_layer_map_is_locked() {
+        use smithay::{
+            output::{Mode, Output, PhysicalProperties, Subpixel},
+            reexports::wayland_server::Display,
+            utils::{Transform, SERIAL_COUNTER},
+        };
+
+        let display: Display<super::MalusState> = Display::new().unwrap();
+        let mut state = super::MalusState::new(&display);
+        let _keyboard = state.seat.add_keyboard(Default::default(), 200, 200).unwrap();
+
+        let output = Output::new(
+            "DP-1".to_string(),
+            PhysicalProperties {
+                size: (600, 340).into(),
+                subpixel: Subpixel::Unknown,
+                make: "Malus".to_string(),
+                model: "Primary".to_string(),
+            },
+        );
+        let mode = Mode {
+            size: (1920, 1080).into(),
+            refresh: 60_000,
+        };
+        output.change_current_state(Some(mode), Some(Transform::Normal), None, Some((0, 0).into()));
+        output.set_preferred(mode);
+        state.space.map_output(&output, (0, 0));
+
+        // Simula el estado del bucle de renderizado DRM/Winit manteniendo bloqueado `LayerMap`
+        let _held_layer_map = smithay::desktop::layer_map_for_output(&output);
+        assert!(!state.is_session_locked());
+        assert!(state.lock_focus_surface().is_none());
+
+        state.ext_session_locked = true;
+        assert!(state.is_session_locked());
+        state.set_keyboard_focus_with_sync(None, SERIAL_COUNTER.next_serial());
     }
 }

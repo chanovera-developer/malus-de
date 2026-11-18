@@ -3547,6 +3547,7 @@ pub fn run_drm() -> Result<()> {
                     None
                 };
 
+                let session_locked = state.is_session_locked();
                 let layer_map = smithay::desktop::layer_map_for_output(&out_surface.output);
                 let has_fullscreen_window = state.has_fullscreen_window_on_output(&out_surface.output);
                 let mut lower_elements = Vec::new();
@@ -3681,7 +3682,6 @@ pub fn run_drm() -> Result<()> {
                         );
                     lock_elements.extend(elems);
                 }
-                let session_locked = state.is_session_locked();
 
                 let is_dark_theme = crate::state::is_dark_color_scheme();
                 let mut window_render_data = Vec::new();

@@ -1261,6 +1261,7 @@ pub fn run_winit() -> Result<()> {
                     None
                 };
 
+                let session_locked = state.is_session_locked();
                 let layer_map = smithay::desktop::layer_map_for_output(&output);
                 let has_fullscreen_window = state.has_fullscreen_window_on_output(&output);
                 let mut lower_elements = Vec::new();
@@ -1434,7 +1435,6 @@ pub fn run_winit() -> Result<()> {
                         );
                     lock_elements.extend(elems);
                 }
-                let session_locked = state.is_session_locked();
 
                 let mut window_render_data = Vec::new();
                 let is_dark_theme = crate::state::is_dark_color_scheme();
@@ -2932,7 +2932,7 @@ pub fn run_winit() -> Result<()> {
                     }
                 }
 
-                if !state.is_session_locked() {
+                if !session_locked {
                 if let Some(ref mut session) = state.active_screen_recording {
                     let interval = std::time::Duration::from_millis(
                         (1000 / session.target_fps.max(1)) as u64,
