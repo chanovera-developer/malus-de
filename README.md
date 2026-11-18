@@ -89,6 +89,11 @@ Para arrancar la sesión de desarrollo se usa el lanzador incluido:
 ./scripts/malus-session
 ```
 
+### Atajos de recuperación (sesión DRM)
+
+- `Ctrl + Alt + BackSpace`: fuerza el cierre limpio del compositor y vuelve al login sin apagar el equipo. Para que funcione también si el hilo principal se congela por completo, añade tu usuario al grupo `input` (`sudo usermod -aG input $USER` y vuelve a iniciar sesión).
+- `Ctrl + Alt + F1` .. `F12`: cambia de consola virtual (TTY) mediante `libseat`.
+
 La documentación de instalación y soporte para Fedora está en:
 
 - [docs/FEDORA_STANDALONE_INSTALL.md](./docs/FEDORA_STANDALONE_INSTALL.md)

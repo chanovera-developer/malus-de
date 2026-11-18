@@ -4,6 +4,19 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-18] — Atajo de Cierre de Emergencia (`Ctrl + Alt + BackSpace`) y Watchdog Evdev
+
+### 1. Cierre Forzado del Entorno y Prioridad de Atajos Críticos (`crates/compositor`)
+* **Evaluación prioritaria ([`drm.rs`](../crates/compositor/src/backend/drm.rs)):** `Ctrl + Alt + BackSpace` (reconociendo `KEY_BackSpace` y `KEY_Terminate_Server`) y `Ctrl + Alt + F1..F12` ahora se procesan al inicio del manejador de teclado en `libinput_backend`, antes de estados modales como `screenshot_ui` o `snap_layouts`.
+* **Salida limpia garantizada (`trigger_emergency_compositor_exit`):** pone `state.is_running = false` y lanza un temporizador de 600 ms hacia `std::process::exit(0)` para asegurar el retorno a GDM/`malus-session` sin generar volcado de fallo si el apagado normal se bloquea.
+* **Watchdog independiente (`spawn_emergency_zap_watchdog`):** hilo secundario (`malus-zap-watchdog`) que abre teclados en `/dev/input/event*` filtrados por `KEY_BACKSPACE` en `capabilities/key` (`sysfs_key_caps_has_backspace`, sin `EVIOCGRAB`, activo solo cuando `session_active` es `true`). Si el usuario tiene permisos de lectura (p. ej. grupo `input`), permite cerrar el compositor con `Ctrl + Alt + BackSpace` incluso ante un bloqueo total del hilo principal.
+
+### 2. Validación
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-compositor`: **79 passed; 0 failed** (incluye `drm_emergency_tests`).
+* `cargo build --release --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-compositor`: compilación correcta sin advertencias (`exit 0`).
+
+---
+
 ## [2026-11-17] — Vista de Columnas de Branches: Animaciones y Conservación del Padre
 
 ### 1. Entrada Animada de Columnas (`crates/branches`)
