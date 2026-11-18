@@ -1865,6 +1865,9 @@ pub fn run_drm() -> Result<()> {
     // 8. Registrar fuentes de eventos en el EventLoop de Calloop
     let loop_handle = event_loop.handle();
 
+    let session_active = Arc::new(AtomicBool::new(session.is_active()));
+    let session_active_vt = session_active.clone();
+
     // Notificador de pausa / reactivación de sesión TTY (VT Switch)
     loop_handle
         .insert_source(
@@ -1872,10 +1875,12 @@ pub fn run_drm() -> Result<()> {
             move |event, &mut (), state: &mut MalusState| match event {
                 SessionEvent::PauseSession => {
                     info!("⏸️ Sesión TTY pausada (VT switch away)");
+                    session_active_vt.store(false, Ordering::Relaxed);
                     libinput_context.suspend();
                 }
                 SessionEvent::ActivateSession => {
                     info!("▶️ Sesión TTY reactivada (VT switch back)");
+                    session_active_vt.store(true, Ordering::Relaxed);
                     state.pending_drm_hotplug = true;
                     if let Err(e) = libinput_context.resume() {
                         error!("Error al reanudar libinput tras VT switch: {:?}", e);
@@ -1969,6 +1974,7 @@ pub fn run_drm() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Error al registrar Wayland Display en calloop: {e:?}"))?;
 
     // Despacho de eventos de Libinput con soporte para ratón, touchpad y atajos completos
+    spawn_emergency_zap_watchdog(session_active);
     let mut session_vt = session.clone();
 
     loop_handle.insert_source(libinput_backend, move |event, _, state: &mut MalusState| {
@@ -2013,6 +2019,45 @@ pub fn run_drm() -> Result<()> {
                                 let has_alt = modifiers.alt;
                                 let has_ctrl = modifiers.ctrl;
 
+                                // 🚨 RED DE SEGURIDAD CRÍTICA (siempre por encima de cualquier UI modal):
+                                // 1. Ctrl + Alt + BackSpace: fuerza el cierre limpio del compositor/entorno.
+                                // 2. Ctrl + Alt + F1..F12: cambio inmediato de TTY vía LibSeat.
+                                if has_ctrl && has_alt {
+                                    let is_bksp = sym == keysyms::KEY_BackSpace.into()
+                                        || sym == keysyms::KEY_Terminate_Server.into()
+                                        || keysym_handle.raw_syms().iter().any(|&s| {
+                                            s == keysyms::KEY_BackSpace.into()
+                                                || s == keysyms::KEY_Terminate_Server.into()
+                                        });
+                                    if is_bksp {
+                                        state.is_running = false;
+                                        trigger_emergency_compositor_exit("Ctrl+Alt+BackSpace");
+                                        return FilterResult::Intercept(());
+                                    }
+
+                                    let vt_target = if sym == keysyms::KEY_F1.into() { Some(1) }
+                                    else if sym == keysyms::KEY_F2.into() { Some(2) }
+                                    else if sym == keysyms::KEY_F3.into() { Some(3) }
+                                    else if sym == keysyms::KEY_F4.into() { Some(4) }
+                                    else if sym == keysyms::KEY_F5.into() { Some(5) }
+                                    else if sym == keysyms::KEY_F6.into() { Some(6) }
+                                    else if sym == keysyms::KEY_F7.into() { Some(7) }
+                                    else if sym == keysyms::KEY_F8.into() { Some(8) }
+                                    else if sym == keysyms::KEY_F9.into() { Some(9) }
+                                    else if sym == keysyms::KEY_F10.into() { Some(10) }
+                                    else if sym == keysyms::KEY_F11.into() { Some(11) }
+                                    else if sym == keysyms::KEY_F12.into() { Some(12) }
+                                    else { None };
+
+                                    if let Some(vt) = vt_target {
+                                        info!("🚨 [VT SWITCH] Solicitando cambio de terminal virtual a tty{} vía LibSeat", vt);
+                                        if let Err(err) = session_vt.change_vt(vt) {
+                                            error!("Error al cambiar a VT {}: {:?}", vt, err);
+                                        }
+                                        return FilterResult::Intercept(());
+                                    }
+                                }
+
                                 let is_print = sym == keysyms::KEY_Print.into() || key == 99;
                                 let is_s = sym == keysyms::KEY_s.into() || sym == keysyms::KEY_S.into();
                                 let is_3 = sym == keysyms::KEY_3.into() || sym == keysyms::KEY_numbersign.into();
@@ -2055,31 +2100,6 @@ pub fn run_drm() -> Result<()> {
                                         .ipc_broadcaster
                                         .broadcast(&IpcMessage::ToggleClipboardHistory);
                                     return FilterResult::Intercept(());
-                                }
-
-                                // 🚨 RED DE SEGURIDAD CRÍTICA: CAMBIO DE TTY CON CTRL + ALT + F1..F12
-                                if has_ctrl && has_alt {
-                                    let vt_target = if sym == keysyms::KEY_F1.into() { Some(1) }
-                                    else if sym == keysyms::KEY_F2.into() { Some(2) }
-                                    else if sym == keysyms::KEY_F3.into() { Some(3) }
-                                    else if sym == keysyms::KEY_F4.into() { Some(4) }
-                                    else if sym == keysyms::KEY_F5.into() { Some(5) }
-                                    else if sym == keysyms::KEY_F6.into() { Some(6) }
-                                    else if sym == keysyms::KEY_F7.into() { Some(7) }
-                                    else if sym == keysyms::KEY_F8.into() { Some(8) }
-                                    else if sym == keysyms::KEY_F9.into() { Some(9) }
-                                    else if sym == keysyms::KEY_F10.into() { Some(10) }
-                                    else if sym == keysyms::KEY_F11.into() { Some(11) }
-                                    else if sym == keysyms::KEY_F12.into() { Some(12) }
-                                    else { None };
-
-                                    if let Some(vt) = vt_target {
-                                        info!("🚨 [VT SWITCH] Solicitando cambio de terminal virtual a tty{} vía LibSeat", vt);
-                                        if let Err(err) = session_vt.change_vt(vt) {
-                                            error!("Error al cambiar a VT {}: {:?}", vt, err);
-                                        }
-                                        return FilterResult::Intercept(());
-                                    }
                                 }
 
                                 let is_tab = sym == keysyms::KEY_Tab.into()
@@ -6498,4 +6518,41 @@ pub fn run_drm() -> Result<()> {
 
     info!("Compositor Malus DE DRM finalizado limpiamente.");
     Ok(())
+}
+
+#[cfg(test)]
+mod drm_emergency_tests {
+    use super::{parse_evdev_key_event, sysfs_key_caps_has_backspace, EmergencyZapKeys};
+
+    #[test]
+    fn sysfs_key_caps_identifies_keyboards_with_backspace() {
+        assert!(sysfs_key_caps_has_backspace("10000 7 fffffffffffffffe"));
+        assert!(!sysfs_key_caps_has_backspace("10000002"));
+        assert!(!sysfs_key_caps_has_backspace("0"));
+    }
+
+    #[test]
+    fn evdev_zap_triggers_only_on_ctrl_alt_backspace_press() {
+        let mut keys = EmergencyZapKeys::default();
+        assert!(!keys.update(29, 1)); // LeftCtrl down
+        assert!(!keys.update(14, 1)); // Backspace without Alt
+        assert!(!keys.update(56, 1)); // LeftAlt down
+        assert!(keys.update(14, 1)); // Ctrl+Alt+Backspace press -> ZAP
+        assert!(!keys.update(14, 2)); // key repeat ignored
+        assert!(!keys.update(56, 0)); // LeftAlt released
+        assert!(!keys.update(14, 1));
+    }
+
+    #[test]
+    fn parse_evdev_key_event_extracts_type_code_and_value() {
+        #[cfg(target_pointer_width = "64")]
+        let mut buf = [0u8; 24];
+        #[cfg(not(target_pointer_width = "64"))]
+        let mut buf = [0u8; 16];
+        let off = buf.len() - 8;
+        buf[off..off + 2].copy_from_slice(&1u16.to_ne_bytes()); // EV_KEY
+        buf[off + 2..off + 4].copy_from_slice(&14u16.to_ne_bytes()); // KEY_BACKSPACE
+        buf[off + 4..off + 8].copy_from_slice(&1i32.to_ne_bytes());
+        assert_eq!(parse_evdev_key_event(&buf), Some((14, 1)));
+    }
 }
