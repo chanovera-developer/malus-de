@@ -4,6 +4,23 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-18] — Tema Claro por Defecto, Compatibilidad con `kmscon` e Instalador Fedora Minimal
+
+### 1. Tema Claro por Defecto en Instalaciones Nuevas
+- **Configuración aislada (`crates/common/src/config.rs`):** En instalaciones nuevas, `setup_isolated_session_environment()` ahora inicializa `keyfile` con `color-scheme='prefer-light'` e `icon-theme='Malus'`, y genera `gtk-3.0/settings.ini` y `gtk-4.0/settings.ini` con `gtk-application-prefer-dark-theme=0` y `DEFAULT_ICON_THEME_LIGHT` (`Malus`), preservando sesiones ya existentes. El respaldo de `is_dark_mode_active()` pasó a `false`.
+- **Scripts de sesión (`scripts/malus-session`, `scripts/malus-session.sh`):** Actualizada la generación inicial a `prefer-light`, `Malus` y `gtk-application-prefer-dark-theme=0` (seleccionando `Malus` o `Malus-Dark` según el esquema activo si ya existe `keyfile`).
+- **Respaldos en compositor y shell:** `is_dark_color_scheme()` (`crates/compositor/src/state.rs`), `CURRENT_IS_DARK` (`crates/wallpaper/src/main.rs`) y `ControlCenterModel::default().dark_mode` (`crates/render/src/popover.rs`) ahora parten de `false` (modo claro).
+
+### 2. Instalador en Un Solo Comando y Soporte `kmscon` en Fedora 45+
+- **Instalador todo-en-uno (`scripts/install-fedora-minimal.sh`, `docs/FEDORA_STANDALONE_INSTALL.md`):** Añadido comando único estilo `curl | bash` (`--dir`, `--branch`, `--tty-autostart`, `--greetd`, `--skip-build`) para instalar dependencias runtime y `-devel` (incluyendo `gdk-pixbuf2-devel`, `libdrm-devel`, `wayland-devel` y `pam`), clonar/compilar el workspace en `Release` y desplegar la sesión.
+- **Liberación automática de DRM en `kmscon` (`scripts/malus-session`):** En Fedora 45+ (`pts/0` bajo `kmscon`), `malus-session` detecta la sesión PTY de `kmscon` antes de redirigir stdout a `tee` y se envuelve automáticamente con `kmscon-launch-gui` para evitar el error `EBUSY (Device or resource busy)` al abrir `/dev/dri/card*`.
+
+### 3. Validación
+- Sintaxis shell (`bash -n`) en `scripts/malus-session`, `scripts/malus-session.sh` y `scripts/install-fedora-minimal.sh`: exit `0`.
+- Pruebas unitarias Rust (`cargo test`): `malus-de-common` (51/51 en entorno aislado `/tmp`), `malus-de-compositor` (80/80), `malus-de-render` (14/14 en sus binarios/suites) y `malus-de-wallpaper` (19/19).
+
+---
+
 ## [2026-11-18] — Lockscreen estilo macOS Sequoia, Autenticación PAM y Atajo `Super + L`
 
 ### 1. Lockscreen Real, Multi-Monitor y *Vibrancy* (`crates/session-lock`)
