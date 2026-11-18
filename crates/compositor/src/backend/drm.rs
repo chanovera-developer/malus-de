@@ -2338,15 +2338,6 @@ pub fn run_drm() -> Result<()> {
                                     return FilterResult::Intercept(());
                                 }
 
-                                let is_v = sym == keysyms::KEY_v.into() || sym == keysyms::KEY_V.into();
-
-                                if is_v && has_super {
-                                    state
-                                        .ipc_broadcaster
-                                        .broadcast(&IpcMessage::ToggleClipboardHistory);
-                                    return FilterResult::Intercept(());
-                                }
-
                                 let is_tab = sym == keysyms::KEY_Tab.into()
                                     || sym == keysyms::KEY_ISO_Left_Tab.into()
                                     || key == 23;

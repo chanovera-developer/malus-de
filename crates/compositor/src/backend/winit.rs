@@ -301,7 +301,6 @@ pub fn run_winit() -> Result<()> {
 
                             let is_space = sym == keysyms::KEY_space.into();
                             let is_k = sym == keysyms::KEY_k.into() || sym == keysyms::KEY_K.into();
-                            let is_v = sym == keysyms::KEY_v.into() || sym == keysyms::KEY_V.into();
                             let is_tab = sym == keysyms::KEY_Tab.into() || sym == keysyms::KEY_ISO_Left_Tab.into() || key == 23;
                             let is_return = sym == keysyms::KEY_Return.into() || sym == keysyms::KEY_KP_Enter.into();
                             let is_w = sym == keysyms::KEY_w.into() || sym == keysyms::KEY_W.into();
@@ -350,13 +349,6 @@ pub fn run_winit() -> Result<()> {
                                 if (is_print && !has_shift) || (has_super && has_shift && is_3) {
                                     info!("📸 Atajo de captura completa detectado (Print, Super+Shift+3)");
                                     state.start_full_screenshot();
-                                    return FilterResult::Intercept(());
-                                }
-
-                                if is_v && has_super {
-                                    state
-                                        .ipc_broadcaster
-                                        .broadcast(&IpcMessage::ToggleClipboardHistory);
                                     return FilterResult::Intercept(());
                                 }
 
