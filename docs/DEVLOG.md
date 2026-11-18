@@ -4,6 +4,25 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-18] — Traslado Inmediato de Dock y Top Bar al Monitor Principal y Corrección de Deadlock
+
+### 1. Reubicación en Vivo de Capas del Shell al Cambiar de Pantalla Principal (`crates/compositor`)
+- **Traslado sin recrear clientes ([`state.rs`](../crates/compositor/src/state.rs)):** Añadidos `PRIMARY_SHELL_LAYER_NAMESPACES` / `is_primary_shell_layer_namespace` (`malus-top-bar`, `malus-dock`, `malus-app-switcher`), `primary_output_for_config()` y `relocate_primary_shell_layers_for_config()` para desmapear (`unmap_layer`) las capas principales de salidas secundarias, reasignarlas al nuevo monitor principal con `new_map.arrange()`, restablecer `s.size = None` en `malus-top-bar` para adaptar su ancho, actualizar `preferred_scale` mediante `with_fractional_scale` y enviar `send_configure()`.
+- **Integración en DRM y Winit ([`drm.rs`](../crates/compositor/src/backend/drm.rs), [`winit.rs`](../crates/compositor/src/backend/winit.rs)):**
+  - Durante recarga en vivo (`ReloadDisplaysConfig`), al mover capas principales se marcan como sucios los buffers de fondo y daño (`background_dirty`, `background_snapshot_stale`, `full_damage_buffers`, `dock_redraw_buffers`) y se invoca `ensure_window_below_topbar(&win)` para ajustar ventanas bajo la barra en el nuevo monitor.
+  - En desconexión física (`reconcile_drm_outputs`), si quedan salidas conectadas, las capas principales se preservan y migran al monitor principal en lugar de cerrarse con `send_close()`.
+  - También conectado en `pending_displays_reload` dentro de `run_winit()`.
+
+### 2. Corrección de Congelamiento al Presionar «Hacer Principal»
+- **Causa ([`state.rs`](../crates/compositor/src/state.rs)):** Dentro del cierre `processor` de `with_surface_tree_downward` en `relocate_primary_shell_layers_for_config()`, se volvía a invocar `with_states(wl_surf, ...)`. Dado que `with_surface_tree_downward` (`PrivateSurfaceData::map_tree` en Smithay) ya mantiene bloqueado el `Mutex` de la superficie y entrega `states` como argumento, se producía un autobloqueo (*deadlock*) inmediato en el hilo principal del compositor.
+- **Solución:** Se reemplazó la llamada anidada usando directamente el argumento `states` del cierre `processor` para aplicar `with_fractional_scale(states, |fs| fs.set_preferred_scale(target_scale))`.
+
+### 3. Validación
+- `cargo test --offline -p malus-de-compositor`: **83 passed; 0 failed** (incluye `primary_output_for_config_selects_configured_primary_display`).
+- `cargo build --release --offline -p malus-de-compositor`: compilación `--release` correcta (exit `0`).
+
+---
+
 ## [2026-11-18] — Corrección de Popups en Compositor y Opacidad en Vivo para Elementos Cortados en Branches
 
 ### 1. Glitch de Recentrado al Abrir Menús Contextuales (`crates/compositor`)

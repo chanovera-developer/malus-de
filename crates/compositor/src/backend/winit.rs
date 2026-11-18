@@ -1219,6 +1219,7 @@ pub fn run_winit() -> Result<()> {
                 if state.pending_displays_reload {
                     state.pending_displays_reload = false;
                     current_displays_cfg = malus_de_common::config::DisplaysConfig::load();
+                    state.relocate_primary_shell_layers_for_config(&current_displays_cfg, Vec::new());
                     squircle_corner_cache.clear();
                 }
 

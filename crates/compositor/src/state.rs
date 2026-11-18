@@ -410,6 +410,16 @@ fn matches_app_target(target_lower: &str, app_id: Option<&str>, title: Option<&s
     false
 }
 
+pub const PRIMARY_SHELL_LAYER_NAMESPACES: &[&str] = &[
+    "malus-top-bar",
+    "malus-dock",
+    "malus-app-switcher",
+];
+
+pub fn is_primary_shell_layer_namespace(namespace: &str) -> bool {
+    PRIMARY_SHELL_LAYER_NAMESPACES.contains(&namespace)
+}
+
 fn is_root_window_surface(window: &smithay::desktop::Window, surface: &WlSurface) -> bool {
     window.wl_surface().as_deref() == Some(surface)
 }
@@ -4496,10 +4506,12 @@ impl MalusState {
         }
     }
 
-    /// Obtiene el monitor configurado como principal (primary = true en DisplaysConfig),
+    /// Obtiene el monitor configurado como principal en `displays_cfg` (`primary = true`),
     /// o el primer monitor disponible en Space si no se encuentra configurado.
-    pub fn primary_output(&self) -> Option<Output> {
-        let displays_cfg = malus_de_common::config::DisplaysConfig::load();
+    pub fn primary_output_for_config(
+        &self,
+        displays_cfg: &malus_de_common::config::DisplaysConfig,
+    ) -> Option<Output> {
         if let Some(primary_cfg) = displays_cfg.outputs.iter().find(|o| o.primary) {
             // 1. Por connector name
             if let Some(output) = self.space.outputs().find(|o| o.name() == primary_cfg.connector) {
@@ -4524,6 +4536,103 @@ impl MalusState {
             }
         }
         self.space.outputs().next().cloned()
+    }
+
+    /// Obtiene el monitor configurado como principal (`primary = true en DisplaysConfig`),
+    /// o el primer monitor disponible en Space si no se encuentra configurado.
+    pub fn primary_output(&self) -> Option<Output> {
+        let displays_cfg = malus_de_common::config::DisplaysConfig::load();
+        self.primary_output_for_config(&displays_cfg)
+    }
+
+    /// Reubica de inmediato las capas principales del shell (`malus-top-bar`, `malus-dock` y
+    /// `malus-app-switcher`) al monitor principal definido en `displays_cfg`.
+    pub fn relocate_primary_shell_layers_for_config(
+        &mut self,
+        displays_cfg: &malus_de_common::config::DisplaysConfig,
+        preserved_layers: Vec<smithay::desktop::LayerSurface>,
+    ) -> bool {
+        let Some(primary_output) = self.primary_output_for_config(displays_cfg) else {
+            for layer in preserved_layers {
+                layer.layer_surface().send_close();
+            }
+            return false;
+        };
+
+        let outputs: Vec<Output> = self.space.outputs().cloned().collect();
+        let mut to_move: Vec<(Output, smithay::desktop::LayerSurface)> = Vec::new();
+        for output in &outputs {
+            if output == &primary_output {
+                continue;
+            }
+            let map = layer_map_for_output(output);
+            for layer in map.layers() {
+                if is_primary_shell_layer_namespace(layer.namespace()) {
+                    to_move.push((output.clone(), layer.clone()));
+                }
+            }
+        }
+
+        if to_move.is_empty() && preserved_layers.is_empty() {
+            return false;
+        }
+
+        for (old_output, layer) in &to_move {
+            let mut old_map = layer_map_for_output(old_output);
+            old_map.unmap_layer(layer);
+        }
+
+        let target_scale = primary_output.current_scale().fractional_scale();
+        let mut moved_layers: Vec<smithay::desktop::LayerSurface> = to_move
+            .into_iter()
+            .map(|(_, l)| l)
+            .chain(preserved_layers)
+            .collect();
+
+        {
+            let mut new_map = layer_map_for_output(&primary_output);
+            for layer in &mut moved_layers {
+                if layer.namespace() == "malus-top-bar" {
+                    layer.layer_surface().with_pending_state(|s| {
+                        s.size = None;
+                    });
+                }
+                if let Err(err) = new_map.map_layer(layer) {
+                    tracing::warn!(
+                        "⚠️ No se pudo reubicar layer '{}' en '{}': {:?}",
+                        layer.namespace(),
+                        primary_output.name(),
+                        err
+                    );
+                }
+            }
+            new_map.arrange();
+            for layer in &moved_layers {
+                smithay::wayland::compositor::with_surface_tree_downward(
+                    layer.wl_surface(),
+                    (),
+                    |_, _, _| smithay::wayland::compositor::TraversalAction::DoChildren(()),
+                    |_wl_surf, states, _| {
+                        with_fractional_scale(states, |fs| {
+                            fs.set_preferred_scale(target_scale);
+                        });
+                    },
+                    |_, _, _| true,
+                );
+                layer.layer_surface().send_configure();
+            }
+        }
+
+        tracing::info!(
+            "🖥 Capas principales (Dock / Top Bar / Switcher) trasladadas a '{}'",
+            primary_output.name()
+        );
+        true
+    }
+
+    pub fn relocate_primary_shell_layers(&mut self) -> bool {
+        let displays_cfg = malus_de_common::config::DisplaysConfig::load();
+        self.relocate_primary_shell_layers_for_config(&displays_cfg, Vec::new())
     }
 
     /// Migra ventanas y puntero que hayan quedado fuera de las salidas activas tras desconectar
@@ -7314,5 +7423,81 @@ mod tests {
         assert!(state_src.contains("fn is_root_window_surface"));
         assert!(state_src.contains("if is_root_window_surface(&window, surface)"));
         assert!(state_src.contains("if is_root_window_surface(&win, surface)"));
+    }
+
+    #[test]
+    fn primary_output_for_config_selects_configured_primary_display() {
+        use malus_de_common::config::{DisplayOutputConfig, DisplaysConfig};
+        use smithay::{
+            output::{Mode, Output, PhysicalProperties, Subpixel},
+            reexports::wayland_server::Display,
+            utils::Transform,
+        };
+
+        let display: Display<super::MalusState> = Display::new().unwrap();
+        let mut state = super::MalusState::new(&display);
+
+        let make_out = |name: &str, x: i32| {
+            let out = Output::new(
+                name.to_string(),
+                PhysicalProperties {
+                    size: (600, 340).into(),
+                    subpixel: Subpixel::Unknown,
+                    make: "Malus".to_string(),
+                    model: name.to_string(),
+                },
+            );
+            let mode = Mode {
+                size: (1920, 1080).into(),
+                refresh: 60_000,
+            };
+            out.change_current_state(Some(mode), Some(Transform::Normal), None, Some((x, 0).into()));
+            out.set_preferred(mode);
+            out
+        };
+
+        let out1 = make_out("DP-1", 0);
+        let out2 = make_out("DP-2", 1920);
+        state.space.map_output(&out1, (0, 0));
+        state.space.map_output(&out2, (1920, 0));
+
+        let mut cfg = DisplaysConfig::default();
+        cfg.outputs = vec![
+            DisplayOutputConfig {
+                connector: "DP-1".to_string(),
+                name: "DP-1".to_string(),
+                width: 1920,
+                height: 1080,
+                refresh_rate: 60.0,
+                modes: vec![],
+                x: 0,
+                y: 0,
+                scale: 1.0,
+                primary: false,
+                diagonal_inches: None,
+            },
+            DisplayOutputConfig {
+                connector: "DP-2".to_string(),
+                name: "DP-2".to_string(),
+                width: 1920,
+                height: 1080,
+                refresh_rate: 60.0,
+                modes: vec![],
+                x: 1920,
+                y: 0,
+                scale: 1.0,
+                primary: true,
+                diagonal_inches: None,
+            },
+        ];
+
+        assert_eq!(
+            state.primary_output_for_config(&cfg).map(|o| o.name()),
+            Some("DP-2".to_string())
+        );
+        assert!(super::is_primary_shell_layer_namespace("malus-top-bar"));
+        assert!(super::is_primary_shell_layer_namespace("malus-dock"));
+        assert!(super::is_primary_shell_layer_namespace("malus-app-switcher"));
+        assert!(!super::is_primary_shell_layer_namespace("malus-wallpaper"));
     }
 }

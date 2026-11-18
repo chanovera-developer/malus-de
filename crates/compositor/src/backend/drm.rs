@@ -1145,12 +1145,21 @@ fn reconcile_drm_outputs(
         any_added
     };
 
+    let mut preserved_shell_layers = Vec::new();
     for removed in removed_outputs {
         info!("🔌 Monitor físico desconectado: {}", removed.output.name());
         {
-            let lmap = smithay::desktop::layer_map_for_output(&removed.output);
-            for layer in lmap.layers() {
-                layer.layer_surface().send_close();
+            let mut lmap = smithay::desktop::layer_map_for_output(&removed.output);
+            let layers: Vec<_> = lmap.layers().cloned().collect();
+            for layer in layers {
+                if crate::state::is_primary_shell_layer_namespace(layer.namespace())
+                    && !connected_list.is_empty()
+                {
+                    lmap.unmap_layer(&layer);
+                    preserved_shell_layers.push(layer);
+                } else {
+                    layer.layer_surface().send_close();
+                }
             }
         }
         state.space.unmap_output(&removed.output);
@@ -1208,6 +1217,7 @@ fn reconcile_drm_outputs(
         }
     }
 
+    state.relocate_primary_shell_layers_for_config(&displays_cfg, preserved_shell_layers);
     state.migrate_orphaned_windows_and_pointer();
     Some(displays_cfg)
 }
@@ -3246,6 +3256,20 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
 
+                let moved_shell_layers =
+                    state.relocate_primary_shell_layers_for_config(new_cfg, Vec::new());
+                if moved_shell_layers {
+                    if let Ok(mut surfs) = shared_surfaces.lock() {
+                        for s in surfs.iter_mut() {
+                            s.background_dirty = true;
+                            s.background_snapshot_stale = true;
+                            s.full_damage_buffers = if ENABLE_DAMAGE_TRACKING { 3 } else { 1 };
+                            s.dock_redraw_buffers = if ENABLE_DAMAGE_TRACKING { 3 } else { 0 };
+                            s.pending_damage_buffers = 1;
+                        }
+                    }
+                }
+
                 // Migrar ventanas cuyos monitores cambiaron de posición y actualizar su escala fraccionaria
                 let windows: Vec<_> = state.space.elements().cloned().collect();
                 for win in windows {
@@ -3276,6 +3300,8 @@ pub fn run_drm() -> Result<()> {
                             }
                         }
                     }
+
+                    state.ensure_window_below_topbar(&win);
 
                     if let Some(wl_surf) = win.wl_surface() {
                         let new_scale = state.preferred_scale_for_surface(&wl_surf);
