@@ -87,8 +87,9 @@ Edita o crea tu archivo `~/.bash_profile`:
 cat << 'EOF' >> ~/.bash_profile
 
 # Iniciar Malus DE automáticamente si iniciamos sesión en la TTY1 física
-if [ -z "$WAYLAND_DISPLAY" ] && [ "$XDG_VTNR" -eq 1 ]; then
-    exec /usr/local/bin/malus-session
+# (sin `exec` para conservar la shell si necesitas depurar algún fallo en el arranque)
+if [ -z "$WAYLAND_DISPLAY" ] && [ "${XDG_VTNR:-0}" -eq 1 ]; then
+    /usr/local/bin/malus-session
 fi
 EOF
 ```
@@ -135,7 +136,7 @@ Si prefieres construir todo directamente en la máquina limpia:
    sudo dnf install -y \
        rust cargo gcc clang pkgconf-pkg-config git \
        gtk4-devel libadwaita-devel gtk4-layer-shell-devel \
-       mesa-libgbm-devel libinput-devel libseat-devel \
+       'pkgconfig(gbm)' libinput-devel libseat-devel \
        systemd-devel dbus-devel libxkbcommon-devel sqlite-devel
    ```
 2. Clona y compila en perfil Release:

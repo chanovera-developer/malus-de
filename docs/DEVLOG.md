@@ -4,6 +4,22 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-18] — Selección Multi-GPU en DRM y Arranque TTY en Fedora Minimal
+
+### 1. Sondeo y Prioridad Multi-GPU (`crates/compositor`)
+* **Problema:** al fallar la detección de `primary_gpu` o en laptops híbridas / con pantalla interna retirada (donde `card0` puede ser `simpledrm` o una iGPU sin salidas conectadas), [`drm.rs`](../crates/compositor/src/backend/drm.rs) intentaba abrir un único nodo o caía al respaldo fijo `/dev/dri/card1`, abortando con `"Error al abrir nodo DRM mediante libseat"`.
+* **Solución (`scan_dev_dri_cards`, `sysfs_drm_card_score`, `prioritize_drm_gpu_candidates`, `open_first_working_drm_gpu`):** recopila y deduplica `primary_gpu`, `all_gpus` y `/dev/dri/card*`, priorizando tarjetas KMS reales (descartando `simple-framebuffer`/`vgem`) que tengan al menos un conector en estado `connected`, y prueba en cascada `libseat` (`session.open`), `DrmDevice`, `GbmDevice`, `EGLDisplay` y `GlesRenderer`.
+
+### 2. Guía Fedora Minimal ([`FEDORA_STANDALONE_INSTALL.md`](../docs/FEDORA_STANDALONE_INSTALL.md))
+* Retirado `exec` en el arranque automático de `~/.bash_profile` para evitar bucles de expulsión al `login:` si falla el compositor.
+* Sustituido `mesa-libgbm-devel` por `'pkgconfig(gbm)'` en la lista de dependencias de compilación.
+
+### 3. Validación
+* `cargo test --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-compositor`: **80 passed; 0 failed** (incluye `prioritize_drm_gpu_candidates_prefers_real_kms_with_connected_outputs`).
+* `cargo build --release --manifest-path /home/cristian/Proyectos/malus-de/Cargo.toml -p malus-de-compositor`: compilación correcta sin advertencias (`exit 0`).
+
+---
+
 ## [2026-11-18] — Atajo de Cierre de Emergencia (`Ctrl + Alt + BackSpace`) y Watchdog Evdev
 
 ### 1. Cierre Forzado del Entorno y Prioridad de Atajos Críticos (`crates/compositor`)
