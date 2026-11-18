@@ -274,6 +274,180 @@ fn spawn_emergency_zap_watchdog(session_active: Arc<AtomicBool>) {
 
 const ENABLE_DAMAGE_TRACKING: bool = false;
 
+fn scan_dev_dri_cards() -> Vec<std::path::PathBuf> {
+    let mut cards = Vec::new();
+    if let Ok(entries) = std::fs::read_dir("/dev/dri") {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if let Some(rest) = name_str.strip_prefix("card") {
+                if !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit()) {
+                    cards.push(entry.path());
+                }
+            }
+        }
+    }
+    cards.sort();
+    for fallback in ["/dev/dri/card0", "/dev/dri/card1"] {
+        let p = std::path::PathBuf::from(fallback);
+        if !cards.contains(&p) {
+            cards.push(p);
+        }
+    }
+    cards
+}
+
+/// Puntúa una tarjeta DRM vía sysfs (`/sys/class/drm/cardN*`):
+/// `(tiene_monitor_conectado, es_driver_kms_real)` sin requerir abrir el nodo DRM.
+fn sysfs_drm_card_score(path: &std::path::Path) -> (bool, bool) {
+    let Some(card_name) = path.file_name().and_then(|n| n.to_str()) else {
+        return (false, true);
+    };
+    let drm_sysfs = std::path::Path::new("/sys/class/drm");
+    let uevent_path = drm_sysfs.join(card_name).join("device/uevent");
+    let is_real_kms = std::fs::read_to_string(uevent_path)
+        .map(|content| {
+            !content.lines().any(|line| {
+                matches!(
+                    line.trim(),
+                    "DRIVER=simple-framebuffer" | "DRIVER=vgem" | "DRIVER=vkms"
+                )
+            })
+        })
+        .unwrap_or(true);
+
+    let prefix = format!("{card_name}-");
+    let mut has_connected = false;
+    if let Ok(entries) = std::fs::read_dir(drm_sysfs) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if !name.to_string_lossy().starts_with(&prefix) {
+                continue;
+            }
+            if let Ok(status) = std::fs::read_to_string(entry.path().join("status")) {
+                if status.trim() == "connected" {
+                    has_connected = true;
+                    break;
+                }
+            }
+        }
+    }
+    (has_connected, is_real_kms)
+}
+
+/// Deduplica las rutas candidatas de GPU conservando el orden de descubrimiento y prioriza
+/// GPUs KMS reales con monitores conectados (útil en laptops híbridas o sin panel eDP interno).
+fn prioritize_drm_gpu_candidates(
+    primary: Option<std::path::PathBuf>,
+    udev_gpus: Vec<std::path::PathBuf>,
+    dev_dri_cards: Vec<std::path::PathBuf>,
+    score_fn: impl Fn(&std::path::Path) -> (bool, bool),
+) -> Vec<std::path::PathBuf> {
+    let mut ordered = Vec::new();
+    let mut seen_canonical = HashSet::new();
+    for path in primary
+        .into_iter()
+        .chain(udev_gpus)
+        .chain(dev_dri_cards)
+    {
+        let key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if seen_canonical.insert(key) {
+            ordered.push(path);
+        }
+    }
+    let mut indexed: Vec<(usize, (bool, bool), std::path::PathBuf)> = ordered
+        .into_iter()
+        .enumerate()
+        .map(|(idx, p)| {
+            let score = score_fn(&p);
+            (idx, score, p)
+        })
+        .collect();
+    indexed.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    indexed.into_iter().map(|(_, _, p)| p).collect()
+}
+
+fn open_first_working_drm_gpu(
+    session: &mut LibSeatSession,
+    candidates: &[std::path::PathBuf],
+) -> Result<(
+    DrmDevice,
+    smithay::backend::drm::DrmDeviceNotifier,
+    GbmDevice<DrmDeviceFd>,
+    GlesRenderer,
+    std::path::PathBuf,
+)> {
+    let mut errors = Vec::new();
+    for path in candidates {
+        let raw_fd = match session.open(
+            path,
+            smithay::reexports::rustix::fs::OFlags::RDWR
+                | smithay::reexports::rustix::fs::OFlags::CLOEXEC
+                | smithay::reexports::rustix::fs::OFlags::NOCTTY,
+        ) {
+            Ok(fd) => fd,
+            Err(err) => {
+                warn!("⚠️ No se pudo abrir nodo DRM {:?} mediante libseat: {:?}", path, err);
+                errors.push(format!("{}: libseat open ({err:?})", path.display()));
+                continue;
+            }
+        };
+
+        let drm_device_fd = DrmDeviceFd::new(DeviceFd::from(raw_fd));
+        let (drm_device, drm_notifier) = match DrmDevice::new(drm_device_fd.clone(), false) {
+            Ok(pair) => pair,
+            Err(err) => {
+                warn!("⚠️ {:?} no soportó DrmDevice KMS: {:?}", path, err);
+                errors.push(format!("{}: DrmDevice ({err:?})", path.display()));
+                continue;
+            }
+        };
+        let gbm_device = match GbmDevice::new(drm_device_fd) {
+            Ok(gbm) => gbm,
+            Err(err) => {
+                warn!("⚠️ {:?} no soportó GbmDevice: {:?}", path, err);
+                errors.push(format!("{}: GbmDevice ({err:?})", path.display()));
+                continue;
+            }
+        };
+        let egl_display = match unsafe { EGLDisplay::new(gbm_device.clone()) } {
+            Ok(dpy) => dpy,
+            Err(err) => {
+                warn!("⚠️ {:?} no soportó EGLDisplay sobre GBM: {:?}", path, err);
+                errors.push(format!("{}: EGLDisplay ({err:?})", path.display()));
+                continue;
+            }
+        };
+        let egl_context = match EGLContext::new(&egl_display) {
+            Ok(ctx) => ctx,
+            Err(err) => {
+                warn!("⚠️ {:?} no soportó EGLContext: {:?}", path, err);
+                errors.push(format!("{}: EGLContext ({err:?})", path.display()));
+                continue;
+            }
+        };
+        let renderer = match unsafe { GlesRenderer::new(egl_context) } {
+            Ok(r) => r,
+            Err(err) => {
+                warn!("⚠️ {:?} no soportó GlesRenderer: {:?}", path, err);
+                errors.push(format!("{}: GlesRenderer ({err:?})", path.display()));
+                continue;
+            }
+        };
+
+        return Ok((drm_device, drm_notifier, gbm_device, renderer, path.clone()));
+    }
+
+    anyhow::bail!(
+        "Ningún nodo DRM pudo inicializarse ({})",
+        if errors.is_empty() {
+            "sin candidatos".to_string()
+        } else {
+            errors.join("; ")
+        }
+    );
+}
+
 struct DrmOutputSurface {
     output: Output,
     connector: connector::Handle,
@@ -1621,33 +1795,22 @@ pub fn run_drm() -> Result<()> {
     let seat_name = session.seat();
     info!("✅ Sesión de hardware activa en asiento: '{}'", seat_name);
 
-    // 2. Detectar y abrir nodo DRM de la GPU primaria vía LibSeat
-    let gpu_path = primary_gpu(&seat_name)
-        .context("Error al buscar GPU primaria")?
-        .or_else(|| all_gpus(&seat_name).ok()?.into_iter().next())
-        .unwrap_or_else(|| std::path::PathBuf::from("/dev/dri/card1"));
-    info!("🎮 GPU seleccionada: {:?}", gpu_path);
+    // 2. Detectar y abrir el mejor nodo DRM disponible vía LibSeat (probando todas las GPUs)
+    let primary_candidate = primary_gpu(&seat_name).ok().flatten();
+    let udev_candidates = all_gpus(&seat_name).unwrap_or_default();
+    let dev_dri_candidates = scan_dev_dri_cards();
+    let gpu_candidates = prioritize_drm_gpu_candidates(
+        primary_candidate,
+        udev_candidates,
+        dev_dri_candidates,
+        sysfs_drm_card_score,
+    );
+    info!("🎮 Candidatos DRM detectados (orden de prioridad): {:?}", gpu_candidates);
 
-    let raw_fd = session
-        .open(
-            &gpu_path,
-            smithay::reexports::rustix::fs::OFlags::RDWR
-                | smithay::reexports::rustix::fs::OFlags::CLOEXEC
-                | smithay::reexports::rustix::fs::OFlags::NOCTTY,
-        )
-        .context("Error al abrir nodo DRM mediante libseat")?;
-    let drm_device_fd = DrmDeviceFd::new(DeviceFd::from(raw_fd));
-
-    // 3. Inicializar DrmDevice, GBM, EGL y GlesRenderer
-    let (mut drm_device, drm_notifier) =
-        DrmDevice::new(drm_device_fd.clone(), false).context("Error al inicializar DrmDevice")?;
-    let gbm_device =
-        GbmDevice::new(drm_device_fd.clone()).context("Error al inicializar GbmDevice")?;
-    let egl_display = unsafe { EGLDisplay::new(gbm_device.clone()) }
-        .context("Error al crear EGLDisplay sobre GBM")?;
-    let egl_context = EGLContext::new(&egl_display).context("Error al crear EGLContext")?;
-    let mut renderer =
-        unsafe { GlesRenderer::new(egl_context) }.context("Error al inicializar GlesRenderer")?;
+    let (mut drm_device, drm_notifier, gbm_device, mut renderer, chosen_gpu) =
+        open_first_working_drm_gpu(&mut session, &gpu_candidates)
+            .context("Error al abrir nodo DRM mediante libseat")?;
+    info!("🎮 GPU seleccionada y operativa: {:?}", chosen_gpu);
 
     info!("🎨 Renderer OpenGL ES acelerado por hardware listo");
 
@@ -6554,5 +6717,25 @@ mod drm_emergency_tests {
         buf[off + 2..off + 4].copy_from_slice(&14u16.to_ne_bytes()); // KEY_BACKSPACE
         buf[off + 4..off + 8].copy_from_slice(&1i32.to_ne_bytes());
         assert_eq!(parse_evdev_key_event(&buf), Some((14, 1)));
+    }
+
+    #[test]
+    fn prioritize_drm_gpu_candidates_prefers_real_kms_with_connected_outputs() {
+        use std::path::PathBuf;
+        let ordered = super::prioritize_drm_gpu_candidates(
+            Some(PathBuf::from("/dev/dri/card0")),
+            vec![PathBuf::from("/dev/dri/card0"), PathBuf::from("/dev/dri/card1")],
+            vec![PathBuf::from("/dev/dri/card0"), PathBuf::from("/dev/dri/card1")],
+            |p| match p.to_str() {
+                // Caso laptop con panel interno roto/desconectado en card0 y monitor externo en card1
+                Some("/dev/dri/card0") => (false, true),
+                Some("/dev/dri/card1") => (true, true),
+                _ => (false, false),
+            },
+        );
+        assert_eq!(
+            ordered,
+            vec![PathBuf::from("/dev/dri/card1"), PathBuf::from("/dev/dri/card0")]
+        );
     }
 }
