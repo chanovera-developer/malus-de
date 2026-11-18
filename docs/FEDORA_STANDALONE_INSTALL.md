@@ -40,7 +40,8 @@ sudo dnf install -y \
     gtk4-layer-shell \
     gsettings-desktop-schemas \
     adwaita-icon-theme \
-    inter-fonts \
+    rsms-inter-fonts \
+    rsms-inter-vf-fonts \
     pipewire \
     wireplumber \
     pipewire-pulseaudio \
