@@ -657,7 +657,7 @@ pub fn setup_isolated_session_environment() -> std::io::Result<PathBuf> {
 button-layout='close,minimize,maximize:'
 
 [org/gnome/desktop/interface]
-color-scheme='prefer-dark'
+color-scheme='prefer-light'
 cursor-theme='macOS'
 cursor-size=24
 document-font-name='Inter 11'
@@ -666,7 +666,7 @@ font-hinting='slight'
 font-name='Inter 11'
 font-rendering='manual'
 font-rgba-order='rgb'
-icon-theme='Malus-Dark'
+icon-theme='Malus'
 gtk-theme='Adwaita'
 
 [org/gnome/settings-daemon/plugins/xsettings]
@@ -700,8 +700,8 @@ org.freedesktop.impl.portal.Settings=gtk;gnome;
     let gtk3_ini = gtk3_dir.join("settings.ini");
     if !gtk3_ini.exists() {
         let gtk_ini_content = format!(
-            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme=1\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-font-name={}\ngtk-xft-antialias=1\ngtk-xft-hinting=1\ngtk-xft-hintstyle=hintslight\ngtk-xft-rgba=none\ngtk-hint-font-metrics=1\ngtk-theme-name=Adwaita\ngtk-icon-theme-name={}\n",
-            cursor_theme, cursor_size, DEFAULT_SYSTEM_FONT_NAME, DEFAULT_ICON_THEME_DARK
+            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme=0\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-font-name={}\ngtk-xft-antialias=1\ngtk-xft-hinting=1\ngtk-xft-hintstyle=hintslight\ngtk-xft-rgba=none\ngtk-hint-font-metrics=1\ngtk-theme-name=Adwaita\ngtk-icon-theme-name={}\n",
+            cursor_theme, cursor_size, DEFAULT_SYSTEM_FONT_NAME, DEFAULT_ICON_THEME_LIGHT
         );
         write_file_atomic_if_changed(&gtk3_ini, &gtk_ini_content)?;
     }
@@ -711,8 +711,8 @@ org.freedesktop.impl.portal.Settings=gtk;gnome;
     let gtk4_ini = gtk4_dir.join("settings.ini");
     if !gtk4_ini.exists() {
         let gtk_ini_content = format!(
-            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme=1\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-font-name={}\ngtk-xft-antialias=1\ngtk-xft-hinting=1\ngtk-xft-hintstyle=hintslight\ngtk-xft-rgba=none\ngtk-hint-font-metrics=1\ngtk-theme-name=Adwaita\ngtk-icon-theme-name={}\n",
-            cursor_theme, cursor_size, DEFAULT_SYSTEM_FONT_NAME, DEFAULT_ICON_THEME_DARK
+            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme=0\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-font-name={}\ngtk-xft-antialias=1\ngtk-xft-hinting=1\ngtk-xft-hintstyle=hintslight\ngtk-xft-rgba=none\ngtk-hint-font-metrics=1\ngtk-theme-name=Adwaita\ngtk-icon-theme-name={}\n",
+            cursor_theme, cursor_size, DEFAULT_SYSTEM_FONT_NAME, DEFAULT_ICON_THEME_LIGHT
         );
         write_file_atomic_if_changed(&gtk4_ini, &gtk_ini_content)?;
     }
@@ -1263,8 +1263,8 @@ pub fn is_dark_mode_active() -> bool {
         }
     }
 
-    // Valor predeterminado en Malus DE: modo oscuro
-    true
+    // Valor predeterminado en Malus DE: modo claro
+    false
 }
 
 /// Sincroniza el modo claro/oscuro EXCLUSIVAMENTE dentro del entorno aislado de Malus DE

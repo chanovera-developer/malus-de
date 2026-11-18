@@ -252,7 +252,7 @@ cat << 'EOF' > "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile"
 button-layout='close,minimize,maximize:'
 
 [org/gnome/desktop/interface]
-color-scheme='prefer-dark'
+color-scheme='prefer-light'
 cursor-theme='macOS'
 cursor-size=24
 document-font-name='Inter 11'
@@ -262,7 +262,7 @@ font-name='Inter 11'
 font-rendering='manual'
 font-rgba-order='rgb'
 gtk-theme='Adwaita'
-icon-theme='Malus-Dark'
+icon-theme='Malus'
 
 [org/gnome/settings-daemon/plugins/xsettings]
 overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
@@ -345,7 +345,7 @@ if [ ! -f "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" ]; then
 cat << EOF > "$XDG_CONFIG_HOME/gtk-3.0/settings.ini"
 [Settings]
 gtk-decoration-layout=close,minimize,maximize:
-gtk-application-prefer-dark-theme=1
+gtk-application-prefer-dark-theme=0
 gtk-cursor-theme-name=$CURSOR_THEME
 gtk-cursor-theme-size=$CURSOR_SIZE
 gtk-font-name=Inter 11
@@ -360,7 +360,7 @@ if [ ! -f "$XDG_CONFIG_HOME/gtk-4.0/settings.ini" ]; then
 cat << EOF > "$XDG_CONFIG_HOME/gtk-4.0/settings.ini"
 [Settings]
 gtk-decoration-layout=close,minimize,maximize:
-gtk-application-prefer-dark-theme=1
+gtk-application-prefer-dark-theme=0
 gtk-cursor-theme-name=$CURSOR_THEME
 gtk-cursor-theme-size=$CURSOR_SIZE
 gtk-font-name=Inter 11
@@ -371,11 +371,16 @@ else
     sed -i "s/^gtk-decoration-layout=.*/gtk-decoration-layout=close,minimize,maximize:/" "$XDG_CONFIG_HOME/gtk-4.0/settings.ini" 2>/dev/null || true
 fi
 
+DEFAULT_GTK_ICON_THEME="Malus"
+if grep -q "color-scheme='prefer-dark'" "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile" 2>/dev/null; then
+    DEFAULT_GTK_ICON_THEME="Malus-Dark"
+fi
+
 for GTK_SETTINGS in "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" "$XDG_CONFIG_HOME/gtk-4.0/settings.ini"; do
     if ! grep -q '^gtk-icon-theme-name=' "$GTK_SETTINGS"; then
-        printf '\ngtk-icon-theme-name=Malus-Dark\n' >> "$GTK_SETTINGS"
+        printf '\ngtk-icon-theme-name=%s\n' "$DEFAULT_GTK_ICON_THEME" >> "$GTK_SETTINGS"
     else
-        sed -i 's/^gtk-icon-theme-name=Adwaita$/gtk-icon-theme-name=Malus-Dark/' "$GTK_SETTINGS" 2>/dev/null || true
+        sed -i "s/^gtk-icon-theme-name=Adwaita$/gtk-icon-theme-name=$DEFAULT_GTK_ICON_THEME/" "$GTK_SETTINGS" 2>/dev/null || true
     fi
     if ! grep -q '^gtk-font-name=' "$GTK_SETTINGS"; then
         printf 'gtk-font-name=Inter 11\n' >> "$GTK_SETTINGS"

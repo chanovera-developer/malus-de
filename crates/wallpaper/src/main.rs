@@ -210,7 +210,7 @@ fn build_default_gradient_texture(target_w: i32, target_h: i32) -> Option<gtk4::
     Some(tex.upcast())
 }
 
-static CURRENT_IS_DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+static CURRENT_IS_DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 thread_local! {
     static REGISTERED_POPOVERS: RefCell<Vec<glib::WeakRef<Popover>>> = RefCell::new(Vec::new());

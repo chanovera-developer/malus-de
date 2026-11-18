@@ -159,7 +159,7 @@ impl Default for ControlCenterModel {
             display_brightness: 85,
             sound_volume: 62,
             sound_muted: false,
-            dark_mode: true,
+            dark_mode: false,
         }
     }
 }

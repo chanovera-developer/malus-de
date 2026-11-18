@@ -723,9 +723,9 @@ pub fn is_dark_color_scheme() -> bool {
                 .as_deref()
                 .and_then(read_system_dark_mode)
                 .or_else(|| cached_theme.as_ref().map(|(_, _, is_dark)| *is_dark))
-                .unwrap_or(true)
+                .unwrap_or(false)
         } else {
-            cached_theme.as_ref().map(|(_, _, is_dark)| *is_dark).unwrap_or(true)
+            cached_theme.as_ref().map(|(_, _, is_dark)| *is_dark).unwrap_or(false)
         };
         *cached_theme = Some((Instant::now(), current_mtime, is_dark));
     }
