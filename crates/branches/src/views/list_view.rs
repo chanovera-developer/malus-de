@@ -308,6 +308,17 @@ impl ListView {
             }
         }
     }
+
+    pub fn refresh_cut_states(&self) {
+        let items = self.items.borrow();
+        for (idx, item) in items.iter().enumerate() {
+            if let Some(row) = self.list_box.row_at_index(idx as i32) {
+                if let Some(hbox) = row.child() {
+                    crate::views::sync_cut_css_class(&hbox, &item.path);
+                }
+            }
+        }
+    }
 }
 
 /// Aplica `widths` a las columnas 2..4 de un `GtkBox` de fila o cabecera.

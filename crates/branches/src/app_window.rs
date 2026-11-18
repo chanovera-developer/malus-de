@@ -977,6 +977,7 @@ impl BranchesWindow {
 
         self.tab_stack.set_visible_child_name(&format!("tab-{tab_id}"));
         self.sync_active_tab_ui();
+        self.refresh_all_cut_states();
     }
 
     pub fn close_tab(&self, tab_id: u64) {
@@ -1216,12 +1217,28 @@ impl BranchesWindow {
         self.status_bar.update(active.items_count(), 0, &free);
     }
 
+    fn refresh_all_cut_states(&self) {
+        let panes: Vec<Rc<FolderPane>> = self
+            .tabs
+            .borrow()
+            .iter()
+            .flat_map(|t| [t.primary_pane.clone(), t.secondary_pane.clone()])
+            .collect();
+        for pane in panes {
+            pane.refresh_cut_states();
+        }
+    }
+
     fn copy_selected(&self) {
-        self.active_pane().copy_selected();
+        if self.active_pane().copy_selected() {
+            self.refresh_all_cut_states();
+        }
     }
 
     fn cut_selected(&self) {
-        self.active_pane().cut_selected();
+        if self.active_pane().cut_selected() {
+            self.refresh_all_cut_states();
+        }
     }
 
     fn copy_or_cut_item_with_selection(
@@ -1241,6 +1258,7 @@ impl BranchesWindow {
             vec![clicked_path]
         };
         crate::operations::set_clipboard(action, paths);
+        self.refresh_all_cut_states();
     }
 
     fn paste_into_folder(&self, dest_dir: PathBuf) {
@@ -1249,6 +1267,7 @@ impl BranchesWindow {
             if changed {
                 bw.reload_all_panes();
             }
+            bw.refresh_all_cut_states();
         });
     }
 

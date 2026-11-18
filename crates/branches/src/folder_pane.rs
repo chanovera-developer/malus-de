@@ -205,6 +205,7 @@ impl FolderPane {
 
     pub fn set_view_mode(&self, mode_name: &str) {
         self.view_stack.set_visible_child_name(mode_name);
+        self.refresh_cut_states();
     }
 
     pub fn view_mode(&self) -> String {
@@ -661,6 +662,13 @@ impl FolderPane {
         }
         crate::operations::set_clipboard(crate::operations::ClipboardAction::Cut, paths);
         true
+    }
+
+    pub fn refresh_cut_states(&self) {
+        self.icon_view.refresh_cut_states();
+        self.list_view.refresh_cut_states();
+        self.column_view.refresh_cut_states();
+        self.gallery_view.refresh_cut_states();
     }
 
     pub fn trash_selected(&self) {

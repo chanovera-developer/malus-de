@@ -4,6 +4,28 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-18] — Corrección de Popups en Compositor y Opacidad en Vivo para Elementos Cortados en Branches
+
+### 1. Glitch de Recentrado al Abrir Menús Contextuales (`crates/compositor`)
+- **Causa ([`state.rs`](../crates/compositor/src/state.rs)):** En Smithay, `Window::with_surfaces` también recorre los `xdg_popup` vinculados al toplevel (`PopupManager::popups_for_surface`). Al hacer `commit` sobre la superficie de un `GtkPopover` contextual, `window_for_surface(surface)` devolvía la ventana padre y `!self.initially_placed_windows.contains(surface)` evaluaba `true`, re-centrando la ventana en el escritorio.
+- **Solución:** Añadido `is_root_window_surface(window, surface)` (`window.wl_surface().as_deref() == Some(surface)`) para ejecutar colocación inicial, centrado de *transients*, ajuste bajo top bar, actualización de `window_restore_geometries` y captura `cached_close_snapshots` únicamente en commits de la superficie raíz del toplevel, manteniendo `window.on_commit()` para todas las superficies.
+
+### 2. Marcado Visual Inmediato de Elementos Cortados (`crates/branches`)
+- **Sincronización en vivo (`.branches-cut-item` con `opacity: 0.5`):** Añadido [`sync_cut_css_class`](../crates/branches/src/views/mod.rs) y `refresh_cut_states()` en las cuatro vistas (`IconView`, `ListView`, `ColumnView`, `GalleryView`), `FolderPane` (incluyendo cambio de vista en `set_view_mode`) y [`BranchesWindow::refresh_all_cut_states`](../crates/branches/src/app_window.rs).
+- Al ejecutar **Cortar** (`Ctrl+X` / `Command+X` / menú contextual), los ítems visibles pasan de inmediato a opacidad `0.5` sin perder la selección ni recargar el directorio, y recuperan su opacidad normal al copiar otros archivos o completar el pegado.
+
+### 3. Copiar/Cortar/Pegar y Opacidad `.desktop-cut-item` / `.desktop-hidden-item` en el Escritorio (`crates/wallpaper`)
+- **Opacidad `0.5` en vivo ([`default-gradient.css`](../crates/wallpaper/src/styles/default-gradient.css), [`main.rs`](../crates/wallpaper/src/main.rs)):** Añadidas las clases `.desktop-icon.desktop-hidden-item` y `.desktop-icon.desktop-cut-item` (`opacity: 0.5`, preservando `opacity: 0.0` en `.desktop-icon-dragging`), con observación reactiva del portapapeles Wayland (`watch_clipboard_for_desktop` / `connect_changed`) para atenuar en tiempo real iconos del escritorio cortados tanto localmente como desde Branches.
+- **Portapapeles y atajos del escritorio:** Implementados `set_desktop_clipboard`, `paste_desktop_payload_into` y `paste_from_desktop_clipboard_async` (`x-special/gnome-copied-files` y `text/uri-list`), menús contextuales `"Copiar"`, `"Cortar"`, `"Pegar en carpeta"` y `"Pegar"` en fondo del escritorio (guardando coordenadas cerca del clic), además de atajos `Ctrl/Command + C / X / V / D / A`.
+
+### 4. Validación
+- `cargo test --offline -p malus-de-compositor`: **82 passed; 0 failed** (incluye `commit_ignores_non_root_surfaces_for_window_centering`).
+- `cargo test --offline -p malus-de-branches`: **34 passed; 0 failed**.
+- `cargo test --offline -p malus-de-wallpaper`: **20 passed; 0 failed** (incluye `desktop_clipboard_cut_and_copy_roundtrip`).
+- `cargo build --release --offline -p malus-de-compositor`, `-p malus-de-branches` y `-p malus-de-wallpaper`: exit `0`.
+
+---
+
 ## [2026-11-18] — Pestañas, Opacidad de Archivos Ocultos y Copiar/Cortar/Pegar en Branches (`Command + C / X / V`)
 
 ### 1. Soporte Multi-Pestaña y Apertura en Nueva Pestaña (`crates/branches`)

@@ -173,6 +173,14 @@ impl GalleryView {
         *self.pending_select_name.borrow_mut() = Some(name.to_string());
     }
 
+    pub fn refresh_cut_states(&self) {
+        let items = self.items.borrow();
+        let cards = self.carousel_widgets.borrow();
+        for (item, card) in items.iter().zip(cards.iter()) {
+            crate::views::sync_cut_css_class(card, &item.path);
+        }
+    }
+
     pub fn set_items(self: &Rc<Self>, items: &[FileItem]) {
         *self.items.borrow_mut() = items.to_vec();
         *self.current_index.borrow_mut() = None;

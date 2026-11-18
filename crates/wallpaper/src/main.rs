@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use gio::prelude::*;
+use gtk4::gdk::prelude::DisplayExt;
 use gtk4::gdk::Key;
 use gtk4::prelude::*;
 use gtk4::{
@@ -774,6 +775,428 @@ fn launch_quick_look(path: &Path) {
         let file = gio::File::for_path(path);
         launch_file(&file);
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DesktopClipboardAction {
+    Copy,
+    Cut,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DesktopClipboardPayload {
+    action: DesktopClipboardAction,
+    paths: Vec<PathBuf>,
+}
+
+thread_local! {
+    static DESKTOP_FILE_CLIPBOARD: RefCell<Option<DesktopClipboardPayload>> = const { RefCell::new(None) };
+    static EXTERNAL_CUT_PATHS: RefCell<HashSet<PathBuf>> = RefCell::new(HashSet::new());
+}
+
+fn encode_gnome_copied_files(action: &DesktopClipboardAction, paths: &[PathBuf]) -> String {
+    let op = match action {
+        DesktopClipboardAction::Copy => "copy",
+        DesktopClipboardAction::Cut => "cut",
+    };
+    let mut lines = Vec::with_capacity(paths.len() + 1);
+    lines.push(op.to_string());
+    for p in paths {
+        lines.push(gio::File::for_path(p).uri().to_string());
+    }
+    lines.join("\n")
+}
+
+fn parse_gnome_copied_files(text: &str) -> Option<DesktopClipboardPayload> {
+    let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
+    let op = lines.next()?;
+    let action = match op {
+        "copy" => DesktopClipboardAction::Copy,
+        "cut" => DesktopClipboardAction::Cut,
+        _ => return None,
+    };
+    let paths: Vec<PathBuf> = lines
+        .filter_map(|uri| {
+            if uri.starts_with('#') {
+                return None;
+            }
+            if uri.contains("://") {
+                gio::File::for_uri(uri).path()
+            } else {
+                Some(PathBuf::from(uri))
+            }
+        })
+        .collect();
+    if paths.is_empty() {
+        None
+    } else {
+        Some(DesktopClipboardPayload { action, paths })
+    }
+}
+
+fn parse_uri_list(text: &str) -> Option<DesktopClipboardPayload> {
+    let paths: Vec<PathBuf> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|line| {
+            if line.contains("://") {
+                gio::File::for_uri(line).path()
+            } else if line.starts_with('/') {
+                Some(PathBuf::from(line))
+            } else {
+                None
+            }
+        })
+        .collect();
+    if paths.is_empty() {
+        None
+    } else {
+        Some(DesktopClipboardPayload {
+            action: DesktopClipboardAction::Copy,
+            paths,
+        })
+    }
+}
+
+fn set_desktop_clipboard(action: DesktopClipboardAction, paths: Vec<PathBuf>) {
+    if paths.is_empty() {
+        return;
+    }
+    let gnome_payload = encode_gnome_copied_files(&action, &paths);
+    let uri_list: String = paths
+        .iter()
+        .map(|p| format!("{}\r\n", gio::File::for_path(p).uri()))
+        .collect();
+
+    EXTERNAL_CUT_PATHS.with(|slot| slot.borrow_mut().clear());
+    DESKTOP_FILE_CLIPBOARD.with(|slot| {
+        *slot.borrow_mut() = Some(DesktopClipboardPayload { action, paths });
+    });
+
+    if let Some(display) = gtk4::gdk::Display::default() {
+        let provider = gtk4::gdk::ContentProvider::new_union(&[
+            gtk4::gdk::ContentProvider::for_bytes(
+                "x-special/gnome-copied-files",
+                &glib::Bytes::from_owned(gnome_payload),
+            ),
+            gtk4::gdk::ContentProvider::for_bytes(
+                "text/uri-list",
+                &glib::Bytes::from_owned(uri_list),
+            ),
+        ]);
+        let _ = display.clipboard().set_content(Some(&provider));
+    }
+}
+
+fn clear_desktop_clipboard() {
+    EXTERNAL_CUT_PATHS.with(|slot| slot.borrow_mut().clear());
+    let had_local = DESKTOP_FILE_CLIPBOARD.with(|slot| slot.borrow_mut().take().is_some());
+    if had_local {
+        if let Some(display) = gtk4::gdk::Display::default() {
+            let formats = display.clipboard().formats();
+            if formats.contain_mime_type("x-special/gnome-copied-files") {
+                let _ = display
+                    .clipboard()
+                    .set_content(None::<&gtk4::gdk::ContentProvider>);
+            }
+        }
+    }
+}
+
+fn has_desktop_clipboard_files() -> bool {
+    if let Some(display) = gtk4::gdk::Display::default() {
+        let formats = display.clipboard().formats();
+        return formats.contain_mime_type("x-special/gnome-copied-files")
+            || formats.contain_mime_type("text/uri-list");
+    }
+    DESKTOP_FILE_CLIPBOARD.with(|slot| slot.borrow().is_some())
+}
+
+fn is_desktop_path_cut(path: &Path) -> bool {
+    let local_cut = DESKTOP_FILE_CLIPBOARD.with(|slot| {
+        slot.borrow().as_ref().is_some_and(|p| {
+            p.action == DesktopClipboardAction::Cut && p.paths.iter().any(|cut_p| cut_p == path)
+        })
+    });
+    if local_cut {
+        return true;
+    }
+    EXTERNAL_CUT_PATHS.with(|slot| slot.borrow().contains(path))
+}
+
+fn sync_desktop_cut_states(fixed: &Fixed) {
+    let mut sibling = fixed.first_child();
+    while let Some(child) = sibling {
+        sibling = child.next_sibling();
+        if !child.has_css_class("desktop-icon") {
+            continue;
+        }
+        let Some(item_path) = (unsafe { child.data::<PathBuf>("desktop_item_path") }) else {
+            continue;
+        };
+        let cut = is_desktop_path_cut(unsafe { item_path.as_ref() });
+        if cut {
+            child.add_css_class("desktop-cut-item");
+        } else {
+            child.remove_css_class("desktop-cut-item");
+        }
+    }
+}
+
+fn refresh_cut_paths_from_display_clipboard(fixed: &Fixed) {
+    let Some(display) = gtk4::gdk::Display::default() else {
+        return;
+    };
+    let clipboard = display.clipboard();
+    let formats = clipboard.formats();
+    if !formats.contain_mime_type("x-special/gnome-copied-files") {
+        EXTERNAL_CUT_PATHS.with(|slot| slot.borrow_mut().clear());
+        if !clipboard.is_local() {
+            DESKTOP_FILE_CLIPBOARD.with(|slot| *slot.borrow_mut() = None);
+        }
+        sync_desktop_cut_states(fixed);
+        return;
+    }
+
+    if clipboard.is_local() {
+        EXTERNAL_CUT_PATHS.with(|slot| slot.borrow_mut().clear());
+        sync_desktop_cut_states(fixed);
+        return;
+    }
+
+    let fixed_weak = fixed.downgrade();
+    glib::MainContext::default().spawn_local(async move {
+        let mut new_cuts = HashSet::new();
+        if let Ok((stream, _mime)) = clipboard
+            .read_future(&["x-special/gnome-copied-files"], glib::Priority::DEFAULT)
+            .await
+        {
+            let mut raw = Vec::new();
+            loop {
+                let buf = vec![0u8; 65536];
+                match stream.read_future(buf, glib::Priority::DEFAULT).await {
+                    Ok((chunk, n)) if n > 0 => {
+                        raw.extend_from_slice(&chunk[..n]);
+                        if raw.len() >= 4 * 1024 * 1024 {
+                            break;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            let text = String::from_utf8_lossy(&raw);
+            if let Some(payload) = parse_gnome_copied_files(&text) {
+                if payload.action == DesktopClipboardAction::Cut {
+                    new_cuts.extend(payload.paths);
+                }
+            }
+        }
+        EXTERNAL_CUT_PATHS.with(|slot| *slot.borrow_mut() = new_cuts);
+        if let Some(fixed) = fixed_weak.upgrade() {
+            sync_desktop_cut_states(&fixed);
+        }
+    });
+}
+
+fn watch_clipboard_for_desktop(fixed: &Fixed) {
+    let Some(display) = gtk4::gdk::Display::default() else {
+        return;
+    };
+    refresh_cut_paths_from_display_clipboard(fixed);
+    let fixed_weak = fixed.downgrade();
+    display.clipboard().connect_changed(move |_| {
+        if let Some(fixed) = fixed_weak.upgrade() {
+            refresh_cut_paths_from_display_clipboard(&fixed);
+        }
+    });
+}
+
+fn copy_dir_recursive_desktop(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)?.flatten() {
+        let entry_path = entry.path();
+        let target_path = dst.join(entry.file_name());
+        if entry_path.is_dir() {
+            copy_dir_recursive_desktop(&entry_path, &target_path)?;
+        } else {
+            fs::copy(&entry_path, &target_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn unique_destination_in_desktop_folder(src: &Path, dest_folder: &Path) -> Option<PathBuf> {
+    let file_name = src.file_name()?;
+    let mut dest = dest_folder.join(file_name);
+    if !dest.exists() && dest.symlink_metadata().is_err() {
+        return Some(dest);
+    }
+
+    let is_dir = src
+        .symlink_metadata()
+        .map(|m| m.is_dir())
+        .unwrap_or_else(|_| src.is_dir());
+
+    let (stem, ext) = if is_dir {
+        (file_name.to_string_lossy().to_string(), String::new())
+    } else {
+        (
+            src.file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| file_name.to_string_lossy().to_string()),
+            src.extension()
+                .map(|e| format!(".{}", e.to_string_lossy()))
+                .unwrap_or_default(),
+        )
+    };
+
+    let mut counter = 2usize;
+    dest = dest_folder.join(format!("{} copia{}", stem, ext));
+    while dest.exists() || dest.symlink_metadata().is_ok() {
+        dest = dest_folder.join(format!("{} copia {}{}", stem, counter, ext));
+        counter += 1;
+    }
+    Some(dest)
+}
+
+fn paste_desktop_payload_into(
+    payload: &DesktopClipboardPayload,
+    dest_folder: &Path,
+) -> Vec<PathBuf> {
+    if !dest_folder.is_dir() {
+        return Vec::new();
+    }
+    let mut pasted = Vec::new();
+    for src in &payload.paths {
+        if !src.exists() && src.symlink_metadata().is_err() {
+            continue;
+        }
+        if src == dest_folder || (src.is_dir() && dest_folder.starts_with(src)) {
+            continue;
+        }
+        match payload.action {
+            DesktopClipboardAction::Copy => {
+                let Some(dest) = unique_destination_in_desktop_folder(src, dest_folder) else {
+                    continue;
+                };
+                let ok = if src.is_dir() {
+                    copy_dir_recursive_desktop(src, &dest).is_ok()
+                } else {
+                    fs::copy(src, &dest).is_ok()
+                };
+                if ok {
+                    pasted.push(dest);
+                }
+            }
+            DesktopClipboardAction::Cut => {
+                if src.parent() == Some(dest_folder) {
+                    continue;
+                }
+                let Some(dest) = unique_destination_in_desktop_folder(src, dest_folder) else {
+                    continue;
+                };
+                let src_file = gio::File::for_path(src);
+                let dest_file = gio::File::for_path(&dest);
+                let ok = src_file
+                    .move_(
+                        &dest_file,
+                        gio::FileCopyFlags::NONE,
+                        gio::Cancellable::NONE,
+                        None,
+                    )
+                    .is_ok()
+                    || fs::rename(src, &dest).is_ok();
+                if ok {
+                    pasted.push(dest);
+                }
+            }
+        }
+    }
+    pasted
+}
+
+fn paste_from_desktop_clipboard_async<F: Fn(Vec<PathBuf>) + 'static>(
+    dest_dir: PathBuf,
+    on_done: F,
+) {
+    let Some(display) = gtk4::gdk::Display::default() else {
+        if let Some(payload) = DESKTOP_FILE_CLIPBOARD.with(|slot| slot.borrow().clone()) {
+            let is_cut = payload.action == DesktopClipboardAction::Cut;
+            let pasted = paste_desktop_payload_into(&payload, &dest_dir);
+            if is_cut && !pasted.is_empty() {
+                clear_desktop_clipboard();
+            }
+            on_done(pasted);
+        } else {
+            on_done(Vec::new());
+        }
+        return;
+    };
+
+    let clipboard = display.clipboard();
+    let formats = clipboard.formats();
+    let has_gnome = formats.contain_mime_type("x-special/gnome-copied-files");
+    let has_uri = formats.contain_mime_type("text/uri-list");
+    if !has_gnome && !has_uri {
+        on_done(Vec::new());
+        return;
+    }
+
+    if clipboard.is_local() {
+        if let Some(payload) = DESKTOP_FILE_CLIPBOARD.with(|slot| slot.borrow().clone()) {
+            let is_cut = payload.action == DesktopClipboardAction::Cut;
+            let pasted = paste_desktop_payload_into(&payload, &dest_dir);
+            if is_cut && !pasted.is_empty() {
+                clear_desktop_clipboard();
+            }
+            on_done(pasted);
+            return;
+        }
+    }
+
+    glib::MainContext::default().spawn_local(async move {
+        let payload = if let Ok((stream, mime)) = clipboard
+            .read_future(
+                &["x-special/gnome-copied-files", "text/uri-list"],
+                glib::Priority::DEFAULT,
+            )
+            .await
+        {
+            let mut raw = Vec::new();
+            loop {
+                let buf = vec![0u8; 65536];
+                match stream.read_future(buf, glib::Priority::DEFAULT).await {
+                    Ok((chunk, n)) if n > 0 => {
+                        raw.extend_from_slice(&chunk[..n]);
+                        if raw.len() >= 4 * 1024 * 1024 {
+                            break;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            let text = String::from_utf8_lossy(&raw);
+            if mime.as_str() == "x-special/gnome-copied-files" {
+                parse_gnome_copied_files(&text)
+            } else {
+                parse_uri_list(&text)
+            }
+        } else {
+            None
+        };
+
+        if let Some(payload) = payload {
+            let is_cut = payload.action == DesktopClipboardAction::Cut;
+            let pasted = paste_desktop_payload_into(&payload, &dest_dir);
+            if is_cut && !pasted.is_empty() {
+                clear_desktop_clipboard();
+            }
+            on_done(pasted);
+        } else {
+            on_done(Vec::new());
+        }
+    });
 }
 
 fn trash_file(path: &Path) {
@@ -2268,6 +2691,19 @@ fn render_single_icon(
     item_box.append(&icon_image);
     item_box.append(&label);
 
+    unsafe {
+        item_box.set_data("desktop_item_path", path.clone());
+    }
+    if path
+        .file_name()
+        .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+    {
+        item_box.add_css_class("desktop-hidden-item");
+    }
+    if is_desktop_path_cut(&path) {
+        item_box.add_css_class("desktop-cut-item");
+    }
+
     let is_selected = selected_paths.borrow().contains(&path);
     set_desktop_icon_selected(&item_box, is_selected);
 
@@ -2405,6 +2841,66 @@ fn render_single_icon(
     });
     menu.append(&dup_button);
 
+    // 5b. Copiar / Cortar / Pegar en carpeta
+    let copy_button = create_menu_button("Copiar", false);
+    {
+        let copy_path = path.clone();
+        let sel_copy = selected_paths.clone();
+        let fixed_copy = fixed.clone();
+        let popover_c = popover.clone();
+        copy_button.connect_clicked(move |_| {
+            let sel = sel_copy.borrow();
+            let paths = if sel.contains(&copy_path) && !sel.is_empty() {
+                sel.iter().cloned().collect()
+            } else {
+                vec![copy_path.clone()]
+            };
+            drop(sel);
+            set_desktop_clipboard(DesktopClipboardAction::Copy, paths);
+            sync_desktop_cut_states(&fixed_copy);
+            popover_c.popdown();
+        });
+    }
+    menu.append(&copy_button);
+
+    let cut_button = create_menu_button("Cortar", false);
+    {
+        let cut_path = path.clone();
+        let sel_cut = selected_paths.clone();
+        let fixed_cut = fixed.clone();
+        let popover_c = popover.clone();
+        cut_button.connect_clicked(move |_| {
+            let sel = sel_cut.borrow();
+            let paths = if sel.contains(&cut_path) && !sel.is_empty() {
+                sel.iter().cloned().collect()
+            } else {
+                vec![cut_path.clone()]
+            };
+            drop(sel);
+            set_desktop_clipboard(DesktopClipboardAction::Cut, paths);
+            sync_desktop_cut_states(&fixed_cut);
+            popover_c.popdown();
+        });
+    }
+    menu.append(&cut_button);
+
+    let is_dir_item = path.is_dir();
+    let paste_into_button = create_menu_button("Pegar en carpeta", false);
+    paste_into_button.set_visible(false);
+    if is_dir_item {
+        let paste_dir = path.clone();
+        let fixed_paste = fixed.clone();
+        let popover_c = popover.clone();
+        paste_into_button.connect_clicked(move |_| {
+            let fixed_done = fixed_paste.clone();
+            popover_c.popdown();
+            paste_from_desktop_clipboard_async(paste_dir.clone(), move |_pasted| {
+                sync_desktop_cut_states(&fixed_done);
+            });
+        });
+        menu.append(&paste_into_button);
+    }
+
     let sep2 = GtkBox::new(Orientation::Horizontal, 0);
     sep2.add_css_class("desktop-context-separator");
     menu.append(&sep2);
@@ -2431,8 +2927,12 @@ fn render_single_icon(
     context_click.set_button(3);
     let p_click = popover.clone();
     let menu_click = menu.clone();
+    let paste_btn_vis = paste_into_button.clone();
     context_click.connect_pressed(move |gesture, _, x, y| {
         gesture.set_state(gtk4::EventSequenceState::Claimed);
+        if is_dir_item {
+            paste_btn_vis.set_visible(has_desktop_clipboard_files());
+        }
         let is_dark = is_dark_mode_active();
         apply_theme_to_popover(&p_click, is_dark);
         let rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
@@ -2826,19 +3326,115 @@ fn create_wallpaper_window(
         });
 
         trigger_refresh();
+        watch_clipboard_for_desktop(&icons);
 
         // Controladores de teclado en la ventana del escritorio:
-        // Espacio -> Quick Look, Enter -> Abrir, Delete -> Papelera
+        // Espacio -> Quick Look, Enter -> Abrir, Delete -> Papelera, Ctrl/Cmd+C/X/V/D/A
         let key_controller = EventControllerKey::new();
         let win_key = window.clone();
         let foc_path_key = focused_path.clone();
         let sel_paths_key = selected_paths.clone();
-        key_controller.connect_key_pressed(move |_, keyval, _, _| {
+        let icons_key = icons.clone();
+        let dir_key = desktop_dir.to_path_buf();
+        let trigger_key = trigger_refresh.clone();
+        key_controller.connect_key_pressed(move |_, keyval, _, state| {
             if gtk4::prelude::GtkWindowExt::focus(&win_key)
                 .is_some_and(|w| w.is::<gtk4::Editable>() || w.is::<gtk4::Text>())
             {
                 return glib::Propagation::Proceed;
             }
+
+            let is_alt = state.contains(gtk4::gdk::ModifierType::ALT_MASK);
+            let is_ctrl = state.contains(gtk4::gdk::ModifierType::CONTROL_MASK);
+            let is_command = state.intersects(
+                gtk4::gdk::ModifierType::SUPER_MASK | gtk4::gdk::ModifierType::META_MASK,
+            );
+            let is_shift = state.contains(gtk4::gdk::ModifierType::SHIFT_MASK);
+
+            if (is_ctrl || is_command) && !is_alt && !is_shift {
+                match keyval {
+                    Key::c | Key::C => {
+                        let sel = sel_paths_key.borrow();
+                        let paths: Vec<PathBuf> = if !sel.is_empty() {
+                            sel.iter().cloned().collect()
+                        } else if let Some(p) = foc_path_key.borrow().as_ref() {
+                            vec![p.clone()]
+                        } else {
+                            Vec::new()
+                        };
+                        drop(sel);
+                        if !paths.is_empty() {
+                            set_desktop_clipboard(DesktopClipboardAction::Copy, paths);
+                            sync_desktop_cut_states(&icons_key);
+                            return glib::Propagation::Stop;
+                        }
+                    }
+                    Key::x | Key::X => {
+                        let sel = sel_paths_key.borrow();
+                        let paths: Vec<PathBuf> = if !sel.is_empty() {
+                            sel.iter().cloned().collect()
+                        } else if let Some(p) = foc_path_key.borrow().as_ref() {
+                            vec![p.clone()]
+                        } else {
+                            Vec::new()
+                        };
+                        drop(sel);
+                        if !paths.is_empty() {
+                            set_desktop_clipboard(DesktopClipboardAction::Cut, paths);
+                            sync_desktop_cut_states(&icons_key);
+                            return glib::Propagation::Stop;
+                        }
+                    }
+                    Key::v | Key::V => {
+                        let trig_done = trigger_key.clone();
+                        let icons_done = icons_key.clone();
+                        paste_from_desktop_clipboard_async(dir_key.clone(), move |pasted| {
+                            if !pasted.is_empty() {
+                                trig_done();
+                            }
+                            sync_desktop_cut_states(&icons_done);
+                        });
+                        return glib::Propagation::Stop;
+                    }
+                    Key::d | Key::D => {
+                        let sel = sel_paths_key.borrow();
+                        let paths: Vec<PathBuf> = if !sel.is_empty() {
+                            sel.iter().cloned().collect()
+                        } else if let Some(p) = foc_path_key.borrow().as_ref() {
+                            vec![p.clone()]
+                        } else {
+                            Vec::new()
+                        };
+                        drop(sel);
+                        if !paths.is_empty() {
+                            for p in paths {
+                                duplicate_file(&p);
+                            }
+                            trigger_key();
+                            return glib::Propagation::Stop;
+                        }
+                    }
+                    Key::a | Key::A => {
+                        let mut sel = sel_paths_key.borrow_mut();
+                        sel.clear();
+                        let mut sibling = icons_key.first_child();
+                        while let Some(child) = sibling {
+                            sibling = child.next_sibling();
+                            if !child.has_css_class("desktop-icon") {
+                                continue;
+                            }
+                            if let Some(p) = unsafe { child.data::<PathBuf>("desktop_item_path") } {
+                                let p_clone = unsafe { p.as_ref() }.clone();
+                                set_desktop_icon_selected(&child, true);
+                                sel.insert(p_clone);
+                            }
+                        }
+                        return glib::Propagation::Stop;
+                    }
+                    _ => {}
+                }
+            }
+
             match keyval {
                 Key::space => {
                     if let Some(path) = foc_path_key.borrow().as_ref() {
@@ -2970,6 +3566,39 @@ fn create_wallpaper_window(
                 stack_cn.set_visible_child_name("create_new");
             });
             menu.append(&create_new_btn);
+
+            if has_desktop_clipboard_files() {
+                let paste_btn = create_menu_button("Pegar", false);
+                let popover_c = popover.clone();
+                let paste_dir = desktop_dir_menu.clone();
+                let pos_paste = icon_pos_snap.clone();
+                let trig_paste = trigger_refresh_menu.clone();
+                let icons_paste = icons_context.clone();
+                paste_btn.connect_clicked(move |_| {
+                    popover_c.popdown();
+                    let pos_map_done = pos_paste.clone();
+                    let trig_done = trig_paste.clone();
+                    let icons_done = icons_paste.clone();
+                    paste_from_desktop_clipboard_async(paste_dir.clone(), move |pasted| {
+                        if !pasted.is_empty() {
+                            {
+                                let mut pos_map = pos_map_done.borrow_mut();
+                                let base_y = y.max(top_margin);
+                                for (idx, p) in pasted.iter().enumerate() {
+                                    pos_map.insert(
+                                        p.clone(),
+                                        (x + (idx as f64) * 24.0, base_y + (idx as f64) * 24.0),
+                                    );
+                                }
+                                save_icon_positions(&pos_map);
+                            }
+                            trig_done();
+                        }
+                        sync_desktop_cut_states(&icons_done);
+                    });
+                });
+                menu.append(&paste_btn);
+            }
 
             let sep1 = GtkBox::new(Orientation::Horizontal, 0);
             sep1.add_css_class("desktop-context-separator");
@@ -4301,6 +4930,9 @@ mod tests {
     #[test]
     fn test_desktop_drag_and_drop_macos_css_classes() {
         let css = include_str!("styles/default-gradient.css");
+        assert!(css.contains(".desktop-icon.desktop-hidden-item"));
+        assert!(css.contains(".desktop-icon.desktop-cut-item"));
+        assert!(css.contains("opacity: 0.5;"));
         assert!(css.contains(".desktop-icon.desktop-icon-dragging"));
         assert!(css.contains("opacity: 0.0;"));
         assert!(css.contains("transition: none;"));
@@ -4454,5 +5086,40 @@ mod squircle_thumb_tests {
         assert_eq!(rgba[3], 0);
         assert_eq!(rgba[((h / 2) * w + w / 2) * 4 + 3], 255);
         assert_eq!(rgba[(w / 2) * 4 + 3], 255);
+    }
+
+    #[test]
+    fn desktop_clipboard_cut_and_copy_roundtrip() {
+        let dir = std::env::temp_dir().join("malus_wallpaper_clipboard_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let src_dir = dir.join("src");
+        let dest_dir = dir.join("dest");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&dest_dir).unwrap();
+
+        let file = src_dir.join("nota.txt");
+        std::fs::write(&file, "hola escritorio").unwrap();
+
+        let encoded = encode_gnome_copied_files(&DesktopClipboardAction::Cut, &[file.clone()]);
+        let parsed = parse_gnome_copied_files(&encoded).unwrap();
+        assert_eq!(parsed.action, DesktopClipboardAction::Cut);
+        assert_eq!(parsed.paths, vec![file.clone()]);
+
+        let copied = paste_desktop_payload_into(
+            &DesktopClipboardPayload {
+                action: DesktopClipboardAction::Copy,
+                paths: vec![file.clone()],
+            },
+            &src_dir,
+        );
+        assert_eq!(copied, vec![src_dir.join("nota copia.txt")]);
+        assert!(src_dir.join("nota copia.txt").is_file());
+
+        let moved = paste_desktop_payload_into(&parsed, &dest_dir);
+        assert_eq!(moved, vec![dest_dir.join("nota.txt")]);
+        assert!(!file.exists());
+        assert!(dest_dir.join("nota.txt").is_file());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

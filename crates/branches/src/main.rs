@@ -312,6 +312,7 @@ mod tests {
         assert!(app_window_src.contains("\"copy_item\""));
         assert!(app_window_src.contains("\"cut_item\""));
         assert!(app_window_src.contains("\"paste_into\""));
+        assert!(app_window_src.contains("refresh_all_cut_states"));
         assert!(app_window_src.contains("SUPER_MASK"));
         assert!(app_window_src.contains("META_MASK"));
 

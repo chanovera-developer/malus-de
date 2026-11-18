@@ -50,6 +50,11 @@ window.malus-wallpaper-window picture {
     transition: none;
 }
 
+.desktop-icon.desktop-hidden-item,
+.desktop-icon.desktop-cut-item {
+    opacity: 0.5;
+}
+
 /* Efectos Drag & Drop estilo macOS Finder */
 .desktop-icon.desktop-icon-dragging {
     opacity: 0.0;

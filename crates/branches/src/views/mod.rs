@@ -9,6 +9,19 @@ pub type NavigateCallback = std::rc::Rc<dyn Fn(PathBuf)>;
 pub type SelectionCallback = std::rc::Rc<dyn Fn(usize)>;
 pub type RenameCallback = std::rc::Rc<dyn Fn(PathBuf)>;
 
+/// Aplica o retira `.branches-cut-item` (opacidad 0.5) sobre el widget del elemento según el portapapeles.
+pub(super) fn sync_cut_css_class(
+    widget: &impl gtk4::prelude::IsA<gtk4::Widget>,
+    path: &std::path::Path,
+) {
+    use gtk4::prelude::*;
+    if crate::operations::is_path_cut(path) {
+        widget.add_css_class("branches-cut-item");
+    } else {
+        widget.remove_css_class("branches-cut-item");
+    }
+}
+
 /// Crea un botón de menú contextual estilizado como ítem unificado de Malus DE.
 pub(super) fn make_context_menu_button(label: &str) -> gtk4::Button {
     use gtk4::prelude::*;

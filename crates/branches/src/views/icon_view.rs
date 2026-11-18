@@ -572,6 +572,13 @@ impl IconView {
             .collect()
     }
 
+    pub fn refresh_cut_states(&self) {
+        for data in self.item_widgets.borrow().values() {
+            let d = data.borrow();
+            crate::views::sync_cut_css_class(&d.widget, &d.item.path);
+        }
+    }
+
     pub fn select_all(&self) {
         let widgets = self.item_widgets.borrow();
         let mut sel = self.selected_items.borrow_mut();

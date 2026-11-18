@@ -41,6 +41,18 @@ struct ColumnViewInner {
 }
 
 impl ColumnView {
+    pub fn refresh_cut_states(&self) {
+        for col in self.inner.columns.borrow().iter() {
+            for (idx, item) in col.items.iter().enumerate() {
+                if let Some(row) = col.list_box.row_at_index(idx as i32) {
+                    if let Some(hbox) = row.child() {
+                        crate::views::sync_cut_css_class(&hbox, &item.path);
+                    }
+                }
+            }
+        }
+    }
+
     pub fn new(on_navigate: NavigateCallback, on_selection_changed: SelectionCallback) -> Self {
         let columns_box = GtkBox::new(Orientation::Horizontal, 0);
         columns_box.add_css_class("branches-columns-box");
