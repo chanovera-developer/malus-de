@@ -1509,6 +1509,12 @@ pub fn run_drm() -> Result<()> {
 
     loop_handle.insert_source(libinput_backend, move |event, _, state: &mut MalusState| {
         match event {
+            InputEvent::DeviceAdded { mut device } => {
+                if device.config_tap_finger_count() > 0 {
+                    let _ = device.config_tap_set_enabled(true);
+                    let _ = device.config_tap_set_drag_enabled(true);
+                }
+            }
             InputEvent::Keyboard { event } => {
                 let key = event.key_code().raw();
                 let is_pressed = event.state() == KeyState::Pressed;
