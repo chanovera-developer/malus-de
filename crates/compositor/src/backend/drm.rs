@@ -26,7 +26,7 @@ use smithay::{
             Bind, Color32F, ExportMem, Frame, ImportDma, ImportMem, Renderer, Texture,
         },
         session::{libseat::LibSeatSession, Event as SessionEvent, Session},
-        udev::{all_gpus, primary_gpu},
+        udev::{all_gpus, primary_gpu, UdevBackend, UdevEvent},
     },
     input::{
         keyboard::{keysyms, FilterResult},
@@ -35,17 +35,20 @@ use smithay::{
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
         calloop::EventLoop,
-        drm::control::{connector, crtc, Device as ControlDevice},
+        drm::control::{connector, crtc, Device as ControlDevice, ResourceHandles},
         input::Libinput,
         wayland_protocols::xdg::shell::server::xdg_toplevel::{ResizeEdge, State as XdgState},
-        wayland_server::{Display, ListeningSocket},
+        wayland_server::{backend::GlobalId, Display, ListeningSocket},
     },
     utils::{DeviceFd, IsAlive, Logical, Physical, Point, Rectangle, Size, Transform, SERIAL_COUNTER},
     wayland::{seat::WaylandFocus, shell::wlr_layer::Layer},
 };
 use std::{
     collections::HashSet,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant},
 };
 use tracing::{error, info, warn};
@@ -103,10 +106,178 @@ fn send_presentation_feedback_surface_tree(
     );
 }
 
+fn trigger_emergency_compositor_exit(reason: &str) {
+    warn!("🛑 [ZAP] Cierre de emergencia del compositor activado: {}", reason);
+    std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_millis(600));
+        std::process::exit(0);
+    });
+}
+
+#[derive(Default, Debug, Clone, Copy)]
+struct EmergencyZapKeys {
+    left_ctrl: bool,
+    right_ctrl: bool,
+    left_alt: bool,
+    right_alt: bool,
+}
+
+impl EmergencyZapKeys {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Actualiza el estado con un evento evdev (`EV_KEY`) y devuelve `true` si se pulsó `Ctrl + Alt + BackSpace`.
+    fn update(&mut self, code: u16, value: i32) -> bool {
+        const KEY_BACKSPACE: u16 = 14;
+        const KEY_LEFTCTRL: u16 = 29;
+        const KEY_LEFTALT: u16 = 56;
+        const KEY_RIGHTCTRL: u16 = 97;
+        const KEY_RIGHTALT: u16 = 100;
+
+        let down = value != 0;
+        match code {
+            KEY_LEFTCTRL => self.left_ctrl = down,
+            KEY_RIGHTCTRL => self.right_ctrl = down,
+            KEY_LEFTALT => self.left_alt = down,
+            KEY_RIGHTALT => self.right_alt = down,
+            KEY_BACKSPACE if value == 1 => {
+                return (self.left_ctrl || self.right_ctrl) && (self.left_alt || self.right_alt);
+            }
+            _ => {}
+        }
+        false
+    }
+}
+
+fn parse_evdev_key_event(chunk: &[u8]) -> Option<(u16, i32)> {
+    const EV_KEY: u16 = 1;
+    #[cfg(target_pointer_width = "64")]
+    const HEADER_BYTES: usize = 16;
+    #[cfg(not(target_pointer_width = "64"))]
+    const HEADER_BYTES: usize = 8;
+
+    if chunk.len() < HEADER_BYTES + 8 {
+        return None;
+    }
+    let ev_type = u16::from_ne_bytes([chunk[HEADER_BYTES], chunk[HEADER_BYTES + 1]]);
+    if ev_type != EV_KEY {
+        return None;
+    }
+    let code = u16::from_ne_bytes([chunk[HEADER_BYTES + 2], chunk[HEADER_BYTES + 3]]);
+    let value = i32::from_ne_bytes([
+        chunk[HEADER_BYTES + 4],
+        chunk[HEADER_BYTES + 5],
+        chunk[HEADER_BYTES + 6],
+        chunk[HEADER_BYTES + 7],
+    ]);
+    Some((code, value))
+}
+
+fn sysfs_key_caps_has_backspace(caps: &str) -> bool {
+    let Some(last_word) = caps.split_whitespace().last() else {
+        return false;
+    };
+    u64::from_str_radix(last_word, 16).is_ok_and(|mask| (mask & (1u64 << 14)) != 0)
+}
+
+fn open_readable_evdev_keyboards() -> Vec<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let Ok(entries) = std::fs::read_dir("/sys/class/input") else {
+        return Vec::new();
+    };
+    let nonblock = smithay::reexports::rustix::fs::OFlags::NONBLOCK.bits() as i32;
+    let mut files = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if !name_str.starts_with("event") {
+            continue;
+        }
+        let key_caps_path = entry.path().join("device/capabilities/key");
+        let Ok(caps) = std::fs::read_to_string(key_caps_path) else {
+            continue;
+        };
+        if !sysfs_key_caps_has_backspace(&caps) {
+            continue;
+        }
+        let dev_path = std::path::Path::new("/dev/input").join(&name);
+        if let Ok(file) = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(nonblock)
+            .open(dev_path)
+        {
+            files.push(file);
+        }
+    }
+    files
+}
+
+/// Hilo independiente de emergencia: si el usuario tiene permiso de lectura en `/dev/input/event*`
+/// (p. ej. grupo `input`), permite cerrar el entorno con `Ctrl+Alt+BackSpace` aunque el hilo
+/// principal del compositor esté completamente bloqueado.
+fn spawn_emergency_zap_watchdog(session_active: Arc<AtomicBool>) {
+    std::thread::Builder::new()
+        .name("malus-zap-watchdog".to_string())
+        .spawn(move || {
+            use std::io::Read;
+
+            #[cfg(target_pointer_width = "64")]
+            const EVENT_SIZE: usize = 24;
+            #[cfg(not(target_pointer_width = "64"))]
+            const EVENT_SIZE: usize = 16;
+
+            let mut keyboards = open_readable_evdev_keyboards();
+            if keyboards.is_empty() {
+                return;
+            }
+            let mut key_state = EmergencyZapKeys::default();
+            let mut buf = [0u8; EVENT_SIZE * 16];
+            let mut last_rescan = Instant::now();
+
+            loop {
+                if !session_active.load(Ordering::Relaxed) {
+                    key_state.reset();
+                    std::thread::sleep(Duration::from_millis(80));
+                    continue;
+                }
+                if last_rescan.elapsed() >= Duration::from_secs(5) {
+                    last_rescan = Instant::now();
+                    let refreshed = open_readable_evdev_keyboards();
+                    if !refreshed.is_empty() {
+                        keyboards = refreshed;
+                    }
+                }
+                for kb in &mut keyboards {
+                    loop {
+                        match kb.read(&mut buf) {
+                            Ok(n) if n >= EVENT_SIZE => {
+                                for chunk in buf[..n].chunks_exact(EVENT_SIZE) {
+                                    if let Some((code, value)) = parse_evdev_key_event(chunk) {
+                                        if key_state.update(code, value) {
+                                            warn!("🛑 [ZAP-EVDEV] Ctrl+Alt+BackSpace detectado en hilo independiente; cerrando compositor");
+                                            std::process::exit(0);
+                                        }
+                                    }
+                                }
+                            }
+                            _ => break,
+                        }
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(35));
+            }
+        })
+        .ok();
+}
+
 const ENABLE_DAMAGE_TRACKING: bool = false;
 
 struct DrmOutputSurface {
     output: Output,
+    connector: connector::Handle,
+    global: GlobalId,
     surface: GbmBufferedSurface<GbmAllocator<DrmDeviceFd>, ()>,
     crtc: crtc::Handle,
     modes: Vec<smithay::reexports::drm::control::Mode>,
@@ -299,6 +470,559 @@ fn create_gbm_surface_with_fallback(
         output_name
     );
     None
+}
+
+fn scan_connected_drm_connectors(
+    drm_device: &mut DrmDevice,
+    res_handles: &ResourceHandles,
+    displays_cfg: &DisplaysConfig,
+) -> Vec<(connector::Handle, connector::Info, String, bool)> {
+    let mut connected_list = Vec::new();
+    for &conn_handle in res_handles.connectors() {
+        let conn_info = match drm_device.get_connector(conn_handle, true) {
+            Ok(info) => info,
+            Err(e) => {
+                warn!("Error al leer connector {:?}: {:?}", conn_handle, e);
+                continue;
+            }
+        };
+
+        if conn_info.state() != connector::State::Connected {
+            continue;
+        }
+
+        let conn_name = format!(
+            "{}-{}",
+            conn_info.interface().as_str(),
+            conn_info.interface_id()
+        );
+        let is_primary = displays_cfg
+            .find_for_connector(&conn_name)
+            .map(|c| c.primary)
+            .unwrap_or(false);
+        connected_list.push((conn_handle, conn_info, conn_name, is_primary));
+    }
+    connected_list
+}
+
+fn sync_displays_config_from_connectors(
+    connected_list: &[(connector::Handle, connector::Info, String, bool)],
+    displays_cfg: &mut DisplaysConfig,
+) {
+    let mut detected_outputs = Vec::with_capacity(connected_list.len());
+    let mut detected_x = 0;
+    for (idx, (_, conn_info, conn_name, _)) in connected_list.iter().enumerate() {
+        let modes: Vec<DisplayModeConfig> = conn_info
+            .modes()
+            .iter()
+            .map(|mode| {
+                let (width, height) = mode.size();
+                DisplayModeConfig {
+                    width: width as u32,
+                    height: height as u32,
+                    refresh_rate: mode.vrefresh() as f64,
+                }
+            })
+            .collect();
+        let previous = displays_cfg.find_for_connector(conn_name).cloned();
+        let selected_mode = previous
+            .as_ref()
+            .and_then(|output| {
+                conn_info.modes().iter().find(|mode| {
+                    let (width, height) = mode.size();
+                    width as u32 == output.width
+                        && height as u32 == output.height
+                        && (mode.vrefresh() as f64 - output.refresh_rate).abs() < 1.0
+                })
+            })
+            .or_else(|| conn_info.modes().first());
+        let Some(selected_mode) = selected_mode else {
+            continue;
+        };
+        let (width, height) = selected_mode.size();
+        let (physical_width_mm, physical_height_mm) = conn_info.size().unwrap_or((0, 0));
+        let detected_diagonal = if physical_width_mm > 0 && physical_height_mm > 0 {
+            Some(
+                (((physical_width_mm as f64).powi(2) + (physical_height_mm as f64).powi(2)).sqrt()
+                    / 25.4
+                    * 10.0)
+                    .round()
+                    / 10.0,
+            )
+        } else {
+            None
+        };
+        let scale = previous.as_ref().map(|output| output.scale).unwrap_or_else(|| {
+            DisplayOutputConfig::recommended_scale(width as u32, height as u32, detected_diagonal)
+        });
+        let logical_width = (width as f64 / scale.max(0.5)).round() as i32;
+        detected_outputs.push(DisplayOutputConfig {
+            connector: conn_name.clone(),
+            name: previous
+                .as_ref()
+                .map(|output| output.name.clone())
+                .unwrap_or_else(|| conn_name.clone()),
+            width: width as u32,
+            height: height as u32,
+            refresh_rate: selected_mode.vrefresh() as f64,
+            modes,
+            x: previous
+                .as_ref()
+                .map(|output| output.x)
+                .unwrap_or(detected_x),
+            y: previous.as_ref().map(|output| output.y).unwrap_or(0),
+            scale,
+            primary: previous
+                .as_ref()
+                .map(|output| output.primary)
+                .unwrap_or(idx == 0),
+            diagonal_inches: previous
+                .as_ref()
+                .and_then(|output| output.diagonal_inches)
+                .or(detected_diagonal),
+        });
+        detected_x += logical_width.max(100);
+    }
+    let primary_idx = detected_outputs
+        .iter()
+        .position(|output| output.primary)
+        .unwrap_or(0);
+    for (idx, output) in detected_outputs.iter_mut().enumerate() {
+        output.primary = idx == primary_idx;
+    }
+    displays_cfg.outputs = detected_outputs;
+    if let Some(primary) = displays_cfg.outputs.get(primary_idx) {
+        displays_cfg.master_scale = primary.scale;
+    }
+    displays_cfg.recalculate_layout();
+    if let Err(err) = displays_cfg.save() {
+        warn!("No se pudo guardar la detección de pantallas: {}", err);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn create_drm_output_surface_for_connector(
+    drm_device: &mut DrmDevice,
+    gbm_device: &GbmDevice<DrmDeviceFd>,
+    renderer: &mut GlesRenderer,
+    res_handles: &ResourceHandles,
+    conn_handle: connector::Handle,
+    conn_info: &connector::Info,
+    conn_name: &str,
+    displays_cfg: &DisplaysConfig,
+    used_crtcs: &mut HashSet<crtc::Handle>,
+    next_auto_x: &mut i32,
+    state: &mut MalusState,
+) -> Option<DrmOutputSurface> {
+    info!("🔌 Monitor físico conectado detectado: {}", conn_name);
+
+    let cfg_output = displays_cfg.find_for_connector(conn_name);
+    let mode = if let Some(cfg) = cfg_output {
+        conn_info
+            .modes()
+            .iter()
+            .find(|m| {
+                m.size().0 == cfg.width as u16
+                    && m.size().1 == cfg.height as u16
+                    && (m.vrefresh() as f64 - cfg.refresh_rate).abs() < 1.0
+            })
+            .or_else(|| {
+                conn_info
+                    .modes()
+                    .iter()
+                    .find(|m| m.size().0 == cfg.width as u16 && m.size().1 == cfg.height as u16)
+            })
+            .copied()
+            .or_else(|| conn_info.modes().first().copied())
+    } else {
+        conn_info.modes().first().copied()
+    };
+
+    let mode = match mode {
+        Some(m) => m,
+        None => {
+            warn!("No hay modos de vídeo para {}", conn_name);
+            return None;
+        }
+    };
+
+    let possible_crtcs: Vec<crtc::Handle> = conn_info
+        .encoders()
+        .iter()
+        .filter_map(|&enc_handle| drm_device.get_encoder(enc_handle).ok())
+        .flat_map(|enc| res_handles.filter_crtcs(enc.possible_crtcs()))
+        .collect();
+
+    let active_crtc = conn_info
+        .current_encoder()
+        .and_then(|encoder| drm_device.get_encoder(encoder).ok())
+        .and_then(|encoder| encoder.crtc())
+        .filter(|crtc| possible_crtcs.contains(crtc));
+    let crtc = match active_crtc
+        .filter(|crtc| !used_crtcs.contains(crtc))
+        .or_else(|| possible_crtcs.into_iter().find(|c| !used_crtcs.contains(c)))
+    {
+        Some(c) => {
+            used_crtcs.insert(c);
+            c
+        }
+        None => {
+            warn!("No se encontró CRTC libre para el monitor {}", conn_name);
+            return None;
+        }
+    };
+
+    if active_crtc == Some(crtc) {
+        info!("   ♻️ Reutilizando CRTC activo {:?} de {}", crtc, conn_name);
+    }
+
+    info!(
+        "   🖥 Asignando CRTC {:?} a {} con modo {}x{} @ {}Hz",
+        crtc,
+        conn_name,
+        mode.size().0,
+        mode.size().1,
+        mode.vrefresh()
+    );
+
+    let renderer_formats = renderer.dmabuf_formats().into_iter().collect::<Vec<_>>();
+    let (gbm_surface, mode) = create_gbm_surface_with_fallback(
+        drm_device,
+        gbm_device,
+        conn_handle,
+        crtc,
+        mode,
+        conn_info.modes(),
+        &renderer_formats,
+        conn_name,
+    )?;
+
+    let (mode_w, mode_h) = mode.size();
+    let edid_mm = conn_info
+        .size()
+        .filter(|&(w, h)| w > 0 && h > 0)
+        .map(|(w, h)| (w as i32, h as i32));
+    let edid_diag = edid_mm.map(|(w, h)| ((w as f64).powi(2) + (h as f64).powi(2)).sqrt() / 25.4);
+    let (loc_x, loc_y, scale, phys_mm, model_label) = if let Some(cfg) = cfg_output {
+        let use_edid_mm = match (edid_mm, edid_diag, cfg.diagonal_inches) {
+            (Some(_), Some(ed), Some(manual_diag)) if (ed - manual_diag).abs() > 0.5 => false,
+            (Some(_), _, _) => true,
+            (None, _, _) => false,
+        };
+        let phys_mm = if use_edid_mm {
+            edid_mm.unwrap()
+        } else {
+            cfg.physical_size_mm()
+                .map(|(w_mm, h_mm)| (w_mm.round() as i32, h_mm.round() as i32))
+                .unwrap_or((0, 0))
+        };
+        (
+            cfg.x,
+            cfg.y,
+            cfg.scale.max(0.5),
+            phys_mm,
+            cfg.name.clone(),
+        )
+    } else {
+        let fallback_scale = displays_cfg.master_scale.max(1.0);
+        (
+            *next_auto_x,
+            0,
+            fallback_scale,
+            edid_mm.unwrap_or((0, 0)),
+            conn_name.to_string(),
+        )
+    };
+
+    let logical_w = (mode_w as f64 / scale).round() as i32;
+    let logical_h = (mode_h as f64 / scale).round() as i32;
+    *next_auto_x = (*next_auto_x).max(loc_x + logical_w);
+
+    info!(
+        "   📐 Monitor {} ({}) extendido: pos=({}, {}), escala={:.4}x ({:.1}%), lógico={}x{}, físico={}x{}mm",
+        conn_name,
+        model_label,
+        loc_x,
+        loc_y,
+        scale,
+        scale * 100.0,
+        logical_w,
+        logical_h,
+        phys_mm.0,
+        phys_mm.1
+    );
+
+    let output = Output::new(
+        conn_name.to_string(),
+        PhysicalProperties {
+            size: phys_mm.into(),
+            subpixel: Subpixel::Unknown,
+            make: "Apple/Malus".to_string(),
+            model: model_label,
+        },
+    );
+
+    let smithay_mode = Mode {
+        size: (mode_w as i32, mode_h as i32).into(),
+        refresh: (mode.vrefresh() * 1000) as i32,
+    };
+    let global = output.create_global::<MalusState>(&state.display_handle);
+    output.set_preferred(smithay_mode);
+    output.change_current_state(
+        Some(smithay_mode),
+        Some(Transform::Normal),
+        Some(Scale::Fractional(scale)),
+        Some((loc_x, loc_y).into()),
+    );
+    state.space.map_output(&output, (loc_x, loc_y));
+
+    let damage_tracker = OutputDamageTracker::from_output(&output);
+    Some(DrmOutputSurface {
+        output,
+        connector: conn_handle,
+        global,
+        surface: gbm_surface,
+        crtc,
+        modes: conn_info.modes().to_vec(),
+        size: (mode_w as i32, mode_h as i32).into(),
+        damage_tracker,
+        cursor_history: std::collections::VecDeque::with_capacity(4),
+        extra_damage_history: std::collections::VecDeque::with_capacity(4),
+        last_window_geometries: std::collections::HashMap::new(),
+        window_redraw_shadow_blur: std::collections::HashMap::new(),
+        dock_redraw_buffers: if ENABLE_DAMAGE_TRACKING { 3 } else { 0 },
+        full_damage_pending: true,
+        last_commit_counter: 0,
+        last_output_commit_counter: 0,
+        pending_damage_buffers: 1,
+        flip_pending: None,
+        last_cursor_draw_point: None,
+        last_cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
+        last_background_commit_counter: usize::MAX,
+        last_background_size: (0, 0),
+        background_dirty: true,
+        background_snapshot_stale: true,
+        last_expose_revision: 0,
+        last_workspace_revision: 0,
+    })
+}
+
+fn apply_output_config_to_surface(
+    s: &mut DrmOutputSurface,
+    new_cfg: &DisplaysConfig,
+    state: &mut MalusState,
+    auto_x: &mut i32,
+) -> (Point<i32, Logical>, f64) {
+    let out_name = s.output.name();
+    let (loc_x, loc_y, scale, requested_mode) = if let Some(cfg) = new_cfg.find_for_connector(&out_name) {
+        let requested_mode = s
+            .modes
+            .iter()
+            .find(|mode| {
+                let (width, height) = mode.size();
+                width as u32 == cfg.width
+                    && height as u32 == cfg.height
+                    && (mode.vrefresh() as f64 - cfg.refresh_rate).abs() < 1.0
+            })
+            .copied();
+        (cfg.x, cfg.y, cfg.scale.clamp(0.5, 4.0), requested_mode)
+    } else {
+        (*auto_x, 0, new_cfg.master_scale.clamp(0.5, 4.0), None)
+    };
+    let mut mode_update = None;
+    if let Some(mode) = requested_mode {
+        let current_mode = s.surface.current_mode();
+        if mode.size() != current_mode.size() || mode.vrefresh() != current_mode.vrefresh() {
+            match s.surface.use_mode(mode) {
+                Ok(()) => {
+                    let (width, height) = mode.size();
+                    s.size = (width as i32, height as i32).into();
+                    s.full_damage_pending = true;
+                    s.flip_pending = None;
+                    s.cursor_history.clear();
+                    s.extra_damage_history.clear();
+                    s.last_window_geometries.clear();
+                    s.window_redraw_shadow_blur.clear();
+                    s.dock_redraw_buffers = if ENABLE_DAMAGE_TRACKING { 3 } else { 0 };
+                    s.pending_damage_buffers = 1;
+                    s.background_dirty = true;
+                    s.damage_tracker = OutputDamageTracker::from_output(&s.output);
+                    mode_update = Some(Mode {
+                        size: (width as i32, height as i32).into(),
+                        refresh: (mode.vrefresh() * 1000) as i32,
+                    });
+                    info!(
+                        "   🖥 Resolución de {} cambiada en vivo a {}x{} @ {}Hz",
+                        out_name,
+                        width,
+                        height,
+                        mode.vrefresh()
+                    );
+                }
+                Err(err) => warn!(
+                    "No se pudo cambiar {} al modo {}x{} @ {}Hz: {:?}",
+                    out_name,
+                    mode.size().0,
+                    mode.size().1,
+                    mode.vrefresh(),
+                    err
+                ),
+            }
+        }
+    }
+    let log_w = (s.size.w as f64 / scale).round() as i32;
+    *auto_x = (*auto_x).max(loc_x + log_w);
+
+    s.output.change_current_state(
+        mode_update,
+        None,
+        Some(Scale::Fractional(scale)),
+        Some((loc_x, loc_y).into()),
+    );
+    if let Some(mode) = mode_update {
+        s.output.set_preferred(mode);
+    }
+    state.space.map_output(&s.output, (loc_x, loc_y));
+
+    let mut lmap = smithay::desktop::layer_map_for_output(&s.output);
+    lmap.arrange();
+    for layer in lmap.layers() {
+        let wl_surf = layer.wl_surface();
+        smithay::wayland::compositor::with_states(wl_surf, |states| {
+            smithay::wayland::fractional_scale::with_fractional_scale(states, |fs| {
+                fs.set_preferred_scale(scale);
+            });
+        });
+        layer.layer_surface().send_configure();
+    }
+
+    s.full_damage_pending = true;
+    s.flip_pending = None;
+    s.pending_damage_buffers = 1;
+    s.cursor_history.clear();
+    s.extra_damage_history.clear();
+    s.last_window_geometries.clear();
+    s.window_redraw_shadow_blur.clear();
+    s.dock_redraw_buffers = if ENABLE_DAMAGE_TRACKING { 3 } else { 0 };
+    s.damage_tracker = OutputDamageTracker::from_output(&s.output);
+    (Point::from((loc_x, loc_y)), scale)
+}
+
+fn reconcile_drm_outputs(
+    drm_device: &mut DrmDevice,
+    gbm_device: &GbmDevice<DrmDeviceFd>,
+    renderer: &mut GlesRenderer,
+    shared_surfaces: &Arc<Mutex<Vec<DrmOutputSurface>>>,
+    state: &mut MalusState,
+) -> Option<DisplaysConfig> {
+    let res_handles = match drm_device.resource_handles() {
+        Ok(res) => res,
+        Err(err) => {
+            warn!("No se pudieron leer resource_handles en hotplug DRM: {err:?}");
+            return None;
+        }
+    };
+    let mut displays_cfg = DisplaysConfig::load();
+    let mut connected_list = scan_connected_drm_connectors(drm_device, &res_handles, &displays_cfg);
+    let connected_handles: HashSet<connector::Handle> =
+        connected_list.iter().map(|(h, ..)| *h).collect();
+
+    let mut removed_outputs = Vec::new();
+    let has_added = {
+        let Ok(mut surfs) = shared_surfaces.lock() else {
+            return None;
+        };
+        if connected_list.is_empty() && !surfs.is_empty() {
+            warn!("Hotplug DRM reportó 0 conectores momentáneamente; conservando salidas activas.");
+            return None;
+        }
+        let existing_handles: HashSet<connector::Handle> =
+            surfs.iter().map(|s| s.connector).collect();
+        let any_added = connected_handles
+            .iter()
+            .any(|h| !existing_handles.contains(h));
+        let any_removed = surfs.iter().any(|s| !connected_handles.contains(&s.connector));
+        if !any_added && !any_removed {
+            return None;
+        }
+
+        let mut remaining = Vec::with_capacity(surfs.len());
+        for surf in surfs.drain(..) {
+            if connected_handles.contains(&surf.connector) {
+                remaining.push(surf);
+            } else {
+                removed_outputs.push(surf);
+            }
+        }
+        *surfs = remaining;
+        any_added
+    };
+
+    for removed in removed_outputs {
+        info!("🔌 Monitor físico desconectado: {}", removed.output.name());
+        {
+            let lmap = smithay::desktop::layer_map_for_output(&removed.output);
+            for layer in lmap.layers() {
+                layer.layer_surface().send_close();
+            }
+        }
+        state.space.unmap_output(&removed.output);
+        let DrmOutputSurface { global, surface, .. } = removed;
+        drop(surface);
+        state.display_handle.remove_global::<MalusState>(global);
+    }
+
+    sync_displays_config_from_connectors(&connected_list, &mut displays_cfg);
+    connected_list.sort_by_key(|(_, _, name, _)| {
+        !displays_cfg
+            .find_for_connector(name)
+            .map(|output| output.primary)
+            .unwrap_or(false)
+    });
+
+    if let Ok(mut surfs) = shared_surfaces.lock() {
+        if has_added {
+            let mut used_crtcs: HashSet<crtc::Handle> = surfs.iter().map(|s| s.crtc).collect();
+            let existing_handles: HashSet<connector::Handle> =
+                surfs.iter().map(|s| s.connector).collect();
+            let mut next_auto_x = 0;
+            for (conn_handle, conn_info, conn_name, _) in &connected_list {
+                if existing_handles.contains(conn_handle) {
+                    continue;
+                }
+                if let Some(new_surf) = create_drm_output_surface_for_connector(
+                    drm_device,
+                    gbm_device,
+                    renderer,
+                    &res_handles,
+                    *conn_handle,
+                    conn_info,
+                    conn_name,
+                    &displays_cfg,
+                    &mut used_crtcs,
+                    &mut next_auto_x,
+                    state,
+                ) {
+                    surfs.push(new_surf);
+                }
+            }
+        }
+
+        surfs.sort_by_key(|s| {
+            !displays_cfg
+                .find_for_connector(&s.output.name())
+                .is_some_and(|o| o.primary)
+        });
+        let mut auto_x = 0;
+        for s in surfs.iter_mut() {
+            apply_output_config_to_surface(s, &displays_cfg, state, &mut auto_x);
+            s.background_dirty = true;
+            s.background_snapshot_stale = true;
+        }
+    }
+
+    state.migrate_orphaned_windows_and_pointer();
+    Some(displays_cfg)
 }
 
 fn cursor_names_for_icon(icon: smithay::input::pointer::CursorIcon) -> &'static [&'static str] {
@@ -927,6 +1651,13 @@ pub fn run_drm() -> Result<()> {
 
     info!("🎨 Renderer OpenGL ES acelerado por hardware listo");
 
+    // Obtener el dev_id del nodo DRM primario (/dev/dri/cardX) para filtrar eventos udev hotplug
+    let primary_drm_dev_id = smithay::backend::drm::DrmNode::from_file(
+        std::os::fd::AsFd::as_fd(&drm_device),
+    )
+    .ok()
+    .map(|node| node.dev_id());
+
     // Exponer protocolo Wayland zwp_linux_dmabuf_v1 para compartición zero-copy en GPU (Chrome, Firefox, Electron)
     let dmabuf_formats = renderer.dmabuf_formats();
     let drm_render_node = smithay::backend::drm::DrmNode::from_file(
@@ -1040,123 +1771,9 @@ pub fn run_drm() -> Result<()> {
     let mut used_crtcs = HashSet::new();
     let mut surfaces = Vec::new();
 
-    // Recopilar conectores conectados y ordenarlos de modo que el monitor primario (DP-1) sea el primero
-    let mut connected_list = Vec::new();
-    for &conn_handle in res_handles.connectors() {
-        let conn_info = match drm_device.get_connector(conn_handle, true) {
-            Ok(info) => info,
-            Err(e) => {
-                warn!("Error al leer connector {:?}: {:?}", conn_handle, e);
-                continue;
-            }
-        };
-
-        if conn_info.state() != connector::State::Connected {
-            continue;
-        }
-
-        let conn_name = format!(
-            "{}-{}",
-            conn_info.interface().as_str(),
-            conn_info.interface_id()
-        );
-        let is_primary = displays_cfg
-            .find_for_connector(&conn_name)
-            .map(|c| c.primary)
-            .unwrap_or(false);
-        connected_list.push((conn_handle, conn_info, conn_name, is_primary));
-    }
-
-    // Mantener solo las salidas conectadas y refrescar sus modos a partir de DRM.
-    let mut detected_outputs = Vec::with_capacity(connected_list.len());
-    let mut detected_x = 0;
-    for (idx, (_, conn_info, conn_name, _)) in connected_list.iter().enumerate() {
-        let modes: Vec<DisplayModeConfig> = conn_info
-            .modes()
-            .iter()
-            .map(|mode| {
-                let (width, height) = mode.size();
-                DisplayModeConfig {
-                    width: width as u32,
-                    height: height as u32,
-                    refresh_rate: mode.vrefresh() as f64,
-                }
-            })
-            .collect();
-        let previous = displays_cfg.find_for_connector(conn_name).cloned();
-        let selected_mode = previous
-            .as_ref()
-            .and_then(|output| {
-                conn_info.modes().iter().find(|mode| {
-                    let (width, height) = mode.size();
-                    width as u32 == output.width
-                        && height as u32 == output.height
-                        && (mode.vrefresh() as f64 - output.refresh_rate).abs() < 1.0
-                })
-            })
-            .or_else(|| conn_info.modes().first());
-        let Some(selected_mode) = selected_mode else {
-            continue;
-        };
-        let (width, height) = selected_mode.size();
-        let (physical_width_mm, physical_height_mm) = conn_info.size().unwrap_or((0, 0));
-        let detected_diagonal = if physical_width_mm > 0 && physical_height_mm > 0 {
-            Some(
-                (((physical_width_mm as f64).powi(2) + (physical_height_mm as f64).powi(2)).sqrt()
-                    / 25.4
-                    * 10.0)
-                    .round()
-                    / 10.0,
-            )
-        } else {
-            None
-        };
-        let scale = previous.as_ref().map(|output| output.scale).unwrap_or_else(|| {
-            DisplayOutputConfig::recommended_scale(width as u32, height as u32, detected_diagonal)
-        });
-        let logical_width = (width as f64 / scale.max(0.5)).round() as i32;
-        detected_outputs.push(DisplayOutputConfig {
-            connector: conn_name.clone(),
-            name: previous
-                .as_ref()
-                .map(|output| output.name.clone())
-                .unwrap_or_else(|| conn_name.clone()),
-            width: width as u32,
-            height: height as u32,
-            refresh_rate: selected_mode.vrefresh() as f64,
-            modes,
-            x: previous
-                .as_ref()
-                .map(|output| output.x)
-                .unwrap_or(detected_x),
-            y: previous.as_ref().map(|output| output.y).unwrap_or(0),
-            scale,
-            primary: previous
-                .as_ref()
-                .map(|output| output.primary)
-                .unwrap_or(idx == 0),
-            diagonal_inches: previous
-                .as_ref()
-                .and_then(|output| output.diagonal_inches)
-                .or(detected_diagonal),
-        });
-        detected_x += logical_width.max(100);
-    }
-    let primary_idx = detected_outputs
-        .iter()
-        .position(|output| output.primary)
-        .unwrap_or(0);
-    for (idx, output) in detected_outputs.iter_mut().enumerate() {
-        output.primary = idx == primary_idx;
-    }
-    displays_cfg.outputs = detected_outputs;
-    if let Some(primary) = displays_cfg.outputs.get(primary_idx) {
-        displays_cfg.master_scale = primary.scale;
-    }
-    displays_cfg.recalculate_layout();
-    if let Err(err) = displays_cfg.save() {
-        warn!("No se pudo guardar la detección de pantallas: {}", err);
-    }
+    // Recopilar conectores conectados y ordenarlos de modo que el monitor primario sea el primero
+    let mut connected_list = scan_connected_drm_connectors(&mut drm_device, &res_handles, &displays_cfg);
+    sync_displays_config_from_connectors(&connected_list, &mut displays_cfg);
 
     // Monitor primario siempre en el índice 0 de state.space.outputs()
     connected_list.sort_by_key(|(_, _, name, _)| {
@@ -1167,206 +1784,22 @@ pub fn run_drm() -> Result<()> {
     });
 
     let mut next_auto_x: i32 = 0;
-
     for (conn_handle, conn_info, conn_name, _) in connected_list {
-        info!("🔌 Monitor físico conectado detectado: {}", conn_name);
-
-        let cfg_output = displays_cfg.find_for_connector(&conn_name);
-        let mode = if let Some(cfg) = cfg_output {
-            conn_info
-                .modes()
-                .iter()
-                .find(|m| {
-                    m.size().0 == cfg.width as u16
-                        && m.size().1 == cfg.height as u16
-                        && (m.vrefresh() as f64 - cfg.refresh_rate).abs() < 1.0
-                })
-                .or_else(|| {
-                    conn_info
-                        .modes()
-                        .iter()
-                        .find(|m| m.size().0 == cfg.width as u16 && m.size().1 == cfg.height as u16)
-                })
-                .copied()
-                .or_else(|| conn_info.modes().first().copied())
-        } else {
-            conn_info.modes().first().copied()
-        };
-
-        let mode = match mode {
-            Some(m) => m,
-            None => {
-                warn!("No hay modos de vídeo para {}", conn_name);
-                continue;
-            }
-        };
-
-        let possible_crtcs: Vec<crtc::Handle> = conn_info
-            .encoders()
-            .iter()
-            .filter_map(|&enc_handle| drm_device.get_encoder(enc_handle).ok())
-            .flat_map(|enc| res_handles.filter_crtcs(enc.possible_crtcs()))
-            .collect();
-
-        // GDM may still own DRM master and have already routed each connector to a CRTC.
-        // Keep that mapping when available instead of choosing a different compatible CRTC.
-        let active_crtc = conn_info
-            .current_encoder()
-            .and_then(|encoder| drm_device.get_encoder(encoder).ok())
-            .and_then(|encoder| encoder.crtc())
-            .filter(|crtc| possible_crtcs.contains(crtc));
-        let crtc = match active_crtc
-            .filter(|crtc| !used_crtcs.contains(crtc))
-            .or_else(|| possible_crtcs.into_iter().find(|c| !used_crtcs.contains(c)))
-        {
-            Some(c) => {
-                used_crtcs.insert(c);
-                c
-            }
-            None => {
-                warn!("No se encontró CRTC libre para el monitor {}", conn_name);
-                continue;
-            }
-        };
-
-        if active_crtc == Some(crtc) {
-            info!("   ♻️ Reutilizando CRTC activo {:?} de {}", crtc, conn_name);
-        }
-
-        info!(
-            "   🖥 Asignando CRTC {:?} a {} con modo {}x{} @ {}Hz",
-            crtc,
-            conn_name,
-            mode.size().0,
-            mode.size().1,
-            mode.vrefresh()
-        );
-
-        let renderer_formats = renderer.dmabuf_formats().into_iter().collect::<Vec<_>>();
-        let (gbm_surface, mode) = match create_gbm_surface_with_fallback(
+        if let Some(surface) = create_drm_output_surface_for_connector(
             &mut drm_device,
             &gbm_device,
+            &mut renderer,
+            &res_handles,
             conn_handle,
-            crtc,
-            mode,
-            conn_info.modes(),
-            &renderer_formats,
+            &conn_info,
             &conn_name,
+            &displays_cfg,
+            &mut used_crtcs,
+            &mut next_auto_x,
+            &mut state,
         ) {
-            Some(surface) => surface,
-            None => continue,
-        };
-
-        let (mode_w, mode_h) = mode.size();
-        let edid_mm = conn_info
-            .size()
-            .filter(|&(w, h)| w > 0 && h > 0)
-            .map(|(w, h)| (w as i32, h as i32));
-        let edid_diag = edid_mm.map(|(w, h)| {
-            ((w as f64).powi(2) + (h as f64).powi(2)).sqrt() / 25.4
-        });
-        let (loc_x, loc_y, scale, phys_mm, model_label) = if let Some(cfg) = cfg_output {
-            // Preservar los milímetros reales reportados por EDID salvo que el usuario
-            // haya configurado manualmente una diagonal distinta (para corregir EDID defectuosos).
-            let use_edid_mm = match (edid_mm, edid_diag, cfg.diagonal_inches) {
-                (Some(_), Some(ed), Some(manual_diag)) if (ed - manual_diag).abs() > 0.5 => false,
-                (Some(_), _, _) => true,
-                (None, _, _) => false,
-            };
-            let phys_mm = if use_edid_mm {
-                edid_mm.unwrap()
-            } else {
-                cfg.physical_size_mm()
-                    .map(|(w_mm, h_mm)| (w_mm.round() as i32, h_mm.round() as i32))
-                    .unwrap_or((0, 0))
-            };
-            (
-                cfg.x,
-                cfg.y,
-                cfg.scale.max(0.5),
-                phys_mm,
-                cfg.name.clone(),
-            )
-        } else {
-            let fallback_scale = displays_cfg.master_scale.max(1.0);
-            (
-                next_auto_x,
-                0,
-                fallback_scale,
-                edid_mm.unwrap_or((0, 0)),
-                conn_name.clone(),
-            )
-        };
-
-        let logical_w = (mode_w as f64 / scale).round() as i32;
-        let logical_h = (mode_h as f64 / scale).round() as i32;
-        next_auto_x = next_auto_x.max(loc_x + logical_w);
-
-        info!(
-            "   📐 Monitor {} ({}) extendido: pos=({}, {}), escala={:.4}x ({:.1}%), lógico={}x{}, físico={}x{}mm",
-            conn_name,
-            model_label,
-            loc_x,
-            loc_y,
-            scale,
-            scale * 100.0,
-            logical_w,
-            logical_h,
-            phys_mm.0,
-            phys_mm.1
-        );
-
-        let output = Output::new(
-            conn_name.clone(),
-            PhysicalProperties {
-                size: phys_mm.into(),
-                subpixel: Subpixel::Unknown,
-                make: "Apple/Malus".to_string(),
-                model: model_label,
-            },
-        );
-
-        let smithay_mode = Mode {
-            size: (mode_w as i32, mode_h as i32).into(),
-            refresh: (mode.vrefresh() * 1000) as i32,
-        };
-        let _global = output.create_global::<MalusState>(&state.display_handle);
-        output.set_preferred(smithay_mode);
-        output.change_current_state(
-            Some(smithay_mode),
-            Some(Transform::Normal),
-            Some(Scale::Fractional(scale)),
-            Some((loc_x, loc_y).into()),
-        );
-        state.space.map_output(&output, (loc_x, loc_y));
-
-        let damage_tracker = OutputDamageTracker::from_output(&output);
-        surfaces.push(DrmOutputSurface {
-            output,
-            surface: gbm_surface,
-            crtc,
-            modes: conn_info.modes().to_vec(),
-            size: (mode_w as i32, mode_h as i32).into(),
-            damage_tracker,
-            cursor_history: std::collections::VecDeque::with_capacity(4),
-            extra_damage_history: std::collections::VecDeque::with_capacity(4),
-            last_window_geometries: std::collections::HashMap::new(),
-            window_redraw_shadow_blur: std::collections::HashMap::new(),
-            dock_redraw_buffers: if ENABLE_DAMAGE_TRACKING { 3 } else { 0 },
-            full_damage_pending: true,
-            last_commit_counter: 0,
-            last_output_commit_counter: 0,
-            pending_damage_buffers: 1,
-            flip_pending: None,
-            last_cursor_draw_point: None,
-            last_cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
-            last_background_commit_counter: usize::MAX,
-            last_background_size: (0, 0),
-            background_dirty: true,
-            background_snapshot_stale: true,
-            last_expose_revision: 0,
-            last_workspace_revision: 0,
-        });
+            surfaces.push(surface);
+        }
     }
 
     if surfaces.is_empty() {
@@ -1436,13 +1869,14 @@ pub fn run_drm() -> Result<()> {
     loop_handle
         .insert_source(
             notifier,
-            move |event, &mut (), _state: &mut MalusState| match event {
+            move |event, &mut (), state: &mut MalusState| match event {
                 SessionEvent::PauseSession => {
                     info!("⏸️ Sesión TTY pausada (VT switch away)");
                     libinput_context.suspend();
                 }
                 SessionEvent::ActivateSession => {
                     info!("▶️ Sesión TTY reactivada (VT switch back)");
+                    state.pending_drm_hotplug = true;
                     if let Err(e) = libinput_context.resume() {
                         error!("Error al reanudar libinput tras VT switch: {:?}", e);
                     }
@@ -1484,6 +1918,36 @@ pub fn run_drm() -> Result<()> {
             },
         )
         .map_err(|e| anyhow::anyhow!("Error al registrar notificador DRM: {e:?}"))?;
+
+    // Notificador udev de conexión/desconexión en caliente de monitores (DRM hotplug)
+    match UdevBackend::new(&seat_name) {
+        Ok(udev_backend) => {
+            if let Err(err) = loop_handle.insert_source(
+                udev_backend,
+                move |event, _, state: &mut MalusState| {
+                    let matches_gpu = match event {
+                        UdevEvent::Changed { device_id }
+                        | UdevEvent::Added { device_id, .. }
+                        | UdevEvent::Removed { device_id } => {
+                            primary_drm_dev_id.is_none_or(|id| id == device_id)
+                        }
+                    };
+                    if matches_gpu {
+                        info!(
+                            "🔌 Evento udev DRM recibido ({:?}); programando reconciliación de pantallas",
+                            event
+                        );
+                        state.pending_drm_hotplug = true;
+                    }
+                },
+            ) {
+                warn!("No se pudo registrar UdevBackend para hotplug de monitores: {err:?}");
+            }
+        }
+        Err(err) => {
+            warn!("No se pudo inicializar UdevBackend para hotplug de monitores: {err:?}");
+        }
+    }
 
     // Despertar inmediatamente cuando algún cliente Wayland escriba commits o frame requests
     let display_poll_fd = display
@@ -2413,6 +2877,24 @@ pub fn run_drm() -> Result<()> {
             continue;
         }
 
+        // Reconciliación en caliente (hotplug) de monitores conectados/desconectados
+        if state.pending_drm_hotplug {
+            state.pending_drm_hotplug = false;
+            if let Some(updated_cfg) = reconcile_drm_outputs(
+                &mut drm_device,
+                &gbm_device,
+                &mut renderer,
+                &shared_surfaces,
+                &mut state,
+            ) {
+                current_displays_cfg = updated_cfg;
+                last_monitors_mtime = std::fs::metadata(&monitors_toml_path)
+                    .and_then(|m| m.modified())
+                    .ok();
+                squircle_corner_cache.clear();
+            }
+        }
+
         // Hot-reload automático de monitors.toml e input.toml (inmediato vía IPC o cada 250ms por mtime)
         let check_now = state.pending_displays_reload
             || last_config_check.elapsed() >= Duration::from_millis(250);
@@ -2468,112 +2950,18 @@ pub fn run_drm() -> Result<()> {
                     let mut auto_x = 0;
                     for s in surfs.iter_mut() {
                         let out_name = s.output.name();
-                        let (loc_x, loc_y, scale, requested_mode) = if let Some(cfg) =
-                            new_cfg.find_for_connector(&out_name)
-                        {
-                            let requested_mode = s
-                                .modes
-                                .iter()
-                                .find(|mode| {
-                                    let (width, height) = mode.size();
-                                    width as u32 == cfg.width
-                                        && height as u32 == cfg.height
-                                        && (mode.vrefresh() as f64 - cfg.refresh_rate).abs() < 1.0
-                                })
-                                .copied();
-                            (cfg.x, cfg.y, cfg.scale.clamp(0.5, 4.0), requested_mode)
-                        } else {
-                            (auto_x, 0, new_cfg.master_scale.clamp(0.5, 4.0), None)
-                        };
-                        let mut mode_update = None;
-                        if let Some(mode) = requested_mode {
-                            let current_mode = s.surface.current_mode();
-                            if mode.size() != current_mode.size()
-                                || mode.vrefresh() != current_mode.vrefresh()
-                            {
-                                match s.surface.use_mode(mode) {
-                                    Ok(()) => {
-                                        let (width, height) = mode.size();
-                                        s.size = (width as i32, height as i32).into();
-                                        s.full_damage_pending = true;
-                                        s.flip_pending = None;
-                                        s.cursor_history.clear();
-                                        s.extra_damage_history.clear();
-                                        s.last_window_geometries.clear();
-                                        s.window_redraw_shadow_blur.clear();
-                                        s.dock_redraw_buffers = if ENABLE_DAMAGE_TRACKING { 3 } else { 0 };
-                                        s.pending_damage_buffers = 1;
-                                        s.background_dirty = true;
-                                        s.damage_tracker = OutputDamageTracker::from_output(&s.output);
-                                        mode_update = Some(Mode {
-                                            size: (width as i32, height as i32).into(),
-                                            refresh: (mode.vrefresh() * 1000) as i32,
-                                        });
-                                        info!(
-                                            "   🖥 Resolución de {} cambiada en vivo a {}x{} @ {}Hz",
-                                            out_name,
-                                            width,
-                                            height,
-                                            mode.vrefresh()
-                                        );
-                                    }
-                                    Err(err) => warn!(
-                                        "No se pudo cambiar {} al modo {}x{} @ {}Hz: {:?}",
-                                        out_name,
-                                        mode.size().0,
-                                        mode.size().1,
-                                        mode.vrefresh(),
-                                        err
-                                    ),
-                                }
-                            }
-                        }
-                        let log_w = (s.size.w as f64 / scale).round() as i32;
-                        auto_x = auto_x.max(loc_x + log_w);
-
-                        s.output.change_current_state(
-                            mode_update,
-                            None,
-                            Some(Scale::Fractional(scale)),
-                            Some((loc_x, loc_y).into()),
+                        let (loc, scale) = apply_output_config_to_surface(
+                            s,
+                            new_cfg,
+                            &mut state,
+                            &mut auto_x,
                         );
-                        if let Some(mode) = mode_update {
-                            s.output.set_preferred(mode);
-                        }
-                        state.space.map_output(&s.output, (loc_x, loc_y));
-                        new_output_locs
-                            .insert(out_name.clone(), (Point::from((loc_x, loc_y)), scale));
-
-                        // Notificar nueva escala fraccionaria y reconfigurar todas las Layer Surfaces del monitor
-                        let mut lmap = smithay::desktop::layer_map_for_output(&s.output);
-                        lmap.arrange();
-                        for layer in lmap.layers() {
-                            let wl_surf = layer.wl_surface();
-                            smithay::wayland::compositor::with_states(wl_surf, |states| {
-                                smithay::wayland::fractional_scale::with_fractional_scale(
-                                    states,
-                                    |fs| {
-                                        fs.set_preferred_scale(scale);
-                                    },
-                                );
-                            });
-                            layer.layer_surface().send_configure();
-                        }
-
-                        s.full_damage_pending = true;
-                        s.flip_pending = None;
-                        s.pending_damage_buffers = 1;
-                        s.cursor_history.clear();
-                        s.extra_damage_history.clear();
-                        s.last_window_geometries.clear();
-                        s.window_redraw_shadow_blur.clear();
-                        s.dock_redraw_buffers = if ENABLE_DAMAGE_TRACKING { 3 } else { 0 };
-                        s.damage_tracker = OutputDamageTracker::from_output(&s.output);
+                        new_output_locs.insert(out_name.clone(), (loc, scale));
                         info!(
                             "   ✅ Monitor {} actualizado en vivo: pos=({}, {}), escala={:.4}x ({:.1}%)",
                             out_name,
-                            loc_x,
-                            loc_y,
+                            loc.x,
+                            loc.y,
                             scale,
                             scale * 100.0
                         );

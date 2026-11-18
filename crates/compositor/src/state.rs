@@ -293,6 +293,7 @@ pub struct MalusState {
     pub app_switcher_style: AppSwitcherStyle,
     pub cursor_status: smithay::input::pointer::CursorImageStatus,
     pub pending_displays_reload: bool,
+    pub pending_drm_hotplug: bool,
     pub saved_app_window_sizes: HashMap<String, Size<i32, Logical>>,
     pub dock_blur_headroom: i32,
     pub pending_screenshot_requests: std::collections::VecDeque<(std::path::PathBuf, Option<String>)>,
@@ -1204,6 +1205,7 @@ impl MalusState {
             app_switcher_style,
             cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
             pending_displays_reload: false,
+            pending_drm_hotplug: false,
             saved_app_window_sizes: Self::load_saved_window_sizes(),
             dock_blur_headroom,
             pending_screenshot_requests: std::collections::VecDeque::new(),
@@ -4375,6 +4377,126 @@ impl MalusState {
         self.space.outputs().next().cloned()
     }
 
+    /// Migra ventanas y puntero que hayan quedado fuera de las salidas activas tras desconectar
+    /// un monitor, reubicándolos dentro del área útil del monitor primario y sincronizando escala.
+    pub fn migrate_orphaned_windows_and_pointer(&mut self) {
+        let active_geos: Vec<Rectangle<i32, Logical>> = self
+            .space
+            .outputs()
+            .filter_map(|o| self.space.output_geometry(o))
+            .collect();
+        if active_geos.is_empty() {
+            return;
+        }
+        let Some(target_output) = self
+            .primary_output()
+            .or_else(|| self.space.outputs().next().cloned())
+        else {
+            return;
+        };
+        let Some(target_geo) = self.space.output_geometry(&target_output) else {
+            return;
+        };
+        let usable = self.usable_zone_for_output(&target_output);
+
+        let windows: Vec<_> = self.space.elements().cloned().collect();
+        for win in windows {
+            let Some(win_loc) = self.space.element_location(&win) else {
+                continue;
+            };
+            let geo = win.geometry();
+            let center = Point::<i32, Logical>::from((
+                win_loc.x + geo.loc.x + geo.size.w.max(1) / 2,
+                win_loc.y + geo.loc.y + geo.size.h.max(1) / 2,
+            ));
+            let on_active_output = active_geos.iter().any(|g| g.contains(center));
+            if !on_active_output {
+                let ssd_top = if window_uses_ssd(&win) {
+                    crate::ssd::SSD_TITLEBAR_HEIGHT
+                } else {
+                    0
+                };
+                let max_bounds = max_window_size_in_usable_zone(usable, ssd_top);
+                let target_size = clamp_size_to_bounds(geo.size, max_bounds);
+                let centered_loc = centered_window_location(
+                    usable,
+                    Rectangle::new(geo.loc, target_size),
+                    ssd_top,
+                );
+                self.space.map_element(win.clone(), centered_loc, false);
+
+                if let Some(wl_surf) = win.wl_surface() {
+                    if let Some(entry) = self.window_restore_geometries.get_mut(wl_surf.as_ref()) {
+                        *entry = (centered_loc, target_size);
+                    }
+                    let new_scale = self.preferred_scale_for_surface(&wl_surf);
+                    smithay::wayland::compositor::with_states(&wl_surf, |states| {
+                        smithay::wayland::fractional_scale::with_fractional_scale(states, |fs| {
+                            fs.set_preferred_scale(new_scale);
+                        });
+                    });
+                }
+                if let Some(toplevel) = win.toplevel() {
+                    let needs_resize =
+                        target_size.w != geo.size.w || target_size.h != geo.size.h;
+                    toplevel.with_pending_state(|s| {
+                        s.bounds = Some(max_bounds);
+                        if needs_resize {
+                            s.size = Some(target_size);
+                        }
+                    });
+                    toplevel.send_configure();
+                } else if let Some(x11) = win.x11_surface() {
+                    let _ = x11.configure(Some(Rectangle::new(centered_loc, target_size)));
+                }
+            }
+        }
+
+        // Evitar que ventanas minimizadas en el monitor desconectado se restauren fuera de pantalla
+        for (win, prev_loc) in self.minimized_windows.values_mut() {
+            let geo = win.geometry();
+            let center = Point::<i32, Logical>::from((
+                prev_loc.x + geo.loc.x + geo.size.w.max(1) / 2,
+                prev_loc.y + geo.loc.y + geo.size.h.max(1) / 2,
+            ));
+            if !active_geos.iter().any(|g| g.contains(center)) {
+                let ssd_top = if window_uses_ssd(win) {
+                    crate::ssd::SSD_TITLEBAR_HEIGHT
+                } else {
+                    0
+                };
+                let max_bounds = max_window_size_in_usable_zone(usable, ssd_top);
+                let target_size = clamp_size_to_bounds(geo.size, max_bounds);
+                *prev_loc = centered_window_location(
+                    usable,
+                    Rectangle::new(geo.loc, target_size),
+                    ssd_top,
+                );
+            }
+        }
+
+        let ptr_outside = self
+            .last_pointer_location
+            .is_none_or(|loc| !active_geos.iter().any(|g| g.to_f64().contains(loc)));
+        if ptr_outside {
+            let center = target_geo.loc.to_f64() + (target_geo.size.to_f64() / 2.0);
+            self.last_pointer_location = Some(center);
+            if let Some(pointer) = self.seat.get_pointer() {
+                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                pointer.motion(
+                    self,
+                    None,
+                    &smithay::input::pointer::MotionEvent {
+                        location: center,
+                        serial,
+                        time: 0,
+                    },
+                );
+                pointer.frame(self);
+            }
+        }
+    }
+
     /// Determina si un monitor dado corresponde a la pantalla principal del entorno.
     pub fn is_primary_output(&self, output: &Output) -> bool {
         self.primary_output().as_ref() == Some(output)
@@ -6814,5 +6936,46 @@ mod tests {
         let ssd_geo = Rectangle::new((0, 0).into(), (800, 900 - ssd_h).into());
         let loc = super::centered_window_location(usable, ssd_geo, ssd_h);
         assert_eq!(loc, Point::from((100 + 400, 36 + ssd_h)));
+    }
+
+    #[test]
+    fn migrate_orphaned_windows_and_pointer_when_secondary_output_is_removed() {
+        use smithay::{
+            output::{Mode, Output, PhysicalProperties, Subpixel},
+            reexports::wayland_server::Display,
+            utils::{Point, Size, Transform},
+        };
+
+        let display: Display<super::MalusState> = Display::new().unwrap();
+        let mut state = super::MalusState::new(&display);
+        let _pointer = state.seat.add_pointer();
+
+        let primary = Output::new(
+            "DP-1".to_string(),
+            PhysicalProperties {
+                size: (600, 340).into(),
+                subpixel: Subpixel::Unknown,
+                make: "Malus".to_string(),
+                model: "Primary".to_string(),
+            },
+        );
+        let p_mode = Mode {
+            size: (1920, 1080).into(),
+            refresh: 60_000,
+        };
+        primary.change_current_state(Some(p_mode), Some(Transform::Normal), None, Some((0, 0).into()));
+        primary.set_preferred(p_mode);
+        state.space.map_output(&primary, (0, 0));
+
+        // Puntero estaba en el segundo monitor (x=2400) ya desmapeado de Space
+        state.last_pointer_location = Some(Point::from((2400.0, 500.0)));
+        state.migrate_orphaned_windows_and_pointer();
+
+        assert_eq!(
+            state.last_pointer_location,
+            Some(Point::from((960.0, 540.0)))
+        );
+        assert_eq!(state.space.outputs().count(), 1);
+        let _ = Size::<i32, smithay::utils::Logical>::from((0, 0));
     }
 }
