@@ -2144,7 +2144,11 @@ dependencies = [
  "libadwaita",
  "libc",
  "malus-de-common",
+ "serde",
+ "serde_json",
  "tracing",
+ "wayland-client",
+ "wayland-protocols",
  "wayland-protocols-misc",
  "zbus",
 ]

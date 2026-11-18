@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::os::unix::io::OwnedFd;
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use crate::cpu_priority::FocusCpuPriority;
 use malus_de_common::config::{AppSwitcherStyle, DockConfig};
@@ -10,8 +11,8 @@ use smithay::{
     backend::renderer::element::memory::MemoryRenderBuffer,
     delegate_compositor, delegate_data_control, delegate_data_device, delegate_dmabuf,
     delegate_fractional_scale, delegate_layer_shell, delegate_output, delegate_presentation,
-    delegate_primary_selection, delegate_seat, delegate_shm, delegate_viewporter,
-    delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_primary_selection, delegate_seat, delegate_session_lock, delegate_shm,
+    delegate_viewporter, delegate_xdg_decoration, delegate_xdg_shell,
     desktop::{
         find_popup_root_surface, get_popup_toplevel_coords, layer_map_for_output, PopupGrab,
         PopupKeyboardGrab, PopupKind, PopupManager, PopupPointerGrab, Space,
@@ -19,20 +20,26 @@ use smithay::{
     input::{Seat, SeatHandler, SeatState},
     output::Output,
     reexports::{
-        wayland_protocols::xdg::shell::server::xdg_toplevel::{ResizeEdge, State as XdgState},
+        wayland_protocols::{
+            ext::session_lock::v1::server::ext_session_lock_v1::ExtSessionLockV1,
+            xdg::shell::server::xdg_toplevel::{ResizeEdge, State as XdgState},
+        },
         wayland_server::{
             backend::{ClientData, ClientId, DisconnectReason},
             protocol::{
                 wl_buffer::WlBuffer, wl_output::WlOutput, wl_seat::WlSeat, wl_surface::WlSurface,
             },
-            Client, Display, DisplayHandle,
+            Client, Display, DisplayHandle, Resource,
         },
     },
-    utils::{IsAlive, Logical, Point, Rectangle, Serial, Size},
+    utils::{IsAlive, Logical, Point, Rectangle, Serial, Size, SERIAL_COUNTER},
     wayland::{
         buffer::BufferHandler,
         compositor::{CompositorClientState, CompositorHandler, CompositorState},
         dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
+        session_lock::{
+            LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker,
+        },
         fractional_scale::{with_fractional_scale, FractionalScaleHandler, FractionalScaleManagerState},
         output::{OutputHandler, OutputManagerState},
         selection::{
@@ -238,6 +245,13 @@ pub struct MalusState {
     pub xdg_shell_state: XdgShellState,
     pub xdg_decoration_state: smithay::wayland::shell::xdg::decoration::XdgDecorationState,
     pub layer_shell_state: WlrLayerShellState,
+    pub session_lock_state: SessionLockManagerState,
+    pub ext_session_locked: bool,
+    pub ext_lock_handle: Option<ExtSessionLockV1>,
+    pub ext_lock_client_pid: Option<i32>,
+    pub ext_lock_surfaces: HashMap<String, LockSurface>,
+    pub lockscreen_respawn_at: Option<Instant>,
+    pub session_locked_flag: Arc<AtomicBool>,
     pub fractional_scale_manager_state: FractionalScaleManagerState,
     pub viewporter_state: ViewporterState,
     pub presentation_state: smithay::wayland::presentation::PresentationState,
@@ -903,10 +917,7 @@ pub fn snap_target_geometry(
 }
 
 impl MalusState {
-    pub fn lock_session(&self) {
-        if self.is_session_locked() {
-            return;
-        }
+    pub fn spawn_lockscreen_process(&self) {
         let lock_executable = std::env::current_exe()
             .ok()
             .and_then(|path| path.parent().map(|parent| parent.join("malus-de-session-lock")))
@@ -921,7 +932,17 @@ impl MalusState {
         }
     }
 
+    pub fn lock_session(&self) {
+        if self.is_session_locked() {
+            return;
+        }
+        self.spawn_lockscreen_process();
+    }
+
     pub fn start_full_screenshot(&self) {
+        if self.is_session_locked() {
+            return;
+        }
         let screenshot_executable = std::env::current_exe()
             .ok()
             .and_then(|path| {
@@ -941,6 +962,9 @@ impl MalusState {
     }
 
     pub fn start_area_screenshot(&self) {
+        if self.is_session_locked() {
+            return;
+        }
         let screenshot_executable = std::env::current_exe()
             .ok()
             .and_then(|path| {
@@ -960,6 +984,9 @@ impl MalusState {
     }
 
     pub fn start_interactive_screenshot(&mut self) {
+        if self.is_session_locked() {
+            return;
+        }
         self.snap_layouts.close();
         if self.screenshot_ui.is_open() {
             self.screenshot_ui.close();
@@ -1151,6 +1178,7 @@ impl MalusState {
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
         let xdg_decoration_state = smithay::wayland::shell::xdg::decoration::XdgDecorationState::new::<Self>(&dh);
         let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
+        let session_lock_state = SessionLockManagerState::new::<Self, _>(&dh, |_| true);
         let fractional_scale_manager_state = FractionalScaleManagerState::new::<Self>(&dh);
         let viewporter_state = ViewporterState::new::<Self>(&dh);
         let presentation_state = smithay::wayland::presentation::PresentationState::new::<Self>(&dh, 1);
@@ -1177,6 +1205,13 @@ impl MalusState {
             xdg_shell_state,
             xdg_decoration_state,
             layer_shell_state,
+            session_lock_state,
+            ext_session_locked: false,
+            ext_lock_handle: None,
+            ext_lock_client_pid: None,
+            ext_lock_surfaces: HashMap::new(),
+            lockscreen_respawn_at: None,
+            session_locked_flag: Arc::new(AtomicBool::new(false)),
             fractional_scale_manager_state,
             viewporter_state,
             presentation_state,
@@ -2262,15 +2297,66 @@ impl MalusState {
     /// Cambia el foco de teclado y garantiza la actualización de `Activated` incluso cuando `focus` es `None`
     /// (Smithay no invoca `SeatHandler::focus_changed` al limpiar el foco con `None`).
     pub fn is_session_locked(&self) -> bool {
-        self.space.outputs().any(|output| {
-            let map = layer_map_for_output(output);
-            let locked = map.layers().any(|layer| layer.namespace() == "malus-lock");
-            locked
-        })
+        self.ext_session_locked
+            || self.space.outputs().any(|output| {
+                let map = layer_map_for_output(output);
+                let locked = map.layers().any(|layer| layer.namespace() == "malus-lock");
+                locked
+            })
     }
 
-    fn lock_focus_surface(&self) -> Option<WlSurface> {
+    /// Verifica la salud del bloqueo `ext-session-lock-v1` y sincroniza el indicador atómico
+    /// compartido con el watchdog evdev. Si el cliente lockscreen muere sin desbloquear,
+    /// mantiene el estado bloqueado (pantalla negra) y relanza `malus-de-session-lock`.
+    pub fn check_session_lock_liveness(&mut self) {
+        self.ext_lock_surfaces.retain(|_, surf| surf.alive());
+        if self.ext_session_locked {
+            let owner_dead = self
+                .ext_lock_handle
+                .as_ref()
+                .is_some_and(|handle| !handle.is_alive());
+            if owner_dead {
+                self.ext_lock_handle = None;
+                self.ext_lock_client_pid = None;
+                self.ext_lock_surfaces.clear();
+            }
+            if self.ext_lock_handle.is_none()
+                && self
+                    .lockscreen_respawn_at
+                    .is_none_or(|ts| ts.elapsed() >= Duration::from_millis(800))
+            {
+                tracing::warn!(
+                    "🔒 [SECURITY] Lockscreen cerrado sin unlock_and_destroy(); manteniendo sesión bloqueada y relanzando malus-de-session-lock"
+                );
+                self.lockscreen_respawn_at = Some(Instant::now());
+                self.spawn_lockscreen_process();
+            }
+        }
+        self.session_locked_flag
+            .store(self.is_session_locked(), Ordering::SeqCst);
+    }
+
+    pub fn authorized_ext_lock_surface_for_output(&self, output_name: &str) -> Option<LockSurface> {
+        self.ext_lock_surfaces
+            .get(output_name)
+            .filter(|ls| ls.alive())
+            .cloned()
+    }
+
+    pub fn lock_focus_surface(&self) -> Option<WlSurface> {
         let mut fallback = None;
+        for output in self.space.outputs() {
+            if let Some(ls) = self.ext_lock_surfaces.get(&output.name()) {
+                if ls.alive() {
+                    if self.is_primary_output(output) {
+                        return Some(ls.wl_surface().clone());
+                    }
+                    if fallback.is_none() {
+                        fallback = Some(ls.wl_surface().clone());
+                    }
+                }
+            }
+        }
         for output in self.space.outputs() {
             let map = layer_map_for_output(output);
             for layer in map.layers() {
@@ -4796,6 +4882,11 @@ impl CompositorHandler for MalusState {
                 }
             };
         }
+        for (out_name, ls) in &self.ext_lock_surfaces {
+            if ls.wl_surface() == surface {
+                matched_outputs.push(out_name.clone());
+            }
+        }
         if is_background {
             self.background_commit_counter = self.background_commit_counter.wrapping_add(1);
         }
@@ -5885,12 +5976,33 @@ impl WlrLayerShellHandler for MalusState {
     ) {
         tracing::info!("✨ Nueva Layer Surface recibida: namespace={}", namespace);
         if namespace == "malus-lock" {
+            let layer_client_pid = self
+                .display_handle
+                .get_client(smithay::reexports::wayland_server::Resource::id(
+                    surface.wl_surface(),
+                ))
+                .ok()
+                .and_then(|c| c.get_credentials(&self.display_handle).ok())
+                .map(|cred| cred.pid);
+            if let (Some(expected_pid), Some(got_pid)) = (self.ext_lock_client_pid, layer_client_pid)
+            {
+                if expected_pid != got_pid {
+                    tracing::warn!(
+                        "🚨 [SECURITY] Rechazada capa 'malus-lock' no autorizada del PID {} (esperado {})",
+                        got_pid,
+                        expected_pid
+                    );
+                    surface.send_close();
+                    return;
+                }
+            }
             self.snap_layouts.close();
             self.dismiss_app_switcher_immediately();
             self.spotlight.close();
             if self.expose.active {
                 self.expose.active = false;
             }
+            self.session_locked_flag.store(true, Ordering::SeqCst);
         }
         if namespace == "malus-top-bar" {
             surface.with_pending_state(|state| {
@@ -6004,6 +6116,97 @@ fn should_include_minimized_in_app_switcher(
 ) -> bool {
     target_is_primary && window_workspace == active_workspace
 }
+
+impl SessionLockHandler for MalusState {
+    fn lock_state(&mut self) -> &mut SessionLockManagerState {
+        &mut self.session_lock_state
+    }
+
+    fn lock(&mut self, confirmation: SessionLocker) {
+        if self.ext_session_locked
+            && self
+                .ext_lock_handle
+                .as_ref()
+                .is_some_and(|handle| handle.is_alive())
+        {
+            tracing::warn!(
+                "🔒 [SECURITY] Solicitud ext-session-lock-v1 rechazada: ya existe un bloqueo activo"
+            );
+            drop(confirmation);
+            return;
+        }
+
+        let lock_res = confirmation.ext_session_lock().clone();
+        let client_pid = self
+            .display_handle
+            .get_client(lock_res.id())
+            .ok()
+            .and_then(|client| client.get_credentials(&self.display_handle).ok())
+            .map(|cred| cred.pid);
+
+        self.ext_session_locked = true;
+        self.ext_lock_handle = Some(lock_res);
+        self.ext_lock_client_pid = client_pid;
+        self.lockscreen_respawn_at = None;
+        self.session_locked_flag.store(true, Ordering::SeqCst);
+
+        self.snap_layouts.close();
+        self.dismiss_app_switcher_immediately();
+        self.spotlight.close();
+        if self.expose.active {
+            self.expose.active = false;
+        }
+        self.clear_dnd_icon();
+        let serial = SERIAL_COUNTER.next_serial();
+        self.set_keyboard_focus_with_sync(None, serial);
+
+        confirmation.lock();
+        self.surface_commit_counter = self.surface_commit_counter.wrapping_add(1);
+        tracing::info!("🔒 Sesión bloqueada mediante protocolo ext-session-lock-v1 (pid={:?})", client_pid);
+    }
+
+    fn unlock(&mut self) {
+        self.ext_session_locked = false;
+        self.ext_lock_handle = None;
+        self.ext_lock_client_pid = None;
+        self.ext_lock_surfaces.clear();
+        self.lockscreen_respawn_at = None;
+        self.session_locked_flag.store(false, Ordering::SeqCst);
+        self.surface_commit_counter = self.surface_commit_counter.wrapping_add(1);
+
+        if let Some(top_win) = self.space.elements().last().cloned() {
+            if let Some(surf) = top_win.wl_surface().map(|s| s.into_owned()) {
+                self.set_keyboard_focus_with_sync(Some(surf), SERIAL_COUNTER.next_serial());
+            }
+        }
+        tracing::info!("🔓 Sesión desbloqueada vía ext-session-lock-v1");
+    }
+
+    fn new_surface(&mut self, surface: LockSurface, output: WlOutput) {
+        let Some(out) = Output::from_resource(&output).or_else(|| self.primary_output()) else {
+            return;
+        };
+        let size = self
+            .space
+            .output_geometry(&out)
+            .map(|geo| Size::from((geo.size.w.max(1) as u32, geo.size.h.max(1) as u32)))
+            .unwrap_or_else(|| Size::from((1920, 1080)));
+
+        surface.with_pending_state(|state| {
+            state.size = Some(size);
+        });
+        surface.send_configure();
+
+        let wl_surf = surface.wl_surface().clone();
+        self.ext_lock_surfaces.insert(out.name(), surface);
+
+        if self.is_primary_output(&out) || self.lock_focus_surface().is_none() {
+            self.set_keyboard_focus_with_sync(Some(wl_surf), SERIAL_COUNTER.next_serial());
+        }
+    }
+}
+
+delegate_session_lock!(MalusState);
 
 #[cfg(test)]
 mod tests {

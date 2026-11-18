@@ -12,6 +12,10 @@ gdk-pixbuf.workspace = true
 libadwaita.workspace = true
 gtk4-layer-shell.workspace = true
 wayland-protocols-misc.workspace = true
+wayland-client.workspace = true
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+serde.workspace = true
+serde_json.workspace = true
 zbus.workspace = true
 glib.workspace = true
 gio.workspace = true

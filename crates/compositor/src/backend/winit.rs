@@ -246,6 +246,7 @@ pub fn run_winit() -> Result<()> {
 
     while state.is_running {
         let frame_start = Instant::now();
+        state.check_session_lock_liveness();
         state.resume_timed_out_dock_animations(frame_start);
         state.tick_snap_layouts(frame_start);
         state.tick_app_switcher_deck(frame_start);
@@ -604,7 +605,30 @@ pub fn run_winit() -> Result<()> {
                         })
                     };
 
-                    let under_target = if let Some((surf, focus_loc)) = find_layer_popup_under(&state, &output, point) {
+                    let under_target = if state.is_session_locked() {
+                        if let Some(ls) = state.authorized_ext_lock_surface_for_output(&output.name()) {
+                            Some((ls.wl_surface().clone(), Point::from((0.0, 0.0))))
+                        } else {
+                            let layer_map = smithay::desktop::layer_map_for_output(&output);
+                            let res = layer_map
+                                .layers()
+                                .rev()
+                                .find(|l| l.namespace() == "malus-lock")
+                                .and_then(|layer| {
+                                    layer_map.layer_geometry(layer).and_then(|geo| {
+                                        let local_point = point - geo.loc.to_f64();
+                                        layer
+                                            .surface_under(
+                                                local_point,
+                                                smithay::desktop::WindowSurfaceType::TOPLEVEL
+                                                    | smithay::desktop::WindowSurfaceType::SUBSURFACE,
+                                            )
+                                            .map(|(surf, sub_loc)| (surf, (geo.loc + sub_loc).to_f64()))
+                                    })
+                                });
+                            res
+                        }
+                    } else if let Some((surf, focus_loc)) = find_layer_popup_under(&state, &output, point) {
                         Some((surf, focus_loc))
                     } else if let Some((surf, focus_loc)) = layer_target {
                         Some((surf, focus_loc))
@@ -694,7 +718,47 @@ pub fn run_winit() -> Result<()> {
                         })
                     };
 
-                    let (under_target, layer_info, regular_win, is_popup) = if let Some((surf, focus_loc)) = find_layer_popup_under(&state, &output, point) {
+                    let (under_target, layer_info, regular_win, is_popup) = if state.is_session_locked() {
+                        if let Some(ls) = state.authorized_ext_lock_surface_for_output(&output.name()) {
+                            let surf = ls.wl_surface().clone();
+                            (
+                                Some((surf.clone(), Point::from((0.0, 0.0)))),
+                                Some((surf, "ext-session-lock".to_string(), true)),
+                                None,
+                                false,
+                            )
+                        } else {
+                            let layer_map = smithay::desktop::layer_map_for_output(&output);
+                            let hit = layer_map
+                                .layers()
+                                .rev()
+                                .find(|l| l.namespace() == "malus-lock")
+                                .and_then(|layer| {
+                                    layer_map.layer_geometry(layer).and_then(|geo| {
+                                        let local_point = point - geo.loc.to_f64();
+                                        layer
+                                            .surface_under(
+                                                local_point,
+                                                smithay::desktop::WindowSurfaceType::TOPLEVEL
+                                                    | smithay::desktop::WindowSurfaceType::SUBSURFACE,
+                                            )
+                                            .map(|(surf, sub_loc)| {
+                                                (
+                                                    surf.clone(),
+                                                    (geo.loc + sub_loc).to_f64(),
+                                                    layer.namespace().to_string(),
+                                                    layer.can_receive_keyboard_focus(),
+                                                )
+                                            })
+                                    })
+                                });
+                            if let Some((surf, focus_loc, ns, can_kb)) = hit {
+                                (Some((surf.clone(), focus_loc)), Some((surf, ns, can_kb)), None, false)
+                            } else {
+                                (None, None, None, false)
+                            }
+                        }
+                    } else if let Some((surf, focus_loc)) = find_layer_popup_under(&state, &output, point) {
                         (Some((surf, focus_loc)), None, None, true)
                     } else if let Some((surf, focus_loc, ns, can_kb)) = layer_target {
                         (Some((surf.clone(), focus_loc)), Some((surf, ns, can_kb)), None, false)
@@ -1356,7 +1420,21 @@ pub fn run_winit() -> Result<()> {
                         }
                     }
                 }
-                upper_elements.extend(lock_elements);
+                if let Some(ext_lock_surf) =
+                    state.authorized_ext_lock_surface_for_output(&output.name())
+                {
+                    let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                        render_elements_from_surface_tree(
+                            renderer,
+                            ext_lock_surf.wl_surface(),
+                            (0, 0),
+                            smithay::utils::Scale::from(1.0),
+                            1.0,
+                            Kind::Unspecified,
+                        );
+                    lock_elements.extend(elems);
+                }
+                let session_locked = state.is_session_locked();
 
                 let mut window_render_data = Vec::new();
                 let is_dark_theme = crate::state::is_dark_color_scheme();
@@ -1771,7 +1849,22 @@ pub fn run_winit() -> Result<()> {
                             .any(|occ| occ.contains_rect(Rectangle::from_size(size)));
 
                     frame_rendered = true;
-                    let _ = frame.clear(dark_acrylic, &[damage]);
+                    let clear_color = if session_locked {
+                        Color32F::new(0.0, 0.0, 0.0, 1.0)
+                    } else {
+                        dark_acrylic
+                    };
+                    let _ = frame.clear(clear_color, &[damage]);
+                    if session_locked {
+                        if !lock_elements.is_empty() {
+                            let _ = draw_render_elements(
+                                &mut frame,
+                                1.0,
+                                &lock_elements,
+                                &[damage],
+                            );
+                        }
+                    } else {
                     // 1. Renderizar fondo (wallpaper y capas inferiores) solo si no está 100% ocluido por una ventana pantalla completa
                     if !wallpaper_occluded && !lower_elements.is_empty() {
                         let _ = draw_render_elements(&mut frame, 1.0, &lower_elements, &[damage]);
@@ -2631,6 +2724,7 @@ pub fn run_winit() -> Result<()> {
                             });
                         }
                     }
+                    }
 
                     // 🖥 ESQUINAS SQUIRCLE SUPERELÍPTICAS (n=4.2) DEL ESCRITORIO
                     if let Some(r) = phys_r {
@@ -2838,6 +2932,7 @@ pub fn run_winit() -> Result<()> {
                     }
                 }
 
+                if !state.is_session_locked() {
                 if let Some(ref mut session) = state.active_screen_recording {
                     let interval = std::time::Duration::from_millis(
                         (1000 / session.target_fps.max(1)) as u64,
@@ -2861,6 +2956,7 @@ pub fn run_winit() -> Result<()> {
                             }
                         }
                     }
+                }
                 }
             }
         }
@@ -2897,6 +2993,9 @@ pub fn run_winit() -> Result<()> {
                 {
                     send_frames_surface_tree(popup.wl_surface(), now_ms);
                 }
+            }
+            if let Some(ext_ls) = state.authorized_ext_lock_surface_for_output(&output.name()) {
+                send_frames_surface_tree(ext_ls.wl_surface(), now_ms);
             }
         }
 

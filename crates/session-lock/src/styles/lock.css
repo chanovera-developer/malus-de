@@ -119,3 +119,15 @@ button.unlock-btn:active,
     color: #ff6961;
     text-shadow: 0 1px 6px rgba(0, 0, 0, 0.65);
 }
+
+.lock-intrusion-warning {
+    margin-top: 4px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background-color: rgba(255, 69, 58, 0.24);
+    border: 1px solid rgba(255, 105, 97, 0.55);
+    color: #ffd5d2;
+    font-size: 11px;
+    font-weight: 600;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+}

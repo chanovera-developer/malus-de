@@ -217,7 +217,10 @@ fn open_readable_evdev_keyboards() -> Vec<std::fs::File> {
 /// Hilo independiente de emergencia: si el usuario tiene permiso de lectura en `/dev/input/event*`
 /// (p. ej. grupo `input`), permite cerrar el entorno con `Ctrl+Alt+BackSpace` aunque el hilo
 /// principal del compositor esté completamente bloqueado.
-fn spawn_emergency_zap_watchdog(session_active: Arc<AtomicBool>) {
+fn spawn_emergency_zap_watchdog(
+    session_active: Arc<AtomicBool>,
+    session_locked: Arc<AtomicBool>,
+) {
     std::thread::Builder::new()
         .name("malus-zap-watchdog".to_string())
         .spawn(move || {
@@ -237,7 +240,9 @@ fn spawn_emergency_zap_watchdog(session_active: Arc<AtomicBool>) {
             let mut last_rescan = Instant::now();
 
             loop {
-                if !session_active.load(Ordering::Relaxed) {
+                if !session_active.load(Ordering::Relaxed)
+                    || session_locked.load(Ordering::Relaxed)
+                {
                     key_state.reset();
                     std::thread::sleep(Duration::from_millis(80));
                     continue;
@@ -1045,7 +1050,15 @@ fn apply_output_config_to_surface(
         }
     }
     let log_w = (s.size.w as f64 / scale).round() as i32;
+    let log_h = (s.size.h as f64 / scale).round() as i32;
     *auto_x = (*auto_x).max(loc_x + log_w);
+
+    if let Some(lock_surf) = state.ext_lock_surfaces.get(&out_name).cloned() {
+        lock_surf.with_pending_state(|ls| {
+            ls.size = Some(Size::from((log_w.max(1) as u32, log_h.max(1) as u32)));
+        });
+        lock_surf.send_configure();
+    }
 
     s.output.change_current_state(
         mode_update,
@@ -1568,6 +1581,53 @@ fn find_layer_under(
     String,
     bool,
 )> {
+    if state.is_session_locked() {
+        for output in state.space.outputs() {
+            let Some(output_geo) = state.space.output_geometry(output) else {
+                continue;
+            };
+            if !output_geo.to_f64().contains(point) {
+                continue;
+            }
+            if let Some(ls) = state.authorized_ext_lock_surface_for_output(&output.name()) {
+                return Some((
+                    ls.wl_surface().clone(),
+                    output_geo.loc.to_f64(),
+                    "ext-session-lock".to_string(),
+                    true,
+                ));
+            }
+            let layer_map = smithay::desktop::layer_map_for_output(output);
+            let matched = layer_map
+                .layers()
+                .rev()
+                .find(|l| l.namespace() == "malus-lock")
+                .and_then(|layer| {
+                    layer_map.layer_geometry(layer).and_then(|geo| {
+                        let local_point = point - output_geo.loc.to_f64() - geo.loc.to_f64();
+                        layer
+                            .surface_under(
+                                local_point,
+                                smithay::desktop::WindowSurfaceType::TOPLEVEL
+                                    | smithay::desktop::WindowSurfaceType::SUBSURFACE,
+                            )
+                            .map(|(surf, sub_loc)| {
+                                (
+                                    surf,
+                                    (output_geo.loc + geo.loc + sub_loc).to_f64(),
+                                    layer.namespace().to_string(),
+                                    layer.can_receive_keyboard_focus(),
+                                )
+                            })
+                    })
+                });
+            if let Some(hit) = matched {
+                return Some(hit);
+            }
+        }
+        return None;
+    }
+
     if let Some(hit) = find_layer_under_layer(state, point, Layer::Overlay) {
         return Some(hit);
     }
@@ -1716,6 +1776,18 @@ fn resolve_target_under(
     bool,
 ) {
     let layer_hit = find_layer_under(state, point);
+    if state.is_session_locked() {
+        return if let Some((surf, focus_loc, ns, can_kb)) = layer_hit {
+            (
+                Some((surf.clone(), focus_loc)),
+                Some((surf, ns, can_kb)),
+                None,
+                false,
+            )
+        } else {
+            (None, None, None, false)
+        };
+    }
     if let Some((surf, focus_loc, ns, can_kb)) = layer_hit {
         (
             Some((surf.clone(), focus_loc)),
@@ -2137,7 +2209,7 @@ pub fn run_drm() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Error al registrar Wayland Display en calloop: {e:?}"))?;
 
     // Despacho de eventos de Libinput con soporte para ratón, touchpad y atajos completos
-    spawn_emergency_zap_watchdog(session_active);
+    spawn_emergency_zap_watchdog(session_active, state.session_locked_flag.clone());
     let mut session_vt = session.clone();
 
     loop_handle.insert_source(libinput_backend, move |event, _, state: &mut MalusState| {
@@ -2182,8 +2254,8 @@ pub fn run_drm() -> Result<()> {
                                 let has_alt = modifiers.alt;
                                 let has_ctrl = modifiers.ctrl;
 
-                                // 🚨 RED DE SEGURIDAD CRÍTICA (siempre por encima de cualquier UI modal):
-                                // 1. Ctrl + Alt + BackSpace: fuerza el cierre limpio del compositor/entorno.
+                                // 🚨 RED DE SEGURIDAD CRÍTICA (deshabilitado Ctrl+Alt+BackSpace si la sesión está bloqueada):
+                                // 1. Ctrl + Alt + BackSpace: fuerza el cierre limpio del compositor/entorno (solo desbloqueado).
                                 // 2. Ctrl + Alt + F1..F12: cambio inmediato de TTY vía LibSeat.
                                 if has_ctrl && has_alt {
                                     let is_bksp = sym == keysyms::KEY_BackSpace.into()
@@ -2193,6 +2265,10 @@ pub fn run_drm() -> Result<()> {
                                                 || s == keysyms::KEY_Terminate_Server.into()
                                         });
                                     if is_bksp {
+                                        if state.is_session_locked() {
+                                            tracing::warn!("🔒 [SECURITY] Ctrl+Alt+BackSpace bloqueado mientras la sesión está bloqueada");
+                                            return FilterResult::Intercept(());
+                                        }
                                         state.is_running = false;
                                         trigger_emergency_compositor_exit("Ctrl+Alt+BackSpace");
                                         return FilterResult::Intercept(());
@@ -3052,9 +3128,22 @@ pub fn run_drm() -> Result<()> {
     let mut workspace_transition_pipeline: Option<
         crate::workspace_transition::WorkspaceTransitionPipeline,
     > = None;
+    let mut was_session_locked = false;
 
     while state.is_running {
         let frame_start = Instant::now();
+        state.check_session_lock_liveness();
+        let session_locked_now = state.is_session_locked();
+        if session_locked_now != was_session_locked {
+            was_session_locked = session_locked_now;
+            let full_bufs = if ENABLE_DAMAGE_TRACKING { 3 } else { 1 };
+            if let Ok(mut surfs) = shared_surfaces.lock() {
+                for s in surfs.iter_mut() {
+                    s.full_damage_buffers = s.full_damage_buffers.max(full_bufs);
+                    s.pending_damage_buffers = s.pending_damage_buffers.max(full_bufs);
+                }
+            }
+        }
         state.resume_timed_out_dock_animations(frame_start);
         state.tick_snap_layouts(frame_start);
         state.tick_app_switcher_deck(frame_start);
@@ -3578,7 +3667,21 @@ pub fn run_drm() -> Result<()> {
                         }
                     }
                 }
-                upper_elements.extend(lock_elements);
+                if let Some(ext_lock_surf) =
+                    state.authorized_ext_lock_surface_for_output(&out_surface.output.name())
+                {
+                    let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                        render_elements_from_surface_tree(
+                            &mut renderer,
+                            ext_lock_surf.wl_surface(),
+                            (0, 0),
+                            smithay::utils::Scale::from(scale),
+                            1.0,
+                            Kind::Unspecified,
+                        );
+                    lock_elements.extend(elems);
+                }
+                let session_locked = state.is_session_locked();
 
                 let is_dark_theme = crate::state::is_dark_color_scheme();
                 let mut window_render_data = Vec::new();
@@ -4969,7 +5072,22 @@ pub fn run_drm() -> Result<()> {
                     {
                         frame_rendered = true;
 
-                        let _ = frame.clear(dark_acrylic, damage);
+                        let clear_color = if session_locked {
+                            Color32F::new(0.0, 0.0, 0.0, 1.0)
+                        } else {
+                            dark_acrylic
+                        };
+                        let _ = frame.clear(clear_color, damage);
+                        if session_locked {
+                            if !lock_elements.is_empty() {
+                                let _ = draw_render_elements(
+                                    &mut frame,
+                                    scale,
+                                    &lock_elements,
+                                    damage,
+                                );
+                            }
+                        } else {
                         // 1. Renderizar fondo (wallpaper y capas inferiores) solo si no está 100% ocluido por una ventana pantalla completa
                         if !wallpaper_occluded && !lower_elements.is_empty() {
                             let _ =
@@ -6145,6 +6263,7 @@ pub fn run_drm() -> Result<()> {
                             let fallback_slice = std::slice::from_ref(fallback_elem);
                             let _ = draw_render_elements(&mut frame, 1.0, fallback_slice, damage);
                         }
+                        }
 
                         // Dibujar el puntero con el tamaño lógico configurado y el hotspot exacto
                         if let Some((phys_x, phys_y)) = cursor_draw_point {
@@ -6391,6 +6510,7 @@ pub fn run_drm() -> Result<()> {
                         }
                     }
 
+                    if !session_locked {
                     if let Some(ref mut session) = state.active_screen_recording {
                         let interval = std::time::Duration::from_millis(
                             (1000 / session.target_fps.max(1)) as u64,
@@ -6414,6 +6534,7 @@ pub fn run_drm() -> Result<()> {
                                 }
                             }
                         }
+                    }
                     }
                 }
 
@@ -6637,6 +6758,18 @@ pub fn run_drm() -> Result<()> {
                             0,
                         );
                     }
+                }
+            }
+            if let Some(ext_ls) = state.authorized_ext_lock_surface_for_output(&output.name()) {
+                send_frames_surface_tree(ext_ls.wl_surface(), now_ms);
+                if output_rendered {
+                    send_presentation_feedback_surface_tree(
+                        ext_ls.wl_surface(),
+                        output,
+                        pres_time,
+                        refresh,
+                        0,
+                    );
                 }
             }
         }

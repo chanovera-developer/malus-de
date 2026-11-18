@@ -1,5 +1,7 @@
 mod auth;
 mod blur_bg;
+mod intrusion;
+mod lock_protocol;
 mod scale_fade;
 
 use anyhow::Result;
@@ -32,22 +34,32 @@ struct LockSessionState {
     unlocked: Cell<bool>,
     verifying: Cell<bool>,
     revealed: Cell<bool>,
+    cooldown_timer_active: Cell<bool>,
     windows: RefCell<Vec<ApplicationWindow>>,
     backdrop_overlays: RefCell<Vec<Overlay>>,
     primary_entry: RefCell<Option<PasswordEntry>>,
     reveal_login_cb: RefCell<Option<Rc<dyn Fn()>>>,
+    protocol_lock: RefCell<Option<lock_protocol::SessionLockGuard>>,
+    intrusion: RefCell<intrusion::IntrusionState>,
 }
 
 impl LockSessionState {
-    fn new() -> Rc<Self> {
+    fn new(
+        protocol_lock: Option<lock_protocol::SessionLockGuard>,
+        intrusion: intrusion::IntrusionState,
+    ) -> Rc<Self> {
+        let has_intrusion = intrusion.failed_attempts > 0;
         Rc::new(Self {
             unlocked: Cell::new(false),
             verifying: Cell::new(false),
-            revealed: Cell::new(false),
+            revealed: Cell::new(has_intrusion),
+            cooldown_timer_active: Cell::new(false),
             windows: RefCell::new(Vec::new()),
             backdrop_overlays: RefCell::new(Vec::new()),
             primary_entry: RefCell::new(None),
             reveal_login_cb: RefCell::new(None),
+            protocol_lock: RefCell::new(protocol_lock),
+            intrusion: RefCell::new(intrusion),
         })
     }
 
@@ -64,6 +76,19 @@ impl LockSessionState {
 fn main() -> Result<()> {
     init_logging("malus_de_session_lock");
     info!("Iniciando Malus DE Session Lock (Lock Screen)...");
+
+    let protocol_lock = match lock_protocol::SessionLockGuard::acquire() {
+        Ok(guard) => guard,
+        Err(lock_protocol::LockRejection::AlreadyLocked) => {
+            tracing::warn!("La sesión ya cuenta con un bloqueo ext-session-lock-v1 activo; saliendo.");
+            return Ok(());
+        }
+        Err(lock_protocol::LockRejection::ConnectionFailed(err)) => {
+            tracing::warn!("No se pudo adquirir ext-session-lock-v1 ({err}); continuando con respaldo layer-shell");
+            None
+        }
+    };
+    let initial_intrusion = intrusion::load_state_from(&intrusion::intrusion_state_path());
 
     if let Err(err) = adw::init() {
         tracing::warn!("Aviso al inicializar libadwaita: {:?}", err);
@@ -92,7 +117,7 @@ fn main() -> Result<()> {
         }
     });
 
-    let state = LockSessionState::new();
+    let state = LockSessionState::new(protocol_lock, initial_intrusion);
     let state_act = state.clone();
     app.connect_activate(move |application| {
         if !state_act.windows.borrow().is_empty() {
@@ -599,6 +624,9 @@ fn animate_unlock_and_quit(
         if finish_flag.replace(true) {
             return;
         }
+        if let Some(mut guard) = finish_state.protocol_lock.borrow_mut().take() {
+            guard.unlock_and_destroy();
+        }
         finish_state.close_all_windows();
         finish_app.quit();
     });
@@ -886,6 +914,13 @@ fn build_lock_window(
             .visible(false)
             .build();
         bottom_login_box.append(&error_label);
+
+        let intrusion_label = Label::builder()
+            .css_classes(["lock-intrusion-warning"])
+            .halign(Align::Center)
+            .visible(false)
+            .build();
+        bottom_login_box.append(&intrusion_label);
         root_box.append(&bottom_login_box);
 
         // Animación estilo Sequoia al despertar: viñeta sutil + resorte orgánico en login y avatar
@@ -1034,6 +1069,7 @@ fn build_lock_window(
         let arrow_clone = unlock_arrow;
         let spin_clone = unlock_spinner;
         let err_lbl_clone = error_label;
+        let intr_lbl_clone = intrusion_label;
         let err_flag_clone = is_error;
         let entry_shell_clone = entry_shell;
         let input_row_clone = input_row;
@@ -1043,8 +1079,120 @@ fn build_lock_window(
         let win_attempt = window.clone();
         let ui_attempt = ui_scale_box.clone();
 
+        let update_intrusion_banner: Rc<dyn Fn()> = {
+            let st = state_unlock.clone();
+            let lbl = intr_lbl_clone.clone();
+            Rc::new(move || {
+                let intr = st.intrusion.borrow();
+                if intr.failed_attempts == 0 {
+                    lbl.set_visible(false);
+                    return;
+                }
+                let text = match (es, intr.last_failed_local.as_deref()) {
+                    (true, Some(ts)) => format!(
+                        "⚠ {} intento(s) fallido(s) (último: {})",
+                        intr.failed_attempts, ts
+                    ),
+                    (true, None) => {
+                        format!("⚠ {} intento(s) fallido(s)", intr.failed_attempts)
+                    }
+                    (false, Some(ts)) => format!(
+                        "⚠ {} failed attempt(s) (last: {})",
+                        intr.failed_attempts, ts
+                    ),
+                    (false, None) => {
+                        format!("⚠ {} failed attempt(s)", intr.failed_attempts)
+                    }
+                };
+                lbl.set_text(&text);
+                lbl.set_visible(true);
+            })
+        };
+
+        let start_cooldown_countdown: Rc<dyn Fn()> = {
+            let st = state_unlock.clone();
+            let pwd = pwd_clone.clone();
+            let btn = btn_clone.clone();
+            let err_lbl = err_lbl_clone.clone();
+            let err_flag = err_flag_clone.clone();
+            let shell = entry_shell_clone.clone();
+            Rc::new(move || {
+                let rem = intrusion::remaining_cooldown_secs(
+                    &st.intrusion.borrow(),
+                    intrusion::now_unix_secs(),
+                );
+                if rem == 0 {
+                    return;
+                }
+                pwd.set_sensitive(false);
+                btn.set_sensitive(false);
+                err_flag.set(true);
+                err_lbl.set_text(&if es {
+                    format!("Demasiados intentos fallidos. Espera {rem} s")
+                } else {
+                    format!("Too many failed attempts. Wait {rem} s")
+                });
+                err_lbl.set_visible(true);
+                if let Some(bg) = shell.child() {
+                    bg.queue_draw();
+                }
+
+                if st.cooldown_timer_active.replace(true) {
+                    return;
+                }
+                let st_t = st.clone();
+                let pwd_t = pwd.clone();
+                let btn_t = btn.clone();
+                let err_lbl_t = err_lbl.clone();
+                let err_flag_t = err_flag.clone();
+                let shell_t = shell.clone();
+                glib::timeout_add_local(Duration::from_secs(1), move || {
+                    if st_t.unlocked.get() || pwd_t.root().is_none() {
+                        st_t.cooldown_timer_active.set(false);
+                        return ControlFlow::Break;
+                    }
+                    let rem = intrusion::remaining_cooldown_secs(
+                        &st_t.intrusion.borrow(),
+                        intrusion::now_unix_secs(),
+                    );
+                    if rem == 0 {
+                        st_t.cooldown_timer_active.set(false);
+                        err_flag_t.set(false);
+                        err_lbl_t.set_visible(false);
+                        if !st_t.verifying.get() {
+                            pwd_t.set_sensitive(true);
+                            btn_t.set_sensitive(true);
+                            pwd_t.grab_focus();
+                        }
+                        if let Some(bg) = shell_t.child() {
+                            bg.queue_draw();
+                        }
+                        return ControlFlow::Break;
+                    }
+                    err_lbl_t.set_text(&if es {
+                        format!("Demasiados intentos fallidos. Espera {rem} s")
+                    } else {
+                        format!("Too many failed attempts. Wait {rem} s")
+                    });
+                    ControlFlow::Continue
+                });
+            })
+        };
+
+        update_intrusion_banner();
+        start_cooldown_countdown();
+
         let attempt_unlock = Rc::new(move || {
             if state_unlock.verifying.get() || state_unlock.unlocked.get() {
+                return;
+            }
+            let rem = intrusion::remaining_cooldown_secs(
+                &state_unlock.intrusion.borrow(),
+                intrusion::now_unix_secs(),
+            );
+            if rem > 0 {
+                start_cooldown_countdown();
+                trigger_shake(&input_row_clone);
                 return;
             }
             let password = pwd_clone.text().to_string();
@@ -1088,6 +1236,8 @@ fn build_lock_window(
             let err_flag_res = err_flag_clone.clone();
             let shell_res = entry_shell_clone.clone();
             let row_res = input_row_clone.clone();
+            let banner_res = update_intrusion_banner.clone();
+            let cooldown_res = start_cooldown_countdown.clone();
 
             glib::MainContext::default().spawn_local(async move {
                 let auth_result = gio::spawn_blocking(move || {
@@ -1102,24 +1252,56 @@ fn build_lock_window(
                 match auth_result {
                     Ok(Ok(true)) => {
                         info!("Desbloqueo autenticado mediante PAM; animando salida del lockscreen...");
+                        let prev = intrusion::clear_state_at(&intrusion::intrusion_state_path());
+                        *state_res.intrusion.borrow_mut() = intrusion::IntrusionState::default();
+                        if prev.failed_attempts > 0 {
+                            let last_ts = prev.last_failed_local.clone();
+                            let count = prev.failed_attempts;
+                            gio::spawn_blocking(move || {
+                                intrusion::dispatch_intrusion_alert(
+                                    count,
+                                    last_ts.as_deref(),
+                                    es,
+                                );
+                            });
+                        }
                         animate_unlock_and_quit(&app_res, &state_res, &win_res, &ui_res);
                     }
                     Ok(Ok(false)) => {
+                        let local_ts = glib::DateTime::now_local()
+                            .ok()
+                            .and_then(|dt| dt.format("%H:%M:%S").ok())
+                            .map(|s| s.to_string())
+                            .unwrap_or_default();
+                        let wait = {
+                            let mut intr = state_res.intrusion.borrow_mut();
+                            intrusion::record_failed_attempt_at(
+                                &intrusion::intrusion_state_path(),
+                                &mut intr,
+                                intrusion::now_unix_secs(),
+                                &local_ts,
+                            )
+                        };
+                        banner_res();
                         err_flag_res.set(true);
-                        err_lbl_res.set_text(if es {
-                            "Contraseña incorrecta"
-                        } else {
-                            "Incorrect password"
-                        });
-                        err_lbl_res.set_visible(true);
                         pwd_res.set_text("");
-                        pwd_res.set_sensitive(true);
-                        btn_res.set_sensitive(true);
-                        if let Some(bg) = shell_res.child() {
-                            bg.queue_draw();
+                        if wait > 0 {
+                            cooldown_res();
+                        } else {
+                            err_lbl_res.set_text(if es {
+                                "Contraseña incorrecta"
+                            } else {
+                                "Incorrect password"
+                            });
+                            err_lbl_res.set_visible(true);
+                            pwd_res.set_sensitive(true);
+                            btn_res.set_sensitive(true);
+                            if let Some(bg) = shell_res.child() {
+                                bg.queue_draw();
+                            }
+                            pwd_res.grab_focus();
                         }
                         trigger_shake(&row_res);
-                        pwd_res.grab_focus();
                     }
                     Ok(Err(err)) => {
                         error!("Error interno de PAM al verificar contraseña: {}", err);
