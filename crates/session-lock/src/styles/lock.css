@@ -1,64 +1,121 @@
 window.malus-lock-window {
-    background-color: alpha(@window_bg_color, 0.42);
-    color: @window_fg_color;
+    background-color: transparent;
+    color: #ffffff;
 }
 
-.giant-clock {
-    font-size: 80px;
-    font-weight: 200;
-    color: @window_fg_color;
-    letter-spacing: -2px;
+.lock-primary-layout {
+    padding-top: 64px;
+    padding-bottom: 52px;
+}
+
+.lock-top-clock {
+    margin-top: 12px;
 }
 
 .lock-date {
     font-size: 20px;
-    font-weight: 400;
-    color: alpha(@window_fg_color, 0.75);
-    margin-top: -10px;
-    margin-bottom: 40px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.88);
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
 }
 
-.avatar-circle {
-    background-color: alpha(@window_fg_color, 0.12);
-    border: 2px solid alpha(@window_fg_color, 0.30);
-    border-radius: 50%;
-    min-width: 96px;
-    min-height: 96px;
-    margin-bottom: 12px;
+.giant-clock {
+    font-size: 92px;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.94);
+    letter-spacing: -3px;
+    text-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
 }
 
-.avatar-icon {
-    color: @window_fg_color;
+.lock-bottom-login {
+    margin-bottom: 8px;
 }
 
 .username-label {
-    font-size: 18px;
-    font-weight: 600;
-    color: @window_fg_color;
-    margin-bottom: 16px;
-}
-
-.lock-password-entry {
-    background-color: alpha(@window_fg_color, 0.12);
-    border: 1px solid alpha(@window_fg_color, 0.25);
-    border-radius: 12px;
-    min-height: 37px;
-    max-height: 37px;
-    padding: 0 16px;
     font-size: 14px;
-    color: @window_fg_color;
-    min-width: 240px;
+    font-weight: 600;
+    color: #ffffff;
+    margin-bottom: 4px;
+    text-shadow: 0 1px 8px rgba(0, 0, 0, 0.55);
 }
 
-.lock-password-entry:focus {
-    border-color: @accent_bg_color;
-    background-color: alpha(@window_fg_color, 0.18);
-}
-
-.unlock-btn {
-    border-radius: 12px;
-    min-width: 36px;
-    min-height: 37px;
+.lock-squircle-shell {
+    background: transparent;
+    min-height: 34px;
     max-height: 37px;
-    margin-left: 8px;
+}
+
+passwordentry.lock-password-entry,
+.lock-password-entry {
+    background: transparent;
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+    outline: none;
+    min-height: 34px;
+    max-height: 37px;
+    min-width: 214px;
+    padding: 0 12px;
+    font-size: 13px;
+    color: #ffffff;
+    caret-color: #ffffff;
+}
+
+passwordentry.lock-password-entry > text,
+.lock-password-entry > text {
+    min-height: 0;
+    max-height: 37px;
+    padding: 0;
+    margin-right: 10px;
+    background: transparent;
+    color: #ffffff;
+}
+
+passwordentry.lock-password-entry > image,
+.lock-password-entry > image {
+    color: rgba(255, 255, 255, 0.82);
+    min-height: 0;
+    margin-left: 6px;
+    margin-right: 2px;
+}
+
+passwordentry.lock-password-entry:focus,
+.lock-password-entry:focus,
+passwordentry.lock-password-entry:focus-within,
+.lock-password-entry:focus-within {
+    outline: none;
+    box-shadow: none;
+    border: none;
+}
+
+button.unlock-btn,
+.unlock-btn {
+    background: transparent;
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+    outline: none;
+    min-width: 34px;
+    max-width: 37px;
+    min-height: 34px;
+    max-height: 37px;
+    padding: 0;
+    margin: 0;
+    color: #ffffff;
+}
+
+button.unlock-btn:hover,
+.unlock-btn:hover,
+button.unlock-btn:active,
+.unlock-btn:active {
+    background: transparent;
+    box-shadow: none;
+}
+
+.lock-error-label {
+    margin-top: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    color: #ff6961;
+    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.65);
 }

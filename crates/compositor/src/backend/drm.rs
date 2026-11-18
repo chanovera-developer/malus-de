@@ -2221,6 +2221,12 @@ pub fn run_drm() -> Result<()> {
                                     }
                                 }
 
+                                // Mientras la sesión está bloqueada, ningún atajo del entorno debe abrir
+                                // Spotlight, AppSwitcher, Exposé ni capturas sobre el lockscreen.
+                                if state.is_session_locked() {
+                                    return FilterResult::Forward;
+                                }
+
                                 let is_print = sym == keysyms::KEY_Print.into() || key == 99;
                                 let is_s = sym == keysyms::KEY_s.into() || sym == keysyms::KEY_S.into();
                                 let is_3 = sym == keysyms::KEY_3.into() || sym == keysyms::KEY_numbersign.into();
@@ -2362,7 +2368,14 @@ pub fn run_drm() -> Result<()> {
                                     return FilterResult::Intercept(());
                                 }
 
-                                // Cerrar ventana activa (Super+W / Super+Q / Alt+F4)
+                                // Cerrar ventana activa (Super+W / Super+Q / Alt+F4) y bloqueo de pantalla (Super+L / Ctrl+Super+Q)
+                                let is_l = sym == keysyms::KEY_l.into() || sym == keysyms::KEY_L.into();
+                                if (has_super && !has_alt && is_l) || (has_super && has_ctrl && !has_alt && is_q) {
+                                    info!("🔒 Bloqueando pantalla mediante atajo de teclado");
+                                    state.lock_session();
+                                    return FilterResult::Intercept(());
+                                }
+
                                 let is_f4 = sym == keysyms::KEY_F4.into();
                                 if (has_super && (is_w || is_q)) || (has_alt && is_f4) {
                                     state.close_active_window();
@@ -3449,7 +3462,6 @@ pub fn run_drm() -> Result<()> {
                 let mut upper_elements = Vec::new();
                 let mut lock_elements = Vec::new();
                 let mut dock_clip_roots = Vec::new();
-                let mut lock_blur_roots = Vec::new();
                 let mut spotlight_backdrop_elements = Vec::new();
                 let mut spotlight_shadow_rects = Vec::new();
                 let mut dock_popups = Vec::new();
@@ -3494,20 +3506,6 @@ pub fn run_drm() -> Result<()> {
                                         state.dock_blur_headroom,
                                         scale,
                                     ),
-                                ));
-                            }
-                        }
-                        if namespace == "malus-lock" {
-                            let root_id =
-                                smithay::backend::renderer::element::Id::from_wayland_resource(
-                                    surface.wl_surface(),
-                                );
-                            if let Some(root_elem) =
-                                s_elems.iter().find(|elem| *elem.id() == root_id)
-                            {
-                                lock_blur_roots.push((
-                                    root_id,
-                                    root_elem.geometry(smithay::utils::Scale::from(scale)),
                                 ));
                             }
                         }
@@ -4072,22 +4070,6 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
                 for elem in &upper_elements {
-                    if let Some((_, rect)) = lock_blur_roots
-                        .iter()
-                        .find(|(root_id, _)| *elem.id() == *root_id)
-                    {
-                        if let Some(blur) = blur_pipeline.as_ref() {
-                            let lock_blur = crate::blur::BlurRenderElement::for_popup(
-                                smithay::backend::renderer::element::Id::new(),
-                                smithay::backend::renderer::utils::CommitCounter::default(),
-                                blur.clone(),
-                                *rect,
-                                0.0,
-                                out_surface.size,
-                            );
-                            tracker_elements.push(MalusDrmElement::Blur(lock_blur));
-                        }
-                    }
                     let dock_rect = dock_clip_roots
                         .iter()
                         .find(|(root_id, _)| *elem.id() == *root_id)
@@ -5703,33 +5685,6 @@ pub fn run_drm() -> Result<()> {
                         // 4. Renderizar capas superiores translúcidas (Dock, Top Bar, Popovers)
                         if !upper_elements.is_empty() {
                             for elem in &upper_elements {
-                                let lock_blur_rect = lock_blur_roots
-                                    .iter()
-                                    .find(|(root_id, _)| *elem.id() == *root_id)
-                                    .map(|(_, rect)| *rect);
-                                if let Some(rect) = lock_blur_rect {
-                                    if damage.iter().any(|d| d.overlaps(rect)) {
-                                        if let Some(mut blur) =
-                                            blur_pipeline.as_ref().and_then(|b| b.lock().ok())
-                                        {
-                                            let _ = frame.with_context(|gl| {
-                                                blur.capture_background_region(
-                                                    gl,
-                                                    &projection,
-                                                    out_surface.size,
-                                                    rect,
-                                                );
-                                                blur.render_captured_blur(
-                                                    gl,
-                                                    &projection,
-                                                    out_surface.size,
-                                                    rect,
-                                                    0.0,
-                                                );
-                                            });
-                                        }
-                                    }
-                                }
                                 let dock_rect = dock_clip_roots
                                     .iter()
                                     .find(|(root_id, _)| *elem.id() == *root_id)

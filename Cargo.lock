@@ -2136,11 +2136,13 @@ name = "malus-de-session-lock"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "gdk-pixbuf",
  "gio",
  "glib",
  "gtk4",
  "gtk4-layer-shell",
  "libadwaita",
+ "libc",
  "malus-de-common",
  "tracing",
  "wayland-protocols-misc",

@@ -903,6 +903,24 @@ pub fn snap_target_geometry(
 }
 
 impl MalusState {
+    pub fn lock_session(&self) {
+        if self.is_session_locked() {
+            return;
+        }
+        let lock_executable = std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(|parent| parent.join("malus-de-session-lock")))
+            .filter(|path| path.is_file())
+            .unwrap_or_else(|| std::path::PathBuf::from("malus-de-session-lock"));
+        let result = std::process::Command::new(lock_executable)
+            .env("WAYLAND_DISPLAY", &self.socket_name)
+            .env("GDK_BACKEND", "wayland")
+            .spawn();
+        if let Err(error) = result {
+            tracing::error!("No se pudo iniciar malus-de-session-lock: {error}");
+        }
+    }
+
     pub fn start_full_screenshot(&self) {
         let screenshot_executable = std::env::current_exe()
             .ok()
@@ -2243,7 +2261,39 @@ impl MalusState {
 
     /// Cambia el foco de teclado y garantiza la actualización de `Activated` incluso cuando `focus` es `None`
     /// (Smithay no invoca `SeatHandler::focus_changed` al limpiar el foco con `None`).
-    pub fn set_keyboard_focus_with_sync(&mut self, focus: Option<WlSurface>, serial: Serial) {
+    pub fn is_session_locked(&self) -> bool {
+        self.space.outputs().any(|output| {
+            let map = layer_map_for_output(output);
+            let locked = map.layers().any(|layer| layer.namespace() == "malus-lock");
+            locked
+        })
+    }
+
+    fn lock_focus_surface(&self) -> Option<WlSurface> {
+        let mut fallback = None;
+        for output in self.space.outputs() {
+            let map = layer_map_for_output(output);
+            for layer in map.layers() {
+                if layer.namespace() == "malus-lock" && layer.can_receive_keyboard_focus() {
+                    if self.is_primary_output(output) {
+                        return Some(layer.wl_surface().clone());
+                    }
+                    if fallback.is_none() {
+                        fallback = Some(layer.wl_surface().clone());
+                    }
+                }
+            }
+        }
+        fallback
+    }
+
+    pub fn set_keyboard_focus_with_sync(&mut self, mut focus: Option<WlSurface>, serial: Serial) {
+        if let Some(lock_surf) = self.lock_focus_surface() {
+            let focusing_lock = focus.as_ref().is_some_and(|s| s == &lock_surf);
+            if !focusing_lock {
+                focus = Some(lock_surf);
+            }
+        }
         let Some(kb) = self.seat.get_keyboard() else {
             return;
         };
@@ -5828,6 +5878,14 @@ impl WlrLayerShellHandler for MalusState {
         namespace: String,
     ) {
         tracing::info!("✨ Nueva Layer Surface recibida: namespace={}", namespace);
+        if namespace == "malus-lock" {
+            self.snap_layouts.close();
+            self.dismiss_app_switcher_immediately();
+            self.spotlight.close();
+            if self.expose.active {
+                self.expose.active = false;
+            }
+        }
         if namespace == "malus-top-bar" {
             surface.with_pending_state(|state| {
                 state.size = None;

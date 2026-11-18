@@ -451,7 +451,7 @@ const DEFAULT_MENUS: &[MenuCategoryDef] = &[
         title: "Archivo",
         items: &[
             MenuItemDef::item("Búsqueda Spotlight", Some("⌘Espacio"), MenuAction::Command(&["malus-de-spotlight"])),
-            MenuItemDef::item("Bloquear pantalla", Some("⌃⌘L"), MenuAction::Command(&["malus-de-session-lock"])),
+            MenuItemDef::item("Bloquear pantalla", Some("⌘L"), MenuAction::Command(&["malus-de-session-lock"])),
         ],
     },
     MenuCategoryDef {

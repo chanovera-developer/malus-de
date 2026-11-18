@@ -313,6 +313,9 @@ pub fn run_winit() -> Result<()> {
                             let is_right = sym == keysyms::KEY_Right.into() || key == 106 || key == 114;
 
                             if is_pressed {
+                                if state.is_session_locked() {
+                                    return FilterResult::Forward;
+                                }
                                 let is_print = sym == keysyms::KEY_Print.into() || key == 99;
                                 let is_s = sym == keysyms::KEY_s.into() || sym == keysyms::KEY_S.into();
                                 let is_3 = sym == keysyms::KEY_3.into() || sym == keysyms::KEY_numbersign.into();
@@ -439,6 +442,14 @@ pub fn run_winit() -> Result<()> {
                                         );
                                         return FilterResult::Intercept(());
                                     }
+                                }
+
+                                // Bloqueo de pantalla (Super+L, y Ctrl+Super+Q estilo macOS)
+                                let is_l = sym == keysyms::KEY_l.into() || sym == keysyms::KEY_L.into();
+                                if (has_super && !has_alt && is_l) || (has_super && has_ctrl && !has_alt && is_q) {
+                                    info!("🔒 Bloqueando pantalla mediante atajo de teclado");
+                                    state.lock_session();
+                                    return FilterResult::Intercept(());
                                 }
 
                                 // 4. Atajos universales de macOS: ⌘Q / ⌘W / Alt+F4 para cerrar ventana activa
@@ -1190,7 +1201,6 @@ pub fn run_winit() -> Result<()> {
                 let mut lower_elements = Vec::new();
                 let mut upper_elements = Vec::new();
                 let mut lock_elements = Vec::new();
-                let mut lock_blur_roots = Vec::new();
                 let mut dock_clip_roots = Vec::new();
                 let mut spotlight_backdrop_elements = Vec::new();
                 let mut spotlight_shadow_rects = Vec::new();
@@ -1275,19 +1285,6 @@ pub fn run_winit() -> Result<()> {
                                         state.dock_blur_headroom,
                                         1.0,
                                     ),
-                                ));
-                            }
-                        }
-                        if namespace == "malus-lock" {
-                            let root_id =
-                                smithay::backend::renderer::element::Id::from_wayland_resource(
-                                    surface.wl_surface(),
-                                );
-                            if let Some(root_elem) = s_elems.iter().find(|elem| *elem.id() == root_id)
-                            {
-                                lock_blur_roots.push((
-                                    root_id,
-                                    root_elem.geometry(smithay::utils::Scale::from(1.0)),
                                 ));
                             }
                         }
@@ -2235,29 +2232,6 @@ pub fn run_winit() -> Result<()> {
                     // 4. Renderizar capas superiores translúcidas (Dock, Top Bar, Popovers)
                     if !upper_elements.is_empty() {
                         for elem in &upper_elements {
-                            let lock_blur_rect = lock_blur_roots
-                                .iter()
-                                .find(|(root_id, _)| *elem.id() == *root_id)
-                                .map(|(_, rect)| *rect);
-                            if let Some(rect) = lock_blur_rect {
-                                if let Some(blur) = blur_pipeline.as_mut() {
-                                    let _ = frame.with_context(|gl| {
-                                        blur.capture_background_region(
-                                            gl,
-                                            &projection,
-                                            size,
-                                            rect,
-                                        );
-                                        blur.render_captured_blur_strong(
-                                            gl,
-                                            &projection,
-                                            size,
-                                            rect,
-                                            0.0,
-                                        );
-                                    });
-                                }
-                            }
                             let dock_rect = dock_clip_roots
                                 .iter()
                                 .find(|(root_id, _)| *elem.id() == *root_id)
