@@ -410,6 +410,10 @@ fn matches_app_target(target_lower: &str, app_id: Option<&str>, title: Option<&s
     false
 }
 
+fn is_root_window_surface(window: &smithay::desktop::Window, surface: &WlSurface) -> bool {
+    window.wl_surface().as_deref() == Some(surface)
+}
+
 fn is_system_action_confirmation_surface(surface: &WlSurface) -> bool {
     toplevel_info(surface).1.as_deref() == Some("Confirmación de acción del sistema")
 }
@@ -4907,7 +4911,9 @@ impl CompositorHandler for MalusState {
         if is_buffer_removed {
             if let Some(ctx_id) = self.renderer_context_id.clone() {
                 if let Some(win) = self.window_for_surface(surface) {
-                    if self.space.element_location(&win).is_some() {
+                    if is_root_window_surface(&win, surface)
+                        && self.space.element_location(&win).is_some()
+                    {
                         if let Some(root_surf) = win.wl_surface() {
                             if !self.cached_close_snapshots.contains_key(root_surf.as_ref()) {
                                 let layers = crate::black_hole::capture_surface_tree_snapshot(
@@ -4975,143 +4981,148 @@ impl CompositorHandler for MalusState {
             });
         });
 
-        // Si es una ventana regular en Space, actualizamos sus dimensiones internas únicamente para esa ventana
+        // Si es una ventana regular en Space, actualizamos sus dimensiones internas únicamente para esa ventana.
+        // Solo el commit de la superficie raíz del toplevel debe evaluar colocación inicial, transients o topbar;
+        // los commits de popups (menús contextuales) o subsurfaces pertenecen a `window_for_surface` vía `with_surfaces`,
+        // pero nunca deben recentrar la ventana padre.
         if let Some(window) = window {
             window.on_commit();
-            if let Some(toplevel) = window.toplevel() {
-                let is_system_action_confirmation =
-                    toplevel.parent().is_some() || is_system_action_confirmation_surface(surface);
-                let geometry = window.geometry();
-                if is_system_action_confirmation
-                    && self.centered_transient_windows.get(surface)
-                        != Some(&(geometry.loc, geometry.size))
-                {
-                    if geometry.size.w > 1 && geometry.size.h > 1 {
-                        let parent_output = toplevel
-                            .parent()
-                            .and_then(|parent| {
-                                let parent_surface = parent.wl_surface();
-                                parent_surface
-                                    .as_deref()
-                                    .and_then(|surface| self.window_for_surface(surface))
-                            })
-                            .and_then(|parent| {
-                                let location = self.space.element_location(&parent)?;
-                                let parent_geometry = parent.geometry();
-                                let center = Point::<i32, Logical>::from((
-                                    location.x + parent_geometry.loc.x + parent_geometry.size.w / 2,
-                                    location.y + parent_geometry.loc.y + parent_geometry.size.h / 2,
-                                ));
+            if is_root_window_surface(&window, surface) {
+                if let Some(toplevel) = window.toplevel() {
+                    let is_system_action_confirmation =
+                        toplevel.parent().is_some() || is_system_action_confirmation_surface(surface);
+                    let geometry = window.geometry();
+                    if is_system_action_confirmation
+                        && self.centered_transient_windows.get(surface)
+                            != Some(&(geometry.loc, geometry.size))
+                    {
+                        if geometry.size.w > 1 && geometry.size.h > 1 {
+                            let parent_output = toplevel
+                                .parent()
+                                .and_then(|parent| {
+                                    let parent_surface = parent.wl_surface();
+                                    parent_surface
+                                        .as_deref()
+                                        .and_then(|surface| self.window_for_surface(surface))
+                                })
+                                .and_then(|parent| {
+                                    let location = self.space.element_location(&parent)?;
+                                    let parent_geometry = parent.geometry();
+                                    let center = Point::<i32, Logical>::from((
+                                        location.x + parent_geometry.loc.x + parent_geometry.size.w / 2,
+                                        location.y + parent_geometry.loc.y + parent_geometry.size.h / 2,
+                                    ));
+                                    self.space.outputs().find(|output| {
+                                        self.space
+                                            .output_geometry(output)
+                                            .map(|output_geometry| output_geometry.contains(center))
+                                            .unwrap_or(false)
+                                    })
+                                });
+                            let window_location =
+                                self.space.element_location(&window).unwrap_or_default();
+                            let current_center = Point::<i32, Logical>::from((
+                                window_location.x + geometry.loc.x + geometry.size.w / 2,
+                                window_location.y + geometry.loc.y + geometry.size.h / 2,
+                            ));
+                            let output = parent_output.or_else(|| {
                                 self.space.outputs().find(|output| {
                                     self.space
                                         .output_geometry(output)
-                                        .map(|output_geometry| output_geometry.contains(center))
+                                        .map(|output_geometry| output_geometry.contains(current_center))
                                         .unwrap_or(false)
                                 })
                             });
-                        let window_location =
-                            self.space.element_location(&window).unwrap_or_default();
-                        let current_center = Point::<i32, Logical>::from((
-                            window_location.x + geometry.loc.x + geometry.size.w / 2,
-                            window_location.y + geometry.loc.y + geometry.size.h / 2,
-                        ));
-                        let output = parent_output.or_else(|| {
-                            self.space.outputs().find(|output| {
-                                self.space
-                                    .output_geometry(output)
-                                    .map(|output_geometry| output_geometry.contains(current_center))
-                                    .unwrap_or(false)
-                            })
-                        });
 
-                        if let Some(output) = output {
-                            if let Some(output_geometry) = self.space.output_geometry(output) {
-                                let centered_location = Point::<i32, Logical>::from((
-                                    output_geometry.loc.x
-                                        + (output_geometry.size.w - geometry.size.w) / 2
-                                        - geometry.loc.x,
-                                    output_geometry.loc.y
-                                        + (output_geometry.size.h - geometry.size.h) / 2
-                                        - geometry.loc.y,
-                                ));
+                            if let Some(output) = output {
+                                if let Some(output_geometry) = self.space.output_geometry(output) {
+                                    let centered_location = Point::<i32, Logical>::from((
+                                        output_geometry.loc.x
+                                            + (output_geometry.size.w - geometry.size.w) / 2
+                                            - geometry.loc.x,
+                                        output_geometry.loc.y
+                                            + (output_geometry.size.h - geometry.size.h) / 2
+                                            - geometry.loc.y,
+                                    ));
+                                    self.space
+                                        .map_element(window.clone(), centered_location, true);
+                                    self.space.raise_element(&window, true);
+                                    self.centered_transient_windows
+                                        .insert(surface.clone(), (geometry.loc, geometry.size));
+                                }
+                            }
+                        }
+                    } else if !is_system_action_confirmation
+                        && !self.initially_placed_windows.contains(surface)
+                        && geometry.size.w > 1
+                        && geometry.size.h > 1
+                    {
+                        let states = &toplevel.current_state().states;
+                        let is_snapped_state = states.contains(XdgState::Maximized)
+                            || states.contains(XdgState::Fullscreen)
+                            || states.contains(XdgState::TiledLeft)
+                            || states.contains(XdgState::TiledRight)
+                            || states.contains(XdgState::TiledTop)
+                            || states.contains(XdgState::TiledBottom);
+                        if is_window_snapped(&window)
+                            || is_snapped_state
+                            || self.snap_transitions.contains_key(surface)
+                            || self.minimized_windows.contains_key(surface)
+                        {
+                            self.initially_placed_windows.insert(surface.clone());
+                        } else if let Some(output) = self
+                            .origin_output_for_window(&window)
+                            .or_else(|| self.primary_output())
+                        {
+                            let usable = self.usable_zone_for_output(&output);
+                            let ssd_top = if window_uses_ssd(&window) {
+                                crate::ssd::SSD_TITLEBAR_HEIGHT
+                            } else {
+                                0
+                            };
+                            let max_bounds = max_window_size_in_usable_zone(usable, ssd_top);
+                            if (geometry.size.w > max_bounds.w || geometry.size.h > max_bounds.h)
+                                && !self.clamped_oversized_windows.contains(surface)
+                            {
+                                let clamped = clamp_size_to_bounds(geometry.size, max_bounds);
+                                tracing::info!(
+                                    "📐 [commit] Ventana excede el área útil ({:?} > {:?}); acotando a {:?}",
+                                    geometry.size,
+                                    max_bounds,
+                                    clamped
+                                );
+                                self.clamped_oversized_windows.insert(surface.clone());
+                                toplevel.with_pending_state(|s| {
+                                    s.bounds = Some(max_bounds);
+                                    s.size = Some(clamped);
+                                });
+                                toplevel.send_configure();
+                                let provisional_loc =
+                                    centered_window_location(usable, geometry, ssd_top);
                                 self.space
-                                    .map_element(window.clone(), centered_location, true);
-                                self.space.raise_element(&window, true);
-                                self.centered_transient_windows
-                                    .insert(surface.clone(), (geometry.loc, geometry.size));
+                                    .map_element(window.clone(), provisional_loc, true);
+                            } else {
+                                let centered_loc =
+                                    centered_window_location(usable, geometry, ssd_top);
+                                self.space.map_element(window.clone(), centered_loc, true);
+                                self.initially_placed_windows.insert(surface.clone());
                             }
                         }
                     }
-                } else if !is_system_action_confirmation
-                    && !self.initially_placed_windows.contains(surface)
-                    && geometry.size.w > 1
-                    && geometry.size.h > 1
-                {
-                    let states = &toplevel.current_state().states;
-                    let is_snapped_state = states.contains(XdgState::Maximized)
-                        || states.contains(XdgState::Fullscreen)
-                        || states.contains(XdgState::TiledLeft)
-                        || states.contains(XdgState::TiledRight)
-                        || states.contains(XdgState::TiledTop)
-                        || states.contains(XdgState::TiledBottom);
-                    if is_window_snapped(&window)
-                        || is_snapped_state
-                        || self.snap_transitions.contains_key(surface)
-                        || self.minimized_windows.contains_key(surface)
-                    {
-                        self.initially_placed_windows.insert(surface.clone());
-                    } else if let Some(output) = self
-                        .origin_output_for_window(&window)
-                        .or_else(|| self.primary_output())
-                    {
-                        let usable = self.usable_zone_for_output(&output);
-                        let ssd_top = if window_uses_ssd(&window) {
-                            crate::ssd::SSD_TITLEBAR_HEIGHT
-                        } else {
-                            0
-                        };
-                        let max_bounds = max_window_size_in_usable_zone(usable, ssd_top);
-                        if (geometry.size.w > max_bounds.w || geometry.size.h > max_bounds.h)
-                            && !self.clamped_oversized_windows.contains(surface)
-                        {
-                            let clamped = clamp_size_to_bounds(geometry.size, max_bounds);
-                            tracing::info!(
-                                "📐 [commit] Ventana excede el área útil ({:?} > {:?}); acotando a {:?}",
-                                geometry.size,
-                                max_bounds,
-                                clamped
-                            );
-                            self.clamped_oversized_windows.insert(surface.clone());
-                            toplevel.with_pending_state(|s| {
-                                s.bounds = Some(max_bounds);
-                                s.size = Some(clamped);
-                            });
-                            toplevel.send_configure();
-                            let provisional_loc =
-                                centered_window_location(usable, geometry, ssd_top);
-                            self.space
-                                .map_element(window.clone(), provisional_loc, true);
-                        } else {
-                            let centered_loc =
-                                centered_window_location(usable, geometry, ssd_top);
-                            self.space.map_element(window.clone(), centered_loc, true);
-                            self.initially_placed_windows.insert(surface.clone());
-                        }
-                    }
                 }
-            }
 
-            let is_currently_snapped = is_window_snapped(&window);
+                let is_currently_snapped = is_window_snapped(&window);
 
-            if !is_currently_snapped {
-                self.ensure_window_below_topbar(&window);
-            }
+                if !is_currently_snapped {
+                    self.ensure_window_below_topbar(&window);
+                }
 
-            if !is_currently_snapped && !self.snap_transitions.contains_key(surface) {
-                let geo = window.geometry();
-                let loc = self.space.element_location(&window).unwrap_or_default();
-                if geo.size.w > 150 && geo.size.h > 150 {
-                    self.window_restore_geometries.insert(surface.clone(), (loc, geo.size));
+                if !is_currently_snapped && !self.snap_transitions.contains_key(surface) {
+                    let geo = window.geometry();
+                    let loc = self.space.element_location(&window).unwrap_or_default();
+                    if geo.size.w > 150 && geo.size.h > 150 {
+                        self.window_restore_geometries.insert(surface.clone(), (loc, geo.size));
+                    }
                 }
             }
         }
@@ -7295,5 +7306,13 @@ mod tests {
         state.ext_session_locked = true;
         assert!(state.is_session_locked());
         state.set_keyboard_focus_with_sync(None, SERIAL_COUNTER.next_serial());
+    }
+
+    #[test]
+    fn commit_ignores_non_root_surfaces_for_window_centering() {
+        let state_src = include_str!("state.rs");
+        assert!(state_src.contains("fn is_root_window_surface"));
+        assert!(state_src.contains("if is_root_window_surface(&window, surface)"));
+        assert!(state_src.contains("if is_root_window_surface(&win, surface)"));
     }
 }
