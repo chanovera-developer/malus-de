@@ -179,6 +179,7 @@ void main() {
 const BLUR_SLOT_COUNT: usize = 12;
 const BLUR_DOWNSAMPLE_DIVISOR: i32 = 3;
 const BLUR_GAUSSIAN_PASSES: usize = 3;
+const LOCKSCREEN_BLUR_GAUSSIAN_PASSES: usize = 6;
 const CAPTURE_PAD_PX: i32 = 12;
 
 #[inline]
@@ -386,6 +387,7 @@ impl GaussianBlur {
         source_rect: [f32; 4],
         w0: i32,
         h0: i32,
+        gaussian_passes: usize,
     ) {
         // PASO 1: Downsample inicial hacia FBO 0
         gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbos[0]);
@@ -414,7 +416,7 @@ impl GaussianBlur {
         gl.UseProgram(self.gaussian_program);
         gl.Uniform1i(self.gaussian_u_texture, 0);
         gl.Uniform2f(self.gaussian_u_texel_size, 1.0 / w0 as f32, 1.0 / h0 as f32);
-        for _ in 0..BLUR_GAUSSIAN_PASSES {
+        for _ in 0..gaussian_passes {
             gl.BindFramebuffer(ffi::FRAMEBUFFER, slot.fbos[1]);
             gl.Viewport(0, 0, w0, h0);
             gl.BindTexture(ffi::TEXTURE_2D, slot.fbo_textures[0]);
@@ -446,6 +448,29 @@ impl GaussianBlur {
             corner_radius,
             4.2,
             false,
+        );
+    }
+
+    pub fn render_captured_blur_strong(
+        &mut self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        screen_size: Size<i32, Physical>,
+        win_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+    ) {
+        self.render_blur_internal(
+            gl,
+            projection,
+            screen_size,
+            win_rect,
+            win_rect,
+            corner_radius,
+            4.2,
+            true,
+            1.0,
+            false,
+            LOCKSCREEN_BLUR_GAUSSIAN_PASSES,
         );
     }
 
@@ -683,6 +708,7 @@ impl GaussianBlur {
             from_capture,
             alpha,
             false,
+            BLUR_GAUSSIAN_PASSES,
         );
     }
 
@@ -709,6 +735,7 @@ impl GaussianBlur {
             true,
             1.0,
             true,
+            BLUR_GAUSSIAN_PASSES,
         );
     }
 
@@ -758,6 +785,7 @@ impl GaussianBlur {
         from_capture: bool,
         alpha: f32,
         offscreen_premul: bool,
+        gaussian_passes: usize,
     ) {
         let screen_rect = Rectangle::from_size(screen_size);
         let visible_src = match src_win_rect.intersection(screen_rect) {
@@ -929,7 +957,16 @@ impl GaussianBlur {
             } else {
                 slot.source_tex
             };
-            self.run_blur_passes(gl, &slot, source_tex, source_size, source_rect, w0, h0);
+            self.run_blur_passes(
+                gl,
+                &slot,
+                source_tex,
+                source_size,
+                source_rect,
+                w0,
+                h0,
+                gaussian_passes,
+            );
 
             // PASO 4: Blit final desde FBO 0 hacia la pantalla con soporte squircle y anclaje proyectado
             gl.BindFramebuffer(ffi::FRAMEBUFFER, prev_fbo as u32);
@@ -1222,7 +1259,16 @@ impl GaussianBlur {
             gl.Disable(ffi::CULL_FACE);
             gl.Disable(ffi::BLEND);
 
-            self.run_blur_passes(gl, &slot, slot.source_tex, (w, h), [0.0, 0.0, 1.0, 1.0], w0, h0);
+            self.run_blur_passes(
+                gl,
+                &slot,
+                slot.source_tex,
+                (w, h),
+                [0.0, 0.0, 1.0, 1.0],
+                w0,
+                h0,
+                BLUR_GAUSSIAN_PASSES,
+            );
 
             // PASO 4: Blit enmascarado por silueta exacta
             gl.BindFramebuffer(ffi::FRAMEBUFFER, prev_fbo as u32);
@@ -1848,8 +1894,8 @@ impl RenderElement<GlesRenderer> for BlurRenderElement {
 #[cfg(test)]
 mod tests {
     use super::{
-        BLUR_DOWNSAMPLE_DIVISOR, BLUR_GAUSSIAN_PASSES, CAPTURE_PAD_PX, GAUSSIAN_BLUR_SRC,
-        downsampled_size,
+        BLUR_DOWNSAMPLE_DIVISOR, BLUR_GAUSSIAN_PASSES, CAPTURE_PAD_PX,
+        GAUSSIAN_BLUR_SRC, LOCKSCREEN_BLUR_GAUSSIAN_PASSES, downsampled_size,
     };
 
     #[test]
@@ -1863,6 +1909,7 @@ mod tests {
     #[test]
     fn blur_configuration_uses_multipass_frosted_strength() {
         assert!(BLUR_GAUSSIAN_PASSES >= 2);
+        assert!(LOCKSCREEN_BLUR_GAUSSIAN_PASSES > BLUR_GAUSSIAN_PASSES);
         assert!(BLUR_DOWNSAMPLE_DIVISOR >= 2);
         assert!(CAPTURE_PAD_PX >= 8);
         assert!(GAUSSIAN_BLUR_SRC.contains("BLUR_RADIUS_SCALE = 1.75"));

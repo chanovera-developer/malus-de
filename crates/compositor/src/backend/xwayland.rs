@@ -91,40 +91,59 @@ pub fn map_window(state: &mut MalusState, surface: X11Surface) {
         return;
     }
 
-    let output = state.primary_output();
-    let (location, output_geometry) = output
-        .as_ref()
-        .and_then(|output| {
-            let geometry = state.space.output_geometry(output)?;
-            let offset = (state.space.elements().count() as i32 % 8) * 28;
-            Some((
-                Point::from((geometry.loc.x + 80 + offset, geometry.loc.y + 60 + offset)),
-                geometry,
-            ))
+    let output = state
+        .seat
+        .get_pointer()
+        .map(|p| p.current_location())
+        .and_then(|loc| {
+            state
+                .space
+                .outputs()
+                .find(|o| {
+                    state
+                        .space
+                        .output_geometry(o)
+                        .map(|g| g.to_f64().contains(loc))
+                        .unwrap_or(false)
+                })
+                .cloned()
         })
-        .unwrap_or_else(|| {
-            (
-                Point::from((80, 60)),
-                Rectangle::new((0, 0).into(), (1920, 1080).into()),
-            )
-        });
+        .or_else(|| state.primary_output());
+    let usable = output
+        .as_ref()
+        .map(|o| state.usable_zone_for_output(o))
+        .unwrap_or_else(|| Rectangle::new((0, 36).into(), (1920, 1044).into()));
 
-    if !surface.is_override_redirect() {
+    let location = if !surface.is_override_redirect() {
         let current = surface.geometry();
-        let max_width = (output_geometry.size.w - 80).max(320);
-        let max_height = (output_geometry.size.h - 80).max(240);
-        let geometry = Rectangle::new(
-            location,
-            (
-                current.size.w.clamp(320, max_width),
-                current.size.h.clamp(240, max_height),
-            )
-                .into(),
+        let max_bounds = crate::state::max_window_size_in_usable_zone(usable, 0);
+        let class = surface.class();
+        let requested = if !class.is_empty() {
+            state.get_saved_window_size(&class)
+        } else {
+            None
+        }
+        .unwrap_or_else(|| {
+            if current.size.w > 0 && current.size.h > 0 {
+                current.size
+            } else {
+                smithay::utils::Size::from((800, 600))
+            }
+        });
+        let target_size = crate::state::clamp_size_to_bounds(requested, max_bounds);
+        let centered = crate::state::centered_window_location(
+            usable,
+            Rectangle::from_size(target_size),
+            0,
         );
+        let geometry = Rectangle::new(centered, target_size);
         if let Err(error) = surface.configure(Some(geometry)) {
             warn!("No se pudo ubicar la ventana X11: {error}");
         }
-    }
+        centered
+    } else {
+        surface.geometry().loc
+    };
 
     if let Some(output) = output {
         output.enter(&wl_surface);
@@ -165,8 +184,17 @@ pub fn unmap_window(state: &mut MalusState, surface: &X11Surface) {
         state.space.unmap_elem(&window);
     }
     if let Some(wl_surface) = wl_surface {
+        if !surface.is_override_redirect() && !surface.is_maximized() && !surface.is_fullscreen() {
+            let class = surface.class();
+            let geo_size = surface.geometry().size;
+            if !class.is_empty() && geo_size.w >= 200 && geo_size.h >= 200 {
+                state.save_app_window_size(&class, geo_size);
+            }
+        }
         state.minimized_windows.remove(&wl_surface);
         state.window_restore_geometries.remove(&wl_surface);
+        state.initially_placed_windows.remove(&wl_surface);
+        state.clamped_oversized_windows.remove(&wl_surface);
         state.x11_window_info.remove(&wl_surface);
         if let Some(window_id) = state.window_ids.remove(&wl_surface) {
             state.dock_slots.remove(&window_id);

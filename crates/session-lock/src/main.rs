@@ -2,12 +2,12 @@ use anyhow::Result;
 use glib::ControlFlow;
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, Button, CssProvider,
-    Image, Label, Orientation, PasswordEntry,
+    Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, Image, Label, Orientation,
+    PasswordEntry,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita as adw;
-use malus_de_common::logging::init_logging;
+use malus_de_common::{config::DisplaysConfig, logging::init_logging};
 use std::time::Duration;
 use tracing::info;
 
@@ -20,6 +20,13 @@ fn main() -> Result<()> {
     if let Err(err) = adw::init() {
         tracing::warn!("Aviso al inicializar libadwaita: {:?}", err);
     }
+    adw::StyleManager::default().set_color_scheme(
+        if malus_de_common::config::is_dark_mode_active() {
+            adw::ColorScheme::ForceDark
+        } else {
+            adw::ColorScheme::ForceLight
+        },
+    );
 
     let app = Application::builder()
         .application_id("org.malus_de.SessionLock")
@@ -44,6 +51,48 @@ fn main() -> Result<()> {
 }
 
 fn build_lock_ui(app: &Application) {
+    let monitor = gtk4::gdk::Display::default().and_then(|display| {
+        let monitors: Vec<gtk4::gdk::Monitor> = {
+            let monitors = display.monitors();
+            (0..monitors.n_items())
+                .filter_map(|index| monitors.item(index))
+                .filter_map(|monitor| monitor.downcast().ok())
+                .collect()
+        };
+        let displays_config = DisplaysConfig::load();
+        let primary_config = displays_config.outputs.iter().find(|output| output.primary);
+        let primary_index = primary_config
+            .and_then(|config| {
+                monitors.iter().position(|monitor| {
+                    if monitor
+                        .connector()
+                        .is_some_and(|connector| connector.as_str() == config.connector)
+                    {
+                        return true;
+                    }
+                    if monitor.model().is_some_and(|model| {
+                        model.as_str() == config.name || model.as_str() == config.connector
+                    }) {
+                        return true;
+                    }
+                    if monitor.description().is_some_and(|description| {
+                        description.contains(&config.name)
+                            || description.contains(&config.connector)
+                    }) {
+                        return true;
+                    }
+                    let geometry = monitor.geometry();
+                    geometry.x() == config.x && geometry.y() == config.y
+                })
+            })
+            .unwrap_or(0);
+        monitors.get(primary_index).cloned()
+    });
+
+    build_lock_window(app, monitor.as_ref());
+}
+
+fn build_lock_window(app: &Application, monitor: Option<&gtk4::gdk::Monitor>) {
     let window = ApplicationWindow::builder()
         .application(app)
         .title("Bloqueo de Sesión")
@@ -53,6 +102,9 @@ fn build_lock_ui(app: &Application) {
     if gtk4_layer_shell::is_supported() {
         info!("Bloqueando pantalla completa con foco exclusivo en Overlay...");
         window.init_layer_shell();
+        if let Some(monitor) = monitor {
+            window.set_monitor(monitor);
+        }
         window.set_layer(Layer::Overlay);
         window.set_namespace("malus-lock");
         window.set_anchor(Edge::Top, true);
@@ -62,6 +114,9 @@ fn build_lock_ui(app: &Application) {
         window.set_keyboard_mode(KeyboardMode::Exclusive);
         window.set_exclusive_zone(-1);
     } else {
+        if let Some(monitor) = monitor {
+            window.set_monitor(monitor);
+        }
         window.set_decorated(false);
         window.maximize();
     }
@@ -132,14 +187,14 @@ fn build_lock_ui(app: &Application) {
     root_box.append(&input_box);
 
     // Desbloqueo al pulsar Enter o el botón
-    let win_unlock = window.clone();
+    let app_unlock = app.clone();
     let pwd_clone = password_entry.clone();
     let attempt_unlock = move || {
         let text = pwd_clone.text();
         info!("Intento de desbloqueo recibido (longitud={})", text.len());
         // En entorno de desarrollo o con cualquier tecla pulsada desbloquea
         info!("Desbloqueando sesión de Malus DE...");
-        win_unlock.close();
+        app_unlock.quit();
     };
 
     let u_btn = attempt_unlock.clone();

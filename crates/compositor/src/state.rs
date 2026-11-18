@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::os::unix::io::OwnedFd;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -263,6 +263,10 @@ pub struct MalusState {
     pub pending_activation_configures: Vec<WlSurface>,
     pub window_restore_geometries: HashMap<WlSurface, (Point<i32, Logical>, Size<i32, Logical>)>,
     pub centered_transient_windows: HashMap<WlSurface, (Point<i32, Logical>, Size<i32, Logical>)>,
+    /// Ventanas normales ya posicionadas en el centro del área útil tras su primer `commit` válido.
+    pub initially_placed_windows: HashSet<WlSurface>,
+    /// Ventanas a las que ya se les envió un `configure` de acotamiento para evitar bucles si exceden el escritorio.
+    pub clamped_oversized_windows: HashSet<WlSurface>,
     pub minimized_windows: HashMap<WlSurface, (smithay::desktop::Window, Point<i32, Logical>)>,
     pub minimized_window_workspaces: HashMap<WlSurface, usize>,
     pub minimized_window_thumbnails: HashMap<u64, String>,
@@ -411,6 +415,41 @@ pub fn normalize_app_id(app_id: &str) -> String {
 }
 
 /// Obtiene el identificador de aplicación normalizado a partir de una superficie
+/// Calcula el tamaño máximo disponible para una ventana dentro del área útil del escritorio,
+/// descontando la barra de título SSD cuando corresponda.
+pub fn max_window_size_in_usable_zone(
+    usable: Rectangle<i32, Logical>,
+    ssd_top: i32,
+) -> Size<i32, Logical> {
+    Size::from((usable.size.w.max(1), (usable.size.h - ssd_top.max(0)).max(1)))
+}
+
+/// Recorta un tamaño recordado o solicitado para que nunca exceda `max_bounds`.
+/// No impone mínimos artificiales a ventanas pequeñas que quepan en el escritorio.
+pub fn clamp_size_to_bounds(
+    size: Size<i32, Logical>,
+    max_bounds: Size<i32, Logical>,
+) -> Size<i32, Logical> {
+    Size::from((
+        size.w.clamp(1, max_bounds.w.max(1)),
+        size.h.clamp(1, max_bounds.h.max(1)),
+    ))
+}
+
+/// Calcula la ubicación que centra una ventana dentro de `usable`, compensando `win_geo.loc`
+/// (sombras CSD) y `ssd_top` (barra de título SSD por encima de `loc.y`).
+pub fn centered_window_location(
+    usable: Rectangle<i32, Logical>,
+    win_geo: Rectangle<i32, Logical>,
+    ssd_top: i32,
+) -> Point<i32, Logical> {
+    let ssd = ssd_top.max(0);
+    let total_h = win_geo.size.h + ssd;
+    let x = usable.loc.x + (usable.size.w - win_geo.size.w).max(0) / 2 - win_geo.loc.x;
+    let y = usable.loc.y + (usable.size.h - total_h).max(0) / 2 + ssd - win_geo.loc.y;
+    Point::from((x, y))
+}
+
 pub fn app_id_for_surface(surface: &WlSurface) -> Option<String> {
     let (app_id, title) = toplevel_info(surface);
     if let Some(id) = app_id {
@@ -1141,6 +1180,8 @@ impl MalusState {
             pending_activation_configures: Vec::new(),
             window_restore_geometries: HashMap::new(),
             centered_transient_windows: HashMap::new(),
+            initially_placed_windows: HashSet::new(),
+            clamped_oversized_windows: HashSet::new(),
             minimized_windows: HashMap::new(),
             minimized_window_workspaces: HashMap::new(),
             minimized_window_thumbnails: HashMap::new(),
@@ -4227,6 +4268,8 @@ impl MalusState {
         self.window_restore_geometries.retain(|s, _| s.alive());
         self.snap_transitions.retain(|s, _| s.alive());
         self.centered_transient_windows.retain(|s, _| s.alive());
+        self.initially_placed_windows.retain(|s| s.alive());
+        self.clamped_oversized_windows.retain(|s| s.alive());
         self.minimized_windows.retain(|s, _| s.alive());
         self.minimized_window_workspaces.retain(|s, _| s.alive());
         self.cached_close_snapshots.retain(|s, _| s.alive());
@@ -4727,6 +4770,62 @@ impl CompositorHandler for MalusState {
                             }
                         }
                     }
+                } else if !is_system_action_confirmation
+                    && !self.initially_placed_windows.contains(surface)
+                    && geometry.size.w > 1
+                    && geometry.size.h > 1
+                {
+                    let states = &toplevel.current_state().states;
+                    let is_snapped_state = states.contains(XdgState::Maximized)
+                        || states.contains(XdgState::Fullscreen)
+                        || states.contains(XdgState::TiledLeft)
+                        || states.contains(XdgState::TiledRight)
+                        || states.contains(XdgState::TiledTop)
+                        || states.contains(XdgState::TiledBottom);
+                    if is_window_snapped(&window)
+                        || is_snapped_state
+                        || self.snap_transitions.contains_key(surface)
+                        || self.minimized_windows.contains_key(surface)
+                    {
+                        self.initially_placed_windows.insert(surface.clone());
+                    } else if let Some(output) = self
+                        .origin_output_for_window(&window)
+                        .or_else(|| self.primary_output())
+                    {
+                        let usable = self.usable_zone_for_output(&output);
+                        let ssd_top = if window_uses_ssd(&window) {
+                            crate::ssd::SSD_TITLEBAR_HEIGHT
+                        } else {
+                            0
+                        };
+                        let max_bounds = max_window_size_in_usable_zone(usable, ssd_top);
+                        if (geometry.size.w > max_bounds.w || geometry.size.h > max_bounds.h)
+                            && !self.clamped_oversized_windows.contains(surface)
+                        {
+                            let clamped = clamp_size_to_bounds(geometry.size, max_bounds);
+                            tracing::info!(
+                                "📐 [commit] Ventana excede el área útil ({:?} > {:?}); acotando a {:?}",
+                                geometry.size,
+                                max_bounds,
+                                clamped
+                            );
+                            self.clamped_oversized_windows.insert(surface.clone());
+                            toplevel.with_pending_state(|s| {
+                                s.bounds = Some(max_bounds);
+                                s.size = Some(clamped);
+                            });
+                            toplevel.send_configure();
+                            let provisional_loc =
+                                centered_window_location(usable, geometry, ssd_top);
+                            self.space
+                                .map_element(window.clone(), provisional_loc, true);
+                        } else {
+                            let centered_loc =
+                                centered_window_location(usable, geometry, ssd_top);
+                            self.space.map_element(window.clone(), centered_loc, true);
+                            self.initially_placed_windows.insert(surface.clone());
+                        }
+                    }
                 }
             }
 
@@ -5000,7 +5099,7 @@ impl XdgShellHandler for MalusState {
             })
             .or_else(|| self.primary_output());
 
-        let (spawn_loc, usable_zone) = if let Some(ref output) = target_output {
+        let usable_zone = if let Some(ref output) = target_output {
             output.enter(surface.wl_surface());
             let scale = output.current_scale().fractional_scale();
             smithay::wayland::compositor::with_states(surface.wl_surface(), |states| {
@@ -5008,29 +5107,33 @@ impl XdgShellHandler for MalusState {
                     fractional_scale.set_preferred_scale(scale);
                 });
             });
-            let geo = self.space.output_geometry(output).unwrap_or_default();
-            let usable = self.usable_zone_for_output(output);
-            let offset = ((self.space.elements().count() % 6) as i32) * 28;
-            let spawn_y = (geo.loc.y + 60 + offset).max(usable.loc.y + crate::ssd::SSD_TITLEBAR_HEIGHT);
-            ((geo.loc.x + 80 + offset, spawn_y), usable)
+            self.usable_zone_for_output(output)
         } else {
-            ((80, 60), Rectangle::new((0, 0).into(), (1920, 1080).into()))
+            Rectangle::new((0, 36).into(), (1920, 1044).into())
         };
 
         let window = smithay::desktop::Window::new_wayland_window(surface.clone());
         window.set_activated(true);
 
-        // Si tenemos un tamaño recordado para esta aplicación, sugerirlo en el configure inicial
+        let max_bounds = max_window_size_in_usable_zone(usable_zone, 0);
+
+        // Si tenemos un tamaño recordado para esta aplicación, aplicarlo acotado al área útil;
+        // si no, dejar `size = None` para que la app elija su tamaño natural según contenido sin exceder `bounds`.
         let initial_size = if surface.parent().is_none() {
             let app_id = app_id_for_surface(surface.wl_surface());
-            app_id.as_deref().and_then(|id| self.get_saved_window_size(id)).map(|saved| {
-                let max_w = (usable_zone.size.w - 80).max(400);
-                let max_h = (usable_zone.size.h - 80).max(300);
-                Size::from((saved.w.min(max_w).max(320), saved.h.min(max_h).max(240)))
-            })
+            app_id
+                .as_deref()
+                .and_then(|id| self.get_saved_window_size(id))
+                .map(|saved| clamp_size_to_bounds(saved, max_bounds))
         } else {
             None
         };
+
+        let spawn_loc = centered_window_location(
+            usable_zone,
+            Rectangle::from_size(initial_size.unwrap_or_else(|| Size::from((400, 300)))),
+            0,
+        );
 
         surface.with_pending_state(|state| {
             state.states.set(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated);
@@ -5038,6 +5141,7 @@ impl XdgShellHandler for MalusState {
             // Preferir decoraciones del lado del cliente (CSD) nativas estilo Gnome por defecto.
             // Solo las ventanas que soliciten explícitamente ServerSide recibirán SSD.
             state.decoration_mode = Some(Mode::ClientSide);
+            state.bounds = Some(max_bounds);
             if let Some(size) = initial_size {
                 tracing::info!("📐 [State] Aplicando tamaño de ventana recordado a nueva ventana: {:?}", size);
                 state.size = Some(size);
@@ -5363,6 +5467,8 @@ impl XdgShellHandler for MalusState {
         self.snap_layouts.close();
         let surf = surface.wl_surface();
         self.centered_transient_windows.remove(surf);
+        self.initially_placed_windows.remove(surf);
+        self.clamped_oversized_windows.remove(surf);
 
         let window = self
             .space
@@ -5537,12 +5643,34 @@ impl XdgShellHandler for MalusState {
         if surface.parent().is_none() {
             if let Some(id) = app_id_for_surface(surface.wl_surface()) {
                 if let Some(saved) = self.get_saved_window_size(&id) {
-                    let cur_geo = self.window_for_surface(surface.wl_surface()).map(|w| w.geometry());
+                    let win_opt = self.window_for_surface(surface.wl_surface());
+                    let cur_geo = win_opt.as_ref().map(|w| w.geometry());
                     let is_unconfigured = cur_geo.map(|g| g.size.w <= 200 || g.size.h <= 200).unwrap_or(true);
                     if is_unconfigured {
-                        tracing::info!("📐 [app_id_changed] Aplicando tamaño recordado para {}: {:?}", id, saved);
+                        let output = win_opt
+                            .as_ref()
+                            .and_then(|w| self.origin_output_for_window(w))
+                            .or_else(|| self.primary_output());
+                        let usable = output
+                            .as_ref()
+                            .map(|o| self.usable_zone_for_output(o))
+                            .unwrap_or_else(|| Rectangle::new((0, 36).into(), (1920, 1044).into()));
+                        let ssd_top = win_opt
+                            .as_ref()
+                            .filter(|w| window_uses_ssd(w))
+                            .map(|_| crate::ssd::SSD_TITLEBAR_HEIGHT)
+                            .unwrap_or(0);
+                        let max_bounds = max_window_size_in_usable_zone(usable, ssd_top);
+                        let clamped = clamp_size_to_bounds(saved, max_bounds);
+                        tracing::info!(
+                            "📐 [app_id_changed] Aplicando tamaño recordado para {}: {:?}",
+                            id,
+                            clamped
+                        );
+                        self.initially_placed_windows.remove(surface.wl_surface());
                         surface.with_pending_state(|state| {
-                            state.size = Some(saved);
+                            state.bounds = Some(max_bounds);
+                            state.size = Some(clamped);
                         });
                         surface.send_configure();
                     }
@@ -6641,5 +6769,50 @@ mod tests {
             super::MalusState::close_button_offset_for_app_id(Some("org.gnome.TextEditor"), false, false),
             (22.5, 23.0)
         );
+    }
+
+    #[test]
+    fn initial_bounds_and_clamping_respect_usable_zone_without_min_inflation() {
+        use smithay::utils::{Logical, Rectangle, Size};
+        let usable = Rectangle::<i32, Logical>::new((0, 36).into(), (1920, 960).into());
+        assert_eq!(
+            super::max_window_size_in_usable_zone(usable, 0),
+            Size::from((1920, 960))
+        );
+        let ssd_max = super::max_window_size_in_usable_zone(usable, crate::ssd::SSD_TITLEBAR_HEIGHT);
+        assert_eq!(
+            ssd_max,
+            Size::from((1920, 960 - crate::ssd::SSD_TITLEBAR_HEIGHT))
+        );
+
+        // Ventanas pequeñas mantienen el tamaño de su contenido (no se inflan a 320x240)
+        assert_eq!(
+            super::clamp_size_to_bounds(Size::from((210, 140)), ssd_max),
+            Size::from((210, 140))
+        );
+        // Ventanas enormes o tamaños recordados de un monitor mayor quedan acotados al área útil
+        assert_eq!(
+            super::clamp_size_to_bounds(Size::from((3840, 2160)), ssd_max),
+            ssd_max
+        );
+    }
+
+    #[test]
+    fn centered_window_location_centers_csd_and_ssd_inside_usable_zone() {
+        use smithay::utils::{Logical, Point, Rectangle};
+        let usable = Rectangle::<i32, Logical>::new((100, 36).into(), (1600, 900).into());
+
+        // Ventana CSD con sombra de 24px (geometry.loc = (24, 24))
+        let csd_geo = Rectangle::new((24, 24).into(), (800, 500).into());
+        assert_eq!(
+            super::centered_window_location(usable, csd_geo, 0),
+            Point::from((100 + 400 - 24, 36 + 200 - 24))
+        );
+
+        // Ventana SSD cuya barra de título mide SSD_TITLEBAR_HEIGHT por encima de loc.y
+        let ssd_h = crate::ssd::SSD_TITLEBAR_HEIGHT;
+        let ssd_geo = Rectangle::new((0, 0).into(), (800, 900 - ssd_h).into());
+        let loc = super::centered_window_location(usable, ssd_geo, ssd_h);
+        assert_eq!(loc, Point::from((100 + 400, 36 + ssd_h)));
     }
 }

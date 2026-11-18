@@ -1189,6 +1189,8 @@ pub fn run_winit() -> Result<()> {
                 let has_fullscreen_window = state.has_fullscreen_window_on_output(&output);
                 let mut lower_elements = Vec::new();
                 let mut upper_elements = Vec::new();
+                let mut lock_elements = Vec::new();
+                let mut lock_blur_roots = Vec::new();
                 let mut dock_clip_roots = Vec::new();
                 let mut spotlight_backdrop_elements = Vec::new();
                 let mut spotlight_shadow_rects = Vec::new();
@@ -1276,6 +1278,19 @@ pub fn run_winit() -> Result<()> {
                                 ));
                             }
                         }
+                        if namespace == "malus-lock" {
+                            let root_id =
+                                smithay::backend::renderer::element::Id::from_wayland_resource(
+                                    surface.wl_surface(),
+                                );
+                            if let Some(root_elem) = s_elems.iter().find(|elem| *elem.id() == root_id)
+                            {
+                                lock_blur_roots.push((
+                                    root_id,
+                                    root_elem.geometry(smithay::utils::Scale::from(1.0)),
+                                ));
+                            }
+                        }
                         let mut p_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
                             Vec::new();
                         for (popup, popup_offset) in
@@ -1324,6 +1339,9 @@ pub fn run_winit() -> Result<()> {
                         if namespace == "malus-spotlight-backdrop" {
                             spotlight_backdrop_elements
                                 .push((s_elems, geo.to_physical_precise_round(1.0)));
+                        } else if namespace == "malus-lock" {
+                            lock_elements.extend(s_elems);
+                            lock_elements.extend(p_elems);
                         } else if matches!(surface.layer(), Layer::Background | Layer::Bottom) {
                             lower_elements.extend(s_elems);
                             upper_elements.extend(p_elems);
@@ -1340,6 +1358,7 @@ pub fn run_winit() -> Result<()> {
                         }
                     }
                 }
+                upper_elements.extend(lock_elements);
 
                 let mut window_render_data = Vec::new();
                 let is_dark_theme = crate::state::is_dark_color_scheme();
@@ -2003,6 +2022,7 @@ pub fn run_winit() -> Result<()> {
                                     let radius = match ns.as_ref() {
                                         "malus-dock" => 32.0,
                                         "malus-app-switcher" => 32.0,
+                                        "malus-lock" => 0.0,
                                         "malus-spotlight-controls"
                                         | "malus-spotlight-input"
                                         | "malus-spotlight-apps"
@@ -2215,6 +2235,29 @@ pub fn run_winit() -> Result<()> {
                     // 4. Renderizar capas superiores translúcidas (Dock, Top Bar, Popovers)
                     if !upper_elements.is_empty() {
                         for elem in &upper_elements {
+                            let lock_blur_rect = lock_blur_roots
+                                .iter()
+                                .find(|(root_id, _)| *elem.id() == *root_id)
+                                .map(|(_, rect)| *rect);
+                            if let Some(rect) = lock_blur_rect {
+                                if let Some(blur) = blur_pipeline.as_mut() {
+                                    let _ = frame.with_context(|gl| {
+                                        blur.capture_background_region(
+                                            gl,
+                                            &projection,
+                                            size,
+                                            rect,
+                                        );
+                                        blur.render_captured_blur_strong(
+                                            gl,
+                                            &projection,
+                                            size,
+                                            rect,
+                                            0.0,
+                                        );
+                                    });
+                                }
+                            }
                             let dock_rect = dock_clip_roots
                                 .iter()
                                 .find(|(root_id, _)| *elem.id() == *root_id)
