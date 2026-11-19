@@ -112,11 +112,15 @@ fn wrap_squircle_card(inner: &GtkBox, radius: f64) -> Overlay {
     overlay
 }
 
-/// Crea un botón estilo macOS con fondo y borde dibujados mediante Squircle.
+/// Crea un botón estilo macOS compacto y ajustado al texto con forma cápsula/squircle.
 fn make_squircle_button(label: &str, primary: bool, tooltip: Option<&str>) -> (Overlay, Button) {
     let btn = Button::builder()
         .label(label)
         .has_frame(false)
+        .hexpand(false)
+        .vexpand(false)
+        .halign(Align::Center)
+        .valign(Align::Center)
         .css_classes([if primary {
             "wifi-squircle-btn-primary"
         } else {
@@ -150,7 +154,8 @@ fn make_squircle_button(label: &str, primary: bool, tooltip: Option<&str>) -> (O
 
         let _ = cr.save();
         cr.translate(0.5, 0.5);
-        crate::squircle_path(cr, width - 1.0, height - 1.0, WIFI_BUTTON_SQUIRCLE_RADIUS);
+        let pill_r = ((height - 1.0) * 0.48).max(WIFI_BUTTON_SQUIRCLE_RADIUS);
+        crate::squircle_path(cr, width - 1.0, height - 1.0, pill_r);
         if primary {
             let alpha = if insensitive { 0.45 } else { 1.0 };
             if active {
@@ -209,7 +214,12 @@ fn make_squircle_button(label: &str, primary: bool, tooltip: Option<&str>) -> (O
         }
     });
 
-    let overlay = Overlay::builder().valign(Align::Center).build();
+    let overlay = Overlay::builder()
+        .hexpand(false)
+        .vexpand(false)
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .build();
     overlay.set_child(Some(&bg));
     overlay.add_overlay(&btn);
     overlay.set_measure_overlay(&btn, true);
@@ -259,11 +269,22 @@ fn wrap_squircle_round_control<W: gtk4::prelude::IsA<gtk4::Widget>>(
         let hovered = flags.contains(StateFlags::PRELIGHT);
         let active = flags.contains(StateFlags::ACTIVE);
         let dark = libadwaita::StyleManager::default().is_dark();
-        let radius = (width.min(height) - 1.0) * 0.48;
-
         let _ = cr.save();
-        cr.translate(0.5, 0.5);
-        crate::squircle_path(cr, width - 1.0, height - 1.0, radius);
+        if matches!(
+            style,
+            RoundControlStyle::CircleOutline | RoundControlStyle::SolidButton
+        ) {
+            let cx = width * 0.5;
+            let cy = height * 0.5;
+            let circle_r = (width.min(height) - 1.0) * 0.5;
+            cr.new_sub_path();
+            cr.arc(cx, cy, circle_r, 0.0, std::f64::consts::TAU);
+            cr.close_path();
+        } else {
+            cr.translate(0.5, 0.5);
+            let radius = (width.min(height) - 1.0) * 0.48;
+            crate::squircle_path(cr, width - 1.0, height - 1.0, radius);
+        }
 
         match style {
             RoundControlStyle::SolidButton => {
@@ -539,7 +560,10 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
     header_text.append(&desc_lbl);
     header_text.append(&get_details_link);
 
-    let wifi_switch = Switch::builder().valign(Align::Start).build();
+    let wifi_switch = Switch::builder()
+        .valign(Align::Start)
+        .css_classes(["macos-switch"])
+        .build();
 
     header_row.append(&icon_badge);
     header_row.append(&header_text);
@@ -793,7 +817,7 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .always_show_arrow(false)
         .tooltip_text("Ayuda de Wi-Fi")
         .build();
-    let help_wrap = wrap_squircle_round_control(&help_btn, 26, RoundControlStyle::SolidButton);
+    let help_wrap = wrap_squircle_round_control(&help_btn, 22, RoundControlStyle::SolidButton);
 
     footer_actions.append(&advanced_wrap);
     footer_actions.append(&help_wrap);
@@ -1260,6 +1284,27 @@ fn populate_wifi_list_card(
             .valign(Align::Center)
             .build();
 
+        // Botón "Conectar" que aparece al pasar el cursor sobre redes desconectadas (estilo macOS)
+        let hover_conn_btn = if !net.connected {
+            let (wrap, btn) = make_squircle_button("Conectar", false, None);
+            wrap.set_visible(false);
+            right_icons.append(&wrap);
+
+            let motion = gtk4::EventControllerMotion::new();
+            let wrap_enter = wrap.clone();
+            motion.connect_enter(move |_, _, _| {
+                wrap_enter.set_visible(true);
+            });
+            let wrap_leave = wrap.clone();
+            motion.connect_leave(move |_| {
+                wrap_leave.set_visible(false);
+            });
+            row_box.add_controller(motion);
+            Some(btn)
+        } else {
+            None
+        };
+
         if net.is_secured() || (net.known && !net.in_range) {
             let lock_ico = Image::builder()
                 .icon_name("channel-secure-symbolic")
@@ -1284,78 +1329,144 @@ fn populate_wifi_list_card(
             .valign(Align::Center)
             .tooltip_text("Opciones de red")
             .build();
-        let more_wrap = wrap_squircle_round_control(&more_btn, 22, RoundControlStyle::CircleOutline);
+        let more_wrap = wrap_squircle_round_control(&more_btn, 20, RoundControlStyle::CircleOutline);
         right_icons.append(&more_wrap);
 
-        // Acción al pulsar la fila
-        let net_click = net.clone();
-        let win_click = parent_window.clone();
-        let ban_click = banner.clone();
-        let rel_click = trigger_reload.clone();
-        connect_btn.connect_clicked(move |_| {
-            if net_click.connected {
-                return;
-            }
-            if net_click.known || !net_click.is_secured() {
-                connect_wifi_async(net_click.ssid.clone(), None, net_click.known, &ban_click, &rel_click);
-            } else {
-                show_password_prompt_dialog(&win_click, &net_click.ssid, &ban_click, &rel_click);
-            }
-        });
+        // Acción al pulsar la fila o el botón flotante "Conectar"
+        let trigger_connect: Rc<dyn Fn()> = {
+            let net_click = net.clone();
+            let win_click = parent_window.clone();
+            let ban_click = banner.clone();
+            let rel_click = trigger_reload.clone();
+            Rc::new(move || {
+                if net_click.connected {
+                    return;
+                }
+                if net_click.known || !net_click.is_secured() {
+                    connect_wifi_async(net_click.ssid.clone(), None, net_click.known, &ban_click, &rel_click);
+                } else {
+                    show_password_prompt_dialog(&win_click, &net_click.ssid, &ban_click, &rel_click);
+                }
+            })
+        };
+        let tc1 = trigger_connect.clone();
+        connect_btn.connect_clicked(move |_| tc1());
+        if let Some(hbtn) = hover_conn_btn {
+            let tc2 = trigger_connect.clone();
+            hbtn.connect_clicked(move |_| tc2());
+        }
 
         // Menú popover del botón "⋯" (gestionado por MenuButton para evitar warnings de GTK al destruir filas)
         let popover = Popover::builder().has_arrow(true).build();
         let menu_box = GtkBox::builder()
             .orientation(Orientation::Vertical)
-            .spacing(4)
+            .spacing(3)
             .margin_top(6)
             .margin_bottom(6)
             .margin_start(6)
             .margin_end(6)
             .build();
 
-        if net.connected {
-            let disconn_btn = Button::builder()
-                .label("Desconectar")
+        if is_known_section {
+            if net.connected {
+                let disconn_btn = Button::builder()
+                    .label("Desconectar")
+                    .css_classes(["wifi-menu-action-btn"])
+                    .has_frame(false)
+                    .halign(Align::Fill)
+                    .build();
+                let pop_c = popover.clone();
+                let ssid_c = net.ssid.clone();
+                let ban_c = banner.clone();
+                let rel_c = trigger_reload.clone();
+                disconn_btn.connect_clicked(move |_| {
+                    pop_c.popdown();
+                    disconnect_wifi_async(ssid_c.clone(), &ban_c, &rel_c);
+                });
+                menu_box.append(&disconn_btn);
+            }
+
+            let auto_label = if net.autoconnect {
+                "✓  Conexión automática"
+            } else {
+                "    Conexión automática"
+            };
+            let auto_btn = Button::builder()
+                .label(auto_label)
                 .css_classes(["wifi-menu-action-btn"])
                 .has_frame(false)
                 .halign(Align::Fill)
                 .build();
             let pop_c = popover.clone();
             let ssid_c = net.ssid.clone();
-            let ban_c = banner.clone();
+            let next_val = if net.autoconnect { "no" } else { "yes" };
             let rel_c = trigger_reload.clone();
-            disconn_btn.connect_clicked(move |_| {
+            auto_btn.connect_clicked(move |_| {
                 pop_c.popdown();
-                disconnect_wifi_async(ssid_c.clone(), &ban_c, &rel_c);
+                let s = ssid_c.clone();
+                let r = rel_c.clone();
+                let (tx, rx) = async_channel::bounded::<()>(1);
+                std::thread::spawn(move || {
+                    let _ = run_nmcli(&["connection", "modify", "id", &s, "connection.autoconnect", next_val]);
+                    let _ = tx.send_blocking(());
+                });
+                glib::spawn_future_local(async move {
+                    let _ = rx.recv().await;
+                    r(false);
+                });
             });
-            menu_box.append(&disconn_btn);
-        } else {
-            let conn_item = Button::builder()
-                .label("Conectar")
-                .css_classes(["wifi-menu-action-btn"])
-                .has_frame(false)
-                .halign(Align::Fill)
-                .build();
-            let pop_c = popover.clone();
-            let net_c = net.clone();
-            let win_c = parent_window.clone();
-            let ban_c = banner.clone();
-            let rel_c = trigger_reload.clone();
-            conn_item.connect_clicked(move |_| {
-                pop_c.popdown();
-                if net_c.known || !net_c.is_secured() {
-                    connect_wifi_async(net_c.ssid.clone(), None, net_c.known, &ban_c, &rel_c);
-                } else {
-                    show_password_prompt_dialog(&win_c, &net_c.ssid, &ban_c, &rel_c);
-                }
-            });
-            menu_box.append(&conn_item);
-        }
+            menu_box.append(&auto_btn);
 
-        if is_known_section {
+            if net.is_secured() {
+                let copy_pw_btn = Button::builder()
+                    .label("Copiar contraseña")
+                    .css_classes(["wifi-menu-action-btn"])
+                    .has_frame(false)
+                    .halign(Align::Fill)
+                    .build();
+                let pop_c = popover.clone();
+                let ssid_c = net.ssid.clone();
+                let ban_c = banner.clone();
+                copy_pw_btn.connect_clicked(move |_| {
+                    pop_c.popdown();
+                    let s = ssid_c.clone();
+                    let b = ban_c.clone();
+                    let (tx, rx) = async_channel::bounded::<Result<String, String>>(1);
+                    std::thread::spawn(move || {
+                        let res = run_nmcli(&[
+                            "-s",
+                            "-g",
+                            "802-11-wireless-security.psk",
+                            "connection",
+                            "show",
+                            "id",
+                            &s,
+                        ]);
+                        let _ = tx.send_blocking(res);
+                    });
+                    glib::spawn_future_local(async move {
+                        match rx.recv().await {
+                            Ok(Ok(pw)) if !pw.trim().is_empty() => {
+                                if let Some(display) = gtk4::gdk::Display::default() {
+                                    display.clipboard().set_text(pw.trim());
+                                    b.set_label("Contraseña copiada al portapapeles.");
+                                } else {
+                                    b.set_label("No se pudo acceder al portapapeles.");
+                                }
+                                b.set_visible(true);
+                            }
+                            _ => {
+                                b.set_label("Esta red no tiene contraseña guardada accesible.");
+                                b.set_visible(true);
+                            }
+                        }
+                    });
+                });
+                menu_box.append(&copy_pw_btn);
+            }
+
             let det_item = Button::builder()
-                .label("Detalles...")
+                .label("Configuración de esta red...")
                 .css_classes(["wifi-menu-action-btn"])
                 .has_frame(false)
                 .halign(Align::Fill)
@@ -1371,6 +1482,13 @@ fn populate_wifi_list_card(
                 show_network_details_dialog(&win_c, &snap_c, Some(&net_c), &ban_c, &rel_c);
             });
             menu_box.append(&det_item);
+
+            let menu_sep = GtkBox::builder()
+                .css_classes(["wifi-row-separator"])
+                .margin_top(2)
+                .margin_bottom(2)
+                .build();
+            menu_box.append(&menu_sep);
 
             let forget_item = Button::builder()
                 .label("Olvidar esta red...")
@@ -1388,6 +1506,38 @@ fn populate_wifi_list_card(
             });
             menu_box.append(&forget_item);
         } else {
+            let conn_item = Button::builder()
+                .label("Conectar")
+                .css_classes(["wifi-menu-action-btn"])
+                .has_frame(false)
+                .halign(Align::Fill)
+                .build();
+            let pop_c = popover.clone();
+            let tc_menu = trigger_connect.clone();
+            conn_item.connect_clicked(move |_| {
+                pop_c.popdown();
+                tc_menu();
+            });
+            menu_box.append(&conn_item);
+
+            let det_item = Button::builder()
+                .label("Configuración de esta red...")
+                .css_classes(["wifi-menu-action-btn"])
+                .has_frame(false)
+                .halign(Align::Fill)
+                .build();
+            let pop_c = popover.clone();
+            let win_c = parent_window.clone();
+            let snap_c = snapshot.clone();
+            let net_c = net.clone();
+            let ban_c = banner.clone();
+            let rel_c = trigger_reload.clone();
+            det_item.connect_clicked(move |_| {
+                pop_c.popdown();
+                show_network_details_dialog(&win_c, &snap_c, Some(&net_c), &ban_c, &rel_c);
+            });
+            menu_box.append(&det_item);
+
             let info_lbl = Label::builder()
                 .label(&format!(
                     "Señal: {}% · {} {}",
@@ -1890,7 +2040,10 @@ fn show_network_details_dialog(
             .hexpand(true)
             .xalign(0.0)
             .build();
-        let auto_sw = Switch::builder().active(n.autoconnect).build();
+        let auto_sw = Switch::builder()
+            .active(n.autoconnect)
+            .css_classes(["macos-switch"])
+            .build();
         let ssid_auto = n.ssid.clone();
         let rel_auto = trigger_reload.clone();
         auto_sw.connect_state_set(move |_, enabled| {

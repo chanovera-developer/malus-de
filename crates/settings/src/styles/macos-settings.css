@@ -734,9 +734,11 @@ button.wifi-squircle-btn-primary {
     border: none;
     box-shadow: none;
     border-radius: 0px;
-    padding: 4px 12px;
-    min-height: 24px;
-    font-size: 12.5px;
+    padding: 1px 10px;
+    margin: 0px;
+    min-width: 0px;
+    min-height: 22px;
+    font-size: 12px;
     font-weight: 500;
     color: #232323;
 }
@@ -755,10 +757,11 @@ menubutton.wifi-more-btn > button {
     background: transparent;
     border: none;
     box-shadow: none;
-    border-radius: 0px;
-    min-width: 22px;
-    min-height: 22px;
+    border-radius: 999px;
+    min-width: 20px;
+    min-height: 20px;
     padding: 0px;
+    margin: 0px;
     color: rgba(35, 35, 35, 0.72);
 }
 
@@ -772,11 +775,12 @@ menubutton.wifi-help-btn > button {
     background: transparent;
     border: none;
     box-shadow: none;
-    border-radius: 0px;
-    min-width: 26px;
-    min-height: 26px;
+    border-radius: 999px;
+    min-width: 22px;
+    min-height: 22px;
     padding: 0px;
-    font-size: 13px;
+    margin: 0px;
+    font-size: 12px;
     font-weight: 600;
     color: #232323;
 }
@@ -784,6 +788,43 @@ menubutton.wifi-help-btn > button {
 :root.dark .wifi-help-btn,
 :root.dark menubutton.wifi-help-btn > button {
     color: #f3f3f3;
+}
+
+/* Toggle estilo macOS Tahoe (píldora alargada azul/gris con deslizador blanco ancho) */
+switch.macos-switch {
+    min-width: 42px;
+    min-height: 22px;
+    border-radius: 999px;
+    background-color: rgba(0, 0, 0, 0.14);
+    border: none;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.05);
+    padding: 2px;
+    transition: background-color 160ms ease;
+}
+
+:root.dark switch.macos-switch {
+    background-color: rgba(255, 255, 255, 0.22);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+switch.macos-switch:checked {
+    background-color: #007aff;
+    box-shadow: none;
+}
+
+switch.macos-switch > slider {
+    min-width: 22px;
+    min-height: 18px;
+    border-radius: 999px;
+    background-color: #ffffff;
+    border: none;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.24);
+    margin: 0px;
+}
+
+switch.macos-switch image {
+    opacity: 0;
+    color: transparent;
 }
 
 .wifi-pref-row {

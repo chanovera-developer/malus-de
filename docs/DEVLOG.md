@@ -4,6 +4,18 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-19] — Controles Wi-Fi Estilo macOS Tahoe (`malus-de-settings`)
+
+- Ajustado el panel **Wi-Fi** ([`wifi_pane.rs`](../crates/settings/src/wifi_pane.rs), [`macos-settings.css`](../crates/settings/src/styles/macos-settings.css)) según las capturas de referencia:
+  - **Botones compactos ajustados al texto:** altura mínima reducida (`min-height: 22px`, `padding: 1px 10px`) con contorno cápsula en `Detalles...`, `Otra...`, `Avanzado...` y `Conectar`.
+  - **Botón `Conectar` en hover por fila:** al pasar el cursor sobre cualquier red desconectada (conocida o cercana), aparece el botón `Conectar` a la izquierda del candado/señal.
+  - **Contorno circular `999px` en `⋯` y `?`:** dibujado con `cairo::Context::arc` para un círculo exacto (`20 px` en `⋯`, `22 px` en `?`).
+  - **Menús contextuales `⋯`:** en *Redes conocidas* incluye `✓ Conexión automática`, `Copiar contraseña`, `Configuración de esta red...`, separador y `Olvidar esta red...`; en *Otras redes* incluye `Conectar`, `Configuración de esta red...` e información de señal/canal.
+  - **Toggles `.macos-switch`:** diseño tipo píldora alargada (`42×22 px`) con deslizador blanco ancho (`22×18 px`, `border-radius: 999px`) y pista azul `#007aff` / gris translúcido.
+- Validación: `cargo check --offline --workspace --all-targets` (**0 warnings**), `cargo test --offline -p malus-de-settings` (**5 passed; 0 failed**).
+
+---
+
 ## [2026-11-19] — Alineación Superior de Secciones, Radio Concétrico y Navegación Branches (`malus-de-settings`)
 
 - **Radio de secciones unificado (calibrado para superelipse):** ajustado el `border-radius` de las tarjetas agrupadas (`.macos-group-card`, `.macos-canvas-card`, `.spotlight-list-card`) a `10px` y calibradas las constantes Squircle (`n = 4.2`) en [`wifi_pane.rs`](../crates/settings/src/wifi_pane.rs) (`WIFI_CARD_SQUIRCLE_RADIUS = 19.0`, `WIFI_BUTTON_SQUIRCLE_RADIUS = 11.5`, `WIFI_BADGE_SQUIRCLE_RADIUS = 15.0`) para igualar la profundidad visual de esquina (`~2.9 px`) de las secciones de la barra lateral (`border-radius: 10px`).
