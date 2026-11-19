@@ -4,6 +4,17 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-18] — Corrección de Prueba Unitaria de Arrastre en Escritorio (`GTK 4.24`)
+
+### 1. Ajuste de `test_drag_preview_widget_paintable` (`crates/wallpaper`)
+- **Causa ([`main.rs`](../crates/wallpaper/src/main.rs)):** En GTK `4.24.1` bajo sesión Wayland activa, `gtk4::Fixed::child_position()` consulta la geometría resuelta tras la pasada de *layout* (`gtk_widget_compute_point`), devolviendo `(0.0, 0.0)` cuando el contenedor `gtk4::Fixed` de prueba no ha sido asignado ni mapeado en una ventana, aunque `put()` y `move_()` ya hayan registrado la transformación en el `LayoutChild`.
+- **Solución:** Se actualizó `test_drag_preview_widget_paintable` para validar `fixed.child_transform(&item_box).map(|t| t.to_translate())`, verificando `(100.0, 100.0)` tras `put` y `(-5000.0, -5000.0)` tras `move_`.
+
+### 2. Validación
+- `cargo test --offline -p malus-de-wallpaper` sobre sesión Wayland activa: **20 passed; 0 failed**.
+
+---
+
 ## [2026-11-18] — Traslado Inmediato de Dock y Top Bar al Monitor Principal y Corrección de Deadlock
 
 ### 1. Reubicación en Vivo de Capas del Shell al Cambiar de Pantalla Principal (`crates/compositor`)

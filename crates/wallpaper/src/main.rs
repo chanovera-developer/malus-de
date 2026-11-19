@@ -4955,6 +4955,10 @@ mod tests {
         let lbl = gtk4::Label::new(Some("Archivo"));
         item_box.append(&lbl);
         fixed.put(&item_box, 100.0, 100.0);
+        assert_eq!(
+            fixed.child_transform(&item_box).map(|t| t.to_translate()),
+            Some((100.0, 100.0))
+        );
 
         let paintable = gtk4::WidgetPaintable::new(Some(&item_box));
         let src = gtk4::DragSource::new();
@@ -4962,7 +4966,10 @@ mod tests {
 
         // Al comenzar el arrastre se desplaza fuera de pantalla (-5000)
         fixed.move_(&item_box, -5000.0, -5000.0);
-        assert_eq!(fixed.child_position(&item_box), (-5000.0, -5000.0));
+        assert_eq!(
+            fixed.child_transform(&item_box).map(|t| t.to_translate()),
+            Some((-5000.0, -5000.0))
+        );
     }
 
     #[test]
