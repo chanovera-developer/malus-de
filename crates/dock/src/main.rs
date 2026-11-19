@@ -3098,7 +3098,9 @@ fn create_minimized_window_item(info: &MinimizedWindowInfo, icon_size: i32) -> (
     let id = window_id;
     gesture.connect_pressed(move |_, _, _, _| {
         info!("✨ Clic en miniatura de Dock: restaurando ventana id={}", id);
-        let _ = send_ipc_message(&IpcMessage::AnimateRestore { window_id: id });
+        if let Err(err) = send_ipc_message(&IpcMessage::AnimateRestore { window_id: id }) {
+            warn!("No se pudo enviar AnimateRestore (id={}) por IPC: {}", id, err);
+        }
     });
     overlay.add_controller(gesture);
 
@@ -3128,13 +3130,15 @@ fn register_minimized_dock_slot(
             "📍 Registrando slot de miniatura en Dock: id={}, pos=({}, {}, {}, {})",
             window_id, x, y, width, height
         );
-        let _ = send_ipc_message(&IpcMessage::RegisterDockSlot {
+        if let Err(err) = send_ipc_message(&IpcMessage::RegisterDockSlot {
             window_id,
             x,
             y,
             width,
             height,
-        });
+        }) {
+            warn!("No se pudo enviar RegisterDockSlot (id={}) por IPC: {}", window_id, err);
+        }
     }
 }
 

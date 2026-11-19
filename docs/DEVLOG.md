@@ -4,6 +4,21 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-18] — Protección del Socket IPC Vivo ante `cargo test` y Restauración desde el Dock
+
+### 1. Preservación de `malus-de-ipc.sock` en Pruebas Unitarias (`crates/compositor`, `crates/dock`)
+- **Causa ([`state.rs`](../crates/compositor/src/state.rs)):** `MalusState::new()` invocaba incondicionalmente `ipc_broadcaster.start_server()`, que ejecuta `remove_file()` y `bind()` sobre `ipc_socket_path()` (`$XDG_RUNTIME_DIR/malus-de-ipc.sock`). Al ejecutar `cargo test` dentro de una sesión activa, las instancias de prueba eliminaban el socket de escucha del compositor vivo, haciendo fallar los envíos IPC puntuales desde el Dock (`AnimateRestore`, `RegisterDockSlot`) mientras los flujos ya abiertos seguían recibiendo `MinimizedWindowsChanged`.
+- **Solución:**
+  - Protegido `ipc_broadcaster.start_server()` en `MalusState::new()` con `#[cfg(not(test))]` para que las pruebas nunca reemplacen el socket IPC de la sesión activa.
+  - Añadido registro `warn!` en [`crates/dock/src/main.rs`](../crates/dock/src/main.rs) cuando falla `send_ipc_message` para `AnimateRestore` o `RegisterDockSlot` en lugar de descartar el error silenciosamente.
+- **Documentación (`docs/decisiones`):** Creado [`0006-branches-pendiente.md`](decisiones/0006-branches-pendiente.md) con los 8 bloques pendientes para completar la paridad de **Branches** con macOS Finder y la Fase 5.
+
+### 2. Validación
+- `cargo test --offline -p malus-de-compositor -p malus-de-dock`: **83 passed; 0 failed** en `malus-de-compositor` y **15 passed; 0 failed** en `malus-de-dock`.
+- `cargo build --release --offline -p malus-de-compositor -p malus-de-dock`: compilación `--release` correcta (exit `0`).
+
+---
+
 ## [2026-11-18] — Corrección de Prueba Unitaria de Arrastre en Escritorio (`GTK 4.24`)
 
 ### 1. Ajuste de `test_drag_preview_widget_paintable` (`crates/wallpaper`)

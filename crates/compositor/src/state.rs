@@ -1207,6 +1207,8 @@ impl MalusState {
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
 
         let ipc_broadcaster = IpcBroadcaster::new();
+        // Evitar que `cargo test` dentro de una sesión activa elimine y sobrescriba el socket IPC vivo.
+        #[cfg(not(test))]
         if let Err(e) = ipc_broadcaster.start_server() {
             tracing::error!("Error al iniciar servidor IPC: {:?}", e);
         }
