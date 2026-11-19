@@ -25,15 +25,16 @@ fn make_squircle_wifi_badge(size: i32, icon_px: i32, radius: f64) -> Overlay {
             return;
         }
         let grad = gtk4::cairo::LinearGradient::new(0.0, 0.0, 0.0, height);
-        grad.add_color_stop_rgba(0.0, 0.22, 0.57, 1.0, 1.0);
-        grad.add_color_stop_rgba(1.0, 0.0, 0.44, 0.94, 1.0);
+        // Colores muestreados exactamente de macOS: (66, 144, 249) -> (60, 132, 242)
+        grad.add_color_stop_rgba(0.0, 0.259, 0.565, 0.976, 1.0);
+        grad.add_color_stop_rgba(1.0, 0.235, 0.518, 0.949, 1.0);
 
         let _ = cr.save();
         cr.translate(0.5, 0.5);
         crate::squircle_path(cr, width - 1.0, height - 1.0, radius);
         let _ = cr.set_source(&grad);
         let _ = cr.fill_preserve();
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.18);
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.22);
         cr.set_line_width(1.0);
         let _ = cr.stroke();
         let _ = cr.restore();
@@ -157,20 +158,25 @@ fn make_squircle_button(label: &str, primary: bool, tooltip: Option<&str>) -> (O
                 } else if hovered {
                     cr.set_source_rgba(1.0, 1.0, 1.0, 0.16);
                 } else {
-                    cr.set_source_rgba(1.0, 1.0, 1.0, 0.11);
+                    cr.set_source_rgba(1.0, 1.0, 1.0, 0.10);
                 }
             } else if active {
-                cr.set_source_rgba(0.0, 0.0, 0.0, 0.11);
+                cr.set_source_rgba(0.0, 0.0, 0.0, 0.16);
             } else if hovered {
-                cr.set_source_rgba(0.97, 0.97, 0.98, 1.0);
+                cr.set_source_rgba(0.0, 0.0, 0.0, 0.11);
             } else {
-                cr.set_source_rgba(1.0, 1.0, 1.0, 0.92);
+                // macOS usa gris translúcido rgba(0,0,0,0.075):
+                // En fondo blanco (255) genera exactamente (236, 236, 236) [#ECECEC]
+                // En fondo de tarjeta (247) genera exactamente (228, 228, 228) [#E4E4E4]
+                cr.set_source_rgba(0.0, 0.0, 0.0, 0.075);
             }
             let _ = cr.fill_preserve();
             if dark {
-                cr.set_source_rgba(1.0, 1.0, 1.0, 0.16);
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.14);
+            } else if active || hovered {
+                cr.set_source_rgba(0.0, 0.0, 0.0, 0.09);
             } else {
-                cr.set_source_rgba(0.0, 0.0, 0.0, 0.14);
+                cr.set_source_rgba(0.0, 0.0, 0.0, 0.065);
             }
             cr.set_line_width(1.0);
             let _ = cr.stroke();
@@ -197,11 +203,21 @@ fn make_squircle_button(label: &str, primary: bool, tooltip: Option<&str>) -> (O
     (overlay, btn)
 }
 
-/// Envuelve botones compactos (`⋯`, `?`, recargar) con un Squircle redondo.
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum RoundControlStyle {
+    /// Botón redondo sólido estilo macOS (ej. botón '?' con relleno gris #ECECEC / rgba(0,0,0,0.075))
+    SolidButton,
+    /// Botón circular con contorno (ej. botón '⋯' de fila en macOS: borde circular sutil y fondo al pasar el cursor)
+    CircleOutline,
+    /// Botón con fondo transparente en reposo que se resalta solo al pasar el cursor (ej. botón '🔄' de refrescar)
+    SubtleHover,
+}
+
+/// Envuelve botones compactos (`⋯`, `?`, recargar) con un Squircle redondo con los estilos muestreados de macOS.
 fn wrap_squircle_round_control<W: gtk4::prelude::IsA<gtk4::Widget>>(
     widget: &W,
     size: i32,
-    always_fill: bool,
+    style: RoundControlStyle,
 ) -> Overlay {
     let w_ref = widget.as_ref();
     let overlay = Overlay::builder()
@@ -229,38 +245,79 @@ fn wrap_squircle_round_control<W: gtk4::prelude::IsA<gtk4::Widget>>(
             .unwrap_or(StateFlags::empty());
         let hovered = flags.contains(StateFlags::PRELIGHT);
         let active = flags.contains(StateFlags::ACTIVE);
-        if !always_fill && !hovered && !active {
-            return;
-        }
         let dark = libadwaita::StyleManager::default().is_dark();
         let radius = (width.min(height) - 1.0) * 0.48;
 
         let _ = cr.save();
         cr.translate(0.5, 0.5);
         crate::squircle_path(cr, width - 1.0, height - 1.0, radius);
-        if dark {
-            if active {
-                cr.set_source_rgba(1.0, 1.0, 1.0, 0.22);
-            } else if hovered {
-                cr.set_source_rgba(1.0, 1.0, 1.0, 0.16);
-            } else {
-                cr.set_source_rgba(1.0, 1.0, 1.0, 0.10);
+
+        match style {
+            RoundControlStyle::SolidButton => {
+                // Estilo botón '?' de macOS: fondo gris (236, 236, 236) idéntico a Avanzado...
+                if dark {
+                    if active {
+                        cr.set_source_rgba(1.0, 1.0, 1.0, 0.22);
+                    } else if hovered {
+                        cr.set_source_rgba(1.0, 1.0, 1.0, 0.16);
+                    } else {
+                        cr.set_source_rgba(1.0, 1.0, 1.0, 0.10);
+                    }
+                } else if active {
+                    cr.set_source_rgba(0.0, 0.0, 0.0, 0.16);
+                } else if hovered {
+                    cr.set_source_rgba(0.0, 0.0, 0.0, 0.11);
+                } else {
+                    cr.set_source_rgba(0.0, 0.0, 0.0, 0.075);
+                }
+                let _ = cr.fill_preserve();
+                if dark {
+                    cr.set_source_rgba(1.0, 1.0, 1.0, 0.14);
+                } else if active || hovered {
+                    cr.set_source_rgba(0.0, 0.0, 0.0, 0.09);
+                } else {
+                    cr.set_source_rgba(0.0, 0.0, 0.0, 0.065);
+                }
+                cr.set_line_width(1.0);
+                let _ = cr.stroke();
             }
-        } else if active {
-            cr.set_source_rgba(0.0, 0.0, 0.0, 0.14);
-        } else if hovered {
-            cr.set_source_rgba(0.0, 0.0, 0.0, 0.09);
-        } else {
-            cr.set_source_rgba(0.0, 0.0, 0.0, 0.055);
+            RoundControlStyle::CircleOutline => {
+                // Estilo botón '⋯' de macOS: contorno circular visible en reposo
+                if hovered || active {
+                    if dark {
+                        cr.set_source_rgba(1.0, 1.0, 1.0, if active { 0.20 } else { 0.14 });
+                    } else {
+                        cr.set_source_rgba(0.0, 0.0, 0.0, if active { 0.14 } else { 0.08 });
+                    }
+                    let _ = cr.fill_preserve();
+                }
+                if dark {
+                    cr.set_source_rgba(1.0, 1.0, 1.0, if active { 0.30 } else { 0.22 });
+                } else {
+                    cr.set_source_rgba(0.0, 0.0, 0.0, if active { 0.26 } else { 0.18 });
+                }
+                cr.set_line_width(1.0);
+                let _ = cr.stroke();
+            }
+            RoundControlStyle::SubtleHover => {
+                // Estilo botón '🔄': transparente en reposo, resaltado al interactuar
+                if hovered || active {
+                    if dark {
+                        cr.set_source_rgba(1.0, 1.0, 1.0, if active { 0.20 } else { 0.14 });
+                    } else {
+                        cr.set_source_rgba(0.0, 0.0, 0.0, if active { 0.14 } else { 0.075 });
+                    }
+                    let _ = cr.fill_preserve();
+                    if dark {
+                        cr.set_source_rgba(1.0, 1.0, 1.0, 0.16);
+                    } else {
+                        cr.set_source_rgba(0.0, 0.0, 0.0, 0.09);
+                    }
+                    cr.set_line_width(1.0);
+                    let _ = cr.stroke();
+                }
+            }
         }
-        let _ = cr.fill_preserve();
-        if dark {
-            cr.set_source_rgba(1.0, 1.0, 1.0, 0.13);
-        } else {
-            cr.set_source_rgba(0.0, 0.0, 0.0, 0.08);
-        }
-        cr.set_line_width(1.0);
-        let _ = cr.stroke();
         let _ = cr.restore();
     });
 
@@ -610,7 +667,7 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .has_frame(false)
         .tooltip_text("Buscar redes cercanas nuevamente")
         .build();
-    let rescan_wrap = wrap_squircle_round_control(&rescan_btn, 24, false);
+    let rescan_wrap = wrap_squircle_round_control(&rescan_btn, 24, RoundControlStyle::SubtleHover);
     others_hdr.append(&others_title);
     others_hdr.append(&scan_spinner);
     others_hdr.append(&rescan_wrap);
@@ -698,7 +755,7 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .always_show_arrow(false)
         .tooltip_text("Ayuda de Wi-Fi")
         .build();
-    let help_wrap = wrap_squircle_round_control(&help_btn, 26, true);
+    let help_wrap = wrap_squircle_round_control(&help_btn, 26, RoundControlStyle::SolidButton);
 
     footer_actions.append(&advanced_wrap);
     footer_actions.append(&help_wrap);
@@ -1189,7 +1246,7 @@ fn populate_wifi_list_card(
             .valign(Align::Center)
             .tooltip_text("Opciones de red")
             .build();
-        let more_wrap = wrap_squircle_round_control(&more_btn, 22, true);
+        let more_wrap = wrap_squircle_round_control(&more_btn, 22, RoundControlStyle::CircleOutline);
         right_icons.append(&more_wrap);
 
         // Acción al pulsar la fila

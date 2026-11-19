@@ -695,7 +695,11 @@ button.wifi-squircle-btn-primary {
     min-height: 24px;
     font-size: 12.5px;
     font-weight: 500;
-    color: @window_fg_color;
+    color: #232323;
+}
+
+:root.dark button.wifi-squircle-btn {
+    color: #f3f3f3;
 }
 
 button.wifi-squircle-btn-primary {
@@ -712,7 +716,12 @@ menubutton.wifi-more-btn > button {
     min-width: 22px;
     min-height: 22px;
     padding: 0px;
-    color: alpha(currentColor, 0.72);
+    color: rgba(35, 35, 35, 0.72);
+}
+
+:root.dark .wifi-more-btn,
+:root.dark menubutton.wifi-more-btn > button {
+    color: rgba(255, 255, 255, 0.75);
 }
 
 .wifi-help-btn,
@@ -724,9 +733,14 @@ menubutton.wifi-help-btn > button {
     min-width: 26px;
     min-height: 26px;
     padding: 0px;
-    font-size: 12.5px;
-    font-weight: 700;
-    color: alpha(currentColor, 0.78);
+    font-size: 13px;
+    font-weight: 600;
+    color: #232323;
+}
+
+:root.dark .wifi-help-btn,
+:root.dark menubutton.wifi-help-btn > button {
+    color: #f3f3f3;
 }
 
 .wifi-pref-row {
