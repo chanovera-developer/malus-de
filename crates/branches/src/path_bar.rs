@@ -1,5 +1,8 @@
+use gtk4::gdk;
 use gtk4::prelude::*;
-use gtk4::{Align, Box as GtkBox, Button, Image, Label, Orientation, PolicyType, ScrolledWindow};
+use gtk4::{
+    Align, Box as GtkBox, Button, DropTarget, Image, Label, Orientation, PolicyType, ScrolledWindow,
+};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -102,6 +105,68 @@ impl PathBar {
             btn.connect_clicked(move |_| {
                 cb(target.clone());
             });
+
+            // Permitir arrastrar archivos/carpetas hacia cualquier carpeta padre de la barra de ruta
+            let drop_target = DropTarget::new(
+                gdk::FileList::static_type(),
+                gdk::DragAction::MOVE | gdk::DragAction::COPY,
+            );
+            let btn_enter = btn.clone();
+            drop_target.connect_enter(move |_, _, _| {
+                btn_enter.add_css_class("folder-drop-hover");
+                gdk::DragAction::MOVE
+            });
+            drop_target.connect_motion(move |_, _, _| gdk::DragAction::MOVE);
+            let btn_leave = btn.clone();
+            drop_target.connect_leave(move |_| {
+                btn_leave.remove_css_class("folder-drop-hover");
+            });
+            let btn_drop = btn.clone();
+            let dest_dir = ancestor.clone();
+            let nav_drop = self.on_navigate.clone();
+            drop_target.connect_drop(move |drop, value, _, _| {
+                btn_drop.remove_css_class("folder-drop-hover");
+                if let Ok(file_list) = value.get::<gdk::FileList>() {
+                    let paths: Vec<PathBuf> = file_list
+                        .files()
+                        .into_iter()
+                        .filter_map(|f| f.path())
+                        .filter(|src| {
+                            src != &dest_dir
+                                && src.parent() != Some(dest_dir.as_path())
+                                && !(src.is_dir() && dest_dir.starts_with(src))
+                        })
+                        .collect();
+                    if paths.is_empty() {
+                        return false;
+                    }
+                    let is_copy = drop
+                        .current_drop()
+                        .is_some_and(|d| d.actions() == gdk::DragAction::COPY);
+                    let action_name = if is_copy {
+                        "win.copy_paths_to"
+                    } else {
+                        "win.move_paths_to"
+                    };
+                    let dest_str = dest_dir.to_string_lossy().to_string();
+                    let path_strs: Vec<String> = paths
+                        .iter()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .collect();
+                    if btn_drop
+                        .activate_action(action_name, Some(&(dest_str, path_strs).to_variant()))
+                        .is_ok()
+                    {
+                        return true;
+                    }
+                    if crate::operations::move_paths_into_folder(&paths, &dest_dir) {
+                        nav_drop(dest_dir.clone());
+                        return true;
+                    }
+                }
+                false
+            });
+            btn.add_controller(drop_target);
 
             self.hbox.append(&btn);
         }

@@ -10,7 +10,6 @@ pub enum ViewMode {
     Gallery,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortBy {
     Name,
@@ -19,11 +18,46 @@ pub enum SortBy {
     Kind,
 }
 
-#[allow(dead_code)]
+impl SortBy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SortBy::Name => "name",
+            SortBy::DateModified => "date",
+            SortBy::Size => "size",
+            SortBy::Kind => "kind",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "date" => SortBy::DateModified,
+            "size" => SortBy::Size,
+            "kind" => SortBy::Kind,
+            _ => SortBy::Name,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortOrder {
     Ascending,
     Descending,
+}
+
+impl SortOrder {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SortOrder::Ascending => "asc",
+            SortOrder::Descending => "desc",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "desc" => SortOrder::Descending,
+            _ => SortOrder::Ascending,
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -111,5 +145,53 @@ impl AppState {
             }
         }
         None
+    }
+
+    pub fn go_back_steps(&mut self, steps: usize) -> Option<PathBuf> {
+        if steps == 0 || steps > self.history_back.len() {
+            return None;
+        }
+        let mut last = None;
+        for _ in 0..steps {
+            last = self.go_back();
+        }
+        last
+    }
+
+    pub fn go_forward_steps(&mut self, steps: usize) -> Option<PathBuf> {
+        if steps == 0 || steps > self.history_forward.len() {
+            return None;
+        }
+        let mut last = None;
+        for _ in 0..steps {
+            last = self.go_forward();
+        }
+        last
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_steps_and_sort_conversions_work() {
+        assert_eq!(SortBy::from_str("date"), SortBy::DateModified);
+        assert_eq!(SortBy::from_str("size"), SortBy::Size);
+        assert_eq!(SortBy::from_str("kind"), SortBy::Kind);
+        assert_eq!(SortBy::from_str("other"), SortBy::Name);
+        assert_eq!(SortOrder::from_str("desc"), SortOrder::Descending);
+        assert_eq!(SortOrder::from_str("asc"), SortOrder::Ascending);
+
+        let mut st = AppState::new(PathBuf::from("/a"));
+        st.navigate_to(PathBuf::from("/b"));
+        st.navigate_to(PathBuf::from("/c"));
+        st.navigate_to(PathBuf::from("/d"));
+
+        assert_eq!(st.go_back_steps(2), Some(PathBuf::from("/b")));
+        assert_eq!(st.current_path, PathBuf::from("/b"));
+        assert_eq!(st.history_forward, vec![PathBuf::from("/d"), PathBuf::from("/c")]);
+        assert_eq!(st.go_forward_steps(2), Some(PathBuf::from("/d")));
+        assert_eq!(st.current_path, PathBuf::from("/d"));
     }
 }

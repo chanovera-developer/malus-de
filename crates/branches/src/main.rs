@@ -2,6 +2,7 @@ mod app_window;
 mod db;
 mod folder_pane;
 mod fs_backend;
+mod info_window;
 mod job_ui;
 mod jobs;
 mod operations;

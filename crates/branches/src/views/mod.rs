@@ -979,6 +979,23 @@ pub(super) fn show_item_context_menu(
     }
     vbox.append(&copy_btn);
 
+    let info_menu_btn = make_context_menu_button(if es {
+        "Obtener información"
+    } else {
+        "Get Info"
+    });
+    {
+        let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
+        let target_str = path.to_string_lossy().to_string();
+        let pop = popover.clone();
+        info_menu_btn.connect_clicked(move |_| {
+            pop.popdown();
+            let _ = anchor_widget
+                .activate_action("win.get_info_item", Some(&target_str.to_variant()));
+        });
+    }
+    vbox.append(&info_menu_btn);
+
     if !is_inside_trash(path) && path != std::path::Path::new("/") && path.parent().is_some() {
         let dup_btn = make_context_menu_button(if es { "Duplicar" } else { "Duplicate" });
         {

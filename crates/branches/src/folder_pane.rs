@@ -284,6 +284,44 @@ impl FolderPane {
         self.step_history(next)
     }
 
+    pub fn go_back_steps(&self, steps: usize) -> bool {
+        let target = self.state.borrow_mut().go_back_steps(steps);
+        self.step_history(target)
+    }
+
+    pub fn go_forward_steps(&self, steps: usize) -> bool {
+        let target = self.state.borrow_mut().go_forward_steps(steps);
+        self.step_history(target)
+    }
+
+    pub fn history_back_list(&self) -> Vec<PathBuf> {
+        self.state.borrow().history_back.iter().rev().cloned().collect()
+    }
+
+    pub fn history_forward_list(&self) -> Vec<PathBuf> {
+        self.state
+            .borrow()
+            .history_forward
+            .iter()
+            .rev()
+            .cloned()
+            .collect()
+    }
+
+    pub fn sort_settings(&self) -> (crate::state::SortBy, crate::state::SortOrder) {
+        let s = self.state.borrow();
+        (s.sort_by, s.sort_order)
+    }
+
+    pub fn set_sort(&self, sort_by: crate::state::SortBy, sort_order: crate::state::SortOrder) {
+        {
+            let mut s = self.state.borrow_mut();
+            s.sort_by = sort_by;
+            s.sort_order = sort_order;
+        }
+        self.reload();
+    }
+
     pub fn go_up(&self) -> bool {
         let parent = self.state.borrow_mut().go_up();
         self.step_history(parent)

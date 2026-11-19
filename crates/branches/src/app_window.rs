@@ -53,6 +53,8 @@ pub struct BranchesWindow {
     btn_gallery_view: ToggleButton,
     quick_look: Rc<QuickLook>,
     job_ui: Rc<JobUiController>,
+    sort_by_action: gio::SimpleAction,
+    sort_order_action: gio::SimpleAction,
     search_entry: SearchEntry,
     search_toggle_btn: ToggleButton,
     syncing_ui: Rc<Cell<bool>>,
@@ -200,6 +202,57 @@ impl BranchesWindow {
         view_box.append(&btn_col_view);
         view_box.append(&btn_gallery_view);
 
+        // 3b. Cápsula de ordenación (Ordenar por / Dirección)
+        let es_ui = malus_de_common::is_spanish_locale();
+        let sort_pill_box = GtkBox::new(Orientation::Horizontal, 0);
+        sort_pill_box.add_css_class("branches-toolbar-pill");
+        sort_pill_box.add_css_class("branches-toolbar-solo-pill");
+        sort_pill_box.set_valign(Align::Center);
+
+        let sort_menu_btn = MenuButton::builder()
+            .icon_name("view-sort-ascending-symbolic")
+            .tooltip_text(if es_ui {
+                "Ordenar elementos"
+            } else {
+                "Sort items"
+            })
+            .valign(Align::Center)
+            .css_classes(["branches-tool-btn"])
+            .build();
+
+        let sort_model = gio::Menu::new();
+        let sort_by_sec = gio::Menu::new();
+        for (id, lbl_es, lbl_en) in [
+            ("name", "Nombre", "Name"),
+            ("date", "Fecha de modificación", "Date Modified"),
+            ("size", "Tamaño", "Size"),
+            ("kind", "Clase", "Kind"),
+        ] {
+            let item = gio::MenuItem::new(Some(if es_ui { lbl_es } else { lbl_en }), None);
+            item.set_action_and_target_value(Some("win.sort_by"), Some(&id.to_variant()));
+            sort_by_sec.append_item(&item);
+        }
+        sort_model.append_section(
+            Some(if es_ui { "Ordenar por" } else { "Sort By" }),
+            &sort_by_sec,
+        );
+
+        let sort_dir_sec = gio::Menu::new();
+        for (id, lbl_es, lbl_en) in [
+            ("asc", "Ascendente", "Ascending"),
+            ("desc", "Descendente", "Descending"),
+        ] {
+            let item = gio::MenuItem::new(Some(if es_ui { lbl_es } else { lbl_en }), None);
+            item.set_action_and_target_value(Some("win.sort_order"), Some(&id.to_variant()));
+            sort_dir_sec.append_item(&item);
+        }
+        sort_model.append_section(
+            Some(if es_ui { "Dirección" } else { "Direction" }),
+            &sort_dir_sec,
+        );
+        sort_menu_btn.set_menu_model(Some(&sort_model));
+        sort_pill_box.append(&sort_menu_btn);
+
         // 4. Botón de división de pantalla (Split View Dual Pane) en su propia cápsula
         let split_pill_box = GtkBox::new(Orientation::Horizontal, 0);
         split_pill_box.add_css_class("branches-toolbar-pill");
@@ -235,10 +288,14 @@ impl BranchesWindow {
         share_model.append(Some("Enviar por correo electrónico"), Some("win.share_email"));
         share_menu_btn.set_menu_model(Some(&share_model));
 
-        // 6. Botón de Información / Quick Look (Inspector "i")
+        // 6. Botón de Información (Inspector "Obtener información")
         let info_btn = Button::builder()
             .icon_name("dialog-information-symbolic")
-            .tooltip_text("Obtener información / Vista Rápida (Espacio / Ctrl+I)")
+            .tooltip_text(if es_ui {
+                "Obtener información (Ctrl+I)"
+            } else {
+                "Get Info (Ctrl+I)"
+            })
             .valign(Align::Center)
             .css_classes(["branches-tool-btn"])
             .build();
@@ -339,6 +396,7 @@ impl BranchesWindow {
             .halign(Align::End)
             .build();
         right_header_box.append(&view_box);
+        right_header_box.append(&sort_pill_box);
         right_header_box.append(&split_pill_box);
         right_header_box.append(&actions_pill_box);
         right_header_box.append(job_ui.pill_widget());
@@ -587,6 +645,17 @@ impl BranchesWindow {
             .monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
             .ok();
 
+        let sort_by_action = gio::SimpleAction::new_stateful(
+            "sort_by",
+            Some(glib::VariantTy::STRING),
+            &"name".to_variant(),
+        );
+        let sort_order_action = gio::SimpleAction::new_stateful(
+            "sort_order",
+            Some(glib::VariantTy::STRING),
+            &"asc".to_variant(),
+        );
+
         let branches_window = Rc::new(Self {
             window,
             sidebar,
@@ -610,6 +679,8 @@ impl BranchesWindow {
             btn_gallery_view,
             quick_look,
             job_ui,
+            sort_by_action,
+            sort_order_action,
             search_entry: search_entry.clone(),
             search_toggle_btn,
             syncing_ui: Rc::new(Cell::new(false)),
@@ -634,16 +705,18 @@ impl BranchesWindow {
             bw_new_tab.open_new_tab_matching_active();
         });
 
-        // Conectar botones de navegación
+        // Conectar botones de navegación (clic + historial con pulsación larga o clic derecho)
         let bw_back = branches_window.clone();
         branches_window.back_btn.connect_clicked(move |_| {
             bw_back.active_pane().go_back();
         });
+        Self::attach_history_menu(&branches_window, &branches_window.back_btn, true);
 
         let bw_fwd = branches_window.clone();
         branches_window.forward_btn.connect_clicked(move |_| {
             bw_fwd.active_pane().go_forward();
         });
+        Self::attach_history_menu(&branches_window, &branches_window.forward_btn, false);
 
         // Conectar conmutadores de vista
         let bw_v1 = branches_window.clone();
@@ -680,10 +753,10 @@ impl BranchesWindow {
             bw_split.toggle_split_view();
         });
 
-        // Conectar botón de Información / Quick Look
+        // Conectar botón de Información (Obtener Información / Get Info)
         let bw_info = branches_window.clone();
         info_btn.connect_clicked(move |_| {
-            bw_info.toggle_quick_look();
+            bw_info.open_get_info(None);
         });
 
         // Conectar campo y botón de búsqueda
@@ -1178,6 +1251,11 @@ impl BranchesWindow {
             "gallery" => self.btn_gallery_view.set_active(true),
             _ => self.btn_icon_view.set_active(true),
         }
+        let (sort_by, sort_order) = pane.sort_settings();
+        self.sort_by_action
+            .set_state(&sort_by.as_str().to_variant());
+        self.sort_order_action
+            .set_state(&sort_order.as_str().to_variant());
         let query = pane.search_query();
         self.search_entry.set_text(&query);
         self.search_toggle_btn.set_active(!query.is_empty());
@@ -1247,6 +1325,96 @@ impl BranchesWindow {
     pub fn toggle_quick_look(&self) {
         let item = self.active_pane().get_selected_item();
         self.quick_look.toggle(&self.window, item);
+    }
+
+    pub fn open_get_info(&self, explicit_path: Option<PathBuf>) {
+        let target = explicit_path.or_else(|| {
+            self.active_pane()
+                .get_selected_item()
+                .map(|i| i.path)
+                .or_else(|| Some(self.active_pane().current_path()))
+        });
+        let Some(path) = target else { return };
+        let bw = self.clone_ref();
+        crate::info_window::show_get_info_window(
+            &self.window,
+            path,
+            Rc::new(move || {
+                bw.reload_all_panes();
+            }),
+        );
+    }
+
+    fn attach_history_menu(bw: &Rc<Self>, btn: &Button, is_back: bool) {
+        let long_press = gtk4::GestureLongPress::new();
+        let bw_lp = bw.clone();
+        let btn_lp = btn.clone();
+        long_press.connect_pressed(move |_, _, _| {
+            bw_lp.show_history_popover(&btn_lp, is_back);
+        });
+        btn.add_controller(long_press);
+
+        let right_click = GestureClick::new();
+        right_click.set_button(gdk::BUTTON_SECONDARY);
+        let bw_rc = bw.clone();
+        let btn_rc = btn.clone();
+        right_click.connect_pressed(move |g, _, _, _| {
+            g.set_state(gtk4::EventSequenceState::Claimed);
+            bw_rc.show_history_popover(&btn_rc, is_back);
+        });
+        btn.add_controller(right_click);
+    }
+
+    fn show_history_popover(&self, anchor: &Button, is_back: bool) {
+        let entries = if is_back {
+            self.active_pane().history_back_list()
+        } else {
+            self.active_pane().history_forward_list()
+        };
+        if entries.is_empty() {
+            return;
+        }
+        let popover = gtk4::Popover::builder()
+            .has_arrow(true)
+            .css_classes(["malus-popover-menu"])
+            .build();
+        popover.set_parent(anchor);
+        popover.connect_closed(|p| p.unparent());
+
+        let vbox = GtkBox::new(Orientation::Vertical, 2);
+        vbox.set_margin_top(4);
+        vbox.set_margin_bottom(4);
+        vbox.set_margin_start(4);
+        vbox.set_margin_end(4);
+
+        for (idx, path) in entries.into_iter().take(12).enumerate() {
+            let label = Self::folder_display_title(&path);
+            let item_btn = Button::builder()
+                .label(&label)
+                .has_frame(false)
+                .css_classes(["popover-menu-item"])
+                .build();
+            if let Some(child) = item_btn.child() {
+                if let Some(lbl) = child.downcast_ref::<Label>() {
+                    lbl.set_xalign(0.0);
+                }
+            }
+            let bw = self.clone_ref();
+            let pop = popover.clone();
+            let steps = idx + 1;
+            item_btn.connect_clicked(move |_| {
+                pop.popdown();
+                if is_back {
+                    bw.active_pane().go_back_steps(steps);
+                } else {
+                    bw.active_pane().go_forward_steps(steps);
+                }
+            });
+            vbox.append(&item_btn);
+        }
+
+        popover.set_child(Some(&vbox));
+        popover.popup();
     }
 
     pub fn show_recents(&self) {
@@ -1913,6 +2081,49 @@ impl BranchesWindow {
         });
         actions.add_action(&act_trash_item);
 
+        let bw_get_info = self.clone_ref();
+        let act_get_info = gio::SimpleAction::new("get_info", None);
+        act_get_info.connect_activate(move |_, _| {
+            bw_get_info.open_get_info(None);
+        });
+        actions.add_action(&act_get_info);
+
+        let bw_get_info_item = self.clone_ref();
+        let act_get_info_item =
+            gio::SimpleAction::new("get_info_item", Some(glib::VariantTy::STRING));
+        act_get_info_item.connect_activate(move |_, param| {
+            if let Some(target) = param.and_then(|v| v.str()) {
+                bw_get_info_item.open_get_info(Some(PathBuf::from(target)));
+            }
+        });
+        actions.add_action(&act_get_info_item);
+
+        {
+            let bw_sort = self.clone_ref();
+            let act_sb = self.sort_by_action.clone();
+            self.sort_by_action.connect_activate(move |_, param| {
+                if let Some(val) = param.and_then(|v| v.str()) {
+                    act_sb.set_state(&val.to_variant());
+                    let pane = bw_sort.active_pane();
+                    let (_, order) = pane.sort_settings();
+                    pane.set_sort(crate::state::SortBy::from_str(val), order);
+                }
+            });
+            actions.add_action(&self.sort_by_action);
+
+            let bw_dir = self.clone_ref();
+            let act_so = self.sort_order_action.clone();
+            self.sort_order_action.connect_activate(move |_, param| {
+                if let Some(val) = param.and_then(|v| v.str()) {
+                    act_so.set_state(&val.to_variant());
+                    let pane = bw_dir.active_pane();
+                    let (by, _) = pane.sort_settings();
+                    pane.set_sort(by, crate::state::SortOrder::from_str(val));
+                }
+            });
+            actions.add_action(&self.sort_order_action);
+        }
+
         let bw_restore = self.clone_ref();
         let act_restore = gio::SimpleAction::new("restore_trash", None);
         act_restore.connect_activate(move |_, _| {
@@ -2104,8 +2315,8 @@ impl BranchesWindow {
                 return glib::Propagation::Stop;
             }
 
-            if is_ctrl && (keyval == gdk::Key::i || keyval == gdk::Key::I) {
-                bw.toggle_quick_look();
+            if (is_ctrl || is_command) && (keyval == gdk::Key::i || keyval == gdk::Key::I) {
+                bw.open_get_info(None);
                 return glib::Propagation::Stop;
             }
 
@@ -2301,6 +2512,8 @@ impl BranchesWindow {
             btn_gallery_view: self.btn_gallery_view.clone(),
             quick_look: self.quick_look.clone(),
             job_ui: self.job_ui.clone(),
+            sort_by_action: self.sort_by_action.clone(),
+            sort_order_action: self.sort_order_action.clone(),
             search_entry: self.search_entry.clone(),
             search_toggle_btn: self.search_toggle_btn.clone(),
             syncing_ui: self.syncing_ui.clone(),
