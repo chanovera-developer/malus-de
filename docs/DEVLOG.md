@@ -4,6 +4,29 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-18] — Modernización de Ajustes (`FileDialog`, Buscador Squircle, Sidebar 212 px y Glifos del Sistema)
+
+### 1. Eliminación de Warnings en `crates/settings` (`FileChooserNative` -> `FileDialog`)
+- **Migración GTK 4.10+ ([`main.rs`](../crates/settings/src/main.rs)):** Sustituidos los 5 *warnings* de deprecación de `gtk4::FileChooserNative` en el selector de fondo de pantalla por `gtk4::FileDialog::builder()` asíncrono (`chooser.open`), añadiendo `build_wallpaper_file_filter()` (`image/jpeg`, `image/png`, `image/webp`, `image/svg+xml`) y `wallpaper_chooser_initial_folder()` (`~/Imágenes/Wallpapers` / `~/Pictures/Wallpapers`).
+
+### 2. Buscador Lateral Squircle (`<= 36 px`) y Consistencia Visual con Branches (`212 px`)
+- **Filtro squircle compacto ([`main.rs`](../crates/settings/src/main.rs), [`macos-settings.css`](../crates/settings/src/styles/macos-settings.css)):**
+  - Implementado `create_squircle_search_shell` (`Overlay` + `DrawingArea` en Cairo con superelipse $n = 4.2$ y `SIDEBAR_SEARCH_SQUIRCLE_RADIUS = 17.0` para igualar la curvatura visual ~`2.6 px` de los botones `border-radius: 9px`), con altura fija de `34 px` (`SIDEBAR_SEARCH_MAX_HEIGHT = 36`), reactivo a foco (`EventControllerFocus`) y modo claro/oscuro (`libadwaita::StyleManager`), y `.sidebar-search` unificado a `border-radius: 9px`.
+- **Barra lateral alineada con Branches:**
+  - Sustituido `OverlaySplitView` (`220–280 px`) por `gtk4::Paned` acotado a `SETTINGS_SIDEBAR_WIDTH = 212` (coincidente con `MAX_SIDEBAR_WIDTH = 212` de Branches y la región de desenfoque acrílico del compositor para `dev.malus.Settings`), junto con `.settings-content-pane` opaco (`@view_bg_color`).
+  - Igualados translucidez, bordes y estados de `.macos-sidebar` (`alpha(@window_bg_color, 0.72)`, `border-right: 1px solid alpha(@borders, 0.28)`) y `.sidebar-btn` / `.sidebar-btn-active` (`alpha(@window_fg_color, 0.11)`) con [`macos-branches.css`](../crates/branches/src/styles/macos-branches.css).
+- **Altura fija y alineación izquierda de secciones (`build_sidebar_nav_button`):** Eliminado el `vexpand`/`hexpand` que se propagaba desde los iconos internos (y hacía estirarse/centrarse las filas al redimensionar la ventana), fijando `SIDEBAR_ROW_HEIGHT = 32`, `valign(Align::Start)` y contenido alineado estrictamente a la izquierda.
+
+### 3. Reemplazo de Emojis por Glifos del Sistema (`-symbolic`)
+- Retirados todos los emojis de la interfaz en [`crates/settings/src/main.rs`](../crates/settings/src/main.rs) (barra lateral sin cajas de fondo usando iconos `16 px` `.settings-sidebar-icon`, tarjetas de tema con `make_system_glyph_badge`, selector Claro/Oscuro con `weather-clear-symbolic` / `weather-clear-night-symbolic`, *Acerca de este equipo*, Dock, Spotlight, Pantallas, Teclado y Fondo de pantalla).
+
+### 4. Validación
+- `cargo check --offline -p malus-de-settings --all-targets`: **0 warnings**, código de salida `0`.
+- `cargo test --offline -p malus-de-settings` sobre sesión Wayland activa: **2 passed; 0 failed** (`wallpaper_chooser_initial_folder_prefers_wallpapers_subdirs` y `gtk_ui_smoke_checks`).
+- `cargo build --release --offline -p malus-de-settings`: compilación `--release` correcta (exit `0`).
+
+---
+
 ## [2026-11-18] — Protección del Socket IPC Vivo ante `cargo test` y Restauración desde el Dock
 
 ### 1. Preservación de `malus-de-ipc.sock` en Pruebas Unitarias (`crates/compositor`, `crates/dock`)
