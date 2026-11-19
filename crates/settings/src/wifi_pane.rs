@@ -54,12 +54,18 @@ fn make_squircle_wifi_badge(size: i32, icon_px: i32, radius: f64) -> Overlay {
 }
 
 /// Envuelve un contenedor tipo tarjeta con fondo gris claro y borde Squircle en Cairo.
+/// El radio por defecto es 10.0px (idéntico al radio de las secciones y filas de la barra lateral).
 fn wrap_squircle_card(inner: &GtkBox, radius: f64) -> Overlay {
-    let overlay = Overlay::new();
+    let overlay = Overlay::builder()
+        .hexpand(true)
+        .vexpand(false)
+        .valign(Align::Start)
+        .build();
     let bg = DrawingArea::new();
     bg.set_can_target(false);
     bg.set_hexpand(true);
-    bg.set_vexpand(true);
+    bg.set_vexpand(false);
+    bg.set_valign(Align::Fill);
     bg.set_draw_func(move |_, cr, w, h| {
         let width = w as f64;
         let height = h as f64;
@@ -93,6 +99,8 @@ fn wrap_squircle_card(inner: &GtkBox, radius: f64) -> Overlay {
         }
     });
 
+    inner.set_vexpand(false);
+    inner.set_valign(Align::Start);
     overlay.set_child(Some(&bg));
     overlay.add_overlay(inner);
     overlay.set_measure_overlay(inner, true);
@@ -464,6 +472,8 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .orientation(Orientation::Vertical)
         .spacing(12)
         .css_classes(["wifi-content-pane"])
+        .valign(Align::Start)
+        .vexpand(false)
         .build();
 
     let status_banner = Label::builder()
@@ -471,6 +481,8 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .xalign(0.0)
         .wrap(true)
         .visible(false)
+        .valign(Align::Start)
+        .vexpand(false)
         .build();
 
     // =========================================================================
@@ -480,6 +492,8 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .orientation(Orientation::Vertical)
         .spacing(0)
         .css_classes(["wifi-card-compact"])
+        .valign(Align::Start)
+        .vexpand(false)
         .build();
 
     let header_row = GtkBox::builder()
@@ -615,7 +629,7 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
     active_row.append(&active_right_box);
     top_card.append(&active_row);
 
-    pane.append(&wrap_squircle_card(&top_card, 12.0));
+    pane.append(&wrap_squircle_card(&top_card, 10.0));
     pane.append(&status_banner);
 
     // =========================================================================
@@ -624,19 +638,25 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
     let known_section_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(6)
+        .valign(Align::Start)
+        .vexpand(false)
         .build();
     let known_title = Label::builder()
         .label("Redes conocidas")
         .css_classes(["wifi-section-title"])
         .xalign(0.0)
+        .valign(Align::Start)
+        .vexpand(false)
         .build();
     let known_card = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(0)
         .css_classes(["wifi-card-compact"])
+        .valign(Align::Start)
+        .vexpand(false)
         .build();
     known_section_box.append(&known_title);
-    known_section_box.append(&wrap_squircle_card(&known_card, 12.0));
+    known_section_box.append(&wrap_squircle_card(&known_card, 10.0));
     pane.append(&known_section_box);
 
     // =========================================================================
@@ -645,6 +665,8 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
     let others_section_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(6)
+        .valign(Align::Start)
+        .vexpand(false)
         .build();
     let others_hdr = GtkBox::builder()
         .orientation(Orientation::Horizontal)
@@ -656,15 +678,18 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .css_classes(["wifi-section-title"])
         .hexpand(true)
         .xalign(0.0)
+        .valign(Align::Center)
         .build();
     let scan_spinner = Spinner::builder()
         .spinning(false)
         .visible(false)
+        .valign(Align::Center)
         .build();
     let rescan_btn = Button::builder()
         .icon_name("view-refresh-symbolic")
         .css_classes(["wifi-more-btn"])
         .has_frame(false)
+        .valign(Align::Center)
         .tooltip_text("Buscar redes cercanas nuevamente")
         .build();
     let rescan_wrap = wrap_squircle_round_control(&rescan_btn, 24, RoundControlStyle::SubtleHover);
@@ -676,10 +701,14 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .orientation(Orientation::Vertical)
         .spacing(0)
         .css_classes(["wifi-card-compact"])
+        .valign(Align::Start)
+        .vexpand(false)
         .build();
     let other_join_row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .halign(Align::End)
+        .valign(Align::Start)
+        .vexpand(false)
         .margin_top(2)
         .build();
     let (other_network_wrap, other_network_btn) = make_squircle_button(
@@ -690,7 +719,7 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
     other_join_row.append(&other_network_wrap);
 
     others_section_box.append(&others_hdr);
-    others_section_box.append(&wrap_squircle_card(&others_card, 12.0));
+    others_section_box.append(&wrap_squircle_card(&others_card, 10.0));
     others_section_box.append(&other_join_row);
     pane.append(&others_section_box);
 
@@ -702,6 +731,8 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .orientation(Orientation::Vertical)
         .spacing(0)
         .css_classes(["wifi-card-compact"])
+        .valign(Align::Start)
+        .vexpand(false)
         .build();
 
     let ask_join_row = build_preference_dropdown_row(
@@ -739,12 +770,14 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
     prefs_card.append(&ask_join_row.0);
     prefs_card.append(&prefs_sep);
     prefs_card.append(&ask_hotspot_row.0);
-    pane.append(&wrap_squircle_card(&prefs_card, 12.0));
+    pane.append(&wrap_squircle_card(&prefs_card, 10.0));
 
     let footer_actions = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(8)
         .halign(Align::End)
+        .valign(Align::Start)
+        .vexpand(false)
         .build();
 
     let (advanced_wrap, advanced_btn) = make_squircle_button("Avanzado...", false, None);
@@ -1742,7 +1775,7 @@ fn show_adapter_info_dialog(parent: &ApplicationWindow, snap: &WifiSnapshot) {
     for (k, v) in rows {
         rows_card.append(&detail_kv_row(k, &v));
     }
-    vbox.append(&wrap_squircle_card(&rows_card, 12.0));
+    vbox.append(&wrap_squircle_card(&rows_card, 10.0));
 
     let (ok_wrap, ok_btn) = make_squircle_button("Aceptar", true, None);
     ok_wrap.set_halign(Align::End);
@@ -1839,7 +1872,7 @@ fn show_network_details_dialog(
         }
     }
 
-    vbox.append(&wrap_squircle_card(&card, 12.0));
+    vbox.append(&wrap_squircle_card(&card, 10.0));
 
     if let Some(n) = net.filter(|n| n.known) {
         let auto_row = GtkBox::builder()
@@ -1955,7 +1988,7 @@ fn show_advanced_dialog(
             snap.details.ip4_dns.join(", ")
         },
     ));
-    vbox.append(&wrap_squircle_card(&hw_card, 12.0));
+    vbox.append(&wrap_squircle_card(&hw_card, 10.0));
 
     let known_lbl = Label::builder()
         .label("Perfiles Wi-Fi conocidos:")
@@ -2012,7 +2045,7 @@ fn show_advanced_dialog(
             profiles_card.append(&r);
         }
     }
-    vbox.append(&wrap_squircle_card(&profiles_card, 12.0));
+    vbox.append(&wrap_squircle_card(&profiles_card, 10.0));
 
     let (ok_wrap, ok_btn) = make_squircle_button("Aceptar", true, None);
     ok_wrap.set_halign(Align::End);
@@ -2398,7 +2431,7 @@ no:Red\\:ConDosPuntos:11\\:22\\:33\\:44\\:55\\:66:Infra:6:2437 MHz:130 Mbit/s:45
         assert_eq!(badge.height_request(), 34);
 
         let card_inner = GtkBox::new(Orientation::Vertical, 0);
-        let card_wrap = wrap_squircle_card(&card_inner, 12.0);
+        let card_wrap = wrap_squircle_card(&card_inner, 10.0);
         assert!(card_wrap.child().is_some());
 
         let (btn_wrap, btn) = make_squircle_button("Detalles...", false, None);

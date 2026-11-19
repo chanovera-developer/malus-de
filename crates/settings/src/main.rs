@@ -551,31 +551,40 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         .valign(Align::Center)
         .build();
 
+    // 1. Botones de navegación [ < | > ] agrupados en cápsula estilo Branches
     let nav_btn_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(4)
+        .spacing(0)
+        .css_classes(["branches-toolbar-pill", "branches-nav-group", "linked"])
         .valign(Align::Center)
         .build();
 
     let btn_back = Button::builder()
-        .label("‹")
-        .css_classes(["nav-chevron-btn"])
-        .tooltip_text("Atrás")
+        .icon_name("go-previous-symbolic")
+        .tooltip_text("Atrás (Alt+Izquierda)")
+        .css_classes(["branches-nav-btn"])
         .has_frame(false)
         .sensitive(false)
         .valign(Align::Center)
         .build();
 
+    let nav_divider = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .css_classes(["branches-pill-divider"])
+        .valign(Align::Center)
+        .build();
+
     let btn_forward = Button::builder()
-        .label("›")
-        .css_classes(["nav-chevron-btn"])
-        .tooltip_text("Adelante")
+        .icon_name("go-next-symbolic")
+        .tooltip_text("Adelante (Alt+Derecha)")
+        .css_classes(["branches-nav-btn"])
         .has_frame(false)
         .sensitive(false)
         .valign(Align::Center)
         .build();
 
     nav_btn_box.append(&btn_back);
+    nav_btn_box.append(&nav_divider);
     nav_btn_box.append(&btn_forward);
     header_toolbar.append(&nav_btn_box);
 
@@ -601,33 +610,31 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     content_area.append(&header_handle);
     content_area.append(&stack);
 
-    let stack_ref = stack.clone();
-    let btns_ref = Rc::new(sidebar_buttons.clone());
-    let ref_wall_c = refresh_wallpaper_pane.clone();
-    let title_ref_wall = active_pane_title.clone();
+    let goto_action: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let goto_action_c = goto_action.clone();
     let goto_wallpaper = Rc::new(move || {
-        for (id, btn) in btns_ref.iter() {
-            if id == "wallpaper" {
-                btn.add_css_class("sidebar-btn-active");
-            } else {
-                btn.remove_css_class("sidebar-btn-active");
-            }
+        if let Some(act) = goto_action_c.borrow().as_ref() {
+            act();
         }
-        ref_wall_c();
-        title_ref_wall.set_label("Fondo de pantalla");
-        stack_ref.set_visible_child_name("wallpaper");
     });
 
     let (appearance_pane, refresh_appearance_pane) = create_appearance_pane(&window, Some(goto_wallpaper));
     stack.add_named(&appearance_pane, Some("appearance"));
 
-    // Conectar navegación de la barra lateral
+    // Historial de navegación para botones atrás / adelante (estilo Branches)
+    let start_id = match initial_panel {
+        "wifi" | "wallpaper" | "keyboard" | "appearance" | "sound" | "about" | "dock" | "spotlight" | "displays" => initial_panel,
+        _ => "spotlight",
+    };
+
     let all_btns = Rc::new(sidebar_buttons.clone());
-    for (id, btn) in &sidebar_buttons {
-        let target_id = id.clone();
+    let nav_history: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(vec![start_id.to_string()]));
+    let nav_index: Rc<RefCell<usize>> = Rc::new(RefCell::new(0));
+
+    let select_panel = {
+        let btns = all_btns.clone();
         let stack_c = stack.clone();
-        let btns_c = all_btns.clone();
-        let title_lbl_c = active_pane_title.clone();
+        let title_lbl = active_pane_title.clone();
         let ref_wifi = refresh_wifi_pane.clone();
         let ref_disp = refresh_displays_pane.clone();
         let ref_wall = refresh_wallpaper_pane.clone();
@@ -635,75 +642,108 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         let ref_app = refresh_appearance_pane.clone();
         let ref_dock = refresh_dock_pane.clone();
         let ref_spot = refresh_spotlight_pane.clone();
+        let history_c = nav_history.clone();
+        let idx_c = nav_index.clone();
+        let btn_b_c = btn_back.clone();
+        let btn_f_c = btn_forward.clone();
 
-        let display_title = match id.as_str() {
-            "wifi" => "Wi-Fi",
-            "displays" => "Pantallas",
-            "wallpaper" => "Fondo de pantalla",
-            "keyboard" => "Teclado",
-            "appearance" => "Aspecto",
-            "dock" => "Escritorio y Dock",
-            "spotlight" => "Spotlight",
-            "sound" => "Sonido",
-            "about" => "General",
-            _ => "Ajustes",
-        }.to_string();
-
-        btn.connect_clicked(move |_| {
-            for (other_id, other_btn) in btns_c.iter() {
-                if other_id == &target_id {
-                    other_btn.add_css_class("sidebar-btn-active");
+        Rc::new(move |target: &str, push_history: bool| {
+            for (id, btn) in btns.iter() {
+                if id == target {
+                    btn.add_css_class("sidebar-btn-active");
                 } else {
-                    other_btn.remove_css_class("sidebar-btn-active");
+                    btn.remove_css_class("sidebar-btn-active");
                 }
             }
-            if target_id == "wifi" {
+            if target == "wifi" {
                 ref_wifi();
-            } else if target_id == "displays" {
+            } else if target == "displays" {
                 ref_disp();
-            } else if target_id == "wallpaper" {
+            } else if target == "wallpaper" {
                 ref_wall();
-            } else if target_id == "keyboard" {
+            } else if target == "keyboard" {
                 ref_kb();
-            } else if target_id == "appearance" {
+            } else if target == "appearance" {
                 ref_app();
-            } else if target_id == "dock" {
+            } else if target == "dock" {
                 ref_dock();
-            } else if target_id == "spotlight" {
+            } else if target == "spotlight" {
                 ref_spot();
             }
-            title_lbl_c.set_label(&display_title);
-            stack_c.set_visible_child_name(&target_id);
+            let display_title = match target {
+                "wifi" => "Wi-Fi",
+                "displays" => "Pantallas",
+                "wallpaper" => "Fondo de pantalla",
+                "keyboard" => "Teclado",
+                "appearance" => "Aspecto",
+                "dock" => "Escritorio y Dock",
+                "spotlight" => "Spotlight",
+                "sound" => "Sonido",
+                "about" => "General",
+                _ => "Ajustes",
+            };
+            title_lbl.set_label(display_title);
+            stack_c.set_visible_child_name(target);
+
+            if push_history {
+                let mut hist = history_c.borrow_mut();
+                let mut cur = idx_c.borrow_mut();
+                if hist.get(*cur).map(|s| s.as_str()) != Some(target) {
+                    hist.truncate(*cur + 1);
+                    hist.push(target.to_string());
+                    *cur = hist.len() - 1;
+                }
+            }
+            let cur = *idx_c.borrow();
+            let total = history_c.borrow().len();
+            btn_b_c.set_sensitive(cur > 0);
+            btn_f_c.set_sensitive(cur + 1 < total);
+        })
+    };
+
+    let sel_for_goto = select_panel.clone();
+    *goto_action.borrow_mut() = Some(Rc::new(move || {
+        sel_for_goto("wallpaper", true);
+    }));
+
+    let sel_back = select_panel.clone();
+    let hist_b = nav_history.clone();
+    let idx_b = nav_index.clone();
+    btn_back.connect_clicked(move |_| {
+        let mut cur = idx_b.borrow_mut();
+        if *cur > 0 {
+            *cur -= 1;
+            let target = hist_b.borrow()[*cur].clone();
+            drop(cur);
+            sel_back(&target, false);
+        }
+    });
+
+    let sel_fwd = select_panel.clone();
+    let hist_f = nav_history.clone();
+    let idx_f = nav_index.clone();
+    btn_forward.connect_clicked(move |_| {
+        let mut cur = idx_f.borrow_mut();
+        let total = hist_f.borrow().len();
+        if *cur + 1 < total {
+            *cur += 1;
+            let target = hist_f.borrow()[*cur].clone();
+            drop(cur);
+            sel_fwd(&target, false);
+        }
+    });
+
+    // Conectar navegación de la barra lateral
+    for (id, btn) in &sidebar_buttons {
+        let target_id = id.clone();
+        let sel = select_panel.clone();
+        btn.connect_clicked(move |_| {
+            sel(&target_id, true);
         });
     }
 
     // Seleccionar panel inicial
-    let start_id = match initial_panel {
-        "wifi" | "wallpaper" | "keyboard" | "appearance" | "sound" | "about" | "dock" | "spotlight" | "displays" => initial_panel,
-        _ => "spotlight",
-    };
-    if start_id == "wifi" {
-        refresh_wifi_pane();
-    }
-    for (id, btn) in &sidebar_buttons {
-        if id == start_id {
-            btn.add_css_class("sidebar-btn-active");
-        }
-    }
-    stack.set_visible_child_name(start_id);
-    let initial_title = match start_id {
-        "wifi" => "Wi-Fi",
-        "displays" => "Pantallas",
-        "wallpaper" => "Fondo de pantalla",
-        "keyboard" => "Teclado",
-        "appearance" => "Aspecto",
-        "dock" => "Escritorio y Dock",
-        "spotlight" => "Spotlight",
-        "sound" => "Sonido",
-        "about" => "General",
-        _ => "Ajustes",
-    };
-    active_pane_title.set_label(initial_title);
+    select_panel(start_id, false);
 
     let main_paned = Paned::builder()
         .orientation(Orientation::Horizontal)
