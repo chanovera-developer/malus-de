@@ -1115,7 +1115,10 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
     });
 
     // Botón "?"
-    let help_popover = Popover::builder().has_arrow(true).build();
+    let help_popover = Popover::builder()
+        .has_arrow(false)
+        .css_classes(["wifi-macos-popover"])
+        .build();
     let help_lbl = Label::builder()
         .label("• Haz clic en cualquier red conocida para alternar conexión.\n• Pulsa ⋯ en cada red para ver detalles, desconectar u olvidar su perfil.\n• En tarjetas Intel AX210, activar AirDrop pausa temporalmente el Wi-Fi mientras dura la transferencia.")
         .wrap(true)
@@ -1339,14 +1342,17 @@ fn populate_wifi_list_card(
             let more_wrap = wrap_squircle_round_control(&more_btn, 20, RoundControlStyle::CircleOutline);
             right_icons.append(&more_wrap);
 
-            let popover = Popover::builder().has_arrow(true).build();
+            let popover = Popover::builder()
+                .has_arrow(false)
+                .css_classes(["wifi-macos-popover"])
+                .build();
             let menu_box = GtkBox::builder()
                 .orientation(Orientation::Vertical)
-                .spacing(2)
-                .margin_top(6)
-                .margin_bottom(6)
-                .margin_start(6)
-                .margin_end(6)
+                .spacing(1)
+                .margin_top(2)
+                .margin_bottom(2)
+                .margin_start(2)
+                .margin_end(2)
                 .build();
 
             let auto_btn = make_popover_menu_row(
@@ -1429,14 +1435,7 @@ fn populate_wifi_list_card(
             });
             menu_box.append(&det_item);
 
-            let menu_sep = GtkBox::builder()
-                .css_classes(["wifi-row-separator"])
-                .margin_top(2)
-                .margin_bottom(2)
-                .build();
-            menu_box.append(&menu_sep);
-
-            let forget_item = make_popover_menu_row(None, "Olvidar esta red...", true);
+            let forget_item = make_popover_menu_row(None, "Olvidar esta red...", false);
             let pop_c = popover.clone();
             let ssid_c = net.ssid.clone();
             let ban_c = banner.clone();
@@ -1547,6 +1546,14 @@ fn deterministic_private_mac(ssid: &str) -> String {
     )
 }
 
+fn attach_modal_scrim(parent: &ApplicationWindow, dialog: &gtk4::Window) {
+    crate::set_modal_scrim_visible(parent, true);
+    let p_c = parent.clone();
+    dialog.connect_destroy(move |_| {
+        crate::set_modal_scrim_visible(&p_c, false);
+    });
+}
+
 fn show_private_wifi_address_dialog(
     parent: &ApplicationWindow,
     snap: &WifiSnapshot,
@@ -1560,6 +1567,7 @@ fn show_private_wifi_address_dialog(
         .title(&format!("{} — Dirección Wi-Fi privada", net.ssid))
         .default_width(470)
         .build();
+    attach_modal_scrim(parent, &dialog);
 
     let vbox = GtkBox::builder()
         .orientation(Orientation::Vertical)

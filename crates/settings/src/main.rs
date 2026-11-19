@@ -764,8 +764,33 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     main_paned.set_start_child(Some(&sidebar));
     main_paned.set_end_child(Some(&content_area));
 
-    window.set_child(Some(&main_paned));
+    let root_overlay = Overlay::new();
+    root_overlay.set_child(Some(&main_paned));
+    let modal_scrim = GtkBox::builder()
+        .name("settings-modal-scrim")
+        .css_classes(["settings-modal-scrim"])
+        .hexpand(true)
+        .vexpand(true)
+        .visible(false)
+        .build();
+    root_overlay.add_overlay(&modal_scrim);
+
+    window.set_child(Some(&root_overlay));
     window.present();
+}
+
+pub(crate) fn set_modal_scrim_visible(window: &ApplicationWindow, visible: bool) {
+    let Some(overlay) = window.child().and_then(|c| c.downcast::<Overlay>().ok()) else {
+        return;
+    };
+    let mut child = overlay.first_child();
+    while let Some(widget) = child {
+        if widget.widget_name() == "settings-modal-scrim" {
+            widget.set_visible(visible);
+            break;
+        }
+        child = widget.next_sibling();
+    }
 }
 
 // ============================================================================
