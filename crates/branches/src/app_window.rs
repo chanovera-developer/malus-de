@@ -20,6 +20,9 @@ use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 
 const BRANCHES_SEARCH_HEIGHT: i32 = 30;
+const BRANCHES_SEARCH_COLLAPSED_WIDTH: i32 = 30;
+const BRANCHES_SEARCH_EXPANDED_WIDTH: i32 = 196;
+const BRANCHES_SEARCH_ANIM_MS: f64 = 180.0;
 const BRANCHES_SEARCH_SQUIRCLE_RADIUS: f64 = 15.0;
 const SEARCH_SQUIRCLE_EXPONENT: f64 = 4.2;
 const SEARCH_SQUIRCLE_SEGMENTS: usize = 20;
@@ -148,9 +151,11 @@ fn create_squircle_search_shell(entry: &SearchEntry) -> Overlay {
         }
     });
 
+    shell.set_overflow(gtk4::Overflow::Hidden);
+    shell.set_halign(Align::End);
     shell.set_child(Some(&bg));
     shell.add_overlay(entry);
-    shell.set_measure_overlay(entry, true);
+    shell.set_measure_overlay(entry, false);
     shell
 }
 
@@ -192,10 +197,12 @@ pub struct BranchesWindow {
     sort_by_action: gio::SimpleAction,
     sort_order_action: gio::SimpleAction,
     search_recursive_action: gio::SimpleAction,
-    search_stack: Stack,
     search_shell: Overlay,
     search_entry: SearchEntry,
     search_toggle_btn: Button,
+    search_expanded: Rc<Cell<bool>>,
+    search_anim_progress: Rc<Cell<f64>>,
+    search_anim_gen: Rc<Cell<u64>>,
     syncing_ui: Rc<Cell<bool>>,
     _config_monitor: Option<gio::FileMonitor>,
 }
@@ -499,21 +506,25 @@ impl BranchesWindow {
 
         action_menu_btn.set_menu_model(Some(&menu_model));
 
-        // 8. Botón de búsqueda que se transforma en input squircle y vuelve a botón al hacer clic fuera
+        // 8. Botón de búsqueda con crecimiento suave a campo squircle y repliegue al hacer clic fuera
         let search_container = GtkBox::new(Orientation::Horizontal, 0);
         search_container.set_valign(Align::Center);
+        search_container.set_halign(Align::End);
         search_container.add_css_class("branches-search-container");
 
         let search_entry = SearchEntry::builder()
             .placeholder_text(if es_ui { "Buscar" } else { "Search" })
-            .width_chars(18)
+            .width_chars(1)
+            .hexpand(true)
+            .halign(Align::Fill)
             .height_request(BRANCHES_SEARCH_HEIGHT)
             .valign(Align::Center)
             .vexpand(false)
             .css_classes(["branches-search-entry"])
             .build();
         let search_shell = create_squircle_search_shell(&search_entry);
-        search_shell.set_width_request(196);
+        search_shell.set_width_request(BRANCHES_SEARCH_COLLAPSED_WIDTH);
+        search_shell.set_visible(false);
 
         let search_toggle_btn = Button::builder()
             .icon_name("system-search-symbolic")
@@ -523,18 +534,8 @@ impl BranchesWindow {
             .css_classes(["branches-tool-btn", "branches-search-btn"])
             .build();
 
-        let search_stack = Stack::builder()
-            .vhomogeneous(false)
-            .hhomogeneous(false)
-            .transition_type(StackTransitionType::Crossfade)
-            .transition_duration(150)
-            .valign(Align::Center)
-            .build();
-        search_stack.add_named(&search_toggle_btn, Some("button"));
-        search_stack.add_named(&search_shell, Some("input"));
-        search_stack.set_visible_child_name("button");
-
-        search_container.append(&search_stack);
+        search_container.append(&search_shell);
+        search_container.append(&search_toggle_btn);
 
         actions_pill_box.append(&share_menu_btn);
         actions_pill_box.append(&info_btn);
@@ -839,10 +840,12 @@ impl BranchesWindow {
             sort_by_action,
             sort_order_action,
             search_recursive_action,
-            search_stack,
             search_shell: search_shell.clone(),
             search_entry: search_entry.clone(),
             search_toggle_btn: search_toggle_btn.clone(),
+            search_expanded: Rc::new(Cell::new(false)),
+            search_anim_progress: Rc::new(Cell::new(0.0)),
+            search_anim_gen: Rc::new(Cell::new(0)),
             syncing_ui: Rc::new(Cell::new(false)),
             _config_monitor: config_monitor.clone(),
         });
@@ -1445,8 +1448,8 @@ impl BranchesWindow {
             .set_state(&pane.search_recursive().to_variant());
         if query.is_empty() {
             self.search_toggle_btn.remove_css_class("has-query");
-            if !self.search_entry.has_focus() {
-                self.search_stack.set_visible_child_name("button");
+            if !self.search_entry.has_focus() && self.is_search_expanded() {
+                self.collapse_search(false);
             }
         } else {
             self.search_toggle_btn.add_css_class("has-query");
@@ -2895,19 +2898,104 @@ impl BranchesWindow {
     }
 
     fn is_search_expanded(&self) -> bool {
-        self.search_stack.visible_child_name().as_deref() == Some("input")
+        self.search_expanded.get()
+    }
+
+    fn animate_search_width(&self, expand: bool) {
+        self.search_expanded.set(expand);
+        let next_gen = self.search_anim_gen.get().wrapping_add(1);
+        self.search_anim_gen.set(next_gen);
+
+        let start_p = self.search_anim_progress.get();
+        let target_p = if expand { 1.0 } else { 0.0 };
+        if (start_p - target_p).abs() < 0.005 {
+            self.search_anim_progress.set(target_p);
+            if expand {
+                self.search_toggle_btn.set_visible(false);
+                self.search_shell
+                    .set_width_request(BRANCHES_SEARCH_EXPANDED_WIDTH);
+                self.search_shell.set_visible(true);
+                self.search_entry.set_opacity(1.0);
+                self.search_entry.grab_focus();
+                if !self.search_entry.text().is_empty() {
+                    self.search_entry.select_region(0, -1);
+                }
+            } else {
+                self.search_shell.set_visible(false);
+                self.search_shell
+                    .set_width_request(BRANCHES_SEARCH_COLLAPSED_WIDTH);
+                self.search_toggle_btn.set_visible(true);
+            }
+            return;
+        }
+
+        if expand {
+            self.search_toggle_btn.set_visible(false);
+            let initial_w = (BRANCHES_SEARCH_COLLAPSED_WIDTH as f64
+                + (BRANCHES_SEARCH_EXPANDED_WIDTH - BRANCHES_SEARCH_COLLAPSED_WIDTH) as f64
+                    * start_p)
+                .round() as i32;
+            self.search_shell.set_width_request(initial_w);
+            self.search_entry.set_opacity(start_p);
+            self.search_shell.set_visible(true);
+            self.search_entry.grab_focus();
+            if !self.search_entry.text().is_empty() {
+                self.search_entry.select_region(0, -1);
+            }
+        }
+
+        let started_at = std::time::Instant::now();
+        let duration_ms = BRANCHES_SEARCH_ANIM_MS * (target_p - start_p).abs();
+        let gen_ref = self.search_anim_gen.clone();
+        let prog_ref = self.search_anim_progress.clone();
+        let shell = self.search_shell.clone();
+        let entry = self.search_entry.clone();
+        let btn = self.search_toggle_btn.clone();
+
+        self.search_shell.add_tick_callback(move |_, _| {
+            if gen_ref.get() != next_gen {
+                return glib::ControlFlow::Break;
+            }
+            let raw_t = if duration_ms <= 1.0 {
+                1.0
+            } else {
+                (started_at.elapsed().as_secs_f64() * 1000.0 / duration_ms).clamp(0.0, 1.0)
+            };
+            // Curva cúbica macOS (ease-out al expandir, suave al retraer)
+            let eased = 1.0 - (1.0 - raw_t).powi(3);
+            let p = start_p + (target_p - start_p) * eased;
+            prog_ref.set(p);
+
+            let width = (BRANCHES_SEARCH_COLLAPSED_WIDTH as f64
+                + (BRANCHES_SEARCH_EXPANDED_WIDTH - BRANCHES_SEARCH_COLLAPSED_WIDTH) as f64 * p)
+                .round() as i32;
+            shell.set_width_request(width);
+            shell.queue_draw();
+            entry.set_opacity(((p - 0.12) / 0.88).clamp(0.0, 1.0));
+
+            if raw_t >= 1.0 {
+                prog_ref.set(target_p);
+                if expand {
+                    entry.set_opacity(1.0);
+                    shell.set_width_request(BRANCHES_SEARCH_EXPANDED_WIDTH);
+                } else {
+                    shell.set_visible(false);
+                    shell.set_width_request(BRANCHES_SEARCH_COLLAPSED_WIDTH);
+                    btn.set_visible(true);
+                }
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
     }
 
     fn expand_search(&self) {
-        self.search_stack.set_visible_child_name("input");
-        self.search_entry.grab_focus();
-        if !self.search_entry.text().is_empty() {
-            self.search_entry.select_region(0, -1);
-        }
+        self.animate_search_width(true);
     }
 
     fn collapse_search(&self, clear_query: bool) {
-        self.search_stack.set_visible_child_name("button");
+        self.animate_search_width(false);
         if clear_query && !self.search_entry.text().is_empty() {
             self.search_entry.set_text("");
         }
@@ -2941,10 +3029,12 @@ impl BranchesWindow {
             sort_by_action: self.sort_by_action.clone(),
             sort_order_action: self.sort_order_action.clone(),
             search_recursive_action: self.search_recursive_action.clone(),
-            search_stack: self.search_stack.clone(),
             search_shell: self.search_shell.clone(),
             search_entry: self.search_entry.clone(),
             search_toggle_btn: self.search_toggle_btn.clone(),
+            search_expanded: self.search_expanded.clone(),
+            search_anim_progress: self.search_anim_progress.clone(),
+            search_anim_gen: self.search_anim_gen.clone(),
             syncing_ui: self.syncing_ui.clone(),
             _config_monitor: self._config_monitor.clone(),
         })
