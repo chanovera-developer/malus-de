@@ -1326,16 +1326,147 @@ fn populate_wifi_list_card(
             right_icons.append(&sig_ico);
         }
 
-        let more_btn = MenuButton::builder()
-            .icon_name("view-more-symbolic")
-            .css_classes(["wifi-more-btn"])
-            .has_frame(false)
-            .always_show_arrow(false)
-            .valign(Align::Center)
-            .tooltip_text("Opciones de red")
-            .build();
-        let more_wrap = wrap_squircle_round_control(&more_btn, 20, RoundControlStyle::CircleOutline);
-        right_icons.append(&more_wrap);
+        // Botón "⋯": menú popover en Redes conocidas; diálogo Dirección Wi-Fi privada en Otras redes
+        if is_known_section {
+            let more_btn = MenuButton::builder()
+                .icon_name("view-more-symbolic")
+                .css_classes(["wifi-more-btn"])
+                .has_frame(false)
+                .always_show_arrow(false)
+                .valign(Align::Center)
+                .tooltip_text("Opciones de red")
+                .build();
+            let more_wrap = wrap_squircle_round_control(&more_btn, 20, RoundControlStyle::CircleOutline);
+            right_icons.append(&more_wrap);
+
+            let popover = Popover::builder().has_arrow(true).build();
+            let menu_box = GtkBox::builder()
+                .orientation(Orientation::Vertical)
+                .spacing(2)
+                .margin_top(6)
+                .margin_bottom(6)
+                .margin_start(6)
+                .margin_end(6)
+                .build();
+
+            let auto_btn = make_popover_menu_row(
+                if net.autoconnect { Some("✓") } else { None },
+                "Conexión automática",
+                false,
+            );
+            let pop_c = popover.clone();
+            let ssid_c = net.ssid.clone();
+            let next_val = if net.autoconnect { "no" } else { "yes" };
+            let rel_c = trigger_reload.clone();
+            auto_btn.connect_clicked(move |_| {
+                pop_c.popdown();
+                let s = ssid_c.clone();
+                let r = rel_c.clone();
+                let (tx, rx) = async_channel::bounded::<()>(1);
+                std::thread::spawn(move || {
+                    let _ = run_nmcli(&["connection", "modify", "id", &s, "connection.autoconnect", next_val]);
+                    let _ = tx.send_blocking(());
+                });
+                glib::spawn_future_local(async move {
+                    let _ = rx.recv().await;
+                    r(false);
+                });
+            });
+            menu_box.append(&auto_btn);
+
+            let copy_pw_btn = make_popover_menu_row(None, "Copiar contraseña", false);
+            copy_pw_btn.set_sensitive(net.is_secured());
+            let pop_c = popover.clone();
+            let ssid_c = net.ssid.clone();
+            let ban_c = banner.clone();
+            copy_pw_btn.connect_clicked(move |_| {
+                pop_c.popdown();
+                let s = ssid_c.clone();
+                let b = ban_c.clone();
+                let (tx, rx) = async_channel::bounded::<Result<String, String>>(1);
+                std::thread::spawn(move || {
+                    let res = run_nmcli(&[
+                        "-s",
+                        "-g",
+                        "802-11-wireless-security.psk",
+                        "connection",
+                        "show",
+                        "id",
+                        &s,
+                    ]);
+                    let _ = tx.send_blocking(res);
+                });
+                glib::spawn_future_local(async move {
+                    match rx.recv().await {
+                        Ok(Ok(pw)) if !pw.trim().is_empty() => {
+                            if let Some(display) = gtk4::gdk::Display::default() {
+                                display.clipboard().set_text(pw.trim());
+                                b.set_label("Contraseña copiada al portapapeles.");
+                            } else {
+                                b.set_label("No se pudo acceder al portapapeles.");
+                            }
+                            b.set_visible(true);
+                        }
+                        _ => {
+                            b.set_label("Esta red no tiene contraseña guardada accesible.");
+                            b.set_visible(true);
+                        }
+                    }
+                });
+            });
+            menu_box.append(&copy_pw_btn);
+
+            let det_item = make_popover_menu_row(None, "Configuración de esta red...", false);
+            let pop_c = popover.clone();
+            let win_c = parent_window.clone();
+            let snap_c = snapshot.clone();
+            let net_c = net.clone();
+            let ban_c = banner.clone();
+            let rel_c = trigger_reload.clone();
+            det_item.connect_clicked(move |_| {
+                pop_c.popdown();
+                show_network_details_dialog(&win_c, &snap_c, Some(&net_c), &ban_c, &rel_c);
+            });
+            menu_box.append(&det_item);
+
+            let menu_sep = GtkBox::builder()
+                .css_classes(["wifi-row-separator"])
+                .margin_top(2)
+                .margin_bottom(2)
+                .build();
+            menu_box.append(&menu_sep);
+
+            let forget_item = make_popover_menu_row(None, "Olvidar esta red...", true);
+            let pop_c = popover.clone();
+            let ssid_c = net.ssid.clone();
+            let ban_c = banner.clone();
+            let rel_c = trigger_reload.clone();
+            forget_item.connect_clicked(move |_| {
+                pop_c.popdown();
+                forget_wifi_async(ssid_c.clone(), &ban_c, &rel_c);
+            });
+            menu_box.append(&forget_item);
+
+            popover.set_child(Some(&menu_box));
+            more_btn.set_popover(Some(&popover));
+        } else {
+            let more_btn = Button::builder()
+                .icon_name("view-more-symbolic")
+                .css_classes(["wifi-more-btn"])
+                .has_frame(false)
+                .valign(Align::Center)
+                .tooltip_text("Dirección Wi-Fi privada")
+                .build();
+            let more_wrap = wrap_squircle_round_control(&more_btn, 20, RoundControlStyle::CircleOutline);
+            right_icons.append(&more_wrap);
+
+            let win_c = parent_window.clone();
+            let snap_c = snapshot.clone();
+            let net_c = net.clone();
+            more_btn.connect_clicked(move |_| {
+                show_private_wifi_address_dialog(&win_c, &snap_c, &net_c);
+            });
+        }
 
         // Acción al pulsar la fila o el botón flotante "Conectar"
         let trigger_connect: Rc<dyn Fn()> = {
@@ -1361,211 +1492,6 @@ fn populate_wifi_list_card(
             hbtn.connect_clicked(move |_| tc2());
         }
 
-        // Menú popover del botón "⋯" (gestionado por MenuButton para evitar warnings de GTK al destruir filas)
-        let popover = Popover::builder().has_arrow(true).build();
-        let menu_box = GtkBox::builder()
-            .orientation(Orientation::Vertical)
-            .spacing(3)
-            .margin_top(6)
-            .margin_bottom(6)
-            .margin_start(6)
-            .margin_end(6)
-            .build();
-
-        if is_known_section {
-            if net.connected {
-                let disconn_btn = Button::builder()
-                    .label("Desconectar")
-                    .css_classes(["wifi-menu-action-btn"])
-                    .has_frame(false)
-                    .halign(Align::Fill)
-                    .build();
-                let pop_c = popover.clone();
-                let ssid_c = net.ssid.clone();
-                let ban_c = banner.clone();
-                let rel_c = trigger_reload.clone();
-                disconn_btn.connect_clicked(move |_| {
-                    pop_c.popdown();
-                    disconnect_wifi_async(ssid_c.clone(), &ban_c, &rel_c);
-                });
-                menu_box.append(&disconn_btn);
-            }
-
-            let auto_label = if net.autoconnect {
-                "✓  Conexión automática"
-            } else {
-                "    Conexión automática"
-            };
-            let auto_btn = Button::builder()
-                .label(auto_label)
-                .css_classes(["wifi-menu-action-btn"])
-                .has_frame(false)
-                .halign(Align::Fill)
-                .build();
-            let pop_c = popover.clone();
-            let ssid_c = net.ssid.clone();
-            let next_val = if net.autoconnect { "no" } else { "yes" };
-            let rel_c = trigger_reload.clone();
-            auto_btn.connect_clicked(move |_| {
-                pop_c.popdown();
-                let s = ssid_c.clone();
-                let r = rel_c.clone();
-                let (tx, rx) = async_channel::bounded::<()>(1);
-                std::thread::spawn(move || {
-                    let _ = run_nmcli(&["connection", "modify", "id", &s, "connection.autoconnect", next_val]);
-                    let _ = tx.send_blocking(());
-                });
-                glib::spawn_future_local(async move {
-                    let _ = rx.recv().await;
-                    r(false);
-                });
-            });
-            menu_box.append(&auto_btn);
-
-            if net.is_secured() {
-                let copy_pw_btn = Button::builder()
-                    .label("Copiar contraseña")
-                    .css_classes(["wifi-menu-action-btn"])
-                    .has_frame(false)
-                    .halign(Align::Fill)
-                    .build();
-                let pop_c = popover.clone();
-                let ssid_c = net.ssid.clone();
-                let ban_c = banner.clone();
-                copy_pw_btn.connect_clicked(move |_| {
-                    pop_c.popdown();
-                    let s = ssid_c.clone();
-                    let b = ban_c.clone();
-                    let (tx, rx) = async_channel::bounded::<Result<String, String>>(1);
-                    std::thread::spawn(move || {
-                        let res = run_nmcli(&[
-                            "-s",
-                            "-g",
-                            "802-11-wireless-security.psk",
-                            "connection",
-                            "show",
-                            "id",
-                            &s,
-                        ]);
-                        let _ = tx.send_blocking(res);
-                    });
-                    glib::spawn_future_local(async move {
-                        match rx.recv().await {
-                            Ok(Ok(pw)) if !pw.trim().is_empty() => {
-                                if let Some(display) = gtk4::gdk::Display::default() {
-                                    display.clipboard().set_text(pw.trim());
-                                    b.set_label("Contraseña copiada al portapapeles.");
-                                } else {
-                                    b.set_label("No se pudo acceder al portapapeles.");
-                                }
-                                b.set_visible(true);
-                            }
-                            _ => {
-                                b.set_label("Esta red no tiene contraseña guardada accesible.");
-                                b.set_visible(true);
-                            }
-                        }
-                    });
-                });
-                menu_box.append(&copy_pw_btn);
-            }
-
-            let det_item = Button::builder()
-                .label("Configuración de esta red...")
-                .css_classes(["wifi-menu-action-btn"])
-                .has_frame(false)
-                .halign(Align::Fill)
-                .build();
-            let pop_c = popover.clone();
-            let win_c = parent_window.clone();
-            let snap_c = snapshot.clone();
-            let net_c = net.clone();
-            let ban_c = banner.clone();
-            let rel_c = trigger_reload.clone();
-            det_item.connect_clicked(move |_| {
-                pop_c.popdown();
-                show_network_details_dialog(&win_c, &snap_c, Some(&net_c), &ban_c, &rel_c);
-            });
-            menu_box.append(&det_item);
-
-            let menu_sep = GtkBox::builder()
-                .css_classes(["wifi-row-separator"])
-                .margin_top(2)
-                .margin_bottom(2)
-                .build();
-            menu_box.append(&menu_sep);
-
-            let forget_item = Button::builder()
-                .label("Olvidar esta red...")
-                .css_classes(["wifi-menu-action-btn", "wifi-menu-danger-btn"])
-                .has_frame(false)
-                .halign(Align::Fill)
-                .build();
-            let pop_c = popover.clone();
-            let ssid_c = net.ssid.clone();
-            let ban_c = banner.clone();
-            let rel_c = trigger_reload.clone();
-            forget_item.connect_clicked(move |_| {
-                pop_c.popdown();
-                forget_wifi_async(ssid_c.clone(), &ban_c, &rel_c);
-            });
-            menu_box.append(&forget_item);
-        } else {
-            let conn_item = Button::builder()
-                .label("Conectar")
-                .css_classes(["wifi-menu-action-btn"])
-                .has_frame(false)
-                .halign(Align::Fill)
-                .build();
-            let pop_c = popover.clone();
-            let tc_menu = trigger_connect.clone();
-            conn_item.connect_clicked(move |_| {
-                pop_c.popdown();
-                tc_menu();
-            });
-            menu_box.append(&conn_item);
-
-            let det_item = Button::builder()
-                .label("Configuración de esta red...")
-                .css_classes(["wifi-menu-action-btn"])
-                .has_frame(false)
-                .halign(Align::Fill)
-                .build();
-            let pop_c = popover.clone();
-            let win_c = parent_window.clone();
-            let snap_c = snapshot.clone();
-            let net_c = net.clone();
-            let ban_c = banner.clone();
-            let rel_c = trigger_reload.clone();
-            det_item.connect_clicked(move |_| {
-                pop_c.popdown();
-                show_network_details_dialog(&win_c, &snap_c, Some(&net_c), &ban_c, &rel_c);
-            });
-            menu_box.append(&det_item);
-
-            let info_lbl = Label::builder()
-                .label(&format!(
-                    "Señal: {}% · {} {}",
-                    net.signal,
-                    if net.is_secured() { &net.security } else { "Abierta" },
-                    if net.channel.is_empty() {
-                        String::new()
-                    } else {
-                        format!("· Canal {}", net.channel)
-                    }
-                ))
-                .css_classes(["card-section-sub"])
-                .margin_start(6)
-                .margin_end(6)
-                .margin_top(2)
-                .margin_bottom(2)
-                .build();
-            menu_box.append(&info_lbl);
-        }
-
-        popover.set_child(Some(&menu_box));
-        more_btn.set_popover(Some(&popover));
-
         row_box.set_margin_start(0);
         row_box.set_margin_end(0);
         row_box.set_spacing(4);
@@ -1573,6 +1499,195 @@ fn populate_wifi_list_card(
         row_box.append(&right_icons);
         card.append(&row_box);
     }
+}
+
+fn make_popover_menu_row(check: Option<&str>, text: &str, danger: bool) -> Button {
+    let row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(6)
+        .build();
+    let check_lbl = Label::builder()
+        .label(check.unwrap_or(""))
+        .width_request(14)
+        .xalign(0.5)
+        .build();
+    let text_lbl = Label::builder()
+        .label(text)
+        .xalign(0.0)
+        .hexpand(true)
+        .build();
+    row.append(&check_lbl);
+    row.append(&text_lbl);
+
+    let classes: &[&str] = if danger {
+        &["wifi-menu-action-btn", "wifi-menu-danger-btn"]
+    } else {
+        &["wifi-menu-action-btn"]
+    };
+    Button::builder()
+        .child(&row)
+        .css_classes(classes)
+        .has_frame(false)
+        .halign(Align::Fill)
+        .build()
+}
+
+fn deterministic_private_mac(ssid: &str) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in ssid.as_bytes() {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    let bytes = hash.to_le_bytes();
+    // Byte 0: localmente administrada (bit 1 = 1) y unicast (bit 0 = 0)
+    let b0 = (bytes[0] & 0xfc) | 0x02;
+    format!(
+        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        b0, bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]
+    )
+}
+
+fn show_private_wifi_address_dialog(
+    parent: &ApplicationWindow,
+    snap: &WifiSnapshot,
+    net: &WifiDisplayNetwork,
+) {
+    let dialog = gtk4::Window::builder()
+        .transient_for(parent)
+        .destroy_with_parent(true)
+        .modal(true)
+        .resizable(false)
+        .title(&format!("{} — Dirección Wi-Fi privada", net.ssid))
+        .default_width(470)
+        .build();
+
+    let vbox = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(14)
+        .margin_top(18)
+        .margin_bottom(18)
+        .margin_start(20)
+        .margin_end(20)
+        .build();
+
+    let card = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(0)
+        .css_classes(["wifi-card-compact"])
+        .build();
+
+    let mode_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(14)
+        .css_classes(["wifi-pref-row"])
+        .build();
+
+    let text_col = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(4)
+        .hexpand(true)
+        .build();
+    let title_lbl = Label::builder()
+        .label("Dirección Wi-Fi privada")
+        .css_classes(["card-section-title"])
+        .xalign(0.0)
+        .build();
+    let sub_lbl = Label::builder()
+        .label("Usar una dirección privada ayuda a reducir el rastreo de tu equipo por parte de los operadores de redes Wi-Fi. Si la dirección privada es fija, se permite que esta red rastree el equipo, pero dificulta rastrearlo en otras redes.")
+        .css_classes(["card-section-sub"])
+        .wrap(true)
+        .xalign(0.0)
+        .build();
+    text_col.append(&title_lbl);
+    text_col.append(&sub_lbl);
+
+    let mode_list = StringList::new(&["Fija", "Desactivada", "Rotatoria"]);
+    let mode_dd = DropDown::builder()
+        .model(&mode_list)
+        .selected(0)
+        .valign(Align::Start)
+        .css_classes(["wifi-compact-dropdown"])
+        .build();
+    mode_row.append(&text_col);
+    mode_row.append(&mode_dd);
+
+    let sep = GtkBox::builder()
+        .css_classes(["wifi-row-separator"])
+        .build();
+
+    let addr_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["wifi-pref-row"])
+        .build();
+    let addr_key = Label::builder()
+        .label("Dirección Wi-Fi")
+        .css_classes(["card-section-title"])
+        .hexpand(true)
+        .xalign(0.0)
+        .build();
+
+    let hw_mac = if snap.details.hwaddr.is_empty() {
+        "—".to_string()
+    } else {
+        snap.details.hwaddr.to_lowercase()
+    };
+    let fixed_mac = deterministic_private_mac(&net.ssid);
+    let addr_val = Label::builder()
+        .label(&fixed_mac)
+        .css_classes(["card-section-sub"])
+        .xalign(1.0)
+        .selectable(true)
+        .build();
+    addr_row.append(&addr_key);
+    addr_row.append(&addr_val);
+
+    let addr_val_c = addr_val.clone();
+    let fixed_c = fixed_mac.clone();
+    let hw_c = hw_mac.clone();
+    mode_dd.connect_selected_notify(move |dd| match dd.selected() {
+        0 => addr_val_c.set_label(&fixed_c),
+        1 => addr_val_c.set_label(&hw_c),
+        _ => addr_val_c.set_label("Rotatoria (aleatoria)"),
+    });
+
+    card.append(&mode_row);
+    card.append(&sep);
+    card.append(&addr_row);
+    vbox.append(&wrap_squircle_card(&card, WIFI_CARD_SQUIRCLE_RADIUS));
+
+    let actions = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .halign(Align::End)
+        .build();
+    let (cancel_wrap, cancel_btn) = make_squircle_button("Cancelar", false, None);
+    let (ok_wrap, ok_btn) = make_squircle_button("OK", true, None);
+    actions.append(&cancel_wrap);
+    actions.append(&ok_wrap);
+    vbox.append(&actions);
+
+    let d_cancel = dialog.clone();
+    cancel_btn.connect_clicked(move |_| d_cancel.close());
+
+    let d_ok = dialog.clone();
+    let ssid_ok = net.ssid.clone();
+    let mode_dd_ok = mode_dd.clone();
+    ok_btn.connect_clicked(move |_| {
+        let nm_mode = match mode_dd_ok.selected() {
+            0 => "stable",
+            1 => "permanent",
+            _ => "random",
+        };
+        let s = ssid_ok.clone();
+        std::thread::spawn(move || {
+            let _ = run_nmcli(&["connection", "modify", "id", &s, "wifi.cloned-mac-address", nm_mode]);
+        });
+        d_ok.close();
+    });
+
+    dialog.set_child(Some(&vbox));
+    dialog.present();
 }
 
 fn wifi_signal_icon_name(signal: u8) -> &'static str {
@@ -1623,27 +1738,6 @@ fn connect_wifi_async(
             Err(_) => b.set_visible(false),
         }
         rel(true);
-    });
-}
-
-fn disconnect_wifi_async(ssid: String, banner: &Label, trigger_reload: &Rc<dyn Fn(bool)>) {
-    banner.set_label(&format!("Desconectando de «{}»...", ssid));
-    banner.set_visible(true);
-    let (tx, rx) = async_channel::bounded::<Result<(), String>>(1);
-    std::thread::spawn(move || {
-        let res = run_nmcli(&["connection", "down", "id", &ssid]).map(|_| ());
-        let _ = tx.send_blocking(res);
-    });
-    let b = banner.clone();
-    let rel = trigger_reload.clone();
-    glib::spawn_future_local(async move {
-        if let Ok(Err(err)) = rx.recv().await {
-            b.set_label(&format!("No se pudo desconectar: {}", err));
-            b.set_visible(true);
-        } else {
-            b.set_visible(false);
-        }
-        rel(false);
     });
 }
 

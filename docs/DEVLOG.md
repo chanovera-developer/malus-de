@@ -10,7 +10,7 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
   - **Botones compactos ajustados al texto:** altura mínima reducida (`min-height: 22px`, `padding: 1px 10px`) con contorno cápsula en `Detalles...`, `Otra...`, `Avanzado...` y `Conectar`.
   - **Botón `Conectar` en hover por fila:** al pasar el cursor sobre cualquier red desconectada (conocida o cercana), aparece el botón `Conectar` a la izquierda del candado/señal.
   - **Contorno circular `999px` en `⋯` y `?`:** dibujado con `cairo::Context::arc` para un círculo exacto (`20 px` en `⋯`, `22 px` en `?`).
-  - **Menús contextuales `⋯`:** en *Redes conocidas* incluye `✓ Conexión automática`, `Copiar contraseña`, `Configuración de esta red...`, separador y `Olvidar esta red...`; en *Otras redes* incluye `Conectar`, `Configuración de esta red...` e información de señal/canal.
+  - **Menús y diálogos `⋯`:** en *Redes conocidas* abre el popover exacto (`✓ Conexión automática`, `Copiar contraseña`, `Configuración de esta red...`, separador y `Olvidar esta red...`); en *Otras redes* abre el diálogo modal **Dirección Wi-Fi privada** (`Fija`, `Desactivada`, `Rotatoria` + dirección MAC visible y `Cancelar` / `OK`).
   - **Toggles `.macos-switch`:** diseño tipo píldora alargada (`42×22 px`) con deslizador blanco ancho (`22×18 px`, `border-radius: 999px`) y pista azul `#007aff` / gris translúcido.
 - Validación: `cargo check --offline --workspace --all-targets` (**0 warnings**), `cargo test --offline -p malus-de-settings` (**5 passed; 0 failed**).
 
