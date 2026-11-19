@@ -245,12 +245,14 @@ mod tests {
             .expect("Debe existir button.branches-search-btn");
         assert!(search_btn_block.contains("border-radius: 8px;"));
 
+        assert!(css.contains(".branches-search-shell"));
         let search_entry_block = css
             .split(".branches-search-entry {")
             .nth(1)
             .and_then(|s| s.split('}').next())
             .expect("Debe existir .branches-search-entry");
-        assert!(search_entry_block.contains("border-radius: 999px;"));
+        assert!(search_entry_block.contains("background: transparent;"));
+        assert!(search_entry_block.contains("border: none;"));
 
         assert!(css.contains("border-radius: 5px;"));
         assert!(css.contains("menubutton.branches-tool-btn"));

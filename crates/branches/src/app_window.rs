@@ -10,14 +10,149 @@ use gtk4::gdk;
 use gtk4::gio;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Application, ApplicationWindow, Box as GtkBox, Button, EventControllerKey,
-    GestureClick, Label, MenuButton, Orientation, Overlay, PackType, Paned, Revealer,
-    RevealerTransitionType, SearchEntry, Stack, StackTransitionType, ToggleButton, WindowControls,
-    WindowHandle,
+    Align, Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea,
+    EventControllerFocus, EventControllerKey, GestureClick, Label, MenuButton, Orientation, Overlay,
+    PackType, Paned, Revealer, RevealerTransitionType, SearchEntry, Stack, StackTransitionType,
+    ToggleButton, WindowControls, WindowHandle,
 };
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
+
+const BRANCHES_SEARCH_HEIGHT: i32 = 30;
+const BRANCHES_SEARCH_SQUIRCLE_RADIUS: f64 = 15.0;
+const SEARCH_SQUIRCLE_EXPONENT: f64 = 4.2;
+const SEARCH_SQUIRCLE_SEGMENTS: usize = 20;
+
+fn squircle_path(context: &gtk4::cairo::Context, width: f64, height: f64, radius: f64) {
+    let radius = radius.min(width / 2.0).min(height / 2.0).max(1.0);
+    let power = 2.0 / SEARCH_SQUIRCLE_EXPONENT;
+    let quarter_turn = std::f64::consts::FRAC_PI_2;
+
+    context.move_to(radius, 0.0);
+    context.line_to(width - radius, 0.0);
+
+    for step in 1..=SEARCH_SQUIRCLE_SEGMENTS {
+        let angle = quarter_turn * step as f64 / SEARCH_SQUIRCLE_SEGMENTS as f64;
+        context.line_to(
+            width - radius + radius * angle.sin().powf(power),
+            radius - radius * angle.cos().powf(power),
+        );
+    }
+    context.line_to(width, height - radius);
+
+    for step in 1..=SEARCH_SQUIRCLE_SEGMENTS {
+        let angle = quarter_turn * step as f64 / SEARCH_SQUIRCLE_SEGMENTS as f64;
+        context.line_to(
+            width - radius + radius * angle.cos().powf(power),
+            height - radius + radius * angle.sin().powf(power),
+        );
+    }
+    context.line_to(radius, height);
+
+    for step in 1..=SEARCH_SQUIRCLE_SEGMENTS {
+        let angle = quarter_turn * step as f64 / SEARCH_SQUIRCLE_SEGMENTS as f64;
+        context.line_to(
+            radius - radius * angle.sin().powf(power),
+            height - radius + radius * angle.cos().powf(power),
+        );
+    }
+    context.line_to(0.0, radius);
+
+    for step in 1..=SEARCH_SQUIRCLE_SEGMENTS {
+        let angle = quarter_turn * step as f64 / SEARCH_SQUIRCLE_SEGMENTS as f64;
+        context.line_to(
+            radius - radius * angle.cos().powf(power),
+            radius - radius * angle.sin().powf(power),
+        );
+    }
+    context.close_path();
+}
+
+/// Envuelve un `SearchEntry` en la misma cápsula squircle en Cairo que el filtro de Ajustes.
+fn create_squircle_search_shell(entry: &SearchEntry) -> Overlay {
+    let shell = Overlay::builder()
+        .height_request(BRANCHES_SEARCH_HEIGHT)
+        .valign(Align::Center)
+        .vexpand(false)
+        .css_classes(["branches-search-shell"])
+        .build();
+
+    let bg = DrawingArea::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .can_target(false)
+        .build();
+
+    let focus_ctrl = EventControllerFocus::new();
+    let focus_state = focus_ctrl.clone();
+    let bg_draw = bg.clone();
+    focus_ctrl.connect_enter(move |_| bg_draw.queue_draw());
+    let bg_draw_leave = bg.clone();
+    focus_ctrl.connect_leave(move |_| bg_draw_leave.queue_draw());
+    entry.add_controller(focus_ctrl);
+
+    let bg_weak = bg.downgrade();
+    libadwaita::StyleManager::default().connect_dark_notify(move |_| {
+        if let Some(area) = bg_weak.upgrade() {
+            area.queue_draw();
+        }
+    });
+
+    bg.set_draw_func(move |_, cr, w, h| {
+        let w = w as f64;
+        let h = h as f64;
+        if w <= 2.0 || h <= 2.0 {
+            return;
+        }
+        let is_dark = libadwaita::StyleManager::default().is_dark();
+        let focused = focus_state.contains_focus();
+
+        if cr.save().is_ok() {
+            squircle_path(cr, w, h, BRANCHES_SEARCH_SQUIRCLE_RADIUS);
+            if is_dark {
+                cr.set_source_rgba(1.0, 1.0, 1.0, if focused { 0.11 } else { 0.08 });
+            } else {
+                cr.set_source_rgba(0.0, 0.0, 0.0, if focused { 0.075 } else { 0.055 });
+            }
+            let _ = cr.fill();
+            let _ = cr.restore();
+        }
+
+        if cr.save().is_ok() {
+            let inset = 0.75;
+            cr.translate(inset, inset);
+            squircle_path(
+                cr,
+                (w - inset * 2.0).max(1.0),
+                (h - inset * 2.0).max(1.0),
+                (BRANCHES_SEARCH_SQUIRCLE_RADIUS - inset).max(2.0),
+            );
+            if focused {
+                if is_dark {
+                    cr.set_source_rgba(0.04, 0.52, 1.0, 0.85);
+                } else {
+                    cr.set_source_rgba(0.0, 0.48, 1.0, 0.80);
+                }
+                cr.set_line_width(1.5);
+            } else {
+                if is_dark {
+                    cr.set_source_rgba(1.0, 1.0, 1.0, 0.15);
+                } else {
+                    cr.set_source_rgba(0.0, 0.0, 0.0, 0.13);
+                }
+                cr.set_line_width(1.0);
+            }
+            let _ = cr.stroke();
+            let _ = cr.restore();
+        }
+    });
+
+    shell.set_child(Some(&bg));
+    shell.add_overlay(entry);
+    shell.set_measure_overlay(entry, true);
+    shell
+}
 
 struct BranchesTab {
     id: u64,
@@ -360,11 +495,14 @@ impl BranchesWindow {
         search_container.add_css_class("branches-search-container");
 
         let search_entry = SearchEntry::builder()
-            .placeholder_text("Buscar...")
+            .placeholder_text(if es_ui { "Buscar" } else { "Search" })
             .width_chars(16)
+            .height_request(BRANCHES_SEARCH_HEIGHT)
             .valign(Align::Center)
+            .vexpand(false)
             .css_classes(["branches-search-entry"])
             .build();
+        let search_shell = create_squircle_search_shell(&search_entry);
 
         let search_recursive_btn = ToggleButton::builder()
             .icon_name("folder-saved-search-symbolic")
@@ -379,7 +517,7 @@ impl BranchesWindow {
 
         let search_reveal_box = GtkBox::new(Orientation::Horizontal, 4);
         search_reveal_box.set_valign(Align::Center);
-        search_reveal_box.append(&search_entry);
+        search_reveal_box.append(&search_shell);
         search_reveal_box.append(&search_recursive_btn);
 
         let search_revealer = Revealer::builder()

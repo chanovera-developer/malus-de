@@ -365,21 +365,59 @@ button.branches-search-btn:checked {
     color: @window_fg_color;
 }
 
+.branches-search-shell {
+    background: transparent;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+}
+
+window.branches-window searchentry.branches-search-entry,
+searchentry.branches-search-entry,
 .branches-search-entry {
-    min-height: 30px;
-    border-radius: 999px;
+    background: transparent;
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+    outline: none;
+    min-height: 0;
+    min-width: 0;
     padding: 0 10px;
-    font-size: 12px;
-    background-color: alpha(@window_fg_color, 0.025);
-    border: 1px solid alpha(@borders, 0.28);
+    margin: 0;
+    font-size: 12.5px;
     color: @window_fg_color;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+window.branches-window searchentry.branches-search-entry > text,
+searchentry.branches-search-entry > text,
+.branches-search-entry > text {
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    color: @window_fg_color;
+}
+
+window.branches-window searchentry.branches-search-entry > image,
+searchentry.branches-search-entry > image,
+.branches-search-entry > image {
+    color: alpha(currentColor, 0.60);
+    min-height: 0;
+    min-width: 0;
+    padding: 0;
+    margin: 0;
+}
+
+searchentry.branches-search-entry:focus,
+.branches-search-entry:focus-within {
+    outline: none;
+    box-shadow: none;
+    border: none;
 }
 
 @media (prefers-color-scheme: dark) {
     .branches-toolbar-pill,
-    button.branches-search-btn,
-    .branches-search-entry {
+    button.branches-search-btn {
         background-color: alpha(@window_fg_color, 0.10);
         border-color: alpha(@window_fg_color, 0.14);
     }
@@ -392,11 +430,6 @@ button.branches-search-btn:checked {
     button.branches-search-btn:checked {
         background-color: alpha(@window_fg_color, 0.20);
     }
-}
-
-.branches-search-entry:focus-within {
-    border-color: @accent_bg_color;
-    box-shadow: 0 0 0 1.5px @accent_bg_color;
 }
 
 .branches-icon-canvas,
