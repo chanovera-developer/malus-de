@@ -570,26 +570,51 @@ viewport {
 /* ==========================================
    Panel Wi-Fi estilo macOS System Settings
    ========================================== */
+.wifi-content-pane {
+    background-color: @view_bg_color;
+    padding: 10px 22px 18px 22px;
+}
+
 .wifi-card-compact {
+    background: transparent;
+    border: none;
+    box-shadow: none;
     padding: 0px;
-    border-radius: 12px;
 }
 
 .wifi-header-section {
-    padding: 14px 16px;
+    padding: 10px 14px;
 }
 
 .wifi-active-section {
-    padding: 12px 16px;
+    padding: 9px 14px;
+}
+
+.wifi-section-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: @window_fg_color;
+    margin-top: 4px;
+    margin-bottom: 0px;
+}
+
+.wifi-badge-glyph {
+    color: #ffffff;
+}
+
+.wifi-row-separator {
+    min-height: 1px;
+    background-color: alpha(@borders, 0.45);
+    margin: 0px 12px;
 }
 
 .wifi-network-row {
     background: transparent;
     border: none;
     border-radius: 0px;
-    padding: 7px 14px;
-    min-height: 36px;
-    color: @card_fg_color;
+    padding: 1px 10px 1px 8px;
+    min-height: 28px;
+    color: @window_fg_color;
     box-shadow: none;
 }
 
@@ -597,34 +622,54 @@ viewport {
     background-color: alpha(currentColor, 0.045);
 }
 
-.wifi-row-check {
-    min-width: 18px;
-    color: @card_fg_color;
+button.wifi-row-btn {
+    background: transparent;
+    border: none;
+    border-radius: 0px;
+    padding: 3px 4px;
+    min-height: 24px;
+    color: @window_fg_color;
+    box-shadow: none;
+}
+
+button.wifi-row-btn:hover {
+    background: transparent;
+}
+
+.wifi-row-title {
     font-size: 13px;
+    font-weight: 500;
+    color: @window_fg_color;
+}
+
+.wifi-row-check {
+    min-width: 16px;
+    color: @window_fg_color;
+    font-size: 12.5px;
     font-weight: 700;
 }
 
 .wifi-status-dot-connected {
     color: #34c759;
-    font-size: 10px;
+    font-size: 9.5px;
 }
 
 .wifi-status-dot-connecting {
     color: #ff9f0a;
-    font-size: 10px;
+    font-size: 9.5px;
 }
 
 .wifi-status-dot-disconnected {
     color: #8e8e93;
-    font-size: 10px;
+    font-size: 9.5px;
 }
 
 .wifi-warn-label {
-    color: #d97706;
+    color: #eab308;
     font-size: 12px;
 }
 
-.wifi-link-btn {
+button.wifi-link-btn {
     background: transparent;
     border: none;
     box-shadow: none;
@@ -635,75 +680,85 @@ viewport {
     font-weight: 500;
 }
 
-.wifi-link-btn:hover {
+button.wifi-link-btn:hover {
     text-decoration: underline;
     background: transparent;
 }
 
+button.wifi-squircle-btn,
+button.wifi-squircle-btn-primary {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 0px;
+    padding: 4px 12px;
+    min-height: 24px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: @window_fg_color;
+}
+
+button.wifi-squircle-btn-primary {
+    color: #ffffff;
+    font-weight: 600;
+}
+
 .wifi-more-btn,
 menubutton.wifi-more-btn > button {
-    background-color: alpha(currentColor, 0.08);
-    border: 1px solid alpha(@borders, 0.7);
-    border-radius: 999px;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 0px;
     min-width: 22px;
     min-height: 22px;
     padding: 0px;
-    color: alpha(currentColor, 0.78);
-}
-
-.wifi-more-btn:hover,
-menubutton.wifi-more-btn > button:hover {
-    background-color: alpha(currentColor, 0.16);
+    color: alpha(currentColor, 0.72);
 }
 
 .wifi-help-btn,
 menubutton.wifi-help-btn > button {
-    background-color: alpha(currentColor, 0.08);
-    border: 1px solid @borders;
-    border-radius: 999px;
-    min-width: 28px;
-    min-height: 28px;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 0px;
+    min-width: 26px;
+    min-height: 26px;
     padding: 0px;
-    font-size: 13px;
+    font-size: 12.5px;
     font-weight: 700;
-    color: alpha(currentColor, 0.75);
-}
-
-.wifi-help-btn:hover,
-menubutton.wifi-help-btn > button:hover {
-    background-color: alpha(currentColor, 0.14);
+    color: alpha(currentColor, 0.78);
 }
 
 .wifi-pref-row {
-    padding: 12px 16px;
+    padding: 9px 14px;
 }
 
 .wifi-compact-dropdown button {
     background: transparent;
     border: none;
     box-shadow: none;
-    padding: 4px 8px;
-    border-radius: 8px;
-    color: @card_fg_color;
-    font-size: 13px;
+    padding: 3px 6px;
+    border-radius: 0px;
+    color: @window_fg_color;
+    font-size: 12.5px;
 }
 
 .wifi-compact-dropdown button:hover {
-    background-color: alpha(currentColor, 0.07);
+    background-color: alpha(currentColor, 0.05);
 }
 
 .wifi-menu-action-btn {
     background: transparent;
     border: none;
     box-shadow: none;
-    border-radius: 7px;
-    padding: 6px 10px;
+    border-radius: 0px;
+    padding: 5px 10px;
     color: @window_fg_color;
     font-size: 12.5px;
 }
 
 .wifi-menu-action-btn:hover {
-    background-color: @accent_bg_color;
+    background-color: alpha(@accent_bg_color, 0.85);
     color: @accent_fg_color;
 }
 

@@ -1,8 +1,286 @@
 use gtk4::prelude::*;
 use gtk4::{
-    Align, ApplicationWindow, Box as GtkBox, Button, DropDown, Entry, Image, Label, MenuButton,
-    Orientation, PasswordEntry, PolicyType, Popover, ScrolledWindow, Spinner, StringList, Switch,
+    Align, ApplicationWindow, Box as GtkBox, Button, DrawingArea, DropDown, Entry, Image, Label,
+    MenuButton, Orientation, Overlay, PasswordEntry, PolicyType, Popover, ScrolledWindow,
+    Spinner, StateFlags, StringList, Switch,
 };
+
+/// Dibuja la insignia cuadrada-squircle azul de Wi-Fi estilo macOS con el glifo centrado.
+fn make_squircle_wifi_badge(size: i32, icon_px: i32, radius: f64) -> Overlay {
+    let overlay = Overlay::builder()
+        .width_request(size)
+        .height_request(size)
+        .halign(Align::Center)
+        .valign(Align::Start)
+        .build();
+
+    let bg = DrawingArea::new();
+    bg.set_content_width(size);
+    bg.set_content_height(size);
+    bg.set_can_target(false);
+    bg.set_draw_func(move |_, cr, w, h| {
+        let width = w as f64;
+        let height = h as f64;
+        if width <= 2.0 || height <= 2.0 {
+            return;
+        }
+        let grad = gtk4::cairo::LinearGradient::new(0.0, 0.0, 0.0, height);
+        grad.add_color_stop_rgba(0.0, 0.22, 0.57, 1.0, 1.0);
+        grad.add_color_stop_rgba(1.0, 0.0, 0.44, 0.94, 1.0);
+
+        let _ = cr.save();
+        cr.translate(0.5, 0.5);
+        crate::squircle_path(cr, width - 1.0, height - 1.0, radius);
+        let _ = cr.set_source(&grad);
+        let _ = cr.fill_preserve();
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.18);
+        cr.set_line_width(1.0);
+        let _ = cr.stroke();
+        let _ = cr.restore();
+    });
+
+    let icon = Image::builder()
+        .icon_name("network-wireless-symbolic")
+        .pixel_size(icon_px)
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .css_classes(["wifi-badge-glyph"])
+        .build();
+
+    overlay.set_child(Some(&bg));
+    overlay.add_overlay(&icon);
+    overlay
+}
+
+/// Envuelve un contenedor tipo tarjeta con fondo gris claro y borde Squircle en Cairo.
+fn wrap_squircle_card(inner: &GtkBox, radius: f64) -> Overlay {
+    let overlay = Overlay::new();
+    let bg = DrawingArea::new();
+    bg.set_can_target(false);
+    bg.set_hexpand(true);
+    bg.set_vexpand(true);
+    bg.set_draw_func(move |_, cr, w, h| {
+        let width = w as f64;
+        let height = h as f64;
+        if width <= 2.0 || height <= 2.0 {
+            return;
+        }
+        let dark = libadwaita::StyleManager::default().is_dark();
+        let _ = cr.save();
+        cr.translate(0.5, 0.5);
+        crate::squircle_path(cr, width - 1.0, height - 1.0, radius);
+        if dark {
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.055);
+        } else {
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.036);
+        }
+        let _ = cr.fill_preserve();
+        if dark {
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.095);
+        } else {
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.075);
+        }
+        cr.set_line_width(1.0);
+        let _ = cr.stroke();
+        let _ = cr.restore();
+    });
+
+    let bg_weak = bg.downgrade();
+    libadwaita::StyleManager::default().connect_dark_notify(move |_| {
+        if let Some(area) = bg_weak.upgrade() {
+            area.queue_draw();
+        }
+    });
+
+    overlay.set_child(Some(&bg));
+    overlay.add_overlay(inner);
+    overlay.set_measure_overlay(inner, true);
+    overlay
+}
+
+/// Crea un botón estilo macOS con fondo y borde dibujados mediante Squircle.
+fn make_squircle_button(label: &str, primary: bool, tooltip: Option<&str>) -> (Overlay, Button) {
+    let btn = Button::builder()
+        .label(label)
+        .has_frame(false)
+        .css_classes([if primary {
+            "wifi-squircle-btn-primary"
+        } else {
+            "wifi-squircle-btn"
+        }])
+        .build();
+    if let Some(tip) = tooltip {
+        btn.set_tooltip_text(Some(tip));
+    }
+
+    let bg = DrawingArea::new();
+    bg.set_can_target(false);
+    bg.set_hexpand(true);
+    bg.set_vexpand(true);
+
+    let btn_weak = btn.downgrade();
+    bg.set_draw_func(move |_, cr, w, h| {
+        let width = w as f64;
+        let height = h as f64;
+        if width <= 2.0 || height <= 2.0 {
+            return;
+        }
+        let flags = btn_weak
+            .upgrade()
+            .map(|b| b.state_flags())
+            .unwrap_or(StateFlags::empty());
+        let hovered = flags.contains(StateFlags::PRELIGHT);
+        let active = flags.contains(StateFlags::ACTIVE);
+        let insensitive = flags.contains(StateFlags::INSENSITIVE);
+        let dark = libadwaita::StyleManager::default().is_dark();
+
+        let _ = cr.save();
+        cr.translate(0.5, 0.5);
+        crate::squircle_path(cr, width - 1.0, height - 1.0, 7.5);
+        if primary {
+            let alpha = if insensitive { 0.45 } else { 1.0 };
+            if active {
+                cr.set_source_rgba(0.0, 0.38, 0.80, alpha);
+            } else if hovered {
+                cr.set_source_rgba(0.04, 0.52, 1.0, alpha);
+            } else {
+                cr.set_source_rgba(0.0, 0.48, 1.0, alpha);
+            }
+            let _ = cr.fill_preserve();
+            cr.set_source_rgba(0.0, 0.25, 0.65, 0.25 * alpha);
+            cr.set_line_width(1.0);
+            let _ = cr.stroke();
+        } else {
+            if dark {
+                if active {
+                    cr.set_source_rgba(1.0, 1.0, 1.0, 0.22);
+                } else if hovered {
+                    cr.set_source_rgba(1.0, 1.0, 1.0, 0.16);
+                } else {
+                    cr.set_source_rgba(1.0, 1.0, 1.0, 0.11);
+                }
+            } else if active {
+                cr.set_source_rgba(0.0, 0.0, 0.0, 0.11);
+            } else if hovered {
+                cr.set_source_rgba(0.97, 0.97, 0.98, 1.0);
+            } else {
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.92);
+            }
+            let _ = cr.fill_preserve();
+            if dark {
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.16);
+            } else {
+                cr.set_source_rgba(0.0, 0.0, 0.0, 0.14);
+            }
+            cr.set_line_width(1.0);
+            let _ = cr.stroke();
+        }
+        let _ = cr.restore();
+    });
+
+    let bg_state = bg.clone();
+    btn.connect_state_flags_changed(move |_, _| {
+        bg_state.queue_draw();
+    });
+
+    let bg_theme = bg.downgrade();
+    libadwaita::StyleManager::default().connect_dark_notify(move |_| {
+        if let Some(area) = bg_theme.upgrade() {
+            area.queue_draw();
+        }
+    });
+
+    let overlay = Overlay::builder().valign(Align::Center).build();
+    overlay.set_child(Some(&bg));
+    overlay.add_overlay(&btn);
+    overlay.set_measure_overlay(&btn, true);
+    (overlay, btn)
+}
+
+/// Envuelve botones compactos (`⋯`, `?`, recargar) con un Squircle redondo.
+fn wrap_squircle_round_control<W: gtk4::prelude::IsA<gtk4::Widget>>(
+    widget: &W,
+    size: i32,
+    always_fill: bool,
+) -> Overlay {
+    let w_ref = widget.as_ref();
+    let overlay = Overlay::builder()
+        .width_request(size)
+        .height_request(size)
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .build();
+
+    let bg = DrawingArea::new();
+    bg.set_content_width(size);
+    bg.set_content_height(size);
+    bg.set_can_target(false);
+
+    let w_weak = w_ref.downgrade();
+    bg.set_draw_func(move |_, cr, w, h| {
+        let width = w as f64;
+        let height = h as f64;
+        if width <= 2.0 || height <= 2.0 {
+            return;
+        }
+        let flags = w_weak
+            .upgrade()
+            .map(|x| x.state_flags())
+            .unwrap_or(StateFlags::empty());
+        let hovered = flags.contains(StateFlags::PRELIGHT);
+        let active = flags.contains(StateFlags::ACTIVE);
+        if !always_fill && !hovered && !active {
+            return;
+        }
+        let dark = libadwaita::StyleManager::default().is_dark();
+        let radius = (width.min(height) - 1.0) * 0.48;
+
+        let _ = cr.save();
+        cr.translate(0.5, 0.5);
+        crate::squircle_path(cr, width - 1.0, height - 1.0, radius);
+        if dark {
+            if active {
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.22);
+            } else if hovered {
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.16);
+            } else {
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.10);
+            }
+        } else if active {
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.14);
+        } else if hovered {
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.09);
+        } else {
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.055);
+        }
+        let _ = cr.fill_preserve();
+        if dark {
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.13);
+        } else {
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.08);
+        }
+        cr.set_line_width(1.0);
+        let _ = cr.stroke();
+        let _ = cr.restore();
+    });
+
+    let bg_state = bg.clone();
+    w_ref.connect_state_flags_changed(move |_, _| {
+        bg_state.queue_draw();
+    });
+
+    let bg_theme = bg.downgrade();
+    libadwaita::StyleManager::default().connect_dark_notify(move |_| {
+        if let Some(area) = bg_theme.upgrade() {
+            area.queue_draw();
+        }
+    });
+
+    overlay.set_child(Some(&bg));
+    overlay.add_overlay(w_ref);
+    overlay.set_measure_overlay(w_ref, true);
+    overlay
+}
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashSet};
@@ -127,8 +405,8 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
 
     let pane = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .spacing(16)
-        .css_classes(["content-pane"])
+        .spacing(12)
+        .css_classes(["wifi-content-pane"])
         .build();
 
     let status_banner = Label::builder()
@@ -144,22 +422,16 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
     let top_card = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(0)
-        .css_classes(["macos-group-card", "wifi-card-compact"])
+        .css_classes(["wifi-card-compact"])
         .build();
 
     let header_row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(14)
+        .spacing(12)
         .css_classes(["wifi-header-section"])
         .build();
 
-    let icon_badge = crate::make_system_glyph_badge(
-        "network-wireless-symbolic",
-        &["spotlight-banner-icon", "badge-blue"],
-        40,
-        20,
-    );
-    icon_badge.set_valign(Align::Start);
+    let icon_badge = make_squircle_wifi_badge(34, 18, 10.5);
 
     let header_text = GtkBox::builder()
         .orientation(Orientation::Vertical)
@@ -199,7 +471,7 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
     top_card.append(&header_row);
 
     let top_sep = GtkBox::builder()
-        .css_classes(["list-row-separator"])
+        .css_classes(["wifi-row-separator"])
         .build();
     top_card.append(&top_sep);
 
@@ -276,21 +548,17 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .pixel_size(15)
         .visible(false)
         .build();
-    let active_details_btn = Button::builder()
-        .label("Detalles...")
-        .css_classes(["macos-action-btn"])
-        .has_frame(false)
-        .build();
+    let (active_details_wrap, active_details_btn) = make_squircle_button("Detalles...", false, None);
 
     active_right_box.append(&active_lock_icon);
     active_right_box.append(&active_signal_icon);
-    active_right_box.append(&active_details_btn);
+    active_right_box.append(&active_details_wrap);
 
     active_row.append(&active_info_col);
     active_row.append(&active_right_box);
     top_card.append(&active_row);
 
-    pane.append(&top_card);
+    pane.append(&wrap_squircle_card(&top_card, 12.0));
     pane.append(&status_banner);
 
     // =========================================================================
@@ -298,20 +566,20 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
     // =========================================================================
     let known_section_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .spacing(8)
+        .spacing(6)
         .build();
     let known_title = Label::builder()
         .label("Redes conocidas")
-        .css_classes(["section-header-title"])
+        .css_classes(["wifi-section-title"])
         .xalign(0.0)
         .build();
     let known_card = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(0)
-        .css_classes(["macos-group-card", "wifi-list-card"])
+        .css_classes(["wifi-card-compact"])
         .build();
     known_section_box.append(&known_title);
-    known_section_box.append(&known_card);
+    known_section_box.append(&wrap_squircle_card(&known_card, 12.0));
     pane.append(&known_section_box);
 
     // =========================================================================
@@ -319,7 +587,7 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
     // =========================================================================
     let others_section_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .spacing(8)
+        .spacing(6)
         .build();
     let others_hdr = GtkBox::builder()
         .orientation(Orientation::Horizontal)
@@ -328,7 +596,7 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .build();
     let others_title = Label::builder()
         .label("Otras redes")
-        .css_classes(["section-header-title"])
+        .css_classes(["wifi-section-title"])
         .hexpand(true)
         .xalign(0.0)
         .build();
@@ -342,30 +610,30 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .has_frame(false)
         .tooltip_text("Buscar redes cercanas nuevamente")
         .build();
+    let rescan_wrap = wrap_squircle_round_control(&rescan_btn, 24, false);
     others_hdr.append(&others_title);
     others_hdr.append(&scan_spinner);
-    others_hdr.append(&rescan_btn);
+    others_hdr.append(&rescan_wrap);
 
     let others_card = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(0)
-        .css_classes(["macos-group-card", "wifi-list-card"])
+        .css_classes(["wifi-card-compact"])
         .build();
     let other_join_row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .halign(Align::End)
         .margin_top(2)
         .build();
-    let other_network_btn = Button::builder()
-        .label("Otra...")
-        .css_classes(["macos-action-btn"])
-        .has_frame(false)
-        .tooltip_text("Conectarse manualmente a una red oculta")
-        .build();
-    other_join_row.append(&other_network_btn);
+    let (other_network_wrap, other_network_btn) = make_squircle_button(
+        "Otra...",
+        false,
+        Some("Conectarse manualmente a una red oculta"),
+    );
+    other_join_row.append(&other_network_wrap);
 
     others_section_box.append(&others_hdr);
-    others_section_box.append(&others_card);
+    others_section_box.append(&wrap_squircle_card(&others_card, 12.0));
     others_section_box.append(&other_join_row);
     pane.append(&others_section_box);
 
@@ -376,7 +644,7 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
     let prefs_card = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(0)
-        .css_classes(["macos-group-card", "wifi-card-compact"])
+        .css_classes(["wifi-card-compact"])
         .build();
 
     let ask_join_row = build_preference_dropdown_row(
@@ -394,7 +662,7 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
     });
 
     let prefs_sep = GtkBox::builder()
-        .css_classes(["list-row-separator"])
+        .css_classes(["wifi-row-separator"])
         .build();
 
     let ask_hotspot_row = build_preference_dropdown_row(
@@ -414,7 +682,7 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
     prefs_card.append(&ask_join_row.0);
     prefs_card.append(&prefs_sep);
     prefs_card.append(&ask_hotspot_row.0);
-    pane.append(&prefs_card);
+    pane.append(&wrap_squircle_card(&prefs_card, 12.0));
 
     let footer_actions = GtkBox::builder()
         .orientation(Orientation::Horizontal)
@@ -422,11 +690,7 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .halign(Align::End)
         .build();
 
-    let advanced_btn = Button::builder()
-        .label("Avanzado...")
-        .css_classes(["macos-action-btn"])
-        .has_frame(false)
-        .build();
+    let (advanced_wrap, advanced_btn) = make_squircle_button("Avanzado...", false, None);
     let help_btn = MenuButton::builder()
         .label("?")
         .css_classes(["wifi-help-btn"])
@@ -434,9 +698,10 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .always_show_arrow(false)
         .tooltip_text("Ayuda de Wi-Fi")
         .build();
+    let help_wrap = wrap_squircle_round_control(&help_btn, 26, true);
 
-    footer_actions.append(&advanced_btn);
-    footer_actions.append(&help_btn);
+    footer_actions.append(&advanced_wrap);
+    footer_actions.append(&help_wrap);
     pane.append(&footer_actions);
 
     scrolled.set_child(Some(&pane));
@@ -849,28 +1114,28 @@ fn populate_wifi_list_card(
     for (idx, net) in networks.iter().enumerate() {
         if idx > 0 {
             let sep = GtkBox::builder()
-                .css_classes(["list-row-separator"])
+                .css_classes(["wifi-row-separator"])
                 .build();
             card.append(&sep);
         }
 
         let row_box = GtkBox::builder()
             .orientation(Orientation::Horizontal)
-            .spacing(8)
+            .spacing(6)
             .css_classes(["wifi-network-row"])
             .build();
 
         let connect_btn = Button::builder()
             .has_frame(false)
             .hexpand(true)
-            .css_classes(["wifi-network-row"])
+            .css_classes(["wifi-row-btn"])
             .build();
         connect_btn.set_margin_top(0);
         connect_btn.set_margin_bottom(0);
 
         let left_inner = GtkBox::builder()
             .orientation(Orientation::Horizontal)
-            .spacing(6)
+            .spacing(4)
             .hexpand(true)
             .valign(Align::Center)
             .build();
@@ -883,7 +1148,7 @@ fn populate_wifi_list_card(
 
         let name_lbl = Label::builder()
             .label(&net.ssid)
-            .css_classes(["card-section-title"])
+            .css_classes(["wifi-row-title"])
             .xalign(0.0)
             .hexpand(true)
             .ellipsize(gtk4::pango::EllipsizeMode::End)
@@ -893,17 +1158,10 @@ fn populate_wifi_list_card(
         left_inner.append(&name_lbl);
         connect_btn.set_child(Some(&left_inner));
 
-        // Estilo plano en el botón de fila para integrarse dentro de row_box
-        let row_wrapper = GtkBox::builder()
-            .orientation(Orientation::Horizontal)
-            .spacing(8)
-            .hexpand(true)
-            .build();
-
         let right_icons = GtkBox::builder()
             .orientation(Orientation::Horizontal)
-            .spacing(10)
-            .margin_end(14)
+            .spacing(8)
+            .margin_end(2)
             .valign(Align::Center)
             .build();
 
@@ -931,7 +1189,8 @@ fn populate_wifi_list_card(
             .valign(Align::Center)
             .tooltip_text("Opciones de red")
             .build();
-        right_icons.append(&more_btn);
+        let more_wrap = wrap_squircle_round_control(&more_btn, 22, true);
+        right_icons.append(&more_wrap);
 
         // Acción al pulsar la fila
         let net_click = net.clone();
@@ -1060,10 +1319,8 @@ fn populate_wifi_list_card(
         row_box.set_margin_start(0);
         row_box.set_margin_end(0);
         row_box.set_spacing(4);
-        row_wrapper.append(&connect_btn);
-        row_wrapper.append(&right_icons);
-        // Hacer que toda la fila se vea sin doble padding
-        row_box.append(&row_wrapper);
+        row_box.append(&connect_btn);
+        row_box.append(&right_icons);
         card.append(&row_box);
     }
 }
@@ -1203,18 +1460,10 @@ fn show_password_prompt_dialog(
         .spacing(8)
         .halign(Align::End)
         .build();
-    let cancel_btn = Button::builder()
-        .label("Cancelar")
-        .css_classes(["macos-action-btn"])
-        .has_frame(false)
-        .build();
-    let ok_btn = Button::builder()
-        .label("Conectar")
-        .css_classes(["macos-action-btn-primary"])
-        .has_frame(false)
-        .build();
-    actions.append(&cancel_btn);
-    actions.append(&ok_btn);
+    let (cancel_wrap, cancel_btn) = make_squircle_button("Cancelar", false, None);
+    let (ok_wrap, ok_btn) = make_squircle_button("Conectar", true, None);
+    actions.append(&cancel_wrap);
+    actions.append(&ok_wrap);
 
     let d_cancel = dialog.clone();
     cancel_btn.connect_clicked(move |_| d_cancel.close());
@@ -1299,18 +1548,10 @@ fn show_hidden_network_dialog(
         .halign(Align::End)
         .margin_top(6)
         .build();
-    let cancel_btn = Button::builder()
-        .label("Cancelar")
-        .css_classes(["macos-action-btn"])
-        .has_frame(false)
-        .build();
-    let join_btn = Button::builder()
-        .label("Acceder")
-        .css_classes(["macos-action-btn-primary"])
-        .has_frame(false)
-        .build();
-    actions.append(&cancel_btn);
-    actions.append(&join_btn);
+    let (cancel_wrap, cancel_btn) = make_squircle_button("Cancelar", false, None);
+    let (join_wrap, join_btn) = make_squircle_button("Acceder", true, None);
+    actions.append(&cancel_wrap);
+    actions.append(&join_wrap);
 
     let d_cancel = dialog.clone();
     cancel_btn.connect_clicked(move |_| d_cancel.close());
@@ -1436,20 +1677,22 @@ fn show_adapter_info_dialog(parent: &ApplicationWindow, snap: &WifiSnapshot) {
         ),
     ];
 
-    for (k, v) in rows {
-        vbox.append(&detail_kv_row(k, &v));
-    }
-
-    let ok_btn = Button::builder()
-        .label("Aceptar")
-        .css_classes(["macos-action-btn-primary"])
-        .has_frame(false)
-        .halign(Align::End)
-        .margin_top(6)
+    let rows_card = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(8)
+        .css_classes(["wifi-card-compact", "wifi-header-section"])
         .build();
+    for (k, v) in rows {
+        rows_card.append(&detail_kv_row(k, &v));
+    }
+    vbox.append(&wrap_squircle_card(&rows_card, 12.0));
+
+    let (ok_wrap, ok_btn) = make_squircle_button("Aceptar", true, None);
+    ok_wrap.set_halign(Align::End);
+    ok_wrap.set_margin_top(6);
     let d_c = dialog.clone();
     ok_btn.connect_clicked(move |_| d_c.close());
-    vbox.append(&ok_btn);
+    vbox.append(&ok_wrap);
 
     dialog.set_child(Some(&vbox));
     dialog.present();
@@ -1488,7 +1731,7 @@ fn show_network_details_dialog(
     let card = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(8)
-        .css_classes(["macos-group-card"])
+        .css_classes(["wifi-card-compact", "wifi-header-section"])
         .build();
 
     let is_connected = net.is_some_and(|n| n.connected);
@@ -1539,7 +1782,7 @@ fn show_network_details_dialog(
         }
     }
 
-    vbox.append(&card);
+    vbox.append(&wrap_squircle_card(&card, 12.0));
 
     if let Some(n) = net.filter(|n| n.known) {
         let auto_row = GtkBox::builder()
@@ -1548,7 +1791,7 @@ fn show_network_details_dialog(
             .build();
         let auto_lbl = Label::builder()
             .label("Conectarse automáticamente a esta red")
-            .css_classes(["card-section-title"])
+            .css_classes(["wifi-row-title"])
             .hexpand(true)
             .xalign(0.0)
             .build();
@@ -1581,11 +1824,7 @@ fn show_network_details_dialog(
         .build();
 
     if let Some(n) = net.filter(|n| n.known) {
-        let forget_btn = Button::builder()
-            .label("Olvidar esta red...")
-            .css_classes(["macos-action-btn"])
-            .has_frame(false)
-            .build();
+        let (forget_wrap, forget_btn) = make_squircle_button("Olvidar esta red...", false, None);
         let d_f = dialog.clone();
         let ssid_f = n.ssid.clone();
         let ban_f = banner.clone();
@@ -1594,20 +1833,16 @@ fn show_network_details_dialog(
             d_f.close();
             forget_wifi_async(ssid_f.clone(), &ban_f, &rel_f);
         });
-        footer.append(&forget_btn);
+        footer.append(&forget_wrap);
     }
 
     let spacer = GtkBox::builder().hexpand(true).build();
-    let ok_btn = Button::builder()
-        .label("Aceptar")
-        .css_classes(["macos-action-btn-primary"])
-        .has_frame(false)
-        .build();
+    let (ok_wrap, ok_btn) = make_squircle_button("Aceptar", true, None);
     let d_ok = dialog.clone();
     ok_btn.connect_clicked(move |_| d_ok.close());
 
     footer.append(&spacer);
-    footer.append(&ok_btn);
+    footer.append(&ok_wrap);
     vbox.append(&footer);
 
     dialog.set_child(Some(&vbox));
@@ -1641,7 +1876,7 @@ fn show_advanced_dialog(
     let hw_card = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(6)
-        .css_classes(["macos-group-card"])
+        .css_classes(["wifi-card-compact", "wifi-header-section"])
         .build();
     hw_card.append(&detail_kv_row(
         "Interfaz física",
@@ -1663,11 +1898,11 @@ fn show_advanced_dialog(
             snap.details.ip4_dns.join(", ")
         },
     ));
-    vbox.append(&hw_card);
+    vbox.append(&wrap_squircle_card(&hw_card, 12.0));
 
     let known_lbl = Label::builder()
         .label("Perfiles Wi-Fi conocidos:")
-        .css_classes(["section-header-title"])
+        .css_classes(["wifi-section-title"])
         .xalign(0.0)
         .build();
     vbox.append(&known_lbl);
@@ -1675,7 +1910,7 @@ fn show_advanced_dialog(
     let profiles_card = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(6)
-        .css_classes(["macos-group-card"])
+        .css_classes(["wifi-card-compact", "wifi-header-section"])
         .build();
 
     if snap.known_networks.is_empty() {
@@ -1702,15 +1937,11 @@ fn show_advanced_dialog(
                         ""
                     }
                 ))
-                .css_classes(["card-section-title"])
+                .css_classes(["wifi-row-title"])
                 .hexpand(true)
                 .xalign(0.0)
                 .build();
-            let forget = Button::builder()
-                .label("Olvidar")
-                .css_classes(["macos-action-btn"])
-                .has_frame(false)
-                .build();
+            let (forget_wrap, forget) = make_squircle_button("Olvidar", false, None);
             let d_c = dialog.clone();
             let ssid_c = net.ssid.clone();
             let ban_c = banner.clone();
@@ -1720,21 +1951,17 @@ fn show_advanced_dialog(
                 forget_wifi_async(ssid_c.clone(), &ban_c, &rel_c);
             });
             r.append(&lbl);
-            r.append(&forget);
+            r.append(&forget_wrap);
             profiles_card.append(&r);
         }
     }
-    vbox.append(&profiles_card);
+    vbox.append(&wrap_squircle_card(&profiles_card, 12.0));
 
-    let ok_btn = Button::builder()
-        .label("Aceptar")
-        .css_classes(["macos-action-btn-primary"])
-        .has_frame(false)
-        .halign(Align::End)
-        .build();
+    let (ok_wrap, ok_btn) = make_squircle_button("Aceptar", true, None);
+    ok_wrap.set_halign(Align::End);
     let d_c = dialog.clone();
     ok_btn.connect_clicked(move |_| d_c.close());
-    vbox.append(&ok_btn);
+    vbox.append(&ok_wrap);
 
     dialog.set_child(Some(&vbox));
     dialog.present();
@@ -2102,5 +2329,23 @@ no:Red\\:ConDosPuntos:11\\:22\\:33\\:44\\:55\\:66:Infra:6:2437 MHz:130 Mbit/s:45
         assert_eq!(det.hwaddr, "9A:61:39:D9:A6:9A");
         assert_eq!(det.ip4_addresses, vec!["192.168.1.8/24"]);
         assert_eq!(det.ip4_gateway, "192.168.1.1");
+    }
+
+    #[test]
+    fn squircle_wifi_widgets_smoke_when_display_available() {
+        if gtk4::init().is_err() {
+            return;
+        }
+        let badge = make_squircle_wifi_badge(34, 18, 10.5);
+        assert_eq!(badge.width_request(), 34);
+        assert_eq!(badge.height_request(), 34);
+
+        let card_inner = GtkBox::new(Orientation::Vertical, 0);
+        let card_wrap = wrap_squircle_card(&card_inner, 12.0);
+        assert!(card_wrap.child().is_some());
+
+        let (btn_wrap, btn) = make_squircle_button("Detalles...", false, None);
+        assert!(btn_wrap.child().is_some());
+        assert_eq!(btn.label().as_deref(), Some("Detalles..."));
     }
 }

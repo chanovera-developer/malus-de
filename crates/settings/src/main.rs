@@ -120,7 +120,7 @@ fn load_macos_settings_css() {
     }
 }
 
-fn squircle_path(context: &gtk4::cairo::Context, width: f64, height: f64, radius: f64) {
+pub(crate) fn squircle_path(context: &gtk4::cairo::Context, width: f64, height: f64, radius: f64) {
     let radius = radius.min(width / 2.0).min(height / 2.0).max(1.0);
     let power = 2.0 / SQUIRCLE_EXPONENT;
     let quarter_turn = std::f64::consts::FRAC_PI_2;

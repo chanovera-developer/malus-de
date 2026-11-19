@@ -4,6 +4,16 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-19] — Refinamiento Squircle y Colores macOS del Panel Wi-Fi (`malus-de-settings`)
+
+- Ajustada la geometría, proporciones y paleta del panel **Wi-Fi** ([`wifi_pane.rs`](../crates/settings/src/wifi_pane.rs), [`macos-settings.css`](../crates/settings/src/styles/macos-settings.css), [`main.rs`](../crates/settings/src/main.rs)) para igualar la estética de [`assets/screenshots/Wi-Fi.png`](../assets/screenshots/Wi-Fi.png):
+  - **Fondo claro y secciones en gris claro:** el contenedor `.wifi-content-pane` usa `@view_bg_color` mientras las tarjetas agrupadas utilizan un relleno sutil gris claro (`rgba(0,0,0,0.036)` / borde `rgba(0,0,0,0.075)` en tema claro; `rgba(255,255,255,0.055)` en tema oscuro).
+  - **Squircles con Cairo (`crate::squircle_path`):** tarjetas, botones de acción (`Detalles...`, `Otra...`, `Avanzado...` y acciones de diálogos) y controles redondos compactos (`⋯`, `?`, recargar) renderizan bordes superelípticos continuos con `DrawingArea` dentro de `Overlay` sin `border-radius` CSS rectangular.
+  - **Paddings compactos e icono Wi-Fi centrado:** insignia azul Squircle `34×34 px` con glifo `network-wireless-symbolic` de `18 px` centrado y paddings reducidos en encabezado, filas de red y pie.
+- Validación: `cargo check --offline --workspace --all-targets` (**0 warnings**), `cargo test --offline -p malus-de-settings` (**5 passed; 0 failed**).
+
+---
+
 ## [2026-11-19] — Panel de Ajustes de Wi-Fi Estilo macOS (`malus-de-settings` + `malus-de-top-bar`)
 
 - Implementado el panel completo de **Wi-Fi** ([`wifi_pane.rs`](../crates/settings/src/wifi_pane.rs), [`macos-settings.css`](../crates/settings/src/styles/macos-settings.css), [`main.rs`](../crates/settings/src/main.rs)) siguiendo el diseño de [`assets/screenshots/Wi-Fi.png`](../assets/screenshots/Wi-Fi.png):
