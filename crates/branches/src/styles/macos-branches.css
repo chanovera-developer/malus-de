@@ -869,6 +869,16 @@ window.branches-quicklook-window {
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
 }
 
+.branches-quicklook-video-stage {
+    background-color: #101114;
+    border-radius: 8px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+}
+
+.branches-quicklook-footer {
+    padding: 4px 12px;
+}
+
 .branches-quicklook-text {
     font-family: monospace;
     font-size: 12px;

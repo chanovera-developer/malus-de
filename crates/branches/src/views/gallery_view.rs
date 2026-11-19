@@ -35,6 +35,7 @@ impl GalleryView {
     pub fn new(on_navigate: NavigateCallback, on_selection_changed: SelectionCallback) -> Rc<Self> {
         let container = GtkBox::new(Orientation::Vertical, 0);
         container.add_css_class("branches-gallery-view");
+        container.set_focusable(true);
         container.set_hexpand(true);
         container.set_vexpand(true);
 
@@ -561,6 +562,7 @@ impl GalleryView {
         let cancel_slow_drag = pending_slow_rename.clone();
 
         click.connect_pressed(move |g, n_press, x, y| {
+            self_click.container.grab_focus();
             let button = g.current_button();
             let state = g.current_event_state();
             if let Some(source_id) = pending_slow_rename.take() {

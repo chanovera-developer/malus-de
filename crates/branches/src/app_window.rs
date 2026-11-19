@@ -2581,7 +2581,11 @@ impl BranchesWindow {
                 return glib::Propagation::Stop;
             }
 
-            if !focus_is_editable && keyval == gdk::Key::space {
+            if !focus_is_editable
+                && !is_ctrl
+                && !is_alt
+                && matches!(keyval, gdk::Key::space | gdk::Key::KP_Space)
+            {
                 bw.toggle_quick_look();
                 return glib::Propagation::Stop;
             }
