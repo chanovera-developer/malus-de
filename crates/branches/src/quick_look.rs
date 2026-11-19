@@ -11,6 +11,7 @@ use gtk4::{
     Separator, Spinner, TextView, Window,
 };
 use std::cell::{Cell, RefCell};
+use std::collections::{HashSet, VecDeque};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -91,6 +92,7 @@ pub struct QuickLook {
     media_handles: Rc<RefCell<Vec<Rc<MediaPlaybackHandle>>>>,
     page_step_cb: Rc<RefCell<Option<PageStepCallback>>>,
     preview_gen: Rc<Cell<u64>>,
+    cache: Arc<Mutex<PreviewCache>>,
 }
 
 impl QuickLook {
@@ -112,6 +114,7 @@ impl QuickLook {
             media_handles: Rc::new(RefCell::new(Vec::new())),
             page_step_cb: Rc::new(RefCell::new(None)),
             preview_gen: Rc::new(Cell::new(0)),
+            cache: Arc::new(Mutex::new(PreviewCache::new(24))),
         })
     }
 
@@ -214,6 +217,41 @@ impl QuickLook {
         };
         self.current_index.set(idx);
         self.show_in_overlay(overlay, &item);
+        self.prefetch_neighbors();
+    }
+
+    /// Precarga silenciosamente en segundo plano el ítem seleccionado antes de pulsar Espacio
+    /// (imitando la caché predictiva de Quick Look en macOS Finder).
+    pub fn prefetch_item(&self, item: &FileItem) {
+        if item.is_dir {
+            return;
+        }
+        let ext = item
+            .path
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        if !needs_background_preview(&ext, &item.kind_str) {
+            return;
+        }
+        spawn_prefetch_into_cache(&self.cache, item.path.clone(), ext, item.kind_str.clone());
+    }
+
+    fn prefetch_neighbors(&self) {
+        let items = self.items_list.borrow();
+        let len = items.len();
+        if len <= 1 {
+            return;
+        }
+        let idx = self.current_index.get().min(len - 1);
+        let next_idx = (idx + 1) % len;
+        let prev_idx = (idx + len - 1) % len;
+        if next_idx != idx {
+            self.prefetch_item(&items[next_idx]);
+        }
+        if prev_idx != idx && prev_idx != next_idx {
+            self.prefetch_item(&items[prev_idx]);
+        }
     }
 
     fn stop_active_media(&self) {
@@ -244,6 +282,7 @@ impl QuickLook {
                     &self.media_handles,
                     &self.page_step_cb,
                     &self.preview_gen,
+                    &self.cache,
                     0,
                 );
             }
@@ -272,6 +311,7 @@ impl QuickLook {
         let item = self.items_list.borrow().get(next).cloned();
         if let Some(item) = item {
             self.update_if_open(&item);
+            self.prefetch_neighbors();
         }
     }
 
@@ -510,6 +550,7 @@ impl QuickLook {
             &self.media_handles,
             &self.page_step_cb,
             &self.preview_gen,
+            &self.cache,
             185,
         );
         root_box.append(&content_holder);
@@ -596,23 +637,136 @@ fn is_text_preview_candidate(ext: &str, kind_str: &str) -> bool {
         || kind_str.to_lowercase().contains("código")
 }
 
+fn needs_background_preview(ext: &str, kind_str: &str) -> bool {
+    is_image_extension(ext)
+        || ext == "pdf"
+        || is_video_extension(ext)
+        || is_audio_extension(ext)
+        || is_archive_extension(ext)
+        || is_text_preview_candidate(ext, kind_str)
+}
+
+#[derive(Clone)]
+struct DecodedRgbaFrame {
+    width: i32,
+    height: i32,
+    stride: usize,
+    bytes: glib::Bytes,
+}
+
+impl DecodedRgbaFrame {
+    fn to_texture(&self) -> Texture {
+        MemoryTexture::new(
+            self.width,
+            self.height,
+            MemoryFormat::R8g8b8a8,
+            &self.bytes,
+            self.stride,
+        )
+        .upcast()
+    }
+}
+
+#[derive(Clone)]
 enum PreparedPreview {
     Image {
-        bytes: Option<Vec<u8>>,
+        frame: Option<DecodedRgbaFrame>,
     },
     Pdf {
         total_pages: u32,
-        first_page_png: Option<Vec<u8>>,
+        first_page: Option<DecodedRgbaFrame>,
     },
     Video {
         meta: MediaMetadata,
-        poster_png: Option<Vec<u8>>,
+        poster: Option<DecodedRgbaFrame>,
     },
     Audio {
         meta: MediaMetadata,
     },
     Text(String),
     Generic,
+}
+
+type CacheKey = (PathBuf, u64);
+
+struct PreviewCache {
+    max_entries: usize,
+    entries: VecDeque<(CacheKey, PreparedPreview)>,
+    in_flight: HashSet<CacheKey>,
+}
+
+impl PreviewCache {
+    fn new(max_entries: usize) -> Self {
+        Self {
+            max_entries: max_entries.max(1),
+            entries: VecDeque::new(),
+            in_flight: HashSet::new(),
+        }
+    }
+
+    fn get_if_fresh(&mut self, key: &CacheKey) -> Option<PreparedPreview> {
+        let pos = self.entries.iter().position(|(k, _)| k == key)?;
+        let (k, val) = self.entries.remove(pos)?;
+        let out = val.clone();
+        self.entries.push_back((k, val));
+        Some(out)
+    }
+
+    fn insert(&mut self, key: CacheKey, payload: PreparedPreview) {
+        if let Some(pos) = self.entries.iter().position(|(k, _)| k == &key) {
+            self.entries.remove(pos);
+        }
+        while self.entries.len() >= self.max_entries {
+            self.entries.pop_front();
+        }
+        self.entries.push_back((key, payload));
+    }
+
+    fn try_begin_fetch(&mut self, key: CacheKey) -> bool {
+        if self.entries.iter().any(|(k, _)| k == &key) || self.in_flight.contains(&key) {
+            return false;
+        }
+        self.in_flight.insert(key);
+        true
+    }
+
+    fn finish_fetch(&mut self, key: CacheKey, payload: PreparedPreview) {
+        self.in_flight.remove(&key);
+        self.insert(key, payload);
+    }
+}
+
+fn file_mtime_nanos(path: &Path) -> u64 {
+    fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
+}
+
+fn spawn_prefetch_into_cache(
+    cache: &Arc<Mutex<PreviewCache>>,
+    path: PathBuf,
+    ext: String,
+    kind_str: String,
+) {
+    let key = (path.clone(), file_mtime_nanos(&path));
+    {
+        let Ok(mut guard) = cache.lock() else {
+            return;
+        };
+        if !guard.try_begin_fetch(key.clone()) {
+            return;
+        }
+    }
+    let cache_clone = cache.clone();
+    std::thread::spawn(move || {
+        let payload = prepare_preview_payload(&path, &ext, &kind_str);
+        if let Ok(mut guard) = cache_clone.lock() {
+            guard.finish_fetch(key, payload);
+        }
+    });
 }
 
 fn create_loading_placeholder(item: &FileItem) -> gtk4::Widget {
@@ -640,6 +794,7 @@ fn populate_preview_async(
     media_handles: &Rc<RefCell<Vec<Rc<MediaPlaybackHandle>>>>,
     page_step_cb: &Rc<RefCell<Option<PageStepCallback>>>,
     preview_gen: &Rc<Cell<u64>>,
+    cache: &Arc<Mutex<PreviewCache>>,
     delay_playback_ms: u64,
 ) {
     let next_gen = preview_gen.get().wrapping_add(1);
@@ -655,64 +810,79 @@ fn populate_preview_async(
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default();
 
-    let needs_worker = is_image_extension(&ext)
-        || ext == "pdf"
-        || is_video_extension(&ext)
-        || is_audio_extension(&ext)
-        || is_archive_extension(&ext)
-        || is_text_preview_candidate(&ext, &item.kind_str);
-
-    if !needs_worker {
+    if !needs_background_preview(&ext, &item.kind_str) {
         holder.append(&create_generic_preview(item));
         return;
     }
 
+    let key = (item.path.clone(), file_mtime_nanos(&item.path));
+
+    // Ruta rápida macOS (0 ms): si ya estaba precargado/cacheado en LRU, montarlo antes del Frame 0
+    if let Ok(mut guard) = cache.lock() {
+        if let Some(cached) = guard.get_if_fresh(&key) {
+            let widget = build_widget_from_payload(
+                item,
+                cached,
+                media_handles,
+                page_step_cb,
+                preview_gen,
+                next_gen,
+                delay_playback_ms,
+            );
+            holder.append(&widget);
+            return;
+        }
+    }
+
     holder.append(&create_loading_placeholder(item));
+    spawn_prefetch_into_cache(cache, item.path.clone(), ext, item.kind_str.clone());
 
     let opened_at = std::time::Instant::now();
-    let path = item.path.clone();
-    let kind_str = item.kind_str.clone();
-    let (tx, rx) = mpsc::channel::<PreparedPreview>();
-    std::thread::spawn(move || {
-        let payload = prepare_preview_payload(&path, &ext, &kind_str);
-        let _ = tx.send(payload);
-    });
-
     let holder_weak = holder.downgrade();
     let item_clone = item.clone();
     let mh = media_handles.clone();
     let psc = page_step_cb.clone();
     let gen_ref = preview_gen.clone();
+    let cache_poll = cache.clone();
 
-    glib::timeout_add_local(Duration::from_millis(10), move || {
+    glib::timeout_add_local(Duration::from_millis(8), move || {
         if gen_ref.get() != next_gen {
             return glib::ControlFlow::Break;
         }
-        match rx.try_recv() {
-            Ok(payload) => {
-                if let Some(h) = holder_weak.upgrade() {
-                    if gen_ref.get() == next_gen {
-                        let elapsed_ms = opened_at.elapsed().as_millis() as u64;
-                        let remaining_delay = delay_playback_ms.saturating_sub(elapsed_ms);
-                        let widget = build_widget_from_payload(
-                            &item_clone,
-                            payload,
-                            &mh,
-                            &psc,
-                            &gen_ref,
-                            next_gen,
-                            remaining_delay,
-                        );
-                        while let Some(child) = h.first_child() {
-                            h.remove(&child);
-                        }
-                        h.append(&widget);
+        let cached_opt = cache_poll
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.get_if_fresh(&key));
+        if let Some(payload) = cached_opt {
+            if let Some(h) = holder_weak.upgrade() {
+                if gen_ref.get() == next_gen {
+                    let elapsed_ms = opened_at.elapsed().as_millis() as u64;
+                    let remaining_delay = delay_playback_ms.saturating_sub(elapsed_ms);
+                    let widget = build_widget_from_payload(
+                        &item_clone,
+                        payload,
+                        &mh,
+                        &psc,
+                        &gen_ref,
+                        next_gen,
+                        remaining_delay,
+                    );
+                    while let Some(child) = h.first_child() {
+                        h.remove(&child);
                     }
+                    h.append(&widget);
                 }
-                glib::ControlFlow::Break
             }
-            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-            Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+            return glib::ControlFlow::Break;
+        }
+        let still_fetching = cache_poll
+            .lock()
+            .ok()
+            .is_some_and(|guard| guard.in_flight.contains(&key));
+        if still_fetching {
+            glib::ControlFlow::Continue
+        } else {
+            glib::ControlFlow::Break
         }
     });
 }
@@ -720,21 +890,21 @@ fn populate_preview_async(
 fn prepare_preview_payload(path: &Path, ext: &str, kind_str: &str) -> PreparedPreview {
     if is_image_extension(ext) {
         return PreparedPreview::Image {
-            bytes: load_image_bytes_offthread(path, ext),
+            frame: decode_image_rgba_offthread(path, ext),
         };
     }
     if ext == "pdf" {
         let total_pages = query_pdf_page_count(path);
-        let first_page_png = render_pdf_page_png_bytes(path, 1);
+        let first_page = render_pdf_page_rgba_offthread(path, 1);
         return PreparedPreview::Pdf {
             total_pages,
-            first_page_png,
+            first_page,
         };
     }
     if is_video_extension(ext) {
         let meta = probe_media_metadata(path);
-        let poster_png = extract_video_poster_png_bytes(path, meta.duration_secs);
-        return PreparedPreview::Video { meta, poster_png };
+        let poster = extract_video_poster_rgba_offthread(path, meta.duration_secs);
+        return PreparedPreview::Video { meta, poster };
     }
     if is_audio_extension(ext) {
         let meta = probe_media_metadata(path);
@@ -761,21 +931,16 @@ fn build_widget_from_payload(
     remaining_delay_ms: u64,
 ) -> gtk4::Widget {
     match payload {
-        PreparedPreview::Image { bytes } => create_image_preview_from_bytes(&item.path, item, bytes),
+        PreparedPreview::Image { frame } => create_image_preview_from_frame(&item.path, item, frame),
         PreparedPreview::Pdf {
             total_pages,
-            first_page_png,
-        } => create_pdf_preview_from_bytes(
-            &item.path,
-            total_pages,
-            first_page_png,
-            page_step_cb,
-        )
-        .unwrap_or_else(|| create_generic_preview(item)),
-        PreparedPreview::Video { meta, poster_png } => create_video_preview_from_payload(
+            first_page,
+        } => create_pdf_preview_from_frame(&item.path, total_pages, first_page, page_step_cb)
+            .unwrap_or_else(|| create_generic_preview(item)),
+        PreparedPreview::Video { meta, poster } => create_video_preview_from_payload(
             item,
             meta,
-            poster_png,
+            poster,
             media_handles,
             preview_gen,
             expected_gen,
@@ -808,14 +973,65 @@ fn unique_temp_path(tag: &str, ext: &str) -> PathBuf {
     ))
 }
 
-fn load_image_bytes_offthread(path: &Path, ext: &str) -> Option<Vec<u8>> {
-    let meta = fs::metadata(path).ok();
-    let too_big = meta.as_ref().is_some_and(|m| m.len() > 2_500_000);
-    let needs_ffmpeg = too_big || matches!(ext, "heic" | "avif" | "jxl" | "tiff" | "tif");
+fn decode_pixbuf_to_rgba_frame(pixbuf: &Pixbuf) -> Option<DecodedRgbaFrame> {
+    let oriented = pixbuf.apply_embedded_orientation();
+    let pb = oriented.as_ref().unwrap_or(pixbuf);
+    let width = pb.width();
+    let height = pb.height();
+    let rowstride = pb.rowstride();
+    if width <= 0 || height <= 0 || rowstride <= 0 {
+        return None;
+    }
+    let has_alpha = pb.has_alpha();
+    let src_bytes = pb.read_pixel_bytes();
+    let src = src_bytes.as_ref();
+    let w = width as usize;
+    let h = height as usize;
+    let stride = rowstride as usize;
+    let out_stride = w * 4;
+    let mut rgba = vec![0u8; out_stride * h];
 
-    if !needs_ffmpeg {
-        if let Ok(bytes) = fs::read(path) {
-            return Some(bytes);
+    if has_alpha {
+        for y in 0..h {
+            let s0 = y * stride;
+            let d0 = y * out_stride;
+            if s0 + out_stride > src.len() {
+                return None;
+            }
+            rgba[d0..d0 + out_stride].copy_from_slice(&src[s0..s0 + out_stride]);
+        }
+    } else {
+        for y in 0..h {
+            let s0 = y * stride;
+            let d0 = y * out_stride;
+            if s0 + w * 3 > src.len() {
+                return None;
+            }
+            for x in 0..w {
+                let sp = s0 + x * 3;
+                let dp = d0 + x * 4;
+                rgba[dp] = src[sp];
+                rgba[dp + 1] = src[sp + 1];
+                rgba[dp + 2] = src[sp + 2];
+                rgba[dp + 3] = 255;
+            }
+        }
+    }
+
+    Some(DecodedRgbaFrame {
+        width,
+        height,
+        stride: out_stride,
+        bytes: glib::Bytes::from_owned(rgba),
+    })
+}
+
+fn decode_image_rgba_offthread(path: &Path, ext: &str) -> Option<DecodedRgbaFrame> {
+    if !matches!(ext, "heic" | "avif" | "jxl") {
+        if let Ok(pb) = Pixbuf::from_file_at_scale(path, 1280, 920, true) {
+            if let Some(frame) = decode_pixbuf_to_rgba_frame(&pb) {
+                return Some(frame);
+            }
         }
     }
 
@@ -834,27 +1050,25 @@ fn load_image_bytes_offthread(path: &Path, ext: &str) -> Option<Vec<u8>> {
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|s| s.success());
-    let out = if ok && tmp_png.exists() {
-        fs::read(&tmp_png).ok()
+    let frame = if ok && tmp_png.exists() {
+        Pixbuf::from_file_at_scale(&tmp_png, 1280, 920, true)
+            .ok()
+            .and_then(|pb| decode_pixbuf_to_rgba_frame(&pb))
     } else {
-        fs::read(path).ok()
+        None
     };
     let _ = fs::remove_file(&tmp_png);
-    out
+    frame
 }
 
-fn create_image_preview_from_bytes(
+fn create_image_preview_from_frame(
     path: &Path,
     item: &FileItem,
-    bytes_opt: Option<Vec<u8>>,
+    frame_opt: Option<DecodedRgbaFrame>,
 ) -> gtk4::Widget {
-    let texture = bytes_opt
-        .and_then(|b| Texture::from_bytes(&glib::Bytes::from_owned(b)).ok())
-        .or_else(|| {
-            Pixbuf::from_file_at_scale(path, 1280, 920, true)
-                .ok()
-                .map(|pb| Texture::for_pixbuf(&pb))
-        });
+    let texture = frame_opt
+        .map(|f| f.to_texture())
+        .or_else(|| Texture::from_file(&gio::File::for_path(path)).ok());
 
     let Some(texture) = texture else {
         return create_generic_preview(item);
@@ -900,7 +1114,7 @@ fn query_pdf_page_count(path: &Path) -> u32 {
     parse_pdfinfo_page_count(&String::from_utf8_lossy(&out.stdout))
 }
 
-fn render_pdf_page_png_bytes(path: &Path, page: u32) -> Option<Vec<u8>> {
+fn render_pdf_page_rgba_offthread(path: &Path, page: u32) -> Option<DecodedRgbaFrame> {
     let prefix = unique_temp_path("pdf", "tmp").with_extension("");
     let page_str = page.to_string();
     let status = Command::new("pdftoppm")
@@ -915,23 +1129,24 @@ fn render_pdf_page_png_bytes(path: &Path, page: u32) -> Option<Vec<u8>> {
         return None;
     }
     let png_path = PathBuf::from(format!("{}.png", prefix.display()));
-    let bytes = if png_path.exists() {
-        fs::read(&png_path).ok()
+    let frame = if png_path.exists() {
+        Pixbuf::from_file(&png_path)
+            .ok()
+            .and_then(|pb| decode_pixbuf_to_rgba_frame(&pb))
     } else {
         None
     };
     let _ = fs::remove_file(&png_path);
-    bytes
+    frame
 }
 
-fn create_pdf_preview_from_bytes(
+fn create_pdf_preview_from_frame(
     path: &Path,
     total_pages: u32,
-    first_page_png: Option<Vec<u8>>,
+    first_page: Option<DecodedRgbaFrame>,
     page_step_cb: &Rc<RefCell<Option<PageStepCallback>>>,
 ) -> Option<gtk4::Widget> {
-    let png_bytes = first_page_png?;
-    let initial_tex = Texture::from_bytes(&glib::Bytes::from_owned(png_bytes)).ok()?;
+    let initial_tex = first_page?.to_texture();
 
     let root = GtkBox::new(Orientation::Vertical, 0);
     root.set_vexpand(true);
@@ -1011,25 +1226,22 @@ fn create_pdf_preview_from_bytes(
 
                 let gen = page_gen.get().wrapping_add(1);
                 page_gen.set(gen);
-                let (tx, rx) = mpsc::channel::<Option<Vec<u8>>>();
+                let (tx, rx) = mpsc::channel::<Option<DecodedRgbaFrame>>();
                 let p = path.clone();
                 std::thread::spawn(move || {
-                    let _ = tx.send(render_pdf_page_png_bytes(&p, target));
+                    let _ = tx.send(render_pdf_page_rgba_offthread(&p, target));
                 });
                 let pic_weak = picture.downgrade();
                 let pg_ref = page_gen.clone();
-                glib::timeout_add_local(Duration::from_millis(10), move || {
+                glib::timeout_add_local(Duration::from_millis(8), move || {
                     if pg_ref.get() != gen {
                         return glib::ControlFlow::Break;
                     }
                     match rx.try_recv() {
-                        Ok(Some(bytes)) => {
+                        Ok(Some(frame)) => {
                             if let Some(pic) = pic_weak.upgrade() {
-                                if let Ok(tex) =
-                                    Texture::from_bytes(&glib::Bytes::from_owned(bytes))
-                                {
-                                    pic.set_paintable(Some(&tex));
-                                }
+                                let tex = frame.to_texture();
+                                pic.set_paintable(Some(&tex));
                             }
                             glib::ControlFlow::Break
                         }
@@ -1062,7 +1274,7 @@ fn create_pdf_preview_from_bytes(
     Some(root.upcast())
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct MediaMetadata {
     duration_secs: Option<f64>,
     duration_str: Option<String>,
@@ -1150,7 +1362,10 @@ pub fn fit_video_dimensions(src_w: u32, src_h: u32, max_w: u32, max_h: u32) -> (
     (w, h)
 }
 
-fn extract_video_poster_png_bytes(path: &Path, duration_secs: Option<f64>) -> Option<Vec<u8>> {
+fn extract_video_poster_rgba_offthread(
+    path: &Path,
+    duration_secs: Option<f64>,
+) -> Option<DecodedRgbaFrame> {
     let seek_arg = match duration_secs {
         Some(d) if d > 2.0 => "0.5",
         _ => "0",
@@ -1165,13 +1380,15 @@ fn extract_video_poster_png_bytes(path: &Path, duration_secs: Option<f64>) -> Op
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|s| s.success());
-    let bytes = if ok && tmp_png.exists() {
-        fs::read(&tmp_png).ok()
+    let frame = if ok && tmp_png.exists() {
+        Pixbuf::from_file(&tmp_png)
+            .ok()
+            .and_then(|pb| decode_pixbuf_to_rgba_frame(&pb))
     } else {
         None
     };
     let _ = fs::remove_file(&tmp_png);
-    bytes
+    frame
 }
 
 fn spawn_video_playback(
@@ -1299,7 +1516,7 @@ fn spawn_video_playback(
 fn create_video_preview_from_payload(
     item: &FileItem,
     meta: MediaMetadata,
-    poster_png: Option<Vec<u8>>,
+    poster_frame: Option<DecodedRgbaFrame>,
     media_handles: &Rc<RefCell<Vec<Rc<MediaPlaybackHandle>>>>,
     preview_gen: &Rc<Cell<u64>>,
     expected_gen: u64,
@@ -1330,10 +1547,9 @@ fn create_video_preview_from_payload(
     picture.set_can_shrink(true);
     picture.set_vexpand(true);
     picture.set_hexpand(true);
-    if let Some(bytes) = poster_png {
-        if let Ok(poster) = Texture::from_bytes(&glib::Bytes::from_owned(bytes)) {
-            picture.set_paintable(Some(&poster));
-        }
+    if let Some(frame) = poster_frame {
+        let poster = frame.to_texture();
+        picture.set_paintable(Some(&poster));
     }
     stage.append(&picture);
     root.append(&stage);
@@ -1766,5 +1982,37 @@ mod tests {
         assert_eq!(w % 2, 0);
         assert_eq!(h % 2, 0);
         assert_eq!((w, h), (760, 428));
+    }
+
+    #[test]
+    fn preview_cache_respects_lru_eviction_and_mtime_invalidation() {
+        let mut cache = PreviewCache::new(2);
+        let k1 = (PathBuf::from("/tmp/a.png"), 100);
+        let k2 = (PathBuf::from("/tmp/b.png"), 200);
+        let k3 = (PathBuf::from("/tmp/c.png"), 300);
+
+        cache.insert(k1.clone(), PreparedPreview::Text("a".into()));
+        cache.insert(k2.clone(), PreparedPreview::Text("b".into()));
+        // Re-acceder k1 lo promueve a MRU; k2 pasa a ser LRU
+        assert!(cache.get_if_fresh(&k1).is_some());
+        cache.insert(k3.clone(), PreparedPreview::Text("c".into()));
+
+        assert!(cache.get_if_fresh(&k1).is_some());
+        assert!(cache.get_if_fresh(&k2).is_none());
+        assert!(cache.get_if_fresh(&k3).is_some());
+        // Cambio de mtime invalida la clave
+        assert!(cache
+            .get_if_fresh(&(PathBuf::from("/tmp/a.png"), 101))
+            .is_none());
+    }
+
+    #[test]
+    fn decode_pixbuf_to_rgba_frame_produces_aligned_rgba_bytes() {
+        let pb = Pixbuf::new(gdk_pixbuf::Colorspace::Rgb, false, 8, 5, 3).unwrap();
+        let frame = decode_pixbuf_to_rgba_frame(&pb).unwrap();
+        assert_eq!(frame.width, 5);
+        assert_eq!(frame.height, 3);
+        assert_eq!(frame.stride, 20);
+        assert_eq!(frame.bytes.len(), 60);
     }
 }

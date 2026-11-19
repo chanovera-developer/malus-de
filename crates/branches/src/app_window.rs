@@ -1016,6 +1016,10 @@ impl BranchesWindow {
                                 if let Some(item) = w.active_pane().get_selected_item() {
                                     ql_for_sel.update_if_open(&item);
                                 }
+                            } else if selected_count > 0 {
+                                if let Some(item) = w.active_pane().get_selected_item() {
+                                    ql_for_sel.prefetch_item(&item);
+                                }
                             }
                         }
                     }
