@@ -365,6 +365,11 @@ button.branches-search-btn:checked {
     color: @window_fg_color;
 }
 
+button.branches-search-btn.has-query {
+    border-color: alpha(@accent_bg_color, 0.65);
+    color: @accent_bg_color;
+}
+
 .branches-search-shell {
     background: transparent;
     min-height: 0;

@@ -12,7 +12,7 @@ use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea,
     EventControllerFocus, EventControllerKey, GestureClick, Label, MenuButton, Orientation, Overlay,
-    PackType, Paned, Revealer, RevealerTransitionType, SearchEntry, Stack, StackTransitionType,
+    PackType, Paned, SearchEntry, Stack, StackTransitionType,
     ToggleButton, WindowControls, WindowHandle,
 };
 use std::cell::{Cell, RefCell};
@@ -191,9 +191,11 @@ pub struct BranchesWindow {
     job_ui: Rc<JobUiController>,
     sort_by_action: gio::SimpleAction,
     sort_order_action: gio::SimpleAction,
+    search_recursive_action: gio::SimpleAction,
+    search_stack: Stack,
+    search_shell: Overlay,
     search_entry: SearchEntry,
-    search_recursive_btn: ToggleButton,
-    search_toggle_btn: ToggleButton,
+    search_toggle_btn: Button,
     syncing_ui: Rc<Cell<bool>>,
     _config_monitor: Option<gio::FileMonitor>,
 }
@@ -461,6 +463,14 @@ impl BranchesWindow {
         menu_model.append(Some("Abrir en Terminal"), Some("win.open_terminal"));
         menu_model.append(Some("Conectar al servidor…"), Some("win.connect_server"));
         menu_model.append(Some("Mostrar Archivos Ocultos"), Some("win.toggle_hidden"));
+        menu_model.append(
+            Some(if es_ui {
+                "Buscar en subcarpetas"
+            } else {
+                "Search subfolders"
+            }),
+            Some("win.search_recursive"),
+        );
         menu_model.append(Some("Recargar"), Some("win.reload"));
 
         let tag_menu = gio::Menu::new();
@@ -489,58 +499,42 @@ impl BranchesWindow {
 
         action_menu_btn.set_menu_model(Some(&menu_model));
 
-        // 8. Búsqueda expandible macOS (Icono de lupa a la derecha que revela el campo)
-        let search_container = GtkBox::new(Orientation::Horizontal, 4);
+        // 8. Botón de búsqueda que se transforma en input squircle y vuelve a botón al hacer clic fuera
+        let search_container = GtkBox::new(Orientation::Horizontal, 0);
         search_container.set_valign(Align::Center);
         search_container.add_css_class("branches-search-container");
 
         let search_entry = SearchEntry::builder()
             .placeholder_text(if es_ui { "Buscar" } else { "Search" })
-            .width_chars(16)
+            .width_chars(18)
             .height_request(BRANCHES_SEARCH_HEIGHT)
             .valign(Align::Center)
             .vexpand(false)
             .css_classes(["branches-search-entry"])
             .build();
         let search_shell = create_squircle_search_shell(&search_entry);
+        search_shell.set_width_request(196);
 
-        let search_recursive_btn = ToggleButton::builder()
-            .icon_name("folder-saved-search-symbolic")
-            .tooltip_text(if es_ui {
-                "Buscar también en subcarpetas"
-            } else {
-                "Search subfolders recursively"
-            })
-            .valign(Align::Center)
-            .css_classes(["flat", "branches-tool-btn"])
-            .build();
-
-        let search_reveal_box = GtkBox::new(Orientation::Horizontal, 4);
-        search_reveal_box.set_valign(Align::Center);
-        search_reveal_box.append(&search_shell);
-        search_reveal_box.append(&search_recursive_btn);
-
-        let search_revealer = Revealer::builder()
-            .transition_type(RevealerTransitionType::SlideLeft)
-            .transition_duration(180)
-            .reveal_child(false)
-            .child(&search_reveal_box)
-            .build();
-
-        let search_toggle_btn = ToggleButton::builder()
+        let search_toggle_btn = Button::builder()
             .icon_name("system-search-symbolic")
             .tooltip_text("Buscar archivos (Ctrl+F)")
             .valign(Align::Center)
+            .halign(Align::End)
             .css_classes(["branches-tool-btn", "branches-search-btn"])
             .build();
 
-        let stb_stop = search_toggle_btn.clone();
-        search_entry.connect_stop_search(move |_| {
-            stb_stop.set_active(false);
-        });
+        let search_stack = Stack::builder()
+            .vhomogeneous(false)
+            .hhomogeneous(false)
+            .transition_type(StackTransitionType::Crossfade)
+            .transition_duration(150)
+            .valign(Align::Center)
+            .build();
+        search_stack.add_named(&search_toggle_btn, Some("button"));
+        search_stack.add_named(&search_shell, Some("input"));
+        search_stack.set_visible_child_name("button");
 
-        search_container.append(&search_revealer);
-        search_container.append(&search_toggle_btn);
+        search_container.append(&search_stack);
 
         actions_pill_box.append(&share_menu_btn);
         actions_pill_box.append(&info_btn);
@@ -815,6 +809,8 @@ impl BranchesWindow {
             Some(glib::VariantTy::STRING),
             &"asc".to_variant(),
         );
+        let search_recursive_action =
+            gio::SimpleAction::new_stateful("search_recursive", None, &false.to_variant());
 
         let branches_window = Rc::new(Self {
             window,
@@ -842,9 +838,11 @@ impl BranchesWindow {
             job_ui,
             sort_by_action,
             sort_order_action,
+            search_recursive_action,
+            search_stack,
+            search_shell: search_shell.clone(),
             search_entry: search_entry.clone(),
-            search_recursive_btn: search_recursive_btn.clone(),
-            search_toggle_btn,
+            search_toggle_btn: search_toggle_btn.clone(),
             syncing_ui: Rc::new(Cell::new(false)),
             _config_monitor: config_monitor.clone(),
         });
@@ -921,37 +919,49 @@ impl BranchesWindow {
             bw_info.open_get_info(None);
         });
 
-        // Conectar campo y botón de búsqueda
-        let bw_search_toggle = branches_window.clone();
-        let se_toggle = search_entry.clone();
-        let rev_toggle = search_revealer.clone();
-        branches_window.search_toggle_btn.connect_toggled(move |btn| {
-            let active = btn.is_active();
-            rev_toggle.set_reveal_child(active);
-            if bw_search_toggle.syncing_ui.get() {
-                return;
-            }
-            if active {
-                se_toggle.grab_focus();
-            } else {
-                se_toggle.set_text("");
-            }
+        // Conectar botón de búsqueda <-> input squircle y repliegue al hacer clic fuera
+        let bw_search_open = branches_window.clone();
+        branches_window.search_toggle_btn.connect_clicked(move |_| {
+            bw_search_open.expand_search();
+        });
+
+        let bw_stop = branches_window.clone();
+        search_entry.connect_stop_search(move |_| {
+            bw_stop.collapse_search(true);
         });
 
         let bw_search = branches_window.clone();
         search_entry.connect_search_changed(move |entry| {
+            let query = entry.text().to_string();
+            if query.is_empty() {
+                bw_search.search_toggle_btn.remove_css_class("has-query");
+            } else {
+                bw_search.search_toggle_btn.add_css_class("has-query");
+            }
             if !bw_search.syncing_ui.get() {
-                let query = entry.text().to_string();
                 bw_search.active_pane().set_search_query(query);
             }
         });
 
-        let bw_rec = branches_window.clone();
-        search_recursive_btn.connect_toggled(move |btn| {
-            if !bw_rec.syncing_ui.get() {
-                bw_rec.active_pane().set_search_recursive(btn.is_active());
+        let outside_click = GestureClick::new();
+        outside_click.set_button(0);
+        outside_click.set_propagation_phase(gtk4::PropagationPhase::Capture);
+        let bw_outside = branches_window.clone();
+        outside_click.connect_pressed(move |g, _n, x, y| {
+            if !bw_outside.is_search_expanded() {
+                return;
             }
+            if let Some(win_w) = g.widget() {
+                if let Some(picked) = win_w.pick(x, y, gtk4::PickFlags::DEFAULT) {
+                    let shell_w: &gtk4::Widget = bw_outside.search_shell.upcast_ref();
+                    if picked == *shell_w || picked.is_ancestor(shell_w) {
+                        return;
+                    }
+                }
+            }
+            bw_outside.collapse_search(false);
         });
+        branches_window.window.add_controller(outside_click);
 
         // Conectar acciones del menú
         branches_window.setup_actions();
@@ -1431,8 +1441,16 @@ impl BranchesWindow {
             .set_state(&sort_order.as_str().to_variant());
         let query = pane.search_query();
         self.search_entry.set_text(&query);
-        self.search_recursive_btn.set_active(pane.search_recursive());
-        self.search_toggle_btn.set_active(!query.is_empty());
+        self.search_recursive_action
+            .set_state(&pane.search_recursive().to_variant());
+        if query.is_empty() {
+            self.search_toggle_btn.remove_css_class("has-query");
+            if !self.search_entry.has_focus() {
+                self.search_stack.set_visible_child_name("button");
+            }
+        } else {
+            self.search_toggle_btn.add_css_class("has-query");
+        }
         self.syncing_ui.set(false);
 
         if pane.is_recents() {
@@ -2568,6 +2586,19 @@ impl BranchesWindow {
         });
         actions.add_action(&act_email);
 
+        let bw_rec = self.clone_ref();
+        self.search_recursive_action.connect_activate(move |act, _| {
+            let next = !act
+                .state()
+                .and_then(|v| v.get::<bool>())
+                .unwrap_or(false);
+            act.set_state(&next.to_variant());
+            if !bw_rec.syncing_ui.get() {
+                bw_rec.active_pane().set_search_recursive(next);
+            }
+        });
+        actions.add_action(&self.search_recursive_action);
+
         let bw_conn = self.clone_ref();
         let act_conn = gio::SimpleAction::new("connect_server", None);
         act_conn.connect_activate(move |_, _| {
@@ -2631,8 +2662,8 @@ impl BranchesWindow {
                 }
             }
 
-            if keyval == gdk::Key::Escape && bw.search_toggle_btn.is_active() {
-                bw.search_toggle_btn.set_active(false);
+            if keyval == gdk::Key::Escape && bw.is_search_expanded() {
+                bw.collapse_search(true);
                 return glib::Propagation::Stop;
             }
 
@@ -2665,8 +2696,11 @@ impl BranchesWindow {
             }
 
             if is_ctrl && (keyval == gdk::Key::f || keyval == gdk::Key::F) {
-                let active = !bw.search_toggle_btn.is_active();
-                bw.search_toggle_btn.set_active(active);
+                if bw.is_search_expanded() {
+                    bw.collapse_search(true);
+                } else {
+                    bw.expand_search();
+                }
                 return glib::Propagation::Stop;
             }
 
@@ -2860,6 +2894,25 @@ impl BranchesWindow {
         self.window.add_controller(key_controller);
     }
 
+    fn is_search_expanded(&self) -> bool {
+        self.search_stack.visible_child_name().as_deref() == Some("input")
+    }
+
+    fn expand_search(&self) {
+        self.search_stack.set_visible_child_name("input");
+        self.search_entry.grab_focus();
+        if !self.search_entry.text().is_empty() {
+            self.search_entry.select_region(0, -1);
+        }
+    }
+
+    fn collapse_search(&self, clear_query: bool) {
+        self.search_stack.set_visible_child_name("button");
+        if clear_query && !self.search_entry.text().is_empty() {
+            self.search_entry.set_text("");
+        }
+    }
+
     fn clone_ref(&self) -> Rc<Self> {
         Rc::new(Self {
             window: self.window.clone(),
@@ -2887,8 +2940,10 @@ impl BranchesWindow {
             job_ui: self.job_ui.clone(),
             sort_by_action: self.sort_by_action.clone(),
             sort_order_action: self.sort_order_action.clone(),
+            search_recursive_action: self.search_recursive_action.clone(),
+            search_stack: self.search_stack.clone(),
+            search_shell: self.search_shell.clone(),
             search_entry: self.search_entry.clone(),
-            search_recursive_btn: self.search_recursive_btn.clone(),
             search_toggle_btn: self.search_toggle_btn.clone(),
             syncing_ui: self.syncing_ui.clone(),
             _config_monitor: self._config_monitor.clone(),
