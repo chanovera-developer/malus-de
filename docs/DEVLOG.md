@@ -4,6 +4,22 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-19] — Módulo Nativo de AirDrop en Malus DE (`owly` AWDL + `malus-de-link` + `top-bar` + `branches` + `malus-ctl`)
+
+Implementación completa del módulo de **AirDrop** compatible con dispositivos Apple (MacBook Air / iPhone / iPad) sobre **AWDL (`awdl0`)** usando **`t4t5/owly` 0.4.3** (`owlyd` + `owly`, instalado vía RPM oficial en Fedora 45):
+
+### 1. Motor AirDrop Real en `malus-de-link` ([`airdrop.rs`](../crates/link/src/airdrop.rs), [`main.rs`](../crates/link/src/main.rs))
+- Creado [`crates/link/src/airdrop.rs`](../crates/link/src/airdrop.rs) con `AirDropEngine`, diagnóstico de hardware (`owly doctor --json`), gestión segura del ciclo de vida de `owly radio up --for 600` y `owly receive --dir ~/Descargas --name <hostname> --accept`, terminación limpia (`SIGINT`) para restaurar Wi-Fi automáticamente en tarjetas Intel en modo exclusivo (`wlp4s0` / Intel AX210 `8086:2725`), detección de archivos entrantes con notificaciones nativas, escaneo real (`owly browse` + `owly radio peers`) y envío de archivos/URLs (`owly send`).
+- Expuesta la interfaz D-Bus `org.malus_de.Link` con nombres explícitos (`#[zbus(name = "...")]`) para `GetAirDropMode`, `SetAirDropMode`, `GetAirDropRemainingSeconds`, `GetAirDropStatusJson`, `ScanAirDropPeers`, `SendAirDropFile`, `SendAirDropUrl`, `GetConnectedDevices` (pares reales) y `ShareFile`.
+- Arranque por defecto en modo `Off` para no interrumpir la conexión Wi-Fi en tarjetas en modo exclusivo hasta que el usuario active AirDrop explícitamente.
+
+### 2. Interfaz en Barra Superior, Centro de Control, Branches y CLI ([`status_tray.rs`](../crates/top-bar/src/ui/status_tray.rs), [`control_center.rs`](../crates/top-bar/src/ui/control_center.rs), [`app_window.rs`](../crates/branches/src/app_window.rs), [`main.rs`](../crates/ctl/src/main.rs))
+- Reemplazada la simulación de AirDrop en el menú de barra superior y en el Centro de Control por estado real del hardware/radio AWDL, botón **Buscar** con listado clicable de dispositivos Apple descubiertos, botón **Enviar archivo** (`gtk4::FileDialog`) y apertura directa de `Descargas` en `malus-de-branches`.
+- Actualizado el diálogo **Malus Link / AirDrop** en `malus-de-branches` para mostrar pares AirDrop sin porcentaje de batería ficticio y permitir envío directo al primer MacBook/iPhone cercano.
+- Añadido subcomando `malus-ctl airdrop <status|on|off|scan|send|send-url>` en `malus-de-ctl`.
+
+---
+
 ## [2026-11-19] — Corrección Integral de Desconexión/Hotplug Multi-Monitor (`compositor`, `common`, `wallpaper`, `top-bar`, `dock`, `settings`)
 
 Resuelto el fallo por el cual desconectar el monitor principal provocaba que la pantalla sobreviviente no asumiera el rol principal, dejara el fondo negro y no reubicara `malus-top-bar` ni `malus-dock`:
