@@ -29,7 +29,6 @@ license = "GPL-3.0-or-later"
 # Dependencias internas del Workspace
 malus-de-common = { path = "crates/common" }
 malus-de-dialogs = { path = "crates/dialogs" }
-malus-de-render = { path = "crates/render" }
 
 # Renderizado GPU Nativo & Shell
 wgpu = "24"

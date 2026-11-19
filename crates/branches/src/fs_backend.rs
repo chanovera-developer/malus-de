@@ -720,6 +720,7 @@ mod tests {
         assert!(!result.contains("Ayer"));
     }
 
+    #[test]
     fn split_desktop_exec_args_handles_quotes_and_escapes() {
         assert_eq!(
             malus_de_common::apps::split_desktop_exec_args(

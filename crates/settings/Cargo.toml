@@ -18,5 +18,4 @@ glib = { workspace = true }
 gio = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }
-anyhow = { workspace = true }
 gdk-pixbuf = "0.20"

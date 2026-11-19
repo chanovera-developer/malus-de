@@ -19,7 +19,6 @@ gio = { workspace = true }
 gdk-pixbuf = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }
-anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
