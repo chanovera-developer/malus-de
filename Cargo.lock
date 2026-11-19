@@ -2024,7 +2024,9 @@ dependencies = [
  "anyhow",
  "clap",
  "malus-de-common",
+ "serde_json",
  "tracing",
+ "zbus",
 ]
 
 [[package]]
@@ -2058,6 +2060,7 @@ name = "malus-de-link"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "malus-de-common",
  "serde",
  "serde_json",
