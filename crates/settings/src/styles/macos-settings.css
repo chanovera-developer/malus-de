@@ -790,6 +790,14 @@ menubutton.wifi-help-btn > button {
     color: #f3f3f3;
 }
 
+menubutton.wifi-help-btn arrow {
+    min-width: 0px;
+    min-height: 0px;
+    margin: 0px;
+    padding: 0px;
+    opacity: 0;
+}
+
 /* Toggle estilo macOS Tahoe (píldora alargada azul/gris con deslizador blanco ancho) */
 switch.macos-switch {
     min-width: 42px;

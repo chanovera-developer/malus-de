@@ -810,8 +810,13 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .build();
 
     let (advanced_wrap, advanced_btn) = make_squircle_button("Avanzado...", false, None);
-    let help_btn = MenuButton::builder()
+    let help_lbl = Label::builder()
         .label("?")
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .build();
+    let help_btn = MenuButton::builder()
+        .child(&help_lbl)
         .css_classes(["wifi-help-btn"])
         .has_frame(false)
         .always_show_arrow(false)
