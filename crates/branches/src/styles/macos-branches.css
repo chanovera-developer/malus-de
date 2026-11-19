@@ -1131,4 +1131,66 @@ button.branches-job-cancel-btn {
     padding: 0;
 }
 
+/* ========================================================= */
+/* BANNER CONTEXTUAL DE PAPELERA Y PUNTOS DE ETIQUETA        */
+/* ========================================================= */
+
+.branches-trash-banner {
+    padding: 6px 12px;
+    background-color: alpha(@window_fg_color, 0.045);
+    border-bottom: 1px solid alpha(@borders, 0.22);
+}
+
+.branches-trash-banner-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: alpha(@window_fg_color, 0.82);
+}
+
+.branches-item-tags {
+    margin: 0 2px;
+}
+
+.branches-item-tag-dot {
+    min-width: 7px;
+    min-height: 7px;
+    border-radius: 50%;
+    border: 1px solid rgba(0, 0, 0, 0.14);
+}
+
+.branches-tag-color-red { background-color: #ff3b30; }
+.branches-tag-color-orange { background-color: #ff9500; }
+.branches-tag-color-yellow { background-color: #ffcc00; }
+.branches-tag-color-green { background-color: #34c759; }
+.branches-tag-color-blue { background-color: #007aff; }
+.branches-tag-color-purple { background-color: #af52de; }
+.branches-tag-color-gray { background-color: #8e8e93; }
+
+.branches-context-tag-row {
+    padding: 4px 6px;
+}
+
+button.branches-context-tag-btn {
+    min-width: 16px;
+    min-height: 16px;
+    padding: 0;
+    margin: 0;
+    border-radius: 50%;
+    border: 1px solid rgba(0, 0, 0, 0.18);
+    transition: transform 100ms ease;
+}
+
+button.branches-context-tag-btn:hover {
+    transform: scale(1.16);
+}
+
+button.branches-context-tag-clear-btn {
+    min-width: 18px;
+    min-height: 18px;
+    padding: 0;
+    margin-left: 2px;
+    border-radius: 50%;
+}
+
+
 

@@ -41,6 +41,7 @@ pub struct BranchesWindow {
     win_weak_holder: Rc<RefCell<Weak<BranchesWindow>>>,
     tab_bar_box: GtkBox,
     tabs_strip: GtkBox,
+    trash_banner_box: GtkBox,
     tab_stack: Stack,
     split_btn: Button,
     back_btn: Button,
@@ -267,10 +268,28 @@ impl BranchesWindow {
         menu_model.append(Some("Recargar"), Some("win.reload"));
 
         let tag_menu = gio::Menu::new();
-        tag_menu.append(Some("Rojo"), Some("win.tag_red"));
-        tag_menu.append(Some("Verde"), Some("win.tag_green"));
-        tag_menu.append(Some("Azul"), Some("win.tag_blue"));
-        menu_model.append_submenu(Some("Etiquetar"), &tag_menu);
+        let es_menu = malus_de_common::is_spanish_locale();
+        for def in crate::db::TAG_CATALOG.iter() {
+            let label = if es_menu { def.label_es } else { def.label_en };
+            let item = gio::MenuItem::new(Some(label), None);
+            item.set_action_and_target_value(
+                Some("win.toggle_tag"),
+                Some(&def.id.to_variant()),
+            );
+            tag_menu.append_item(&item);
+        }
+        tag_menu.append(
+            Some(if es_menu {
+                "Quitar etiquetas"
+            } else {
+                "Clear Tags"
+            }),
+            Some("win.clear_tags"),
+        );
+        menu_model.append_submenu(
+            Some(if es_menu { "Etiquetar" } else { "Tags" }),
+            &tag_menu,
+        );
 
         action_menu_btn.set_menu_model(Some(&menu_model));
 
@@ -448,6 +467,47 @@ impl BranchesWindow {
         tab_bar_box.append(&tabs_strip);
         tab_bar_box.append(&new_tab_btn);
 
+        // Barra contextual de Papelera (se muestra cuando la ruta activa es Trash/files)
+        let trash_banner_box = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(8)
+            .css_classes(["branches-trash-banner"])
+            .hexpand(true)
+            .visible(false)
+            .build();
+        let trash_icon = gtk4::Image::from_icon_name("user-trash-symbolic");
+        trash_icon.set_pixel_size(16);
+        let trash_banner_lbl = Label::builder()
+            .label(if es {
+                "Papelera — Puedes restaurar elementos o vaciarla permanentemente"
+            } else {
+                "Trash — Put items back or empty Trash permanently"
+            })
+            .halign(Align::Start)
+            .hexpand(true)
+            .ellipsize(gtk4::pango::EllipsizeMode::End)
+            .css_classes(["branches-trash-banner-label"])
+            .build();
+        let restore_banner_btn = Button::builder()
+            .label(if es { "Restaurar" } else { "Put Back" })
+            .action_name("win.restore_trash")
+            .valign(Align::Center)
+            .build();
+        let empty_banner_btn = Button::builder()
+            .label(if es {
+                "Vaciar Papelera"
+            } else {
+                "Empty Trash"
+            })
+            .action_name("win.empty_trash")
+            .valign(Align::Center)
+            .css_classes(["destructive-action"])
+            .build();
+        trash_banner_box.append(&trash_icon);
+        trash_banner_box.append(&trash_banner_lbl);
+        trash_banner_box.append(&restore_banner_btn);
+        trash_banner_box.append(&empty_banner_btn);
+
         let tab_stack = Stack::builder()
             .transition_type(StackTransitionType::None)
             .hexpand(true)
@@ -512,6 +572,7 @@ impl BranchesWindow {
             .build();
         right_pane.append(&header_handle);
         right_pane.append(&tab_bar_box);
+        right_pane.append(&trash_banner_box);
         right_pane.append(&tab_stack);
         right_pane.append(path_bar.widget());
         right_pane.append(status_bar.widget());
@@ -537,6 +598,7 @@ impl BranchesWindow {
             win_weak_holder: win_weak_holder.clone(),
             tab_bar_box,
             tabs_strip,
+            trash_banner_box,
             tab_stack,
             split_btn,
             back_btn,
@@ -1122,6 +1184,7 @@ impl BranchesWindow {
         self.syncing_ui.set(false);
 
         if pane.is_recents() {
+            self.trash_banner_box.set_visible(false);
             let title = Self::pane_display_title(&pane);
             self.title_label.set_label(&title);
             self.sidebar.highlight_virtual("target_recents");
@@ -1131,6 +1194,7 @@ impl BranchesWindow {
             self.status_bar
                 .update(pane.items_count(), pane.get_selected_items().len(), &free);
         } else if pane.is_applications() {
+            self.trash_banner_box.set_visible(false);
             let title = Self::pane_display_title(&pane);
             self.title_label.set_label(&title);
             self.sidebar.highlight_virtual("target_applications");
@@ -1263,6 +1327,8 @@ impl BranchesWindow {
 
         self.path_bar.update_path(path);
         self.sidebar.highlight_path(path);
+        self.trash_banner_box
+            .set_visible(crate::operations::is_in_trash_dir(path));
 
         let free = get_free_space(path);
         self.status_bar
@@ -1373,11 +1439,176 @@ impl BranchesWindow {
         if sources.is_empty() {
             return;
         }
+        if sources
+            .iter()
+            .any(|p| crate::operations::is_in_trash_dir(p))
+        {
+            self.confirm_delete_permanent(sources);
+            return;
+        }
         self.job_ui.start_job(JobRequest::Trash { sources }, false);
     }
 
     fn trash_selected(&self) {
         self.trash_paths(self.selected_paths());
+    }
+
+    fn restore_trash_paths(&self, sources: Vec<PathBuf>) {
+        if sources.is_empty() {
+            return;
+        }
+        let mut restored_any = false;
+        let mut last_err = None;
+        for path in sources {
+            match crate::operations::restore_from_trash(&path) {
+                Ok(_) => restored_any = true,
+                Err(e) => last_err = Some(e),
+            }
+        }
+        if restored_any {
+            self.reload_all_panes();
+        }
+        if let Some(err) = last_err {
+            gtk4::AlertDialog::builder()
+                .message(err)
+                .build()
+                .show(Some(&self.window));
+        }
+    }
+
+    fn confirm_destructive_dialog<F: FnOnce() + 'static>(
+        &self,
+        title: &str,
+        body: &str,
+        confirm_label: &str,
+        on_confirm: F,
+    ) {
+        let es = malus_de_common::is_spanish_locale();
+        let dialog = gtk4::Window::builder()
+            .transient_for(&self.window)
+            .destroy_with_parent(true)
+            .modal(true)
+            .resizable(false)
+            .title(title)
+            .default_width(380)
+            .build();
+
+        let vbox = GtkBox::new(Orientation::Vertical, 12);
+        vbox.set_margin_top(16);
+        vbox.set_margin_bottom(16);
+        vbox.set_margin_start(18);
+        vbox.set_margin_end(18);
+
+        let lbl = Label::builder()
+            .label(body)
+            .wrap(true)
+            .xalign(0.0)
+            .build();
+        vbox.append(&lbl);
+
+        let btns = GtkBox::new(Orientation::Horizontal, 8);
+        btns.set_halign(Align::End);
+        let cancel_btn = Button::with_label(if es { "Cancelar" } else { "Cancel" });
+        let confirm_btn = Button::builder()
+            .label(confirm_label)
+            .css_classes(["destructive-action"])
+            .build();
+        btns.append(&cancel_btn);
+        btns.append(&confirm_btn);
+        vbox.append(&btns);
+        dialog.set_child(Some(&vbox));
+
+        let d_cancel = dialog.clone();
+        cancel_btn.connect_clicked(move |_| d_cancel.close());
+
+        let cb_slot = std::cell::RefCell::new(Some(on_confirm));
+        let d_ok = dialog.clone();
+        confirm_btn.connect_clicked(move |_| {
+            d_ok.close();
+            if let Some(f) = cb_slot.borrow_mut().take() {
+                f();
+            }
+        });
+
+        dialog.present();
+    }
+
+    fn confirm_delete_permanent(&self, sources: Vec<PathBuf>) {
+        if sources.is_empty() {
+            return;
+        }
+        let es = malus_de_common::is_spanish_locale();
+        let body = if sources.len() == 1 {
+            let name = sources[0]
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if es {
+                format!("¿Seguro que quieres eliminar «{}» permanentemente? Esta acción no se puede deshacer.", name)
+            } else {
+                format!("Are you sure you want to permanently delete \"{}\"? This cannot be undone.", name)
+            }
+        } else if es {
+            format!("¿Seguro que quieres eliminar {} elementos permanentemente? Esta acción no se puede deshacer.", sources.len())
+        } else {
+            format!("Are you sure you want to permanently delete {} items? This cannot be undone.", sources.len())
+        };
+        let bw = self.clone_ref();
+        self.confirm_destructive_dialog(
+            if es { "Eliminar permanentemente" } else { "Delete Permanently" },
+            &body,
+            if es { "Eliminar" } else { "Delete" },
+            move || {
+                let mut changed = false;
+                let mut last_err = None;
+                for p in sources {
+                    match crate::operations::delete_permanent(&p) {
+                        Ok(()) => changed = true,
+                        Err(e) => last_err = Some(e),
+                    }
+                }
+                if changed {
+                    bw.reload_all_panes();
+                }
+                if let Some(err) = last_err {
+                    gtk4::AlertDialog::builder()
+                        .message(err)
+                        .build()
+                        .show(Some(&bw.window));
+                }
+            },
+        );
+    }
+
+    fn confirm_empty_trash(&self) {
+        let es = malus_de_common::is_spanish_locale();
+        let files_dir = crate::operations::trash_files_dir();
+        let count = std::fs::read_dir(&files_dir)
+            .map(|iter| iter.count())
+            .unwrap_or(0);
+        if count == 0 {
+            return;
+        }
+        let body = if es {
+            format!("¿Vaciar los {} elementos de la Papelera permanentemente? Esta acción no se puede deshacer.", count)
+        } else {
+            format!("Permanently empty {} item(s) from the Trash? This cannot be undone.", count)
+        };
+        let bw = self.clone_ref();
+        self.confirm_destructive_dialog(
+            if es { "Vaciar Papelera" } else { "Empty Trash" },
+            &body,
+            if es { "Vaciar Papelera" } else { "Empty Trash" },
+            move || {
+                if let Err(err) = crate::operations::empty_trash() {
+                    gtk4::AlertDialog::builder()
+                        .message(err)
+                        .build()
+                        .show(Some(&bw.window));
+                }
+                bw.reload_all_panes();
+            },
+        );
     }
 
     fn compress_paths(&self, sources: Vec<PathBuf>, format: ArchiveFormat) {
@@ -1682,26 +1913,93 @@ impl BranchesWindow {
         });
         actions.add_action(&act_trash_item);
 
-        let bw_tag_r = self.clone_ref();
-        let act_tag_r = gio::SimpleAction::new("tag_red", None);
-        act_tag_r.connect_activate(move |_, _| {
-            bw_tag_r.active_pane().set_tag_on_selected("Rojo", "#ff3b30");
+        let bw_restore = self.clone_ref();
+        let act_restore = gio::SimpleAction::new("restore_trash", None);
+        act_restore.connect_activate(move |_, _| {
+            bw_restore.restore_trash_paths(bw_restore.selected_paths());
         });
-        actions.add_action(&act_tag_r);
+        actions.add_action(&act_restore);
 
-        let bw_tag_g = self.clone_ref();
-        let act_tag_g = gio::SimpleAction::new("tag_green", None);
-        act_tag_g.connect_activate(move |_, _| {
-            bw_tag_g.active_pane().set_tag_on_selected("Verde", "#34c759");
+        let bw_restore_item = self.clone_ref();
+        let act_restore_item =
+            gio::SimpleAction::new("restore_item", Some(glib::VariantTy::STRING));
+        act_restore_item.connect_activate(move |_, param| {
+            if let Some(target) = param.and_then(|v| v.str()) {
+                let paths = bw_restore_item.selected_paths_or(PathBuf::from(target));
+                bw_restore_item.restore_trash_paths(paths);
+            }
         });
-        actions.add_action(&act_tag_g);
+        actions.add_action(&act_restore_item);
 
-        let bw_tag_b = self.clone_ref();
-        let act_tag_b = gio::SimpleAction::new("tag_blue", None);
-        act_tag_b.connect_activate(move |_, _| {
-            bw_tag_b.active_pane().set_tag_on_selected("Azul", "#007aff");
+        let bw_empty_trash = self.clone_ref();
+        let act_empty_trash = gio::SimpleAction::new("empty_trash", None);
+        act_empty_trash.connect_activate(move |_, _| {
+            bw_empty_trash.confirm_empty_trash();
         });
-        actions.add_action(&act_tag_b);
+        actions.add_action(&act_empty_trash);
+
+        let bw_del_perm = self.clone_ref();
+        let act_del_perm = gio::SimpleAction::new("delete_permanent", None);
+        act_del_perm.connect_activate(move |_, _| {
+            bw_del_perm.confirm_delete_permanent(bw_del_perm.selected_paths());
+        });
+        actions.add_action(&act_del_perm);
+
+        let bw_del_perm_item = self.clone_ref();
+        let act_del_perm_item =
+            gio::SimpleAction::new("delete_permanent_item", Some(glib::VariantTy::STRING));
+        act_del_perm_item.connect_activate(move |_, param| {
+            if let Some(target) = param.and_then(|v| v.str()) {
+                let paths = bw_del_perm_item.selected_paths_or(PathBuf::from(target));
+                bw_del_perm_item.confirm_delete_permanent(paths);
+            }
+        });
+        actions.add_action(&act_del_perm_item);
+
+        let bw_toggle_tag = self.clone_ref();
+        let act_toggle_tag =
+            gio::SimpleAction::new("toggle_tag", Some(glib::VariantTy::STRING));
+        act_toggle_tag.connect_activate(move |_, param| {
+            if let Some(tag_id) = param.and_then(|v| v.str()) {
+                let paths = bw_toggle_tag.selected_paths();
+                bw_toggle_tag.active_pane().toggle_tag_on_paths(tag_id, &paths);
+            }
+        });
+        actions.add_action(&act_toggle_tag);
+
+        let bw_toggle_tag_item = self.clone_ref();
+        let act_toggle_tag_item = gio::SimpleAction::new(
+            "toggle_tag_item",
+            Some(glib::VariantTy::new("(ss)").expect("valid variant type")),
+        );
+        act_toggle_tag_item.connect_activate(move |_, param| {
+            if let Some((tag_id, target)) = param.and_then(|v| v.get::<(String, String)>()) {
+                let paths = bw_toggle_tag_item.selected_paths_or(PathBuf::from(target));
+                bw_toggle_tag_item
+                    .active_pane()
+                    .toggle_tag_on_paths(&tag_id, &paths);
+            }
+        });
+        actions.add_action(&act_toggle_tag_item);
+
+        let bw_clear_tags = self.clone_ref();
+        let act_clear_tags = gio::SimpleAction::new("clear_tags", None);
+        act_clear_tags.connect_activate(move |_, _| {
+            let paths = bw_clear_tags.selected_paths();
+            bw_clear_tags.active_pane().clear_tags_on_paths(&paths);
+        });
+        actions.add_action(&act_clear_tags);
+
+        let bw_clear_tags_item = self.clone_ref();
+        let act_clear_tags_item =
+            gio::SimpleAction::new("clear_tags_item", Some(glib::VariantTy::STRING));
+        act_clear_tags_item.connect_activate(move |_, param| {
+            if let Some(target) = param.and_then(|v| v.str()) {
+                let paths = bw_clear_tags_item.selected_paths_or(PathBuf::from(target));
+                bw_clear_tags_item.active_pane().clear_tags_on_paths(&paths);
+            }
+        });
+        actions.add_action(&act_clear_tags_item);
 
         let bw_copy = self.clone_ref();
         let act_copy_path = gio::SimpleAction::new("copy_path", None);
@@ -1935,6 +2233,13 @@ impl BranchesWindow {
                 bw.duplicate_selected();
                 return glib::Propagation::Stop;
             }
+            if !focus_is_editable
+                && ((is_shift && keyval == gdk::Key::Delete)
+                    || (is_command && is_alt && keyval == gdk::Key::BackSpace))
+            {
+                bw.confirm_delete_permanent(bw.selected_paths());
+                return glib::Propagation::Stop;
+            }
             if !focus_is_editable && keyval == gdk::Key::Delete {
                 bw.trash_selected();
                 return glib::Propagation::Stop;
@@ -1984,6 +2289,7 @@ impl BranchesWindow {
             win_weak_holder: self.win_weak_holder.clone(),
             tab_bar_box: self.tab_bar_box.clone(),
             tabs_strip: self.tabs_strip.clone(),
+            trash_banner_box: self.trash_banner_box.clone(),
             tab_stack: self.tab_stack.clone(),
             split_btn: self.split_btn.clone(),
             back_btn: self.back_btn.clone(),

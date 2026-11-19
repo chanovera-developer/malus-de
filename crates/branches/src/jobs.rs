@@ -668,7 +668,7 @@ fn execute_trash_job(ctx: &mut JobContext<'_>, sources: &[PathBuf]) -> Result<Jo
 }
 
 pub fn move_to_trash_with_record(src: &Path) -> Result<TrashedUndoRecord, String> {
-    let trash_base = trash_base_dir();
+    let trash_base = crate::operations::trash_base_dir();
     let files_dir = trash_base.join("files");
     let info_dir = trash_base.join("info");
 
@@ -706,16 +706,6 @@ pub fn move_to_trash_with_record(src: &Path) -> Result<TrashedUndoRecord, String
         trash_files_path,
         trash_info_path,
     })
-}
-
-fn trash_base_dir() -> PathBuf {
-    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
-        return PathBuf::from(xdg).join("Trash");
-    }
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/tmp"));
-    home.join(".local/share/Trash")
 }
 
 fn unique_archive_path(sources: &[PathBuf], dest_dir: &Path, format: ArchiveFormat) -> PathBuf {

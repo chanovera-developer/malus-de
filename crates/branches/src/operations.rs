@@ -233,14 +233,179 @@ pub fn trash_item(path: &Path) -> Result<(), String> {
         .map_err(|e| format!("Error al mover a papelera: {}", e))
 }
 
-#[allow(dead_code)]
-/// Eliminar permanentemente (sin pasar por la papelera)
-pub fn delete_permanent(path: &Path) -> Result<(), String> {
-    if path.is_dir() {
-        fs::remove_dir_all(path).map_err(|e| format!("Error al eliminar carpeta: {}", e))
-    } else {
-        fs::remove_file(path).map_err(|e| format!("Error al eliminar archivo: {}", e))
+/// Directorio base FreeDesktop de la Papelera (`$XDG_DATA_HOME/Trash` o `~/.local/share/Trash`).
+pub fn trash_base_dir() -> PathBuf {
+    if let Some(xdg) = std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
+        return PathBuf::from(xdg).join("Trash");
     }
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    home.join(".local/share/Trash")
+}
+
+pub fn trash_files_dir() -> PathBuf {
+    trash_base_dir().join("files")
+}
+
+pub fn is_in_trash_dir(path: &Path) -> bool {
+    let files_dir = trash_files_dir();
+    path == files_dir || path.starts_with(&files_dir) || path.ends_with("Trash/files")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrashInfo {
+    pub original_path: PathBuf,
+    pub deletion_date: Option<String>,
+}
+
+fn percent_decode_path(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3]) {
+                if let Ok(val) = u8::from_str_radix(hex, 16) {
+                    out.push(val);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+pub fn parse_trash_info_in(trash_base: &Path, trash_item_path: &Path) -> Option<TrashInfo> {
+    let name = trash_item_path.file_name()?.to_string_lossy();
+    let info_path = trash_base.join("info").join(format!("{}.trashinfo", name));
+    let content = fs::read_to_string(&info_path).ok()?;
+    let mut in_section = false;
+    let mut path_val: Option<String> = None;
+    let mut date_val: Option<String> = None;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[Trash Info]" {
+            in_section = true;
+            continue;
+        }
+        if trimmed.starts_with('[') {
+            in_section = false;
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("Path=") {
+            path_val = Some(percent_decode_path(rest));
+        } else if let Some(rest) = trimmed.strip_prefix("DeletionDate=") {
+            date_val = Some(rest.to_string());
+        }
+    }
+
+    let decoded = path_val?;
+    let p = PathBuf::from(&decoded);
+    let original_path = if p.is_absolute() {
+        p
+    } else if let Some(data_home) = trash_base.parent() {
+        data_home.join(p)
+    } else {
+        p
+    };
+
+    Some(TrashInfo {
+        original_path,
+        deletion_date: date_val,
+    })
+}
+
+pub fn restore_from_trash_in(trash_base: &Path, trash_item_path: &Path) -> Result<PathBuf, String> {
+    let info = parse_trash_info_in(trash_base, trash_item_path)
+        .ok_or_else(|| "No se encontró metadato .trashinfo para restaurar el elemento".to_string())?;
+    let mut target = info.original_path;
+    let parent = target
+        .parent()
+        .ok_or_else(|| "Ruta original inválida".to_string())?;
+    if !parent.exists() {
+        fs::create_dir_all(parent).map_err(|e| format!("No se pudo crear carpeta destino: {}", e))?;
+    }
+    if target.exists() || target.symlink_metadata().is_ok() {
+        target = unique_destination_for_copy(&target, parent)?;
+    }
+
+    let src_file = gio::File::for_path(trash_item_path);
+    let dst_file = gio::File::for_path(&target);
+    src_file
+        .move_(
+            &dst_file,
+            gio::FileCopyFlags::NONE,
+            gio::Cancellable::NONE,
+            None,
+        )
+        .or_else(|_| fs::rename(trash_item_path, &target))
+        .map_err(|e| format!("Error al restaurar desde Papelera: {}", e))?;
+
+    if let Some(name) = trash_item_path.file_name().map(|n| n.to_string_lossy()) {
+        let info_path = trash_base.join("info").join(format!("{}.trashinfo", name));
+        let _ = fs::remove_file(info_path);
+    }
+
+    Ok(target)
+}
+
+pub fn restore_from_trash(trash_item_path: &Path) -> Result<PathBuf, String> {
+    restore_from_trash_in(&trash_base_dir(), trash_item_path)
+}
+
+pub fn empty_trash_in(trash_base: &Path) -> Result<usize, String> {
+    let files_dir = trash_base.join("files");
+    let info_dir = trash_base.join("info");
+    let mut count = 0usize;
+
+    if files_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&files_dir) {
+            for entry in entries.flatten() {
+                delete_permanent(&entry.path())?;
+                count += 1;
+            }
+        }
+    }
+    if info_dir.is_dir() {
+        if let Ok(entries) = fs::read_dir(&info_dir) {
+            for entry in entries.flatten() {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+    Ok(count)
+}
+
+pub fn empty_trash() -> Result<usize, String> {
+    empty_trash_in(&trash_base_dir())
+}
+
+/// Eliminar permanentemente (sin pasar por la papelera, limpiando también `.trashinfo` si existe)
+pub fn delete_permanent(path: &Path) -> Result<(), String> {
+    let meta = fs::symlink_metadata(path)
+        .map_err(|e| format!("No se pudo inspeccionar elemento a eliminar: {}", e))?;
+    if meta.is_dir() && !meta.file_type().is_symlink() {
+        fs::remove_dir_all(path).map_err(|e| format!("Error al eliminar carpeta: {}", e))?;
+    } else {
+        fs::remove_file(path).map_err(|e| format!("Error al eliminar archivo: {}", e))?;
+    }
+    if is_in_trash_dir(path) {
+        if let Some(name) = path.file_name().map(|n| n.to_string_lossy()) {
+            let info_path = trash_base_dir()
+                .join("info")
+                .join(format!("{}.trashinfo", name));
+            let _ = fs::remove_file(info_path);
+        }
+    }
+    Ok(())
 }
 
 /// Calcula una ruta destino única al duplicar o resolver "Mantener ambos" ("nombre copia.ext", "nombre copia 2.ext").
@@ -625,10 +790,10 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        create_new_folder, create_new_text_document, encode_gnome_copied_files,
-        move_paths_into_folder, parse_gnome_copied_files, parse_uri_list, paste_payload_into,
-        rename_item, rename_selection_end, validate_rename_target, ClipboardAction,
-        ClipboardPayload,
+        create_new_folder, create_new_text_document, empty_trash_in, encode_gnome_copied_files,
+        move_paths_into_folder, parse_gnome_copied_files, parse_trash_info_in, parse_uri_list,
+        paste_payload_into, rename_item, rename_selection_end, restore_from_trash_in,
+        validate_rename_target, ClipboardAction, ClipboardPayload,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -795,5 +960,51 @@ mod tests {
         assert!(dest_dir.join("sub.v1/interno.txt").is_file());
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn trash_info_restore_and_empty_work_correctly() {
+        let root = std::env::temp_dir().join("malus_branches_trash_test");
+        let _ = fs::remove_dir_all(&root);
+        let trash_base = root.join("Trash");
+        let files_dir = trash_base.join("files");
+        let info_dir = trash_base.join("info");
+        let orig_dir = root.join("docs con espacio");
+        fs::create_dir_all(&files_dir).unwrap();
+        fs::create_dir_all(&info_dir).unwrap();
+        fs::create_dir_all(&orig_dir).unwrap();
+
+        let trashed_file = files_dir.join("informe final.txt");
+        fs::write(&trashed_file, b"recuperable").unwrap();
+
+        let orig_target = orig_dir.join("informe final.txt");
+        let encoded_orig = orig_target
+            .to_string_lossy()
+            .replace(' ', "%20");
+        let info_content = format!(
+            "[Trash Info]\nPath={}\nDeletionDate=2026-11-19T08:00:00\n",
+            encoded_orig
+        );
+        fs::write(info_dir.join("informe final.txt.trashinfo"), info_content).unwrap();
+
+        let parsed = parse_trash_info_in(&trash_base, &trashed_file).unwrap();
+        assert_eq!(parsed.original_path, orig_target);
+        assert_eq!(parsed.deletion_date.as_deref(), Some("2026-11-19T08:00:00"));
+
+        let restored = restore_from_trash_in(&trash_base, &trashed_file).unwrap();
+        assert_eq!(restored, orig_target);
+        assert!(!trashed_file.exists());
+        assert!(orig_target.is_file());
+        assert!(!info_dir.join("informe final.txt.trashinfo").exists());
+
+        // Probar vaciado de papelera
+        fs::write(files_dir.join("otro.txt"), b"basura").unwrap();
+        fs::write(info_dir.join("otro.txt.trashinfo"), "[Trash Info]\nPath=/tmp/otro.txt\n").unwrap();
+        let emptied = empty_trash_in(&trash_base).unwrap();
+        assert_eq!(emptied, 1);
+        assert!(!files_dir.join("otro.txt").exists());
+        assert!(!info_dir.join("otro.txt.trashinfo").exists());
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

@@ -747,7 +747,13 @@ impl FolderPane {
                     items.push(item);
                 }
             }
-            self.pane_title.set_label(&format!("Etiqueta: {}", tag_name));
+            let es = malus_de_common::is_spanish_locale();
+            let display = crate::db::tag_display_label(tag_name, es);
+            self.pane_title.set_label(&format!(
+                "{}: {}",
+                if es { "Etiqueta" } else { "Tag" },
+                display
+            ));
             self.apply_items_snapshot(items);
         }
     }
@@ -806,16 +812,28 @@ impl FolderPane {
         self.apply_items_snapshot(items);
     }
 
-    pub fn set_tag_on_selected(&self, tag_name: &str, tag_color: &str) {
-        let items = self.get_selected_items();
-        if items.is_empty() {
+    pub fn toggle_tag_on_paths(&self, tag_id: &str, paths: &[PathBuf]) {
+        if paths.is_empty() {
             return;
         }
         if let Ok(conn) = crate::db::open_db() {
-            for item in items {
-                let _ = crate::db::set_file_tag(&conn, &item.path, tag_name, tag_color);
+            for path in paths {
+                let _ = crate::db::toggle_file_tag(&conn, path, tag_id);
             }
         }
+        self.reload();
+    }
+
+    pub fn clear_tags_on_paths(&self, paths: &[PathBuf]) {
+        if paths.is_empty() {
+            return;
+        }
+        if let Ok(conn) = crate::db::open_db() {
+            for path in paths {
+                let _ = crate::db::clear_file_tags(&conn, path);
+            }
+        }
+        self.reload();
     }
 }
 

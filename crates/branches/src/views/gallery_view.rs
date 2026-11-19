@@ -255,8 +255,9 @@ impl GalleryView {
         }
 
         // Poblar carrusel
+        let tags_map = crate::views::load_tags_map();
         for (idx, item) in items.iter().enumerate() {
-            let card = self.create_carousel_card(idx, item);
+            let card = self.create_carousel_card(idx, item, &tags_map);
             self.carousel_box.append(&card);
             self.carousel_widgets.borrow_mut().push(card);
         }
@@ -508,7 +509,12 @@ impl GalleryView {
         self.canvas_holder.append(&main_box);
     }
 
-    fn create_carousel_card(self: &Rc<Self>, index: usize, item: &FileItem) -> GtkBox {
+    fn create_carousel_card(
+        self: &Rc<Self>,
+        index: usize,
+        item: &FileItem,
+        tags_map: &std::collections::HashMap<PathBuf, Vec<(String, String)>>,
+    ) -> GtkBox {
         let card = GtkBox::new(Orientation::Vertical, 4);
         card.add_css_class("branches-carousel-card");
         if item.is_hidden {
@@ -538,6 +544,10 @@ impl GalleryView {
             .css_classes(["branches-carousel-label"])
             .build();
         card.append(&lbl);
+
+        if let Some(tag_dots) = crate::views::create_item_tag_dots(&item.path, tags_map) {
+            card.append(&tag_dots);
+        }
 
         let click = GestureClick::new();
         click.set_button(0);

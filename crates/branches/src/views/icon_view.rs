@@ -876,7 +876,9 @@ impl IconView {
             max_y = max_y.max(pos_y + cell_h);
 
             let pos_cell = Rc::new(Cell::new((pos_x, pos_y)));
-            let (widget, image) = self.create_spatial_icon_widget(item, pos_cell.clone(), metrics);
+            let tags_map = crate::views::load_tags_map();
+            let (widget, image) =
+                self.create_spatial_icon_widget(item, pos_cell.clone(), metrics, &tags_map);
             if pending_select.contains(&item.name) {
                 widget.add_css_class("selected");
                 self.selected_items.borrow_mut().insert(item.name.clone());
@@ -1036,8 +1038,9 @@ impl IconView {
                     };
 
                 let pos_cell = Rc::new(Cell::new((pos_x, pos_y)));
+                let tags_map = crate::views::load_tags_map();
                 let (widget, image) =
-                    self.create_spatial_icon_widget(item, pos_cell.clone(), metrics);
+                    self.create_spatial_icon_widget(item, pos_cell.clone(), metrics, &tags_map);
                 if pending_select.remove(&item.name) {
                     widget.add_css_class("selected");
                     self.selected_items.borrow_mut().insert(item.name.clone());
@@ -1105,6 +1108,7 @@ impl IconView {
         item: &FileItem,
         pos_cell: Rc<Cell<(i32, i32)>>,
         metrics: IconGridMetrics,
+        tags_map: &HashMap<PathBuf, Vec<(String, String)>>,
     ) -> (GtkBox, Image) {
         let vbox = GtkBox::builder()
             .orientation(Orientation::Vertical)
@@ -1143,6 +1147,10 @@ impl IconView {
             .css_classes(["branches-icon-label"])
             .build();
         vbox.append(&label);
+
+        if let Some(tag_dots) = crate::views::create_item_tag_dots(&item.path, tags_map) {
+            vbox.append(&tag_dots);
+        }
 
         // 1. Doble clic para abrir, segundo clic lento sobre etiqueta para renombrar (estilo Finder)
         // y Clic derecho para menú contextual
@@ -1910,10 +1918,12 @@ impl IconView {
                             if let Some(file_item) = FileItem::from_path(&dest) {
                                 if !view_drop.item_widgets.borrow().contains_key(&name) {
                                     let pos_cell = Rc::new(Cell::new((fx, fy)));
+                                    let tags_map = crate::views::load_tags_map();
                                     let (vbox, img) = view_drop.create_spatial_icon_widget(
                                         &file_item,
                                         pos_cell.clone(),
                                         metrics,
+                                        &tags_map,
                                     );
                                     vbox.add_css_class("selected");
                                     view_drop.fixed_canvas.put(&vbox, fx as f64, fy as f64);

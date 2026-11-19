@@ -1,7 +1,92 @@
+use gio::prelude::FileExt;
 use rusqlite::{params, Connection};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TagDefinition {
+    pub id: &'static str,
+    pub color_hex: &'static str,
+    pub label_es: &'static str,
+    pub label_en: &'static str,
+}
+
+pub const TAG_CATALOG: [TagDefinition; 7] = [
+    TagDefinition {
+        id: "red",
+        color_hex: "#ff3b30",
+        label_es: "Rojo",
+        label_en: "Red",
+    },
+    TagDefinition {
+        id: "orange",
+        color_hex: "#ff9500",
+        label_es: "Naranja",
+        label_en: "Orange",
+    },
+    TagDefinition {
+        id: "yellow",
+        color_hex: "#ffcc00",
+        label_es: "Amarillo",
+        label_en: "Yellow",
+    },
+    TagDefinition {
+        id: "green",
+        color_hex: "#34c759",
+        label_es: "Verde",
+        label_en: "Green",
+    },
+    TagDefinition {
+        id: "blue",
+        color_hex: "#007aff",
+        label_es: "Azul",
+        label_en: "Blue",
+    },
+    TagDefinition {
+        id: "purple",
+        color_hex: "#af52de",
+        label_es: "Púrpura",
+        label_en: "Purple",
+    },
+    TagDefinition {
+        id: "gray",
+        color_hex: "#8e8e93",
+        label_es: "Gris",
+        label_en: "Gray",
+    },
+];
+
+pub fn canonical_tag_id(raw: &str) -> String {
+    let norm = raw.trim().to_lowercase();
+    match norm.as_str() {
+        "red" | "rojo" => "red".to_string(),
+        "orange" | "naranja" => "orange".to_string(),
+        "yellow" | "amarillo" => "yellow".to_string(),
+        "green" | "verde" => "green".to_string(),
+        "blue" | "azul" => "blue".to_string(),
+        "purple" | "púrpura" | "purpura" | "morado" => "purple".to_string(),
+        "gray" | "grey" | "gris" => "gray".to_string(),
+        _ => norm,
+    }
+}
+
+pub fn tag_definition(id_or_name: &str) -> Option<&'static TagDefinition> {
+    let cid = canonical_tag_id(id_or_name);
+    TAG_CATALOG.iter().find(|t| t.id == cid)
+}
+
+pub fn tag_display_label(id_or_name: &str, es: bool) -> String {
+    if let Some(def) = tag_definition(id_or_name) {
+        if es {
+            def.label_es.to_string()
+        } else {
+            def.label_en.to_string()
+        }
+    } else {
+        id_or_name.to_string()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayoutMode {
@@ -86,7 +171,48 @@ pub fn open_db() -> Result<Connection, rusqlite::Error> {
         let _ = conn.execute("PRAGMA user_version = 1", []);
     }
 
+    // Migración v2: normalizar etiquetas localizadas previas ("Rojo", "Verde", "Azul"...) a IDs canónicos.
+    if user_ver < 2 {
+        migrate_legacy_tags(&conn);
+        let _ = conn.execute("PRAGMA user_version = 2", []);
+    }
+
     Ok(conn)
+}
+
+fn migrate_legacy_tags(conn: &Connection) {
+    let rows: Vec<(String, String, String)> = {
+        let Ok(mut stmt) = conn.prepare("SELECT file_path, tag_name, tag_color FROM file_tags") else {
+            return;
+        };
+        let mapped = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        });
+        mapped.map(|it| it.flatten().collect()).unwrap_or_default()
+    };
+
+    for (file_path, old_name, old_color) in rows {
+        let canonical = canonical_tag_id(&old_name);
+        let color = tag_definition(&canonical)
+            .map(|d| d.color_hex.to_string())
+            .unwrap_or(old_color);
+        if canonical != old_name {
+            let _ = conn.execute(
+                "DELETE FROM file_tags WHERE file_path = ?1 AND tag_name = ?2",
+                params![file_path, old_name],
+            );
+            let _ = conn.execute(
+                "INSERT INTO file_tags (file_path, tag_name, tag_color)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(file_path, tag_name) DO UPDATE SET tag_color = excluded.tag_color",
+                params![file_path, canonical, color],
+            );
+        }
+    }
 }
 
 pub fn get_positions(conn: &Connection, folder: &Path) -> HashMap<String, (i32, i32)> {
@@ -218,6 +344,48 @@ pub fn set_folder_icon_size(
     Ok(())
 }
 
+fn sync_xattr_tags(conn: &Connection, file_path: &Path) {
+    if file_path.symlink_metadata().is_err() {
+        return;
+    }
+    let tags = get_file_tags(conn, file_path);
+    let mut ids: Vec<String> = tags.into_iter().map(|(id, _)| id).collect();
+    ids.sort();
+    ids.dedup();
+    let val = ids.join(",");
+    let gfile = gio::File::for_path(file_path);
+    let _ = gfile.set_attribute_string(
+        "xattr::user.malus.tags",
+        &val,
+        gio::FileQueryInfoFlags::NONE,
+        gio::Cancellable::NONE,
+    );
+}
+
+#[allow(dead_code)]
+pub fn read_xattr_tags(file_path: &Path) -> Vec<String> {
+    if file_path.symlink_metadata().is_err() {
+        return Vec::new();
+    }
+    let gfile = gio::File::for_path(file_path);
+    let Ok(info) = gfile.query_info(
+        "xattr::user.malus.tags",
+        gio::FileQueryInfoFlags::NONE,
+        gio::Cancellable::NONE,
+    ) else {
+        return Vec::new();
+    };
+    info.attribute_string("xattr::user.malus.tags")
+        .map(|s| {
+            s.split(',')
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(canonical_tag_id)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub fn set_file_tag(
     conn: &Connection,
     file_path: &Path,
@@ -225,30 +393,63 @@ pub fn set_file_tag(
     tag_color: &str,
 ) -> Result<(), rusqlite::Error> {
     let p_str = file_path.to_string_lossy();
+    let canonical = canonical_tag_id(tag_name);
+    let color = tag_definition(&canonical)
+        .map(|d| d.color_hex)
+        .unwrap_or(tag_color);
     conn.execute(
         "INSERT INTO file_tags (file_path, tag_name, tag_color)
          VALUES (?1, ?2, ?3)
          ON CONFLICT(file_path, tag_name) DO UPDATE SET tag_color = excluded.tag_color",
-        params![p_str, tag_name, tag_color],
+        params![p_str, canonical, color],
     )?;
+    sync_xattr_tags(conn, file_path);
     Ok(())
 }
 
-#[allow(dead_code)]
 pub fn remove_file_tag(
     conn: &Connection,
     file_path: &Path,
     tag_name: &str,
 ) -> Result<(), rusqlite::Error> {
     let p_str = file_path.to_string_lossy();
+    let canonical = canonical_tag_id(tag_name);
     conn.execute(
-        "DELETE FROM file_tags WHERE file_path = ?1 AND tag_name = ?2",
-        params![p_str, tag_name],
+        "DELETE FROM file_tags WHERE file_path = ?1 AND (tag_name = ?2 OR tag_name = ?3)",
+        params![p_str, canonical, tag_name],
     )?;
+    sync_xattr_tags(conn, file_path);
     Ok(())
 }
 
-#[allow(dead_code)]
+/// Alterna una etiqueta canónica en el archivo y devuelve `true` si quedó activada.
+pub fn toggle_file_tag(
+    conn: &Connection,
+    file_path: &Path,
+    tag_name: &str,
+) -> Result<bool, rusqlite::Error> {
+    let canonical = canonical_tag_id(tag_name);
+    let existing = get_file_tags(conn, file_path);
+    let has_tag = existing.iter().any(|(id, _)| id == &canonical);
+    if has_tag {
+        remove_file_tag(conn, file_path, &canonical)?;
+        Ok(false)
+    } else {
+        let color = tag_definition(&canonical)
+            .map(|d| d.color_hex)
+            .unwrap_or("#8e8e93");
+        set_file_tag(conn, file_path, &canonical, color)?;
+        Ok(true)
+    }
+}
+
+pub fn clear_file_tags(conn: &Connection, file_path: &Path) -> Result<(), rusqlite::Error> {
+    let p_str = file_path.to_string_lossy();
+    conn.execute("DELETE FROM file_tags WHERE file_path = ?1", params![p_str])?;
+    sync_xattr_tags(conn, file_path);
+    Ok(())
+}
+
 pub fn get_file_tags(conn: &Connection, file_path: &Path) -> Vec<(String, String)> {
     let p_str = file_path.to_string_lossy();
     let mut stmt = match conn.prepare("SELECT tag_name, tag_color FROM file_tags WHERE file_path = ?1") {
@@ -261,12 +462,38 @@ pub fn get_file_tags(conn: &Connection, file_path: &Path) -> Vec<(String, String
     rows.map(|iter| iter.flatten().collect()).unwrap_or_default()
 }
 
+pub fn get_all_file_tags_map(conn: &Connection) -> HashMap<PathBuf, Vec<(String, String)>> {
+    let mut map: HashMap<PathBuf, Vec<(String, String)>> = HashMap::new();
+    let mut stmt = match conn.prepare("SELECT file_path, tag_name, tag_color FROM file_tags") {
+        Ok(s) => s,
+        Err(_) => return map,
+    };
+    if let Ok(rows) = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    }) {
+        for (path_str, tag_id, color) in rows.flatten() {
+            let entry = map.entry(PathBuf::from(path_str)).or_default();
+            if !entry.iter().any(|(id, _)| id == &tag_id) {
+                entry.push((tag_id, color));
+            }
+        }
+    }
+    map
+}
+
 pub fn get_files_by_tag(conn: &Connection, tag_name: &str) -> Vec<PathBuf> {
-    let mut stmt = match conn.prepare("SELECT file_path FROM file_tags WHERE tag_name = ?1") {
+    let canonical = canonical_tag_id(tag_name);
+    let mut stmt = match conn.prepare(
+        "SELECT DISTINCT file_path FROM file_tags WHERE tag_name = ?1 OR lower(tag_name) = lower(?2)",
+    ) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
-    let rows = stmt.query_map(params![tag_name], |row| {
+    let rows = stmt.query_map(params![canonical, tag_name], |row| {
         let p: String = row.get(0)?;
         Ok(PathBuf::from(p))
     });
@@ -467,10 +694,13 @@ pub fn rename_item_metadata(
 #[cfg(test)]
 mod tests {
     use super::{
-        add_bookmark, get_bookmarks, get_folder_icon_size, get_layout_mode, get_positions,
-        is_bookmark, open_db, remove_bookmark, rename_bookmark, rename_item_metadata,
-        save_position, set_folder_icon_size, set_layout_mode, LayoutMode,
+        add_bookmark, clear_file_tags, get_bookmarks, get_file_tags, get_files_by_tag,
+        get_folder_icon_size, get_layout_mode, get_positions, is_bookmark, migrate_legacy_tags,
+        open_db, remove_bookmark, rename_bookmark, rename_item_metadata, save_position,
+        set_folder_icon_size, set_layout_mode, toggle_file_tag, LayoutMode,
     };
+    use rusqlite::{params, Connection};
+    use std::fs;
     use std::path::Path;
 
     #[test]
@@ -586,6 +816,49 @@ mod tests {
 
         assert!(remove_bookmark(&conn, p1_renamed).unwrap());
         assert!(!is_bookmark(&conn, p1_renamed));
+    }
+
+    #[test]
+    fn canonical_tags_migrate_legacy_rows_and_toggle_cleanly() {
+        let temp_dir = std::env::temp_dir().join("malus_branches_tags_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+        let sample = temp_dir.join("doc.txt");
+        fs::write(&sample, b"hola").unwrap();
+
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE file_tags (
+                file_path TEXT NOT NULL,
+                tag_name TEXT NOT NULL,
+                tag_color TEXT NOT NULL,
+                PRIMARY KEY (file_path, tag_name)
+            );",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO file_tags (file_path, tag_name, tag_color) VALUES (?1, 'Rojo', '#ff3b30')",
+            params![sample.to_string_lossy()],
+        )
+        .unwrap();
+
+        migrate_legacy_tags(&conn);
+        let migrated = get_file_tags(&conn, &sample);
+        assert_eq!(migrated, vec![("red".to_string(), "#ff3b30".to_string())]);
+
+        // Activar segunda etiqueta y alternar la primera
+        assert!(toggle_file_tag(&conn, &sample, "Azul").unwrap());
+        assert_eq!(get_files_by_tag(&conn, "blue"), vec![sample.clone()]);
+        assert_eq!(get_files_by_tag(&conn, "Azul"), vec![sample.clone()]);
+        assert!(!toggle_file_tag(&conn, &sample, "Red").unwrap());
+
+        let remaining = get_file_tags(&conn, &sample);
+        assert_eq!(remaining, vec![("blue".to_string(), "#007aff".to_string())]);
+
+        clear_file_tags(&conn, &sample).unwrap();
+        assert!(get_file_tags(&conn, &sample).is_empty());
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }
 

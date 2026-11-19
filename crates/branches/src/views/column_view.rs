@@ -285,8 +285,9 @@ impl ColumnViewInner {
             .build();
 
         let items_rc = Rc::new(items);
+        let tags_map = crate::views::load_tags_map();
         for item in items_rc.iter() {
-            let row = create_column_row(item, items_rc.clone(), &self.on_navigate);
+            let row = create_column_row(item, items_rc.clone(), &tags_map, &self.on_navigate);
             list_box.append(&row);
         }
 
@@ -675,6 +676,7 @@ fn slide_in_from_right(widget: &impl IsA<gtk4::Widget>, distance: i32) {
 fn create_column_row(
     item: &FileItem,
     col_items: Rc<Vec<FileItem>>,
+    tags_map: &std::collections::HashMap<PathBuf, Vec<(String, String)>>,
     on_navigate: &NavigateCallback,
 ) -> ListBoxRow {
     let row = ListBoxRow::new();
@@ -706,6 +708,10 @@ fn create_column_row(
         .css_classes(["branches-column-name-label"])
         .build();
     hbox.append(&label);
+
+    if let Some(tag_dots) = crate::views::create_item_tag_dots(&item.path, tags_map) {
+        hbox.append(&tag_dots);
+    }
 
     if item.is_dir {
         let chevron = Image::from_icon_name("pan-end-symbolic");

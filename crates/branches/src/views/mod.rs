@@ -29,6 +29,42 @@ pub(super) fn inclusive_range(a: usize, b: usize) -> std::ops::RangeInclusive<us
     }
 }
 
+/// Carga el mapa completo de etiquetas por ruta en una única consulta SQLite.
+pub(super) fn load_tags_map() -> std::collections::HashMap<PathBuf, Vec<(String, String)>> {
+    crate::db::open_db()
+        .map(|conn| crate::db::get_all_file_tags_map(&conn))
+        .unwrap_or_default()
+}
+
+/// Construye el contenedor de puntos de color (máximo 3 visibles) si el archivo tiene etiquetas.
+pub(super) fn create_item_tag_dots(
+    path: &std::path::Path,
+    tags_map: &std::collections::HashMap<PathBuf, Vec<(String, String)>>,
+) -> Option<gtk4::Box> {
+    use gtk4::prelude::*;
+
+    let tags = tags_map.get(path)?;
+    if tags.is_empty() {
+        return None;
+    }
+
+    let box_dots = gtk4::Box::new(gtk4::Orientation::Horizontal, 3);
+    box_dots.set_valign(gtk4::Align::Center);
+    box_dots.set_halign(gtk4::Align::Center);
+    box_dots.add_css_class("branches-item-tags");
+
+    for (raw_id, _) in tags.iter().take(3) {
+        let cid = crate::db::canonical_tag_id(raw_id);
+        let dot = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+        dot.add_css_class("branches-item-tag-dot");
+        dot.add_css_class(&format!("branches-tag-color-{}", cid));
+        dot.set_valign(gtk4::Align::Center);
+        box_dots.append(&dot);
+    }
+
+    Some(box_dots)
+}
+
 /// Extrae todos los `FileItem` seleccionados de un `gtk4::ListBox` respetando el orden visual.
 pub(super) fn list_box_selected_items(
     list_box: &gtk4::ListBox,
@@ -1009,6 +1045,110 @@ pub(super) fn show_item_context_menu(
             });
         }
         vbox.append(&trash_btn);
+
+        let del_perm_btn = make_context_menu_button(if es {
+            "Eliminar inmediatamente…"
+        } else {
+            "Delete Immediately…"
+        });
+        {
+            let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
+            let target_str = path.to_string_lossy().to_string();
+            let pop = popover.clone();
+            del_perm_btn.connect_clicked(move |_| {
+                pop.popdown();
+                let _ = anchor_widget
+                    .activate_action("win.delete_permanent_item", Some(&target_str.to_variant()));
+            });
+        }
+        vbox.append(&del_perm_btn);
+
+        // Selector visual rápido de las 7 etiquetas + limpiar etiquetas
+        vbox.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
+        let tag_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 5);
+        tag_row.add_css_class("branches-context-tag-row");
+        tag_row.set_halign(gtk4::Align::Center);
+        for def in crate::db::TAG_CATALOG.iter() {
+            let dot_btn = gtk4::Button::builder()
+                .has_frame(false)
+                .valign(gtk4::Align::Center)
+                .tooltip_text(if es { def.label_es } else { def.label_en })
+                .css_classes([
+                    "branches-context-tag-btn",
+                    &format!("branches-tag-color-{}", def.id),
+                ])
+                .build();
+            let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
+            let target_str = path.to_string_lossy().to_string();
+            let tag_id = def.id.to_string();
+            let pop = popover.clone();
+            dot_btn.connect_clicked(move |_| {
+                pop.popdown();
+                let _ = anchor_widget.activate_action(
+                    "win.toggle_tag_item",
+                    Some(&(tag_id.clone(), target_str.clone()).to_variant()),
+                );
+            });
+            tag_row.append(&dot_btn);
+        }
+
+        let clear_tags_btn = gtk4::Button::builder()
+            .icon_name("edit-clear-symbolic")
+            .has_frame(false)
+            .valign(gtk4::Align::Center)
+            .tooltip_text(if es {
+                "Quitar etiquetas"
+            } else {
+                "Clear Tags"
+            })
+            .css_classes(["flat", "branches-context-tag-clear-btn"])
+            .build();
+        {
+            let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
+            let target_str = path.to_string_lossy().to_string();
+            let pop = popover.clone();
+            clear_tags_btn.connect_clicked(move |_| {
+                pop.popdown();
+                let _ = anchor_widget
+                    .activate_action("win.clear_tags_item", Some(&target_str.to_variant()));
+            });
+        }
+        tag_row.append(&clear_tags_btn);
+        vbox.append(&tag_row);
+    } else if is_inside_trash(path) {
+        let restore_btn = make_context_menu_button(if es {
+            "Restaurar a ubicación original"
+        } else {
+            "Put Back"
+        });
+        {
+            let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
+            let target_str = path.to_string_lossy().to_string();
+            let pop = popover.clone();
+            restore_btn.connect_clicked(move |_| {
+                pop.popdown();
+                let _ = anchor_widget
+                    .activate_action("win.restore_item", Some(&target_str.to_variant()));
+            });
+        }
+        vbox.append(&restore_btn);
+
+        let del_perm_btn = make_context_menu_button(if es {
+            "Eliminar inmediatamente…"
+        } else {
+            "Delete Immediately…"
+        });
+        {
+            let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
+            let target_str = path.to_string_lossy().to_string();
+            let pop = popover.clone();
+            del_perm_btn.connect_clicked(move |_| {
+                pop.popdown();
+                let _ = anchor_widget
+                    .activate_action("win.delete_permanent_item", Some(&target_str.to_variant()));
+            });
+        }
+        vbox.append(&del_perm_btn);
     }
 
     popover.set_child(Some(&vbox));

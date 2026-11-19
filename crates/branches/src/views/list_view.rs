@@ -58,8 +58,16 @@ fn populate_list(
     while let Some(child) = list_box.first_child() {
         list_box.remove(&child);
     }
+    let tags_map = crate::views::load_tags_map();
     for item in items {
-        let row = create_list_row(item, items_ref.clone(), icon_size, widths, on_navigate.clone());
+        let row = create_list_row(
+            item,
+            items_ref.clone(),
+            icon_size,
+            widths,
+            &tags_map,
+            on_navigate.clone(),
+        );
         list_box.append(&row);
     }
 }
@@ -550,6 +558,7 @@ fn create_list_row(
     items_ref: Rc<RefCell<Vec<FileItem>>>,
     icon_size: i32,
     widths: [i32; 3],
+    tags_map: &std::collections::HashMap<PathBuf, Vec<(String, String)>>,
     on_navigate: NavigateCallback,
 ) -> ListBoxRow {
     let hbox = GtkBox::new(Orientation::Horizontal, 0);
@@ -580,6 +589,9 @@ fn create_list_row(
         .css_classes(["branches-list-name-label"])
         .build();
     name_box.append(&label_name);
+    if let Some(tag_dots) = crate::views::create_item_tag_dots(&item.path, tags_map) {
+        name_box.append(&tag_dots);
+    }
 
     // Columnas 2-4: fecha, tamaño y clase (ancho fijo compartido con la cabecera)
     let label_date = create_cell_label(&item.modified_str, false);

@@ -246,10 +246,14 @@ impl Sidebar {
 
         let mut devices_anchor: Option<ListBoxRow> = None;
         for entry in locations {
+            let is_trash_entry = entry.path.ends_with("Trash/files");
             let row = create_sidebar_row(&entry.title, entry.icon_name, entry.path.clone(), false);
             attach_folder_navigation_handlers(&row, &on_navigate, entry.path.clone());
             if entry.path != Path::new("/") {
                 attach_folder_drop_target(&row, entry.path, &on_files_dropped);
+            }
+            if is_trash_entry {
+                attach_trash_context_menu(&row, es);
             }
             list_box.append(&row);
             devices_anchor = Some(row);
@@ -259,34 +263,26 @@ impl Sidebar {
         // 4. Sección Etiquetas (Tags)
         let tags_header = add_section_title(&list_box, if es { "Etiquetas" } else { "Tags" });
         attach_bookmark_drop_target(&tags_header);
-        let tags = [
-            (if es { "Rojo" } else { "Red" }, "#ff3b30"),
-            (if es { "Naranja" } else { "Orange" }, "#ff9500"),
-            (if es { "Amarillo" } else { "Yellow" }, "#ffcc00"),
-            (if es { "Verde" } else { "Green" }, "#34c759"),
-            (if es { "Azul" } else { "Blue" }, "#007aff"),
-            (if es { "Púrpura" } else { "Purple" }, "#af52de"),
-            (if es { "Gris" } else { "Gray" }, "#8e8e93"),
-        ];
 
-        for (name, color_hex) in tags {
-            let row = create_tag_row(name, color_hex);
+        for def in crate::db::TAG_CATALOG.iter() {
+            let display_title = if es { def.label_es } else { def.label_en };
+            let row = create_tag_row(def.id, display_title);
             let tag_cb = on_tag_selected.clone();
-            let tag_name = name.to_string();
+            let tag_id = def.id.to_string();
 
             let click = GestureClick::new();
             let cb_c = tag_cb.clone();
-            let t_c = tag_name.clone();
+            let t_c = tag_id.clone();
             click.connect_released(move |_, _, _, _| {
                 cb_c(t_c.clone());
             });
             row.add_controller(click);
 
-            let t_a = tag_name.clone();
+            let t_a = tag_id.clone();
             row.connect_activate(move |_| {
                 tag_cb(t_a.clone());
             });
-            attach_tag_drop_target(&row, tag_name, color_hex.to_string(), &on_files_dropped);
+            attach_tag_drop_target(&row, tag_id, def.color_hex.to_string(), &on_files_dropped);
             list_box.append(&row);
         }
 
@@ -1641,23 +1637,59 @@ fn create_sidebar_row(
     row
 }
 
-fn create_tag_row(title: &str, color_hex: &str) -> ListBoxRow {
+fn attach_trash_context_menu(row: &ListBoxRow, es: bool) {
+    let click = GestureClick::new();
+    click.set_button(gdk::BUTTON_SECONDARY);
+    let row_ref = row.clone();
+    click.connect_pressed(move |g, _n, x, y| {
+        g.set_state(gtk4::EventSequenceState::Claimed);
+        let popover = gtk4::Popover::builder()
+            .has_arrow(false)
+            .css_classes(["malus-popover-menu"])
+            .build();
+        popover.set_parent(&row_ref);
+        let rect = gdk::Rectangle::new(x.round() as i32, y.round() as i32, 1, 1);
+        popover.set_pointing_to(Some(&rect));
+        popover.connect_closed(|p| p.unparent());
+
+        let vbox = GtkBox::new(Orientation::Vertical, 2);
+        let empty_btn = gtk4::Button::builder()
+            .label(if es {
+                "Vaciar Papelera…"
+            } else {
+                "Empty Trash…"
+            })
+            .has_frame(false)
+            .css_classes(["popover-menu-item"])
+            .build();
+        if let Some(child) = empty_btn.child() {
+            if let Some(lbl) = child.downcast_ref::<Label>() {
+                lbl.set_xalign(0.0);
+            }
+        }
+        let anchor = row_ref.clone();
+        let pop = popover.clone();
+        empty_btn.connect_clicked(move |_| {
+            pop.popdown();
+            let _ = anchor.activate_action("win.empty_trash", None);
+        });
+        vbox.append(&empty_btn);
+        popover.set_child(Some(&vbox));
+        popover.popup();
+    });
+    row.add_controller(click);
+}
+
+fn create_tag_row(tag_id: &str, title: &str) -> ListBoxRow {
     let hbox = GtkBox::new(Orientation::Horizontal, 8);
     hbox.set_margin_start(4);
     hbox.set_margin_end(4);
 
-    let dot = Image::builder()
-        .css_classes(["branches-tag-dot"])
-        .build();
-    
-    // Aplicar estilo de color al punto
-    let provider = gtk4::CssProvider::new();
-    let css = format!(".branches-tag-dot-{} {{ background-color: {}; min-width: 10px; min-height: 10px; border-radius: 5px; }}", title, color_hex);
-    provider.load_from_string(&css);
-    if let Some(display) = gtk4::gdk::Display::default() {
-        gtk4::style_context_add_provider_for_display(&display, &provider, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
-    }
-    dot.add_css_class(&format!("branches-tag-dot-{}", title));
+    let dot = GtkBox::new(Orientation::Horizontal, 0);
+    dot.set_size_request(10, 10);
+    dot.set_valign(Align::Center);
+    dot.add_css_class("branches-tag-dot");
+    dot.add_css_class(&format!("branches-tag-color-{}", tag_id));
 
     let label = Label::builder()
         .label(title)
@@ -1677,7 +1709,7 @@ fn create_tag_row(title: &str, color_hex: &str) -> ListBoxRow {
         .build();
 
     unsafe {
-        row.set_data("target_tag", title.to_string());
+        row.set_data("target_tag", tag_id.to_string());
     }
 
     row
