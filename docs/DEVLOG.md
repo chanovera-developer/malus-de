@@ -4,6 +4,32 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-19] — Quick Look Fluido Estilo macOS (`Overlay`, Multimedia, Caché LRU, Precarga) y Cierre de ADR 0006
+
+### 1. Vista Rápida (`Espacio`) con Media Real, Transición macOS y Sin *Black Hole*
+- **Alternancia directa con `Espacio` ([`quick_look.rs`](../crates/branches/src/quick_look.rs), [`app_window.rs`](../crates/branches/src/app_window.rs), [`gallery_view.rs`](../crates/branches/src/views/gallery_view.rs), `c65e758`):**
+  - Captura de teclado en `PropagationPhase::Capture` (`Key::space` / `Key::KP_Space` / `Escape` / `←` / `→` / `Re Pág` / `Av Pág`) y foco automático al pulsar tarjetas en `GalleryView` para evitar que controles internos absorban la barra espaciadora.
+  - Renderizado real con `gtk4::Picture` (`ContentFit::Contain`) para imágenes (incluyendo Glycin y respaldo `ffmpeg` para HEIC/AVIF/JXL), PDFs multipágina (`pdfinfo` + `pdftoppm`), vídeo/audio inline (`ffmpeg` raw RGBA a `MemoryTexture` + `ffplay` con parada instantánea) y listado de comprimidos (`.zip`, `.tar.*`, `.7z`).
+- **Animación macOS de entrada y salida sin efecto *Agujero Negro* ([`quick_look.rs`](../crates/branches/src/quick_look.rs), [`macos-branches.css`](../crates/branches/src/styles/macos-branches.css), [`state.rs`](../crates/compositor/src/state.rs), `f1a781b`):**
+  - Integrado Quick Look como HUD flotante dentro de `root_overlay` (`Overlay`) en `BranchesWindow` con transición CSS `scale(0.90) -> 1.0` (`175 ms`) y salida `1.0 -> 0.92` (`135 ms`), evitando crear/cerrar superficies `xdg_toplevel` en sesión normal.
+  - Añadido `should_skip_black_hole_for_app_id` en `malus-de-compositor` para omitir también el shader de agujero negro cuando se cierren ventanas `dev.malus.Branches.QuickLook` o `dev.malus.Preview`.
+
+### 2. Eliminación de *Lag*, Caché LRU en Memoria y Precarga Predictiva (`2ee68c5`, `c4e9dff`)
+- **Cero bloqueos en el hilo principal (`2ee68c5`):**
+  - Recolección no bloqueante (`wait()` en hilo secundario tras `kill()`) en `MediaPlaybackHandle::stop()`, eliminación de doble sombra pesada durante el escalado CSS y arranque de vídeo/audio diferido (`185 ms`) tras completar la animación de entrada.
+- **Caché LRU + precarga estilo macOS (`c4e9dff`):**
+  - Decodificación RGBA completa en hilo secundario (`DecodedRgbaFrame` con rotación EXIF) lista para `MemoryTexture::new`, junto con `PreviewCache` LRU de `24` entradas indexada por `(PathBuf, mtime_nanos)` y deduplicación `in_flight`.
+  - Precarga automática al cambiar de selección en el explorador (`prefetch_item` en [`app_window.rs`](../crates/branches/src/app_window.rs#L1019-L1023)) y de vecinos `←`/`→` (`prefetch_neighbors`) para montar la imagen desde el fotograma `0` al pulsar `Espacio`.
+
+### 3. Actualización de ADR 0006 y Validación
+- Actualizado [`0006-branches-pendiente.md`](decisiones/0006-branches-pendiente.md) reflejando los 8 bloques completados y acotando los puntos menores de seguimiento (`GroupBy` visual, resaltado sintáctico en Quick Look, consulta directa a `malus-de-spotlight`, app independiente `Preview` en ADR 0007 y despliegue en sistema).
+- `cargo test --offline -p malus-de-branches`: **53 passed; 0 failed**.
+- `cargo test --offline -p malus-de-compositor quick_look_and_preview_windows_skip_black_hole_close_effect`: **1 passed; 0 failed** (`83 filtered out`).
+- `cargo check --offline --workspace --all-targets`: **0 warnings** en todo el workspace.
+- `cargo build --release --offline -p malus-de-branches`: compilado limpio en `24.47s`.
+
+---
+
 ## [2026-11-19] — Resolución Completa de Pendientes en Branches (ADR 0006, Fases 1–6)
 
 Implementación integral de las 6 fases planificadas a partir de [`0006-branches-pendiente.md`](decisiones/0006-branches-pendiente.md) para equipar a **Branches** (`crates/branches`) como explorador nativo completo de **Malus DE**:
