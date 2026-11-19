@@ -1919,9 +1919,14 @@ fn create_wifi_subview(
     let pop_c = popover.clone();
     pref_btn.connect_clicked(move |_| {
         pop_c.popdown();
-        let mut command = Command::new("gnome-control-center");
+        let settings_bin = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|dir| dir.join("malus-de-settings")))
+            .filter(|p| p.exists())
+            .unwrap_or_else(|| std::path::PathBuf::from("malus-de-settings"));
+        let mut command = Command::new(settings_bin);
         malus_de_common::config::set_cursor_environment(&mut command);
-        let _ = command.arg("wifi").spawn();
+        let _ = command.args(["--panel", "wifi"]).spawn();
     });
 
     view_box.append(&footer_sep);

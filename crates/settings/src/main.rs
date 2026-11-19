@@ -17,6 +17,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::rc::Rc;
 
+mod wifi_pane;
+
 const APP_ID: &str = "dev.malus.Settings";
 const SETTINGS_SIDEBAR_WIDTH: i32 = 212;
 const SIDEBAR_SEARCH_MAX_HEIGHT: i32 = 36;
@@ -30,7 +32,7 @@ const SQUIRCLE_SEGMENTS: usize = 20;
 #[command(name = "malus-de-settings")]
 #[command(about = "Ajustes del Sistema de Malus DE (macOS System Settings)")]
 struct Args {
-    /// Panel inicial a mostrar: displays, wallpaper, keyboard, appearance, dock, spotlight, sound, about
+    /// Panel inicial a mostrar: wifi, displays, wallpaper, keyboard, appearance, dock, spotlight, sound, about
     #[arg(short, long, default_value = "spotlight")]
     panel: String,
 
@@ -175,7 +177,7 @@ fn build_sidebar_search_entry() -> SearchEntry {
         .build()
 }
 
-fn make_system_glyph_badge(
+pub(crate) fn make_system_glyph_badge(
     icon_name: &str,
     css_classes: &[&str],
     box_size: i32,
@@ -446,6 +448,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
 
     // Items de navegación de la barra lateral con glifos del sistema (estilo Branches)
     let nav_items = [
+        ("wifi", "network-wireless-symbolic", "Wi-Fi"),
         ("appearance", "preferences-desktop-appearance-symbolic", "Aspecto"),
         ("dock", "user-desktop-symbolic", "Escritorio y Dock"),
         ("wallpaper", "preferences-desktop-wallpaper-symbolic", "Fondo de pantalla"),
@@ -490,6 +493,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                 btn.set_visible(true);
             } else {
                 let matches = id.contains(&query) || match id.as_str() {
+                    "wifi" => "wi-fi wifi red inalambrica internet redes",
                     "displays" => "pantallas monitor resolucion ppi truesize",
                     "wallpaper" => "fondo pantalla wallpaper imagen",
                     "keyboard" => "teclado distribucion lenguaje idioma xkb",
@@ -508,6 +512,9 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     // ==========================================
     // 2. Construcción de los Paneles de Contenido
     // ==========================================
+    let (wifi_pane, refresh_wifi_pane) = wifi_pane::create_wifi_pane(&window);
+    stack.add_named(&wifi_pane, Some("wifi"));
+
     let (displays_pane, refresh_displays_pane) = create_displays_pane();
     stack.add_named(&displays_pane, Some("displays"));
 
@@ -621,6 +628,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         let stack_c = stack.clone();
         let btns_c = all_btns.clone();
         let title_lbl_c = active_pane_title.clone();
+        let ref_wifi = refresh_wifi_pane.clone();
         let ref_disp = refresh_displays_pane.clone();
         let ref_wall = refresh_wallpaper_pane.clone();
         let ref_kb = refresh_keyboard_pane.clone();
@@ -629,6 +637,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         let ref_spot = refresh_spotlight_pane.clone();
 
         let display_title = match id.as_str() {
+            "wifi" => "Wi-Fi",
             "displays" => "Pantallas",
             "wallpaper" => "Fondo de pantalla",
             "keyboard" => "Teclado",
@@ -648,7 +657,9 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                     other_btn.remove_css_class("sidebar-btn-active");
                 }
             }
-            if target_id == "displays" {
+            if target_id == "wifi" {
+                ref_wifi();
+            } else if target_id == "displays" {
                 ref_disp();
             } else if target_id == "wallpaper" {
                 ref_wall();
@@ -668,9 +679,12 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
 
     // Seleccionar panel inicial
     let start_id = match initial_panel {
-        "wallpaper" | "keyboard" | "appearance" | "sound" | "about" | "dock" | "spotlight" | "displays" => initial_panel,
+        "wifi" | "wallpaper" | "keyboard" | "appearance" | "sound" | "about" | "dock" | "spotlight" | "displays" => initial_panel,
         _ => "spotlight",
     };
+    if start_id == "wifi" {
+        refresh_wifi_pane();
+    }
     for (id, btn) in &sidebar_buttons {
         if id == start_id {
             btn.add_css_class("sidebar-btn-active");
@@ -678,6 +692,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     }
     stack.set_visible_child_name(start_id);
     let initial_title = match start_id {
+        "wifi" => "Wi-Fi",
         "displays" => "Pantallas",
         "wallpaper" => "Fondo de pantalla",
         "keyboard" => "Teclado",
