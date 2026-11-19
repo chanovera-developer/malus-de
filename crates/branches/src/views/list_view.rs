@@ -50,6 +50,7 @@ fn sort_items(items: &mut [FileItem], state: Option<(SortCol, bool)>) {
 fn populate_list(
     list_box: &ListBox,
     items: &[FileItem],
+    items_ref: &Rc<RefCell<Vec<FileItem>>>,
     icon_size: i32,
     widths: [i32; 3],
     on_navigate: &NavigateCallback,
@@ -58,7 +59,7 @@ fn populate_list(
         list_box.remove(&child);
     }
     for item in items {
-        let row = create_list_row(item, icon_size, widths, on_navigate.clone());
+        let row = create_list_row(item, items_ref.clone(), icon_size, widths, on_navigate.clone());
         list_box.append(&row);
     }
 }
@@ -147,9 +148,11 @@ impl ListView {
                         .collect()
                 };
                 sort_items(&mut items.borrow_mut(), state.get());
+                let snapshot = items.borrow().clone();
                 populate_list(
                     &list_box,
-                    &items.borrow(),
+                    &snapshot,
+                    &items,
                     icon_size_sort.get(),
                     widths.get(),
                     &on_nav,
@@ -280,6 +283,14 @@ impl ListView {
         Some((item, row.upcast()))
     }
 
+    pub fn get_selected_items(&self) -> Vec<FileItem> {
+        crate::views::list_box_selected_items(&self.list_box, &self.items.borrow())
+    }
+
+    pub fn select_all(&self) {
+        self.list_box.select_all();
+    }
+
     pub fn queue_select_name(&self, name: &str) {
         *self.pending_select_name.borrow_mut() = Some(name.to_string());
     }
@@ -294,6 +305,7 @@ impl ListView {
         populate_list(
             &self.list_box,
             items,
+            &self.items,
             self.icon_size.get(),
             self.col_widths.get(),
             &self.on_navigate,
@@ -535,6 +547,7 @@ fn create_list_header(
 
 fn create_list_row(
     item: &FileItem,
+    items_ref: Rc<RefCell<Vec<FileItem>>>,
     icon_size: i32,
     widths: [i32; 3],
     on_navigate: NavigateCallback,
@@ -601,7 +614,15 @@ fn create_list_row(
         }
 
         if button == gdk::BUTTON_PRIMARY {
-            if n_press == 1 && row_for_menu.is_selected() {
+            let is_single_selected = row_for_menu
+                .parent()
+                .and_then(|p| p.downcast::<ListBox>().ok())
+                .is_some_and(|lb| lb.selected_rows().len() == 1);
+            if n_press == 1
+                && row_for_menu.is_selected()
+                && is_single_selected
+                && !crate::views::is_multi_select_modifier(g.current_event_state())
+            {
                 let clicked_on_name = label_for_click
                     .compute_bounds(&row_for_menu)
                     .map(|b| x <= (b.x() + b.width().max(180.0)) as f64)
@@ -657,12 +678,17 @@ fn create_list_row(
 
     row.add_controller(gesture);
 
-    // Arrastrar archivo (Drag & Drop con icono translúcido estilo macOS Finder)
+    // Arrastrar archivo (Drag & Drop con soporte múltiple estilo macOS Finder)
     let drag_source = gtk4::DragSource::new();
     drag_source.set_actions(gdk::DragAction::MOVE | gdk::DragAction::COPY);
     let path_for_drag = item.path.clone();
+    let row_for_drag = row.clone();
     drag_source.connect_prepare(move |_, _x, _y| {
-        Some(crate::views::build_file_drag_content_provider(&path_for_drag))
+        Some(crate::views::prepare_list_row_drag(
+            &row_for_drag,
+            &path_for_drag,
+            &items_ref.borrow(),
+        ))
     });
 
     // Pre-adjuntar el icono para respuesta visual instantánea (sin lapso de cursor vacío)

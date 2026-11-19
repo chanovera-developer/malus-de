@@ -9,6 +9,71 @@ pub type NavigateCallback = std::rc::Rc<dyn Fn(PathBuf)>;
 pub type SelectionCallback = std::rc::Rc<dyn Fn(usize)>;
 pub type RenameCallback = std::rc::Rc<dyn Fn(PathBuf)>;
 
+/// Devuelve `true` si el evento tiene un modificador de selección múltiple o rango (`Ctrl`, `Super`, `Meta` o `Shift`).
+pub(super) fn is_multi_select_modifier(state: gtk4::gdk::ModifierType) -> bool {
+    use gtk4::gdk::ModifierType;
+    state.intersects(
+        ModifierType::CONTROL_MASK
+            | ModifierType::SUPER_MASK
+            | ModifierType::META_MASK
+            | ModifierType::SHIFT_MASK,
+    )
+}
+
+/// Rango inclusivo normalizado entre dos índices en cualquier orden.
+pub(super) fn inclusive_range(a: usize, b: usize) -> std::ops::RangeInclusive<usize> {
+    if a <= b {
+        a..=b
+    } else {
+        b..=a
+    }
+}
+
+/// Extrae todos los `FileItem` seleccionados de un `gtk4::ListBox` respetando el orden visual.
+pub(super) fn list_box_selected_items(
+    list_box: &gtk4::ListBox,
+    items: &[crate::fs_backend::FileItem],
+) -> Vec<crate::fs_backend::FileItem> {
+    use gtk4::prelude::*;
+
+    let mut indices: Vec<usize> = list_box
+        .selected_rows()
+        .into_iter()
+        .filter_map(|row| usize::try_from(row.index()).ok())
+        .collect();
+    indices.sort_unstable();
+    indices.dedup();
+    indices
+        .into_iter()
+        .filter_map(|idx| items.get(idx).cloned())
+        .collect()
+}
+
+/// Prepara el `ContentProvider` de arrastre para una fila de `ListBox`:
+/// si la fila forma parte de una selección múltiple, arrastra todas las rutas seleccionadas.
+pub(super) fn prepare_list_row_drag(
+    row: &gtk4::ListBoxRow,
+    item_path: &std::path::Path,
+    items: &[crate::fs_backend::FileItem],
+) -> gtk4::gdk::ContentProvider {
+    use gtk4::prelude::*;
+
+    if let Some(lb) = row.parent().and_then(|p| p.downcast::<gtk4::ListBox>().ok()) {
+        if !row.is_selected() {
+            lb.unselect_all();
+            lb.select_row(Some(row));
+        }
+        let paths: Vec<PathBuf> = list_box_selected_items(&lb, items)
+            .into_iter()
+            .map(|it| it.path)
+            .collect();
+        if !paths.is_empty() {
+            return build_files_drag_content_provider(&paths);
+        }
+    }
+    build_file_drag_content_provider(item_path)
+}
+
 /// Aplica o retira `.branches-cut-item` (opacidad 0.5) sobre el widget del elemento según el portapapeles.
 pub(super) fn sync_cut_css_class(
     widget: &impl gtk4::prelude::IsA<gtk4::Widget>,
@@ -1206,5 +1271,76 @@ mod tests {
         assert_eq!(raw[(32 * 128 + 64) * 4 + 3], 255);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn multi_selection_helpers_and_views_work_across_list_columns_and_gallery() {
+        assert_eq!(super::inclusive_range(2, 5).collect::<Vec<_>>(), vec![2, 3, 4, 5]);
+        assert_eq!(super::inclusive_range(5, 2).collect::<Vec<_>>(), vec![2, 3, 4, 5]);
+        assert!(super::is_multi_select_modifier(gtk4::gdk::ModifierType::CONTROL_MASK));
+        assert!(super::is_multi_select_modifier(gtk4::gdk::ModifierType::SHIFT_MASK));
+        assert!(super::is_multi_select_modifier(gtk4::gdk::ModifierType::SUPER_MASK));
+        assert!(!super::is_multi_select_modifier(gtk4::gdk::ModifierType::empty()));
+
+        if gtk4::init().is_err() {
+            return;
+        }
+
+        let make_item = |name: &str| FileItem {
+            name: name.to_string(),
+            path: PathBuf::from(format!("/tmp/{name}")),
+            is_dir: false,
+            is_hidden: false,
+            is_symlink: false,
+            size: 128,
+            size_str: "128 B".to_string(),
+            modified: None,
+            modified_str: "--".to_string(),
+            kind_str: "Texto".to_string(),
+            gicon: gio::ThemedIcon::new("text-x-generic").upcast(),
+        };
+        let items = vec![make_item("a.txt"), make_item("b.txt"), make_item("c.txt")];
+        let nav: super::NavigateCallback = std::rc::Rc::new(|_| {});
+        let last_sel_count = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        let sel_count_cb = last_sel_count.clone();
+        let sel_cb: super::SelectionCallback = std::rc::Rc::new(move |n| sel_count_cb.set(n));
+
+        // 1. ListView: selección múltiple y select_all
+        let list_view = super::list_view::ListView::new(nav.clone(), sel_cb.clone());
+        list_view.set_items(&items);
+        list_view.select_all();
+        let list_sel = list_view.get_selected_items();
+        assert_eq!(list_sel.len(), 3);
+        assert_eq!(last_sel_count.get(), 3);
+
+        // 2. ColumnView: selección múltiple en columna activa y select_all
+        let col_view = super::column_view::ColumnView::new(nav.clone(), sel_cb.clone());
+        col_view.set_root(
+            std::path::Path::new("/tmp"),
+            &items,
+            false,
+            crate::state::SortBy::Name,
+            crate::state::SortOrder::Ascending,
+        );
+        col_view.select_all();
+        let col_sel = col_view.get_selected_items();
+        assert_eq!(col_sel.len(), 3);
+        assert_eq!(last_sel_count.get(), 3);
+
+        // 3. GalleryView: selección única, rango Shift, toggle Ctrl y select_all
+        let gallery = super::gallery_view::GalleryView::new(nav, sel_cb);
+        gallery.set_items(&items);
+        assert_eq!(gallery.get_selected_items().len(), 1);
+        gallery.select_range_to(2);
+        assert_eq!(gallery.get_selected_items().len(), 3);
+        gallery.toggle_select_index(1);
+        let gal_after_toggle: Vec<String> = gallery
+            .get_selected_items()
+            .into_iter()
+            .map(|i| i.name)
+            .collect();
+        assert_eq!(gal_after_toggle, vec!["a.txt", "c.txt"]);
+        gallery.select_all();
+        assert_eq!(gallery.get_selected_items().len(), 3);
     }
 }

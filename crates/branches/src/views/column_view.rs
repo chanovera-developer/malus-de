@@ -29,6 +29,8 @@ struct ColumnViewInner {
     scrolled: ScrolledWindow,
     columns_box: GtkBox,
     columns: RefCell<Vec<ColumnData>>,
+    active_col_idx: Cell<Option<usize>>,
+    syncing_selection: Cell<bool>,
     preview_box: RefCell<Option<GtkBox>>,
     current_root: RefCell<PathBuf>,
     pending_select_name: RefCell<Option<String>>,
@@ -72,6 +74,8 @@ impl ColumnView {
             scrolled,
             columns_box,
             columns: RefCell::new(Vec::new()),
+            active_col_idx: Cell::new(None),
+            syncing_selection: Cell::new(false),
             preview_box: RefCell::new(None),
             current_root: RefCell::new(PathBuf::from("/")),
             pending_select_name: RefCell::new(None),
@@ -123,6 +127,7 @@ impl ColumnView {
             existing_idx,
             self.inner.pending_select_name.borrow().is_none(),
         ) {
+            self.inner.syncing_selection.set(true);
             self.inner.prune_after(k);
             let list_box = self
                 .inner
@@ -133,6 +138,8 @@ impl ColumnView {
             if let Some(list_box) = list_box {
                 list_box.unselect_all();
             }
+            self.inner.active_col_idx.set(Some(k));
+            self.inner.syncing_selection.set(false);
             self.inner.scroll_to_end();
             return;
         }
@@ -147,17 +154,73 @@ impl ColumnView {
 
     pub fn get_selected_item_and_widget(&self) -> Option<(FileItem, gtk4::Widget)> {
         let columns = self.inner.columns.borrow();
-        columns.iter().rev().find_map(|col| {
-            let selected_row = col.list_box.selected_row()?;
-            let idx = selected_row.index() as usize;
-            let item = col.items.get(idx).cloned()?;
-            Some((item, selected_row.upcast()))
-        })
+        let col_idx = self.inner.target_column_index(&columns)?;
+        let col = columns.get(col_idx)?;
+        let selected_row = col.list_box.selected_rows().into_iter().next()?;
+        let idx = selected_row.index() as usize;
+        let item = col.items.get(idx).cloned()?;
+        Some((item, selected_row.upcast()))
+    }
+
+    pub fn get_selected_items(&self) -> Vec<FileItem> {
+        let columns = self.inner.columns.borrow();
+        let Some(col_idx) = self.inner.target_column_index(&columns) else {
+            return Vec::new();
+        };
+        let Some(col) = columns.get(col_idx) else {
+            return Vec::new();
+        };
+        crate::views::list_box_selected_items(&col.list_box, &col.items)
+    }
+
+    pub fn select_all(&self) {
+        let columns = self.inner.columns.borrow();
+        if columns.is_empty() {
+            return;
+        }
+        let target_idx = columns
+            .iter()
+            .position(|c| c.list_box.has_focus() || c.list_box.focus_child().is_some())
+            .or_else(|| {
+                self.inner
+                    .active_col_idx
+                    .get()
+                    .filter(|&idx| idx < columns.len())
+            })
+            .unwrap_or(columns.len() - 1);
+        if let Some(col) = columns.get(target_idx) {
+            self.inner.active_col_idx.set(Some(target_idx));
+            self.inner.syncing_selection.set(true);
+            col.list_box.select_all();
+            self.inner.syncing_selection.set(false);
+            self.inner.prune_after(target_idx);
+            let count = col.list_box.selected_rows().len();
+            if count == 1 {
+                if let Some(item) = col.items.first() {
+                    self.inner.on_item_selected(target_idx, item);
+                    return;
+                }
+            }
+            (self.inner.on_selection_changed)(count);
+        }
     }
 }
 
 impl ColumnViewInner {
+    fn target_column_index(&self, cols: &[ColumnData]) -> Option<usize> {
+        if let Some(idx) = self.active_col_idx.get() {
+            if let Some(col) = cols.get(idx) {
+                if !col.list_box.selected_rows().is_empty() {
+                    return Some(idx);
+                }
+            }
+        }
+        cols.iter()
+            .rposition(|col| !col.list_box.selected_rows().is_empty())
+    }
+
     fn clear_all(&self) {
+        self.active_col_idx.set(None);
         if let Some(prev) = self.preview_box.borrow_mut().take() {
             self.columns_box.remove(&prev);
         }
@@ -216,12 +279,14 @@ impl ColumnViewInner {
         col_box.set_vexpand(true);
 
         let list_box = ListBox::builder()
-            .selection_mode(gtk4::SelectionMode::Single)
+            .selection_mode(gtk4::SelectionMode::Multiple)
+            .activate_on_single_click(false)
             .css_classes(["branches-column-list"])
             .build();
 
-        for item in &items {
-            let row = create_column_row(item, &self.on_navigate);
+        let items_rc = Rc::new(items);
+        for item in items_rc.iter() {
+            let row = create_column_row(item, items_rc.clone(), &self.on_navigate);
             list_box.append(&row);
         }
 
@@ -292,20 +357,31 @@ impl ColumnViewInner {
 
         col_box.append(&scrolled);
 
-        // Controlador de selección de fila
+        // Controlador de selección de filas (soporta selección múltiple y rango)
         let self_for_sel = self.clone();
-        let items_for_sel = items.clone();
-        list_box.connect_row_selected(move |_, row_opt| {
-            if let Some(row) = row_opt {
-                let idx = row.index() as usize;
-                if let Some(item) = items_for_sel.get(idx) {
-                    self_for_sel.on_item_selected(col_idx, item);
+        let items_for_sel = items_rc.clone();
+        list_box.connect_selected_rows_changed(move |lb| {
+            if self_for_sel.syncing_selection.get() {
+                return;
+            }
+            self_for_sel.active_col_idx.set(Some(col_idx));
+            let selected_rows = lb.selected_rows();
+            let count = selected_rows.len();
+            if count == 1 {
+                if let Some(row) = selected_rows.first() {
+                    let idx = row.index() as usize;
+                    if let Some(item) = items_for_sel.get(idx) {
+                        self_for_sel.on_item_selected(col_idx, item);
+                        return;
+                    }
                 }
             }
+            self_for_sel.prune_after(col_idx);
+            (self_for_sel.on_selection_changed)(count);
         });
 
         // Controlador de activación (doble clic o Enter)
-        let items_for_act = items.clone();
+        let items_for_act = items_rc;
         let on_nav = self.on_navigate.clone();
         list_box.connect_row_activated(move |_, row| {
             let idx = row.index() as usize;
@@ -328,7 +404,7 @@ impl ColumnViewInner {
                     if cols.len() > col_idx + 1 {
                         let next_lb = &cols[col_idx + 1].list_box;
                         next_lb.grab_focus();
-                        if next_lb.selected_row().is_none() {
+                        if next_lb.selected_rows().is_empty() {
                             if let Some(first_row) = next_lb.row_at_index(0) {
                                 next_lb.select_row(Some(&first_row));
                             }
@@ -596,7 +672,11 @@ fn slide_in_from_right(widget: &impl IsA<gtk4::Widget>, distance: i32) {
     });
 }
 
-fn create_column_row(item: &FileItem, on_navigate: &NavigateCallback) -> ListBoxRow {
+fn create_column_row(
+    item: &FileItem,
+    col_items: Rc<Vec<FileItem>>,
+    on_navigate: &NavigateCallback,
+) -> ListBoxRow {
     let row = ListBoxRow::new();
     row.add_css_class("branches-column-row");
 
@@ -651,7 +731,15 @@ fn create_column_row(item: &FileItem, on_navigate: &NavigateCallback) -> ListBox
             source_id.remove();
         }
         if button == gdk::BUTTON_PRIMARY {
-            if n_press == 1 && row_for_menu.is_selected() {
+            let is_single_selected = row_for_menu
+                .parent()
+                .and_then(|p| p.downcast::<ListBox>().ok())
+                .is_some_and(|lb| lb.selected_rows().len() == 1);
+            if n_press == 1
+                && row_for_menu.is_selected()
+                && is_single_selected
+                && !crate::views::is_multi_select_modifier(g.current_event_state())
+            {
                 let row_ren = row_for_menu.clone();
                 let path_ren = path_for_menu.clone();
                 let on_nav_ren = on_nav_menu.clone();
@@ -690,6 +778,7 @@ fn create_column_row(item: &FileItem, on_navigate: &NavigateCallback) -> ListBox
             g.set_state(gtk4::EventSequenceState::Claimed);
             if let Some(lb) = row_for_menu.parent().and_then(|p| p.downcast::<ListBox>().ok()) {
                 if !row_for_menu.is_selected() {
+                    lb.unselect_all();
                     lb.select_row(Some(&row_for_menu));
                 }
             }
@@ -708,8 +797,13 @@ fn create_column_row(item: &FileItem, on_navigate: &NavigateCallback) -> ListBox
     let drag_source = gtk4::DragSource::new();
     drag_source.set_actions(gdk::DragAction::MOVE | gdk::DragAction::COPY);
     let path_for_drag = item.path.clone();
+    let row_for_drag = row.clone();
     drag_source.connect_prepare(move |_, _x, _y| {
-        Some(crate::views::build_file_drag_content_provider(&path_for_drag))
+        Some(crate::views::prepare_list_row_drag(
+            &row_for_drag,
+            &path_for_drag,
+            &col_items,
+        ))
     });
     let cancel_slow_drag = pending_slow_rename;
     drag_source.connect_drag_begin(move |_, _| {

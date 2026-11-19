@@ -9,6 +9,7 @@ use gtk4::{
     Orientation, PolicyType, ScrolledWindow, Separator,
 };
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -23,6 +24,8 @@ pub struct GalleryView {
     current_folder: RefCell<Option<PathBuf>>,
     pending_select_name: RefCell<Option<String>>,
     current_index: RefCell<Option<usize>>,
+    selected_indices: RefCell<BTreeSet<usize>>,
+    selection_anchor: RefCell<Option<usize>>,
     carousel_widgets: RefCell<Vec<GtkBox>>,
     on_navigate: NavigateCallback,
     on_selection_changed: SelectionCallback,
@@ -73,6 +76,8 @@ impl GalleryView {
             current_folder: RefCell::new(None),
             pending_select_name: RefCell::new(None),
             current_index: RefCell::new(None),
+            selected_indices: RefCell::new(BTreeSet::new()),
+            selection_anchor: RefCell::new(None),
             carousel_widgets: RefCell::new(Vec::new()),
             on_navigate,
             on_selection_changed,
@@ -128,17 +133,35 @@ impl GalleryView {
         });
         gallery.canvas_holder.add_controller(bg_click);
 
-        // Controlador de teclado: Flecha Izq / Der navega el carrusel
+        // Controlador de teclado: Flecha Izq / Der navega el carrusel (Shift extiende rango)
         let key_controller = EventControllerKey::new();
         let g_weak = gallery.clone();
-        key_controller.connect_key_pressed(move |_, keyval, _, _| {
+        key_controller.connect_key_pressed(move |_, keyval, _, state| {
+            let shift = state.contains(gdk::ModifierType::SHIFT_MASK);
             match keyval {
                 Key::Left => {
-                    g_weak.select_prev();
+                    if shift {
+                        if let Some(curr) = *g_weak.current_index.borrow() {
+                            if curr > 0 {
+                                g_weak.select_range_to(curr - 1);
+                            }
+                        }
+                    } else {
+                        g_weak.select_prev();
+                    }
                     glib::Propagation::Stop
                 }
                 Key::Right => {
-                    g_weak.select_next();
+                    if shift {
+                        let total = g_weak.items.borrow().len();
+                        if let Some(curr) = *g_weak.current_index.borrow() {
+                            if curr + 1 < total {
+                                g_weak.select_range_to(curr + 1);
+                            }
+                        }
+                    } else {
+                        g_weak.select_next();
+                    }
                     glib::Propagation::Stop
                 }
                 _ => glib::Propagation::Proceed,
@@ -158,7 +181,8 @@ impl GalleryView {
     }
 
     pub fn get_selected_item_and_widget(&self) -> Option<(FileItem, gtk4::Widget)> {
-        let idx = (*self.current_index.borrow())?;
+        let idx = (*self.current_index.borrow())
+            .or_else(|| self.selected_indices.borrow().iter().next().copied())?;
         let item = self.items.borrow().get(idx).cloned()?;
         let widget = self
             .carousel_widgets
@@ -167,6 +191,36 @@ impl GalleryView {
             .map(|w| w.clone().upcast())
             .unwrap_or_else(|| self.container.clone().upcast());
         Some((item, widget))
+    }
+
+    pub fn get_selected_items(&self) -> Vec<FileItem> {
+        let items = self.items.borrow();
+        self.selected_indices
+            .borrow()
+            .iter()
+            .filter_map(|&idx| items.get(idx).cloned())
+            .collect()
+    }
+
+    pub fn select_all(self: &Rc<Self>) {
+        let total = self.items.borrow().len();
+        if total == 0 {
+            return;
+        }
+        {
+            let mut sel = self.selected_indices.borrow_mut();
+            sel.clear();
+            for idx in 0..total {
+                sel.insert(idx);
+            }
+        }
+        if self.current_index.borrow().is_none() {
+            *self.current_index.borrow_mut() = Some(0);
+        }
+        if self.selection_anchor.borrow().is_none() {
+            *self.selection_anchor.borrow_mut() = Some(0);
+        }
+        self.sync_selection_visuals();
     }
 
     pub fn queue_select_name(&self, name: &str) {
@@ -184,6 +238,8 @@ impl GalleryView {
     pub fn set_items(self: &Rc<Self>, items: &[FileItem]) {
         *self.items.borrow_mut() = items.to_vec();
         *self.current_index.borrow_mut() = None;
+        self.selected_indices.borrow_mut().clear();
+        *self.selection_anchor.borrow_mut() = None;
 
         // Limpiar carrusel previo
         while let Some(child) = self.carousel_box.first_child() {
@@ -194,6 +250,7 @@ impl GalleryView {
         if items.is_empty() {
             self.pending_select_name.borrow_mut().take();
             self.show_empty_canvas();
+            (self.on_selection_changed)(0);
             return;
         }
 
@@ -231,24 +288,88 @@ impl GalleryView {
     }
 
     pub fn select_index(self: &Rc<Self>, index: usize) {
-        let items = self.items.borrow();
-        if let Some(item) = items.get(index) {
+        let total = self.items.borrow().len();
+        if index < total {
             *self.current_index.borrow_mut() = Some(index);
-
-            // Actualizar estilo activo en las tarjetas del carrusel
-            let widgets = self.carousel_widgets.borrow();
-            for (i, widget) in widgets.iter().enumerate() {
-                if i == index {
-                    widget.add_css_class("branches-carousel-active");
-                } else {
-                    widget.remove_css_class("branches-carousel-active");
-                }
+            *self.selection_anchor.borrow_mut() = Some(index);
+            {
+                let mut sel = self.selected_indices.borrow_mut();
+                sel.clear();
+                sel.insert(index);
             }
-
-            // Actualizar lienzo superior
-            self.show_item_in_canvas(item);
-            (self.on_selection_changed)(1);
+            self.sync_selection_visuals();
         }
+    }
+
+    pub fn toggle_select_index(self: &Rc<Self>, index: usize) {
+        let total = self.items.borrow().len();
+        if index >= total {
+            return;
+        }
+        let next_focus = {
+            let mut sel = self.selected_indices.borrow_mut();
+            if sel.contains(&index) {
+                sel.remove(&index);
+                sel.iter().next_back().copied()
+            } else {
+                sel.insert(index);
+                Some(index)
+            }
+        };
+        if next_focus.is_some() {
+            *self.current_index.borrow_mut() = next_focus;
+            *self.selection_anchor.borrow_mut() = next_focus;
+        } else {
+            *self.current_index.borrow_mut() = None;
+            *self.selection_anchor.borrow_mut() = None;
+        }
+        self.sync_selection_visuals();
+    }
+
+    pub fn select_range_to(self: &Rc<Self>, index: usize) {
+        let total = self.items.borrow().len();
+        if index >= total {
+            return;
+        }
+        let anchor = self
+            .selection_anchor
+            .borrow()
+            .or(*self.current_index.borrow())
+            .unwrap_or(index);
+        {
+            let mut sel = self.selected_indices.borrow_mut();
+            sel.clear();
+            for i in crate::views::inclusive_range(anchor, index) {
+                sel.insert(i);
+            }
+        }
+        *self.selection_anchor.borrow_mut() = Some(anchor);
+        *self.current_index.borrow_mut() = Some(index);
+        self.sync_selection_visuals();
+    }
+
+    fn sync_selection_visuals(&self) {
+        let sel = self.selected_indices.borrow();
+        let widgets = self.carousel_widgets.borrow();
+        for (i, widget) in widgets.iter().enumerate() {
+            if sel.contains(&i) {
+                widget.add_css_class("branches-carousel-active");
+            } else {
+                widget.remove_css_class("branches-carousel-active");
+            }
+        }
+        let count = sel.len();
+        drop(sel);
+
+        let items = self.items.borrow();
+        if let Some(idx) = *self.current_index.borrow() {
+            if let Some(item) = items.get(idx) {
+                self.show_item_in_canvas(item);
+            }
+        } else if items.is_empty() {
+            self.show_empty_canvas();
+        }
+        (self.on_selection_changed)(count);
     }
 
     fn show_empty_canvas(&self) {
@@ -427,14 +548,18 @@ impl GalleryView {
         let card_for_menu = card.clone();
         let pending_slow_rename: Rc<std::cell::Cell<Option<glib::SourceId>>> =
             Rc::new(std::cell::Cell::new(None));
+        let cancel_slow_drag = pending_slow_rename.clone();
 
         click.connect_pressed(move |g, n_press, x, y| {
             let button = g.current_button();
+            let state = g.current_event_state();
             if let Some(source_id) = pending_slow_rename.take() {
                 source_id.remove();
             }
             if button == gdk::BUTTON_SECONDARY {
-                self_click.select_index(index);
+                if !self_click.selected_indices.borrow().contains(&index) {
+                    self_click.select_index(index);
+                }
                 show_item_context_menu(
                     &card_for_menu,
                     &p_for_dbl,
@@ -444,33 +569,48 @@ impl GalleryView {
                     None,
                 );
             } else if n_press == 1 {
-                let was_selected = *self_click.current_index.borrow() == Some(index);
-                self_click.select_index(index);
-                if was_selected {
-                    let card_ren = card_for_menu.clone();
-                    let path_ren = p_for_dbl.clone();
-                    let on_nav_ren = on_nav.clone();
-                    let slot = pending_slow_rename.clone();
-                    let id = glib::timeout_add_local_once(
-                        std::time::Duration::from_millis(450),
-                        move || {
-                            slot.set(None);
-                            let parent_dir = path_ren.parent().map(|p| p.to_path_buf());
-                            let on_renamed = parent_dir.map(|dir| {
-                                Rc::new(move |_new_path: PathBuf| {
-                                    on_nav_ren(dir.clone());
-                                }) as crate::views::RenameCallback
-                            });
-                            crate::views::show_rename_popover(
-                                &card_ren,
-                                path_ren,
-                                is_dir,
-                                None,
-                                on_renamed,
-                            );
-                        },
-                    );
-                    pending_slow_rename.set(Some(id));
+                let shift = state.contains(gdk::ModifierType::SHIFT_MASK);
+                let ctrl = state.intersects(
+                    gdk::ModifierType::CONTROL_MASK
+                        | gdk::ModifierType::SUPER_MASK
+                        | gdk::ModifierType::META_MASK,
+                );
+                if shift {
+                    self_click.select_range_to(index);
+                } else if ctrl {
+                    self_click.toggle_select_index(index);
+                } else {
+                    let was_single_selected = {
+                        let sel = self_click.selected_indices.borrow();
+                        sel.len() == 1 && sel.contains(&index)
+                    };
+                    self_click.select_index(index);
+                    if was_single_selected {
+                        let card_ren = card_for_menu.clone();
+                        let path_ren = p_for_dbl.clone();
+                        let on_nav_ren = on_nav.clone();
+                        let slot = pending_slow_rename.clone();
+                        let id = glib::timeout_add_local_once(
+                            std::time::Duration::from_millis(450),
+                            move || {
+                                slot.set(None);
+                                let parent_dir = path_ren.parent().map(|p| p.to_path_buf());
+                                let on_renamed = parent_dir.map(|dir| {
+                                    Rc::new(move |_new_path: PathBuf| {
+                                        on_nav_ren(dir.clone());
+                                    }) as crate::views::RenameCallback
+                                });
+                                crate::views::show_rename_popover(
+                                    &card_ren,
+                                    path_ren,
+                                    is_dir,
+                                    None,
+                                    on_renamed,
+                                );
+                            },
+                        );
+                        pending_slow_rename.set(Some(id));
+                    }
                 }
             } else if n_press >= 2 {
                 if is_dir {
@@ -482,6 +622,50 @@ impl GalleryView {
             g.set_state(gtk4::EventSequenceState::Claimed);
         });
         card.add_controller(click);
+
+        let drag_source = gtk4::DragSource::new();
+        drag_source.set_actions(gdk::DragAction::MOVE | gdk::DragAction::COPY);
+        let self_drag = self.clone();
+        let path_drag_fallback = item.path.clone();
+        drag_source.connect_prepare(move |_, _x, _y| {
+            if !self_drag.selected_indices.borrow().contains(&index) {
+                self_drag.select_index(index);
+            }
+            let paths: Vec<PathBuf> = self_drag
+                .get_selected_items()
+                .into_iter()
+                .map(|it| it.path)
+                .collect();
+            if paths.is_empty() {
+                Some(crate::views::build_file_drag_content_provider(&path_drag_fallback))
+            } else {
+                Some(crate::views::build_files_drag_content_provider(&paths))
+            }
+        });
+        drag_source.connect_drag_begin(move |_, _| {
+            if let Some(source_id) = cancel_slow_drag.take() {
+                source_id.remove();
+            }
+        });
+        let path_end = item.path.clone();
+        let on_nav_end = self.on_navigate.clone();
+        drag_source.connect_drag_end(move |_, drag, _| {
+            if let Some(parent) = path_end.parent() {
+                let _ = crate::views::refresh_if_moved_out(drag, &path_end, parent, &on_nav_end);
+            }
+        });
+        if let Some(display) = gdk::Display::default() {
+            let theme = gtk4::IconTheme::for_display(&display);
+            let paintable = theme.lookup_by_gicon(
+                &item.gicon,
+                32,
+                1,
+                gtk4::TextDirection::Ltr,
+                gtk4::IconLookupFlags::empty(),
+            );
+            drag_source.set_icon(Some(&paintable), 16, 16);
+        }
+        card.add_controller(drag_source);
 
         card
     }

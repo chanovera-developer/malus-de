@@ -43,7 +43,7 @@ pub struct FolderPane {
     pending_sync: Rc<Cell<Option<glib::SourceId>>>,
     on_activated: Rc<dyn Fn(PaneId)>,
     on_path_changed: Rc<dyn Fn(PaneId, PathBuf)>,
-    on_selection_changed: Rc<dyn Fn(PaneId, usize, PathBuf)>,
+    on_selection_changed: Rc<dyn Fn(PaneId, usize, usize, PathBuf)>,
     #[allow(dead_code)]
     on_close_split: Option<Rc<dyn Fn()>>,
 }
@@ -54,7 +54,7 @@ impl FolderPane {
         initial_path: PathBuf,
         on_activated: Rc<dyn Fn(PaneId)>,
         on_path_changed: Rc<dyn Fn(PaneId, PathBuf)>,
-        on_selection_changed: Rc<dyn Fn(PaneId, usize, PathBuf)>,
+        on_selection_changed: Rc<dyn Fn(PaneId, usize, usize, PathBuf)>,
         on_close_split: Option<Rc<dyn Fn()>>,
     ) -> Rc<Self> {
         let state = Rc::new(RefCell::new(AppState::new(initial_path.clone())));
@@ -110,10 +110,11 @@ impl FolderPane {
         });
 
         let self_for_sel = self_weak.clone();
-        let on_selection = Rc::new(move |count: usize| {
+        let on_selection = Rc::new(move |selected_count: usize| {
             if let Some(p) = self_for_sel.borrow().as_ref() {
                 let curr = p.state.borrow().current_path.clone();
-                (p.on_selection_changed)(p.id, count, curr);
+                let total = p.items_cache.borrow().len();
+                (p.on_selection_changed)(p.id, total, selected_count, curr);
             }
         });
 
@@ -206,6 +207,12 @@ impl FolderPane {
     pub fn set_view_mode(&self, mode_name: &str) {
         self.view_stack.set_visible_child_name(mode_name);
         self.refresh_cut_states();
+        (self.on_selection_changed)(
+            self.id,
+            self.items_cache.borrow().len(),
+            self.get_selected_items().len(),
+            self.current_path(),
+        );
     }
 
     pub fn view_mode(&self) -> String {
@@ -343,7 +350,12 @@ impl FolderPane {
                 self.column_view.set_root(&current_path, &items, show_hidden, sort_by, sort_order);
                 self.gallery_view.set_items(&items);
                 *self.items_cache.borrow_mut() = items;
-                (self.on_selection_changed)(self.id, count, current_path.clone());
+                (self.on_selection_changed)(
+                    self.id,
+                    count,
+                    self.get_selected_items().len(),
+                    current_path.clone(),
+                );
                 self.ensure_directory_monitor(&current_path);
             }
             Err(e) => {
@@ -471,7 +483,12 @@ impl FolderPane {
             .set_root(&current_path, &items, show_hidden, sort_by, sort_order);
         self.gallery_view.set_items(&items);
         *self.items_cache.borrow_mut() = items;
-        (self.on_selection_changed)(self.id, count, current_path);
+        (self.on_selection_changed)(
+            self.id,
+            count,
+            self.get_selected_items().len(),
+            current_path,
+        );
     }
 
     pub fn current_path(&self) -> PathBuf {
@@ -608,20 +625,26 @@ impl FolderPane {
 
     pub fn get_selected_items(&self) -> Vec<FileItem> {
         let mode = self.view_stack.visible_child_name().unwrap_or_default();
-        if mode.as_str() == "icons" {
-            let items = self.icon_view.get_selected_items(&self.items_cache.borrow());
-            if !items.is_empty() {
-                return items;
-            }
+        match mode.as_str() {
+            "icons" => self.icon_view.get_selected_items(&self.items_cache.borrow()),
+            "list" => self.list_view.get_selected_items(),
+            "columns" => self.column_view.get_selected_items(),
+            "gallery" => self.gallery_view.get_selected_items(),
+            _ => self
+                .get_selected_item_and_widget()
+                .map(|(item, _)| vec![item])
+                .unwrap_or_default(),
         }
-        self.get_selected_item_and_widget()
-            .map(|(item, _)| vec![item])
-            .unwrap_or_default()
     }
 
     pub fn select_all(&self) {
-        if self.is_icon_view_active() {
-            self.icon_view.select_all();
+        let mode = self.view_stack.visible_child_name().unwrap_or_default();
+        match mode.as_str() {
+            "icons" => self.icon_view.select_all(),
+            "list" => self.list_view.select_all(),
+            "columns" => self.column_view.select_all(),
+            "gallery" => self.gallery_view.select_all(),
+            _ => {}
         }
     }
 
@@ -699,7 +722,12 @@ impl FolderPane {
         self.column_view.set_root(&current_path, &items, show_hidden, sort_by, sort_order);
         self.gallery_view.set_items(&items);
         *self.items_cache.borrow_mut() = items;
-        (self.on_selection_changed)(self.id, count, current_path);
+        (self.on_selection_changed)(
+            self.id,
+            count,
+            self.get_selected_items().len(),
+            current_path,
+        );
     }
 
     pub fn show_tag_filter(&self, tag_name: &str) {
@@ -773,8 +801,12 @@ impl FolderPane {
     }
 
     pub fn set_tag_on_selected(&self, tag_name: &str, tag_color: &str) {
-        if let Some(item) = self.get_selected_item() {
-            if let Ok(conn) = crate::db::open_db() {
+        let items = self.get_selected_items();
+        if items.is_empty() {
+            return;
+        }
+        if let Ok(conn) = crate::db::open_db() {
+            for item in items {
                 let _ = crate::db::set_file_tag(&conn, &item.path, tag_name, tag_color);
             }
         }

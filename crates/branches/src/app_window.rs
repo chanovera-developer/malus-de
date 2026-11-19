@@ -802,19 +802,21 @@ impl BranchesWindow {
         let on_selection_changed = {
             let w_for_sel = win_weak.clone();
             let tab_pane_id = active_pane_id.clone();
-            Rc::new(move |id: PaneId, count: usize, path: PathBuf| {
-                if let Some(w) = w_for_sel.borrow().upgrade() {
-                    if *w.active_tab_id.borrow() == tab_id && *tab_pane_id.borrow() == id {
-                        let free = get_free_space(&path);
-                        w.status_bar.update(count, 0, &free);
-                        if ql_for_sel.is_open() {
-                            if let Some(item) = w.active_pane().get_selected_item() {
-                                ql_for_sel.update_if_open(&item);
+            Rc::new(
+                move |id: PaneId, total_count: usize, selected_count: usize, path: PathBuf| {
+                    if let Some(w) = w_for_sel.borrow().upgrade() {
+                        if *w.active_tab_id.borrow() == tab_id && *tab_pane_id.borrow() == id {
+                            let free = get_free_space(&path);
+                            w.status_bar.update(total_count, selected_count, &free);
+                            if ql_for_sel.is_open() {
+                                if let Some(item) = w.active_pane().get_selected_item() {
+                                    ql_for_sel.update_if_open(&item);
+                                }
                             }
                         }
                     }
-                }
-            })
+                },
+            )
         };
 
         let on_close_split = {
@@ -1088,7 +1090,8 @@ impl BranchesWindow {
             self.back_btn.set_sensitive(pane.can_go_back());
             self.forward_btn.set_sensitive(pane.can_go_forward());
             let free = get_free_space(&pane.current_path());
-            self.status_bar.update(pane.items_count(), 0, &free);
+            self.status_bar
+                .update(pane.items_count(), pane.get_selected_items().len(), &free);
         } else if pane.is_applications() {
             let title = Self::pane_display_title(&pane);
             self.title_label.set_label(&title);
@@ -1096,7 +1099,8 @@ impl BranchesWindow {
             self.back_btn.set_sensitive(pane.can_go_back());
             self.forward_btn.set_sensitive(pane.can_go_forward());
             let free = get_free_space(&pane.current_path());
-            self.status_bar.update(pane.items_count(), 0, &free);
+            self.status_bar
+                .update(pane.items_count(), pane.get_selected_items().len(), &free);
         } else {
             let curr = pane.current_path();
             self.sync_active_ui(&curr);
@@ -1223,7 +1227,8 @@ impl BranchesWindow {
         self.sidebar.highlight_path(path);
 
         let free = get_free_space(path);
-        self.status_bar.update(active.items_count(), 0, &free);
+        self.status_bar
+            .update(active.items_count(), active.get_selected_items().len(), &free);
     }
 
     fn refresh_all_cut_states(&self) {
@@ -1631,7 +1636,7 @@ impl BranchesWindow {
                 return glib::Propagation::Stop;
             }
 
-            if !focus_is_editable && is_ctrl && !is_alt && !is_shift {
+            if !focus_is_editable && (is_ctrl || is_command) && !is_alt && !is_shift {
                 if keyval == gdk::Key::a || keyval == gdk::Key::A {
                     bw.active_pane().select_all();
                     return glib::Propagation::Stop;
