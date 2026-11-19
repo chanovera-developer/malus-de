@@ -1032,6 +1032,36 @@ pub fn parse_owly_browse_output(stdout: &str) -> Vec<AirDropPeer> {
             continue;
         }
 
+        // Formato real de `owly browse`:
+        //   06:72:42:a8:44:fe "MacBook Air de Ada" ([fe80::472:42ff:fea8:44fe%19]:8770)
+        //   a1b2c3d4e5f6 "iPhone de Cristian" ([fe80::...]:8770)
+        if let (Some(q1), Some(q2)) = (line.find('"'), line.rfind('"')) {
+            if q2 > q1 + 1 {
+                let quoted_name = line[q1 + 1..q2].trim().to_string();
+                let before = line[..q1].trim();
+                let mac_or_addr = extract_mac_address(line)
+                    .or_else(|| extract_peer_address(line))
+                    .unwrap_or_else(|| before.to_string());
+                let id = if !quoted_name.is_empty() {
+                    quoted_name.clone()
+                } else if !before.is_empty() {
+                    before.to_string()
+                } else {
+                    mac_or_addr.clone()
+                };
+                if seen_ids.insert(id.to_lowercase()) {
+                    peers.push(AirDropPeer {
+                        id,
+                        name: quoted_name,
+                        model: String::new(),
+                        address: mac_or_addr,
+                        via_discover: true,
+                    });
+                }
+                continue;
+            }
+        }
+
         // Extraer dirección MAC/AWDL o IPv6 si aparece en la línea
         let address = extract_peer_address(line).unwrap_or_default();
 
@@ -1131,6 +1161,20 @@ pub fn parse_owly_radio_peers_output(stdout: &str) -> Vec<AirDropPeer> {
 /// Extrae un nombre de archivo o URL si `owly receive` imprime una línea de recepción completada.
 pub fn parse_owly_receive_line(line: &str) -> Option<String> {
     let trimmed = line.trim();
+    if trimmed.starts_with('/') && !trimmed.contains(' ') {
+        return Path::new(trimmed)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(ToString::to_string);
+    }
+    if trimmed.starts_with('/') {
+        let p = Path::new(trimmed);
+        if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+            if p.parent().is_some_and(|parent| parent != Path::new("/")) {
+                return Some(name.to_string());
+            }
+        }
+    }
     for prefix in [
         "saved ",
         "Saved ",
@@ -1243,6 +1287,22 @@ no AWDL peer answered /Discover
         assert_eq!(peers.len(), 1);
         assert_eq!(peers[0].id, "42:11:aa:bb:cc:dd");
         assert!(!peers[0].via_discover);
+    }
+
+    #[test]
+    fn parses_live_owly_browse_quoted_format_and_plain_receive_path() {
+        let sample = "trying AWDL peer 06:72:42:a8:44:fe\n06:72:42:a8:44:fe \"MacBook Air de Ada\" ([fe80::472:42ff:fea8:44fe%19]:8770)\n";
+        let peers = parse_owly_browse_output(sample);
+        assert_eq!(peers.len(), 1);
+        assert_eq!(peers[0].id, "MacBook Air de Ada");
+        assert_eq!(peers[0].name, "MacBook Air de Ada");
+        assert_eq!(peers[0].address, "06:72:42:a8:44:fe");
+        assert!(peers[0].via_discover);
+
+        assert_eq!(
+            parse_owly_receive_line("/home/cristian/Descargas/Wi-Fi (1).png"),
+            Some("Wi-Fi (1).png".to_string())
+        );
     }
 
     #[test]

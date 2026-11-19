@@ -18,6 +18,11 @@ Implementación completa del módulo de **AirDrop** compatible con dispositivos 
 - Actualizado el diálogo **Malus Link / AirDrop** en `malus-de-branches` para mostrar pares AirDrop sin porcentaje de batería ficticio y permitir envío directo al primer MacBook/iPhone cercano.
 - Añadido subcomando `malus-ctl airdrop <status|on|off|scan|send|send-url>` en `malus-de-ctl`.
 
+### 3. Validación Real Bidireccional con MacBook Air (`firewalld` + `MDNS-2`)
+- Agregada la interfaz `awdl0` permanentemente a la zona `trusted` de `firewalld` y compilados `owlyd`/`owly` con soporte **`MDNS-2`** (PR `#130` de `t4t5/owly`, registros DNS-SD en tramas de acción AWDL).
+- Ajustado [`parse_owly_browse_output`](../crates/link/src/airdrop.rs) y [`parse_owly_receive_line`](../crates/link/src/airdrop.rs) al formato real observado (`06:72:42:a8:44:fe "MacBook Air de Ada" ([fe80::...]:8770)` y rutas directas en stdout).
+- Probada recepción real desde **MacBook Air de Ada** hacia **Malus DE** (`Wi-Fi.png`, `1.38 MB` en ~6 s guardado en `/home/cristian/Descargas` con notificación nativa) y descubrimiento inverso hacia la MacBook Air.
+
 ---
 
 ## [2026-11-19] — Corrección Integral de Desconexión/Hotplug Multi-Monitor (`compositor`, `common`, `wallpaper`, `top-bar`, `dock`, `settings`)
