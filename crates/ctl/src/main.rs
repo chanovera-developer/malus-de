@@ -50,6 +50,13 @@ enum Commands {
         action: LinkAction,
     },
 
+    /// Controla AirDrop nativo (AWDL/owly) para compartir archivos con MacBook y iPhone
+    #[command(name = "airdrop")]
+    AirDrop {
+        #[command(subcommand)]
+        action: AirDropAction,
+    },
+
     /// Recarga en caliente los componentes de la interfaz de usuario sin cerrar sesión ni ventanas
     Reload {
         /// Componente específico a reiniciar (ej: top-bar, dock, notifications, link, o 'all' por defecto)
@@ -196,6 +203,38 @@ enum LinkAction {
     Share { path: String },
 }
 
+#[derive(Subcommand, Debug)]
+enum AirDropAction {
+    /// Muestra el estado del hardware AWDL, radio y dispositivos descubiertos
+    Status,
+    /// Activa AirDrop en modo "Todos durante 10 min" (levanta awdl0 y recibe en ~/Descargas)
+    On,
+    /// Desactiva AirDrop y restaura el Wi-Fi habitual
+    Off,
+    /// Busca dispositivos Apple cercanos (requiere AirDrop activo)
+    Scan {
+        /// Duración del escaneo en segundos
+        #[arg(short, long, default_value_t = 8)]
+        seconds: u32,
+    },
+    /// Envía un archivo a un MacBook o iPhone cercano vía AirDrop
+    Send {
+        /// Ruta del archivo a enviar
+        path: String,
+        /// Nombre, ID o dirección AWDL del receptor (si se omite envía al primero encontrado)
+        #[arg(long, default_value = "auto")]
+        to: String,
+    },
+    /// Envía un enlace URL a un MacBook o iPhone cercano vía AirDrop
+    SendUrl {
+        /// URL a enviar
+        url: String,
+        /// Nombre, ID o dirección AWDL del receptor
+        #[arg(long, default_value = "auto")]
+        to: String,
+    },
+}
+
 fn main() -> Result<()> {
     init_logging("malus_de_ctl");
     let cli = Cli::parse();
@@ -271,6 +310,182 @@ fn main() -> Result<()> {
                 println!("📤 Compartiendo '{}' con el teléfono móvil...", path);
             }
         },
+        Commands::AirDrop { action } => {
+            zbus::block_on(async {
+                let conn = match zbus::Connection::session().await {
+                    Ok(c) => c,
+                    Err(err) => {
+                        eprintln!("❌ No se pudo conectar al bus D-Bus de sesión: {}", err);
+                        return;
+                    }
+                };
+                match action {
+                    AirDropAction::Status => {
+                        match conn
+                            .call_method(
+                                Some("org.malus_de.Link"),
+                                "/org/malus_de/Link",
+                                Some("org.malus_de.Link"),
+                                "GetAirDropStatusJson",
+                                &(),
+                            )
+                            .await
+                        {
+                            Ok(reply) => {
+                                let raw: String = reply.body().deserialize().unwrap_or_default();
+                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                                    println!("📡 AirDrop (Malus Link / owly)");
+                                    println!("   Modo:        {}", v["mode"].as_str().unwrap_or("off"));
+                                    println!("   Radio AWDL:  {}", v["radio_state"].as_str().unwrap_or("off"));
+                                    let rem = v["remaining_seconds"].as_u64().unwrap_or(0);
+                                    if rem > 0 {
+                                        println!("   Restante:    {}m {:02}s", rem / 60, rem % 60);
+                                    }
+                                    println!("   Nombre:      {}", v["device_name"].as_str().unwrap_or("Malus DE"));
+                                    println!("   Descargas:   {}", v["downloads_dir"].as_str().unwrap_or("~/Descargas"));
+                                    println!(
+                                        "   Hardware:    {} (modo: {}, interfaz: {}, canal: {})",
+                                        if v["hardware_ready"].as_bool().unwrap_or(false) { "Listo ✅" } else { "No listo ❌" },
+                                        v["radio_mode"].as_str().unwrap_or("-"),
+                                        v["station"].as_str().unwrap_or("-"),
+                                        v["channel"].as_u64().map(|c| c.to_string()).unwrap_or_else(|| "-".to_string())
+                                    );
+                                    if let Some(err) = v["last_error"].as_str() {
+                                        println!("   Aviso:       {}", err);
+                                    }
+                                    if let Some(peers) = v["peers"].as_array() {
+                                        println!("   Dispositivos cercanos: {}", peers.len());
+                                        for p in peers {
+                                            println!(
+                                                "     • {} [{}]",
+                                                p["name"].as_str().unwrap_or("?"),
+                                                p["address"].as_str().unwrap_or("")
+                                            );
+                                        }
+                                    }
+                                } else {
+                                    println!("{}", raw);
+                                }
+                            }
+                            Err(err) => {
+                                eprintln!("❌ malus-de-link no respondió en D-Bus ({}). Ejecuta 'malus-de-link &'.", err);
+                            }
+                        }
+                    }
+                    AirDropAction::On => {
+                        match conn
+                            .call_method(
+                                Some("org.malus_de.Link"),
+                                "/org/malus_de/Link",
+                                Some("org.malus_de.Link"),
+                                "SetAirDropMode",
+                                &("everyone",),
+                            )
+                            .await
+                        {
+                            Ok(reply) if reply.body().deserialize::<bool>().unwrap_or(false) => {
+                                println!("📡 AirDrop activado en modo 'Todos durante 10 min'.");
+                                println!("   En modo exclusivo Intel AX210, el Wi-Fi se pausa temporalmente y se restaura al desactivar.");
+                            }
+                            Ok(_) => eprintln!("❌ No se pudo activar AirDrop (ejecuta `malus-ctl airdrop status` para ver el motivo)."),
+                            Err(err) => eprintln!("❌ Error D-Bus: {}", err),
+                        }
+                    }
+                    AirDropAction::Off => {
+                        match conn
+                            .call_method(
+                                Some("org.malus_de.Link"),
+                                "/org/malus_de/Link",
+                                Some("org.malus_de.Link"),
+                                "SetAirDropMode",
+                                &("off",),
+                            )
+                            .await
+                        {
+                            Ok(_) => println!("⏹ AirDrop desactivado. Radio AWDL liberado y Wi-Fi restaurado."),
+                            Err(err) => eprintln!("❌ Error D-Bus: {}", err),
+                        }
+                    }
+                    AirDropAction::Scan { seconds } => {
+                        println!("🔍 Buscando dispositivos Apple cercanos durante {}s...", seconds);
+                        match conn
+                            .call_method(
+                                Some("org.malus_de.Link"),
+                                "/org/malus_de/Link",
+                                Some("org.malus_de.Link"),
+                                "ScanAirDropPeers",
+                                &(seconds,),
+                            )
+                            .await
+                        {
+                            Ok(reply) => {
+                                let peers: Vec<(String, String, String)> =
+                                    reply.body().deserialize().unwrap_or_default();
+                                if peers.is_empty() {
+                                    println!("No se encontraron dispositivos AirDrop. Verifica que AirDrop esté activo en ambos equipos.");
+                                } else {
+                                    for (id, name, addr) in peers {
+                                        println!("  • {}  (id: {}, addr: {})", name, id, addr);
+                                    }
+                                }
+                            }
+                            Err(err) => eprintln!("❌ Error escaneando AirDrop: {}", err),
+                        }
+                    }
+                    AirDropAction::Send { path, to } => {
+                        let abs = std::fs::canonicalize(&path)
+                            .map(|p| p.to_string_lossy().into_owned())
+                            .unwrap_or(path);
+                        println!("📤 Enviando '{}' vía AirDrop (destino: {})...", abs, to);
+                        match conn
+                            .call_method(
+                                Some("org.malus_de.Link"),
+                                "/org/malus_de/Link",
+                                Some("org.malus_de.Link"),
+                                "SendAirDropFile",
+                                &(to, abs),
+                            )
+                            .await
+                        {
+                            Ok(reply) => {
+                                let (ok, msg): (bool, String) =
+                                    reply.body().deserialize().unwrap_or((false, String::new()));
+                                if ok {
+                                    println!("✅ {}", msg);
+                                } else {
+                                    eprintln!("❌ {}", msg);
+                                }
+                            }
+                            Err(err) => eprintln!("❌ Error D-Bus: {}", err),
+                        }
+                    }
+                    AirDropAction::SendUrl { url, to } => {
+                        println!("🔗 Enviando enlace '{}' vía AirDrop (destino: {})...", url, to);
+                        match conn
+                            .call_method(
+                                Some("org.malus_de.Link"),
+                                "/org/malus_de/Link",
+                                Some("org.malus_de.Link"),
+                                "SendAirDropUrl",
+                                &(to, url),
+                            )
+                            .await
+                        {
+                            Ok(reply) => {
+                                let (ok, msg): (bool, String) =
+                                    reply.body().deserialize().unwrap_or((false, String::new()));
+                                if ok {
+                                    println!("✅ {}", msg);
+                                } else {
+                                    eprintln!("❌ {}", msg);
+                                }
+                            }
+                            Err(err) => eprintln!("❌ Error D-Bus: {}", err),
+                        }
+                    }
+                }
+            });
+        }
         Commands::Reload { component } => {
             let comp = component.as_deref().unwrap_or("all");
             println!("🔄 Recargando componentes de interfaz de Malus DE (modo: {})...", comp);

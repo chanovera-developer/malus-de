@@ -1561,81 +1561,103 @@ impl BranchesWindow {
         glib::timeout_add_local(std::time::Duration::from_millis(40), move || {
             match rx.try_recv() {
                 Ok(Ok(devices)) => {
-                    if devices.is_empty() {
-                        gtk4::AlertDialog::builder()
-                            .message(if es {
-                                "No hay dispositivos conectados en Malus Link."
-                            } else {
-                                "No connected devices found in Malus Link."
-                            })
-                            .build()
-                            .show(Some(&win_ref));
-                    } else {
-                        let dialog = gtk4::Window::builder()
-                            .transient_for(&win_ref)
-                            .destroy_with_parent(true)
-                            .modal(true)
-                            .resizable(false)
-                            .title("Malus Link")
-                            .default_width(340)
-                            .build();
-                        let vbox = GtkBox::new(Orientation::Vertical, 8);
-                        vbox.set_margin_top(14);
-                        vbox.set_margin_bottom(14);
-                        vbox.set_margin_start(16);
-                        vbox.set_margin_end(16);
-                        let hdr = Label::builder()
-                            .label(if es {
-                                "Enviar selección a dispositivo:"
-                            } else {
-                                "Send selection to device:"
-                            })
-                            .halign(Align::Start)
-                            .css_classes(["heading"])
-                            .build();
-                        vbox.append(&hdr);
+                    let dialog = gtk4::Window::builder()
+                        .transient_for(&win_ref)
+                        .destroy_with_parent(true)
+                        .modal(true)
+                        .resizable(false)
+                        .title("AirDrop / Malus Link")
+                        .default_width(360)
+                        .build();
+                    let vbox = GtkBox::new(Orientation::Vertical, 8);
+                    vbox.set_margin_top(14);
+                    vbox.set_margin_bottom(14);
+                    vbox.set_margin_start(16);
+                    vbox.set_margin_end(16);
+                    let hdr = Label::builder()
+                        .label(if es {
+                            "Enviar selección vía AirDrop / Malus Link:"
+                        } else {
+                            "Send selection via AirDrop / Malus Link:"
+                        })
+                        .halign(Align::Start)
+                        .css_classes(["heading"])
+                        .build();
+                    vbox.append(&hdr);
 
-                        for (dev_id, dev_name, battery) in devices {
-                            let btn = Button::builder()
-                                .label(&format!("{} ({}%)", dev_name, battery))
-                                .halign(Align::Fill)
-                                .build();
-                            let d_ref = dialog.clone();
-                            let p_list = paths.clone();
-                            btn.connect_clicked(move |_| {
-                                d_ref.close();
-                                let id = dev_id.clone();
-                                let send_paths = p_list.clone();
-                                std::thread::spawn(move || {
-                                    if let Ok(conn) =
-                                        gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)
-                                    {
-                                        for p in send_paths {
-                                            let args = (
-                                                id.clone(),
-                                                p.to_string_lossy().into_owned(),
-                                            )
-                                                .to_variant();
-                                            let _ = conn.call_sync(
-                                                Some("org.malus_de.Link"),
-                                                "/org/malus_de/Link",
-                                                "org.malus_de.Link",
-                                                "ShareFile",
-                                                Some(&args),
-                                                None,
-                                                gio::DBusCallFlags::NONE,
-                                                2000,
-                                                gio::Cancellable::NONE,
-                                            );
-                                        }
+                    let wire_share_btn = |btn: &Button, target_id: String, d_ref: gtk4::Window, p_list: Vec<PathBuf>| {
+                        btn.connect_clicked(move |_| {
+                            d_ref.close();
+                            let id = target_id.clone();
+                            let send_paths = p_list.clone();
+                            std::thread::spawn(move || {
+                                if let Ok(conn) =
+                                    gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)
+                                {
+                                    for p in send_paths {
+                                        let args = (
+                                            id.clone(),
+                                            p.to_string_lossy().into_owned(),
+                                        )
+                                            .to_variant();
+                                        let _ = conn.call_sync(
+                                            Some("org.malus_de.Link"),
+                                            "/org/malus_de/Link",
+                                            "org.malus_de.Link",
+                                            "ShareFile",
+                                            Some(&args),
+                                            None,
+                                            gio::DBusCallFlags::NONE,
+                                            5000,
+                                            gio::Cancellable::NONE,
+                                        );
                                     }
-                                });
+                                }
                             });
-                            vbox.append(&btn);
-                        }
-                        dialog.set_child(Some(&vbox));
-                        dialog.present();
+                        });
+                    };
+
+                    for (dev_id, dev_name, battery) in &devices {
+                        let label = if *battery == 0 {
+                            format!("📡 {}", dev_name)
+                        } else {
+                            format!("{} ({}%)", dev_name, battery)
+                        };
+                        let btn = Button::builder()
+                            .label(&label)
+                            .halign(Align::Fill)
+                            .build();
+                        wire_share_btn(&btn, dev_id.clone(), dialog.clone(), paths.clone());
+                        vbox.append(&btn);
                     }
+
+                    let auto_btn = Button::builder()
+                        .label(if es {
+                            "📡 Enviar al primer dispositivo AirDrop cercano (Mac / iPhone)"
+                        } else {
+                            "📡 Send to first nearby AirDrop device (Mac / iPhone)"
+                        })
+                        .halign(Align::Fill)
+                        .build();
+                    wire_share_btn(&auto_btn, "auto".to_string(), dialog.clone(), paths.clone());
+                    vbox.append(&auto_btn);
+
+                    if devices.is_empty() {
+                        let hint = Label::builder()
+                            .label(if es {
+                                "Pon AirDrop en «Todos durante 10 min» en tu MacBook Air o iPhone y pulsa arriba para enviar."
+                            } else {
+                                "Set AirDrop to Everyone (10 min) on your MacBook Air or iPhone and click above to send."
+                            })
+                            .wrap(true)
+                            .halign(Align::Start)
+                            .css_classes(["dim-label"])
+                            .build();
+                        vbox.append(&hint);
+                    }
+
+                    dialog.set_child(Some(&vbox));
+                    dialog.present();
                     glib::ControlFlow::Break
                 }
                 Ok(Err(err)) => {

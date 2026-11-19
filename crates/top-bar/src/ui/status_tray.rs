@@ -1056,46 +1056,62 @@ fn create_link_tray_button() -> MenuButton {
     popover_box.append(&title_lbl);
 
     let desc_lbl = Label::builder()
-        .label("Comparte archivos al instante con dispositivos Apple o Linux cercanos.")
+        .label("Comparte archivos vía AirDrop nativo (AWDL/owly) con MacBook, iPhone o iPad cercanos.")
         .css_classes(["cc-airdrop-desc"])
         .wrap(true)
         .xalign(0.0)
         .build();
     popover_box.append(&desc_lbl);
 
+    let status_lbl = Label::builder()
+        .label("Consultando estado del motor AirDrop...")
+        .css_classes(["cc-item-subtitle"])
+        .wrap(true)
+        .xalign(0.0)
+        .build();
+    popover_box.append(&status_lbl);
+
     // Opciones
-    let (row_off, check_off) = create_link_option_row("No recibir", "Nadie puede descubrirte");
-    let (row_contacts, check_contacts) = create_link_option_row("Solo contactos", "Solo dispositivos conocidos");
-    let (row_everyone, check_everyone) = create_link_option_row("Todos durante 10 min", "Visible temporalmente");
+    let (row_off, check_off) = create_link_option_row("No recibir", "Desactiva AWDL y mantiene tu Wi-Fi normal");
+    let (row_contacts, check_contacts) = create_link_option_row("Solo contactos", "Requiere Apple ID (inactivo en Linux)");
+    let (row_everyone, check_everyone) = create_link_option_row("Todos durante 10 min", "Activa awdl0 y recibe en Descargas");
 
     popover_box.append(&row_off);
     popover_box.append(&row_contacts);
     popover_box.append(&row_everyone);
 
-    // Simulación de recepción
-    let sim_btn = Button::builder()
-        .css_classes(["cc-airdrop-sim-btn"])
-        .label("📲 Simular recepción (iPhone)")
-        .has_frame(false)
-        .tooltip_text("Prueba la notificación nativa de archivo entrante por AirDrop")
+    // Dispositivos cercanos detectados
+    let peers_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(4)
+        .visible(false)
+        .build();
+    popover_box.append(&peers_box);
+
+    // Acciones reales de escaneo y envío
+    let actions_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(6)
+        .homogeneous(true)
         .build();
 
-    sim_btn.connect_clicked(move |_| {
-        glib::MainContext::default().spawn_local(async move {
-            if let Ok(conn) = zbus::Connection::session().await {
-                let _ = conn
-                    .call_method(
-                        Some("org.malus_de.Link"),
-                        "/org/malus_de/Link",
-                        Some("org.malus_de.Link"),
-                        "SimulateAirDropReceive",
-                        &("iPhone de Cristian", "presentacion_malus_de.pdf"),
-                    )
-                    .await;
-            }
-        });
-    });
-    popover_box.append(&sim_btn);
+    let scan_btn = Button::builder()
+        .css_classes(["cc-airdrop-sim-btn"])
+        .label("🔍 Buscar")
+        .has_frame(false)
+        .tooltip_text("Buscar dispositivos Apple cercanos en awdl0 (requiere activar 'Todos durante 10 min')")
+        .build();
+
+    let send_btn = Button::builder()
+        .css_classes(["cc-airdrop-sim-btn"])
+        .label("📤 Enviar archivo")
+        .has_frame(false)
+        .tooltip_text("Seleccionar un archivo y enviarlo al primer dispositivo AirDrop cercano")
+        .build();
+
+    actions_row.append(&scan_btn);
+    actions_row.append(&send_btn);
+    popover_box.append(&actions_row);
 
     // Footer
     let sep = Separator::new(Orientation::Horizontal);
@@ -1108,9 +1124,13 @@ fn create_link_tray_button() -> MenuButton {
     let pop_c = popover.clone();
     down_btn.connect_clicked(move |_| {
         pop_c.popdown();
-        let mut command = Command::new("nautilus");
+        let dl_dir = resolve_airdrop_downloads_dir();
+        let mut command = Command::new("malus-de-branches");
         malus_de_common::config::set_cursor_environment(&mut command);
-        let _ = command.arg(glib::home_dir().join("Descargas")).spawn();
+        if command.arg(&dl_dir).spawn().is_err() {
+            let mut fallback = Command::new("xdg-open");
+            let _ = fallback.arg(&dl_dir).spawn();
+        }
     });
 
     popover_box.append(&sep);
@@ -1148,37 +1168,219 @@ fn create_link_tray_button() -> MenuButton {
         }
     });
 
+    let pop_send = popover.clone();
+    send_btn.connect_clicked(move |_| {
+        pop_send.popdown();
+        pick_and_send_airdrop_file("auto".to_string());
+    });
+
+    let status_scan = status_lbl.clone();
+    let peers_scan = peers_box.clone();
+    let pop_scan = popover.clone();
+    scan_btn.connect_clicked(move |btn| {
+        btn.set_sensitive(false);
+        btn.set_label("⏳ Buscando...");
+        status_scan.set_label("Buscando MacBook / iPhone cercanos vía AWDL...");
+        let btn_c = btn.clone();
+        let st_c = status_scan.clone();
+        let pb_c = peers_scan.clone();
+        let pop_peer = pop_scan.clone();
+        glib::MainContext::default().spawn_local(async move {
+            let peers = scan_airdrop_peers_dbus(6).await;
+            btn_c.set_sensitive(true);
+            btn_c.set_label("🔍 Buscar");
+            populate_airdrop_peers_list(&pb_c, &peers, &pop_peer);
+            if peers.is_empty() {
+                st_c.set_label("Sin dispositivos encontrados. Asegúrate de tener 'Todos durante 10 min' activo aquí y en tu Mac.");
+            } else {
+                st_c.set_label(&format!("{} dispositivo(s) AirDrop encontrado(s). Haz clic para enviar un archivo.", peers.len()));
+            }
+        });
+    });
+
+    let refresh_status: Rc<dyn Fn()> = {
+        let u_mode = update_ui_mode.clone();
+        let st_lbl = status_lbl.clone();
+        let pb = peers_box.clone();
+        let pop_r = popover.clone();
+        Rc::new(move || {
+            let u = u_mode.clone();
+            let s = st_lbl.clone();
+            let p = pb.clone();
+            let pop_inner = pop_r.clone();
+            glib::MainContext::default().spawn_local(async move {
+                if let Some(v) = get_airdrop_status_json_dbus().await {
+                    let mode = v["mode"].as_str().unwrap_or("off");
+                    u(mode);
+                    s.set_label(&format_airdrop_status_text(&v));
+                    let peers: Vec<(String, String, String)> = v["peers"]
+                        .as_array()
+                        .map(|arr| {
+                            arr.iter()
+                                .map(|item| {
+                                    (
+                                        item["id"].as_str().unwrap_or("").to_string(),
+                                        item["name"].as_str().unwrap_or("Apple").to_string(),
+                                        item["address"].as_str().unwrap_or("").to_string(),
+                                    )
+                                })
+                                .filter(|(id, _, _)| !id.is_empty())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    populate_airdrop_peers_list(&p, &peers, &pop_inner);
+                } else {
+                    let mode = get_link_mode_dbus().await;
+                    u(&mode);
+                    s.set_label("malus-de-link no disponible en D-Bus.");
+                }
+            });
+        })
+    };
+
     let u_off = update_ui_mode.clone();
+    let ref_off = refresh_status.clone();
     row_off.connect_clicked(move |_| {
         u_off("off");
-        set_link_mode_dbus("off");
+        set_link_mode_dbus_and_refresh("off", ref_off.clone());
     });
 
     let u_cont = update_ui_mode.clone();
+    let ref_cont = refresh_status.clone();
     row_contacts.connect_clicked(move |_| {
         u_cont("contacts");
-        set_link_mode_dbus("contacts");
+        set_link_mode_dbus_and_refresh("contacts", ref_cont.clone());
     });
 
     let u_every = update_ui_mode.clone();
+    let ref_every = refresh_status.clone();
+    let st_every = status_lbl.clone();
     row_everyone.connect_clicked(move |_| {
         u_every("everyone");
-        set_link_mode_dbus("everyone");
+        st_every.set_label("Levantando radio AWDL (awdl0)... En Intel AX210 el Wi-Fi se pausa temporalmente.");
+        set_link_mode_dbus_and_refresh("everyone", ref_every.clone());
     });
 
-    let u_pop = update_ui_mode.clone();
+    let ref_pop = refresh_status.clone();
     popover.connect_show(move |_| {
-        let u = u_pop.clone();
-        glib::MainContext::default().spawn_local(async move {
-            let mode = get_link_mode_dbus().await;
-            u(&mode);
-        });
+        ref_pop();
     });
 
     popover.set_child(Some(&popover_box));
     menu_btn.set_popover(Some(&popover));
 
     menu_btn
+}
+
+fn resolve_airdrop_downloads_dir() -> std::path::PathBuf {
+    let home = glib::home_dir();
+    let es = home.join("Descargas");
+    if es.exists() {
+        es
+    } else {
+        home.join("Downloads")
+    }
+}
+
+fn format_airdrop_status_text(v: &serde_json::Value) -> String {
+    let radio_state = v["radio_state"].as_str().unwrap_or("off");
+    let rem = v["remaining_seconds"].as_u64().unwrap_or(0);
+    let station = v["station"].as_str().unwrap_or("Wi-Fi");
+    let rmode = v["radio_mode"].as_str().unwrap_or("");
+    let hw_ready = v["hardware_ready"].as_bool().unwrap_or(false);
+    if let Some(err) = v["last_error"].as_str() {
+        if !err.trim().is_empty() {
+            return format!("⚠️ {}", err);
+        }
+    }
+    match radio_state {
+        "starting" => format!("⏳ Iniciando awdl0 en {}...", station),
+        "active" => {
+            let name = v["device_name"].as_str().unwrap_or("Malus DE");
+            let time_part = if rem > 0 {
+                format!(" · {}:{:02}", rem / 60, rem % 60)
+            } else {
+                String::new()
+            };
+            format!("🟢 Activo como '{}' en awdl0{}", name, time_part)
+        }
+        "error" => "❌ Error activando radio AWDL.".to_string(),
+        _ => {
+            if hw_ready {
+                if rmode == "exclusive" {
+                    format!("Listo ({} · modo exclusivo: pausa Wi-Fi al activar)", station)
+                } else {
+                    format!("Listo ({} · modo compartido)", station)
+                }
+            } else {
+                "⚠️ Motor owly/hardware AWDL no listo.".to_string()
+            }
+        }
+    }
+}
+
+fn populate_airdrop_peers_list(
+    peers_box: &GtkBox,
+    peers: &[(String, String, String)],
+    popover: &Popover,
+) {
+    while let Some(child) = peers_box.first_child() {
+        peers_box.remove(&child);
+    }
+    if peers.is_empty() {
+        peers_box.set_visible(false);
+        return;
+    }
+    peers_box.set_visible(true);
+    let hdr = Label::builder()
+        .label("Dispositivos cercanos (clic para enviar):")
+        .css_classes(["cc-item-subtitle"])
+        .xalign(0.0)
+        .build();
+    peers_box.append(&hdr);
+
+    for (id, name, addr) in peers {
+        let subtitle = if addr.is_empty() {
+            "Enviar archivo vía AirDrop".to_string()
+        } else {
+            format!("AWDL · {}", addr)
+        };
+        let (row, _) = create_link_option_row(&format!("💻 {}", name), &subtitle);
+        let target_id = id.clone();
+        let pop_c = popover.clone();
+        row.connect_clicked(move |_| {
+            pop_c.popdown();
+            pick_and_send_airdrop_file(target_id.clone());
+        });
+        peers_box.append(&row);
+    }
+}
+
+fn pick_and_send_airdrop_file(target: String) {
+    let dialog = gtk4::FileDialog::builder()
+        .title("Enviar archivo por AirDrop")
+        .build();
+    dialog.open(None::<&gtk4::Window>, None::<&gtk4::gio::Cancellable>, move |res| {
+        if let Ok(file) = res {
+            if let Some(path) = file.path() {
+                let path_str = path.to_string_lossy().into_owned();
+                let target_c = target.clone();
+                glib::MainContext::default().spawn_local(async move {
+                    if let Ok(conn) = zbus::Connection::session().await {
+                        let _ = conn
+                            .call_method(
+                                Some("org.malus_de.Link"),
+                                "/org/malus_de/Link",
+                                Some("org.malus_de.Link"),
+                                "SendAirDropFile",
+                                &(target_c, path_str),
+                            )
+                            .await;
+                    }
+                });
+            }
+        }
+    });
 }
 
 fn create_link_option_row(title: &str, subtitle: &str) -> (Button, Image) {
@@ -1227,7 +1429,7 @@ fn create_link_option_row(title: &str, subtitle: &str) -> (Button, Image) {
     (btn, check_icon)
 }
 
-fn set_link_mode_dbus(mode: &'static str) {
+fn set_link_mode_dbus_and_refresh(mode: &'static str, refresh: Rc<dyn Fn()>) {
     glib::MainContext::default().spawn_local(async move {
         if let Ok(conn) = zbus::Connection::session().await {
             let _ = conn
@@ -1240,7 +1442,50 @@ fn set_link_mode_dbus(mode: &'static str) {
                 )
                 .await;
         }
+        refresh();
+        if mode == "everyone" {
+            let ref_later = refresh.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_secs(4), move || {
+                ref_later();
+            });
+        }
     });
+}
+
+async fn get_airdrop_status_json_dbus() -> Option<serde_json::Value> {
+    let conn = zbus::Connection::session().await.ok()?;
+    let reply = conn
+        .call_method(
+            Some("org.malus_de.Link"),
+            "/org/malus_de/Link",
+            Some("org.malus_de.Link"),
+            "GetAirDropStatusJson",
+            &(),
+        )
+        .await
+        .ok()?;
+    let raw: String = reply.body().deserialize().ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+async fn scan_airdrop_peers_dbus(seconds: u32) -> Vec<(String, String, String)> {
+    if let Ok(conn) = zbus::Connection::session().await {
+        if let Ok(reply) = conn
+            .call_method(
+                Some("org.malus_de.Link"),
+                "/org/malus_de/Link",
+                Some("org.malus_de.Link"),
+                "ScanAirDropPeers",
+                &(seconds,),
+            )
+            .await
+        {
+            if let Ok(peers) = reply.body().deserialize::<Vec<(String, String, String)>>() {
+                return peers;
+            }
+        }
+    }
+    Vec::new()
 }
 
 async fn get_link_mode_dbus() -> String {
@@ -1260,7 +1505,7 @@ async fn get_link_mode_dbus() -> String {
             }
         }
     }
-    "everyone".to_string()
+    "off".to_string()
 }
 
 // ==========================================
