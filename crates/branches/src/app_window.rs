@@ -19,11 +19,11 @@ use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 
-const BRANCHES_SEARCH_HEIGHT: i32 = 30;
-const BRANCHES_SEARCH_COLLAPSED_WIDTH: i32 = 30;
+const BRANCHES_SEARCH_HEIGHT: i32 = 32;
+const BRANCHES_SEARCH_COLLAPSED_WIDTH: i32 = 32;
 const BRANCHES_SEARCH_EXPANDED_WIDTH: i32 = 196;
 const BRANCHES_SEARCH_ANIM_MS: f64 = 180.0;
-const BRANCHES_SEARCH_SQUIRCLE_RADIUS: f64 = 15.0;
+const BRANCHES_SEARCH_SQUIRCLE_RADIUS: f64 = 16.0;
 const SEARCH_SQUIRCLE_EXPONENT: f64 = 4.2;
 const SEARCH_SQUIRCLE_SEGMENTS: usize = 20;
 
@@ -2906,6 +2906,13 @@ impl BranchesWindow {
         let next_gen = self.search_anim_gen.get().wrapping_add(1);
         self.search_anim_gen.set(next_gen);
 
+        let btn_h = self.search_toggle_btn.height();
+        let target_h = if btn_h > 0 { btn_h } else { BRANCHES_SEARCH_HEIGHT };
+        let btn_w = self.search_toggle_btn.width();
+        let collapsed_w = if btn_w > 0 { btn_w } else { BRANCHES_SEARCH_COLLAPSED_WIDTH };
+        self.search_shell.set_height_request(target_h);
+        self.search_entry.set_height_request(target_h);
+
         let start_p = self.search_anim_progress.get();
         let target_p = if expand { 1.0 } else { 0.0 };
         if (start_p - target_p).abs() < 0.005 {
@@ -2922,8 +2929,7 @@ impl BranchesWindow {
                 }
             } else {
                 self.search_shell.set_visible(false);
-                self.search_shell
-                    .set_width_request(BRANCHES_SEARCH_COLLAPSED_WIDTH);
+                self.search_shell.set_width_request(collapsed_w);
                 self.search_toggle_btn.set_visible(true);
             }
             return;
@@ -2931,9 +2937,8 @@ impl BranchesWindow {
 
         if expand {
             self.search_toggle_btn.set_visible(false);
-            let initial_w = (BRANCHES_SEARCH_COLLAPSED_WIDTH as f64
-                + (BRANCHES_SEARCH_EXPANDED_WIDTH - BRANCHES_SEARCH_COLLAPSED_WIDTH) as f64
-                    * start_p)
+            let initial_w = (collapsed_w as f64
+                + (BRANCHES_SEARCH_EXPANDED_WIDTH - collapsed_w) as f64 * start_p)
                 .round() as i32;
             self.search_shell.set_width_request(initial_w);
             self.search_entry.set_opacity(start_p);
@@ -2966,8 +2971,8 @@ impl BranchesWindow {
             let p = start_p + (target_p - start_p) * eased;
             prog_ref.set(p);
 
-            let width = (BRANCHES_SEARCH_COLLAPSED_WIDTH as f64
-                + (BRANCHES_SEARCH_EXPANDED_WIDTH - BRANCHES_SEARCH_COLLAPSED_WIDTH) as f64 * p)
+            let width = (collapsed_w as f64
+                + (BRANCHES_SEARCH_EXPANDED_WIDTH - collapsed_w) as f64 * p)
                 .round() as i32;
             shell.set_width_request(width);
             shell.queue_draw();
@@ -2980,7 +2985,7 @@ impl BranchesWindow {
                     shell.set_width_request(BRANCHES_SEARCH_EXPANDED_WIDTH);
                 } else {
                     shell.set_visible(false);
-                    shell.set_width_request(BRANCHES_SEARCH_COLLAPSED_WIDTH);
+                    shell.set_width_request(collapsed_w);
                     btn.set_visible(true);
                 }
                 glib::ControlFlow::Break
@@ -3038,5 +3043,27 @@ impl BranchesWindow {
             syncing_ui: self.syncing_ui.clone(),
             _config_monitor: self._config_monitor.clone(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_shell_matches_search_button_height() {
+        assert_eq!(BRANCHES_SEARCH_HEIGHT, BRANCHES_SEARCH_COLLAPSED_WIDTH);
+        assert_eq!(BRANCHES_SEARCH_HEIGHT, 32);
+        assert_eq!(BRANCHES_SEARCH_SQUIRCLE_RADIUS, 16.0);
+
+        let css = include_str!("styles/macos-branches.css");
+        let btn_block = css
+            .split("button.branches-search-btn {")
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .expect("Debe existir button.branches-search-btn");
+        // 30px contenido + 1px borde superior + 1px borde inferior = 32px totales
+        assert!(btn_block.contains("min-height: 30px;"));
+        assert!(btn_block.contains("border: 1px solid"));
     }
 }
