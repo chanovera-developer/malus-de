@@ -557,6 +557,12 @@ pub(crate) fn show_rename_popover(
 
             if let Ok(new_path) = crate::operations::rename_item(&old_path, trimmed) {
                 if new_path != old_path {
+                    let old_str = old_path.to_string_lossy().to_string();
+                    let new_str = new_path.to_string_lossy().to_string();
+                    let _ = label_ref.activate_action(
+                        "win.record_undo_rename",
+                        Some(&(old_str, new_str).to_variant()),
+                    );
                     if let Some(new_name) = new_path.file_name() {
                         label_ref.set_label(&new_name.to_string_lossy());
                     }
@@ -936,6 +942,74 @@ pub(super) fn show_item_context_menu(
         });
     }
     vbox.append(&copy_btn);
+
+    if !is_inside_trash(path) && path != std::path::Path::new("/") && path.parent().is_some() {
+        let dup_btn = make_context_menu_button(if es { "Duplicar" } else { "Duplicate" });
+        {
+            let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
+            let target_str = path.to_string_lossy().to_string();
+            let pop = popover.clone();
+            dup_btn.connect_clicked(move |_| {
+                pop.popdown();
+                let _ = anchor_widget
+                    .activate_action("win.duplicate_item", Some(&target_str.to_variant()));
+            });
+        }
+        vbox.append(&dup_btn);
+
+        let compress_btn = make_context_menu_button(if es {
+            "Comprimir (.zip)"
+        } else {
+            "Compress (.zip)"
+        });
+        {
+            let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
+            let target_str = path.to_string_lossy().to_string();
+            let pop = popover.clone();
+            compress_btn.connect_clicked(move |_| {
+                pop.popdown();
+                let _ = anchor_widget
+                    .activate_action("win.compress_item", Some(&target_str.to_variant()));
+            });
+        }
+        vbox.append(&compress_btn);
+
+        if crate::jobs::is_supported_archive(path) {
+            let extract_btn = make_context_menu_button(if es {
+                "Extraer aquí"
+            } else {
+                "Extract Here"
+            });
+            {
+                let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
+                let target_str = path.to_string_lossy().to_string();
+                let pop = popover.clone();
+                extract_btn.connect_clicked(move |_| {
+                    pop.popdown();
+                    let _ = anchor_widget
+                        .activate_action("win.extract_item", Some(&target_str.to_variant()));
+                });
+            }
+            vbox.append(&extract_btn);
+        }
+
+        let trash_btn = make_context_menu_button(if es {
+            "Mover a la Papelera"
+        } else {
+            "Move to Trash"
+        });
+        {
+            let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
+            let target_str = path.to_string_lossy().to_string();
+            let pop = popover.clone();
+            trash_btn.connect_clicked(move |_| {
+                pop.popdown();
+                let _ = anchor_widget
+                    .activate_action("win.trash_item", Some(&target_str.to_variant()));
+            });
+        }
+        vbox.append(&trash_btn);
+    }
 
     popover.set_child(Some(&vbox));
     popover.popup();

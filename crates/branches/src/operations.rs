@@ -148,18 +148,9 @@ pub fn has_clipboard_files() -> bool {
     get_clipboard_payload().is_some()
 }
 
-pub fn paste_from_clipboard_async<F: Fn(bool) + 'static>(dest_dir: PathBuf, on_done: F) {
+pub fn read_clipboard_payload_async<F: FnOnce(Option<ClipboardPayload>) + 'static>(on_payload: F) {
     let Some(display) = gtk4::gdk::Display::default() else {
-        if let Some(payload) = get_clipboard_payload() {
-            let is_cut = payload.action == ClipboardAction::Cut;
-            let pasted = paste_payload_into(&payload, &dest_dir).unwrap_or_default();
-            if is_cut && !pasted.is_empty() {
-                clear_clipboard();
-            }
-            on_done(!pasted.is_empty());
-        } else {
-            on_done(false);
-        }
+        on_payload(get_clipboard_payload());
         return;
     };
 
@@ -168,20 +159,13 @@ pub fn paste_from_clipboard_async<F: Fn(bool) + 'static>(dest_dir: PathBuf, on_d
     let has_gnome = formats.contain_mime_type("x-special/gnome-copied-files");
     let has_uri = formats.contain_mime_type("text/uri-list");
     if !has_gnome && !has_uri {
-        on_done(false);
+        on_payload(None);
         return;
     }
 
     if clipboard.is_local() {
-        if let Some(payload) = get_clipboard_payload() {
-            let is_cut = payload.action == ClipboardAction::Cut;
-            let pasted = paste_payload_into(&payload, &dest_dir).unwrap_or_default();
-            if is_cut && !pasted.is_empty() {
-                clear_clipboard();
-            }
-            on_done(!pasted.is_empty());
-            return;
-        }
+        on_payload(get_clipboard_payload());
+        return;
     }
 
     glib::MainContext::default().spawn_local(async move {
@@ -214,7 +198,13 @@ pub fn paste_from_clipboard_async<F: Fn(bool) + 'static>(dest_dir: PathBuf, on_d
         } else {
             None
         };
+        on_payload(payload);
+    });
+}
 
+#[allow(dead_code)]
+pub fn paste_from_clipboard_async<F: Fn(bool) + 'static>(dest_dir: PathBuf, on_done: F) {
+    read_clipboard_payload_async(move |payload| {
         if let Some(payload) = payload {
             let is_cut = payload.action == ClipboardAction::Cut;
             let pasted = paste_payload_into(&payload, &dest_dir).unwrap_or_default();
@@ -253,50 +243,11 @@ pub fn delete_permanent(path: &Path) -> Result<(), String> {
     }
 }
 
-/// Duplicar archivo o carpeta al estilo macOS Finder ("nombre copia.ext", "nombre copia 2.ext")
-pub fn duplicate_item(path: &Path) -> Result<PathBuf, String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| "No se encontró directorio padre".to_string())?;
-
-    let file_stem = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "archivo".to_string());
-
-    let ext = path
-        .extension()
-        .map(|e| format!(".{}", e.to_string_lossy()))
-        .unwrap_or_default();
-
-    let mut candidate = parent.join(format!("{} copia{}", file_stem, ext));
-    let mut counter = 2;
-    while candidate.exists() {
-        candidate = parent.join(format!("{} copia {}{}", file_stem, counter, ext));
-        counter += 1;
-    }
-
-    if path.is_dir() {
-        copy_dir_recursive(path, &candidate)?;
-    } else {
-        fs::copy(path, &candidate)
-            .map_err(|e| format!("Error al duplicar archivo: {}", e))?;
-    }
-
-    Ok(candidate)
-}
-
-/// Calcula una ruta destino única al copiar o mover sin sobrescribir archivos/carpetas existentes.
-fn unique_destination_in_folder(src: &Path, dest_folder: &Path) -> Result<PathBuf, String> {
+/// Calcula una ruta destino única al duplicar o resolver "Mantener ambos" ("nombre copia.ext", "nombre copia 2.ext").
+pub fn unique_destination_for_copy(src: &Path, dest_folder: &Path) -> Result<PathBuf, String> {
     let file_name = src
         .file_name()
         .ok_or_else(|| "Nombre de archivo inválido".to_string())?;
-
-    let mut dest = dest_folder.join(file_name);
-    if !dest.exists() && dest.symlink_metadata().is_err() {
-        return Ok(dest);
-    }
-
     let is_dir = src
         .symlink_metadata()
         .map(|m| m.is_dir())
@@ -316,12 +267,48 @@ fn unique_destination_in_folder(src: &Path, dest_folder: &Path) -> Result<PathBu
     };
 
     let mut counter = 2usize;
-    dest = dest_folder.join(format!("{} copia{}", stem, ext));
+    let mut dest = dest_folder.join(format!("{} copia{}", stem, ext));
     while dest.exists() || dest.symlink_metadata().is_ok() {
         dest = dest_folder.join(format!("{} copia {}{}", stem, counter, ext));
         counter += 1;
     }
     Ok(dest)
+}
+
+/// Calcula la siguiente ruta de duplicado para un elemento existente en su misma carpeta.
+pub fn next_duplicate_path(path: &Path) -> Result<PathBuf, String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "No se encontró directorio padre".to_string())?;
+    unique_destination_for_copy(path, parent)
+}
+
+#[allow(dead_code)]
+/// Duplicar archivo o carpeta al estilo macOS Finder ("nombre copia.ext", "nombre copia 2.ext")
+pub fn duplicate_item(path: &Path) -> Result<PathBuf, String> {
+    let candidate = next_duplicate_path(path)?;
+
+    if path.is_dir() {
+        copy_dir_recursive(path, &candidate)?;
+    } else {
+        fs::copy(path, &candidate)
+            .map_err(|e| format!("Error al duplicar archivo: {}", e))?;
+    }
+
+    Ok(candidate)
+}
+
+/// Calcula una ruta destino única al copiar o mover sin sobrescribir archivos/carpetas existentes.
+fn unique_destination_in_folder(src: &Path, dest_folder: &Path) -> Result<PathBuf, String> {
+    let file_name = src
+        .file_name()
+        .ok_or_else(|| "Nombre de archivo inválido".to_string())?;
+
+    let dest = dest_folder.join(file_name);
+    if !dest.exists() && dest.symlink_metadata().is_err() {
+        return Ok(dest);
+    }
+    unique_destination_for_copy(src, dest_folder)
 }
 
 /// Copiar archivo o carpeta a una carpeta destino

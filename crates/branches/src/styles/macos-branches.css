@@ -1076,3 +1076,59 @@ button.branches-tab-add-btn:active {
     }
 }
 
+/* ========================================================= */
+/* CÁPSULA DE TRANSFERENCIAS / OPERACIONES ASÍNCRONAS        */
+/* ========================================================= */
+
+menubutton.branches-jobs-pill-btn > button {
+    min-height: 30px;
+    padding: 0 9px;
+    border-radius: 8px;
+    background-color: alpha(@accent_bg_color, 0.14);
+    border: 1px solid alpha(@accent_bg_color, 0.32);
+    color: @window_fg_color;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+menubutton.branches-jobs-pill-btn > button:hover {
+    background-color: alpha(@accent_bg_color, 0.22);
+}
+
+.branches-jobs-pill-label {
+    font-variant-numeric: tabular-nums;
+}
+
+.branches-job-row {
+    padding: 6px 4px;
+}
+
+.branches-job-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: @window_fg_color;
+}
+
+.branches-job-detail {
+    font-size: 11px;
+}
+
+progressbar.branches-job-progress trough {
+    min-height: 5px;
+    border-radius: 999px;
+    background-color: alpha(@window_fg_color, 0.12);
+}
+
+progressbar.branches-job-progress progress {
+    min-height: 5px;
+    border-radius: 999px;
+    background-color: @accent_bg_color;
+}
+
+button.branches-job-cancel-btn {
+    min-width: 20px;
+    min-height: 20px;
+    padding: 0;
+}
+
+

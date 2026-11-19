@@ -1,5 +1,7 @@
 use crate::folder_pane::{FolderPane, PaneId};
 use crate::fs_backend::get_free_space;
+use crate::job_ui::JobUiController;
+use crate::jobs::{ArchiveFormat, JobRequest, UndoEntry};
 use crate::path_bar::PathBar;
 use crate::quick_look::QuickLook;
 use crate::sidebar::Sidebar;
@@ -49,6 +51,7 @@ pub struct BranchesWindow {
     btn_col_view: ToggleButton,
     btn_gallery_view: ToggleButton,
     quick_look: Rc<QuickLook>,
+    job_ui: Rc<JobUiController>,
     search_entry: SearchEntry,
     search_toggle_btn: ToggleButton,
     syncing_ui: Rc<Cell<bool>>,
@@ -70,6 +73,36 @@ impl BranchesWindow {
         // Ocultar barra CSD tradicional para usar el layout auténtico de macOS Finder
         let dummy_titlebar = GtkBox::builder().visible(false).build();
         window.set_titlebar(Some(&dummy_titlebar));
+
+        let win_weak_holder: Rc<RefCell<Weak<BranchesWindow>>> = Rc::new(RefCell::new(Weak::new()));
+        let job_ui = JobUiController::new(
+            window.clone(),
+            {
+                let w_ref = win_weak_holder.clone();
+                Rc::new(move |select_name, clear_cut| {
+                    if let Some(w) = w_ref.borrow().upgrade() {
+                        if clear_cut {
+                            crate::operations::clear_clipboard();
+                        }
+                        if let Some(name) = select_name {
+                            w.active_pane().queue_select_name_active(&name);
+                        }
+                        w.reload_all_panes();
+                        w.refresh_all_cut_states();
+                    }
+                })
+            },
+            {
+                let w_for_err = window.clone();
+                Rc::new(move |err| {
+                    tracing::error!("Operación de archivo fallida: {}", err);
+                    gtk4::AlertDialog::builder()
+                        .message(err)
+                        .build()
+                        .show(Some(&w_for_err));
+                })
+            },
+        );
 
         // 1. Botones de navegación [ < | > ] agrupados en cápsula estilo Finder
         let nav_box = GtkBox::new(Orientation::Horizontal, 0);
@@ -220,10 +253,14 @@ impl BranchesWindow {
         let menu_model = gio::Menu::new();
         menu_model.append(Some("Nueva Pestaña"), Some("win.new_tab"));
         menu_model.append(Some("Nueva Carpeta"), Some("win.new_folder"));
+        menu_model.append(Some("Deshacer"), Some("win.undo"));
         menu_model.append(Some("Copiar"), Some("win.copy"));
         menu_model.append(Some("Cortar"), Some("win.cut"));
         menu_model.append(Some("Pegar"), Some("win.paste"));
         menu_model.append(Some("Duplicar"), Some("win.duplicate"));
+        menu_model.append(Some("Comprimir (.zip)"), Some("win.compress_zip"));
+        menu_model.append(Some("Comprimir (.tar.gz)"), Some("win.compress_targz"));
+        menu_model.append(Some("Extraer aquí"), Some("win.extract"));
         menu_model.append(Some("Mover a la Papelera"), Some("win.trash"));
         menu_model.append(Some("Abrir en Terminal"), Some("win.open_terminal"));
         menu_model.append(Some("Mostrar Archivos Ocultos"), Some("win.toggle_hidden"));
@@ -285,6 +322,7 @@ impl BranchesWindow {
         right_header_box.append(&view_box);
         right_header_box.append(&split_pill_box);
         right_header_box.append(&actions_pill_box);
+        right_header_box.append(job_ui.pill_widget());
         right_header_box.append(&search_container);
 
         // 9. Paned principal (Sidebar a la izquierda y Contenido a la derecha)
@@ -312,7 +350,6 @@ impl BranchesWindow {
         let status_bar = Rc::new(StatusBar::new());
         let quick_look = QuickLook::new();
 
-        let win_weak_holder: Rc<RefCell<Weak<BranchesWindow>>> = Rc::new(RefCell::new(Weak::new()));
         let win_weak_for_nav = win_weak_holder.clone();
 
         let sidebar = Rc::new(Sidebar::new(
@@ -510,6 +547,7 @@ impl BranchesWindow {
             btn_col_view,
             btn_gallery_view,
             quick_look,
+            job_ui,
             search_entry: search_entry.clone(),
             search_toggle_btn,
             syncing_ui: Rc::new(Cell::new(false)),
@@ -1255,34 +1293,133 @@ impl BranchesWindow {
         }
     }
 
-    fn copy_or_cut_item_with_selection(
-        &self,
-        action: crate::operations::ClipboardAction,
-        clicked_path: PathBuf,
-    ) {
+    fn selected_paths_or(&self, fallback_path: PathBuf) -> Vec<PathBuf> {
         let selected: Vec<PathBuf> = self
             .active_pane()
             .get_selected_items()
             .into_iter()
             .map(|i| i.path)
             .collect();
-        let paths = if selected.iter().any(|p| p == &clicked_path) && !selected.is_empty() {
+        if selected.iter().any(|p| p == &fallback_path) && !selected.is_empty() {
             selected
         } else {
-            vec![clicked_path]
-        };
+            vec![fallback_path]
+        }
+    }
+
+    fn selected_paths(&self) -> Vec<PathBuf> {
+        self.active_pane()
+            .get_selected_items()
+            .into_iter()
+            .map(|i| i.path)
+            .collect()
+    }
+
+    fn copy_or_cut_item_with_selection(
+        &self,
+        action: crate::operations::ClipboardAction,
+        clicked_path: PathBuf,
+    ) {
+        let paths = self.selected_paths_or(clicked_path);
         crate::operations::set_clipboard(action, paths);
         self.refresh_all_cut_states();
     }
 
     fn paste_into_folder(&self, dest_dir: PathBuf) {
-        let bw = self.clone_ref();
-        crate::operations::paste_from_clipboard_async(dest_dir, move |changed| {
-            if changed {
-                bw.reload_all_panes();
+        if !dest_dir.is_dir() {
+            return;
+        }
+        let job_ui = self.job_ui.clone();
+        crate::operations::read_clipboard_payload_async(move |payload| {
+            let Some(payload) = payload else { return };
+            if payload.paths.is_empty() {
+                return;
             }
-            bw.refresh_all_cut_states();
+            match payload.action {
+                crate::operations::ClipboardAction::Copy => {
+                    job_ui.start_job(
+                        JobRequest::Copy {
+                            sources: payload.paths,
+                            dest_dir,
+                        },
+                        false,
+                    );
+                }
+                crate::operations::ClipboardAction::Cut => {
+                    job_ui.start_job(
+                        JobRequest::Move {
+                            sources: payload.paths,
+                            dest_dir,
+                        },
+                        true,
+                    );
+                }
+            }
         });
+    }
+
+    fn duplicate_paths(&self, sources: Vec<PathBuf>) {
+        if sources.is_empty() {
+            return;
+        }
+        self.job_ui.start_job(JobRequest::Duplicate { sources }, false);
+    }
+
+    fn duplicate_selected(&self) {
+        self.duplicate_paths(self.selected_paths());
+    }
+
+    fn trash_paths(&self, sources: Vec<PathBuf>) {
+        if sources.is_empty() {
+            return;
+        }
+        self.job_ui.start_job(JobRequest::Trash { sources }, false);
+    }
+
+    fn trash_selected(&self) {
+        self.trash_paths(self.selected_paths());
+    }
+
+    fn compress_paths(&self, sources: Vec<PathBuf>, format: ArchiveFormat) {
+        if sources.is_empty() {
+            return;
+        }
+        let dest_dir = sources[0]
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.active_pane().current_path());
+        self.job_ui.start_job(
+            JobRequest::Compress {
+                sources,
+                dest_dir,
+                format,
+            },
+            false,
+        );
+    }
+
+    fn extract_archive(&self, archive: PathBuf) {
+        if !crate::jobs::is_supported_archive(&archive) {
+            return;
+        }
+        let dest_dir = archive
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.active_pane().current_path());
+        self.job_ui
+            .start_job(JobRequest::Extract { archive, dest_dir }, false);
+    }
+
+    fn move_or_copy_paths_to(&self, dest_dir: PathBuf, sources: Vec<PathBuf>, is_copy: bool) {
+        if sources.is_empty() || !dest_dir.is_dir() {
+            return;
+        }
+        let req = if is_copy {
+            JobRequest::Copy { sources, dest_dir }
+        } else {
+            JobRequest::Move { sources, dest_dir }
+        };
+        self.job_ui.start_job(req, false);
     }
 
     fn paste_into_active_pane(&self) {
@@ -1345,9 +1482,130 @@ impl BranchesWindow {
         let bw_dup = self.clone_ref();
         let act_dup = gio::SimpleAction::new("duplicate", None);
         act_dup.connect_activate(move |_, _| {
-            bw_dup.active_pane().duplicate_selected();
+            bw_dup.duplicate_selected();
         });
         actions.add_action(&act_dup);
+
+        let bw_dup_item = self.clone_ref();
+        let act_dup_item =
+            gio::SimpleAction::new("duplicate_item", Some(glib::VariantTy::STRING));
+        act_dup_item.connect_activate(move |_, param| {
+            if let Some(target) = param.and_then(|v| v.str()) {
+                let paths = bw_dup_item.selected_paths_or(PathBuf::from(target));
+                bw_dup_item.duplicate_paths(paths);
+            }
+        });
+        actions.add_action(&act_dup_item);
+
+        let bw_undo = self.clone_ref();
+        let act_undo = gio::SimpleAction::new("undo", None);
+        act_undo.connect_activate(move |_, _| {
+            bw_undo.job_ui.undo_last();
+        });
+        actions.add_action(&act_undo);
+
+        let bw_undo_ren = self.clone_ref();
+        let act_undo_ren = gio::SimpleAction::new(
+            "record_undo_rename",
+            Some(glib::VariantTy::new("(ss)").expect("valid variant type")),
+        );
+        act_undo_ren.connect_activate(move |_, param| {
+            if let Some((old_s, new_s)) = param.and_then(|v| v.get::<(String, String)>()) {
+                bw_undo_ren.job_ui.push_undo(UndoEntry::Rename {
+                    from: PathBuf::from(old_s),
+                    to: PathBuf::from(new_s),
+                });
+            }
+        });
+        actions.add_action(&act_undo_ren);
+
+        let bw_undo_created = self.clone_ref();
+        let act_undo_created =
+            gio::SimpleAction::new("record_undo_created", Some(glib::VariantTy::STRING_ARRAY));
+        act_undo_created.connect_activate(move |_, param| {
+            if let Some(paths) = param.and_then(|v| v.get::<Vec<String>>()) {
+                bw_undo_created.job_ui.push_undo(UndoEntry::CreatedPaths {
+                    paths: paths.into_iter().map(PathBuf::from).collect(),
+                });
+            }
+        });
+        actions.add_action(&act_undo_created);
+
+        let bw_move_to = self.clone_ref();
+        let act_move_to = gio::SimpleAction::new(
+            "move_paths_to",
+            Some(glib::VariantTy::new("(sas)").expect("valid variant type")),
+        );
+        act_move_to.connect_activate(move |_, param| {
+            if let Some((dest, paths)) = param.and_then(|v| v.get::<(String, Vec<String>)>()) {
+                bw_move_to.move_or_copy_paths_to(
+                    PathBuf::from(dest),
+                    paths.into_iter().map(PathBuf::from).collect(),
+                    false,
+                );
+            }
+        });
+        actions.add_action(&act_move_to);
+
+        let bw_copy_to = self.clone_ref();
+        let act_copy_to = gio::SimpleAction::new(
+            "copy_paths_to",
+            Some(glib::VariantTy::new("(sas)").expect("valid variant type")),
+        );
+        act_copy_to.connect_activate(move |_, param| {
+            if let Some((dest, paths)) = param.and_then(|v| v.get::<(String, Vec<String>)>()) {
+                bw_copy_to.move_or_copy_paths_to(
+                    PathBuf::from(dest),
+                    paths.into_iter().map(PathBuf::from).collect(),
+                    true,
+                );
+            }
+        });
+        actions.add_action(&act_copy_to);
+
+        let bw_comp_zip = self.clone_ref();
+        let act_comp_zip = gio::SimpleAction::new("compress_zip", None);
+        act_comp_zip.connect_activate(move |_, _| {
+            bw_comp_zip.compress_paths(bw_comp_zip.selected_paths(), ArchiveFormat::Zip);
+        });
+        actions.add_action(&act_comp_zip);
+
+        let bw_comp_targz = self.clone_ref();
+        let act_comp_targz = gio::SimpleAction::new("compress_targz", None);
+        act_comp_targz.connect_activate(move |_, _| {
+            bw_comp_targz.compress_paths(bw_comp_targz.selected_paths(), ArchiveFormat::TarGz);
+        });
+        actions.add_action(&act_comp_targz);
+
+        let bw_comp_item = self.clone_ref();
+        let act_comp_item =
+            gio::SimpleAction::new("compress_item", Some(glib::VariantTy::STRING));
+        act_comp_item.connect_activate(move |_, param| {
+            if let Some(target) = param.and_then(|v| v.str()) {
+                let paths = bw_comp_item.selected_paths_or(PathBuf::from(target));
+                bw_comp_item.compress_paths(paths, ArchiveFormat::Zip);
+            }
+        });
+        actions.add_action(&act_comp_item);
+
+        let bw_extract = self.clone_ref();
+        let act_extract = gio::SimpleAction::new("extract", None);
+        act_extract.connect_activate(move |_, _| {
+            if let Some(item) = bw_extract.active_pane().get_selected_item() {
+                bw_extract.extract_archive(item.path);
+            }
+        });
+        actions.add_action(&act_extract);
+
+        let bw_extract_item = self.clone_ref();
+        let act_extract_item =
+            gio::SimpleAction::new("extract_item", Some(glib::VariantTy::STRING));
+        act_extract_item.connect_activate(move |_, param| {
+            if let Some(target) = param.and_then(|v| v.str()) {
+                bw_extract_item.extract_archive(PathBuf::from(target));
+            }
+        });
+        actions.add_action(&act_extract_item);
 
         let bw_copy_sel = self.clone_ref();
         let act_copy = gio::SimpleAction::new("copy", None);
@@ -1409,9 +1667,20 @@ impl BranchesWindow {
         let bw_trash = self.clone_ref();
         let act_trash = gio::SimpleAction::new("trash", None);
         act_trash.connect_activate(move |_, _| {
-            bw_trash.active_pane().trash_selected();
+            bw_trash.trash_selected();
         });
         actions.add_action(&act_trash);
+
+        let bw_trash_item = self.clone_ref();
+        let act_trash_item =
+            gio::SimpleAction::new("trash_item", Some(glib::VariantTy::STRING));
+        act_trash_item.connect_activate(move |_, param| {
+            if let Some(target) = param.and_then(|v| v.str()) {
+                let paths = bw_trash_item.selected_paths_or(PathBuf::from(target));
+                bw_trash_item.trash_paths(paths);
+            }
+        });
+        actions.add_action(&act_trash_item);
 
         let bw_tag_r = self.clone_ref();
         let act_tag_r = gio::SimpleAction::new("tag_red", None);
@@ -1656,14 +1925,18 @@ impl BranchesWindow {
                     bw.paste_into_active_pane();
                     return glib::Propagation::Stop;
                 }
+                if keyval == gdk::Key::z || keyval == gdk::Key::Z {
+                    bw.job_ui.undo_last();
+                    return glib::Propagation::Stop;
+                }
             }
 
-            if is_ctrl && (keyval == gdk::Key::d || keyval == gdk::Key::D) {
-                bw.active_pane().duplicate_selected();
+            if (is_ctrl || is_command) && !is_alt && !is_shift && (keyval == gdk::Key::d || keyval == gdk::Key::D) {
+                bw.duplicate_selected();
                 return glib::Propagation::Stop;
             }
             if !focus_is_editable && keyval == gdk::Key::Delete {
-                bw.active_pane().trash_selected();
+                bw.trash_selected();
                 return glib::Propagation::Stop;
             }
 
@@ -1721,6 +1994,7 @@ impl BranchesWindow {
             btn_col_view: self.btn_col_view.clone(),
             btn_gallery_view: self.btn_gallery_view.clone(),
             quick_look: self.quick_look.clone(),
+            job_ui: self.job_ui.clone(),
             search_entry: self.search_entry.clone(),
             search_toggle_btn: self.search_toggle_btn.clone(),
             syncing_ui: self.syncing_ui.clone(),

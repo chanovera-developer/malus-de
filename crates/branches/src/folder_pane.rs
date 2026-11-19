@@ -548,7 +548,7 @@ impl FolderPane {
         }
     }
 
-    fn queue_select_name_active(&self, name: &str) {
+    pub fn queue_select_name_active(&self, name: &str) {
         match self.view_stack.visible_child_name().as_deref() {
             Some("icons") => self.icon_view.queue_select_name(name),
             Some("list") => self.list_view.queue_select_name(name),
@@ -570,6 +570,10 @@ impl FolderPane {
         };
         match crate::operations::create_new_folder(&current_path, default_name) {
             Ok(created_path) => {
+                let created_str = created_path.to_string_lossy().to_string();
+                let _ = self
+                    .container
+                    .activate_action("win.record_undo_created", Some(&vec![created_str].to_variant()));
                 if let Some(new_name) = created_path.file_name() {
                     self.queue_select_name_active(&new_name.to_string_lossy());
                 }
@@ -648,6 +652,7 @@ impl FolderPane {
         }
     }
 
+    #[allow(dead_code)]
     pub fn duplicate_selected(&self) {
         let items = self.get_selected_items();
         let mut changed = false;
@@ -694,6 +699,7 @@ impl FolderPane {
         self.gallery_view.refresh_cut_states();
     }
 
+    #[allow(dead_code)]
     pub fn trash_selected(&self) {
         let items = self.get_selected_items();
         let mut changed = false;
@@ -824,35 +830,42 @@ fn setup_drop_target<F: Fn() + 'static>(
     drop_target.connect_motion(move |_, _, _| gdk::DragAction::MOVE);
     let on_reload = Rc::new(on_reload);
 
-    drop_target.connect_drop(move |_, value, _x, _y| {
+    let widget_for_action = widget.as_ref().clone();
+    drop_target.connect_drop(move |drop, value, _x, _y| {
         if let Ok(file_list) = value.get::<gdk::FileList>() {
             let dest_dir = state.borrow().current_path.clone();
-            let mut moved_any = false;
-
-            for file in file_list.files() {
-                if let Some(src_path) = file.path() {
-                    if let Some(file_name) = src_path.file_name() {
-                        let target_path = dest_dir.join(file_name);
-                        if target_path != src_path {
-                            let dest_file = gio::File::for_path(&target_path);
-                            if file
-                                .move_(
-                                    &dest_file,
-                                    gio::FileCopyFlags::NONE,
-                                    gio::Cancellable::NONE,
-                                    None,
-                                )
-                                .is_ok()
-                                || std::fs::rename(&src_path, &target_path).is_ok()
-                            {
-                                moved_any = true;
-                            }
-                        }
-                    }
-                }
+            let paths: Vec<PathBuf> = file_list
+                .files()
+                .into_iter()
+                .filter_map(|f| f.path())
+                .filter(|src| {
+                    src != &dest_dir && !(src.is_dir() && dest_dir.starts_with(src))
+                })
+                .collect();
+            if paths.is_empty() {
+                return false;
+            }
+            let is_copy = drop
+                .current_drop()
+                .is_some_and(|d| d.actions() == gdk::DragAction::COPY);
+            let action_name = if is_copy {
+                "win.copy_paths_to"
+            } else {
+                "win.move_paths_to"
+            };
+            let dest_str = dest_dir.to_string_lossy().to_string();
+            let path_strs: Vec<String> = paths
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect();
+            if widget_for_action
+                .activate_action(action_name, Some(&(dest_str, path_strs).to_variant()))
+                .is_ok()
+            {
+                return true;
             }
 
-            if moved_any {
+            if crate::operations::move_paths_into_folder(&paths, &dest_dir) {
                 on_reload();
                 return true;
             }
