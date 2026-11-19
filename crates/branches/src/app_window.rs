@@ -382,7 +382,7 @@ impl BranchesWindow {
         // Barra de pestañas estilo macOS Finder (se muestra automáticamente al abrir 2+ pestañas)
         let tab_bar_box = GtkBox::builder()
             .orientation(Orientation::Horizontal)
-            .spacing(4)
+            .spacing(8)
             .css_classes(["branches-tab-bar"])
             .hexpand(true)
             .visible(false)
@@ -393,6 +393,7 @@ impl BranchesWindow {
             .spacing(4)
             .homogeneous(true)
             .hexpand(true)
+            .valign(Align::Center)
             .css_classes(["branches-tabs-strip"])
             .build();
 
@@ -874,6 +875,7 @@ impl BranchesWindow {
             .orientation(Orientation::Horizontal)
             .spacing(4)
             .hexpand(true)
+            .valign(Align::Center)
             .css_classes(["branches-tab"])
             .build();
 
@@ -881,6 +883,7 @@ impl BranchesWindow {
         let tab_title_label = Label::builder()
             .label(&tab_title)
             .halign(Align::Center)
+            .valign(Align::Center)
             .hexpand(true)
             .ellipsize(gtk4::pango::EllipsizeMode::End)
             .css_classes(["branches-tab-label"])
@@ -897,6 +900,11 @@ impl BranchesWindow {
             .valign(Align::Center)
             .has_frame(false)
             .css_classes(["branches-tab-close-btn"])
+            .build();
+
+        let right_spacer = GtkBox::builder()
+            .valign(Align::Center)
+            .css_classes(["branches-tab-spacer"])
             .build();
 
         {
@@ -927,8 +935,9 @@ impl BranchesWindow {
             tab_widget.add_controller(mid_click);
         }
 
-        tab_widget.append(&tab_title_label);
         tab_widget.append(&close_btn);
+        tab_widget.append(&tab_title_label);
+        tab_widget.append(&right_spacer);
 
         let stack_name = format!("tab-{tab_id}");
         self.tab_stack.add_named(&split_paned, Some(&stack_name));

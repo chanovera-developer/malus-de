@@ -304,6 +304,14 @@ mod tests {
         assert!(css.contains(".branches-tab.branches-tab-active"));
         assert!(css.contains("button.branches-tab-close-btn"));
         assert!(css.contains("button.branches-tab-add-btn"));
+        // El botón de nueva pestaña debe tener las mismas dimensiones que el botón de búsqueda (30x30px)
+        assert!(css.contains("button.branches-tab-add-btn {\n    min-width: 30px;\n    min-height: 30px;"));
+        // Las pestañas deben tener la misma altura que los botones internos de vista (26px)
+        assert!(css.contains(".branches-tab {\n    min-height: 26px;"));
+        // El botón de cerrar pestaña debe ser compacto (14x14px), oculto por defecto y visible en hover
+        assert!(css.contains("button.branches-tab-close-btn {\n    min-width: 14px;\n    min-height: 14px;"));
+        assert!(css.contains(".branches-tab:hover button.branches-tab-close-btn"));
+        assert!(css.contains(".branches-tab-spacer"));
 
         let app_window_src = include_str!("app_window.rs");
         assert!(app_window_src.contains("\"open_in_new_tab\""));
