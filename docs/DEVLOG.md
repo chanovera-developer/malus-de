@@ -4,6 +4,35 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-19] — Refinamiento de Pestañas en Branches, Limpieza de Warnings en Workspace y ADR 0007 (`Preview`)
+
+### 1. Medidas y Botón de Cierre en Barra de Pestañas (`crates/branches`)
+- **Consistencia métrica con la barra superior ([`macos-branches.css`](../crates/branches/src/styles/macos-branches.css), [`app_window.rs`](../crates/branches/src/app_window.rs)):**
+  - Ajustado el botón de nueva pestaña (`button.branches-tab-add-btn`) a `30 × 30 px` (`border-radius: 8px`, estilo squircle *Liquid Glass* y variantes claro/oscuro) para igualar en tamaño, estilo y alineación derecha al botón **Buscar archivos** (`button.branches-search-btn`).
+  - Ajustado el contenedor `.branches-tabs-strip` (`min-height: 26px`, `padding: 2px`, altura exterior equivalente a las cápsulas `.branches-toolbar-pill`) y centrados `tabs_strip` y `new_tab_btn` con `valign(Align::Center)` y `spacing(8)` en `tab_bar_box`.
+  - Elevadas las pestañas `.branches-tab` de `24 px` a `min-height: 26px` para igualar la altura de los botones internos de vista (`.branches-view-toggle button` / `.branches-tool-btn`).
+- **Botón de cerrar pestaña compacto, a la izquierda y solo en *hover*:**
+  - Movido `close_btn` (`button.branches-tab-close-btn`) a la izquierda de `tab_title_label`, reduciendo su tamaño de `18 px` a `14 × 14 px` (`-gtk-icon-size: 10px`) y ocultándolo por defecto (`opacity: 0`) para mostrarse únicamente al pasar el ratón por encima (`.branches-tab:hover button.branches-tab-close-btn`).
+  - Añadido un espaciador simétrico `.branches-tab-spacer` (`14 × 14 px`) en el extremo derecho de la pestaña para mantener centrado el título sin saltos visuales al aparecer el botón de cierre.
+  - Añadidas aserciones CSS en `test_branches_tab_bar_styles_and_context_menu_wiring` ([`main.rs`](../crates/branches/src/main.rs)).
+
+### 2. Eliminación Completa de Warnings de Compilación en el Workspace (`Cargo 1.100.0`)
+- **Limpieza de dependencias no utilizadas (`cargo::unused_workspace_dependencies` / `cargo::unused_dependencies`):**
+  - Retirada `malus-de-render` de `[workspace.dependencies]` en [`Cargo.toml`](../Cargo.toml) (se mantiene como miembro activo en `[workspace.members]`).
+  - Eliminadas dependencias declaradas pero sin uso en `crates/common`, `crates/compositor`, `crates/screenshot`, `crates/session-lock`, `crates/spotlight`, `crates/branches`, `crates/dock` y `crates/settings`, actualizando [`Cargo.lock`](../Cargo.lock).
+- **Prueba unitaria dormida ([`fs_backend.rs`](../crates/branches/src/fs_backend.rs)):** Añadido `#[test]` faltante en `split_desktop_exec_args_handles_quotes_and_escapes`, eliminando el *warning* de código muerto e incorporando el caso a la batería de pruebas.
+
+### 3. Planificación de Aplicación de Vista Previa (`ADR 0007`)
+- Creado [`0007-preview-app-pendiente.md`](decisiones/0007-preview-app-pendiente.md) detallando la arquitectura por fases para `crates/preview` (`malus-de-preview`, `dev.malus.Preview`): instancia única con navegación `←/→`, visor de imágenes (`Pixbuf`/`Glycin`), vídeo/audio sobre GStreamer `gtk4paintablesink` (documentando la ausencia de `gtk4-media-gstreamer` en Fedora 45), documentos PDF (`Poppler`/`pdftoppm`), conversión LibreOffice *headless*, código/Markdown, archivos comprimidos y resumen de carpetas.
+
+### 4. Validación
+- `cargo check --offline --workspace --all-targets` y `cargo check --offline --workspace` (tras limpiar artefactos locales de los 16 crates): **0 warnings**.
+- `cargo test --offline --workspace --no-run`: **0 warnings**.
+- `cargo build --offline --workspace`: **0 warnings**, compilación limpia en los 16 crates.
+- `cargo test --offline -p malus-de-branches`: **35 passed; 0 failed**.
+
+---
+
 ## [2026-11-18] — Modernización de Ajustes (`FileDialog`, Buscador Squircle, Sidebar 212 px y Glifos del Sistema)
 
 ### 1. Eliminación de Warnings en `crates/settings` (`FileChooserNative` -> `FileDialog`)
