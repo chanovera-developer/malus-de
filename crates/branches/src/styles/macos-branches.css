@@ -827,9 +827,9 @@ row:selected .branches-list-col-even {
 /* ========================================================= */
 
 .branches-quicklook-backdrop {
-    background-color: rgba(0, 0, 0, 0.24);
+    background-color: rgba(0, 0, 0, 0.16);
     opacity: 0.0;
-    transition: opacity 180ms ease-out;
+    transition: opacity 150ms ease-out;
 }
 
 .branches-quicklook-backdrop.ql-open {
@@ -838,7 +838,7 @@ row:selected .branches-list-col-even {
 
 .branches-quicklook-backdrop.ql-closing {
     opacity: 0.0;
-    transition: opacity 150ms cubic-bezier(0.4, 0, 1, 1);
+    transition: opacity 130ms cubic-bezier(0.4, 0, 1, 1);
 }
 
 window.branches-quicklook-window {
@@ -848,25 +848,25 @@ window.branches-quicklook-window {
 }
 
 .branches-quicklook-container {
-    background-color: alpha(@window_bg_color, 0.94);
+    background-color: alpha(@window_bg_color, 0.96);
     border-radius: 14px;
-    box-shadow: 0 20px 48px rgba(0, 0, 0, 0.38), 0 4px 12px rgba(0, 0, 0, 0.18);
-    border: 1px solid alpha(@borders, 0.58);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.26);
+    border: 1px solid alpha(@borders, 0.60);
     color: @window_fg_color;
     opacity: 0.0;
-    transform: scale(0.84);
+    transform: scale(0.90);
 }
 
 .branches-quicklook-container.ql-open {
     opacity: 1.0;
     transform: scale(1.0);
-    transition: transform 210ms cubic-bezier(0.16, 1, 0.3, 1), opacity 165ms ease-out;
+    transition: transform 175ms cubic-bezier(0.16, 1, 0.3, 1), opacity 145ms ease-out;
 }
 
 .branches-quicklook-container.ql-closing {
     opacity: 0.0;
-    transform: scale(0.86);
-    transition: transform 155ms cubic-bezier(0.4, 0, 1, 1), opacity 145ms ease-in;
+    transform: scale(0.92);
+    transition: transform 135ms cubic-bezier(0.4, 0, 1, 1), opacity 125ms ease-in;
 }
 
 .branches-quicklook-close-btn {
@@ -903,13 +903,11 @@ window.branches-quicklook-window {
 
 .branches-quicklook-image {
     border-radius: 8px;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
 }
 
 .branches-quicklook-video-stage {
     background-color: #101114;
     border-radius: 8px;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
 }
 
 .branches-quicklook-footer {

@@ -8,7 +8,7 @@ use gtk4::prelude::*;
 use gtk4::{
     Align, Application, Box as GtkBox, Button, ContentFit, EventControllerKey, GestureClick, Grid,
     Image, Label, Orientation, Overlay, Picture, PolicyType, PropagationPhase, ScrolledWindow,
-    Separator, TextView, Window,
+    Separator, Spinner, TextView, Window,
 };
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -39,7 +39,9 @@ impl MediaPlaybackHandle {
     fn register_child(&self, mut child: Child) {
         if self.stop_flag.load(Ordering::SeqCst) {
             let _ = child.kill();
-            let _ = child.wait();
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
             return;
         }
         if let Ok(mut guard) = self.children.lock() {
@@ -49,11 +51,19 @@ impl MediaPlaybackHandle {
 
     fn stop(&self) {
         self.stop_flag.store(true, Ordering::SeqCst);
+        let mut drained = Vec::new();
         if let Ok(mut guard) = self.children.lock() {
             for mut child in guard.drain(..) {
                 let _ = child.kill();
-                let _ = child.wait();
+                drained.push(child);
             }
+        }
+        if !drained.is_empty() {
+            std::thread::spawn(move || {
+                for mut child in drained {
+                    let _ = child.wait();
+                }
+            });
         }
     }
 }
@@ -80,6 +90,7 @@ pub struct QuickLook {
     open_btn_path: Rc<RefCell<PathBuf>>,
     media_handles: Rc<RefCell<Vec<Rc<MediaPlaybackHandle>>>>,
     page_step_cb: Rc<RefCell<Option<PageStepCallback>>>,
+    preview_gen: Rc<Cell<u64>>,
 }
 
 impl QuickLook {
@@ -100,6 +111,7 @@ impl QuickLook {
             open_btn_path: Rc::new(RefCell::new(PathBuf::new())),
             media_handles: Rc::new(RefCell::new(Vec::new())),
             page_step_cb: Rc::new(RefCell::new(None)),
+            preview_gen: Rc::new(Cell::new(0)),
         })
     }
 
@@ -120,6 +132,7 @@ impl QuickLook {
         self.closing.set(true);
         let next_gen = self.anim_gen.get().wrapping_add(1);
         self.anim_gen.set(next_gen);
+        self.preview_gen.set(self.preview_gen.get().wrapping_add(1));
         self.stop_active_media();
 
         if let Some(bd) = self.backdrop.borrow().as_ref() {
@@ -132,7 +145,7 @@ impl QuickLook {
         }
 
         let self_c = self.clone();
-        glib::timeout_add_local_once(Duration::from_millis(165), move || {
+        glib::timeout_add_local_once(Duration::from_millis(140), move || {
             if self_c.anim_gen.get() != next_gen {
                 return;
             }
@@ -211,6 +224,7 @@ impl QuickLook {
 
     fn clear_refs(&self) {
         self.stop_active_media();
+        self.preview_gen.set(self.preview_gen.get().wrapping_add(1));
         *self.page_step_cb.borrow_mut() = None;
         *self.current_path.borrow_mut() = None;
         *self.content_holder.borrow_mut() = None;
@@ -224,12 +238,14 @@ impl QuickLook {
             self.stop_active_media();
             *self.page_step_cb.borrow_mut() = None;
             if let Some(holder) = self.content_holder.borrow().as_ref() {
-                while let Some(child) = holder.first_child() {
-                    holder.remove(&child);
-                }
-                let new_content =
-                    create_preview_content(item, &self.media_handles, &self.page_step_cb);
-                holder.append(&new_content);
+                populate_preview_async(
+                    item,
+                    holder,
+                    &self.media_handles,
+                    &self.page_step_cb,
+                    &self.preview_gen,
+                    0,
+                );
             }
             if let Some(tl) = self.title_label.borrow().as_ref() {
                 tl.set_label(&item.name);
@@ -389,14 +405,8 @@ impl QuickLook {
     }
 
     fn trigger_macos_enter_animation(card: &GtkBox, backdrop: Option<&GtkBox>) {
-        let frame_count = Cell::new(0u8);
         let bd_opt = backdrop.cloned();
         card.add_tick_callback(move |widget, _| {
-            let next = frame_count.get().saturating_add(1);
-            frame_count.set(next);
-            if next < 2 {
-                return glib::ControlFlow::Continue;
-            }
             widget.add_css_class("ql-open");
             if let Some(ref bd) = bd_opt {
                 bd.add_css_class("ql-open");
@@ -488,15 +498,20 @@ impl QuickLook {
 
         root_box.append(&header_box);
 
-        // Contenedor dinámico de previsualización
+        // Contenedor dinámico de previsualización (carga asíncrona sin bloquear la transición)
         let content_holder = GtkBox::new(Orientation::Vertical, 0);
         content_holder.set_vexpand(true);
         content_holder.set_hexpand(true);
         content_holder.add_css_class("branches-quicklook-content");
 
-        let preview_content =
-            create_preview_content(item, &self.media_handles, &self.page_step_cb);
-        content_holder.append(&preview_content);
+        populate_preview_async(
+            item,
+            &content_holder,
+            &self.media_handles,
+            &self.page_step_cb,
+            &self.preview_gen,
+            185,
+        );
         root_box.append(&content_holder);
 
         *self.title_label.borrow_mut() = Some(title_label);
@@ -570,55 +585,213 @@ fn is_archive_extension(ext: &str) -> bool {
     matches!(ext, "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z")
 }
 
-fn create_preview_content(
+fn is_text_preview_candidate(ext: &str, kind_str: &str) -> bool {
+    [
+        "rs", "toml", "json", "md", "txt", "sh", "c", "cpp", "h", "py", "js", "ts", "html", "css",
+        "yaml", "yml", "xml", "ini", "conf", "log",
+    ]
+    .iter()
+    .any(|e| *e == ext)
+        || kind_str.to_lowercase().contains("texto")
+        || kind_str.to_lowercase().contains("código")
+}
+
+enum PreparedPreview {
+    Image {
+        bytes: Option<Vec<u8>>,
+    },
+    Pdf {
+        total_pages: u32,
+        first_page_png: Option<Vec<u8>>,
+    },
+    Video {
+        meta: MediaMetadata,
+        poster_png: Option<Vec<u8>>,
+    },
+    Audio {
+        meta: MediaMetadata,
+    },
+    Text(String),
+    Generic,
+}
+
+fn create_loading_placeholder(item: &FileItem) -> gtk4::Widget {
+    let vbox = GtkBox::new(Orientation::Vertical, 12);
+    vbox.set_valign(Align::Center);
+    vbox.set_halign(Align::Center);
+    vbox.set_vexpand(true);
+    vbox.set_hexpand(true);
+
+    let icon = Image::from_gicon(&item.gicon);
+    icon.set_pixel_size(72);
+    vbox.append(&icon);
+
+    let spinner = Spinner::new();
+    spinner.set_size_request(24, 24);
+    spinner.start();
+    vbox.append(&spinner);
+
+    vbox.upcast()
+}
+
+fn populate_preview_async(
     item: &FileItem,
+    holder: &GtkBox,
     media_handles: &Rc<RefCell<Vec<Rc<MediaPlaybackHandle>>>>,
     page_step_cb: &Rc<RefCell<Option<PageStepCallback>>>,
-) -> gtk4::Widget {
+    preview_gen: &Rc<Cell<u64>>,
+    delay_playback_ms: u64,
+) {
+    let next_gen = preview_gen.get().wrapping_add(1);
+    preview_gen.set(next_gen);
+
+    while let Some(child) = holder.first_child() {
+        holder.remove(&child);
+    }
+
     let ext = item
         .path
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default();
 
-    if is_image_extension(&ext) {
-        return create_image_preview(&item.path, item);
+    let needs_worker = is_image_extension(&ext)
+        || ext == "pdf"
+        || is_video_extension(&ext)
+        || is_audio_extension(&ext)
+        || is_archive_extension(&ext)
+        || is_text_preview_candidate(&ext, &item.kind_str);
+
+    if !needs_worker {
+        holder.append(&create_generic_preview(item));
+        return;
     }
 
+    holder.append(&create_loading_placeholder(item));
+
+    let opened_at = std::time::Instant::now();
+    let path = item.path.clone();
+    let kind_str = item.kind_str.clone();
+    let (tx, rx) = mpsc::channel::<PreparedPreview>();
+    std::thread::spawn(move || {
+        let payload = prepare_preview_payload(&path, &ext, &kind_str);
+        let _ = tx.send(payload);
+    });
+
+    let holder_weak = holder.downgrade();
+    let item_clone = item.clone();
+    let mh = media_handles.clone();
+    let psc = page_step_cb.clone();
+    let gen_ref = preview_gen.clone();
+
+    glib::timeout_add_local(Duration::from_millis(10), move || {
+        if gen_ref.get() != next_gen {
+            return glib::ControlFlow::Break;
+        }
+        match rx.try_recv() {
+            Ok(payload) => {
+                if let Some(h) = holder_weak.upgrade() {
+                    if gen_ref.get() == next_gen {
+                        let elapsed_ms = opened_at.elapsed().as_millis() as u64;
+                        let remaining_delay = delay_playback_ms.saturating_sub(elapsed_ms);
+                        let widget = build_widget_from_payload(
+                            &item_clone,
+                            payload,
+                            &mh,
+                            &psc,
+                            &gen_ref,
+                            next_gen,
+                            remaining_delay,
+                        );
+                        while let Some(child) = h.first_child() {
+                            h.remove(&child);
+                        }
+                        h.append(&widget);
+                    }
+                }
+                glib::ControlFlow::Break
+            }
+            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+        }
+    });
+}
+
+fn prepare_preview_payload(path: &Path, ext: &str, kind_str: &str) -> PreparedPreview {
+    if is_image_extension(ext) {
+        return PreparedPreview::Image {
+            bytes: load_image_bytes_offthread(path, ext),
+        };
+    }
     if ext == "pdf" {
-        if let Some(pdf_widget) = create_pdf_preview(&item.path, page_step_cb) {
-            return pdf_widget;
+        let total_pages = query_pdf_page_count(path);
+        let first_page_png = render_pdf_page_png_bytes(path, 1);
+        return PreparedPreview::Pdf {
+            total_pages,
+            first_page_png,
+        };
+    }
+    if is_video_extension(ext) {
+        let meta = probe_media_metadata(path);
+        let poster_png = extract_video_poster_png_bytes(path, meta.duration_secs);
+        return PreparedPreview::Video { meta, poster_png };
+    }
+    if is_audio_extension(ext) {
+        let meta = probe_media_metadata(path);
+        return PreparedPreview::Audio { meta };
+    }
+    if is_archive_extension(ext) {
+        if let Some(text) = read_archive_listing_text(path, ext) {
+            return PreparedPreview::Text(text);
         }
     }
-
-    if is_video_extension(&ext) {
-        return create_video_preview(item, media_handles);
+    if is_text_preview_candidate(ext, kind_str) {
+        return PreparedPreview::Text(read_text_preview_string(path));
     }
+    PreparedPreview::Generic
+}
 
-    if is_audio_extension(&ext) {
-        return create_audio_preview(item, media_handles);
+fn build_widget_from_payload(
+    item: &FileItem,
+    payload: PreparedPreview,
+    media_handles: &Rc<RefCell<Vec<Rc<MediaPlaybackHandle>>>>,
+    page_step_cb: &Rc<RefCell<Option<PageStepCallback>>>,
+    preview_gen: &Rc<Cell<u64>>,
+    expected_gen: u64,
+    remaining_delay_ms: u64,
+) -> gtk4::Widget {
+    match payload {
+        PreparedPreview::Image { bytes } => create_image_preview_from_bytes(&item.path, item, bytes),
+        PreparedPreview::Pdf {
+            total_pages,
+            first_page_png,
+        } => create_pdf_preview_from_bytes(
+            &item.path,
+            total_pages,
+            first_page_png,
+            page_step_cb,
+        )
+        .unwrap_or_else(|| create_generic_preview(item)),
+        PreparedPreview::Video { meta, poster_png } => create_video_preview_from_payload(
+            item,
+            meta,
+            poster_png,
+            media_handles,
+            preview_gen,
+            expected_gen,
+            remaining_delay_ms,
+        ),
+        PreparedPreview::Audio { meta } => create_audio_preview_from_payload(
+            item,
+            meta,
+            media_handles,
+            preview_gen,
+            expected_gen,
+            remaining_delay_ms,
+        ),
+        PreparedPreview::Text(content) => create_text_widget_from_string(&content),
+        PreparedPreview::Generic => create_generic_preview(item),
     }
-
-    if is_archive_extension(&ext) {
-        if let Some(arch_widget) = create_archive_preview(&item.path) {
-            return arch_widget;
-        }
-    }
-
-    let is_text = [
-        "rs", "toml", "json", "md", "txt", "sh", "c", "cpp", "h", "py", "js", "ts", "html", "css",
-        "yaml", "yml", "xml", "ini", "conf", "log",
-    ]
-    .iter()
-    .any(|e| *e == ext)
-        || item.kind_str.to_lowercase().contains("texto")
-        || item.kind_str.to_lowercase().contains("código");
-
-    if is_text {
-        return create_text_preview(&item.path);
-    }
-
-    create_generic_preview(item)
 }
 
 fn unique_temp_path(tag: &str, ext: &str) -> PathBuf {
@@ -635,36 +808,55 @@ fn unique_temp_path(tag: &str, ext: &str) -> PathBuf {
     ))
 }
 
-fn load_image_texture(path: &Path) -> Option<Texture> {
-    let gfile = gio::File::for_path(path);
-    if let Ok(tex) = Texture::from_file(&gfile) {
-        return Some(tex);
+fn load_image_bytes_offthread(path: &Path, ext: &str) -> Option<Vec<u8>> {
+    let meta = fs::metadata(path).ok();
+    let too_big = meta.as_ref().is_some_and(|m| m.len() > 2_500_000);
+    let needs_ffmpeg = too_big || matches!(ext, "heic" | "avif" | "jxl" | "tiff" | "tif");
+
+    if !needs_ffmpeg {
+        if let Ok(bytes) = fs::read(path) {
+            return Some(bytes);
+        }
     }
-    if let Ok(pixbuf) = Pixbuf::from_file_at_scale(path, 1280, 920, true) {
-        return Some(Texture::for_pixbuf(&pixbuf));
-    }
-    // Respaldo con ffmpeg para formatos poco comunes (HEIC/AVIF/JXL)
+
     let tmp_png = unique_temp_path("img", "png");
     let ok = Command::new("ffmpeg")
         .args(["-y", "-loglevel", "error", "-i"])
         .arg(path)
-        .args(["-frames:v", "1"])
+        .args([
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale='min(1280,iw)':'min(920,ih)':force_original_aspect_ratio=decrease",
+        ])
         .arg(&tmp_png)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|s| s.success());
-    let tex = if ok && tmp_png.exists() {
-        Texture::from_file(&gio::File::for_path(&tmp_png)).ok()
+    let out = if ok && tmp_png.exists() {
+        fs::read(&tmp_png).ok()
     } else {
-        None
+        fs::read(path).ok()
     };
     let _ = fs::remove_file(&tmp_png);
-    tex
+    out
 }
 
-fn create_image_preview(path: &Path, item: &FileItem) -> gtk4::Widget {
-    let Some(texture) = load_image_texture(path) else {
+fn create_image_preview_from_bytes(
+    path: &Path,
+    item: &FileItem,
+    bytes_opt: Option<Vec<u8>>,
+) -> gtk4::Widget {
+    let texture = bytes_opt
+        .and_then(|b| Texture::from_bytes(&glib::Bytes::from_owned(b)).ok())
+        .or_else(|| {
+            Pixbuf::from_file_at_scale(path, 1280, 920, true)
+                .ok()
+                .map(|pb| Texture::for_pixbuf(&pb))
+        });
+
+    let Some(texture) = texture else {
         return create_generic_preview(item);
     };
 
@@ -708,7 +900,7 @@ fn query_pdf_page_count(path: &Path) -> u32 {
     parse_pdfinfo_page_count(&String::from_utf8_lossy(&out.stdout))
 }
 
-fn render_pdf_page_texture(path: &Path, page: u32) -> Option<Texture> {
+fn render_pdf_page_png_bytes(path: &Path, page: u32) -> Option<Vec<u8>> {
     let prefix = unique_temp_path("pdf", "tmp").with_extension("");
     let page_str = page.to_string();
     let status = Command::new("pdftoppm")
@@ -723,21 +915,23 @@ fn render_pdf_page_texture(path: &Path, page: u32) -> Option<Texture> {
         return None;
     }
     let png_path = PathBuf::from(format!("{}.png", prefix.display()));
-    let tex = if png_path.exists() {
-        Texture::from_file(&gio::File::for_path(&png_path)).ok()
+    let bytes = if png_path.exists() {
+        fs::read(&png_path).ok()
     } else {
         None
     };
     let _ = fs::remove_file(&png_path);
-    tex
+    bytes
 }
 
-fn create_pdf_preview(
+fn create_pdf_preview_from_bytes(
     path: &Path,
+    total_pages: u32,
+    first_page_png: Option<Vec<u8>>,
     page_step_cb: &Rc<RefCell<Option<PageStepCallback>>>,
 ) -> Option<gtk4::Widget> {
-    let initial_tex = render_pdf_page_texture(path, 1)?;
-    let total_pages = query_pdf_page_count(path);
+    let png_bytes = first_page_png?;
+    let initial_tex = Texture::from_bytes(&glib::Bytes::from_owned(png_bytes)).ok()?;
 
     let root = GtkBox::new(Orientation::Vertical, 0);
     root.set_vexpand(true);
@@ -777,6 +971,7 @@ fn create_pdf_preview(
         footer.set_margin_bottom(10);
 
         let current_page = Rc::new(Cell::new(1u32));
+        let page_gen = Rc::new(Cell::new(0u64));
         let prev_btn = Button::builder()
             .icon_name("go-previous-symbolic")
             .has_frame(false)
@@ -798,6 +993,7 @@ fn create_pdf_preview(
         let step_page: PageStepCallback = Rc::new({
             let path = path.to_path_buf();
             let current_page = current_page.clone();
+            let page_gen = page_gen.clone();
             let picture = picture.clone();
             let page_lbl = page_lbl.clone();
             let prev_btn = prev_btn.clone();
@@ -808,15 +1004,42 @@ fn create_pdf_preview(
                 if target == current_page.get() {
                     return false;
                 }
-                if let Some(tex) = render_pdf_page_texture(&path, target) {
-                    current_page.set(target);
-                    picture.set_paintable(Some(&tex));
-                    page_lbl.set_label(&format!("Página {} de {}", target, total_pages));
-                    prev_btn.set_sensitive(target > 1);
-                    next_btn.set_sensitive(target < total_pages);
-                    return true;
-                }
-                false
+                current_page.set(target);
+                page_lbl.set_label(&format!("Página {} de {}", target, total_pages));
+                prev_btn.set_sensitive(target > 1);
+                next_btn.set_sensitive(target < total_pages);
+
+                let gen = page_gen.get().wrapping_add(1);
+                page_gen.set(gen);
+                let (tx, rx) = mpsc::channel::<Option<Vec<u8>>>();
+                let p = path.clone();
+                std::thread::spawn(move || {
+                    let _ = tx.send(render_pdf_page_png_bytes(&p, target));
+                });
+                let pic_weak = picture.downgrade();
+                let pg_ref = page_gen.clone();
+                glib::timeout_add_local(Duration::from_millis(10), move || {
+                    if pg_ref.get() != gen {
+                        return glib::ControlFlow::Break;
+                    }
+                    match rx.try_recv() {
+                        Ok(Some(bytes)) => {
+                            if let Some(pic) = pic_weak.upgrade() {
+                                if let Ok(tex) =
+                                    Texture::from_bytes(&glib::Bytes::from_owned(bytes))
+                                {
+                                    pic.set_paintable(Some(&tex));
+                                }
+                            }
+                            glib::ControlFlow::Break
+                        }
+                        Ok(None) | Err(mpsc::TryRecvError::Disconnected) => {
+                            glib::ControlFlow::Break
+                        }
+                        Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                    }
+                });
+                true
             }
         });
 
@@ -927,7 +1150,7 @@ pub fn fit_video_dimensions(src_w: u32, src_h: u32, max_w: u32, max_h: u32) -> (
     (w, h)
 }
 
-fn extract_video_poster_texture(path: &Path, duration_secs: Option<f64>) -> Option<Texture> {
+fn extract_video_poster_png_bytes(path: &Path, duration_secs: Option<f64>) -> Option<Vec<u8>> {
     let seek_arg = match duration_secs {
         Some(d) if d > 2.0 => "0.5",
         _ => "0",
@@ -942,13 +1165,13 @@ fn extract_video_poster_texture(path: &Path, duration_secs: Option<f64>) -> Opti
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|s| s.success());
-    let tex = if ok && tmp_png.exists() {
-        Texture::from_file(&gio::File::for_path(&tmp_png)).ok()
+    let bytes = if ok && tmp_png.exists() {
+        fs::read(&tmp_png).ok()
     } else {
         None
     };
     let _ = fs::remove_file(&tmp_png);
-    tex
+    bytes
 }
 
 fn spawn_video_playback(
@@ -1073,11 +1296,15 @@ fn spawn_video_playback(
     handle
 }
 
-fn create_video_preview(
+fn create_video_preview_from_payload(
     item: &FileItem,
+    meta: MediaMetadata,
+    poster_png: Option<Vec<u8>>,
     media_handles: &Rc<RefCell<Vec<Rc<MediaPlaybackHandle>>>>,
+    preview_gen: &Rc<Cell<u64>>,
+    expected_gen: u64,
+    remaining_delay_ms: u64,
 ) -> gtk4::Widget {
-    let meta = probe_media_metadata(&item.path);
     let (play_w, play_h) = fit_video_dimensions(
         meta.width.unwrap_or(720),
         meta.height.unwrap_or(420),
@@ -1103,8 +1330,10 @@ fn create_video_preview(
     picture.set_can_shrink(true);
     picture.set_vexpand(true);
     picture.set_hexpand(true);
-    if let Some(poster) = extract_video_poster_texture(&item.path, meta.duration_secs) {
-        picture.set_paintable(Some(&poster));
+    if let Some(bytes) = poster_png {
+        if let Ok(poster) = Texture::from_bytes(&glib::Bytes::from_owned(bytes)) {
+            picture.set_paintable(Some(&poster));
+        }
     }
     stage.append(&picture);
     root.append(&stage);
@@ -1196,8 +1425,18 @@ fn create_video_preview(
         }
     });
 
-    // Iniciar reproducción inmediatamente al abrir Vista Rápida
-    start_playback();
+    // Diferir arranque de ffmpeg/ffplay hasta completar la transición de apertura
+    if remaining_delay_ms == 0 {
+        start_playback();
+    } else {
+        let sp_delayed = start_playback.clone();
+        let gen_ref = preview_gen.clone();
+        glib::timeout_add_local_once(Duration::from_millis(remaining_delay_ms), move || {
+            if gen_ref.get() == expected_gen {
+                sp_delayed();
+            }
+        });
+    }
 
     let sp_toggle = start_playback.clone();
     let ch_toggle = current_handle.clone();
@@ -1236,11 +1475,14 @@ fn create_video_preview(
     root.upcast()
 }
 
-fn create_audio_preview(
+fn create_audio_preview_from_payload(
     item: &FileItem,
+    meta: MediaMetadata,
     media_handles: &Rc<RefCell<Vec<Rc<MediaPlaybackHandle>>>>,
+    preview_gen: &Rc<Cell<u64>>,
+    expected_gen: u64,
+    remaining_delay_ms: u64,
 ) -> gtk4::Widget {
-    let meta = probe_media_metadata(&item.path);
 
     let vbox = GtkBox::new(Orientation::Vertical, 12);
     vbox.set_valign(Align::Center);
@@ -1315,7 +1557,17 @@ fn create_audio_preview(
         }
     });
 
-    start_audio();
+    if remaining_delay_ms == 0 {
+        start_audio();
+    } else {
+        let sa_delayed = start_audio.clone();
+        let gen_ref = preview_gen.clone();
+        glib::timeout_add_local_once(Duration::from_millis(remaining_delay_ms), move || {
+            if gen_ref.get() == expected_gen {
+                sa_delayed();
+            }
+        });
+    }
 
     let ip_btn = is_playing;
     let ch_btn = current_handle;
@@ -1337,14 +1589,12 @@ fn create_audio_preview(
     vbox.upcast()
 }
 
-fn create_archive_preview(path: &Path) -> Option<gtk4::Widget> {
-    let ext = path
-        .extension()
-        .map(|e| e.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-    let out = match ext.as_str() {
+fn read_archive_listing_text(path: &Path, ext: &str) -> Option<String> {
+    let out = match ext {
         "zip" => Command::new("unzip").args(["-Z1"]).arg(path).output().ok()?,
-        "tar" | "gz" | "tgz" | "bz2" | "xz" => Command::new("tar").args(["-tf"]).arg(path).output().ok()?,
+        "tar" | "gz" | "tgz" | "bz2" | "xz" => {
+            Command::new("tar").args(["-tf"]).arg(path).output().ok()?
+        }
         "7z" => Command::new("7z").args(["l", "-ba"]).arg(path).output().ok()?,
         _ => return None,
     };
@@ -1357,57 +1607,15 @@ fn create_archive_preview(path: &Path) -> Option<gtk4::Widget> {
         .take(500)
         .map(ToString::to_string)
         .collect();
-
-    let scrolled = ScrolledWindow::builder()
-        .hscrollbar_policy(PolicyType::Automatic)
-        .vscrollbar_policy(PolicyType::Automatic)
-        .vexpand(true)
-        .hexpand(true)
-        .build();
-
-    let text_view = TextView::builder()
-        .editable(false)
-        .cursor_visible(false)
-        .can_focus(false)
-        .monospace(true)
-        .left_margin(16)
-        .right_margin(16)
-        .top_margin(14)
-        .bottom_margin(14)
-        .css_classes(["branches-quicklook-text"])
-        .build();
-
-    let text = if lines.is_empty() {
-        "(Archivo comprimido vacío)".to_string()
+    if lines.is_empty() {
+        Some("(Archivo comprimido vacío)".to_string())
     } else {
-        lines.join("\n")
-    };
-    text_view.buffer().set_text(&text);
-    scrolled.set_child(Some(&text_view));
-    Some(scrolled.upcast())
+        Some(lines.join("\n"))
+    }
 }
 
-fn create_text_preview(path: &Path) -> gtk4::Widget {
-    let scrolled = ScrolledWindow::builder()
-        .hscrollbar_policy(PolicyType::Automatic)
-        .vscrollbar_policy(PolicyType::Automatic)
-        .vexpand(true)
-        .hexpand(true)
-        .build();
-
-    let text_view = TextView::builder()
-        .editable(false)
-        .cursor_visible(false)
-        .can_focus(false)
-        .monospace(true)
-        .left_margin(16)
-        .right_margin(16)
-        .top_margin(14)
-        .bottom_margin(14)
-        .css_classes(["branches-quicklook-text"])
-        .build();
-
-    let content = match fs::read(path) {
+fn read_text_preview_string(path: &Path) -> String {
+    match fs::read(path) {
         Ok(bytes) => {
             let truncated = if bytes.len() > 150_000 {
                 &bytes[..150_000]
@@ -1417,9 +1625,30 @@ fn create_text_preview(path: &Path) -> gtk4::Widget {
             String::from_utf8_lossy(truncated).to_string()
         }
         Err(_) => "(No se pudo leer el archivo de texto)".to_string(),
-    };
+    }
+}
 
-    text_view.buffer().set_text(&content);
+fn create_text_widget_from_string(content: &str) -> gtk4::Widget {
+    let scrolled = ScrolledWindow::builder()
+        .hscrollbar_policy(PolicyType::Automatic)
+        .vscrollbar_policy(PolicyType::Automatic)
+        .vexpand(true)
+        .hexpand(true)
+        .build();
+
+    let text_view = TextView::builder()
+        .editable(false)
+        .cursor_visible(false)
+        .can_focus(false)
+        .monospace(true)
+        .left_margin(16)
+        .right_margin(16)
+        .top_margin(14)
+        .bottom_margin(14)
+        .css_classes(["branches-quicklook-text"])
+        .build();
+
+    text_view.buffer().set_text(content);
     scrolled.set_child(Some(&text_view));
     scrolled.upcast()
 }

@@ -268,7 +268,7 @@ mod tests {
         assert!(css.contains(".branches-quicklook-backdrop"));
         assert!(css.contains(".branches-quicklook-container.ql-open"));
         assert!(css.contains(".branches-quicklook-container.ql-closing"));
-        assert!(css.contains("transform: scale(0.84);"));
+        assert!(css.contains("transform: scale(0.90);"));
         assert!(css.contains("transform: scale(1.0);"));
     }
 
