@@ -848,35 +848,32 @@ switch.macos-switch image {
 }
 
 popover.wifi-macos-popover > contents {
-    padding: 4px;
+    padding: 0px;
     margin: 0px;
-    border-radius: 10px;
-    background-color: @popover_bg_color;
-    border: 1px solid alpha(@borders, 0.35);
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.16);
+    border-radius: 0px;
+    background: transparent;
+    border: none;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
 }
 
 .wifi-menu-action-btn {
     background: transparent;
     border: none;
     box-shadow: none;
-    border-radius: 6px;
-    padding: 4px 8px;
+    border-radius: 0px;
+    padding: 3px 8px;
     min-height: 22px;
     color: @window_fg_color;
     font-size: 12.5px;
 }
 
-.wifi-menu-action-btn:hover {
-    background-color: alpha(@accent_bg_color, 0.90);
-    color: @accent_fg_color;
+.wifi-menu-action-btn:hover,
+.wifi-menu-action-btn:active {
+    background: transparent;
+    color: #ffffff;
 }
 
-.wifi-menu-danger-btn {
-    color: @window_fg_color;
-}
-
-.wifi-menu-danger-btn:hover {
-    background-color: alpha(@accent_bg_color, 0.90);
-    color: @accent_fg_color;
+.wifi-menu-action-btn:hover label,
+.wifi-menu-action-btn:active label {
+    color: #ffffff;
 }

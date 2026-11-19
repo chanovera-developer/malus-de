@@ -9,6 +9,8 @@ use gtk4::{
 const WIFI_CARD_SQUIRCLE_RADIUS: f64 = 19.0;
 const WIFI_BUTTON_SQUIRCLE_RADIUS: f64 = 11.5;
 const WIFI_BADGE_SQUIRCLE_RADIUS: f64 = 15.0;
+const WIFI_MENU_SQUIRCLE_RADIUS: f64 = 15.0;
+const WIFI_MENU_ITEM_SQUIRCLE_RADIUS: f64 = 9.5;
 
 /// Dibuja la insignia cuadrada-squircle azul de Wi-Fi estilo macOS con el glifo centrado.
 fn make_squircle_wifi_badge(size: i32, icon_px: i32, radius: f64) -> Overlay {
@@ -1119,8 +1121,11 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .has_arrow(false)
         .css_classes(["wifi-macos-popover"])
         .build();
+    let help_pop_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .build();
     let help_lbl = Label::builder()
-        .label("• Haz clic en cualquier red conocida para alternar conexión.\n• Pulsa ⋯ en cada red para ver detalles, desconectar u olvidar su perfil.\n• En tarjetas Intel AX210, activar AirDrop pausa temporalmente el Wi-Fi mientras dura la transferencia.")
+        .label("• Haz clic en cualquier red conocida para alternar conexión.\n• Pulsa ⋯ en cada red para ver detalles u olvidar su perfil.\n• En tarjetas Intel AX210, activar AirDrop pausa temporalmente el Wi-Fi mientras dura la transferencia.")
         .wrap(true)
         .max_width_chars(38)
         .xalign(0.0)
@@ -1129,7 +1134,8 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .margin_start(12)
         .margin_end(12)
         .build();
-    help_popover.set_child(Some(&help_lbl));
+    help_pop_box.append(&help_lbl);
+    help_popover.set_child(Some(&wrap_squircle_popover_card(&help_pop_box, WIFI_MENU_SQUIRCLE_RADIUS)));
     help_btn.set_popover(Some(&help_popover));
 
     // Refresco periódico mientras el panel esté visible
@@ -1349,16 +1355,15 @@ fn populate_wifi_list_card(
             let menu_box = GtkBox::builder()
                 .orientation(Orientation::Vertical)
                 .spacing(1)
-                .margin_top(2)
-                .margin_bottom(2)
-                .margin_start(2)
-                .margin_end(2)
+                .margin_top(4)
+                .margin_bottom(4)
+                .margin_start(4)
+                .margin_end(4)
                 .build();
 
-            let auto_btn = make_popover_menu_row(
+            let (auto_wrap, auto_btn) = make_popover_menu_row(
                 if net.autoconnect { Some("✓") } else { None },
                 "Conexión automática",
-                false,
             );
             let pop_c = popover.clone();
             let ssid_c = net.ssid.clone();
@@ -1378,9 +1383,9 @@ fn populate_wifi_list_card(
                     r(false);
                 });
             });
-            menu_box.append(&auto_btn);
+            menu_box.append(&auto_wrap);
 
-            let copy_pw_btn = make_popover_menu_row(None, "Copiar contraseña", false);
+            let (copy_pw_wrap, copy_pw_btn) = make_popover_menu_row(None, "Copiar contraseña");
             copy_pw_btn.set_sensitive(net.is_secured());
             let pop_c = popover.clone();
             let ssid_c = net.ssid.clone();
@@ -1420,9 +1425,9 @@ fn populate_wifi_list_card(
                     }
                 });
             });
-            menu_box.append(&copy_pw_btn);
+            menu_box.append(&copy_pw_wrap);
 
-            let det_item = make_popover_menu_row(None, "Configuración de esta red...", false);
+            let (det_wrap, det_item) = make_popover_menu_row(None, "Configuración de esta red...");
             let pop_c = popover.clone();
             let win_c = parent_window.clone();
             let snap_c = snapshot.clone();
@@ -1433,9 +1438,9 @@ fn populate_wifi_list_card(
                 pop_c.popdown();
                 show_network_details_dialog(&win_c, &snap_c, Some(&net_c), &ban_c, &rel_c);
             });
-            menu_box.append(&det_item);
+            menu_box.append(&det_wrap);
 
-            let forget_item = make_popover_menu_row(None, "Olvidar esta red...", false);
+            let (forget_wrap, forget_item) = make_popover_menu_row(None, "Olvidar esta red...");
             let pop_c = popover.clone();
             let ssid_c = net.ssid.clone();
             let ban_c = banner.clone();
@@ -1444,9 +1449,9 @@ fn populate_wifi_list_card(
                 pop_c.popdown();
                 forget_wifi_async(ssid_c.clone(), &ban_c, &rel_c);
             });
-            menu_box.append(&forget_item);
+            menu_box.append(&forget_wrap);
 
-            popover.set_child(Some(&menu_box));
+            popover.set_child(Some(&wrap_squircle_popover_card(&menu_box, WIFI_MENU_SQUIRCLE_RADIUS)));
             more_btn.set_popover(Some(&popover));
         } else {
             let more_btn = Button::builder()
@@ -1500,7 +1505,53 @@ fn populate_wifi_list_card(
     }
 }
 
-fn make_popover_menu_row(check: Option<&str>, text: &str, danger: bool) -> Button {
+/// Envuelve el contenido de un menú contextual con un fondo y borde Squircle propio de Malus DE.
+fn wrap_squircle_popover_card(inner: &GtkBox, radius: f64) -> Overlay {
+    let overlay = Overlay::new();
+    let bg = DrawingArea::new();
+    bg.set_can_target(false);
+    bg.set_hexpand(true);
+    bg.set_vexpand(true);
+    bg.set_draw_func(move |_, cr, w, h| {
+        let width = w as f64;
+        let height = h as f64;
+        if width <= 2.0 || height <= 2.0 {
+            return;
+        }
+        let dark = libadwaita::StyleManager::default().is_dark();
+        let _ = cr.save();
+        cr.translate(0.5, 0.5);
+        crate::squircle_path(cr, width - 1.0, height - 1.0, radius);
+        if dark {
+            cr.set_source_rgba(0.17, 0.17, 0.18, 0.97);
+        } else {
+            cr.set_source_rgba(0.985, 0.985, 0.99, 0.98);
+        }
+        let _ = cr.fill_preserve();
+        if dark {
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.14);
+        } else {
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.10);
+        }
+        cr.set_line_width(1.0);
+        let _ = cr.stroke();
+        let _ = cr.restore();
+    });
+
+    let bg_weak = bg.downgrade();
+    libadwaita::StyleManager::default().connect_dark_notify(move |_| {
+        if let Some(area) = bg_weak.upgrade() {
+            area.queue_draw();
+        }
+    });
+
+    overlay.set_child(Some(&bg));
+    overlay.add_overlay(inner);
+    overlay.set_measure_overlay(inner, true);
+    overlay
+}
+
+fn make_popover_menu_row(check: Option<&str>, text: &str) -> (Overlay, Button) {
     let row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(6)
@@ -1518,17 +1569,59 @@ fn make_popover_menu_row(check: Option<&str>, text: &str, danger: bool) -> Butto
     row.append(&check_lbl);
     row.append(&text_lbl);
 
-    let classes: &[&str] = if danger {
-        &["wifi-menu-action-btn", "wifi-menu-danger-btn"]
-    } else {
-        &["wifi-menu-action-btn"]
-    };
-    Button::builder()
+    let btn = Button::builder()
         .child(&row)
-        .css_classes(classes)
+        .css_classes(["wifi-menu-action-btn"])
         .has_frame(false)
         .halign(Align::Fill)
-        .build()
+        .hexpand(true)
+        .build();
+
+    let bg = DrawingArea::new();
+    bg.set_can_target(false);
+    bg.set_hexpand(true);
+    bg.set_vexpand(true);
+
+    let btn_weak = btn.downgrade();
+    bg.set_draw_func(move |_, cr, w, h| {
+        let width = w as f64;
+        let height = h as f64;
+        if width <= 2.0 || height <= 2.0 {
+            return;
+        }
+        let Some(b) = btn_weak.upgrade() else {
+            return;
+        };
+        let flags = b.state_flags();
+        if flags.contains(StateFlags::INSENSITIVE) {
+            return;
+        }
+        let hovered = flags.contains(StateFlags::PRELIGHT);
+        let active = flags.contains(StateFlags::ACTIVE);
+        if !hovered && !active {
+            return;
+        }
+        let _ = cr.save();
+        crate::squircle_path(cr, width, height, WIFI_MENU_ITEM_SQUIRCLE_RADIUS);
+        if active {
+            cr.set_source_rgba(0.0, 0.39, 0.85, 0.96);
+        } else {
+            cr.set_source_rgba(0.0, 0.48, 1.0, 0.92);
+        }
+        let _ = cr.fill();
+        let _ = cr.restore();
+    });
+
+    let bg_state = bg.clone();
+    btn.connect_state_flags_changed(move |_, _| {
+        bg_state.queue_draw();
+    });
+
+    let overlay = Overlay::builder().hexpand(true).build();
+    overlay.set_child(Some(&bg));
+    overlay.add_overlay(&btn);
+    overlay.set_measure_overlay(&btn, true);
+    (overlay, btn)
 }
 
 fn deterministic_private_mac(ssid: &str) -> String {
