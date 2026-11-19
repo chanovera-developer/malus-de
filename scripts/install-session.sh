@@ -140,6 +140,22 @@ if [ -f "$PROJECT_DIR/data/dev.malus.Branches.desktop" ]; then
     chmod 644 /usr/share/applications/dev.malus.Branches.desktop
     echo "   ✔ /usr/share/applications/dev.malus.Branches.desktop"
 fi
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+    echo "   ✔ Base de datos de lanzadores actualizada (/usr/share/applications)"
+fi
+REAL_USER="${SUDO_USER:-$USER}"
+REAL_HOME="$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6 || true)"
+if command -v xdg-mime >/dev/null 2>&1 && [ -n "$REAL_USER" ] && [ -n "$REAL_HOME" ]; then
+    if [ "$(id -u)" -eq 0 ] && [ "$REAL_USER" != "root" ]; then
+        su - "$REAL_USER" -c "XDG_DATA_HOME=\"$REAL_HOME/.local/share\" xdg-mime default dev.malus.Branches.desktop inode/directory" >/dev/null 2>&1 || true
+        su - "$REAL_USER" -c "XDG_DATA_HOME=\"$REAL_HOME/.local/share\" xdg-mime default dev.malus.Branches.desktop x-scheme-handler/trash" >/dev/null 2>&1 || true
+    else
+        xdg-mime default dev.malus.Branches.desktop inode/directory >/dev/null 2>&1 || true
+        xdg-mime default dev.malus.Branches.desktop x-scheme-handler/trash >/dev/null 2>&1 || true
+    fi
+    echo "   ✔ Branches registrado como explorador predeterminado (inode/directory, trash)"
+fi
 
 # Instalar script de inicio de sesión
 cp -f "$SCRIPT_DIR/malus-session" "/usr/local/bin/malus-session"

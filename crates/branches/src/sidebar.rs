@@ -246,11 +246,29 @@ impl Sidebar {
 
         let mut devices_anchor: Option<ListBoxRow> = None;
         for entry in locations {
+            let is_network_entry = entry.icon_name == "network-workgroup-symbolic";
             let is_trash_entry = entry.path.ends_with("Trash/files");
             let row = create_sidebar_row(&entry.title, entry.icon_name, entry.path.clone(), false);
-            attach_folder_navigation_handlers(&row, &on_navigate, entry.path.clone());
-            if entry.path != Path::new("/") {
-                attach_folder_drop_target(&row, entry.path, &on_files_dropped);
+            if is_network_entry {
+                unsafe {
+                    row.set_data("target_network", true);
+                }
+                let click = GestureClick::new();
+                click.set_button(gdk::BUTTON_PRIMARY);
+                let lb_ref = list_box.clone();
+                let nav_cb = on_navigate.clone();
+                click.connect_released(move |_, _, _, _| {
+                    let win = lb_ref.root().and_downcast::<gtk4::Window>();
+                    let cb = nav_cb.clone();
+                    crate::network::open_network_location(win.as_ref(), move |p| cb(p));
+                });
+                row.add_controller(click);
+                attach_network_context_menu(&row, es, &on_navigate);
+            } else {
+                attach_folder_navigation_handlers(&row, &on_navigate, entry.path.clone());
+                if entry.path != Path::new("/") {
+                    attach_folder_drop_target(&row, entry.path, &on_files_dropped);
+                }
             }
             if is_trash_entry {
                 attach_trash_context_menu(&row, es);
@@ -291,11 +309,16 @@ impl Sidebar {
         let recents_for_lb = on_recents.clone();
         let apps_for_lb = on_applications.clone();
         let tag_for_lb = on_tag_selected.clone();
+        let lb_for_net = list_box.clone();
         list_box.connect_row_activated(move |_lb, row| {
             if unsafe { row.data::<bool>("target_recents") }.is_some() {
                 recents_for_lb();
             } else if unsafe { row.data::<bool>("target_applications") }.is_some() {
                 apps_for_lb();
+            } else if unsafe { row.data::<bool>("target_network") }.is_some() {
+                let win = lb_for_net.root().and_downcast::<gtk4::Window>();
+                let cb = nav_for_lb.clone();
+                crate::network::open_network_location(win.as_ref(), move |p| cb(p));
             } else if let Some(path_obj) = unsafe { row.data::<PathBuf>("target_path") } {
                 let p = unsafe { path_obj.as_ref() }.clone();
                 if p.is_dir() {
@@ -573,25 +596,39 @@ impl SidebarInner {
         let mut rows: Vec<ListBoxRow> = Vec::new();
         let mut seen: HashSet<PathBuf> = HashSet::new();
 
-        // 1. Montajes activos
+        // 1. Montajes activos (unidades extraíbles y recursos de red GVfs)
         for mount in self.volume_monitor.mounts() {
             if mount.is_shadowed() {
                 continue;
             }
-            let Some(root) = mount.root().path() else { continue };
-            if is_system_mount_path(&root) {
+            let is_network = crate::network::is_network_gio_mount(&mount);
+            let Some(root) = mount
+                .root()
+                .path()
+                .or_else(|| mount.default_location().path())
+            else {
+                continue;
+            };
+            if !is_network && is_system_mount_path(&root) {
                 continue;
             }
             let removable = mount.drive().is_some_and(|d| d.is_removable());
-            if !(is_external_mount_path(&root) || removable) {
+            if !(is_network || is_external_mount_path(&root) || removable) {
                 continue;
             }
             if !seen.insert(root.clone()) {
                 continue;
             }
+            let icon = if is_network {
+                "folder-remote-symbolic"
+            } else if removable {
+                "drive-removable-media-symbolic"
+            } else {
+                "drive-harddisk-symbolic"
+            };
             let row = create_sidebar_row(
                 mount.name().as_str(),
-                if removable { "drive-removable-media-symbolic" } else { "drive-harddisk-symbolic" },
+                icon,
                 root.clone(),
                 false,
             );
@@ -1635,6 +1672,76 @@ fn create_sidebar_row(
     }
 
     row
+}
+
+fn attach_network_context_menu(
+    row: &ListBoxRow,
+    es: bool,
+    on_navigate: &Rc<dyn Fn(PathBuf)>,
+) {
+    let click = GestureClick::new();
+    click.set_button(gdk::BUTTON_SECONDARY);
+    let row_ref = row.clone();
+    let nav_ref = on_navigate.clone();
+    click.connect_pressed(move |g, _n, x, y| {
+        g.set_state(gtk4::EventSequenceState::Claimed);
+        let popover = gtk4::Popover::builder()
+            .has_arrow(false)
+            .css_classes(["malus-popover-menu"])
+            .build();
+        popover.set_parent(&row_ref);
+        let rect = gdk::Rectangle::new(x.round() as i32, y.round() as i32, 1, 1);
+        popover.set_pointing_to(Some(&rect));
+        popover.connect_closed(|p| p.unparent());
+
+        let vbox = GtkBox::new(Orientation::Vertical, 2);
+
+        let connect_btn = gtk4::Button::builder()
+            .label(if es {
+                "Conectar al servidor…"
+            } else {
+                "Connect to Server…"
+            })
+            .has_frame(false)
+            .css_classes(["popover-menu-item"])
+            .build();
+        if let Some(child) = connect_btn.child().and_then(|c| c.downcast::<Label>().ok()) {
+            child.set_xalign(0.0);
+        }
+        let anchor = row_ref.clone();
+        let pop = popover.clone();
+        connect_btn.connect_clicked(move |_| {
+            pop.popdown();
+            let _ = anchor.activate_action("win.connect_server", None);
+        });
+        vbox.append(&connect_btn);
+
+        if let Some(gvfs_root) = crate::network::gvfs_mounts_root() {
+            let gvfs_btn = gtk4::Button::builder()
+                .label(if es {
+                    "Abrir carpeta de montajes GVfs"
+                } else {
+                    "Open GVfs Mounts Folder"
+                })
+                .has_frame(false)
+                .css_classes(["popover-menu-item"])
+                .build();
+            if let Some(child) = gvfs_btn.child().and_then(|c| c.downcast::<Label>().ok()) {
+                child.set_xalign(0.0);
+            }
+            let pop2 = popover.clone();
+            let nav_c = nav_ref.clone();
+            gvfs_btn.connect_clicked(move |_| {
+                pop2.popdown();
+                nav_c(gvfs_root.clone());
+            });
+            vbox.append(&gvfs_btn);
+        }
+
+        popover.set_child(Some(&vbox));
+        popover.popup();
+    });
+    row.add_controller(click);
 }
 
 fn attach_trash_context_menu(row: &ListBoxRow, es: bool) {

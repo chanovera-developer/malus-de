@@ -323,6 +323,7 @@ impl BranchesWindow {
         menu_model.append(Some("Extraer aquí"), Some("win.extract"));
         menu_model.append(Some("Mover a la Papelera"), Some("win.trash"));
         menu_model.append(Some("Abrir en Terminal"), Some("win.open_terminal"));
+        menu_model.append(Some("Conectar al servidor…"), Some("win.connect_server"));
         menu_model.append(Some("Mostrar Archivos Ocultos"), Some("win.toggle_hidden"));
         menu_model.append(Some("Recargar"), Some("win.reload"));
 
@@ -2420,6 +2421,19 @@ impl BranchesWindow {
         });
         actions.add_action(&act_email);
 
+        let bw_conn = self.clone_ref();
+        let act_conn = gio::SimpleAction::new("connect_server", None);
+        act_conn.connect_activate(move |_, _| {
+            let bw_nav = bw_conn.clone_ref();
+            crate::network::open_connect_server_dialog(
+                bw_conn.window.upcast_ref::<gtk4::Window>(),
+                move |path| {
+                    bw_nav.active_pane().navigate_to(path);
+                },
+            );
+        });
+        actions.add_action(&act_conn);
+
         self.window.insert_action_group("win", Some(&actions));
     }
 
@@ -2483,6 +2497,19 @@ impl BranchesWindow {
 
             if (is_ctrl || is_command) && (keyval == gdk::Key::i || keyval == gdk::Key::I) {
                 bw.open_get_info(None);
+                return glib::Propagation::Stop;
+            }
+
+            if (is_ctrl || is_command) && !is_alt && !is_shift
+                && (keyval == gdk::Key::k || keyval == gdk::Key::K)
+            {
+                let bw_nav = bw.clone_ref();
+                crate::network::open_connect_server_dialog(
+                    bw.window.upcast_ref::<gtk4::Window>(),
+                    move |path| {
+                        bw_nav.active_pane().navigate_to(path);
+                    },
+                );
                 return glib::Propagation::Stop;
             }
 

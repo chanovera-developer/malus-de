@@ -5,6 +5,7 @@ mod fs_backend;
 mod info_window;
 mod job_ui;
 mod jobs;
+mod network;
 mod operations;
 mod path_bar;
 mod quick_look;
