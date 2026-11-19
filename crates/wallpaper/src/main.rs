@@ -3205,7 +3205,7 @@ fn create_wallpaper_window(
     active_icon_drag: &Rc<RefCell<Option<(PathBuf, (f64, f64), (f64, f64))>>>,
     shortcut_handler: &DesktopShortcutHandler,
     is_primary: bool,
-) {
+) -> ApplicationWindow {
     let window = ApplicationWindow::builder()
         .application(application)
         .title("Fondo de Pantalla Malus DE")
@@ -4442,6 +4442,54 @@ fn create_wallpaper_window(
 
     window.set_child(Some(&overlay));
     window.present();
+    window
+}
+
+fn resolve_wallpaper_image_path(image_path: &Option<PathBuf>) -> Option<PathBuf> {
+    image_path.clone().or_else(|| {
+        let config_dir = std::env::var("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::env::var("HOME")
+                    .map(|h| PathBuf::from(h).join(".config/malus-de"))
+                    .unwrap_or_else(|_| PathBuf::from("/etc/malus-de"))
+            });
+        let candidates = [
+            config_dir.join("wallpaper.png"),
+            config_dir.join("wallpaper.jpg"),
+            config_dir.join("wallpaper.jpeg"),
+            config_dir.join("wallpaper.webp"),
+            config_dir.join("wallpaper.svg"),
+        ];
+        candidates.into_iter().find(|p| p.exists()).or_else(|| {
+            if config_dir.join(".wallpaper-gradient").exists() {
+                None
+            } else {
+                malus_de_common::config::default_bundled_wallpaper_path()
+            }
+        })
+    })
+}
+
+fn select_primary_monitor_index(
+    monitor_list: &[gtk4::gdk::Monitor],
+    displays_cfg: &DisplaysConfig,
+) -> usize {
+    displays_cfg
+        .primary_output()
+        .and_then(|cfg| {
+            monitor_list.iter().position(|monitor| {
+                let geo = monitor.geometry();
+                cfg.matches_monitor_identity(
+                    monitor.connector().as_deref(),
+                    monitor.model().as_deref(),
+                    monitor.description().as_deref(),
+                    geo.x(),
+                    geo.y(),
+                )
+            })
+        })
+        .unwrap_or(0)
 }
 
 fn main() -> Result<()> {
@@ -4462,6 +4510,10 @@ fn main() -> Result<()> {
     let image_path = args.image;
     let desktop_dir = resolve_desktop_dir();
     let desktop_monitors = Rc::new(RefCell::new(Vec::new()));
+    let wallpaper_windows: Rc<RefCell<Vec<ApplicationWindow>>> = Rc::new(RefCell::new(Vec::new()));
+    let hold_guard: Rc<RefCell<Option<gio::ApplicationHoldGuard>>> = Rc::new(RefCell::new(None));
+    let sync_handler: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let sync_handler_ipc = sync_handler.clone();
     let icon_positions = Rc::new(RefCell::new(load_icon_positions()));
     let internal_drag_paths = Rc::new(RefCell::new(HashSet::new()));
     let active_icon_drag = Rc::new(RefCell::new(None));
@@ -4472,9 +4524,10 @@ fn main() -> Result<()> {
         let initial_dark = malus_de_common::config::is_dark_mode_active();
         set_is_dark_mode(initial_dark);
 
-        // 1. Escuchar mensajes IPC del compositor (ThemeChanged y accesos directos de Spotlight)
+        // 1. Escuchar mensajes IPC del compositor (ThemeChanged, ReloadDisplaysConfig y accesos de Spotlight)
         let (tx, rx) = async_channel::unbounded::<malus_de_common::ipc::IpcMessage>();
         let shortcut_handler_rx = shortcut_handler_ipc.clone();
+        let sync_handler_rx = sync_handler_ipc.clone();
         glib::spawn_future_local(async move {
             while let Ok(msg) = rx.recv().await {
                 match msg {
@@ -4489,6 +4542,12 @@ fn main() -> Result<()> {
                     } => {
                         if let Some(ref handler) = *shortcut_handler_rx.borrow() {
                             handler(desktop_file, drop_x, drop_y);
+                        }
+                    }
+                    malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig => {
+                        info!("🖥 [Wallpaper] IPC ReloadDisplaysConfig recibido — sincronizando monitores");
+                        if let Some(ref trigger) = *sync_handler_rx.borrow() {
+                            trigger();
                         }
                     }
                     _ => {}
@@ -4546,30 +4605,11 @@ fn main() -> Result<()> {
         }
     });
 
+    let monitors_hooked = Rc::new(Cell::new(false));
     app.connect_activate(move |application| {
-        let resolved_path = image_path.clone().or_else(|| {
-            let config_dir = std::env::var("XDG_CONFIG_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| {
-                    std::env::var("HOME")
-                        .map(|h| PathBuf::from(h).join(".config/malus-de"))
-                        .unwrap_or_else(|_| PathBuf::from("/etc/malus-de"))
-                });
-            let candidates = [
-                config_dir.join("wallpaper.png"),
-                config_dir.join("wallpaper.jpg"),
-                config_dir.join("wallpaper.jpeg"),
-                config_dir.join("wallpaper.webp"),
-                config_dir.join("wallpaper.svg"),
-            ];
-            candidates.into_iter().find(|p| p.exists()).or_else(|| {
-                if config_dir.join(".wallpaper-gradient").exists() {
-                    None
-                } else {
-                    malus_de_common::config::default_bundled_wallpaper_path()
-                }
-            })
-        });
+        if hold_guard.borrow().is_none() {
+            *hold_guard.borrow_mut() = Some(application.hold());
+        }
 
         if let Some(desktop_dir) = &desktop_dir {
             info!(
@@ -4580,90 +4620,127 @@ fn main() -> Result<()> {
             warn!("No se pudo determinar la carpeta de escritorio del usuario.");
         }
 
-        let mut created = 0;
-        if let Some(display) = gtk4::gdk::Display::default() {
-            let monitors = display.monitors();
-            let displays_cfg = DisplaysConfig::load();
-            let primary_cfg = displays_cfg.outputs.iter().find(|output| output.primary).cloned();
-            let monitor_list: Vec<gtk4::gdk::Monitor> = (0..monitors.n_items())
-                .filter_map(|i| monitors.item(i))
-                .filter_map(|monitor| monitor.downcast().ok())
-                .collect();
-            let primary_index = primary_cfg
-                .as_ref()
-                .and_then(|cfg| {
-                    monitor_list.iter().position(|monitor| {
-                        if let Some(connector) = monitor.connector() {
-                            if connector.as_str() == cfg.connector {
-                                return true;
-                            }
-                        }
-                        if let Some(model) = monitor.model() {
-                            if model.as_str() == cfg.name || model.as_str() == cfg.connector {
-                                return true;
-                            }
-                        }
-                        if let Some(desc) = monitor.description() {
-                            if desc.contains(&cfg.name) || desc.contains(&cfg.connector) {
-                                return true;
-                            }
-                        }
-                        let geo = monitor.geometry();
-                        geo.x() == cfg.x && geo.y() == cfg.y
-                    })
-                })
-                .unwrap_or(0);
+        let app_sync = application.clone();
+        let image_path_sync = image_path.clone();
+        let desktop_dir_sync = desktop_dir.clone();
+        let desktop_monitors_sync = desktop_monitors.clone();
+        let wallpaper_windows_sync = wallpaper_windows.clone();
+        let icon_positions_sync = icon_positions.clone();
+        let internal_drag_sync = internal_drag_paths.clone();
+        let active_drag_sync = active_icon_drag.clone();
+        let shortcut_handler_sync = shortcut_handler.clone();
 
-            match (primary_cfg.as_ref(), monitor_list.get(primary_index)) {
-                (Some(cfg), Some(_)) => info!(
-                    "Mostrando iconos del escritorio en la pantalla principal: {} ({})",
-                    cfg.connector, cfg.name
-                ),
-                (_, Some(monitor)) => info!(
-                    "No se encontró la pantalla principal configurada; usando {} para los iconos del escritorio.",
-                    monitor
-                        .connector()
-                        .map(|name| name.to_string())
-                        .unwrap_or_else(|| "la primera pantalla".to_string())
-                ),
-                (_, None) => {}
+        let sync_windows: Rc<dyn Fn()> = Rc::new(move || {
+            let resolved_path = resolve_wallpaper_image_path(&image_path_sync);
+            let prev_windows: Vec<ApplicationWindow> =
+                wallpaper_windows_sync.borrow_mut().drain(..).collect();
+            desktop_monitors_sync.borrow_mut().clear();
+            *shortcut_handler_sync.borrow_mut() = None;
+
+            let mut new_windows = Vec::new();
+            if let Some(display) = gtk4::gdk::Display::default() {
+                let monitors = display.monitors();
+                let displays_cfg = DisplaysConfig::load();
+                let primary_cfg = displays_cfg.primary_output().cloned();
+                let monitor_list: Vec<gtk4::gdk::Monitor> = (0..monitors.n_items())
+                    .filter_map(|i| monitors.item(i))
+                    .filter_map(|monitor| monitor.downcast().ok())
+                    .collect();
+                let primary_index = select_primary_monitor_index(&monitor_list, &displays_cfg);
+
+                match (primary_cfg.as_ref(), monitor_list.get(primary_index)) {
+                    (Some(cfg), Some(_)) => info!(
+                        "Mostrando iconos del escritorio en la pantalla principal: {} ({})",
+                        cfg.connector, cfg.name
+                    ),
+                    (_, Some(monitor)) => info!(
+                        "No se encontró la pantalla principal configurada; usando {} para los iconos del escritorio.",
+                        monitor
+                            .connector()
+                            .map(|name| name.to_string())
+                            .unwrap_or_else(|| "la primera pantalla".to_string())
+                    ),
+                    (_, None) => {}
+                }
+
+                for (index, monitor) in monitor_list.iter().enumerate() {
+                    let is_primary = index == primary_index;
+                    let win = create_wallpaper_window(
+                        &app_sync,
+                        Some(monitor),
+                        &resolved_path,
+                        if is_primary {
+                            desktop_dir_sync.as_deref()
+                        } else {
+                            None
+                        },
+                        &desktop_monitors_sync,
+                        &icon_positions_sync,
+                        &internal_drag_sync,
+                        &active_drag_sync,
+                        &shortcut_handler_sync,
+                        is_primary,
+                    );
+                    new_windows.push(win);
+                }
             }
 
-            for (index, monitor) in monitor_list.iter().enumerate() {
-                let is_primary = index == primary_index;
-                create_wallpaper_window(
-                    application,
-                    Some(monitor),
+            if new_windows.is_empty() {
+                let win = create_wallpaper_window(
+                    &app_sync,
+                    None,
                     &resolved_path,
-                    if is_primary {
-                        desktop_dir.as_deref()
-                    } else {
-                        None
-                    },
-                    &desktop_monitors,
-                    &icon_positions,
-                    &internal_drag_paths,
-                    &active_icon_drag,
-                    &shortcut_handler,
-                    is_primary,
+                    desktop_dir_sync.as_deref(),
+                    &desktop_monitors_sync,
+                    &icon_positions_sync,
+                    &internal_drag_sync,
+                    &active_drag_sync,
+                    &shortcut_handler_sync,
+                    true,
                 );
-                created += 1;
+                new_windows.push(win);
             }
-        }
 
-        if created == 0 {
-            create_wallpaper_window(
-                application,
-                None,
-                &resolved_path,
-                desktop_dir.as_deref(),
-                &desktop_monitors,
-                &icon_positions,
-                &internal_drag_paths,
-                &active_icon_drag,
-                &shortcut_handler,
-                true,
-            );
+            *wallpaper_windows_sync.borrow_mut() = new_windows;
+            for old_win in prev_windows {
+                old_win.close();
+            }
+        });
+
+        let pending_sync: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
+        let schedule_sync: Rc<dyn Fn()> = {
+            let sync_windows_c = sync_windows.clone();
+            let pending_c = pending_sync.clone();
+            Rc::new(move || {
+                if let Some(source) = pending_c.borrow_mut().take() {
+                    source.remove();
+                }
+                let sync_cb = sync_windows_c.clone();
+                let pending_done = pending_c.clone();
+                let source = glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(120),
+                    move || {
+                        *pending_done.borrow_mut() = None;
+                        sync_cb();
+                    },
+                );
+                *pending_c.borrow_mut() = Some(source);
+            })
+        };
+
+        *sync_handler.borrow_mut() = Some(schedule_sync.clone());
+        sync_windows();
+
+        if !monitors_hooked.get() {
+            monitors_hooked.set(true);
+            if let Some(display) = gtk4::gdk::Display::default() {
+                let monitors = display.monitors();
+                let schedule_mon = schedule_sync.clone();
+                monitors.connect_items_changed(move |_, _, _, _| {
+                    info!("🔌 [Wallpaper] Cambio en monitores GDK detectado; programando resincronización");
+                    schedule_mon();
+                });
+            }
         }
     });
 

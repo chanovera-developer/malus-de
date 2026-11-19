@@ -969,41 +969,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         .orientation(Orientation::Vertical)
         .spacing(14)
         .build();
-    let initial_displays_cfg = DisplaysConfig::load();
-    let mut monitor_widgets = Vec::with_capacity(initial_displays_cfg.outputs.len());
-    if initial_displays_cfg.outputs.is_empty() {
-        monitors_grid.append(
-            &Label::builder()
-                .label("No hay pantallas activas detectadas. Conecta una pantalla y vuelve a abrir Ajustes.")
-                .css_classes(["card-section-sub"])
-                .xalign(0.0)
-                .build(),
-        );
-    }
-    for output in &initial_displays_cfg.outputs {
-        let title = format!("{} · {}", output.connector, output.name);
-        let specs = format_monitor_specs_label(output);
-        let presets: Vec<(String, String, f64)> = [2.0, 1.75, 1.5, 1.25, 1.0]
-            .iter()
-            .map(|scale| {
-                let width = (output.width as f64 / scale).round() as i32;
-                let height = (output.height as f64 / scale).round() as i32;
-                (
-                    format!("{width} × {height}"),
-                    format!("{:.0}%", scale * 100.0),
-                    *scale,
-                )
-            })
-            .collect();
-        let (card, widgets) = create_macos_monitor_scaling_card(
-            &title,
-            &specs,
-            &presets,
-            output,
-        );
-        monitors_grid.append(&card);
-        monitor_widgets.push(widgets);
-    }
+    let monitor_widgets: Rc<RefCell<Vec<MonitorCardWidgets>>> = Rc::new(RefCell::new(Vec::new()));
     pane.append(&monitors_grid);
 
     // ------------------------------------------------------------------------
@@ -1309,6 +1275,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     });
 
     let is_syncing = Rc::new(RefCell::new(false));
+    let refresh_all_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
 
     let da_ref = drawing_area.clone();
     let coords_ref = canvas_coords_lbl.clone();
@@ -1317,7 +1284,9 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     let ts_p1_ref = ts_preset1_btn.clone();
     let ts_p2_ref = ts_preset2_btn.clone();
     let ts_math_ref = truesize_math_lbl.clone();
+    let monitors_grid_ref = monitors_grid.clone();
     let monitor_widgets_ref = monitor_widgets.clone();
+    let refresh_slot_ref = refresh_all_slot.clone();
     let rad_lbl_ref = radius_val_lbl.clone();
     let rad_sld_ref = radius_slider.clone();
     let win_rad_lbl_ref = win_radius_val_lbl.clone();
@@ -1397,9 +1366,33 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
             }
         }
 
-        for (idx, widgets) in monitor_widgets_ref.iter().enumerate() {
+        let needs_rebuild = {
+            let widgets = monitor_widgets_ref.borrow();
+            monitors_grid_ref.first_child().is_none()
+                || widgets.len() != cfg.outputs.len()
+                || widgets
+                    .iter()
+                    .zip(cfg.outputs.iter())
+                    .any(|(w, o)| w.connector != o.connector)
+        };
+        if needs_rebuild {
+            if let Some(ref refresh_fn) = *refresh_slot_ref.borrow() {
+                rebuild_monitors_grid(
+                    &monitors_grid_ref,
+                    &monitor_widgets_ref,
+                    &cfg,
+                    &sync_lock,
+                    refresh_fn,
+                );
+            }
+        }
+
+        for (idx, widgets) in monitor_widgets_ref.borrow().iter().enumerate() {
             if let Some(output) = cfg.outputs.get(idx) {
+                widgets.card_box.set_visible(true);
                 update_monitor_card_ui(widgets, output);
+            } else {
+                widgets.card_box.set_visible(false);
             }
         }
 
@@ -1415,11 +1408,37 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         *sync_lock.borrow_mut() = false;
     });
 
-    for (idx, widgets) in monitor_widgets.iter().enumerate() {
-        wire_monitor_card_events(idx, widgets, &is_syncing, &refresh_all);
-    }
-
+    *refresh_all_slot.borrow_mut() = Some(refresh_all.clone());
     refresh_all();
+
+    if let Some(display) = gtk4::gdk::Display::default() {
+        let ref_mon = refresh_all.clone();
+        display.monitors().connect_items_changed(move |_, _, _, _| {
+            let ref_later = ref_mon.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
+                ref_later();
+            });
+        });
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let toml_path = std::path::PathBuf::from(home).join(".config/malus-de/monitors.toml");
+        if let Ok(file_mon) = gio::File::for_path(toml_path)
+            .monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
+        {
+            let ref_file = refresh_all.clone();
+            file_mon.connect_changed(move |_, _, _, ev| {
+                if matches!(
+                    ev,
+                    gio::FileMonitorEvent::Changed
+                        | gio::FileMonitorEvent::Created
+                        | gio::FileMonitorEvent::ChangesDoneHint
+                ) {
+                    ref_file();
+                }
+            });
+            Box::leak(Box::new(file_mon));
+        }
+    }
 
     let save_and_reload = |cfg: DisplaysConfig, ref_fn: &Rc<dyn Fn()>| {
         let _ = cfg.save();
@@ -1663,6 +1682,9 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
 
 #[derive(Clone)]
 struct MonitorCardWidgets {
+    connector: String,
+    card_box: GtkBox,
+    title_lbl: Label,
     primary_btn: Button,
     details_lbl: Label,
     active_info_lbl: Label,
@@ -1872,8 +1894,11 @@ fn create_macos_monitor_scaling_card(
     card.append(&slider_row);
 
     (
-        card,
+        card.clone(),
         MonitorCardWidgets {
+            connector: output.connector.clone(),
+            card_box: card,
+            title_lbl,
             primary_btn,
             details_lbl: specs_lbl,
             active_info_lbl,
@@ -1898,11 +1923,65 @@ fn format_monitor_specs_label(o: &malus_de_common::config::DisplayOutputConfig) 
     )
 }
 
+fn format_monitor_title(o: &malus_de_common::config::DisplayOutputConfig) -> String {
+    if o.name.trim().is_empty() {
+        o.connector.clone()
+    } else {
+        format!("{} · {}", o.connector, o.name)
+    }
+}
+
+fn rebuild_monitors_grid(
+    monitors_grid: &GtkBox,
+    monitor_widgets: &Rc<RefCell<Vec<MonitorCardWidgets>>>,
+    cfg: &DisplaysConfig,
+    is_syncing: &Rc<RefCell<bool>>,
+    refresh_all: &Rc<dyn Fn()>,
+) {
+    while let Some(child) = monitors_grid.first_child() {
+        monitors_grid.remove(&child);
+    }
+    let mut widgets_guard = monitor_widgets.borrow_mut();
+    widgets_guard.clear();
+    if cfg.outputs.is_empty() {
+        monitors_grid.append(
+            &Label::builder()
+                .label("No hay pantallas activas detectadas. Conecta una pantalla para configurarla.")
+                .css_classes(["card-section-sub"])
+                .xalign(0.0)
+                .build(),
+        );
+        return;
+    }
+    for (idx, output) in cfg.outputs.iter().enumerate() {
+        let title = format_monitor_title(output);
+        let specs = format_monitor_specs_label(output);
+        let presets: Vec<(String, String, f64)> = [2.0, 1.75, 1.5, 1.25, 1.0]
+            .iter()
+            .map(|scale| {
+                let width = (output.width as f64 / scale).round() as i32;
+                let height = (output.height as f64 / scale).round() as i32;
+                (
+                    format!("{width} × {height}"),
+                    format!("{:.0}%", scale * 100.0),
+                    *scale,
+                )
+            })
+            .collect();
+        let (card, widgets) =
+            create_macos_monitor_scaling_card(&title, &specs, &presets, output);
+        wire_monitor_card_events(idx, &widgets, is_syncing, refresh_all);
+        monitors_grid.append(&card);
+        widgets_guard.push(widgets);
+    }
+}
+
 fn update_monitor_card_ui(
     w: &MonitorCardWidgets,
     o: &malus_de_common::config::DisplayOutputConfig,
 ) {
     let (lw, lh) = o.logical_size();
+    w.title_lbl.set_label(&format_monitor_title(o));
     w.details_lbl.set_label(&format_monitor_specs_label(o));
     w.active_info_lbl
         .set_label(&format!("{:.1}% · {} × {}", o.scale * 100.0, lw, lh));

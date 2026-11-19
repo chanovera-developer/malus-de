@@ -3258,12 +3258,21 @@ fn create_displays_subview(
     let l_sub = left_mon_sub.clone();
     let r_title = right_mon_title.clone();
     let r_sub = right_mon_sub.clone();
+    let r_box_c = right_mon_box.clone();
+    let o_row_c = order_actions_row.clone();
+    let a_lbl_c = align_lbl.clone();
+    let a_row_c = align_row.clone();
+    let fy_row_c = fine_y_row.clone();
+    let lk_card_c = link_card.clone();
     let s_link_btn = sub_link_btn.clone();
     let s_link_lbl = sub_link_lbl.clone();
     let l_p1_btn = link_p1_btn.clone();
     let l_p2_btn = link_p2_btn.clone();
+    let m0_title_c = mon0_title.clone();
     let m0_val = mon0_val_lbl.clone();
     let m0_sld = mon0_slider.clone();
+    let m1_title_c = mon1_title.clone();
+    let m1_card_c = mon1_card.clone();
     let m1_val = mon1_val_lbl.clone();
     let m1_sld = mon1_slider.clone();
     let main_info_c = main_monitors_info.clone();
@@ -3278,6 +3287,15 @@ fn create_displays_subview(
         let cfg = malus_de_common::config::DisplaysConfig::load();
         *sync_lock.borrow_mut() = true;
 
+        let has_multi = cfg.outputs.len() > 1;
+        r_box_c.set_visible(has_multi);
+        o_row_c.set_visible(has_multi);
+        a_lbl_c.set_visible(has_multi);
+        a_row_c.set_visible(has_multi);
+        fy_row_c.set_visible(has_multi);
+        lk_card_c.set_visible(has_multi);
+        m1_card_c.set_visible(has_multi);
+
         // Actualizar disposición visual (Izquierda vs Derecha)
         let mut sorted: Vec<_> = cfg.outputs.iter().enumerate().collect();
         sorted.sort_by_key(|(_, o)| o.x);
@@ -3285,8 +3303,12 @@ fn create_displays_subview(
         if let Some((_, left_o)) = sorted.first() {
             let (lw, lh) = left_o.logical_size();
             l_title.set_label(&format!(
-                "⬅ Izq: {}{}",
-                left_o.connector,
+                "{}{}",
+                if has_multi {
+                    format!("⬅ Izq: {}", left_o.connector)
+                } else {
+                    format!("🖥 {}", left_o.connector)
+                },
                 if left_o.primary { " ★" } else { "" }
             ));
             l_sub.set_label(&format!(
@@ -3343,16 +3365,30 @@ fn create_displays_subview(
             l_p2_btn.remove_css_class("cc-pill-btn-active");
         }
 
-        // Actualizar Monitor 0 (DP-1)
+        // Actualizar Monitor 0
         if let Some(o0) = cfg.outputs.first() {
             let (w0, h0) = o0.logical_size();
+            let star0 = if o0.primary { " ★" } else { "" };
+            let mon0_name = if o0.name.trim().is_empty() {
+                o0.connector.clone()
+            } else {
+                format!("{} ({})", o0.connector, o0.name)
+            };
+            m0_title_c.set_label(&format!("Monitor 1: {mon0_name}{star0}"));
             m0_val.set_label(&format!("{:.1}% · {}×{}", o0.scale * 100.0, w0, h0));
             m0_sld.set_value((o0.scale * 100.0).clamp(100.0, 250.0));
         }
 
-        // Actualizar Monitor 1 (HDMI-A-1)
+        // Actualizar Monitor 1
         if let Some(o1) = cfg.outputs.get(1) {
             let (w1, h1) = o1.logical_size();
+            let star1 = if o1.primary { " ★" } else { "" };
+            let mon1_name = if o1.name.trim().is_empty() {
+                o1.connector.clone()
+            } else {
+                format!("{} ({})", o1.connector, o1.name)
+            };
+            m1_title_c.set_label(&format!("Monitor 2: {mon1_name}{star1}"));
             m1_val.set_label(&format!("{:.1}% · {}×{}", o1.scale * 100.0, w1, h1));
             m1_sld.set_value((o1.scale * 100.0).clamp(100.0, 250.0));
         }
@@ -3368,6 +3404,39 @@ fn create_displays_subview(
     });
 
     refresh_ui();
+
+    let ref_map = refresh_ui.clone();
+    subview.connect_map(move |_| {
+        ref_map();
+    });
+    if let Some(display) = gtk4::gdk::Display::default() {
+        let ref_mon = refresh_ui.clone();
+        display.monitors().connect_items_changed(move |_, _, _, _| {
+            let ref_later = ref_mon.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(120), move || {
+                ref_later();
+            });
+        });
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let toml_path = std::path::PathBuf::from(home).join(".config/malus-de/monitors.toml");
+        if let Ok(file_mon) = gtk4::gio::File::for_path(toml_path)
+            .monitor_file(gtk4::gio::FileMonitorFlags::NONE, gtk4::gio::Cancellable::NONE)
+        {
+            let ref_file = refresh_ui.clone();
+            file_mon.connect_changed(move |_, _, _, ev| {
+                if matches!(
+                    ev,
+                    gtk4::gio::FileMonitorEvent::Changed
+                        | gtk4::gio::FileMonitorEvent::Created
+                        | gtk4::gio::FileMonitorEvent::ChangesDoneHint
+                ) {
+                    ref_file();
+                }
+            });
+            Box::leak(Box::new(file_mon));
+        }
+    }
 
     // Helper para guardar cambios, notificar al compositor en vivo y refrescar la UI
     let apply_and_notify = |cfg: malus_de_common::config::DisplaysConfig,

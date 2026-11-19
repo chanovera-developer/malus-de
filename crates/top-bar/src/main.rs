@@ -95,6 +95,12 @@ fn build_ui(app: &Application) {
     if gtk4_layer_shell::is_supported() {
         info!("Protocolo Layer Shell soportado. Anclando Top Bar en capa Top...");
         window.init_layer_shell();
+        if let Some(display) = gtk4::gdk::Display::default() {
+            let displays_cfg = malus_de_common::config::DisplaysConfig::load();
+            if let Some(primary_mon) = find_primary_gdk_monitor(&display, &displays_cfg) {
+                window.set_monitor(&primary_mon);
+            }
+        }
         window.set_layer(Layer::Top);
         window.set_namespace("malus-top-bar");
         window.set_anchor(Edge::Top, true);
@@ -165,6 +171,7 @@ fn build_ui(app: &Application) {
         ui::theme::update_all_popovers_theme(is_dark);
     });
 
+    let win_ipc = window.clone();
     glib::spawn_future_local(async move {
         while let Ok(msg) = rx.recv().await {
             match msg {
@@ -191,10 +198,23 @@ fn build_ui(app: &Application) {
                     });
                     ui::theme::update_all_popovers_theme(is_dark);
                 }
+                malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig => {
+                    info!("🖥 [TopBar] IPC ReloadDisplaysConfig recibido — reajustando top bar");
+                    win_ipc.queue_resize();
+                    win_ipc.queue_draw();
+                }
                 _ => {}
             }
         }
     });
+
+    if let Some(display) = gtk4::gdk::Display::default() {
+        let win_mon = window.clone();
+        display.monitors().connect_items_changed(move |_, _, _, _| {
+            win_mon.queue_resize();
+            win_mon.queue_draw();
+        });
+    }
 
     std::thread::spawn(move || {
         let sock_path = malus_de_common::ipc::ipc_socket_path();
@@ -236,6 +256,32 @@ fn build_ui(app: &Application) {
 
     window.set_child(Some(&root_box));
     window.present();
+}
+
+fn find_primary_gdk_monitor(
+    display: &gtk4::gdk::Display,
+    cfg: &malus_de_common::config::DisplaysConfig,
+) -> Option<gtk4::gdk::Monitor> {
+    let monitors = display.monitors();
+    let monitor_list: Vec<gtk4::gdk::Monitor> = (0..monitors.n_items())
+        .filter_map(|i| monitors.item(i))
+        .filter_map(|m| m.downcast::<gtk4::gdk::Monitor>().ok())
+        .collect();
+    if let Some(primary_cfg) = cfg.primary_output() {
+        if let Some(matched) = monitor_list.iter().find(|monitor| {
+            let geo = monitor.geometry();
+            primary_cfg.matches_monitor_identity(
+                monitor.connector().as_deref(),
+                monitor.model().as_deref(),
+                monitor.description().as_deref(),
+                geo.x(),
+                geo.y(),
+            )
+        }) {
+            return Some(matched.clone());
+        }
+    }
+    monitor_list.into_iter().next()
 }
 
 fn format_app_name(app_id: Option<&str>, title: Option<&str>) -> String {

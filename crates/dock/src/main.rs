@@ -847,6 +847,12 @@ fn build_dock_ui(app: &Application) {
     if gtk4_layer_shell::is_supported() {
         info!("Layer Shell soportado. Configurando Dock flotante centrado inferior...");
         window.init_layer_shell();
+        if let Some(display) = gtk4::gdk::Display::default() {
+            let displays_cfg = malus_de_common::config::DisplaysConfig::load();
+            if let Some(primary_mon) = find_primary_gdk_monitor(&display, &displays_cfg) {
+                window.set_monitor(&primary_mon);
+            }
+        }
         window.set_layer(Layer::Top);
         window.set_namespace("malus-dock");
         window.set_anchor(Edge::Bottom, true);
@@ -1620,6 +1626,30 @@ fn build_dock_ui(app: &Application) {
                     dock_root_ref.queue_draw();
                     win_ref.queue_draw();
                 }
+                IpcMessage::ReloadDisplaysConfig => {
+                    info!("🖥 [Dock] IPC ReloadDisplaysConfig recibido — reajustando dock y miniaturas");
+                    queue_dock_resize(&win_ref, &dock_root_ref, &dock_bar_ref);
+                    queue_dock_icon_backgrounds(apps_box_ipc.upcast_ref());
+                    dock_root_ref.queue_draw();
+                    win_ref.queue_draw();
+                    let cards: Vec<(u64, gtk4::Widget)> = min_map
+                        .borrow()
+                        .iter()
+                        .map(|(id, widget)| (*id, widget.clone()))
+                        .collect();
+                    let dock_window_weak = win_ref.downgrade();
+                    for delay in [60, 180] {
+                        let cards = cards.clone();
+                        let dock_window_weak = dock_window_weak.clone();
+                        glib::timeout_add_local_once(Duration::from_millis(delay), move || {
+                            if let Some(dock_window) = dock_window_weak.upgrade() {
+                                for (window_id, card) in cards {
+                                    register_minimized_dock_slot(&card, &dock_window, window_id);
+                                }
+                            }
+                        });
+                    }
+                }
                 _ => {}
             }
         }
@@ -1655,8 +1685,45 @@ fn build_dock_ui(app: &Application) {
         glib::ControlFlow::Continue
     });
 
+    if let Some(display) = gtk4::gdk::Display::default() {
+        let win_mon = window.clone();
+        let dock_root_mon = dock_root.clone();
+        let dock_bar_mon = dock_bar.clone();
+        display.monitors().connect_items_changed(move |_, _, _, _| {
+            queue_dock_resize(&win_mon, &dock_root_mon, &dock_bar_mon);
+            dock_root_mon.queue_draw();
+            win_mon.queue_draw();
+        });
+    }
+
     window.set_child(Some(&dock_root));
     window.present();
+}
+
+fn find_primary_gdk_monitor(
+    display: &gtk4::gdk::Display,
+    cfg: &malus_de_common::config::DisplaysConfig,
+) -> Option<gtk4::gdk::Monitor> {
+    let monitors = display.monitors();
+    let monitor_list: Vec<gtk4::gdk::Monitor> = (0..monitors.n_items())
+        .filter_map(|i| monitors.item(i))
+        .filter_map(|m| m.downcast::<gtk4::gdk::Monitor>().ok())
+        .collect();
+    if let Some(primary_cfg) = cfg.primary_output() {
+        if let Some(matched) = monitor_list.iter().find(|monitor| {
+            let geo = monitor.geometry();
+            primary_cfg.matches_monitor_identity(
+                monitor.connector().as_deref(),
+                monitor.model().as_deref(),
+                monitor.description().as_deref(),
+                geo.x(),
+                geo.y(),
+            )
+        }) {
+            return Some(matched.clone());
+        }
+    }
+    monitor_list.into_iter().next()
 }
 
 fn clear_dock_drop_placeholder(apps_box: &GtkBox, drop_placeholder: &Rc<RefCell<Option<GtkBox>>>) {
