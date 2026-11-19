@@ -73,26 +73,24 @@ window.macos-settings-window popover listbox > row:selected:not(:disabled) {
     color: #ffffff;
 }
 
-overlay-split-view {
-    background-color: transparent;
-}
-
-.sidebar-pane,
-overlay-split-view > .sidebar-pane {
-    background-color: alpha(@window_bg_color, 0.82);
-    box-shadow: inset -1px 0 alpha(@borders, 0.75);
-}
-
-.sidebar-pane:backdrop,
-overlay-split-view > .sidebar-pane:backdrop {
-    background-color: alpha(@window_bg_color, 0.88);
+paned.settings-main-paned > separator {
+    min-width: 0px;
+    margin: 0px;
+    padding: 0px;
+    background: transparent;
+    border: none;
 }
 
 .macos-sidebar {
-    background-color: transparent;
-    background: transparent;
-    border-right: none;
+    background-color: alpha(@window_bg_color, 0.72);
+    border-right: 1px solid alpha(@borders, 0.28);
+    min-width: 200px;
     padding: 0px;
+}
+
+.settings-content-pane {
+    background-color: @view_bg_color;
+    color: @view_fg_color;
 }
 
 .macos-sidebar scrolledwindow,
@@ -108,8 +106,8 @@ overlay-split-view > .sidebar-pane:backdrop {
 }
 
 .sidebar-windowcontrols {
-    min-height: 47px;
-    padding: 0px 9px;
+    min-height: 48px;
+    padding: 0px 12px;
     background-color: transparent;
     background: transparent;
     border-color: transparent;
@@ -117,65 +115,127 @@ overlay-split-view > .sidebar-pane:backdrop {
 }
 
 .sidebar-body {
-    padding: 0px 10px 12px 10px;
+    padding: 4px 6px 12px 6px;
+}
+
+.sidebar-search-shell {
+    background: transparent;
+    min-height: 0;
+    margin: 0px 6px;
+    padding: 0;
+}
+
+window.macos-settings-window searchentry.sidebar-search-input,
+searchentry.sidebar-search-input,
+.sidebar-search-input {
+    background: transparent;
+    background-color: transparent;
+    border: none;
+    box-shadow: none;
+    outline: none;
+    min-height: 0;
+    min-width: 0;
+    padding: 0 10px;
+    margin: 0;
+    font-size: 13px;
+    color: @window_fg_color;
+}
+window.macos-settings-window searchentry.sidebar-search-input > text,
+searchentry.sidebar-search-input > text,
+.sidebar-search-input > text {
+    min-height: 0;
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    color: @window_fg_color;
+}
+window.macos-settings-window searchentry.sidebar-search-input > image,
+searchentry.sidebar-search-input > image,
+.sidebar-search-input > image {
+    color: alpha(currentColor, 0.60);
+    min-height: 0;
+    min-width: 0;
+    padding: 0;
+    margin: 0;
+}
+searchentry.sidebar-search-input:focus,
+.sidebar-search-input:focus-within {
+    outline: none;
+    box-shadow: none;
+    border: none;
 }
 
 .sidebar-search {
     background-color: alpha(currentColor, 0.06);
     border: 1px solid @borders;
-    border-radius: 8px;
+    border-radius: 9px;
     color: @window_fg_color;
-    padding: 4px 8px;
+    min-height: 32px;
+    padding: 2px 10px;
     margin-bottom: 8px;
+}
+.sidebar-search > text {
+    min-height: 0;
+    padding: 0;
 }
 .sidebar-search image {
     color: alpha(currentColor, 0.60);
 }
 
 .profile-card {
-    background-color: alpha(currentColor, 0.05);
-    border: 1px solid @borders;
-    border-radius: 12px;
-    padding: 8px 10px;
-    margin-bottom: 10px;
+    background-color: alpha(@window_fg_color, 0.05);
+    border: 1px solid alpha(@borders, 0.32);
+    border-radius: 10px;
+    padding: 7px 10px;
+    margin: 4px 6px 6px 6px;
 }
 
 .avatar-circle {
     background: linear-gradient(135deg, @accent_bg_color, #5e5ce6);
     border-radius: 999px;
-    min-width: 32px;
-    min-height: 32px;
+    min-width: 30px;
+    min-height: 30px;
     color: @accent_fg_color;
     font-weight: 700;
-    font-size: 14px;
+    font-size: 13px;
 }
 
 .sidebar-btn {
-    background: transparent;
+    background-color: transparent;
+    background-image: none;
     border: none;
     border-radius: 9px;
-    padding: 7px 10px;
-    color: @window_fg_color;
-    font-weight: 500;
-    font-size: 13.5px;
+    padding: 5px 10px;
+    margin: 1px 6px;
+    min-height: 22px;
+    color: alpha(@window_fg_color, 0.88);
+    font-weight: 400;
+    font-size: 13px;
+    transition: background-color 140ms ease-in-out;
 }
 .sidebar-btn:hover {
-    background-color: alpha(currentColor, 0.07);
+    background-color: alpha(@window_fg_color, 0.055);
 }
-.sidebar-btn-active {
-    background-color: @accent_bg_color;
-    color: @accent_fg_color;
+.sidebar-btn-active,
+.sidebar-btn.sidebar-btn-active {
+    background-color: alpha(@window_fg_color, 0.11);
+    color: @window_fg_color;
     font-weight: 600;
+    box-shadow: inset 0 0 0 1px alpha(@window_fg_color, 0.06);
 }
 .sidebar-btn-active:hover {
-    filter: brightness(1.08);
+    background-color: alpha(@window_fg_color, 0.14);
+}
+
+.settings-sidebar-icon {
+    color: #0a84ff;
+    margin-right: 4px;
 }
 
 .sidebar-icon-badge {
-    border-radius: 7px;
-    min-width: 24px;
-    min-height: 24px;
-    font-size: 13px;
+    border-radius: 6px;
+    min-width: 22px;
+    min-height: 22px;
     color: white;
 }
 .badge-blue { background: linear-gradient(180deg, #32ade6, #007aff); }
@@ -187,10 +247,10 @@ overlay-split-view > .sidebar-pane:backdrop {
 .badge-dark { background: linear-gradient(180deg, #545458, #2c2c2e); }
 
 .content-header-toolbar {
-    min-height: 47px;
+    min-height: 48px;
     padding: 0px 24px;
     background-color: @view_bg_color;
-    border-bottom: 1px solid alpha(currentColor, 0.08);
+    border-bottom: 1px solid alpha(@borders, 0.28);
 }
 
 .nav-chevron-btn {
@@ -264,10 +324,6 @@ overlay-split-view > .sidebar-pane:backdrop {
 .content-pane {
     background-color: @view_bg_color;
     padding: 16px 28px 24px 28px;
-}
-
-overlay-split-view > .content-pane {
-    padding: 0px;
 }
 
 .pane-header-title {

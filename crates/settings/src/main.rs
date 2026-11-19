@@ -2,9 +2,10 @@ use clap::Parser;
 use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, CssProvider, DropDown,
-    DrawingArea, Entry, FileChooserAction, FileChooserNative, FileFilter, FlowBox, GestureClick,
-    GestureDrag, Grid, Label, Orientation, PackType, Picture, PolicyType, Scale, ScrolledWindow,
-    SearchEntry, Stack, StackTransitionType, Switch, WindowControls, WindowHandle,
+    DrawingArea, Entry, EventControllerFocus, FileDialog, FileFilter, FlowBox, GestureClick,
+    GestureDrag, Grid, Image, Label, Orientation, Overlay, PackType, Paned, Picture, PolicyType,
+    Scale, ScrolledWindow, SearchEntry, Stack, StackTransitionType, Switch, WindowControls,
+    WindowHandle,
 };
 use malus_de_common::config::{
     AppSwitcherStyle, DesktopIconsConfig, DisplayModeConfig, DisplaysConfig, DockConfig, InputConfig,
@@ -17,6 +18,13 @@ use std::process::Command;
 use std::rc::Rc;
 
 const APP_ID: &str = "dev.malus.Settings";
+const SETTINGS_SIDEBAR_WIDTH: i32 = 212;
+const SIDEBAR_SEARCH_MAX_HEIGHT: i32 = 36;
+const SIDEBAR_SEARCH_HEIGHT: i32 = 34;
+// Con superelipse n=4.2, r=17 px iguala la profundidad visual de esquina (~2.6 px) de `border-radius: 9px`.
+const SIDEBAR_SEARCH_SQUIRCLE_RADIUS: f64 = 17.0;
+const SQUIRCLE_EXPONENT: f64 = 4.2;
+const SQUIRCLE_SEGMENTS: usize = 20;
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "malus-de-settings")]
@@ -110,6 +118,227 @@ fn load_macos_settings_css() {
     }
 }
 
+fn squircle_path(context: &gtk4::cairo::Context, width: f64, height: f64, radius: f64) {
+    let radius = radius.min(width / 2.0).min(height / 2.0).max(1.0);
+    let power = 2.0 / SQUIRCLE_EXPONENT;
+    let quarter_turn = std::f64::consts::FRAC_PI_2;
+
+    context.move_to(radius, 0.0);
+    context.line_to(width - radius, 0.0);
+
+    for step in 1..=SQUIRCLE_SEGMENTS {
+        let angle = quarter_turn * step as f64 / SQUIRCLE_SEGMENTS as f64;
+        context.line_to(
+            width - radius + radius * angle.sin().powf(power),
+            radius - radius * angle.cos().powf(power),
+        );
+    }
+    context.line_to(width, height - radius);
+
+    for step in 1..=SQUIRCLE_SEGMENTS {
+        let angle = quarter_turn * step as f64 / SQUIRCLE_SEGMENTS as f64;
+        context.line_to(
+            width - radius + radius * angle.cos().powf(power),
+            height - radius + radius * angle.sin().powf(power),
+        );
+    }
+    context.line_to(radius, height);
+
+    for step in 1..=SQUIRCLE_SEGMENTS {
+        let angle = quarter_turn * step as f64 / SQUIRCLE_SEGMENTS as f64;
+        context.line_to(
+            radius - radius * angle.sin().powf(power),
+            height - radius + radius * angle.cos().powf(power),
+        );
+    }
+    context.line_to(0.0, radius);
+
+    for step in 1..=SQUIRCLE_SEGMENTS {
+        let angle = quarter_turn * step as f64 / SQUIRCLE_SEGMENTS as f64;
+        context.line_to(
+            radius - radius * angle.cos().powf(power),
+            radius - radius * angle.sin().powf(power),
+        );
+    }
+    context.close_path();
+}
+
+fn build_sidebar_search_entry() -> SearchEntry {
+    let clamped_height = SIDEBAR_SEARCH_HEIGHT.min(SIDEBAR_SEARCH_MAX_HEIGHT);
+    SearchEntry::builder()
+        .placeholder_text("Buscar")
+        .height_request(clamped_height)
+        .valign(Align::Center)
+        .vexpand(false)
+        .hexpand(true)
+        .css_classes(["sidebar-search-input"])
+        .build()
+}
+
+fn make_system_glyph_badge(
+    icon_name: &str,
+    css_classes: &[&str],
+    box_size: i32,
+    icon_px: i32,
+) -> GtkBox {
+    let badge = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .width_request(box_size)
+        .height_request(box_size)
+        .build();
+    for cls in css_classes {
+        badge.add_css_class(cls);
+    }
+    let glyph = Image::builder()
+        .icon_name(icon_name)
+        .pixel_size(icon_px)
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .hexpand(false)
+        .vexpand(false)
+        .build();
+    badge.append(&glyph);
+    badge
+}
+
+const SIDEBAR_ROW_HEIGHT: i32 = 32;
+
+fn build_sidebar_nav_button(icon_name: &str, label_txt: &str) -> Button {
+    let btn = Button::builder()
+        .css_classes(["sidebar-btn"])
+        .has_frame(false)
+        .height_request(SIDEBAR_ROW_HEIGHT)
+        .halign(Align::Fill)
+        .valign(Align::Start)
+        .hexpand(true)
+        .vexpand(false)
+        .build();
+
+    let row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .margin_start(4)
+        .margin_end(4)
+        .halign(Align::Fill)
+        .valign(Align::Center)
+        .hexpand(true)
+        .vexpand(false)
+        .build();
+
+    let glyph = Image::builder()
+        .icon_name(icon_name)
+        .pixel_size(16)
+        .css_classes(["settings-sidebar-icon"])
+        .halign(Align::Start)
+        .valign(Align::Center)
+        .hexpand(false)
+        .vexpand(false)
+        .build();
+
+    let lbl = Label::builder()
+        .label(label_txt)
+        .xalign(0.0)
+        .halign(Align::Start)
+        .valign(Align::Center)
+        .hexpand(true)
+        .vexpand(false)
+        .ellipsize(gtk4::pango::EllipsizeMode::End)
+        .build();
+
+    row.append(&glyph);
+    row.append(&lbl);
+    btn.set_child(Some(&row));
+    btn
+}
+
+fn create_squircle_search_shell(entry: &SearchEntry) -> Overlay {
+    let clamped_height = SIDEBAR_SEARCH_HEIGHT.min(SIDEBAR_SEARCH_MAX_HEIGHT);
+    let shell = Overlay::builder()
+        .height_request(clamped_height)
+        .valign(Align::Center)
+        .vexpand(false)
+        .hexpand(true)
+        .css_classes(["sidebar-search-shell"])
+        .build();
+
+    let bg = DrawingArea::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .can_target(false)
+        .build();
+
+    let focus_ctrl = EventControllerFocus::new();
+    let focus_state = focus_ctrl.clone();
+    let bg_draw = bg.clone();
+    focus_ctrl.connect_enter(move |_| bg_draw.queue_draw());
+    let bg_draw_leave = bg.clone();
+    focus_ctrl.connect_leave(move |_| bg_draw_leave.queue_draw());
+    entry.add_controller(focus_ctrl);
+
+    let bg_weak = bg.downgrade();
+    libadwaita::StyleManager::default().connect_dark_notify(move |_| {
+        if let Some(area) = bg_weak.upgrade() {
+            area.queue_draw();
+        }
+    });
+
+    bg.set_draw_func(move |_, cr, w, h| {
+        let w = w as f64;
+        let h = h as f64;
+        if w <= 2.0 || h <= 2.0 {
+            return;
+        }
+        let is_dark = libadwaita::StyleManager::default().is_dark();
+        let focused = focus_state.contains_focus();
+
+        if cr.save().is_ok() {
+            squircle_path(cr, w, h, SIDEBAR_SEARCH_SQUIRCLE_RADIUS);
+            if is_dark {
+                cr.set_source_rgba(1.0, 1.0, 1.0, if focused { 0.11 } else { 0.08 });
+            } else {
+                cr.set_source_rgba(0.0, 0.0, 0.0, if focused { 0.075 } else { 0.055 });
+            }
+            let _ = cr.fill();
+            let _ = cr.restore();
+        }
+
+        if cr.save().is_ok() {
+            let inset = 0.75;
+            cr.translate(inset, inset);
+            squircle_path(
+                cr,
+                (w - inset * 2.0).max(1.0),
+                (h - inset * 2.0).max(1.0),
+                (SIDEBAR_SEARCH_SQUIRCLE_RADIUS - inset).max(2.0),
+            );
+            if focused {
+                if is_dark {
+                    cr.set_source_rgba(0.04, 0.52, 1.0, 0.85);
+                } else {
+                    cr.set_source_rgba(0.0, 0.48, 1.0, 0.80);
+                }
+                cr.set_line_width(1.5);
+            } else {
+                if is_dark {
+                    cr.set_source_rgba(1.0, 1.0, 1.0, 0.15);
+                } else {
+                    cr.set_source_rgba(0.0, 0.0, 0.0, 0.13);
+                }
+                cr.set_line_width(1.0);
+            }
+            let _ = cr.stroke();
+            let _ = cr.restore();
+        }
+    });
+
+    shell.set_child(Some(&bg));
+    shell.add_overlay(entry);
+    shell.set_measure_overlay(entry, true);
+    shell
+}
+
 fn build_settings_window(app: &Application, initial_panel: &str) {
     let window = ApplicationWindow::builder()
         .application(app)
@@ -128,11 +357,13 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     window.set_titlebar(Some(&dummy_titlebar));
 
     // ==========================================
-    // 1. Barra Lateral Estilo macOS Sonoma / Sequoia
+    // 1. Barra Lateral Estilo macOS / Branches (212 px)
     // ==========================================
     let sidebar = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .css_classes(["macos-sidebar"])
+        .hexpand(false)
+        .vexpand(true)
         .build();
 
     // Controles de ventana nativos (Cerrar, Minimizar, Maximizar) según el tema activo
@@ -155,16 +386,16 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
 
     let sidebar_body = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .spacing(4)
+        .spacing(2)
+        .valign(Align::Start)
+        .vexpand(false)
         .css_classes(["sidebar-body"])
         .build();
 
-    // Buscador de Ajustes
-    let search_entry = SearchEntry::builder()
-        .placeholder_text("Buscar")
-        .css_classes(["sidebar-search"])
-        .build();
-    sidebar_body.append(&search_entry);
+    // Buscador de Ajustes (altura máx. 36 px con squircle real n=4.2)
+    let search_entry = build_sidebar_search_entry();
+    let search_shell = create_squircle_search_shell(&search_entry);
+    sidebar_body.append(&search_shell);
 
     // Tarjeta de Perfil de Usuario estilo Apple ID
     let profile_card = GtkBox::builder()
@@ -213,16 +444,16 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     profile_card.append(&profile_text_box);
     sidebar_body.append(&profile_card);
 
-    // Items de navegación de la barra lateral (macOS System Settings)
+    // Items de navegación de la barra lateral con glifos del sistema (estilo Branches)
     let nav_items = [
-        ("appearance", "🌓", "Aspecto", "badge-dark"),
-        ("dock", "🖥️", "Escritorio y Dock", "badge-blue"),
-        ("wallpaper", "🖼️", "Fondo de pantalla", "badge-teal"),
-        ("displays", "☀️", "Pantallas", "badge-blue"),
-        ("spotlight", "🔍", "Spotlight", "badge-blue"),
-        ("sound", "🔊", "Sonido", "badge-pink"),
-        ("keyboard", "⌨️", "Teclado", "badge-indigo"),
-        ("about", "⚙️", "General", "badge-gray"),
+        ("appearance", "preferences-desktop-appearance-symbolic", "Aspecto"),
+        ("dock", "user-desktop-symbolic", "Escritorio y Dock"),
+        ("wallpaper", "preferences-desktop-wallpaper-symbolic", "Fondo de pantalla"),
+        ("displays", "video-display-symbolic", "Pantallas"),
+        ("spotlight", "system-search-symbolic", "Spotlight"),
+        ("sound", "audio-volume-high-symbolic", "Sonido"),
+        ("keyboard", "input-keyboard-symbolic", "Teclado"),
+        ("about", "preferences-system-symbolic", "General"),
     ];
 
     let stack = Stack::builder()
@@ -234,35 +465,8 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
 
     let mut sidebar_buttons: Vec<(String, Button)> = Vec::new();
 
-    for (id, icon_txt, label_txt, badge_class) in nav_items {
-        let btn = Button::builder()
-            .css_classes(["sidebar-btn"])
-            .has_frame(false)
-            .build();
-
-        let row = GtkBox::builder()
-            .orientation(Orientation::Horizontal)
-            .spacing(10)
-            .build();
-
-        let badge = Label::builder()
-            .label(icon_txt)
-            .css_classes(["sidebar-icon-badge", badge_class])
-            .valign(Align::Center)
-            .halign(Align::Center)
-            .build();
-
-        let lbl = Label::builder()
-            .label(label_txt)
-            .xalign(0.0)
-            .hexpand(true)
-            .ellipsize(gtk4::pango::EllipsizeMode::End)
-            .build();
-
-        row.append(&badge);
-        row.append(&lbl);
-        btn.set_child(Some(&row));
-
+    for (id, icon_name, label_txt) in nav_items {
+        let btn = build_sidebar_nav_button(icon_name, label_txt);
         sidebar_body.append(&btn);
         sidebar_buttons.push((id.to_string(), btn));
     }
@@ -328,6 +532,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     // Header Toolbar macOS (‹ › chevrons + título de la vista actual)
     let content_area = GtkBox::builder()
         .orientation(Orientation::Vertical)
+        .css_classes(["settings-content-pane"])
         .hexpand(true)
         .vexpand(true)
         .build();
@@ -485,18 +690,26 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     };
     active_pane_title.set_label(initial_title);
 
-    let split_view = libadwaita::OverlaySplitView::builder()
-        .max_sidebar_width(280.0)
-        .min_sidebar_width(220.0)
-        .sidebar_width_fraction(0.245)
-        .sidebar_width_unit(libadwaita::LengthUnit::Px)
-        .enable_show_gesture(false)
-        .enable_hide_gesture(false)
-        .sidebar(&sidebar)
-        .content(&content_area)
+    let main_paned = Paned::builder()
+        .orientation(Orientation::Horizontal)
+        .position(SETTINGS_SIDEBAR_WIDTH)
+        .resize_start_child(false)
+        .resize_end_child(true)
+        .shrink_start_child(false)
+        .shrink_end_child(false)
+        .hexpand(true)
+        .vexpand(true)
+        .css_classes(["settings-main-paned"])
         .build();
+    main_paned.connect_position_notify(|paned| {
+        if paned.position() > SETTINGS_SIDEBAR_WIDTH {
+            paned.set_position(SETTINGS_SIDEBAR_WIDTH);
+        }
+    });
+    main_paned.set_start_child(Some(&sidebar));
+    main_paned.set_end_child(Some(&content_area));
 
-    window.set_child(Some(&split_view));
+    window.set_child(Some(&main_paned));
     window.present();
 }
 
@@ -561,7 +774,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         .spacing(8)
         .build();
     let canvas_title = Label::builder()
-        .label("📐 Disposición Interactiva de Pantallas (Arrastra con el ratón para mover o intercambiar)")
+        .label("Disposición Interactiva de Pantallas (Arrastra con el ratón para mover o intercambiar)")
         .css_classes(["card-section-title"])
         .hexpand(true)
         .xalign(0.0)
@@ -587,35 +800,35 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         .build();
 
     let btn_swap = Button::builder()
-        .label("⇄ Invertir Izquierda / Derecha")
+        .label("Invertir Izquierda / Derecha")
         .css_classes(["macos-action-btn-primary"])
         .tooltip_text("Intercambia la posición horizontal de ambos monitores")
         .has_frame(false)
         .build();
 
     let btn_align_top = Button::builder()
-        .label("⬆ Alinear Arriba")
+        .label("Alinear Arriba")
         .css_classes(["macos-action-btn"])
         .tooltip_text("Alinea los bordes superiores (y = 0)")
         .has_frame(false)
         .build();
 
     let btn_align_center = Button::builder()
-        .label("⬌ Centrar")
+        .label("Centrar")
         .css_classes(["macos-action-btn"])
         .tooltip_text("Alinea los centros verticales de ambas pantallas")
         .has_frame(false)
         .build();
 
     let btn_align_bottom = Button::builder()
-        .label("⬇ Alinear Abajo")
+        .label("Alinear Abajo")
         .css_classes(["macos-action-btn"])
         .tooltip_text("Alinea los bordes inferiores")
         .has_frame(false)
         .build();
 
     let btn_align_desk = Button::builder()
-        .label("🖥 Escritorio (y=519)")
+        .label("Escritorio (y=519)")
         .css_classes(["macos-action-btn"])
         .tooltip_text("Alineación ergonómica de escritorio (24\" desplazado a y=519)")
         .has_frame(false)
@@ -651,7 +864,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         .build();
 
     let truesize_title = Label::builder()
-        .label("🔗 Enlazar Resolución Física 1:1 Pixel a Pixel (TrueSize PPI)")
+        .label("Enlazar Resolución Física 1:1 Pixel a Pixel (TrueSize PPI)")
         .css_classes(["card-section-title"])
         .xalign(0.0)
         .build();
@@ -667,7 +880,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     truesize_text_col.append(&truesize_sub);
 
     let truesize_toggle_btn = Button::builder()
-        .label("🔗 Enlazadas 1:1")
+        .label("Enlazadas 1:1")
         .css_classes(["macos-action-btn-primary"])
         .valign(Align::Center)
         .has_frame(false)
@@ -814,7 +1027,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         .build();
 
     let radius_title = Label::builder()
-        .label("🖥 Curvatura de Esquinas del Escritorio (Squircle Display Border-Radius)")
+        .label("Curvatura de Esquinas del Escritorio (Squircle Display Border-Radius)")
         .css_classes(["card-section-title"])
         .xalign(0.0)
         .build();
@@ -882,7 +1095,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         .build();
 
     let win_radius_title = Label::builder()
-        .label("🪟 Curvatura de Esquinas de Ventanas (Squircle Window Border-Radius)")
+        .label("Curvatura de Esquinas de Ventanas (Squircle Window Border-Radius)")
         .css_classes(["card-section-title"])
         .xalign(0.0)
         .build();
@@ -1088,7 +1301,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
                 o.x,
                 o.y,
                 ppi_str,
-                if o.primary { " · ★ Principal" } else { "" }
+                if o.primary { " · Principal" } else { "" }
             );
             cr.move_to(rx + 12.0, ry + 61.0);
             let _ = cr.show_text(&pos_str);
@@ -1125,19 +1338,19 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
                 format!("{} [{}×{} @({}, {})]", o.connector, lw, lh, o.x, o.y)
             })
             .collect();
-        coords_ref.set_label(&summary.join("  ↔  "));
+        coords_ref.set_label(&summary.join("  |  "));
 
         // Actualizar banner de Enlace 1:1 TrueSize
         if cfg.linked_physical_1to1 {
             ts_card_ref.remove_css_class("truesize-banner-inactive");
             ts_card_ref.add_css_class("truesize-banner-active");
-            ts_btn_ref.set_label("🔗 Enlazadas 1:1 (Activo)");
+            ts_btn_ref.set_label("Enlazadas 1:1 (Activo)");
             ts_btn_ref.add_css_class("macos-action-btn-primary");
             ts_btn_ref.remove_css_class("macos-action-btn");
         } else {
             ts_card_ref.remove_css_class("truesize-banner-active");
             ts_card_ref.add_css_class("truesize-banner-inactive");
-            ts_btn_ref.set_label("🔓 Escala Independiente (Enlazar 1:1)");
+            ts_btn_ref.set_label("Escala Independiente (Enlazar 1:1)");
             ts_btn_ref.remove_css_class("macos-action-btn-primary");
             ts_btn_ref.add_css_class("macos-action-btn");
         }
@@ -1169,7 +1382,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
                 let mm0 = (100.0 * o0.scale / ppi0) * 25.4;
                 let mm1 = (100.0 * o1.scale / ppi1) * 25.4;
                 ts_math_ref.set_label(&format!(
-                    "📐 Regla Física Actual: 100 pt lógicos = {:.1} mm en {} ({:.1}%)  |  {:.1} mm en {} ({:.1}%)",
+                    "Regla Física Actual: 100 pt lógicos = {:.1} mm en {} ({:.1}%)  |  {:.1} mm en {} ({:.1}%)",
                     mm0,
                     o0.connector,
                     o0.scale * 100.0,
@@ -1179,7 +1392,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
                 ));
             } else {
                 ts_math_ref.set_label(
-                    "📐 Regla Física Actual: falta el tamaño físico real (EDID/pulgadas) en al menos una pantalla para enlazar 1:1",
+                    "Regla Física Actual: falta el tamaño físico real (EDID/pulgadas) en al menos una pantalla para enlazar 1:1",
                 );
             }
         }
@@ -1499,7 +1712,7 @@ fn create_macos_monitor_scaling_card(
     title_col.append(&specs_lbl);
 
     let primary_btn = Button::builder()
-        .label("★ Pantalla Principal")
+        .label("Pantalla Principal")
         .css_classes(["macos-action-btn"])
         .valign(Align::Center)
         .has_frame(false)
@@ -1706,7 +1919,7 @@ fn update_monitor_card_ui(
         .set_selected(selected_mode.map(|idx| idx as u32).unwrap_or(u32::MAX));
 
     if o.primary {
-        w.primary_btn.set_label("★ Pantalla Principal");
+        w.primary_btn.set_label("Pantalla Principal");
         w.primary_btn.add_css_class("macos-action-btn-primary");
         w.primary_btn.remove_css_class("macos-action-btn");
     } else {
@@ -1895,7 +2108,7 @@ fn create_keyboard_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         .build();
 
     let active_status_lbl = Label::builder()
-        .label("Distribución activa: 🇲🇽 Español (Latinoamérica)")
+        .label("Distribución activa: Español (Latinoamérica)")
         .css_classes(["card-section-title"])
         .xalign(0.0)
         .build();
@@ -1939,17 +2152,17 @@ fn create_keyboard_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     };
 
     let btn_latam = create_layout_btn(
-        "🇲🇽 Español (Latinoamérica)",
+        "Español (Latinoamérica)",
         "XKB: latam (Predeterminado)",
         "Tecla ñ, acentos muertos (áéíóú), ¿¡ y @ en AltGr+Q",
     );
     let btn_es = create_layout_btn(
-        "🇪🇸 Español (España)",
+        "Español (España)",
         "XKB: es",
         "Distribución ISO española con ç, ñ y @ en AltGr+2",
     );
     let btn_us = create_layout_btn(
-        "🇺🇸 English (US)",
+        "English (US)",
         "XKB: us",
         "Distribución ANSI estadounidense estándar",
     );
@@ -2074,10 +2287,10 @@ fn get_installed_cursor_themes() -> Vec<(String, String, &'static str)> {
                     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                         if name != "default" && found_names.insert(name.to_string()) {
                             let (label, desc) = match name {
-                                "macOS" => ("🍎 macOS Original", "Flecha negra clásica con contorno blanco Apple"),
-                                "macOS-White" => ("⚪ macOS Blanco", "Variante blanca oficial de Apple"),
-                                "Adwaita" => ("🐧 Adwaita", "Tema estándar de GNOME Linux"),
-                                "AdwaitaLegacy" => ("🐧 Adwaita Legacy", "Tema clásico de GNOME"),
+                                "macOS" => ("macOS Original", "Flecha negra clásica con contorno blanco Apple"),
+                                "macOS-White" => ("macOS Blanco", "Variante blanca oficial de Apple"),
+                                "Adwaita" => ("Adwaita", "Tema estándar de GNOME Linux"),
+                                "AdwaitaLegacy" => ("Adwaita Legacy", "Tema clásico de GNOME"),
                                 other => (other, "Tema instalado por el usuario"),
                             };
                             themes.push((name.to_string(), label.to_string(), desc));
@@ -2089,9 +2302,9 @@ fn get_installed_cursor_themes() -> Vec<(String, String, &'static str)> {
     }
 
     if themes.is_empty() {
-        themes.push(("macOS".to_string(), "🍎 macOS Original".to_string(), "Flecha negra clásica con contorno blanco Apple"));
-        themes.push(("macOS-White".to_string(), "⚪ macOS Blanco".to_string(), "Variante blanca oficial de Apple"));
-        themes.push(("Adwaita".to_string(), "🐧 Adwaita".to_string(), "Tema estándar de GNOME Linux"));
+        themes.push(("macOS".to_string(), "macOS Original".to_string(), "Flecha negra clásica con contorno blanco Apple"));
+        themes.push(("macOS-White".to_string(), "macOS Blanco".to_string(), "Variante blanca oficial de Apple"));
+        themes.push(("Adwaita".to_string(), "Adwaita".to_string(), "Tema estándar de GNOME Linux"));
     }
 
     // Ordenar con temas de macOS al principio
@@ -2136,12 +2349,12 @@ fn get_installed_gtk_themes() -> Vec<(String, String, &'static str)> {
     vec![
         (
             "Adwaita-Dark".to_string(),
-            "🍎 Adwaita macOS Oscuro".to_string(),
+            "Adwaita macOS Oscuro".to_string(),
             "Estilo macOS Sonoma oscuro con semáforos integrados y recortes Squircle",
         ),
         (
             "Adwaita-Light".to_string(),
-            "🍎 Adwaita macOS Claro".to_string(),
+            "Adwaita macOS Claro".to_string(),
             "Estilo macOS Sonoma claro con semáforos integrados y recortes Squircle",
         ),
     ]
@@ -2305,7 +2518,7 @@ fn create_appearance_pane(
         .build();
 
     let app_title = Label::builder()
-        .label("🌓 Modo de Apariencia del Sistema")
+        .label("Modo de Apariencia del Sistema")
         .css_classes(["card-section-title"])
         .xalign(0.0)
         .build();
@@ -2336,8 +2549,9 @@ fn create_appearance_pane(
         .spacing(6)
         .halign(Align::Center)
         .build();
-    let light_icon = Label::builder()
-        .label("☀️")
+    let light_icon = Image::builder()
+        .icon_name("weather-clear-symbolic")
+        .pixel_size(24)
         .css_classes(["cursor-preview-icon"])
         .build();
     let light_lbl = Label::builder()
@@ -2357,8 +2571,9 @@ fn create_appearance_pane(
         .spacing(6)
         .halign(Align::Center)
         .build();
-    let dark_icon = Label::builder()
-        .label("🌙")
+    let dark_icon = Image::builder()
+        .icon_name("weather-clear-night-symbolic")
+        .pixel_size(24)
         .css_classes(["cursor-preview-icon"])
         .build();
     let dark_lbl = Label::builder()
@@ -2390,7 +2605,7 @@ fn create_appearance_pane(
         .build();
 
     let theme_title = Label::builder()
-        .label("🎨 Tema de Aplicaciones y Ventanas (GTK)")
+        .label("Tema de Aplicaciones y Ventanas (GTK)")
         .css_classes(["card-section-title"])
         .xalign(0.0)
         .build();
@@ -2437,22 +2652,22 @@ fn create_appearance_pane(
             .margin_end(10)
             .build();
 
-        let icon_badge = Label::builder()
-            .label(if theme_id.starts_with("WhiteSur") { "🍎" } else if theme_id == "Adwaita" { "🐧" } else { "🎨" })
-            .css_classes([
-                "spotlight-banner-icon",
-                if theme_id.contains("Dark") {
-                    "badge-dark"
-                } else if theme_id.contains("Light") {
-                    "badge-blue"
-                } else if theme_id == "Adwaita" {
-                    "badge-teal"
-                } else {
-                    "badge-indigo"
-                },
-            ])
-            .valign(Align::Center)
-            .build();
+        let badge_style = if theme_id.contains("Dark") {
+            "badge-dark"
+        } else if theme_id.contains("Light") {
+            "badge-blue"
+        } else if theme_id == "Adwaita" {
+            "badge-teal"
+        } else {
+            "badge-indigo"
+        };
+        let icon_badge = make_system_glyph_badge(
+            "preferences-desktop-appearance-symbolic",
+            &["spotlight-banner-icon", badge_style],
+            44,
+            22,
+        );
+        icon_badge.set_valign(Align::Center);
 
         let text_col = GtkBox::builder()
             .orientation(Orientation::Vertical)
@@ -2511,7 +2726,7 @@ fn create_appearance_pane(
         .build();
 
     let cursor_title = Label::builder()
-        .label("🖱 Tema y Estilo del Puntero / Cursor")
+        .label("Tema y Estilo del Puntero / Cursor")
         .css_classes(["card-section-title"])
         .xalign(0.0)
         .build();
@@ -2633,7 +2848,7 @@ fn create_appearance_pane(
     let dock_cfg = DockConfig::load_or_create_default();
 
     let dock_header_lbl = Label::builder()
-        .label("🧭 Dock de Aplicaciones")
+        .label("Dock de Aplicaciones")
         .css_classes(["card-section-title"])
         .xalign(0.0)
         .build();
@@ -2672,7 +2887,7 @@ fn create_appearance_pane(
         .build();
 
     let desktop_header_lbl = Label::builder()
-        .label("🖥️ Superficie de Escritorio (Archivos e Iconos)")
+        .label("Superficie de Escritorio (Archivos e Iconos)")
         .css_classes(["card-section-title"])
         .xalign(0.0)
         .build();
@@ -2805,7 +3020,7 @@ fn create_appearance_pane(
         .build();
 
     let wp_header_lbl = Label::builder()
-        .label("🖼 Fondo de Pantalla del Escritorio")
+        .label("Fondo de Pantalla del Escritorio")
         .css_classes(["card-section-title"])
         .xalign(0.0)
         .build();
@@ -3228,7 +3443,7 @@ fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<dyn 
         .build();
 
     let current_title = Label::builder()
-        .label("🖼 Fondo de Pantalla Actual")
+        .label("Fondo de Pantalla Actual")
         .css_classes(["card-section-title"])
         .xalign(0.0)
         .build();
@@ -3289,7 +3504,7 @@ fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<dyn 
         .build();
 
     let gallery_title = Label::builder()
-        .label("🎨 Galería de Fondos y Colecciones")
+        .label("Galería de Fondos y Colecciones")
         .css_classes(["card-section-title"])
         .xalign(0.0)
         .build();
@@ -3448,38 +3663,64 @@ fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<dyn 
     let win_c = window.clone();
     let ref_choose = refresh_wallpaper_pane.clone();
     btn_choose.connect_clicked(move |_| {
-        let chooser = FileChooserNative::new(
-            Some("Seleccionar fondo de pantalla"),
-            Some(&win_c),
-            FileChooserAction::Open,
-            Some("Establecer Fondo"),
-            Some("Cancelar"),
-        );
+        let filter = build_wallpaper_file_filter();
+        let filters = gtk4::gio::ListStore::new::<FileFilter>();
+        filters.append(&filter);
 
-        let filter = FileFilter::new();
-        filter.set_name(Some("Archivos de imagen (*.jpg, *.png, *.webp, *.svg)"));
-        filter.add_mime_type("image/jpeg");
-        filter.add_mime_type("image/png");
-        filter.add_mime_type("image/webp");
-        filter.add_mime_type("image/svg+xml");
-        chooser.add_filter(&filter);
+        let chooser = FileDialog::builder()
+            .title("Seleccionar fondo de pantalla")
+            .accept_label("Establecer Fondo")
+            .modal(true)
+            .filters(&filters)
+            .default_filter(&filter)
+            .build();
+
+        if let Some(folder) = wallpaper_chooser_initial_folder() {
+            chooser.set_initial_folder(Some(&gtk4::gio::File::for_path(folder)));
+        }
 
         let ref_sub = ref_choose.clone();
-        chooser.connect_response(move |dialog, resp| {
-            if resp == gtk4::ResponseType::Accept {
-                if let Some(file) = dialog.file() {
+        chooser.open(
+            Some(&win_c),
+            gtk4::gio::Cancellable::NONE,
+            move |res| {
+                if let Ok(file) = res {
                     if let Some(path) = file.path() {
                         apply_system_wallpaper(Some(&path));
                         ref_sub();
                     }
                 }
-            }
-        });
-
-        chooser.show();
+            },
+        );
     });
 
     (scrolled, refresh_wallpaper_pane)
+}
+
+fn build_wallpaper_file_filter() -> FileFilter {
+    let filter = FileFilter::new();
+    filter.set_name(Some("Archivos de imagen (*.jpg, *.png, *.webp, *.svg)"));
+    for mime in ["image/jpeg", "image/png", "image/webp", "image/svg+xml"] {
+        filter.add_mime_type(mime);
+    }
+    filter
+}
+
+fn wallpaper_chooser_initial_folder_in(home: &std::path::Path) -> Option<PathBuf> {
+    [
+        "Imágenes/Wallpapers",
+        "Pictures/Wallpapers",
+        "Imágenes",
+        "Pictures",
+    ]
+    .into_iter()
+    .map(|rel| home.join(rel))
+    .find(|p| p.is_dir())
+}
+
+fn wallpaper_chooser_initial_folder() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    wallpaper_chooser_initial_folder_in(&home)
 }
 
 // ============================================================================
@@ -3566,20 +3807,35 @@ fn create_about_pane() -> ScrolledWindow {
         .spacing(8)
         .build();
 
-    for line in [
-        "🍎 Malus Desktop Environment v1.1.0",
-        "🖥 Compositor: Smithay 0.7 (Wayland Multi-CRTC DRM/KMS)",
-        "🎮 Gráficos: AMD Radeon Vega 7 (OpenGL ES 3.2 / GBM)",
-        "📐 Pantallas: detección DRM/KMS de conectores, modos de resolución y escalado fraccionario",
-        "⌨️ Teclado predeterminado: Español Latinoamericano (XKB 'latam')",
+    for (icon_name, line) in [
+        ("start-here-symbolic", "Malus Desktop Environment v1.1.0"),
+        ("video-display-symbolic", "Compositor: Smithay 0.7 (Wayland Multi-CRTC DRM/KMS)"),
+        ("applications-graphics-symbolic", "Gráficos: AMD Radeon Vega 7 (OpenGL ES 3.2 / GBM)"),
+        (
+            "preferences-desktop-display-symbolic",
+            "Pantallas: detección DRM/KMS de conectores, modos de resolución y escalado fraccionario",
+        ),
+        ("input-keyboard-symbolic", "Teclado predeterminado: Español Latinoamericano (XKB 'latam')"),
     ] {
-        card.append(
-            &Label::builder()
-                .label(line)
-                .css_classes(["card-section-title"])
-                .xalign(0.0)
-                .build(),
-        );
+        let row = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(10)
+            .build();
+        let glyph = Image::builder()
+            .icon_name(icon_name)
+            .pixel_size(16)
+            .valign(Align::Center)
+            .build();
+        let lbl = Label::builder()
+            .label(line)
+            .css_classes(["card-section-title"])
+            .xalign(0.0)
+            .wrap(true)
+            .hexpand(true)
+            .build();
+        row.append(&glyph);
+        row.append(&lbl);
+        card.append(&row);
     }
 
     pane.append(&card);
@@ -3608,11 +3864,13 @@ fn create_spotlight_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         .css_classes(["macos-group-card"])
         .build();
 
-    let icon_badge = Label::builder()
-        .label("🔍")
-        .css_classes(["spotlight-banner-icon"])
-        .valign(Align::Start)
-        .build();
+    let icon_badge = make_system_glyph_badge(
+        "system-search-symbolic",
+        &["spotlight-banner-icon", "badge-blue"],
+        44,
+        22,
+    );
+    icon_badge.set_valign(Align::Start);
 
     let banner_text = GtkBox::builder()
         .orientation(Orientation::Vertical)
@@ -3745,11 +4003,13 @@ fn create_dock_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         .css_classes(["macos-group-card"])
         .build();
 
-    let icon_badge = Label::builder()
-        .label("🖥️")
-        .css_classes(["spotlight-banner-icon", "badge-blue"])
-        .valign(Align::Start)
-        .build();
+    let icon_badge = make_system_glyph_badge(
+        "user-desktop-symbolic",
+        &["spotlight-banner-icon", "badge-blue"],
+        44,
+        22,
+    );
+    icon_badge.set_valign(Align::Start);
 
     let banner_text = GtkBox::builder()
         .orientation(Orientation::Vertical)
@@ -3846,7 +4106,7 @@ fn create_dock_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         .hexpand(true)
         .build();
     let eff_val = Label::builder()
-        .label("🧞 Efecto Aladino (Genie Lamp)")
+        .label("Efecto Aladino (Genie Lamp)")
         .css_classes(["card-section-sub"])
         .build();
     eff_row.append(&eff_lbl);
@@ -3891,4 +4151,90 @@ fn create_dock_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
 
     let refresh: Rc<dyn Fn()> = Rc::new(|| {});
     (scrolled, refresh)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wallpaper_chooser_initial_folder_prefers_wallpapers_subdirs() {
+        let temp_root = std::env::temp_dir().join("malus_settings_wallpaper_folder_test");
+        let _ = std::fs::remove_dir_all(&temp_root);
+        let images = temp_root.join("Imágenes");
+        let wallpapers = images.join("Wallpapers");
+        std::fs::create_dir_all(&wallpapers).unwrap();
+
+        assert_eq!(
+            wallpaper_chooser_initial_folder_in(&temp_root),
+            Some(wallpapers.clone())
+        );
+
+        std::fs::remove_dir_all(&wallpapers).unwrap();
+        assert_eq!(
+            wallpaper_chooser_initial_folder_in(&temp_root),
+            Some(images)
+        );
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn gtk_ui_smoke_checks() {
+        if gtk4::init().is_err() {
+            return;
+        }
+        let _ = libadwaita::init();
+        load_macos_settings_css();
+
+        // 1. Verificar filtro de selector de fondo (FileDialog)
+        let filter = build_wallpaper_file_filter();
+        assert_eq!(
+            filter.name().as_deref(),
+            Some("Archivos de imagen (*.jpg, *.png, *.webp, *.svg)")
+        );
+        let filters = gtk4::gio::ListStore::new::<FileFilter>();
+        filters.append(&filter);
+        let dialog = FileDialog::builder()
+            .title("Seleccionar fondo de pantalla")
+            .accept_label("Establecer Fondo")
+            .modal(true)
+            .filters(&filters)
+            .default_filter(&filter)
+            .build();
+        assert_eq!(dialog.title(), "Seleccionar fondo de pantalla");
+        assert_eq!(dialog.accept_label().as_deref(), Some("Establecer Fondo"));
+        assert!(dialog.is_modal());
+
+        // 2. Verificar alto <= 36 px y squircle del filtro lateral
+        let search_entry = build_sidebar_search_entry();
+        let shell = create_squircle_search_shell(&search_entry);
+        let (_entry_min_h, _entry_nat_h, _, _) = search_entry.measure(Orientation::Vertical, 200);
+        let (min_h, nat_h, _, _) = shell.measure(Orientation::Vertical, 200);
+        assert!(
+            min_h <= SIDEBAR_SEARCH_MAX_HEIGHT,
+            "La altura mínima ({min_h}) supera {SIDEBAR_SEARCH_MAX_HEIGHT}px"
+        );
+        assert!(
+            nat_h <= SIDEBAR_SEARCH_MAX_HEIGHT,
+            "La altura natural ({nat_h}) supera {SIDEBAR_SEARCH_MAX_HEIGHT}px"
+        );
+        assert_eq!(SETTINGS_SIDEBAR_WIDTH, 212);
+        let (min_w, _, _, _) = shell.measure(Orientation::Horizontal, -1);
+        assert!(
+            min_w <= SETTINGS_SIDEBAR_WIDTH - 20,
+            "El ancho mínimo del buscador ({min_w}) excede el espacio útil de la sidebar ({SETTINGS_SIDEBAR_WIDTH}px)"
+        );
+        assert!(SIDEBAR_SEARCH_HEIGHT <= SIDEBAR_SEARCH_MAX_HEIGHT);
+
+        // 3. Verificar altura fija (sin vexpand) y alineación izquierda en ítems de la sidebar
+        let nav_btn = build_sidebar_nav_button("preferences-desktop-appearance-symbolic", "Aspecto");
+        assert!(!nav_btn.property::<bool>("vexpand"));
+        assert_eq!(nav_btn.valign(), Align::Start);
+        let (btn_min_h, btn_nat_h, _, _) = nav_btn.measure(Orientation::Vertical, 200);
+        assert!(
+            btn_min_h <= 36 && btn_nat_h <= 36,
+            "La fila de la sidebar creció verticalmente: min={btn_min_h}, nat={btn_nat_h}"
+        );
+    }
 }
