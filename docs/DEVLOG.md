@@ -4,6 +4,44 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-19] — Resolución Completa de Pendientes en Branches (ADR 0006, Fases 1–6)
+
+Implementación integral de las 6 fases planificadas a partir de [`0006-branches-pendiente.md`](decisiones/0006-branches-pendiente.md) para equipar a **Branches** (`crates/branches`) como explorador nativo completo de **Malus DE**:
+
+### 1. Fase 1 — Selección Múltiple Unificada y Arrastre por Lotes (`7924b69`)
+- Unificadas las rutas de selección múltiple (`get_selected_items`, `select_all`, selección por rango `Shift` y conmutación `Ctrl`/`Cmd`) en [`list_view.rs`](../crates/branches/src/views/list_view.rs), [`column_view.rs`](../crates/branches/src/views/column_view.rs), [`gallery_view.rs`](../crates/branches/src/views/gallery_view.rs) y [`folder_pane.rs`](../crates/branches/src/folder_pane.rs).
+- Habilitado arrastre multi-archivo coherente (`views/mod.rs`) y corregido el conteo real de ítems en [`status_bar.rs`](../crates/branches/src/status_bar.rs) / [`app_window.rs`](../crates/branches/src/app_window.rs).
+
+### 2. Fase 2 — Trabajos Asíncronos con Progreso, Cancelación, Conflictos, `Undo` y Archivos Comprimidos (`b77a18c`)
+- Creados [`jobs.rs`](../crates/branches/src/jobs.rs) y [`job_ui.rs`](../crates/branches/src/job_ui.rs) con copia, movimiento, duplicado y envío a papelera por bloques en segundo plano, botón de cancelación e indicador/popover de progreso en la barra de herramientas.
+- Diálogo interactivo de resolución de conflictos (*Reemplazar*, *Saltar*, *Mantener ambos* y *Aplicar a todos*), pila `UndoEntry` (`Ctrl/Cmd+Z`) cubriendo movimientos, duplicados, renombrados y envíos a papelera, además de compresión (`.zip`, `.tar.gz`) y extracción (`.zip`, `.tar.*`, `.7z`).
+
+### 3. Fase 3 — Ciclo Completo de Papelera FreeDesktop y Etiquetas Canónicas (`b49a5ee`)
+- Soporte completo de `.trashinfo` (`restore_from_trash`, `empty_trash`, `delete_permanent` con confirmación `Shift+Delete` / `Cmd+Alt+Backspace`), banner contextual en Papelera y menú secundario en la barra lateral.
+- Catálogo unificado de 7 etiquetas canónicas (`TAG_CATALOG` en [`db.rs`](../crates/branches/src/db.rs)) con migración automática SQLite v2 desde nombres previos, sincronización con atributo extendido `user.malus.tags` vía `gio::File`, indicadores de color en las 4 vistas y selector contextual de puntos.
+
+### 4. Fase 4 — *Obtener Información*, Ordenación, Historial de Navegación y *Drop* en `PathBar` (`aa06006`)
+- Nueva ventana [`info_window.rs`](../crates/branches/src/info_window.rs) (`Ctrl/Cmd+I` / botón *Info*) separada de Quick Look, con cálculo recursivo cancelable de tamaño en carpetas, edición de permisos POSIX `rwx`, selector *«Abrir con…»* (`gio::AppInfo::all_for_type` + predeterminada) y etiquetas del ítem.
+- Selector de ordenación en toolbar (`win.sort_by`, `win.sort_order`), popovers de historial en botones `<` / `>` (`go_back_steps`, `go_forward_steps`) y `DropTarget` en los segmentos de [`path_bar.rs`](../crates/branches/src/path_bar.rs).
+
+### 5. Fase 5 — Búsqueda Recursiva, Malus Link y Puente con `malus-de-preview` (`381f293`)
+- Añadido selector de alcance junto a `search_entry` (*Esta carpeta* vs *Subcarpetas*) y recorrido BFS acotado/cancelable en segundo plano (`search_paths_recursive` en [`fs_backend.rs`](../crates/branches/src/fs_backend.rs)), excluyendo `.git`, `node_modules` y `target`.
+- Integración D-Bus con **Malus Link** (`org.malus_de.Link`: `GetConnectedDevices` y `ShareFile`) desde barra y menú contextual en [`app_window.rs`](../crates/branches/src/app_window.rs).
+- Puente D-Bus hacia `dev.malus.Preview` en [`quick_look.rs`](../crates/branches/src/quick_look.rs) con respaldo local mejorado (navegación `←/→`, previsualización PDF página 1 vía `pdftoppm` y metadatos multimedia vía `ffprobe`).
+
+### 6. Fase 6 — Red (`SMB`/`SFTP`/`NFS`), Montajes GVfs y Asociación MIME de Sesión (`c79a462`)
+- Creado [`network.rs`](../crates/branches/src/network.rs) con validación/normalización de URIs (`smb://`, `sftp://`, `ssh://` -> `sftp://`, `nfs://`, `dav://`, `davs://`, `ftp://`, `ftps://`, `afp://`), historial persistente de servidores recientes y diálogo modal **Conectar al servidor…** (`Ctrl/Cmd+K`, acción `win.connect_server`) montando volúmenes vía `gio::File::mount_enclosing_volume` + `gtk4::MountOperation`.
+- Integrada la entrada **«Red»** y montajes GVfs activos en [`sidebar.rs`](../crates/branches/src/sidebar.rs) con iconos remotos y botón de desmontaje.
+- Actualizado [`install-session.sh`](../scripts/install-session.sh) para refrescar `/usr/share/applications` (`update-desktop-database`) y registrar `dev.malus.Branches.desktop` como gestor predeterminado para `inode/directory` y `x-scheme-handler/trash` mediante `xdg-mime`.
+
+### 7. Validación
+- `cargo test --offline -p malus-de-branches`: **48 passed; 0 failed** (`0 warnings`).
+- `cargo check --offline --workspace --all-targets`: **0 warnings** en los 16 crates del workspace.
+- `cargo build --release --offline -p malus-de-branches`: compilación optimizada exitosa (`1m 26s`, **0 warnings**).
+- `bash -n scripts/install-session.sh`: sintaxis válida.
+
+---
+
 ## [2026-11-19] — Refinamiento de Pestañas en Branches, Limpieza de Warnings en Workspace y ADR 0007 (`Preview`)
 
 ### 1. Medidas y Botón de Cierre en Barra de Pestañas (`crates/branches`)
