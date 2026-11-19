@@ -4,6 +4,35 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-19] — Corrección Integral de Desconexión/Hotplug Multi-Monitor (`compositor`, `common`, `wallpaper`, `top-bar`, `dock`, `settings`)
+
+Resuelto el fallo por el cual desconectar el monitor principal provocaba que la pantalla sobreviviente no asumiera el rol principal, dejara el fondo negro y no reubicara `malus-top-bar` ni `malus-dock`:
+
+### 1. Identidad de Salida y Promoción Automática a Principal ([`config.rs`](../crates/common/src/config.rs))
+- Añadidos `DisplaysConfig::primary_output` y `DisplayOutputConfig::matches_monitor_identity` (con coincidencia estricta cuando existe `connector` para evitar falsos positivos por coordenadas `(0, 0)` desactualizadas).
+- Normalización de `primary` y `master_scale` dentro de `DisplaysConfig::recalculate_layout` cuando el monitor principal previo desaparece de `outputs`, garantizando que el monitor sobreviviente quede como `primary = true` en `(0, 0)`.
+
+### 2. Reubicación Real de `LayerSurface` y Señalización DRM ([`state.rs`](../crates/compositor/src/state.rs), [`drm.rs`](../crates/compositor/src/backend/drm.rs))
+- `MalusState::relocate_primary_shell_layers_for_config` ahora emite `old_output.leave` sobre el árbol de superficies saliente y `primary_output.enter` junto con `set_preferred_scale` y `send_configure` en todas las capas reubicadas o preservadas (`malus-top-bar`, `malus-dock`, `malus-app-switcher`).
+- En `reconcile_drm_outputs`, los `global` de `wl_output` desconectados se retiran después de reubicar capas y migrar ventanas, emitiendo `removed.output.leave`, marcando `full_damage_buffers` / `dock_redraw_buffers` / `background_dirty` en las salidas activas, vaciando clientes (`flush_clients`) y difundiendo `IpcMessage::ReloadDisplaysConfig`.
+
+### 3. Wallpaper Dinámico, Top Bar, Dock, Control Center y Ajustes ([`main.rs`](../crates/wallpaper/src/main.rs), [`main.rs`](../crates/top-bar/src/main.rs), [`main.rs`](../crates/dock/src/main.rs), [`control_center.rs`](../crates/top-bar/src/ui/control_center.rs), [`main.rs`](../crates/settings/src/main.rs))
+- **Wallpaper (`malus-de-wallpaper`):** agregado `ApplicationHoldGuard` para no cerrar el daemon durante transiciones de salidas, creación secuencial de nuevas ventanas antes de cerrar las previas y resincronización debounced (`120 ms`) ante `display.monitors().connect_items_changed` e IPC `ReloadDisplaysConfig`, promoviendo los iconos del escritorio al monitor sobreviviente.
+- **Top Bar y Dock (`malus-de-top-bar`, `malus-de-dock`):** fijado del monitor primario al inicio (`find_primary_gdk_monitor` antes de `present()`) y escucha de `ReloadDisplaysConfig` / `connect_items_changed` para recalcular tamaño, redibujar y re-registrar slots de miniaturas sin llamar `set_monitor`/`set_visible(false)` en tiempo de ejecución sobre superficies `gtk4-layer-shell` mapeadas.
+- **Control Center y Ajustes (`control_center.rs`, `malus-de-settings`):** actualización en vivo de títulos por conector (`title_lbl`, `mon0_title`, `mon1_title`), reconstrucción dinámica de tarjetas en `rebuild_monitors_grid` cuando cambia el conjunto de conectores y ocultamiento automático de controles duales al quedar 1 solo monitor.
+
+### 4. Validación
+- `cargo check --offline --workspace --all-targets`: **0 warnings**.
+- `cargo test --offline -p malus-de-common display`: **7 passed; 0 failed**.
+- `cargo test --offline -p malus-de-compositor`: **84 passed; 0 failed**.
+- `cargo test --offline -p malus-de-dock`: **15 passed; 0 failed**.
+- `cargo test --offline -p malus-de-wallpaper`: **20 passed; 0 failed**.
+- `cargo test --offline -p malus-de-settings`: **2 passed; 0 failed**.
+- `cargo test --offline -p malus-de-top-bar`: **9 passed; 1 failed** (`services::tests::test_brightness_service` falló dentro del sandbox al escribir en sysfs del host).
+- `cargo build --release --offline -p malus-de-compositor -p malus-de-top-bar -p malus-de-dock -p malus-de-wallpaper -p malus-de-settings`: compilado limpio en `1m 59s`.
+
+---
+
 ## [2026-11-19] — Quick Look Fluido Estilo macOS (`Overlay`, Multimedia, Caché LRU, Precarga) y Cierre de ADR 0006
 
 ### 1. Vista Rápida (`Espacio`) con Media Real, Transición macOS y Sin *Black Hole*
