@@ -4,6 +4,17 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-19] — Panel de Ajustes de Wi-Fi Estilo macOS (`malus-de-settings` + `malus-de-top-bar`)
+
+- Implementado el panel completo de **Wi-Fi** ([`wifi_pane.rs`](../crates/settings/src/wifi_pane.rs), [`macos-settings.css`](../crates/settings/src/styles/macos-settings.css), [`main.rs`](../crates/settings/src/main.rs)) siguiendo el diseño de [`assets/screenshots/Wi-Fi.png`](../assets/screenshots/Wi-Fi.png):
+  - **Tarjeta superior unificada:** icono circular/cuadrado azul, descripción con enlace *"Obtén detalles..."*, interruptor Wi-Fi (`nmcli radio wifi on/off`) y bloque inferior de red conectada con indicador verde/ámbar/gris, alerta contextual de seguridad (redes abiertas o WEP), candado, barras de intensidad y botón **`Detalles...`**.
+  - **Listas agrupadas *Redes conocidas* y *Otras redes*:** filas con check `✓` alineado en la red activa, candado, intensidad, conexión directa (o diálogo de contraseña WPA2/WPA3), menú contextual `⋯` (*Conectar / Desconectar*, *Detalles...*, *Olvidar esta red...*) y botón **`Otra...`** para redes ocultas.
+  - **Preferencias inferiores y pie:** selectores *"Preguntar al conectar"* y *"Preguntar antes de conectarse"* persistidos en `~/.config/malus-de/wifi-settings.toml`, botón **`Avanzado...`** (MAC, IPv4, DNS y gestión de perfiles conocidos) y botón **`?`** de ayuda.
+- Enlazados los botones *"Preferencias de Wi-Fi..."* de [`status_tray.rs`](../crates/top-bar/src/ui/status_tray.rs) y [`control_center.rs`](../crates/top-bar/src/ui/control_center.rs) directamente a `malus-de-settings --panel wifi`.
+- Validación: `cargo check --offline --workspace --all-targets` (**0 warnings**), `cargo test --offline -p malus-de-settings` (**4 passed; 0 failed**).
+
+---
+
 ## [2026-11-19] — Corrección de Pánico en Miniaturas Delgadas/Pequeñas (`branches`, `wallpaper`)
 
 - Corregido pánico en [`thumbnail_squircle_radius`](../crates/branches/src/views/mod.rs#L1233-L1238) (`min > max, or either was NaN. min = 3.0, max = 2.25`) y en su homólogo [`thumb_squircle_radius`](../crates/wallpaper/src/main.rs#L109-L114), que se disparaba cuando una imagen muy estrecha escalaba por debajo de `7 px` en su lado menor (`min_side * 0.45 < 3.0`).
