@@ -108,12 +108,14 @@ fn thumb_squircle_sdf(px: f32, py: f32, half_w: f32, half_h: f32, radius: f32) -
 /// Mismo radio relativo que las miniaturas de Branches.
 fn thumb_squircle_radius(width: i32, height: i32) -> f32 {
     let min_side = width.min(height).max(1) as f32;
-    (min_side * 0.22).clamp(3.0, min_side * 0.45)
+    let max_r = (min_side * 0.45).max(0.5);
+    let min_r = 3.0_f32.min(max_r);
+    (min_side * 0.22).clamp(min_r, max_r)
 }
 
 /// Recorta a transparente las esquinas de un buffer RGBA (stride = width * 4) con squircle.
 fn apply_thumb_squircle_clip_rgba(rgba: &mut [u8], width: usize, height: usize, radius: f32) {
-    if width == 0 || height == 0 {
+    if width < 4 || height < 4 {
         return;
     }
     let half_w = width as f32 * 0.5;

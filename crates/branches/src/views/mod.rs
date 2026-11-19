@@ -1232,11 +1232,13 @@ fn squircle_sdf(px: f32, py: f32, half_w: f32, half_h: f32, radius: f32) -> f32 
 
 fn thumbnail_squircle_radius(width: i32, height: i32) -> f32 {
     let min_side = width.min(height).max(1) as f32;
-    (min_side * 0.22).clamp(3.0, min_side * 0.45)
+    let max_r = (min_side * 0.45).max(0.5);
+    let min_r = 3.0_f32.min(max_r);
+    (min_side * 0.22).clamp(min_r, max_r)
 }
 
 fn apply_squircle_clip_rgba(rgba: &mut [u8], width: usize, height: usize, radius: f32) {
-    if width == 0 || height == 0 {
+    if width < 4 || height < 4 {
         return;
     }
     let half_w = width as f32 * 0.5;
@@ -1573,5 +1575,17 @@ mod tests {
         assert_eq!(gal_after_toggle, vec!["a.txt", "c.txt"]);
         gallery.select_all();
         assert_eq!(gallery.get_selected_items().len(), 3);
+    }
+
+    #[test]
+    fn thin_and_tiny_thumbnails_do_not_panic_in_squircle_radius() {
+        // Reproducción del caso real: imagen muy delgada escalada a ancho/alto <= 5 px (min_side * 0.45 = 2.25 < 3.0)
+        for &(w, h) in &[(512, 5), (5, 512), (1, 200), (0, 0), (-4, 12), (64, 64)] {
+            let r = super::thumbnail_squircle_radius(w, h);
+            assert!(r.is_finite() && r > 0.0);
+        }
+        let mut thin = vec![255u8; 512 * 3 * 4];
+        super::apply_squircle_clip_rgba(&mut thin, 512, 3, super::thumbnail_squircle_radius(512, 3));
+        assert!(thin.iter().all(|&b| b == 255));
     }
 }

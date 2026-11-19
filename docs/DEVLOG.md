@@ -4,6 +4,14 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-19] — Corrección de Pánico en Miniaturas Delgadas/Pequeñas (`branches`, `wallpaper`)
+
+- Corregido pánico en [`thumbnail_squircle_radius`](../crates/branches/src/views/mod.rs#L1233-L1238) (`min > max, or either was NaN. min = 3.0, max = 2.25`) y en su homólogo [`thumb_squircle_radius`](../crates/wallpaper/src/main.rs#L109-L114), que se disparaba cuando una imagen muy estrecha escalaba por debajo de `7 px` en su lado menor (`min_side * 0.45 < 3.0`).
+- Limitado `min_r = 3.0_f32.min(max_r)` con `max_r = (min_side * 0.45).max(0.5)` y omitido el recorte squircle cuando `width < 4 || height < 4`.
+- Validado con la prueba de regresión `thin_and_tiny_thumbnails_do_not_panic_in_squircle_radius` (`malus-de-branches`: **55 passed; 0 failed**, `malus-de-wallpaper`: **20 passed; 0 failed**, `0 warnings`).
+
+---
+
 ## [2026-11-19] — Módulo Nativo de AirDrop en Malus DE (`owly` AWDL + `malus-de-link` + `top-bar` + `branches` + `malus-ctl`)
 
 Implementación completa del módulo de **AirDrop** compatible con dispositivos Apple (MacBook Air / iPhone / iPad) sobre **AWDL (`awdl0`)** usando **`t4t5/owly` 0.4.3** (`owlyd` + `owly`, instalado vía RPM oficial en Fedora 45):
