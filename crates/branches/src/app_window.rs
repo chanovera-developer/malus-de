@@ -11,7 +11,7 @@ use gtk4::gio;
 use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, EventControllerKey,
-    GestureClick, Label, MenuButton, Orientation, PackType, Paned, Revealer,
+    GestureClick, Label, MenuButton, Orientation, Overlay, PackType, Paned, Revealer,
     RevealerTransitionType, SearchEntry, Stack, StackTransitionType, ToggleButton, WindowControls,
     WindowHandle,
 };
@@ -32,6 +32,7 @@ struct BranchesTab {
 
 pub struct BranchesWindow {
     window: ApplicationWindow,
+    root_overlay: Overlay,
     sidebar: Rc<Sidebar>,
     path_bar: Rc<PathBar>,
     status_bar: Rc<StatusBar>,
@@ -657,7 +658,9 @@ impl BranchesWindow {
         hpaned.set_start_child(Some(&left_pane));
         hpaned.set_end_child(Some(&right_pane));
 
-        window.set_child(Some(&hpaned));
+        let root_overlay = Overlay::new();
+        root_overlay.set_child(Some(&hpaned));
+        window.set_child(Some(&root_overlay));
 
         let config_file = gio::File::for_path(malus_de_common::config::BranchesConfig::config_path());
         let config_monitor = config_file
@@ -677,6 +680,7 @@ impl BranchesWindow {
 
         let branches_window = Rc::new(Self {
             window,
+            root_overlay,
             sidebar,
             path_bar,
             status_bar,
@@ -1354,7 +1358,8 @@ impl BranchesWindow {
         let pane = self.active_pane();
         let item = pane.get_selected_item();
         let items = pane.items_snapshot();
-        self.quick_look.toggle_with_items(&self.window, item, items);
+        self.quick_look
+            .toggle_in_overlay(&self.root_overlay, item, items);
     }
 
     fn share_via_malus_link(&self) {
@@ -2456,6 +2461,34 @@ impl BranchesWindow {
             );
             let is_shift = state.contains(gdk::ModifierType::SHIFT_MASK);
 
+            if bw.quick_look.is_open() {
+                if !is_ctrl
+                    && !is_alt
+                    && matches!(keyval, gdk::Key::space | gdk::Key::KP_Space | gdk::Key::Escape)
+                {
+                    bw.quick_look.close();
+                    return glib::Propagation::Stop;
+                }
+                if !is_ctrl && !is_alt && !is_shift && keyval == gdk::Key::Left {
+                    bw.quick_look.step_item(-1);
+                    return glib::Propagation::Stop;
+                }
+                if !is_ctrl && !is_alt && !is_shift && keyval == gdk::Key::Right {
+                    bw.quick_look.step_item(1);
+                    return glib::Propagation::Stop;
+                }
+                if !is_ctrl && !is_alt && !is_shift && keyval == gdk::Key::Page_Up {
+                    if bw.quick_look.step_pdf_page(-1) {
+                        return glib::Propagation::Stop;
+                    }
+                }
+                if !is_ctrl && !is_alt && !is_shift && keyval == gdk::Key::Page_Down {
+                    if bw.quick_look.step_pdf_page(1) {
+                        return glib::Propagation::Stop;
+                    }
+                }
+            }
+
             if keyval == gdk::Key::Escape && bw.search_toggle_btn.is_active() {
                 bw.search_toggle_btn.set_active(false);
                 return glib::Propagation::Stop;
@@ -2688,6 +2721,7 @@ impl BranchesWindow {
     fn clone_ref(&self) -> Rc<Self> {
         Rc::new(Self {
             window: self.window.clone(),
+            root_overlay: self.root_overlay.clone(),
             sidebar: self.sidebar.clone(),
             path_bar: self.path_bar.clone(),
             status_bar: self.status_bar.clone(),

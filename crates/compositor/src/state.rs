@@ -5899,9 +5899,11 @@ impl XdgShellHandler for MalusState {
         }
 
         let hint_entry = self.close_button_hints.remove(surf);
+        let skip_black_hole = should_skip_black_hole_for_app_id(app_id_for_surface(surf).as_deref());
         if let Some(ref win) = window {
             let geo = win.geometry();
-            if !self.expose.active
+            if !skip_black_hole
+                && !self.expose.active
                 && !self.minimized_windows.contains_key(surf)
                 && geo.size.w >= 80
                 && geo.size.h >= 48
@@ -6341,6 +6343,14 @@ impl SessionLockHandler for MalusState {
 }
 
 delegate_session_lock!(MalusState);
+
+fn should_skip_black_hole_for_app_id(app_id: Option<&str>) -> bool {
+    let Some(id) = app_id else {
+        return false;
+    };
+    let lower = id.to_ascii_lowercase();
+    lower.contains("branches.quicklook") || lower == "dev.malus.preview" || lower == "malus-de-preview"
+}
 
 #[cfg(test)]
 mod tests {
@@ -7264,6 +7274,20 @@ mod tests {
         );
         assert_eq!(state.last_pointer_location, Some(Point::from((1919.0, 1079.0))));
         assert!(!state.ssd.grab_active);
+    }
+
+    #[test]
+    fn quick_look_and_preview_windows_skip_black_hole_close_effect() {
+        assert!(super::should_skip_black_hole_for_app_id(Some(
+            "dev.malus.Branches.QuickLook"
+        )));
+        assert!(super::should_skip_black_hole_for_app_id(Some(
+            "dev.malus.Preview"
+        )));
+        assert!(!super::should_skip_black_hole_for_app_id(Some(
+            "dev.malus.Branches"
+        )));
+        assert!(!super::should_skip_black_hole_for_app_id(None));
     }
 
     #[test]

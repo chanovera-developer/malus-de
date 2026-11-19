@@ -6,8 +6,8 @@ use gtk4::glib;
 use gtk4::pango;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Application, ApplicationWindow, Box as GtkBox, Button, ContentFit, EventControllerKey,
-    Grid, Image, Label, Orientation, Picture, PolicyType, PropagationPhase, ScrolledWindow,
+    Align, Application, Box as GtkBox, Button, ContentFit, EventControllerKey, GestureClick, Grid,
+    Image, Label, Orientation, Overlay, Picture, PolicyType, PropagationPhase, ScrolledWindow,
     Separator, TextView, Window,
 };
 use std::cell::{Cell, RefCell};
@@ -66,6 +66,11 @@ impl Drop for MediaPlaybackHandle {
 
 pub struct QuickLook {
     window: RefCell<Option<Window>>,
+    host_overlay: RefCell<Option<Overlay>>,
+    backdrop: RefCell<Option<GtkBox>>,
+    container: RefCell<Option<GtkBox>>,
+    closing: Cell<bool>,
+    anim_gen: Cell<u64>,
     current_path: RefCell<Option<PathBuf>>,
     items_list: RefCell<Vec<FileItem>>,
     current_index: Cell<usize>,
@@ -81,6 +86,11 @@ impl QuickLook {
     pub fn new() -> Rc<Self> {
         Rc::new(Self {
             window: RefCell::new(None),
+            host_overlay: RefCell::new(None),
+            backdrop: RefCell::new(None),
+            container: RefCell::new(None),
+            closing: Cell::new(false),
+            anim_gen: Cell::new(0),
             current_path: RefCell::new(None),
             items_list: RefCell::new(Vec::new()),
             current_index: Cell::new(0),
@@ -94,27 +104,71 @@ impl QuickLook {
     }
 
     pub fn is_open(&self) -> bool {
-        self.window.borrow().is_some()
+        (self.backdrop.borrow().is_some() || self.window.borrow().is_some()) && !self.closing.get()
     }
 
-    pub fn close(&self) {
+    pub fn close(self: &Rc<Self>) {
+        if self.closing.get() {
+            return;
+        }
+        let has_overlay = self.backdrop.borrow().is_some();
+        let has_window = self.window.borrow().is_some();
+        if !has_overlay && !has_window {
+            return;
+        }
+
+        self.closing.set(true);
+        let next_gen = self.anim_gen.get().wrapping_add(1);
+        self.anim_gen.set(next_gen);
         self.stop_active_media();
+
+        if let Some(bd) = self.backdrop.borrow().as_ref() {
+            bd.remove_css_class("ql-open");
+            bd.add_css_class("ql-closing");
+        }
+        if let Some(card) = self.container.borrow().as_ref() {
+            card.remove_css_class("ql-open");
+            card.add_css_class("ql-closing");
+        }
+
+        let self_c = self.clone();
+        glib::timeout_add_local_once(Duration::from_millis(165), move || {
+            if self_c.anim_gen.get() != next_gen {
+                return;
+            }
+            self_c.finish_close_immediately();
+        });
+    }
+
+    fn finish_close_immediately(&self) {
+        self.stop_active_media();
+        if let (Some(overlay), Some(bd)) = (
+            self.host_overlay.borrow_mut().take(),
+            self.backdrop.borrow_mut().take(),
+        ) {
+            overlay.remove_overlay(&bd);
+        } else {
+            *self.host_overlay.borrow_mut() = None;
+            *self.backdrop.borrow_mut() = None;
+        }
+        *self.container.borrow_mut() = None;
         let win_opt = self.window.borrow_mut().take();
         self.clear_refs();
+        self.closing.set(false);
         if let Some(win) = win_opt {
             win.close();
         }
     }
 
     #[allow(dead_code)]
-    pub fn toggle(self: &Rc<Self>, parent: &ApplicationWindow, item: Option<FileItem>) {
+    pub fn toggle(self: &Rc<Self>, overlay: &Overlay, item: Option<FileItem>) {
         let items = item.iter().cloned().collect::<Vec<_>>();
-        self.toggle_with_items(parent, item, items);
+        self.toggle_in_overlay(overlay, item, items);
     }
 
-    pub fn toggle_with_items(
+    pub fn toggle_in_overlay(
         self: &Rc<Self>,
-        parent: &ApplicationWindow,
+        overlay: &Overlay,
         item: Option<FileItem>,
         items: Vec<FileItem>,
     ) {
@@ -122,6 +176,13 @@ impl QuickLook {
             self.close();
             return;
         }
+        // Si seguía en medio de la animación de cierre, limpiar antes de reabrir
+        if self.closing.get() {
+            let next_gen = self.anim_gen.get().wrapping_add(1);
+            self.anim_gen.set(next_gen);
+            self.finish_close_immediately();
+        }
+
         let Some(item) = item else { return };
 
         // Puente con aplicación dedicada `malus-de-preview` (ADR 0007) cuando esté disponible
@@ -139,7 +200,7 @@ impl QuickLook {
             items
         };
         self.current_index.set(idx);
-        self.show(parent, &item);
+        self.show_in_overlay(overlay, &item);
     }
 
     fn stop_active_media(&self) {
@@ -184,7 +245,7 @@ impl QuickLook {
         }
     }
 
-    fn step_item(&self, delta: isize) {
+    pub fn step_item(&self, delta: isize) {
         let len = self.items_list.borrow().len();
         if len <= 1 {
             return;
@@ -198,38 +259,171 @@ impl QuickLook {
         }
     }
 
+    pub fn step_pdf_page(&self, delta: i32) -> bool {
+        if let Some(cb) = self.page_step_cb.borrow().as_ref() {
+            return cb(delta);
+        }
+        false
+    }
+
     pub fn show_standalone(self: &Rc<Self>, app: &Application, item: &FileItem) {
         let win = Window::builder()
             .application(app)
             .title(&item.name)
-            .default_width(800)
-            .default_height(580)
+            .default_width(820)
+            .default_height(600)
+            .decorated(false)
             .css_classes(["branches-quicklook-window"])
             .build();
         *self.items_list.borrow_mut() = vec![item.clone()];
         self.current_index.set(0);
-        self.setup_window(&win, item);
+
+        let root_box = self.build_preview_card(item);
+        root_box.set_margin_top(18);
+        root_box.set_margin_bottom(18);
+        root_box.set_margin_start(18);
+        root_box.set_margin_end(18);
+        win.set_child(Some(&root_box));
+
+        let key_controller = EventControllerKey::new();
+        key_controller.set_propagation_phase(PropagationPhase::Capture);
+        let self_key = self.clone();
+        key_controller.connect_key_pressed(move |_, keyval, _, state| {
+            let has_mod = state.intersects(ModifierType::CONTROL_MASK | ModifierType::ALT_MASK);
+            if !has_mod && matches!(keyval, Key::space | Key::KP_Space | Key::Escape) {
+                self_key.close();
+                return glib::Propagation::Stop;
+            }
+            if !has_mod && keyval == Key::Left {
+                self_key.step_item(-1);
+                return glib::Propagation::Stop;
+            }
+            if !has_mod && keyval == Key::Right {
+                self_key.step_item(1);
+                return glib::Propagation::Stop;
+            }
+            if !has_mod && keyval == Key::Page_Up && self_key.step_pdf_page(-1) {
+                return glib::Propagation::Stop;
+            }
+            if !has_mod && keyval == Key::Page_Down && self_key.step_pdf_page(1) {
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        win.add_controller(key_controller);
+
+        let self_destroy = self.clone();
+        win.connect_close_request(move |_| {
+            self_destroy.stop_active_media();
+            *self_destroy.container.borrow_mut() = None;
+            *self_destroy.window.borrow_mut() = None;
+            self_destroy.clear_refs();
+            self_destroy.closing.set(false);
+            glib::Propagation::Proceed
+        });
+
+        *self.container.borrow_mut() = Some(root_box.clone());
+        *self.window.borrow_mut() = Some(win.clone());
+        win.present();
+        Self::trigger_macos_enter_animation(&root_box, None);
     }
 
-    fn show(self: &Rc<Self>, parent: &ApplicationWindow, item: &FileItem) {
-        let win = Window::builder()
-            .transient_for(parent)
-            .destroy_with_parent(true)
-            .title(&item.name)
-            .default_width(800)
-            .default_height(580)
-            .css_classes(["branches-quicklook-window"])
-            .build();
-        self.setup_window(&win, item);
+    fn show_in_overlay(self: &Rc<Self>, overlay: &Overlay, item: &FileItem) {
+        let next_gen = self.anim_gen.get().wrapping_add(1);
+        self.anim_gen.set(next_gen);
+        self.closing.set(false);
+
+        let backdrop = GtkBox::new(Orientation::Vertical, 0);
+        backdrop.add_css_class("branches-quicklook-backdrop");
+        backdrop.set_hexpand(true);
+        backdrop.set_vexpand(true);
+
+        let card = self.build_preview_card(item);
+        let ow = overlay.width();
+        let oh = overlay.height();
+        let target_w = if ow > 0 {
+            ((ow as f64) * 0.80).round() as i32
+        } else {
+            780
+        }
+        .clamp(460, 840);
+        let target_h = if oh > 0 {
+            ((oh as f64) * 0.84).round() as i32
+        } else {
+            540
+        }
+        .clamp(360, 620);
+        card.set_size_request(target_w, target_h);
+        card.set_halign(Align::Center);
+        card.set_valign(Align::Center);
+        card.set_vexpand(true);
+        card.set_margin_top(24);
+        card.set_margin_bottom(24);
+        card.set_margin_start(24);
+        card.set_margin_end(24);
+
+        // Impedir que los clics dentro de la tarjeta cierren Quick Look
+        let card_click = GestureClick::new();
+        card_click.set_button(0);
+        card_click.connect_pressed(|g, _, _, _| {
+            g.set_state(gtk4::EventSequenceState::Claimed);
+        });
+        card.add_controller(card_click);
+
+        // Clic fuera de la tarjeta (en el fondo atenuado) cierra con efecto macOS
+        let bd_click = GestureClick::new();
+        bd_click.set_button(gtk4::gdk::BUTTON_PRIMARY);
+        let ql_bd = self.clone();
+        bd_click.connect_released(move |_, _, _, _| {
+            ql_bd.close();
+        });
+        backdrop.add_controller(bd_click);
+
+        backdrop.append(&card);
+        *self.host_overlay.borrow_mut() = Some(overlay.clone());
+        *self.backdrop.borrow_mut() = Some(backdrop.clone());
+        *self.container.borrow_mut() = Some(card.clone());
+
+        overlay.add_overlay(&backdrop);
+        Self::trigger_macos_enter_animation(&card, Some(&backdrop));
     }
 
-    fn setup_window(self: &Rc<Self>, win: &Window, item: &FileItem) {
+    fn trigger_macos_enter_animation(card: &GtkBox, backdrop: Option<&GtkBox>) {
+        let frame_count = Cell::new(0u8);
+        let bd_opt = backdrop.cloned();
+        card.add_tick_callback(move |widget, _| {
+            let next = frame_count.get().saturating_add(1);
+            frame_count.set(next);
+            if next < 2 {
+                return glib::ControlFlow::Continue;
+            }
+            widget.add_css_class("ql-open");
+            if let Some(ref bd) = bd_opt {
+                bd.add_css_class("ql-open");
+            }
+            glib::ControlFlow::Break
+        });
+    }
+
+    fn build_preview_card(self: &Rc<Self>, item: &FileItem) -> GtkBox {
         let root_box = GtkBox::new(Orientation::Vertical, 0);
         root_box.add_css_class("branches-quicklook-container");
 
         // Barra superior de Quick Look
         let header_box = GtkBox::new(Orientation::Horizontal, 8);
         header_box.add_css_class("branches-quicklook-header");
+
+        let close_btn = Button::builder()
+            .icon_name("window-close-symbolic")
+            .has_frame(false)
+            .can_focus(false)
+            .valign(Align::Center)
+            .css_classes(["branches-quicklook-close-btn"])
+            .tooltip_text("Cerrar Vista Rápida (Espacio / Esc)")
+            .build();
+        let ql_close = self.clone();
+        close_btn.connect_clicked(move |_| ql_close.close());
+        header_box.append(&close_btn);
 
         let has_neighbors = self.items_list.borrow().len() > 1;
         if has_neighbors {
@@ -305,60 +499,12 @@ impl QuickLook {
         content_holder.append(&preview_content);
         root_box.append(&content_holder);
 
-        win.set_child(Some(&root_box));
-
-        // Controlador en fase Capture: garantiza que Espacio y Escape siempre cierren Quick Look
-        // sin ser consumidos por botones o barras de desplazamiento hijas.
-        let key_controller = EventControllerKey::new();
-        key_controller.set_propagation_phase(PropagationPhase::Capture);
-        let self_key = self.clone();
-        key_controller.connect_key_pressed(move |_, keyval, _, state| {
-            let has_mod = state.intersects(ModifierType::CONTROL_MASK | ModifierType::ALT_MASK);
-            if !has_mod && matches!(keyval, Key::space | Key::KP_Space | Key::Escape) {
-                self_key.close();
-                return glib::Propagation::Stop;
-            }
-            if !has_mod && keyval == Key::Left {
-                self_key.step_item(-1);
-                return glib::Propagation::Stop;
-            }
-            if !has_mod && keyval == Key::Right {
-                self_key.step_item(1);
-                return glib::Propagation::Stop;
-            }
-            if !has_mod && keyval == Key::Page_Up {
-                if let Some(cb) = self_key.page_step_cb.borrow().as_ref() {
-                    if cb(-1) {
-                        return glib::Propagation::Stop;
-                    }
-                }
-            }
-            if !has_mod && keyval == Key::Page_Down {
-                if let Some(cb) = self_key.page_step_cb.borrow().as_ref() {
-                    if cb(1) {
-                        return glib::Propagation::Stop;
-                    }
-                }
-            }
-            glib::Propagation::Proceed
-        });
-        win.add_controller(key_controller);
-
-        let self_destroy = self.clone();
-        win.connect_close_request(move |_| {
-            self_destroy.stop_active_media();
-            *self_destroy.window.borrow_mut() = None;
-            self_destroy.clear_refs();
-            glib::Propagation::Proceed
-        });
-
         *self.title_label.borrow_mut() = Some(title_label);
         *self.subtitle_label.borrow_mut() = Some(subtitle_label);
         *self.content_holder.borrow_mut() = Some(content_holder);
         *self.current_path.borrow_mut() = Some(item.path.clone());
-        *self.window.borrow_mut() = Some(win.clone());
 
-        win.present();
+        root_box
     }
 }
 

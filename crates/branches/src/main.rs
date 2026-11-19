@@ -264,6 +264,12 @@ mod tests {
         assert!(nav_btn_block.contains("min-height: 26px;"));
         assert!(nav_btn_block.contains("min-width: 26px;"));
         assert_eq!(nav_btn_block.contains("padding: 0;"), true);
+
+        assert!(css.contains(".branches-quicklook-backdrop"));
+        assert!(css.contains(".branches-quicklook-container.ql-open"));
+        assert!(css.contains(".branches-quicklook-container.ql-closing"));
+        assert!(css.contains("transform: scale(0.84);"));
+        assert!(css.contains("transform: scale(1.0);"));
     }
 
     #[test]
