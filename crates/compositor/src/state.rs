@@ -4582,6 +4582,15 @@ impl MalusState {
         for (old_output, layer) in &to_move {
             let mut old_map = layer_map_for_output(old_output);
             old_map.unmap_layer(layer);
+            smithay::wayland::compositor::with_surface_tree_downward(
+                layer.wl_surface(),
+                (),
+                |_, _, _| smithay::wayland::compositor::TraversalAction::DoChildren(()),
+                |wl_surf, _, _| {
+                    old_output.leave(wl_surf);
+                },
+                |_, _, _| true,
+            );
         }
 
         let target_scale = primary_output.current_scale().fractional_scale();
@@ -4614,7 +4623,8 @@ impl MalusState {
                     layer.wl_surface(),
                     (),
                     |_, _, _| smithay::wayland::compositor::TraversalAction::DoChildren(()),
-                    |_wl_surf, states, _| {
+                    |wl_surf, states, _| {
+                        primary_output.enter(wl_surf);
                         with_fractional_scale(states, |fs| {
                             fs.set_preferred_scale(target_scale);
                         });
@@ -7520,6 +7530,12 @@ mod tests {
         assert_eq!(
             state.primary_output_for_config(&cfg).map(|o| o.name()),
             Some("DP-2".to_string())
+        );
+        // Si DP-2 ya no está mapeado (desconectado), el monitor sobreviviente pasa a ser primario.
+        state.space.unmap_output(&out2);
+        assert_eq!(
+            state.primary_output_for_config(&cfg).map(|o| o.name()),
+            Some("DP-1".to_string())
         );
         assert!(super::is_primary_shell_layer_namespace("malus-top-bar"));
         assert!(super::is_primary_shell_layer_namespace("malus-dock"));

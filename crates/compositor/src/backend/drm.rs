@@ -1146,12 +1146,22 @@ fn reconcile_drm_outputs(
     };
 
     let mut preserved_shell_layers = Vec::new();
+    let mut removed_globals = Vec::with_capacity(removed_outputs.len());
     for removed in removed_outputs {
         info!("🔌 Monitor físico desconectado: {}", removed.output.name());
         {
             let mut lmap = smithay::desktop::layer_map_for_output(&removed.output);
             let layers: Vec<_> = lmap.layers().cloned().collect();
             for layer in layers {
+                smithay::wayland::compositor::with_surface_tree_downward(
+                    layer.wl_surface(),
+                    (),
+                    |_, _, _| smithay::wayland::compositor::TraversalAction::DoChildren(()),
+                    |wl_surf, _, _| {
+                        removed.output.leave(wl_surf);
+                    },
+                    |_, _, _| true,
+                );
                 if crate::state::is_primary_shell_layer_namespace(layer.namespace())
                     && !connected_list.is_empty()
                 {
@@ -1165,7 +1175,7 @@ fn reconcile_drm_outputs(
         state.space.unmap_output(&removed.output);
         let DrmOutputSurface { global, surface, .. } = removed;
         drop(surface);
-        state.display_handle.remove_global::<MalusState>(global);
+        removed_globals.push(global);
     }
 
     sync_displays_config_from_connectors(&connected_list, &mut displays_cfg);
@@ -1219,6 +1229,22 @@ fn reconcile_drm_outputs(
 
     state.relocate_primary_shell_layers_for_config(&displays_cfg, preserved_shell_layers);
     state.migrate_orphaned_windows_and_pointer();
+    for global in removed_globals {
+        state.display_handle.remove_global::<MalusState>(global);
+    }
+    if let Ok(mut surfs) = shared_surfaces.lock() {
+        for s in surfs.iter_mut() {
+            s.full_damage_buffers = if ENABLE_DAMAGE_TRACKING { 3 } else { 1 };
+            s.pending_damage_buffers = 1;
+            s.dock_redraw_buffers = if ENABLE_DAMAGE_TRACKING { 3 } else { 0 };
+            s.background_dirty = true;
+            s.background_snapshot_stale = true;
+        }
+    }
+    let _ = state.display_handle.flush_clients();
+    state
+        .ipc_broadcaster
+        .broadcast(&IpcMessage::ReloadDisplaysConfig);
     Some(displays_cfg)
 }
 

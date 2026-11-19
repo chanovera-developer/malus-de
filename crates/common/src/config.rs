@@ -2186,6 +2186,12 @@ impl DisplaysConfig {
             return;
         }
 
+        let primary_idx = self.outputs.iter().position(|o| o.primary).unwrap_or(0);
+        for (idx, output) in self.outputs.iter_mut().enumerate() {
+            output.primary = idx == primary_idx;
+        }
+        self.master_scale = self.outputs[primary_idx].scale;
+
         // Ordenar índices de izquierda a derecha según su coordenada X actual
         let mut order: Vec<usize> = (0..self.outputs.len()).collect();
         order.sort_by_key(|&idx| (self.outputs[idx].x, !self.outputs[idx].primary));
@@ -2498,6 +2504,53 @@ impl DisplaysConfig {
             o_norm.eq_ignore_ascii_case(norm)
         })
     }
+
+    /// Devuelve la configuración del monitor marcado como principal (`primary = true`),
+    /// o la primera salida disponible si ninguna está marcada.
+    pub fn primary_output(&self) -> Option<&DisplayOutputConfig> {
+        self.outputs
+            .iter()
+            .find(|o| o.primary)
+            .or_else(|| self.outputs.first())
+    }
+}
+
+impl DisplayOutputConfig {
+    /// Comprueba si un monitor GDK coincide con esta salida por conector, modelo, descripción o geometría.
+    pub fn matches_monitor_identity(
+        &self,
+        connector: Option<&str>,
+        model: Option<&str>,
+        description: Option<&str>,
+        x: i32,
+        y: i32,
+    ) -> bool {
+        if let Some(conn) = connector.map(str::trim).filter(|c| !c.is_empty()) {
+            let norm = conn.trim_start_matches("card1-").trim_start_matches("card0-");
+            let self_norm = self
+                .connector
+                .trim_start_matches("card1-")
+                .trim_start_matches("card0-");
+            if !self_norm.is_empty() {
+                return self_norm.eq_ignore_ascii_case(norm);
+            }
+        }
+        if let Some(m) = model.map(str::trim).filter(|m| !m.is_empty()) {
+            if (!self.name.is_empty() && m == self.name)
+                || (!self.connector.is_empty() && m == self.connector)
+            {
+                return true;
+            }
+        }
+        if let Some(d) = description.map(str::trim).filter(|d| !d.is_empty()) {
+            if (!self.name.is_empty() && d.contains(&self.name))
+                || (!self.connector.is_empty() && d.contains(&self.connector))
+            {
+                return true;
+            }
+        }
+        x == self.x && y == self.y
+    }
 }
 
 fn extract_tag_value(xml_snippet: &str, tag: &str) -> Option<String> {
@@ -2521,6 +2574,49 @@ mod tests {
         };
 
         assert_eq!(config.headroom_height(), 42);
+    }
+
+    #[test]
+    fn displays_config_promotes_remaining_output_and_matches_by_connector_strictly() {
+        let dp1 = DisplayOutputConfig {
+            connector: "DP-1".to_string(),
+            name: String::new(),
+            width: 3840,
+            height: 2160,
+            refresh_rate: 60.0,
+            modes: vec![],
+            x: 0,
+            y: 0,
+            scale: 2.0,
+            primary: true,
+            diagonal_inches: Some(24.0),
+        };
+        let hdmi = DisplayOutputConfig {
+            connector: "HDMI-A-1".to_string(),
+            name: "Mi Monitor".to_string(),
+            width: 3840,
+            height: 2160,
+            refresh_rate: 60.0,
+            modes: vec![],
+            x: 1920,
+            y: 0,
+            scale: 1.5,
+            primary: false,
+            diagonal_inches: Some(27.0),
+        };
+
+        // Even at (0, 0), HDMI-A-1 must never match DP-1 by stale coordinates when connector is present.
+        assert!(!dp1.matches_monitor_identity(Some("HDMI-A-1"), None, Some("HDMI-A-1"), 0, 0));
+        assert!(dp1.matches_monitor_identity(Some("card1-DP-1"), None, None, 0, 0));
+
+        let mut cfg = DisplaysConfig::default();
+        cfg.outputs = vec![hdmi];
+        cfg.recalculate_layout();
+        let promoted = cfg.primary_output().expect("remaining output promoted");
+        assert_eq!(promoted.connector, "HDMI-A-1");
+        assert!(promoted.primary);
+        assert_eq!((promoted.x, promoted.y), (0, 0));
+        assert!((cfg.master_scale - 1.5).abs() < f64::EPSILON);
     }
 
     #[test]
