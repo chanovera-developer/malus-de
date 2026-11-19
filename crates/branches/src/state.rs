@@ -72,6 +72,7 @@ pub struct AppState {
     pub sort_order: SortOrder,
     pub split_view_active: bool,
     pub search_query: String,
+    pub search_recursive: bool,
     pub icon_size: i32,
     pub grid_spacing: i32,
 }
@@ -89,6 +90,7 @@ impl AppState {
             sort_order: SortOrder::Ascending,
             split_view_active: false,
             search_query: String::new(),
+            search_recursive: false,
             icon_size: cfg.clamped_icon_size(),
             grid_spacing: cfg.clamped_grid_spacing(),
         }

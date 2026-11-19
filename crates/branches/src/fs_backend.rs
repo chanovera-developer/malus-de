@@ -1,7 +1,9 @@
 use crate::state::{SortBy, SortOrder};
 use gio::prelude::*;
+use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
 #[derive(Debug, Clone)]
@@ -89,6 +91,12 @@ pub fn load_directory(
         }
     }
 
+    sort_file_items(&mut items, sort_by, sort_order);
+
+    Ok(items)
+}
+
+pub fn sort_file_items(items: &mut [FileItem], sort_by: SortBy, sort_order: SortOrder) {
     // Ordenar elementos: siempre carpetas primero salvo requerimiento especial
     items.sort_by(|a, b| {
         if a.is_dir != b.is_dir {
@@ -111,8 +119,85 @@ pub fn load_directory(
             SortOrder::Descending => ordering.reverse(),
         }
     });
+}
 
-    Ok(items)
+/// Búsqueda recursiva BFS acotada y cancelable sobre `root` devolviendo rutas `Send`.
+pub fn search_paths_recursive(
+    root: &Path,
+    filter_query: &str,
+    show_hidden: bool,
+    max_results: usize,
+    cancel: &AtomicBool,
+) -> Vec<PathBuf> {
+    let needle = filter_query.trim().to_lowercase();
+    let mut results = Vec::new();
+    if needle.is_empty() || max_results == 0 {
+        return results;
+    }
+
+    let mut queue = VecDeque::new();
+    queue.push_back((root.to_path_buf(), 0usize));
+    const MAX_DEPTH: usize = 8;
+
+    while let Some((dir, depth)) = queue.pop_front() {
+        if cancel.load(Ordering::Relaxed) || results.len() >= max_results {
+            break;
+        }
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if cancel.load(Ordering::Relaxed) || results.len() >= max_results {
+                break;
+            }
+            let p = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            let is_hidden = name.starts_with('.');
+            if !show_hidden && is_hidden {
+                continue;
+            }
+            if name.to_lowercase().contains(&needle) {
+                results.push(p.clone());
+            }
+            if let Ok(meta) = fs::symlink_metadata(&p) {
+                let is_dir = meta.is_dir();
+                let is_symlink = meta.file_type().is_symlink();
+                if is_dir && !is_symlink && depth < MAX_DEPTH {
+                    let skip_heavy = matches!(name.as_str(), ".git" | "node_modules" | "target");
+                    if !skip_heavy {
+                        queue.push_back((p, depth + 1));
+                    }
+                }
+            }
+        }
+    }
+
+    results
+}
+
+/// Búsqueda recursiva BFS acotada y cancelable sobre `root`.
+#[cfg(test)]
+pub fn search_directory_recursive(
+    root: &Path,
+    filter_query: &str,
+    show_hidden: bool,
+    sort_by: SortBy,
+    sort_order: SortOrder,
+    max_results: usize,
+    cancel: &AtomicBool,
+) -> Vec<FileItem> {
+    let mut results: Vec<FileItem> = search_paths_recursive(
+        root,
+        filter_query,
+        show_hidden,
+        max_results,
+        cancel,
+    )
+    .into_iter()
+    .filter_map(|p| FileItem::from_path(&p))
+    .collect();
+    sort_file_items(&mut results, sort_by, sort_order);
+    results
 }
 
 pub fn format_size(bytes: u64) -> String {
@@ -755,5 +840,46 @@ mod tests {
         assert!(term);
         assert_eq!(wd.as_deref(), Some(dir.as_path()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn recursive_search_finds_nested_matches_skips_heavy_dirs_and_honors_cancel() {
+        let root = std::env::temp_dir().join("malus_branches_rec_search_test");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("a/b")).unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::create_dir_all(root.join("node_modules")).unwrap();
+
+        fs::write(root.join("a/reporte_anual.txt"), b"x").unwrap();
+        fs::write(root.join("a/b/otro_reporte.md"), b"y").unwrap();
+        fs::write(root.join(".git/reporte_oculto.txt"), b"z").unwrap();
+        fs::write(root.join("node_modules/reporte_pkg.js"), b"w").unwrap();
+
+        let cancel = AtomicBool::new(false);
+        let found = search_directory_recursive(
+            &root,
+            "reporte",
+            false,
+            SortBy::Name,
+            SortOrder::Ascending,
+            50,
+            &cancel,
+        );
+        let names: Vec<String> = found.into_iter().map(|i| i.name).collect();
+        assert_eq!(names, vec!["otro_reporte.md", "reporte_anual.txt"]);
+
+        cancel.store(true, Ordering::Relaxed);
+        let cancelled = search_directory_recursive(
+            &root,
+            "reporte",
+            false,
+            SortBy::Name,
+            SortOrder::Ascending,
+            50,
+            &cancel,
+        );
+        assert!(cancelled.is_empty());
+
+        let _ = fs::remove_dir_all(&root);
     }
 }

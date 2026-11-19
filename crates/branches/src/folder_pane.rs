@@ -12,6 +12,8 @@ use gtk4::{
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaneId {
@@ -41,6 +43,8 @@ pub struct FolderPane {
     self_weak_ref: RefCell<Weak<Self>>,
     dir_monitor: RefCell<Option<(PathBuf, gio::FileMonitor)>>,
     pending_sync: Rc<Cell<Option<glib::SourceId>>>,
+    search_cancel: RefCell<Option<Arc<AtomicBool>>>,
+    search_gen: Rc<Cell<u64>>,
     on_activated: Rc<dyn Fn(PaneId)>,
     on_path_changed: Rc<dyn Fn(PaneId, PathBuf)>,
     on_selection_changed: Rc<dyn Fn(PaneId, usize, usize, PathBuf)>,
@@ -170,6 +174,8 @@ impl FolderPane {
             self_weak_ref: RefCell::new(Weak::new()),
             dir_monitor: RefCell::new(None),
             pending_sync: Rc::new(Cell::new(None)),
+            search_cancel: RefCell::new(None),
+            search_gen: Rc::new(Cell::new(0)),
             on_activated,
             on_path_changed,
             on_selection_changed,
@@ -338,7 +344,32 @@ impl FolderPane {
         self.reload();
     }
 
+    pub fn search_recursive(&self) -> bool {
+        self.state.borrow().search_recursive
+    }
+
+    pub fn set_search_recursive(&self, recursive: bool) {
+        self.state.borrow_mut().search_recursive = recursive;
+        if !self.state.borrow().search_query.trim().is_empty() {
+            self.reload();
+        }
+    }
+
+    pub fn items_snapshot(&self) -> Vec<FileItem> {
+        self.items_cache.borrow().clone()
+    }
+
+    fn cancel_pending_search(&self) {
+        if let Some(flag) = self.search_cancel.borrow_mut().take() {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
+
     pub fn reload(&self) {
+        self.cancel_pending_search();
+        let next_gen = self.search_gen.get().wrapping_add(1);
+        self.search_gen.set(next_gen);
+
         match *self.virtual_folder.borrow() {
             Some(VirtualFolder::Applications) => {
                 self.clear_directory_monitor();
@@ -353,7 +384,7 @@ impl FolderPane {
             None => {}
         }
 
-        let (current_path, show_hidden, sort_by, sort_order, search_query) = {
+        let (current_path, show_hidden, sort_by, sort_order, search_query, search_recursive) = {
             let s = self.state.borrow();
             (
                 s.current_path.clone(),
@@ -361,6 +392,7 @@ impl FolderPane {
                 s.sort_by,
                 s.sort_order,
                 s.search_query.clone(),
+                s.search_recursive,
             )
         };
 
@@ -375,6 +407,48 @@ impl FolderPane {
                 .unwrap_or_else(|| "Carpeta".to_string())
         };
         self.pane_title.set_label(&folder_name);
+
+        if search_recursive && !search_query.trim().is_empty() {
+            let cancel_flag = Arc::new(AtomicBool::new(false));
+            *self.search_cancel.borrow_mut() = Some(cancel_flag.clone());
+            let (tx, rx) = mpsc::channel::<Vec<PathBuf>>();
+            let root = current_path.clone();
+            std::thread::spawn(move || {
+                let paths = crate::fs_backend::search_paths_recursive(
+                    &root,
+                    &search_query,
+                    show_hidden,
+                    250,
+                    &cancel_flag,
+                );
+                let _ = tx.send(paths);
+            });
+            let weak_self = self.self_weak_ref.borrow().clone();
+            let gen_ref = self.search_gen.clone();
+            glib::timeout_add_local(std::time::Duration::from_millis(30), move || {
+                if gen_ref.get() != next_gen {
+                    return glib::ControlFlow::Break;
+                }
+                match rx.try_recv() {
+                    Ok(paths) => {
+                        if let Some(pane) = weak_self.upgrade() {
+                            if pane.search_gen.get() == next_gen {
+                                let mut items: Vec<FileItem> = paths
+                                    .into_iter()
+                                    .filter_map(|p| FileItem::from_path(&p))
+                                    .collect();
+                                crate::fs_backend::sort_file_items(&mut items, sort_by, sort_order);
+                                pane.apply_items_snapshot(items);
+                            }
+                        }
+                        glib::ControlFlow::Break
+                    }
+                    Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                    Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+                }
+            });
+            return;
+        }
 
         match load_directory(&current_path, show_hidden, sort_by, sort_order, &search_query) {
             Ok(items) => {

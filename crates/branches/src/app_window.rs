@@ -56,6 +56,7 @@ pub struct BranchesWindow {
     sort_by_action: gio::SimpleAction,
     sort_order_action: gio::SimpleAction,
     search_entry: SearchEntry,
+    search_recursive_btn: ToggleButton,
     search_toggle_btn: ToggleButton,
     syncing_ui: Rc<Cell<bool>>,
     _config_monitor: Option<gio::FileMonitor>,
@@ -284,6 +285,7 @@ impl BranchesWindow {
 
         let share_model = gio::Menu::new();
         share_model.append(Some("Copiar ruta al portapapeles"), Some("win.copy_path"));
+        share_model.append(Some("Malus Link / Enviar a dispositivo…"), Some("win.share_malus_link"));
         share_model.append(Some("KDE Connect / Enviar a dispositivo"), Some("win.share_kdeconnect"));
         share_model.append(Some("Enviar por correo electrónico"), Some("win.share_email"));
         share_menu_btn.set_menu_model(Some(&share_model));
@@ -362,11 +364,27 @@ impl BranchesWindow {
             .css_classes(["branches-search-entry"])
             .build();
 
+        let search_recursive_btn = ToggleButton::builder()
+            .icon_name("folder-saved-search-symbolic")
+            .tooltip_text(if es_ui {
+                "Buscar también en subcarpetas"
+            } else {
+                "Search subfolders recursively"
+            })
+            .valign(Align::Center)
+            .css_classes(["flat", "branches-tool-btn"])
+            .build();
+
+        let search_reveal_box = GtkBox::new(Orientation::Horizontal, 4);
+        search_reveal_box.set_valign(Align::Center);
+        search_reveal_box.append(&search_entry);
+        search_reveal_box.append(&search_recursive_btn);
+
         let search_revealer = Revealer::builder()
             .transition_type(RevealerTransitionType::SlideLeft)
             .transition_duration(180)
             .reveal_child(false)
-            .child(&search_entry)
+            .child(&search_reveal_box)
             .build();
 
         let search_toggle_btn = ToggleButton::builder()
@@ -682,6 +700,7 @@ impl BranchesWindow {
             sort_by_action,
             sort_order_action,
             search_entry: search_entry.clone(),
+            search_recursive_btn: search_recursive_btn.clone(),
             search_toggle_btn,
             syncing_ui: Rc::new(Cell::new(false)),
             _config_monitor: config_monitor.clone(),
@@ -781,6 +800,13 @@ impl BranchesWindow {
             if !bw_search.syncing_ui.get() {
                 let query = entry.text().to_string();
                 bw_search.active_pane().set_search_query(query);
+            }
+        });
+
+        let bw_rec = branches_window.clone();
+        search_recursive_btn.connect_toggled(move |btn| {
+            if !bw_rec.syncing_ui.get() {
+                bw_rec.active_pane().set_search_recursive(btn.is_active());
             }
         });
 
@@ -1258,6 +1284,7 @@ impl BranchesWindow {
             .set_state(&sort_order.as_str().to_variant());
         let query = pane.search_query();
         self.search_entry.set_text(&query);
+        self.search_recursive_btn.set_active(pane.search_recursive());
         self.search_toggle_btn.set_active(!query.is_empty());
         self.syncing_ui.set(false);
 
@@ -1323,8 +1350,140 @@ impl BranchesWindow {
     }
 
     pub fn toggle_quick_look(&self) {
-        let item = self.active_pane().get_selected_item();
-        self.quick_look.toggle(&self.window, item);
+        let pane = self.active_pane();
+        let item = pane.get_selected_item();
+        let items = pane.items_snapshot();
+        self.quick_look.toggle_with_items(&self.window, item, items);
+    }
+
+    fn share_via_malus_link(&self) {
+        let es = malus_de_common::is_spanish_locale();
+        let mut paths = self.selected_paths();
+        if paths.is_empty() {
+            paths.push(self.active_pane().current_path());
+        }
+        let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<(String, String, u32)>, String>>();
+        std::thread::spawn(move || {
+            let res = (|| -> Result<Vec<(String, String, u32)>, String> {
+                let conn = gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)
+                    .map_err(|e| e.to_string())?;
+                let reply = conn
+                    .call_sync(
+                        Some("org.malus_de.Link"),
+                        "/org/malus_de/Link",
+                        "org.malus_de.Link",
+                        "GetConnectedDevices",
+                        None,
+                        Some(glib::VariantTy::new("(a(ssu))").expect("valid variant")),
+                        gio::DBusCallFlags::NONE,
+                        1500,
+                        gio::Cancellable::NONE,
+                    )
+                    .map_err(|e| e.to_string())?;
+                let (devices,) = reply
+                    .get::<(Vec<(String, String, u32)>,)>()
+                    .ok_or_else(|| "Respuesta inválida de Malus Link".to_string())?;
+                Ok(devices)
+            })();
+            let _ = tx.send(res);
+        });
+
+        let win_ref = self.window.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(40), move || {
+            match rx.try_recv() {
+                Ok(Ok(devices)) => {
+                    if devices.is_empty() {
+                        gtk4::AlertDialog::builder()
+                            .message(if es {
+                                "No hay dispositivos conectados en Malus Link."
+                            } else {
+                                "No connected devices found in Malus Link."
+                            })
+                            .build()
+                            .show(Some(&win_ref));
+                    } else {
+                        let dialog = gtk4::Window::builder()
+                            .transient_for(&win_ref)
+                            .destroy_with_parent(true)
+                            .modal(true)
+                            .resizable(false)
+                            .title("Malus Link")
+                            .default_width(340)
+                            .build();
+                        let vbox = GtkBox::new(Orientation::Vertical, 8);
+                        vbox.set_margin_top(14);
+                        vbox.set_margin_bottom(14);
+                        vbox.set_margin_start(16);
+                        vbox.set_margin_end(16);
+                        let hdr = Label::builder()
+                            .label(if es {
+                                "Enviar selección a dispositivo:"
+                            } else {
+                                "Send selection to device:"
+                            })
+                            .halign(Align::Start)
+                            .css_classes(["heading"])
+                            .build();
+                        vbox.append(&hdr);
+
+                        for (dev_id, dev_name, battery) in devices {
+                            let btn = Button::builder()
+                                .label(&format!("{} ({}%)", dev_name, battery))
+                                .halign(Align::Fill)
+                                .build();
+                            let d_ref = dialog.clone();
+                            let p_list = paths.clone();
+                            btn.connect_clicked(move |_| {
+                                d_ref.close();
+                                let id = dev_id.clone();
+                                let send_paths = p_list.clone();
+                                std::thread::spawn(move || {
+                                    if let Ok(conn) =
+                                        gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)
+                                    {
+                                        for p in send_paths {
+                                            let args = (
+                                                id.clone(),
+                                                p.to_string_lossy().into_owned(),
+                                            )
+                                                .to_variant();
+                                            let _ = conn.call_sync(
+                                                Some("org.malus_de.Link"),
+                                                "/org/malus_de/Link",
+                                                "org.malus_de.Link",
+                                                "ShareFile",
+                                                Some(&args),
+                                                None,
+                                                gio::DBusCallFlags::NONE,
+                                                2000,
+                                                gio::Cancellable::NONE,
+                                            );
+                                        }
+                                    }
+                                });
+                            });
+                            vbox.append(&btn);
+                        }
+                        dialog.set_child(Some(&vbox));
+                        dialog.present();
+                    }
+                    glib::ControlFlow::Break
+                }
+                Ok(Err(err)) => {
+                    gtk4::AlertDialog::builder()
+                        .message(if es {
+                            format!("Malus Link no está disponible: {}", err)
+                        } else {
+                            format!("Malus Link is unavailable: {}", err)
+                        })
+                        .build()
+                        .show(Some(&win_ref));
+                    glib::ControlFlow::Break
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+            }
+        });
     }
 
     pub fn open_get_info(&self, explicit_path: Option<PathBuf>) {
@@ -2224,6 +2383,13 @@ impl BranchesWindow {
         });
         actions.add_action(&act_copy_path);
 
+        let bw_link = self.clone_ref();
+        let act_link = gio::SimpleAction::new("share_malus_link", None);
+        act_link.connect_activate(move |_, _| {
+            bw_link.share_via_malus_link();
+        });
+        actions.add_action(&act_link);
+
         let bw_kde = self.clone_ref();
         let act_kde = gio::SimpleAction::new("share_kdeconnect", None);
         act_kde.connect_activate(move |_, _| {
@@ -2515,6 +2681,7 @@ impl BranchesWindow {
             sort_by_action: self.sort_by_action.clone(),
             sort_order_action: self.sort_order_action.clone(),
             search_entry: self.search_entry.clone(),
+            search_recursive_btn: self.search_recursive_btn.clone(),
             search_toggle_btn: self.search_toggle_btn.clone(),
             syncing_ui: self.syncing_ui.clone(),
             _config_monitor: self._config_monitor.clone(),
