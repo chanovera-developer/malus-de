@@ -640,7 +640,8 @@ viewport {
     background: transparent;
 }
 
-.wifi-more-btn {
+.wifi-more-btn,
+menubutton.wifi-more-btn > button {
     background-color: alpha(currentColor, 0.08);
     border: 1px solid alpha(@borders, 0.7);
     border-radius: 999px;
@@ -650,11 +651,13 @@ viewport {
     color: alpha(currentColor, 0.78);
 }
 
-.wifi-more-btn:hover {
+.wifi-more-btn:hover,
+menubutton.wifi-more-btn > button:hover {
     background-color: alpha(currentColor, 0.16);
 }
 
-.wifi-help-btn {
+.wifi-help-btn,
+menubutton.wifi-help-btn > button {
     background-color: alpha(currentColor, 0.08);
     border: 1px solid @borders;
     border-radius: 999px;
@@ -666,7 +669,8 @@ viewport {
     color: alpha(currentColor, 0.75);
 }
 
-.wifi-help-btn:hover {
+.wifi-help-btn:hover,
+menubutton.wifi-help-btn > button:hover {
     background-color: alpha(currentColor, 0.14);
 }
 

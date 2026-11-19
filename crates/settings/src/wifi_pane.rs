@@ -1,10 +1,10 @@
 use gtk4::prelude::*;
 use gtk4::{
-    Align, ApplicationWindow, Box as GtkBox, Button, DropDown, Entry, Image, Label,
-    Orientation, PasswordEntry, PolicyType, Popover, ScrolledWindow, StringList, Switch,
+    Align, ApplicationWindow, Box as GtkBox, Button, DropDown, Entry, Image, Label, MenuButton,
+    Orientation, PasswordEntry, PolicyType, Popover, ScrolledWindow, Spinner, StringList, Switch,
 };
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 use std::process::Command;
@@ -321,11 +321,31 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .orientation(Orientation::Vertical)
         .spacing(8)
         .build();
+    let others_hdr = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .valign(Align::Center)
+        .build();
     let others_title = Label::builder()
         .label("Otras redes")
         .css_classes(["section-header-title"])
+        .hexpand(true)
         .xalign(0.0)
         .build();
+    let scan_spinner = Spinner::builder()
+        .spinning(false)
+        .visible(false)
+        .build();
+    let rescan_btn = Button::builder()
+        .icon_name("view-refresh-symbolic")
+        .css_classes(["wifi-more-btn"])
+        .has_frame(false)
+        .tooltip_text("Buscar redes cercanas nuevamente")
+        .build();
+    others_hdr.append(&others_title);
+    others_hdr.append(&scan_spinner);
+    others_hdr.append(&rescan_btn);
+
     let others_card = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(0)
@@ -344,7 +364,7 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .build();
     other_join_row.append(&other_network_btn);
 
-    others_section_box.append(&others_title);
+    others_section_box.append(&others_hdr);
     others_section_box.append(&others_card);
     others_section_box.append(&other_join_row);
     pane.append(&others_section_box);
@@ -407,10 +427,11 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .css_classes(["macos-action-btn"])
         .has_frame(false)
         .build();
-    let help_btn = Button::builder()
+    let help_btn = MenuButton::builder()
         .label("?")
         .css_classes(["wifi-help-btn"])
         .has_frame(false)
+        .always_show_arrow(false)
         .tooltip_text("Ayuda de Wi-Fi")
         .build();
 
@@ -425,13 +446,13 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
     // =========================================================================
     let latest_snapshot: Rc<RefCell<Option<WifiSnapshot>>> = Rc::new(RefCell::new(None));
     let is_syncing_switch = Rc::new(RefCell::new(false));
-    let is_fetching = Rc::new(RefCell::new(false));
+    let refresh_gen = Rc::new(Cell::new(0u64));
     let refresh_slot: Rc<RefCell<Option<Rc<dyn Fn(bool)>>>> = Rc::new(RefCell::new(None));
 
     let win_ref = parent_window.clone();
     let snap_ref = latest_snapshot.clone();
     let sync_sw_ref = is_syncing_switch.clone();
-    let fetching_ref = is_fetching.clone();
+    let gen_ref = refresh_gen.clone();
     let sw_ref = wifi_switch.clone();
     let active_ssid_ref = active_ssid_lbl.clone();
     let status_dot_ref = status_dot.clone();
@@ -445,24 +466,37 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
     let known_card_ref = known_card.clone();
     let others_sec_ref = others_section_box.clone();
     let others_card_ref = others_card.clone();
+    let spinner_ref = scan_spinner.clone();
     let banner_ref = status_banner.clone();
     let refresh_slot_inner = refresh_slot.clone();
 
     let run_refresh: Rc<dyn Fn(bool)> = Rc::new(move |rescan: bool| {
-        if *fetching_ref.borrow() {
-            return;
-        }
-        *fetching_ref.borrow_mut() = true;
+        let my_gen = gen_ref.get().wrapping_add(1);
+        gen_ref.set(my_gen);
 
-        let (tx, rx) = async_channel::bounded::<WifiSnapshot>(1);
+        if rescan {
+            spinner_ref.set_visible(true);
+            spinner_ref.set_spinning(true);
+        }
+
+        let (tx, rx) = async_channel::bounded::<(WifiSnapshot, bool)>(2);
         std::thread::spawn(move || {
-            let snap = collect_wifi_snapshot(rescan);
-            let _ = tx.send_blocking(snap);
+            // Fase 1 inmediata (<50ms): muestra redes en caché sin esperar bloqueo de hardware
+            let fast_snap = collect_wifi_snapshot(false);
+            let want_rescan = rescan && fast_snap.nm_available && fast_snap.radio_enabled;
+            let _ = tx.send_blocking((fast_snap, !want_rescan));
+            // Fase 2 opcional: dispara rescan en vivo y devuelve resultados actualizados
+            if want_rescan {
+                let _ = run_nmcli(&["device", "wifi", "rescan"]);
+                std::thread::sleep(std::time::Duration::from_millis(1800));
+                let fresh_snap = collect_wifi_snapshot(false);
+                let _ = tx.send_blocking((fresh_snap, true));
+            }
         });
 
         let snap_dest = snap_ref.clone();
         let sync_sw = sync_sw_ref.clone();
-        let fetch_done = fetching_ref.clone();
+        let gen_check = gen_ref.clone();
         let sw = sw_ref.clone();
         let ssid_lbl = active_ssid_ref.clone();
         let dot = status_dot_ref.clone();
@@ -476,12 +510,24 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         let known_c = known_card_ref.clone();
         let others_sec = others_sec_ref.clone();
         let others_c = others_card_ref.clone();
+        let sp = spinner_ref.clone();
         let banner = banner_ref.clone();
         let win = win_ref.clone();
         let slot = refresh_slot_inner.clone();
 
         glib::spawn_future_local(async move {
-            if let Ok(snap) = rx.recv().await {
+            while let Ok((snap, is_final)) = rx.recv().await {
+                if gen_check.get() != my_gen {
+                    if is_final {
+                        break;
+                    }
+                    continue;
+                }
+                if is_final {
+                    sp.set_spinning(false);
+                    sp.set_visible(false);
+                }
+
                 *snap_dest.borrow_mut() = Some(snap.clone());
 
                 *sync_sw.borrow_mut() = true;
@@ -500,8 +546,9 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
                     known_sec.set_visible(false);
                     others_sec.set_visible(false);
                     banner.set_visible(false);
-                    *fetch_done.borrow_mut() = false;
-                    return;
+                    sp.set_spinning(false);
+                    sp.set_visible(false);
+                    break;
                 }
 
                 if !snap.radio_enabled {
@@ -591,12 +638,20 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
                     &snap,
                     &trigger_reload,
                 );
+
+                if is_final {
+                    break;
+                }
             }
-            *fetch_done.borrow_mut() = false;
         });
     });
 
     *refresh_slot.borrow_mut() = Some(run_refresh.clone());
+
+    let ref_rescan = run_refresh.clone();
+    rescan_btn.connect_clicked(move |_| {
+        ref_rescan(true);
+    });
 
     // Conectar Switch de Wi-Fi
     let sync_sw_ev = is_syncing_switch.clone();
@@ -672,7 +727,6 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
 
     // Botón "?"
     let help_popover = Popover::builder().has_arrow(true).build();
-    help_popover.set_parent(&help_btn);
     let help_lbl = Label::builder()
         .label("• Haz clic en cualquier red conocida para alternar conexión.\n• Pulsa ⋯ en cada red para ver detalles, desconectar u olvidar su perfil.\n• En tarjetas Intel AX210, activar AirDrop pausa temporalmente el Wi-Fi mientras dura la transferencia.")
         .wrap(true)
@@ -684,9 +738,7 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .margin_end(12)
         .build();
     help_popover.set_child(Some(&help_lbl));
-    help_btn.connect_clicked(move |_| {
-        help_popover.popup();
-    });
+    help_btn.set_popover(Some(&help_popover));
 
     // Refresco periódico mientras el panel esté visible
     let pane_timer = pane.clone();
@@ -871,10 +923,11 @@ fn populate_wifi_list_card(
             right_icons.append(&sig_ico);
         }
 
-        let more_btn = Button::builder()
+        let more_btn = MenuButton::builder()
             .icon_name("view-more-symbolic")
             .css_classes(["wifi-more-btn"])
             .has_frame(false)
+            .always_show_arrow(false)
             .valign(Align::Center)
             .tooltip_text("Opciones de red")
             .build();
@@ -896,9 +949,8 @@ fn populate_wifi_list_card(
             }
         });
 
-        // Menú popover del botón "⋯"
+        // Menú popover del botón "⋯" (gestionado por MenuButton para evitar warnings de GTK al destruir filas)
         let popover = Popover::builder().has_arrow(true).build();
-        popover.set_parent(&more_btn);
         let menu_box = GtkBox::builder()
             .orientation(Orientation::Vertical)
             .spacing(4)
@@ -1003,9 +1055,7 @@ fn populate_wifi_list_card(
         }
 
         popover.set_child(Some(&menu_box));
-        more_btn.connect_clicked(move |_| {
-            popover.popup();
-        });
+        more_btn.set_popover(Some(&popover));
 
         row_box.set_margin_start(0);
         row_box.set_margin_end(0);
