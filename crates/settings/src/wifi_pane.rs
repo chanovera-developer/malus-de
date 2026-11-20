@@ -10,7 +10,7 @@ const WIFI_CARD_SQUIRCLE_RADIUS: f64 = 19.0;
 const WIFI_BUTTON_SQUIRCLE_RADIUS: f64 = 11.5;
 const WIFI_BADGE_SQUIRCLE_RADIUS: f64 = 15.0;
 const WIFI_MENU_SQUIRCLE_RADIUS: f64 = 12.0;
-const WIFI_MENU_ITEM_SQUIRCLE_RADIUS: f64 = 8.0;
+const WIFI_MENU_ITEM_SQUIRCLE_RADIUS: f64 = 14.0;
 
 /// Dibuja la insignia cuadrada-squircle azul de Wi-Fi estilo macOS con el glifo centrado.
 fn make_squircle_wifi_badge(size: i32, icon_px: i32, radius: f64) -> Overlay {
