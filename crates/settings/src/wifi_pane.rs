@@ -9,7 +9,6 @@ use gtk4::{
 pub(crate) const WIFI_CARD_SQUIRCLE_RADIUS: f64 = 19.0;
 const WIFI_BUTTON_SQUIRCLE_RADIUS: f64 = 11.5;
 pub(crate) const WIFI_BADGE_SQUIRCLE_RADIUS: f64 = 15.0;
-pub(crate) const WIFI_MENU_SQUIRCLE_RADIUS: f64 = 12.0;
 const WIFI_MENU_ITEM_SQUIRCLE_RADIUS: f64 = 14.0;
 
 /// Dibuja una insignia cuadrada-squircle azul estilo macOS con el glifo centrado.
@@ -836,19 +835,7 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .build();
 
     let (advanced_wrap, advanced_btn) = make_squircle_button("Avanzado...", false, None);
-    let help_lbl = Label::builder()
-        .label("?")
-        .halign(Align::Center)
-        .valign(Align::Center)
-        .build();
-    let help_btn = MenuButton::builder()
-        .child(&help_lbl)
-        .css_classes(["wifi-help-btn"])
-        .has_frame(false)
-        .always_show_arrow(false)
-        .tooltip_text("Ayuda de Wi-Fi")
-        .build();
-    let help_wrap = wrap_squircle_round_control(&help_btn, 22, RoundControlStyle::SolidButton);
+    let (help_wrap, help_btn) = make_help_circle_button("Ayuda de Wi-Fi");
 
     footer_actions.append(&advanced_wrap);
     footer_actions.append(&help_wrap);
@@ -1159,7 +1146,7 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .margin_end(12)
         .build();
     help_pop_box.append(&help_lbl);
-    help_popover.set_child(Some(&wrap_squircle_popover_card(&help_pop_box, WIFI_MENU_SQUIRCLE_RADIUS)));
+    help_popover.set_child(Some(&help_pop_box));
     help_btn.set_popover(Some(&help_popover));
 
     // Refresco periódico mientras el panel esté visible
@@ -1529,50 +1516,23 @@ fn populate_wifi_list_card(
     }
 }
 
-/// Envuelve el contenido de un menú contextual con un fondo y borde Squircle propio de Malus DE.
-pub(crate) fn wrap_squircle_popover_card(inner: &GtkBox, radius: f64) -> Overlay {
-    let overlay = Overlay::new();
-    let bg = DrawingArea::new();
-    bg.set_can_target(false);
-    bg.set_hexpand(true);
-    bg.set_vexpand(true);
-    bg.set_draw_func(move |_, cr, w, h| {
-        let width = w as f64;
-        let height = h as f64;
-        if width <= 2.0 || height <= 2.0 {
-            return;
-        }
-        let dark = libadwaita::StyleManager::default().is_dark();
-        let _ = cr.save();
-        cr.translate(0.5, 0.5);
-        crate::squircle_path(cr, width - 1.0, height - 1.0, radius);
-        if dark {
-            cr.set_source_rgba(0.17, 0.17, 0.18, 0.97);
-        } else {
-            cr.set_source_rgba(0.985, 0.985, 0.99, 0.98);
-        }
-        let _ = cr.fill_preserve();
-        if dark {
-            cr.set_source_rgba(1.0, 1.0, 1.0, 0.14);
-        } else {
-            cr.set_source_rgba(0.0, 0.0, 0.0, 0.10);
-        }
-        cr.set_line_width(1.0);
-        let _ = cr.stroke();
-        let _ = cr.restore();
-    });
-
-    let bg_weak = bg.downgrade();
-    libadwaita::StyleManager::default().connect_dark_notify(move |_| {
-        if let Some(area) = bg_weak.upgrade() {
-            area.queue_draw();
-        }
-    });
-
-    overlay.set_child(Some(&bg));
-    overlay.add_overlay(inner);
-    overlay.set_measure_overlay(inner, true);
-    overlay
+/// Botón circular de ayuda `?` centrado (estilo macOS) compartido entre Wi-Fi, Bluetooth y Red.
+pub(crate) fn make_help_circle_button(tooltip: &str) -> (Overlay, MenuButton) {
+    let help_lbl = Label::builder()
+        .label("?")
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .build();
+    let help_btn = MenuButton::builder()
+        .child(&help_lbl)
+        .css_classes(["wifi-help-btn"])
+        .has_frame(false)
+        .always_show_arrow(false)
+        .valign(Align::Center)
+        .tooltip_text(tooltip)
+        .build();
+    let help_wrap = wrap_squircle_round_control(&help_btn, 22, RoundControlStyle::SolidButton);
+    (help_wrap, help_btn)
 }
 
 pub(crate) fn make_popover_menu_row(check: Option<&str>, text: &str) -> (Overlay, Button) {

@@ -4482,5 +4482,9 @@ mod tests {
         );
         assert_eq!(fw_badge.width_request(), 34);
         assert_eq!(fw_badge.height_request(), 34);
+
+        let (help_wrap, _) = wifi_pane::make_help_circle_button("Ayuda");
+        assert_eq!(help_wrap.width_request(), 22);
+        assert_eq!(help_wrap.height_request(), 22);
     }
 }

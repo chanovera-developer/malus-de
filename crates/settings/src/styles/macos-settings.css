@@ -734,7 +734,7 @@ button.wifi-squircle-btn-primary {
     border: none;
     box-shadow: none;
     border-radius: 0px;
-    padding: 1px 10px;
+    padding: 0px 10px;
     margin: 0px;
     min-width: 0px;
     min-height: 22px;
@@ -973,9 +973,25 @@ label.bt-inline-desc link:hover {
     color: #e6a100;
 }
 
-button.net-more-pill-btn {
-    padding: 2px 9px;
+menubutton.net-more-pill-btn,
+menubutton.net-more-pill-btn > button {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 0px;
+    padding: 0px 8px;
+    margin: 0px;
+    min-width: 0px;
     min-height: 22px;
+    color: @window_fg_color;
+}
+
+menubutton.net-more-pill-btn arrow {
+    min-width: 0px;
+    min-height: 0px;
+    margin: 0px;
+    padding: 0px;
+    opacity: 0;
 }
 
 .fw-apps-frame {

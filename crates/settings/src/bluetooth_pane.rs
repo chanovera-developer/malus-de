@@ -1,12 +1,12 @@
 use crate::wifi_pane::{
-    detail_kv_row, make_squircle_badge, make_squircle_button, wrap_squircle_card,
-    wrap_squircle_popover_card, wrap_squircle_round_control, RoundControlStyle,
-    WIFI_BADGE_SQUIRCLE_RADIUS, WIFI_CARD_SQUIRCLE_RADIUS, WIFI_MENU_SQUIRCLE_RADIUS,
+    detail_kv_row, make_help_circle_button, make_squircle_badge, make_squircle_button,
+    wrap_squircle_card, wrap_squircle_round_control, RoundControlStyle,
+    WIFI_BADGE_SQUIRCLE_RADIUS, WIFI_CARD_SQUIRCLE_RADIUS,
 };
 use gtk4::prelude::*;
 use gtk4::{
     Align, ApplicationWindow, Box as GtkBox, Button, EventControllerMotion, Image, Label,
-    MenuButton, Orientation, PolicyType, Popover, ScrolledWindow, Spinner, Switch,
+    Orientation, PolicyType, Popover, ScrolledWindow, Spinner, Switch,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -185,19 +185,7 @@ pub fn create_bluetooth_pane(parent_window: &ApplicationWindow) -> (ScrolledWind
         .vexpand(false)
         .margin_top(2)
         .build();
-    let help_lbl = Label::builder()
-        .label("?")
-        .halign(Align::Center)
-        .valign(Align::Center)
-        .build();
-    let help_btn = MenuButton::builder()
-        .child(&help_lbl)
-        .css_classes(["wifi-help-btn"])
-        .has_frame(false)
-        .always_show_arrow(false)
-        .tooltip_text("Ayuda de Bluetooth")
-        .build();
-    let help_wrap = wrap_squircle_round_control(&help_btn, 22, RoundControlStyle::SolidButton);
+    let (help_wrap, help_btn) = make_help_circle_button("Ayuda de Bluetooth");
     help_row.append(&help_wrap);
     my_section_box.append(&help_row);
 
@@ -465,10 +453,7 @@ pub fn create_bluetooth_pane(parent_window: &ApplicationWindow) -> (ScrolledWind
         .margin_end(12)
         .build();
     help_pop_box.append(&help_lbl_pop);
-    help_popover.set_child(Some(&wrap_squircle_popover_card(
-        &help_pop_box,
-        WIFI_MENU_SQUIRCLE_RADIUS,
-    )));
+    help_popover.set_child(Some(&help_pop_box));
     help_btn.set_popover(Some(&help_popover));
 
     // Refresco periódico mientras el panel esté visible

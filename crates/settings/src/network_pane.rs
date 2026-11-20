@@ -11,10 +11,9 @@ use std::process::Command;
 use std::rc::Rc;
 
 use crate::wifi_pane::{
-    detail_kv_row, make_popover_menu_row, make_squircle_badge, make_squircle_button,
-    make_squircle_colored_badge, wrap_squircle_card, wrap_squircle_popover_card,
-    wrap_squircle_round_control, RoundControlStyle, WIFI_BADGE_SQUIRCLE_RADIUS,
-    WIFI_CARD_SQUIRCLE_RADIUS, WIFI_MENU_SQUIRCLE_RADIUS,
+    detail_kv_row, make_help_circle_button, make_popover_menu_row, make_squircle_badge,
+    make_squircle_button, make_squircle_colored_badge, wrap_squircle_card,
+    WIFI_BADGE_SQUIRCLE_RADIUS, WIFI_CARD_SQUIRCLE_RADIUS,
 };
 
 const FIREWALL_BADGE_TOP: (f64, f64, f64) = (0.988, 0.584, 0.129);
@@ -286,24 +285,13 @@ pub fn create_network_panes(
     let (more_pill_wrap, more_menu_btn) = build_more_chevron_menu_button();
     bottom_actions.append(&more_pill_wrap);
 
-    let net_help_btn = MenuButton::builder()
-        .label("?")
-        .css_classes(["wifi-help-btn"])
-        .has_frame(false)
-        .always_show_arrow(false)
-        .valign(Align::Center)
-        .tooltip_text("Ayuda sobre Red")
-        .build();
+    let (net_help_wrap, net_help_btn) = make_help_circle_button("Ayuda sobre Red");
     let net_help_pop = build_help_popover(
         "Red y Servicios",
         "Administra Wi-Fi, Ethernet, puentes de red, Firewalld y el orden de métricas de ruta.\n\nNota de adaptación: las ubicaciones de red y algunos tipos de servicio virtuales se guardan localmente mientras se amplía su integración automática (ver docs/decisiones/0008-red-pendiente.md).",
     );
     net_help_btn.set_popover(Some(&net_help_pop));
-    bottom_actions.append(&wrap_squircle_round_control(
-        &net_help_btn,
-        22,
-        RoundControlStyle::SolidButton,
-    ));
+    bottom_actions.append(&net_help_wrap);
     net_pane.append(&bottom_actions);
     net_scroll.set_child(Some(&net_pane));
 
@@ -420,24 +408,13 @@ pub fn create_network_panes(
     let (fw_opt_wrap, fw_opt_btn) = make_squircle_button("Opciones...", false, None);
     fw_actions.append(&fw_opt_wrap);
 
-    let fw_help_btn = MenuButton::builder()
-        .label("?")
-        .css_classes(["wifi-help-btn"])
-        .has_frame(false)
-        .always_show_arrow(false)
-        .valign(Align::Center)
-        .tooltip_text("Ayuda sobre el Firewall")
-        .build();
+    let (fw_help_wrap, fw_help_btn) = make_help_circle_button("Ayuda sobre el Firewall");
     let fw_help_pop = build_help_popover(
         "Firewall en Malus DE",
         "Controla firewalld y el bloqueo ICMP (modo encubierto).\n\nNota: en Linux firewalld opera por servicios, puertos y zonas; las preferencias de firma de software integrado/descargado se conservan como anotación de diseño para una futura integración con eBPF/OpenSnitch (docs/decisiones/0008-red-pendiente.md).",
     );
     fw_help_btn.set_popover(Some(&fw_help_pop));
-    fw_actions.append(&wrap_squircle_round_control(
-        &fw_help_btn,
-        22,
-        RoundControlStyle::SolidButton,
-    ));
+    fw_actions.append(&fw_help_wrap);
 
     fw_pane.append(&fw_actions);
     fw_scroll.set_child(Some(&fw_pane));
@@ -855,6 +832,8 @@ fn build_more_chevron_menu_button() -> (Overlay, MenuButton) {
         .child(&row)
         .has_frame(false)
         .always_show_arrow(false)
+        .height_request(22)
+        .valign(Align::Center)
         .css_classes(["wifi-squircle-btn", "net-more-pill-btn"])
         .tooltip_text("Acciones de servicios de red")
         .build();
@@ -986,10 +965,7 @@ fn build_network_actions_popover(
     menu_box.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
     menu_box.append(&loc_wrap);
 
-    popover.set_child(Some(&wrap_squircle_popover_card(
-        &menu_box,
-        WIFI_MENU_SQUIRCLE_RADIUS,
-    )));
+    popover.set_child(Some(&menu_box));
     popover
 }
 
@@ -1001,10 +977,10 @@ fn build_help_popover(title: &str, body: &str) -> Popover {
     let box_inner = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(6)
-        .margin_top(12)
-        .margin_bottom(12)
-        .margin_start(14)
-        .margin_end(14)
+        .margin_top(10)
+        .margin_bottom(10)
+        .margin_start(12)
+        .margin_end(12)
         .width_request(280)
         .build();
     box_inner.append(
@@ -1022,10 +998,7 @@ fn build_help_popover(title: &str, body: &str) -> Popover {
             .xalign(0.0)
             .build(),
     );
-    pop.set_child(Some(&wrap_squircle_popover_card(
-        &box_inner,
-        WIFI_MENU_SQUIRCLE_RADIUS,
-    )));
+    pop.set_child(Some(&box_inner));
     pop
 }
 
@@ -1981,10 +1954,7 @@ fn build_rule_action_dropdown_button<F: Fn(FirewallAppAction) + 'static>(
 
     menu_box.append(&allow_wrap);
     menu_box.append(&block_wrap);
-    pop.set_child(Some(&wrap_squircle_popover_card(
-        &menu_box,
-        WIFI_MENU_SQUIRCLE_RADIUS,
-    )));
+    pop.set_child(Some(&menu_box));
     btn.set_popover(Some(&pop));
     btn
 }
