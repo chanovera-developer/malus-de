@@ -456,6 +456,10 @@ impl BranchesWindow {
             &sort_dir_sec,
         );
         sort_menu_btn.set_menu_model(Some(&sort_model));
+        if let Some(pop) = sort_menu_btn.popover() {
+            pop.set_has_arrow(false);
+            pop.add_css_class("malus-popover-menu");
+        }
         sort_pill_box.append(&sort_menu_btn);
 
         // 4. Botón de división de pantalla (Split View Dual Pane) en su propia cápsula
@@ -487,12 +491,40 @@ impl BranchesWindow {
             .css_classes(["branches-tool-btn"])
             .build();
 
-        let share_model = gio::Menu::new();
-        share_model.append(Some("Copiar ruta al portapapeles"), Some("win.copy_path"));
-        share_model.append(Some("Malus Link / Enviar a dispositivo…"), Some("win.share_malus_link"));
-        share_model.append(Some("KDE Connect / Enviar a dispositivo"), Some("win.share_kdeconnect"));
-        share_model.append(Some("Enviar por correo electrónico"), Some("win.share_email"));
-        share_menu_btn.set_menu_model(Some(&share_model));
+        let make_action_menu_btn = |label: &str, action: &str, target: Option<glib::Variant>, pop: &gtk4::Popover| {
+            let btn = Button::builder()
+                .label(label)
+                .has_frame(false)
+                .css_classes(["popover-menu-item"])
+                .build();
+            if let Some(lbl) = btn.child().and_then(|c| c.downcast::<Label>().ok()) {
+                lbl.set_xalign(0.0);
+            }
+            btn.set_action_name(Some(action));
+            if let Some(val) = target {
+                btn.set_action_target_value(Some(&val));
+            }
+            attach_squircle_menu_hover(&btn);
+            let p = pop.clone();
+            btn.connect_clicked(move |_| p.popdown());
+            btn
+        };
+
+        let share_popover = gtk4::Popover::builder()
+            .has_arrow(false)
+            .css_classes(["malus-popover-menu"])
+            .build();
+        let share_box = GtkBox::new(Orientation::Vertical, 1);
+        for (lbl, act) in [
+            ("Copiar ruta al portapapeles", "win.copy_path"),
+            ("Malus Link / Enviar a dispositivo…", "win.share_malus_link"),
+            ("KDE Connect / Enviar a dispositivo", "win.share_kdeconnect"),
+            ("Enviar por correo electrónico", "win.share_email"),
+        ] {
+            share_box.append(&make_action_menu_btn(lbl, act, None, &share_popover));
+        }
+        share_popover.set_child(Some(&share_box));
+        share_menu_btn.set_popover(Some(&share_popover));
 
         // 6. Botón de Información (Inspector "Obtener información")
         let info_btn = Button::builder()
@@ -514,56 +546,96 @@ impl BranchesWindow {
             .css_classes(["branches-tool-btn"])
             .build();
         
-        let menu_model = gio::Menu::new();
-        menu_model.append(Some("Nueva Pestaña"), Some("win.new_tab"));
-        menu_model.append(Some("Nueva Carpeta"), Some("win.new_folder"));
-        menu_model.append(Some("Deshacer"), Some("win.undo"));
-        menu_model.append(Some("Copiar"), Some("win.copy"));
-        menu_model.append(Some("Cortar"), Some("win.cut"));
-        menu_model.append(Some("Pegar"), Some("win.paste"));
-        menu_model.append(Some("Duplicar"), Some("win.duplicate"));
-        menu_model.append(Some("Comprimir (.zip)"), Some("win.compress_zip"));
-        menu_model.append(Some("Comprimir (.tar.gz)"), Some("win.compress_targz"));
-        menu_model.append(Some("Extraer aquí"), Some("win.extract"));
-        menu_model.append(Some("Mover a la Papelera"), Some("win.trash"));
-        menu_model.append(Some("Abrir en Terminal"), Some("win.open_terminal"));
-        menu_model.append(Some("Conectar al servidor…"), Some("win.connect_server"));
-        menu_model.append(Some("Mostrar Archivos Ocultos"), Some("win.toggle_hidden"));
-        menu_model.append(
-            Some(if es_ui {
-                "Buscar en subcarpetas"
-            } else {
-                "Search subfolders"
-            }),
-            Some("win.search_recursive"),
-        );
-        menu_model.append(Some("Recargar"), Some("win.reload"));
+        let action_popover = gtk4::Popover::builder()
+            .has_arrow(false)
+            .css_classes(["malus-popover-menu"])
+            .build();
+        let action_box = GtkBox::new(Orientation::Vertical, 1);
+        for (lbl, act) in [
+            ("Nueva Pestaña", "win.new_tab"),
+            ("Nueva Carpeta", "win.new_folder"),
+            ("Deshacer", "win.undo"),
+            ("Copiar", "win.copy"),
+            ("Cortar", "win.cut"),
+            ("Pegar", "win.paste"),
+            ("Duplicar", "win.duplicate"),
+            ("Comprimir (.zip)", "win.compress_zip"),
+            ("Comprimir (.tar.gz)", "win.compress_targz"),
+            ("Extraer aquí", "win.extract"),
+            ("Mover a la Papelera", "win.trash"),
+            ("Abrir en Terminal", "win.open_terminal"),
+            ("Conectar al servidor…", "win.connect_server"),
+            ("Mostrar Archivos Ocultos", "win.toggle_hidden"),
+            (
+                if es_ui {
+                    "Buscar en subcarpetas"
+                } else {
+                    "Search subfolders"
+                },
+                "win.search_recursive",
+            ),
+            ("Recargar", "win.reload"),
+        ] {
+            action_box.append(&make_action_menu_btn(lbl, act, None, &action_popover));
+        }
 
-        let tag_menu = gio::Menu::new();
         let es_menu = malus_de_common::is_spanish_locale();
+        let tag_row = GtkBox::new(Orientation::Horizontal, 16);
+        let tag_lbl = Label::builder()
+            .label(if es_menu { "Etiquetar" } else { "Tags" })
+            .xalign(0.0)
+            .hexpand(true)
+            .build();
+        let tag_chev = Label::builder().label("›").xalign(1.0).build();
+        tag_row.append(&tag_lbl);
+        tag_row.append(&tag_chev);
+        let tag_btn = Button::builder()
+            .child(&tag_row)
+            .has_frame(false)
+            .css_classes(["popover-menu-item"])
+            .build();
+        attach_squircle_menu_hover(&tag_btn);
+
+        let tag_popover = gtk4::Popover::builder()
+            .has_arrow(false)
+            .position(gtk4::PositionType::Right)
+            .css_classes(["malus-popover-menu"])
+            .build();
+        tag_popover.set_parent(&tag_btn);
+        let tag_box = GtkBox::new(Orientation::Vertical, 1);
         for def in crate::db::TAG_CATALOG.iter() {
             let label = if es_menu { def.label_es } else { def.label_en };
-            let item = gio::MenuItem::new(Some(label), None);
-            item.set_action_and_target_value(
-                Some("win.toggle_tag"),
-                Some(&def.id.to_variant()),
-            );
-            tag_menu.append_item(&item);
+            let btn = make_action_menu_btn(label, "win.toggle_tag", Some(def.id.to_variant()), &tag_popover);
+            let parent_pop = action_popover.clone();
+            btn.connect_clicked(move |_| parent_pop.popdown());
+            tag_box.append(&btn);
         }
-        tag_menu.append(
-            Some(if es_menu {
+        let clear_tags_btn = make_action_menu_btn(
+            if es_menu {
                 "Quitar etiquetas"
             } else {
                 "Clear Tags"
-            }),
-            Some("win.clear_tags"),
+            },
+            "win.clear_tags",
+            None,
+            &tag_popover,
         );
-        menu_model.append_submenu(
-            Some(if es_menu { "Etiquetar" } else { "Tags" }),
-            &tag_menu,
-        );
+        let parent_pop_c = action_popover.clone();
+        clear_tags_btn.connect_clicked(move |_| parent_pop_c.popdown());
+        tag_box.append(&clear_tags_btn);
+        tag_popover.set_child(Some(&tag_box));
 
-        action_menu_btn.set_menu_model(Some(&menu_model));
+        let tag_pop_open = tag_popover.clone();
+        tag_btn.connect_clicked(move |_| {
+            tag_pop_open.popup();
+        });
+        let tag_pop_close = tag_popover.clone();
+        action_popover.connect_closed(move |_| {
+            tag_pop_close.popdown();
+        });
+        action_box.append(&tag_btn);
+        action_popover.set_child(Some(&action_box));
+        action_menu_btn.set_popover(Some(&action_popover));
 
         // 8. Botón de búsqueda con crecimiento suave a campo squircle y repliegue al hacer clic fuera
         let search_container = GtkBox::new(Orientation::Horizontal, 0);

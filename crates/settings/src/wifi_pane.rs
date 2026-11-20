@@ -1355,10 +1355,10 @@ fn populate_wifi_list_card(
             let menu_box = GtkBox::builder()
                 .orientation(Orientation::Vertical)
                 .spacing(1)
-                .margin_top(0)
-                .margin_bottom(0)
-                .margin_start(0)
-                .margin_end(0)
+                .margin_top(4)
+                .margin_bottom(4)
+                .margin_start(4)
+                .margin_end(4)
                 .build();
 
             let (auto_wrap, auto_btn) = make_popover_menu_row(
