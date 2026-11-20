@@ -4,11 +4,13 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
-## [2026-11-19] — Radio Squircle Unificado para Menús en el Compositor (`malus-de-compositor`)
+## [2026-11-19] — Radio Squircle Unificado para Menús en el Compositor (`malus-de-compositor`) y Hover Cairo en Todo el Workspace
 
-- Reducido y unificado el radio squircle (`n = 4.2`) de todos los contenedores de menús emergentes y popups en el compositor ([`mod.rs`](../crates/compositor/src/backend/mod.rs), [`drm.rs`](../crates/compositor/src/backend/drm.rs), [`winit.rs`](../crates/compositor/src/backend/winit.rs)):
-  - Definida la constante compartida `POPUP_MENU_CORNER_RADIUS_LOGICAL = 16.0` (antes `32.0 * scale`) para el blur (`BlurRenderElement::for_popup`), sombra (`MenuShadowRenderElement`) y recorte squircle de popups (`topbar_popups`, `dock_popups`, `wallpaper_popups` y `popups` de ventanas), logrando un ajuste concéntrico exacto con el resaltado interior de `14.0 px` dibujado con Cairo.
-- Validación: `cargo check --offline --workspace --all-targets` (**0 warnings**), `cargo test --offline -p malus-de-compositor` (**84 passed; 0 failed**).
+- **Compositor (`malus-de-compositor`):** ajustado `POPUP_MENU_CORNER_RADIUS_LOGICAL` a `20.0` ([`mod.rs`](../crates/compositor/src/backend/mod.rs), [`drm.rs`](../crates/compositor/src/backend/drm.rs), [`winit.rs`](../crates/compositor/src/backend/winit.rs)) para redondear un poco más los menús emergentes y popups conservando el ajuste concéntrico con los ítems interiores.
+- **Hover azul Squircle con Cairo en todos los menús (`branches`, `dock`, `top-bar`, `settings`, `common`):**
+  - Añadida la clase compartida `.malus-squircle-menu-item` en [`squircle-rules.css`](../crates/common/src/styles/squircle-rules.css), [`style.css`](../crates/top-bar/src/styles/style.css) y [`dock.css`](../crates/dock/src/styles/dock.css) para suprimir el fondo/padding rectangular de GTK CSS.
+  - Replicado el `Overlay` + `DrawingArea` con `squircle_path` (`r = 14.0`, `n = 4.2`, azul semitransparente `rgba(0.0, 0.48, 1.0, 0.74)` en hover y `0.86` al presionar) en [`branches`](../crates/branches/src/app_window.rs) (`views/mod.rs`, `sidebar.rs`, `app_window.rs`), [`dock`](../crates/dock/src/main.rs) (`make_dock_menu_button`) y [`top-bar`](../crates/top-bar/src/ui/system_menu.rs) (`system_menu.rs`, `global_menu.rs`).
+- Validación: `cargo check --offline --workspace --all-targets` (**0 warnings**); tests unitarios aprobados en `compositor` (**84/84**), `branches` (**55/55**), `dock` (**15/15**), `settings` (**5/5**) y `top-bar` (9/10; falla preexistente en `test_brightness_service` por brillo real de pantalla `80%` != `85%`).
 
 ---
 

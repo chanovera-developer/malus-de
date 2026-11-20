@@ -839,14 +839,7 @@ fn show_add_bookmark_popover(
         } else {
             format!("Bookmark Current Folder (“{}”)", folder_name)
         };
-        let btn_cur = Button::builder()
-            .label(&cur_lbl)
-            .has_frame(false)
-            .css_classes(["popover-menu-item"])
-            .build();
-        if let Some(lbl) = btn_cur.child().and_then(|c| c.downcast::<Label>().ok()) {
-            lbl.set_xalign(0.0);
-        }
+        let btn_cur = make_sidebar_menu_item(&cur_lbl);
         let pop_c = pop.clone();
         let cur_p = current;
         btn_cur.connect_clicked(move |_| {
@@ -859,14 +852,7 @@ fn show_add_bookmark_popover(
         vbox.append(&btn_cur);
     }
 
-    let btn_pick = Button::builder()
-        .label(if es { "Elegir carpeta…" } else { "Choose Folder…" })
-        .has_frame(false)
-        .css_classes(["popover-menu-item"])
-        .build();
-    if let Some(lbl) = btn_pick.child().and_then(|c| c.downcast::<Label>().ok()) {
-        lbl.set_xalign(0.0);
-    }
+    let btn_pick = make_sidebar_menu_item(if es { "Elegir carpeta…" } else { "Choose Folder…" });
     let pop_p = pop.clone();
     let parent_for_dialog = anchor.clone().upcast::<gtk4::Widget>();
     btn_pick.connect_clicked(move |_| {
@@ -951,6 +937,7 @@ fn make_sidebar_menu_item(label: &str) -> Button {
     if let Some(lbl) = btn.child().and_then(|c| c.downcast::<Label>().ok()) {
         lbl.set_xalign(0.0);
     }
+    crate::app_window::attach_squircle_menu_hover(&btn);
     btn
 }
 
@@ -1415,14 +1402,7 @@ fn attach_bookmark_context_menu(
 
         let vbox = GtkBox::new(Orientation::Vertical, 2);
 
-        let open_btn = Button::builder()
-            .label(if es { "Abrir" } else { "Open" })
-            .has_frame(false)
-            .css_classes(["popover-menu-item"])
-            .build();
-        if let Some(lbl) = open_btn.child().and_then(|c| c.downcast::<Label>().ok()) {
-            lbl.set_xalign(0.0);
-        }
+        let open_btn = make_sidebar_menu_item(if es { "Abrir" } else { "Open" });
         {
             let p_open = pop.clone();
             let nav = nav_cb.clone();
@@ -1468,18 +1448,11 @@ fn attach_bookmark_context_menu(
             vbox.append(&parent_tab_btn);
         }
 
-        let rename_btn = Button::builder()
-            .label(if es {
-                "Renombrar marcador…"
-            } else {
-                "Rename Bookmark…"
-            })
-            .has_frame(false)
-            .css_classes(["popover-menu-item"])
-            .build();
-        if let Some(lbl) = rename_btn.child().and_then(|c| c.downcast::<Label>().ok()) {
-            lbl.set_xalign(0.0);
-        }
+        let rename_btn = make_sidebar_menu_item(if es {
+            "Renombrar marcador…"
+        } else {
+            "Rename Bookmark…"
+        });
         {
             let p_ren = pop.clone();
             let r_anchor = row_ref.clone();
@@ -1497,18 +1470,11 @@ fn attach_bookmark_context_menu(
         }
         vbox.append(&rename_btn);
 
-        let remove_btn = Button::builder()
-            .label(if es {
-                "Quitar de marcadores"
-            } else {
-                "Remove Bookmark"
-            })
-            .has_frame(false)
-            .css_classes(["popover-menu-item"])
-            .build();
-        if let Some(lbl) = remove_btn.child().and_then(|c| c.downcast::<Label>().ok()) {
-            lbl.set_xalign(0.0);
-        }
+        let remove_btn = make_sidebar_menu_item(if es {
+            "Quitar de marcadores"
+        } else {
+            "Remove Bookmark"
+        });
         {
             let p_rem = pop.clone();
             let target = folder_path.clone();
@@ -1696,18 +1662,11 @@ fn attach_network_context_menu(
 
         let vbox = GtkBox::new(Orientation::Vertical, 2);
 
-        let connect_btn = gtk4::Button::builder()
-            .label(if es {
-                "Conectar al servidor…"
-            } else {
-                "Connect to Server…"
-            })
-            .has_frame(false)
-            .css_classes(["popover-menu-item"])
-            .build();
-        if let Some(child) = connect_btn.child().and_then(|c| c.downcast::<Label>().ok()) {
-            child.set_xalign(0.0);
-        }
+        let connect_btn = make_sidebar_menu_item(if es {
+            "Conectar al servidor…"
+        } else {
+            "Connect to Server…"
+        });
         let anchor = row_ref.clone();
         let pop = popover.clone();
         connect_btn.connect_clicked(move |_| {
@@ -1717,18 +1676,11 @@ fn attach_network_context_menu(
         vbox.append(&connect_btn);
 
         if let Some(gvfs_root) = crate::network::gvfs_mounts_root() {
-            let gvfs_btn = gtk4::Button::builder()
-                .label(if es {
-                    "Abrir carpeta de montajes GVfs"
-                } else {
-                    "Open GVfs Mounts Folder"
-                })
-                .has_frame(false)
-                .css_classes(["popover-menu-item"])
-                .build();
-            if let Some(child) = gvfs_btn.child().and_then(|c| c.downcast::<Label>().ok()) {
-                child.set_xalign(0.0);
-            }
+            let gvfs_btn = make_sidebar_menu_item(if es {
+                "Abrir carpeta de montajes GVfs"
+            } else {
+                "Open GVfs Mounts Folder"
+            });
             let pop2 = popover.clone();
             let nav_c = nav_ref.clone();
             gvfs_btn.connect_clicked(move |_| {
@@ -1760,20 +1712,11 @@ fn attach_trash_context_menu(row: &ListBoxRow, es: bool) {
         popover.connect_closed(|p| p.unparent());
 
         let vbox = GtkBox::new(Orientation::Vertical, 2);
-        let empty_btn = gtk4::Button::builder()
-            .label(if es {
-                "Vaciar Papelera…"
-            } else {
-                "Empty Trash…"
-            })
-            .has_frame(false)
-            .css_classes(["popover-menu-item"])
-            .build();
-        if let Some(child) = empty_btn.child() {
-            if let Some(lbl) = child.downcast_ref::<Label>() {
-                lbl.set_xalign(0.0);
-            }
-        }
+        let empty_btn = make_sidebar_menu_item(if es {
+            "Vaciar Papelera…"
+        } else {
+            "Empty Trash…"
+        });
         let anchor = row_ref.clone();
         let pop = popover.clone();
         empty_btn.connect_clicked(move |_| {

@@ -382,3 +382,22 @@ window.malus-switcher-window decoration,
     color: @accent_fg_color;
     font-weight: 700;
 }
+
+button.popover-menu-item.malus-squircle-menu-item,
+button.popover-menu-item.malus-squircle-menu-item:hover,
+button.popover-menu-item.malus-squircle-menu-item:active,
+button.popover-menu-item.malus-squircle-menu-item:focus,
+button.popover-menu-item.malus-squircle-menu-item:focus-visible,
+popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item,
+popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:hover,
+popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:active {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    padding: 0px;
+    border: none;
+    border-radius: 0px;
+    box-shadow: none;
+    outline: none;
+    outline-width: 0px;
+}

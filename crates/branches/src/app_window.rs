@@ -72,6 +72,65 @@ fn squircle_path(context: &gtk4::cairo::Context, width: f64, height: f64, radius
     context.close_path();
 }
 
+/// Envuelve el contenido de un botón de menú en un Overlay con DrawingArea Cairo Squircle azul semitransparente.
+pub(crate) fn attach_squircle_menu_hover(btn: &Button) {
+    let Some(inner) = btn.child() else {
+        return;
+    };
+    btn.add_css_class("malus-squircle-menu-item");
+    btn.set_child(gtk4::Widget::NONE);
+    inner.set_margin_top(3);
+    inner.set_margin_bottom(3);
+    inner.set_margin_start(8);
+    inner.set_margin_end(8);
+
+    let bg = gtk4::DrawingArea::new();
+    bg.set_can_target(false);
+    bg.set_hexpand(true);
+    bg.set_vexpand(true);
+
+    let btn_weak = btn.downgrade();
+    bg.set_draw_func(move |_, cr, w, h| {
+        let width = w as f64;
+        let height = h as f64;
+        if width <= 2.0 || height <= 2.0 {
+            return;
+        }
+        let Some(b) = btn_weak.upgrade() else {
+            return;
+        };
+        let flags = b.state_flags();
+        if flags.contains(gtk4::StateFlags::INSENSITIVE) {
+            return;
+        }
+        let hovered = flags.contains(gtk4::StateFlags::PRELIGHT);
+        let active = flags.contains(gtk4::StateFlags::ACTIVE);
+        if !hovered && !active {
+            return;
+        }
+        let _ = cr.save();
+        squircle_path(cr, width, height, 14.0);
+        if active {
+            cr.set_source_rgba(0.0, 0.39, 0.85, 0.86);
+        } else {
+            cr.set_source_rgba(0.0, 0.48, 1.0, 0.74);
+        }
+        let _ = cr.fill();
+        let _ = cr.restore();
+    });
+
+    let bg_state = bg.clone();
+    btn.connect_state_flags_changed(move |_, _| {
+        bg_state.queue_draw();
+    });
+
+    let overlay = Overlay::builder().hexpand(true).build();
+    overlay.set_child(Some(&bg));
+    overlay.add_overlay(&inner);
+    overlay.set_measure_overlay(&inner, true);
+    btn.set_child(Some(&overlay));
+}
+
 /// Envuelve un `SearchEntry` en la misma cápsula squircle en Cairo que el filtro de Ajustes.
 fn create_squircle_search_shell(entry: &SearchEntry) -> Overlay {
     let shell = Overlay::builder()
@@ -1749,6 +1808,7 @@ impl BranchesWindow {
                     lbl.set_xalign(0.0);
                 }
             }
+            attach_squircle_menu_hover(&item_btn);
             let bw = self.clone_ref();
             let pop = popover.clone();
             let steps = idx + 1;

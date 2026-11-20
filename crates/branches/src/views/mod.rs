@@ -137,6 +137,7 @@ pub(super) fn make_context_menu_button(label: &str) -> gtk4::Button {
             lbl.set_xalign(0.0);
         }
     }
+    crate::app_window::attach_squircle_menu_hover(&btn);
     btn
 }
 

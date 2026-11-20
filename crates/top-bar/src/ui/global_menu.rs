@@ -761,6 +761,7 @@ fn append_dbus_menu_item(
         row.append(&chevron);
 
         row_btn.set_child(Some(&row));
+        crate::ui::system_menu::attach_squircle_menu_hover(&row_btn);
 
         let sub_popover = Popover::builder()
             .css_classes(["malus-popover-menu"])
@@ -995,12 +996,20 @@ pub fn create_menu_row(label_text: &str, shortcut: Option<&str>) -> Button {
     }
 
     btn.set_child(Some(&row));
+    crate::ui::system_menu::attach_squircle_menu_hover(&btn);
     btn
 }
 
 pub fn update_menu_row_label(btn: &Button, new_label: &str) {
     if let Some(child) = btn.child() {
-        if let Some(row) = child.downcast_ref::<GtkBox>() {
+        let row_opt = child.clone().downcast::<GtkBox>().ok().or_else(|| {
+            child
+                .downcast::<gtk4::Overlay>()
+                .ok()
+                .and_then(|ov| ov.last_child())
+                .and_then(|c| c.downcast::<GtkBox>().ok())
+        });
+        if let Some(row) = row_opt {
             if let Some(first) = row.first_child() {
                 if let Some(label) = first.downcast_ref::<Label>() {
                     label.set_label(new_label);

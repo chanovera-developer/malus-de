@@ -3065,6 +3065,76 @@ fn squircle_path(context: &gtk4::cairo::Context, width: f64, height: f64, radius
     context.close_path();
 }
 
+fn make_dock_menu_button(label: &str, danger: bool) -> Button {
+    let classes: &[&str] = if danger {
+        &["popover-menu-item", "popover-menu-item-danger", "malus-squircle-menu-item"]
+    } else {
+        &["popover-menu-item", "malus-squircle-menu-item"]
+    };
+    let btn = Button::builder()
+        .label(label)
+        .has_frame(false)
+        .css_classes(classes)
+        .build();
+    if let Some(inner) = btn.child() {
+        if let Some(lbl) = inner.downcast_ref::<Label>() {
+            lbl.set_xalign(0.0);
+        }
+        btn.set_child(gtk4::Widget::NONE);
+        inner.set_margin_top(4);
+        inner.set_margin_bottom(4);
+        inner.set_margin_start(8);
+        inner.set_margin_end(8);
+
+        let bg = DrawingArea::new();
+        bg.set_can_target(false);
+        bg.set_hexpand(true);
+        bg.set_vexpand(true);
+
+        let btn_weak = btn.downgrade();
+        bg.set_draw_func(move |_, cr, w, h| {
+            let width = w as f64;
+            let height = h as f64;
+            if width <= 2.0 || height <= 2.0 {
+                return;
+            }
+            let Some(b) = btn_weak.upgrade() else {
+                return;
+            };
+            let flags = b.state_flags();
+            if flags.contains(gtk4::StateFlags::INSENSITIVE) {
+                return;
+            }
+            let hovered = flags.contains(gtk4::StateFlags::PRELIGHT);
+            let active = flags.contains(gtk4::StateFlags::ACTIVE);
+            if !hovered && !active {
+                return;
+            }
+            let _ = cr.save();
+            squircle_path(cr, width, height, 14.0);
+            if active {
+                cr.set_source_rgba(0.0, 0.39, 0.85, 0.86);
+            } else {
+                cr.set_source_rgba(0.0, 0.48, 1.0, 0.74);
+            }
+            let _ = cr.fill();
+            let _ = cr.restore();
+        });
+
+        let bg_state = bg.clone();
+        btn.connect_state_flags_changed(move |_, _| {
+            bg_state.queue_draw();
+        });
+
+        let overlay = Overlay::builder().hexpand(true).build();
+        overlay.set_child(Some(&bg));
+        overlay.add_overlay(&inner);
+        overlay.set_measure_overlay(&inner, true);
+        btn.set_child(Some(&overlay));
+    }
+    btn
+}
+
 fn create_minimized_window_item(info: &MinimizedWindowInfo, icon_size: i32) -> (gtk4::Widget, u64) {
     let window_id = info.window_id;
 
@@ -3272,20 +3342,14 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
     sep.add_css_class("popover-separator");
     menu_box.append(&sep);
 
-    let btn_open = Button::builder()
-        .label("Abrir en Branches")
-        .css_classes(["popover-menu-item"])
-        .build();
+    let btn_open = make_dock_menu_button("Abrir en Branches", false);
     let p_open = popover.clone();
     btn_open.connect_clicked(move |_| {
         p_open.popdown();
         spawn_dock_app("Branches", "malus-de-branches", &["trash:///"]);
     });
 
-    let btn_empty = Button::builder()
-        .label("Vaciar Papelera")
-        .css_classes(["popover-menu-item"])
-        .build();
+    let btn_empty = make_dock_menu_button("Vaciar Papelera", false);
     let img_clone = trash_img.clone();
     let popover_clone = popover.clone();
     btn_empty.connect_clicked(move |_| {
@@ -3363,10 +3427,7 @@ fn populate_dock_app_menu_box(
     menu_box.append(&sep1);
 
     // 2. Acción Abrir / Traer al frente
-    let btn_open = Button::builder()
-        .label(if is_running { "Traer al frente" } else { "Abrir" })
-        .css_classes(["popover-menu-item"])
-        .build();
+    let btn_open = make_dock_menu_button(if is_running { "Traer al frente" } else { "Abrir" }, false);
     let p_open = popover.clone();
     let act_open = activate_or_spawn.clone();
     btn_open.connect_clicked(move |_| {
@@ -3376,10 +3437,7 @@ fn populate_dock_app_menu_box(
     menu_box.append(&btn_open);
 
     for (label, args) in dock_app_context_actions(app_cfg, is_running) {
-        let btn_action = Button::builder()
-            .label(label)
-            .css_classes(["popover-menu-item"])
-            .build();
+        let btn_action = make_dock_menu_button(label, false);
         let p_action = popover.clone();
         let action_name = app_cfg.name.clone();
         let action_command = app_cfg.command.clone();
@@ -3393,10 +3451,7 @@ fn populate_dock_app_menu_box(
     // 3. Opciones de anclado / organización estilo macOS
     if is_pinned {
         if idx > 0 {
-            let btn_move_left = Button::builder()
-                .label("Mover a la izquierda")
-                .css_classes(["popover-menu-item"])
-                .build();
+            let btn_move_left = make_dock_menu_button("Mover a la izquierda", false);
             let p_mv_l = popover.clone();
             let cfg_mv_l = dock_config.clone();
             let on_rf_mv_l = on_refresh.clone();
@@ -3413,10 +3468,7 @@ fn populate_dock_app_menu_box(
         }
 
         if idx + 1 < total_pinned {
-            let btn_move_right = Button::builder()
-                .label("Mover a la derecha")
-                .css_classes(["popover-menu-item"])
-                .build();
+            let btn_move_right = make_dock_menu_button("Mover a la derecha", false);
             let p_mv_r = popover.clone();
             let cfg_mv_r = dock_config.clone();
             let on_rf_mv_r = on_refresh.clone();
@@ -3432,10 +3484,7 @@ fn populate_dock_app_menu_box(
             menu_box.append(&btn_move_right);
         }
 
-        let btn_unpin = Button::builder()
-            .label("Eliminar del Dock")
-            .css_classes(["popover-menu-item"])
-            .build();
+        let btn_unpin = make_dock_menu_button("Eliminar del Dock", false);
         let p_unpin = popover.clone();
         let cfg_unpin = dock_config.clone();
         let name_unpin = app_cfg.name.clone();
@@ -3451,10 +3500,7 @@ fn populate_dock_app_menu_box(
         });
         menu_box.append(&btn_unpin);
     } else {
-        let btn_pin = Button::builder()
-            .label("Mantener en el Dock")
-            .css_classes(["popover-menu-item"])
-            .build();
+        let btn_pin = make_dock_menu_button("Mantener en el Dock", false);
         let p_pin = popover.clone();
         let cfg_pin = dock_config.clone();
         let app_to_pin = app_cfg.clone();
@@ -3477,10 +3523,7 @@ fn populate_dock_app_menu_box(
         sep2.add_css_class("popover-separator");
         menu_box.append(&sep2);
 
-        let btn_force_quit = Button::builder()
-            .label("Forzar salida")
-            .css_classes(["popover-menu-item", "popover-menu-item-danger"])
-            .build();
+        let btn_force_quit = make_dock_menu_button("Forzar salida", true);
         let p_fq = popover.clone();
         let matchers_fq = app_cfg.matchers.clone();
         let cmd_fq = app_cfg.command.clone();

@@ -201,6 +201,25 @@ menu menuitem:active:not(:disabled),
     color: #ffffff;
 }
 
+popover .popover-menu-item.malus-squircle-menu-item,
+popover .popover-menu-item.malus-squircle-menu-item:hover:not(:disabled),
+popover .popover-menu-item.malus-squircle-menu-item:active:not(:disabled),
+popover .popover-menu-item.malus-squircle-menu-item:focus,
+popover .popover-menu-item.malus-squircle-menu-item:focus-visible,
+popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item,
+popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:hover:not(:disabled),
+popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:active:not(:disabled) {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    padding: 0px;
+    border: none;
+    border-radius: 0px;
+    box-shadow: none;
+    outline: none;
+    outline-width: 0px;
+}
+
 popover modelbutton:hover:not(:disabled) label,
 popover modelbutton:hover:not(:disabled) image,
 popover modelbutton:selected:not(:disabled) label,

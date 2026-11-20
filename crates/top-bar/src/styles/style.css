@@ -1165,3 +1165,26 @@ popover.malus-popover-menu.light-popover>contents button.popover-menu-item:hover
 popover.light-popover button:hover label.menu-shortcut-hint {
     color: rgba(255, 255, 255, 0.90);
 }
+
+button.popover-menu-item.malus-squircle-menu-item,
+button.popover-menu-item.malus-squircle-menu-item:hover,
+button.popover-menu-item.malus-squircle-menu-item:active,
+button.popover-menu-item.malus-squircle-menu-item:focus,
+button.popover-menu-item.malus-squircle-menu-item:focus-visible,
+popover.malus-popover-menu>contents button.popover-menu-item.malus-squircle-menu-item,
+popover.malus-popover-menu>contents button.popover-menu-item.malus-squircle-menu-item:hover,
+popover.malus-popover-menu>contents button.popover-menu-item.malus-squircle-menu-item:active,
+popover.malus-popover-menu.light-popover>contents button.popover-menu-item.malus-squircle-menu-item,
+popover.malus-popover-menu.light-popover>contents button.popover-menu-item.malus-squircle-menu-item:hover,
+popover.light-popover button.popover-menu-item.malus-squircle-menu-item,
+popover.light-popover button.popover-menu-item.malus-squircle-menu-item:hover {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    padding: 0px;
+    border: none;
+    border-radius: 0px;
+    box-shadow: none;
+    outline: none;
+    outline-width: 0px;
+}
