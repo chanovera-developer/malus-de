@@ -9,8 +9,8 @@ use gtk4::{
 const WIFI_CARD_SQUIRCLE_RADIUS: f64 = 19.0;
 const WIFI_BUTTON_SQUIRCLE_RADIUS: f64 = 11.5;
 const WIFI_BADGE_SQUIRCLE_RADIUS: f64 = 15.0;
-const WIFI_MENU_SQUIRCLE_RADIUS: f64 = 15.0;
-const WIFI_MENU_ITEM_SQUIRCLE_RADIUS: f64 = 9.5;
+const WIFI_MENU_SQUIRCLE_RADIUS: f64 = 12.0;
+const WIFI_MENU_ITEM_SQUIRCLE_RADIUS: f64 = 8.0;
 
 /// Dibuja la insignia cuadrada-squircle azul de Wi-Fi estilo macOS con el glifo centrado.
 fn make_squircle_wifi_badge(size: i32, icon_px: i32, radius: f64) -> Overlay {
@@ -1641,9 +1641,18 @@ fn deterministic_private_mac(ssid: &str) -> String {
 
 fn attach_modal_scrim(parent: &ApplicationWindow, dialog: &gtk4::Window) {
     crate::set_modal_scrim_visible(parent, true);
-    let p_c = parent.clone();
+    let p_c1 = parent.clone();
+    dialog.connect_close_request(move |_| {
+        crate::set_modal_scrim_visible(&p_c1, false);
+        glib::Propagation::Proceed
+    });
+    let p_c2 = parent.clone();
+    dialog.connect_hide(move |_| {
+        crate::set_modal_scrim_visible(&p_c2, false);
+    });
+    let p_c3 = parent.clone();
     dialog.connect_destroy(move |_| {
-        crate::set_modal_scrim_visible(&p_c, false);
+        crate::set_modal_scrim_visible(&p_c3, false);
     });
 }
 

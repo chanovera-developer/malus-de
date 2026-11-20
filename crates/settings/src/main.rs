@@ -771,6 +771,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         .css_classes(["settings-modal-scrim"])
         .hexpand(true)
         .vexpand(true)
+        .can_target(false)
         .visible(false)
         .build();
     root_overlay.add_overlay(&modal_scrim);

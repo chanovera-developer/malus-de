@@ -847,24 +847,30 @@ switch.macos-switch image {
     background-color: rgba(0, 0, 0, 0.22);
 }
 
+popover.wifi-macos-popover,
 popover.wifi-macos-popover > contents {
     padding: 0px;
     margin: 0px;
     border-radius: 0px;
     background: transparent;
     border: none;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+    box-shadow: none;
 }
 
-.wifi-menu-action-btn {
+.wifi-menu-action-btn,
+.wifi-menu-action-btn:focus,
+.wifi-menu-action-btn:focus-visible {
     background: transparent;
     border: none;
     box-shadow: none;
+    outline: none;
+    outline-width: 0px;
     border-radius: 0px;
     padding: 3px 8px;
     min-height: 22px;
     color: @window_fg_color;
     font-size: 12.5px;
+    font-weight: 400;
 }
 
 .wifi-menu-action-btn:hover,
