@@ -20,12 +20,13 @@ Se implementa el módulo completo de **General** y sus 14 subvistas siguiendo la
     - `Elementos de inicio y extensiones` (`General09.png`, `General10.png`): Gestión real de `~/.config/autostart/*.desktop` (`+` / `-`) y pestañas `Por app` / `Por categoría`.
     - `Fecha y hora` (`General11.png`) e `Idioma y región` (`General12.png`): NTP (`timedatectl`), reloj 24h (`GSettings`), zona horaria, idiomas preferidos y vista previa regional interactiva.
   - **Etiquetas `"por implementar"`**: Insignias `.gen-pending-badge` en *AppleCare y garantía*, *AirDrop y continuidad*, *Autorrelleno del sistema*, servicios de compartición pendientes, *Extensiones*, *Tratamiento*, *Texto en vivo (OCR)*, *Time Machine*, *Admón. de dispositivos* y *Asistente de migración*, documentados en [`docs/decisiones/0011-general-pendiente.md`](decisiones/0011-general-pendiente.md).
-- **Barra lateral e historial ([`crates/settings/src/main.rs`](../crates/settings/src/main.rs), [`crates/settings/src/styles/macos-settings.css`](../crates/settings/src/styles/macos-settings.css))**:
+- **Barra lateral, transiciones e historial ([`crates/settings/src/main.rs`](../crates/settings/src/main.rs), [`crates/settings/src/styles/macos-settings.css`](../crates/settings/src/styles/macos-settings.css))**:
   - `General` ubicado debajo de `Batería` con `margin-top: 14px` y resaltado activo mantenido en todas las subvistas `general-*`.
+  - Transiciones direccionales animadas en el `Stack` (`choose_panel_transition`): `SlideLeft` (`220 ms`) al entrar a una subsección o avanzar, `SlideRight` (`220 ms`) al regresar con `<` o salir de una subsección a su sección padre, y `Crossfade` (`140 ms`) entre secciones principales.
 
 ### Verificación
 - `cargo check --offline --workspace --all-targets`: 0 warnings.
-- `cargo test --offline -p malus-de-settings`: 15 passed, 0 failed.
+- `cargo test --offline -p malus-de-settings`: 16 passed, 0 failed.
 - `cargo build --offline --release -p malus-de-settings` e instalación en `/usr/local/bin/malus-de-settings`.
 
 ---

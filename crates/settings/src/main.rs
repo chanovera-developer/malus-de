@@ -726,6 +726,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     let all_btns = Rc::new(sidebar_buttons.clone());
     let nav_history: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(vec![start_id.to_string()]));
     let nav_index: Rc<RefCell<usize>> = Rc::new(RefCell::new(0));
+    let current_panel: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
 
     let select_panel = {
         let btns = all_btns.clone();
@@ -747,10 +748,18 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         let ref_spot = refresh_spotlight_pane.clone();
         let history_c = nav_history.clone();
         let idx_c = nav_index.clone();
+        let cur_panel_c = current_panel.clone();
         let btn_b_c = btn_back.clone();
         let btn_f_c = btn_forward.clone();
 
-        Rc::new(move |target: &str, push_history: bool| {
+        Rc::new(move |target: &str, action: NavAction| {
+            let prev_id = cur_panel_c.borrow().clone();
+            let (trans_type, trans_ms) =
+                choose_panel_transition(prev_id.as_deref(), target, action);
+            stack_c.set_transition_type(trans_type);
+            stack_c.set_transition_duration(trans_ms);
+            *cur_panel_c.borrow_mut() = Some(target.to_string());
+
             let sidebar_id = if target == "network-firewall" {
                 "network"
             } else if general_pane::is_general_subpanel(target) {
@@ -812,7 +821,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             title_lbl.set_label(display_title);
             stack_c.set_visible_child_name(target);
 
-            if push_history {
+            if matches!(action, NavAction::Push) {
                 let mut hist = history_c.borrow_mut();
                 let mut cur = idx_c.borrow_mut();
                 if hist.get(*cur).map(|s| s.as_str()) != Some(target) {
@@ -830,12 +839,19 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
 
     let sel_for_dispatch = select_panel.clone();
     *nav_dispatch.borrow_mut() = Some(Rc::new(move |target: &str, push: bool| {
-        sel_for_dispatch(target, push);
+        sel_for_dispatch(
+            target,
+            if push {
+                NavAction::Push
+            } else {
+                NavAction::Back
+            },
+        );
     }));
 
     let sel_for_goto = select_panel.clone();
     *goto_action.borrow_mut() = Some(Rc::new(move || {
-        sel_for_goto("wallpaper", true);
+        sel_for_goto("wallpaper", NavAction::Push);
     }));
 
     let sel_back = select_panel.clone();
@@ -847,7 +863,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             *cur -= 1;
             let target = hist_b.borrow()[*cur].clone();
             drop(cur);
-            sel_back(&target, false);
+            sel_back(&target, NavAction::Back);
         }
     });
 
@@ -861,7 +877,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             *cur += 1;
             let target = hist_f.borrow()[*cur].clone();
             drop(cur);
-            sel_fwd(&target, false);
+            sel_fwd(&target, NavAction::Forward);
         }
     });
 
@@ -870,12 +886,12 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         let target_id = id.clone();
         let sel = select_panel.clone();
         btn.connect_clicked(move |_| {
-            sel(&target_id, true);
+            sel(&target_id, NavAction::Push);
         });
     }
 
-    // Seleccionar panel inicial
-    select_panel(start_id, false);
+    // Seleccionar panel inicial sin animación de entrada
+    select_panel(start_id, NavAction::Initial);
 
     let main_paned = Paned::builder()
         .orientation(Orientation::Horizontal)
@@ -937,6 +953,68 @@ pub(crate) fn attach_modal_scrim(dialog: &gtk4::Window, parent: &ApplicationWind
     dialog.connect_destroy(move |_| {
         set_modal_scrim_visible(&p2, false);
     });
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NavAction {
+    Initial,
+    Push,
+    Back,
+    Forward,
+}
+
+fn is_subsection_panel(id: &str) -> bool {
+    id == "network-firewall" || (id != "about" && general_pane::is_general_subpanel(id))
+}
+
+fn section_group(id: &str) -> &str {
+    if id == "network" || id == "network-firewall" {
+        "network"
+    } else if general_pane::is_general_subpanel(id) {
+        "about"
+    } else {
+        id
+    }
+}
+
+fn same_section_group(a: &str, b: &str) -> bool {
+    section_group(a) == section_group(b)
+}
+
+fn choose_panel_transition(
+    prev_id: Option<&str>,
+    next_id: &str,
+    action: NavAction,
+) -> (StackTransitionType, u32) {
+    let Some(prev) = prev_id else {
+        return (StackTransitionType::None, 0);
+    };
+    if prev == next_id || matches!(action, NavAction::Initial) {
+        return (StackTransitionType::None, 0);
+    }
+
+    let prev_sub = is_subsection_panel(prev);
+    let next_sub = is_subsection_panel(next_id);
+
+    match action {
+        NavAction::Back => {
+            if prev_sub || next_sub || same_section_group(prev, next_id) {
+                (StackTransitionType::SlideRight, 220)
+            } else {
+                (StackTransitionType::Crossfade, 140)
+            }
+        }
+        NavAction::Forward | NavAction::Push => {
+            if next_sub {
+                (StackTransitionType::SlideLeft, 220)
+            } else if prev_sub && same_section_group(prev, next_id) {
+                (StackTransitionType::SlideRight, 220)
+            } else {
+                (StackTransitionType::Crossfade, 140)
+            }
+        }
+        NavAction::Initial => (StackTransitionType::None, 0),
+    }
 }
 
 // ============================================================================
@@ -4525,6 +4603,34 @@ mod tests {
         assert!(
             pill_min_h <= 24 && pill_nat_h <= 24,
             "La píldora + ⌄ excede altura compacta: min={pill_min_h}, nat={pill_nat_h}"
+        );
+    }
+
+    #[test]
+    fn chooses_slide_and_crossfade_transitions_cleanly() {
+        assert_eq!(
+            choose_panel_transition(None, "about", NavAction::Initial),
+            (StackTransitionType::None, 0)
+        );
+        assert_eq!(
+            choose_panel_transition(Some("about"), "general-info", NavAction::Push),
+            (StackTransitionType::SlideLeft, 220)
+        );
+        assert_eq!(
+            choose_panel_transition(Some("network"), "network-firewall", NavAction::Push),
+            (StackTransitionType::SlideLeft, 220)
+        );
+        assert_eq!(
+            choose_panel_transition(Some("general-info"), "about", NavAction::Back),
+            (StackTransitionType::SlideRight, 220)
+        );
+        assert_eq!(
+            choose_panel_transition(Some("about"), "general-info", NavAction::Forward),
+            (StackTransitionType::SlideLeft, 220)
+        );
+        assert_eq!(
+            choose_panel_transition(Some("wifi"), "battery", NavAction::Push),
+            (StackTransitionType::Crossfade, 140)
         );
     }
 }
