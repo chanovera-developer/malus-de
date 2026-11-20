@@ -22,6 +22,7 @@ mod bluetooth_pane;
 mod network_pane;
 mod vpn_pane;
 mod battery_pane;
+mod general_pane;
 
 const APP_ID: &str = "dev.malus.Settings";
 const SETTINGS_SIDEBAR_WIDTH: i32 = 212;
@@ -457,6 +458,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         ("network", "network-workgroup-symbolic", "Red"),
         ("vpn", "network-vpn-symbolic", "VPN"),
         ("battery", "battery-level-100-symbolic", "Batería"),
+        ("about", "preferences-system-symbolic", "General"),
         ("appearance", "preferences-desktop-appearance-symbolic", "Aspecto"),
         ("dock", "user-desktop-symbolic", "Escritorio y Dock"),
         ("wallpaper", "preferences-desktop-wallpaper-symbolic", "Fondo de pantalla"),
@@ -464,7 +466,6 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         ("spotlight", "system-search-symbolic", "Spotlight"),
         ("sound", "audio-volume-high-symbolic", "Sonido"),
         ("keyboard", "input-keyboard-symbolic", "Teclado"),
-        ("about", "preferences-system-symbolic", "General"),
     ];
 
     let stack = Stack::builder()
@@ -478,6 +479,10 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
 
     for (id, icon_name, label_txt) in nav_items {
         let btn = build_sidebar_nav_button(icon_name, label_txt);
+        // Espaciado visual de separación de grupo después de Batería antes de General
+        if id == "about" {
+            btn.set_margin_top(14);
+        }
         sidebar_body.append(&btn);
         sidebar_buttons.push((id.to_string(), btn));
     }
@@ -513,7 +518,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                     "dock" => "escritorio dock iconos aladino genie",
                     "spotlight" => "spotlight busqueda aplicaciones archivos",
                     "sound" => "sonido volumen audio",
-                    "about" => "acerca sistema procesador ram version general",
+                    "about" => "general acerca sistema procesador ram version informacion actualizacion almacenamiento airdrop compartir disco arranque inicio extensiones fecha hora idioma region time machine",
                     _ => "",
                 }.contains(&query);
                 btn.set_visible(matches);
@@ -616,8 +621,16 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     let sound_pane = create_sound_pane();
     stack.add_named(&sound_pane, Some("sound"));
 
-    let about_pane = create_about_pane();
-    stack.add_named(&about_pane, Some("about"));
+    let nav_general: Rc<dyn Fn(&str)> = {
+        let d = nav_dispatch.clone();
+        Rc::new(move |target_id: &str| {
+            if let Some(f) = d.borrow().as_ref() {
+                f(target_id, true);
+            }
+        })
+    };
+    let refresh_general_pane =
+        general_pane::register_general_panes(&window, &stack, nav_general);
 
     // Header Toolbar macOS (‹ › chevrons + título de la vista actual)
     let content_area = GtkBox::builder()
@@ -702,6 +715,8 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         "red" => "network",
         "firewall" => "network-firewall",
         "bateria" | "batería" => "battery",
+        "general" => "about",
+        p if general_pane::is_general_subpanel(p) => p,
         "wifi" | "bluetooth" | "network" | "network-firewall" | "vpn" | "battery"
         | "wallpaper" | "keyboard" | "appearance" | "sound" | "about" | "dock" | "spotlight"
         | "displays" => initial_panel,
@@ -723,6 +738,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         let ref_fw = refresh_firewall_pane.clone();
         let ref_vpn = refresh_vpn_pane.clone();
         let ref_bat = refresh_battery_pane.clone();
+        let ref_gen = refresh_general_pane.clone();
         let ref_disp = refresh_displays_pane.clone();
         let ref_wall = refresh_wallpaper_pane.clone();
         let ref_kb = refresh_keyboard_pane.clone();
@@ -737,6 +753,8 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         Rc::new(move |target: &str, push_history: bool| {
             let sidebar_id = if target == "network-firewall" {
                 "network"
+            } else if general_pane::is_general_subpanel(target) {
+                "about"
             } else {
                 target
             };
@@ -760,6 +778,8 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                 ref_vpn();
             } else if target == "battery" {
                 ref_bat();
+            } else if general_pane::is_general_subpanel(target) {
+                ref_gen(target);
             } else if target == "displays" {
                 ref_disp();
             } else if target == "wallpaper" {
@@ -773,7 +793,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             } else if target == "spotlight" {
                 ref_spot();
             }
-            let display_title = match target {
+            let display_title = general_pane::general_subpanel_title(target).unwrap_or(match target {
                 "wifi" => "Wi-Fi",
                 "bluetooth" => "Bluetooth",
                 "network" => "Red",
@@ -787,9 +807,8 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                 "dock" => "Escritorio y Dock",
                 "spotlight" => "Spotlight",
                 "sound" => "Sonido",
-                "about" => "General",
                 _ => "Ajustes",
-            };
+            });
             title_lbl.set_label(display_title);
             stack_c.set_visible_child_name(target);
 
@@ -4063,71 +4082,8 @@ fn create_sound_pane() -> ScrolledWindow {
 }
 
 // ============================================================================
-// PANEL 5: ACERCA DE ESTE EQUIPO
+// PANEL 5: SPOTLIGHT
 // ============================================================================
-
-fn create_about_pane() -> ScrolledWindow {
-    let scrolled = ScrolledWindow::builder()
-        .hscrollbar_policy(PolicyType::Never)
-        .vscrollbar_policy(PolicyType::Automatic)
-        .hexpand(true)
-        .vexpand(true)
-        .build();
-
-    let pane = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .css_classes(["content-pane"])
-        .spacing(16)
-        .build();
-
-    let title = Label::builder()
-        .label("Acerca de este equipo")
-        .css_classes(["pane-header-title"])
-        .xalign(0.0)
-        .build();
-    pane.append(&title);
-
-    let card = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .css_classes(["macos-group-card"])
-        .spacing(8)
-        .build();
-
-    for (icon_name, line) in [
-        ("start-here-symbolic", "Malus Desktop Environment v1.1.0"),
-        ("video-display-symbolic", "Compositor: Smithay 0.7 (Wayland Multi-CRTC DRM/KMS)"),
-        ("applications-graphics-symbolic", "Gráficos: AMD Radeon Vega 7 (OpenGL ES 3.2 / GBM)"),
-        (
-            "preferences-desktop-display-symbolic",
-            "Pantallas: detección DRM/KMS de conectores, modos de resolución y escalado fraccionario",
-        ),
-        ("input-keyboard-symbolic", "Teclado predeterminado: Español Latinoamericano (XKB 'latam')"),
-    ] {
-        let row = GtkBox::builder()
-            .orientation(Orientation::Horizontal)
-            .spacing(10)
-            .build();
-        let glyph = Image::builder()
-            .icon_name(icon_name)
-            .pixel_size(16)
-            .valign(Align::Center)
-            .build();
-        let lbl = Label::builder()
-            .label(line)
-            .css_classes(["card-section-title"])
-            .xalign(0.0)
-            .wrap(true)
-            .hexpand(true)
-            .build();
-        row.append(&glyph);
-        row.append(&lbl);
-        card.append(&row);
-    }
-
-    pane.append(&card);
-    scrolled.set_child(Some(&pane));
-    scrolled
-}
 
 fn create_spotlight_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     let scrolled = ScrolledWindow::builder()

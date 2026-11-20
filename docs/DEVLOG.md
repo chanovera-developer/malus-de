@@ -4,6 +4,32 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-20] — Panel General y 14 Subvistas al estilo macOS + Etiquetas «por implementar» (`malus-de-settings`)
+
+Se implementa el módulo completo de **General** y sus 14 subvistas siguiendo las capturas `assets/screenshots/General01.png`–`General12.png`, reubicando `General` en la barra lateral justo debajo de `Batería` con el espaciado de separación de grupo (`14 px`) y marcando con la etiqueta visual `"por implementar"` las opciones exclusivas de macOS aún no disponibles en Linux.
+
+### Cambios Clave
+- **Nuevo módulo [`crates/settings/src/general_pane.rs`](../crates/settings/src/general_pane.rs)**:
+  - **Hub `General` (`General01.png`)**: Tarjeta hero superior con insignia squircle y las 6 tarjetas agrupadas con navegación completa en el historial `< | >`.
+  - **Subvistas con telemetría/control Linux real**:
+    - `Información` (`General02.png`): Modelo DMI, CPU (`/proc/cpuinfo`), RAM (`/proc/meminfo`), machine-id, distro (`/etc/os-release`), kernel, monitores, volumen raíz (`df -B1 /`), modal `"Reporte del sistema..."` y enlaces a `Pantallas` y `Almacenamiento`.
+    - `Actualización de software` (`General03.png`): Comprobación asíncrona con `dnf check-update` y preferencia de actualizaciones automáticas.
+    - `Almacenamiento` (`General04.png`): Barra segmentada Cairo y desglose asíncrono real (`Aplicaciones`, `Basurero`, `Documentos`, `Fotos`, `Descargas`, `Datos del sistema`).
+    - `Compartir` (`General07.png`): Control de `sshd` y `cups` vía `systemctl`, y edición del hostname local (`pkexec hostnamectl set-hostname`).
+    - `Disco de arranque` (`General08.png`): Selección visual del volumen raíz activo y reinicio (`systemctl reboot`).
+    - `Elementos de inicio y extensiones` (`General09.png`, `General10.png`): Gestión real de `~/.config/autostart/*.desktop` (`+` / `-`) y pestañas `Por app` / `Por categoría`.
+    - `Fecha y hora` (`General11.png`) e `Idioma y región` (`General12.png`): NTP (`timedatectl`), reloj 24h (`GSettings`), zona horaria, idiomas preferidos y vista previa regional interactiva.
+  - **Etiquetas `"por implementar"`**: Insignias `.gen-pending-badge` en *AppleCare y garantía*, *AirDrop y continuidad*, *Autorrelleno del sistema*, servicios de compartición pendientes, *Extensiones*, *Tratamiento*, *Texto en vivo (OCR)*, *Time Machine*, *Admón. de dispositivos* y *Asistente de migración*, documentados en [`docs/decisiones/0011-general-pendiente.md`](decisiones/0011-general-pendiente.md).
+- **Barra lateral e historial ([`crates/settings/src/main.rs`](../crates/settings/src/main.rs), [`crates/settings/src/styles/macos-settings.css`](../crates/settings/src/styles/macos-settings.css))**:
+  - `General` ubicado debajo de `Batería` con `margin-top: 14px` y resaltado activo mantenido en todas las subvistas `general-*`.
+
+### Verificación
+- `cargo check --offline --workspace --all-targets`: 0 warnings.
+- `cargo test --offline -p malus-de-settings`: 15 passed, 0 failed.
+- `cargo build --offline --release -p malus-de-settings` e instalación en `/usr/local/bin/malus-de-settings`.
+
+---
+
 ## [2026-11-20] — Panel de Batería y Energía al estilo macOS + Anotaciones Linux (`malus-de-settings`)
 
 Se implementa la sección completa de **Batería** siguiendo las capturas `assets/screenshots/Bateria00.png`–`Bateria05.png`, con lectura de hardware en `sysfs`/`UPower`, gráficas Cairo de 24 horas y 10 días, modales dedicados y documentación de brechas Linux en [`docs/decisiones/0010-bateria-pendiente.md`](decisiones/0010-bateria-pendiente.md).
