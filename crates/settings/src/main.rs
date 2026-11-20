@@ -3,12 +3,12 @@ use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, CssProvider, DropDown,
     DrawingArea, Entry, EventControllerFocus, FileDialog, FileFilter, FlowBox, GestureClick,
-    GestureDrag, Grid, Image, Label, Orientation, Overlay, PackType, Paned, Picture, PolicyType,
+    GestureDrag, Image, Label, Orientation, Overlay, PackType, Paned, Picture, PolicyType,
     Scale, ScrolledWindow, SearchEntry, Stack, StackTransitionType, Switch, WindowControls,
     WindowHandle,
 };
 use malus_de_common::config::{
-    AppSwitcherStyle, DesktopIconsConfig, DisplayModeConfig, DisplaysConfig, DockConfig, InputConfig,
+    AppSwitcherStyle, DisplayModeConfig, DisplaysConfig, DockConfig, InputConfig,
 };
 use malus_de_common::ipc::{IpcClient, IpcMessage};
 use malus_de_common::logging::init_logging;
@@ -24,6 +24,7 @@ mod vpn_pane;
 mod battery_pane;
 mod general_pane;
 mod accessibility_pane;
+mod appearance_pane;
 
 const APP_ID: &str = "dev.malus.Settings";
 const SETTINGS_SIDEBAR_WIDTH: i32 = 212;
@@ -634,7 +635,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     };
     let refresh_general_pane =
         general_pane::register_general_panes(&window, &stack, nav_general.clone());
-    accessibility_pane::register_accessibility_panes(&window, &stack, nav_general);
+    accessibility_pane::register_accessibility_panes(&window, &stack, nav_general.clone());
 
     // Header Toolbar macOS (‹ › chevrons + título de la vista actual)
     let content_area = GtkBox::builder()
@@ -703,16 +704,8 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     content_area.append(&header_handle);
     content_area.append(&stack);
 
-    let goto_action: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
-    let goto_action_c = goto_action.clone();
-    let goto_wallpaper = Rc::new(move || {
-        if let Some(act) = goto_action_c.borrow().as_ref() {
-            act();
-        }
-    });
-
-    let (appearance_pane, refresh_appearance_pane) = create_appearance_pane(&window, Some(goto_wallpaper));
-    stack.add_named(&appearance_pane, Some("appearance"));
+    let refresh_appearance_pane =
+        appearance_pane::register_appearance_panes(&stack, nav_general.clone());
 
     // Historial de navegación para botones atrás / adelante (estilo Branches)
     let start_id = match initial_panel {
@@ -721,8 +714,11 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         "bateria" | "batería" => "battery",
         "general" => "about",
         "accesibilidad" => "accessibility",
+        "aspecto" => "appearance",
+        "temas" => "appearance-themes",
         p if general_pane::is_general_subpanel(p) => p,
         p if accessibility_pane::is_accessibility_subpanel(p) => p,
+        p if appearance_pane::is_appearance_subpanel(p) => p,
         "wifi" | "bluetooth" | "network" | "network-firewall" | "vpn" | "battery"
         | "wallpaper" | "keyboard" | "appearance" | "sound" | "about" | "dock" | "spotlight"
         | "displays" => initial_panel,
@@ -772,6 +768,8 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                 "about"
             } else if accessibility_pane::is_accessibility_subpanel(target) {
                 "accessibility"
+            } else if appearance_pane::is_appearance_subpanel(target) {
+                "appearance"
             } else {
                 target
             };
@@ -803,7 +801,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                 ref_wall();
             } else if target == "keyboard" {
                 ref_kb();
-            } else if target == "appearance" {
+            } else if appearance_pane::is_appearance_subpanel(target) {
                 ref_app();
             } else if target == "dock" {
                 ref_dock();
@@ -812,6 +810,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             }
             let display_title = general_pane::general_subpanel_title(target)
                 .or_else(|| accessibility_pane::accessibility_subpanel_title(target))
+                .or_else(|| appearance_pane::appearance_subpanel_title(target))
                 .unwrap_or(match target {
                     "wifi" => "Wi-Fi",
                     "bluetooth" => "Bluetooth",
@@ -857,11 +856,6 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                 NavAction::Back
             },
         );
-    }));
-
-    let sel_for_goto = select_panel.clone();
-    *goto_action.borrow_mut() = Some(Rc::new(move || {
-        sel_for_goto("wallpaper", NavAction::Push);
     }));
 
     let sel_back = select_panel.clone();
@@ -977,6 +971,7 @@ fn is_subsection_panel(id: &str) -> bool {
     id == "network-firewall"
         || (id != "about" && general_pane::is_general_subpanel(id))
         || (id != "accessibility" && accessibility_pane::is_accessibility_subpanel(id))
+        || (id != "appearance" && appearance_pane::is_appearance_subpanel(id))
 }
 
 fn section_group(id: &str) -> &str {
@@ -986,6 +981,8 @@ fn section_group(id: &str) -> &str {
         "about"
     } else if accessibility_pane::is_accessibility_subpanel(id) {
         "accessibility"
+    } else if appearance_pane::is_appearance_subpanel(id) {
+        "appearance"
     } else {
         id
     }
@@ -2660,10 +2657,10 @@ fn create_keyboard_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
 }
 
 // ============================================================================
-// PANEL 3: APARIENCIA Y DOCK
+// PANEL 3: APARIENCIA Y TEMAS (HELPERS COMPARTIDOS)
 // ============================================================================
 
-fn get_installed_cursor_themes() -> Vec<(String, String, &'static str)> {
+pub(crate) fn get_installed_cursor_themes() -> Vec<(String, String, &'static str)> {
     let mut themes: Vec<(String, String, &'static str)> = Vec::new();
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     let dirs = [
@@ -2718,7 +2715,7 @@ fn get_installed_cursor_themes() -> Vec<(String, String, &'static str)> {
     themes
 }
 
-fn get_current_cursor_config() -> (String, u32) {
+pub(crate) fn get_current_cursor_config() -> (String, u32) {
     let out_theme = Command::new("gsettings")
         .args(["get", "org.gnome.desktop.interface", "cursor-theme"])
         .output()
@@ -2738,11 +2735,11 @@ fn get_current_cursor_config() -> (String, u32) {
     (out_theme, out_size)
 }
 
-fn is_dark_mode_active() -> bool {
+pub(crate) fn is_dark_mode_active() -> bool {
     malus_de_common::config::is_dark_mode_active()
 }
 
-fn get_installed_gtk_themes() -> Vec<(String, String, &'static str)> {
+pub(crate) fn get_installed_gtk_themes() -> Vec<(String, String, &'static str)> {
     vec![
         (
             "Adwaita-Dark".to_string(),
@@ -2757,7 +2754,7 @@ fn get_installed_gtk_themes() -> Vec<(String, String, &'static str)> {
     ]
 }
 
-fn get_current_gtk_theme() -> String {
+pub(crate) fn get_current_gtk_theme() -> String {
     if is_dark_mode_active() {
         "Adwaita-Dark".to_string()
     } else {
@@ -2765,7 +2762,7 @@ fn get_current_gtk_theme() -> String {
     }
 }
 
-fn set_gtk_theme(theme_name: &str) {
+pub(crate) fn set_gtk_theme(theme_name: &str) {
     tracing::info!("🎨 Aplicando tema GTK y controles: {}", theme_name);
     let to_dark = theme_name.contains("Dark")
         || theme_name.contains("dark")
@@ -2773,7 +2770,7 @@ fn set_gtk_theme(theme_name: &str) {
     set_system_appearance_mode(to_dark);
 }
 
-fn set_system_appearance_mode(to_dark: bool) {
+pub(crate) fn set_system_appearance_mode(to_dark: bool) {
     let target = if to_dark { "prefer-dark" } else { "prefer-light" };
     tracing::info!("🎨 Cambiando modo de apariencia de Malus DE: {}", target);
 
@@ -2804,7 +2801,7 @@ fn set_system_appearance_mode(to_dark: bool) {
     });
 }
 
-fn set_cursor_theme_and_size(theme: &str, size: u32) {
+pub(crate) fn set_cursor_theme_and_size(theme: &str, size: u32) {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     let malus_config_dir = PathBuf::from(&home).join(".config/malus-de");
     let _ = Command::new("gsettings")
@@ -2874,713 +2871,6 @@ fn set_cursor_theme_and_size(theme: &str, size: u32) {
             "No se pudo actualizar el entorno de activación D-Bus para el cursor: {error}"
         ),
     }
-}
-
-fn create_appearance_pane(
-    _window: &ApplicationWindow,
-    on_goto_wallpaper: Option<Rc<dyn Fn()>>,
-) -> (ScrolledWindow, Rc<dyn Fn()>) {
-    let scrolled = ScrolledWindow::builder()
-        .hscrollbar_policy(PolicyType::Never)
-        .vscrollbar_policy(PolicyType::Automatic)
-        .hexpand(true)
-        .vexpand(true)
-        .build();
-
-    let pane = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .css_classes(["content-pane"])
-        .spacing(16)
-        .build();
-
-    let title = Label::builder()
-        .label("Aspecto")
-        .css_classes(["pane-header-title"])
-        .xalign(0.0)
-        .build();
-    pane.append(&title);
-
-    // ------------------------------------------------------------------------
-    // SECCIÓN 1: Modo de Apariencia del Sistema (Claro / Oscuro)
-    // ------------------------------------------------------------------------
-    let appearance_card = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .css_classes(["macos-group-card"])
-        .spacing(14)
-        .build();
-
-    let app_header = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .spacing(3)
-        .build();
-
-    let app_title = Label::builder()
-        .label("Modo de Apariencia del Sistema")
-        .css_classes(["card-section-title"])
-        .xalign(0.0)
-        .build();
-
-    let app_desc = Label::builder()
-        .label("Selecciona el aspecto visual general (claro u oscuro) para las aplicaciones y ventanas del sistema. La barra superior mantiene su diseño base transparente con texto blanco.")
-        .css_classes(["card-section-sub"])
-        .wrap(true)
-        .xalign(0.0)
-        .build();
-
-    app_header.append(&app_title);
-    app_header.append(&app_desc);
-    appearance_card.append(&app_header);
-
-    let modes_grid = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(14)
-        .homogeneous(true)
-        .build();
-
-    let btn_light = Button::builder()
-        .css_classes(["appearance-mode-btn"])
-        .has_frame(false)
-        .build();
-    let light_box = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .spacing(6)
-        .halign(Align::Center)
-        .build();
-    let light_icon = Image::builder()
-        .icon_name("weather-clear-symbolic")
-        .pixel_size(24)
-        .css_classes(["cursor-preview-icon"])
-        .build();
-    let light_lbl = Label::builder()
-        .label("Claro")
-        .css_classes(["cursor-theme-name"])
-        .build();
-    light_box.append(&light_icon);
-    light_box.append(&light_lbl);
-    btn_light.set_child(Some(&light_box));
-
-    let btn_dark = Button::builder()
-        .css_classes(["appearance-mode-btn"])
-        .has_frame(false)
-        .build();
-    let dark_box = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .spacing(6)
-        .halign(Align::Center)
-        .build();
-    let dark_icon = Image::builder()
-        .icon_name("weather-clear-night-symbolic")
-        .pixel_size(24)
-        .css_classes(["cursor-preview-icon"])
-        .build();
-    let dark_lbl = Label::builder()
-        .label("Oscuro")
-        .css_classes(["cursor-theme-name"])
-        .build();
-    dark_box.append(&dark_icon);
-    dark_box.append(&dark_lbl);
-    btn_dark.set_child(Some(&dark_box));
-
-    modes_grid.append(&btn_light);
-    modes_grid.append(&btn_dark);
-    appearance_card.append(&modes_grid);
-
-    pane.append(&appearance_card);
-
-    // ------------------------------------------------------------------------
-    // SECCIÓN 2: Temas de Aplicaciones y Ventanas (GTK / Libadwaita)
-    // ------------------------------------------------------------------------
-    let theme_card = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .css_classes(["macos-group-card"])
-        .spacing(14)
-        .build();
-
-    let theme_header = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .spacing(3)
-        .build();
-
-    let theme_title = Label::builder()
-        .label("Tema de Aplicaciones y Ventanas (GTK)")
-        .css_classes(["card-section-title"])
-        .xalign(0.0)
-        .build();
-
-    let theme_desc = Label::builder()
-        .label("Selecciona el tema de controles, botones y estilo de ventanas para las aplicaciones GTK3, GTK4 y Libadwaita de la sesión Malus DE.")
-        .css_classes(["card-section-sub"])
-        .wrap(true)
-        .xalign(0.0)
-        .build();
-
-    theme_header.append(&theme_title);
-    theme_header.append(&theme_desc);
-    theme_card.append(&theme_header);
-
-    let gtk_themes_list = get_installed_gtk_themes();
-    let gtk_themes_grid = Grid::builder()
-        .column_spacing(10)
-        .row_spacing(10)
-        .column_homogeneous(true)
-        .build();
-
-    let gtk_theme_buttons: Rc<RefCell<Vec<(String, Button)>>> = Rc::new(RefCell::new(Vec::new()));
-
-    let gtk_status_hint_lbl = Label::builder()
-        .label("✓ Tema aplicado en vivo para las aplicaciones de Malus DE.")
-        .css_classes(["card-section-sub"])
-        .xalign(0.0)
-        .build();
-
-    let total_themes = gtk_themes_list.len();
-    for (idx, (theme_id, label_txt, desc_txt)) in gtk_themes_list.iter().enumerate() {
-        let btn = Button::builder()
-            .css_classes(["theme-select-btn"])
-            .has_frame(false)
-            .build();
-
-        let inner_box = GtkBox::builder()
-            .orientation(Orientation::Horizontal)
-            .spacing(12)
-            .margin_top(6)
-            .margin_bottom(6)
-            .margin_start(10)
-            .margin_end(10)
-            .build();
-
-        let badge_style = if theme_id.contains("Dark") {
-            "badge-dark"
-        } else if theme_id.contains("Light") {
-            "badge-blue"
-        } else if theme_id == "Adwaita" {
-            "badge-teal"
-        } else {
-            "badge-indigo"
-        };
-        let icon_badge = make_system_glyph_badge(
-            "preferences-desktop-appearance-symbolic",
-            &["spotlight-banner-icon", badge_style],
-            44,
-            22,
-        );
-        icon_badge.set_valign(Align::Center);
-
-        let text_col = GtkBox::builder()
-            .orientation(Orientation::Vertical)
-            .spacing(2)
-            .hexpand(true)
-            .build();
-
-        let t_lbl = Label::builder()
-            .label(label_txt)
-            .css_classes(["card-section-title"])
-            .xalign(0.0)
-            .build();
-
-        let d_lbl = Label::builder()
-            .label(*desc_txt)
-            .css_classes(["card-section-sub"])
-            .xalign(0.0)
-            .wrap(true)
-            .build();
-
-        text_col.append(&t_lbl);
-        text_col.append(&d_lbl);
-
-        inner_box.append(&icon_badge);
-        inner_box.append(&text_col);
-        btn.set_child(Some(&inner_box));
-
-        let col = (idx % 2) as i32;
-        let row = (idx / 2) as i32;
-        if idx == total_themes - 1 && idx % 2 == 0 {
-            gtk_themes_grid.attach(&btn, 0, row, 2, 1);
-        } else {
-            gtk_themes_grid.attach(&btn, col, row, 1, 1);
-        }
-
-        gtk_theme_buttons.borrow_mut().push((theme_id.clone(), btn));
-    }
-
-    theme_card.append(&gtk_themes_grid);
-    theme_card.append(&gtk_status_hint_lbl);
-    pane.append(&theme_card);
-
-    // ------------------------------------------------------------------------
-    // SECCIÓN 3: Tema y Estilo del Cursor del Ratón (Puntero macOS)
-    // ------------------------------------------------------------------------
-    let cursor_card = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .css_classes(["macos-group-card"])
-        .spacing(14)
-        .build();
-
-    let cursor_title_col = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .hexpand(true)
-        .spacing(3)
-        .build();
-
-    let cursor_title = Label::builder()
-        .label("Tema y Estilo del Puntero / Cursor")
-        .css_classes(["card-section-title"])
-        .xalign(0.0)
-        .build();
-
-    let cursor_desc = Label::builder()
-        .label("Selecciona el diseño y tamaño del cursor para todas las ventanas, aplicaciones y el escritorio. Compatible con temas instalados en ~/.icons.")
-        .css_classes(["card-section-sub"])
-        .wrap(true)
-        .xalign(0.0)
-        .build();
-
-    cursor_title_col.append(&cursor_title);
-    cursor_title_col.append(&cursor_desc);
-    cursor_card.append(&cursor_title_col);
-
-    let themes_list = get_installed_cursor_themes();
-    let themes_grid = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(10)
-        .homogeneous(true)
-        .build();
-
-    let theme_buttons: Rc<RefCell<Vec<(String, Button)>>> = Rc::new(RefCell::new(Vec::new()));
-    let size_buttons: Rc<RefCell<Vec<(u32, Button)>>> = Rc::new(RefCell::new(Vec::new()));
-
-    let (active_theme, active_size) = get_current_cursor_config();
-    let state_theme = Rc::new(RefCell::new(active_theme));
-    let state_size = Rc::new(RefCell::new(active_size));
-
-    let cursor_status_hint_lbl = Label::builder()
-        .label("✓ Tema aplicado en vivo para nuevas ventanas y aplicaciones.")
-        .css_classes(["card-section-sub"])
-        .xalign(0.0)
-        .build();
-
-    for (theme_id, label_txt, desc_txt) in &themes_list {
-        let btn = Button::builder()
-            .css_classes(["cursor-theme-btn"])
-            .has_frame(false)
-            .build();
-
-        let inner_box = GtkBox::builder()
-            .orientation(Orientation::Vertical)
-            .spacing(3)
-            .margin_top(4)
-            .margin_bottom(4)
-            .margin_start(8)
-            .margin_end(8)
-            .build();
-
-        let t_lbl = Label::builder()
-            .label(label_txt)
-            .css_classes(["card-section-title"])
-            .xalign(0.5)
-            .build();
-
-        let d_lbl = Label::builder()
-            .label(*desc_txt)
-            .css_classes(["card-section-sub"])
-            .xalign(0.5)
-            .wrap(true)
-            .build();
-
-        inner_box.append(&t_lbl);
-        inner_box.append(&d_lbl);
-        btn.set_child(Some(&inner_box));
-
-        themes_grid.append(&btn);
-        theme_buttons.borrow_mut().push((theme_id.clone(), btn));
-    }
-    cursor_card.append(&themes_grid);
-
-    // Fila de selección de tamaño del cursor
-    let size_box = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(12)
-        .build();
-
-    let size_prompt_lbl = Label::builder()
-        .label("Tamaño del cursor:")
-        .css_classes(["card-section-title"])
-        .valign(Align::Center)
-        .build();
-    size_box.append(&size_prompt_lbl);
-
-    let size_pills_box = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(6)
-        .build();
-
-    for &(sz, sz_label) in &[
-        (24, "24 px (Estándar)"),
-        (32, "32 px (Mediano)"),
-        (48, "48 px (Grande / 4K)"),
-    ] {
-        let p_btn = Button::builder()
-            .css_classes(["macos-action-btn"])
-            .label(sz_label)
-            .has_frame(false)
-            .build();
-        size_pills_box.append(&p_btn);
-        size_buttons.borrow_mut().push((sz, p_btn));
-    }
-    size_box.append(&size_pills_box);
-    cursor_card.append(&size_box);
-    cursor_card.append(&cursor_status_hint_lbl);
-
-    pane.append(&cursor_card);
-
-    // ------------------------------------------------------------------------
-    // SECCIÓN 4: Opciones del Dock
-    // ------------------------------------------------------------------------
-    let dock_card = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .css_classes(["macos-group-card"])
-        .spacing(12)
-        .build();
-
-    let dock_cfg = DockConfig::load_or_create_default();
-
-    let dock_header_lbl = Label::builder()
-        .label("Dock de Aplicaciones")
-        .css_classes(["card-section-title"])
-        .xalign(0.0)
-        .build();
-    dock_card.append(&dock_header_lbl);
-
-    let size_lbl = Label::builder()
-        .label(&format!("Tamaño de iconos del Dock: {} px", dock_cfg.icon_size))
-        .css_classes(["card-section-sub"])
-        .xalign(0.0)
-        .build();
-    let size_slider = Scale::with_range(Orientation::Horizontal, 36.0, 72.0, 2.0);
-    size_slider.set_value(dock_cfg.icon_size as f64);
-    size_slider.set_draw_value(false);
-
-    let size_lbl_c = size_lbl.clone();
-    size_slider.connect_value_changed(move |s| {
-        let val = s.value().round() as u32;
-        size_lbl_c.set_label(&format!("Tamaño de iconos del Dock: {} px", val));
-        let mut cfg = DockConfig::load_or_create_default();
-        cfg.icon_size = val;
-        let _ = cfg.save();
-        let _ = IpcClient::send_command(IpcMessage::ReloadDockConfig);
-    });
-
-    dock_card.append(&size_lbl);
-    dock_card.append(&size_slider);
-    pane.append(&dock_card);
-
-    // ------------------------------------------------------------------------
-    // SECCIÓN 4B: Superficie de Escritorio (Archivos e Iconos)
-    // ------------------------------------------------------------------------
-    let desktop_card = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .css_classes(["macos-group-card"])
-        .spacing(12)
-        .build();
-
-    let desktop_header_lbl = Label::builder()
-        .label("Superficie de Escritorio (Archivos e Iconos)")
-        .css_classes(["card-section-title"])
-        .xalign(0.0)
-        .build();
-    desktop_card.append(&desktop_header_lbl);
-
-    let desk_cfg = DesktopIconsConfig::load();
-
-    // 1. Mostrar archivos en el escritorio
-    let show_row = GtkBox::new(Orientation::Horizontal, 10);
-    let show_lbl = Label::builder()
-        .label("Mostrar archivos en el escritorio")
-        .css_classes(["card-section-title"])
-        .hexpand(true)
-        .xalign(0.0)
-        .build();
-    let show_switch = Switch::builder()
-        .valign(Align::Center)
-        .active(desk_cfg.show_icons)
-        .build();
-    show_row.append(&show_lbl);
-    show_row.append(&show_switch);
-    desktop_card.append(&show_row);
-
-    show_switch.connect_state_set(|_, active| {
-        let mut cfg = DesktopIconsConfig::load();
-        cfg.show_icons = active;
-        let _ = cfg.save();
-        glib::Propagation::Proceed
-    });
-
-    // 2. Usar Pilas en el escritorio (macOS Stacks)
-    let stacks_row = GtkBox::new(Orientation::Horizontal, 10);
-    let stacks_lbl = Label::builder()
-        .label("Usar Pilas en el escritorio (macOS Stacks)")
-        .css_classes(["card-section-title"])
-        .hexpand(true)
-        .xalign(0.0)
-        .build();
-    let stacks_switch = Switch::builder()
-        .valign(Align::Center)
-        .active(desk_cfg.use_stacks)
-        .build();
-    stacks_row.append(&stacks_lbl);
-    stacks_row.append(&stacks_switch);
-    desktop_card.append(&stacks_row);
-
-    stacks_switch.connect_state_set(|_, active| {
-        let mut cfg = DesktopIconsConfig::load();
-        cfg.use_stacks = active;
-        let _ = cfg.save();
-        glib::Propagation::Proceed
-    });
-
-    // 3. Imantar a la cuadrícula (Snap to Grid)
-    let snap_row = GtkBox::new(Orientation::Horizontal, 10);
-    let snap_lbl = Label::builder()
-        .label("Imantar iconos a la cuadrícula (Snap to Grid)")
-        .css_classes(["card-section-title"])
-        .hexpand(true)
-        .xalign(0.0)
-        .build();
-    let snap_switch = Switch::builder()
-        .valign(Align::Center)
-        .active(desk_cfg.snap_to_grid)
-        .build();
-    snap_row.append(&snap_lbl);
-    snap_row.append(&snap_switch);
-    desktop_card.append(&snap_row);
-
-    snap_switch.connect_state_set(|_, active| {
-        let mut cfg = DesktopIconsConfig::load();
-        cfg.snap_to_grid = active;
-        let _ = cfg.save();
-        glib::Propagation::Proceed
-    });
-
-    // 4. Alineación de la cuadrícula
-    let align_row = GtkBox::new(Orientation::Horizontal, 10);
-    let align_lbl = Label::builder()
-        .label("Alineación de cuadrícula de iconos")
-        .css_classes(["card-section-title"])
-        .hexpand(true)
-        .xalign(0.0)
-        .build();
-    let align_dropdown = DropDown::from_strings(&[
-        "Columna Derecha (Estilo macOS)",
-        "Columna Izquierda",
-    ]);
-    align_dropdown.set_selected(if desk_cfg.align_left { 1 } else { 0 });
-    align_row.append(&align_lbl);
-    align_row.append(&align_dropdown);
-    desktop_card.append(&align_row);
-
-    align_dropdown.connect_selected_notify(|dd| {
-        let mut cfg = DesktopIconsConfig::load();
-        cfg.align_left = dd.selected() == 1;
-        let _ = cfg.save();
-    });
-
-    // 5. Tamaño de iconos del escritorio
-    let desk_size_lbl = Label::builder()
-        .label(&format!("Tamaño de iconos del escritorio: {} px", desk_cfg.clamped_icon_size()))
-        .css_classes(["card-section-sub"])
-        .xalign(0.0)
-        .build();
-    let desk_size_slider = Scale::with_range(Orientation::Horizontal, 32.0, 96.0, 4.0);
-    desk_size_slider.set_value(desk_cfg.clamped_icon_size() as f64);
-    desk_size_slider.set_draw_value(false);
-
-    let desk_size_lbl_c = desk_size_lbl.clone();
-    desk_size_slider.connect_value_changed(move |s| {
-        let val = s.value().round() as u32;
-        desk_size_lbl_c.set_label(&format!("Tamaño de iconos del escritorio: {} px", val));
-        let mut cfg = DesktopIconsConfig::load();
-        cfg.icon_size = val;
-        let _ = cfg.save();
-    });
-
-    desktop_card.append(&desk_size_lbl);
-    desktop_card.append(&desk_size_slider);
-    pane.append(&desktop_card);
-
-    // ------------------------------------------------------------------------
-    // SECCIÓN 5: Fondo de Pantalla (Enlace a la sección dedicada)
-    // ------------------------------------------------------------------------
-    let wp_card = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .css_classes(["macos-group-card"])
-        .spacing(10)
-        .build();
-
-    let wp_header_lbl = Label::builder()
-        .label("Fondo de Pantalla del Escritorio")
-        .css_classes(["card-section-title"])
-        .xalign(0.0)
-        .build();
-
-    let wp_desc_lbl = Label::builder()
-        .label("Personaliza el fondo de escritorio con colecciones exclusivas de macOS, fotos de tu galería o degradados dinámicos.")
-        .css_classes(["card-section-sub"])
-        .wrap(true)
-        .xalign(0.0)
-        .build();
-
-    wp_card.append(&wp_header_lbl);
-    wp_card.append(&wp_desc_lbl);
-
-    if let Some(goto_wp) = on_goto_wallpaper {
-        let btn_open_wp = Button::builder()
-            .label("Personalizar fondos de pantalla...")
-            .css_classes(["macos-action-btn"])
-            .halign(Align::Start)
-            .has_frame(false)
-            .build();
-        btn_open_wp.connect_clicked(move |_| {
-            goto_wp();
-        });
-        wp_card.append(&btn_open_wp);
-    }
-
-    pane.append(&wp_card);
-
-    scrolled.set_child(Some(&pane));
-
-    // Función para refrescar la selección visual activa de temas y tamaños
-    let gtk_tb_ref = gtk_theme_buttons.clone();
-    let tb_ref = theme_buttons.clone();
-    let sb_ref = size_buttons.clone();
-    let st_theme = state_theme.clone();
-    let st_size = state_size.clone();
-    let btn_l_ref = btn_light.clone();
-    let btn_d_ref = btn_dark.clone();
-
-    let refresh_appearance: Rc<dyn Fn()> = Rc::new(move || {
-        let current_gtk = get_current_gtk_theme();
-        let (current_t, current_s) = get_current_cursor_config();
-        *st_theme.borrow_mut() = current_t.clone();
-        *st_size.borrow_mut() = current_s;
-
-        // Modo Claro / Oscuro
-        if is_dark_mode_active() {
-            btn_d_ref.add_css_class("appearance-mode-btn-active");
-            btn_l_ref.remove_css_class("appearance-mode-btn-active");
-        } else {
-            btn_l_ref.add_css_class("appearance-mode-btn-active");
-            btn_d_ref.remove_css_class("appearance-mode-btn-active");
-        }
-
-        // Temas GTK
-        for (id, btn) in gtk_tb_ref.borrow().iter() {
-            if id == &current_gtk {
-                btn.add_css_class("theme-select-btn-active");
-                btn.remove_css_class("theme-select-btn");
-            } else {
-                btn.remove_css_class("theme-select-btn-active");
-                btn.add_css_class("theme-select-btn");
-            }
-        }
-
-        // Temas de cursor
-        for (id, btn) in tb_ref.borrow().iter() {
-            if id == &current_t {
-                btn.add_css_class("cursor-theme-btn-active");
-                btn.remove_css_class("cursor-theme-btn");
-            } else {
-                btn.remove_css_class("cursor-theme-btn-active");
-                btn.add_css_class("cursor-theme-btn");
-            }
-        }
-
-        // Tamaños de cursor
-        for (sz, btn) in sb_ref.borrow().iter() {
-            if *sz == current_s {
-                btn.add_css_class("macos-action-btn-primary");
-                btn.remove_css_class("macos-action-btn");
-            } else {
-                btn.remove_css_class("macos-action-btn-primary");
-                btn.add_css_class("macos-action-btn");
-            }
-        }
-    });
-
-    refresh_appearance();
-
-    // Conectar eventos del modo de apariencia
-    let ref_app_1 = refresh_appearance.clone();
-    btn_light.connect_clicked(move |_| {
-        let cur = get_current_gtk_theme();
-        if cur == "WhiteSur-Dark" {
-            set_gtk_theme("WhiteSur-Light");
-        } else if cur == "WhiteSur-Dark-solid" {
-            set_gtk_theme("WhiteSur-Light-solid");
-        } else {
-            set_system_appearance_mode(false);
-        }
-        ref_app_1();
-    });
-
-    let ref_app_2 = refresh_appearance.clone();
-    btn_dark.connect_clicked(move |_| {
-        let cur = get_current_gtk_theme();
-        if cur == "WhiteSur-Light" {
-            set_gtk_theme("WhiteSur-Dark");
-        } else if cur == "WhiteSur-Light-solid" {
-            set_gtk_theme("WhiteSur-Dark-solid");
-        } else {
-            set_system_appearance_mode(true);
-        }
-        ref_app_2();
-    });
-
-    let ref_app_notify = refresh_appearance.clone();
-    libadwaita::StyleManager::default().connect_dark_notify(move |_| {
-        ref_app_notify();
-    });
-
-    // Conectar eventos de clic de los botones de tema GTK
-    for (t_id, btn) in gtk_theme_buttons.borrow().iter() {
-        let target_theme = t_id.clone();
-        let ref_fn = refresh_appearance.clone();
-        let hint_lbl_c = gtk_status_hint_lbl.clone();
-
-        btn.connect_clicked(move |_| {
-            set_gtk_theme(&target_theme);
-            hint_lbl_c.set_label(&format!("✓ Tema '{}' aplicado en vivo para las aplicaciones de Malus DE.", target_theme));
-            ref_fn();
-        });
-    }
-
-    // Conectar eventos de clic de los botones de tema de cursor
-    for (t_id, btn) in theme_buttons.borrow().iter() {
-        let target_theme = t_id.clone();
-        let st_size_c = state_size.clone();
-        let ref_fn = refresh_appearance.clone();
-
-        btn.connect_clicked(move |_| {
-            let sz = *st_size_c.borrow();
-            set_cursor_theme_and_size(&target_theme, sz);
-            ref_fn();
-        });
-    }
-
-    // Conectar eventos de clic de los botones de tamaño de cursor
-    for (sz, btn) in size_buttons.borrow().iter() {
-        let target_size = *sz;
-        let st_theme_c = state_theme.clone();
-        let ref_fn = refresh_appearance.clone();
-
-        btn.connect_clicked(move |_| {
-            let current_t = st_theme_c.borrow().clone();
-            set_cursor_theme_and_size(&current_t, target_size);
-            ref_fn();
-        });
-    }
-
-    (scrolled, refresh_appearance)
 }
 
 // ============================================================================

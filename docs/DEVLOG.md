@@ -4,6 +4,30 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-20] — Rediseño de Aspecto (`Aspecto.png`) y Subsección «Temas» al estilo Apple (`malus-de-settings`)
+
+Se reemplaza el panel de **Aspecto** por la arquitectura visual de `assets/screenshots/Aspecto.png` (macOS Tahoe) y se incorpora la subsección **Temas** (`appearance-themes`) con transición animada `SlideLeft`/`SlideRight`, agrupando *Tema de aplicaciones*, *Tema y estilo del puntero* y *Superficie de escritorio* con tarjetas squircle Apple-like (y trasladando el tamaño del Dock fuera de Aspecto).
+
+### Cambios Clave
+- **Nuevo módulo [`crates/settings/src/appearance_pane.rs`](../crates/settings/src/appearance_pane.rs)**:
+  - **Vista principal `Aspecto` (`Aspecto.png`)**:
+    - Miniaturas Cairo interactivas para **Aspecto** (`Claro`, `Obscuro`, `Automático`) sincronizadas en vivo con `set_system_appearance_mode` e IPC del compositor.
+    - Previsualización Cairo interactiva de **Liquid Glass** con deslizador de opacidad (`0.20..0.95`) que actualiza en tiempo real la translucidez de las píldoras superiores.
+    - Sección **Tema** con selector de 9 muestras circulares de color de acento (incluyendo rueda multicolor), *Color de resaltado* con popover transparente `.wifi-macos-popover`, 4 mosaicos Cairo para *Estilo de íconos y widgets* (`Predeterminado`, `Obscuro`, `Transparente`, `Entintado`), *Color de carpetas* y fila de navegación hacia la subsección **Temas**.
+    - Sección **Ventanas** con *Tamaño de los íconos de la barra lateral*, interruptor *Entintar ventanas con el fondo de pantalla*, y grupos de botones de radio para *Mostrar barras de desplazamiento* y *Hacer clic en la barra de desplazamiento para*.
+    - Pie con botón squircle *"Configuración de pantallas de accesibilidad..."* (que navega a `a11y-display`) y botón circular de ayuda `?`.
+  - **Subsección `Temas` (`appearance-themes`)**:
+    - **Tema de aplicaciones**: Filas Apple-like con miniatura Cairo de ventana macOS, etiqueta `"Activo"` y marca `✓` para temas GTK3/GTK4/Libadwaita.
+    - **Tema y estilo del puntero**: Filas con insignia Cairo de silueta de puntero para cada tema de cursor instalado y control segmentado (`24 px`, `32 px`, `48 px`) para el tamaño del puntero.
+    - **Superficie de escritorio**: Tarjeta squircle con interruptores `.macos-switch` (*Mostrar archivos en el escritorio*, *Usar Pilas en el escritorio*, *Imantar íconos a la cuadrícula*), selector popover de alineación de cuadrícula, deslizador `32..96 px` con iconos laterales y acceso directo a *Fondo de pantalla*.
+
+### Verificación
+- `cargo check --offline --workspace --all-targets`: 0 warnings.
+- `cargo test --offline -p malus-de-settings`: 18 passed, 0 failed.
+- `cargo build --offline --release -p malus-de-settings` e instalación en `/usr/local/bin/malus-de-settings`.
+
+---
+
 ## [2026-11-20] — Panel de Accesibilidad y 20 Subvistas al estilo macOS + Etiquetas «por implementar» (`malus-de-settings`)
 
 Se implementa la sección completa de **Accesibilidad** y sus 20 subvistas siguiendo las capturas `assets/screenshots/Accesibilidad1.png`–`Accesibilidad21.png`, integrando los esquemas `org.gnome.desktop.a11y.*`, el lector de pantalla `orca`, `speech-dispatcher` (`spd-say`), vistas previas Cairo para *Filtros de colores* y *Subtítulos*, y etiquetas `"por implementar"` en las funciones sin equivalente directo en Linux.
