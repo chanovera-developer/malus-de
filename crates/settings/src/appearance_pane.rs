@@ -32,6 +32,9 @@ pub struct AppearancePreferences {
     /// 0 = Claro, 1 = Obscuro, 2 = Automático
     pub mode_idx: usize,
     pub liquid_glass_opacity: f64,
+    /// «Reducir transparencia»: superficies sólidas y sin blur.
+    #[serde(default)]
+    pub reduce_transparency: bool,
     pub accent_color_idx: usize,
     pub highlight_color_idx: usize,
     /// 0 = Predeterminado, 1 = Obscuro, 2 = Transparente, 3 = Teñido
@@ -51,6 +54,7 @@ impl Default for AppearancePreferences {
         Self {
             mode_idx: if crate::is_dark_mode_active() { 1 } else { 0 },
             liquid_glass_opacity: 0.55,
+            reduce_transparency: false,
             accent_color_idx: 0,
             highlight_color_idx: 0,
             icon_widget_style_idx: 0,
@@ -314,8 +318,9 @@ fn build_appearance_main_pane(
         .hexpand(true)
         .css_classes(["bat-limit-slider"])
         .build();
+    let glass_preview_ref = glass_preview.clone();
     {
-        let op_c = glass_op;
+        let op_c = glass_op.clone();
         let prev_c = glass_preview;
         let prefs_c = prefs.clone();
         glass_slider.connect_value_changed(move |sc| {
@@ -343,6 +348,34 @@ fn build_appearance_main_pane(
 
     glass_row.append(&glass_col);
     top_card.append(&glass_row);
+
+    // Fila «Reducir transparencia»: todo sólido y sin blur (sin detener ningún servicio).
+    top_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
+    glass_slider.set_sensitive(!prefs.borrow().reduce_transparency);
+    {
+        let prefs_c = prefs.clone();
+        let slider_c = glass_slider.clone();
+        let preview_c = glass_preview_ref.clone();
+        let op_c = glass_op.clone();
+        top_card.append(&apple_switch_row(
+            "Reducir transparencia",
+            Some("Muestra menús, Dock y barras laterales con fondos sólidos y desactiva el desenfoque."),
+            prefs.borrow().reduce_transparency,
+            move |active| {
+                prefs_c.borrow_mut().reduce_transparency = active;
+                prefs_c.borrow().save();
+                slider_c.set_sensitive(!active);
+                op_c.set(if active { 0.95 } else { prefs_c.borrow().liquid_glass_opacity });
+                preview_c.queue_draw();
+                let v = prefs_c.borrow().liquid_glass_opacity;
+                crate::apply_liquid_glass_opacity_css(v);
+                malus_de_common::config::sync_system_appearance(crate::is_dark_mode_active());
+                let _ = malus_de_common::ipc::IpcClient::send_command(
+                    malus_de_common::ipc::IpcMessage::LiquidGlassOpacityChanged { opacity: v },
+                );
+            },
+        ));
+    }
     pane.append(&wrap_squircle_card(&top_card, WIFI_CARD_SQUIRCLE_RADIUS));
 
     // ------------------------------------------------------------------------

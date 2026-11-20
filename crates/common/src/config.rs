@@ -113,8 +113,30 @@ pub fn load_liquid_glass_opacity() -> f64 {
     DEFAULT_LIQUID_GLASS_OPACITY
 }
 
+/// Indica si el usuario activó «Reducir transparencia» (todo sólido, sin blur) en `appearance-settings.toml`.
+pub fn load_reduce_transparency() -> bool {
+    let Ok(raw) = std::fs::read_to_string(appearance_settings_path()) else {
+        return false;
+    };
+    for line in raw.lines() {
+        if let Some(rest) = line.trim().strip_prefix("reduce_transparency") {
+            if let Some(val) = rest.trim_start().strip_prefix('=') {
+                return val.trim() == "true";
+            }
+        }
+    }
+    false
+}
+
+/// Factor de escala que fuerza opacidad total (modo «Reducir transparencia»).
+pub const SOLID_GLASS_SCALE: f64 = 1000.0;
+
 /// Factor multiplicativo relativo a la opacidad predeterminada (`0.55` -> `1.0`).
+/// Con «Reducir transparencia» activo devuelve [`SOLID_GLASS_SCALE`] (superficies sólidas).
 pub fn liquid_glass_scale_for(opacity: f64) -> f64 {
+    if load_reduce_transparency() {
+        return SOLID_GLASS_SCALE;
+    }
     (opacity.clamp(0.15, 0.95) / DEFAULT_LIQUID_GLASS_OPACITY).clamp(0.25, 1.85)
 }
 
@@ -124,7 +146,11 @@ pub fn current_liquid_glass_scale() -> f64 {
 }
 
 /// Escala un valor alfa base según el factor de Liquid Glass manteniéndolo dentro de `[min_a, max_a]`.
+/// Si el factor es [`SOLID_GLASS_SCALE`] devuelve alfa `1.0` (totalmente sólido).
 pub fn scaled_liquid_glass_alpha(base_alpha: f64, scale: f64, min_a: f64, max_a: f64) -> f64 {
+    if scale >= SOLID_GLASS_SCALE {
+        return 1.0;
+    }
     (base_alpha * scale).clamp(min_a, max_a)
 }
 

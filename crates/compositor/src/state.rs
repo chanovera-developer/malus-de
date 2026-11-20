@@ -1887,6 +1887,9 @@ impl MalusState {
                         opacity
                     );
                     self.surface_commit_counter = self.surface_commit_counter.wrapping_add(1);
+                    crate::blur::set_reduce_transparency(
+                        malus_de_common::config::load_reduce_transparency(),
+                    );
                     self.expose.bump_revision();
                     self.ipc_broadcaster
                         .broadcast(&IpcMessage::LiquidGlassOpacityChanged { opacity });

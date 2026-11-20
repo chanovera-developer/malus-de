@@ -3,7 +3,22 @@
 //! Usa una reducción a media resolución y un filtro gaussiano separable para limitar
 //! el coste de renderizado, con soporte para recorte squircle y anclaje proyectado.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
+
+static REDUCE_TRANSPARENCY: AtomicBool = AtomicBool::new(false);
+
+/// Activa/desactiva el modo «Reducir transparencia»: omite por completo capturas y pases de blur.
+pub fn set_reduce_transparency(active: bool) {
+    REDUCE_TRANSPARENCY.store(active, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn reduce_transparency_active() -> bool {
+    REDUCE_TRANSPARENCY.load(Ordering::Relaxed)
+}
 
 use smithay::{
     backend::renderer::{
@@ -346,6 +361,7 @@ impl GaussianBlur {
             }
 
             info!("✨ [GaussianBlur] Pipeline gaussiano por GPU inicializado con éxito.");
+            set_reduce_transparency(malus_de_common::config::load_reduce_transparency());
 
             Some(Self {
                 down_program,
@@ -593,7 +609,7 @@ impl GaussianBlur {
         screen_size: Size<i32, Physical>,
         region: Rectangle<i32, Physical>,
     ) {
-        if screen_size.w < 1 || screen_size.h < 1 {
+        if screen_size.w < 1 || screen_size.h < 1 || reduce_transparency_active() {
             return;
         }
         let expanded = Rectangle::new(
@@ -841,6 +857,9 @@ impl GaussianBlur {
         offscreen_premul: bool,
         gaussian_passes: usize,
     ) {
+        if reduce_transparency_active() {
+            return;
+        }
         let screen_rect = Rectangle::from_size(screen_size);
         let visible_src = match src_win_rect.intersection(screen_rect) {
             Some(r) if r.size.w >= 4 && r.size.h >= 4 => r,
@@ -1124,7 +1143,7 @@ impl GaussianBlur {
         mask_h: i32,
         opacity: f32,
     ) {
-        if mask_w < 2 || mask_h < 2 || opacity <= 0.001 {
+        if mask_w < 2 || mask_h < 2 || opacity <= 0.001 || reduce_transparency_active() {
             return;
         }
         let screen_rect = Rectangle::from_size(screen_size);
