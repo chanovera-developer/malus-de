@@ -389,13 +389,20 @@ for GTK_SETTINGS in "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" "$XDG_CONFIG_HOME/gt
         "gtk-xft-antialias=1" \
         "gtk-xft-hinting=1" \
         "gtk-xft-hintstyle=hintslight" \
-        "gtk-xft-rgba=none" \
-        "gtk-hint-font-metrics=1"; do
+        "gtk-xft-rgba=none"; do
         xft_key="${xft_kv%%=*}"
         if ! grep -q "^${xft_key}=" "$GTK_SETTINGS"; then
             printf '%s\n' "$xft_kv" >> "$GTK_SETTINGS"
         fi
     done
+    if [[ "$GTK_SETTINGS" == *"/gtk-4.0/"* ]]; then
+        if ! grep -q "^gtk-hint-font-metrics=" "$GTK_SETTINGS"; then
+            printf 'gtk-hint-font-metrics=1\n' >> "$GTK_SETTINGS"
+        fi
+    else
+        sed -i '/^gtk-hint-font-metrics=/d' "$GTK_SETTINGS" 2>/dev/null || true
+    fi
+    sed -i '/^[[:space:]]*1[[:space:]]*$/d' "$GTK_SETTINGS" 2>/dev/null || true
 done
 
 mkdir -p "$XDG_CONFIG_HOME/fontconfig/conf.d"
@@ -706,8 +713,6 @@ cleanup() {
     # Limpiar las variables aisladas en systemd para que una sesión posterior de GNOME no las herede
     if command -v systemctl >/dev/null 2>&1; then
         systemctl --user unset-environment XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL 2>/dev/null || true
-        dbus-update-activation-environment --systemd XDG_CONFIG_HOME="" GSETTINGS_BACKEND="" GTK_USE_PORTAL="" 2>/dev/null || true
-        systemctl --user restart xdg-desktop-portal 2>/dev/null || true
     fi
     [ -n "$POLKIT_AGENT_PID" ] && kill "$POLKIT_AGENT_PID" 2>/dev/null || true
     [ -n "$XWAYLAND_PID" ] && kill "$XWAYLAND_PID" 2>/dev/null || true

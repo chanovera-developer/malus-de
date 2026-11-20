@@ -321,7 +321,7 @@ pub fn create_system_menu() -> MenuButton {
                 info!("Cerrando sesión de Malus DE...");
                 malus_de_common::crash::mark_clean_session_exit();
                 let _ = std::process::Command::new("pkill")
-                    .args(["-TERM", "-x", "malus-de-compositor"])
+                    .args(["-TERM", "-f", "malus-de-compositor"])
                     .status();
                 let _ = std::process::Command::new("killall")
                     .args(["-TERM", "malus-de-compositor"])

@@ -246,21 +246,53 @@ impl GaussianBlur {
     pub fn new(gl: &ffi::Gles2) -> Option<Self> {
         unsafe {
             let quad_vert = compile_shader(gl, ffi::VERTEX_SHADER, QUAD_VERT_SRC)?;
-            let down_frag = compile_shader(gl, ffi::FRAGMENT_SHADER, DOWNSAMPLE_SRC)?;
-            let gaussian_frag = compile_shader(gl, ffi::FRAGMENT_SHADER, GAUSSIAN_BLUR_SRC)?;
+            let Some(down_frag) = compile_shader(gl, ffi::FRAGMENT_SHADER, DOWNSAMPLE_SRC) else {
+                gl.DeleteShader(quad_vert);
+                return None;
+            };
+            let Some(gaussian_frag) = compile_shader(gl, ffi::FRAGMENT_SHADER, GAUSSIAN_BLUR_SRC) else {
+                gl.DeleteShader(quad_vert);
+                gl.DeleteShader(down_frag);
+                return None;
+            };
+            let Some(blit_vert) = compile_shader(gl, ffi::VERTEX_SHADER, BLIT_VERT_SRC) else {
+                gl.DeleteShader(quad_vert);
+                gl.DeleteShader(down_frag);
+                gl.DeleteShader(gaussian_frag);
+                return None;
+            };
+            let Some(blit_frag) = compile_shader(gl, ffi::FRAGMENT_SHADER, BLIT_FRAG_SRC) else {
+                gl.DeleteShader(quad_vert);
+                gl.DeleteShader(down_frag);
+                gl.DeleteShader(gaussian_frag);
+                gl.DeleteShader(blit_vert);
+                return None;
+            };
 
-            let blit_vert = compile_shader(gl, ffi::VERTEX_SHADER, BLIT_VERT_SRC)?;
-            let blit_frag = compile_shader(gl, ffi::FRAGMENT_SHADER, BLIT_FRAG_SRC)?;
-
-            let down_program = link_program(gl, quad_vert, down_frag)?;
-            let gaussian_program = link_program(gl, quad_vert, gaussian_frag)?;
-            let blit_program = link_program(gl, blit_vert, blit_frag)?;
+            let down_program = link_program(gl, quad_vert, down_frag);
+            let gaussian_program = link_program(gl, quad_vert, gaussian_frag);
+            let blit_program = link_program(gl, blit_vert, blit_frag);
 
             gl.DeleteShader(quad_vert);
             gl.DeleteShader(down_frag);
             gl.DeleteShader(gaussian_frag);
             gl.DeleteShader(blit_vert);
             gl.DeleteShader(blit_frag);
+
+            let (Some(down_program), Some(gaussian_program), Some(blit_program)) =
+                (down_program, gaussian_program, blit_program)
+            else {
+                if let Some(p) = down_program {
+                    gl.DeleteProgram(p);
+                }
+                if let Some(p) = gaussian_program {
+                    gl.DeleteProgram(p);
+                }
+                if let Some(p) = blit_program {
+                    gl.DeleteProgram(p);
+                }
+                return None;
+            };
 
             let down_u_texture = gl.GetUniformLocation(down_program, c"u_texture".as_ptr());
             let down_u_halfpixel = gl.GetUniformLocation(down_program, c"u_halfpixel".as_ptr());
@@ -1765,7 +1797,7 @@ unsafe fn compile_shader(
         );
         error!(
             "❌ [GaussianBlur] Error al compilar shader GLSL: {}",
-            String::from_utf8_lossy(&buffer)
+            String::from_utf8_lossy(&buffer).trim_end_matches('\0').trim()
         );
         gl.DeleteShader(shader);
         return None;
@@ -1797,7 +1829,7 @@ unsafe fn link_program(
         );
         error!(
             "❌ [GaussianBlur] Error al enlazar programa GLSL: {}",
-            String::from_utf8_lossy(&buffer)
+            String::from_utf8_lossy(&buffer).trim_end_matches('\0').trim()
         );
         gl.DeleteProgram(program);
         return None;

@@ -493,6 +493,21 @@ impl DrmOutputSurface {
         self.flip_pending
             .map_or(false, |submitted_at| submitted_at.elapsed() < Duration::from_millis(250))
     }
+
+    fn recover_expired_flip(&mut self) {
+        if let Some(submitted_at) = self.flip_pending {
+            if submitted_at.elapsed() >= Duration::from_millis(250) {
+                warn!(
+                    "⏱️ Timeout de VBlank DRM en {} ({:?}); liberando frame pendiente en swapchain",
+                    self.output.name(),
+                    submitted_at.elapsed()
+                );
+                let _ = self.surface.frame_submitted();
+                self.flip_pending = None;
+                self.pending_damage_buffers = self.pending_damage_buffers.max(1);
+            }
+        }
+    }
 }
 
 struct ThemedCursor {
@@ -3141,20 +3156,27 @@ pub fn run_drm() -> Result<()> {
         Option<ThemedCursor>,
     > = std::collections::HashMap::new();
     let mut blur_pipeline: Option<std::sync::Arc<std::sync::Mutex<crate::blur::GaussianBlur>>> = None;
+    let mut blur_init_attempted = false;
     let mut window_squircle_shader: Option<std::sync::Arc<crate::window_corners::WindowSquircleShader>> = None;
+    let mut window_squircle_init_attempted = false;
     let mut shadow_pipeline: Option<std::sync::Arc<crate::shadow::WindowShadowPipeline>> = None;
+    let mut shadow_init_attempted = false;
     let mut black_hole_pipeline: Option<crate::black_hole::BlackHolePipeline> = None;
+    let mut black_hole_init_attempted = false;
     let mut active_black_holes: Vec<crate::black_hole::ActiveBlackHoleClose> = Vec::new();
     let mut genie_pipeline: Option<crate::magic_lamp::GeniePipeline> = None;
+    let mut genie_init_attempted = false;
     let mut genie_snapshots: std::collections::HashMap<
         u64,
         crate::capture::CapturedWindowOffscreen,
     > = std::collections::HashMap::new();
     let mut theme_transition_pipeline: Option<crate::theme_transition::ThemeTransitionPipeline> =
         None;
+    let mut theme_transition_init_attempted = false;
     let mut workspace_transition_pipeline: Option<
         crate::workspace_transition::WorkspaceTransitionPipeline,
     > = None;
+    let mut workspace_transition_init_attempted = false;
     let mut was_session_locked = false;
 
     while state.is_running {
@@ -3385,8 +3407,9 @@ pub fn run_drm() -> Result<()> {
             || state.pending_theme_transition_capture.is_some()
             || state.workspace_transition.is_some()
             || state.pending_workspace_switch.is_some();
-        let has_ready_output = if let Ok(surfs) = shared_surfaces.lock() {
-            surfs.iter().any(|s| {
+        let has_ready_output = if let Ok(mut surfs) = shared_surfaces.lock() {
+            surfs.iter_mut().any(|s| {
+                s.recover_expired_flip();
                 if s.is_flip_pending() {
                     return false;
                 }
@@ -3442,6 +3465,7 @@ pub fn run_drm() -> Result<()> {
             let mut ws_transition_attempted = false;
             let mut ws_transition_drawn = false;
             for out_surface in surfs.iter_mut() {
+                out_surface.recover_expired_flip();
                 let scale = out_surface.output.current_scale().fractional_scale();
                 let output_geo = state
                     .space
@@ -3930,36 +3954,41 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
 
-                // Inicializar shaders y pipelines declarativos de renderizado si aún no existen
+                // Inicializar shaders y pipelines declarativos de renderizado una sola vez por contexto GL
                 if state.renderer_context_id.is_none() {
                     state.renderer_context_id = Some(renderer.context_id());
                 }
-                if window_squircle_shader.is_none() {
+                if !window_squircle_init_attempted {
+                    window_squircle_init_attempted = true;
                     window_squircle_shader =
                         crate::window_corners::WindowSquircleShader::new(&mut renderer)
                             .map(std::sync::Arc::new);
                 }
-                if shadow_pipeline.is_none() {
+                if !shadow_init_attempted {
+                    shadow_init_attempted = true;
                     shadow_pipeline = renderer
                         .with_context(|gl| crate::shadow::WindowShadowPipeline::new(gl))
                         .ok()
                         .flatten()
                         .map(std::sync::Arc::new);
                 }
-                if blur_pipeline.is_none() {
+                if !blur_init_attempted {
+                    blur_init_attempted = true;
                     blur_pipeline = renderer
                         .with_context(|gl| crate::blur::GaussianBlur::new(gl))
                         .ok()
                         .flatten()
                         .map(|b| std::sync::Arc::new(std::sync::Mutex::new(b)));
                 }
-                if black_hole_pipeline.is_none() {
+                if !black_hole_init_attempted {
+                    black_hole_init_attempted = true;
                     black_hole_pipeline = renderer
                         .with_context(|gl| crate::black_hole::BlackHolePipeline::new(gl))
                         .ok()
                         .flatten();
                 }
-                if genie_pipeline.is_none() {
+                if !genie_init_attempted {
+                    genie_init_attempted = true;
                     genie_pipeline = renderer
                         .with_context(|gl| crate::magic_lamp::GeniePipeline::new(gl))
                         .ok()
@@ -5138,8 +5167,9 @@ pub fn run_drm() -> Result<()> {
                                 draw_render_elements(&mut frame, scale, &lower_elements, damage);
                         }
 
-                        // Inicializar pipeline de sombras squircle si aún no existe
-                        if shadow_pipeline.is_none() {
+                        // Inicializar pipeline de sombras squircle si aún no se intentó
+                        if !shadow_init_attempted {
+                            shadow_init_attempted = true;
                             shadow_pipeline = frame
                                 .with_context(|gl| crate::shadow::WindowShadowPipeline::new(gl))
                                 .ok()
@@ -5147,8 +5177,9 @@ pub fn run_drm() -> Result<()> {
                                 .map(std::sync::Arc::new);
                         }
 
-                        // Inicializar pipeline de desenfoque Dual Kawase si aún no existe
-                        if blur_pipeline.is_none() {
+                        // Inicializar pipeline de desenfoque Dual Kawase si aún no se intentó
+                        if !blur_init_attempted {
+                            blur_init_attempted = true;
                             blur_pipeline = frame
                                 .with_context(|gl| crate::blur::GaussianBlur::new(gl))
                                 .ok()
@@ -5585,7 +5616,8 @@ pub fn run_drm() -> Result<()> {
                         }
 
                         // 2. Aplicar desenfoque de fondo Dual Kawase por GPU a las capas y popups translúcidos
-                        if blur_pipeline.is_none() {
+                        if !blur_init_attempted {
+                            blur_init_attempted = true;
                             blur_pipeline = frame
                                 .with_context(|gl| crate::blur::GaussianBlur::new(gl))
                                 .ok()
@@ -6433,7 +6465,8 @@ pub fn run_drm() -> Result<()> {
                             }
                         }
 
-                        if theme_transition_pipeline.is_none() {
+                        if !theme_transition_init_attempted {
+                            theme_transition_init_attempted = true;
                             theme_transition_pipeline = frame
                                 .with_context(crate::theme_transition::ThemeTransitionPipeline::new)
                                 .ok()
@@ -6487,7 +6520,8 @@ pub fn run_drm() -> Result<()> {
                             theme_capture_succeeded = false;
                         }
 
-                        if workspace_transition_pipeline.is_none() {
+                        if !workspace_transition_init_attempted {
+                            workspace_transition_init_attempted = true;
                             workspace_transition_pipeline = frame
                                 .with_context(
                                     crate::workspace_transition::WorkspaceTransitionPipeline::new,
@@ -6585,6 +6619,9 @@ pub fn run_drm() -> Result<()> {
 
                 if let Err(e) = out_surface.surface.queue_buffer(None, None, ()) {
                     warn!("Error al encolar buffer en DRM: {:?}", e);
+                    let _ = out_surface.surface.frame_submitted();
+                    out_surface.flip_pending = None;
+                    out_surface.pending_damage_buffers = out_surface.pending_damage_buffers.max(1);
                 } else if frame_rendered {
                     out_surface.flip_pending = Some(Instant::now());
                     out_surface.last_commit_counter = state.surface_commit_counter;

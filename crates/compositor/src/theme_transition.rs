@@ -267,7 +267,7 @@ pub(crate) unsafe fn compile_shader(
         );
         tracing::error!(
             "Error compilando shader de transición de tema: {}",
-            String::from_utf8_lossy(&log)
+            String::from_utf8_lossy(&log).trim_end_matches('\0').trim()
         );
         gl.DeleteShader(shader);
         None
@@ -300,7 +300,7 @@ pub(crate) unsafe fn link_program(
         );
         tracing::error!(
             "Error enlazando shader de transición de tema: {}",
-            String::from_utf8_lossy(&log)
+            String::from_utf8_lossy(&log).trim_end_matches('\0').trim()
         );
         gl.DeleteProgram(program);
         None

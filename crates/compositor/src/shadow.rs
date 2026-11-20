@@ -171,7 +171,10 @@ impl WindowShadowPipeline {
     pub fn new(gl: &ffi::Gles2) -> Option<Self> {
         unsafe {
             let vert = compile_shader(gl, ffi::VERTEX_SHADER, SHADOW_VERT_SRC)?;
-            let frag = compile_shader(gl, ffi::FRAGMENT_SHADER, SHADOW_FRAG_SRC)?;
+            let Some(frag) = compile_shader(gl, ffi::FRAGMENT_SHADER, SHADOW_FRAG_SRC) else {
+                gl.DeleteShader(vert);
+                return None;
+            };
 
             let program = gl.CreateProgram();
             gl.AttachShader(program, vert);
@@ -188,7 +191,10 @@ impl WindowShadowPipeline {
                 gl.GetProgramiv(program, ffi::INFO_LOG_LENGTH, &mut len);
                 let mut buffer = vec![0u8; len as usize];
                 gl.GetProgramInfoLog(program, len, std::ptr::null_mut(), buffer.as_mut_ptr() as *mut ffi::types::GLchar);
-                error!("❌ [WindowShadowPipeline] Error en enlace de shaders: {}", String::from_utf8_lossy(&buffer));
+                error!(
+                    "❌ [WindowShadowPipeline] Error en enlace de shaders: {}",
+                    String::from_utf8_lossy(&buffer).trim_end_matches('\0').trim()
+                );
                 gl.DeleteProgram(program);
                 return None;
             }
@@ -541,7 +547,7 @@ unsafe fn compile_shader(
         );
         error!(
             "❌ [WindowShadowPipeline] Error compilando shader: {}",
-            String::from_utf8_lossy(&buffer)
+            String::from_utf8_lossy(&buffer).trim_end_matches('\0').trim()
         );
         gl.DeleteShader(shader);
         return None;

@@ -229,20 +229,27 @@ pub fn run_winit() -> Result<()> {
         [smithay::backend::renderer::gles::GlesTexture; 4],
     > = std::collections::HashMap::new();
     let mut blur_pipeline: Option<crate::blur::GaussianBlur> = None;
+    let mut blur_init_attempted = false;
     let mut window_squircle_shader: Option<crate::window_corners::WindowSquircleShader> = None;
+    let mut window_squircle_init_attempted = false;
     let mut shadow_pipeline: Option<crate::shadow::WindowShadowPipeline> = None;
+    let mut shadow_init_attempted = false;
     let mut black_hole_pipeline: Option<crate::black_hole::BlackHolePipeline> = None;
+    let mut black_hole_init_attempted = false;
     let mut active_black_holes: Vec<crate::black_hole::ActiveBlackHoleClose> = Vec::new();
     let mut genie_pipeline: Option<crate::magic_lamp::GeniePipeline> = None;
+    let mut genie_init_attempted = false;
     let mut genie_snapshots: std::collections::HashMap<
         u64,
         crate::capture::CapturedWindowOffscreen,
     > = std::collections::HashMap::new();
     let mut theme_transition_pipeline: Option<crate::theme_transition::ThemeTransitionPipeline> =
         None;
+    let mut theme_transition_init_attempted = false;
     let mut workspace_transition_pipeline: Option<
         crate::workspace_transition::WorkspaceTransitionPipeline,
     > = None;
+    let mut workspace_transition_init_attempted = false;
 
     while state.is_running {
         let frame_start = Instant::now();
@@ -1627,21 +1634,24 @@ pub fn run_winit() -> Result<()> {
                     }
                 }
 
-                // Inicializar shader de recorte squircle para ventanas si aún no existe
+                // Inicializar shaders una sola vez por contexto GL
                 if state.renderer_context_id.is_none() {
                     state.renderer_context_id = Some(renderer.context_id());
                 }
-                if window_squircle_shader.is_none() {
+                if !window_squircle_init_attempted {
+                    window_squircle_init_attempted = true;
                     window_squircle_shader =
                         crate::window_corners::WindowSquircleShader::new(renderer);
                 }
-                if black_hole_pipeline.is_none() {
+                if !black_hole_init_attempted {
+                    black_hole_init_attempted = true;
                     black_hole_pipeline = renderer
                         .with_context(|gl| crate::black_hole::BlackHolePipeline::new(gl))
                         .ok()
                         .flatten();
                 }
-                if genie_pipeline.is_none() {
+                if !genie_init_attempted {
+                    genie_init_attempted = true;
                     genie_pipeline = renderer
                         .with_context(|gl| crate::magic_lamp::GeniePipeline::new(gl))
                         .ok()
@@ -1863,16 +1873,18 @@ pub fn run_winit() -> Result<()> {
                         let _ = draw_render_elements(&mut frame, 1.0, &lower_elements, &[damage]);
                     }
 
-                    // Inicializar pipeline de sombras squircle si aún no existe
-                    if shadow_pipeline.is_none() {
+                    // Inicializar pipeline de sombras squircle si aún no se intentó
+                    if !shadow_init_attempted {
+                        shadow_init_attempted = true;
                         shadow_pipeline = frame
                             .with_context(|gl| crate::shadow::WindowShadowPipeline::new(gl))
                             .ok()
                             .flatten();
                     }
 
-                    // Inicializar pipeline de desenfoque Dual Kawase si aún no existe
-                    if blur_pipeline.is_none() {
+                    // Inicializar pipeline de desenfoque Dual Kawase si aún no se intentó
+                    if !blur_init_attempted {
+                        blur_init_attempted = true;
                         blur_pipeline = frame
                             .with_context(|gl| crate::blur::GaussianBlur::new(gl))
                             .ok()
@@ -2076,7 +2088,8 @@ pub fn run_winit() -> Result<()> {
                     }
 
                     // 2. Aplicar desenfoque de fondo Dual Kawase por GPU a las capas y popups translúcidos
-                    if blur_pipeline.is_none() {
+                    if !blur_init_attempted {
+                        blur_init_attempted = true;
                         blur_pipeline = frame
                             .with_context(|gl| crate::blur::GaussianBlur::new(gl))
                             .ok()
@@ -2747,7 +2760,8 @@ pub fn run_winit() -> Result<()> {
                     }
 
                     let mut theme_capture_succeeded = false;
-                    if theme_transition_pipeline.is_none() {
+                    if !theme_transition_init_attempted {
+                        theme_transition_init_attempted = true;
                         theme_transition_pipeline = frame
                             .with_context(crate::theme_transition::ThemeTransitionPipeline::new)
                             .ok()
@@ -2789,7 +2803,8 @@ pub fn run_winit() -> Result<()> {
                     }
 
                     let mut ws_capture_succeeded = false;
-                    if workspace_transition_pipeline.is_none() {
+                    if !workspace_transition_init_attempted {
+                        workspace_transition_init_attempted = true;
                         workspace_transition_pipeline = frame
                             .with_context(
                                 crate::workspace_transition::WorkspaceTransitionPipeline::new,

@@ -1089,7 +1089,7 @@ unsafe fn compile_shader(
         error!(
             "❌ [BlackHolePipeline:{}] Error compilando shader: {}",
             label,
-            String::from_utf8_lossy(&buffer)
+            String::from_utf8_lossy(&buffer).trim_end_matches('\0').trim()
         );
         gl.DeleteShader(shader);
         return None;
@@ -1135,7 +1135,7 @@ pub(crate) unsafe fn link_program(
         error!(
             "❌ [BlackHolePipeline:{}] Error enlazando programa GL: {}",
             label,
-            String::from_utf8_lossy(&buffer)
+            String::from_utf8_lossy(&buffer).trim_end_matches('\0').trim()
         );
         gl.DeleteProgram(program);
         return None;

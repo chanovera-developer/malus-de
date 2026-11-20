@@ -319,7 +319,11 @@ pub fn upsert_keyfile_entries(
                 sections.push((current_header.take(), std::mem::take(&mut current_lines)));
             }
             current_header = Some(trimmed[1..trimmed.len() - 1].to_string());
-        } else {
+        } else if trimmed.is_empty()
+            || trimmed.starts_with('#')
+            || trimmed.starts_with(';')
+            || trimmed.contains('=')
+        {
             current_lines.push(line.to_string());
         }
     }
@@ -441,19 +445,25 @@ fn propagate_isolated_portal_environment_once(malus_config_dir: &Path) {
                     "XDG_CONFIG_HOME",
                     "GSETTINGS_BACKEND",
                     "FREETYPE_PROPERTIES",
+                    "WAYLAND_DISPLAY",
+                    "DISPLAY",
                 ])
                 .status();
             let _ = std::process::Command::new("systemctl")
                 .args(["--user", "unset-environment", "GTK_USE_PORTAL"])
                 .status();
-            let _ = std::process::Command::new("systemctl")
-                .args([
-                    "--user",
-                    "restart",
-                    "xdg-desktop-portal-gtk",
-                    "xdg-desktop-portal",
-                ])
-                .status();
+            let has_display = std::env::var_os("WAYLAND_DISPLAY").is_some()
+                || std::env::var_os("DISPLAY").is_some();
+            if has_display {
+                let _ = std::process::Command::new("systemctl")
+                    .args([
+                        "--user",
+                        "restart",
+                        "xdg-desktop-portal-gtk",
+                        "xdg-desktop-portal",
+                    ])
+                    .status();
+            }
         });
 }
 
@@ -539,7 +549,7 @@ pub fn ensure_default_font_settings(
         }
     }
 
-    for ini_path in [gtk3_ini, gtk4_ini] {
+    for (is_gtk4, ini_path) in [(false, gtk3_ini), (true, gtk4_ini)] {
         if ini_path.exists() {
             let mut gtk_updates: Vec<(&str, &str)> = Vec::new();
             let needs_gtk_font = read_section_key_value(ini_path, "Settings", "gtk-font-name")
@@ -552,11 +562,13 @@ pub fn ensure_default_font_settings(
                 ("gtk-xft-hinting", "1"),
                 ("gtk-xft-hintstyle", "hintslight"),
                 ("gtk-xft-rgba", "none"),
-                ("gtk-hint-font-metrics", "1"),
             ] {
                 if read_section_key_value(ini_path, "Settings", key).is_none() {
                     gtk_updates.push((key, default_val));
                 }
+            }
+            if is_gtk4 && read_section_key_value(ini_path, "Settings", "gtk-hint-font-metrics").is_none() {
+                gtk_updates.push(("gtk-hint-font-metrics", "1"));
             }
             if !gtk_updates.is_empty() {
                 let _ = upsert_keyfile_entries(ini_path, &[("Settings", &gtk_updates)])?;
@@ -769,7 +781,7 @@ org.freedesktop.impl.portal.Settings=gtk;gnome;
     let gtk3_ini = gtk3_dir.join("settings.ini");
     if !gtk3_ini.exists() {
         let gtk_ini_content = format!(
-            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme=0\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-font-name={}\ngtk-xft-antialias=1\ngtk-xft-hinting=1\ngtk-xft-hintstyle=hintslight\ngtk-xft-rgba=none\ngtk-hint-font-metrics=1\ngtk-theme-name=Adwaita\ngtk-icon-theme-name={}\n",
+            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme=0\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-font-name={}\ngtk-xft-antialias=1\ngtk-xft-hinting=1\ngtk-xft-hintstyle=hintslight\ngtk-xft-rgba=none\ngtk-theme-name=Adwaita\ngtk-icon-theme-name={}\n",
             cursor_theme, cursor_size, DEFAULT_SYSTEM_FONT_NAME, DEFAULT_ICON_THEME_LIGHT
         );
         write_file_atomic_if_changed(&gtk3_ini, &gtk_ini_content)?;
@@ -3502,7 +3514,7 @@ apps = []
         assert!(gtk3_after.contains("gtk-font-name=Inter 11"));
         assert!(gtk3_after.contains("gtk-xft-hintstyle=hintslight"));
         assert!(gtk3_after.contains("gtk-xft-rgba=none"));
-        assert!(gtk3_after.contains("gtk-hint-font-metrics=1"));
+        assert!(!gtk3_after.contains("gtk-hint-font-metrics=1"));
 
         let gtk4_after = std::fs::read_to_string(&gtk4_ini).unwrap();
         assert!(gtk4_after.contains("gtk-font-name=IBM Plex Sans 10"));
