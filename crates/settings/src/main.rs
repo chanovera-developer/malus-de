@@ -23,6 +23,7 @@ mod network_pane;
 mod vpn_pane;
 mod battery_pane;
 mod general_pane;
+mod accessibility_pane;
 
 const APP_ID: &str = "dev.malus.Settings";
 const SETTINGS_SIDEBAR_WIDTH: i32 = 212;
@@ -459,6 +460,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         ("vpn", "network-vpn-symbolic", "VPN"),
         ("battery", "battery-level-100-symbolic", "Batería"),
         ("about", "preferences-system-symbolic", "General"),
+        ("accessibility", "preferences-desktop-accessibility-symbolic", "Accesibilidad"),
         ("appearance", "preferences-desktop-appearance-symbolic", "Aspecto"),
         ("dock", "user-desktop-symbolic", "Escritorio y Dock"),
         ("wallpaper", "preferences-desktop-wallpaper-symbolic", "Fondo de pantalla"),
@@ -519,6 +521,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                     "spotlight" => "spotlight busqueda aplicaciones archivos",
                     "sound" => "sonido volumen audio",
                     "about" => "general acerca sistema procesador ram version informacion actualizacion almacenamiento airdrop compartir disco arranque inicio extensiones fecha hora idioma region time machine",
+                    "accessibility" => "accesibilidad accessibility vision voiceover orca zoom pantalla contraste movimiento voz teclado puntero subtitulos audio",
                     _ => "",
                 }.contains(&query);
                 btn.set_visible(matches);
@@ -630,7 +633,8 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         })
     };
     let refresh_general_pane =
-        general_pane::register_general_panes(&window, &stack, nav_general);
+        general_pane::register_general_panes(&window, &stack, nav_general.clone());
+    accessibility_pane::register_accessibility_panes(&window, &stack, nav_general);
 
     // Header Toolbar macOS (‹ › chevrons + título de la vista actual)
     let content_area = GtkBox::builder()
@@ -716,7 +720,9 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         "firewall" => "network-firewall",
         "bateria" | "batería" => "battery",
         "general" => "about",
+        "accesibilidad" => "accessibility",
         p if general_pane::is_general_subpanel(p) => p,
+        p if accessibility_pane::is_accessibility_subpanel(p) => p,
         "wifi" | "bluetooth" | "network" | "network-firewall" | "vpn" | "battery"
         | "wallpaper" | "keyboard" | "appearance" | "sound" | "about" | "dock" | "spotlight"
         | "displays" => initial_panel,
@@ -764,6 +770,8 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                 "network"
             } else if general_pane::is_general_subpanel(target) {
                 "about"
+            } else if accessibility_pane::is_accessibility_subpanel(target) {
+                "accessibility"
             } else {
                 target
             };
@@ -802,22 +810,24 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             } else if target == "spotlight" {
                 ref_spot();
             }
-            let display_title = general_pane::general_subpanel_title(target).unwrap_or(match target {
-                "wifi" => "Wi-Fi",
-                "bluetooth" => "Bluetooth",
-                "network" => "Red",
-                "network-firewall" => "Firewall",
-                "vpn" => "VPN",
-                "battery" => "Batería",
-                "displays" => "Pantallas",
-                "wallpaper" => "Fondo de pantalla",
-                "keyboard" => "Teclado",
-                "appearance" => "Aspecto",
-                "dock" => "Escritorio y Dock",
-                "spotlight" => "Spotlight",
-                "sound" => "Sonido",
-                _ => "Ajustes",
-            });
+            let display_title = general_pane::general_subpanel_title(target)
+                .or_else(|| accessibility_pane::accessibility_subpanel_title(target))
+                .unwrap_or(match target {
+                    "wifi" => "Wi-Fi",
+                    "bluetooth" => "Bluetooth",
+                    "network" => "Red",
+                    "network-firewall" => "Firewall",
+                    "vpn" => "VPN",
+                    "battery" => "Batería",
+                    "displays" => "Pantallas",
+                    "wallpaper" => "Fondo de pantalla",
+                    "keyboard" => "Teclado",
+                    "appearance" => "Aspecto",
+                    "dock" => "Escritorio y Dock",
+                    "spotlight" => "Spotlight",
+                    "sound" => "Sonido",
+                    _ => "Ajustes",
+                });
             title_lbl.set_label(display_title);
             stack_c.set_visible_child_name(target);
 
@@ -964,7 +974,9 @@ enum NavAction {
 }
 
 fn is_subsection_panel(id: &str) -> bool {
-    id == "network-firewall" || (id != "about" && general_pane::is_general_subpanel(id))
+    id == "network-firewall"
+        || (id != "about" && general_pane::is_general_subpanel(id))
+        || (id != "accessibility" && accessibility_pane::is_accessibility_subpanel(id))
 }
 
 fn section_group(id: &str) -> &str {
@@ -972,6 +984,8 @@ fn section_group(id: &str) -> &str {
         "network"
     } else if general_pane::is_general_subpanel(id) {
         "about"
+    } else if accessibility_pane::is_accessibility_subpanel(id) {
+        "accessibility"
     } else {
         id
     }

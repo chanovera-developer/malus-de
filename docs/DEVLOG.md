@@ -4,6 +4,31 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-20] — Panel de Accesibilidad y 20 Subvistas al estilo macOS + Etiquetas «por implementar» (`malus-de-settings`)
+
+Se implementa la sección completa de **Accesibilidad** y sus 20 subvistas siguiendo las capturas `assets/screenshots/Accesibilidad1.png`–`Accesibilidad21.png`, integrando los esquemas `org.gnome.desktop.a11y.*`, el lector de pantalla `orca`, `speech-dispatcher` (`spd-say`), vistas previas Cairo para *Filtros de colores* y *Subtítulos*, y etiquetas `"por implementar"` en las funciones sin equivalente directo en Linux.
+
+### Cambios Clave
+- **Nuevo módulo [`crates/settings/src/accessibility_pane.rs`](../crates/settings/src/accessibility_pane.rs)**:
+  - **Hub `Accesibilidad` (`Accesibilidad1.png`)**: Tarjeta superior con enlace *"Obtén detalles..."* y las 5 secciones (`Visión`, `Físico y motriz`, `Audición`, `Lectura`, `General`) con transición animada `SlideLeft`/`SlideRight`.
+  - **Integración nativa Linux (`GSettings`, `Orca`, `spd-say`)**:
+    - `VoiceOver` (`Accesibilidad2.png`): `screen-reader-enabled` y control de `/usr/bin/orca` (`orca -s`).
+    - `Zoom` (`Accesibilidad3.png`): `screen-magnifier-enabled`, tecla modificadora y estilo de zoom.
+    - `Pantalla` (`Accesibilidad5.png`): inversión de colores (`invert-lightness`), alto contraste (`high-contrast`), formas de estado (`show-status-shapes`), escala de texto (`text-scaling-factor`), tamaño de cursor (`cursor-size`) e ilustración Cairo de 12 lápices para *Filtros de colores* (`color-saturation`).
+    - `Movimiento` (`Accesibilidad6.png`): `reduced-motion` y parpadeo del cursor (`cursor-blink`).
+    - `Lectura y voz` / `Lectura en vivo` (`Accesibilidad7.png`, `Accesibilidad17.png`): síntesis de prueba con `spd-say`.
+    - `Teclado` y `Control del puntero` (`Accesibilidad10.png`, `Accesibilidad11.png`): `stickykeys-enable`, `slowkeys-enable`, `screen-keyboard-enabled`, `mousekeys-enable` y salto a `Teclado`.
+    - `Audio` y `Subtítulos` (`Accesibilidad13.png`, `Accesibilidad14.png`): `visual-bell`, salto a `Sonido` y vista previa Cairo interactiva de los 4 estilos de subtítulos.
+    - `Atajo` (`Accesibilidad21.png`): selección de las 20 funciones de accesibilidad persistidas en `~/.config/malus-de/accessibility-settings.toml`.
+  - **Etiquetas `"por implementar"`**: Insignias en *Texto flotante*, *Atenuar luces parpadeantes*, *Descripciones de audio*, *Control por voz*, *Control por botón*, *Puntero con seguimiento de cabeza*, *Sonidos de fondo*, *Adaptaciones de audífonos*, *Subtítulos en vivo*, *Reconocimiento de nombres*, *Voz personal*, *Atajos de voz* y *Siri*, documentados en [`docs/decisiones/0012-accesibilidad-pendiente.md`](decisiones/0012-accesibilidad-pendiente.md).
+
+### Verificación
+- `cargo check --offline --workspace --all-targets`: 0 warnings.
+- `cargo test --offline -p malus-de-settings`: 17 passed, 0 failed.
+- `cargo build --offline --release -p malus-de-settings` e instalación en `/usr/local/bin/malus-de-settings`.
+
+---
+
 ## [2026-11-20] — Panel General y 14 Subvistas al estilo macOS + Etiquetas «por implementar» (`malus-de-settings`)
 
 Se implementa el módulo completo de **General** y sus 14 subvistas siguiendo las capturas `assets/screenshots/General01.png`–`General12.png`, reubicando `General` en la barra lateral justo debajo de `Batería` con el espaciado de separación de grupo (`14 px`) y marcando con la etiqueta visual `"por implementar"` las opciones exclusivas de macOS aún no disponibles en Linux.
