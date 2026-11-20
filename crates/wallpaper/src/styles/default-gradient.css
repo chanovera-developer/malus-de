@@ -42,6 +42,7 @@ window.malus-wallpaper-window picture {
 }
 
 .desktop-icon.selected,
+.desktop-icon.selected:hover,
 .desktop-icon:focus-visible {
     background: rgba(0, 122, 255, 0.14);
     border-color: rgba(71, 166, 255, 0.55);
@@ -95,7 +96,7 @@ label.desktop-icon-label {
     font-weight: 500;
     padding: 2px 4px;
     border-radius: 4px;
-    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.88);
+    text-shadow: 0 1px 0 rgba(0, 0, 0, 0.78);
 }
 
 .desktop-icon.selected label.desktop-icon-label {

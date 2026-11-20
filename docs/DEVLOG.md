@@ -4,6 +4,20 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-19] — Fluidez de Reorganización en Escritorio y Drop sin Parpadeo (`malus-de-wallpaper`, `malus-de-compositor`)
+
+- **Renderizado rápido en `GSK_RENDERER=cairo` (`malus-de-wallpaper`):**
+  - `build_scaled_wallpaper_texture` ([`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs)) convierte una sola vez el `Pixbuf` del fondo a `gdk::MemoryTexture` en formato nativo Cairo `B8g8r8a8Premultiplied` (evitando reconversión `R8G8B8` por cuadro en CPU).
+  - En [`default-gradient.css`](../crates/wallpaper/src/styles/default-gradient.css), se añadió `.desktop-icon.selected:hover` con `transition: none;` (como en Branches) y se cambió `text-shadow` en `.desktop-icon-label` a `0 1px 0 rgba(0, 0, 0, 0.78)` para eliminar el desenfoque gaussiano por software en cada etiqueta durante animaciones.
+- **Reorganización y ajuste a la cuadrícula fluidos (`malus-de-wallpaper`):**
+  - En `animate_desktop_layout_transition_with_completion` ([`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs)), la posición inicial lee primero `fixed.child_transform(&item).to_translate()` (compatible con GTK `4.24`), usa `std::time::Instant::now()` anclado al primer tick (evitando saltos de `frame_clock.frame_time()` tras salir de reposo o cerrar popovers) y aplica el primer paso sin omitir el frame inicial.
+  - En `drop_target.connect_drop`, al soltar un icono con `snap_to_grid` activo se coloca primero en la posición exacta del puntero (`raw_pos`, coincidiendo 1:1 con la miniatura retenida) y luego se desliza suavemente (`180 ms`, `ease_out_cubic`) hasta la celda de la cuadrícula.
+- **Protección de handoff DnD en el compositor (`malus-de-compositor`):**
+  - En [`state.rs`](../crates/compositor/src/state.rs), `dnd_drop_hold` requiere `started.elapsed() >= 4 ms` antes de liberarse con un `BufferAssignment::NewBuffer` (evitando que commits en vuelo previos a la suelta borren prematuramente la miniatura) y amplía el límite de seguridad a `200 ms`.
+- Validación: `cargo check --offline --workspace --all-targets` (**0 warnings**); tests unitarios aprobados en `wallpaper` (**20/20**) y `compositor` (**84/84**).
+
+---
+
 ## [2026-11-19] — Submenús en Branches con Color Correcto y Drag & Drop Estático sin Parpadeo (`common`, `wallpaper`, `top-bar`, `dock`)
 
 - **Submenú `Etiquetar` en Branches sin texto blanco heredado (`common`, `top-bar`, `dock`):** en [`squircle-rules.css`](../crates/common/src/styles/squircle-rules.css), [`style.css`](../crates/top-bar/src/styles/style.css) y [`dock.css`](../crates/dock/src/styles/dock.css) se sustituyeron los selectores descendientes `:hover *` / `:hover label` por combinadores directos `>`, manteniendo `color: inherit` sobre `.malus-squircle-menu-item:hover` y restableciendo `color: @window_fg_color` en `popover popover > contents`, evitando que el estado `:hover` del botón padre (`tag_btn`) fuerce texto blanco fijo dentro del submenú anidado `tag_popover`.

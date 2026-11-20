@@ -87,7 +87,41 @@ fn build_scaled_wallpaper_texture(
             sub.copy()?
         }
     };
-    Some(gtk4::gdk::Texture::for_pixbuf(&final_pixbuf))
+    let w = final_pixbuf.width() as usize;
+    let h = final_pixbuf.height() as usize;
+    let stride = final_pixbuf.rowstride() as usize;
+    let channels = final_pixbuf.n_channels() as usize;
+    if w == 0 || h == 0 || channels < 3 {
+        return Some(gtk4::gdk::Texture::for_pixbuf(&final_pixbuf));
+    }
+    let src_bytes = final_pixbuf.read_pixel_bytes();
+    let src = src_bytes.as_ref();
+    let mut bgrx = vec![255u8; w * h * 4];
+    for y in 0..h {
+        let row_src = y * stride;
+        let row_dst = y * w * 4;
+        for x in 0..w {
+            let s = row_src + x * channels;
+            let d = row_dst + x * 4;
+            if s + 3 > src.len() {
+                return Some(gtk4::gdk::Texture::for_pixbuf(&final_pixbuf));
+            }
+            // Formato nativo Cairo RGB24 / GDK B8g8r8x8 (little-endian: B, G, R, 0xFF)
+            bgrx[d] = src[s + 2];
+            bgrx[d + 1] = src[s + 1];
+            bgrx[d + 2] = src[s];
+            bgrx[d + 3] = 255;
+        }
+    }
+    let bytes = glib::Bytes::from_owned(bgrx);
+    let tex = gtk4::gdk::MemoryTexture::new(
+        w as i32,
+        h as i32,
+        gtk4::gdk::MemoryFormat::B8g8r8a8Premultiplied,
+        &bytes,
+        w * 4,
+    );
+    Some(tex.upcast())
 }
 
 const THUMB_SQUIRCLE_EXPONENT: f32 = 4.2;
@@ -1848,7 +1882,11 @@ fn animate_desktop_layout_transition_with_completion(
         if item.has_css_class("desktop-rubberband") {
             continue;
         }
-        let current = fixed.child_position(&item);
+        let current = fixed
+            .child_transform(&item)
+            .map(|t| t.to_translate())
+            .map(|(tx, ty)| (f64::from(tx), f64::from(ty)))
+            .unwrap_or_else(|| fixed.child_position(&item));
         if current.0 < 0.0 || current.1 < 0.0 {
             continue;
         }
@@ -1887,29 +1925,33 @@ fn animate_desktop_layout_transition_with_completion(
         next
     });
 
-    let start_time: Rc<Cell<Option<i64>>> = Rc::new(Cell::new(None));
+    let start_instant: Rc<Cell<Option<std::time::Instant>>> = Rc::new(Cell::new(None));
     let fixed_clone = fixed.clone();
     let completion = Rc::new(RefCell::new(on_complete));
+    let duration_f = duration_ms as f64;
 
-    fixed.add_tick_callback(move |_, frame_clock| {
+    fixed.add_tick_callback(move |_, _frame_clock| {
         if DESKTOP_LAYOUT_ANIM_GEN.with(|g| g.get()) != anim_gen {
             return glib::ControlFlow::Break;
         }
 
-        let now = frame_clock.frame_time() / 1000;
-        let start = match start_time.get() {
+        let now = std::time::Instant::now();
+        let start = match start_instant.get() {
             Some(t) => t,
             None => {
-                start_time.set(Some(now));
-                now
+                start_instant.set(Some(now));
+                // Primer fotograma: aplicar paso mínimo para mantener el frame clock activo a 60 Hz sin saltar frames
+                for (widget, start_pos, target) in &moves {
+                    let cx = start_pos.0 + (target.0 - start_pos.0) * 0.04;
+                    let cy = start_pos.1 + (target.1 - start_pos.1) * 0.04;
+                    fixed_clone.move_(widget, cx, cy);
+                }
+                return glib::ControlFlow::Continue;
             }
         };
 
-        let elapsed = now - start;
-        if elapsed == 0 {
-            return glib::ControlFlow::Continue;
-        }
-        if elapsed >= duration_ms {
+        let elapsed_ms = now.saturating_duration_since(start).as_secs_f64() * 1000.0;
+        if elapsed_ms >= duration_f {
             for (widget, _, target) in &moves {
                 fixed_clone.move_(widget, target.0, target.1);
             }
@@ -1918,7 +1960,7 @@ fn animate_desktop_layout_transition_with_completion(
             }
             glib::ControlFlow::Break
         } else {
-            let progress = (elapsed as f64 / duration_ms as f64).clamp(0.0, 1.0);
+            let progress = (elapsed_ms / duration_f).clamp(0.0, 1.0);
             let eased = ease_out_cubic(progress);
             for (widget, start_pos, target) in &moves {
                 let cx = start_pos.0 + (target.0 - start_pos.0) * eased;
@@ -4173,6 +4215,7 @@ fn create_wallpaper_window(
 
             let mut moved_any = false;
             let mut cleared_selection_for_external = false;
+            let mut snap_anim_targets: HashMap<PathBuf, (f64, f64)> = HashMap::new();
             for (index, source) in files.files().into_iter().enumerate() {
                 let Some(name) = source.basename() else {
                     warn!(
@@ -4204,13 +4247,30 @@ fn create_wallpaper_window(
                                 f64::from(metrics.box_width) / 2.0,
                                 f64::from(metrics.box_height) / 2.0,
                             ));
-                        let mut position = clamp_icon_position(x + offset_idx, y + offset_idx, pointer_offset, &metrics, desktop_size, top_margin);
-                        if snap {
-                            position = snap_position_to_grid(position, &metrics, align_left, desktop_size, top_margin);
-                        }
-                        if move_desktop_icon(&drop_icons, &path, position) {
-                            drop_positions.borrow_mut().insert(path.clone(), position);
+                        let raw_pos = clamp_icon_position(
+                            x + offset_idx,
+                            y + offset_idx,
+                            pointer_offset,
+                            &metrics,
+                            desktop_size,
+                            top_margin,
+                        );
+                        let final_pos = if snap {
+                            snap_position_to_grid(raw_pos, &metrics, align_left, desktop_size, top_margin)
+                        } else {
+                            raw_pos
+                        };
+                        // Colocar primero exactamente en el punto de suelta (1:1 con la miniatura del cursor)
+                        // y luego deslizar suavemente hacia la celda de la cuadrícula si `snap_to_grid` está activo.
+                        if move_desktop_icon(&drop_icons, &path, raw_pos) {
+                            drop_positions.borrow_mut().insert(path.clone(), final_pos);
                             internal_paths_drop.borrow_mut().insert(path.clone());
+                            if snap
+                                && ((final_pos.0 - raw_pos.0).abs() > 0.5
+                                    || (final_pos.1 - raw_pos.1).abs() > 0.5)
+                            {
+                                snap_anim_targets.insert(path.clone(), final_pos);
+                            }
                             moved_any = true;
                         }
                     }
@@ -4322,7 +4382,19 @@ fn create_wallpaper_window(
                 }
             }
             if moved_any {
-                save_icon_positions(&drop_positions.borrow());
+                if !snap_anim_targets.is_empty() {
+                    let pos_for_save = drop_positions.clone();
+                    animate_desktop_layout_transition_with_completion(
+                        &drop_icons,
+                        &snap_anim_targets,
+                        180,
+                        Some(Box::new(move || {
+                            save_icon_positions(&pos_for_save.borrow());
+                        })),
+                    );
+                } else {
+                    save_icon_positions(&drop_positions.borrow());
+                }
                 drop_icons.queue_draw();
             }
             moved_any

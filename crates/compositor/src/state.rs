@@ -5080,7 +5080,9 @@ impl CompositorHandler for MalusState {
             && self
                 .dnd_drop_hold
                 .as_ref()
-                .is_some_and(|(target, _, _)| target == surface)
+                .is_some_and(|(target, _, started)| {
+                    target == surface && started.elapsed() >= std::time::Duration::from_millis(4)
+                })
         {
             self.clear_dnd_icon();
         }
@@ -5460,7 +5462,7 @@ impl MalusState {
 
     pub fn active_dnd_icon_draw_location(&mut self) -> Option<Point<f64, Logical>> {
         if let Some((_, drop_loc, started)) = self.dnd_drop_hold {
-            if started.elapsed() >= std::time::Duration::from_millis(120) {
+            if started.elapsed() >= std::time::Duration::from_millis(200) {
                 self.clear_dnd_icon();
                 return None;
             }
