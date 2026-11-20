@@ -6,14 +6,14 @@ use gtk4::{
 };
 
 /// Con superelipse n=4.2, r=19.0 px iguala la profundidad visual de esquina (~2.9 px) de `border-radius: 10px` en el sidebar.
-const WIFI_CARD_SQUIRCLE_RADIUS: f64 = 19.0;
+pub(crate) const WIFI_CARD_SQUIRCLE_RADIUS: f64 = 19.0;
 const WIFI_BUTTON_SQUIRCLE_RADIUS: f64 = 11.5;
-const WIFI_BADGE_SQUIRCLE_RADIUS: f64 = 15.0;
-const WIFI_MENU_SQUIRCLE_RADIUS: f64 = 12.0;
+pub(crate) const WIFI_BADGE_SQUIRCLE_RADIUS: f64 = 15.0;
+pub(crate) const WIFI_MENU_SQUIRCLE_RADIUS: f64 = 12.0;
 const WIFI_MENU_ITEM_SQUIRCLE_RADIUS: f64 = 14.0;
 
-/// Dibuja la insignia cuadrada-squircle azul de Wi-Fi estilo macOS con el glifo centrado.
-fn make_squircle_wifi_badge(size: i32, icon_px: i32, radius: f64) -> Overlay {
+/// Dibuja una insignia cuadrada-squircle azul estilo macOS con el glifo centrado.
+pub(crate) fn make_squircle_badge(size: i32, icon_name: &str, icon_px: i32, radius: f64) -> Overlay {
     let overlay = Overlay::builder()
         .width_request(size)
         .height_request(size)
@@ -48,7 +48,7 @@ fn make_squircle_wifi_badge(size: i32, icon_px: i32, radius: f64) -> Overlay {
     });
 
     let icon = Image::builder()
-        .icon_name("network-wireless-symbolic")
+        .icon_name(icon_name)
         .pixel_size(icon_px)
         .halign(Align::Center)
         .valign(Align::Center)
@@ -60,9 +60,14 @@ fn make_squircle_wifi_badge(size: i32, icon_px: i32, radius: f64) -> Overlay {
     overlay
 }
 
+/// Dibuja la insignia cuadrada-squircle azul de Wi-Fi estilo macOS con el glifo centrado.
+fn make_squircle_wifi_badge(size: i32, icon_px: i32, radius: f64) -> Overlay {
+    make_squircle_badge(size, "network-wireless-symbolic", icon_px, radius)
+}
+
 /// Envuelve un contenedor tipo tarjeta con fondo gris claro y borde Squircle en Cairo.
 /// El radio por defecto es 10.0px (idéntico al radio de las secciones y filas de la barra lateral).
-fn wrap_squircle_card(inner: &GtkBox, radius: f64) -> Overlay {
+pub(crate) fn wrap_squircle_card(inner: &GtkBox, radius: f64) -> Overlay {
     let overlay = Overlay::builder()
         .hexpand(true)
         .vexpand(false)
@@ -115,7 +120,7 @@ fn wrap_squircle_card(inner: &GtkBox, radius: f64) -> Overlay {
 }
 
 /// Crea un botón estilo macOS compacto y ajustado al texto con forma cápsula/squircle.
-fn make_squircle_button(label: &str, primary: bool, tooltip: Option<&str>) -> (Overlay, Button) {
+pub(crate) fn make_squircle_button(label: &str, primary: bool, tooltip: Option<&str>) -> (Overlay, Button) {
     let btn = Button::builder()
         .label(label)
         .has_frame(false)
@@ -229,7 +234,7 @@ fn make_squircle_button(label: &str, primary: bool, tooltip: Option<&str>) -> (O
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
-enum RoundControlStyle {
+pub(crate) enum RoundControlStyle {
     /// Botón redondo sólido estilo macOS (ej. botón '?' con relleno gris #ECECEC / rgba(0,0,0,0.075))
     SolidButton,
     /// Botón circular con contorno (ej. botón '⋯' de fila en macOS: borde circular sutil y fondo al pasar el cursor)
@@ -239,7 +244,7 @@ enum RoundControlStyle {
 }
 
 /// Envuelve botones compactos (`⋯`, `?`, recargar) con un Squircle redondo con los estilos muestreados de macOS.
-fn wrap_squircle_round_control<W: gtk4::prelude::IsA<gtk4::Widget>>(
+pub(crate) fn wrap_squircle_round_control<W: gtk4::prelude::IsA<gtk4::Widget>>(
     widget: &W,
     size: i32,
     style: RoundControlStyle,
@@ -1506,7 +1511,7 @@ fn populate_wifi_list_card(
 }
 
 /// Envuelve el contenido de un menú contextual con un fondo y borde Squircle propio de Malus DE.
-fn wrap_squircle_popover_card(inner: &GtkBox, radius: f64) -> Overlay {
+pub(crate) fn wrap_squircle_popover_card(inner: &GtkBox, radius: f64) -> Overlay {
     let overlay = Overlay::new();
     let bg = DrawingArea::new();
     bg.set_can_target(false);
@@ -2424,7 +2429,7 @@ fn show_advanced_dialog(
     dialog.present();
 }
 
-fn detail_kv_row(key: &str, val: &str) -> GtkBox {
+pub(crate) fn detail_kv_row(key: &str, val: &str) -> GtkBox {
     let row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(12)
@@ -2786,23 +2791,5 @@ no:Red\\:ConDosPuntos:11\\:22\\:33\\:44\\:55\\:66:Infra:6:2437 MHz:130 Mbit/s:45
         assert_eq!(det.hwaddr, "9A:61:39:D9:A6:9A");
         assert_eq!(det.ip4_addresses, vec!["192.168.1.8/24"]);
         assert_eq!(det.ip4_gateway, "192.168.1.1");
-    }
-
-    #[test]
-    fn squircle_wifi_widgets_smoke_when_display_available() {
-        if gtk4::init().is_err() {
-            return;
-        }
-        let badge = make_squircle_wifi_badge(34, 18, WIFI_BADGE_SQUIRCLE_RADIUS);
-        assert_eq!(badge.width_request(), 34);
-        assert_eq!(badge.height_request(), 34);
-
-        let card_inner = GtkBox::new(Orientation::Vertical, 0);
-        let card_wrap = wrap_squircle_card(&card_inner, WIFI_CARD_SQUIRCLE_RADIUS);
-        assert!(card_wrap.child().is_some());
-
-        let (btn_wrap, btn) = make_squircle_button("Detalles...", false, None);
-        assert!(btn_wrap.child().is_some());
-        assert_eq!(btn.label().as_deref(), Some("Detalles..."));
     }
 }

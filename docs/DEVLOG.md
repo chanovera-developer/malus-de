@@ -4,6 +4,28 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-19] — Panel de Configuración de Bluetooth al estilo macOS (`malus-de-settings`)
+
+Se implementa el panel completo de **Bluetooth** en `malus-de-settings` siguiendo el diseño de referencia (`assets/screenshots/Bluetooth.png`), con backend reactivo sobre BlueZ (`org.bluez` D-Bus mediante `zbus`) y reutilización de las primitivas squircle compartidas de `wifi_pane`.
+
+### Cambios Clave
+- **Nuevo módulo [`crates/settings/src/bluetooth_pane.rs`](../crates/settings/src/bluetooth_pane.rs)**:
+  - **Tarjeta principal de encabezado**: badge azul squircle (`34×34`, `WIFI_BADGE_SQUIRCLE_RADIUS`), descripción con enlace interactivo `"Obtén detalles..."` (diálogo del adaptador: nombre visible, MAC, estado de visibilidad), interruptor `.macos-switch` para habilitar/deshabilitar el adaptador y pie dinámico de visibilidad (`"Este equipo estará visible como “…” mientras la configuración de Bluetooth esté abierta."` / `"Bluetooth está desactivado."`).
+  - **Sección `"Mis dispositivos"`**: listado de dispositivos emparejados/de confianza/conectados ordenados por conexión activa y nombre, mostrando icono de categoría (`Auriculares`, `Altavoz`, `Teclado`, `Ratón`, `Mando`, `Teléfono`, `Ordenador`), estado (`"Conectado"`, `"Conectado · Batería N%"`, `"Sin conexión"`), botón hover `"Conectar"` / `"Desconectar"`, botón circular `(i)` de detalles (con interruptor de confianza y opción `"Olvidar este dispositivo..."`) y botón circular de ayuda `?` alineado a la derecha bajo la tarjeta.
+  - **Sección `"Dispositivos cercanos"`**: cabecera con indicador `Spinner` + botón de recarga de escaneo (`StartDiscovery`), tarjeta centrada `"Buscando..."` cuando aún no hay dispositivos con nombre descubierto y filas con acción `"Conectar"` (emparejamiento, confianza y conexión automática vía D-Bus).
+- **Primitivas compartidas y estilos ([`crates/settings/src/wifi_pane.rs`](../crates/settings/src/wifi_pane.rs), [`crates/settings/src/styles/macos-settings.css`](../crates/settings/src/styles/macos-settings.css))**:
+  - Promoción a `pub(crate)` de los helpers squircle (`make_squircle_badge`, `wrap_squircle_card`, `make_squircle_button`, `wrap_squircle_round_control`, `detail_kv_row`) para garantizar coherencia geométrica entre Wi-Fi y Bluetooth.
+  - Reglas CSS para enlace inline (`.bt-inline-desc link`), filas de dispositivos (`.bt-device-row`), iconos y glifo `(i)`.
+- **Integración en Ajustes ([`crates/settings/src/main.rs`](../crates/settings/src/main.rs), [`crates/settings/Cargo.toml`](../crates/settings/Cargo.toml))**:
+  - Ítem `Bluetooth` en la barra lateral justo debajo de `Wi-Fi`, compatibilidad con `--panel bluetooth`, búsqueda lateral por palabras clave y pruebas GTK unificadas en `gtk_ui_smoke_checks`.
+
+### Verificación
+- `cargo check --offline --workspace --all-targets`: 0 warnings.
+- `cargo test --offline -p malus-de-settings`: 6 passed, 0 failed.
+- `cargo build --offline --release -p malus-de-settings` e instalación en `/usr/local/bin/malus-de-settings`.
+
+---
+
 ## [2026-11-19] — Fluidez de Reorganización en Escritorio y Drop sin Parpadeo (`malus-de-wallpaper`, `malus-de-compositor`)
 
 - **Renderizado rápido en `GSK_RENDERER=cairo` (`malus-de-wallpaper`):**

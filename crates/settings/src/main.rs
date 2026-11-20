@@ -18,6 +18,7 @@ use std::process::Command;
 use std::rc::Rc;
 
 mod wifi_pane;
+mod bluetooth_pane;
 
 const APP_ID: &str = "dev.malus.Settings";
 const SETTINGS_SIDEBAR_WIDTH: i32 = 212;
@@ -32,7 +33,7 @@ const SQUIRCLE_SEGMENTS: usize = 20;
 #[command(name = "malus-de-settings")]
 #[command(about = "Ajustes del Sistema de Malus DE (macOS System Settings)")]
 struct Args {
-    /// Panel inicial a mostrar: wifi, displays, wallpaper, keyboard, appearance, dock, spotlight, sound, about
+    /// Panel inicial a mostrar: wifi, bluetooth, displays, wallpaper, keyboard, appearance, dock, spotlight, sound, about
     #[arg(short, long, default_value = "spotlight")]
     panel: String,
 
@@ -449,6 +450,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     // Items de navegación de la barra lateral con glifos del sistema (estilo Branches)
     let nav_items = [
         ("wifi", "network-wireless-symbolic", "Wi-Fi"),
+        ("bluetooth", "bluetooth-active-symbolic", "Bluetooth"),
         ("appearance", "preferences-desktop-appearance-symbolic", "Aspecto"),
         ("dock", "user-desktop-symbolic", "Escritorio y Dock"),
         ("wallpaper", "preferences-desktop-wallpaper-symbolic", "Fondo de pantalla"),
@@ -494,6 +496,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             } else {
                 let matches = id.contains(&query) || match id.as_str() {
                     "wifi" => "wi-fi wifi red inalambrica internet redes",
+                    "bluetooth" => "bluetooth dispositivos audio auriculares teclado raton inalambrico emparejar",
                     "displays" => "pantallas monitor resolucion ppi truesize",
                     "wallpaper" => "fondo pantalla wallpaper imagen",
                     "keyboard" => "teclado distribucion lenguaje idioma xkb",
@@ -514,6 +517,9 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     // ==========================================
     let (wifi_pane, refresh_wifi_pane) = wifi_pane::create_wifi_pane(&window);
     stack.add_named(&wifi_pane, Some("wifi"));
+
+    let (bluetooth_pane, refresh_bluetooth_pane) = bluetooth_pane::create_bluetooth_pane(&window);
+    stack.add_named(&bluetooth_pane, Some("bluetooth"));
 
     let (displays_pane, refresh_displays_pane) = create_displays_pane();
     stack.add_named(&displays_pane, Some("displays"));
@@ -623,7 +629,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
 
     // Historial de navegación para botones atrás / adelante (estilo Branches)
     let start_id = match initial_panel {
-        "wifi" | "wallpaper" | "keyboard" | "appearance" | "sound" | "about" | "dock" | "spotlight" | "displays" => initial_panel,
+        "wifi" | "bluetooth" | "wallpaper" | "keyboard" | "appearance" | "sound" | "about" | "dock" | "spotlight" | "displays" => initial_panel,
         _ => "spotlight",
     };
 
@@ -636,6 +642,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         let stack_c = stack.clone();
         let title_lbl = active_pane_title.clone();
         let ref_wifi = refresh_wifi_pane.clone();
+        let ref_bt = refresh_bluetooth_pane.clone();
         let ref_disp = refresh_displays_pane.clone();
         let ref_wall = refresh_wallpaper_pane.clone();
         let ref_kb = refresh_keyboard_pane.clone();
@@ -657,6 +664,8 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             }
             if target == "wifi" {
                 ref_wifi();
+            } else if target == "bluetooth" {
+                ref_bt();
             } else if target == "displays" {
                 ref_disp();
             } else if target == "wallpaper" {
@@ -672,6 +681,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             }
             let display_title = match target {
                 "wifi" => "Wi-Fi",
+                "bluetooth" => "Bluetooth",
                 "displays" => "Pantallas",
                 "wallpaper" => "Fondo de pantalla",
                 "keyboard" => "Teclado",
@@ -4396,5 +4406,24 @@ mod tests {
             btn_min_h <= 36 && btn_nat_h <= 36,
             "La fila de la sidebar creció verticalmente: min={btn_min_h}, nat={btn_nat_h}"
         );
+
+        // 4. Smoke checks de widgets squircle compartidos entre Wi-Fi y Bluetooth
+        let bt_badge = wifi_pane::make_squircle_badge(
+            34,
+            "bluetooth-active-symbolic",
+            18,
+            wifi_pane::WIFI_BADGE_SQUIRCLE_RADIUS,
+        );
+        assert_eq!(bt_badge.width_request(), 34);
+        assert_eq!(bt_badge.height_request(), 34);
+
+        let card_inner = GtkBox::new(Orientation::Vertical, 0);
+        let card_wrap =
+            wifi_pane::wrap_squircle_card(&card_inner, wifi_pane::WIFI_CARD_SQUIRCLE_RADIUS);
+        assert!(card_wrap.child().is_some());
+
+        let (btn_wrap, btn) = wifi_pane::make_squircle_button("Conectar", false, None);
+        assert!(btn_wrap.child().is_some());
+        assert_eq!(btn.label().as_deref(), Some("Conectar"));
     }
 }

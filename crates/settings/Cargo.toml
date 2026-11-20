@@ -22,3 +22,4 @@ gdk-pixbuf = "0.20"
 async-channel = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
+zbus = { workspace = true }
