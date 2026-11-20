@@ -1226,6 +1226,43 @@ fn build_appearance_themes_subpane(
 // Primitivas Cairo de previsualización (Aspecto.png y Temas)
 // ============================================================================
 
+const ASPECTO_CLARO_PNG: &[u8] = include_bytes!("../../../assets/screenshots/aspecto-claro.png");
+const ASPECTO_OBSCURO_PNG: &[u8] = include_bytes!("../../../assets/screenshots/aspecto-obscuro.png");
+const ASPECTO_AUTOMATICO_PNG: &[u8] =
+    include_bytes!("../../../assets/screenshots/aspecto-automatico.png");
+
+fn load_pixbuf_from_png(bytes: &[u8]) -> Option<gdk_pixbuf::Pixbuf> {
+    let loader = gdk_pixbuf::PixbufLoader::with_type("png").ok()?;
+    loader.write(bytes).ok()?;
+    loader.close().ok()?;
+    loader.pixbuf()
+}
+
+fn with_mode_thumbnail_pixbuf<F: FnOnce(&gdk_pixbuf::Pixbuf)>(mode_idx: usize, f: F) -> bool {
+    thread_local! {
+        static PIXBUFS: RefCell<[Option<gdk_pixbuf::Pixbuf>; 3]> =
+            const { RefCell::new([None, None, None]) };
+    }
+    let idx = mode_idx.min(2);
+    PIXBUFS.with(|cache| {
+        let mut arr = cache.borrow_mut();
+        if arr[idx].is_none() {
+            let bytes = match idx {
+                0 => ASPECTO_CLARO_PNG,
+                1 => ASPECTO_OBSCURO_PNG,
+                _ => ASPECTO_AUTOMATICO_PNG,
+            };
+            arr[idx] = load_pixbuf_from_png(bytes);
+        }
+        if let Some(pb) = arr[idx].as_ref() {
+            f(pb);
+            true
+        } else {
+            false
+        }
+    })
+}
+
 fn draw_mode_thumbnail(
     cr: &gtk4::cairo::Context,
     w: f64,
@@ -1238,51 +1275,37 @@ fn draw_mode_thumbnail(
     let iw = (w - 4.0).max(10.0);
     let ih = (h - 4.0).max(10.0);
     crate::squircle_path(cr, iw, ih, 8.0);
-    cr.clip_preserve();
+    cr.clip();
 
-    // Fondo de escritorio
-    match mode_idx {
-        0 => cr.set_source_rgb(0.45, 0.72, 0.98),
-        1 => cr.set_source_rgb(0.11, 0.16, 0.34),
-        _ => {
-            let g = gtk4::cairo::LinearGradient::new(0.0, 0.0, iw, 0.0);
-            g.add_color_stop_rgb(0.49, 0.45, 0.72, 0.98);
-            g.add_color_stop_rgb(0.51, 0.11, 0.16, 0.34);
-            let _ = cr.set_source(&g);
+    let painted = with_mode_thumbnail_pixbuf(mode_idx, |pb| {
+        let sw = pb.width() as f64;
+        let sh = pb.height() as f64;
+        if sw > 0.0 && sh > 0.0 {
+            let scale = (iw / sw).max(ih / sh);
+            let dx = (iw - sw * scale) * 0.5;
+            let dy = (ih - sh * scale) * 0.5;
+            let _ = cr.save();
+            cr.translate(dx, dy);
+            cr.scale(scale, scale);
+            cr.set_source_pixbuf(pb, 0.0, 0.0);
+            cr.source().set_filter(gtk4::cairo::Filter::Bilinear);
+            let _ = cr.paint();
+            let _ = cr.restore();
         }
-    }
-    let _ = cr.fill();
+    });
 
-    // Ventana miniatura interna
-    let wx = iw * 0.16;
-    let wy = ih * 0.24;
-    let ww = iw * 0.76;
-    let wh = ih * 0.68;
-    match mode_idx {
-        0 => cr.set_source_rgb(0.97, 0.97, 0.98),
-        1 => cr.set_source_rgb(0.16, 0.17, 0.20),
-        _ => {
-            let g = gtk4::cairo::LinearGradient::new(wx, 0.0, wx + ww, 0.0);
-            g.add_color_stop_rgb(0.45, 0.97, 0.97, 0.98);
-            g.add_color_stop_rgb(0.55, 0.16, 0.17, 0.20);
-            let _ = cr.set_source(&g);
+    if !painted {
+        match mode_idx {
+            0 => cr.set_source_rgb(0.45, 0.72, 0.98),
+            1 => cr.set_source_rgb(0.11, 0.16, 0.34),
+            _ => {
+                let g = gtk4::cairo::LinearGradient::new(0.0, 0.0, iw, 0.0);
+                g.add_color_stop_rgb(0.49, 0.45, 0.72, 0.98);
+                g.add_color_stop_rgb(0.51, 0.11, 0.16, 0.34);
+                let _ = cr.set_source(&g);
+            }
         }
-    }
-    cr.rectangle(wx, wy, ww, wh);
-    let _ = cr.fill();
-
-    // Semáforo miniatura (rojo, amarillo, verde)
-    for (i, (r, g, b)) in [
-        (1.0, 0.37, 0.34),
-        (1.0, 0.74, 0.18),
-        (0.15, 0.78, 0.25),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        cr.set_source_rgb(r, g, b);
-        cr.arc(wx + 7.0 + i as f64 * 6.0, wy + wh * 0.62, 2.1, 0.0, std::f64::consts::TAU);
-        let _ = cr.fill();
+        let _ = cr.paint();
     }
     cr.reset_clip();
 
