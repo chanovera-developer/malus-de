@@ -2231,7 +2231,7 @@ pub fn run_winit() -> Result<()> {
                     }
 
                     // 3. Renderizar menús contextuales y popups de ventanas (siempre ENCIMA de las superficies de ventana)
-                    let menu_radius = 32;
+                    let menu_radius = super::POPUP_MENU_CORNER_RADIUS_LOGICAL.round() as i32;
                     for (idx, (_, _, _, popup_shadow_rects, _, is_active, ..)) in
                         window_render_data.iter().enumerate()
                     {

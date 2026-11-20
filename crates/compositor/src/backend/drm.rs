@@ -4136,6 +4136,7 @@ pub fn run_drm() -> Result<()> {
                 if let Some(ref fallback_elem) = dnd_fallback_elem {
                     tracker_elements.push(MalusDrmElement::Memory(fallback_elem));
                 }
+                let popup_corner_radius = (super::POPUP_MENU_CORNER_RADIUS_LOGICAL * scale) as f32;
                 for (popups, popup_rect) in &topbar_popups {
                     for elem in popups {
                         tracker_elements.push(MalusDrmElement::Wayland(elem));
@@ -4146,7 +4147,7 @@ pub fn run_drm() -> Result<()> {
                             smithay::backend::renderer::utils::CommitCounter::default(),
                             blur.clone(),
                             *popup_rect,
-                            (32.0 * scale).round() as f32,
+                            popup_corner_radius.round(),
                             out_surface.size,
                         );
                         tracker_elements.push(MalusDrmElement::Blur(menu_blur));
@@ -4157,7 +4158,7 @@ pub fn run_drm() -> Result<()> {
                             smithay::backend::renderer::utils::CommitCounter::default(),
                             pipeline.clone(),
                             *popup_rect,
-                            32.0 * scale as f32,
+                            popup_corner_radius,
                             scale,
                         );
                         tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
@@ -4174,7 +4175,7 @@ pub fn run_drm() -> Result<()> {
                             smithay::backend::renderer::utils::CommitCounter::default(),
                             blur.clone(),
                             blur_rect,
-                            (32.0 * scale).round() as f32,
+                            popup_corner_radius.round(),
                             out_surface.size,
                         );
                         tracker_elements.push(MalusDrmElement::Blur(menu_blur));
@@ -4185,7 +4186,7 @@ pub fn run_drm() -> Result<()> {
                             smithay::backend::renderer::utils::CommitCounter::default(),
                             pipeline.clone(),
                             *popup_rect,
-                            32.0 * scale as f32,
+                            popup_corner_radius,
                             scale,
                         );
                         tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
@@ -4201,7 +4202,7 @@ pub fn run_drm() -> Result<()> {
                             smithay::backend::renderer::utils::CommitCounter::default(),
                             blur.clone(),
                             *popup_rect,
-                            (32.0 * scale).round() as f32,
+                            popup_corner_radius.round(),
                             out_surface.size,
                         );
                         tracker_elements.push(MalusDrmElement::Blur(menu_blur));
@@ -4212,7 +4213,7 @@ pub fn run_drm() -> Result<()> {
                             smithay::backend::renderer::utils::CommitCounter::default(),
                             pipeline.clone(),
                             *popup_rect,
-                            32.0 * scale as f32,
+                            popup_corner_radius,
                             scale,
                         );
                         tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
@@ -4291,7 +4292,7 @@ pub fn run_drm() -> Result<()> {
                                     smithay::backend::renderer::utils::CommitCounter::default(),
                                     blur.clone(),
                                     *popup_rect,
-                                    (32.0 * scale).round() as f32,
+                                    popup_corner_radius.round(),
                                     out_surface.size,
                                 );
                                 tracker_elements.push(MalusDrmElement::Blur(menu_blur));
@@ -4305,7 +4306,7 @@ pub fn run_drm() -> Result<()> {
                                 smithay::backend::renderer::utils::CommitCounter::default(),
                                 pipeline.clone(),
                                 *popup_rect,
-                                32.0 * scale as f32,
+                                popup_corner_radius,
                                 scale,
                             );
                             tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
@@ -5288,7 +5289,8 @@ pub fn run_drm() -> Result<()> {
                         }
                         let mut snap_preview_drawn = false;
 
-                        let menu_radius = (32.0 * scale).round() as i32;
+                        let menu_radius =
+                            (super::POPUP_MENU_CORNER_RADIUS_LOGICAL * scale).round() as i32;
                         if let Some((eased, ref expose_cards, ref filter_elem, ref spaces_bar_elem)) =
                             expose_render_bundle
                         {

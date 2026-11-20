@@ -5,6 +5,9 @@ use smithay::utils::{Physical, Rectangle};
 use std::time::Duration;
 
 const DOCK_POPOVER_SHADOW_GUTTER: f64 = 32.0;
+/// Radio squircle lógico (en píxeles 1x, n=4.2) para menús emergentes y popups del compositor,
+/// calibrado para enmarcar el resaltado squircle interior (~14 px) sin recortes ni huecos excesivos.
+pub(super) const POPUP_MENU_CORNER_RADIUS_LOGICAL: f64 = 16.0;
 
 pub fn frame_interval(refresh_millihz: i32) -> Duration {
     if refresh_millihz > 0 {

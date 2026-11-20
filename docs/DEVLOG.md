@@ -4,6 +4,14 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-19] — Radio Squircle Unificado para Menús en el Compositor (`malus-de-compositor`)
+
+- Reducido y unificado el radio squircle (`n = 4.2`) de todos los contenedores de menús emergentes y popups en el compositor ([`mod.rs`](../crates/compositor/src/backend/mod.rs), [`drm.rs`](../crates/compositor/src/backend/drm.rs), [`winit.rs`](../crates/compositor/src/backend/winit.rs)):
+  - Definida la constante compartida `POPUP_MENU_CORNER_RADIUS_LOGICAL = 16.0` (antes `32.0 * scale`) para el blur (`BlurRenderElement::for_popup`), sombra (`MenuShadowRenderElement`) y recorte squircle de popups (`topbar_popups`, `dock_popups`, `wallpaper_popups` y `popups` de ventanas), logrando un ajuste concéntrico exacto con el resaltado interior de `14.0 px` dibujado con Cairo.
+- Validación: `cargo check --offline --workspace --all-targets` (**0 warnings**), `cargo test --offline -p malus-de-compositor` (**84 passed; 0 failed**).
+
+---
+
 ## [2026-11-19] — Controles Wi-Fi Estilo macOS Tahoe (`malus-de-settings`)
 
 - Ajustado el panel **Wi-Fi** ([`wifi_pane.rs`](../crates/settings/src/wifi_pane.rs), [`macos-settings.css`](../crates/settings/src/styles/macos-settings.css)) según las capturas de referencia:
