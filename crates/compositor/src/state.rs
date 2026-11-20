@@ -1886,6 +1886,7 @@ impl MalusState {
                         "📥 IPC LiquidGlassOpacityChanged recibido: opacidad={:.2}",
                         opacity
                     );
+                    crate::blur::set_dock_liquid_glass_opacity(opacity);
                     self.surface_commit_counter = self.surface_commit_counter.wrapping_add(1);
                     self.expose.bump_revision();
                     self.ipc_broadcaster

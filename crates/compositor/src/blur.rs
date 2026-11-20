@@ -3,7 +3,10 @@
 //! Usa una reducción a media resolución y un filtro gaussiano separable para limitar
 //! el coste de renderizado, con soporte para recorte squircle y anclaje proyectado.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Arc, Mutex,
+};
 
 use smithay::{
     backend::renderer::{
@@ -83,6 +86,7 @@ uniform int u_is_drm;
 
 out vec2 v_tex_coords;
 out vec2 v_win_px;
+out vec2 v_screen_pos;
 
 void main() {
     float u = (gl_VertexID == 1 || gl_VertexID == 3) ? 1.0 : 0.0;
@@ -90,6 +94,7 @@ void main() {
 
     vec2 screen_pos = u_blit_rect.xy + vec2(u * u_blit_rect.z, v * u_blit_rect.w);
     v_win_px = screen_pos - u_win_rect.xy;
+    v_screen_pos = screen_pos;
 
     float tex_v = (u_is_drm == 1) ? v : (1.0 - v);
     v_tex_coords = vec2(u, tex_v);
@@ -104,11 +109,19 @@ precision highp float;
 
 in vec2 v_tex_coords;
 in vec2 v_win_px;
+in vec2 v_screen_pos;
 out vec4 frag_color;
 
 uniform sampler2D u_texture;
 uniform sampler2D u_mask_texture;
+uniform sampler2D u_snapshot_texture;
 uniform int u_use_mask;
+uniform int u_liquid_glass;
+uniform int u_is_drm;
+uniform int u_snapshot_is_drm;
+uniform vec4 u_blit_rect;
+uniform vec2 u_screen_size;
+uniform float u_glass_tint_strength;
 uniform float u_opacity;
 uniform float u_solid_mode;
 uniform vec4 u_solid_color;
@@ -161,6 +174,82 @@ void main() {
         return;
     }
 
+    if (u_liquid_glass == 1) {
+        vec2 half_size = u_win_size * 0.5;
+        vec2 p = v_win_px - half_size;
+        float effective_r = (u_corner_radius > 1.0) ? min(u_corner_radius, min(half_size.x, half_size.y)) : 0.0;
+        float dist = rounded_shape_sdf(p, half_size, effective_r);
+        float edge_aa = max(fwidth(dist), 1.0);
+        float alpha = 1.0 - smoothstep(-edge_aa, 0.0, dist);
+        if (alpha <= 0.001) {
+            discard;
+        }
+
+        float t = clamp(u_glass_tint_strength, 0.0, 1.0);
+        float depth = max(0.0, -dist);
+        vec2 grad = vec2(dFdx(dist), dFdy(dist));
+        float grad_len = length(grad);
+        vec2 normal = (grad_len > 1e-4) ? (grad / grad_len) : normalize(p + vec2(1e-4));
+
+        float rim_w = clamp(min(u_win_size.y * 0.30, 22.0), 10.0, 22.0);
+        float rim_t = clamp(1.0 - depth / rim_w, 0.0, 1.0);
+        float rim_curve = pow(rim_t, 2.0);
+        float body_curve = rim_t * rim_t * (3.0 - 2.0 * rim_t);
+
+        // Refracción óptica en el borde (Dock1.png..Dock5.png: siempre presente, más marcada cuando es transparente)
+        float max_refract = mix(11.5, 7.5, t);
+        float refract_px = max_refract * rim_curve - 1.5 * (1.0 - rim_t) * rim_t;
+        vec2 min_sp = u_blit_rect.xy - vec2(10.0);
+        vec2 max_sp = u_blit_rect.xy + u_blit_rect.zw + vec2(10.0);
+
+        float disp = mix(1.25, 0.65, t) * rim_curve;
+        vec2 sp_r = clamp(v_screen_pos + normal * (refract_px + disp), min_sp, max_sp);
+        vec2 sp_g = clamp(v_screen_pos + normal * refract_px, min_sp, max_sp);
+        vec2 sp_b = clamp(v_screen_pos + normal * (refract_px - disp), min_sp, max_sp);
+
+        vec2 uv_r = sp_r / max(u_screen_size, vec2(1.0));
+        vec2 uv_g = sp_g / max(u_screen_size, vec2(1.0));
+        vec2 uv_b = sp_b / max(u_screen_size, vec2(1.0));
+        if (u_snapshot_is_drm == 0) {
+            uv_r.y = 1.0 - uv_r.y;
+            uv_g.y = 1.0 - uv_g.y;
+            uv_b.y = 1.0 - uv_b.y;
+        }
+        uv_r = clamp(uv_r, vec2(0.001), vec2(0.999));
+        uv_g = clamp(uv_g, vec2(0.001), vec2(0.999));
+        uv_b = clamp(uv_b, vec2(0.001), vec2(0.999));
+
+        vec3 crisp_rgb = vec3(
+            texture(u_snapshot_texture, uv_r).r,
+            texture(u_snapshot_texture, uv_g).g,
+            texture(u_snapshot_texture, uv_b).b
+        );
+
+        vec2 blur_offset = (normal * refract_px) / max(u_blit_rect.zw, vec2(1.0));
+        if (u_is_drm == 0) {
+            blur_offset.y = -blur_offset.y;
+        }
+        vec2 blur_uv = clamp(v_tex_coords + blur_offset, vec2(0.01), vec2(0.99));
+        vec3 blur_rgb = texture(u_texture, blur_uv).rgb;
+
+        // Progresión Dock1 (t=0, casi cristal puro) -> Dock3 (t=0.5) -> Dock5 (t=1, frosted)
+        float center_crisp = mix(0.86, 0.18, t);
+        float rim_crisp = mix(0.95, 0.62, t);
+        float crisp_weight = mix(center_crisp, rim_crisp, body_curve);
+        vec3 glass_rgb = mix(blur_rgb, crisp_rgb, crisp_weight);
+
+        // Iluminación especular Fresnel y bisel superior/inferior estilo Liquid Glass macOS
+        vec2 light_dir = normalize(vec2(-0.32, -0.95));
+        float dir_spec = clamp(dot(normal, light_dir) * 0.5 + 0.5, 0.0, 1.0);
+        float outer_rim = 1.0 - smoothstep(0.6, 2.4, depth);
+        float inner_sheen = (1.0 - smoothstep(0.0, 10.0, depth)) * (0.04 + 0.14 * dir_spec);
+        float rim_glow = outer_rim * mix(0.24, 0.62, dir_spec);
+
+        glass_rgb = clamp(glass_rgb + vec3(0.02 + 0.03 * t) + vec3(0.95, 0.97, 1.0) * (rim_glow + inner_sheen), 0.0, 1.0);
+        frag_color = vec4(glass_rgb, alpha * u_opacity);
+        return;
+    }
+
     vec4 col = texture(u_texture, v_tex_coords);
     if (u_corner_radius > 1.0) {
         vec2 half_size = u_win_size * 0.5;
@@ -200,6 +289,18 @@ struct BlurSlot {
     last_used: u64,
 }
 
+static DOCK_LIQUID_GLASS_TINT_BITS: AtomicU32 = AtomicU32::new(f32::to_bits(0.5));
+
+pub fn set_dock_liquid_glass_opacity(opacity: f64) {
+    let t = ((opacity - 0.15) / 0.80).clamp(0.0, 1.0) as f32;
+    DOCK_LIQUID_GLASS_TINT_BITS.store(t.to_bits(), Ordering::Relaxed);
+}
+
+#[inline]
+pub fn dock_liquid_glass_tint_strength() -> f32 {
+    f32::from_bits(DOCK_LIQUID_GLASS_TINT_BITS.load(Ordering::Relaxed)).clamp(0.0, 1.0)
+}
+
 #[derive(Debug)]
 pub struct GaussianBlur {
     down_program: ffi::types::GLuint,
@@ -222,7 +323,12 @@ pub struct GaussianBlur {
     blit_u_is_drm: ffi::types::GLint,
     blit_u_texture: ffi::types::GLint,
     blit_u_mask_texture: ffi::types::GLint,
+    blit_u_snapshot_texture: ffi::types::GLint,
     blit_u_use_mask: ffi::types::GLint,
+    blit_u_liquid_glass: ffi::types::GLint,
+    blit_u_snapshot_is_drm: ffi::types::GLint,
+    blit_u_screen_size: ffi::types::GLint,
+    blit_u_glass_tint_strength: ffi::types::GLint,
     blit_u_opacity: ffi::types::GLint,
     blit_u_corner_radius: ffi::types::GLint,
     blit_u_corner_exponent: ffi::types::GLint,
@@ -281,7 +387,17 @@ impl GaussianBlur {
             let blit_u_texture = gl.GetUniformLocation(blit_program, c"u_texture".as_ptr());
             let blit_u_mask_texture =
                 gl.GetUniformLocation(blit_program, c"u_mask_texture".as_ptr());
+            let blit_u_snapshot_texture =
+                gl.GetUniformLocation(blit_program, c"u_snapshot_texture".as_ptr());
             let blit_u_use_mask = gl.GetUniformLocation(blit_program, c"u_use_mask".as_ptr());
+            let blit_u_liquid_glass =
+                gl.GetUniformLocation(blit_program, c"u_liquid_glass".as_ptr());
+            let blit_u_snapshot_is_drm =
+                gl.GetUniformLocation(blit_program, c"u_snapshot_is_drm".as_ptr());
+            let blit_u_screen_size =
+                gl.GetUniformLocation(blit_program, c"u_screen_size".as_ptr());
+            let blit_u_glass_tint_strength =
+                gl.GetUniformLocation(blit_program, c"u_glass_tint_strength".as_ptr());
             let blit_u_opacity = gl.GetUniformLocation(blit_program, c"u_opacity".as_ptr());
             let blit_u_corner_radius =
                 gl.GetUniformLocation(blit_program, c"u_corner_radius".as_ptr());
@@ -313,6 +429,7 @@ impl GaussianBlur {
                 gl.GenTextures(2, slot.fbo_textures.as_mut_ptr());
             }
 
+            set_dock_liquid_glass_opacity(malus_de_common::config::load_liquid_glass_opacity());
             info!("✨ [GaussianBlur] Pipeline gaussiano por GPU inicializado con éxito.");
 
             Some(Self {
@@ -333,7 +450,12 @@ impl GaussianBlur {
                 blit_u_is_drm,
                 blit_u_texture,
                 blit_u_mask_texture,
+                blit_u_snapshot_texture,
                 blit_u_use_mask,
+                blit_u_liquid_glass,
+                blit_u_snapshot_is_drm,
+                blit_u_screen_size,
+                blit_u_glass_tint_strength,
                 blit_u_opacity,
                 blit_u_corner_radius,
                 blit_u_corner_exponent,
@@ -471,6 +593,7 @@ impl GaussianBlur {
             1.0,
             false,
             LOCKSCREEN_BLUR_GAUSSIAN_PASSES,
+            false,
         );
     }
 
@@ -731,6 +854,33 @@ impl GaussianBlur {
             alpha,
             false,
             BLUR_GAUSSIAN_PASSES,
+            false,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_liquid_glass_dock(
+        &mut self,
+        gl: &ffi::Gles2,
+        projection: &[f32; 9],
+        screen_size: Size<i32, Physical>,
+        win_rect: Rectangle<i32, Physical>,
+        corner_radius: f32,
+        corner_exponent: f32,
+    ) {
+        self.render_blur_internal(
+            gl,
+            projection,
+            screen_size,
+            win_rect,
+            win_rect,
+            corner_radius,
+            corner_exponent,
+            true,
+            1.0,
+            false,
+            BLUR_GAUSSIAN_PASSES,
+            true,
         );
     }
 
@@ -758,6 +908,7 @@ impl GaussianBlur {
             1.0,
             true,
             BLUR_GAUSSIAN_PASSES,
+            false,
         );
     }
 
@@ -808,6 +959,7 @@ impl GaussianBlur {
         alpha: f32,
         offscreen_premul: bool,
         gaussian_passes: usize,
+        liquid_glass: bool,
     ) {
         let screen_rect = Rectangle::from_size(screen_size);
         let visible_src = match src_win_rect.intersection(screen_rect) {
@@ -1024,6 +1176,28 @@ impl GaussianBlur {
             gl.BindTexture(ffi::TEXTURE_2D, slot.fbo_textures[0]);
             gl.Uniform1i(self.blit_u_texture, 0);
 
+            if liquid_glass {
+                gl.ActiveTexture(ffi::TEXTURE2);
+                gl.BindTexture(ffi::TEXTURE_2D, self.snapshot_tex);
+                gl.Uniform1i(self.blit_u_snapshot_texture, 2);
+                gl.Uniform1i(self.blit_u_liquid_glass, 1);
+                gl.Uniform1i(
+                    self.blit_u_snapshot_is_drm,
+                    if self.snapshot_is_drm { 1 } else { 0 },
+                );
+                gl.Uniform2f(
+                    self.blit_u_screen_size,
+                    screen_size.w as f32,
+                    screen_size.h as f32,
+                );
+                gl.Uniform1f(
+                    self.blit_u_glass_tint_strength,
+                    dock_liquid_glass_tint_strength(),
+                );
+            } else {
+                gl.Uniform1i(self.blit_u_liquid_glass, 0);
+            }
+
             gl.UniformMatrix3fv(self.blit_u_matrix, 1, ffi::FALSE, projection.as_ptr());
             gl.Uniform4f(
                 self.blit_u_blit_rect,
@@ -1049,11 +1223,17 @@ impl GaussianBlur {
             gl.Uniform1f(self.blit_u_corner_exponent, corner_exponent);
             gl.Uniform1f(self.blit_u_solid_mode, 0.0);
             gl.Uniform1i(self.blit_u_use_mask, 0);
+            gl.Uniform1i(self.blit_u_liquid_glass, 0);
             gl.Uniform1f(self.blit_u_opacity, alpha.clamp(0.0, 1.0));
 
             gl.DrawArrays(ffi::TRIANGLE_STRIP, 0, 4);
 
             // 5. Restaurar estado GL previo
+            if liquid_glass {
+                gl.ActiveTexture(ffi::TEXTURE2);
+                gl.BindTexture(ffi::TEXTURE_2D, 0);
+            }
+            gl.ActiveTexture(ffi::TEXTURE0);
             gl.BindTexture(ffi::TEXTURE_2D, 0);
             gl.ActiveTexture(prev_active_tex as u32);
             gl.UseProgram(prev_program as u32);
@@ -1322,6 +1502,7 @@ impl GaussianBlur {
             gl.BindTexture(ffi::TEXTURE_2D, self.spotlight_mask_tex);
             gl.Uniform1i(self.blit_u_mask_texture, 1);
             gl.Uniform1i(self.blit_u_use_mask, 1);
+            gl.Uniform1i(self.blit_u_liquid_glass, 0);
             gl.Uniform1f(self.blit_u_opacity, opacity.clamp(0.0, 1.0));
             gl.Uniform1f(self.blit_u_solid_mode, 0.0);
 
@@ -1430,6 +1611,7 @@ impl GaussianBlur {
             gl.UseProgram(self.blit_program);
             gl.Uniform1i(self.blit_u_texture, 0);
             gl.Uniform1i(self.blit_u_use_mask, 0);
+            gl.Uniform1i(self.blit_u_liquid_glass, 0);
             gl.Uniform1f(self.blit_u_opacity, 1.0);
             gl.Uniform1f(self.blit_u_solid_mode, 1.0);
             gl.Uniform4f(self.blit_u_solid_color, color[0], color[1], color[2], 1.0);
@@ -1665,6 +1847,7 @@ impl GaussianBlur {
             gl.UseProgram(self.blit_program);
             gl.Uniform1i(self.blit_u_texture, 0);
             gl.Uniform1i(self.blit_u_use_mask, 0);
+            gl.Uniform1i(self.blit_u_liquid_glass, 0);
             gl.Uniform1f(self.blit_u_opacity, 1.0);
             gl.Uniform1f(self.blit_u_solid_mode, 1.0);
             gl.Uniform4f(
@@ -1818,6 +2001,7 @@ pub struct BlurRenderElement {
     rect: Rectangle<i32, Physical>,
     corner_radius: f32,
     corner_exponent: f32,
+    liquid_glass: bool,
     screen_size: Size<i32, Physical>,
     geometry: Rectangle<i32, Physical>,
     src: Rectangle<f64, Buffer>,
@@ -1842,6 +2026,7 @@ impl BlurRenderElement {
             rect,
             corner_radius,
             corner_exponent,
+            liquid_glass: false,
             screen_size,
             geometry,
             src,
@@ -1872,7 +2057,7 @@ impl BlurRenderElement {
         Self::new(id, commit, pipeline, rect, corner_radius, 4.2, screen_size)
     }
 
-    /// Blur para la barra de tareas / Dock.
+    /// Liquid Glass con refracción de borde y bisel especular para el Dock.
     pub fn for_dock(
         id: impl Into<Id>,
         commit: CommitCounter,
@@ -1881,7 +2066,9 @@ impl BlurRenderElement {
         corner_radius: f32,
         screen_size: Size<i32, Physical>,
     ) -> Self {
-        Self::new(id, commit, pipeline, rect, corner_radius, 2.0, screen_size)
+        let mut elem = Self::new(id, commit, pipeline, rect, corner_radius, 2.0, screen_size);
+        elem.liquid_glass = true;
+        elem
     }
 }
 
@@ -1942,15 +2129,26 @@ impl RenderElement<GlesRenderer> for BlurRenderElement {
                     self.screen_size,
                     self.rect,
                 );
-                blur.render_blur_with_exponent(
-                    gl,
-                    &projection,
-                    self.screen_size,
-                    self.rect,
-                    self.corner_radius,
-                    self.corner_exponent,
-                    true,
-                );
+                if self.liquid_glass {
+                    blur.render_liquid_glass_dock(
+                        gl,
+                        &projection,
+                        self.screen_size,
+                        self.rect,
+                        self.corner_radius,
+                        self.corner_exponent,
+                    );
+                } else {
+                    blur.render_blur_with_exponent(
+                        gl,
+                        &projection,
+                        self.screen_size,
+                        self.rect,
+                        self.corner_radius,
+                        self.corner_exponent,
+                        true,
+                    );
+                }
             }
         })
     }

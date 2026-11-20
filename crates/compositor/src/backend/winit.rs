@@ -2085,10 +2085,10 @@ pub fn run_winit() -> Result<()> {
 
                     if let Some(ref mut blur) = blur_pipeline {
                         let screen_size = size;
-                        let mut layer_blur_items: Vec<(Rectangle<i32, Physical>, f32, bool)> =
+                        let mut layer_blur_items: Vec<(Rectangle<i32, Physical>, f32, bool, bool)> =
                             Vec::new();
                         for (_, rect) in &spotlight_backdrop_elements {
-                            layer_blur_items.push((*rect, 26.0, false));
+                            layer_blur_items.push((*rect, 26.0, false, false));
                         }
                         for surface in layer_map.layers() {
                             if matches!(surface.layer(), Layer::Top | Layer::Overlay) {
@@ -2148,6 +2148,7 @@ pub fn run_winit() -> Result<()> {
                                                 phys_rect,
                                                 radius,
                                                 is_spotlight_comp,
+                                                ns == "malus-dock",
                                             ));
                                         }
                                     }
@@ -2160,7 +2161,7 @@ pub fn run_winit() -> Result<()> {
                             let mut min_y = i32::MAX;
                             let mut max_x = i32::MIN;
                             let mut max_y = i32::MIN;
-                            for (rect, _, _) in &layer_blur_items {
+                            for (rect, _, _, _) in &layer_blur_items {
                                 min_x = min_x.min(rect.loc.x);
                                 min_y = min_y.min(rect.loc.y);
                                 max_x = max_x.max(rect.loc.x + rect.size.w);
@@ -2177,8 +2178,17 @@ pub fn run_winit() -> Result<()> {
                                     screen_size,
                                     capture_region,
                                 );
-                                for (phys_rect, radius, is_round) in layer_blur_items {
-                                    if is_round {
+                                for (phys_rect, radius, is_round, is_dock) in layer_blur_items {
+                                    if is_dock {
+                                        blur.render_liquid_glass_dock(
+                                            gl,
+                                            &projection,
+                                            screen_size,
+                                            phys_rect,
+                                            radius,
+                                            2.0,
+                                        );
+                                    } else if is_round {
                                         blur.render_captured_blur_round(
                                             gl,
                                             &projection,
