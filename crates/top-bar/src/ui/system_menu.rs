@@ -96,10 +96,10 @@ pub fn create_system_menu() -> MenuButton {
     let content_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(1)
-        .margin_top(2)
-        .margin_bottom(2)
-        .margin_start(2)
-        .margin_end(2)
+        .margin_top(0)
+        .margin_bottom(0)
+        .margin_start(0)
+        .margin_end(0)
         .build();
 
     let es = is_spanish_locale();

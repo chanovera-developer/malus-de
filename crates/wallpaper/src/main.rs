@@ -2405,6 +2405,106 @@ fn refresh_desktop_icons(
     }
 }
 
+fn squircle_path(context: &gtk4::cairo::Context, width: f64, height: f64, radius: f64) {
+    let radius = radius.min(width / 2.0).min(height / 2.0).max(1.0);
+    let power = 2.0 / 4.2;
+    let quarter_turn = std::f64::consts::FRAC_PI_2;
+    const SEGMENTS: usize = 20;
+
+    context.move_to(radius, 0.0);
+    context.line_to(width - radius, 0.0);
+    for step in 1..=SEGMENTS {
+        let angle = quarter_turn * step as f64 / SEGMENTS as f64;
+        context.line_to(
+            width - radius + radius * angle.sin().powf(power),
+            radius - radius * angle.cos().powf(power),
+        );
+    }
+    context.line_to(width, height - radius);
+    for step in 1..=SEGMENTS {
+        let angle = quarter_turn * step as f64 / SEGMENTS as f64;
+        context.line_to(
+            width - radius + radius * angle.cos().powf(power),
+            height - radius + radius * angle.sin().powf(power),
+        );
+    }
+    context.line_to(radius, height);
+    for step in 1..=SEGMENTS {
+        let angle = quarter_turn * step as f64 / SEGMENTS as f64;
+        context.line_to(
+            radius - radius * angle.sin().powf(power),
+            height - radius + radius * angle.cos().powf(power),
+        );
+    }
+    context.line_to(0.0, radius);
+    for step in 1..=SEGMENTS {
+        let angle = quarter_turn * step as f64 / SEGMENTS as f64;
+        context.line_to(
+            radius - radius * angle.cos().powf(power),
+            radius - radius * angle.sin().powf(power),
+        );
+    }
+    context.close_path();
+}
+
+fn attach_squircle_menu_hover(btn: &Button) {
+    let Some(inner) = btn.child() else {
+        return;
+    };
+    btn.add_css_class("malus-squircle-menu-item");
+    btn.set_child(gtk4::Widget::NONE);
+    inner.set_margin_top(3);
+    inner.set_margin_bottom(3);
+    inner.set_margin_start(8);
+    inner.set_margin_end(8);
+
+    let bg = gtk4::DrawingArea::new();
+    bg.set_can_target(false);
+    bg.set_hexpand(true);
+    bg.set_vexpand(true);
+
+    let btn_weak = btn.downgrade();
+    bg.set_draw_func(move |_, cr, w, h| {
+        let width = w as f64;
+        let height = h as f64;
+        if width <= 2.0 || height <= 2.0 {
+            return;
+        }
+        let Some(b) = btn_weak.upgrade() else {
+            return;
+        };
+        let flags = b.state_flags();
+        if flags.contains(gtk4::StateFlags::INSENSITIVE) {
+            return;
+        }
+        let hovered = flags.contains(gtk4::StateFlags::PRELIGHT);
+        let active = flags.contains(gtk4::StateFlags::ACTIVE);
+        if !hovered && !active {
+            return;
+        }
+        let _ = cr.save();
+        squircle_path(cr, width, height, 14.0);
+        if active {
+            cr.set_source_rgba(0.0, 0.39, 0.85, 0.86);
+        } else {
+            cr.set_source_rgba(0.0, 0.48, 1.0, 0.74);
+        }
+        let _ = cr.fill();
+        let _ = cr.restore();
+    });
+
+    let bg_state = bg.clone();
+    btn.connect_state_flags_changed(move |_, _| {
+        bg_state.queue_draw();
+    });
+
+    let overlay = Overlay::builder().hexpand(true).build();
+    overlay.set_child(Some(&bg));
+    overlay.add_overlay(&inner);
+    overlay.set_measure_overlay(&inner, true);
+    btn.set_child(Some(&overlay));
+}
+
 fn create_menu_button(label: &str, destructive: bool) -> Button {
     let btn = Button::with_label(label);
     btn.add_css_class("desktop-context-btn");
@@ -2423,6 +2523,7 @@ fn create_menu_button(label: &str, destructive: bool) -> Button {
             });
         }
     }
+    attach_squircle_menu_hover(&btn);
     btn
 }
 
@@ -4414,11 +4515,11 @@ fn create_wallpaper_window(
 
             let menu = GtkBox::builder()
                 .orientation(Orientation::Vertical)
-                .spacing(2)
-                .margin_top(6)
-                .margin_bottom(6)
-                .margin_start(6)
-                .margin_end(6)
+                .spacing(1)
+                .margin_top(0)
+                .margin_bottom(0)
+                .margin_start(0)
+                .margin_end(0)
                 .css_classes(["desktop-context-menu"])
                 .build();
 

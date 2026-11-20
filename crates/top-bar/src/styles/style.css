@@ -190,7 +190,7 @@ popover.malus-popover-menu>contents {
     border: none;
     border-radius: 0;
     box-shadow: none;
-    padding: 5px 5px;
+    padding: 0;
     color: #f4f4f5;
     text-shadow: none;
     -gtk-icon-shadow: none;
@@ -217,7 +217,7 @@ popover.light-popover>contents,
     border: none;
     border-radius: 0;
     box-shadow: none;
-    padding: 5px 5px;
+    padding: 0;
     color: #1d1d1f;
     text-shadow: none;
     -gtk-icon-shadow: none;

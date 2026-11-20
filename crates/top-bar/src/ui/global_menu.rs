@@ -515,11 +515,11 @@ pub fn create_global_menu_widget(dbus_menu_service: Arc<DbusMenuService>) -> Glo
 
     let content = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .spacing(2)
-        .margin_top(4)
-        .margin_bottom(4)
-        .margin_start(4)
-        .margin_end(4)
+        .spacing(1)
+        .margin_top(0)
+        .margin_bottom(0)
+        .margin_start(0)
+        .margin_end(0)
         .build();
 
     let es = std::env::var("LC_ALL")
@@ -691,11 +691,11 @@ fn render_dbus_categories(
 
         let menu_box = GtkBox::builder()
             .orientation(Orientation::Vertical)
-            .spacing(2)
-            .margin_top(4)
-            .margin_bottom(4)
-            .margin_start(4)
-            .margin_end(4)
+            .spacing(1)
+            .margin_top(0)
+            .margin_bottom(0)
+            .margin_start(0)
+            .margin_end(0)
             .build();
 
         for item in &cat.items {
@@ -773,11 +773,11 @@ fn append_dbus_menu_item(
 
         let sub_box = GtkBox::builder()
             .orientation(Orientation::Vertical)
-            .spacing(2)
-            .margin_top(4)
-            .margin_bottom(4)
-            .margin_start(4)
-            .margin_end(4)
+            .spacing(1)
+            .margin_top(0)
+            .margin_bottom(0)
+            .margin_start(0)
+            .margin_end(0)
             .build();
 
         for child in &item.children {
@@ -915,11 +915,11 @@ fn render_static_categories(
 
         let menu_box = GtkBox::builder()
             .orientation(Orientation::Vertical)
-            .spacing(2)
-            .margin_top(4)
-            .margin_bottom(4)
-            .margin_start(4)
-            .margin_end(4)
+            .spacing(1)
+            .margin_top(0)
+            .margin_bottom(0)
+            .margin_start(0)
+            .margin_end(0)
             .build();
 
         for item in cat.items {

@@ -52,7 +52,7 @@ window.view .menu {
     box-shadow: none;
     color: #f4f4f5;
     margin: 0;
-    padding: 5px;
+    padding: 0;
 }
 
 popover modelbutton,
