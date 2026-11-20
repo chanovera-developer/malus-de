@@ -4,6 +4,16 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-19] — Submenús en Branches con Color Correcto y Drag & Drop Estático sin Parpadeo (`common`, `wallpaper`, `top-bar`, `dock`)
+
+- **Submenú `Etiquetar` en Branches sin texto blanco heredado (`common`, `top-bar`, `dock`):** en [`squircle-rules.css`](../crates/common/src/styles/squircle-rules.css), [`style.css`](../crates/top-bar/src/styles/style.css) y [`dock.css`](../crates/dock/src/styles/dock.css) se sustituyeron los selectores descendientes `:hover *` / `:hover label` por combinadores directos `>`, manteniendo `color: inherit` sobre `.malus-squircle-menu-item:hover` y restableciendo `color: @window_fg_color` en `popover popover > contents`, evitando que el estado `:hover` del botón padre (`tag_btn`) fuerce texto blanco fijo dentro del submenú anidado `tag_popover`.
+- **Eliminación definitiva del parpadeo al soltar iconos en el escritorio (`malus-de-wallpaper`):**
+  - En [`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs), el arrastre de un solo icono ahora captura una miniatura inmutable (`build_single_desktop_drag_paintable` mediante `gtk4::Snapshot`) igual que el arrastre múltiple, y oculta el icono original in-situ con la clase `.desktop-icon-dragging` (`opacity: 0.0; transition: none;`) en lugar de usar un `WidgetPaintable` vivo ni teletransportar el widget a `(-5000.0, -5000.0)`.
+  - Al soltar en `drop_target` (`move_desktop_icon`), el icono se reubica y recupera visibilidad de forma atómica en el mismo ciclo de frame sin invalidaciones en vivo de `WidgetPaintable` ni reasignación de geometría fuera de pantalla.
+- Validación: `cargo check --offline --workspace --all-targets` (**0 warnings**); tests unitarios aprobados en `wallpaper` (**20/20**), `branches` (**55/55**), `dock` (**15/15**), `settings` (**5/5**) y `top-bar` (**9/9** con `--skip test_brightness_service`).
+
+---
+
 ## [2026-11-19] — Sincronización de Texto en Hover, Apertura Instantánea del Menú del Escritorio y Drop sin Parpadeo (`common`, `compositor`, `wallpaper`, `top-bar`, `dock`, `settings`)
 
 - **Sincronización instantánea de texto e iconos con el Squircle Cairo (`0 ms`):** eliminadas las transiciones `100ms ease` de color en los ítems de menú y sus hijos (`*`, `label`, `image`, `.menu-row-label`, `.menu-item-icon`, `.menu-submenu-chevron`) en [`squircle-rules.css`](../crates/common/src/styles/squircle-rules.css), [`style.css`](../crates/top-bar/src/styles/style.css), [`dock.css`](../crates/dock/src/styles/dock.css), [`default-gradient.css`](../crates/wallpaper/src/styles/default-gradient.css) y [`macos-settings.css`](../crates/settings/src/styles/macos-settings.css), y añadido `transition: none` junto al selector `#ffffff` en `:hover` para `.malus-squircle-menu-item`, eliminando el desfase entre el relleno azul Cairo y el texto blanco.

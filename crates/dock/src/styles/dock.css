@@ -410,10 +410,18 @@ button.popover-menu-item.malus-squircle-menu-item image {
 }
 
 button.popover-menu-item.malus-squircle-menu-item:hover,
-button.popover-menu-item.malus-squircle-menu-item:hover label,
-button.popover-menu-item.malus-squircle-menu-item:hover image,
+button.popover-menu-item.malus-squircle-menu-item:hover > label,
+button.popover-menu-item.malus-squircle-menu-item:hover > image,
+button.popover-menu-item.malus-squircle-menu-item:hover > overlay > label,
+button.popover-menu-item.malus-squircle-menu-item:hover > overlay > image,
+button.popover-menu-item.malus-squircle-menu-item:hover > overlay > box > label,
+button.popover-menu-item.malus-squircle-menu-item:hover > overlay > box > image,
 button.popover-menu-item-danger.malus-squircle-menu-item:hover,
-button.popover-menu-item-danger.malus-squircle-menu-item:hover label,
-button.popover-menu-item-danger.malus-squircle-menu-item:hover image {
+button.popover-menu-item-danger.malus-squircle-menu-item:hover > label,
+button.popover-menu-item-danger.malus-squircle-menu-item:hover > image,
+button.popover-menu-item-danger.malus-squircle-menu-item:hover > overlay > label,
+button.popover-menu-item-danger.malus-squircle-menu-item:hover > overlay > image,
+button.popover-menu-item-danger.malus-squircle-menu-item:hover > overlay > box > label,
+button.popover-menu-item-danger.malus-squircle-menu-item:hover > overlay > box > image {
     color: #ffffff;
 }

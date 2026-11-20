@@ -1196,15 +1196,21 @@ button.popover-menu-item.malus-squircle-menu-item image {
     transition: none;
 }
 
-button.popover-menu-item.malus-squircle-menu-item:hover,
-button.popover-menu-item.malus-squircle-menu-item:hover label,
-button.popover-menu-item.malus-squircle-menu-item:hover image,
-button.popover-menu-item.malus-squircle-menu-item:hover .menu-row-label,
-button.popover-menu-item.malus-squircle-menu-item:hover .menu-item-icon,
-button.popover-menu-item.malus-squircle-menu-item:hover .menu-submenu-chevron,
-popover.malus-popover-menu.light-popover>contents button.popover-menu-item.malus-squircle-menu-item:hover label,
-popover.malus-popover-menu.light-popover>contents button.popover-menu-item.malus-squircle-menu-item:hover image,
-popover.light-popover button.popover-menu-item.malus-squircle-menu-item:hover label,
-popover.light-popover button.popover-menu-item.malus-squircle-menu-item:hover image {
+button.popover-menu-item.malus-squircle-menu-item:hover > label,
+button.popover-menu-item.malus-squircle-menu-item:hover > image,
+button.popover-menu-item.malus-squircle-menu-item:hover > box > label,
+button.popover-menu-item.malus-squircle-menu-item:hover > box > image,
+button.popover-menu-item.malus-squircle-menu-item:hover > overlay > label,
+button.popover-menu-item.malus-squircle-menu-item:hover > overlay > image,
+button.popover-menu-item.malus-squircle-menu-item:hover > overlay > box > label,
+button.popover-menu-item.malus-squircle-menu-item:hover > overlay > box > image,
+button.popover-menu-item.malus-squircle-menu-item:hover > overlay > box > box > label,
+button.popover-menu-item.malus-squircle-menu-item:hover > overlay > box > box > image,
+popover.malus-popover-menu.light-popover>contents button.popover-menu-item.malus-squircle-menu-item:hover > label,
+popover.malus-popover-menu.light-popover>contents button.popover-menu-item.malus-squircle-menu-item:hover > image,
+popover.malus-popover-menu.light-popover>contents button.popover-menu-item.malus-squircle-menu-item:hover > overlay > box > label,
+popover.malus-popover-menu.light-popover>contents button.popover-menu-item.malus-squircle-menu-item:hover > overlay > box > image,
+popover.light-popover button.popover-menu-item.malus-squircle-menu-item:hover > overlay > box > label,
+popover.light-popover button.popover-menu-item.malus-squircle-menu-item:hover > overlay > box > image {
     color: #ffffff;
 }

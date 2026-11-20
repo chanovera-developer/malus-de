@@ -212,6 +212,7 @@ popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:act
     background: transparent;
     background-color: transparent;
     background-image: none;
+    color: inherit;
     padding: 0px;
     border: none;
     border-radius: 0px;
@@ -219,6 +220,13 @@ popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:act
     outline: none;
     outline-width: 0px;
     transition: none;
+}
+
+popover popover,
+popover popover > contents,
+popover.malus-popover-menu popover,
+popover.malus-popover-menu popover > contents {
+    color: @window_fg_color;
 }
 
 popover .popover-menu-item.malus-squircle-menu-item *,
@@ -230,33 +238,67 @@ popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item ima
     transition: none;
 }
 
-popover .popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) *,
-popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) * {
+popover .popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > label,
+popover .popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > image,
+popover .popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > box > label,
+popover .popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > box > image,
+popover .popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > overlay > label,
+popover .popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > overlay > image,
+popover .popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > overlay > box > label,
+popover .popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > overlay > box > image,
+popover .popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > overlay > box > box > label,
+popover .popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > overlay > box > box > image,
+popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > label,
+popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > image,
+popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > box > label,
+popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > box > image,
+popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > overlay > label,
+popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > overlay > image,
+popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > overlay > box > label,
+popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > overlay > box > image,
+popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > overlay > box > box > label,
+popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > overlay > box > box > image {
     color: #ffffff;
 }
 
-popover modelbutton:hover:not(:disabled) label,
-popover modelbutton:hover:not(:disabled) image,
-popover modelbutton:selected:not(:disabled) label,
-popover modelbutton:selected:not(:disabled) image,
-popover.menu modelbutton:hover:not(:disabled) label,
-popover.menu modelbutton:hover:not(:disabled) image,
-popover.menu modelbutton:selected:not(:disabled) label,
-popover.menu modelbutton:selected:not(:disabled) image,
-window.view popover modelbutton:hover:not(:disabled) label,
-window.view popover modelbutton:hover:not(:disabled) image,
-window.view popover.menu modelbutton:hover:not(:disabled) label,
-window.view popover.menu modelbutton:hover:not(:disabled) image,
-popover .popover-menu-item:hover:not(:disabled) label,
-popover .popover-menu-item:hover:not(:disabled) image,
-popover.malus-popover-menu button:hover:not(:disabled) label,
-popover.malus-popover-menu button:hover:not(:disabled) image,
-popover listview > row:hover:not(:disabled) label,
-popover listview > row:selected:not(:disabled) label,
-popover listbox > row:hover:not(:disabled) label,
-popover listbox > row:selected:not(:disabled) label,
-menu menuitem:hover:not(:disabled) label,
-.menu menuitem:hover:not(:disabled) label {
+popover modelbutton:hover:not(:disabled) > label,
+popover modelbutton:hover:not(:disabled) > image,
+popover modelbutton:hover:not(:disabled) > box > label,
+popover modelbutton:hover:not(:disabled) > box > image,
+popover modelbutton:selected:not(:disabled) > label,
+popover modelbutton:selected:not(:disabled) > image,
+popover.menu modelbutton:hover:not(:disabled) > label,
+popover.menu modelbutton:hover:not(:disabled) > image,
+popover.menu modelbutton:hover:not(:disabled) > box > label,
+popover.menu modelbutton:hover:not(:disabled) > box > image,
+popover.menu modelbutton:selected:not(:disabled) > label,
+popover.menu modelbutton:selected:not(:disabled) > image,
+window.view popover modelbutton:hover:not(:disabled) > label,
+window.view popover modelbutton:hover:not(:disabled) > image,
+window.view popover.menu modelbutton:hover:not(:disabled) > label,
+window.view popover.menu modelbutton:hover:not(:disabled) > image,
+popover .popover-menu-item:hover:not(:disabled) > label,
+popover .popover-menu-item:hover:not(:disabled) > image,
+popover .popover-menu-item:hover:not(:disabled) > box > label,
+popover .popover-menu-item:hover:not(:disabled) > box > image,
+popover .popover-menu-item:hover:not(:disabled) > overlay > label,
+popover .popover-menu-item:hover:not(:disabled) > overlay > image,
+popover .popover-menu-item:hover:not(:disabled) > overlay > box > label,
+popover .popover-menu-item:hover:not(:disabled) > overlay > box > image,
+popover.malus-popover-menu button:hover:not(:disabled) > label,
+popover.malus-popover-menu button:hover:not(:disabled) > image,
+popover.malus-popover-menu button:hover:not(:disabled) > box > label,
+popover.malus-popover-menu button:hover:not(:disabled) > box > image,
+popover.malus-popover-menu button:hover:not(:disabled) > overlay > label,
+popover.malus-popover-menu button:hover:not(:disabled) > overlay > image,
+popover.malus-popover-menu button:hover:not(:disabled) > overlay > box > label,
+popover.malus-popover-menu button:hover:not(:disabled) > overlay > box > image,
+popover listview > row:hover:not(:disabled) > label,
+popover listview > row:selected:not(:disabled) > label,
+popover listbox > row:hover:not(:disabled) > label,
+popover listbox > row:selected:not(:disabled) > label,
+menu menuitem:hover:not(:disabled) > label,
+.menu menuitem:hover:not(:disabled) > label {
     color: #ffffff;
 }
 

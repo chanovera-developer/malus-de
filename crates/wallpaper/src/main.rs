@@ -595,6 +595,7 @@ fn move_desktop_icon(fixed: &Fixed, path: &Path, position: (f64, f64)) -> bool {
         let item_path = item.property::<Option<String>>("tooltip-text");
         if item_path.as_deref() == Some(expected_path.as_ref()) {
             fixed.move_(&item, position.0, position.1);
+            item.remove_css_class("desktop-icon-dragging");
             return true;
         }
     }
@@ -2725,6 +2726,17 @@ fn build_multi_desktop_drag_paintable(
     Some((paintable, hot_x, hot_y))
 }
 
+fn build_single_desktop_drag_paintable(widget: &GtkBox) -> gtk4::gdk::Paintable {
+    let wp = gtk4::WidgetPaintable::new(Some(widget));
+    let w = wp.intrinsic_width().max(widget.width()).max(widget.width_request()).max(72) as f32;
+    let h = wp.intrinsic_height().max(widget.height()).max(widget.height_request()).max(76) as f32;
+    let snapshot = gtk4::Snapshot::new();
+    wp.snapshot(&snapshot, w as f64, h as f64);
+    snapshot
+        .to_paintable(Some(&gtk4::graphene::Size::new(w, h)))
+        .unwrap_or_else(|| wp.upcast())
+}
+
 #[allow(unused_variables)]
 fn render_single_icon(
     fixed: &Fixed,
@@ -3117,7 +3129,7 @@ fn render_single_icon(
                 .map(|p| gio::File::for_path(p))
                 .collect()
         } else {
-            let paintable = gtk4::WidgetPaintable::new(Some(&item_box_prep));
+            let paintable = build_single_desktop_drag_paintable(&item_box_prep);
             source.set_icon(Some(&paintable), rounded_click.0 as i32, rounded_click.1 as i32);
             malus_de_common::write_drag_anchor(&path_drag, rounded_click.0, rounded_click.1);
             vec![gio::File::for_path(&path_drag)]
@@ -3141,12 +3153,12 @@ fn render_single_icon(
                 sibling = child.next_sibling();
                 if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
                     if sel.contains(&PathBuf::from(p_str)) {
-                        fixed_drag.move_(&child, -5000.0, -5000.0);
+                        child.add_css_class("desktop-icon-dragging");
                     }
                 }
             }
         } else {
-            fixed_drag.move_(&item_box_drag, -5000.0, -5000.0);
+            item_box_drag.add_css_class("desktop-icon-dragging");
         }
         *act_drag_begin.borrow_mut() = Some((
             path_drag_begin.clone(),
@@ -3169,7 +3181,8 @@ fn render_single_icon(
         while let Some(child) = sibling {
             sibling = child.next_sibling();
             let (cx, cy) = fixed_drag_end.child_position(&child);
-            if cx < 0.0 || cy < 0.0 {
+            let is_dragging = child.has_css_class("desktop-icon-dragging") || cx < 0.0 || cy < 0.0;
+            if is_dragging {
                 if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
                     let p = PathBuf::from(p_str);
                     if p.symlink_metadata().is_err() {
@@ -3186,7 +3199,10 @@ fn render_single_icon(
                             .get(&p)
                             .cloned()
                             .unwrap_or(orig_pos);
-                        fixed_drag_end.move_(&child, target_pos.0, target_pos.1);
+                        if cx < 0.0 || cy < 0.0 {
+                            fixed_drag_end.move_(&child, target_pos.0, target_pos.1);
+                        }
+                        child.remove_css_class("desktop-icon-dragging");
                     }
                 }
             }
@@ -3222,6 +3238,7 @@ fn render_single_icon(
                                     .unwrap_or(orig_pos);
                                 fixed_check.move_(&child, target_pos.0, target_pos.1);
                             }
+                            child.remove_css_class("desktop-icon-dragging");
                         }
                     }
                 }
