@@ -11,9 +11,9 @@ use std::process::Command;
 use std::rc::Rc;
 
 use crate::wifi_pane::{
-    detail_kv_row, make_help_circle_button, make_popover_menu_row, make_squircle_badge,
-    make_squircle_button, make_squircle_colored_badge, wrap_squircle_card,
-    WIFI_BADGE_SQUIRCLE_RADIUS, WIFI_CARD_SQUIRCLE_RADIUS,
+    build_squircle_chevron_menu_button, detail_kv_row, make_help_circle_button,
+    make_popover_menu_row, make_squircle_badge, make_squircle_button, make_squircle_colored_badge,
+    wrap_squircle_card, WIFI_BADGE_SQUIRCLE_RADIUS, WIFI_CARD_SQUIRCLE_RADIUS,
 };
 
 const FIREWALL_BADGE_TOP: (f64, f64, f64) = (0.988, 0.584, 0.129);
@@ -282,7 +282,8 @@ pub fn create_network_panes(
         .margin_top(2)
         .build();
 
-    let (more_pill_wrap, more_menu_btn) = build_more_chevron_menu_button();
+    let (more_pill_wrap, more_menu_btn) =
+        build_squircle_chevron_menu_button("view-more-symbolic", "Acciones de servicios de red");
     bottom_actions.append(&more_pill_wrap);
 
     let (net_help_wrap, net_help_btn) = make_help_circle_button("Ayuda sobre Red");
@@ -808,106 +809,6 @@ fn populate_other_services_card(
         });
         container.append(&row_btn);
     }
-}
-
-fn build_more_chevron_menu_button() -> (Overlay, MenuButton) {
-    let row = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(4)
-        .halign(Align::Center)
-        .valign(Align::Center)
-        .build();
-    let dots = Image::builder()
-        .icon_name("view-more-symbolic")
-        .pixel_size(14)
-        .build();
-    let chev = Image::builder()
-        .icon_name("pan-down-symbolic")
-        .pixel_size(12)
-        .build();
-    row.append(&dots);
-    row.append(&chev);
-
-    let btn = MenuButton::builder()
-        .child(&row)
-        .has_frame(false)
-        .always_show_arrow(false)
-        .height_request(22)
-        .valign(Align::Center)
-        .css_classes(["wifi-squircle-btn", "net-more-pill-btn"])
-        .tooltip_text("Acciones de servicios de red")
-        .build();
-
-    let bg = gtk4::DrawingArea::new();
-    bg.set_can_target(false);
-    bg.set_hexpand(true);
-    bg.set_vexpand(true);
-
-    let btn_weak = btn.downgrade();
-    bg.set_draw_func(move |_, cr, w, h| {
-        let width = w as f64;
-        let height = h as f64;
-        if width <= 2.0 || height <= 2.0 {
-            return;
-        }
-        let flags = btn_weak
-            .upgrade()
-            .map(|b| b.state_flags())
-            .unwrap_or(gtk4::StateFlags::empty());
-        let hovered = flags.contains(gtk4::StateFlags::PRELIGHT);
-        let active = flags.contains(gtk4::StateFlags::ACTIVE);
-        let dark = libadwaita::StyleManager::default().is_dark();
-        let _ = cr.save();
-        cr.translate(0.5, 0.5);
-        let r = ((height - 1.0) * 0.48).max(11.5);
-        crate::squircle_path(cr, width - 1.0, height - 1.0, r);
-        if dark {
-            cr.set_source_rgba(
-                1.0,
-                1.0,
-                1.0,
-                if active {
-                    0.22
-                } else if hovered {
-                    0.16
-                } else {
-                    0.10
-                },
-            );
-        } else {
-            cr.set_source_rgba(
-                0.0,
-                0.0,
-                0.0,
-                if active {
-                    0.16
-                } else if hovered {
-                    0.11
-                } else {
-                    0.075
-                },
-            );
-        }
-        let _ = cr.fill_preserve();
-        cr.set_source_rgba(
-            if dark { 1.0 } else { 0.0 },
-            if dark { 1.0 } else { 0.0 },
-            if dark { 1.0 } else { 0.0 },
-            if dark { 0.14 } else { 0.065 },
-        );
-        cr.set_line_width(1.0);
-        let _ = cr.stroke();
-        let _ = cr.restore();
-    });
-
-    let bg_state = bg.clone();
-    btn.connect_state_flags_changed(move |_, _| bg_state.queue_draw());
-
-    let overlay = Overlay::builder().valign(Align::Center).build();
-    overlay.set_child(Some(&bg));
-    overlay.add_overlay(&btn);
-    overlay.set_measure_overlay(&btn, true);
-    (overlay, btn)
 }
 
 fn build_network_actions_popover(

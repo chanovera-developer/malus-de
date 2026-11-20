@@ -1516,7 +1516,7 @@ fn populate_wifi_list_card(
     }
 }
 
-/// Botón circular de ayuda `?` centrado (estilo macOS) compartido entre Wi-Fi, Bluetooth y Red.
+/// Botón circular de ayuda `?` centrado (estilo macOS) compartido entre Wi-Fi, Bluetooth, Red y VPN.
 pub(crate) fn make_help_circle_button(tooltip: &str) -> (Overlay, MenuButton) {
     let help_lbl = Label::builder()
         .label("?")
@@ -1535,22 +1535,130 @@ pub(crate) fn make_help_circle_button(tooltip: &str) -> (Overlay, MenuButton) {
     (help_wrap, help_btn)
 }
 
-pub(crate) fn make_popover_menu_row(check: Option<&str>, text: &str) -> (Overlay, Button) {
+/// Botón tipo píldora squircle compacta de 22 px con icono + flecha hacia abajo (`••• ⌄`, `+ ⌄`).
+pub(crate) fn build_squircle_chevron_menu_button(
+    icon_name: &str,
+    tooltip: &str,
+) -> (Overlay, MenuButton) {
     let row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(6)
+        .spacing(4)
+        .halign(Align::Center)
+        .valign(Align::Center)
         .build();
-    let check_lbl = Label::builder()
-        .label(check.unwrap_or(""))
-        .width_request(14)
-        .xalign(0.5)
+    row.append(
+        &Image::builder()
+            .icon_name(icon_name)
+            .pixel_size(14)
+            .build(),
+    );
+    row.append(
+        &Image::builder()
+            .icon_name("pan-down-symbolic")
+            .pixel_size(12)
+            .build(),
+    );
+
+    let btn = MenuButton::builder()
+        .child(&row)
+        .has_frame(false)
+        .always_show_arrow(false)
+        .height_request(22)
+        .valign(Align::Center)
+        .css_classes(["wifi-squircle-btn", "net-more-pill-btn"])
+        .tooltip_text(tooltip)
         .build();
+
+    let bg = DrawingArea::new();
+    bg.set_can_target(false);
+    bg.set_hexpand(true);
+    bg.set_vexpand(true);
+
+    let btn_weak = btn.downgrade();
+    bg.set_draw_func(move |_, cr, w, h| {
+        let width = w as f64;
+        let height = h as f64;
+        if width <= 2.0 || height <= 2.0 {
+            return;
+        }
+        let flags = btn_weak
+            .upgrade()
+            .map(|b| b.state_flags())
+            .unwrap_or(StateFlags::empty());
+        let hovered = flags.contains(StateFlags::PRELIGHT);
+        let active = flags.contains(StateFlags::ACTIVE);
+        let dark = libadwaita::StyleManager::default().is_dark();
+        let _ = cr.save();
+        cr.translate(0.5, 0.5);
+        let r = ((height - 1.0) * 0.48).max(WIFI_BUTTON_SQUIRCLE_RADIUS);
+        crate::squircle_path(cr, width - 1.0, height - 1.0, r);
+        if dark {
+            cr.set_source_rgba(
+                1.0,
+                1.0,
+                1.0,
+                if active {
+                    0.22
+                } else if hovered {
+                    0.16
+                } else {
+                    0.10
+                },
+            );
+        } else {
+            cr.set_source_rgba(
+                0.0,
+                0.0,
+                0.0,
+                if active {
+                    0.16
+                } else if hovered {
+                    0.11
+                } else {
+                    0.075
+                },
+            );
+        }
+        let _ = cr.fill_preserve();
+        cr.set_source_rgba(
+            if dark { 1.0 } else { 0.0 },
+            if dark { 1.0 } else { 0.0 },
+            if dark { 1.0 } else { 0.0 },
+            if dark { 0.14 } else { 0.065 },
+        );
+        cr.set_line_width(1.0);
+        let _ = cr.stroke();
+        let _ = cr.restore();
+    });
+
+    let bg_state = bg.clone();
+    btn.connect_state_flags_changed(move |_, _| bg_state.queue_draw());
+
+    let overlay = Overlay::builder().valign(Align::Center).build();
+    overlay.set_child(Some(&bg));
+    overlay.add_overlay(&btn);
+    overlay.set_measure_overlay(&btn, true);
+    (overlay, btn)
+}
+
+pub(crate) fn make_popover_action_row(text: &str, reserve_check_col: bool, check: Option<&str>) -> (Overlay, Button) {
+    let row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(if reserve_check_col { 6 } else { 0 })
+        .build();
+    if reserve_check_col {
+        let check_lbl = Label::builder()
+            .label(check.unwrap_or(""))
+            .width_request(14)
+            .xalign(0.5)
+            .build();
+        row.append(&check_lbl);
+    }
     let text_lbl = Label::builder()
         .label(text)
         .xalign(0.0)
         .hexpand(true)
         .build();
-    row.append(&check_lbl);
     row.append(&text_lbl);
 
     let btn = Button::builder()
@@ -1606,6 +1714,10 @@ pub(crate) fn make_popover_menu_row(check: Option<&str>, text: &str) -> (Overlay
     overlay.add_overlay(&btn);
     overlay.set_measure_overlay(&btn, true);
     (overlay, btn)
+}
+
+pub(crate) fn make_popover_menu_row(check: Option<&str>, text: &str) -> (Overlay, Button) {
+    make_popover_action_row(text, true, check)
 }
 
 fn deterministic_private_mac(ssid: &str) -> String {

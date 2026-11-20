@@ -20,6 +20,7 @@ use std::rc::Rc;
 mod wifi_pane;
 mod bluetooth_pane;
 mod network_pane;
+mod vpn_pane;
 
 const APP_ID: &str = "dev.malus.Settings";
 const SETTINGS_SIDEBAR_WIDTH: i32 = 212;
@@ -34,7 +35,7 @@ const SQUIRCLE_SEGMENTS: usize = 20;
 #[command(name = "malus-de-settings")]
 #[command(about = "Ajustes del Sistema de Malus DE (macOS System Settings)")]
 struct Args {
-    /// Panel inicial a mostrar: wifi, bluetooth, network, network-firewall, displays, wallpaper, keyboard, appearance, dock, spotlight, sound, about
+    /// Panel inicial a mostrar: wifi, bluetooth, network, network-firewall, vpn, displays, wallpaper, keyboard, appearance, dock, spotlight, sound, about
     #[arg(short, long, default_value = "spotlight")]
     panel: String,
 
@@ -453,6 +454,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         ("wifi", "network-wireless-symbolic", "Wi-Fi"),
         ("bluetooth", "bluetooth-active-symbolic", "Bluetooth"),
         ("network", "network-workgroup-symbolic", "Red"),
+        ("vpn", "network-vpn-symbolic", "VPN"),
         ("appearance", "preferences-desktop-appearance-symbolic", "Aspecto"),
         ("dock", "user-desktop-symbolic", "Escritorio y Dock"),
         ("wallpaper", "preferences-desktop-wallpaper-symbolic", "Fondo de pantalla"),
@@ -500,6 +502,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                     "wifi" => "wi-fi wifi red inalambrica internet redes",
                     "bluetooth" => "bluetooth dispositivos audio auriculares teclado raton inalambrico emparejar",
                     "network" => "red network ethernet puente thunderbolt firewall firewalld servicios ubicaciones",
+                    "vpn" => "vpn wireguard openvpn ipsec ikev2 l2tp cisco red privada",
                     "displays" => "pantallas monitor resolucion ppi truesize",
                     "wallpaper" => "fondo pantalla wallpaper imagen",
                     "keyboard" => "teclado distribucion lenguaje idioma xkb",
@@ -545,6 +548,9 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         network_pane::create_network_panes(&window, nav_wifi, nav_fw);
     stack.add_named(&network_pane, Some("network"));
     stack.add_named(&firewall_pane, Some("network-firewall"));
+
+    let (vpn_pane, refresh_vpn_pane) = vpn_pane::create_vpn_pane(&window);
+    stack.add_named(&vpn_pane, Some("vpn"));
 
     let (displays_pane, refresh_displays_pane) = create_displays_pane();
     stack.add_named(&displays_pane, Some("displays"));
@@ -656,8 +662,10 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     let start_id = match initial_panel {
         "red" => "network",
         "firewall" => "network-firewall",
-        "wifi" | "bluetooth" | "network" | "network-firewall" | "wallpaper" | "keyboard"
-        | "appearance" | "sound" | "about" | "dock" | "spotlight" | "displays" => initial_panel,
+        "wifi" | "bluetooth" | "network" | "network-firewall" | "vpn" | "wallpaper"
+        | "keyboard" | "appearance" | "sound" | "about" | "dock" | "spotlight" | "displays" => {
+            initial_panel
+        }
         _ => "spotlight",
     };
 
@@ -673,6 +681,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         let ref_bt = refresh_bluetooth_pane.clone();
         let ref_net = refresh_network_pane.clone();
         let ref_fw = refresh_firewall_pane.clone();
+        let ref_vpn = refresh_vpn_pane.clone();
         let ref_disp = refresh_displays_pane.clone();
         let ref_wall = refresh_wallpaper_pane.clone();
         let ref_kb = refresh_keyboard_pane.clone();
@@ -705,6 +714,8 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                 ref_net();
             } else if target == "network-firewall" {
                 ref_fw();
+            } else if target == "vpn" {
+                ref_vpn();
             } else if target == "displays" {
                 ref_disp();
             } else if target == "wallpaper" {
@@ -723,6 +734,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                 "bluetooth" => "Bluetooth",
                 "network" => "Red",
                 "network-firewall" => "Firewall",
+                "vpn" => "VPN",
                 "displays" => "Pantallas",
                 "wallpaper" => "Fondo de pantalla",
                 "keyboard" => "Teclado",
@@ -4486,5 +4498,9 @@ mod tests {
         let (help_wrap, _) = wifi_pane::make_help_circle_button("Ayuda");
         assert_eq!(help_wrap.width_request(), 22);
         assert_eq!(help_wrap.height_request(), 22);
+
+        let (_pill_wrap, pill_btn) =
+            wifi_pane::build_squircle_chevron_menu_button("list-add-symbolic", "Añadir");
+        assert_eq!(pill_btn.height_request(), 22);
     }
 }

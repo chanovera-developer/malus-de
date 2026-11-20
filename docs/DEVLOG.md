@@ -4,6 +4,26 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-19] — Panel de VPN al estilo macOS + Anotaciones de Adaptación (`malus-de-settings`)
+
+Se añade la sección **VPN** en `malus-de-settings` siguiendo el diseño de `assets/screenshots/VPN.png` y reutilizando los controles squircle compartidos (`build_squircle_chevron_menu_button`, `make_help_circle_button`, popovers transparentes).
+
+### Cambios Clave
+- **Nuevo módulo [`crates/settings/src/vpn_pane.rs`](../crates/settings/src/vpn_pane.rs)**:
+  - Tarjeta principal con estado vacío `"Sin configuraciones de VPN"` o lista de conexiones `vpn`/`wireguard` de NetworkManager con interruptor `.macos-switch` (`nmcli connection up/down`) y botón circular `(i)` de detalles/autoconexión/eliminación.
+  - Barra inferior con botón `"Acerca de las redes VPN y la privacidad..."`, botón píldora `+ ⌄` transparente con las opciones `L2TP sobre IPSec...`, `Cisco IPSec...`, `IKEv2...` más importación de `.ovpn` (OpenVPN) y `.conf` (WireGuard), y botón circular `?` de ayuda.
+  - Detección dinámica de plugins NetworkManager en `/usr/lib*/NetworkManager/VPN/` (`libreswan` para IKEv2, `openvpn`, `openconnect`, más avisos cuando falten `NetworkManager-l2tp` o `NetworkManager-vpnc`), documentado en [`docs/decisiones/0009-vpn-pendiente.md`](decisiones/0009-vpn-pendiente.md).
+- **Integración y reutilización ([`crates/settings/src/wifi_pane.rs`](../crates/settings/src/wifi_pane.rs), [`crates/settings/src/network_pane.rs`](../crates/settings/src/network_pane.rs), [`crates/settings/src/main.rs`](../crates/settings/src/main.rs), [`crates/settings/src/styles/macos-settings.css`](../crates/settings/src/styles/macos-settings.css))**:
+  - Extracción del botón píldora compartido `build_squircle_chevron_menu_button` (`••• ⌄` en Red y `+ ⌄` en VPN) y `make_popover_action_row`.
+  - Ítem `VPN` en la barra lateral debajo de `Red`, búsqueda lateral y soporte para `--panel vpn`.
+
+### Verificación
+- `cargo check --offline --workspace --all-targets`: 0 warnings.
+- `cargo test --offline -p malus-de-settings`: 10 passed, 0 failed.
+- `cargo build --offline --release -p malus-de-settings` e instalación en `/usr/local/bin/malus-de-settings`.
+
+---
+
 ## [2026-11-19] — Panel de Red y Firewall al estilo macOS + Anotaciones de Adaptación (`malus-de-settings`)
 
 Se implementa el panel completo de **Red** y su subvista **Firewall** siguiendo las capturas `assets/screenshots/Red00.png`–`Red03.png`, junto con las anotaciones de adaptación Linux documentadas en [`docs/decisiones/0008-red-pendiente.md`](decisiones/0008-red-pendiente.md).
