@@ -4499,8 +4499,18 @@ mod tests {
         assert_eq!(help_wrap.width_request(), 22);
         assert_eq!(help_wrap.height_request(), 22);
 
-        let (_pill_wrap, pill_btn) =
+        let (pill_wrap, pill_btn) =
             wifi_pane::build_squircle_chevron_menu_button("list-add-symbolic", "Añadir");
         assert_eq!(pill_btn.height_request(), 22);
+        let (pill_min_w, pill_nat_w, _, _) = pill_wrap.measure(Orientation::Horizontal, -1);
+        let (pill_min_h, pill_nat_h, _, _) = pill_wrap.measure(Orientation::Vertical, -1);
+        assert!(
+            pill_min_w <= 44 && pill_nat_w <= 44,
+            "La píldora + ⌄ está demasiado ancha: min={pill_min_w}, nat={pill_nat_w}"
+        );
+        assert!(
+            pill_min_h <= 24 && pill_nat_h <= 24,
+            "La píldora + ⌄ excede altura compacta: min={pill_min_h}, nat={pill_nat_h}"
+        );
     }
 }

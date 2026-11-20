@@ -793,6 +793,12 @@ menubutton.wifi-help-btn arrow {
     opacity: 0;
 }
 
+menubutton.wifi-help-btn > button > box {
+    border-spacing: 0px;
+    padding: 0px;
+    margin: 0px;
+}
+
 /* Toggle estilo macOS Tahoe (píldora alargada azul/gris con deslizador blanco ancho) */
 switch.macos-switch {
     min-width: 42px;
@@ -973,17 +979,32 @@ label.bt-inline-desc link:hover {
     color: #e6a100;
 }
 
-menubutton.net-more-pill-btn,
+menubutton.net-more-pill-btn {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 0px;
+    margin: 0px;
+    min-width: 0px;
+    min-height: 22px;
+}
+
 menubutton.net-more-pill-btn > button {
     background: transparent;
     border: none;
     box-shadow: none;
     border-radius: 0px;
-    padding: 0px 8px;
+    padding: 0px 7px;
     margin: 0px;
     min-width: 0px;
     min-height: 22px;
     color: @window_fg_color;
+}
+
+menubutton.net-more-pill-btn > button > box {
+    border-spacing: 0px;
+    padding: 0px;
+    margin: 0px;
 }
 
 menubutton.net-more-pill-btn arrow {

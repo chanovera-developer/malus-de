@@ -14,7 +14,7 @@ Se añade la sección **VPN** en `malus-de-settings` siguiendo el diseño de `as
   - Barra inferior con botón `"Acerca de las redes VPN y la privacidad..."`, botón píldora `+ ⌄` transparente con las opciones `L2TP sobre IPSec...`, `Cisco IPSec...`, `IKEv2...` más importación de `.ovpn` (OpenVPN) y `.conf` (WireGuard), y botón circular `?` de ayuda.
   - Detección dinámica de plugins NetworkManager en `/usr/lib*/NetworkManager/VPN/` (`libreswan` para IKEv2, `openvpn`, `openconnect`, más avisos cuando falten `NetworkManager-l2tp` o `NetworkManager-vpnc`), documentado en [`docs/decisiones/0009-vpn-pendiente.md`](decisiones/0009-vpn-pendiente.md).
 - **Integración y reutilización ([`crates/settings/src/wifi_pane.rs`](../crates/settings/src/wifi_pane.rs), [`crates/settings/src/network_pane.rs`](../crates/settings/src/network_pane.rs), [`crates/settings/src/main.rs`](../crates/settings/src/main.rs), [`crates/settings/src/styles/macos-settings.css`](../crates/settings/src/styles/macos-settings.css))**:
-  - Extracción del botón píldora compartido `build_squircle_chevron_menu_button` (`••• ⌄` en Red y `+ ⌄` en VPN) y `make_popover_action_row`.
+  - Extracción del botón píldora compartido `build_squircle_chevron_menu_button` (`••• ⌄` en Red y `+ ⌄` en VPN, calzados sin expansión extra `≤ 44×24 px` eliminando doble padding y `border-spacing` interno de `MenuButton`) y `make_popover_action_row`.
   - Ítem `VPN` en la barra lateral debajo de `Red`, búsqueda lateral y soporte para `--panel vpn`.
 
 ### Verificación

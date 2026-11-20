@@ -1542,20 +1542,20 @@ pub(crate) fn build_squircle_chevron_menu_button(
 ) -> (Overlay, MenuButton) {
     let row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(4)
+        .spacing(2)
         .halign(Align::Center)
         .valign(Align::Center)
         .build();
     row.append(
         &Image::builder()
             .icon_name(icon_name)
-            .pixel_size(14)
+            .pixel_size(12)
             .build(),
     );
     row.append(
         &Image::builder()
             .icon_name("pan-down-symbolic")
-            .pixel_size(12)
+            .pixel_size(10)
             .build(),
     );
 
@@ -1563,8 +1563,11 @@ pub(crate) fn build_squircle_chevron_menu_button(
         .child(&row)
         .has_frame(false)
         .always_show_arrow(false)
-        .height_request(22)
+        .hexpand(false)
+        .vexpand(false)
+        .halign(Align::Center)
         .valign(Align::Center)
+        .height_request(22)
         .css_classes(["wifi-squircle-btn", "net-more-pill-btn"])
         .tooltip_text(tooltip)
         .build();
@@ -1634,7 +1637,12 @@ pub(crate) fn build_squircle_chevron_menu_button(
     let bg_state = bg.clone();
     btn.connect_state_flags_changed(move |_, _| bg_state.queue_draw());
 
-    let overlay = Overlay::builder().valign(Align::Center).build();
+    let overlay = Overlay::builder()
+        .hexpand(false)
+        .vexpand(false)
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .build();
     overlay.set_child(Some(&bg));
     overlay.add_overlay(&btn);
     overlay.set_measure_overlay(&btn, true);
