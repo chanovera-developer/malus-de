@@ -1604,9 +1604,9 @@ fn make_popover_menu_row(check: Option<&str>, text: &str) -> (Overlay, Button) {
         let _ = cr.save();
         crate::squircle_path(cr, width, height, WIFI_MENU_ITEM_SQUIRCLE_RADIUS);
         if active {
-            cr.set_source_rgba(0.0, 0.39, 0.85, 0.96);
+            cr.set_source_rgba(0.0, 0.39, 0.85, 0.86);
         } else {
-            cr.set_source_rgba(0.0, 0.48, 1.0, 0.92);
+            cr.set_source_rgba(0.0, 0.48, 1.0, 0.74);
         }
         let _ = cr.fill();
         let _ = cr.restore();
