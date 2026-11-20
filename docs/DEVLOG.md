@@ -4,6 +4,27 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-20] — Panel de Batería y Energía al estilo macOS + Anotaciones Linux (`malus-de-settings`)
+
+Se implementa la sección completa de **Batería** siguiendo las capturas `assets/screenshots/Bateria00.png`–`Bateria05.png`, con lectura de hardware en `sysfs`/`UPower`, gráficas Cairo de 24 horas y 10 días, modales dedicados y documentación de brechas Linux en [`docs/decisiones/0010-bateria-pendiente.md`](decisiones/0010-bateria-pendiente.md).
+
+### Cambios Clave
+- **Nuevo módulo [`crates/settings/src/battery_pane.rs`](../crates/settings/src/battery_pane.rs)**:
+  - **Cabecera dinámica (`Bateria00.png`)**: Subtítulo bajo `"Batería"` en la barra superior con icono dinámico y `"Nivel de batería: N%"` (o `"Corriente alterna (sin batería física)"`).
+  - **Ahorrar batería (`Bateria01.png`)**: Menú popover transparente (`Nunca`, `Siempre`, `Sólo al usar la batería`, `Sólo con el adaptador de corriente`) conectado a `tuned-adm profile` y persistido en `~/.config/malus-de/battery-settings.toml`.
+  - **Modales `Condición de la batería` y `Recarga` (`Bateria02.png`, `Bateria03.png`)**: Estado/salud y capacidad máxima calculada desde `energy_full / energy_full_design` (`charge_full`), deslizador por pasos `80%–100%` vinculado a `charge_control_end_threshold` vía `pkexec` cuando el controlador lo expone, y toggle `"Recarga optimizada"`.
+  - **Gráficas `Últimas 24 horas` y `Últimos 10 días` (`Bateria00.png`, `Bateria04.png`)**: Selector segmentado y doble gráfico Cairo (`Nivel de batería` / `Uso de energía` en verde y `Uso con pantalla encendida` en azul) alimentados desde `~/.local/share/malus-de/battery-history.csv`.
+  - **Modal `Opciones...` (`Bateria05.png`)**: Interruptores de atenuación, reposo en corriente alterna, selector `"Activar la computadora para permitir el acceso a la red"` y optimización SDR/HDR en vídeo.
+- **Integración y estilos ([`crates/settings/src/main.rs`](../crates/settings/src/main.rs), [`crates/settings/src/styles/macos-settings.css`](../crates/settings/src/styles/macos-settings.css))**:
+  - Ítem `Batería` añadido en la barra lateral debajo de `VPN`, soporte de `--panel battery|bateria` y helper `attach_modal_scrim`.
+
+### Verificación
+- `cargo check --offline --workspace --all-targets`: 0 warnings.
+- `cargo test --offline -p malus-de-settings`: 13 passed, 0 failed.
+- `cargo build --offline --release -p malus-de-settings` e instalación en `/usr/local/bin/malus-de-settings`.
+
+---
+
 ## [2026-11-19] — Panel de VPN al estilo macOS + Anotaciones de Adaptación (`malus-de-settings`)
 
 Se añade la sección **VPN** en `malus-de-settings` siguiendo el diseño de `assets/screenshots/VPN.png` y reutilizando los controles squircle compartidos (`build_squircle_chevron_menu_button`, `make_help_circle_button`, popovers transparentes).

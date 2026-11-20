@@ -1079,3 +1079,73 @@ menubutton.fw-rule-action-btn > button:hover {
     font-weight: 500;
     color: alpha(@window_fg_color, 0.36);
 }
+
+/* Panel de Batería estilo macOS Tahoe */
+.bat-header-sub-icon {
+    color: alpha(@window_fg_color, 0.65);
+}
+
+.bat-header-sub-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: alpha(@window_fg_color, 0.65);
+}
+
+.bat-chart-card {
+    padding: 12px 14px 12px 14px;
+}
+
+.bat-segmented-track {
+    background-color: alpha(@window_fg_color, 0.06);
+    border-radius: 9px;
+    padding: 2px;
+}
+
+button.bat-seg-tab {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 7px;
+    padding: 3px 10px;
+    min-height: 22px;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: @window_fg_color;
+}
+
+button.bat-seg-tab:hover {
+    background-color: alpha(@window_fg_color, 0.05);
+}
+
+button.bat-seg-tab-active,
+button.bat-seg-tab-active:hover {
+    background-color: #0a84ff;
+    color: #ffffff;
+    font-weight: 600;
+}
+
+scale.bat-limit-slider trough {
+    min-height: 4px;
+    border-radius: 999px;
+    background-color: alpha(@window_fg_color, 0.16);
+}
+
+scale.bat-limit-slider highlight {
+    min-height: 4px;
+    border-radius: 999px;
+    background-color: #0a84ff;
+}
+
+scale.bat-limit-slider slider {
+    min-width: 16px;
+    min-height: 16px;
+    border-radius: 999px;
+    background-color: #ffffff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+    border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+scale.bat-limit-slider marks {
+    font-size: 10px;
+    color: alpha(@window_fg_color, 0.62);
+}

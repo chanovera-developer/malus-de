@@ -21,6 +21,7 @@ mod wifi_pane;
 mod bluetooth_pane;
 mod network_pane;
 mod vpn_pane;
+mod battery_pane;
 
 const APP_ID: &str = "dev.malus.Settings";
 const SETTINGS_SIDEBAR_WIDTH: i32 = 212;
@@ -35,7 +36,7 @@ const SQUIRCLE_SEGMENTS: usize = 20;
 #[command(name = "malus-de-settings")]
 #[command(about = "Ajustes del Sistema de Malus DE (macOS System Settings)")]
 struct Args {
-    /// Panel inicial a mostrar: wifi, bluetooth, network, network-firewall, vpn, displays, wallpaper, keyboard, appearance, dock, spotlight, sound, about
+    /// Panel inicial a mostrar: wifi, bluetooth, network, network-firewall, vpn, battery, displays, wallpaper, keyboard, appearance, dock, spotlight, sound, about
     #[arg(short, long, default_value = "spotlight")]
     panel: String,
 
@@ -455,6 +456,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         ("bluetooth", "bluetooth-active-symbolic", "Bluetooth"),
         ("network", "network-workgroup-symbolic", "Red"),
         ("vpn", "network-vpn-symbolic", "VPN"),
+        ("battery", "battery-level-100-symbolic", "Batería"),
         ("appearance", "preferences-desktop-appearance-symbolic", "Aspecto"),
         ("dock", "user-desktop-symbolic", "Escritorio y Dock"),
         ("wallpaper", "preferences-desktop-wallpaper-symbolic", "Fondo de pantalla"),
@@ -503,6 +505,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                     "bluetooth" => "bluetooth dispositivos audio auriculares teclado raton inalambrico emparejar",
                     "network" => "red network ethernet puente thunderbolt firewall firewalld servicios ubicaciones",
                     "vpn" => "vpn wireguard openvpn ipsec ikev2 l2tp cisco red privada",
+                    "battery" => "bateria battery energia recarga condicion ciclos ahorro sdr hdr reposo",
                     "displays" => "pantallas monitor resolucion ppi truesize",
                     "wallpaper" => "fondo pantalla wallpaper imagen",
                     "keyboard" => "teclado distribucion lenguaje idioma xkb",
@@ -551,6 +554,49 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
 
     let (vpn_pane, refresh_vpn_pane) = vpn_pane::create_vpn_pane(&window);
     stack.add_named(&vpn_pane, Some("vpn"));
+
+    let header_title_col = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(1)
+        .hexpand(true)
+        .valign(Align::Center)
+        .build();
+    let active_pane_title = Label::builder()
+        .label("Spotlight")
+        .css_classes(["content-header-title"])
+        .xalign(0.0)
+        .build();
+    let header_sub_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(5)
+        .visible(false)
+        .build();
+    let header_sub_icon = Image::builder()
+        .icon_name("battery-level-100-symbolic")
+        .pixel_size(12)
+        .css_classes(["bat-header-sub-icon"])
+        .build();
+    let header_sub_label = Label::builder()
+        .label("")
+        .css_classes(["bat-header-sub-label"])
+        .xalign(0.0)
+        .build();
+    header_sub_row.append(&header_sub_icon);
+    header_sub_row.append(&header_sub_label);
+    header_title_col.append(&active_pane_title);
+    header_title_col.append(&header_sub_row);
+
+    let battery_header_cb: battery_pane::BatteryHeaderCallback = {
+        let icon_c = header_sub_icon.clone();
+        let lbl_c = header_sub_label.clone();
+        Rc::new(move |icon_name: &str, text: &str| {
+            icon_c.set_icon_name(Some(icon_name));
+            lbl_c.set_label(text);
+        })
+    };
+    let (battery_pane, refresh_battery_pane) =
+        battery_pane::create_battery_pane(&window, battery_header_cb);
+    stack.add_named(&battery_pane, Some("battery"));
 
     let (displays_pane, refresh_displays_pane) = create_displays_pane();
     stack.add_named(&displays_pane, Some("displays"));
@@ -625,14 +671,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     nav_btn_box.append(&btn_forward);
     header_toolbar.append(&nav_btn_box);
 
-    let active_pane_title = Label::builder()
-        .label("Spotlight")
-        .css_classes(["content-header-title"])
-        .xalign(0.0)
-        .hexpand(true)
-        .valign(Align::Center)
-        .build();
-    header_toolbar.append(&active_pane_title);
+    header_toolbar.append(&header_title_col);
 
     let window_controls_end = WindowControls::builder()
         .side(PackType::End)
@@ -662,10 +701,10 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     let start_id = match initial_panel {
         "red" => "network",
         "firewall" => "network-firewall",
-        "wifi" | "bluetooth" | "network" | "network-firewall" | "vpn" | "wallpaper"
-        | "keyboard" | "appearance" | "sound" | "about" | "dock" | "spotlight" | "displays" => {
-            initial_panel
-        }
+        "bateria" | "batería" => "battery",
+        "wifi" | "bluetooth" | "network" | "network-firewall" | "vpn" | "battery"
+        | "wallpaper" | "keyboard" | "appearance" | "sound" | "about" | "dock" | "spotlight"
+        | "displays" => initial_panel,
         _ => "spotlight",
     };
 
@@ -677,11 +716,13 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         let btns = all_btns.clone();
         let stack_c = stack.clone();
         let title_lbl = active_pane_title.clone();
+        let sub_row_c = header_sub_row.clone();
         let ref_wifi = refresh_wifi_pane.clone();
         let ref_bt = refresh_bluetooth_pane.clone();
         let ref_net = refresh_network_pane.clone();
         let ref_fw = refresh_firewall_pane.clone();
         let ref_vpn = refresh_vpn_pane.clone();
+        let ref_bat = refresh_battery_pane.clone();
         let ref_disp = refresh_displays_pane.clone();
         let ref_wall = refresh_wallpaper_pane.clone();
         let ref_kb = refresh_keyboard_pane.clone();
@@ -706,6 +747,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                     btn.remove_css_class("sidebar-btn-active");
                 }
             }
+            sub_row_c.set_visible(target == "battery");
             if target == "wifi" {
                 ref_wifi();
             } else if target == "bluetooth" {
@@ -716,6 +758,8 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                 ref_fw();
             } else if target == "vpn" {
                 ref_vpn();
+            } else if target == "battery" {
+                ref_bat();
             } else if target == "displays" {
                 ref_disp();
             } else if target == "wallpaper" {
@@ -735,6 +779,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                 "network" => "Red",
                 "network-firewall" => "Firewall",
                 "vpn" => "VPN",
+                "battery" => "Batería",
                 "displays" => "Pantallas",
                 "wallpaper" => "Fondo de pantalla",
                 "keyboard" => "Teclado",
@@ -860,6 +905,19 @@ pub(crate) fn set_modal_scrim_visible(window: &ApplicationWindow, visible: bool)
         }
         child = widget.next_sibling();
     }
+}
+
+pub(crate) fn attach_modal_scrim(dialog: &gtk4::Window, parent: &ApplicationWindow) {
+    set_modal_scrim_visible(parent, true);
+    let p1 = parent.clone();
+    dialog.connect_close_request(move |_| {
+        set_modal_scrim_visible(&p1, false);
+        glib::Propagation::Proceed
+    });
+    let p2 = parent.clone();
+    dialog.connect_destroy(move |_| {
+        set_modal_scrim_visible(&p2, false);
+    });
 }
 
 // ============================================================================
