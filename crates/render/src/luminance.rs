@@ -36,6 +36,9 @@ pub struct AdaptivePalette {
 impl AdaptivePalette {
     /// Genera la paleta de contraste adaptativo para fondo oscuro o fondo claro.
     pub fn new(is_dark_background: bool) -> Self {
+        let scale = malus_de_common::config::current_liquid_glass_scale();
+        let pop_alpha =
+            malus_de_common::config::scaled_liquid_glass_alpha(0.35, scale, 0.08, 0.90) as f32;
         if is_dark_background {
             // Fondo oscuro (fondos oscuros, nocturnos o espaciales estilo macOS)
             // Barra 100% transparente con texto e iconos en blanco puro / brillante.
@@ -48,7 +51,7 @@ impl AdaptivePalette {
                 button_hover_bg: [1.0, 1.0, 1.0, 0.04], // Escarcha translúcida muy sutil
                 button_active_bg: [0.0, 0.48, 1.0, 0.70], // Acento azul macOS activo semitransparente (#007AFF)
                 topbar_active_bg: [1.0, 1.0, 1.0, 0.02], // Píldora translúcida extremadamente sutil (2% opacidad)
-                popover_bg: [0.93, 0.95, 0.98, 0.35],   // Vidrio claro muy translúcido (35% opacidad)
+                popover_bg: [0.93, 0.95, 0.98, pop_alpha],   // Vidrio claro translúcido enlazado a Liquid Glass
                 popover_border: [0.0, 0.0, 0.0, 0.22],  // Línea exterior oscura semitransparente
                 popover_text: [0.11, 0.11, 0.13, 1.0],  // Grafito oscuro nítido (#1D1D1F)
                 popover_text_dimmed: [0.43, 0.43, 0.46, 0.80], // Atajos y subtítulos (#6E6E73)
@@ -65,7 +68,7 @@ impl AdaptivePalette {
                 button_hover_bg: [0.0, 0.0, 0.0, 0.03], // Escarcha translúcida oscura muy sutil
                 button_active_bg: [0.0, 0.48, 1.0, 0.70], // Acento azul macOS activo semitransparente (#007AFF)
                 topbar_active_bg: [0.0, 0.0, 0.0, 0.02], // Píldora translúcida sutil oscura (2% opacidad)
-                popover_bg: [0.95, 0.96, 0.98, 0.35],   // Vidrio claro muy translúcido (35% opacidad)
+                popover_bg: [0.95, 0.96, 0.98, pop_alpha],   // Vidrio claro translúcido enlazado a Liquid Glass
                 popover_border: [0.0, 0.0, 0.0, 0.22],  // Línea exterior oscura semitransparente
                 popover_text: [0.11, 0.11, 0.13, 1.0],  // Grafito oscuro nítido (#1D1D1F)
                 popover_text_dimmed: [0.43, 0.43, 0.46, 0.80], // Atajos y subtítulos (#6E6E73)

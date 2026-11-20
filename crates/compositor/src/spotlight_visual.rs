@@ -1777,6 +1777,8 @@ impl SpotlightState {
             *s ^= v;
             *s = s.wrapping_mul(1099511628211);
         };
+        let glass_scale = malus_de_common::config::current_liquid_glass_scale();
+        mix(&mut sig, (glass_scale * 1000.0).round() as u64);
         mix(&mut sig, (hover_t * 2000.0).round() as u64);
         mix(&mut sig, (expand_t * 2000.0).round() as u64);
         mix(&mut sig, (card_h * 20.0).round() as u64);
@@ -2112,18 +2114,27 @@ impl SpotlightState {
 
         // 2.2. Rellenar el cuerpo Liquid Glass usando mask_surface como máscara unificada
         // (Cero doble mezcla alfa en los puentes líquidos entre la cápsula y los círculos)
+        let glass_scale = malus_de_common::config::current_liquid_glass_scale();
         let (glass_top, glass_bottom, fg_main, fg_muted, border_rgba) = if is_dark {
+            let a_top =
+                malus_de_common::config::scaled_liquid_glass_alpha(0.56, glass_scale, 0.12, 0.94);
+            let a_bot =
+                malus_de_common::config::scaled_liquid_glass_alpha(0.64, glass_scale, 0.15, 0.96);
             (
-                [0.19, 0.20, 0.23, 0.56],
-                [0.12, 0.13, 0.15, 0.64],
+                [0.19, 0.20, 0.23, a_top],
+                [0.12, 0.13, 0.15, a_bot],
                 [0.96, 0.97, 0.99],
                 [0.64, 0.66, 0.71],
                 [1.0, 1.0, 1.0, 0.22],
             )
         } else {
+            let a_top =
+                malus_de_common::config::scaled_liquid_glass_alpha(0.64, glass_scale, 0.15, 0.95);
+            let a_bot =
+                malus_de_common::config::scaled_liquid_glass_alpha(0.72, glass_scale, 0.18, 0.96);
             (
-                [0.97, 0.98, 0.99, 0.64],
-                [0.91, 0.93, 0.96, 0.72],
+                [0.97, 0.98, 0.99, a_top],
+                [0.91, 0.93, 0.96, a_bot],
                 [0.11, 0.12, 0.15],
                 [0.42, 0.44, 0.49],
                 [1.0, 1.0, 1.0, 0.65],

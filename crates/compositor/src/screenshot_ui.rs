@@ -714,11 +714,16 @@ impl ScreenshotUiState {
         draw_soft_shadow(ctx, x, y, w, h, r, is_dark);
 
         // 2. Fondo de cristal translúcido (frosted glass orgánico)
+        let glass_scale = malus_de_common::config::current_liquid_glass_scale();
         path_squircle_rect(ctx, x, y, w, h, r);
         if is_dark {
-            ctx.set_source_rgba(0.16, 0.17, 0.20, 0.68);
+            let a =
+                malus_de_common::config::scaled_liquid_glass_alpha(0.68, glass_scale, 0.16, 0.95);
+            ctx.set_source_rgba(0.16, 0.17, 0.20, a);
         } else {
-            ctx.set_source_rgba(0.96, 0.96, 0.98, 0.62);
+            let a =
+                malus_de_common::config::scaled_liquid_glass_alpha(0.62, glass_scale, 0.16, 0.95);
+            ctx.set_source_rgba(0.96, 0.96, 0.98, a);
         }
         let _ = ctx.fill_preserve();
 
@@ -835,11 +840,14 @@ impl ScreenshotUiState {
 
         draw_soft_shadow(ctx, x, y, w, h, r, is_dark);
 
+        let glass_scale = malus_de_common::config::current_liquid_glass_scale();
+        let menu_a =
+            malus_de_common::config::scaled_liquid_glass_alpha(0.88, glass_scale, 0.20, 0.96);
         path_squircle_rect(ctx, x, y, w, h, r);
         if is_dark {
-            ctx.set_source_rgba(0.16, 0.17, 0.20, 0.88);
+            ctx.set_source_rgba(0.16, 0.17, 0.20, menu_a);
         } else {
-            ctx.set_source_rgba(0.96, 0.96, 0.98, 0.88);
+            ctx.set_source_rgba(0.96, 0.96, 0.98, menu_a);
         }
         let _ = ctx.fill_preserve();
         ctx.set_line_width(1.0);

@@ -319,11 +319,16 @@ fn build_appearance_main_pane(
         let prev_c = glass_preview;
         let prefs_c = prefs.clone();
         glass_slider.connect_value_changed(move |sc| {
-            let v = sc.value();
+            let v = sc.value().clamp(0.15, 0.95);
             op_c.set(v);
             prefs_c.borrow_mut().liquid_glass_opacity = v;
             prefs_c.borrow().save();
             prev_c.queue_draw();
+            crate::apply_liquid_glass_opacity_css(v);
+            malus_de_common::config::sync_system_appearance(crate::is_dark_mode_active());
+            let _ = malus_de_common::ipc::IpcClient::send_command(
+                malus_de_common::ipc::IpcMessage::LiquidGlassOpacityChanged { opacity: v },
+            );
         });
     }
     glass_slider_row.append(&glass_slider);

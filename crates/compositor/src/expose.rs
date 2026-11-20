@@ -1052,7 +1052,10 @@ fn rasterize_spaces_bar(
             bar_r,
             EXPOSE_SQUIRCLE_EXPONENT,
         );
-        cr.set_source_rgba(0.08, 0.09, 0.12, 0.72);
+        let glass_scale = malus_de_common::config::current_liquid_glass_scale();
+        let bar_a =
+            malus_de_common::config::scaled_liquid_glass_alpha(0.72, glass_scale, 0.16, 0.95);
+        cr.set_source_rgba(0.08, 0.09, 0.12, bar_a);
         cr.fill_preserve().ok()?;
         cr.set_source_rgba(1.0, 1.0, 1.0, 0.14);
         cr.set_line_width((1.0 * scale).max(1.0));

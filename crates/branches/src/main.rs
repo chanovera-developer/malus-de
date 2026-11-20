@@ -167,10 +167,48 @@ fn main() {
     }
 }
 
+thread_local! {
+    static BRANCHES_GLASS_PROVIDER: std::cell::RefCell<Option<CssProvider>> =
+        const { std::cell::RefCell::new(None) };
+    static BRANCHES_GLASS_MONITOR: std::cell::RefCell<Option<gio::FileMonitor>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+pub(crate) fn apply_branches_liquid_glass_opacity(opacity: f64) {
+    let scale = malus_de_common::config::liquid_glass_scale_for(opacity);
+    let side_a = malus_de_common::config::scaled_liquid_glass_alpha(0.72, scale, 0.12, 0.96);
+    let pop_dark_a = malus_de_common::config::scaled_liquid_glass_alpha(0.78, scale, 0.14, 0.96);
+    let pop_light_a = malus_de_common::config::scaled_liquid_glass_alpha(0.76, scale, 0.14, 0.96);
+    let pop_a = if malus_de_common::config::is_dark_mode_active() {
+        pop_dark_a
+    } else {
+        pop_light_a
+    };
+    let css = format!(
+        ".branches-sidebar-pane {{ \
+             background-color: alpha(@window_bg_color, {side_a:.3}); \
+         }} \
+         window.branches-window popover > contents, \
+         window.branches-window popover.menu > contents, \
+         window.branches-window popover.background > contents, \
+         popover > contents, \
+         popover.menu > contents, \
+         popover.background > contents {{ \
+             background-color: alpha(@window_bg_color, {pop_a:.3}); \
+         }}"
+    );
+    BRANCHES_GLASS_PROVIDER.with(|cell| {
+        if let Some(provider) = cell.borrow().as_ref() {
+            provider.load_from_string(&css);
+        }
+    });
+}
+
 fn load_custom_css() {
     let provider = CssProvider::new();
     let css = include_str!("styles/macos-branches.css");
     provider.load_from_string(css);
+    let glass_provider = CssProvider::new();
 
     if let Some(display) = Display::default() {
         let icon_theme = gtk4::IconTheme::for_display(&display);
@@ -184,6 +222,30 @@ fn load_custom_css() {
             &provider,
             gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
+        gtk4::style_context_add_provider_for_display(
+            &display,
+            &glass_provider,
+            gtk4::STYLE_PROVIDER_PRIORITY_USER + 1,
+        );
+    }
+
+    BRANCHES_GLASS_PROVIDER.with(|cell| {
+        *cell.borrow_mut() = Some(glass_provider);
+    });
+    apply_branches_liquid_glass_opacity(malus_de_common::config::load_liquid_glass_opacity());
+
+    let app_cfg_file = gio::File::for_path(malus_de_common::config::appearance_settings_path());
+    if let Ok(monitor) =
+        app_cfg_file.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
+    {
+        monitor.connect_changed(|_, _, _, _| {
+            apply_branches_liquid_glass_opacity(
+                malus_de_common::config::load_liquid_glass_opacity(),
+            );
+        });
+        BRANCHES_GLASS_MONITOR.with(|cell| {
+            *cell.borrow_mut() = Some(monitor);
+        });
     }
 }
 

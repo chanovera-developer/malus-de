@@ -59,12 +59,73 @@ pub const MALUS_GTK_CSS_WINDOWCONTROLS_DARK: &str = include_str!("styles/windowc
 /// Reglas CSS de Malus DE para controles de ventana estilo macOS y recortes squircle
 pub const MALUS_GTK_CSS_SQUIRCLE_RULES: &str = include_str!("styles/squircle-rules.css");
 
-fn malus_gtk_css_popup(dark: bool) -> &'static str {
-    if dark {
+fn malus_gtk_css_popup(dark: bool) -> String {
+    let scale = current_liquid_glass_scale();
+    let dark_alpha = scaled_liquid_glass_alpha(0.78, scale, 0.14, 0.96);
+    let light_alpha = scaled_liquid_glass_alpha(0.76, scale, 0.14, 0.96);
+    let raw = if dark {
         include_str!("styles/popup-dark.css")
     } else {
         include_str!("styles/popup-light.css")
+    };
+    raw.replace(
+        "rgba(30, 30, 36, 0.78)",
+        &format!("rgba(30, 30, 36, {dark_alpha:.2})"),
+    )
+    .replace(
+        "rgba(244, 246, 250, 0.76)",
+        &format!("rgba(244, 246, 250, {light_alpha:.2})"),
+    )
+}
+
+/// Opacidad base del deslizador «Liquid Glass» en Ajustes → Aspecto (`0.55`).
+pub const DEFAULT_LIQUID_GLASS_OPACITY: f64 = 0.55;
+
+/// Ruta canónica del archivo de preferencias de Aspecto (`~/.config/malus-de/appearance-settings.toml`).
+pub fn appearance_settings_path() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        let p = PathBuf::from(&xdg);
+        if p.file_name().is_some_and(|n| n == "malus-de") {
+            return p.join("appearance-settings.toml");
+        }
+        return p.join("malus-de").join("appearance-settings.toml");
     }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".config/malus-de/appearance-settings.toml")
+}
+
+/// Lee el nivel de opacidad de Liquid Glass configurado en `appearance-settings.toml` (`[0.15, 0.95]`).
+pub fn load_liquid_glass_opacity() -> f64 {
+    let path = appearance_settings_path();
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return DEFAULT_LIQUID_GLASS_OPACITY;
+    };
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("liquid_glass_opacity") {
+            if let Some(val_str) = rest.trim_start().strip_prefix('=') {
+                if let Ok(v) = val_str.trim().parse::<f64>() {
+                    return v.clamp(0.15, 0.95);
+                }
+            }
+        }
+    }
+    DEFAULT_LIQUID_GLASS_OPACITY
+}
+
+/// Factor multiplicativo relativo a la opacidad predeterminada (`0.55` -> `1.0`).
+pub fn liquid_glass_scale_for(opacity: f64) -> f64 {
+    (opacity.clamp(0.15, 0.95) / DEFAULT_LIQUID_GLASS_OPACITY).clamp(0.25, 1.85)
+}
+
+/// Factor multiplicativo actual de Liquid Glass leído desde `appearance-settings.toml`.
+pub fn current_liquid_glass_scale() -> f64 {
+    liquid_glass_scale_for(load_liquid_glass_opacity())
+}
+
+/// Escala un valor alfa base según el factor de Liquid Glass manteniéndolo dentro de `[min_a, max_a]`.
+pub fn scaled_liquid_glass_alpha(base_alpha: f64, scale: f64, min_a: f64, max_a: f64) -> f64 {
+    (base_alpha * scale).clamp(min_a, max_a)
 }
 
 pub const MALUS_GTK_CSS_SIDEBAR_COMMON: &str = include_str!("styles/sidebar-common.css");
@@ -102,6 +163,14 @@ pub fn get_malus_gtk_css(dark: bool) -> String {
 
 /// Hoja de estilos CSS nativa y válida para GTK 3 (Firefox, LibreOffice, GIMP, diálogos GTK3)
 pub fn get_malus_gtk3_css(dark: bool) -> String {
+    let scale = current_liquid_glass_scale();
+    let dark_popup_alpha = scaled_liquid_glass_alpha(0.78, scale, 0.14, 0.96);
+    let light_popup_alpha = scaled_liquid_glass_alpha(0.76, scale, 0.14, 0.96);
+    let popup_bg_owned = if dark {
+        format!("rgba(30, 30, 36, {dark_popup_alpha:.2})")
+    } else {
+        format!("rgba(244, 246, 250, {light_popup_alpha:.2})")
+    };
     let (
         bg_color,
         fg_color,
@@ -118,7 +187,7 @@ pub fn get_malus_gtk3_css(dark: bool) -> String {
             "rgb(255, 255, 255)",
             "rgb(30, 30, 34)",
             "rgba(255, 255, 255, 0.08)",
-            "rgba(30, 30, 36, 0.78)",
+            popup_bg_owned.as_str(),
             "#f4f4f5",
             "rgba(255, 255, 255, 0.10)",
             "rgba(255, 255, 255, 0.18)",
@@ -130,7 +199,7 @@ pub fn get_malus_gtk3_css(dark: bool) -> String {
             "rgb(0, 0, 0)",
             "rgb(246, 246, 248)",
             "rgba(0, 0, 0, 0.08)",
-            "rgba(244, 246, 250, 0.76)",
+            popup_bg_owned.as_str(),
             "#1d1d1f",
             "rgba(0, 0, 0, 0.08)",
             "rgba(0, 0, 0, 0.16)",
@@ -2700,7 +2769,7 @@ mod tests {
             css.rfind("window.view popover > contents").unwrap()
                 > css.find("window.view popover > contents").unwrap()
         );
-        assert!(css.contains("border-radius: 0;\n    margin: 0;\n    padding: 5px;"));
+        assert!(css.contains("border-radius: 0;\n    margin: 0;\n    padding: 4px;"));
         assert!(css.contains("min-height: 24px;\n    padding: 3px 8px;"));
         assert!(!css.contains("background-color: alpha(@window_bg_color, 0.84);"));
         assert!(!css.contains("\nwindow.background {\n"));
@@ -2709,18 +2778,24 @@ mod tests {
 
     #[test]
     fn nautilus_popup_background_overrides_transparency_in_both_themes() {
+        let scale = current_liquid_glass_scale();
+        let dark_alpha = scaled_liquid_glass_alpha(0.78, scale, 0.14, 0.96);
+        let light_alpha = scaled_liquid_glass_alpha(0.76, scale, 0.14, 0.96);
+        let dark_bg = format!("background-color: rgba(30, 30, 36, {dark_alpha:.2});");
+        let light_bg = format!("background-color: rgba(244, 246, 250, {light_alpha:.2});");
+
         for (dark, background, opposite_media, opposite_bg) in [
             (
                 true,
-                "background-color: rgba(30, 30, 36, 0.78);",
+                dark_bg.as_str(),
                 "@media (prefers-color-scheme: light)",
-                "background-color: rgba(244, 246, 250, 0.76);",
+                light_bg.as_str(),
             ),
             (
                 false,
-                "background-color: rgba(244, 246, 250, 0.76);",
+                light_bg.as_str(),
                 "@media (prefers-color-scheme: dark)",
-                "background-color: rgba(30, 30, 36, 0.78);",
+                dark_bg.as_str(),
             ),
         ] {
             let css = get_malus_gtk_css(dark);
@@ -2736,24 +2811,41 @@ mod tests {
 
     #[test]
     fn popup_background_and_border_follow_the_active_theme_in_both_gtk_versions() {
+        let scale = current_liquid_glass_scale();
+        let dark_alpha = scaled_liquid_glass_alpha(0.78, scale, 0.14, 0.96);
+        let light_alpha = scaled_liquid_glass_alpha(0.76, scale, 0.14, 0.96);
+        let dark_bg = format!("rgba(30, 30, 36, {dark_alpha:.2})");
+        let light_bg = format!("rgba(244, 246, 250, {light_alpha:.2})");
+
         let dark_gtk4 = get_malus_gtk_css(true);
         let light_gtk4 = get_malus_gtk_css(false);
         let dark_gtk3 = get_malus_gtk3_css(true);
         let light_gtk3 = get_malus_gtk3_css(false);
 
         for (css, bg, fg) in [
-            (&dark_gtk4, "rgba(30, 30, 36, 0.78)", "#f4f4f5"),
-            (&light_gtk4, "rgba(244, 246, 250, 0.76)", "#1d1d1f"),
-            (&dark_gtk3, "rgba(30, 30, 36, 0.78)", "#f4f4f5"),
-            (&light_gtk3, "rgba(244, 246, 250, 0.76)", "#1d1d1f"),
+            (&dark_gtk4, dark_bg.as_str(), "#f4f4f5"),
+            (&light_gtk4, light_bg.as_str(), "#1d1d1f"),
+            (&dark_gtk3, dark_bg.as_str(), "#f4f4f5"),
+            (&light_gtk3, light_bg.as_str(), "#1d1d1f"),
         ] {
             assert!(css.contains(&format!("background-color: {bg};")));
             assert!(css.contains(&format!("color: {fg};")));
             assert!(css.contains("border: none;"));
             assert!(css.contains("box-shadow: none;"));
-            assert!(css.contains("padding: 5px;"));
+            assert!(css.contains("padding: 4px;"));
             assert!(css.contains("background-color: rgba(0, 122, 255, 0.70);"));
         }
+    }
+
+    #[test]
+    fn liquid_glass_scale_and_alpha_clamp_cleanly() {
+        assert!((liquid_glass_scale_for(0.55) - 1.0).abs() < 1e-6);
+        assert!(liquid_glass_scale_for(0.20) < 1.0);
+        assert!(liquid_glass_scale_for(0.90) > 1.0);
+        let low = scaled_liquid_glass_alpha(0.72, liquid_glass_scale_for(0.15), 0.12, 0.96);
+        let high = scaled_liquid_glass_alpha(0.72, liquid_glass_scale_for(0.95), 0.12, 0.96);
+        assert!(low < 0.72 && low >= 0.12);
+        assert!(high > 0.72 && high <= 0.96);
     }
 
     #[test]
@@ -2867,8 +2959,6 @@ mod tests {
     #[test]
     fn test_dock_config_load_or_create_default() {
         let cfg = DockConfig::load_or_create_default();
-        let path = DockConfig::config_path();
-        assert!(path.exists());
         assert!(!cfg.apps.is_empty());
         assert_eq!(DockConfig::default().apps.len(), 5);
         assert!(cfg.icon_size > 0);

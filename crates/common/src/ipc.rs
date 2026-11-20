@@ -163,6 +163,10 @@ pub enum IpcMessage {
         theme_name: String,
         is_dark: bool,
     },
+    /// Notificación de cambio en el nivel de transparencia / opacidad de Liquid Glass (`[0.15, 0.95]`)
+    LiquidGlassOpacityChanged {
+        opacity: f64,
+    },
     /// Solicita al compositor capturar el fotograma actual antes de cambiar el tema.
     PrepareThemeTransition { request_id: String },
     /// Confirmación enviada cuando el fotograma anterior quedó guardado.

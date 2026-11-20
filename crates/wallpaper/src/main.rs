@@ -252,6 +252,30 @@ static CURRENT_IS_DARK: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 thread_local! {
     static REGISTERED_POPOVERS: RefCell<Vec<glib::WeakRef<Popover>>> = RefCell::new(Vec::new());
     static DESKTOP_LAYOUT_ANIM_GEN: Cell<u64> = const { Cell::new(0) };
+    static WALLPAPER_GLASS_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
+}
+
+fn apply_wallpaper_liquid_glass_opacity(opacity: f64) {
+    let scale = malus_de_common::config::liquid_glass_scale_for(opacity);
+    let dark_a = malus_de_common::config::scaled_liquid_glass_alpha(0.78, scale, 0.14, 0.96);
+    let light_a = malus_de_common::config::scaled_liquid_glass_alpha(0.76, scale, 0.14, 0.96);
+    let css = format!(
+        "popover.desktop-popover-menu > contents, \
+         popover.desktop-popover-menu > contents.background {{ \
+             background-color: rgba(30, 30, 36, {dark_a:.3}); \
+         }} \
+         popover.desktop-popover-menu.light-popover > contents, \
+         popover.desktop-popover-menu.light-popover > contents.background, \
+         popover.light-popover.desktop-popover-menu > contents, \
+         popover.light-popover > contents {{ \
+             background-color: rgba(244, 246, 250, {light_a:.3}); \
+         }}"
+    );
+    WALLPAPER_GLASS_PROVIDER.with(|cell| {
+        if let Some(provider) = cell.borrow().as_ref() {
+            provider.load_from_string(&css);
+        }
+    });
 }
 
 pub fn is_dark_mode_active() -> bool {
@@ -4731,6 +4755,10 @@ fn main() -> Result<()> {
                         info!("🎨 [Wallpaper] IPC ThemeChanged recibido: is_dark={}", is_dark);
                         set_is_dark_mode(is_dark);
                     }
+                    malus_de_common::ipc::IpcMessage::LiquidGlassOpacityChanged { opacity } => {
+                        info!("✨ [Wallpaper] IPC LiquidGlassOpacityChanged recibido: opacity={:.2}", opacity);
+                        apply_wallpaper_liquid_glass_opacity(opacity);
+                    }
                     malus_de_common::ipc::IpcMessage::CreateDesktopAppShortcut {
                         desktop_file,
                         drop_x,
@@ -4786,6 +4814,7 @@ fn main() -> Result<()> {
         // 3. Registrar hoja de estilo CSS
         let provider = CssProvider::new();
         provider.load_from_string(DEFAULT_GRADIENT_CSS);
+        let glass_provider = CssProvider::new();
         if let Some(display) = gtk4::gdk::Display::default() {
             let icon_theme = gtk4::IconTheme::for_display(&display);
             for icon_dir in malus_de_common::apps::extra_icon_search_paths() {
@@ -4798,7 +4827,16 @@ fn main() -> Result<()> {
                 &provider,
                 gtk4::STYLE_PROVIDER_PRIORITY_USER + 100,
             );
+            gtk4::style_context_add_provider_for_display(
+                &display,
+                &glass_provider,
+                gtk4::STYLE_PROVIDER_PRIORITY_USER + 101,
+            );
         }
+        WALLPAPER_GLASS_PROVIDER.with(|cell| {
+            *cell.borrow_mut() = Some(glass_provider);
+        });
+        apply_wallpaper_liquid_glass_opacity(malus_de_common::config::load_liquid_glass_opacity());
     });
 
     let monitors_hooked = Rc::new(Cell::new(false));

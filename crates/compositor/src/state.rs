@@ -1881,6 +1881,16 @@ impl MalusState {
                         is_dark,
                     });
                 }
+                IpcMessage::LiquidGlassOpacityChanged { opacity } => {
+                    tracing::info!(
+                        "📥 IPC LiquidGlassOpacityChanged recibido: opacidad={:.2}",
+                        opacity
+                    );
+                    self.surface_commit_counter = self.surface_commit_counter.wrapping_add(1);
+                    self.expose.bump_revision();
+                    self.ipc_broadcaster
+                        .broadcast(&IpcMessage::LiquidGlassOpacityChanged { opacity });
+                }
                 IpcMessage::AnimateRestore { window_id } => {
                     tracing::info!("📥 IPC AnimateRestore recibido para ventana id={}", window_id);
                     self.restore_window_by_id(window_id);

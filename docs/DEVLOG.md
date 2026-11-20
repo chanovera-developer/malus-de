@@ -4,6 +4,28 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-20] — Enlace Global en Vivo de «Liquid Glass» con Menús, Branches, Ajustes, Dock y Spotlight
+
+Se enlaza el deslizador de transparencia **Liquid Glass** de `Ajustes → Aspecto` (`~/.config/malus-de/appearance-settings.toml`) con todas las superficies translúcidas del entorno de escritorio y el mensaje IPC `IpcMessage::LiquidGlassOpacityChanged`.
+
+### Cambios Clave
+- **Núcleo compartido ([`crates/common/src/config.rs`](../crates/common/src/config.rs) e [`ipc.rs`](../crates/common/src/ipc.rs))**:
+  - Funciones `appearance_settings_path()`, `load_liquid_glass_opacity()`, `liquid_glass_scale_for()`, `current_liquid_glass_scale()` y `scaled_liquid_glass_alpha()`.
+  - Las hojas CSS de popovers y menús GTK3/GTK4 (`gtk-3.0/gtk.css` y `gtk-4.0/gtk.css`) generadas por `sync_system_appearance` escalan automáticamente su opacidad con el nivel de Liquid Glass.
+  - Nuevo mensaje `IpcMessage::LiquidGlassOpacityChanged { opacity }` difundido por el compositor a todos los clientes conectados.
+- **Ajustes del Sistema ([`crates/settings/src/appearance_pane.rs`](../crates/settings/src/appearance_pane.rs), [`main.rs`](../crates/settings/src/main.rs))**:
+  - Al mover el deslizador de **Liquid Glass**, actualiza en tiempo real la barra lateral `.macos-sidebar` y los popovers de Ajustes, regenera el CSS global de GTK3/GTK4 y emite `LiquidGlassOpacityChanged`.
+- **Branches ([`crates/branches/src/main.rs`](../crates/branches/src/main.rs))**:
+  - Proveedor CSS dinámico y monitor de archivo sobre `appearance-settings.toml` que actualiza en vivo la transparencia de `.branches-sidebar-pane` y de todos sus menús contextuales/popovers.
+- **Dock y App Switcher ([`crates/dock/src/main.rs`](../crates/dock/src/main.rs))**:
+  - Escucha `LiquidGlassOpacityChanged` y actualiza al instante `.dock-container`, el SVG translúcido de los popovers del Dock y el contenedor squircle del App Switcher.
+- **Top Bar, Centro de Control, Escritorio, Notificaciones y Diálogos ([`crates/top-bar/src/main.rs`](../crates/top-bar/src/main.rs), [`crates/render/src/luminance.rs`](../crates/render/src/luminance.rs), [`crates/wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs), [`crates/notifications/src/main.rs`](../crates/notifications/src/main.rs), [`crates/dialogs/src/lib.rs`](../crates/dialogs/src/lib.rs))**:
+  - Enlazados los menús desplegables de la barra superior, el Centro de Control, los menús contextuales del escritorio, los banners de notificación y las tarjetas de confirmación del sistema.
+- **Spotlight, Snap Layouts, Captura de Pantalla y Exposé en el Compositor ([`crates/compositor/src/spotlight_visual.rs`](../crates/compositor/src/spotlight_visual.rs), [`snap_layouts.rs`](../crates/compositor/src/snap_layouts.rs), [`screenshot_ui.rs`](../crates/compositor/src/screenshot_ui.rs), [`expose.rs`](../crates/compositor/src/expose.rs), [`state.rs`](../crates/compositor/src/state.rs))**:
+  - El cuerpo y botones Liquid Glass de Spotlight, el menú flotante de Snap Layouts, la barra y menú de Captura de Pantalla y la barra superior de espacios de Exposé escalan su transparencia de forma reactiva.
+
+---
+
 ## [2026-11-20] — Rediseño de Aspecto (`Aspecto.png`) y Subsección «Temas» al estilo Apple (`malus-de-settings`)
 
 Se reemplaza el panel de **Aspecto** por la arquitectura visual de `assets/screenshots/Aspecto.png` (macOS Tahoe) y se incorpora la subsección **Temas** (`appearance-themes`) con transición animada `SlideLeft`/`SlideRight`, agrupando *Tema de aplicaciones*, *Tema y estilo del puntero* y *Superficie de escritorio* con tarjetas squircle Apple-like (y trasladando el tamaño del Dock fuera de Aspecto).

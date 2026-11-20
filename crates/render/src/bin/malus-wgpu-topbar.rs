@@ -225,6 +225,13 @@ fn main() -> Result<()> {
                                     let status_items = fetch_current_status_items();
                                     let _ = status_tx.send(StatusUpdate { clock, status_items, is_dark });
                                 }
+                                IpcMessage::LiquidGlassOpacityChanged { opacity } => {
+                                    info!("✨ [TopBar] IPC LiquidGlassOpacityChanged recibido: opacity={:.2}", opacity);
+                                    let clock = current_clock_string();
+                                    let status_items = fetch_current_status_items();
+                                    let is_dark = malus_de_render::luminance::detect_system_is_dark();
+                                    let _ = status_tx.send(StatusUpdate { clock, status_items, is_dark });
+                                }
                                 _ => {}
                             }
                         }

@@ -62,9 +62,27 @@ fn main() {
     app.run();
 }
 
+thread_local! {
+    static DOCK_GLASS_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
+}
+
+fn apply_dock_liquid_glass_opacity(opacity: f64) {
+    let scale = malus_de_common::config::liquid_glass_scale_for(opacity);
+    let dock_a = malus_de_common::config::scaled_liquid_glass_alpha(0.42, scale, 0.10, 0.92);
+    let css = format!(
+        ".dock-container {{ background-color: alpha(@window_bg_color, {dock_a:.3}); }}"
+    );
+    DOCK_GLASS_PROVIDER.with(|cell| {
+        if let Some(provider) = cell.borrow().as_ref() {
+            provider.load_from_string(&css);
+        }
+    });
+}
+
 fn load_css() {
     let provider = CssProvider::new();
     provider.load_from_string(DOCK_CSS);
+    let glass_provider = CssProvider::new();
 
     if let Some(display) = gtk4::gdk::Display::default() {
         gtk4::style_context_add_provider_for_display(
@@ -80,7 +98,18 @@ fn load_css() {
             &popover_provider,
             gtk4::STYLE_PROVIDER_PRIORITY_USER + 1,
         );
+
+        gtk4::style_context_add_provider_for_display(
+            &display,
+            &glass_provider,
+            gtk4::STYLE_PROVIDER_PRIORITY_USER + 2,
+        );
     }
+
+    DOCK_GLASS_PROVIDER.with(|cell| {
+        *cell.borrow_mut() = Some(glass_provider);
+    });
+    apply_dock_liquid_glass_opacity(malus_de_common::config::load_liquid_glass_opacity());
 }
 
 fn create_popover_surface(menu_box: &GtkBox) -> Overlay {
@@ -239,11 +268,15 @@ fn themed_popover_svg(
         3.0 * std::f64::consts::FRAC_PI_2,
     );
     path.push_str(" Z");
+    let glass_scale = malus_de_common::config::current_liquid_glass_scale();
+    let svg_opacity =
+        malus_de_common::config::scaled_liquid_glass_alpha(0.65, glass_scale, 0.14, 0.96);
     let mut svg = template
         .replace("#f5f0ff", &blend_color_hex(background, foreground, 0.08))
         .replace("#e9e0f8", &blend_color_hex(background, foreground, 0.025))
         .replace("#d9cdec", &blend_color_hex(background, foreground, 0.06))
         .replace("#ffffff", &color_hex(foreground))
+        .replace("opacity=\"0.65\"", &format!("opacity=\"{svg_opacity:.3}\""))
         .replace(
             "width=\"320\" height=\"264\" viewBox=\"0 0 320 264\"",
             &format!("width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\""),
@@ -1626,6 +1659,13 @@ fn build_dock_ui(app: &Application) {
                     dock_root_ref.queue_draw();
                     win_ref.queue_draw();
                 }
+                IpcMessage::LiquidGlassOpacityChanged { opacity } => {
+                    info!("✨ [Dock] IPC LiquidGlassOpacityChanged recibido: opacity={:.2}", opacity);
+                    apply_dock_liquid_glass_opacity(opacity);
+                    switcher_bg_ipc.queue_draw();
+                    dock_root_ref.queue_draw();
+                    win_ref.queue_draw();
+                }
                 IpcMessage::ReloadDisplaysConfig => {
                     info!("🖥 [Dock] IPC ReloadDisplaysConfig recibido — reajustando dock y miniaturas");
                     queue_dock_resize(&win_ref, &dock_root_ref, &dock_bar_ref);
@@ -2981,8 +3021,11 @@ fn draw_switcher_squircle(
     } else {
         foreground
     };
+    let glass_scale = malus_de_common::config::current_liquid_glass_scale();
+    let container_alpha =
+        malus_de_common::config::scaled_liquid_glass_alpha(0.42, glass_scale, 0.10, 0.92) as f32;
     let fill_alpha = if container {
-        0.42
+        container_alpha
     } else if selected {
         0.22
     } else {

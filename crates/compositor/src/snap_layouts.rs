@@ -284,6 +284,7 @@ struct RenderCacheKey {
     phys_w: i32,
     phys_h: i32,
     scale_milli: i32,
+    glass_milli: i32,
     is_dark: bool,
     hovered_zone: Option<(usize, usize)>,
     card_count: usize,
@@ -589,10 +590,12 @@ impl SnapLayoutsState {
         let t = (elapsed / OPEN_ANIM_DURATION.as_secs_f32()).clamp(0.0, 1.0);
         let alpha = 1.0 - (1.0 - t).powi(3);
 
+        let glass_scale = malus_de_common::config::current_liquid_glass_scale();
         let key = RenderCacheKey {
             phys_w,
             phys_h,
             scale_milli: (scale * 1000.0).round() as i32,
+            glass_milli: (glass_scale * 1000.0).round() as i32,
             is_dark,
             hovered_zone: active.hovered_zone,
             card_count: cards.len(),
@@ -668,14 +671,19 @@ impl SnapLayoutsState {
             let ch = card_size_log.h as f64;
 
             // Superficie Liquid Glass del popup (la sombra difusa se proyecta por GPU con WindowShadowPipeline)
+            let glass_scale = malus_de_common::config::current_liquid_glass_scale();
+            let a_top =
+                malus_de_common::config::scaled_liquid_glass_alpha(0.78, glass_scale, 0.16, 0.95);
+            let a_bot =
+                malus_de_common::config::scaled_liquid_glass_alpha(0.84, glass_scale, 0.20, 0.96);
             append_squircle_path(&ctx, 0.0, 0.0, cw, ch, POPUP_CORNER_RADIUS, SQUIRCLE_EXPONENT);
             let bg_grad = LinearGradient::new(0.0, 0.0, 0.0, ch);
             if is_dark {
-                bg_grad.add_color_stop_rgba(0.0, 0.17, 0.17, 0.19, 0.78);
-                bg_grad.add_color_stop_rgba(1.0, 0.12, 0.12, 0.14, 0.84);
+                bg_grad.add_color_stop_rgba(0.0, 0.17, 0.17, 0.19, a_top);
+                bg_grad.add_color_stop_rgba(1.0, 0.12, 0.12, 0.14, a_bot);
             } else {
-                bg_grad.add_color_stop_rgba(0.0, 0.98, 0.98, 0.99, 0.78);
-                bg_grad.add_color_stop_rgba(1.0, 0.93, 0.94, 0.96, 0.84);
+                bg_grad.add_color_stop_rgba(0.0, 0.98, 0.98, 0.99, a_top);
+                bg_grad.add_color_stop_rgba(1.0, 0.93, 0.94, 0.96, a_bot);
             }
             let _ = ctx.set_source(&bg_grad);
             let _ = ctx.fill();

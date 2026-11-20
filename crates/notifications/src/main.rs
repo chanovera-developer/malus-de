@@ -15,7 +15,25 @@ use zbus::zvariant::Value;
 
 static NOTIFICATION_COUNTER: AtomicU32 = AtomicU32::new(1);
 
-const BANNER_CSS: &str = include_str!("styles/banner.css");
+thread_local! {
+    static NOTIF_GLASS_PROVIDER: std::cell::RefCell<Option<CssProvider>> =
+        const { std::cell::RefCell::new(None) };
+    static NOTIF_GLASS_MONITOR: std::cell::RefCell<Option<gtk4::gio::FileMonitor>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn apply_notification_liquid_glass_opacity(opacity: f64) {
+    let scale = malus_de_common::config::liquid_glass_scale_for(opacity);
+    let banner_a = malus_de_common::config::scaled_liquid_glass_alpha(0.85, scale, 0.16, 0.96);
+    let css = format!(
+        ".notification-banner {{ background-color: rgba(28, 28, 32, {banner_a:.3}); }}"
+    );
+    NOTIF_GLASS_PROVIDER.with(|cell| {
+        if let Some(provider) = cell.borrow().as_ref() {
+            provider.load_from_string(&css);
+        }
+    });
+}
 
 pub struct NotificationServer {
     sender: async_channel::Sender<NotificationMsg>,
@@ -119,13 +137,39 @@ fn main() -> Result<()> {
 
     app.connect_startup(|_| {
         let provider = CssProvider::new();
-        provider.load_from_string(BANNER_CSS);
+        provider.load_from_string(include_str!("styles/banner.css"));
+        let glass_provider = CssProvider::new();
         if let Some(display) = gtk4::gdk::Display::default() {
             gtk4::style_context_add_provider_for_display(
                 &display,
                 &provider,
                 gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
             );
+            gtk4::style_context_add_provider_for_display(
+                &display,
+                &glass_provider,
+                gtk4::STYLE_PROVIDER_PRIORITY_USER + 1,
+            );
+        }
+        NOTIF_GLASS_PROVIDER.with(|cell| {
+            *cell.borrow_mut() = Some(glass_provider);
+        });
+        apply_notification_liquid_glass_opacity(
+            malus_de_common::config::load_liquid_glass_opacity(),
+        );
+        let cfg_file = gtk4::gio::File::for_path(malus_de_common::config::appearance_settings_path());
+        if let Ok(monitor) = cfg_file.monitor_file(
+            gtk4::gio::FileMonitorFlags::NONE,
+            gtk4::gio::Cancellable::NONE,
+        ) {
+            monitor.connect_changed(|_, _, _, _| {
+                apply_notification_liquid_glass_opacity(
+                    malus_de_common::config::load_liquid_glass_opacity(),
+                );
+            });
+            NOTIF_GLASS_MONITOR.with(|cell| {
+                *cell.borrow_mut() = Some(monitor);
+            });
         }
     });
 

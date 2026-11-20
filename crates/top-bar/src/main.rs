@@ -44,15 +44,48 @@ fn main() {
     app.run();
 }
 
+thread_local! {
+    static TOPBAR_GLASS_PROVIDER: std::cell::RefCell<Option<CssProvider>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn apply_topbar_liquid_glass_opacity(opacity: f64) {
+    let scale = malus_de_common::config::liquid_glass_scale_for(opacity);
+    let dark_pop = malus_de_common::config::scaled_liquid_glass_alpha(0.78, scale, 0.14, 0.96);
+    let dark_cc = malus_de_common::config::scaled_liquid_glass_alpha(0.82, scale, 0.16, 0.96);
+    let light_pop = malus_de_common::config::scaled_liquid_glass_alpha(0.76, scale, 0.14, 0.96);
+    let light_cc = malus_de_common::config::scaled_liquid_glass_alpha(0.78, scale, 0.14, 0.96);
+    let css = format!(
+        "popover.malus-popover-menu>contents {{ background-color: rgba(30, 30, 36, {dark_pop:.3}); }} \
+         popover.control-center-popover>contents {{ background-color: rgba(30, 30, 36, {dark_cc:.3}); }} \
+         popover.light-popover.malus-popover-menu>contents, \
+         popover.light-popover>contents, \
+         .light-mode popover.malus-popover-menu>contents {{ background-color: rgba(244, 246, 250, {light_pop:.3}); }} \
+         popover.light-popover.control-center-popover>contents, \
+         .light-mode popover.control-center-popover>contents {{ background-color: rgba(244, 246, 250, {light_cc:.3}); }}"
+    );
+    TOPBAR_GLASS_PROVIDER.with(|cell| {
+        if let Some(provider) = cell.borrow().as_ref() {
+            provider.load_from_string(&css);
+        }
+    });
+}
+
 fn load_css() {
     let provider = CssProvider::new();
     provider.load_from_string(STYLE_CSS);
+    let glass_provider = CssProvider::new();
 
     if let Some(display) = gtk4::gdk::Display::default() {
         gtk4::style_context_add_provider_for_display(
             &display,
             &provider,
             gtk4::STYLE_PROVIDER_PRIORITY_USER,
+        );
+        gtk4::style_context_add_provider_for_display(
+            &display,
+            &glass_provider,
+            gtk4::STYLE_PROVIDER_PRIORITY_USER + 1,
         );
 
         let icon_theme = gtk4::IconTheme::for_display(&display);
@@ -77,6 +110,11 @@ fn load_css() {
             }
         }
     }
+
+    TOPBAR_GLASS_PROVIDER.with(|cell| {
+        *cell.borrow_mut() = Some(glass_provider);
+    });
+    apply_topbar_liquid_glass_opacity(malus_de_common::config::load_liquid_glass_opacity());
 }
 
 fn build_ui(app: &Application) {
@@ -197,6 +235,11 @@ fn build_ui(app: &Application) {
                         adw::ColorScheme::ForceLight
                     });
                     ui::theme::update_all_popovers_theme(is_dark);
+                }
+                malus_de_common::ipc::IpcMessage::LiquidGlassOpacityChanged { opacity } => {
+                    info!("✨ [TopBar] IPC LiquidGlassOpacityChanged recibido: opacity={:.2}", opacity);
+                    apply_topbar_liquid_glass_opacity(opacity);
+                    win_ipc.queue_draw();
                 }
                 malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig => {
                     info!("🖥 [TopBar] IPC ReloadDisplaysConfig recibido — reajustando top bar");

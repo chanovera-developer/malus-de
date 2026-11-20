@@ -108,10 +108,38 @@ fn main() {
     app.run_with_args::<&str>(&[]);
 }
 
+thread_local! {
+    static SETTINGS_GLASS_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
+}
+
+pub(crate) fn apply_liquid_glass_opacity_css(opacity: f64) {
+    let scale = malus_de_common::config::liquid_glass_scale_for(opacity);
+    let pop_a = malus_de_common::config::scaled_liquid_glass_alpha(0.78, scale, 0.14, 0.96);
+    let side_a = malus_de_common::config::scaled_liquid_glass_alpha(0.72, scale, 0.12, 0.96);
+    let css = format!(
+        "window.macos-settings-window popover > contents, \
+         window.macos-settings-window popover.menu > contents, \
+         window.macos-settings-window popover.background > contents, \
+         window.macos-settings-window menu, \
+         window.macos-settings-window .menu {{ \
+             background-color: alpha(@window_bg_color, {pop_a:.3}); \
+         }} \
+         .macos-sidebar {{ \
+             background-color: alpha(@window_bg_color, {side_a:.3}); \
+         }}"
+    );
+    SETTINGS_GLASS_PROVIDER.with(|cell| {
+        if let Some(provider) = cell.borrow().as_ref() {
+            provider.load_from_string(&css);
+        }
+    });
+}
+
 fn load_macos_settings_css() {
     let provider = CssProvider::new();
     let css = include_str!("styles/macos-settings.css");
     provider.load_from_string(css);
+    let glass_provider = CssProvider::new();
     if let Some(display) = gtk4::gdk::Display::default() {
         let icon_theme = gtk4::IconTheme::for_display(&display);
         for icon_dir in malus_de_common::apps::extra_icon_search_paths() {
@@ -124,7 +152,16 @@ fn load_macos_settings_css() {
             &provider,
             gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
+        gtk4::style_context_add_provider_for_display(
+            &display,
+            &glass_provider,
+            gtk4::STYLE_PROVIDER_PRIORITY_USER + 1,
+        );
     }
+    SETTINGS_GLASS_PROVIDER.with(|cell| {
+        *cell.borrow_mut() = Some(glass_provider);
+    });
+    apply_liquid_glass_opacity_css(malus_de_common::config::load_liquid_glass_opacity());
 }
 
 pub(crate) fn squircle_path(context: &gtk4::cairo::Context, width: f64, height: f64, radius: f64) {

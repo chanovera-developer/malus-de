@@ -12,25 +12,51 @@ use std::rc::Rc;
 
 thread_local! {
     static CONFIRMATION_CSS_LOADED: Cell<bool> = const { Cell::new(false) };
+    static DIALOG_GLASS_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
 }
 
 const CONFIRMATION_CSS: &str = include_str!("styles/confirmation.css");
+
+fn refresh_dialog_liquid_glass_opacity() {
+    let opacity = malus_de_common::config::load_liquid_glass_opacity();
+    let scale = malus_de_common::config::liquid_glass_scale_for(opacity);
+    let card_a = malus_de_common::config::scaled_liquid_glass_alpha(0.82, scale, 0.16, 0.96);
+    let css = format!(
+        ".malus-confirmation-card {{ background-color: alpha(@window_bg_color, {card_a:.3}); }}"
+    );
+    DIALOG_GLASS_PROVIDER.with(|cell| {
+        if let Some(provider) = cell.borrow().as_ref() {
+            provider.load_from_string(&css);
+        }
+    });
+}
 
 fn ensure_dialog_css_loaded() {
     let _ = libadwaita::init();
     CONFIRMATION_CSS_LOADED.with(|loaded| {
         if loaded.get() {
+            refresh_dialog_liquid_glass_opacity();
             return;
         }
         if let Some(display) = gtk4::gdk::Display::default() {
             let provider = CssProvider::new();
             provider.load_from_string(CONFIRMATION_CSS);
+            let glass_provider = CssProvider::new();
             gtk4::style_context_add_provider_for_display(
                 &display,
                 &provider,
                 gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
             );
+            gtk4::style_context_add_provider_for_display(
+                &display,
+                &glass_provider,
+                gtk4::STYLE_PROVIDER_PRIORITY_USER + 1,
+            );
+            DIALOG_GLASS_PROVIDER.with(|cell| {
+                *cell.borrow_mut() = Some(glass_provider);
+            });
             loaded.set(true);
+            refresh_dialog_liquid_glass_opacity();
         }
     });
 }
