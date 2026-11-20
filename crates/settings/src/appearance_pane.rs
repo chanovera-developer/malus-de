@@ -1230,12 +1230,32 @@ const ASPECTO_CLARO_PNG: &[u8] = include_bytes!("../../../assets/screenshots/asp
 const ASPECTO_OBSCURO_PNG: &[u8] = include_bytes!("../../../assets/screenshots/aspecto-obscuro.png");
 const ASPECTO_AUTOMATICO_PNG: &[u8] =
     include_bytes!("../../../assets/screenshots/aspecto-automatico.png");
+const ASPECTO_LIQUID_GLASS_WEBP: &[u8] =
+    include_bytes!("../../../assets/screenshots/aspecto-liquid-glass.webp");
 
-fn load_pixbuf_from_png(bytes: &[u8]) -> Option<gdk_pixbuf::Pixbuf> {
-    let loader = gdk_pixbuf::PixbufLoader::with_type("png").ok()?;
+fn load_pixbuf_from_bytes(bytes: &[u8], image_type: &str) -> Option<gdk_pixbuf::Pixbuf> {
+    let loader = gdk_pixbuf::PixbufLoader::with_type(image_type).ok()?;
     loader.write(bytes).ok()?;
     loader.close().ok()?;
     loader.pixbuf()
+}
+
+fn with_liquid_glass_bg_pixbuf<F: FnOnce(&gdk_pixbuf::Pixbuf)>(f: F) -> bool {
+    thread_local! {
+        static BG_PIXBUF: RefCell<Option<gdk_pixbuf::Pixbuf>> = const { RefCell::new(None) };
+    }
+    BG_PIXBUF.with(|cell| {
+        let mut opt = cell.borrow_mut();
+        if opt.is_none() {
+            *opt = load_pixbuf_from_bytes(ASPECTO_LIQUID_GLASS_WEBP, "webp");
+        }
+        if let Some(pb) = opt.as_ref() {
+            f(pb);
+            true
+        } else {
+            false
+        }
+    })
 }
 
 fn with_mode_thumbnail_pixbuf<F: FnOnce(&gdk_pixbuf::Pixbuf)>(mode_idx: usize, f: F) -> bool {
@@ -1252,7 +1272,7 @@ fn with_mode_thumbnail_pixbuf<F: FnOnce(&gdk_pixbuf::Pixbuf)>(mode_idx: usize, f
                 1 => ASPECTO_OBSCURO_PNG,
                 _ => ASPECTO_AUTOMATICO_PNG,
             };
-            arr[idx] = load_pixbuf_from_png(bytes);
+            arr[idx] = load_pixbuf_from_bytes(bytes, "png");
         }
         if let Some(pb) = arr[idx].as_ref() {
             f(pb);
@@ -1332,21 +1352,39 @@ fn draw_liquid_glass_preview(
     crate::squircle_path(cr, w, h, 14.0);
     cr.clip();
 
-    // Cielo y paisaje arquitectónico estilizado
-    let sky = gtk4::cairo::LinearGradient::new(0.0, 0.0, 0.0, h * 0.72);
-    sky.add_color_stop_rgb(0.0, 0.48, 0.69, 0.93);
-    sky.add_color_stop_rgb(1.0, 0.78, 0.87, 0.96);
-    let _ = cr.set_source(&sky);
-    cr.rectangle(0.0, 0.0, w, h);
-    let _ = cr.fill();
+    let painted_bg = with_liquid_glass_bg_pixbuf(|pb| {
+        let sw = pb.width() as f64;
+        let sh = pb.height() as f64;
+        if sw > 0.0 && sh > 0.0 {
+            let scale = (w / sw).max(h / sh);
+            let dx = (w - sw * scale) * 0.5;
+            let dy = (h - sh * scale) * 0.5;
+            let _ = cr.save();
+            cr.translate(dx, dy);
+            cr.scale(scale, scale);
+            cr.set_source_pixbuf(pb, 0.0, 0.0);
+            cr.source().set_filter(gtk4::cairo::Filter::Bilinear);
+            let _ = cr.paint();
+            let _ = cr.restore();
+        }
+    });
 
-    // Vegetación izquierda y estructura curva derecha (inspirado en Apple Park)
-    cr.set_source_rgb(0.20, 0.38, 0.16);
-    cr.arc(w * 0.22, h * 0.62, 46.0, 0.0, std::f64::consts::TAU);
-    let _ = cr.fill();
-    cr.set_source_rgb(0.84, 0.86, 0.88);
-    cr.arc(w * 0.95, h * 0.52, 64.0, 0.0, std::f64::consts::TAU);
-    let _ = cr.fill();
+    if !painted_bg {
+        // Cielo y paisaje arquitectónico estilizado (respaldo)
+        let sky = gtk4::cairo::LinearGradient::new(0.0, 0.0, 0.0, h * 0.72);
+        sky.add_color_stop_rgb(0.0, 0.48, 0.69, 0.93);
+        sky.add_color_stop_rgb(1.0, 0.78, 0.87, 0.96);
+        let _ = cr.set_source(&sky);
+        cr.rectangle(0.0, 0.0, w, h);
+        let _ = cr.fill();
+
+        cr.set_source_rgb(0.20, 0.38, 0.16);
+        cr.arc(w * 0.22, h * 0.62, 46.0, 0.0, std::f64::consts::TAU);
+        let _ = cr.fill();
+        cr.set_source_rgb(0.84, 0.86, 0.88);
+        cr.arc(w * 0.95, h * 0.52, 64.0, 0.0, std::f64::consts::TAU);
+        let _ = cr.fill();
+    }
 
     // Píldoras superiores Liquid Glass (cambia su opacidad con el deslizador)
     let alpha = glass_opacity.clamp(0.18, 0.94);
