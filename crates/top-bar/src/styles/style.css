@@ -519,7 +519,7 @@ popover modelbutton {
     color: #e4e4e7;
     font-size: 13px;
     font-weight: 500;
-    transition: background-color 100ms ease, color 100ms ease;
+    transition: none;
     box-shadow: none;
 }
 
@@ -533,7 +533,7 @@ popover modelbutton *,
 image.menu-item-icon,
 .menu-item-icon,
 .menu-submenu-chevron {
-    transition: color 100ms ease;
+    transition: none;
 }
 
 .popover-menu-item:hover,
@@ -1187,4 +1187,24 @@ popover.light-popover button.popover-menu-item.malus-squircle-menu-item:hover {
     box-shadow: none;
     outline: none;
     outline-width: 0px;
+    transition: none;
+}
+
+button.popover-menu-item.malus-squircle-menu-item *,
+button.popover-menu-item.malus-squircle-menu-item label,
+button.popover-menu-item.malus-squircle-menu-item image {
+    transition: none;
+}
+
+button.popover-menu-item.malus-squircle-menu-item:hover,
+button.popover-menu-item.malus-squircle-menu-item:hover label,
+button.popover-menu-item.malus-squircle-menu-item:hover image,
+button.popover-menu-item.malus-squircle-menu-item:hover .menu-row-label,
+button.popover-menu-item.malus-squircle-menu-item:hover .menu-item-icon,
+button.popover-menu-item.malus-squircle-menu-item:hover .menu-submenu-chevron,
+popover.malus-popover-menu.light-popover>contents button.popover-menu-item.malus-squircle-menu-item:hover label,
+popover.malus-popover-menu.light-popover>contents button.popover-menu-item.malus-squircle-menu-item:hover image,
+popover.light-popover button.popover-menu-item.malus-squircle-menu-item:hover label,
+popover.light-popover button.popover-menu-item.malus-squircle-menu-item:hover image {
+    color: #ffffff;
 }

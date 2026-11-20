@@ -4,6 +4,18 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-19] — Sincronización de Texto en Hover, Apertura Instantánea del Menú del Escritorio y Drop sin Parpadeo (`common`, `compositor`, `wallpaper`, `top-bar`, `dock`, `settings`)
+
+- **Sincronización instantánea de texto e iconos con el Squircle Cairo (`0 ms`):** eliminadas las transiciones `100ms ease` de color en los ítems de menú y sus hijos (`*`, `label`, `image`, `.menu-row-label`, `.menu-item-icon`, `.menu-submenu-chevron`) en [`squircle-rules.css`](../crates/common/src/styles/squircle-rules.css), [`style.css`](../crates/top-bar/src/styles/style.css), [`dock.css`](../crates/dock/src/styles/dock.css), [`default-gradient.css`](../crates/wallpaper/src/styles/default-gradient.css) y [`macos-settings.css`](../crates/settings/src/styles/macos-settings.css), y añadido `transition: none` junto al selector `#ffffff` en `:hover` para `.malus-squircle-menu-item`, eliminando el desfase entre el relleno azul Cairo y el texto blanco.
+- **Menú contextual del escritorio instantáneo (`malus-de-wallpaper`):**
+  - Diagnóstico: el menú contextual del escritorio era perceptiblemente más lento porque `animate_widget_fade_in` ([`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs)) inicializaba el contenedor con `opacity = 0.0`, esperaba a `w.is_mapped()` y saltaba fotogramas en `add_tick_callback` durante `140–150 ms` sobre un `transition: opacity 140ms` CSS en `popover.desktop-popover-menu > contents` ([`default-gradient.css`](../crates/wallpaper/src/styles/default-gradient.css)), además de `Stack::interpolate_size(true)` (`180 ms`) y múltiples recorridos recursivos completos de `apply_theme_to_popover` (`queue_draw()` y actualización de clases CSS en cada apertura).
+  - Solución: eliminados los fades artificiales en los menús del escritorio (`bg_context`, menú de ítem, monitor secundario y diálogos), desactivada la transición CSS de opacidad en `desktop-popover-menu > contents`, configurado `interpolate_size(false)` en el `GtkStack` y optimizados `register_wallpaper_popover` y `update_menu_text_theme` para evitar mutaciones y recorridos redundantes del árbol de widgets.
+- **Eliminación de parpadeo al soltar iconos del escritorio (`malus-de-compositor`, `malus-de-wallpaper`):**
+  - En [`state.rs`](../crates/compositor/src/state.rs) (`CompositorHandler::commit`), `dnd_drop_hold` solo se limpia al recibir un commit del `target` que adjunte un nuevo buffer (`BufferAssignment::NewBuffer`), evitando que commits intermedios sin buffer (ej. retorno de foco del puntero o actualizaciones de región tras finalizar el grab DnD) borren la miniatura retenida antes de que `malus-de-wallpaper` pinte el icono en su nueva posición; se amplió el margen de seguridad de `dnd_drop_hold` a `120 ms` y se añadió `queue_draw()` tras `move_desktop_icon` en [`wallpaper/src/main.rs`](../crates/wallpaper/src/main.rs).
+- Validación: `cargo check --offline --workspace --all-targets` (**0 warnings**); tests unitarios aprobados en `compositor` (**84/84**), `branches` (**55/55**), `wallpaper` (**20/20**), `dock` (**15/15**), `settings` (**5/5**) y `top-bar` (**9/9** con `--skip test_brightness_service`).
+
+---
+
 ## [2026-11-19] — Radio Squircle Unificado para Menús en el Compositor (`malus-de-compositor`) y Hover Cairo en Todo el Workspace
 
 - **Compositor (`malus-de-compositor`):** ajustado `POPUP_MENU_CORNER_RADIUS_LOGICAL` a `20.0` ([`mod.rs`](../crates/compositor/src/backend/mod.rs), [`drm.rs`](../crates/compositor/src/backend/drm.rs), [`winit.rs`](../crates/compositor/src/backend/winit.rs)) para redondear un poco más los menús emergentes y popups conservando el ajuste concéntrico con los ítems interiores.

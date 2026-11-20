@@ -234,12 +234,19 @@ pub fn set_is_dark_mode(is_dark: bool) {
 
 pub fn register_wallpaper_popover(popover: &Popover) {
     let is_dark = is_dark_mode_active();
-    apply_theme_to_popover(popover, is_dark);
+    if is_dark {
+        popover.remove_css_class("light-popover");
+    } else {
+        popover.add_css_class("light-popover");
+    }
 
     let pop_weak = popover.downgrade();
     popover.connect_show(move |_| {
         if let Some(pop) = pop_weak.upgrade() {
-            apply_theme_to_popover(&pop, is_dark_mode_active());
+            let is_dark = is_dark_mode_active();
+            if pop.has_css_class("light-popover") == is_dark {
+                apply_theme_to_popover(&pop, is_dark);
+            }
         }
     });
 
@@ -276,13 +283,17 @@ pub fn apply_theme_to_popover(popover: &Popover, is_dark: bool) {
 
 fn update_menu_text_theme(widget: &gtk4::Widget, is_dark: bool) {
     if let Some(label) = widget.downcast_ref::<Label>() {
-        label.remove_css_class("menu-light-text");
-        label.remove_css_class("menu-dark-text");
-        label.add_css_class(if is_dark {
-            "menu-dark-text"
+        let (target, stale) = if is_dark {
+            ("menu-dark-text", "menu-light-text")
         } else {
-            "menu-light-text"
-        });
+            ("menu-light-text", "menu-dark-text")
+        };
+        if label.has_css_class(stale) {
+            label.remove_css_class(stale);
+        }
+        if !label.has_css_class(target) {
+            label.add_css_class(target);
+        }
     }
     let mut child = widget.first_child();
     while let Some(current) = child {
@@ -299,6 +310,7 @@ pub fn ease_out_cubic(t: f64) -> f64 {
 
 /// Anima suavemente la opacidad de un widget de 0.0 a 1.0 mediante el frame-clock nativo de GTK4
 /// con aceleración cubic ease-out, garantizando 100% de alineación sin desfases de geometría.
+#[allow(dead_code)]
 pub fn animate_widget_fade_in<W: IsA<gtk4::Widget>>(widget: &W, duration_ms: i64) {
     widget.set_opacity(0.0);
     let start_time: Rc<Cell<Option<i64>>> = Rc::new(Cell::new(None));
@@ -1296,7 +1308,6 @@ fn show_rename_dialog(parent_widget: &impl IsA<gtk4::Widget>, current_path: Path
     popover.set_child(Some(&container));
     apply_theme_to_popover(&popover, is_dark_mode_active());
     popover.connect_closed(|p| p.unparent());
-    animate_widget_fade_in(&container, 140);
     popover.popup();
 }
 
@@ -3029,18 +3040,14 @@ fn render_single_icon(
     let context_click = GestureClick::new();
     context_click.set_button(3);
     let p_click = popover.clone();
-    let menu_click = menu.clone();
     let paste_btn_vis = paste_into_button.clone();
     context_click.connect_pressed(move |gesture, _, x, y| {
         gesture.set_state(gtk4::EventSequenceState::Claimed);
         if is_dir_item {
             paste_btn_vis.set_visible(has_desktop_clipboard_files());
         }
-        let is_dark = is_dark_mode_active();
-        apply_theme_to_popover(&p_click, is_dark);
         let rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
         p_click.set_pointing_to(Some(&rect));
-        animate_widget_fade_in(&menu_click, 140);
         p_click.popup();
     });
     item_box.add_controller(context_click);
@@ -3624,8 +3631,8 @@ fn create_wallpaper_window(
 
             let stack = Stack::builder()
                 .transition_type(StackTransitionType::SlideLeftRight)
-                .transition_duration(180)
-                .interpolate_size(true)
+                .transition_duration(120)
+                .interpolate_size(false)
                 .css_classes(["desktop-context-menu"])
                 .build();
 
@@ -3868,9 +3875,7 @@ fn create_wallpaper_window(
             stack.set_visible_child_name("main");
 
             popover.set_child(Some(&stack));
-            apply_theme_to_popover(&popover, is_dark_mode_active());
             popover.connect_closed(|p| p.unparent());
-            animate_widget_fade_in(&stack, 150);
             popover.popup();
         });
         overlay.add_controller(bg_context);
@@ -4301,6 +4306,7 @@ fn create_wallpaper_window(
             }
             if moved_any {
                 save_icon_positions(&drop_positions.borrow());
+                drop_icons.queue_draw();
             }
             moved_any
         });
@@ -4535,9 +4541,7 @@ fn create_wallpaper_window(
             menu.append(&wp_btn);
 
             popover.set_child(Some(&menu));
-            apply_theme_to_popover(&popover, is_dark_mode_active());
             popover.connect_closed(|p| p.unparent());
-            animate_widget_fade_in(&menu, 140);
             popover.popup();
         });
         overlay.add_controller(bg_context);

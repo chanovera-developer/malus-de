@@ -51,14 +51,14 @@ window.macos-settings-window popover listbox > row {
     margin: 1px 2px;
     font-size: 13px;
     font-weight: 500;
-    transition: background-color 100ms ease, color 100ms ease;
+    transition: none;
 }
 
 window.macos-settings-window popover modelbutton *,
 window.macos-settings-window popover.menu modelbutton *,
 window.macos-settings-window popover listview > row *,
 window.macos-settings-window popover listbox > row * {
-    transition: color 100ms ease;
+    transition: none;
 }
 
 window.macos-settings-window popover modelbutton:hover:not(:disabled),
@@ -871,6 +871,13 @@ popover.wifi-macos-popover > contents {
     color: @window_fg_color;
     font-size: 12.5px;
     font-weight: 400;
+    transition: none;
+}
+
+.wifi-menu-action-btn *,
+.wifi-menu-action-btn label,
+.wifi-menu-action-btn image {
+    transition: none;
 }
 
 .wifi-menu-action-btn:hover,

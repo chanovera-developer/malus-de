@@ -5019,14 +5019,21 @@ impl CompositorHandler for MalusState {
             self.background_commit_counter = self.background_commit_counter.wrapping_add(1);
         }
 
-        let is_buffer_removed =
+        let (is_buffer_removed, has_new_buffer) =
             smithay::wayland::compositor::with_states(surface, |states| {
                 let mut guard = states
                     .cached_state
                     .get::<smithay::wayland::compositor::SurfaceAttributes>();
-                matches!(
-                    guard.current().buffer,
-                    Some(smithay::wayland::compositor::BufferAssignment::Removed)
+                let current = guard.current();
+                (
+                    matches!(
+                        current.buffer,
+                        Some(smithay::wayland::compositor::BufferAssignment::Removed)
+                    ),
+                    matches!(
+                        current.buffer,
+                        Some(smithay::wayland::compositor::BufferAssignment::NewBuffer(_))
+                    ),
                 )
             });
         if is_buffer_removed {
@@ -5069,10 +5076,11 @@ impl CompositorHandler for MalusState {
                 self.dnd_icon_offset += delta;
             }
         }
-        if self
-            .dnd_drop_hold
-            .as_ref()
-            .is_some_and(|(target, _, _)| target == surface)
+        if has_new_buffer
+            && self
+                .dnd_drop_hold
+                .as_ref()
+                .is_some_and(|(target, _, _)| target == surface)
         {
             self.clear_dnd_icon();
         }
@@ -5452,7 +5460,7 @@ impl MalusState {
 
     pub fn active_dnd_icon_draw_location(&mut self) -> Option<Point<f64, Logical>> {
         if let Some((_, drop_loc, started)) = self.dnd_drop_hold {
-            if started.elapsed() >= std::time::Duration::from_millis(80) {
+            if started.elapsed() >= std::time::Duration::from_millis(120) {
                 self.clear_dnd_icon();
                 return None;
             }

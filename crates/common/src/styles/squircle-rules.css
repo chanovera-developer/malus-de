@@ -136,7 +136,7 @@ menu menuitem,
     font-size: 13px;
     font-weight: 500;
     box-shadow: none;
-    transition: background-color 100ms ease, color 100ms ease;
+    transition: none;
 }
 
 popover modelbutton *,
@@ -156,7 +156,7 @@ menu menuitem *,
 popover modelbutton accelerator,
 popover.menu modelbutton accelerator,
 window.view popover modelbutton accelerator {
-    transition: color 100ms ease;
+    transition: none;
 }
 
 popover modelbutton:hover:not(:disabled),
@@ -218,6 +218,21 @@ popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:act
     box-shadow: none;
     outline: none;
     outline-width: 0px;
+    transition: none;
+}
+
+popover .popover-menu-item.malus-squircle-menu-item *,
+popover .popover-menu-item.malus-squircle-menu-item label,
+popover .popover-menu-item.malus-squircle-menu-item image,
+popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item *,
+popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item label,
+popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item image {
+    transition: none;
+}
+
+popover .popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) *,
+popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) * {
+    color: #ffffff;
 }
 
 popover modelbutton:hover:not(:disabled) label,
