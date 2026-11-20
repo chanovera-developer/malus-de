@@ -4,6 +4,28 @@ Registro cronológico y técnico del avance de ingeniería, hitos, experimentos,
 
 ---
 
+## [2026-11-19] — Panel de Red y Firewall al estilo macOS + Anotaciones de Adaptación (`malus-de-settings`)
+
+Se implementa el panel completo de **Red** y su subvista **Firewall** siguiendo las capturas `assets/screenshots/Red00.png`–`Red03.png`, junto con las anotaciones de adaptación Linux documentadas en [`docs/decisiones/0008-red-pendiente.md`](decisiones/0008-red-pendiente.md).
+
+### Cambios Clave
+- **Nuevo módulo [`crates/settings/src/network_pane.rs`](../crates/settings/src/network_pane.rs)**:
+  - **Vista principal `Red` (`Red00.png`)**: tarjetas squircle independientes para **Wi-Fi** (estado en vivo vía `nmcli` y salto directo al panel Wi-Fi con historial `< | >`) y **Firewall** (estado en vivo vía `firewall-cmd --state` con salto a subvista `"network-firewall"`), sección **"Otros servicios"** para interfaces/perfiles no Wi-Fi (Ethernet, puente, Thunderbolt/USB4, móvil) y menú `••• ⌄` (`Añadir servicio...`, `Establecer orden de servicios...`, `Ubicaciones...`).
+  - **Subvista `Firewall` (`Red01.png`)**: tarjeta naranja squircle, interruptor principal sobre `systemctl enable/disable --now firewalld` (vía `pkexec`) y aviso contextual dinámico cuando está bloqueado el tráfico entrante.
+  - **Modal `Opciones de Firewall` (`Red02.png` / `Red03.png`)**: interruptor **"Bloquear todas las conexiones entrantes"** (zona `block` vs zona previa), lista embebida de reglas/servicios permitidos con acciones `[+ | -]` y traducción de demonios (`cupsd`->`ipp`, `smbd`->`samba`, `sshd`->`ssh`), interruptores de firma persistidos y **"Activar modo encubierto"** mapeado a `firewall-cmd --add-icmp-block=echo-request` + `sysctl net.ipv4.icmp_echo_ignore_all`.
+- **Reutilización y navegación ([`crates/settings/src/wifi_pane.rs`](../crates/settings/src/wifi_pane.rs), [`crates/settings/src/main.rs`](../crates/settings/src/main.rs), [`crates/settings/src/styles/macos-settings.css`](../crates/settings/src/styles/macos-settings.css))**:
+  - Nuevo helper compartido `make_squircle_colored_badge` y exposición `pub(crate)` de `make_popover_menu_row`.
+  - Ítem `Red` en barra lateral justo debajo de `Bluetooth`, mantenimiento de resaltado lateral al navegar a `Firewall` (`network-firewall`) y soporte para `--panel network|red|firewall`.
+- **Anotaciones técnicas ([`docs/decisiones/0008-red-pendiente.md`](decisiones/0008-red-pendiente.md))**:
+  - Detalle de brechas entre macOS y Linux (filtrado por firma Mach-O vs eBPF/OpenSnitch, autodetección de `thunderbolt_net`, snapshots completos de Ubicaciones DNS/proxy e `ipv6.route-metric`).
+
+### Verificación
+- `cargo check --offline --workspace --all-targets`: 0 warnings.
+- `cargo test --offline -p malus-de-settings`: 8 passed, 0 failed.
+- `cargo build --offline --release -p malus-de-settings` e instalación en `/usr/local/bin/malus-de-settings`.
+
+---
+
 ## [2026-11-19] — Panel de Configuración de Bluetooth al estilo macOS (`malus-de-settings`)
 
 Se implementa el panel completo de **Bluetooth** en `malus-de-settings` siguiendo el diseño de referencia (`assets/screenshots/Bluetooth.png`), con backend reactivo sobre BlueZ (`org.bluez` D-Bus mediante `zbus`) y reutilización de las primitivas squircle compartidas de `wifi_pane`.

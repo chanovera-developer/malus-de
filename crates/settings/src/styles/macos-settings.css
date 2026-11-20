@@ -929,3 +929,107 @@ label.bt-inline-desc link:hover {
     font-weight: 600;
     color: alpha(@window_fg_color, 0.72);
 }
+
+/* Panel de Red y Firewall estilo macOS Tahoe */
+.net-service-row {
+    background: transparent;
+    border: none;
+    border-radius: 0px;
+    padding: 8px 14px 8px 12px;
+    min-height: 44px;
+    color: @window_fg_color;
+    box-shadow: none;
+}
+
+.net-service-row:hover {
+    background-color: alpha(currentColor, 0.045);
+}
+
+.net-row-chevron {
+    color: alpha(@window_fg_color, 0.42);
+}
+
+.net-dot-green {
+    color: #34c759;
+    font-size: 10px;
+}
+
+.net-dot-amber {
+    color: #ff9f0a;
+    font-size: 10px;
+}
+
+.net-dot-red {
+    color: #ff3b30;
+    font-size: 10px;
+}
+
+.net-dot-gray {
+    color: alpha(@window_fg_color, 0.38);
+    font-size: 10px;
+}
+
+.net-warn-icon {
+    color: #e6a100;
+}
+
+button.net-more-pill-btn {
+    padding: 2px 9px;
+    min-height: 22px;
+}
+
+.fw-apps-frame {
+    border: 1px solid alpha(@window_fg_color, 0.09);
+    border-radius: 10px;
+    background-color: alpha(@window_bg_color, 0.55);
+}
+
+.fw-apps-toolbar {
+    padding: 2px 4px;
+}
+
+button.fw-apps-tool-btn {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 3px 8px;
+    min-height: 22px;
+    color: @window_fg_color;
+}
+
+button.fw-apps-tool-btn:hover {
+    background-color: alpha(@window_fg_color, 0.07);
+    border-radius: 5px;
+}
+
+.fw-apps-tool-sep {
+    min-width: 1px;
+    min-height: 14px;
+    background-color: alpha(@window_fg_color, 0.14);
+}
+
+.fw-app-row {
+    padding: 5px 10px;
+}
+
+.fw-app-row:hover {
+    background-color: alpha(currentColor, 0.04);
+}
+
+.fw-app-row-selected {
+    background-color: alpha(#007aff, 0.14);
+}
+
+button.fw-rule-action-btn,
+menubutton.fw-rule-action-btn > button {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 2px 6px;
+}
+
+button.fw-rule-action-btn:hover,
+menubutton.fw-rule-action-btn > button:hover {
+    background-color: alpha(currentColor, 0.05);
+    border-radius: 6px;
+}

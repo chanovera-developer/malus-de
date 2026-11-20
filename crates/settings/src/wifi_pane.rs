@@ -14,6 +14,26 @@ const WIFI_MENU_ITEM_SQUIRCLE_RADIUS: f64 = 14.0;
 
 /// Dibuja una insignia cuadrada-squircle azul estilo macOS con el glifo centrado.
 pub(crate) fn make_squircle_badge(size: i32, icon_name: &str, icon_px: i32, radius: f64) -> Overlay {
+    // Colores muestreados exactamente de macOS: (66, 144, 249) -> (60, 132, 242)
+    make_squircle_colored_badge(
+        size,
+        icon_name,
+        icon_px,
+        radius,
+        (0.259, 0.565, 0.976),
+        (0.235, 0.518, 0.949),
+    )
+}
+
+/// Dibuja una insignia cuadrada-squircle estilo macOS con gradiente vertical configurable.
+pub(crate) fn make_squircle_colored_badge(
+    size: i32,
+    icon_name: &str,
+    icon_px: i32,
+    radius: f64,
+    top_rgb: (f64, f64, f64),
+    bot_rgb: (f64, f64, f64),
+) -> Overlay {
     let overlay = Overlay::builder()
         .width_request(size)
         .height_request(size)
@@ -32,9 +52,8 @@ pub(crate) fn make_squircle_badge(size: i32, icon_name: &str, icon_px: i32, radi
             return;
         }
         let grad = gtk4::cairo::LinearGradient::new(0.0, 0.0, 0.0, height);
-        // Colores muestreados exactamente de macOS: (66, 144, 249) -> (60, 132, 242)
-        grad.add_color_stop_rgba(0.0, 0.259, 0.565, 0.976, 1.0);
-        grad.add_color_stop_rgba(1.0, 0.235, 0.518, 0.949, 1.0);
+        grad.add_color_stop_rgba(0.0, top_rgb.0, top_rgb.1, top_rgb.2, 1.0);
+        grad.add_color_stop_rgba(1.0, bot_rgb.0, bot_rgb.1, bot_rgb.2, 1.0);
 
         let _ = cr.save();
         cr.translate(0.5, 0.5);
@@ -1556,7 +1575,7 @@ pub(crate) fn wrap_squircle_popover_card(inner: &GtkBox, radius: f64) -> Overlay
     overlay
 }
 
-fn make_popover_menu_row(check: Option<&str>, text: &str) -> (Overlay, Button) {
+pub(crate) fn make_popover_menu_row(check: Option<&str>, text: &str) -> (Overlay, Button) {
     let row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(6)

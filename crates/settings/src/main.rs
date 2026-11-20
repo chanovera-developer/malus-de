@@ -19,6 +19,7 @@ use std::rc::Rc;
 
 mod wifi_pane;
 mod bluetooth_pane;
+mod network_pane;
 
 const APP_ID: &str = "dev.malus.Settings";
 const SETTINGS_SIDEBAR_WIDTH: i32 = 212;
@@ -33,7 +34,7 @@ const SQUIRCLE_SEGMENTS: usize = 20;
 #[command(name = "malus-de-settings")]
 #[command(about = "Ajustes del Sistema de Malus DE (macOS System Settings)")]
 struct Args {
-    /// Panel inicial a mostrar: wifi, bluetooth, displays, wallpaper, keyboard, appearance, dock, spotlight, sound, about
+    /// Panel inicial a mostrar: wifi, bluetooth, network, network-firewall, displays, wallpaper, keyboard, appearance, dock, spotlight, sound, about
     #[arg(short, long, default_value = "spotlight")]
     panel: String,
 
@@ -451,6 +452,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     let nav_items = [
         ("wifi", "network-wireless-symbolic", "Wi-Fi"),
         ("bluetooth", "bluetooth-active-symbolic", "Bluetooth"),
+        ("network", "network-workgroup-symbolic", "Red"),
         ("appearance", "preferences-desktop-appearance-symbolic", "Aspecto"),
         ("dock", "user-desktop-symbolic", "Escritorio y Dock"),
         ("wallpaper", "preferences-desktop-wallpaper-symbolic", "Fondo de pantalla"),
@@ -497,6 +499,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                 let matches = id.contains(&query) || match id.as_str() {
                     "wifi" => "wi-fi wifi red inalambrica internet redes",
                     "bluetooth" => "bluetooth dispositivos audio auriculares teclado raton inalambrico emparejar",
+                    "network" => "red network ethernet puente thunderbolt firewall firewalld servicios ubicaciones",
                     "displays" => "pantallas monitor resolucion ppi truesize",
                     "wallpaper" => "fondo pantalla wallpaper imagen",
                     "keyboard" => "teclado distribucion lenguaje idioma xkb",
@@ -520,6 +523,28 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
 
     let (bluetooth_pane, refresh_bluetooth_pane) = bluetooth_pane::create_bluetooth_pane(&window);
     stack.add_named(&bluetooth_pane, Some("bluetooth"));
+
+    let nav_dispatch: Rc<RefCell<Option<Rc<dyn Fn(&str, bool)>>>> = Rc::new(RefCell::new(None));
+    let nav_wifi = {
+        let d = nav_dispatch.clone();
+        Rc::new(move || {
+            if let Some(f) = d.borrow().as_ref() {
+                f("wifi", true);
+            }
+        })
+    };
+    let nav_fw = {
+        let d = nav_dispatch.clone();
+        Rc::new(move || {
+            if let Some(f) = d.borrow().as_ref() {
+                f("network-firewall", true);
+            }
+        })
+    };
+    let ((network_pane, refresh_network_pane), (firewall_pane, refresh_firewall_pane)) =
+        network_pane::create_network_panes(&window, nav_wifi, nav_fw);
+    stack.add_named(&network_pane, Some("network"));
+    stack.add_named(&firewall_pane, Some("network-firewall"));
 
     let (displays_pane, refresh_displays_pane) = create_displays_pane();
     stack.add_named(&displays_pane, Some("displays"));
@@ -629,7 +654,10 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
 
     // Historial de navegación para botones atrás / adelante (estilo Branches)
     let start_id = match initial_panel {
-        "wifi" | "bluetooth" | "wallpaper" | "keyboard" | "appearance" | "sound" | "about" | "dock" | "spotlight" | "displays" => initial_panel,
+        "red" => "network",
+        "firewall" => "network-firewall",
+        "wifi" | "bluetooth" | "network" | "network-firewall" | "wallpaper" | "keyboard"
+        | "appearance" | "sound" | "about" | "dock" | "spotlight" | "displays" => initial_panel,
         _ => "spotlight",
     };
 
@@ -643,6 +671,8 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         let title_lbl = active_pane_title.clone();
         let ref_wifi = refresh_wifi_pane.clone();
         let ref_bt = refresh_bluetooth_pane.clone();
+        let ref_net = refresh_network_pane.clone();
+        let ref_fw = refresh_firewall_pane.clone();
         let ref_disp = refresh_displays_pane.clone();
         let ref_wall = refresh_wallpaper_pane.clone();
         let ref_kb = refresh_keyboard_pane.clone();
@@ -655,8 +685,13 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         let btn_f_c = btn_forward.clone();
 
         Rc::new(move |target: &str, push_history: bool| {
+            let sidebar_id = if target == "network-firewall" {
+                "network"
+            } else {
+                target
+            };
             for (id, btn) in btns.iter() {
-                if id == target {
+                if id == sidebar_id {
                     btn.add_css_class("sidebar-btn-active");
                 } else {
                     btn.remove_css_class("sidebar-btn-active");
@@ -666,6 +701,10 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                 ref_wifi();
             } else if target == "bluetooth" {
                 ref_bt();
+            } else if target == "network" {
+                ref_net();
+            } else if target == "network-firewall" {
+                ref_fw();
             } else if target == "displays" {
                 ref_disp();
             } else if target == "wallpaper" {
@@ -682,6 +721,8 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             let display_title = match target {
                 "wifi" => "Wi-Fi",
                 "bluetooth" => "Bluetooth",
+                "network" => "Red",
+                "network-firewall" => "Firewall",
                 "displays" => "Pantallas",
                 "wallpaper" => "Fondo de pantalla",
                 "keyboard" => "Teclado",
@@ -710,6 +751,11 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             btn_f_c.set_sensitive(cur + 1 < total);
         })
     };
+
+    let sel_for_dispatch = select_panel.clone();
+    *nav_dispatch.borrow_mut() = Some(Rc::new(move |target: &str, push: bool| {
+        sel_for_dispatch(target, push);
+    }));
 
     let sel_for_goto = select_panel.clone();
     *goto_action.borrow_mut() = Some(Rc::new(move || {
@@ -4425,5 +4471,16 @@ mod tests {
         let (btn_wrap, btn) = wifi_pane::make_squircle_button("Conectar", false, None);
         assert!(btn_wrap.child().is_some());
         assert_eq!(btn.label().as_deref(), Some("Conectar"));
+
+        let fw_badge = wifi_pane::make_squircle_colored_badge(
+            34,
+            "security-high-symbolic",
+            18,
+            wifi_pane::WIFI_BADGE_SQUIRCLE_RADIUS,
+            (0.988, 0.584, 0.129),
+            (0.945, 0.459, 0.039),
+        );
+        assert_eq!(fw_badge.width_request(), 34);
+        assert_eq!(fw_badge.height_request(), 34);
     }
 }
