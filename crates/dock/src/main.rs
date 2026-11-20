@@ -67,11 +67,10 @@ thread_local! {
 }
 
 fn apply_dock_liquid_glass_opacity(opacity: f64) {
-    let t = ((opacity - 0.15) / 0.80).clamp(0.0, 1.0);
-    // Extrapolado de Dock1.png (t=0, cristal transparente ~0.04) a Dock5.png (t=1, frosted ~0.38)
-    let dock_a = 0.04 + t * 0.34;
+    let scale = malus_de_common::config::liquid_glass_scale_for(opacity);
+    let dock_a = malus_de_common::config::scaled_liquid_glass_alpha(0.42, scale, 0.10, 0.92);
     let css = format!(
-        ".dock-container {{ background-color: alpha(@window_bg_color, {dock_a:.3}); border: none; }}"
+        ".dock-container {{ background-color: alpha(@window_bg_color, {dock_a:.3}); }}"
     );
     DOCK_GLASS_PROVIDER.with(|cell| {
         if let Some(provider) = cell.borrow().as_ref() {
