@@ -797,6 +797,7 @@ fn build_appearance_main_pane(
         _ => rb_sb0.set_active(true),
     }
     for (idx, rb) in [(0usize, &rb_sb0), (1, &rb_sb1), (2, &rb_sb2)] {
+        rb.add_css_class("macos-radio");
         let p = prefs.clone();
         rb.connect_toggled(move |b| {
             if b.is_active() {
@@ -834,6 +835,7 @@ fn build_appearance_main_pane(
         rb_sc0.set_active(true);
     }
     for (idx, rb) in [(0usize, &rb_sc0), (1, &rb_sc1)] {
+        rb.add_css_class("macos-radio");
         let p = prefs.clone();
         rb.connect_toggled(move |b| {
             if b.is_active() {

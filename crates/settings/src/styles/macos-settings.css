@@ -685,6 +685,13 @@ button.wifi-row-btn:hover {
     color: @window_fg_color;
 }
 
+window.macos-settings-window checkbutton,
+window.macos-settings-window checkbutton > label {
+    font-size: 13px;
+    font-weight: 400;
+    color: @window_fg_color;
+}
+
 .wifi-row-check {
     min-width: 16px;
     color: @window_fg_color;
