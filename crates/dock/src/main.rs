@@ -150,6 +150,11 @@ fn apply_dock_layout_config(
     } else {
         Orientation::Vertical
     });
+    refs.minimized_box.set_valign(if is_horizontal {
+        gtk4::Align::End
+    } else {
+        gtk4::Align::Center
+    });
     refs.minimized_box
         .set_visible(has_minimized_windows && !cfg.minimize_to_app_icon);
 
@@ -1284,7 +1289,7 @@ fn build_dock_ui(app: &Application) {
     let minimized_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(4)
-        .valign(gtk4::Align::Center)
+        .valign(gtk4::Align::End)
         .build();
     minimized_box.set_overflow(gtk4::Overflow::Visible);
     minimized_box.set_visible(false);
@@ -1896,6 +1901,10 @@ fn build_dock_ui(app: &Application) {
                     for id in to_remove {
                         if let Some(widget) = current_map.get(&id) {
                             if let Ok(revealer) = widget.clone().downcast::<gtk4::Revealer>() {
+                                // Ocultar de inmediato la tarjeta antes de colapsar su espacio en el Dock
+                                // para evitar que la miniatura se vea aplastándose o parpadeando al restaurar.
+                                widget.set_opacity(0.0);
+                                widget.set_sensitive(false);
                                 if revealer.reveals_child() {
                                     revealer.set_reveal_child(false);
                                     let widget = widget.clone();
@@ -1906,7 +1915,7 @@ fn build_dock_ui(app: &Application) {
                                     let dock_root_ref = dock_root_ref.clone();
                                     let dock_bar_ref = dock_bar_ref.clone();
                                     glib::timeout_add_local_once(
-                                        Duration::from_millis(300),
+                                        Duration::from_millis(200),
                                         move || {
                                             let still_current = min_map
                                                 .borrow()
@@ -2909,6 +2918,10 @@ fn render_dock_apps(
 
 fn update_icon_size_recursive(widget: &gtk4::Widget, size: i32, base_size: i32) -> bool {
     let mut changed = false;
+    if widget.has_css_class("dock-min-icon-band") && widget.height_request() != base_size {
+        widget.set_size_request(-1, base_size);
+        changed = true;
+    }
     if widget.has_css_class("dock-icon-placeholder")
         && (widget.width_request() != size || widget.height_request() != base_size)
     {
@@ -3885,14 +3898,54 @@ fn create_minimized_window_item(info: &MinimizedWindowInfo, icon_size: i32) -> (
     }
     overlay.add_overlay(&badge_box);
 
-    // Clic para restaurar la ventana vía Genie Effect inverso
+    // Banda vertical de la altura de los iconos + banda inferior de indicadores para alinear
+    // las miniaturas exactamente a la altura de los iconos y no sobre los puntos indicadores.
+    let item_container = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .css_classes(["dock-item-box"])
+        .spacing(0)
+        .valign(gtk4::Align::End)
+        .build();
+    item_container.set_overflow(gtk4::Overflow::Visible);
+
+    let icon_band = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .css_classes(["dock-min-icon-band"])
+        .valign(gtk4::Align::End)
+        .build();
+    icon_band.set_size_request(-1, icon_size.max(1));
+    icon_band.set_overflow(gtk4::Overflow::Visible);
+    overlay.set_vexpand(true);
+    icon_band.append(&overlay);
+
+    let spacer = Label::builder()
+        .label("●")
+        .css_classes(["dock-indicator"])
+        .opacity(0.0)
+        .valign(gtk4::Align::End)
+        .build();
+
+    item_container.append(&icon_band);
+    item_container.append(&spacer);
+
+    // Clic para restaurar la ventana vía animación inversa desde el Dock
     let gesture = GestureClick::new();
     let id = window_id;
+    let item_for_click = item_container.clone();
     gesture.connect_pressed(move |_, _, _, _| {
         info!(
             "✨ Clic en miniatura de Dock: restaurando ventana id={}",
             id
         );
+        // Ocultar la tarjeta en el instante del clic para que no quede encimada ni se aplaste
+        // mientras el compositor expande la captura real desde este slot.
+        if let Some(revealer) = item_for_click.parent() {
+            revealer.set_opacity(0.0);
+            revealer.set_sensitive(false);
+        } else {
+            item_for_click.set_opacity(0.0);
+            item_for_click.set_sensitive(false);
+        }
         if let Err(err) = send_ipc_message(&IpcMessage::AnimateRestore { window_id: id }) {
             warn!(
                 "No se pudo enviar AnimateRestore (id={}) por IPC: {}",
@@ -3902,13 +3955,27 @@ fn create_minimized_window_item(info: &MinimizedWindowInfo, icon_size: i32) -> (
     });
     overlay.add_controller(gesture);
 
-    (overlay.upcast::<gtk4::Widget>(), window_id)
+    (item_container.upcast::<gtk4::Widget>(), window_id)
+}
+
+fn find_dock_widget_with_class(widget: &gtk4::Widget, class_name: &str) -> Option<gtk4::Widget> {
+    if widget.has_css_class(class_name) {
+        return Some(widget.clone());
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        if let Some(found) = find_dock_widget_with_class(&c, class_name) {
+            return Some(found);
+        }
+        child = c.next_sibling();
+    }
+    None
 }
 
 fn create_dock_item_revealer(child: &gtk4::Widget) -> gtk4::Revealer {
     let revealer = gtk4::Revealer::new();
     revealer.set_transition_type(gtk4::RevealerTransitionType::SlideLeft);
-    revealer.set_transition_duration(280);
+    revealer.set_transition_duration(180);
     revealer.set_child(Some(child));
     revealer
 }
@@ -3918,11 +3985,13 @@ fn register_minimized_dock_slot(
     dock_window: &ApplicationWindow,
     window_id: u64,
 ) {
-    if let Some(point) = card.compute_point(dock_window, &gtk4::graphene::Point::zero()) {
+    let target =
+        find_dock_widget_with_class(card, "dock-window-card").unwrap_or_else(|| card.clone());
+    if let Some(point) = target.compute_point(dock_window, &gtk4::graphene::Point::zero()) {
         let x = point.x().round() as i32;
         let y = point.y().round() as i32;
-        let width = card.width().max(1) as u32;
-        let height = card.height().max(1) as u32;
+        let width = target.width().max(1) as u32;
+        let height = target.height().max(1) as u32;
 
         info!(
             "📍 Registrando slot de miniatura en Dock: id={}, pos=({}, {}, {}, {})",
