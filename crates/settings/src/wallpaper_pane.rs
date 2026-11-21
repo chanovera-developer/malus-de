@@ -23,6 +23,7 @@ use crate::wifi_pane::{make_squircle_button, wrap_squircle_card, WIFI_CARD_SQUIR
 
 const FIT_MODE_LABELS: [&str; 4] = ["Llenar pantalla", "Ajustar", "Estirar", "Centrar"];
 const WP_THUMB_SQUIRCLE_RADIUS: f64 = WIFI_CARD_SQUIRCLE_RADIUS;
+const WP_HERO_SQUIRCLE_RADIUS: f64 = WIFI_CARD_SQUIRCLE_RADIUS * (100.0 / 70.0);
 
 const CURATED_SOLID_COLORS: [(&str, &str); 21] = [
     ("Negro", "#000000"),
@@ -1297,7 +1298,7 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
             }
             let cfg = cfg_draw.borrow().clone();
             let _ = cr.save();
-            squircle_path(cr, w, h, WP_THUMB_SQUIRCLE_RADIUS);
+            squircle_path(cr, w, h, WP_HERO_SQUIRCLE_RADIUS);
             cr.clip();
 
             match cfg.mode {
@@ -1342,7 +1343,7 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
 
             let _ = cr.save();
             cr.translate(0.5, 0.5);
-            squircle_path(cr, w - 1.0, h - 1.0, WP_THUMB_SQUIRCLE_RADIUS);
+            squircle_path(cr, w - 1.0, h - 1.0, WP_HERO_SQUIRCLE_RADIUS);
             cr.set_source_rgba(0.0, 0.0, 0.0, 0.16);
             cr.set_line_width(1.0);
             let _ = cr.stroke();
