@@ -8497,6 +8497,7 @@ mod tests {
                 y: 0,
                 scale: 1.0,
                 primary: false,
+                brightness: 100.0,
                 diagonal_inches: None,
             },
             DisplayOutputConfig {
@@ -8510,6 +8511,7 @@ mod tests {
                 y: 0,
                 scale: 1.0,
                 primary: true,
+                brightness: 100.0,
                 diagonal_inches: None,
             },
         ];

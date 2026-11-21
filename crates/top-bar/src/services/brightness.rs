@@ -46,10 +46,18 @@ impl BrightnessService {
     pub fn set_brightness(pct: f64) {
         let clamped = pct.clamp(5.0, 100.0);
 
-        // 1. Guardar en DisplaysConfig
+        // 1. Guardar en DisplaysConfig y notificar al compositor (brillo hardware o software)
         let mut cfg = DisplaysConfig::load();
         cfg.brightness = clamped;
+        if let Some(prim) = cfg.outputs.iter_mut().find(|o| o.primary) {
+            prim.brightness = clamped;
+        } else if let Some(first) = cfg.outputs.first_mut() {
+            first.brightness = clamped;
+        }
         let _ = cfg.save();
+        let _ = malus_de_common::ipc::IpcClient::send_command(
+            malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig,
+        );
 
         // 2. Intentar escribir en /sys/class/backlight o invocar brightnessctl en un hilo secundario
         std::thread::spawn(move || {

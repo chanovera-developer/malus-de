@@ -1,11 +1,12 @@
 use gtk4::prelude::*;
 use gtk4::{
     Align, ApplicationWindow, Box as GtkBox, Button, DrawingArea, Entry, GestureClick,
-    GestureDrag, Image, Label, Orientation, Popover, PolicyType, Scale, ScrolledWindow, Window,
+    GestureDrag, Image, Label, Orientation, Overlay, Popover, PolicyType, Scale, ScrolledWindow,
+    Window,
 };
 use malus_de_common::config::{
-    default_bundled_wallpaper_path, is_dark_mode_active, DisplayModeConfig, DisplayOutputConfig,
-    DisplaysConfig, WallpaperConfig, WallpaperMode,
+    connector_has_hardware_backlight, default_bundled_wallpaper_path, is_dark_mode_active,
+    DisplayModeConfig, DisplayOutputConfig, DisplaysConfig, WallpaperConfig, WallpaperMode,
 };
 use malus_de_common::ipc::{IpcClient, IpcMessage};
 use malus_de_common::mac_switch::MacSwitch as Switch;
@@ -17,8 +18,8 @@ use std::rc::Rc;
 use crate::general_pane::make_pending_badge;
 use crate::squircle_path;
 use crate::wifi_pane::{
-    make_popover_action_row, make_squircle_button, wrap_squircle_card,
-    wrap_squircle_round_control, RoundControlStyle, WIFI_CARD_SQUIRCLE_RADIUS,
+    make_help_circle_button, make_popover_action_row, make_squircle_button, wrap_squircle_card,
+    WIFI_CARD_SQUIRCLE_RADIUS,
 };
 
 const COLOR_PROFILE_OPTIONS: [&str; 4] = [
@@ -41,54 +42,77 @@ fn save_displays_and_reload(cfg: &DisplaysConfig) {
     let _ = IpcClient::send_command(IpcMessage::ReloadDisplaysConfig);
 }
 
-fn read_hardware_brightness_or_config(cfg: &DisplaysConfig) -> f64 {
-    if let Ok(entries) = std::fs::read_dir("/sys/class/backlight") {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let cur_path = path.join("brightness");
-            let max_path = path.join("max_brightness");
-            if let (Ok(cur_str), Ok(max_str)) = (
-                std::fs::read_to_string(&cur_path),
-                std::fs::read_to_string(&max_path),
+fn read_sysfs_backlight_pct() -> Option<f64> {
+    let entries = std::fs::read_dir("/sys/class/backlight").ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let cur_path = path.join("brightness");
+        let max_path = path.join("max_brightness");
+        if let (Ok(cur_str), Ok(max_str)) = (
+            std::fs::read_to_string(&cur_path),
+            std::fs::read_to_string(&max_path),
+        ) {
+            if let (Ok(cur), Ok(max)) = (
+                cur_str.trim().parse::<f64>(),
+                max_str.trim().parse::<f64>(),
             ) {
-                if let (Ok(cur), Ok(max)) = (
-                    cur_str.trim().parse::<f64>(),
-                    max_str.trim().parse::<f64>(),
-                ) {
-                    if max > 0.0 {
-                        return (cur / max * 100.0).clamp(5.0, 100.0);
-                    }
+                if max > 0.0 {
+                    return Some((cur / max * 100.0).clamp(5.0, 100.0));
                 }
             }
         }
     }
-    cfg.brightness.clamp(5.0, 100.0)
+    None
 }
 
-fn apply_hardware_brightness(pct: f64) {
+fn read_output_brightness(cfg: &DisplaysConfig, output: &DisplayOutputConfig) -> f64 {
+    if connector_has_hardware_backlight(&output.connector) {
+        if let Some(hw) = read_sysfs_backlight_pct() {
+            return hw;
+        }
+    }
+    if (output.brightness - 100.0).abs() > f64::EPSILON || !output.primary {
+        output.brightness.clamp(5.0, 100.0)
+    } else {
+        output.brightness.min(cfg.brightness).clamp(5.0, 100.0)
+    }
+}
+
+fn apply_output_brightness(output_idx: usize, pct: f64) {
     let clamped = pct.clamp(5.0, 100.0);
     let mut cfg = DisplaysConfig::load();
-    cfg.brightness = clamped;
-    let _ = cfg.save();
+    let mut connector = String::new();
+    if let Some(out) = cfg.outputs.get_mut(output_idx) {
+        connector = out.connector.clone();
+        out.brightness = clamped;
+        if out.primary {
+            cfg.brightness = clamped;
+        }
+    } else {
+        cfg.brightness = clamped;
+    }
+    save_displays_and_reload(&cfg);
 
-    std::thread::spawn(move || {
-        if let Ok(entries) = std::fs::read_dir("/sys/class/backlight") {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let cur_path = path.join("brightness");
-                let max_path = path.join("max_brightness");
-                if let Ok(max_str) = std::fs::read_to_string(&max_path) {
-                    if let Ok(max) = max_str.trim().parse::<f64>() {
-                        let target = ((clamped / 100.0) * max).round() as u64;
-                        let _ = std::fs::write(&cur_path, target.to_string());
+    if connector_has_hardware_backlight(&connector) {
+        std::thread::spawn(move || {
+            if let Ok(entries) = std::fs::read_dir("/sys/class/backlight") {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let cur_path = path.join("brightness");
+                    let max_path = path.join("max_brightness");
+                    if let Ok(max_str) = std::fs::read_to_string(&max_path) {
+                        if let Ok(max) = max_str.trim().parse::<f64>() {
+                            let target = ((clamped / 100.0) * max).round() as u64;
+                            let _ = std::fs::write(&cur_path, target.to_string());
+                        }
                     }
                 }
             }
-        }
-        let _ = Command::new("brightnessctl")
-            .args(["set", &format!("{}%", clamped.round() as u32)])
-            .output();
-    });
+            let _ = Command::new("brightnessctl")
+                .args(["set", &format!("{}%", clamped.round() as u32)])
+                .output();
+        });
+    }
 }
 
 fn read_night_shift_enabled() -> bool {
@@ -326,8 +350,7 @@ fn draw_scale_thumbnail_window(
     cr: &gtk4::cairo::Context,
     w: f64,
     h: f64,
-    density_step: usize,
-    total_steps: usize,
+    scale_pct: i32,
     selected: bool,
     is_dark: bool,
     accent: (f64, f64, f64),
@@ -340,7 +363,7 @@ fn draw_scale_thumbnail_window(
     let _ = cr.fill();
     let _ = cr.restore();
 
-    // Cuerpo de la ventana miniatura
+    // Cuerpo de la miniatura
     let _ = cr.save();
     cr.translate(2.0, 2.0);
     squircle_path(cr, w - 4.0, h - 4.0, 9.0);
@@ -352,54 +375,31 @@ fn draw_scale_thumbnail_window(
     let _ = cr.fill();
     let _ = cr.restore();
 
-    // Clip para barra de título y texto ("Here's to the crazy ones...")
+    // Porcentaje centrado únicamente (sin texto de ejemplo ni semáforos)
     let _ = cr.save();
-    cr.translate(2.0, 2.0);
-    squircle_path(cr, w - 4.0, h - 4.0, 9.0);
-    cr.clip();
-
-    // Semáforos macOS
-    let dot_y = 7.5;
-    for (idx, (r, g, b)) in [
-        (0.99, 0.37, 0.34),
-        (0.99, 0.74, 0.18),
-        (0.15, 0.79, 0.25),
-    ]
-    .iter()
-    .enumerate()
-    {
-        let dot_r = 2.6 - (density_step as f64 / total_steps.max(1) as f64) * 1.1;
-        cr.arc(8.0 + idx as f64 * (dot_r * 2.8), dot_y, dot_r.max(1.4), 0.0, std::f64::consts::TAU);
-        cr.set_source_rgb(*r, *g, *b);
-        let _ = cr.fill();
-    }
-
-    // Líneas de texto escaladas según el nivel ("Texto más grande" -> "Más espacio")
-    let t = density_step as f64 / total_steps.saturating_sub(1).max(1) as f64;
-    let font_size = 9.0 - t * 5.0; // de 9.0px a 4.0px
-    let line_step = font_size * 1.25;
-    cr.set_font_size(font_size);
-    if is_dark {
-        cr.set_source_rgba(0.92, 0.92, 0.95, 0.85);
+    let pct_text = format!("{}%", scale_pct);
+    cr.select_font_face(
+        "Sans",
+        gtk4::cairo::FontSlant::Normal,
+        if selected {
+            gtk4::cairo::FontWeight::Bold
+        } else {
+            gtk4::cairo::FontWeight::Normal
+        },
+    );
+    cr.set_font_size(14.5);
+    if selected {
+        cr.set_source_rgba(accent.0, accent.1, accent.2, 0.98);
+    } else if is_dark {
+        cr.set_source_rgba(0.92, 0.93, 0.96, 0.88);
     } else {
-        cr.set_source_rgba(0.16, 0.17, 0.20, 0.85);
+        cr.set_source_rgba(0.14, 0.15, 0.18, 0.88);
     }
-    let sample_lines = [
-        "Here's to the crazy ones.",
-        "The misfits. The rebels.",
-        "The troublemakers. The",
-        "round pegs in the square",
-        "holes. The ones who see",
-        "things differently.",
-    ];
-    let mut ty = 17.0 + font_size * 0.4;
-    for line in sample_lines {
-        if ty > h - 6.0 {
-            break;
-        }
-        cr.move_to(6.0, ty);
-        let _ = cr.show_text(line);
-        ty += line_step;
+    if let Ok(ext) = cr.text_extents(&pct_text) {
+        let tx = (w - ext.width()) * 0.5 - ext.x_bearing();
+        let ty = (h - ext.height()) * 0.5 - ext.y_bearing();
+        cr.move_to(tx, ty);
+        let _ = cr.show_text(&pct_text);
     }
     let _ = cr.restore();
 
@@ -532,7 +532,7 @@ fn build_apple_dropdown_row(
 
     let val_lbl = Label::builder()
         .label(options.get(initial_idx).copied().unwrap_or("—"))
-        .css_classes(["wifi-row-value"])
+        .css_classes(["disp-inline-val"])
         .valign(Align::Center)
         .build();
     let arrows = Image::builder()
@@ -543,21 +543,21 @@ fn build_apple_dropdown_row(
         .build();
     let btn_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(5)
+        .spacing(4)
         .build();
     btn_box.append(&val_lbl);
     btn_box.append(&arrows);
 
     let trigger = Button::builder()
         .child(&btn_box)
-        .css_classes(["dock-inline-menu-btn"])
+        .css_classes(["fw-rule-action-btn"])
         .has_frame(false)
         .valign(Align::Center)
         .sensitive(!pending)
         .build();
 
     let popover = Popover::builder()
-        .css_classes(["wifi-menu-popover"])
+        .css_classes(["wifi-macos-popover"])
         .has_arrow(false)
         .build();
     popover.set_parent(&trigger);
@@ -565,6 +565,10 @@ fn build_apple_dropdown_row(
     let pop_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(2)
+        .margin_top(4)
+        .margin_bottom(4)
+        .margin_start(4)
+        .margin_end(4)
         .build();
 
     let selected_idx = Rc::new(Cell::new(initial_idx));
@@ -1203,12 +1207,17 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
     let show_all_modes = Rc::new(Cell::new(false));
 
     // ========================================================================
-    // 1. Escenario superior de selección de pantallas + botón Ordenar...
+    // 1. Escenario superior de selección de pantallas + Tarjeta 1 con triángulo integrado
     // ========================================================================
+    let stage_and_main_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(0)
+        .build();
+
     let stage_overlay = gtk4::Overlay::builder().hexpand(true).build();
 
     let stage_area = DrawingArea::builder()
-        .content_height(132)
+        .content_height(114)
         .hexpand(true)
         .build();
     crate::register_accent_draw_area(&stage_area);
@@ -1217,6 +1226,36 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
         Rc::new(RefCell::new(Vec::new()));
     let wallpaper_thumb_cache: Rc<RefCell<Option<gdk_pixbuf::Pixbuf>>> =
         Rc::new(RefCell::new(load_hero_wallpaper_pixbuf()));
+
+    fn compute_stage_slots(cfg: &DisplaysConfig, width: f64) -> Vec<(usize, f64, bool)> {
+        if cfg.outputs.is_empty() {
+            return Vec::new();
+        }
+        let mut order: Vec<usize> = (0..cfg.outputs.len()).collect();
+        order.sort_by_key(|&i| cfg.outputs[i].x);
+        let gap = 24.0;
+        let widths: Vec<f64> = order
+            .iter()
+            .map(|&idx| {
+                if is_builtin_connector(&cfg.outputs[idx].connector) {
+                    104.0
+                } else {
+                    114.0
+                }
+            })
+            .collect();
+        let total_w: f64 =
+            widths.iter().sum::<f64>() + gap * (order.len().saturating_sub(1) as f64);
+        let mut cur_x = (width - total_w) * 0.5;
+        let mut slots = Vec::with_capacity(order.len());
+        for (pos, &idx) in order.iter().enumerate() {
+            let slot_w = widths[pos];
+            let cx = cur_x + slot_w * 0.5;
+            slots.push((idx, cx, is_builtin_connector(&cfg.outputs[idx].connector)));
+            cur_x += slot_w + gap;
+        }
+        slots
+    }
 
     {
         let sel_draw = selected_idx.clone();
@@ -1234,34 +1273,14 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
 
             let is_dark = is_dark_mode_active();
             let accent = crate::accent_color();
+            let multi = cfg.outputs.len() > 1;
             let cur_sel = sel_draw.get().min(cfg.outputs.len().saturating_sub(1));
             let pb_opt = wp_draw.borrow().clone();
+            let base_bottom_y = 86.0;
 
-            // Ordenar por X lógico para reflejar disposición izquierda -> derecha
-            let mut order: Vec<usize> = (0..cfg.outputs.len()).collect();
-            order.sort_by_key(|&i| cfg.outputs[i].x);
-
-            let gap = 24.0;
-            let mut widths: Vec<f64> = Vec::with_capacity(order.len());
-            for &idx in &order {
-                let builtin = is_builtin_connector(&cfg.outputs[idx].connector);
-                widths.push(if builtin { 104.0 } else { 114.0 });
-            }
-            let total_w: f64 =
-                widths.iter().sum::<f64>() + gap * (order.len().saturating_sub(1) as f64);
-            let mut cur_x = (w - total_w) * 0.5;
-            let base_bottom_y = 92.0;
-
-            let mut selected_cx = w * 0.5;
-            for (pos, &idx) in order.iter().enumerate() {
+            for (idx, cx, builtin) in compute_stage_slots(&cfg, w) {
                 let o = &cfg.outputs[idx];
-                let slot_w = widths[pos];
-                let cx = cur_x + slot_w * 0.5;
-                let builtin = is_builtin_connector(&o.connector);
                 let is_sel = idx == cur_sel;
-                if is_sel {
-                    selected_cx = cx;
-                }
 
                 let (rx, ry, rw, rh) = draw_apple_monitor_silhouette(
                     cr,
@@ -1269,7 +1288,7 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
                     cx,
                     base_bottom_y,
                     builtin,
-                    is_sel,
+                    is_sel && multi,
                     is_dark,
                     accent,
                 );
@@ -1296,35 +1315,20 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
                 let text_w = ext.map(|e| e.width()).unwrap_or(80.0);
                 cr.move_to(cx - text_w * 0.5, base_bottom_y + 18.0);
                 let _ = cr.show_text(&name);
-
-                cur_x += slot_w + gap;
             }
-
-            // Triángulo indicador macOS apuntando hacia el monitor seleccionado desde el borde inferior
-            let notch_y = h - 1.0;
-            cr.move_to(selected_cx - 7.0, notch_y);
-            cr.line_to(selected_cx, notch_y - 7.0);
-            cr.line_to(selected_cx + 7.0, notch_y);
-            cr.close_path();
-            if is_dark {
-                cr.set_source_rgba(1.0, 1.0, 1.0, 0.14);
-            } else {
-                cr.set_source_rgba(0.0, 0.0, 0.0, 0.08);
-            }
-            let _ = cr.fill();
         });
     }
 
     let (arrange_wrap, arrange_btn) = make_squircle_button("Ordenar...", false, None);
     arrange_wrap.set_halign(Align::Start);
     arrange_wrap.set_valign(Align::End);
-    arrange_wrap.set_margin_bottom(14);
+    arrange_wrap.set_margin_bottom(8);
     stage_overlay.set_child(Some(&stage_area));
     stage_overlay.add_overlay(&arrange_wrap);
-    pane.append(&stage_overlay);
+    stage_and_main_box.append(&stage_overlay);
 
     // ========================================================================
-    // 2. Tarjeta 1: Usar como + Escala (Miniaturas Apple o Lista de Resoluciones)
+    // 2. Tarjeta 1: Usar como + Escala (con triángulo integrado si hay >1 pantalla)
     // ========================================================================
     let main_card = GtkBox::builder().orientation(Orientation::Vertical).build();
 
@@ -1344,12 +1348,12 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
     );
     let use_as_val_lbl = Label::builder()
         .label("Pantalla principal")
-        .css_classes(["wifi-row-value"])
+        .css_classes(["disp-inline-val"])
         .valign(Align::Center)
         .build();
     let use_as_btn_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(5)
+        .spacing(4)
         .build();
     use_as_btn_box.append(&use_as_val_lbl);
     use_as_btn_box.append(
@@ -1362,18 +1366,19 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
     );
     let use_as_btn = Button::builder()
         .child(&use_as_btn_box)
-        .css_classes(["dock-inline-menu-btn"])
+        .css_classes(["fw-rule-action-btn"])
         .has_frame(false)
         .valign(Align::Center)
         .build();
     let use_as_popover = Popover::builder()
-        .css_classes(["wifi-menu-popover"])
+        .css_classes(["wifi-macos-popover"])
         .has_arrow(false)
         .build();
     use_as_popover.set_parent(&use_as_btn);
     use_as_row.append(&use_as_btn);
+    let use_as_sep = make_card_separator();
     main_card.append(&use_as_row);
-    main_card.append(&make_card_separator());
+    main_card.append(&use_as_sep);
 
     // Contenedor de miniaturas ("Texto más grande" .. "Más espacio")
     let thumbs_mode_box = GtkBox::builder()
@@ -1411,16 +1416,42 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
     scale_slider.set_draw_value(false);
     scale_slider.set_hexpand(true);
     scale_slider.set_css_classes(&["bat-limit-slider"]);
+    let (step_down_wrap, step_down_btn) =
+        make_squircle_button("−", false, Some("Reducir escala (-5%)"));
+    step_down_btn.add_css_class("disp-stepper-btn");
+    step_down_wrap.set_height_request(24);
+    step_down_btn.set_height_request(24);
+
     let scale_entry = Entry::builder()
         .placeholder_text("150.0%")
-        .width_chars(7)
-        .max_width_chars(9)
+        .width_chars(6)
+        .max_width_chars(8)
+        .height_request(24)
+        .xalign(0.5)
         .css_classes(["scale-input-entry"])
         .valign(Align::Center)
         .build();
+
+    let (step_up_wrap, step_up_btn) =
+        make_squircle_button("+", false, Some("Aumentar escala (+5%)"));
+    step_up_btn.add_css_class("disp-stepper-btn");
+    step_up_wrap.set_height_request(24);
+    step_up_btn.set_height_request(24);
+
+    let stepper_box = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(4)
+        .valign(Align::Center)
+        .build();
+    stepper_box.append(&step_down_wrap);
+    stepper_box.append(&scale_entry);
+    stepper_box.append(&step_up_wrap);
+
     let (apply_scale_wrap, apply_scale_btn) = make_squircle_button("Aplicar", false, None);
+    apply_scale_wrap.set_height_request(24);
+    apply_scale_btn.set_height_request(24);
     continuous_row.append(&scale_slider);
-    continuous_row.append(&scale_entry);
+    continuous_row.append(&stepper_box);
     continuous_row.append(&apply_scale_wrap);
     thumbs_mode_box.append(&continuous_row);
     thumbs_mode_box.append(
@@ -1451,7 +1482,122 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
     list_mode_box.append(&show_all_res_row);
     main_card.append(&list_mode_box);
 
-    pane.append(&wrap_squircle_card(&main_card, WIFI_CARD_SQUIRCLE_RADIUS));
+    let main_card_overlay = Overlay::builder()
+        .hexpand(true)
+        .vexpand(false)
+        .valign(Align::Start)
+        .build();
+    let main_card_bg = DrawingArea::new();
+    main_card_bg.set_can_target(false);
+    main_card_bg.set_hexpand(true);
+    main_card_bg.set_vexpand(false);
+    main_card_bg.set_valign(Align::Fill);
+    {
+        let sel_bg = selected_idx.clone();
+        main_card_bg.set_draw_func(move |_, cr, w, h| {
+            let width = w as f64;
+            let height = h as f64;
+            if width <= 2.0 || height <= 10.0 {
+                return;
+            }
+            let cfg = DisplaysConfig::load();
+            let has_notch = cfg.outputs.len() > 1;
+            let notch_h = if has_notch { 8.0 } else { 0.0 };
+            let y0 = 0.5 + notch_h;
+            let card_w = (width - 1.0).max(2.0);
+            let card_h = (height - 0.5 - y0).max(2.0);
+            let x0 = 0.5;
+            let radius = WIFI_CARD_SQUIRCLE_RADIUS
+                .min(card_w * 0.5)
+                .min(card_h * 0.5)
+                .max(1.0);
+            let power = 2.0 / 4.2_f64;
+            let q = std::f64::consts::FRAC_PI_2;
+            let segs = 10usize;
+            let dark = libadwaita::StyleManager::default().is_dark();
+
+            let _ = cr.save();
+            cr.new_path();
+            cr.move_to(x0 + radius, y0);
+            if has_notch {
+                let cur_sel = sel_bg.get().min(cfg.outputs.len().saturating_sub(1));
+                let target_cx = compute_stage_slots(&cfg, width)
+                    .into_iter()
+                    .find(|(idx, ..)| *idx == cur_sel)
+                    .map(|(_, cx, _)| cx)
+                    .unwrap_or(width * 0.5);
+                let half_base = 8.0;
+                let nx = target_cx.clamp(
+                    x0 + radius + half_base + 2.0,
+                    x0 + card_w - radius - half_base - 2.0,
+                );
+                cr.line_to(nx - half_base, y0);
+                cr.line_to(nx, 0.5);
+                cr.line_to(nx + half_base, y0);
+            }
+            cr.line_to(x0 + card_w - radius, y0);
+            for step in 1..=segs {
+                let a = q * step as f64 / segs as f64;
+                cr.line_to(
+                    x0 + card_w - radius + radius * a.sin().powf(power),
+                    y0 + radius - radius * a.cos().powf(power),
+                );
+            }
+            cr.line_to(x0 + card_w, y0 + card_h - radius);
+            for step in 1..=segs {
+                let a = q * step as f64 / segs as f64;
+                cr.line_to(
+                    x0 + card_w - radius + radius * a.cos().powf(power),
+                    y0 + card_h - radius + radius * a.sin().powf(power),
+                );
+            }
+            cr.line_to(x0 + radius, y0 + card_h);
+            for step in 1..=segs {
+                let a = q * step as f64 / segs as f64;
+                cr.line_to(
+                    x0 + radius - radius * a.sin().powf(power),
+                    y0 + card_h - radius + radius * a.cos().powf(power),
+                );
+            }
+            cr.line_to(x0, y0 + radius);
+            for step in 1..=segs {
+                let a = q * step as f64 / segs as f64;
+                cr.line_to(
+                    x0 + radius - radius * a.cos().powf(power),
+                    y0 + radius - radius * a.sin().powf(power),
+                );
+            }
+            cr.close_path();
+
+            if dark {
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.055);
+            } else {
+                cr.set_source_rgba(0.0, 0.0, 0.0, 0.036);
+            }
+            let _ = cr.fill_preserve();
+            if dark {
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.095);
+            } else {
+                cr.set_source_rgba(0.0, 0.0, 0.0, 0.075);
+            }
+            cr.set_line_width(1.0);
+            let _ = cr.stroke();
+            let _ = cr.restore();
+        });
+    }
+    let main_card_bg_weak = main_card_bg.downgrade();
+    libadwaita::StyleManager::default().connect_dark_notify(move |_| {
+        if let Some(area) = main_card_bg_weak.upgrade() {
+            area.queue_draw();
+        }
+    });
+    main_card.set_vexpand(false);
+    main_card.set_valign(Align::Start);
+    main_card_overlay.set_child(Some(&main_card_bg));
+    main_card_overlay.add_overlay(&main_card);
+    main_card_overlay.set_measure_overlay(&main_card, true);
+    stage_and_main_box.append(&main_card_overlay);
+    pane.append(&stage_and_main_box);
 
     // ========================================================================
     // 3. Tarjeta 2: Brillo + Brillo automático + True Tone
@@ -1620,12 +1766,12 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
     );
     let refresh_val_lbl = Label::builder()
         .label("60 Hertz")
-        .css_classes(["wifi-row-value"])
+        .css_classes(["disp-inline-val"])
         .valign(Align::Center)
         .build();
     let refresh_btn_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(5)
+        .spacing(4)
         .build();
     refresh_btn_box.append(&refresh_val_lbl);
     refresh_btn_box.append(
@@ -1638,12 +1784,12 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
     );
     let refresh_menu_btn = Button::builder()
         .child(&refresh_btn_box)
-        .css_classes(["dock-inline-menu-btn"])
+        .css_classes(["fw-rule-action-btn"])
         .has_frame(false)
         .valign(Align::Center)
         .build();
     let refresh_popover = Popover::builder()
-        .css_classes(["wifi-menu-popover"])
+        .css_classes(["wifi-macos-popover"])
         .has_arrow(false)
         .build();
     refresh_popover.set_parent(&refresh_menu_btn);
@@ -1700,30 +1846,24 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
 
     let (adv_wrap, adv_btn) = make_squircle_button("Avanzado...", false, None);
     let (ns_wrap, ns_btn) = make_squircle_button("Night Shift...", false, None);
-    let help_btn = Button::builder()
-        .icon_name("help-about-symbolic")
-        .has_frame(false)
-        .tooltip_text("Información sobre Pantallas y TrueSize PPI")
-        .build();
-    let help_wrap = wrap_squircle_round_control(&help_btn, 26, RoundControlStyle::SolidButton);
+    let (help_wrap, help_btn) = make_help_circle_button("Información sobre Pantallas y TrueSize PPI");
     let help_pop = Popover::builder()
-        .css_classes(["wifi-menu-popover"])
+        .css_classes(["wifi-macos-popover"])
+        .has_arrow(false)
         .build();
-    help_pop.set_parent(&help_btn);
     help_pop.set_child(Some(
         &Label::builder()
-            .label("Selecciona una pantalla en la parte superior para ajustar su resolución, frecuencia y escala.\nUsa «Ordenar...» para reorganizar monitores físicos y «Enlace 1:1» para igualar milímetros físicos entre pantallas.")
+            .label("Selecciona una pantalla en la parte superior para ajustar su resolución, frecuencia, brillo y escala.\nUsa «Ordenar...» para reorganizar monitores físicos y «Enlace 1:1» para igualar milímetros físicos entre pantallas.")
             .css_classes(["card-section-sub"])
             .max_width_chars(38)
             .wrap(true)
-            .margin_top(6)
-            .margin_bottom(6)
-            .margin_start(8)
-            .margin_end(8)
+            .margin_top(10)
+            .margin_bottom(10)
+            .margin_start(12)
+            .margin_end(12)
             .build(),
     ));
-    let help_pop_c = help_pop.clone();
-    help_btn.connect_clicked(move |_| help_pop_c.popup());
+    help_btn.set_popover(Some(&help_pop));
 
     bottom_actions.append(&adv_wrap);
     bottom_actions.append(&ns_wrap);
@@ -1741,8 +1881,13 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
         let sel_c = selected_idx.clone();
         let sync_c = syncing_ui.clone();
         let stage_c = stage_area.clone();
+        let main_bg_c = main_card_bg.clone();
+        let main_card_c = main_card.clone();
         let wp_cache_c = wallpaper_thumb_cache.clone();
+        let arrange_wrap_c = arrange_wrap.clone();
         let arrange_c = arrange_btn.clone();
+        let use_as_row_c = use_as_row.clone();
+        let use_as_sep_c = use_as_sep.clone();
         let use_as_lbl_c = use_as_val_lbl.clone();
         let use_as_pop_c = use_as_popover.clone();
         let use_as_btn_c = use_as_btn.clone();
@@ -1769,17 +1914,28 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
             *wp_cache_c.borrow_mut() = load_hero_wallpaper_pixbuf();
             let cfg = DisplaysConfig::load();
             if cfg.outputs.is_empty() {
+                arrange_wrap_c.set_visible(false);
                 arrange_c.set_sensitive(false);
+                use_as_row_c.set_visible(false);
+                use_as_sep_c.set_visible(false);
+                main_card_c.set_margin_top(0);
                 stage_c.queue_draw();
+                main_bg_c.queue_draw();
                 sync_c.set(false);
                 return;
             }
+            let multi = cfg.outputs.len() > 1;
             let idx = sel_c.get().min(cfg.outputs.len().saturating_sub(1));
             sel_c.set(idx);
             let output = &cfg.outputs[idx];
 
-            arrange_c.set_sensitive(cfg.outputs.len() > 1);
+            arrange_wrap_c.set_visible(multi);
+            arrange_c.set_sensitive(multi);
+            use_as_row_c.set_visible(multi);
+            use_as_sep_c.set_visible(multi);
+            main_card_c.set_margin_top(if multi { 8 } else { 0 });
             stage_c.queue_draw();
+            main_bg_c.queue_draw();
 
             // 1. "Usar como" (Pantalla principal / Pantalla extendida)
             use_as_lbl_c.set_label(if output.primary {
@@ -1787,11 +1943,15 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
             } else {
                 "Pantalla extendida"
             });
-            use_as_btn_c.set_sensitive(cfg.outputs.len() > 1);
+            use_as_btn_c.set_sensitive(multi);
 
             let ua_pop_box = GtkBox::builder()
                 .orientation(Orientation::Vertical)
                 .spacing(2)
+                .margin_top(4)
+                .margin_bottom(4)
+                .margin_start(4)
+                .margin_end(4)
                 .build();
             let (row_prim, b_prim) = make_popover_action_row(
                 "Pantalla principal",
@@ -1859,6 +2019,7 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
 
             for (step, &sc) in scales.iter().enumerate() {
                 let is_sel = (output.scale - sc).abs() < 0.03;
+                let scale_pct = (sc * 100.0).round() as i32;
                 let (lw, lh) = (
                     (output.width as f64 / sc).round() as i32,
                     (output.height as f64 / sc).round() as i32,
@@ -1866,7 +2027,7 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
                 let btn = Button::builder()
                     .css_classes(["wp-tile-btn"])
                     .has_frame(false)
-                    .tooltip_text(&format!("{} × {} ({:.0}%)", lw, lh, sc * 100.0))
+                    .tooltip_text(&format!("{} × {} ({}%)", lw, lh, scale_pct))
                     .build();
                 let col = GtkBox::builder()
                     .orientation(Orientation::Vertical)
@@ -1882,8 +2043,7 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
                         cr,
                         ww as f64,
                         hh as f64,
-                        step,
-                        total_steps,
+                        scale_pct,
                         is_sel,
                         is_dark,
                         accent,
@@ -2005,8 +2165,8 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
                 }
             }
 
-            // 3. Brillo
-            bright_sld_c.set_value(read_hardware_brightness_or_config(&cfg));
+            // 3. Brillo (hardware sysfs o por pantalla en el compositor)
+            bright_sld_c.set_value(read_output_brightness(&cfg, output));
 
             // 4. Enlace físico 1:1 TrueSize PPI
             ts_wrap_c.set_visible(cfg.outputs.len() >= 2);
@@ -2056,6 +2216,10 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
             let r_pop_box = GtkBox::builder()
                 .orientation(Orientation::Vertical)
                 .spacing(2)
+                .margin_top(4)
+                .margin_bottom(4)
+                .margin_start(4)
+                .margin_end(4)
                 .build();
             for hz in rates {
                 let active = (hz - output.refresh_rate).abs() < 0.5;
@@ -2188,15 +2352,43 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
         let f = apply_entry_scale;
         apply_scale_btn.connect_clicked(move |_| f());
     }
+    let step_scale_delta = {
+        let sync_c = syncing_ui.clone();
+        let sel_c = selected_idx.clone();
+        let ref_c = refresh_all.clone();
+        Rc::new(move |delta_pct: f64| {
+            if sync_c.get() {
+                return;
+            }
+            let mut cfg = DisplaysConfig::load();
+            let idx = sel_c.get();
+            if let Some(out) = cfg.outputs.get(idx) {
+                let next_pct = (out.scale * 100.0 + delta_pct).round().clamp(50.0, 300.0);
+                let next_scale = ((next_pct / 100.0) * 10000.0).round() / 10000.0;
+                cfg.set_output_scale_independent(idx, next_scale);
+                save_displays_and_reload(&cfg);
+                ref_c();
+            }
+        })
+    };
+    {
+        let step = step_scale_delta.clone();
+        step_down_btn.connect_clicked(move |_| step(-5.0));
+    }
+    {
+        let step = step_scale_delta;
+        step_up_btn.connect_clicked(move |_| step(5.0));
+    }
 
-    // Brillo hardware
+    // Brillo (hardware sysfs para panel integrado o atenuación por pantalla en el compositor)
     {
         let sync_c = syncing_ui.clone();
+        let sel_c = selected_idx.clone();
         bright_slider.connect_value_changed(move |sld| {
             if sync_c.get() {
                 return;
             }
-            apply_hardware_brightness(sld.value());
+            apply_output_brightness(sel_c.get(), sld.value());
         });
     }
 
@@ -2359,6 +2551,7 @@ mod tests {
             y: 0,
             scale: 2.0,
             primary: true,
+            brightness: 100.0,
             diagonal_inches: Some(14.0),
         };
         assert_eq!(friendly_display_name(&edp), "Pantalla integrada");

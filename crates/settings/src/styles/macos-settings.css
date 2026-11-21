@@ -250,8 +250,8 @@ searchentry.sidebar-search-input:focus,
 .content-header-toolbar {
     min-height: 48px;
     padding: 0px 24px;
-    background-color: @view_bg_color;
-    border-bottom: 1px solid alpha(@borders, 0.28);
+    background-color: transparent;
+    border-bottom: none;
 }
 
 /* Contenedores squircle Liquid Glass estilo Branches para navegación [ < | > ] */
@@ -477,13 +477,27 @@ flowbox.settings-wrap-flow > flowboxchild {
     border-radius: 6px;
     color: @window_fg_color;
     font-size: 12px;
-    font-weight: 600;
-    padding: 4px 8px;
-    min-height: 24px;
+    font-weight: 500;
+    padding: 0px 6px;
+    min-height: 22px;
 }
 .scale-input-entry:focus {
     border-color: @accent_bg_color;
     background-color: alpha(currentColor, 0.10);
+}
+
+button.disp-stepper-btn {
+    padding: 0px 7px;
+    min-width: 24px;
+    min-height: 22px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.disp-inline-val {
+    font-size: 13px;
+    font-weight: 400;
+    color: alpha(@window_fg_color, 0.85);
 }
 
 .res-thumb-btn {

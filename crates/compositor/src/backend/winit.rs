@@ -2866,6 +2866,27 @@ pub fn run_winit() -> Result<()> {
                         }
                     }
 
+                    let winit_name = output.name();
+                    let winit_brightness = current_displays_cfg
+                        .find_for_connector(&winit_name)
+                        .or_else(|| current_displays_cfg.outputs.iter().find(|o| o.primary))
+                        .or_else(|| current_displays_cfg.outputs.first())
+                        .map(|o| o.brightness)
+                        .unwrap_or(current_displays_cfg.brightness)
+                        .clamp(5.0, 100.0);
+                    if winit_brightness < 99.9 {
+                        let dim_alpha =
+                            (((100.0 - winit_brightness) / 100.0) * 0.85).clamp(0.0, 0.85) as f32;
+                        if dim_alpha > 0.002 {
+                            let dim_bounds = Rectangle::from_size(size);
+                            let _ = frame.draw_solid(
+                                dim_bounds,
+                                &[dim_bounds],
+                                Color32F::new(0.0, 0.0, 0.0, dim_alpha),
+                            );
+                        }
+                    }
+
                     let _ = frame.finish();
                     if workspace_switch_pending {
                         state.commit_pending_workspace_switch(ws_capture_succeeded);

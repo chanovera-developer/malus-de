@@ -778,6 +778,10 @@ fn sync_displays_config_from_connectors(
                 .as_ref()
                 .map(|output| output.primary)
                 .unwrap_or(idx == 0),
+            brightness: previous
+                .as_ref()
+                .map(|output| output.brightness)
+                .unwrap_or(100.0),
             diagonal_inches: previous
                 .as_ref()
                 .and_then(|output| output.diagonal_inches)
@@ -3301,6 +3305,8 @@ pub fn run_drm() -> Result<()> {
                         let (loc, scale) =
                             apply_output_config_to_surface(s, new_cfg, &mut state, &mut auto_x);
                         new_output_locs.insert(out_name.clone(), (loc, scale));
+                        s.full_damage_buffers = if ENABLE_DAMAGE_TRACKING { 3 } else { 1 };
+                        s.pending_damage_buffers = 1;
                         info!(
                             "   ✅ Monitor {} actualizado en vivo: pos=({}, {}), escala={:.4}x ({:.1}%)",
                             out_name,
@@ -6759,6 +6765,28 @@ pub fn run_drm() -> Result<()> {
                             });
                             if let Err(error) = ws_result {
                                 warn!("No se pudo dibujar la transición de escritorio: {error:?}");
+                            }
+                        }
+
+                        let output_name = out_surface.output.name();
+                        if !malus_de_common::config::connector_has_hardware_backlight(&output_name) {
+                            let out_brightness = current_displays_cfg
+                                .find_for_connector(&output_name)
+                                .map(|o| o.brightness)
+                                .unwrap_or(current_displays_cfg.brightness)
+                                .clamp(5.0, 100.0);
+                            if out_brightness < 99.9 {
+                                let dim_alpha =
+                                    (((100.0 - out_brightness) / 100.0) * 0.85).clamp(0.0, 0.85)
+                                        as f32;
+                                if dim_alpha > 0.002 {
+                                    let dim_bounds = Rectangle::from_size(out_surface.size);
+                                    let _ = frame.draw_solid(
+                                        dim_bounds,
+                                        &[dim_bounds],
+                                        Color32F::new(0.0, 0.0, 0.0, dim_alpha),
+                                    );
+                                }
                             }
                         }
 

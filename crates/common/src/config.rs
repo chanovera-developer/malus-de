@@ -2956,6 +2956,10 @@ pub struct DisplaysConfig {
     pub outputs: Vec<DisplayOutputConfig>,
 }
 
+fn default_output_brightness() -> f64 {
+    100.0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DisplayOutputConfig {
     pub connector: String,
@@ -2969,9 +2973,43 @@ pub struct DisplayOutputConfig {
     pub y: i32,
     pub scale: f64,
     pub primary: bool,
+    /// Nivel de brillo por pantalla (5.0 a 100.0)
+    #[serde(default = "default_output_brightness")]
+    pub brightness: f64,
     /// Diagonal física real del panel en pulgadas (permite corregir datos genéricos de EDID)
     #[serde(default)]
     pub diagonal_inches: Option<f64>,
+}
+
+/// Indica si un conector físico corresponde a un panel integrado.
+pub fn is_builtin_connector_name(connector: &str) -> bool {
+    let bare = connector
+        .split_once('-')
+        .and_then(|(prefix, rest)| prefix.starts_with("card").then_some(rest))
+        .unwrap_or(connector);
+    let low = bare.to_lowercase();
+    low.starts_with("edp") || low.starts_with("lvds") || low.starts_with("dsi")
+}
+
+/// Indica si `/sys/class/backlight` expone al menos un dispositivo de brillo hardware válido.
+pub fn system_has_sysfs_backlight() -> bool {
+    let Ok(entries) = std::fs::read_dir("/sys/class/backlight") else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if let Ok(max_str) = std::fs::read_to_string(p.join("max_brightness")) {
+            if max_str.trim().parse::<f64>().is_ok_and(|v| v > 0.0) && p.join("brightness").exists() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Indica si el brillo de la salida se gestiona por backlight sysfs o por el compositor.
+pub fn connector_has_hardware_backlight(connector: &str) -> bool {
+    is_builtin_connector_name(connector) && system_has_sysfs_backlight()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -3390,6 +3428,7 @@ impl DisplaysConfig {
                 y,
                 scale,
                 primary,
+                brightness: 100.0,
                 diagonal_inches,
             });
         }
@@ -3524,6 +3563,7 @@ mod tests {
             y: 0,
             scale: 2.0,
             primary: true,
+            brightness: 100.0,
             diagonal_inches: Some(24.0),
         };
         let hdmi = DisplayOutputConfig {
@@ -3537,6 +3577,7 @@ mod tests {
             y: 0,
             scale: 1.5,
             primary: false,
+            brightness: 100.0,
             diagonal_inches: Some(27.0),
         };
 
@@ -3882,6 +3923,7 @@ mod tests {
                 y: 0,
                 scale: 1.5,
                 primary: true,
+                brightness: 100.0,
                 diagonal_inches: Some(27.0),
             },
             DisplayOutputConfig {
@@ -3895,6 +3937,7 @@ mod tests {
                 y: 0,
                 scale: 1.5,
                 primary: false,
+                brightness: 100.0,
                 diagonal_inches: Some(24.0),
             },
         ];
@@ -3950,6 +3993,7 @@ mod tests {
             y: 0,
             scale: 1.0,
             primary: true,
+            brightness: 100.0,
             diagonal_inches: None,
         });
         assert!(cfg.find_for_connector("card0-DP-1").is_some());
@@ -3971,6 +4015,7 @@ mod tests {
                 y: 0,
                 scale: 1.5,
                 primary: true,
+                brightness: 100.0,
                 diagonal_inches: Some(27.0),
             },
             DisplayOutputConfig {
@@ -3984,6 +4029,7 @@ mod tests {
                 y: 0,
                 scale: 1.25,
                 primary: false,
+                brightness: 100.0,
                 diagonal_inches: None,
             },
         ];
@@ -4639,5 +4685,26 @@ apps = []
         assert_eq!(loaded, cfg);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn display_output_brightness_defaults_to_100_and_external_skips_sysfs() {
+        let toml_src = r#"
+            connector = "DP-1"
+            name = "Mi Monitor"
+            width = 2560
+            height = 1440
+            refresh_rate = 60.0
+            x = 0
+            y = 0
+            scale = 1.0
+            primary = true
+        "#;
+        let parsed: DisplayOutputConfig = toml::from_str(toml_src).unwrap();
+        assert_eq!(parsed.brightness, 100.0);
+        assert!(is_builtin_connector_name("card0-eDP-1"));
+        assert!(!is_builtin_connector_name("card0-DP-1"));
+        assert!(!connector_has_hardware_backlight("DP-1"));
+        assert!(!connector_has_hardware_backlight("HDMI-A-1"));
     }
 }
