@@ -5,7 +5,8 @@ use gtk4::{
     Popover, Scale, ScrolledWindow, Stack,
 };
 use malus_de_common::mac_switch::MacSwitch as Switch;
-use malus_de_common::config::DesktopIconsConfig;
+use malus_de_common::config::{DesktopIconsConfig, DisplaysConfig};
+use malus_de_common::ipc::{IpcClient, IpcMessage};
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -772,6 +773,31 @@ fn build_appearance_main_pane(
     win_card1.append(&tint_row);
     pane.append(&wrap_squircle_card(&win_card1, WIFI_CARD_SQUIRCLE_RADIUS));
 
+    // Curvatura de esquinas del escritorio y de las ventanas
+    let win_corners_card = GtkBox::builder().orientation(Orientation::Vertical).build();
+    let corner_sync = Rc::new(Cell::new(false));
+    let displays_cfg = DisplaysConfig::load();
+    let (screen_radius_row, screen_radius_slider, screen_radius_lbl) = make_corner_radius_row(
+        "Curvatura de esquinas del escritorio",
+        "Radio squircle en las esquinas de los escritorios y pantallas",
+        displays_cfg.screen_corner_radius,
+        24.0,
+        corner_sync.clone(),
+        |cfg, px| cfg.screen_corner_radius = px,
+    );
+    let (window_radius_row, window_radius_slider, window_radius_lbl) = make_corner_radius_row(
+        "Curvatura de esquinas de ventanas",
+        "Radio squircle en las esquinas de las ventanas",
+        displays_cfg.window_corner_radius,
+        32.0,
+        corner_sync.clone(),
+        |cfg, px| cfg.window_corner_radius = px,
+    );
+    win_corners_card.append(&screen_radius_row);
+    win_corners_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
+    win_corners_card.append(&window_radius_row);
+    pane.append(&wrap_squircle_card(&win_corners_card, WIFI_CARD_SQUIRCLE_RADIUS));
+
     // Mostrar barras de desplazamiento + Hacer clic en la barra de desplazamiento
     let win_card2 = GtkBox::builder().orientation(Orientation::Vertical).build();
     let sb_box = GtkBox::builder()
@@ -869,11 +895,25 @@ fn build_appearance_main_pane(
         let sel = selected_mode;
         let prefs_c = prefs.clone();
         let upd = update_mode_thumbs;
+        let c_sync = corner_sync;
+        let s_sld = screen_radius_slider;
+        let s_lbl = screen_radius_lbl;
+        let w_sld = window_radius_slider;
+        let w_lbl = window_radius_lbl;
         Rc::new(move || {
             if prefs_c.borrow().mode_idx != 2 {
                 sel.set(if crate::is_dark_mode_active() { 1 } else { 0 });
             }
             upd();
+            let dcfg = DisplaysConfig::load();
+            let s_px = dcfg.screen_corner_radius.round().clamp(0.0, 48.0);
+            let w_px = dcfg.window_corner_radius.round().clamp(0.0, 48.0);
+            c_sync.set(true);
+            s_sld.set_value(s_px);
+            s_lbl.set_label(&format!("{s_px:.0} px"));
+            w_sld.set_value(w_px);
+            w_lbl.set_label(&format!("{w_px:.0} px"));
+            c_sync.set(false);
         })
     };
 
@@ -883,6 +923,92 @@ fn build_appearance_main_pane(
     });
 
     (scrolled, refresh)
+}
+
+/// Builds a compact Apple-like slider row for screen/window squircle corner radius.
+fn make_corner_radius_row(
+    title: &str,
+    subtitle: &str,
+    initial_px: f64,
+    recommended_px: f64,
+    syncing: Rc<Cell<bool>>,
+    on_commit: impl Fn(&mut DisplaysConfig, f64) + 'static,
+) -> (GtkBox, Scale, Label) {
+    let row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["wifi-pref-row"])
+        .build();
+
+    let text_col = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .valign(Align::Center)
+        .build();
+    text_col.append(
+        &Label::builder()
+            .label(title)
+            .css_classes(["wifi-row-title"])
+            .xalign(0.0)
+            .build(),
+    );
+    text_col.append(
+        &Label::builder()
+            .label(subtitle)
+            .css_classes(["card-section-sub"])
+            .wrap(true)
+            .xalign(0.0)
+            .build(),
+    );
+
+    let initial_clamped = initial_px.round().clamp(0.0, 48.0);
+    let val_lbl = Label::builder()
+        .label(&format!("{initial_clamped:.0} px"))
+        .css_classes(["card-section-sub"])
+        .width_chars(5)
+        .xalign(1.0)
+        .valign(Align::Center)
+        .build();
+
+    let adj = Adjustment::new(initial_clamped, 0.0, 48.0, 1.0, 4.0, 0.0);
+    let slider = Scale::builder()
+        .orientation(Orientation::Horizontal)
+        .adjustment(&adj)
+        .draw_value(false)
+        .width_request(200)
+        .css_classes(["bat-limit-slider"])
+        .valign(Align::Center)
+        .build();
+    slider.add_mark(0.0, gtk4::PositionType::Bottom, Some("0 px"));
+    let rec_mark = format!("{recommended_px:.0} px");
+    slider.add_mark(recommended_px, gtk4::PositionType::Bottom, Some(&rec_mark));
+    slider.add_mark(48.0, gtk4::PositionType::Bottom, Some("48 px"));
+
+    let lbl_c = val_lbl.clone();
+    slider.connect_value_changed(move |sc| {
+        let px = sc.value().round().clamp(0.0, 48.0);
+        lbl_c.set_label(&format!("{px:.0} px"));
+        if syncing.get() {
+            return;
+        }
+        let mut cfg = DisplaysConfig::load();
+        on_commit(&mut cfg, px);
+        let _ = cfg.save();
+        let _ = IpcClient::send_command(IpcMessage::ReloadDisplaysConfig);
+    });
+
+    let controls = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(10)
+        .valign(Align::Center)
+        .build();
+    controls.append(&slider);
+    controls.append(&val_lbl);
+
+    row.append(&text_col);
+    row.append(&controls);
+    (row, slider, val_lbl)
 }
 
 // ============================================================================
