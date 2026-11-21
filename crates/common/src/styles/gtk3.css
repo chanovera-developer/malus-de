@@ -283,3 +283,40 @@ placessidebar.view {
     background-color: __SIDEBAR_BG__;
     box-shadow: inset -1px 0 __BORDER_COLOR__;
 }
+
+/* Toggles globales GTK 3 estilo macOS Tahoe */
+switch {
+    min-width: 42px;
+    min-height: 18px;
+    border-radius: 999px;
+    background-color: rgba(120, 120, 128, 0.24);
+    background-image: none;
+    border: none;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+    padding: 1px;
+    color: transparent;
+    transition: background-color 160ms ease;
+}
+
+switch:checked {
+    background-color: @accent_bg_color;
+    background-image: none;
+    box-shadow: none;
+    color: transparent;
+}
+
+switch slider {
+    min-width: 26px;
+    min-height: 16px;
+    border-radius: 999px;
+    background-color: #ffffff;
+    background-image: none;
+    border: none;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22), 0 0.5px 1px rgba(0, 0, 0, 0.12);
+    margin: 0px;
+}
+
+switch image {
+    opacity: 0;
+    color: transparent;
+}
