@@ -1782,19 +1782,12 @@ pub struct DockConfig {
     pub blur_strength: u32,
     pub genie_effect: bool,
     pub indicator_style: DockIndicatorStyle,
-    #[serde(default)]
     pub app_switcher_style: AppSwitcherStyle,
-    #[serde(default)]
     pub auto_hide: bool,
-    #[serde(default)]
     pub animate_opening: bool,
-    #[serde(default)]
     pub show_indicators: bool,
-    #[serde(default)]
     pub show_recent_apps: bool,
-    #[serde(default)]
     pub minimize_to_app_icon: bool,
-    #[serde(default)]
     pub titlebar_double_click_action: u8,
     pub apps: Vec<DockAppConfig>,
 }
@@ -3585,6 +3578,11 @@ mod tests {
         assert!(!parsed.magnification_enabled);
         assert_eq!(parsed.floating_gap, 14);
         assert_eq!(parsed.corner_radius, 24); // default
+        assert!(parsed.animate_opening);
+        assert!(parsed.show_indicators);
+        assert!(parsed.show_recent_apps);
+        assert!(!parsed.auto_hide);
+        assert!(!parsed.minimize_to_app_icon);
         assert_eq!(parsed.apps.len(), 1);
         assert_eq!(parsed.apps[0].name, "Test App");
         assert_eq!(parsed.apps[0].icon_appearance, DockIconAppearance::Auto);

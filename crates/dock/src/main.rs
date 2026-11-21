@@ -1136,9 +1136,11 @@ fn build_dock_ui(app: &Application) {
     let dock_root = GtkBox::new(Orientation::Vertical, 0);
     dock_root.add_css_class("dock-root");
     dock_root.set_overflow(gtk4::Overflow::Visible);
+    let dock_stage = GtkBox::new(Orientation::Vertical, 0);
+    dock_stage.set_overflow(gtk4::Overflow::Visible);
     let magnification_headroom = GtkBox::new(Orientation::Horizontal, 0);
     magnification_headroom.set_size_request(-1, dock_headroom_height(&initial_cfg));
-    dock_root.append(&magnification_headroom);
+    dock_stage.append(&magnification_headroom);
 
     let dock_bar = Overlay::builder()
         .valign(gtk4::Align::End)
@@ -1218,13 +1220,15 @@ fn build_dock_ui(app: &Application) {
     dock_bar.set_measure_overlay(&dock_content, true);
     dock_bar.set_clip_overlay(&dock_content, false);
 
+    dock_stage.append(&dock_bar);
+
     let dock_revealer = gtk4::Revealer::builder()
         .transition_duration(180)
         .transition_type(gtk4::RevealerTransitionType::SlideUp)
         .reveal_child(true)
         .build();
     dock_revealer.set_overflow(gtk4::Overflow::Visible);
-    dock_revealer.set_child(Some(&dock_bar));
+    dock_revealer.set_child(Some(&dock_stage));
 
     let edge_sensor = GtkBox::new(Orientation::Horizontal, 0);
     edge_sensor.set_visible(false);
