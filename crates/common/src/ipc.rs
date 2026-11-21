@@ -177,6 +177,8 @@ pub enum IpcMessage {
     StartDockIconDrag { name: String, icon: String },
     /// Notificación de fin de arrastre de un icono del Dock (`poof = true` reproduce la animación puff al soltar fuera)
     EndDockIconDrag { poof: bool },
+    /// Notificación de estado de borde/hover del compositor para auto-hide del Dock
+    DockAutoHideEdge { active: bool },
     /// Notificación o solicitud de recarga de configuración del Dock (dock.toml)
     ReloadDockConfig,
     /// Notificación o solicitud de recarga de configuración de Escritorio y Dock (desktop-dock.toml)

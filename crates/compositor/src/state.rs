@@ -344,6 +344,7 @@ pub struct MalusState {
     pub input_cfg: malus_de_common::config::InputConfig,
     pub show_desktop_hidden_ids: Vec<u64>,
     pub hot_corner_hover: Option<(&'static str, Instant, bool)>,
+    pub dock_auto_hide_edge_active: bool,
 }
 
 pub fn guess_icon_name(app_id: &str, title: &str) -> String {
@@ -1383,6 +1384,7 @@ impl MalusState {
             input_cfg,
             show_desktop_hidden_ids: Vec::new(),
             hot_corner_hover: None,
+            dock_auto_hide_edge_active: false,
         }
     }
 
@@ -1393,6 +1395,11 @@ impl MalusState {
                 parent,
                 config.titlebar_double_click_action,
             );
+        }
+        if !config.auto_hide && self.dock_auto_hide_edge_active {
+            self.dock_auto_hide_edge_active = false;
+            self.ipc_broadcaster
+                .broadcast(&IpcMessage::DockAutoHideEdge { active: false });
         }
         self.dock_cfg = config.clone();
         self.dock_blur_headroom = config.headroom_height().min(i32::MAX as u32) as i32;
@@ -4754,8 +4761,123 @@ impl MalusState {
         None
     }
 
+    pub fn is_pointer_on_dock_auto_hide_zone(
+        point: Point<f64, Logical>,
+        output_geo: Rectangle<i32, Logical>,
+        position: malus_de_common::config::DockPosition,
+        floating_gap: i32,
+        top_bar_reserved: i32,
+        dock_geo: Option<Rectangle<i32, Logical>>,
+    ) -> bool {
+        use malus_de_common::config::DockPosition;
+        let ox = output_geo.loc.x as f64;
+        let oy = output_geo.loc.y as f64;
+        let ow = output_geo.size.w as f64;
+        let oh = output_geo.size.h as f64;
+        let edge_px = 5.0;
+        let gap = floating_gap.max(0) as f64;
+        let top_h = top_bar_reserved.max(0) as f64;
+
+        let on_edge = match position {
+            DockPosition::Bottom => {
+                point.x >= ox && point.x <= ox + ow && point.y >= oy + oh - edge_px
+            }
+            DockPosition::Left => {
+                point.x >= ox - 1.0
+                    && point.x <= ox + edge_px
+                    && point.y >= oy + top_h
+                    && point.y <= oy + oh
+            }
+            DockPosition::Right => {
+                point.x >= ox + ow - edge_px
+                    && point.x <= ox + ow + 1.0
+                    && point.y >= oy + top_h
+                    && point.y <= oy + oh
+            }
+        };
+        if on_edge {
+            return true;
+        }
+
+        if let Some(dg) = dock_geo {
+            let is_collapsed = match position {
+                DockPosition::Bottom => dg.size.h <= 12,
+                DockPosition::Left | DockPosition::Right => dg.size.w <= 12,
+            };
+            if !is_collapsed {
+                let mut x1 = dg.loc.x as f64;
+                let y1 = dg.loc.y as f64;
+                let mut x2 = x1 + dg.size.w as f64;
+                let mut y2 = y1 + dg.size.h as f64;
+                match position {
+                    DockPosition::Bottom => y2 += gap + 2.0,
+                    DockPosition::Left => x1 -= gap + 2.0,
+                    DockPosition::Right => x2 += gap + 2.0,
+                }
+                if point.x >= x1 && point.x <= x2 && point.y >= y1 && point.y <= y2 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn update_dock_auto_hide_edge(&mut self, point: Point<f64, Logical>) {
+        let should_reveal = if !self.dock_cfg.auto_hide
+            || self.is_session_locked()
+            || self.ssd.grab_active
+            || self.spotlight.is_open()
+            || self.screenshot_ui.is_open()
+            || self.expose.active
+        {
+            false
+        } else {
+            let target_output = self
+                .space
+                .outputs()
+                .find(|o| {
+                    self.space
+                        .output_geometry(o)
+                        .map(|g| g.to_f64().contains(point))
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .or_else(|| self.primary_output());
+            if let Some(output) = target_output {
+                if self.has_fullscreen_window_on_output(&output) {
+                    false
+                } else if let Some(output_geo) = self.space.output_geometry(&output) {
+                    let dock_geo = self.dock_surface_geometry().map(|(geo, _)| geo);
+                    let top_bar_h = (self.usable_zone_for_output(&output).loc.y - output_geo.loc.y)
+                        .max(0);
+                    Self::is_pointer_on_dock_auto_hide_zone(
+                        point,
+                        output_geo,
+                        self.dock_cfg.position,
+                        self.dock_cfg.floating_gap as i32,
+                        top_bar_h,
+                        dock_geo,
+                    )
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+
+        if should_reveal != self.dock_auto_hide_edge_active {
+            self.dock_auto_hide_edge_active = should_reveal;
+            self.ipc_broadcaster
+                .broadcast(&IpcMessage::DockAutoHideEdge {
+                    active: should_reveal,
+                });
+        }
+    }
+
     /// Actualiza el estado de hover de los botones semáforo SSD y el icono de redimensión perimetral.
     pub fn update_ssd_hover(&mut self, point: Point<f64, Logical>) {
+        self.update_dock_auto_hide_edge(point);
         if self.ssd.grab_active {
             self.snap_layouts.close();
             return;
@@ -5937,6 +6059,8 @@ impl CompositorHandler for MalusState {
                     if !initial_configure_sent {
                         tracing::info!("📤 Enviando initial configure a layer surface");
                         layer.layer_surface().send_configure();
+                    } else {
+                        layer.layer_surface().send_pending_configure();
                     }
                     if layer.layer() == smithay::wayland::shell::wlr_layer::Layer::Overlay
                         && layer.can_receive_keyboard_focus()
@@ -8419,5 +8543,64 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn dock_auto_hide_zone_detects_screen_edges_and_dock_body() {
+        use malus_de_common::config::DockPosition;
+        let out = smithay::utils::Rectangle::new((0, 0).into(), (2560, 1440).into());
+        let dock_bottom = Some(smithay::utils::Rectangle::new(
+            (1000, 1320).into(),
+            (560, 116).into(),
+        ));
+        assert!(super::MalusState::is_pointer_on_dock_auto_hide_zone(
+            smithay::utils::Point::from((100.0, 1438.0)),
+            out,
+            DockPosition::Bottom,
+            4,
+            36,
+            None,
+        ));
+        assert!(super::MalusState::is_pointer_on_dock_auto_hide_zone(
+            smithay::utils::Point::from((1200.0, 1380.0)),
+            out,
+            DockPosition::Bottom,
+            4,
+            36,
+            dock_bottom,
+        ));
+        assert!(!super::MalusState::is_pointer_on_dock_auto_hide_zone(
+            smithay::utils::Point::from((1200.0, 900.0)),
+            out,
+            DockPosition::Bottom,
+            4,
+            36,
+            dock_bottom,
+        ));
+
+        assert!(super::MalusState::is_pointer_on_dock_auto_hide_zone(
+            smithay::utils::Point::from((2.0, 700.0)),
+            out,
+            DockPosition::Left,
+            4,
+            36,
+            None,
+        ));
+        assert!(!super::MalusState::is_pointer_on_dock_auto_hide_zone(
+            smithay::utils::Point::from((2.0, 20.0)),
+            out,
+            DockPosition::Left,
+            4,
+            36,
+            None,
+        ));
+        assert!(super::MalusState::is_pointer_on_dock_auto_hide_zone(
+            smithay::utils::Point::from((2558.0, 700.0)),
+            out,
+            DockPosition::Right,
+            4,
+            36,
+            None,
+        ));
     }
 }

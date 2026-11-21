@@ -3658,7 +3658,16 @@ pub fn run_drm() -> Result<()> {
                                 1.0,
                                 Kind::Unspecified,
                             );
-                        if surface.namespace() == "malus-dock" && !has_fullscreen_window {
+                        let is_collapsed_dock = namespace == "malus-dock"
+                            && super::dock_is_collapsed(
+                                geo.to_physical_precise_round(scale),
+                                scale,
+                                state.dock_cfg.position,
+                            );
+                        if surface.namespace() == "malus-dock"
+                            && !has_fullscreen_window
+                            && !is_collapsed_dock
+                        {
                             let root_id =
                                 smithay::backend::renderer::element::Id::from_wayland_resource(
                                     surface.wl_surface(),
@@ -3668,27 +3677,15 @@ pub fn run_drm() -> Result<()> {
                             {
                                 let root_geo =
                                     root_elem.geometry(smithay::utils::Scale::from(scale));
-                                if !super::dock_is_collapsed(
-                                    root_geo,
-                                    scale,
-                                    state.dock_cfg.position,
-                                ) {
-                                    let outer_gap = if state.dock_cfg.auto_hide {
-                                        state.dock_cfg.floating_gap as i32
-                                    } else {
-                                        0
-                                    };
-                                    dock_clip_roots.push((
-                                        root_id,
-                                        super::dock_clip_rect(
-                                            root_geo,
-                                            state.dock_blur_headroom,
-                                            outer_gap,
-                                            scale,
-                                            state.dock_cfg.position,
-                                        ),
-                                    ));
-                                }
+                                dock_clip_roots.push((
+                                    root_id,
+                                    super::dock_clip_rect(
+                                        root_geo,
+                                        state.dock_blur_headroom,
+                                        scale,
+                                        state.dock_cfg.position,
+                                    ),
+                                ));
                             }
                         }
                         let mut p_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
@@ -3748,7 +3745,7 @@ pub fn run_drm() -> Result<()> {
                         } else if surface.layer() == Layer::Top {
                             // Por protocolo wlr-layer-shell, Layer::Top está por debajo de ventanas a pantalla completa.
                             // Solo se dibuja en capas superiores cuando NO hay una ventana a pantalla completa en este monitor.
-                            if !has_fullscreen_window {
+                            if !has_fullscreen_window && !is_collapsed_dock {
                                 upper_elements.extend(s_elems);
                                 upper_elements.extend(p_elems);
                             }
@@ -5111,6 +5108,9 @@ pub fn run_drm() -> Result<()> {
                     if surface.namespace() == "malus-dock" {
                         if let Some(geo) = layer_map.layer_geometry(surface) {
                             let dock_phys = geo.to_physical_precise_round(scale);
+                            if super::dock_is_collapsed(dock_phys, scale, state.dock_cfg.position) {
+                                continue;
+                            }
                             current_dock_phys = Some(dock_phys);
                             let dock_shadow_rect = Rectangle::new(
                                 (

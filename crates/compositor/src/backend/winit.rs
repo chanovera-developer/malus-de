@@ -1336,7 +1336,16 @@ pub fn run_winit() -> Result<()> {
                                 1.0,
                                 Kind::Unspecified,
                             );
-                        if surface.namespace() == "malus-dock" && !has_fullscreen_window {
+                        let is_collapsed_dock = namespace == "malus-dock"
+                            && super::dock_is_collapsed(
+                                geo.to_physical_precise_round(1.0),
+                                1.0,
+                                state.dock_cfg.position,
+                            );
+                        if surface.namespace() == "malus-dock"
+                            && !has_fullscreen_window
+                            && !is_collapsed_dock
+                        {
                             let root_id =
                                 smithay::backend::renderer::element::Id::from_wayland_resource(
                                     surface.wl_surface(),
@@ -1346,27 +1355,15 @@ pub fn run_winit() -> Result<()> {
                             {
                                 let root_geo =
                                     root_elem.geometry(smithay::utils::Scale::from(1.0));
-                                if !super::dock_is_collapsed(
-                                    root_geo,
-                                    1.0,
-                                    state.dock_cfg.position,
-                                ) {
-                                    let outer_gap = if state.dock_cfg.auto_hide {
-                                        state.dock_cfg.floating_gap as i32
-                                    } else {
-                                        0
-                                    };
-                                    dock_clip_roots.push((
-                                        root_id,
-                                        super::dock_clip_rect(
-                                            root_geo,
-                                            state.dock_blur_headroom,
-                                            outer_gap,
-                                            1.0,
-                                            state.dock_cfg.position,
-                                        ),
-                                    ));
-                                }
+                                dock_clip_roots.push((
+                                    root_id,
+                                    super::dock_clip_rect(
+                                        root_geo,
+                                        state.dock_blur_headroom,
+                                        1.0,
+                                        state.dock_cfg.position,
+                                    ),
+                                ));
                             }
                         }
                         let mut p_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
@@ -1426,7 +1423,7 @@ pub fn run_winit() -> Result<()> {
                         } else if surface.layer() == Layer::Top {
                             // Por protocolo wlr-layer-shell, Layer::Top está por debajo de ventanas a pantalla completa.
                             // Solo se dibuja en capas superiores cuando NO hay una ventana a pantalla completa en este monitor.
-                            if !has_fullscreen_window {
+                            if !has_fullscreen_window && !is_collapsed_dock {
                                 upper_elements.extend(s_elems);
                                 upper_elements.extend(p_elems);
                             }

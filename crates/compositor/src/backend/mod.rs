@@ -33,28 +33,25 @@ pub fn dock_is_collapsed(
 pub fn dock_clip_rect(
     geometry: Rectangle<i32, Physical>,
     headroom: i32,
-    outer_gap: i32,
     scale: f64,
     position: malus_de_common::config::DockPosition,
 ) -> Rectangle<i32, Physical> {
     let mut clipped = geometry;
     let inner_inset = (headroom.max(0) as f64 * scale).round() as i32;
-    let edge_inset = (outer_gap.max(0) as f64 * scale).round() as i32;
     match position {
         malus_de_common::config::DockPosition::Bottom => {
             let applied_top = inner_inset.min(clipped.size.h.max(0));
             clipped.loc.y += applied_top;
-            clipped.size.h = (clipped.size.h - applied_top - edge_inset).max(1);
+            clipped.size.h = (clipped.size.h - applied_top).max(1);
         }
         malus_de_common::config::DockPosition::Left => {
-            let applied_left = edge_inset.min(clipped.size.w.max(0));
-            clipped.loc.x += applied_left;
-            clipped.size.w = (clipped.size.w - applied_left - inner_inset).max(1);
+            let applied_right = inner_inset.min(clipped.size.w.max(0));
+            clipped.size.w = (clipped.size.w - applied_right).max(1);
         }
         malus_de_common::config::DockPosition::Right => {
             let applied_left = inner_inset.min(clipped.size.w.max(0));
             clipped.loc.x += applied_left;
-            clipped.size.w = (clipped.size.w - applied_left - edge_inset).max(1);
+            clipped.size.w = (clipped.size.w - applied_left).max(1);
         }
     }
     clipped
@@ -526,9 +523,8 @@ mod tests {
         ));
 
         let bottom = dock_clip_rect(
-            Rectangle::new((100, 900).into(), (500, 130).into()),
+            Rectangle::new((100, 900).into(), (500, 126).into()),
             46,
-            4,
             1.0,
             DockPosition::Bottom,
         );
@@ -536,9 +532,8 @@ mod tests {
         assert_eq!(bottom.size, (500, 80).into());
 
         let left = dock_clip_rect(
-            Rectangle::new((0, 200).into(), (130, 500).into()),
+            Rectangle::new((4, 200).into(), (126, 500).into()),
             46,
-            4,
             1.0,
             DockPosition::Left,
         );
@@ -546,9 +541,8 @@ mod tests {
         assert_eq!(left.size, (80, 500).into());
 
         let right = dock_clip_rect(
-            Rectangle::new((1790, 200).into(), (130, 500).into()),
+            Rectangle::new((1790, 200).into(), (126, 500).into()),
             46,
-            4,
             1.0,
             DockPosition::Right,
         );
