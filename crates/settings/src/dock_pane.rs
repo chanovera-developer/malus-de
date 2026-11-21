@@ -764,6 +764,7 @@ pub fn create_dock_pane(
     dd_hooks.borrow_mut().push(Box::new(move |c| {
         set_tabs(c.prefer_tabs_mode as usize);
     }));
+    tabs_row.insert_child_after(&make_pending_badge(), tabs_row.first_child().as_ref());
     win_card1.append(&tabs_row);
     win_card1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 
@@ -787,6 +788,7 @@ pub fn create_dock_pane(
     dd_hooks
         .borrow_mut()
         .push(Box::new(move |c| ask_sw.set_active(c.ask_to_keep_changes)));
+    ask_row.insert_child_after(&make_pending_badge(), ask_row.first_child().as_ref());
     win_card1.append(&ask_row);
     win_card1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 
@@ -810,6 +812,7 @@ pub fn create_dock_pane(
     dd_hooks.borrow_mut().push(Box::new(move |c| {
         close_q_sw.set_active(c.close_windows_on_quit);
     }));
+    close_q_row.insert_child_after(&make_pending_badge(), close_q_row.first_child().as_ref());
     win_card1.append(&close_q_row);
     pane.append(&wrap_squircle_card(&win_card1, WIFI_CARD_SQUIRCLE_RADIUS));
 
@@ -861,6 +864,9 @@ pub fn create_dock_pane(
         dd_hooks.borrow_mut().push(Box::new(move |c| {
             sw.set_active(getter(c));
         }));
+        if idx == 2 {
+            row.insert_child_after(&make_pending_badge(), row.first_child().as_ref());
+        }
         win_card2.append(&row);
     }
     pane.append(&wrap_squircle_card(&win_card2, WIFI_CARD_SQUIRCLE_RADIUS));
@@ -942,6 +948,9 @@ pub fn create_dock_pane(
         dd_hooks.borrow_mut().push(Box::new(move |c| {
             sw.set_active(getter(c));
         }));
+        if idx < 4 {
+            row.insert_child_after(&make_pending_badge(), row.first_child().as_ref());
+        }
         mc_card.append(&row);
     }
     pane.append(&wrap_squircle_card(&mc_card, WIFI_CARD_SQUIRCLE_RADIUS));
