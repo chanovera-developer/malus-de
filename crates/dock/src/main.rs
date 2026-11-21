@@ -2926,24 +2926,23 @@ fn render_dock_apps(
 
 fn update_icon_size_recursive(widget: &gtk4::Widget, size: i32, base_size: i32) -> bool {
     let mut changed = false;
-    if widget.has_css_class("dock-min-icon-band") && widget.height_request() != base_size {
-        widget.set_size_request(-1, base_size);
-        changed = true;
-    }
-    if widget.has_css_class("dock-icon-placeholder")
-        && (widget.width_request() != size || widget.height_request() != base_size)
+    let clamped_size = size.clamp(1, 512);
+    let clamped_base = base_size.clamp(1, 512);
+    if (widget.has_css_class("dock-icon-placeholder")
+        || widget.has_css_class("dock-min-thumb-slot"))
+        && (widget.width_request() != clamped_size || widget.height_request() != clamped_base)
     {
-        widget.set_size_request(size, base_size);
+        widget.set_size_request(clamped_size, clamped_base);
         changed = true;
     }
     if let Ok(overlay) = widget.clone().downcast::<Overlay>() {
-        let height = if overlay.has_css_class("dock-window-card-thumbnail") {
+        let height = if overlay.has_css_class("dock-window-card") {
             -1
         } else {
-            base_size
+            clamped_base
         };
-        if overlay.width_request() != size || overlay.height_request() != height {
-            overlay.set_size_request(size, height);
+        if overlay.width_request() != clamped_size || overlay.height_request() != height {
+            overlay.set_size_request(clamped_size, height);
             changed = true;
         }
     }
@@ -3907,15 +3906,18 @@ fn create_minimized_window_item(info: &MinimizedWindowInfo, icon_size: i32) -> (
         .css_classes(["dock-window-card"])
         .tooltip_text(&info.title)
         .focusable(false)
-        .valign(gtk4::Align::Center)
+        .halign(gtk4::Align::Center)
+        .valign(gtk4::Align::End)
         .build();
+    overlay.set_overflow(gtk4::Overflow::Visible);
     if has_thumbnail {
         overlay.add_css_class("dock-window-card-thumbnail");
     }
     overlay.add_overlay(&badge_box);
 
-    // Banda vertical de la altura de los iconos + banda inferior de indicadores para alinear
-    // las miniaturas exactamente a la altura de los iconos y no sobre los puntos indicadores.
+    // Banda vertical de la altura fija de los iconos + banda inferior de indicadores.
+    // `slot_spacer` fija la altura en `icon_size` (nunca empuja el alto del Dock al magnificar),
+    // mientras `overlay` crece libremente hacia arriba como overlay no medido igual que los iconos.
     let item_container = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .css_classes(["dock-item-box"])
@@ -3924,15 +3926,18 @@ fn create_minimized_window_item(info: &MinimizedWindowInfo, icon_size: i32) -> (
         .build();
     item_container.set_overflow(gtk4::Overflow::Visible);
 
-    let icon_band = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .css_classes(["dock-min-icon-band"])
-        .valign(gtk4::Align::End)
-        .build();
-    icon_band.set_size_request(-1, icon_size.max(1));
+    let slot_spacer = GtkBox::new(Orientation::Horizontal, 0);
+    slot_spacer.add_css_class("dock-min-thumb-slot");
+    slot_spacer.set_size_request(icon_size.max(1), icon_size.max(1));
+
+    let icon_band = Overlay::new();
     icon_band.set_overflow(gtk4::Overflow::Visible);
-    overlay.set_vexpand(true);
-    icon_band.append(&overlay);
+    icon_band.set_valign(gtk4::Align::End);
+    icon_band.set_size_request(icon_size.max(1), icon_size.max(1));
+    icon_band.set_child(Some(&slot_spacer));
+    icon_band.add_overlay(&overlay);
+    icon_band.set_measure_overlay(&overlay, false);
+    icon_band.set_clip_overlay(&overlay, false);
 
     let spacer = Label::builder()
         .label("●")
