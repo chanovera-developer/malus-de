@@ -1383,6 +1383,59 @@ fn draw_mode_thumbnail(cr: &gtk4::cairo::Context, w: f64, h: f64, mode_idx: usiz
     let _ = cr.restore();
 }
 
+fn load_malus_symbolic_pixbuf(icon_name: &str, px_size: i32) -> Option<gtk4::gdk_pixbuf::Pixbuf> {
+    let path = format!("/usr/share/icons/Malus/actions/symbolic/{icon_name}.svg");
+    let raw = std::fs::read_to_string(path).ok()?;
+    let tinted = raw
+        .replace("currentColor", "#1f2128")
+        .replace("#363636", "#1f2128");
+    let loader = gtk4::gdk_pixbuf::PixbufLoader::with_type("svg").ok()?;
+    loader.set_size(px_size, px_size);
+    loader.write(tinted.as_bytes()).ok()?;
+    loader.close().ok()?;
+    loader.pixbuf()
+}
+
+fn paint_malus_symbolic_glyph(
+    cr: &gtk4::cairo::Context,
+    icon_name: &str,
+    x: f64,
+    y: f64,
+    size: f64,
+) {
+    thread_local! {
+        static CACHE: std::cell::RefCell<std::collections::HashMap<(&'static str, i32), Option<gtk4::gdk_pixbuf::Pixbuf>>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    let key_name: &'static str = match icon_name {
+        "share-symbolic" => "share-symbolic",
+        "view-more-symbolic" => "view-more-symbolic",
+        "edit-copy-symbolic" => "edit-copy-symbolic",
+        "search-symbolic" => "search-symbolic",
+        _ => return,
+    };
+    let render_px = ((size * 2.0).round() as i32).max(16);
+    CACHE.with(|cache| {
+        let mut map = cache.borrow_mut();
+        let pb_opt = map
+            .entry((key_name, render_px))
+            .or_insert_with(|| load_malus_symbolic_pixbuf(key_name, render_px));
+        if let Some(pb) = pb_opt {
+            let sw = pb.width() as f64;
+            let sh = pb.height() as f64;
+            if sw > 0.0 && sh > 0.0 {
+                let _ = cr.save();
+                cr.translate(x, y);
+                cr.scale(size / sw, size / sh);
+                cr.set_source_pixbuf(pb, 0.0, 0.0);
+                cr.source().set_filter(gtk4::cairo::Filter::Bilinear);
+                let _ = cr.paint_with_alpha(0.88);
+                let _ = cr.restore();
+            }
+        }
+    });
+}
+
 fn draw_liquid_glass_preview(cr: &gtk4::cairo::Context, w: f64, h: f64, glass_opacity: f64) {
     let _ = cr.save();
     crate::squircle_path(cr, w, h, 14.0);
@@ -1450,54 +1503,14 @@ fn draw_liquid_glass_preview(cr: &gtk4::cairo::Context, w: f64, h: f64, glass_op
 
         match idx {
             0 => {
-                // Ícono Compartir (bandeja + flecha arriba)
-                let sx = px + 17.0;
-                let sy = 22.5;
-                cr.move_to(sx - 2.4, sy - 1.5);
-                cr.line_to(sx - 4.0, sy - 1.5);
-                cr.line_to(sx - 4.0, sy + 4.0);
-                cr.line_to(sx + 4.0, sy + 4.0);
-                cr.line_to(sx + 4.0, sy - 1.5);
-                cr.line_to(sx + 2.4, sy - 1.5);
-                let _ = cr.stroke();
-
-                cr.move_to(sx, sy + 1.0);
-                cr.line_to(sx, sy - 5.2);
-                let _ = cr.stroke();
-                cr.move_to(sx - 2.5, sy - 2.8);
-                cr.line_to(sx, sy - 5.3);
-                cr.line_to(sx + 2.5, sy - 2.8);
-                let _ = cr.stroke();
-
-                // Tres puntos (•••)
-                for dx in [-4.0_f64, 0.0, 4.0] {
-                    cr.arc(px + 41.0 + dx, 22.0, 1.25, 0.0, std::f64::consts::TAU);
-                    let _ = cr.fill();
-                }
+                paint_malus_symbolic_glyph(cr, "share-symbolic", px + 10.5, 15.5, 13.0);
+                paint_malus_symbolic_glyph(cr, "view-more-symbolic", px + 34.5, 15.5, 13.0);
             }
             1 => {
-                // Ícono Copiar / Ventanas superpuestas
-                let cx = px + 14.0;
-                let cy = 22.0;
-                // Cuadro trasero (L superior-izquierda)
-                cr.move_to(cx - 1.2, cy - 4.5);
-                cr.line_to(cx - 4.5, cy - 4.5);
-                cr.line_to(cx - 4.5, cy + 1.5);
-                cr.line_to(cx - 1.8, cy + 1.5);
-                let _ = cr.stroke();
-                // Cuadro frontal
-                cr.rectangle(cx - 1.5, cy - 1.5, 6.0, 6.0);
-                let _ = cr.stroke();
+                paint_malus_symbolic_glyph(cr, "edit-copy-symbolic", px + 7.5, 15.5, 13.0);
             }
             _ => {
-                // Lupa vectorial + texto "Buscar"
-                let lx = px + 15.0;
-                let ly = 21.2;
-                cr.arc(lx, ly, 3.3, 0.0, std::f64::consts::TAU);
-                let _ = cr.stroke();
-                cr.move_to(lx + 2.3, ly + 2.3);
-                cr.line_to(lx + 4.9, ly + 4.9);
-                let _ = cr.stroke();
+                paint_malus_symbolic_glyph(cr, "search-symbolic", px + 9.0, 15.5, 13.0);
 
                 cr.select_font_face(
                     "Sans",
