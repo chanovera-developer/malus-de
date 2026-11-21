@@ -5,8 +5,9 @@ use gtk4::{
 };
 use malus_de_common::apps::index_applications;
 use malus_de_common::config::{
-    get_default_web_browser_desktop, set_default_web_browser_desktop, AppSwitcherStyle,
-    DesktopDockConfig, DesktopIconsConfig, DockConfig, DockPosition, HotCornerAction, InputConfig,
+    get_default_web_browser_desktop, set_default_web_browser_desktop,
+    titlebar_double_click_gtk_action, AppSwitcherStyle, DesktopDockConfig, DesktopIconsConfig,
+    DockConfig, DockPosition, HotCornerAction, InputConfig,
 };
 use malus_de_common::ipc::{IpcClient, IpcMessage};
 use malus_de_common::mac_switch::MacSwitch as Switch;
@@ -335,6 +336,13 @@ pub fn create_dock_pane(
                 let mut b = dc.borrow_mut();
                 b.titlebar_double_click_action = idx as u8;
                 save_dock_and_reload(&b);
+                let gtk_action = titlebar_double_click_gtk_action(b.titlebar_double_click_action);
+                let wm = gtk4::gio::Settings::new("org.gnome.desktop.wm.preferences");
+                let _ = wm.set_string("action-double-click-titlebar", gtk_action);
+                gtk4::gio::Settings::sync();
+                if let Some(gtk_settings) = gtk4::Settings::default() {
+                    gtk_settings.set_property("gtk-titlebar-double-click", gtk_action);
+                }
             }
         },
     );

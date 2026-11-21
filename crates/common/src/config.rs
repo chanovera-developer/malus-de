@@ -963,6 +963,40 @@ pub fn ensure_isolated_fontconfig_inter(malus_config_dir: &Path) -> std::io::Res
     Ok(())
 }
 
+pub fn titlebar_double_click_gtk_action(action: u8) -> &'static str {
+    match action {
+        1 => "minimize",
+        2 => "none",
+        _ => "toggle-maximize",
+    }
+}
+
+pub fn sync_titlebar_double_click_action(config_dir: &Path, action: u8) -> std::io::Result<()> {
+    let gtk_action = titlebar_double_click_gtk_action(action);
+    for version in ["gtk-3.0", "gtk-4.0"] {
+        let ini_path = config_dir.join(version).join("settings.ini");
+        upsert_keyfile_entries(
+            &ini_path,
+            &[(
+                "Settings",
+                &[("gtk-titlebar-double-click", gtk_action)],
+            )],
+        )?;
+    }
+
+    let keyfile_path = config_dir.join("glib-2.0/settings/keyfile");
+    let quoted = format!("'{gtk_action}'");
+    upsert_keyfile_entries(
+        &keyfile_path,
+        &[(
+            "org/gnome/desktop/wm/preferences",
+            &[("action-double-click-titlebar", quoted.as_str())],
+        )],
+    )?;
+
+    Ok(())
+}
+
 pub fn ensure_keyfile_button_layout(keyfile_path: &Path) -> std::io::Result<()> {
     if !keyfile_path.exists() {
         return Ok(());
@@ -1103,10 +1137,14 @@ org.freedesktop.impl.portal.Settings=gtk;gnome;
 
     // 4. Configuración del Dock (~/.config/malus-de/dock.toml)
     let dock_path = malus_config_dir.join("dock.toml");
+    let dock_cfg = DockConfig::load_or_create_default();
     if !dock_path.exists() {
-        let dock_cfg = DockConfig::load_or_create_default();
         let _ = dock_cfg.save();
     }
+    let _ = sync_titlebar_double_click_action(
+        &malus_config_dir,
+        dock_cfg.titlebar_double_click_action,
+    );
 
     // 5. Configuración de Teclado y Entrada (~/.config/malus-de/input.toml)
     let input_path = malus_config_dir.join("input.toml");
@@ -1971,6 +2009,7 @@ impl DockConfig {
         let path = Self::config_path();
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
+            let _ = sync_titlebar_double_click_action(parent, self.titlebar_double_click_action);
         }
         let toml_str = toml::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
@@ -4391,5 +4430,29 @@ apps = []
         let serialized = toml::to_string_pretty(&dd_def).unwrap();
         let parsed: DesktopDockConfig = toml::from_str(&serialized).unwrap();
         assert_eq!(dd_def, parsed);
+    }
+
+    #[test]
+    fn syncs_titlebar_double_click_action_to_gtk_and_wm_preferences() {
+        let dir = std::env::temp_dir().join(format!(
+            "malus-dblclick-test-{}-{}",
+            std::process::id(),
+            super::ATOMIC_TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        for (code, expected) in [(0, "toggle-maximize"), (1, "minimize"), (2, "none")] {
+            super::sync_titlebar_double_click_action(&dir, code).unwrap();
+            let gtk3 = std::fs::read_to_string(dir.join("gtk-3.0/settings.ini")).unwrap();
+            let gtk4 = std::fs::read_to_string(dir.join("gtk-4.0/settings.ini")).unwrap();
+            let keyfile =
+                std::fs::read_to_string(dir.join("glib-2.0/settings/keyfile")).unwrap();
+            assert!(gtk3.contains(&format!("gtk-titlebar-double-click={expected}")));
+            assert!(gtk4.contains(&format!("gtk-titlebar-double-click={expected}")));
+            assert!(keyfile.contains("[org/gnome/desktop/wm/preferences]"));
+            assert!(keyfile.contains(&format!("action-double-click-titlebar='{expected}'")));
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

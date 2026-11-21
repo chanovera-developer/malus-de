@@ -1388,6 +1388,12 @@ impl MalusState {
 
     fn reload_dock_config_fields(&mut self) {
         let config = DockConfig::load_or_create_default();
+        if let Some(parent) = DockConfig::config_path().parent() {
+            let _ = malus_de_common::config::sync_titlebar_double_click_action(
+                parent,
+                config.titlebar_double_click_action,
+            );
+        }
         self.dock_cfg = config.clone();
         self.dock_blur_headroom = config.headroom_height().min(i32::MAX as u32) as i32;
         if self.app_switcher_style != config.app_switcher_style

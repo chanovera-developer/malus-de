@@ -2822,20 +2822,32 @@ pub(crate) fn set_cursor_theme_and_size(theme: &str, size: u32) {
         malus_de_common::config::DEFAULT_ICON_THEME_LIGHT
     };
 
-    // Actualizar los settings.ini aislados de GTK3/GTK4 preservando el tema GTK y de iconos.
+    // Actualizar los settings.ini aislados de GTK3/GTK4 preservando el tema GTK, fuente y doble clic.
+    let dbl_action = malus_de_common::config::titlebar_double_click_gtk_action(
+        malus_de_common::config::DockConfig::load_or_create_default()
+            .titlebar_double_click_action,
+    );
     for ini_path in [
         format!("{}/.config/malus-de/gtk-3.0/settings.ini", home),
         format!("{}/.config/malus-de/gtk-4.0/settings.ini", home),
     ] {
         let p = PathBuf::from(ini_path);
-        if let Some(parent) = p.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let body = format!(
-            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme={}\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-theme-name={}\ngtk-icon-theme-name={}\n",
-            dark_num, theme, size, cur_gtk_theme, icon_theme_name
+        let size_str = size.to_string();
+        let _ = malus_de_common::config::upsert_keyfile_entries(
+            &p,
+            &[(
+                "Settings",
+                &[
+                    ("gtk-decoration-layout", "close,minimize,maximize:"),
+                    ("gtk-application-prefer-dark-theme", dark_num),
+                    ("gtk-cursor-theme-name", theme),
+                    ("gtk-cursor-theme-size", size_str.as_str()),
+                    ("gtk-theme-name", cur_gtk_theme.as_str()),
+                    ("gtk-icon-theme-name", icon_theme_name),
+                    ("gtk-titlebar-double-click", dbl_action),
+                ],
+            )],
         );
-        let _ = std::fs::write(p, body);
     }
 
     let keyfile_path = PathBuf::from(&home).join(".config/malus-de/glib-2.0/settings/keyfile");
