@@ -3276,9 +3276,33 @@ pub fn run_drm() -> Result<()> {
             {
                 state.pending_displays_reload = false;
                 last_monitors_mtime = current_mtime;
+                let prev_cfg = current_displays_cfg.clone();
                 current_displays_cfg = DisplaysConfig::load();
                 current_displays_cfg.recalculate_layout();
                 let new_cfg = &current_displays_cfg;
+                let structural_unchanged = prev_cfg.outputs.len() == new_cfg.outputs.len()
+                    && (prev_cfg.screen_corner_radius - new_cfg.screen_corner_radius).abs()
+                        < 0.01
+                    && (prev_cfg.window_corner_radius - new_cfg.window_corner_radius).abs()
+                        < 0.01
+                    && prev_cfg.outputs.iter().zip(&new_cfg.outputs).all(|(a, b)| {
+                        a.connector == b.connector
+                            && a.width == b.width
+                            && a.height == b.height
+                            && (a.refresh_rate - b.refresh_rate).abs() < 0.1
+                            && a.x == b.x
+                            && a.y == b.y
+                            && (a.scale - b.scale).abs() < 0.0005
+                            && a.primary == b.primary
+                    });
+                if structural_unchanged {
+                    if let Ok(mut surfs) = shared_surfaces.lock() {
+                        for s in surfs.iter_mut() {
+                            s.full_damage_buffers = if ENABLE_DAMAGE_TRACKING { 3 } else { 1 };
+                            s.pending_damage_buffers = 1;
+                        }
+                    }
+                } else {
                 squircle_corner_cache.clear();
                 info!("🔄 Recargando disposición y escalas de pantallas en vivo desde monitors.toml...");
 
@@ -3379,6 +3403,7 @@ pub fn run_drm() -> Result<()> {
                     if let Some(toplevel) = win.toplevel() {
                         toplevel.send_configure();
                     }
+                }
                 }
             }
 
@@ -6783,7 +6808,7 @@ pub fn run_drm() -> Result<()> {
                                     let dim_bounds = Rectangle::from_size(out_surface.size);
                                     let _ = frame.draw_solid(
                                         dim_bounds,
-                                        &[dim_bounds],
+                                        damage,
                                         Color32F::new(0.0, 0.0, 0.0, dim_alpha),
                                     );
                                 }

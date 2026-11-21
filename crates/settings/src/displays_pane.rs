@@ -65,17 +65,13 @@ fn read_sysfs_backlight_pct() -> Option<f64> {
     None
 }
 
-fn read_output_brightness(cfg: &DisplaysConfig, output: &DisplayOutputConfig) -> f64 {
+fn read_output_brightness(_cfg: &DisplaysConfig, output: &DisplayOutputConfig) -> f64 {
     if connector_has_hardware_backlight(&output.connector) {
         if let Some(hw) = read_sysfs_backlight_pct() {
             return hw;
         }
     }
-    if (output.brightness - 100.0).abs() > f64::EPSILON || !output.primary {
-        output.brightness.clamp(5.0, 100.0)
-    } else {
-        output.brightness.min(cfg.brightness).clamp(5.0, 100.0)
-    }
+    output.brightness.clamp(5.0, 100.0)
 }
 
 fn apply_output_brightness(output_idx: usize, pct: f64) {
