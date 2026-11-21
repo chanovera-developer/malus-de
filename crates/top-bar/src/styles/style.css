@@ -1217,7 +1217,7 @@ popover.light-popover button.popover-menu-item.malus-squircle-menu-item:hover > 
 
 /* Toggles estilo macOS Tahoe para Centro de Control y Bandeja de Estado */
 switch {
-    min-width: 42px;
+    min-width: 36px;
     min-height: 18px;
     border-radius: 999px;
     background-color: rgba(120, 120, 128, 0.28);

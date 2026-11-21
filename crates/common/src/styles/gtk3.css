@@ -286,7 +286,7 @@ placessidebar.view {
 
 /* Toggles globales GTK 3 estilo macOS Tahoe */
 switch {
-    min-width: 42px;
+    min-width: 36px;
     min-height: 18px;
     border-radius: 999px;
     background-color: rgba(120, 120, 128, 0.24);
