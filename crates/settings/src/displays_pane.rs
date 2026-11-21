@@ -14,6 +14,7 @@ use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::process::Command;
 use std::rc::Rc;
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use crate::general_pane::make_pending_badge;
 use crate::squircle_path;
@@ -91,24 +92,55 @@ fn apply_output_brightness(output_idx: usize, pct: f64) {
     let _ = IpcClient::send_command(IpcMessage::ReloadDisplayBrightness);
 
     if connector_has_hardware_backlight(&connector) {
-        std::thread::spawn(move || {
-            if let Ok(entries) = std::fs::read_dir("/sys/class/backlight") {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    let cur_path = path.join("brightness");
-                    let max_path = path.join("max_brightness");
-                    if let Ok(max_str) = std::fs::read_to_string(&max_path) {
-                        if let Ok(max) = max_str.trim().parse::<f64>() {
-                            let target = ((clamped / 100.0) * max).round() as u64;
-                            let _ = std::fs::write(&cur_path, target.to_string());
-                        }
+        if let Ok(entries) = std::fs::read_dir("/sys/class/backlight") {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let cur_path = path.join("brightness");
+                let max_path = path.join("max_brightness");
+                if let Ok(max_str) = std::fs::read_to_string(&max_path) {
+                    if let Ok(max) = max_str.trim().parse::<f64>() {
+                        let target = ((clamped / 100.0) * max).round() as u64;
+                        let _ = std::fs::write(&cur_path, target.to_string());
                     }
                 }
             }
-            let _ = Command::new("brightnessctl")
-                .args(["set", &format!("{}%", clamped.round() as u32)])
-                .output();
+        }
+        let _ = Command::new("brightnessctl")
+            .args(["set", &format!("{}%", clamped.round() as u32)])
+            .output();
+    }
+}
+
+fn schedule_output_brightness(output_idx: usize, pct: f64) {
+    static WORKER: OnceLock<Arc<(Mutex<Option<(usize, f64)>>, Condvar)>> = OnceLock::new();
+    let shared = WORKER.get_or_init(|| {
+        let pair = Arc::new((Mutex::new(None::<(usize, f64)>), Condvar::new()));
+        let bg = Arc::clone(&pair);
+        std::thread::spawn(move || loop {
+            let task = {
+                let (lock, cvar) = &*bg;
+                let mut guard = match lock.lock() {
+                    Ok(g) => g,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                while guard.is_none() {
+                    guard = match cvar.wait(guard) {
+                        Ok(g) => g,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                }
+                guard.take()
+            };
+            if let Some((idx, val)) = task {
+                apply_output_brightness(idx, val);
+            }
         });
+        pair
+    });
+
+    if let Ok(mut guard) = shared.0.lock() {
+        *guard = Some((output_idx, pct));
+        shared.1.notify_one();
     }
 }
 
@@ -1618,11 +1650,16 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
     let brightness_card = GtkBox::builder().orientation(Orientation::Vertical).build();
 
     let bright_row = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(12)
+        .orientation(Orientation::Vertical)
+        .spacing(8)
         .css_classes(["wifi-pref-row"])
         .build();
-    bright_row.append(
+
+    let bright_top = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .build();
+    bright_top.append(
         &Label::builder()
             .label("Brillo")
             .css_classes(["wifi-row-title"])
@@ -1631,9 +1668,72 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
             .valign(Align::Center)
             .build(),
     );
+
+    let bright_presets_box = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(4)
+        .valign(Align::Center)
+        .build();
+    let mut bright_preset_buttons: Vec<(f64, Button)> = Vec::new();
+    for pct in [25.0_f64, 50.0, 75.0, 100.0] {
+        let (pw, pb) = make_squircle_button(
+            &format!("{}%", pct as i32),
+            false,
+            Some(&format!("Fijar brillo al {}%", pct as i32)),
+        );
+        pb.add_css_class("disp-bright-preset-btn");
+        pw.set_height_request(24);
+        pb.set_height_request(24);
+        bright_presets_box.append(&pw);
+        bright_preset_buttons.push((pct, pb));
+    }
+    bright_top.append(&bright_presets_box);
+
+    let bright_down_btn = Button::builder()
+        .label("−")
+        .has_frame(false)
+        .tooltip_text("Reducir brillo (-5%)")
+        .css_classes(["disp-stepper-inner-btn", "disp-stepper-left"])
+        .width_request(22)
+        .height_request(22)
+        .valign(Align::Fill)
+        .build();
+    let bright_entry = Entry::builder()
+        .placeholder_text("100%")
+        .width_chars(5)
+        .max_width_chars(6)
+        .height_request(22)
+        .xalign(0.5)
+        .css_classes(["scale-input-entry"])
+        .valign(Align::Center)
+        .build();
+    let bright_up_btn = Button::builder()
+        .label("+")
+        .has_frame(false)
+        .tooltip_text("Aumentar brillo (+5%)")
+        .css_classes(["disp-stepper-inner-btn", "disp-stepper-right"])
+        .width_request(22)
+        .height_request(22)
+        .valign(Align::Fill)
+        .build();
+    let bright_stepper_box = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(0)
+        .height_request(24)
+        .overflow(gtk4::Overflow::Hidden)
+        .css_classes(["scale-stepper-shell"])
+        .valign(Align::Center)
+        .build();
+    bright_stepper_box.append(&bright_down_btn);
+    bright_stepper_box.append(&bright_entry);
+    bright_stepper_box.append(&bright_up_btn);
+    bright_top.append(&bright_stepper_box);
+    bright_row.append(&bright_top);
+
     let bright_controls = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(8)
+        .spacing(10)
+        .hexpand(true)
         .valign(Align::Center)
         .build();
     bright_controls.append(
@@ -1644,9 +1744,20 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
             .build(),
     );
     let bright_slider = Scale::with_range(Orientation::Horizontal, 5.0, 100.0, 1.0);
+    bright_slider.set_increments(1.0, 5.0);
     bright_slider.set_draw_value(false);
-    bright_slider.set_width_request(210);
-    bright_slider.set_css_classes(&["bat-limit-slider"]);
+    bright_slider.set_hexpand(true);
+    bright_slider.set_width_request(220);
+    bright_slider.set_css_classes(&["disp-bright-slider"]);
+    for (val, mark_lbl) in [
+        (5.0, "5%"),
+        (25.0, "25%"),
+        (50.0, "50%"),
+        (75.0, "75%"),
+        (100.0, "100%"),
+    ] {
+        bright_slider.add_mark(val, gtk4::PositionType::Bottom, Some(mark_lbl));
+    }
     bright_controls.append(&bright_slider);
     bright_controls.append(
         &Image::builder()
@@ -1916,6 +2027,8 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
         let show_all_sw_c = show_all_res_sw.clone();
         let show_all_flag_c = show_all_res_flag(&show_all_modes);
         let bright_sld_c = bright_slider.clone();
+        let bright_ent_c = bright_entry.clone();
+        let bright_presets_c = bright_preset_buttons.clone();
         let ts_wrap_c = truesize_card_wrap.clone();
         let ts_sw_c = ts_switch.clone();
         let ts_p1_c = ts_p1_btn.clone();
@@ -2182,7 +2295,16 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
             }
 
             // 3. Brillo (hardware sysfs o por pantalla en el compositor)
-            bright_sld_c.set_value(read_output_brightness(&cfg, output));
+            let cur_bright = read_output_brightness(&cfg, output);
+            bright_sld_c.set_value(cur_bright);
+            bright_ent_c.set_text(&format!("{}%", cur_bright.round() as i32));
+            for (preset_val, pb) in &bright_presets_c {
+                if (cur_bright - *preset_val).abs() < 0.6 {
+                    pb.add_css_class("truesize-preset-btn-active");
+                } else {
+                    pb.remove_css_class("truesize-preset-btn-active");
+                }
+            }
 
             // 4. Enlace físico 1:1 TrueSize PPI
             ts_wrap_c.set_visible(cfg.outputs.len() >= 2);
@@ -2396,15 +2518,70 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
         step_up_btn.connect_clicked(move |_| step(5.0));
     }
 
-    // Brillo (hardware sysfs para panel integrado o atenuación por pantalla en el compositor)
-    {
+    // Brillo fluido (worker en segundo plano) + escala, botones paso ±5%, entrada y presets
+    let apply_brightness_from_ui: Rc<dyn Fn(f64, bool)> = {
         let sync_c = syncing_ui.clone();
         let sel_c = selected_idx.clone();
+        let sld_c = bright_slider.clone();
+        let ent_c = bright_entry.clone();
+        let presets_c = bright_preset_buttons.clone();
+        Rc::new(move |pct: f64, update_slider: bool| {
+            let clamped = pct.clamp(5.0, 100.0);
+            if update_slider {
+                let prev_sync = sync_c.get();
+                sync_c.set(true);
+                sld_c.set_value(clamped);
+                sync_c.set(prev_sync);
+            }
+            ent_c.set_text(&format!("{}%", clamped.round() as i32));
+            for (preset_val, pb) in &presets_c {
+                if (clamped - *preset_val).abs() < 0.6 {
+                    pb.add_css_class("truesize-preset-btn-active");
+                } else {
+                    pb.remove_css_class("truesize-preset-btn-active");
+                }
+            }
+            schedule_output_brightness(sel_c.get(), clamped);
+        })
+    };
+    {
+        let sync_c = syncing_ui.clone();
+        let apply_b = apply_brightness_from_ui.clone();
         bright_slider.connect_value_changed(move |sld| {
             if sync_c.get() {
                 return;
             }
-            apply_output_brightness(sel_c.get(), sld.value());
+            apply_b(sld.value(), false);
+        });
+    }
+    for (preset_val, pb) in &bright_preset_buttons {
+        let apply_b = apply_brightness_from_ui.clone();
+        let target = *preset_val;
+        pb.connect_clicked(move |_| {
+            apply_b(target, true);
+        });
+    }
+    {
+        let apply_b = apply_brightness_from_ui.clone();
+        let sld_c = bright_slider.clone();
+        bright_down_btn.connect_clicked(move |_| {
+            apply_b((sld_c.value() - 5.0).round(), true);
+        });
+    }
+    {
+        let apply_b = apply_brightness_from_ui.clone();
+        let sld_c = bright_slider.clone();
+        bright_up_btn.connect_clicked(move |_| {
+            apply_b((sld_c.value() + 5.0).round(), true);
+        });
+    }
+    {
+        let apply_b = apply_brightness_from_ui;
+        bright_entry.connect_activate(move |ent| {
+            let txt = ent.text().trim().trim_end_matches('%').trim().to_string();
+            if let Ok(val) = txt.parse::<f64>() {
+                apply_b(val, true);
+            }
         });
     }
 
