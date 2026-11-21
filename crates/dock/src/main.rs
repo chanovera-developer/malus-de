@@ -69,9 +69,15 @@ thread_local! {
 fn apply_dock_liquid_glass_opacity(opacity: f64) {
     let scale = malus_de_common::config::liquid_glass_scale_for(opacity);
     let dock_a = malus_de_common::config::scaled_liquid_glass_alpha(0.42, scale, 0.10, 0.92);
-    let css = format!(
-        ".dock-container {{ background-color: alpha(@window_bg_color, {dock_a:.3}); }}"
-    );
+    let css = if malus_de_common::config::load_reduce_transparency()
+        && !malus_de_common::config::is_dark_mode_active()
+    {
+        ".dock-container { background-color: rgb(224, 224, 228); }".to_string()
+    } else {
+        format!(
+            ".dock-container {{ background-color: alpha(@window_bg_color, {dock_a:.3}); }}"
+        )
+    };
     DOCK_GLASS_PROVIDER.with(|cell| {
         if let Some(provider) = cell.borrow().as_ref() {
             provider.load_from_string(&css);
