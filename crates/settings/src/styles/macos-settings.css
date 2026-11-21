@@ -650,6 +650,27 @@ viewport {
 /* ==========================================
    Panel Fondo de pantalla estilo macOS Tahoe
    ========================================== */
+.wp-bleed-content-pane {
+    background-color: transparent;
+    padding: 10px 0px 18px 0px;
+}
+
+.wp-slide-nav-btn {
+    min-width: 28px;
+    min-height: 28px;
+    padding: 0px;
+    border-radius: 999px;
+    background-color: alpha(@window_bg_color, 0.86);
+    border: 1px solid alpha(@window_fg_color, 0.16);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+    color: @window_fg_color;
+    transition: opacity 150ms ease, background-color 120ms ease;
+}
+
+.wp-slide-nav-btn:hover {
+    background-color: @window_bg_color;
+}
+
 .wp-hero-box {
     padding: 12px 14px;
 }

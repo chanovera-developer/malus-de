@@ -3,8 +3,8 @@ use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, CssProvider,
     DrawingArea, DropDown, Entry, EventControllerFocus, FileDialog, FileFilter, FlowBox,
-    GestureClick, GestureDrag, Image, Label, Orientation, Overlay, PackType, Paned, PolicyType,
-    Scale, ScrolledWindow, SearchEntry, Stack, StackTransitionType, WindowControls, WindowHandle,
+    GestureClick, GestureDrag, Image, Label, Orientation, Overlay, PackType, PolicyType, Scale,
+    ScrolledWindow, SearchEntry, Stack, StackTransitionType, WindowControls, WindowHandle,
 };
 use malus_de_common::mac_switch::MacSwitch as Switch;
 use malus_de_common::config::{DisplayModeConfig, DisplaysConfig, InputConfig};
@@ -28,7 +28,7 @@ mod wallpaper_pane;
 mod wifi_pane;
 
 const APP_ID: &str = "dev.malus.Settings";
-const SETTINGS_SIDEBAR_WIDTH: i32 = 212;
+pub(crate) const SETTINGS_SIDEBAR_WIDTH: i32 = 212;
 const SETTINGS_RIGHT_PANE_MIN_WIDTH: i32 = 440;
 const SIDEBAR_SEARCH_MAX_HEIGHT: i32 = 36;
 const SIDEBAR_SEARCH_HEIGHT: i32 = 34;
@@ -812,6 +812,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         .valign(Align::Center)
         .build();
     header_toolbar.append(&window_controls_end);
+    header_toolbar.set_margin_start(SETTINGS_SIDEBAR_WIDTH);
 
     let header_handle = WindowHandle::builder()
         .child(&header_toolbar)
@@ -1022,27 +1023,22 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     // Seleccionar panel inicial sin animación de entrada
     select_panel(start_id, NavAction::Initial);
 
-    let main_paned = Paned::builder()
-        .orientation(Orientation::Horizontal)
-        .position(SETTINGS_SIDEBAR_WIDTH)
-        .resize_start_child(false)
-        .resize_end_child(true)
-        .shrink_start_child(false)
-        .shrink_end_child(false)
+    let split_overlay = Overlay::builder()
         .hexpand(true)
         .vexpand(true)
-        .css_classes(["settings-main-paned"])
         .build();
-    main_paned.connect_position_notify(|paned| {
-        if paned.position() > SETTINGS_SIDEBAR_WIDTH {
-            paned.set_position(SETTINGS_SIDEBAR_WIDTH);
-        }
-    });
-    main_paned.set_start_child(Some(&sidebar));
-    main_paned.set_end_child(Some(&content_area));
+    split_overlay.set_child(Some(&content_area));
+
+    let sidebar_host = frosted_sidebar::FrostedSidebarBox::new(&sidebar, &stack);
+    sidebar_host.set_halign(Align::Start);
+    sidebar_host.set_valign(Align::Fill);
+    sidebar_host.set_hexpand(false);
+    sidebar_host.set_vexpand(true);
+    sidebar_host.set_width_request(SETTINGS_SIDEBAR_WIDTH);
+    split_overlay.add_overlay(&sidebar_host);
 
     let root_overlay = Overlay::new();
-    root_overlay.set_child(Some(&main_paned));
+    root_overlay.set_child(Some(&split_overlay));
     let modal_scrim = GtkBox::builder()
         .name("settings-modal-scrim")
         .css_classes(["settings-modal-scrim"])
@@ -1176,10 +1172,140 @@ fn configure_right_pane_stack(stack: &Stack) {
             .item(i)
             .and_then(|obj| obj.downcast::<gtk4::StackPage>().ok())
         {
-            if let Ok(sw) = page.child().downcast::<ScrolledWindow>() {
-                sw.set_hscrollbar_policy(PolicyType::Automatic);
-                sw.set_min_content_width(SETTINGS_RIGHT_PANE_MIN_WIDTH);
+            let child = page.child();
+            let is_bleed = child.has_css_class("wp-bleed-pane");
+            if !is_bleed {
+                child.set_margin_start(SETTINGS_SIDEBAR_WIDTH);
             }
+            if let Ok(sw) = child.downcast::<ScrolledWindow>() {
+                if !is_bleed {
+                    sw.set_hscrollbar_policy(PolicyType::Automatic);
+                }
+                sw.set_min_content_width(if is_bleed {
+                    SETTINGS_SIDEBAR_WIDTH + SETTINGS_RIGHT_PANE_MIN_WIDTH
+                } else {
+                    SETTINGS_RIGHT_PANE_MIN_WIDTH
+                });
+            }
+        }
+    }
+}
+
+mod frosted_sidebar {
+    use gtk4::glib;
+    use gtk4::prelude::*;
+    use gtk4::subclass::prelude::*;
+    use std::cell::{Cell, RefCell};
+
+    mod imp {
+        use super::*;
+
+        pub struct FrostedSidebarBox {
+            pub backdrop: RefCell<Option<(gtk4::WidgetPaintable, glib::WeakRef<gtk4::Widget>)>>,
+            pub snapshotting: Cell<bool>,
+        }
+
+        impl Default for FrostedSidebarBox {
+            fn default() -> Self {
+                Self {
+                    backdrop: RefCell::new(None),
+                    snapshotting: Cell::new(false),
+                }
+            }
+        }
+
+        #[glib::object_subclass]
+        impl ObjectSubclass for FrostedSidebarBox {
+            const NAME: &'static str = "MalusSettingsFrostedSidebarBox";
+            type Type = super::FrostedSidebarBox;
+            type ParentType = gtk4::Widget;
+
+            fn class_init(klass: &mut Self::Class) {
+                klass.set_layout_manager_type::<gtk4::BinLayout>();
+            }
+        }
+
+        impl ObjectImpl for FrostedSidebarBox {
+            fn dispose(&self) {
+                while let Some(child) = self.obj().first_child() {
+                    child.unparent();
+                }
+            }
+        }
+
+        impl WidgetImpl for FrostedSidebarBox {
+            fn snapshot(&self, snapshot: &gtk4::Snapshot) {
+                let obj = self.obj();
+                let w = obj.width() as f32;
+                let h = obj.height() as f32;
+                if w <= 1.0 || h <= 1.0 {
+                    return;
+                }
+
+                snapshot.push_clip(&gtk4::graphene::Rect::new(0.0, 0.0, w, h));
+
+                if !self.snapshotting.get() {
+                    let backdrop_ref = self.backdrop.borrow();
+                    if let Some((ref paintable, ref src_weak)) = *backdrop_ref {
+                        if let Some(src) = src_weak.upgrade() {
+                            let src_w = src.width() as f64;
+                            let src_h = src.height() as f64;
+                            if src_w > 1.0 && src_h > 1.0 {
+                                self.snapshotting.set(true);
+                                let offset = src
+                                    .compute_point(&*obj, &gtk4::graphene::Point::new(0.0, 0.0))
+                                    .unwrap_or_else(|| gtk4::graphene::Point::new(0.0, 0.0));
+                                let blur_enabled =
+                                    !malus_de_common::config::load_reduce_transparency();
+                                if blur_enabled {
+                                    snapshot.push_blur(26.0);
+                                }
+                                snapshot.save();
+                                snapshot.translate(&offset);
+                                paintable.snapshot(snapshot, src_w, src_h);
+                                snapshot.restore();
+                                if blur_enabled {
+                                    snapshot.pop();
+                                }
+                                self.snapshotting.set(false);
+                            }
+                        }
+                    }
+                }
+
+                if let Some(child) = obj.first_child() {
+                    obj.snapshot_child(&child, snapshot);
+                }
+
+                snapshot.pop();
+            }
+        }
+    }
+
+    glib::wrapper! {
+        pub struct FrostedSidebarBox(ObjectSubclass<imp::FrostedSidebarBox>)
+            @extends gtk4::Widget;
+    }
+
+    impl FrostedSidebarBox {
+        pub fn new(
+            sidebar_child: &impl IsA<gtk4::Widget>,
+            backdrop_source: &impl IsA<gtk4::Widget>,
+        ) -> Self {
+            let obj: Self = glib::Object::new();
+            sidebar_child.set_parent(&obj);
+
+            let paintable = gtk4::WidgetPaintable::new(Some(backdrop_source));
+            let obj_weak = obj.downgrade();
+            paintable.connect_invalidate_contents(move |_| {
+                if let Some(host) = obj_weak.upgrade() {
+                    if !host.imp().snapshotting.get() && host.is_mapped() {
+                        host.queue_draw();
+                    }
+                }
+            });
+            *obj.imp().backdrop.borrow_mut() = Some((paintable, backdrop_source.as_ref().downgrade()));
+            obj
         }
     }
 }

@@ -1,8 +1,8 @@
 use gtk4::prelude::*;
 use gtk4::{
     Align, ApplicationWindow, Box as GtkBox, Button, ColorDialog, DrawingArea, DropDown,
-    FileDialog, FileFilter, FlowBox, Image, Label, Orientation, PolicyType, ScrolledWindow,
-    StringList,
+    EventControllerMotion, FileDialog, FileFilter, FlowBox, Image, Label, Orientation, Overlay,
+    PolicyType, ScrolledWindow, StringList,
 };
 use malus_de_common::config::{
     default_bundled_wallpaper_path, is_dark_mode_active, malus_wallpaper_config_dir,
@@ -587,12 +587,216 @@ fn update_show_all_label(btn: &Button, expanded: bool, count: usize) {
     btn.set_label(&label);
 }
 
+const WP_CONTENT_LEFT_MARGIN: i32 = crate::SETTINGS_SIDEBAR_WIDTH + 22;
+const WP_CONTENT_RIGHT_MARGIN: i32 = 22;
+
+fn align_content_block<W: IsA<gtk4::Widget>>(w: W) -> W {
+    w.set_margin_start(WP_CONTENT_LEFT_MARGIN);
+    w.set_margin_end(WP_CONTENT_RIGHT_MARGIN);
+    w
+}
+
+struct CarouselSection {
+    root: GtkBox,
+    slide_overlay: Overlay,
+    hbox: GtkBox,
+    flow: FlowBox,
+}
+
+fn animate_horizontal_scroll(hadj: gtk4::Adjustment, delta: f64) {
+    let start = hadj.value();
+    let max_val = (hadj.upper() - hadj.page_size()).max(0.0);
+    let target = (start + delta).clamp(0.0, max_val);
+    if (target - start).abs() < 1.0 {
+        return;
+    }
+    let start_us = gtk4::glib::monotonic_time();
+    let duration_us: f64 = 220_000.0;
+    gtk4::glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
+        let elapsed = (gtk4::glib::monotonic_time() - start_us) as f64;
+        let t = (elapsed / duration_us).clamp(0.0, 1.0);
+        let eased = 1.0 - (1.0 - t).powi(3);
+        hadj.set_value(start + (target - start) * eased);
+        if t >= 1.0 {
+            gtk4::glib::ControlFlow::Break
+        } else {
+            gtk4::glib::ControlFlow::Continue
+        }
+    });
+}
+
+impl CarouselSection {
+    fn new(max_per_line: u32, min_per_line: u32) -> Self {
+        let root = GtkBox::builder()
+            .orientation(Orientation::Vertical)
+            .hexpand(true)
+            .build();
+
+        let hbox = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(10)
+            .margin_start(WP_CONTENT_LEFT_MARGIN)
+            .margin_end(WP_CONTENT_RIGHT_MARGIN)
+            .valign(Align::Start)
+            .build();
+
+        let hscroll = ScrolledWindow::builder()
+            .hscrollbar_policy(PolicyType::External)
+            .vscrollbar_policy(PolicyType::Never)
+            .kinetic_scrolling(true)
+            .propagate_natural_width(false)
+            .propagate_natural_height(true)
+            .hexpand(true)
+            .child(&hbox)
+            .build();
+
+        let slide_overlay = Overlay::builder()
+            .hexpand(true)
+            .child(&hscroll)
+            .build();
+
+        let prev_btn = Button::builder()
+            .icon_name("go-previous-symbolic")
+            .css_classes(["wp-slide-nav-btn"])
+            .has_frame(false)
+            .halign(Align::Start)
+            .valign(Align::Center)
+            .margin_start(WP_CONTENT_LEFT_MARGIN + 6)
+            .visible(false)
+            .build();
+        let next_btn = Button::builder()
+            .icon_name("go-next-symbolic")
+            .css_classes(["wp-slide-nav-btn"])
+            .has_frame(false)
+            .halign(Align::End)
+            .valign(Align::Center)
+            .margin_end(10)
+            .visible(false)
+            .build();
+
+        slide_overlay.add_overlay(&prev_btn);
+        slide_overlay.add_overlay(&next_btn);
+
+        let hovered = Rc::new(Cell::new(false));
+        let hadj = hscroll.hadjustment();
+
+        let sync_arrows: Rc<dyn Fn()> = {
+            let hadj_c = hadj.clone();
+            let hov_c = hovered.clone();
+            let prev_c = prev_btn.clone();
+            let next_c = next_btn.clone();
+            Rc::new(move || {
+                let is_hov = hov_c.get();
+                let val = hadj_c.value();
+                let upper = hadj_c.upper();
+                let page = hadj_c.page_size();
+                prev_c.set_visible(is_hov && val > 2.0);
+                next_c.set_visible(is_hov && page > 1.0 && val + page < upper - 2.0);
+            })
+        };
+
+        let motion = EventControllerMotion::new();
+        {
+            let hov_c = hovered.clone();
+            let sync_c = sync_arrows.clone();
+            motion.connect_enter(move |_, _, _| {
+                hov_c.set(true);
+                sync_c();
+            });
+        }
+        {
+            let hov_c = hovered.clone();
+            let sync_c = sync_arrows.clone();
+            motion.connect_leave(move |_| {
+                hov_c.set(false);
+                sync_c();
+            });
+        }
+        slide_overlay.add_controller(motion);
+
+        {
+            let sync_c = sync_arrows.clone();
+            hadj.connect_value_changed(move |_| sync_c());
+        }
+        {
+            let sync_c = sync_arrows;
+            hadj.connect_changed(move |_| sync_c());
+        }
+
+        {
+            let hadj_p = hadj.clone();
+            prev_btn.connect_clicked(move |_| animate_horizontal_scroll(hadj_p.clone(), -280.0));
+        }
+        {
+            let hadj_n = hadj;
+            next_btn.connect_clicked(move |_| animate_horizontal_scroll(hadj_n.clone(), 280.0));
+        }
+
+        let flow = align_content_block(
+            FlowBox::builder()
+                .valign(Align::Start)
+                .max_children_per_line(max_per_line)
+                .min_children_per_line(min_per_line)
+                .selection_mode(gtk4::SelectionMode::None)
+                .row_spacing(10)
+                .column_spacing(10)
+                .homogeneous(false)
+                .visible(false)
+                .build(),
+        );
+
+        root.append(&slide_overlay);
+        root.append(&flow);
+
+        Self {
+            root,
+            slide_overlay,
+            hbox,
+            flow,
+        }
+    }
+
+    fn clear(&self, detach_widgets: &[&gtk4::Widget]) {
+        for w in detach_widgets {
+            if let Some(parent) = w.parent() {
+                if let Some(fb_child) = parent.downcast_ref::<gtk4::FlowBoxChild>() {
+                    fb_child.set_child(Option::<&gtk4::Widget>::None);
+                } else if let Some(box_parent) = parent.downcast_ref::<GtkBox>() {
+                    box_parent.remove(*w);
+                }
+            }
+        }
+        while let Some(child) = self.hbox.first_child() {
+            self.hbox.remove(&child);
+        }
+        while let Some(child) = self.flow.first_child() {
+            self.flow.remove(&child);
+        }
+    }
+
+    fn populate_widgets(&self, expanded: bool, widgets: &[gtk4::Widget]) {
+        self.slide_overlay.set_visible(!expanded);
+        self.flow.set_visible(expanded);
+        if expanded {
+            for w in widgets {
+                self.flow.append(w);
+            }
+        } else {
+            for w in widgets {
+                self.hbox.append(w);
+            }
+        }
+    }
+}
+
 fn build_section_header(title: &str, right_widget: Option<&impl IsA<gtk4::Widget>>) -> GtkBox {
-    let header = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(8)
-        .margin_top(6)
-        .build();
+    let header = align_content_block(
+        GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(8)
+            .margin_top(6)
+            .build(),
+    );
     let lbl = Label::builder()
         .label(title)
         .css_classes(["wp-section-title"])
@@ -835,54 +1039,51 @@ fn resolve_active_image_for_preview(cfg: &WallpaperConfig) -> Option<PathBuf> {
     }
 }
 
-fn populate_flow_grid(
-    flow: &FlowBox,
+fn populate_carousel_tiles(
+    carousel: &CarouselSection,
     items: &[WallpaperItem],
     expanded: bool,
-    collapsed_limit: usize,
     leading_widget: Option<&gtk4::Widget>,
     cfg_state: &Rc<RefCell<WallpaperConfig>>,
     on_select: &Rc<dyn Fn(&WallpaperItem)>,
     tile_refreshers: &Rc<RefCell<Vec<Rc<dyn Fn()>>>>,
 ) {
     if let Some(lead) = leading_widget {
-        if let Some(parent) = lead.parent() {
-            if let Some(fb_child) = parent.downcast_ref::<gtk4::FlowBoxChild>() {
-                fb_child.set_child(Option::<&gtk4::Widget>::None);
-            }
-        }
-    }
-    while let Some(child) = flow.first_child() {
-        flow.remove(&child);
+        carousel.clear(&[lead]);
+    } else {
+        carousel.clear(&[]);
     }
 
+    let mut widgets: Vec<gtk4::Widget> = Vec::with_capacity(items.len() + 1);
     if let Some(lead) = leading_widget {
-        flow.append(lead);
+        widgets.push(lead.clone());
     }
 
-    let limit = if expanded { items.len() } else { collapsed_limit };
-    for item in items.iter().take(limit) {
+    for item in items {
         let cfg_check = cfg_state.clone();
         let is_active_fn: Rc<dyn Fn(&WallpaperItem) -> bool> =
             Rc::new(move |it| is_item_active(it, &cfg_check.borrow()));
         let (btn, refresh_fn) = make_thumbnail_tile(item, is_active_fn, on_select.clone());
         refresh_fn();
         tile_refreshers.borrow_mut().push(refresh_fn);
-        flow.append(&btn);
+        widgets.push(btn.upcast());
     }
+
+    carousel.populate_widgets(expanded, &widgets);
 }
 
 pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<dyn Fn()>) {
     let scrolled = ScrolledWindow::builder()
         .hscrollbar_policy(PolicyType::Never)
         .vscrollbar_policy(PolicyType::Automatic)
+        .css_classes(["wp-bleed-pane"])
         .hexpand(true)
         .vexpand(true)
         .build();
 
     let pane = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .css_classes(["wifi-content-pane"])
+        .css_classes(["wp-bleed-content-pane"])
         .spacing(12)
         .valign(Align::Start)
         .vexpand(false)
@@ -1063,7 +1264,10 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
     hero_right.append(&hero_actions);
 
     hero_row.append(&hero_right);
-    pane.append(&wrap_squircle_card(&hero_row, WIFI_CARD_SQUIRCLE_RADIUS));
+    pane.append(&align_content_block(wrap_squircle_card(
+        &hero_row,
+        WIFI_CARD_SQUIRCLE_RADIUS,
+    )));
 
     // ========================================================================
     // 2. Fondos de pantalla dinámicos
@@ -1083,16 +1287,8 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
         Some(&dyn_show_btn),
     ));
 
-    let dyn_flow = FlowBox::builder()
-        .valign(Align::Start)
-        .max_children_per_line(5)
-        .min_children_per_line(2)
-        .selection_mode(gtk4::SelectionMode::None)
-        .row_spacing(10)
-        .column_spacing(10)
-        .homogeneous(false)
-        .build();
-    pane.append(&dyn_flow);
+    let dyn_carousel = Rc::new(CarouselSection::new(5, 2));
+    pane.append(&dyn_carousel.root);
 
     // ========================================================================
     // 3. Tus fotos ("Agregar foto..." + fotos añadidas/usuario)
@@ -1109,16 +1305,8 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
 
     pane.append(&build_section_header("Tus fotos", Some(&photos_show_btn)));
 
-    let photos_flow = FlowBox::builder()
-        .valign(Align::Start)
-        .max_children_per_line(5)
-        .min_children_per_line(2)
-        .selection_mode(gtk4::SelectionMode::None)
-        .row_spacing(10)
-        .column_spacing(10)
-        .homogeneous(false)
-        .build();
-    pane.append(&photos_flow);
+    let photos_carousel = Rc::new(CarouselSection::new(5, 2));
+    pane.append(&photos_carousel.root);
 
     let add_photo_btn = Button::builder()
         .css_classes(["wp-tile-btn", "wp-add-photo-tile"])
@@ -1179,7 +1367,10 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
                 .valign(Align::Center)
                 .build(),
         );
-        pane.append(&wrap_squircle_card(&pending_box, WIFI_CARD_SQUIRCLE_RADIUS));
+        pane.append(&align_content_block(wrap_squircle_card(
+            &pending_box,
+            WIFI_CARD_SQUIRCLE_RADIUS,
+        )));
     }
 
     // ========================================================================
@@ -1197,16 +1388,8 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
 
     pane.append(&build_section_header("Imágenes", Some(&images_show_btn)));
 
-    let images_flow = FlowBox::builder()
-        .valign(Align::Start)
-        .max_children_per_line(5)
-        .min_children_per_line(2)
-        .selection_mode(gtk4::SelectionMode::None)
-        .row_spacing(10)
-        .column_spacing(10)
-        .homogeneous(false)
-        .build();
-    pane.append(&images_flow);
+    let images_carousel = Rc::new(CarouselSection::new(5, 2));
+    pane.append(&images_carousel.root);
 
     // ========================================================================
     // 11. Colores (Botón rotar + '+' color personalizado + muestras circulares)
@@ -1221,16 +1404,8 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
 
     pane.append(&build_section_header("Colores", Some(&colors_show_btn)));
 
-    let colors_flow = FlowBox::builder()
-        .valign(Align::Start)
-        .max_children_per_line(12)
-        .min_children_per_line(6)
-        .selection_mode(gtk4::SelectionMode::None)
-        .row_spacing(10)
-        .column_spacing(10)
-        .homogeneous(false)
-        .build();
-    pane.append(&colors_flow);
+    let colors_carousel = Rc::new(CarouselSection::new(12, 6));
+    pane.append(&colors_carousel.root);
 
     // ========================================================================
     // Estado compartido de refresco y callbacks
@@ -1324,7 +1499,7 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
     };
 
     let rebuild_dynamic_grid: Rc<dyn Fn()> = {
-        let flow_c = dyn_flow.clone();
+        let carousel_c = dyn_carousel.clone();
         let items_c = dyn_items.clone();
         let exp_c = dyn_expanded.clone();
         let cfg_c = cfg_state.clone();
@@ -1335,11 +1510,10 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
             let items = items_c.borrow();
             let expanded = exp_c.get();
             update_show_all_label(&btn_c, expanded, items.len());
-            populate_flow_grid(
-                &flow_c,
+            populate_carousel_tiles(
+                &carousel_c,
                 &items,
                 expanded,
-                5,
                 None,
                 &cfg_c,
                 &apply_c,
@@ -1349,7 +1523,7 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
     };
 
     let rebuild_photos_grid: Rc<dyn Fn()> = {
-        let flow_c = photos_flow.clone();
+        let carousel_c = photos_carousel.clone();
         let items_c = user_photos.clone();
         let exp_c = photos_expanded.clone();
         let lead_c = add_photo_btn.clone();
@@ -1362,11 +1536,10 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
             let expanded = exp_c.get();
             btn_c.set_visible(items.len() > 4);
             update_show_all_label(&btn_c, expanded, items.len());
-            populate_flow_grid(
-                &flow_c,
+            populate_carousel_tiles(
+                &carousel_c,
                 &items,
                 expanded,
-                4,
                 Some(lead_c.upcast_ref()),
                 &cfg_c,
                 &apply_c,
@@ -1377,7 +1550,7 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
     *rebuild_photos_ref.borrow_mut() = Some(rebuild_photos_grid.clone());
 
     let rebuild_images_grid: Rc<dyn Fn()> = {
-        let flow_c = images_flow.clone();
+        let carousel_c = images_carousel.clone();
         let items_c = image_items.clone();
         let exp_c = images_expanded.clone();
         let cfg_c = cfg_state.clone();
@@ -1388,11 +1561,10 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
             let items = items_c.borrow();
             let expanded = exp_c.get();
             update_show_all_label(&btn_c, expanded, items.len());
-            populate_flow_grid(
-                &flow_c,
+            populate_carousel_tiles(
+                &carousel_c,
                 &items,
                 expanded,
-                5,
                 None,
                 &cfg_c,
                 &apply_c,
@@ -1405,7 +1577,7 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
         Rc::new(RefCell::new(Vec::new()));
 
     let rebuild_colors_grid: Rc<dyn Fn()> = {
-        let flow_c = colors_flow.clone();
+        let carousel_c = colors_carousel.clone();
         let exp_c = colors_expanded.clone();
         let cfg_c = cfg_state.clone();
         let apply_col = apply_solid_color.clone();
@@ -1413,16 +1585,17 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
         let areas_c = color_swatch_areas.clone();
         let btn_c = colors_show_btn.clone();
         Rc::new(move || {
-            while let Some(child) = flow_c.first_child() {
-                flow_c.remove(&child);
-            }
+            carousel_c.clear(&[]);
             areas_c.borrow_mut().clear();
+
+            let mut col_widgets: Vec<gtk4::Widget> = Vec::new();
 
             // Botón 1: Rotar / siguiente color
             let rotate_btn = Button::builder()
                 .css_classes(["wp-color-circle-btn"])
                 .has_frame(false)
                 .tooltip_text("Elegir siguiente color")
+                .valign(Align::Center)
                 .child(
                     &Image::builder()
                         .icon_name("view-refresh-symbolic")
@@ -1446,13 +1619,14 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
                     apply_r(hex, Some(name), false);
                 });
             }
-            flow_c.append(&rotate_btn);
+            col_widgets.push(rotate_btn.upcast());
 
             // Botón 2: '+' selector personalizado ColorDialog
             let add_color_btn = Button::builder()
                 .css_classes(["wp-color-circle-btn"])
                 .has_frame(false)
                 .tooltip_text("Elegir color personalizado...")
+                .valign(Align::Center)
                 .child(
                     &Image::builder()
                         .icon_name("list-add-symbolic")
@@ -1497,7 +1671,7 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
                     );
                 });
             }
-            flow_c.append(&add_color_btn);
+            col_widgets.push(add_color_btn.upcast());
 
             // Lista de muestras: custom + curadas
             let mut swatches: Vec<(String, String)> = cfg_c
@@ -1516,8 +1690,7 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
             let expanded = exp_c.get();
             update_show_all_label(&btn_c, expanded, swatches.len());
 
-            let limit = if expanded { swatches.len() } else { 8 };
-            for (name, hex) in swatches.into_iter().take(limit) {
+            for (name, hex) in swatches {
                 let area = DrawingArea::builder()
                     .content_width(36)
                     .content_height(36)
@@ -1555,6 +1728,7 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
                     .css_classes(["wp-swatch-btn"])
                     .has_frame(false)
                     .tooltip_text(&name)
+                    .valign(Align::Center)
                     .child(&area)
                     .build();
 
@@ -1566,8 +1740,10 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
                 });
 
                 areas_c.borrow_mut().push((hex, area));
-                flow_c.append(&swatch_btn);
+                col_widgets.push(swatch_btn.upcast());
             }
+
+            carousel_c.populate_widgets(expanded, &col_widgets);
         })
     };
     *rebuild_colors_ref.borrow_mut() = Some(rebuild_colors_grid.clone());
@@ -1685,13 +1861,17 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
     // Botones "Mostrar todo (N)"
     {
         let exp_c = dyn_expanded.clone();
-        let rebuild_c = rebuild_dynamic_grid.clone();
+        let rebuild_d = rebuild_dynamic_grid.clone();
+        let rebuild_p = rebuild_photos_grid.clone();
+        let rebuild_i = rebuild_images_grid.clone();
         let sync_c = sync_visuals.clone();
         let ref_c = tile_refreshers.clone();
         dyn_show_btn.connect_clicked(move |_| {
             exp_c.set(!exp_c.get());
             ref_c.borrow_mut().clear();
-            rebuild_c();
+            rebuild_d();
+            rebuild_p();
+            rebuild_i();
             sync_c();
         });
     }
