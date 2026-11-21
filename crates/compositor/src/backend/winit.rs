@@ -1344,11 +1344,18 @@ pub fn run_winit() -> Result<()> {
                             if let Some(root_elem) =
                                 s_elems.iter().find(|elem| *elem.id() == root_id)
                             {
+                                let headroom = if state.dock_cfg.position
+                                    == malus_de_common::config::DockPosition::Bottom
+                                {
+                                    state.dock_blur_headroom
+                                } else {
+                                    0
+                                };
                                 dock_clip_roots.push((
                                     root_id,
                                     super::dock_clip_rect(
                                         root_elem.geometry(smithay::utils::Scale::from(1.0)),
-                                        state.dock_blur_headroom,
+                                        headroom,
                                         1.0,
                                     ),
                                 ));
@@ -2131,8 +2138,9 @@ pub fn run_winit() -> Result<()> {
                                         continue;
                                     }
                                     if let Some(geo) = layer_map.layer_geometry(surface) {
+                                        let dock_radius = state.dock_cfg.dock_corner_radius();
                                         let radius = match ns.as_ref() {
-                                            "malus-dock" => 32.0,
+                                            "malus-dock" => dock_radius,
                                             "malus-app-switcher" => 32.0,
                                             "malus-lock" => 0.0,
                                             "malus-spotlight-controls"
@@ -2352,11 +2360,18 @@ pub fn run_winit() -> Result<()> {
                                     .iter()
                                     .find(|(root_id, _)| *elem.id() == *root_id)
                                     .map(|(_, rect)| *rect);
+                                let dock_radius = state.dock_cfg.dock_corner_radius();
                                 if let (Some(rect), Some(shadow)) =
                                     (dock_rect, shadow_pipeline.as_ref())
                                 {
                                     let _ = frame.with_context(|gl| {
-                                        shadow.render_dock_shadow(gl, &projection, rect, 32.0, 1.0);
+                                        shadow.render_dock_shadow(
+                                            gl,
+                                            &projection,
+                                            rect,
+                                            dock_radius,
+                                            1.0,
+                                        );
                                     });
                                 }
                                 if let Some(rect) = dock_rect {
@@ -2367,7 +2382,7 @@ pub fn run_winit() -> Result<()> {
                                             elem_geo.size,
                                             rect.loc - elem_geo.loc,
                                             rect.size,
-                                            32,
+                                            dock_radius.round() as i32,
                                         );
                                     }
                                 }

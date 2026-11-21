@@ -3664,11 +3664,18 @@ pub fn run_drm() -> Result<()> {
                             if let Some(root_elem) =
                                 s_elems.iter().find(|elem| *elem.id() == root_id)
                             {
+                                let headroom = if state.dock_cfg.position
+                                    == malus_de_common::config::DockPosition::Bottom
+                                {
+                                    state.dock_blur_headroom
+                                } else {
+                                    0
+                                };
                                 dock_clip_roots.push((
                                     root_id,
                                     super::dock_clip_rect(
                                         root_elem.geometry(smithay::utils::Scale::from(scale)),
-                                        state.dock_blur_headroom,
+                                        headroom,
                                         scale,
                                     ),
                                 ));
@@ -5759,8 +5766,9 @@ pub fn run_drm() -> Result<()> {
                                                 continue;
                                             }
                                             if let Some(geo) = layer_map.layer_geometry(surface) {
+                                                let dock_radius = state.dock_cfg.dock_corner_radius();
                                                 let radius = match ns.as_ref() {
-                                                    "malus-dock" => 32.0 * scale as f32,
+                                                    "malus-dock" => dock_radius * scale as f32,
                                                     "malus-app-switcher" => 32.0 * scale as f32,
                                                     "malus-spotlight-controls"
                                                     | "malus-spotlight-input"
@@ -6014,6 +6022,7 @@ pub fn run_drm() -> Result<()> {
                                         .iter()
                                         .find(|(root_id, _)| *elem.id() == *root_id)
                                         .map(|(_, rect)| *rect);
+                                    let dock_radius = state.dock_cfg.dock_corner_radius();
                                     if let (Some(rect), Some(shadow)) =
                                         (dock_rect, shadow_pipeline.as_ref())
                                     {
@@ -6036,7 +6045,7 @@ pub fn run_drm() -> Result<()> {
                                                     gl,
                                                     &projection,
                                                     rect,
-                                                    32.0 * scale as f32,
+                                                    dock_radius * scale as f32,
                                                     scale,
                                                 );
                                             });
@@ -6052,7 +6061,7 @@ pub fn run_drm() -> Result<()> {
                                                 elem_geo.size,
                                                 rect.loc - elem_geo.loc,
                                                 rect.size,
-                                                (32.0 * scale).round() as i32,
+                                                (dock_radius as f64 * scale).round() as i32,
                                                 0.0,
                                                 true,
                                             );

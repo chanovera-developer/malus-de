@@ -1922,6 +1922,11 @@ impl DockConfig {
             .saturating_add(DOCK_BOUNCE_HEADROOM)
     }
 
+    /// Radio squircle exterior del contenedor del Dock escalado proporcionalmente al tamaño de icono.
+    pub fn dock_corner_radius(&self) -> f32 {
+        (32.0 * (self.icon_size as f32 + 16.0) / 64.0).clamp(22.0, 56.0)
+    }
+
     /// Determina la ruta canónica del archivo `dock.toml`
     pub fn config_path() -> PathBuf {
         if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
@@ -4373,6 +4378,10 @@ apps = []
         assert!(dock_def.show_recent_apps);
         assert!(!dock_def.minimize_to_app_icon);
         assert_eq!(dock_def.titlebar_double_click_action, 0);
+        assert!((dock_def.dock_corner_radius() - 32.0).abs() < f32::EPSILON);
+        let mut dock_large = dock_def.clone();
+        dock_large.icon_size = 96;
+        assert!(dock_large.dock_corner_radius() > dock_def.dock_corner_radius());
 
         let dd_def = DesktopDockConfig::default();
         assert!(dd_def.show_items_on_desktop);
