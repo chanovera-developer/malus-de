@@ -67,6 +67,13 @@ thread_local! {
     static DOCK_ACCENT_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
     static DOCK_APPEARANCE_MONITOR: RefCell<Option<gtk4::gio::FileMonitor>> =
         const { RefCell::new(None) };
+    static DOCK_REPAINT_TARGETS: RefCell<
+        Option<(
+            glib::WeakRef<GtkBox>,
+            glib::WeakRef<GtkBox>,
+            glib::WeakRef<gtk4::ApplicationWindow>,
+        )>,
+    > = const { RefCell::new(None) };
 }
 
 fn apply_dock_accent_color(index: usize) {
@@ -146,6 +153,19 @@ fn load_css() {
         monitor.connect_changed(|_, _, _, _| {
             apply_dock_accent_color(malus_de_common::config::load_accent_color_index());
             apply_dock_liquid_glass_opacity(malus_de_common::config::load_liquid_glass_opacity());
+            DOCK_REPAINT_TARGETS.with(|cell| {
+                if let Some((apps_w, root_w, win_w)) = cell.borrow().as_ref() {
+                    if let Some(apps_box) = apps_w.upgrade() {
+                        queue_dock_icon_backgrounds(apps_box.upcast_ref());
+                    }
+                    if let Some(dock_root) = root_w.upgrade() {
+                        dock_root.queue_draw();
+                    }
+                    if let Some(win) = win_w.upgrade() {
+                        win.queue_draw();
+                    }
+                }
+            });
         });
         DOCK_APPEARANCE_MONITOR.with(|cell| {
             *cell.borrow_mut() = Some(monitor);
@@ -1824,6 +1844,14 @@ fn build_dock_ui(app: &Application) {
     }
 
     window.set_child(Some(&dock_root));
+    DOCK_REPAINT_TARGETS.with(|cell| {
+        use glib::object::ObjectExt;
+        *cell.borrow_mut() = Some((
+            apps_box.downgrade(),
+            dock_root.downgrade(),
+            window.downgrade(),
+        ));
+    });
     window.present();
 }
 
@@ -3061,13 +3089,93 @@ fn dock_squircle_radius(width: f64, height: f64) -> f64 {
 }
 
 fn draw_squircle(context: &gtk4::cairo::Context, width: f64, height: f64) {
-    squircle_path(context, width, height, dock_squircle_radius(width, height));
-    if adw::StyleManager::default().is_dark() {
-        context.set_source_rgb(0.06, 0.06, 0.07);
-    } else {
-        context.set_source_rgb(1.0, 1.0, 1.0);
+    let style_idx = malus_de_common::config::load_icon_widget_style_index();
+    let is_dark = adw::StyleManager::default().is_dark();
+    let radius = dock_squircle_radius(width, height);
+
+    match style_idx {
+        // 1 = Obscuro: baldosa oscura estilo macOS incluso en modo claro
+        1 => {
+            squircle_path(context, width, height, radius);
+            let grad = gtk4::cairo::LinearGradient::new(0.0, 0.0, 0.0, height);
+            grad.add_color_stop_rgb(0.0, 0.15, 0.16, 0.19);
+            grad.add_color_stop_rgb(1.0, 0.07, 0.08, 0.10);
+            let _ = context.set_source(&grad);
+            let _ = context.fill_preserve();
+            context.set_source_rgba(1.0, 1.0, 1.0, 0.12);
+            context.set_line_width(1.0);
+            let _ = context.stroke();
+        }
+        // 2 = Transparente: cristal translúcido Liquid Glass (o gris sólido si Reducir transparencia está activo)
+        2 => {
+            squircle_path(context, width, height, radius);
+            if malus_de_common::config::load_reduce_transparency() {
+                if is_dark {
+                    context.set_source_rgb(0.24, 0.25, 0.28);
+                } else {
+                    context.set_source_rgb(0.56, 0.58, 0.62);
+                }
+                let _ = context.fill_preserve();
+                context.set_source_rgba(1.0, 1.0, 1.0, 0.22);
+                context.set_line_width(1.0);
+                let _ = context.stroke();
+            } else {
+                let glass_scale = malus_de_common::config::current_liquid_glass_scale();
+                let base_alpha = malus_de_common::config::scaled_liquid_glass_alpha(
+                    if is_dark { 0.44 } else { 0.36 },
+                    glass_scale,
+                    0.16,
+                    0.88,
+                );
+                if is_dark {
+                    context.set_source_rgba(0.14, 0.15, 0.19, base_alpha);
+                } else {
+                    context.set_source_rgba(0.95, 0.96, 0.99, base_alpha);
+                }
+                let _ = context.fill_preserve();
+
+                let sheen = gtk4::cairo::LinearGradient::new(0.0, 0.0, 0.0, height);
+                sheen.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, if is_dark { 0.20 } else { 0.34 });
+                sheen.add_color_stop_rgba(0.5, 1.0, 1.0, 1.0, 0.04);
+                sheen.add_color_stop_rgba(1.0, 1.0, 1.0, 1.0, 0.0);
+                let _ = context.set_source(&sheen);
+                let _ = context.fill_preserve();
+
+                context.set_source_rgba(1.0, 1.0, 1.0, if is_dark { 0.26 } else { 0.52 });
+                context.set_line_width(1.0);
+                let _ = context.stroke();
+            }
+        }
+        // 3 = Teñido: fondo teñido con el color de énfasis activo
+        3 => {
+            let (r, g, b) = malus_de_common::config::load_accent_color();
+            squircle_path(context, width, height, radius);
+            let grad = gtk4::cairo::LinearGradient::new(0.0, 0.0, 0.0, height);
+            grad.add_color_stop_rgb(
+                0.0,
+                (r * 1.12).min(1.0),
+                (g * 1.12).min(1.0),
+                (b * 1.12).min(1.0),
+            );
+            grad.add_color_stop_rgb(1.0, r * 0.80, g * 0.80, b * 0.80);
+            let _ = context.set_source(&grad);
+            let _ = context.fill_preserve();
+
+            context.set_source_rgba(1.0, 1.0, 1.0, 0.26);
+            context.set_line_width(1.0);
+            let _ = context.stroke();
+        }
+        // 0 = Predeterminado: blanco en modo claro, oscuro en modo oscuro
+        _ => {
+            squircle_path(context, width, height, radius);
+            if is_dark {
+                context.set_source_rgb(0.06, 0.06, 0.07);
+            } else {
+                context.set_source_rgb(1.0, 1.0, 1.0);
+            }
+            let _ = context.fill();
+        }
     }
-    let _ = context.fill();
 }
 
 fn draw_filled_squircle_icon(

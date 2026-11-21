@@ -138,6 +138,20 @@ pub fn load_accent_color() -> (f64, f64, f64) {
     ACCENT_COLORS[load_accent_color_index()].1
 }
 
+/// Indice del estilo de iconos y widgets configurado en Ajustes de Aspecto.
+/// 0 = Predeterminado, 1 = Obscuro, 2 = Transparente, 3 = Teñido.
+pub fn load_icon_widget_style_index() -> usize {
+    let Ok(raw) = std::fs::read_to_string(appearance_settings_path()) else {
+        return 0;
+    };
+    toml::from_str::<toml::Value>(&raw)
+        .ok()
+        .and_then(|settings| settings.get("icon_widget_style_idx")?.as_integer())
+        .and_then(|index| usize::try_from(index).ok())
+        .filter(|index| *index < 4)
+        .unwrap_or(0)
+}
+
 /// Indice del color de carpetas configurado en Ajustes de Aspecto.
 /// 0 = Automatico, 1 = Azul clasico, 2 = Color de enfasis, 3 = Grafito.
 pub fn load_folder_color_index() -> usize {
