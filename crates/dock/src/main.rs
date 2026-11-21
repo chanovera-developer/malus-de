@@ -3497,9 +3497,7 @@ fn update_icon_size_recursive(
         // Solo ajustar iconos principales del dock, preservando insignias secundarias
         if img.has_css_class("dock-primary-icon") || img.pixel_size() >= (base_size - 10) {
             let target_size = (size
-                + if img.has_css_class("dock-trash-icon") {
-                    8
-                } else if img.has_css_class("dock-icon-inset") {
+                + if img.has_css_class("dock-icon-inset") {
                     -10
                 } else {
                     0
@@ -4593,7 +4591,7 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
 
     let trash_img = Image::builder()
         .icon_name(trash_icon_name)
-        .pixel_size(icon_size + 8)
+        .pixel_size(icon_size)
         .css_classes(["dock-trash-icon", "dock-primary-icon"])
         .valign(gtk4::Align::End)
         .build();
