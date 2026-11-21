@@ -186,10 +186,11 @@ pub fn compute_minimize_frame(
         }
     } else {
         let t = raw_progress.clamp(0.0, 1.0);
+        let progress_curve = 0.55 * (1.0 - (1.0 - t).powf(2.2)) + 0.45 * smootherstep(t);
         let eased = if is_minimizing {
-            1.0 - (1.0 - t).powf(2.4)
+            progress_curve
         } else {
-            (1.0 - t).powf(2.4)
+            1.0 - progress_curve
         };
         let target_w = target_rect.width.max(24.0);
         let target_h = target_rect.height.max(24.0);
@@ -199,8 +200,10 @@ pub fn compute_minimize_frame(
             width: (win_rect.width + (target_w - win_rect.width) * eased).max(2.0),
             height: (win_rect.height + (target_h - win_rect.height) * eased).max(2.0),
         };
-        let alpha = if eased > 0.88 {
-            ((1.0 - eased) / 0.12).clamp(0.0, 1.0)
+        // Mantener la ventana opaca durante todo el encogimiento y cruzar suavemente al slot
+        // en el último 6% del recorrido (cuando ya coincide con la miniatura del Dock) sin hueco transparente.
+        let alpha = if is_minimizing && t > 0.94 {
+            1.0 - 0.25 * ((t - 0.94) / 0.06).clamp(0.0, 1.0)
         } else {
             1.0
         };
@@ -638,16 +641,22 @@ mod tests {
         let mid = super::compute_minimize_frame(window, target, 0.5, true, false);
         assert_eq!(mid.k, 0.0);
         assert_eq!(mid.j, 0.0);
+        assert!((mid.alpha - 1.0).abs() < 0.001);
         assert!(mid.win_rect.width < window.width && mid.win_rect.width > target.width);
         assert!(mid.win_rect.y > window.y && mid.win_rect.y < target.y);
 
+        let near_end = super::compute_minimize_frame(window, target, 0.9, true, false);
+        assert!((near_end.alpha - 1.0).abs() < 0.001);
+
         let end = super::compute_minimize_frame(window, target, 1.0, true, false);
+        assert!(end.alpha >= 0.74);
         assert!((end.win_rect.x - target.x).abs() < 0.001);
         assert!((end.win_rect.y - target.y).abs() < 0.001);
         assert!((end.win_rect.width - target.width).abs() < 0.001);
         assert!((end.win_rect.height - target.height).abs() < 0.001);
 
         let restore_start = super::compute_minimize_frame(window, target, 0.0, false, false);
+        assert!((restore_start.alpha - 1.0).abs() < 0.001);
         assert!((restore_start.win_rect.width - target.width).abs() < 0.001);
         let restore_end = super::compute_minimize_frame(window, target, 1.0, false, false);
         assert!((restore_end.win_rect.width - window.width).abs() < 0.001);
