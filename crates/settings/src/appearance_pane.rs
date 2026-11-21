@@ -202,6 +202,10 @@ fn build_appearance_main_pane(
         let area = DrawingArea::new();
         area.set_content_width(68);
         area.set_content_height(44);
+        area.set_halign(Align::Center);
+        area.set_valign(Align::Center);
+        area.set_hexpand(false);
+        area.set_vexpand(false);
         crate::register_accent_draw_area(&area);
         let sel_c = selected_mode.clone();
         area.set_draw_func(move |_, cr, w, h| {
@@ -519,7 +523,9 @@ fn build_appearance_main_pane(
 
     let icon_tiles_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(12)
+        .spacing(6)
+        .homogeneous(true)
+        .halign(Align::End)
         .build();
     let active_icon_style = Rc::new(Cell::new(prefs.borrow().icon_widget_style_idx.min(3)));
     let mut icon_style_areas: Vec<(DrawingArea, Label)> = Vec::new();
@@ -537,6 +543,10 @@ fn build_appearance_main_pane(
         let area = DrawingArea::new();
         area.set_content_width(44);
         area.set_content_height(44);
+        area.set_halign(Align::Center);
+        area.set_valign(Align::Center);
+        area.set_hexpand(false);
+        area.set_vexpand(false);
         crate::register_accent_draw_area(&area);
         let st_c = active_icon_style.clone();
         let acc_c = active_accent.clone();
@@ -1925,9 +1935,12 @@ fn draw_widget_style_tile(
     tint: (f64, f64, f64),
 ) {
     let _ = cr.save();
-    cr.translate(3.0, 3.0);
-    let iw = w - 6.0;
-    let ih = h - 6.0;
+    let side = (w.min(h) - 6.0).max(12.0);
+    let ox = (w - side) * 0.5;
+    let oy = (h - side) * 0.5;
+    cr.translate(ox, oy);
+    let iw = side;
+    let ih = side;
     crate::squircle_path(cr, iw, ih, 10.0);
     let _ = cr.save();
     cr.clip();
