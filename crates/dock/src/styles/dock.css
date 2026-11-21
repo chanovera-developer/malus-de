@@ -54,7 +54,7 @@ window.malus-dock-window .dock-items:drop(active) {
 }
 
 .dock-trash-icon {
-    transform: translateY(4px);
+    transform: translateY(0px);
     transition: transform 140ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -65,7 +65,7 @@ window.malus-dock-window .dock-items:drop(active) {
 }
 
 .dock-item-box.dock-trash-drop-hover .dock-trash-icon {
-    transform: translateY(2px) scale(1.12);
+    transform: translateY(-2px) scale(1.08);
 }
 
 .dock-bounce-target {

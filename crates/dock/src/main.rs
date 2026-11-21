@@ -47,7 +47,8 @@ fn apply_dock_layout_config(
 ) {
     let is_horizontal = cfg.position == DockPosition::Bottom;
     let is_revealed = !cfg.auto_hide || auto_hide_revealed;
-    let scale = (cfg.icon_size as f64 / 48.0).clamp(0.75, 2.0);
+    let edge_pad = ((cfg.icon_size as f64) * 0.308).round().clamp(10.0, 32.0) as i32;
+    let dock_content_spacing = (edge_pad as f64 * 0.45).round().clamp(4.0, 14.0) as i32;
 
     apply_dock_scale_css(cfg);
     refs.dock_corner_radius.set(cfg.dock_corner_radius() as f64);
@@ -114,19 +115,17 @@ fn apply_dock_layout_config(
     } else {
         Orientation::Vertical
     });
-    refs.dock_content
-        .set_spacing((4.0 * scale).round().max(2.0) as i32);
+    refs.dock_content.set_spacing(dock_content_spacing);
     refs.apps_box.set_orientation(if is_horizontal {
         Orientation::Horizontal
     } else {
         Orientation::Vertical
     });
-    refs.apps_box
-        .set_spacing((2.0 * scale).round().max(1.0) as i32);
+    refs.apps_box.set_spacing(edge_pad);
     if is_horizontal {
         refs.apps_box.set_halign(gtk4::Align::Start);
         refs.apps_box.set_valign(gtk4::Align::End);
-        refs.apps_box.set_margin_bottom(1);
+        refs.apps_box.set_margin_bottom(0);
     } else {
         refs.apps_box.set_halign(gtk4::Align::Center);
         refs.apps_box.set_valign(gtk4::Align::Start);
@@ -273,23 +272,20 @@ thread_local! {
 
 fn apply_dock_scale_css(cfg: &DockConfig) {
     let scale = (cfg.icon_size as f64 / 48.0).clamp(0.75, 2.0);
-    let pad_top = (6.0 * scale).round().max(4.0) as i32;
-    let pad_horiz = (10.0 * scale).round().max(6.0) as i32;
-    let pad_bottom = (2.0 * scale).round().max(1.0) as i32;
-    let item_pad_h = (2.0 * scale).round().max(1.0) as i32;
-    let btn_pad = (4.0 * scale).round().max(2.0) as i32;
+    // Calibrado a partir de macOS Tahoe (Dock3.png):
+    // padding simétrico (~31% del icon_size) en bordes superior, inferior, izquierdo, derecho y separación entre iconos,
+    // con el punto indicador centrado verticalmente dentro de esa banda inferior.
+    let edge_pad = ((cfg.icon_size as f64) * 0.308).round().clamp(10.0, 32.0) as i32;
     let btn_radius = (14.0 * scale).round().max(10.0) as i32;
-    let sep_height = (cfg.icon_size as f64 * 0.92).round().max(28.0) as i32;
-    let sep_margin_h = (6.0 * scale).round().max(3.0) as i32;
-    let sep_margin_top = (4.0 * scale).round().max(2.0) as i32;
-    let sep_margin_bot = (10.0 * scale).round().max(6.0) as i32;
-    let ind_font = (8.0 * scale.sqrt()).round().clamp(7.0, 11.0) as i32;
+    let sep_height = cfg.icon_size as i32;
+    let sep_margin_h = (edge_pad as f64 * 0.25).round().clamp(2.0, 8.0) as i32;
+    let ind_font = (7.0 * scale.sqrt()).round().clamp(6.0, 10.0) as i32;
     let css = format!(
-        ".dock-items {{ padding: {pad_top}px {pad_horiz}px {pad_bottom}px; }}\n\
-         .dock-item-box {{ padding: 0px {item_pad_h}px; }}\n\
-         .dock-item-btn {{ padding: {btn_pad}px; border-radius: {btn_radius}px; }}\n\
-         .dock-separator {{ min-height: {sep_height}px; margin: {sep_margin_top}px {sep_margin_h}px {sep_margin_bot}px {sep_margin_h}px; }}\n\
-         .dock-indicator {{ font-size: {ind_font}px; margin-top: 2px; margin-bottom: 0px; }}\n"
+        ".dock-items {{ padding: {edge_pad}px {edge_pad}px 0px {edge_pad}px; }}\n\
+         .dock-item-box {{ padding: 0px; }}\n\
+         .dock-item-btn {{ padding: 0px; border-radius: {btn_radius}px; }}\n\
+         .dock-separator {{ min-height: {sep_height}px; margin: 0px {sep_margin_h}px {edge_pad}px {sep_margin_h}px; }}\n\
+         .dock-indicator {{ font-size: {ind_font}px; min-height: {edge_pad}px; margin: 0px; padding: 0px; }}\n"
     );
     DOCK_SCALE_PROVIDER.with(|cell| {
         if let Some(provider) = cell.borrow().as_ref() {
@@ -3951,7 +3947,7 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
     let item_container = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .css_classes(["dock-item-box"])
-        .spacing(1)
+        .spacing(0)
         .valign(gtk4::Align::End)
         .build();
     item_container.set_overflow(gtk4::Overflow::Visible);
@@ -4231,7 +4227,7 @@ fn create_dock_item(
     let item_container = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .css_classes(["dock-item-box"])
-        .spacing(1)
+        .spacing(0)
         .valign(gtk4::Align::End)
         .build();
     item_container.set_overflow(gtk4::Overflow::Visible);
