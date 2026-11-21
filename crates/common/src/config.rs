@@ -138,6 +138,81 @@ pub fn load_accent_color() -> (f64, f64, f64) {
     ACCENT_COLORS[load_accent_color_index()].1
 }
 
+/// Métricas de tamaño para barras laterales unificadas (`Pequeños`, `Medianos`, `Grandes`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SidebarSizeMetrics {
+    pub icon_px: i32,
+    pub font_px: i32,
+    pub row_min_height: i32,
+    pub row_pad_v: i32,
+    pub row_height: i32,
+}
+
+/// Indice del tamaño de íconos en la barra lateral (`0 = Pequeños`, `1 = Medianos`, `2 = Grandes`).
+pub fn load_sidebar_icon_size_index() -> usize {
+    let Ok(raw) = std::fs::read_to_string(appearance_settings_path()) else {
+        return 1;
+    };
+    toml::from_str::<toml::Value>(&raw)
+        .ok()
+        .and_then(|settings| settings.get("sidebar_icon_size_idx")?.as_integer())
+        .and_then(|index| usize::try_from(index).ok())
+        .filter(|index| *index < 3)
+        .unwrap_or(1)
+}
+
+/// Devuelve las métricas de píxeles para `0 = Pequeños`, `1 = Medianos`, `2 = Grandes`.
+pub fn sidebar_icon_metrics(index: usize) -> SidebarSizeMetrics {
+    match index.min(2) {
+        0 => SidebarSizeMetrics {
+            icon_px: 14,
+            font_px: 12,
+            row_min_height: 18,
+            row_pad_v: 3,
+            row_height: 26,
+        },
+        2 => SidebarSizeMetrics {
+            icon_px: 20,
+            font_px: 14,
+            row_min_height: 24,
+            row_pad_v: 5,
+            row_height: 35,
+        },
+        _ => SidebarSizeMetrics {
+            icon_px: 16,
+            font_px: 13,
+            row_min_height: 22,
+            row_pad_v: 5,
+            row_height: 31,
+        },
+    }
+}
+
+/// Métricas de barra lateral activas según `appearance-settings.toml`.
+pub fn load_sidebar_icon_metrics() -> SidebarSizeMetrics {
+    sidebar_icon_metrics(load_sidebar_icon_size_index())
+}
+
+/// Genera CSS compartido para escalar barras laterales (`.malus-sidebar-*`, Branches y Ajustes).
+pub fn sidebar_icon_size_css(index: usize) -> String {
+    let m = sidebar_icon_metrics(index);
+    format!(
+        ".malus-sidebar-row, .branches-sidebar-row, .sidebar-btn {{ \
+             font-size: {fp}px; min-height: {mh}px; padding: {pv}px 10px; \
+         }} \
+         .malus-sidebar-icon, .branches-sidebar-icon, .settings-sidebar-icon {{ \
+             -gtk-icon-size: {ip}px; min-width: {ip}px; min-height: {ip}px; \
+         }} \
+         .malus-sidebar-label, .branches-sidebar-label, .settings-sidebar-label {{ \
+             font-size: {fp}px; \
+         }}",
+        fp = m.font_px,
+        mh = m.row_min_height,
+        pv = m.row_pad_v,
+        ip = m.icon_px,
+    )
+}
+
 /// Indice del estilo de iconos y widgets configurado en Ajustes de Aspecto.
 /// 0 = Predeterminado, 1 = Obscuro, 2 = Transparente, 3 = Teñido.
 pub fn load_icon_widget_style_index() -> usize {
@@ -3938,5 +4013,22 @@ apps = []
         assert_eq!(resolve_folder_tint_rgb(2, 5), ACCENT_COLORS[5].1);
         // Grafito
         assert_eq!(resolve_folder_tint_rgb(3, 5), (0.55, 0.55, 0.58));
+    }
+
+    #[test]
+    fn sidebar_icon_metrics_and_css_scale_cleanly() {
+        let small = sidebar_icon_metrics(0);
+        let medium = sidebar_icon_metrics(1);
+        let large = sidebar_icon_metrics(2);
+
+        assert_eq!(small.icon_px, 14);
+        assert_eq!(medium.icon_px, 16);
+        assert_eq!(large.icon_px, 20);
+        assert!(small.row_height < medium.row_height && medium.row_height < large.row_height);
+
+        let css_large = sidebar_icon_size_css(2);
+        assert!(css_large.contains(".malus-sidebar-icon"));
+        assert!(css_large.contains("-gtk-icon-size: 20px;"));
+        assert!(css_large.contains("font-size: 14px;"));
     }
 }

@@ -265,6 +265,7 @@ fn load_custom_css() {
             &folder_provider,
             gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
         );
+        malus_de_common::sidebar_style::install_sidebar_size_sync(&display);
     }
 
     BRANCHES_ACCENT_PROVIDER.with(|cell| {

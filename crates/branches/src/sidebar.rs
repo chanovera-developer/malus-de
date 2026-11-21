@@ -1623,15 +1623,15 @@ fn create_virtual_row(title: &str, icon_name: &str, data_key: &'static str) -> L
     hbox.set_margin_end(4);
 
     let icon = Image::from_icon_name(icon_name);
-    icon.set_pixel_size(16);
     icon.add_css_class("branches-sidebar-icon");
+    malus_de_common::sidebar_style::register_sidebar_icon(&icon);
 
     let label = Label::builder()
         .label(title)
         .halign(Align::Start)
         .hexpand(true)
         .ellipsize(gtk4::pango::EllipsizeMode::End)
-        .css_classes(["branches-sidebar-label"])
+        .css_classes(["branches-sidebar-label", "malus-sidebar-label"])
         .build();
 
     hbox.append(&icon);
@@ -1643,6 +1643,7 @@ fn create_virtual_row(title: &str, icon_name: &str, data_key: &'static str) -> L
         .selectable(true)
         .css_classes(["branches-sidebar-row", "branches-sidebar-row-favorite"])
         .build();
+    malus_de_common::sidebar_style::register_sidebar_row(&row);
 
     unsafe {
         row.set_data(data_key, true);
@@ -1662,15 +1663,15 @@ fn create_sidebar_row(
     hbox.set_margin_end(4);
 
     let icon = Image::from_icon_name(icon_name);
-    icon.set_pixel_size(16);
     icon.add_css_class("branches-sidebar-icon");
+    malus_de_common::sidebar_style::register_sidebar_icon(&icon);
 
     let label = Label::builder()
         .label(title)
         .halign(Align::Start)
         .hexpand(true)
         .ellipsize(gtk4::pango::EllipsizeMode::End)
-        .css_classes(["branches-sidebar-label"])
+        .css_classes(["branches-sidebar-label", "malus-sidebar-label"])
         .build();
 
     hbox.append(&icon);
@@ -1689,6 +1690,7 @@ fn create_sidebar_row(
             },
         ])
         .build();
+    malus_de_common::sidebar_style::register_sidebar_row(&row);
 
     unsafe {
         row.set_data("target_path", path);
@@ -1799,6 +1801,7 @@ fn create_tag_row(tag_id: &str, title: &str) -> ListBoxRow {
         .halign(Align::Start)
         .hexpand(true)
         .ellipsize(gtk4::pango::EllipsizeMode::End)
+        .css_classes(["branches-sidebar-label", "malus-sidebar-label"])
         .build();
 
     hbox.append(&dot);
@@ -1810,6 +1813,7 @@ fn create_tag_row(tag_id: &str, title: &str) -> ListBoxRow {
         .selectable(true)
         .css_classes(["branches-sidebar-row"])
         .build();
+    malus_de_common::sidebar_style::register_sidebar_row(&row);
 
     unsafe {
         row.set_data("target_tag", tag_id.to_string());

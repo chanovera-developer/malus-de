@@ -12,6 +12,8 @@ pub mod ipc;
 pub mod logging;
 #[cfg(feature = "gtk-ui")]
 pub mod mac_switch;
+#[cfg(feature = "gtk-ui")]
+pub mod sidebar_style;
 pub mod theme;
 pub mod wayland;
 

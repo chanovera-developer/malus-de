@@ -733,6 +733,7 @@ fn build_appearance_main_pane(
             move |idx| {
                 p.borrow_mut().sidebar_icon_size_idx = idx;
                 p.borrow().save();
+                malus_de_common::sidebar_style::apply_sidebar_size_index(idx);
             }
         },
     ));

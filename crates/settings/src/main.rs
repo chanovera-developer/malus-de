@@ -219,6 +219,9 @@ fn load_macos_settings_css() {
     SETTINGS_ACCENT_PROVIDER.with(|cell| {
         *cell.borrow_mut() = Some(accent_provider);
     });
+    if let Some(display) = gtk4::gdk::Display::default() {
+        malus_de_common::sidebar_style::install_sidebar_size_sync(&display);
+    }
     apply_liquid_glass_opacity_css(malus_de_common::config::load_liquid_glass_opacity());
 }
 
@@ -307,13 +310,10 @@ pub(crate) fn make_system_glyph_badge(
     badge
 }
 
-const SIDEBAR_ROW_HEIGHT: i32 = 32;
-
 fn build_sidebar_nav_button(icon_name: &str, label_txt: &str) -> Button {
     let btn = Button::builder()
-        .css_classes(["sidebar-btn"])
+        .css_classes(["sidebar-btn", "malus-sidebar-row"])
         .has_frame(false)
-        .height_request(SIDEBAR_ROW_HEIGHT)
         .halign(Align::Fill)
         .valign(Align::Start)
         .hexpand(true)
@@ -333,8 +333,7 @@ fn build_sidebar_nav_button(icon_name: &str, label_txt: &str) -> Button {
 
     let glyph = Image::builder()
         .icon_name(icon_name)
-        .pixel_size(16)
-        .css_classes(["settings-sidebar-icon"])
+        .css_classes(["settings-sidebar-icon", "malus-sidebar-icon"])
         .halign(Align::Start)
         .valign(Align::Center)
         .hexpand(false)
@@ -343,6 +342,7 @@ fn build_sidebar_nav_button(icon_name: &str, label_txt: &str) -> Button {
 
     let lbl = Label::builder()
         .label(label_txt)
+        .css_classes(["settings-sidebar-label", "malus-sidebar-label"])
         .xalign(0.0)
         .halign(Align::Start)
         .valign(Align::Center)
@@ -350,6 +350,9 @@ fn build_sidebar_nav_button(icon_name: &str, label_txt: &str) -> Button {
         .vexpand(false)
         .ellipsize(gtk4::pango::EllipsizeMode::End)
         .build();
+
+    malus_de_common::sidebar_style::register_sidebar_row(&btn);
+    malus_de_common::sidebar_style::register_sidebar_icon(&glyph);
 
     row.append(&glyph);
     row.append(&lbl);
