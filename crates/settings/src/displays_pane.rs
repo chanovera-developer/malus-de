@@ -646,8 +646,8 @@ fn show_arrange_modal(
 ) {
     let dialog = Window::builder()
         .transient_for(parent_window)
+        .destroy_with_parent(true)
         .modal(true)
-        .decorated(false)
         .resizable(false)
         .default_width(580)
         .title("Ordenar pantallas")
@@ -952,8 +952,8 @@ fn show_advanced_modal(
 ) {
     let dialog = Window::builder()
         .transient_for(parent_window)
+        .destroy_with_parent(true)
         .modal(true)
-        .decorated(false)
         .resizable(false)
         .default_width(500)
         .title("Avanzado")
@@ -1041,8 +1041,8 @@ fn show_advanced_modal(
 fn show_night_shift_modal(parent_window: &ApplicationWindow) {
     let dialog = Window::builder()
         .transient_for(parent_window)
+        .destroy_with_parent(true)
         .modal(true)
-        .decorated(false)
         .resizable(false)
         .default_width(480)
         .title("Night Shift")

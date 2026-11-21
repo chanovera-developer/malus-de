@@ -5,6 +5,11 @@ window.macos-settings-window {
     box-shadow: none;
 }
 
+window.macos-modal-dialog {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+}
+
 window.macos-settings-window popover,
 window.macos-settings-window popover.menu,
 window.macos-settings-window popover.background {
@@ -446,7 +451,7 @@ flowbox.settings-wrap-flow > flowboxchild {
 
 .card-section-sub {
     font-size: 12px;
-    color: alpha(currentColor, 0.65);
+    color: alpha(@window_fg_color, 0.65);
 }
 
 .macos-action-btn {
@@ -566,7 +571,7 @@ button.disp-stepper-right {
 }
 .res-pct-label {
     font-size: 11px;
-    color: alpha(currentColor, 0.65);
+    color: alpha(@window_fg_color, 0.65);
 }
 
 .truesize-banner-active {
