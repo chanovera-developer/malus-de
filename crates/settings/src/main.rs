@@ -2,7 +2,7 @@ use clap::Parser;
 use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, CssProvider,
-    DrawingArea, DropDown, Entry, EventControllerFocus, FileDialog, FileFilter, FlowBox,
+    DrawingArea, DropDown, Entry, EventControllerFocus, FlowBox,
     GestureClick, GestureDrag, Image, Label, Orientation, Overlay, PackType, PolicyType, Scale,
     ScrolledWindow, SearchEntry, Stack, StackTransitionType, WindowControls, WindowHandle,
 };
@@ -1201,7 +1201,7 @@ mod frosted_sidebar {
         use super::*;
 
         pub struct FrostedSidebarBox {
-            pub backdrop: RefCell<Option<(gtk4::WidgetPaintable, glib::WeakRef<gtk4::Widget>)>>,
+            pub backdrop: RefCell<Option<(gtk4::WidgetPaintable, glib::WeakRef<gtk4::Stack>)>>,
             pub snapshotting: Cell<bool>,
         }
 
@@ -1246,19 +1246,23 @@ mod frosted_sidebar {
 
                 if !self.snapshotting.get() {
                     let backdrop_ref = self.backdrop.borrow();
-                    if let Some((ref paintable, ref src_weak)) = *backdrop_ref {
-                        if let Some(src) = src_weak.upgrade() {
-                            let src_w = src.width() as f64;
-                            let src_h = src.height() as f64;
-                            if src_w > 1.0 && src_h > 1.0 {
+                    if let Some((ref paintable, ref stack_weak)) = *backdrop_ref {
+                        if let Some(stack) = stack_weak.upgrade() {
+                            let is_bleed = stack
+                                .visible_child()
+                                .map(|c| c.has_css_class("wp-bleed-pane"))
+                                .unwrap_or(false);
+                            let src_w = stack.width() as f64;
+                            let src_h = stack.height() as f64;
+                            if is_bleed && src_w > 1.0 && src_h > 1.0 {
                                 self.snapshotting.set(true);
-                                let offset = src
+                                let offset = stack
                                     .compute_point(&*obj, &gtk4::graphene::Point::new(0.0, 0.0))
                                     .unwrap_or_else(|| gtk4::graphene::Point::new(0.0, 0.0));
                                 let blur_enabled =
                                     !malus_de_common::config::load_reduce_transparency();
                                 if blur_enabled {
-                                    snapshot.push_blur(26.0);
+                                    snapshot.push_blur(24.0);
                                 }
                                 snapshot.save();
                                 snapshot.translate(&offset);
@@ -1290,21 +1294,34 @@ mod frosted_sidebar {
     impl FrostedSidebarBox {
         pub fn new(
             sidebar_child: &impl IsA<gtk4::Widget>,
-            backdrop_source: &impl IsA<gtk4::Widget>,
+            backdrop_stack: &gtk4::Stack,
         ) -> Self {
             let obj: Self = glib::Object::new();
             sidebar_child.set_parent(&obj);
 
-            let paintable = gtk4::WidgetPaintable::new(Some(backdrop_source));
+            let paintable = gtk4::WidgetPaintable::new(Some(backdrop_stack));
             let obj_weak = obj.downgrade();
+            let stack_weak = backdrop_stack.downgrade();
             paintable.connect_invalidate_contents(move |_| {
-                if let Some(host) = obj_weak.upgrade() {
-                    if !host.imp().snapshotting.get() && host.is_mapped() {
+                if let (Some(host), Some(st)) = (obj_weak.upgrade(), stack_weak.upgrade()) {
+                    let is_bleed = st
+                        .visible_child()
+                        .map(|c| c.has_css_class("wp-bleed-pane"))
+                        .unwrap_or(false);
+                    if is_bleed && !host.imp().snapshotting.get() && host.is_mapped() {
                         host.queue_draw();
                     }
                 }
             });
-            *obj.imp().backdrop.borrow_mut() = Some((paintable, backdrop_source.as_ref().downgrade()));
+            let obj_weak_vis = obj.downgrade();
+            backdrop_stack.connect_visible_child_notify(move |_| {
+                if let Some(host) = obj_weak_vis.upgrade() {
+                    if host.is_mapped() {
+                        host.queue_draw();
+                    }
+                }
+            });
+            *obj.imp().backdrop.borrow_mut() = Some((paintable, backdrop_stack.downgrade()));
             obj
         }
     }
@@ -3253,9 +3270,9 @@ mod tests {
             filter.name().as_deref(),
             Some("Archivos de imagen (*.jpg, *.png, *.webp, *.svg)")
         );
-        let filters = gtk4::gio::ListStore::new::<FileFilter>();
+        let filters = gtk4::gio::ListStore::new::<gtk4::FileFilter>();
         filters.append(&filter);
-        let dialog = FileDialog::builder()
+        let dialog = gtk4::FileDialog::builder()
             .title("Seleccionar fondo de pantalla")
             .accept_label("Establecer Fondo")
             .modal(true)

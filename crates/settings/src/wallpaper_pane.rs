@@ -479,16 +479,197 @@ fn draw_aurora_gradient_in_context(
     let _ = cr.fill();
 }
 
-fn load_thumbnail_pixbuf(path: &Path, target_w: i32, target_h: i32) -> Option<gdk_pixbuf::Pixbuf> {
-    let loaded = gdk_pixbuf::Pixbuf::from_file_at_scale(
-        path,
-        target_w.max(64) * 2,
-        target_h.max(64) * 2,
-        true,
+struct DecodedThumb {
+    key: (PathBuf, i32),
+    width: i32,
+    height: i32,
+    rowstride: i32,
+    has_alpha: bool,
+    pixels: Option<Vec<u8>>,
+}
+
+thread_local! {
+    static THUMB_PIXBUF_CACHE: RefCell<HashMap<(PathBuf, i32), Option<gdk_pixbuf::Pixbuf>>> =
+        RefCell::new(HashMap::new());
+    static THUMB_WAITERS: RefCell<HashMap<(PathBuf, i32), Vec<gtk4::glib::WeakRef<DrawingArea>>>> =
+        RefCell::new(HashMap::new());
+    static THUMB_REQ_TX: RefCell<Option<std::sync::mpsc::Sender<(PathBuf, i32, i32)>>> =
+        const { RefCell::new(None) };
+}
+
+fn disk_thumb_cache_path(path: &Path, req_w: i32) -> Option<PathBuf> {
+    let meta = std::fs::metadata(path).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in path.to_string_lossy().as_bytes() {
+        hash ^= *b as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    for v in [meta.len(), mtime, req_w as u64] {
+        for b in v.to_le_bytes() {
+            hash ^= b as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    let cache_root = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            PathBuf::from(home).join(".cache")
+        });
+    Some(
+        cache_root
+            .join("malus-de")
+            .join("wallpaper-thumbs")
+            .join(format!("{hash:016x}.png")),
     )
-    .ok()?;
-    let pb = loaded.apply_embedded_orientation().unwrap_or(loaded);
-    Some(pb)
+}
+
+fn decode_thumbnail_off_main(path: &Path, req_w: i32, req_h: i32) -> Option<gdk_pixbuf::Pixbuf> {
+    if let Some(cache_path) = disk_thumb_cache_path(path, req_w) {
+        if cache_path.is_file() {
+            if let Ok(pb) = gdk_pixbuf::Pixbuf::from_file(&cache_path) {
+                return Some(pb);
+            }
+        }
+        let loaded = gdk_pixbuf::Pixbuf::from_file_at_scale(path, req_w, req_h, true).ok()?;
+        let pb = loaded.apply_embedded_orientation().unwrap_or(loaded);
+        if let Some(parent) = cache_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = pb.savev(&cache_path, "png", &[]);
+        return Some(pb);
+    }
+    let loaded = gdk_pixbuf::Pixbuf::from_file_at_scale(path, req_w, req_h, true).ok()?;
+    Some(loaded.apply_embedded_orientation().unwrap_or(loaded))
+}
+
+fn ensure_thumb_worker() -> std::sync::mpsc::Sender<(PathBuf, i32, i32)> {
+    THUMB_REQ_TX.with(|cell| {
+        if let Some(ref tx) = *cell.borrow() {
+            return tx.clone();
+        }
+        let (req_tx, req_rx) = std::sync::mpsc::channel::<(PathBuf, i32, i32)>();
+        let (res_tx, res_rx) = async_channel::unbounded::<DecodedThumb>();
+
+        // Pool ligero de 2 hilos para decodificar miniaturas en paralelo fuera del hilo GTK
+        let shared_rx = std::sync::Arc::new(std::sync::Mutex::new(req_rx));
+        for _ in 0..2 {
+            let rx_c = shared_rx.clone();
+            let tx_c = res_tx.clone();
+            std::thread::spawn(move || {
+                while let Ok(item) = {
+                    let guard = rx_c.lock().ok();
+                    guard.and_then(|g| g.recv().ok()).ok_or(())
+                } {
+                    let (path, req_w, req_h) = item;
+                    let decoded = decode_thumbnail_off_main(&path, req_w, req_h).map(|pb| {
+                        let width = pb.width();
+                        let height = pb.height();
+                        let rowstride = pb.rowstride();
+                        let has_alpha = pb.has_alpha();
+                        let pixels = pb.read_pixel_bytes().as_ref().to_vec();
+                        (width, height, rowstride, has_alpha, pixels)
+                    });
+                    let msg = match decoded {
+                        Some((width, height, rowstride, has_alpha, pixels)) => DecodedThumb {
+                            key: (path, req_w),
+                            width,
+                            height,
+                            rowstride,
+                            has_alpha,
+                            pixels: Some(pixels),
+                        },
+                        None => DecodedThumb {
+                            key: (path, req_w),
+                            width: 0,
+                            height: 0,
+                            rowstride: 0,
+                            has_alpha: false,
+                            pixels: None,
+                        },
+                    };
+                    let _ = tx_c.send_blocking(msg);
+                }
+            });
+        }
+
+        gtk4::glib::spawn_future_local(async move {
+            while let Ok(msg) = res_rx.recv().await {
+                let pb = msg.pixels.map(|bytes| {
+                    gdk_pixbuf::Pixbuf::from_bytes(
+                        &gtk4::glib::Bytes::from_owned(bytes),
+                        gdk_pixbuf::Colorspace::Rgb,
+                        msg.has_alpha,
+                        8,
+                        msg.width,
+                        msg.height,
+                        msg.rowstride,
+                    )
+                });
+                THUMB_PIXBUF_CACHE.with(|cache| {
+                    cache.borrow_mut().insert(msg.key.clone(), pb);
+                });
+                let waiters = THUMB_WAITERS.with(|w| w.borrow_mut().remove(&msg.key));
+                if let Some(list) = waiters {
+                    for weak in list {
+                        if let Some(area) = weak.upgrade() {
+                            area.queue_draw();
+                        }
+                    }
+                }
+            }
+        });
+
+        *cell.borrow_mut() = Some(req_tx.clone());
+        req_tx
+    })
+}
+
+fn get_or_request_thumbnail_pixbuf(
+    path: &Path,
+    target_w: i32,
+    target_h: i32,
+    area: &DrawingArea,
+) -> Option<gdk_pixbuf::Pixbuf> {
+    let req_w = target_w.max(64) * 2;
+    let req_h = target_h.max(64) * 2;
+    let key = (path.to_path_buf(), req_w);
+
+    if let Some(cached) = THUMB_PIXBUF_CACHE.with(|c| c.borrow().get(&key).cloned()) {
+        return cached;
+    }
+
+    // Si la miniatura ya está precalculada en disco (~0.3 ms), cargarla directo sin esperar
+    if let Some(cache_path) = disk_thumb_cache_path(path, req_w) {
+        if cache_path.is_file() {
+            if let Ok(pb) = gdk_pixbuf::Pixbuf::from_file(&cache_path) {
+                THUMB_PIXBUF_CACHE.with(|c| {
+                    c.borrow_mut().insert(key, Some(pb.clone()));
+                });
+                return Some(pb);
+            }
+        }
+    }
+
+    let should_enqueue = THUMB_WAITERS.with(|w| {
+        let mut map = w.borrow_mut();
+        let entry = map.entry(key.clone()).or_default();
+        let is_first = entry.is_empty();
+        entry.push(area.downgrade());
+        is_first
+    });
+
+    if should_enqueue {
+        let tx = ensure_thumb_worker();
+        let _ = tx.send((path.to_path_buf(), req_w, req_h));
+    }
+    None
 }
 
 fn draw_pixbuf_cover(
@@ -833,19 +1014,14 @@ fn make_thumbnail_tile(
         .css_classes(["wp-thumb-area"])
         .build();
 
-    let (pb_primary, pb_secondary, is_dynamic) = match &item.kind {
-        WallpaperKind::AuroraGradient => (None, None, true),
-        WallpaperKind::DynamicPair { light, dark } => (
-            load_thumbnail_pixbuf(light, 114, 70),
-            load_thumbnail_pixbuf(dark, 114, 70),
-            true,
-        ),
-        WallpaperKind::StaticImage(p) => (load_thumbnail_pixbuf(p, 114, 70), None, false),
-    };
+    let is_dynamic = matches!(
+        item.kind,
+        WallpaperKind::AuroraGradient | WallpaperKind::DynamicPair { .. }
+    );
 
     let item_for_draw = item.clone();
     let is_active_draw = is_active_fn.clone();
-    area.set_draw_func(move |_, cr, width, height| {
+    area.set_draw_func(move |area_self, cr, width, height| {
         let w = width as f64;
         let h = height as f64;
         if w <= 2.0 || h <= 2.0 {
@@ -869,27 +1045,31 @@ fn make_thumbnail_tile(
                 draw_aurora_gradient_in_context(cr, 0.0, 0.0, w, h, true);
                 let _ = cr.restore();
             }
-            WallpaperKind::DynamicPair { .. } => {
-                if let Some(ref light_pb) = pb_primary {
+            WallpaperKind::DynamicPair { light, dark } => {
+                let light_pb = get_or_request_thumbnail_pixbuf(light, 114, 70, area_self);
+                let dark_pb = get_or_request_thumbnail_pixbuf(dark, 114, 70, area_self);
+                cr.set_source_rgba(0.18, 0.21, 0.27, 0.45);
+                let _ = cr.paint();
+                if let Some(ref lpb) = light_pb {
                     let _ = cr.save();
                     cr.rectangle(0.0, 0.0, w * 0.5, h);
                     cr.clip();
-                    draw_pixbuf_cover(cr, light_pb, w, h);
+                    draw_pixbuf_cover(cr, lpb, w, h);
                     let _ = cr.restore();
                 }
-                if let Some(ref dark_pb) = pb_secondary {
+                if let Some(ref dpb) = dark_pb {
                     let _ = cr.save();
                     cr.rectangle(w * 0.5, 0.0, w * 0.5, h);
                     cr.clip();
-                    draw_pixbuf_cover(cr, dark_pb, w, h);
+                    draw_pixbuf_cover(cr, dpb, w, h);
                     let _ = cr.restore();
                 }
             }
-            WallpaperKind::StaticImage(_) => {
-                if let Some(ref pb) = pb_primary {
-                    draw_pixbuf_cover(cr, pb, w, h);
+            WallpaperKind::StaticImage(p) => {
+                if let Some(pb) = get_or_request_thumbnail_pixbuf(p, 114, 70, area_self) {
+                    draw_pixbuf_cover(cr, &pb, w, h);
                 } else {
-                    cr.set_source_rgb(0.18, 0.22, 0.28);
+                    cr.set_source_rgba(0.18, 0.21, 0.27, 0.45);
                     let _ = cr.paint();
                 }
             }
@@ -1108,12 +1288,9 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
         .valign(Align::Center)
         .build();
 
-    let preview_cache: Rc<RefCell<Option<(PathBuf, gdk_pixbuf::Pixbuf)>>> =
-        Rc::new(RefCell::new(None));
     {
         let cfg_draw = cfg_state.clone();
-        let cache_draw = preview_cache.clone();
-        hero_preview.set_draw_func(move |_, cr, width, height| {
+        hero_preview.set_draw_func(move |area_self, cr, width, height| {
             let w = width as f64;
             let h = height as f64;
             if w <= 2.0 || h <= 2.0 {
@@ -1136,19 +1313,9 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
                 }
                 WallpaperMode::Image | WallpaperMode::DynamicPair => {
                     if let Some(img_path) = resolve_active_image_for_preview(&cfg) {
-                        let pb = {
-                            let mut cached = cache_draw.borrow_mut();
-                            if cached.as_ref().map(|(p, _)| p == &img_path).unwrap_or(false) {
-                                cached.as_ref().map(|(_, p)| p.clone())
-                            } else {
-                                let loaded = load_thumbnail_pixbuf(&img_path, 328, 200);
-                                if let Some(ref ok) = loaded {
-                                    *cached = Some((img_path, ok.clone()));
-                                }
-                                loaded
-                            }
-                        };
-                        if let Some(pb) = pb {
+                        if let Some(pb) =
+                            get_or_request_thumbnail_pixbuf(&img_path, 164, 100, area_self)
+                        {
                             draw_pixbuf_with_fit(cr, &pb, w, h, cfg.fit_mode);
                         } else {
                             draw_aurora_gradient_in_context(
@@ -1916,6 +2083,10 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
         });
     }
 
+    let built_once = Rc::new(Cell::new(false));
+    let last_item_counts: Rc<Cell<(usize, usize, usize, usize)>> =
+        Rc::new(Cell::new((0, 0, 0, 0)));
+
     let refresh_pane: Rc<dyn Fn()> = {
         let cfg_c = cfg_state.clone();
         let dyn_items_c = dyn_items.clone();
@@ -1927,17 +2098,30 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
         let rebuild_i = rebuild_images_grid.clone();
         let rebuild_col = rebuild_colors_grid.clone();
         let sync_c = sync_visuals.clone();
+        let built_c = built_once.clone();
+        let counts_c = last_item_counts.clone();
         Rc::new(move || {
             let loaded = WallpaperConfig::load();
-            *cfg_c.borrow_mut() = loaded.clone();
-            *dyn_items_c.borrow_mut() = discover_dynamic_wallpapers();
-            *photos_c.borrow_mut() = discover_user_photos(&loaded);
-            *img_items_c.borrow_mut() = discover_system_images();
-            ref_c.borrow_mut().clear();
-            rebuild_d();
-            rebuild_p();
-            rebuild_i();
-            rebuild_col();
+            let custom_col_count = loaded.custom_colors.len();
+            let custom_photo_count = loaded.custom_photos.len();
+            *cfg_c.borrow_mut() = loaded;
+            let next_counts = (
+                dyn_items_c.borrow().len(),
+                custom_photo_count,
+                img_items_c.borrow().len(),
+                custom_col_count,
+            );
+            if !built_c.get() || counts_c.get() != next_counts {
+                built_c.set(true);
+                counts_c.set(next_counts);
+                let cfg_snap = cfg_c.borrow().clone();
+                *photos_c.borrow_mut() = discover_user_photos(&cfg_snap);
+                ref_c.borrow_mut().clear();
+                rebuild_d();
+                rebuild_p();
+                rebuild_i();
+                rebuild_col();
+            }
             sync_c();
         })
     };

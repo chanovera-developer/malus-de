@@ -89,7 +89,8 @@ paned.settings-main-paned > separator {
 }
 
 .settings-content-pane {
-    background-color: @view_bg_color;
+    background-color: transparent;
+    background-image: linear-gradient(to right, transparent 212px, @view_bg_color 212px);
     color: @view_fg_color;
 }
 
