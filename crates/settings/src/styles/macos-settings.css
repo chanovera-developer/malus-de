@@ -1496,7 +1496,7 @@ scale.bat-limit-slider marks {
 }
 
 scale.disp-bright-slider {
-    padding: 6px 0px;
+    padding: 8px 4px 4px 4px;
 }
 
 scale.disp-bright-slider trough {
@@ -1522,8 +1522,15 @@ scale.disp-bright-slider slider {
 }
 
 scale.disp-bright-slider marks {
-    font-size: 10px;
+    margin-top: 8px;
+    padding-top: 2px;
+    font-size: 10.5px;
     color: alpha(@window_fg_color, 0.62);
+}
+
+scale.disp-bright-slider marks indicator {
+    min-height: 5px;
+    color: alpha(@window_fg_color, 0.28);
 }
 
 button.disp-bright-preset-btn {

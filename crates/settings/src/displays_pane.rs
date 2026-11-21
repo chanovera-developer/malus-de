@@ -1671,7 +1671,7 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
 
     let bright_presets_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(4)
+        .spacing(6)
         .valign(Align::Center)
         .build();
     let mut bright_preset_buttons: Vec<(f64, Button)> = Vec::new();
@@ -1732,7 +1732,9 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
 
     let bright_controls = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(10)
+        .spacing(12)
+        .margin_top(6)
+        .margin_bottom(6)
         .hexpand(true)
         .valign(Align::Center)
         .build();
@@ -1740,6 +1742,8 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
         &Image::builder()
             .icon_name("display-brightness-low-symbolic")
             .pixel_size(14)
+            .valign(Align::Start)
+            .margin_top(10)
             .css_classes(["wp-add-photo-icon"])
             .build(),
     );
@@ -1763,6 +1767,8 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
         &Image::builder()
             .icon_name("display-brightness-symbolic")
             .pixel_size(16)
+            .valign(Align::Start)
+            .margin_top(9)
             .css_classes(["wp-add-photo-icon"])
             .build(),
     );
