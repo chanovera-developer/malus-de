@@ -394,6 +394,11 @@ pub fn create_system_menu() -> MenuButton {
     });
     content_box.append(&item_logout);
 
+    let recent_btn_c = item_recent.clone();
+    popover.connect_show(move |_| {
+        let limit = malus_de_common::config::MenuBarConfig::load().recent_items_count;
+        recent_btn_c.set_visible(limit > 0);
+    });
     popover.set_child(Some(&content_box));
     crate::ui::theme::register_popover(&popover);
     menu_btn.set_popover(Some(&popover));

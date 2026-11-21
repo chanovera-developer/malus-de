@@ -51,6 +51,8 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
     static TOPBAR_APPEARANCE_MONITOR: std::cell::RefCell<Option<gtk4::gio::FileMonitor>> =
         const { std::cell::RefCell::new(None) };
+    static TOPBAR_MENUBAR_MONITOR: std::cell::RefCell<Option<gtk4::gio::FileMonitor>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 fn apply_topbar_accent_color(index: usize) {
@@ -69,13 +71,25 @@ fn apply_topbar_liquid_glass_opacity(opacity: f64) {
     let light_pop = malus_de_common::config::scaled_liquid_glass_alpha(0.76, scale, 0.14, 0.96);
     let light_cc = malus_de_common::config::scaled_liquid_glass_alpha(0.78, scale, 0.14, 0.96);
     let bar_bg = if malus_de_common::config::MenuBarConfig::load().show_background {
-        let bar_a = malus_de_common::config::scaled_liquid_glass_alpha(0.44, scale, 0.14, 0.85);
+        let bar_a = malus_de_common::config::scaled_liquid_glass_alpha(0.46, scale, 0.16, 0.86);
         format!(
-            "window.malus-topbar {{ background-color: alpha(@window_bg_color, {bar_a:.3}); \
-             border-bottom: 1px solid alpha(@borders, 0.18); }}"
+            "window.malus-topbar, \
+             window.malus-topbar.background, \
+             window.malus-topbar decoration {{ \
+                 background-image: none; \
+                 background-color: alpha(@window_bg_color, {bar_a:.3}); \
+                 border-bottom: 1px solid alpha(@borders, 0.22); \
+             }}"
         )
     } else {
-        "window.malus-topbar { background-color: transparent; border-bottom: none; }".to_string()
+        "window.malus-topbar, \
+         window.malus-topbar.background, \
+         window.malus-topbar decoration { \
+             background: transparent; \
+             background-color: transparent; \
+             border-bottom: none; \
+         }"
+        .to_string()
     };
     let css = format!(
         "{bar_bg} \
@@ -161,6 +175,22 @@ fn load_css() {
         });
         TOPBAR_APPEARANCE_MONITOR.with(|cell| {
             *cell.borrow_mut() = Some(monitor);
+        });
+    }
+
+    let menubar_file =
+        gtk4::gio::File::for_path(malus_de_common::config::MenuBarConfig::config_path());
+    if let Ok(mb_monitor) = menubar_file.monitor_file(
+        gtk4::gio::FileMonitorFlags::NONE,
+        gtk4::gio::Cancellable::NONE,
+    ) {
+        mb_monitor.connect_changed(|_, _, _, _| {
+            apply_topbar_liquid_glass_opacity(malus_de_common::config::load_liquid_glass_opacity());
+            ui::status_tray::refresh_tray_visibility();
+            ui::clock::refresh_clock_now();
+        });
+        TOPBAR_MENUBAR_MONITOR.with(|cell| {
+            *cell.borrow_mut() = Some(mb_monitor);
         });
     }
 }
@@ -260,7 +290,13 @@ fn build_ui(app: &Application) {
         ui::theme::update_all_popovers_theme(is_dark);
     });
 
+    let has_active_app = std::rc::Rc::new(std::cell::Cell::new(false));
+    let sync_bar_slot: std::rc::Rc<std::cell::RefCell<Option<std::rc::Rc<dyn Fn()>>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(None));
+
     let win_ipc = window.clone();
+    let active_app_ipc = has_active_app.clone();
+    let sync_slot_ipc = sync_bar_slot.clone();
     glib::spawn_future_local(async move {
         while let Ok(msg) = rx.recv().await {
             match msg {
@@ -269,6 +305,10 @@ fn build_ui(app: &Application) {
                     title,
                     window_id,
                 } => {
+                    active_app_ipc.set(app_id.as_ref().is_some_and(|id| !id.is_empty()));
+                    if let Some(ref f) = *sync_slot_ipc.borrow() {
+                        f();
+                    }
                     let display = format_app_name(app_id.as_deref(), title.as_deref());
                     title_label.set_label(&display);
                     let es = std::env::var("LC_ALL")
@@ -328,6 +368,9 @@ fn build_ui(app: &Application) {
                     );
                     ui::status_tray::refresh_tray_visibility();
                     ui::clock::refresh_clock_now();
+                    if let Some(ref f) = *sync_slot_ipc.borrow() {
+                        f();
+                    }
                     win_ipc.queue_draw();
                 }
                 _ => {}
@@ -383,8 +426,85 @@ fn build_ui(app: &Application) {
     root_box.append(&center_spacer);
     root_box.append(&right_box);
 
-    window.set_child(Some(&root_box));
+    let revealer = gtk4::Revealer::builder()
+        .transition_type(gtk4::RevealerTransitionType::SlideDown)
+        .transition_duration(180)
+        .reveal_child(true)
+        .child(&root_box)
+        .build();
+
+    let bar_hovered = std::rc::Rc::new(std::cell::Cell::new(false));
+    let sync_bar_vis: std::rc::Rc<dyn Fn()> = {
+        let win_c = window.clone();
+        let rev_c = revealer.clone();
+        let hov_c = bar_hovered.clone();
+        let act_c = has_active_app;
+        std::rc::Rc::new(move || {
+            let mode = malus_de_common::config::MenuBarConfig::load().auto_hide_mode;
+            if gtk4_layer_shell::is_supported() {
+                match mode {
+                    3 => {
+                        win_c.set_layer(Layer::Overlay);
+                        win_c.auto_exclusive_zone_enable();
+                    }
+                    1 | 2 => {
+                        win_c.set_layer(Layer::Top);
+                        win_c.set_exclusive_zone(0);
+                    }
+                    _ => {
+                        win_c.set_layer(Layer::Top);
+                        win_c.auto_exclusive_zone_enable();
+                    }
+                }
+            }
+            let should_show = match mode {
+                1 => hov_c.get(),
+                2 => !act_c.get() || hov_c.get(),
+                _ => true,
+            };
+            rev_c.set_reveal_child(should_show);
+            if let Some(surface) = win_c.surface() {
+                let w = win_c.width().max(1);
+                let h = if should_show { 36 } else { 2 };
+                let region = gtk4::cairo::Region::create_rectangle(
+                    &gtk4::cairo::RectangleInt::new(0, 0, w, h),
+                );
+                surface.set_input_region(&region);
+            }
+        })
+    };
+    *sync_bar_slot.borrow_mut() = Some(sync_bar_vis.clone());
+
+    let motion = gtk4::EventControllerMotion::new();
+    {
+        let hov_enter = bar_hovered.clone();
+        let sync_enter = sync_bar_vis.clone();
+        motion.connect_enter(move |_, _, _| {
+            hov_enter.set(true);
+            sync_enter();
+        });
+    }
+    {
+        let hov_leave = bar_hovered;
+        let sync_leave = sync_bar_vis.clone();
+        motion.connect_leave(move |_| {
+            hov_leave.set(false);
+            sync_leave();
+        });
+    }
+    window.add_controller(motion);
+
+    {
+        let sync_t = sync_bar_vis.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(600), move || {
+            sync_t();
+            glib::ControlFlow::Continue
+        });
+    }
+
+    window.set_child(Some(&revealer));
     window.present();
+    sync_bar_vis();
 }
 
 fn find_primary_gdk_monitor(

@@ -317,6 +317,20 @@ pub fn create_control_center_widget() -> MenuButton {
     circles_row.append(&night_shift_quick_btn);
     main_box.append(&circles_row);
 
+    let bat_cc_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(6)
+        .css_classes(["cc-tile-subtitle"])
+        .halign(Align::Center)
+        .visible(false)
+        .build();
+    let bat_cc_icon = Image::from_icon_name("battery-level-100-symbolic");
+    bat_cc_icon.set_pixel_size(14);
+    let bat_cc_lbl = Label::builder().css_classes(["cc-tile-subtitle"]).build();
+    bat_cc_row.append(&bat_cc_icon);
+    bat_cc_row.append(&bat_cc_lbl);
+    main_box.append(&bat_cc_row);
+
     let edit_controls_btn = Button::builder()
         .css_classes(["cc-edit-controls-btn"])
         .label(if is_es {
@@ -553,6 +567,7 @@ pub fn create_control_center_widget() -> MenuButton {
         let mut command = Command::new(&exe);
         malus_de_common::config::set_cursor_environment(&mut command);
         let _ = command
+            .args(["--panel", "menubar"])
             .env("WAYLAND_DISPLAY", &wayland_display)
             .env("GDK_BACKEND", "wayland")
             .env("GSK_RENDERER", "cairo")
@@ -631,8 +646,30 @@ pub fn create_control_center_widget() -> MenuButton {
     let br_ico = disp_icon.clone();
     let br_lock = is_updating_brightness.clone();
     let ns_btn = night_shift_quick_btn.clone();
+    let circles_row_c = circles_row;
+    let media_card_c = media_card;
+    let bat_cc_row_c = bat_cc_row;
+    let bat_cc_ico_c = bat_cc_icon;
+    let bat_cc_lbl_c = bat_cc_lbl;
 
     popover.connect_show(move |pop| {
+        let mb_cfg = malus_de_common::config::MenuBarConfig::load();
+        circles_row_c.set_visible(mb_cfg.show_gallery_suggestions);
+        media_card_c.set_visible(mb_cfg.now_playing);
+        f_btn.set_visible(mb_cfg.focus_mode != 2);
+        if mb_cfg.battery_show_in_control_center {
+            if let Some((pct, status)) = super::menubar_extras::read_system_battery() {
+                let charging = status.eq_ignore_ascii_case("Charging");
+                bat_cc_ico_c.set_icon_name(Some(super::menubar_extras::battery_icon_name(pct, charging)));
+                bat_cc_lbl_c.set_label(&format!("Batería: {pct}%"));
+                bat_cc_row_c.set_visible(true);
+            } else {
+                bat_cc_row_c.set_visible(false);
+            }
+        } else {
+            bat_cc_row_c.set_visible(false);
+        }
+
         stack_pop.set_visible_child_name("main");
         update_dark_mode_ui(&d_btn, &d_ico, &d_sub, Some(pop));
         update_focus_tahoe_ui(&f_btn, &f_ico);

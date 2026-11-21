@@ -55,7 +55,11 @@ pub fn create_status_tray_widget() -> GtkBox {
     let spotlight_btn = create_spotlight_button();
     tray.append(&spotlight_btn);
 
-    // 6. Centro de Control macOS Unificado (Esquina derecha junto al Reloj)
+    // 6. Módulos adicionales configurables desde Barra de menús (Batería, Enfoque, Ahora suena, Pantalla, Usuario, Clima, Temporizador...)
+    let extras = super::menubar_extras::create_menubar_extra_widgets();
+    extras.append_to(&tray);
+
+    // 7. Centro de Control macOS Unificado (Esquina derecha junto al Reloj)
     let cc_widget = super::control_center::create_control_center_widget();
     tray.append(&cc_widget);
 
@@ -67,8 +71,14 @@ pub fn create_status_tray_widget() -> GtkBox {
         wifi_widget.set_visible(cfg.wifi);
         vol_widget.set_visible(cfg.sound);
         spotlight_btn.set_visible(cfg.spotlight);
+        extras.refresh(&cfg);
     });
     apply_vis();
+    let apply_poll = apply_vis.clone();
+    glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
+        apply_poll();
+        glib::ControlFlow::Continue
+    });
     TRAY_VISIBILITY_REFRESH.with(|cell| {
         *cell.borrow_mut() = Some(apply_vis);
     });

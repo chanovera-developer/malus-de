@@ -2127,6 +2127,13 @@ impl MalusState {
                     self.ipc_broadcaster
                         .broadcast(&IpcMessage::ReloadDockConfig);
                 }
+                IpcMessage::ReloadMenuBarConfig => {
+                    tracing::info!(
+                        "📥 IPC ReloadMenuBarConfig recibido — retransmitiendo a clientes shell"
+                    );
+                    self.ipc_broadcaster
+                        .broadcast(&IpcMessage::ReloadMenuBarConfig);
+                }
                 msg @ (IpcMessage::PinAppToDock { .. } | IpcMessage::UnpinAppFromDock { .. }) => {
                     self.ipc_broadcaster.broadcast(&msg);
                 }
