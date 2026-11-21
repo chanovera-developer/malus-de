@@ -152,6 +152,69 @@ impl MagicLampAnimation {
     }
 }
 
+/// Parámetros de cuadro unificados para renderizar la minimización/restauración (Genie o Escala).
+#[derive(Clone, Copy)]
+pub struct MinimizeRenderFrame {
+    pub win_rect: GenieRect,
+    pub target_rect: GenieRect,
+    pub k: f32,
+    pub j: f32,
+    pub alpha: f32,
+    pub shadow_k: f32,
+}
+
+/// Calcula los parámetros del efecto de minimización según la preferencia activa (`use_genie`).
+/// En modo escala (`use_genie == false`) interpola el rectángulo de forma uniforme hasta el slot
+/// del Dock sin deformación en cuello ni curva S.
+pub fn compute_minimize_frame(
+    win_rect: GenieRect,
+    target_rect: GenieRect,
+    raw_progress: f32,
+    is_minimizing: bool,
+    use_genie: bool,
+) -> MinimizeRenderFrame {
+    if use_genie {
+        let (k, j, alpha) =
+            MagicLampAnimation::new(win_rect, target_rect, raw_progress, is_minimizing).params();
+        MinimizeRenderFrame {
+            win_rect,
+            target_rect,
+            k,
+            j,
+            alpha,
+            shadow_k: k,
+        }
+    } else {
+        let t = raw_progress.clamp(0.0, 1.0);
+        let eased = if is_minimizing {
+            1.0 - (1.0 - t).powf(2.4)
+        } else {
+            (1.0 - t).powf(2.4)
+        };
+        let target_w = target_rect.width.max(24.0);
+        let target_h = target_rect.height.max(24.0);
+        let scaled_rect = GenieRect {
+            x: win_rect.x + (target_rect.x - win_rect.x) * eased,
+            y: win_rect.y + (target_rect.y - win_rect.y) * eased,
+            width: (win_rect.width + (target_w - win_rect.width) * eased).max(2.0),
+            height: (win_rect.height + (target_h - win_rect.height) * eased).max(2.0),
+        };
+        let alpha = if eased > 0.88 {
+            ((1.0 - eased) / 0.12).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        MinimizeRenderFrame {
+            win_rect: scaled_rect,
+            target_rect: scaled_rect,
+            k: 0.0,
+            j: 0.0,
+            alpha,
+            shadow_k: (eased * 0.45).clamp(0.0, 0.45),
+        }
+    }
+}
+
 const GENIE_VERT_SRC: &str = r#"#version 300 es
 precision highp float;
 
@@ -558,5 +621,35 @@ mod tests {
             prev_k = k;
         }
         assert!(prev_k < 0.001);
+    }
+
+    #[test]
+    fn scale_minimize_effect_interpolates_uniformly_without_genie_warp() {
+        let window = rect(100.0, 80.0, 800.0, 600.0);
+        let target = rect(500.0, 960.0, 64.0, 48.0);
+
+        let start = super::compute_minimize_frame(window, target, 0.0, true, false);
+        assert_eq!(start.k, 0.0);
+        assert_eq!(start.j, 0.0);
+        assert!((start.win_rect.x - window.x).abs() < 0.001);
+        assert!((start.win_rect.width - window.width).abs() < 0.001);
+        assert!((start.alpha - 1.0).abs() < 0.001);
+
+        let mid = super::compute_minimize_frame(window, target, 0.5, true, false);
+        assert_eq!(mid.k, 0.0);
+        assert_eq!(mid.j, 0.0);
+        assert!(mid.win_rect.width < window.width && mid.win_rect.width > target.width);
+        assert!(mid.win_rect.y > window.y && mid.win_rect.y < target.y);
+
+        let end = super::compute_minimize_frame(window, target, 1.0, true, false);
+        assert!((end.win_rect.x - target.x).abs() < 0.001);
+        assert!((end.win_rect.y - target.y).abs() < 0.001);
+        assert!((end.win_rect.width - target.width).abs() < 0.001);
+        assert!((end.win_rect.height - target.height).abs() < 0.001);
+
+        let restore_start = super::compute_minimize_frame(window, target, 0.0, false, false);
+        assert!((restore_start.win_rect.width - target.width).abs() < 0.001);
+        let restore_end = super::compute_minimize_frame(window, target, 1.0, false, false);
+        assert!((restore_end.win_rect.width - window.width).abs() < 0.001);
     }
 }

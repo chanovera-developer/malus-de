@@ -2687,13 +2687,13 @@ pub fn run_winit() -> Result<()> {
                                         width: anim.dock_slot_rect.size.w as f32,
                                         height: anim.dock_slot_rect.size.h as f32,
                                     };
-                                    let (k, j, alpha) = crate::magic_lamp::MagicLampAnimation::new(
+                                    let mf = crate::magic_lamp::compute_minimize_frame(
                                         win_rect,
                                         target,
                                         raw_t,
                                         anim.is_minimizing,
-                                    )
-                                    .params();
+                                        state.dock_cfg.genie_effect,
+                                    );
                                     let is_fullscreen_or_max = anim
                                         .window
                                         .toplevel()
@@ -2712,11 +2712,11 @@ pub fn run_winit() -> Result<()> {
                                         shadow.render_genie_shadow(
                                             gl,
                                             &projection,
-                                            win_rect,
+                                            mf.win_rect,
                                             r as f32,
                                             1.0,
-                                            k,
-                                            j,
+                                            mf.shadow_k,
+                                            mf.j,
                                             is_fullscreen_or_max,
                                         );
                                     }
@@ -2724,11 +2724,11 @@ pub fn run_winit() -> Result<()> {
                                         gl,
                                         &projection,
                                         &snap.texture,
-                                        win_rect,
-                                        target,
-                                        k,
-                                        j,
-                                        alpha,
+                                        mf.win_rect,
+                                        mf.target_rect,
+                                        mf.k,
+                                        mf.j,
+                                        mf.alpha,
                                     );
                                 }
                             });

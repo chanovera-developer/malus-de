@@ -6425,14 +6425,13 @@ pub fn run_drm() -> Result<()> {
                                             height: (anim.dock_slot_rect.size.h as f64 * scale)
                                                 as f32,
                                         };
-                                        let (k, j, alpha) =
-                                            crate::magic_lamp::MagicLampAnimation::new(
-                                                win_rect,
-                                                target,
-                                                raw_t,
-                                                anim.is_minimizing,
-                                            )
-                                            .params();
+                                        let mf = crate::magic_lamp::compute_minimize_frame(
+                                            win_rect,
+                                            target,
+                                            raw_t,
+                                            anim.is_minimizing,
+                                            state.dock_cfg.genie_effect,
+                                        );
                                         let is_fullscreen_or_max = anim
                                             .window
                                             .toplevel()
@@ -6451,11 +6450,11 @@ pub fn run_drm() -> Result<()> {
                                             shadow.render_genie_shadow(
                                                 gl,
                                                 &projection,
-                                                win_rect,
+                                                mf.win_rect,
                                                 r as f32,
                                                 scale,
-                                                k,
-                                                j,
+                                                mf.shadow_k,
+                                                mf.j,
                                                 is_fullscreen_or_max,
                                             );
                                         }
@@ -6463,11 +6462,11 @@ pub fn run_drm() -> Result<()> {
                                             gl,
                                             &projection,
                                             &snap.texture,
-                                            win_rect,
-                                            target,
-                                            k,
-                                            j,
-                                            alpha,
+                                            mf.win_rect,
+                                            mf.target_rect,
+                                            mf.k,
+                                            mf.j,
+                                            mf.alpha,
                                         );
                                     }
                                 });
