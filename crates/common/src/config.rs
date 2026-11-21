@@ -2079,6 +2079,8 @@ pub struct MenuBarConfig {
     pub timer: bool,
     pub timer_mode: u8,
     pub weather: bool,
+    pub power_profile: bool,
+    pub window_tiling: bool,
 }
 
 impl Default for MenuBarConfig {
@@ -2119,6 +2121,8 @@ impl Default for MenuBarConfig {
             timer: true,
             timer_mode: 1,
             weather: false,
+            power_profile: true,
+            window_tiling: true,
         }
     }
 }

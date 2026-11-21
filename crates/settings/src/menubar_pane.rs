@@ -274,6 +274,26 @@ fn control_specs() -> Vec<MenuBarControlSpec> {
             set_checked: |c, v| c.weather = v,
             extra: ControlRowExtra::None,
         },
+        MenuBarControlSpec {
+            label: "Perfil de rendimiento",
+            icon_name: "power-profile-balanced-symbolic",
+            top_rgb: (0.28, 0.76, 0.52),
+            bot_rgb: (0.16, 0.62, 0.39),
+            has_checkbox: true,
+            get_checked: |c| c.power_profile,
+            set_checked: |c, v| c.power_profile = v,
+            extra: ControlRowExtra::None,
+        },
+        MenuBarControlSpec {
+            label: "Ordenamiento de ventanas",
+            icon_name: "view-grid-symbolic",
+            top_rgb: (0.36, 0.52, 0.96),
+            bot_rgb: (0.22, 0.37, 0.85),
+            has_checkbox: true,
+            get_checked: |c| c.window_tiling,
+            set_checked: |c, v| c.window_tiling = v,
+            extra: ControlRowExtra::None,
+        },
     ]
 }
 
@@ -1243,6 +1263,8 @@ mod tests {
                 "Brillo del teclado",
                 "Temporizador",
                 "Clima",
+                "Perfil de rendimiento",
+                "Ordenamiento de ventanas",
             ]
         );
         assert!(!specs[0].has_checkbox);

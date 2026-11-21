@@ -227,6 +227,8 @@ fn load_css() {
         mb_monitor.connect_changed(|_, _, _, _| {
             apply_topbar_liquid_glass_opacity(malus_de_common::config::load_liquid_glass_opacity());
             ui::status_tray::refresh_tray_visibility();
+            ui::power_profile::refresh_power_profile_visibility();
+            ui::auto_tiling::refresh_auto_tiling_visibility();
             ui::clock::refresh_clock_now();
             ui::system_menu::refresh_system_menu_logo();
         });
@@ -409,11 +411,17 @@ fn build_ui(app: &Application) {
                         malus_de_common::config::load_liquid_glass_opacity(),
                     );
                     ui::status_tray::refresh_tray_visibility();
+                    ui::power_profile::refresh_power_profile_visibility();
+                    ui::auto_tiling::refresh_auto_tiling_visibility();
                     ui::clock::refresh_clock_now();
                     ui::system_menu::refresh_system_menu_logo();
                     if let Some(ref f) = *sync_slot_ipc.borrow() {
                         f();
                     }
+                    win_ipc.queue_draw();
+                }
+                malus_de_common::ipc::IpcMessage::AutoTilingChanged { enabled } => {
+                    ui::auto_tiling::set_auto_tiling_visual(enabled);
                     win_ipc.queue_draw();
                 }
                 _ => {}

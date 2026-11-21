@@ -2455,6 +2455,13 @@ pub fn run_drm() -> Result<()> {
                                     return FilterResult::Intercept(());
                                 }
 
+                                let is_y = sym == keysyms::KEY_y.into() || sym == keysyms::KEY_Y.into();
+                                if has_super && !has_alt && !has_ctrl && is_y {
+                                    info!("🪟 Auto-Tiling alternado vía Super+Y");
+                                    state.toggle_auto_tiling();
+                                    return FilterResult::Intercept(());
+                                }
+
                                 if state.spotlight.is_open() {
                                     state.spotlight.handle_key_press(sym, *modifiers);
                                     return FilterResult::Intercept(());

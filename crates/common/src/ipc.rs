@@ -122,6 +122,8 @@ pub enum IpcMessage {
     TriggerOcrCapture,
     /// Conmutar entre Modo Flotante y Modo Mosaico Automático (Super + Y)
     ToggleAutoTiling,
+    /// Notificación de estado activo de Auto-Tiling / Ordenamiento de ventanas
+    AutoTilingChanged { enabled: bool },
     /// Conmutar Picture-in-Picture universal para la ventana activa (Super + P)
     TogglePictureInPicture,
     /// Filtrado difuso dinámico de ventanas en Mission Control al teclear

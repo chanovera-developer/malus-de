@@ -338,6 +338,7 @@ pub struct MalusState {
     pub surface_commit_counter: usize,
     pub output_commit_counters: HashMap<String, usize>,
     pub background_commit_counter: usize,
+    pub auto_tiling_enabled: bool,
 }
 
 pub fn guess_icon_name(app_id: &str, title: &str) -> String {
@@ -1369,6 +1370,7 @@ impl MalusState {
             surface_commit_counter: 0,
             output_commit_counters: HashMap::new(),
             background_commit_counter: 0,
+            auto_tiling_enabled: false,
         }
     }
 
@@ -2133,6 +2135,10 @@ impl MalusState {
                     );
                     self.ipc_broadcaster
                         .broadcast(&IpcMessage::ReloadMenuBarConfig);
+                }
+                IpcMessage::ToggleAutoTiling => {
+                    tracing::info!("📥 IPC ToggleAutoTiling recibido — alternando mosaico de ventanas");
+                    self.toggle_auto_tiling();
                 }
                 msg @ (IpcMessage::PinAppToDock { .. } | IpcMessage::UnpinAppFromDock { .. }) => {
                     self.ipc_broadcaster.broadcast(&msg);
@@ -4118,6 +4124,196 @@ pub fn snap_window(
 
     state.space.map_element(window.clone(), target_loc, true);
     state.space.raise_element(window, true);
+}
+
+/// Calcula rectángulos mosaico no solapados dentro de `usable_zone` para `count` ventanas.
+pub fn compute_auto_tiling_slots(
+    count: usize,
+    usable_zone: Rectangle<i32, Logical>,
+    gap: i32,
+) -> Vec<Rectangle<i32, Logical>> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let ux = usable_zone.loc.x + gap;
+    let uy = usable_zone.loc.y + gap;
+    let uw = (usable_zone.size.w - 2 * gap).max(200);
+    let uh = (usable_zone.size.h - 2 * gap).max(200);
+
+    if count == 1 {
+        return vec![Rectangle::new((ux, uy).into(), (uw, uh).into())];
+    }
+    if count == 2 {
+        let lw = (uw - gap) / 2;
+        let rw = uw - gap - lw;
+        return vec![
+            Rectangle::new((ux, uy).into(), (lw, uh).into()),
+            Rectangle::new((ux + lw + gap, uy).into(), (rw, uh).into()),
+        ];
+    }
+    if count == 3 {
+        let lw = (uw - gap) / 2;
+        let rw = uw - gap - lw;
+        let th = (uh - gap) / 2;
+        let bh = uh - gap - th;
+        return vec![
+            Rectangle::new((ux, uy).into(), (lw, uh).into()),
+            Rectangle::new((ux + lw + gap, uy).into(), (rw, th).into()),
+            Rectangle::new((ux + lw + gap, uy + th + gap).into(), (rw, bh).into()),
+        ];
+    }
+
+    let cols = (count as f64).sqrt().ceil() as usize;
+    let rows = count.div_ceil(cols);
+    let mut rects = Vec::with_capacity(count);
+    let cell_h = (uh - gap * (rows as i32 - 1)) / rows as i32;
+    let mut remaining = count;
+    for r in 0..rows {
+        let row_cols = remaining.min(cols);
+        remaining -= row_cols;
+        let y = uy + r as i32 * (cell_h + gap);
+        let h = if r + 1 == rows {
+            uh - (y - uy)
+        } else {
+            cell_h
+        };
+        let cell_w = (uw - gap * (row_cols as i32 - 1)) / row_cols as i32;
+        for c in 0..row_cols {
+            let x = ux + c as i32 * (cell_w + gap);
+            let w = if c + 1 == row_cols {
+                uw - (x - ux)
+            } else {
+                cell_w
+            };
+            rects.push(Rectangle::new((x, y).into(), (w.max(120), h.max(120)).into()));
+        }
+    }
+    rects
+}
+
+fn apply_tile_rect(
+    state: &mut MalusState,
+    window: &smithay::desktop::Window,
+    rect: Rectangle<i32, Logical>,
+) {
+    let Some(surface) = window.wl_surface() else {
+        return;
+    };
+    let surface = surface.into_owned();
+    let cur_loc = state.space.element_location(window).unwrap_or_default();
+    let cur_geo = window.geometry();
+    let (start_loc, start_size) = if let Some(existing) = state.snap_transitions.get(&surface) {
+        existing.current_geometry(Instant::now())
+    } else {
+        (cur_loc, cur_geo.size)
+    };
+    if !state.window_restore_geometries.contains_key(&surface)
+        && !is_window_snapped(window)
+        && cur_geo.size.w > 150
+        && cur_geo.size.h > 150
+    {
+        state
+            .window_restore_geometries
+            .insert(surface.clone(), (start_loc, start_size));
+    }
+
+    let ssd_top = if window_uses_ssd(window) {
+        crate::ssd::SSD_TITLEBAR_HEIGHT
+    } else {
+        0
+    };
+    let target_loc = Point::from((rect.loc.x, rect.loc.y + ssd_top));
+    let target_size = Size::from((rect.size.w.max(120), (rect.size.h - ssd_top).max(120)));
+
+    if (start_loc != target_loc || start_size != target_size)
+        && start_size.w > 0
+        && start_size.h > 0
+    {
+        state.snap_transitions.insert(
+            surface.clone(),
+            SnapTransition::new(
+                start_loc,
+                start_size,
+                target_loc,
+                target_size,
+                SNAP_TRANSITION_DURATION,
+            ),
+        );
+    } else {
+        state.snap_transitions.remove(&surface);
+    }
+
+    if let Some(toplevel) = window.toplevel() {
+        toplevel.with_pending_state(|top_state| {
+            top_state.size = Some(target_size);
+            unset_snap_states(top_state);
+        });
+        toplevel.send_configure();
+    }
+    state.space.map_element(window.clone(), target_loc, false);
+}
+
+impl MalusState {
+    /// Alterna el ordenamiento automático de ventanas (Auto-Tiling) en las pantallas activas.
+    pub fn toggle_auto_tiling(&mut self) {
+        self.auto_tiling_enabled = !self.auto_tiling_enabled;
+        let enabled = self.auto_tiling_enabled;
+        let outputs: Vec<smithay::output::Output> = self.space.outputs().cloned().collect();
+        let all_windows: Vec<smithay::desktop::Window> = self
+            .space
+            .elements()
+            .filter(|w| {
+                w.wl_surface()
+                    .is_some_and(|s| !self.minimized_windows.contains_key(s.as_ref()))
+            })
+            .cloned()
+            .collect();
+
+        if enabled {
+            for output in &outputs {
+                let usable = self.usable_zone_for_output(output);
+                let out_geo = self.space.output_geometry(output);
+                let wins: Vec<smithay::desktop::Window> = all_windows
+                    .iter()
+                    .filter(|w| {
+                        let outs = self.space.outputs_for_element(w);
+                        if !outs.is_empty() {
+                            outs.iter().any(|o| o == output)
+                        } else if let (Some(loc), Some(og)) =
+                            (self.space.element_location(w), out_geo)
+                        {
+                            og.contains(loc)
+                        } else {
+                            outputs.first() == Some(output)
+                        }
+                    })
+                    .cloned()
+                    .collect();
+                let slots = compute_auto_tiling_slots(wins.len(), usable, 8);
+                for (win, rect) in wins.into_iter().zip(slots.into_iter()) {
+                    apply_tile_rect(self, &win, rect);
+                }
+            }
+        } else {
+            let fallback = outputs
+                .first()
+                .map(|o| self.usable_zone_for_output(o))
+                .unwrap_or_else(|| Rectangle::new((0, 32).into(), (1920, 1000).into()));
+            for win in all_windows {
+                let usable = self
+                    .space
+                    .outputs_for_element(&win)
+                    .into_iter()
+                    .next()
+                    .map(|o| self.usable_zone_for_output(&o))
+                    .unwrap_or(fallback);
+                snap_window(self, &win, SnapMode::CenterRestore, usable);
+            }
+        }
+
+        self.ipc_broadcaster
+            .broadcast(&IpcMessage::AutoTilingChanged { enabled });
+    }
 }
 
 // Delegaciones de protocolos de Smithay
@@ -8023,5 +8219,25 @@ mod tests {
             "malus-app-switcher"
         ));
         assert!(!super::is_primary_shell_layer_namespace("malus-wallpaper"));
+    }
+
+    #[test]
+    fn compute_auto_tiling_slots_partitions_without_overlap() {
+        let usable = smithay::utils::Rectangle::new((0, 36).into(), (1920, 1000).into());
+        assert!(super::compute_auto_tiling_slots(0, usable, 8).is_empty());
+
+        for count in 1..=5 {
+            let slots = super::compute_auto_tiling_slots(count, usable, 8);
+            assert_eq!(slots.len(), count);
+            for (i, a) in slots.iter().enumerate() {
+                assert!(usable.contains_rect(*a), "slot {i} out of usable bounds: {a:?}");
+                for (j, b) in slots.iter().enumerate().skip(i + 1) {
+                    assert!(
+                        !a.overlaps(*b),
+                        "slots {i} and {j} overlap for count={count}: {a:?} vs {b:?}"
+                    );
+                }
+            }
+        }
     }
 }

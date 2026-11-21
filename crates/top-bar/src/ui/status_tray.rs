@@ -71,6 +71,8 @@ pub fn create_status_tray_widget() -> GtkBox {
         wifi_widget.set_visible(cfg.wifi);
         vol_widget.set_visible(cfg.sound);
         spotlight_btn.set_visible(cfg.spotlight);
+        super::power_profile::refresh_power_profile_visibility();
+        super::auto_tiling::refresh_auto_tiling_visibility();
         extras.refresh(&cfg);
     });
     apply_vis();

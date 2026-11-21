@@ -1,6 +1,7 @@
 use gtk4::prelude::*;
 use gtk4::{Button, Image};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::process::Command;
 use std::rc::Rc;
 use tracing::info;
 
@@ -43,6 +44,37 @@ impl PowerMode {
             PowerMode::PowerSaver => "power-saver",
         }
     }
+
+    pub fn tuned_name(&self) -> &'static str {
+        match self {
+            PowerMode::Performance => "throughput-performance",
+            PowerMode::Balanced => "balanced",
+            PowerMode::PowerSaver => "powersave",
+        }
+    }
+}
+
+thread_local! {
+    static POWER_BTN_REF: RefCell<Option<glib::WeakRef<Button>>> = const { RefCell::new(None) };
+}
+
+pub fn refresh_power_profile_visibility() {
+    let visible = malus_de_common::config::MenuBarConfig::load().power_profile;
+    POWER_BTN_REF.with(|cell| {
+        if let Some(btn) = cell.borrow().as_ref().and_then(|w| w.upgrade()) {
+            btn.set_visible(visible);
+        }
+    });
+}
+
+fn apply_mode_visual(btn: &Button, state: &Cell<PowerMode>, mode: PowerMode) {
+    state.set(mode);
+    let icon = Image::from_icon_name(mode.icon_name());
+    btn.set_child(Some(&icon));
+    btn.set_tooltip_text(Some(&format!(
+        "Perfil de rendimiento: {} (Clic para alternar)",
+        mode.label()
+    )));
 }
 
 pub fn create_power_profile_widget() -> Button {
@@ -50,9 +82,14 @@ pub fn create_power_profile_widget() -> Button {
 
     let btn = Button::builder()
         .css_classes(["power-profile-pill", "topbar-btn"])
-        .tooltip_text("Modo de Rendimiento (power-profiles-daemon)")
+        .tooltip_text("Perfil de rendimiento: Equilibrado (Clic para alternar)")
         .has_frame(false)
         .build();
+    btn.set_visible(malus_de_common::config::MenuBarConfig::load().power_profile);
+
+    POWER_BTN_REF.with(|cell| {
+        *cell.borrow_mut() = Some(btn.downgrade());
+    });
 
     let icon = Image::from_icon_name(PowerMode::Balanced.icon_name());
     btn.set_child(Some(&icon));
@@ -61,24 +98,16 @@ pub fn create_power_profile_widget() -> Button {
     let state_clone = mode_state.clone();
 
     btn.connect_clicked(move |_| {
-        let current = state_clone.get();
-        let next_mode = current.next();
-        state_clone.set(next_mode);
-
-        let new_icon = Image::from_icon_name(next_mode.icon_name());
-        btn_clone.set_child(Some(&new_icon));
-        btn_clone.set_tooltip_text(Some(&format!(
-            "Modo: {} (Click para alternar)",
-            next_mode.label()
-        )));
-
+        let next_mode = state_clone.get().next();
+        apply_mode_visual(&btn_clone, &state_clone, next_mode);
         info!("Cambiando Modo de Rendimiento a: {:?}", next_mode);
 
-        // Notificar asíncronamente a power-profiles-daemon si está disponible
-        let mode_name = next_mode.dbus_name();
+        let dbus_name = next_mode.dbus_name();
+        let tuned_name = next_mode.tuned_name();
         glib::MainContext::default().spawn_local(async move {
+            let mut applied_via_dbus = false;
             if let Ok(connection) = zbus::Connection::system().await {
-                let _ = connection
+                if connection
                     .call_method(
                         Some("net.hadess.PowerProfiles"),
                         "/net/hadess/PowerProfiles",
@@ -87,18 +116,27 @@ pub fn create_power_profile_widget() -> Button {
                         &(
                             "net.hadess.PowerProfiles",
                             "ActiveProfile",
-                            zbus::zvariant::Value::from(mode_name),
+                            zbus::zvariant::Value::from(dbus_name),
                         ),
                     )
-                    .await;
+                    .await
+                    .is_ok()
+                {
+                    applied_via_dbus = true;
+                }
+            }
+            if !applied_via_dbus {
+                std::thread::spawn(move || {
+                    let _ = Command::new("tuned-adm").args(["profile", tuned_name]).output();
+                });
             }
         });
     });
 
-    // Consultar el perfil inicial de power-profiles-daemon
     let btn_init = btn.clone();
-    let state_init = mode_state.clone();
+    let state_init = mode_state;
     glib::MainContext::default().spawn_local(async move {
+        let mut detected: Option<PowerMode> = None;
         if let Ok(connection) = zbus::Connection::system().await {
             if let Ok(reply) = connection
                 .call_method(
@@ -112,19 +150,31 @@ pub fn create_power_profile_widget() -> Button {
             {
                 if let Ok(val) = reply.body().deserialize::<zbus::zvariant::OwnedValue>() {
                     if let Ok(profile_str) = val.try_into() as Result<String, _> {
-                        let detected_mode = match profile_str.as_str() {
+                        detected = Some(match profile_str.as_str() {
                             "performance" => PowerMode::Performance,
                             "power-saver" => PowerMode::PowerSaver,
                             _ => PowerMode::Balanced,
-                        };
-                        state_init.set(detected_mode);
-                        let img = Image::from_icon_name(detected_mode.icon_name());
-                        btn_init.set_child(Some(&img));
-                        btn_init
-                            .set_tooltip_text(Some(&format!("Modo: {}", detected_mode.label())));
+                        });
                     }
                 }
             }
+        }
+        if detected.is_none() {
+            if let Ok(out) = Command::new("tuned-adm").arg("active").output() {
+                if out.status.success() {
+                    let txt = String::from_utf8_lossy(&out.stdout).to_lowercase();
+                    detected = Some(if txt.contains("performance") {
+                        PowerMode::Performance
+                    } else if txt.contains("powersave") {
+                        PowerMode::PowerSaver
+                    } else {
+                        PowerMode::Balanced
+                    });
+                }
+            }
+        }
+        if let Some(mode) = detected {
+            apply_mode_visual(&btn_init, &state_init, mode);
         }
     });
 
