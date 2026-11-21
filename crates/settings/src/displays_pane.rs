@@ -1422,36 +1422,47 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
     scale_slider.set_draw_value(false);
     scale_slider.set_hexpand(true);
     scale_slider.set_css_classes(&["bat-limit-slider"]);
-    let (step_down_wrap, step_down_btn) =
-        make_squircle_button("−", false, Some("Reducir escala (-5%)"));
-    step_down_btn.add_css_class("disp-stepper-btn");
-    step_down_wrap.set_height_request(24);
-    step_down_btn.set_height_request(24);
+    let step_down_btn = Button::builder()
+        .label("−")
+        .has_frame(false)
+        .tooltip_text("Reducir escala (-5%)")
+        .css_classes(["disp-stepper-inner-btn", "disp-stepper-left"])
+        .width_request(22)
+        .height_request(22)
+        .valign(Align::Fill)
+        .build();
 
     let scale_entry = Entry::builder()
         .placeholder_text("150.0%")
         .width_chars(6)
         .max_width_chars(8)
-        .height_request(24)
+        .height_request(22)
         .xalign(0.5)
         .css_classes(["scale-input-entry"])
         .valign(Align::Center)
         .build();
 
-    let (step_up_wrap, step_up_btn) =
-        make_squircle_button("+", false, Some("Aumentar escala (+5%)"));
-    step_up_btn.add_css_class("disp-stepper-btn");
-    step_up_wrap.set_height_request(24);
-    step_up_btn.set_height_request(24);
+    let step_up_btn = Button::builder()
+        .label("+")
+        .has_frame(false)
+        .tooltip_text("Aumentar escala (+5%)")
+        .css_classes(["disp-stepper-inner-btn", "disp-stepper-right"])
+        .width_request(22)
+        .height_request(22)
+        .valign(Align::Fill)
+        .build();
 
     let stepper_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(4)
+        .spacing(0)
+        .height_request(24)
+        .overflow(gtk4::Overflow::Hidden)
+        .css_classes(["scale-stepper-shell"])
         .valign(Align::Center)
         .build();
-    stepper_box.append(&step_down_wrap);
+    stepper_box.append(&step_down_btn);
     stepper_box.append(&scale_entry);
-    stepper_box.append(&step_up_wrap);
+    stepper_box.append(&step_up_btn);
 
     let (apply_scale_wrap, apply_scale_btn) = make_squircle_button("Aplicar", false, None);
     apply_scale_wrap.set_height_request(24);
