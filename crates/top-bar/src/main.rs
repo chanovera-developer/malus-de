@@ -64,13 +64,13 @@ fn apply_topbar_accent_color(index: usize) {
     });
 }
 
-fn apply_topbar_liquid_glass_opacity(opacity: f64) {
+fn build_topbar_glass_css(opacity: f64, show_background: bool) -> String {
     let scale = malus_de_common::config::liquid_glass_scale_for(opacity);
     let dark_pop = malus_de_common::config::scaled_liquid_glass_alpha(0.78, scale, 0.14, 0.96);
     let dark_cc = malus_de_common::config::scaled_liquid_glass_alpha(0.82, scale, 0.16, 0.96);
     let light_pop = malus_de_common::config::scaled_liquid_glass_alpha(0.76, scale, 0.14, 0.96);
     let light_cc = malus_de_common::config::scaled_liquid_glass_alpha(0.78, scale, 0.14, 0.96);
-    let bar_bg = if malus_de_common::config::MenuBarConfig::load().show_background {
+    let bar_bg = if show_background {
         let bar_a = malus_de_common::config::scaled_liquid_glass_alpha(0.46, scale, 0.16, 0.86);
         format!(
             "window.malus-topbar, \
@@ -79,6 +79,41 @@ fn apply_topbar_liquid_glass_opacity(opacity: f64) {
                  background-image: none; \
                  background-color: alpha(@window_bg_color, {bar_a:.3}); \
                  border-bottom: 1px solid alpha(@borders, 0.22); \
+                 color: @window_fg_color; \
+                 text-shadow: none; \
+                 -gtk-icon-shadow: none; \
+             }} \
+             window.malus-topbar button.topbar-btn, \
+             window.malus-topbar menubutton.topbar-btn>button, \
+             window.malus-topbar menubutton>button, \
+             window.malus-topbar label.clock-label, \
+             window.malus-topbar .active-app-name, \
+             window.malus-topbar .global-menu-item, \
+             window.malus-topbar .clock-label, \
+             window.malus-topbar button.control-center-toggle image, \
+             window.malus-topbar menubutton.control-center-toggle image, \
+             window.malus-topbar .topbar-content label, \
+             window.malus-topbar .topbar-content image, \
+             window.malus-topbar .topbar-content>box>image, \
+             window.malus-topbar .topbar-content>box>button>image, \
+             window.malus-topbar .topbar-content>box>menubutton>button image, \
+             window.malus-topbar button.topbar-btn>image, \
+             window.malus-topbar menubutton.topbar-btn>button image {{ \
+                 color: @window_fg_color; \
+                 text-shadow: none; \
+                 -gtk-icon-shadow: none; \
+             }} \
+             window.malus-topbar button.topbar-btn:hover, \
+             window.malus-topbar menubutton.topbar-btn>button:hover, \
+             window.malus-topbar menubutton>button:hover, \
+             window.malus-topbar label.clock-label:hover {{ \
+                 background-color: alpha(@window_fg_color, 0.08); \
+             }} \
+             window.malus-topbar button.topbar-btn:active, \
+             window.malus-topbar button.topbar-btn:checked, \
+             window.malus-topbar menubutton.topbar-btn>button:active, \
+             window.malus-topbar menubutton.topbar-btn>button:checked {{ \
+                 background-color: alpha(@window_fg_color, 0.12); \
              }}"
         )
     } else {
@@ -91,7 +126,7 @@ fn apply_topbar_liquid_glass_opacity(opacity: f64) {
          }"
         .to_string()
     };
-    let css = format!(
+    format!(
         "{bar_bg} \
          popover.malus-popover-menu>contents {{ background-color: rgba(30, 30, 36, {dark_pop:.3}); }} \
          popover.control-center-popover>contents {{ background-color: rgba(30, 30, 36, {dark_cc:.3}); }} \
@@ -100,7 +135,12 @@ fn apply_topbar_liquid_glass_opacity(opacity: f64) {
          .light-mode popover.malus-popover-menu>contents {{ background-color: rgba(244, 246, 250, {light_pop:.3}); }} \
          popover.light-popover.control-center-popover>contents, \
          .light-mode popover.control-center-popover>contents {{ background-color: rgba(244, 246, 250, {light_cc:.3}); }}"
-    );
+    )
+}
+
+fn apply_topbar_liquid_glass_opacity(opacity: f64) {
+    let show_background = malus_de_common::config::MenuBarConfig::load().show_background;
+    let css = build_topbar_glass_css(opacity, show_background);
     TOPBAR_GLASS_PROVIDER.with(|cell| {
         if let Some(provider) = cell.borrow().as_ref() {
             provider.load_from_string(&css);
@@ -188,6 +228,7 @@ fn load_css() {
             apply_topbar_liquid_glass_opacity(malus_de_common::config::load_liquid_glass_opacity());
             ui::status_tray::refresh_tray_visibility();
             ui::clock::refresh_clock_now();
+            ui::system_menu::refresh_system_menu_logo();
         });
         TOPBAR_MENUBAR_MONITOR.with(|cell| {
             *cell.borrow_mut() = Some(mb_monitor);
@@ -343,6 +384,7 @@ fn build_ui(app: &Application) {
                         adw::ColorScheme::ForceLight
                     });
                     ui::theme::update_all_popovers_theme(is_dark);
+                    ui::system_menu::refresh_system_menu_logo();
                 }
                 malus_de_common::ipc::IpcMessage::AccentColorChanged { index } => {
                     apply_topbar_accent_color(index);
@@ -368,6 +410,7 @@ fn build_ui(app: &Application) {
                     );
                     ui::status_tray::refresh_tray_visibility();
                     ui::clock::refresh_clock_now();
+                    ui::system_menu::refresh_system_menu_logo();
                     if let Some(ref f) = *sync_slot_ipc.borrow() {
                         f();
                     }
@@ -603,4 +646,22 @@ fn format_app_name(app_id: Option<&str>, title: Option<&str>) -> String {
     }
 
     "Malus DE".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_topbar_glass_css;
+
+    #[test]
+    fn topbar_background_removes_shadows_and_uses_theme_foreground_color() {
+        let off = build_topbar_glass_css(0.65, false);
+        assert!(off.contains("background-color: transparent;"));
+        assert!(!off.contains("text-shadow: none;"));
+
+        let on = build_topbar_glass_css(0.65, true);
+        assert!(on.contains("background-color: alpha(@window_bg_color,"));
+        assert!(on.contains("color: @window_fg_color;"));
+        assert!(on.contains("text-shadow: none;"));
+        assert!(on.contains("-gtk-icon-shadow: none;"));
+    }
 }

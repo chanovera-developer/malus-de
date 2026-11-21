@@ -10,6 +10,44 @@ use tracing::info;
 const MENU_LOGO_SVG: &str = include_str!("../../../../data/icons/menu-logo.svg");
 const PREVIOUS_DEFAULT_LOGO_MARK: &str = "M11.182.008C11.148-.03";
 
+thread_local! {
+    static SYSTEM_MENU_LOGO_IMG: std::cell::RefCell<Option<glib::WeakRef<Image>>> =
+        const { std::cell::RefCell::new(None) };
+    static SYSTEM_MENU_LOGO_PATH: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+pub fn refresh_system_menu_logo() {
+    let show_bg = malus_de_common::config::MenuBarConfig::load().show_background;
+    let dark = malus_de_common::config::is_dark_mode_active();
+    let hex_fg = if show_bg && !dark { "#1d1d1f" } else { "#ffffff" };
+    SYSTEM_MENU_LOGO_IMG.with(|img_cell| {
+        let Some(img) = img_cell.borrow().as_ref().and_then(|w| w.upgrade()) else {
+            return;
+        };
+        let raw_svg = SYSTEM_MENU_LOGO_PATH.with(|path_cell| {
+            path_cell
+                .borrow()
+                .as_ref()
+                .and_then(|p| std::fs::read_to_string(p).ok())
+        })
+        .unwrap_or_else(|| MENU_LOGO_SVG.to_string());
+        let tinted_svg = raw_svg
+            .replace("fill=\"#ffffff\"", &format!("fill=\"{hex_fg}\""))
+            .replace("fill=\"#FFFFFF\"", &format!("fill=\"{hex_fg}\""))
+            .replace("fill=\"currentColor\"", &format!("fill=\"{hex_fg}\""));
+        if let Ok(loader) = gtk4::gdk_pixbuf::PixbufLoader::with_type("svg") {
+            let _ = loader.set_size(16, 16);
+            if loader.write(tinted_svg.as_bytes()).is_ok() && loader.close().is_ok() {
+                if let Some(pb) = loader.pixbuf() {
+                    let texture = gtk4::gdk::Texture::for_pixbuf(&pb);
+                    img.set_paintable(Some(&texture));
+                }
+            }
+        }
+    });
+}
+
 pub fn create_system_menu() -> MenuButton {
     let menu_btn = MenuButton::builder()
         .css_classes(["menu-logo-btn", "topbar-btn"])
@@ -68,14 +106,21 @@ pub fn create_system_menu() -> MenuButton {
     }
 
     let logo_widget: gtk4::Widget = if svg_path.exists() {
-        Image::builder()
+        let img = Image::builder()
             .file(svg_path.to_str().unwrap_or(""))
             .pixel_size(16)
             .valign(gtk4::Align::Center)
             .halign(gtk4::Align::Center)
             .css_classes(["menu-logo-icon"])
-            .build()
-            .upcast()
+            .build();
+        SYSTEM_MENU_LOGO_PATH.with(|cell| {
+            *cell.borrow_mut() = Some(svg_path);
+        });
+        SYSTEM_MENU_LOGO_IMG.with(|cell| {
+            *cell.borrow_mut() = Some(img.downgrade());
+        });
+        refresh_system_menu_logo();
+        img.upcast()
     } else {
         Label::builder()
             .label("M")
