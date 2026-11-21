@@ -2943,6 +2943,9 @@ pub struct DisplaysConfig {
     /// Nivel de brillo de pantalla configurado (5.0 a 100.0)
     #[serde(default = "default_brightness")]
     pub brightness: f64,
+    /// Mostrar las resoluciones de pantalla en forma de lista en lugar de miniaturas visuales
+    #[serde(default)]
+    pub show_resolutions_as_list: bool,
     /// Radio de curvatura squircle de las esquinas del escritorio (en puntos lógicos, ej. 24.0 o 32.0). 0.0 desactiva el recorte.
     #[serde(default = "default_screen_corner_radius")]
     pub screen_corner_radius: f64,
@@ -3030,6 +3033,7 @@ impl Default for DisplaysConfig {
             linked_physical_1to1: true,
             master_scale: 1.0,
             brightness: 80.0,
+            show_resolutions_as_list: false,
             screen_corner_radius: 32.0,
             window_corner_radius: 32.0,
             outputs: Vec::new(),
@@ -3397,6 +3401,7 @@ impl DisplaysConfig {
                 linked_physical_1to1: true,
                 master_scale,
                 brightness: 80.0,
+                show_resolutions_as_list: false,
                 screen_corner_radius: 32.0,
                 window_corner_radius: 32.0,
                 outputs,
