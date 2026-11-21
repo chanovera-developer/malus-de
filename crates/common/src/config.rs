@@ -1784,6 +1784,18 @@ pub struct DockConfig {
     pub indicator_style: DockIndicatorStyle,
     #[serde(default)]
     pub app_switcher_style: AppSwitcherStyle,
+    #[serde(default)]
+    pub auto_hide: bool,
+    #[serde(default)]
+    pub animate_opening: bool,
+    #[serde(default)]
+    pub show_indicators: bool,
+    #[serde(default)]
+    pub show_recent_apps: bool,
+    #[serde(default)]
+    pub minimize_to_app_icon: bool,
+    #[serde(default)]
+    pub titlebar_double_click_action: u8,
     pub apps: Vec<DockAppConfig>,
 }
 
@@ -1838,6 +1850,12 @@ impl Default for DockConfig {
             genie_effect: true,
             indicator_style: DockIndicatorStyle::Dot,
             app_switcher_style: AppSwitcherStyle::Deck,
+            auto_hide: false,
+            animate_opening: true,
+            show_indicators: true,
+            show_recent_apps: true,
+            minimize_to_app_icon: false,
+            titlebar_double_click_action: 0,
             apps: vec![
                 DockAppConfig {
                     name: "Archivos".to_string(),
@@ -2219,8 +2237,119 @@ impl IconGridMetrics {
     }
 }
 
-/// Configuración de la superficie de escritorio activa (archivos e iconos de `~/Escritorio`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Configuración persistente de Escritorio, Organizador visual, Widgets, Ventanas y Mission Control
+/// (`~/.config/malus-de/desktop-dock.toml`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DesktopDockConfig {
+    // Escritorio y Organizador visual
+    pub show_items_on_desktop: bool,
+    pub show_items_in_stage_manager: bool,
+    /// 0 = Siempre, 1 = Sólo en el organizador visual
+    pub click_wallpaper_shows_desktop: u8,
+    pub stage_manager_enabled: bool,
+    pub stage_manager_recent_apps: bool,
+    /// 0 = Todas a la vez, 1 = Una a la vez
+    pub stage_manager_app_windows: u8,
+
+    // Widgets
+    pub widgets_on_desktop: bool,
+    pub widgets_in_stage_manager: bool,
+    /// 0 = Automáticamente, 1 = Siempre, 2 = Nunca
+    pub dim_widgets_on_desktop: u8,
+
+    // Ventanas
+    /// 0 = Nunca, 1 = Al abrir documentos, 2 = En pantalla completa
+    pub prefer_tabs_mode: u8,
+    pub ask_to_keep_changes: bool,
+    pub close_windows_on_quit: bool,
+    pub drag_to_edges_tile: bool,
+    pub drag_to_top_maximize: bool,
+    pub option_drag_tile: bool,
+    pub tiled_windows_have_margins: bool,
+
+    // Mission Control
+    pub mc_auto_rearrange_spaces: bool,
+    pub mc_switch_to_space_with_app: bool,
+    pub mc_group_windows_by_app: bool,
+    pub mc_displays_have_separate_spaces: bool,
+    pub mc_drag_to_top_for_expose: bool,
+}
+
+impl Default for DesktopDockConfig {
+    fn default() -> Self {
+        Self {
+            show_items_on_desktop: true,
+            show_items_in_stage_manager: false,
+            click_wallpaper_shows_desktop: 0,
+            stage_manager_enabled: false,
+            stage_manager_recent_apps: true,
+            stage_manager_app_windows: 0,
+            widgets_on_desktop: true,
+            widgets_in_stage_manager: true,
+            dim_widgets_on_desktop: 0,
+            prefer_tabs_mode: 2,
+            ask_to_keep_changes: false,
+            close_windows_on_quit: true,
+            drag_to_edges_tile: true,
+            drag_to_top_maximize: true,
+            option_drag_tile: true,
+            tiled_windows_have_margins: false,
+            mc_auto_rearrange_spaces: true,
+            mc_switch_to_space_with_app: true,
+            mc_group_windows_by_app: false,
+            mc_displays_have_separate_spaces: true,
+            mc_drag_to_top_for_expose: true,
+        }
+    }
+}
+
+impl DesktopDockConfig {
+    pub fn config_path() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/malus-de/desktop-dock.toml")
+    }
+
+    pub fn load() -> Self {
+        std::fs::read_to_string(Self::config_path())
+            .ok()
+            .and_then(|content| toml::from_str::<DesktopDockConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let toml_str = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let header = "# Configuración de Escritorio, Ventanas y Mission Control de Malus DE\n\n";
+        std::fs::write(path, format!("{header}{toml_str}"))
+    }
+}
+
+pub fn set_default_web_browser_desktop(desktop_id: &str) -> bool {
+    std::process::Command::new("xdg-settings")
+        .args(["set", "default-web-browser", desktop_id])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+pub fn get_default_web_browser_desktop() -> Option<String> {
+    let out = std::process::Command::new("xdg-settings")
+        .args(["get", "default-web-browser"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let trimmed = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DesktopIconsConfig {
     /// Mostrar los archivos de la carpeta de escritorio sobre el fondo de pantalla
@@ -4235,5 +4364,25 @@ apps = []
         sec_12h.clock_flash_separators = true;
         assert_eq!(sec_12h.clock_strftime_format(true), "%a %-d %b  %-I:%M:%S %p");
         assert_eq!(sec_12h.clock_strftime_format(false), "%a %-d %b  %-I %M %S %p");
+    }
+
+    #[test]
+    fn desktop_dock_and_dock_config_defaults_roundtrip_cleanly() {
+        let dock_def = DockConfig::default();
+        assert!(!dock_def.auto_hide);
+        assert!(dock_def.animate_opening);
+        assert!(dock_def.show_indicators);
+        assert!(dock_def.show_recent_apps);
+        assert!(!dock_def.minimize_to_app_icon);
+        assert_eq!(dock_def.titlebar_double_click_action, 0);
+
+        let dd_def = DesktopDockConfig::default();
+        assert!(dd_def.show_items_on_desktop);
+        assert!(!dd_def.show_items_in_stage_manager);
+        assert!(dd_def.drag_to_edges_tile && dd_def.drag_to_top_maximize);
+        assert!(!dd_def.tiled_windows_have_margins);
+        let serialized = toml::to_string_pretty(&dd_def).unwrap();
+        let parsed: DesktopDockConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(dd_def, parsed);
     }
 }

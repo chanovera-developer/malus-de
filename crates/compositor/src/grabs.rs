@@ -504,11 +504,12 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
         }
 
         // Actualizar overlay de previsualización Aero Snap en tiempo real
+        let dd_cfg = &data.desktop_dock_cfg;
         let preview = active_output.and_then(|output| {
             let output_geo = data.space.output_geometry(&output).unwrap_or_default();
             let usable_zone = data.usable_zone_for_output(&output);
 
-            evaluate_snap(cur_loc, output_geo, usable_zone)
+            evaluate_snap_with_config(cur_loc, output_geo, usable_zone, dd_cfg)
                 .and_then(|mode| preview_for_snap(mode, usable_zone))
         });
 
@@ -594,21 +595,44 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
                 .or_else(|| data.space.outputs().next())
                 .cloned();
 
+            let dd_cfg = &data.desktop_dock_cfg;
+            let mut open_expose = false;
             let snap_action = target_output.and_then(|output| {
                 let output_geo = data.space.output_geometry(&output).unwrap_or_default();
                 let usable_zone = data.usable_zone_for_output(&output);
 
-                let mode = evaluate_snap(cur_loc, output_geo, usable_zone);
+                let mode = evaluate_snap_with_config(cur_loc, output_geo, usable_zone, dd_cfg);
+                if mode.is_none()
+                    && !dd_cfg.drag_to_top_maximize
+                    && dd_cfg.mc_drag_to_top_for_expose
+                    && cur_loc.y <= usable_zone.loc.y as f64 + 35.0
+                {
+                    open_expose = true;
+                }
                 tracing::info!(
                     "🔍 Aero Snap evaluación al soltar: modo={:?}, cur_loc={:?}, output_geo={:?}, usable_zone={:?}",
                     mode, cur_loc, output_geo, usable_zone
                 );
 
-                mode.map(|m| (m, usable_zone))
+                let adjusted_zone = if dd_cfg.tiled_windows_have_margins {
+                    Rectangle::new(
+                        (usable_zone.loc.x + 8, usable_zone.loc.y + 8).into(),
+                        (
+                            (usable_zone.size.w - 16).max(200),
+                            (usable_zone.size.h - 16).max(200),
+                        )
+                            .into(),
+                    )
+                } else {
+                    usable_zone
+                };
+                mode.map(|m| (m, adjusted_zone))
             });
 
             if let Some((mode, zone)) = snap_action {
                 crate::state::snap_window(data, &self.window, mode, zone);
+            } else if open_expose {
+                data.toggle_expose(crate::expose::ExposeMode::Global);
             } else if let Some(surf) = self.window.wl_surface() {
                 if !self.is_snapped && win_geo.size.w > 150 && win_geo.size.h > 150 {
                     data.window_restore_geometries
@@ -738,17 +762,31 @@ pub fn evaluate_snap(
     output_geo: Rectangle<i32, Logical>,
     usable_zone: Rectangle<i32, Logical>,
 ) -> Option<crate::state::SnapMode> {
+    evaluate_snap_with_config(
+        cur_loc,
+        output_geo,
+        usable_zone,
+        &malus_de_common::config::DesktopDockConfig::default(),
+    )
+}
+
+pub fn evaluate_snap_with_config(
+    cur_loc: Point<f64, Logical>,
+    output_geo: Rectangle<i32, Logical>,
+    usable_zone: Rectangle<i32, Logical>,
+    dd_cfg: &malus_de_common::config::DesktopDockConfig,
+) -> Option<crate::state::SnapMode> {
     let edge_margin = 35.0;
 
     let is_left = cur_loc.x <= output_geo.loc.x as f64 + edge_margin;
     let is_right = cur_loc.x >= (output_geo.loc.x + output_geo.size.w) as f64 - edge_margin;
     let is_top = cur_loc.y <= usable_zone.loc.y as f64 + edge_margin;
 
-    if is_left {
+    if is_left && dd_cfg.drag_to_edges_tile {
         Some(crate::state::SnapMode::LeftHalf)
-    } else if is_right {
+    } else if is_right && dd_cfg.drag_to_edges_tile {
         Some(crate::state::SnapMode::RightHalf)
-    } else if is_top {
+    } else if is_top && dd_cfg.drag_to_top_maximize {
         Some(crate::state::SnapMode::Maximize)
     } else {
         None

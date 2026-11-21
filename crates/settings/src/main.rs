@@ -8,9 +8,7 @@ use gtk4::{
     WindowControls, WindowHandle,
 };
 use malus_de_common::mac_switch::MacSwitch as Switch;
-use malus_de_common::config::{
-    AppSwitcherStyle, DisplayModeConfig, DisplaysConfig, DockConfig, InputConfig,
-};
+use malus_de_common::config::{DisplayModeConfig, DisplaysConfig, InputConfig};
 use malus_de_common::ipc::{IpcClient, IpcMessage};
 use malus_de_common::logging::init_logging;
 use std::cell::RefCell;
@@ -22,6 +20,7 @@ mod accessibility_pane;
 mod appearance_pane;
 mod battery_pane;
 mod bluetooth_pane;
+mod dock_pane;
 mod general_pane;
 mod menubar_pane;
 mod network_pane;
@@ -635,7 +634,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                     "keyboard" => "teclado distribucion lenguaje idioma xkb",
                     "appearance" => "aspecto tema oscuro claro cursor",
                     "menubar" => "barra de menus menubar centro de control reloj bateria spotlight bluetooth airdrop enfoque pantalla sonido clima",
-                    "dock" => "escritorio dock iconos aladino genie",
+                    "dock" => "escritorio dock organizador visual widgets navegador ventanas mosaico mission control esquinas activas atajos aladino",
                     "spotlight" => "spotlight busqueda aplicaciones archivos",
                     "sound" => "sonido volumen audio",
                     "about" => "general acerca sistema procesador ram version informacion actualizacion almacenamiento airdrop compartir disco arranque inicio extensiones fecha hora idioma region time machine",
@@ -733,9 +732,6 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     let (keyboard_pane, refresh_keyboard_pane) = create_keyboard_pane();
     stack.add_named(&keyboard_pane, Some("keyboard"));
 
-    let (dock_pane, refresh_dock_pane) = create_dock_pane();
-    stack.add_named(&dock_pane, Some("dock"));
-
     let (spotlight_pane, refresh_spotlight_pane) = create_spotlight_pane();
     stack.add_named(&spotlight_pane, Some("spotlight"));
 
@@ -750,6 +746,9 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             }
         })
     };
+    let (dock_pane, refresh_dock_pane) =
+        dock_pane::create_dock_pane(&window, nav_general.clone());
+    stack.add_named(&dock_pane, Some("dock"));
     let refresh_general_pane =
         general_pane::register_general_panes(&window, &stack, nav_general.clone());
     accessibility_pane::register_accessibility_panes(&window, &stack, nav_general.clone());
@@ -3617,176 +3616,6 @@ fn create_spotlight_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     }
 
     pane.append(&list_card);
-    scrolled.set_child(Some(&pane));
-
-    let refresh: Rc<dyn Fn()> = Rc::new(|| {});
-    (scrolled, refresh)
-}
-
-fn create_dock_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
-    let scrolled = ScrolledWindow::builder()
-        .hscrollbar_policy(PolicyType::Never)
-        .vscrollbar_policy(PolicyType::Automatic)
-        .hexpand(true)
-        .vexpand(true)
-        .build();
-
-    let pane = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .spacing(16)
-        .css_classes(["content-pane"])
-        .build();
-
-    let banner_card = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(14)
-        .css_classes(["macos-group-card"])
-        .build();
-
-    let icon_badge = make_system_glyph_badge(
-        "user-desktop-symbolic",
-        &["spotlight-banner-icon", "badge-blue"],
-        44,
-        22,
-    );
-    icon_badge.set_valign(Align::Start);
-
-    let banner_text = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .spacing(3)
-        .hexpand(true)
-        .build();
-
-    let title_lbl = Label::builder()
-        .label("Escritorio y Dock")
-        .css_classes(["card-section-title"])
-        .xalign(0.0)
-        .build();
-
-    let desc_lbl = Label::builder()
-        .label("Personaliza la apariencia del Dock flotante, el tamaño de iconos, el efecto Genie de minimización y el auto-ocultado.")
-        .css_classes(["card-section-sub"])
-        .wrap(true)
-        .xalign(0.0)
-        .build();
-
-    banner_text.append(&title_lbl);
-    banner_text.append(&desc_lbl);
-    banner_card.append(&icon_badge);
-    banner_card.append(&banner_text);
-    pane.append(&banner_card);
-
-    let card = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .spacing(12)
-        .css_classes(["macos-group-card"])
-        .build();
-
-    let cfg = DockConfig::load_or_create_default();
-
-    // Tamaño del Dock Slider
-    let size_row = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(16)
-        .build();
-    let size_lbl = Label::builder()
-        .label("Tamaño:")
-        .css_classes(["card-section-title"])
-        .xalign(0.0)
-        .width_request(130)
-        .build();
-    let size_slider = Scale::with_range(Orientation::Horizontal, 36.0, 96.0, 2.0);
-    size_slider.set_hexpand(true);
-    size_slider.set_value(cfg.icon_size as f64);
-    size_slider.connect_value_changed(|s| {
-        let mut cfg = DockConfig::load_or_create_default();
-        cfg.icon_size = s.value().round() as u32;
-        let _ = cfg.save();
-        let _ = IpcClient::send_command(IpcMessage::ReloadDockConfig);
-    });
-    size_row.append(&size_lbl);
-    size_row.append(&size_slider);
-    card.append(&size_row);
-
-    // Ampliación / Magnification
-    let mag_row = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(16)
-        .build();
-    let mag_lbl = Label::builder()
-        .label("Ampliación:")
-        .css_classes(["card-section-title"])
-        .xalign(0.0)
-        .hexpand(true)
-        .build();
-    let mag_sw = Switch::builder()
-        .active(cfg.magnification_enabled)
-        .valign(Align::Center)
-        .build();
-    mag_sw.connect_state_set(|_, active| {
-        let mut cfg = DockConfig::load_or_create_default();
-        cfg.magnification_enabled = active;
-        let _ = cfg.save();
-        let _ = IpcClient::send_command(IpcMessage::ReloadDockConfig);
-        glib::Propagation::Proceed
-    });
-    mag_row.append(&mag_lbl);
-    mag_row.append(&*mag_sw);
-    card.append(&mag_row);
-
-    // Efecto de minimización
-    let eff_row = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(16)
-        .build();
-    let eff_lbl = Label::builder()
-        .label("Efecto al minimizar:")
-        .css_classes(["card-section-title"])
-        .xalign(0.0)
-        .hexpand(true)
-        .build();
-    let eff_val = Label::builder()
-        .label("Efecto Aladino (Genie Lamp)")
-        .css_classes(["card-section-sub"])
-        .build();
-    eff_row.append(&eff_lbl);
-    eff_row.append(&eff_val);
-    card.append(&eff_row);
-
-    // Estilo del selector de aplicaciones (Alt+Tab)
-    let switcher_row = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(16)
-        .build();
-    let switcher_lbl = Label::builder()
-        .label("Selector de aplicaciones (Alt+Tab):")
-        .css_classes(["card-section-title"])
-        .xalign(0.0)
-        .hexpand(true)
-        .build();
-    let switcher_dropdown = DropDown::from_strings(&[
-        "Tarjetas en cascada (Predeterminado)",
-        "Barra clásica de iconos",
-    ]);
-    switcher_dropdown.set_selected(match cfg.app_switcher_style {
-        AppSwitcherStyle::Deck => 0,
-        AppSwitcherStyle::Classic => 1,
-    });
-    switcher_dropdown.connect_selected_notify(|dd| {
-        let mut cfg = DockConfig::load_or_create_default();
-        cfg.app_switcher_style = if dd.selected() == 1 {
-            AppSwitcherStyle::Classic
-        } else {
-            AppSwitcherStyle::Deck
-        };
-        let _ = cfg.save();
-        let _ = IpcClient::send_command(IpcMessage::ReloadDockConfig);
-    });
-    switcher_row.append(&switcher_lbl);
-    switcher_row.append(&switcher_dropdown);
-    card.append(&switcher_row);
-
-    pane.append(&card);
     scrolled.set_child(Some(&pane));
 
     let refresh: Rc<dyn Fn()> = Rc::new(|| {});

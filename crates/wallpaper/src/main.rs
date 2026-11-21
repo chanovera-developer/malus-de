@@ -3791,7 +3791,10 @@ fn create_wallpaper_window(
         let sel_paths_bg = selected_paths.clone();
         let foc_path_bg = focused_path.clone();
         let rb_check_click = rubberband.clone();
+        let press_origin = Rc::new(Cell::new((0.0_f64, 0.0_f64)));
+        let press_origin_p = press_origin.clone();
         bg_click.connect_pressed(move |_, _, x, y| {
+            press_origin_p.set((x, y));
             if is_point_over_icon(&icons_bg_click, x, y, &rb_check_click) {
                 return;
             }
@@ -3802,6 +3805,26 @@ fn create_wallpaper_window(
             }
             sel_paths_bg.borrow_mut().clear();
             *foc_path_bg.borrow_mut() = None;
+        });
+        let icons_bg_rel = icons.clone();
+        let rb_check_rel = rubberband.clone();
+        bg_click.connect_released(move |_, n_press, x, y| {
+            if n_press != 1 || rb_check_rel.is_visible() {
+                return;
+            }
+            let (px, py) = press_origin.get();
+            if (x - px).hypot(y - py) > 6.0 {
+                return;
+            }
+            if is_point_over_icon(&icons_bg_rel, x, y, &rb_check_rel) {
+                return;
+            }
+            let dd_cfg = malus_de_common::config::DesktopDockConfig::load();
+            if dd_cfg.click_wallpaper_shows_desktop == 0 {
+                let _ = malus_de_common::ipc::IpcClient::send_command(
+                    malus_de_common::ipc::IpcMessage::ToggleShowDesktop,
+                );
+            }
         });
         overlay.add_controller(bg_click);
 

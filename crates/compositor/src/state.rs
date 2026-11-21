@@ -339,6 +339,11 @@ pub struct MalusState {
     pub output_commit_counters: HashMap<String, usize>,
     pub background_commit_counter: usize,
     pub auto_tiling_enabled: bool,
+    pub dock_cfg: DockConfig,
+    pub desktop_dock_cfg: malus_de_common::config::DesktopDockConfig,
+    pub input_cfg: malus_de_common::config::InputConfig,
+    pub show_desktop_hidden_ids: Vec<u64>,
+    pub hot_corner_hover: Option<(&'static str, Instant, bool)>,
 }
 
 pub fn guess_icon_name(app_id: &str, title: &str) -> String {
@@ -1282,6 +1287,8 @@ impl MalusState {
             tracing::error!("Error al iniciar servidor IPC: {:?}", e);
         }
         let dock_config = DockConfig::load_or_create_default();
+        let desktop_dock_cfg = malus_de_common::config::DesktopDockConfig::load();
+        let input_cfg = malus_de_common::config::InputConfig::load();
         let dock_blur_headroom = dock_config.headroom_height().min(i32::MAX as u32) as i32;
         let app_switcher_style = dock_config.app_switcher_style;
 
@@ -1371,11 +1378,17 @@ impl MalusState {
             output_commit_counters: HashMap::new(),
             background_commit_counter: 0,
             auto_tiling_enabled: false,
+            dock_cfg: dock_config,
+            desktop_dock_cfg,
+            input_cfg,
+            show_desktop_hidden_ids: Vec::new(),
+            hot_corner_hover: None,
         }
     }
 
     fn reload_dock_config_fields(&mut self) {
         let config = DockConfig::load_or_create_default();
+        self.dock_cfg = config.clone();
         self.dock_blur_headroom = config.headroom_height().min(i32::MAX as u32) as i32;
         if self.app_switcher_style != config.app_switcher_style
             && (self.app_switcher.is_active || self.app_switcher.deck.active)
@@ -2139,6 +2152,22 @@ impl MalusState {
                 IpcMessage::ToggleAutoTiling => {
                     tracing::info!("📥 IPC ToggleAutoTiling recibido — alternando mosaico de ventanas");
                     self.toggle_auto_tiling();
+                }
+                IpcMessage::ToggleShowDesktop => {
+                    tracing::info!("📥 IPC ToggleShowDesktop recibido — alternando mostrar escritorio");
+                    self.toggle_show_desktop();
+                }
+                IpcMessage::ReloadDesktopDockConfig => {
+                    tracing::info!("📥 IPC ReloadDesktopDockConfig recibido");
+                    self.desktop_dock_cfg = malus_de_common::config::DesktopDockConfig::load();
+                    self.ipc_broadcaster
+                        .broadcast(&IpcMessage::ReloadDesktopDockConfig);
+                }
+                IpcMessage::ReloadInputConfig => {
+                    tracing::info!("📥 IPC ReloadInputConfig recibido");
+                    self.input_cfg = malus_de_common::config::InputConfig::load();
+                    self.ipc_broadcaster
+                        .broadcast(&IpcMessage::ReloadInputConfig);
                 }
                 msg @ (IpcMessage::PinAppToDock { .. } | IpcMessage::UnpinAppFromDock { .. }) => {
                     self.ipc_broadcaster.broadcast(&msg);
@@ -4270,6 +4299,11 @@ impl MalusState {
             .collect();
 
         if enabled {
+            let gap = if self.desktop_dock_cfg.tiled_windows_have_margins {
+                8
+            } else {
+                2
+            };
             for output in &outputs {
                 let usable = self.usable_zone_for_output(output);
                 let out_geo = self.space.output_geometry(output);
@@ -4289,7 +4323,7 @@ impl MalusState {
                     })
                     .cloned()
                     .collect();
-                let slots = compute_auto_tiling_slots(wins.len(), usable, 8);
+                let slots = compute_auto_tiling_slots(wins.len(), usable, gap);
                 for (win, rect) in wins.into_iter().zip(slots.into_iter()) {
                     apply_tile_rect(self, &win, rect);
                 }
@@ -4313,6 +4347,113 @@ impl MalusState {
 
         self.ipc_broadcaster
             .broadcast(&IpcMessage::AutoTilingChanged { enabled });
+    }
+
+    /// Muestra el escritorio minimizando temporalmente las ventanas visibles (o las restaura).
+    pub fn toggle_show_desktop(&mut self) {
+        let visible_wins: Vec<(u64, smithay::wayland::shell::xdg::ToplevelSurface)> = self
+            .space
+            .elements()
+            .filter_map(|w| {
+                let surf = w.wl_surface()?;
+                if self.minimized_windows.contains_key(surf.as_ref()) {
+                    return None;
+                }
+                let toplevel = w.toplevel()?.clone();
+                let id = self.window_ids.get(surf.as_ref()).copied()?;
+                Some((id, toplevel))
+            })
+            .collect();
+
+        if !visible_wins.is_empty() {
+            let mut ids = Vec::with_capacity(visible_wins.len());
+            for (id, toplevel) in visible_wins {
+                ids.push(id);
+                self.minimize_toplevel(&toplevel);
+            }
+            self.show_desktop_hidden_ids = ids;
+        } else {
+            let to_restore = std::mem::take(&mut self.show_desktop_hidden_ids);
+            for id in to_restore {
+                self.restore_window_by_id(id);
+            }
+        }
+    }
+
+    /// Evalúa las esquinas activas (`InputConfig.hot_corners`) al mover el puntero.
+    pub fn check_hot_corners(&mut self, point: Point<f64, Logical>) {
+        use malus_de_common::config::HotCornerAction;
+        if !self.input_cfg.hot_corners.enabled || self.is_session_locked() {
+            self.hot_corner_hover = None;
+            return;
+        }
+        let Some(output) = self
+            .space
+            .outputs()
+            .find(|o| {
+                self.space
+                    .output_geometry(o)
+                    .is_some_and(|g| g.to_f64().contains(point))
+            })
+            .cloned()
+        else {
+            self.hot_corner_hover = None;
+            return;
+        };
+        let Some(geo) = self.space.output_geometry(&output) else {
+            return;
+        };
+        let thr = 6.0;
+        let near_l = (point.x - geo.loc.x as f64) <= thr;
+        let near_r = ((geo.loc.x + geo.size.w) as f64 - point.x) <= thr;
+        let near_t = (point.y - geo.loc.y as f64) <= thr;
+        let near_b = ((geo.loc.y + geo.size.h) as f64 - point.y) <= thr;
+
+        let hit: Option<(&'static str, HotCornerAction)> = if near_l && near_t {
+            Some(("tl", self.input_cfg.hot_corners.top_left))
+        } else if near_r && near_t {
+            Some(("tr", self.input_cfg.hot_corners.top_right))
+        } else if near_l && near_b {
+            Some(("bl", self.input_cfg.hot_corners.bottom_left))
+        } else if near_r && near_b {
+            Some(("br", self.input_cfg.hot_corners.bottom_right))
+        } else {
+            None
+        };
+
+        let Some((tag, action)) = hit else {
+            self.hot_corner_hover = None;
+            return;
+        };
+        if action == HotCornerAction::None {
+            self.hot_corner_hover = None;
+            return;
+        }
+
+        let delay = Duration::from_millis(self.input_cfg.hot_corners.delay_ms.max(50) as u64);
+        let now = Instant::now();
+        match self.hot_corner_hover {
+            Some((prev_tag, entered, fired)) if prev_tag == tag => {
+                if !fired && now.saturating_duration_since(entered) >= delay {
+                    self.hot_corner_hover = Some((tag, entered, true));
+                    match action {
+                        HotCornerAction::MissionControl => {
+                            self.toggle_expose(crate::expose::ExposeMode::Global);
+                        }
+                        HotCornerAction::ShowDesktop => {
+                            self.toggle_show_desktop();
+                        }
+                        HotCornerAction::LockScreen => {
+                            self.lock_session();
+                        }
+                        HotCornerAction::NotificationCenter | HotCornerAction::None => {}
+                    }
+                }
+            }
+            _ => {
+                self.hot_corner_hover = Some((tag, now, false));
+            }
+        }
     }
 }
 
@@ -4653,6 +4794,7 @@ impl MalusState {
             occluded_by_top_ui,
             Instant::now(),
         );
+        self.check_hot_corners(point);
 
         if !occluded_by_top_ui {
             if self.snap_layouts.contains_point(point) {
@@ -4855,16 +4997,26 @@ impl MalusState {
 
                 if is_double_click {
                     self.ssd.last_titlebar_click = None;
-                    let is_maximized = window
-                        .toplevel()
-                        .map(|t| t.current_state().states.contains(XdgState::Maximized))
-                        .unwrap_or(false);
-                    let mode = if is_maximized {
-                        SnapMode::CenterRestore
-                    } else {
-                        SnapMode::Maximize
-                    };
-                    snap_window(self, &window, mode, usable_zone);
+                    match self.dock_cfg.titlebar_double_click_action {
+                        1 => {
+                            if let Some(toplevel) = window.toplevel().cloned() {
+                                self.minimize_toplevel(&toplevel);
+                            }
+                        }
+                        2 => {}
+                        _ => {
+                            let is_maximized = window
+                                .toplevel()
+                                .map(|t| t.current_state().states.contains(XdgState::Maximized))
+                                .unwrap_or(false);
+                            let mode = if is_maximized {
+                                SnapMode::CenterRestore
+                            } else {
+                                SnapMode::Maximize
+                            };
+                            snap_window(self, &window, mode, usable_zone);
+                        }
+                    }
                     return true;
                 }
 
