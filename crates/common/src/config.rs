@@ -114,19 +114,8 @@ pub fn accent_color_css(index: usize) -> String {
         (green * 255.0).round() as u8,
         (blue * 255.0).round() as u8,
     ];
-    let luminance = [red, green, blue].map(|channel| {
-        if channel <= 0.04045 {
-            channel / 12.92
-        } else {
-            ((channel + 0.055) / 1.055).powf(2.4)
-        }
-    });
-    let luminance = 0.2126 * luminance[0] + 0.7152 * luminance[1] + 0.0722 * luminance[2];
-    let foreground = if luminance > 0.179 {
-        "#1d1d1f"
-    } else {
-        "#ffffff"
-    };
+    // El texto sobre fondos de énfasis (menús, botones, selecciones) es siempre blanco, como en macOS.
+    let foreground = "#ffffff";
     format!(
         "@define-color accent_bg_color #{:02x}{:02x}{:02x};\n@define-color accent_fg_color {};\n",
         channels[0], channels[1], channels[2], foreground
@@ -2878,14 +2867,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn accent_color_css_tracks_palette_and_selects_contrasting_foreground() {
+    fn accent_color_css_tracks_palette_and_always_uses_white_foreground() {
         assert_eq!(
             accent_color_css(1),
-            "@define-color accent_bg_color #007aff;\n@define-color accent_fg_color #1d1d1f;\n"
+            "@define-color accent_bg_color #007aff;\n@define-color accent_fg_color #ffffff;\n"
         );
         assert_eq!(
             accent_color_css(6),
-            "@define-color accent_bg_color #f5c71f;\n@define-color accent_fg_color #1d1d1f;\n"
+            "@define-color accent_bg_color #f5c71f;\n@define-color accent_fg_color #ffffff;\n"
         );
         assert_eq!(accent_color_css(usize::MAX), accent_color_css(8));
     }
