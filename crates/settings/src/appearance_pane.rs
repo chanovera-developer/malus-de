@@ -1,7 +1,8 @@
 use gtk4::prelude::*;
 use gtk4::{
-    Adjustment, Align, Box as GtkBox, Button, CheckButton, DrawingArea, GestureClick, Image, Label,
-    MenuButton, Orientation, PolicyType, Popover, Scale, ScrolledWindow, Stack,
+    Adjustment, Align, Box as GtkBox, Button, CheckButton, DrawingArea, EventControllerScroll,
+    EventControllerScrollFlags, GestureClick, Image, Label, MenuButton, Orientation, PolicyType,
+    Popover, Scale, ScrolledWindow, Stack,
 };
 use malus_de_common::mac_switch::MacSwitch as Switch;
 use malus_de_common::config::DesktopIconsConfig;
@@ -291,13 +292,36 @@ fn build_appearance_main_pane(
         .build();
     let glass_preview = DrawingArea::new();
     glass_preview.set_content_width(246);
-    glass_preview.set_content_height(132);
-    let glass_op = Rc::new(Cell::new(prefs.borrow().liquid_glass_opacity));
+    glass_preview.set_content_height(164);
+    glass_preview.set_tooltip_text(Some(
+        "Desplaza la rueda sobre la reseña para probar Liquid Glass sobre texto e imagen",
+    ));
+    let glass_op = Rc::new(Cell::new(if prefs.borrow().reduce_transparency {
+        0.95
+    } else {
+        prefs.borrow().liquid_glass_opacity
+    }));
+    let glass_scroll_y = Rc::new(Cell::new(0.0_f64));
     {
         let op_c = glass_op.clone();
+        let sc_c = glass_scroll_y.clone();
         glass_preview.set_draw_func(move |_, cr, w, h| {
-            draw_liquid_glass_preview(cr, w as f64, h as f64, op_c.get());
+            draw_liquid_glass_preview(cr, w as f64, h as f64, op_c.get(), sc_c.get());
         });
+    }
+    {
+        let scroll_ctrl = EventControllerScroll::new(EventControllerScrollFlags::VERTICAL);
+        let sc_c = glass_scroll_y.clone();
+        let prev_c = glass_preview.clone();
+        scroll_ctrl.connect_scroll(move |_, _dx, dy| {
+            let next = (sc_c.get() + dy * 18.0).clamp(0.0, 82.0);
+            if (next - sc_c.get()).abs() > f64::EPSILON {
+                sc_c.set(next);
+                prev_c.queue_draw();
+            }
+            glib::Propagation::Stop
+        });
+        glass_preview.add_controller(scroll_ctrl);
     }
     glass_col.append(&glass_preview);
 
@@ -1437,18 +1461,39 @@ fn paint_malus_symbolic_glyph(
     });
 }
 
-fn draw_liquid_glass_preview(cr: &gtk4::cairo::Context, w: f64, h: f64, glass_opacity: f64) {
+fn draw_liquid_glass_preview(
+    cr: &gtk4::cairo::Context,
+    w: f64,
+    h: f64,
+    glass_opacity: f64,
+    scroll_y: f64,
+) {
     let _ = cr.save();
     crate::squircle_path(cr, w, h, 20.0);
     cr.clip();
 
+    // Fondo papel del artículo de prueba
+    cr.set_source_rgb(0.965, 0.968, 0.980);
+    let _ = cr.paint();
+
+    let hero_h = 90.0_f64;
+    let clamped_scroll = scroll_y.clamp(0.0, 82.0);
+
+    // Contenido desplazable (imagen + título + reseña de Malus DE)
+    let _ = cr.save();
+    cr.translate(0.0, -clamped_scroll);
+
+    // Cabecera fotográfica del artículo
+    let _ = cr.save();
+    cr.rectangle(0.0, 0.0, w, hero_h);
+    cr.clip();
     let painted_bg = with_liquid_glass_bg_pixbuf(|pb| {
         let sw = pb.width() as f64;
         let sh = pb.height() as f64;
         if sw > 0.0 && sh > 0.0 {
-            let scale = (w / sw).max(h / sh);
+            let scale = (w / sw).max(hero_h / sh);
             let dx = (w - sw * scale) * 0.5;
-            let dy = (h - sh * scale) * 0.5;
+            let dy = (hero_h - sh * scale) * 0.5;
             let _ = cr.save();
             cr.translate(dx, dy);
             cr.scale(scale, scale);
@@ -1460,23 +1505,72 @@ fn draw_liquid_glass_preview(cr: &gtk4::cairo::Context, w: f64, h: f64, glass_op
     });
 
     if !painted_bg {
-        // Cielo y paisaje arquitectónico estilizado (respaldo)
-        let sky = gtk4::cairo::LinearGradient::new(0.0, 0.0, 0.0, h * 0.72);
+        let sky = gtk4::cairo::LinearGradient::new(0.0, 0.0, 0.0, hero_h);
         sky.add_color_stop_rgb(0.0, 0.48, 0.69, 0.93);
         sky.add_color_stop_rgb(1.0, 0.78, 0.87, 0.96);
         let _ = cr.set_source(&sky);
-        cr.rectangle(0.0, 0.0, w, h);
+        cr.rectangle(0.0, 0.0, w, hero_h);
         let _ = cr.fill();
 
         cr.set_source_rgb(0.20, 0.38, 0.16);
-        cr.arc(w * 0.22, h * 0.62, 46.0, 0.0, std::f64::consts::TAU);
+        cr.arc(w * 0.22, hero_h * 0.75, 42.0, 0.0, std::f64::consts::TAU);
         let _ = cr.fill();
         cr.set_source_rgb(0.84, 0.86, 0.88);
-        cr.arc(w * 0.95, h * 0.52, 64.0, 0.0, std::f64::consts::TAU);
+        cr.arc(w * 0.92, hero_h * 0.68, 54.0, 0.0, std::f64::consts::TAU);
         let _ = cr.fill();
     }
+    let _ = cr.restore();
 
-    // Píldoras superiores Liquid Glass (cambia su opacidad con el deslizador)
+    // Línea divisoria entre imagen y artículo
+    cr.set_source_rgba(0.0, 0.0, 0.0, 0.07);
+    cr.rectangle(0.0, hero_h, w, 1.0);
+    let _ = cr.fill();
+
+    // Titular y reseña sobre Malus DE
+    cr.set_source_rgba(0.08, 0.09, 0.12, 0.94);
+    cr.select_font_face(
+        "Sans",
+        gtk4::cairo::FontSlant::Normal,
+        gtk4::cairo::FontWeight::Bold,
+    );
+    cr.set_font_size(11.5);
+    cr.move_to(14.0, hero_h + 19.0);
+    let _ = cr.show_text("Bienvenido a Malus DE");
+
+    cr.set_source_rgba(0.36, 0.39, 0.45, 0.92);
+    cr.select_font_face(
+        "Sans",
+        gtk4::cairo::FontSlant::Normal,
+        gtk4::cairo::FontWeight::Normal,
+    );
+    cr.set_font_size(8.2);
+    cr.move_to(14.0, hero_h + 31.5);
+    let _ = cr.show_text("Reseña · Entorno Wayland nativo en Rust");
+
+    cr.set_source_rgba(0.16, 0.18, 0.22, 0.90);
+    cr.set_font_size(8.7);
+    let review_lines_1 = [
+        "Un escritorio artesanal con compositor DRM,",
+        "geometría squircle continua y motor WGPU",
+        "para efectos Liquid Glass fluidos a 60+ FPS.",
+    ];
+    for (i, line) in review_lines_1.iter().enumerate() {
+        cr.move_to(14.0, hero_h + 46.5 + (i as f64) * 11.5);
+        let _ = cr.show_text(line);
+    }
+
+    let review_lines_2 = [
+        "Su barra superior unificada, menú global y",
+        "dock flotante combinan ligereza, nitidez",
+        "tipográfica y control visual en cada ventana.",
+    ];
+    for (i, line) in review_lines_2.iter().enumerate() {
+        cr.move_to(14.0, hero_h + 87.5 + (i as f64) * 11.5);
+        let _ = cr.show_text(line);
+    }
+    let _ = cr.restore();
+
+    // Píldoras superiores Liquid Glass fijas sobre el artículo desplazable
     let alpha = glass_opacity.clamp(0.18, 0.94);
     for (idx, (px, pw)) in [
         (10.0_f64, 56.0_f64),
@@ -1486,13 +1580,21 @@ fn draw_liquid_glass_preview(cr: &gtk4::cairo::Context, w: f64, h: f64, glass_op
     .into_iter()
     .enumerate()
     {
+        // Sombra suave bajo la píldora de cristal
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.09);
+        let _ = cr.save();
+        cr.translate(px, 11.5);
+        crate::squircle_path(cr, pw, 24.0, 11.0);
+        let _ = cr.restore();
+        let _ = cr.fill();
+
         cr.set_source_rgba(0.96, 0.97, 0.99, alpha);
         let _ = cr.save();
         cr.translate(px, 10.0);
         crate::squircle_path(cr, pw, 24.0, 11.0);
         let _ = cr.restore();
         let _ = cr.fill_preserve();
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.45);
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.55);
         cr.set_line_width(1.0);
         let _ = cr.stroke();
 
@@ -1526,19 +1628,15 @@ fn draw_liquid_glass_preview(cr: &gtk4::cairo::Context, w: f64, h: f64, glass_op
         let _ = cr.restore();
     }
 
-    // Faldón inferior translúcido
-    cr.set_source_rgba(0.95, 0.95, 0.97, (alpha + 0.15).min(0.96));
-    cr.rectangle(0.0, h - 26.0, w, 26.0);
-    let _ = cr.fill();
-    cr.set_source_rgba(0.10, 0.11, 0.13, 0.92);
-    cr.select_font_face(
-        "Sans",
-        gtk4::cairo::FontSlant::Normal,
-        gtk4::cairo::FontWeight::Bold,
-    );
-    cr.set_font_size(11.0);
-    cr.move_to(14.0, h - 9.0);
-    let _ = cr.show_text("Bienvenido a Malus DE");
+    // Borde exterior sutil del contenedor del artículo
+    cr.reset_clip();
+    let _ = cr.save();
+    cr.translate(0.5, 0.5);
+    crate::squircle_path(cr, w - 1.0, h - 1.0, 19.5);
+    cr.set_source_rgba(0.0, 0.0, 0.0, 0.09);
+    cr.set_line_width(1.0);
+    let _ = cr.stroke();
+    let _ = cr.restore();
 
     let _ = cr.restore();
 }
