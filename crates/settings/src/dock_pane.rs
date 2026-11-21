@@ -15,6 +15,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
 
+use crate::general_pane::make_pending_badge;
 use crate::wifi_pane::{
     make_help_circle_button, make_popover_action_row, make_squircle_button, wrap_squircle_card,
     WIFI_CARD_SQUIRCLE_RADIUS,
@@ -461,6 +462,9 @@ pub fn create_dock_pane(
         dock_hooks.borrow_mut().push(Box::new(move |c| {
             sw.set_active(getter(c));
         }));
+        if idx == 0 {
+            row.insert_child_after(&make_pending_badge(), row.first_child().as_ref());
+        }
         dock_card2.append(&row);
     }
     pane.append(&wrap_squircle_card(&dock_card2, WIFI_CARD_SQUIRCLE_RADIUS));
