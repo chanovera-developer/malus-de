@@ -29,6 +29,7 @@ mod wifi_pane;
 
 const APP_ID: &str = "dev.malus.Settings";
 const SETTINGS_SIDEBAR_WIDTH: i32 = 212;
+const SETTINGS_RIGHT_PANE_MIN_WIDTH: i32 = 440;
 const SIDEBAR_SEARCH_MAX_HEIGHT: i32 = 36;
 const SIDEBAR_SEARCH_HEIGHT: i32 = 34;
 // Con superelipse n=4.2, r=17 px iguala la profundidad visual de esquina (~2.6 px) de `border-radius: 9px`.
@@ -586,6 +587,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     let stack = Stack::builder()
         .transition_type(StackTransitionType::Crossfade)
         .transition_duration(160)
+        .hhomogeneous(false)
         .hexpand(true)
         .vexpand(true)
         .build();
@@ -818,6 +820,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
 
     let refresh_appearance_pane =
         appearance_pane::register_appearance_panes(&stack, nav_general.clone());
+    configure_right_pane_stack(&stack);
 
     // Historial de navegación para botones atrás / adelante (estilo Branches)
     let start_id = match initial_panel {
@@ -1154,6 +1157,45 @@ struct CanvasInteractionState {
     monitor_rects: Vec<(usize, f64, f64, f64, f64)>,
 }
 
+/// Configures every page in the right-hand `Stack` so narrow panels wrap cleanly
+/// and the right area can shrink to ~2/3 of its prior minimum width (~440 px).
+fn configure_right_pane_stack(stack: &Stack) {
+    stack.set_hhomogeneous(false);
+    let pages = stack.pages();
+    for i in 0..pages.n_items() {
+        if let Some(page) = pages
+            .item(i)
+            .and_then(|obj| obj.downcast::<gtk4::StackPage>().ok())
+        {
+            if let Ok(sw) = page.child().downcast::<ScrolledWindow>() {
+                sw.set_hscrollbar_policy(PolicyType::Automatic);
+                sw.set_min_content_width(SETTINGS_RIGHT_PANE_MIN_WIDTH);
+            }
+        }
+    }
+}
+
+/// Builds a wrapping horizontal `FlowBox` whose items fit on one row when wide
+/// and wrap cleanly onto multiple lines when the window is narrowed.
+fn make_wrap_flow(
+    min_per_line: u32,
+    max_per_line: u32,
+    spacing: i32,
+    homogeneous: bool,
+) -> FlowBox {
+    FlowBox::builder()
+        .css_classes(["settings-wrap-flow"])
+        .homogeneous(homogeneous)
+        .min_children_per_line(min_per_line)
+        .max_children_per_line(max_per_line)
+        .row_spacing(spacing as u32)
+        .column_spacing(spacing as u32)
+        .selection_mode(gtk4::SelectionMode::None)
+        .hexpand(true)
+        .valign(Align::Start)
+        .build()
+}
+
 fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     let scrolled = ScrolledWindow::builder()
         .hscrollbar_policy(PolicyType::Never)
@@ -1204,6 +1246,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     let canvas_title = Label::builder()
         .label("Disposición Interactiva de Pantallas (Arrastra con el ratón para mover o intercambiar)")
         .css_classes(["card-section-title"])
+        .wrap(true)
         .hexpand(true)
         .xalign(0.0)
         .build();
@@ -1223,10 +1266,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     canvas_card.append(&drawing_area);
 
     // Barra de herramientas de disposición debajo del lienzo
-    let arrange_toolbar = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(6)
-        .build();
+    let arrange_toolbar = make_wrap_flow(2, 5, 6, false);
 
     let btn_swap = Button::builder()
         .label("Invertir Izquierda / Derecha")
@@ -1263,11 +1303,11 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         .has_frame(false)
         .build();
 
-    arrange_toolbar.append(&btn_swap);
-    arrange_toolbar.append(&btn_align_top);
-    arrange_toolbar.append(&btn_align_center);
-    arrange_toolbar.append(&btn_align_bottom);
-    arrange_toolbar.append(&btn_align_desk);
+    arrange_toolbar.insert(&btn_swap, -1);
+    arrange_toolbar.insert(&btn_align_top, -1);
+    arrange_toolbar.insert(&btn_align_center, -1);
+    arrange_toolbar.insert(&btn_align_bottom, -1);
+    arrange_toolbar.insert(&btn_align_desk, -1);
     canvas_card.append(&arrange_toolbar);
 
     pane.append(&canvas_card);
@@ -1295,6 +1335,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     let truesize_title = Label::builder()
         .label("Enlazar Resolución Física 1:1 Pixel a Pixel (TrueSize PPI)")
         .css_classes(["card-section-title"])
+        .wrap(true)
         .xalign(0.0)
         .build();
 
@@ -1340,11 +1381,15 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     let ts_p1_title = Label::builder()
         .label("Ajuste 1 · Equilibrado")
         .css_classes(["card-section-title"])
+        .wrap(true)
+        .justify(gtk4::Justification::Center)
         .xalign(0.5)
         .build();
     let ts_p1_sub = Label::builder()
         .label("Escala base de 150% en la pantalla principal")
         .css_classes(["card-section-sub"])
+        .wrap(true)
+        .justify(gtk4::Justification::Center)
         .xalign(0.5)
         .build();
     ts_p1_box.append(&ts_p1_title);
@@ -1366,11 +1411,15 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     let ts_p2_title = Label::builder()
         .label("Ajuste 2 · Más espacio")
         .css_classes(["card-section-title"])
+        .wrap(true)
+        .justify(gtk4::Justification::Center)
         .xalign(0.5)
         .build();
     let ts_p2_sub = Label::builder()
         .label("Escala base de 133% en la pantalla principal")
         .css_classes(["card-section-sub"])
+        .wrap(true)
+        .justify(gtk4::Justification::Center)
         .xalign(0.5)
         .build();
     ts_p2_box.append(&ts_p2_title);
@@ -1383,6 +1432,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     let truesize_math_lbl = Label::builder()
         .label("")
         .css_classes(["card-section-sub"])
+        .wrap(true)
         .xalign(0.0)
         .build();
 
@@ -1934,11 +1984,13 @@ fn create_macos_monitor_scaling_card(
     let title_lbl = Label::builder()
         .label(title_str)
         .css_classes(["card-section-title"])
+        .wrap(true)
         .xalign(0.0)
         .build();
     let specs_lbl = Label::builder()
         .label(hw_specs_str)
         .css_classes(["card-section-sub"])
+        .wrap(true)
         .xalign(0.0)
         .build();
     title_col.append(&title_lbl);
@@ -2018,11 +2070,7 @@ fn create_macos_monitor_scaling_card(
     scale_header_row.append(&more_space_lbl);
     card.append(&scale_header_row);
 
-    let thumbs_row = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(6)
-        .homogeneous(true)
-        .build();
+    let thumbs_row = make_wrap_flow(3, 5, 6, true);
 
     let mut preset_buttons = Vec::new();
     for (res_label, pct_label, scale_val) in presets {
@@ -2051,7 +2099,7 @@ fn create_macos_monitor_scaling_card(
         col.append(&dim);
         col.append(&pct);
         btn.set_child(Some(&col));
-        thumbs_row.append(&btn);
+        thumbs_row.insert(&btn, -1);
         preset_buttons.push((*scale_val, btn));
     }
     card.append(&thumbs_row);
@@ -2411,15 +2459,12 @@ fn create_keyboard_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     let active_status_lbl = Label::builder()
         .label("Distribución activa: Español (Latinoamérica)")
         .css_classes(["card-section-title"])
+        .wrap(true)
         .xalign(0.0)
         .build();
     layout_card.append(&active_status_lbl);
 
-    let layouts_row = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(10)
-        .homogeneous(true)
-        .build();
+    let layouts_row = make_wrap_flow(1, 3, 10, true);
 
     let create_layout_btn = |flag_title: &str, code_sub: &str, desc: &str| -> Button {
         let btn = Button::builder()
@@ -2435,15 +2480,20 @@ fn create_keyboard_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         let t = Label::builder()
             .label(flag_title)
             .css_classes(["card-section-title"])
+            .wrap(true)
+            .justify(gtk4::Justification::Center)
             .build();
         let c = Label::builder()
             .label(code_sub)
             .css_classes(["res-dim-label"])
+            .wrap(true)
+            .justify(gtk4::Justification::Center)
             .build();
         let d = Label::builder()
             .label(desc)
             .css_classes(["res-pct-label"])
             .wrap(true)
+            .justify(gtk4::Justification::Center)
             .build();
         col.append(&t);
         col.append(&c);
@@ -2468,15 +2518,16 @@ fn create_keyboard_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         "Distribución ANSI estadounidense estándar",
     );
 
-    layouts_row.append(&btn_latam);
-    layouts_row.append(&btn_es);
-    layouts_row.append(&btn_us);
+    layouts_row.insert(&btn_latam, -1);
+    layouts_row.insert(&btn_es, -1);
+    layouts_row.insert(&btn_us, -1);
     layout_card.append(&layouts_row);
 
     // Campo de prueba en vivo
     let test_lbl = Label::builder()
         .label("Prueba tu teclado en vivo aquí (escribe ñ, á, é, í, ó, ú, ¿, ¡, @):")
         .css_classes(["card-section-sub"])
+        .wrap(true)
         .xalign(0.0)
         .build();
     let test_entry = Entry::builder()
@@ -2502,6 +2553,7 @@ fn create_keyboard_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     let nat_lbl = Label::builder()
         .label("Desplazamiento natural (el contenido sigue el movimiento de los dedos)")
         .css_classes(["card-section-title"])
+        .wrap(true)
         .hexpand(true)
         .xalign(0.0)
         .build();
@@ -3103,14 +3155,12 @@ fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<dyn 
     let current_status_lbl = Label::builder()
         .label("Cargando fondo...")
         .css_classes(["card-section-sub"])
+        .wrap(true)
         .xalign(0.0)
         .build();
     current_card.append(&current_status_lbl);
 
-    let actions_row = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(10)
-        .build();
+    let actions_row = make_wrap_flow(1, 3, 10, false);
 
     let btn_choose = Button::builder()
         .label("Seleccionar archivo...")
@@ -3130,9 +3180,9 @@ fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<dyn 
         .has_frame(false)
         .build();
 
-    actions_row.append(&btn_choose);
-    actions_row.append(&btn_reset);
-    actions_row.append(&btn_open_dir);
+    actions_row.insert(&btn_choose, -1);
+    actions_row.insert(&btn_reset, -1);
+    actions_row.insert(&btn_open_dir, -1);
     current_card.append(&actions_row);
 
     pane.append(&current_card);
@@ -3157,6 +3207,7 @@ fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<dyn 
             "Haz clic en cualquier diseño para aplicarlo instantáneamente como fondo de pantalla.",
         )
         .css_classes(["card-section-sub"])
+        .wrap(true)
         .xalign(0.0)
         .build();
 
@@ -3397,6 +3448,7 @@ fn create_sound_pane() -> ScrolledWindow {
     let vol_lbl = Label::builder()
         .label("Volumen de salida maestro (PipeWire / WirePlumber)")
         .css_classes(["card-section-title"])
+        .wrap(true)
         .xalign(0.0)
         .build();
     let vol_slider = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
@@ -3490,6 +3542,7 @@ fn create_spotlight_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     let sec_sub = Label::builder()
         .label("En los resultados de la búsqueda de Spotlight, solo se incluirán las categorías seleccionadas.")
         .css_classes(["card-section-sub"])
+        .wrap(true)
         .xalign(0.0)
         .build();
 
@@ -3858,9 +3911,29 @@ mod tests {
             pill_min_w <= 44 && pill_nat_w <= 44,
             "La píldora + ⌄ está demasiado ancha: min={pill_min_w}, nat={pill_nat_w}"
         );
-        assert!(
+        assert_eq!(
             pill_min_h <= 24 && pill_nat_h <= 24,
+            true,
             "La píldora + ⌄ excede altura compacta: min={pill_min_h}, nat={pill_nat_h}"
+        );
+
+        // 5. Verificar configuración compacta (~2/3) del ancho mínimo del panel derecho
+        assert_eq!(SETTINGS_RIGHT_PANE_MIN_WIDTH, 440);
+        let test_stack = Stack::new();
+        let test_sw = ScrolledWindow::builder()
+            .hscrollbar_policy(PolicyType::Never)
+            .build();
+        let wide_box = GtkBox::builder().width_request(700).build();
+        test_sw.set_child(Some(&wide_box));
+        test_stack.add_named(&test_sw, Some("wide"));
+        configure_right_pane_stack(&test_stack);
+        assert!(!test_stack.is_hhomogeneous());
+        assert_eq!(test_sw.hscrollbar_policy(), PolicyType::Automatic);
+        assert_eq!(test_sw.min_content_width(), SETTINGS_RIGHT_PANE_MIN_WIDTH);
+        let (stack_min_w, _, _, _) = test_stack.measure(Orientation::Horizontal, -1);
+        assert!(
+            stack_min_w <= SETTINGS_RIGHT_PANE_MIN_WIDTH + 16,
+            "El ancho mínimo del Stack derecho ({stack_min_w}) supera el objetivo compacto"
         );
     }
 

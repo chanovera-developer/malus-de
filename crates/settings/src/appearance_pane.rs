@@ -525,6 +525,7 @@ fn build_appearance_main_pane(
         &Label::builder()
             .label("Estilo de íconos y widgets")
             .css_classes(["wifi-row-title"])
+            .wrap(true)
             .xalign(0.0)
             .valign(Align::Start)
             .margin_top(6)
@@ -550,7 +551,7 @@ fn build_appearance_main_pane(
             .orientation(Orientation::Vertical)
             .spacing(4)
             .halign(Align::Center)
-            .width_request(96)
+            .width_request(86)
             .build();
         let area = DrawingArea::new();
         area.set_content_width(44);
@@ -685,6 +686,7 @@ fn build_appearance_main_pane(
         &Label::builder()
             .label("Tema de aplicaciones, tema y estilo del puntero y superficie de escritorio")
             .css_classes(["card-section-sub"])
+            .wrap(true)
             .xalign(0.0)
             .build(),
     );
@@ -849,6 +851,7 @@ fn build_appearance_main_pane(
         &Label::builder()
             .label("Hacer clic en la barra de desplazamiento para")
             .css_classes(["wifi-row-title"])
+            .wrap(true)
             .xalign(0.0)
             .build(),
     );
@@ -950,6 +953,7 @@ fn make_corner_radius_row(
         &Label::builder()
             .label(title)
             .css_classes(["wifi-row-title"])
+            .wrap(true)
             .xalign(0.0)
             .build(),
     );
@@ -976,7 +980,7 @@ fn make_corner_radius_row(
         .orientation(Orientation::Horizontal)
         .adjustment(&adj)
         .draw_value(false)
-        .width_request(200)
+        .width_request(156)
         .css_classes(["bat-limit-slider"])
         .valign(Align::Center)
         .build();
@@ -1311,6 +1315,7 @@ fn build_appearance_themes_subpane(navigate: &Rc<dyn Fn(&str)>) -> (ScrolledWind
             desk_cfg.clamped_icon_size()
         ))
         .css_classes(["wifi-row-title"])
+        .wrap(true)
         .xalign(0.0)
         .hexpand(true)
         .build();
@@ -1326,7 +1331,7 @@ fn build_appearance_themes_subpane(navigate: &Rc<dyn Fn(&str)>) -> (ScrolledWind
         .orientation(Orientation::Horizontal)
         .adjustment(&icon_sz_adj)
         .draw_value(false)
-        .width_request(190)
+        .width_request(156)
         .css_classes(["bat-limit-slider"])
         .valign(Align::Center)
         .build();

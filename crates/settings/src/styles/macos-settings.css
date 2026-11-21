@@ -366,7 +366,15 @@ button.branches-nav-btn:disabled {
 
 .content-pane {
     background-color: @view_bg_color;
-    padding: 16px 28px 24px 28px;
+    padding: 16px 22px 24px 22px;
+}
+
+flowbox.settings-wrap-flow > flowboxchild {
+    padding: 0px;
+    margin: 0px;
+    background: transparent;
+    border: none;
+    box-shadow: none;
 }
 
 .pane-header-title {
