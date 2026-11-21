@@ -312,6 +312,7 @@ pub struct MalusState {
     pub app_switcher_style: AppSwitcherStyle,
     pub cursor_status: smithay::input::pointer::CursorImageStatus,
     pub pending_displays_reload: bool,
+    pub pending_brightness_reload: bool,
     pub pending_drm_hotplug: bool,
     pub saved_app_window_sizes: HashMap<String, Size<i32, Logical>>,
     pub dock_blur_headroom: i32,
@@ -1353,6 +1354,7 @@ impl MalusState {
             app_switcher_style,
             cursor_status: smithay::input::pointer::CursorImageStatus::default_named(),
             pending_displays_reload: false,
+            pending_brightness_reload: false,
             pending_drm_hotplug: false,
             saved_app_window_sizes: Self::load_saved_window_sizes(),
             dock_blur_headroom,
@@ -2132,6 +2134,9 @@ impl MalusState {
                     self.pending_displays_reload = true;
                     self.ipc_broadcaster
                         .broadcast(&IpcMessage::ReloadDisplaysConfig);
+                }
+                IpcMessage::ReloadDisplayBrightness => {
+                    self.pending_brightness_reload = true;
                 }
                 IpcMessage::ThemeTransitionPrepared { .. } => {}
                 IpcMessage::SetKeyboardLayout { layout, variant } => {

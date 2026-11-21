@@ -87,7 +87,8 @@ fn apply_output_brightness(output_idx: usize, pct: f64) {
     } else {
         cfg.brightness = clamped;
     }
-    save_displays_and_reload(&cfg);
+    let _ = cfg.save();
+    let _ = IpcClient::send_command(IpcMessage::ReloadDisplayBrightness);
 
     if connector_has_hardware_backlight(&connector) {
         std::thread::spawn(move || {

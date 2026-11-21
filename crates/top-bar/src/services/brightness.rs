@@ -56,7 +56,7 @@ impl BrightnessService {
         }
         let _ = cfg.save();
         let _ = malus_de_common::ipc::IpcClient::send_command(
-            malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig,
+            malus_de_common::ipc::IpcMessage::ReloadDisplayBrightness,
         );
 
         // 2. Intentar escribir en /sys/class/backlight o invocar brightnessctl en un hilo secundario

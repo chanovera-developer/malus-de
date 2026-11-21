@@ -486,6 +486,7 @@ struct DrmOutputSurface {
     background_snapshot_stale: bool,
     last_expose_revision: u64,
     last_workspace_revision: u64,
+    hw_gamma_brightness_applied: bool,
 }
 
 impl DrmOutputSurface {
@@ -1005,7 +1006,49 @@ fn create_drm_output_surface_for_connector(
         background_snapshot_stale: true,
         last_expose_revision: 0,
         last_workspace_revision: 0,
+        hw_gamma_brightness_applied: false,
     })
+}
+
+fn apply_drm_crtc_brightness_to_surface(
+    drm_device: &DrmDevice,
+    s: &mut DrmOutputSurface,
+    cfg: &DisplaysConfig,
+) -> bool {
+    let out_name = s.output.name();
+    let factor = if malus_de_common::config::connector_has_hardware_backlight(&out_name) {
+        1.0
+    } else {
+        cfg.find_for_connector(&out_name)
+            .map(|o| o.brightness)
+            .unwrap_or(cfg.brightness)
+            .clamp(5.0, 100.0)
+            / 100.0
+    };
+    let Ok(crtc_info) = drm_device.get_crtc(s.crtc) else {
+        s.hw_gamma_brightness_applied = false;
+        return false;
+    };
+    let gamma_len = crtc_info.gamma_length() as usize;
+    if gamma_len <= 1 {
+        s.hw_gamma_brightness_applied = false;
+        return false;
+    }
+    let denom = (gamma_len - 1) as f64;
+    let lut: Vec<u16> = (0..gamma_len)
+        .map(|i| {
+            ((i as f64 / denom) * factor * 65535.0)
+                .round()
+                .clamp(0.0, 65535.0) as u16
+        })
+        .collect();
+    if drm_device.set_gamma(s.crtc, &lut, &lut, &lut).is_ok() {
+        s.hw_gamma_brightness_applied = true;
+        true
+    } else {
+        s.hw_gamma_brightness_applied = false;
+        false
+    }
 }
 
 fn apply_output_config_to_surface(
@@ -1249,6 +1292,7 @@ fn reconcile_drm_outputs(
         let mut auto_x = 0;
         for s in surfs.iter_mut() {
             apply_output_config_to_surface(s, &displays_cfg, state, &mut auto_x);
+            let _ = apply_drm_crtc_brightness_to_surface(drm_device, s, &displays_cfg);
             s.background_dirty = true;
             s.background_snapshot_stale = true;
         }
@@ -2080,7 +2124,7 @@ pub fn run_drm() -> Result<()> {
 
     let mut next_auto_x: i32 = 0;
     for (conn_handle, conn_info, conn_name, _) in connected_list {
-        if let Some(surface) = create_drm_output_surface_for_connector(
+        if let Some(mut surface) = create_drm_output_surface_for_connector(
             &mut drm_device,
             &gbm_device,
             &mut renderer,
@@ -2093,6 +2137,7 @@ pub fn run_drm() -> Result<()> {
             &mut next_auto_x,
             &mut state,
         ) {
+            let _ = apply_drm_crtc_brightness_to_surface(&drm_device, &mut surface, &displays_cfg);
             surfaces.push(surface);
         }
     }
@@ -3249,6 +3294,7 @@ pub fn run_drm() -> Result<()> {
 
         // Hot-reload automático de monitors.toml e input.toml (inmediato vía IPC o cada 250ms por mtime)
         let check_now = state.pending_displays_reload
+            || state.pending_brightness_reload
             || last_config_check.elapsed() >= Duration::from_millis(250);
         if check_now {
             last_config_check = Instant::now();
@@ -3272,9 +3318,11 @@ pub fn run_drm() -> Result<()> {
                 .and_then(|m| m.modified())
                 .ok();
             if state.pending_displays_reload
+                || state.pending_brightness_reload
                 || (current_mtime.is_some() && current_mtime != last_monitors_mtime)
             {
                 state.pending_displays_reload = false;
+                state.pending_brightness_reload = false;
                 last_monitors_mtime = current_mtime;
                 let prev_cfg = current_displays_cfg.clone();
                 current_displays_cfg = DisplaysConfig::load();
@@ -3298,8 +3346,10 @@ pub fn run_drm() -> Result<()> {
                 if structural_unchanged {
                     if let Ok(mut surfs) = shared_surfaces.lock() {
                         for s in surfs.iter_mut() {
-                            s.full_damage_buffers = if ENABLE_DAMAGE_TRACKING { 3 } else { 1 };
-                            s.pending_damage_buffers = 1;
+                            if !apply_drm_crtc_brightness_to_surface(&drm_device, s, new_cfg) {
+                                s.full_damage_buffers = if ENABLE_DAMAGE_TRACKING { 3 } else { 1 };
+                                s.pending_damage_buffers = 1;
+                            }
                         }
                     }
                 } else {
@@ -3328,6 +3378,7 @@ pub fn run_drm() -> Result<()> {
                         let out_name = s.output.name();
                         let (loc, scale) =
                             apply_output_config_to_surface(s, new_cfg, &mut state, &mut auto_x);
+                        let _ = apply_drm_crtc_brightness_to_surface(&drm_device, s, new_cfg);
                         new_output_locs.insert(out_name.clone(), (loc, scale));
                         s.full_damage_buffers = if ENABLE_DAMAGE_TRACKING { 3 } else { 1 };
                         s.pending_damage_buffers = 1;
@@ -6794,7 +6845,11 @@ pub fn run_drm() -> Result<()> {
                         }
 
                         let output_name = out_surface.output.name();
-                        if !malus_de_common::config::connector_has_hardware_backlight(&output_name) {
+                        if !out_surface.hw_gamma_brightness_applied
+                            && !malus_de_common::config::connector_has_hardware_backlight(
+                                &output_name,
+                            )
+                        {
                             let out_brightness = current_displays_cfg
                                 .find_for_connector(&output_name)
                                 .map(|o| o.brightness)

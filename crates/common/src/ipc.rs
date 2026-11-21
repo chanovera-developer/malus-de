@@ -189,6 +189,8 @@ pub enum IpcMessage {
     ReloadMenuBarConfig,
     /// Solicitud de recarga en caliente de la configuración de pantallas y escalado (monitors.toml)
     ReloadDisplaysConfig,
+    /// Solicitud ligera de recarga de brillo por pantalla sin reconstruir superficies ni capas shell
+    ReloadDisplayBrightness,
     /// Notificación o solicitud de recarga de configuración de Fondo de pantalla (wallpaper.toml)
     ReloadWallpaperConfig,
     /// Solicitud de cambio en vivo de la distribución de teclado XKB (ej. "latam", "es", "us")
