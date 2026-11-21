@@ -2953,7 +2953,19 @@ fn render_single_icon(
             Image::from_paintable(Some(&texture))
         })
         .unwrap_or_else(|| match icon.as_ref() {
-            Some(i) => Image::from_gicon(i),
+            Some(i) => {
+                let img = Image::new();
+                if !(path.is_dir()
+                    && malus_de_common::folder_icon::apply_tinted_folder_icon(
+                        &img,
+                        i,
+                        metrics.icon_size,
+                    ))
+                {
+                    img.set_from_gicon(i);
+                }
+                img
+            }
             None => Image::from_icon_name("text-x-generic"),
         });
     icon_image.set_pixel_size(metrics.icon_size);
@@ -4742,6 +4754,23 @@ fn create_wallpaper_window(
                 }
             });
             desktop_monitors.borrow_mut().push(cfg_monitor);
+        }
+
+        let app_cfg_file = gio::File::for_path(malus_de_common::config::appearance_settings_path());
+        if let Ok(app_monitor) =
+            app_cfg_file.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
+        {
+            let last_hex =
+                Rc::new(RefCell::new(malus_de_common::config::load_folder_tint_hex()));
+            let trigger_c = trigger_refresh.clone();
+            app_monitor.connect_changed(move |_, _, _, _| {
+                let next_hex = malus_de_common::config::load_folder_tint_hex();
+                if *last_hex.borrow() != next_hex {
+                    *last_hex.borrow_mut() = next_hex;
+                    trigger_c();
+                }
+            });
+            desktop_monitors.borrow_mut().push(app_monitor);
         }
     } else {
         // Monitor secundario: menú contextual básico en fondo de pantalla

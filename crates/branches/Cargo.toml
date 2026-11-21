@@ -11,7 +11,7 @@ name = "malus-de-branches"
 path = "src/main.rs"
 
 [dependencies]
-malus-de-common = { workspace = true }
+malus-de-common = { workspace = true, features = ["gtk-ui"] }
 gtk4 = { workspace = true }
 libadwaita = { workspace = true }
 glib = { workspace = true }

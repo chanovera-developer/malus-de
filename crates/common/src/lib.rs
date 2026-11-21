@@ -6,6 +6,8 @@
 pub mod apps;
 pub mod config;
 pub mod crash;
+#[cfg(feature = "gtk-ui")]
+pub mod folder_icon;
 pub mod ipc;
 pub mod logging;
 #[cfg(feature = "gtk-ui")]

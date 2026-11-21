@@ -152,13 +152,47 @@ pub fn load_folder_color_index() -> usize {
         .unwrap_or(0)
 }
 
-pub fn folder_color_css(index: usize) -> String {
-    let (red, green, blue) = match index.min(3) {
-        1 => (0.15, 0.45, 0.82),
-        2 => ACCENT_COLORS[load_accent_color_index()].1,
+/// Resuelve el color RGB (`[0.0, 1.0]`) para tintar las carpetas según
+/// `folder_color_idx` (`0 = Automático`, `1 = Azul clásico`, `2 = Color de énfasis`, `3 = Grafito`)
+/// y `accent_color_idx`.
+pub fn resolve_folder_tint_rgb(folder_color_idx: usize, accent_color_idx: usize) -> (f64, f64, f64) {
+    let accent_idx = accent_color_idx.min(ACCENT_COLORS.len() - 1);
+    match folder_color_idx.min(3) {
+        // Azul clásico de macOS / Colloid (#60c0f0 -> azul claro clásico de carpeta)
+        1 => (0.376, 0.753, 0.941),
+        // Color de énfasis explícito
+        2 => ACCENT_COLORS[accent_idx].1,
+        // Grafito neutro
         3 => (0.55, 0.55, 0.58),
-        _ => (0.15, 0.45, 0.82),
-    };
+        // Automático: azul clásico si el énfasis es Multicolor, o sigue el énfasis elegido
+        _ => {
+            if accent_idx == 0 {
+                (0.376, 0.753, 0.941)
+            } else {
+                ACCENT_COLORS[accent_idx].1
+            }
+        }
+    }
+}
+
+/// Color RGB actual de carpetas según `appearance-settings.toml`.
+pub fn load_folder_tint_rgb() -> (f64, f64, f64) {
+    resolve_folder_tint_rgb(load_folder_color_index(), load_accent_color_index())
+}
+
+/// Color hexadecimal `#rrggbb` actual para tintar los SVG de carpetas.
+pub fn load_folder_tint_hex() -> String {
+    let (r, g, b) = load_folder_tint_rgb();
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        (r.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (g.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (b.clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
+}
+
+pub fn folder_color_css(index: usize) -> String {
+    let (red, green, blue) = resolve_folder_tint_rgb(index, load_accent_color_index());
     format!(
         "image.branches-folder-icon {{ color: rgb({:.0}%, {:.0}%, {:.0}%); }}",
         red * 100.0,
@@ -3876,5 +3910,19 @@ apps = []
         assert!(!temp_dir.join("wallpaper.webp").exists());
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn resolve_folder_tint_rgb_follows_mode_and_accent() {
+        // Automático con Multicolor (0) -> azul cielo Colloid (#60c0f0)
+        assert_eq!(resolve_folder_tint_rgb(0, 0), (0.376, 0.753, 0.941));
+        // Automático con Morado (2) -> sigue al acento
+        assert_eq!(resolve_folder_tint_rgb(0, 2), ACCENT_COLORS[2].1);
+        // Azul clásico siempre azul
+        assert_eq!(resolve_folder_tint_rgb(1, 4), (0.376, 0.753, 0.941));
+        // Color de énfasis explícito
+        assert_eq!(resolve_folder_tint_rgb(2, 5), ACCENT_COLORS[5].1);
+        // Grafito
+        assert_eq!(resolve_folder_tint_rgb(3, 5), (0.55, 0.55, 0.58));
     }
 }

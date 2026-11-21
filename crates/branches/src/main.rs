@@ -178,6 +178,8 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
     static BRANCHES_GLASS_MONITOR: std::cell::RefCell<Option<gio::FileMonitor>> =
         const { std::cell::RefCell::new(None) };
+    static LAST_FOLDER_TINT_HEX: std::cell::RefCell<String> =
+        const { std::cell::RefCell::new(String::new()) };
 }
 
 fn apply_branches_accent_color(index: usize) {
@@ -277,6 +279,9 @@ fn load_custom_css() {
     apply_branches_accent_color(malus_de_common::config::load_accent_color_index());
     apply_branches_folder_color(malus_de_common::config::load_folder_color_index());
     apply_branches_liquid_glass_opacity(malus_de_common::config::load_liquid_glass_opacity());
+    LAST_FOLDER_TINT_HEX.with(|cell| {
+        *cell.borrow_mut() = malus_de_common::config::load_folder_tint_hex();
+    });
 
     let app_cfg_file = gio::File::for_path(malus_de_common::config::appearance_settings_path());
     if let Ok(monitor) =
@@ -288,6 +293,19 @@ fn load_custom_css() {
             apply_branches_liquid_glass_opacity(
                 malus_de_common::config::load_liquid_glass_opacity(),
             );
+            let next_hex = malus_de_common::config::load_folder_tint_hex();
+            let changed = LAST_FOLDER_TINT_HEX.with(|cell| {
+                let mut cur = cell.borrow_mut();
+                if *cur != next_hex {
+                    *cur = next_hex;
+                    true
+                } else {
+                    false
+                }
+            });
+            if changed {
+                app_window::reload_all_open_windows();
+            }
         });
         BRANCHES_GLASS_MONITOR.with(|cell| {
             *cell.borrow_mut() = Some(monitor);

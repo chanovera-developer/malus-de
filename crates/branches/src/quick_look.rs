@@ -788,9 +788,7 @@ fn create_loading_placeholder(item: &FileItem) -> gtk4::Widget {
     vbox.set_vexpand(true);
     vbox.set_hexpand(true);
 
-    let icon = Image::from_gicon(&item.gicon);
-    crate::views::apply_folder_icon_tint(&icon, item);
-    icon.set_pixel_size(72);
+    let icon = crate::views::create_folder_aware_icon(item, 72);
     vbox.append(&icon);
 
     let spinner = Spinner::new();
@@ -1728,9 +1726,7 @@ fn create_audio_preview_from_payload(
     vbox.set_margin_top(24);
     vbox.set_margin_bottom(24);
 
-    let icon = Image::from_gicon(&item.gicon);
-    crate::views::apply_folder_icon_tint(&icon, item);
-    icon.set_pixel_size(96);
+    let icon = crate::views::create_folder_aware_icon(item, 96);
     vbox.append(&icon);
 
     let name = Label::builder()
@@ -1909,9 +1905,7 @@ fn create_generic_preview(item: &FileItem) -> gtk4::Widget {
     vbox.set_margin_start(32);
     vbox.set_margin_end(32);
 
-    let icon = Image::from_gicon(&item.gicon);
-    crate::views::apply_folder_icon_tint(&icon, item);
-    icon.set_pixel_size(128);
+    let icon = crate::views::create_folder_aware_icon(item, 128);
     vbox.append(&icon);
 
     let name = Label::builder()

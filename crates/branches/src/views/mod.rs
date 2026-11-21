@@ -1373,7 +1373,7 @@ pub(super) fn update_item_image_thumbnail(
             img.remove_css_class(css);
         }
         img.set_widget_name("");
-        img.set_from_gicon(&item.gicon);
+        apply_item_gicon_or_tinted_folder(img, item, pixel_size);
         return;
     }
 
@@ -1444,13 +1444,27 @@ pub(super) fn create_item_image(
     pixel_size: i32,
     thumb_css_class: Option<&str>,
 ) -> gtk4::Image {
-    let img = gtk4::Image::from_gicon(&item.gicon);
+    let img = gtk4::Image::new();
     apply_folder_icon_tint(&img, item);
+    apply_item_gicon_or_tinted_folder(&img, item, pixel_size);
     img.set_pixel_size(pixel_size);
     if is_image_thumbnail_candidate(item) {
         update_item_image_thumbnail(&img, item, pixel_size, thumb_css_class);
     }
     img
+}
+
+pub(crate) fn apply_item_gicon_or_tinted_folder(
+    img: &gtk4::Image,
+    item: &crate::fs_backend::FileItem,
+    pixel_size: i32,
+) {
+    if item.is_dir
+        && malus_de_common::folder_icon::apply_tinted_folder_icon(img, &item.gicon, pixel_size)
+    {
+        return;
+    }
+    img.set_from_gicon(&item.gicon);
 }
 
 pub(crate) fn apply_folder_icon_tint(img: &gtk4::Image, item: &crate::fs_backend::FileItem) {
@@ -1460,6 +1474,17 @@ pub(crate) fn apply_folder_icon_tint(img: &gtk4::Image, item: &crate::fs_backend
     } else {
         img.remove_css_class("branches-folder-icon");
     }
+}
+
+pub(crate) fn create_folder_aware_icon(
+    item: &crate::fs_backend::FileItem,
+    pixel_size: i32,
+) -> gtk4::Image {
+    let img = gtk4::Image::new();
+    apply_folder_icon_tint(&img, item);
+    apply_item_gicon_or_tinted_folder(&img, item, pixel_size);
+    img.set_pixel_size(pixel_size);
+    img
 }
 
 #[cfg(test)]

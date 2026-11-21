@@ -231,6 +231,22 @@ struct BranchesTab {
     tab_title_label: Label,
 }
 
+thread_local! {
+    static OPEN_BRANCHES_WINDOWS: RefCell<Vec<Weak<BranchesWindow>>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+pub fn reload_all_open_windows() {
+    let active: Vec<Rc<BranchesWindow>> = OPEN_BRANCHES_WINDOWS.with(|cell| {
+        let mut list = cell.borrow_mut();
+        list.retain(|w| w.strong_count() > 0);
+        list.iter().filter_map(Weak::upgrade).collect()
+    });
+    for w in active {
+        w.reload_all_panes();
+    }
+}
+
 pub struct BranchesWindow {
     window: ApplicationWindow,
     root_overlay: Overlay,
@@ -1109,6 +1125,10 @@ impl BranchesWindow {
 
         // Crear la primera pestaña con la ruta inicial
         branches_window.open_new_tab(Some(initial_path));
+
+        OPEN_BRANCHES_WINDOWS.with(|cell| {
+            cell.borrow_mut().push(Rc::downgrade(&branches_window));
+        });
 
         branches_window
     }

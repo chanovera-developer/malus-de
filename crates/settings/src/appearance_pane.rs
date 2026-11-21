@@ -496,6 +496,13 @@ fn build_appearance_main_pane(
         "Color de resaltado del texto",
         &hl_names,
         prefs.borrow().highlight_color_idx,
+        |idx| {
+            if idx == 0 {
+                crate::accent_color()
+            } else {
+                ACCENT_COLORS[idx.min(ACCENT_COLORS.len() - 1)].1
+            }
+        },
         {
             let p = prefs.clone();
             move |idx| {
@@ -631,6 +638,12 @@ fn build_appearance_main_pane(
         "Color de carpetas",
         &["Automático", "Azul clásico", "Color de énfasis", "Grafito"],
         prefs.borrow().folder_color_idx,
+        |idx| {
+            malus_de_common::config::resolve_folder_tint_rgb(
+                idx,
+                malus_de_common::config::load_accent_color_index(),
+            )
+        },
         {
             let p = prefs.clone();
             move |idx| {
@@ -2124,20 +2137,42 @@ fn apple_switch_row<F: Fn(bool) + 'static>(
     row
 }
 
-fn build_color_dot_selector_row<F: Fn(usize) + 'static>(
+fn build_color_dot_selector_row<
+    D: Fn(usize) -> (f64, f64, f64) + 'static,
+    F: Fn(usize) + 'static,
+>(
     title: &str,
     options: &[&str],
     initial_idx: usize,
+    dot_color: D,
     on_select: F,
 ) -> GtkBox {
-    let row = build_simple_selector_row(title, options, initial_idx, on_select);
-    row
+    build_selector_row_inner(title, options, initial_idx, Some(dot_color), on_select)
 }
 
 fn build_simple_selector_row<F: Fn(usize) + 'static>(
     title: &str,
     options: &[&str],
     initial_idx: usize,
+    on_select: F,
+) -> GtkBox {
+    build_selector_row_inner::<fn(usize) -> (f64, f64, f64), F>(
+        title,
+        options,
+        initial_idx,
+        None,
+        on_select,
+    )
+}
+
+fn build_selector_row_inner<
+    D: Fn(usize) -> (f64, f64, f64) + 'static,
+    F: Fn(usize) + 'static,
+>(
+    title: &str,
+    options: &[&str],
+    initial_idx: usize,
+    dot_color: Option<D>,
     on_select: F,
 ) -> GtkBox {
     let row = GtkBox::builder()
@@ -2163,15 +2198,30 @@ fn build_simple_selector_row<F: Fn(usize) + 'static>(
         .spacing(6)
         .valign(Align::Center)
         .build();
-    let dot = Label::builder()
-        .label("●")
-        .css_classes(["net-dot-blue"])
-        .build();
+    let dot_area = dot_color.map(|color_fn| {
+        let da = DrawingArea::new();
+        da.set_content_width(12);
+        da.set_content_height(12);
+        da.set_valign(Align::Center);
+        da.set_halign(Align::Center);
+        crate::register_accent_draw_area(&da);
+        let sel_d = selected.clone();
+        da.set_draw_func(move |_, cr, w, h| {
+            let (r, g, b) = color_fn(sel_d.get());
+            let cx = w as f64 * 0.5;
+            let cy = h as f64 * 0.5;
+            let rad = (w.min(h) as f64) * 0.5 - 1.5;
+            cr.set_source_rgb(r, g, b);
+            cr.arc(cx, cy, rad, 0.0, std::f64::consts::TAU);
+            let _ = cr.fill();
+        });
+        inner.append(&da);
+        da
+    });
     let cur_lbl = Label::builder()
         .label(opts.get(selected.get()).map(String::as_str).unwrap_or(""))
         .css_classes(["card-section-sub"])
         .build();
-    inner.append(&dot);
     inner.append(&cur_lbl);
     inner.append(
         &Image::builder()
@@ -2198,6 +2248,7 @@ fn build_simple_selector_row<F: Fn(usize) + 'static>(
         let pop_c = pop;
         let sel_c = selected;
         let lbl_c = cur_lbl;
+        let dot_c = dot_area;
         let opts_c = opts;
         let cb_c = cb;
         let self_ref = rebuild.clone();
@@ -2216,6 +2267,7 @@ fn build_simple_selector_row<F: Fn(usize) + 'static>(
                 let pc = pop_c.clone();
                 let sc = sel_c.clone();
                 let lc = lbl_c.clone();
+                let dc = dot_c.clone();
                 let os = opt.clone();
                 let cbc = cb_c.clone();
                 let rfc = self_ref.clone();
@@ -2223,6 +2275,9 @@ fn build_simple_selector_row<F: Fn(usize) + 'static>(
                     pc.popdown();
                     sc.set(idx);
                     lc.set_label(&os);
+                    if let Some(ref d) = dc {
+                        d.queue_draw();
+                    }
                     if let Some(f) = rfc.borrow().as_ref() {
                         f();
                     }

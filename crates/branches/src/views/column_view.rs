@@ -489,15 +489,11 @@ impl ColumnViewInner {
                 img.add_css_class("branches-preview-image");
                 img.upcast()
             } else {
-                let img = Image::from_gicon(&item.gicon);
-                crate::views::apply_folder_icon_tint(&img, item);
-                img.set_pixel_size(96);
+                let img = crate::views::create_folder_aware_icon(item, 96);
                 img.upcast()
             }
         } else {
-            let img = Image::from_gicon(&item.gicon);
-            crate::views::apply_folder_icon_tint(&img, item);
-            img.set_pixel_size(96);
+            let img = crate::views::create_folder_aware_icon(item, 96);
             img.upcast()
         };
         thumb_box.append(&thumb_widget);

@@ -428,9 +428,7 @@ impl GalleryView {
                 img.add_css_class("branches-gallery-large-image");
                 main_box.append(&img);
             } else {
-                let icon = Image::from_gicon(&item.gicon);
-                crate::views::apply_folder_icon_tint(&icon, item);
-                icon.set_pixel_size(128);
+                let icon = crate::views::create_folder_aware_icon(item, 128);
                 main_box.append(&icon);
             }
         } else if [
@@ -462,9 +460,7 @@ impl GalleryView {
             text_card.append(&lbl);
             main_box.append(&text_card);
         } else {
-            let icon = Image::from_gicon(&item.gicon);
-            crate::views::apply_folder_icon_tint(&icon, item);
-            icon.set_pixel_size(128);
+            let icon = crate::views::create_folder_aware_icon(item, 128);
             main_box.append(&icon);
         }
 
