@@ -1438,7 +1438,7 @@ fn paint_malus_symbolic_glyph(
 
 fn draw_liquid_glass_preview(cr: &gtk4::cairo::Context, w: f64, h: f64, glass_opacity: f64) {
     let _ = cr.save();
-    crate::squircle_path(cr, w, h, 14.0);
+    crate::squircle_path(cr, w, h, 20.0);
     cr.clip();
 
     let painted_bg = with_liquid_glass_bg_pixbuf(|pb| {
