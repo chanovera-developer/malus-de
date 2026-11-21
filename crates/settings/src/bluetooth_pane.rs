@@ -252,6 +252,12 @@ pub fn create_bluetooth_pane(parent_window: &ApplicationWindow) -> (ScrolledWind
     let discovery_active = Rc::new(Cell::new(false));
     let refresh_gen = Rc::new(Cell::new(0u64));
     let refresh_slot: Rc<RefCell<Option<Rc<dyn Fn(bool)>>>> = Rc::new(RefCell::new(None));
+    let rendered_my_devices: Rc<RefCell<Vec<BtDeviceEntry>>> =
+        Rc::new(RefCell::new(Vec::new()));
+    let rendered_nearby_devices: Rc<RefCell<Vec<BtDeviceEntry>>> =
+        Rc::new(RefCell::new(Vec::new()));
+    let remembered_my_devices: Rc<RefCell<HashMap<String, BtDeviceEntry>>> =
+        Rc::new(RefCell::new(HashMap::new()));
 
     let win_ref = parent_window.clone();
     let snap_ref = latest_snapshot.clone();
@@ -267,6 +273,9 @@ pub fn create_bluetooth_pane(parent_window: &ApplicationWindow) -> (ScrolledWind
     let spinner_ref = scan_spinner.clone();
     let banner_ref = status_banner.clone();
     let slot_inner = refresh_slot.clone();
+    let rendered_my_ref = rendered_my_devices.clone();
+    let rendered_nearby_ref = rendered_nearby_devices.clone();
+    let remembered_my_ref = remembered_my_devices.clone();
 
     let run_refresh: Rc<dyn Fn(bool)> = Rc::new(move |start_scan: bool| {
         let my_gen = gen_ref.get().wrapping_add(1);
@@ -286,14 +295,42 @@ pub fn create_bluetooth_pane(parent_window: &ApplicationWindow) -> (ScrolledWind
         let banner = banner_ref.clone();
         let win = win_ref.clone();
         let slot = slot_inner.clone();
+        let rendered_my = rendered_my_ref.clone();
+        let rendered_nearby = rendered_nearby_ref.clone();
+        let remembered_my = remembered_my_ref.clone();
 
         glib::spawn_future_local(async move {
             if start_scan {
-                let _ = ensure_adapter_discovering(true).await;
+                if let Err(err) = ensure_adapter_discovering(true).await {
+                    banner.set_label(&format!("No se pudo iniciar la búsqueda: {err}"));
+                    banner.set_visible(true);
+                } else {
+                    banner.set_visible(false);
+                }
             }
-            let snap = collect_bluetooth_snapshot().await;
+            let mut snap = collect_bluetooth_snapshot().await;
             if gen_check.get() != my_gen {
                 return;
+            }
+
+            // BlueZ puede omitir momentaneamente Paired/Trusted al emitir actualizaciones.
+            // Conservamos los dispositivos ya enlazados en memoria para que Ajustes
+            // no haga desaparecer filas durante el refresco cada 3 segundos.
+            {
+                let mut remembered = remembered_my.borrow_mut();
+                for dev in &snap.my_devices {
+                    remembered.insert(dev.path.clone(), dev.clone());
+                }
+
+                let remembered_paths: HashSet<String> =
+                    remembered.keys().cloned().collect();
+                snap.nearby_devices.retain(|dev| !remembered_paths.contains(&dev.path));
+                snap.my_devices = remembered.values().cloned().collect();
+                snap.my_devices.sort_by(|a, b| {
+                    b.connected
+                        .cmp(&a.connected)
+                        .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                });
             }
             *snap_dest.borrow_mut() = Some(snap.clone());
 
@@ -341,24 +378,32 @@ pub fn create_bluetooth_pane(parent_window: &ApplicationWindow) -> (ScrolledWind
                 })
             };
 
-            populate_bluetooth_devices_card(
-                &my_c,
-                &snap.my_devices,
-                true,
-                &ops_c,
-                &win,
-                &banner,
-                &trigger_reload,
-            );
-            populate_bluetooth_devices_card(
-                &near_c,
-                &snap.nearby_devices,
-                false,
-                &ops_c,
-                &win,
-                &banner,
-                &trigger_reload,
-            );
+            if *rendered_my.borrow() != snap.my_devices {
+                populate_bluetooth_devices_card(
+                    &my_c,
+                    &snap.my_devices,
+                    true,
+                    &ops_c,
+                    &win,
+                    &banner,
+                    &trigger_reload,
+                    &remembered_my,
+                );
+                *rendered_my.borrow_mut() = snap.my_devices.clone();
+            }
+            if *rendered_nearby.borrow() != snap.nearby_devices {
+                populate_bluetooth_devices_card(
+                    &near_c,
+                    &snap.nearby_devices,
+                    false,
+                    &ops_c,
+                    &win,
+                    &banner,
+                    &trigger_reload,
+                    &remembered_my,
+                );
+                *rendered_nearby.borrow_mut() = snap.nearby_devices.clone();
+            }
         });
     });
 
@@ -461,6 +506,8 @@ pub fn create_bluetooth_pane(parent_window: &ApplicationWindow) -> (ScrolledWind
     let ref_timer = run_refresh.clone();
     glib::timeout_add_local(std::time::Duration::from_secs(3), move || {
         if pane_timer.is_mapped() {
+            // Consultar el estado de conexión sin reiniciar el escaneo ni
+            // reconstruir la lista de dispositivos.
             ref_timer(false);
         }
         glib::ControlFlow::Continue
@@ -481,6 +528,7 @@ fn populate_bluetooth_devices_card(
     parent_window: &ApplicationWindow,
     banner: &Label,
     trigger_reload: &Rc<dyn Fn(bool)>,
+    remembered_my_devices: &Rc<RefCell<HashMap<String, BtDeviceEntry>>>,
 ) {
     while let Some(child) = card.first_child() {
         card.remove(&child);
@@ -522,6 +570,9 @@ fn populate_bluetooth_devices_card(
             .spacing(10)
             .css_classes(["bt-device-row"])
             .build();
+        if is_my_devices && dev.connected {
+            row_box.add_css_class("bt-device-row-active");
+        }
 
         let dev_icon = Image::builder()
             .icon_name(&dev.icon_name)
@@ -669,8 +720,15 @@ fn populate_bluetooth_devices_card(
             let dev_d = dev.clone();
             let ban_d = banner.clone();
             let rel_d = trigger_reload.clone();
+            let remembered_d = remembered_my_devices.clone();
             info_btn.connect_clicked(move |_| {
-                show_bt_device_details_dialog(&win_d, &dev_d, &ban_d, &rel_d);
+                show_bt_device_details_dialog(
+                    &win_d,
+                    &dev_d,
+                    &ban_d,
+                    &rel_d,
+                    &remembered_d,
+                );
             });
         }
 
@@ -749,6 +807,7 @@ fn show_bt_device_details_dialog(
     dev: &BtDeviceEntry,
     banner: &Label,
     trigger_reload: &Rc<dyn Fn(bool)>,
+    remembered_my_devices: &Rc<RefCell<HashMap<String, BtDeviceEntry>>>,
 ) {
     let dialog = gtk4::Window::builder()
         .transient_for(parent)
@@ -851,17 +910,20 @@ fn show_bt_device_details_dialog(
     let dev_name_f = dev.name.clone();
     let ban_f = banner.clone();
     let rel_f = trigger_reload.clone();
+    let remembered_f = remembered_my_devices.clone();
     forget_btn.connect_clicked(move |_| {
         d_f.close();
         let p = dev_path_f.clone();
         let n = dev_name_f.clone();
         let b = ban_f.clone();
         let r = rel_f.clone();
+        let remembered_done = remembered_f.clone();
         glib::spawn_future_local(async move {
             if let Err(err) = remove_bt_device(&p).await {
                 b.set_label(&format!("No se pudo olvidar {n}: {err}"));
                 b.set_visible(true);
             } else {
+                remembered_done.borrow_mut().remove(&p);
                 b.set_visible(false);
             }
             r(false);
@@ -965,9 +1027,11 @@ pub(crate) fn classify_bluetooth_devices(raw_devices: Vec<BtDeviceEntry>) -> (Ve
     let mut nearby_devices = Vec::new();
 
     for dev in raw_devices {
-        if dev.paired || dev.trusted || dev.connected {
+        if dev.paired || dev.connected {
             my_devices.push(dev);
-        } else if !dev.name.trim().is_empty() && dev.name != dev.address {
+        } else if dev.rssi.is_some()
+            || (!dev.address.trim().is_empty() && dev.name != dev.address)
+        {
             nearby_devices.push(dev);
         }
     }
@@ -1130,11 +1194,14 @@ async fn find_first_adapter(conn: &Connection) -> Option<(String, bool, bool)> {
 async fn ensure_adapter_discovering(enable: bool) -> Result<(), String> {
     let conn = Connection::system().await.map_err(|e| e.to_string())?;
     let Some((adapter_path, powered, discovering)) = find_first_adapter(&conn).await else {
-        return Ok(());
+        return Err("BlueZ no encontró ningún adaptador".to_string());
     };
     if !powered {
-        return Ok(());
+        return Err("El adaptador Bluetooth está desactivado".to_string());
     }
+    // Discovery (buscar otros dispositivos) no depende de la visibilidad del
+    // equipo. Ajustar Discoverable por separado evita que un permiso o una
+    // propiedad no admitida impida llamar a StartDiscovery.
     let _ = conn
         .call_method(
             Some("org.bluez"),
@@ -1145,7 +1212,7 @@ async fn ensure_adapter_discovering(enable: bool) -> Result<(), String> {
         )
         .await;
     if enable && !discovering {
-        let _ = conn
+        conn
             .call_method(
                 Some("org.bluez"),
                 adapter_path.as_str(),
@@ -1153,9 +1220,10 @@ async fn ensure_adapter_discovering(enable: bool) -> Result<(), String> {
                 "StartDiscovery",
                 &(),
             )
-            .await;
+            .await
+            .map_err(|e| e.to_string())?;
     } else if !enable && discovering {
-        let _ = conn
+        conn
             .call_method(
                 Some("org.bluez"),
                 adapter_path.as_str(),
@@ -1163,7 +1231,8 @@ async fn ensure_adapter_discovering(enable: bool) -> Result<(), String> {
                 "StopDiscovery",
                 &(),
             )
-            .await;
+            .await
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -1344,9 +1413,10 @@ mod tests {
             "Sin conexión"
         );
 
-        // Solo los cercanos con nombre real distinto de su MAC se muestran
-        assert_eq!(nearby.len(), 1);
+        // Los cercanos pueden aparecer inicialmente solo con su dirección MAC.
+        assert_eq!(nearby.len(), 2);
         assert_eq!(nearby[0].name, "Sony WH-1000XM5");
+        assert_eq!(nearby[1].name, "CC:DD:EE:FF:00:11");
     }
 
     #[test]
@@ -1365,4 +1435,3 @@ mod tests {
         );
     }
 }
-

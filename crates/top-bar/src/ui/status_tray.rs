@@ -520,9 +520,16 @@ fn create_bluetooth_tray_button() -> MenuButton {
     let pop_c = popover.clone();
     pref_btn.connect_clicked(move |_| {
         pop_c.popdown();
-        let mut command = Command::new("gnome-control-center");
+        let settings_bin = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|dir| dir.join("malus-de-settings")))
+            .filter(|p| p.exists())
+            .unwrap_or_else(|| std::path::PathBuf::from("malus-de-settings"));
+        let mut command = Command::new(settings_bin);
         malus_de_common::config::set_cursor_environment(&mut command);
-        let _ = command.arg("bluetooth").spawn();
+        if let Err(err) = command.args(["--panel", "bluetooth"]).spawn() {
+            tracing::error!("No se pudieron abrir los ajustes de Bluetooth de Malus DE: {err}");
+        }
     });
 
     popover_box.append(&sep);
