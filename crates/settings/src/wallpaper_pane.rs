@@ -23,7 +23,8 @@ use crate::wifi_pane::{make_squircle_button, wrap_squircle_card, WIFI_CARD_SQUIR
 
 const FIT_MODE_LABELS: [&str; 4] = ["Llenar pantalla", "Ajustar", "Estirar", "Centrar"];
 const WP_THUMB_SQUIRCLE_RADIUS: f64 = WIFI_CARD_SQUIRCLE_RADIUS;
-const WP_HERO_SQUIRCLE_RADIUS: f64 = WIFI_CARD_SQUIRCLE_RADIUS * (100.0 / 70.0);
+// Radio concéntrico con la tarjeta contenedora (WIFI_CARD_SQUIRCLE_RADIUS=19.0 menos ~11px de padding)
+const WP_HERO_SQUIRCLE_RADIUS: f64 = 8.0;
 
 const CURATED_SOLID_COLORS: [(&str, &str); 21] = [
     ("Negro", "#000000"),
