@@ -1,8 +1,9 @@
 use gtk4::prelude::*;
 use gtk4::{
     Align, Box as GtkBox, Button, Image, Label, MenuButton, Orientation, PolicyType, Popover,
-    Scale, ScrolledWindow, Separator, Spinner, Stack, StackTransitionType, Switch,
+    Scale, ScrolledWindow, Separator, Spinner, Stack, StackTransitionType,
 };
+use malus_de_common::mac_switch::MacSwitch as Switch;
 use std::cell::RefCell;
 use std::process::Command;
 use std::rc::Rc;
@@ -1976,7 +1977,7 @@ fn create_wifi_subview(
 
     header.append(&back_btn);
     header.append(&title_lbl);
-    header.append(&wifi_switch);
+    header.append(&*wifi_switch);
     view_box.append(&header);
 
     // Contenedor con Scroll para redes
@@ -2389,7 +2390,7 @@ fn create_bt_subview(
 
     header.append(&back_btn);
     header.append(&title_lbl);
-    header.append(&bt_switch);
+    header.append(&*bt_switch);
     view_box.append(&header);
 
     // Contenedor con Scroll para dispositivos

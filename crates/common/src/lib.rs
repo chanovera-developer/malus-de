@@ -8,6 +8,8 @@ pub mod config;
 pub mod crash;
 pub mod ipc;
 pub mod logging;
+#[cfg(feature = "gtk-ui")]
+pub mod mac_switch;
 pub mod theme;
 pub mod wayland;
 

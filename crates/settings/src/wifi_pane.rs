@@ -2,8 +2,9 @@ use gtk4::prelude::*;
 use gtk4::{
     Align, ApplicationWindow, Box as GtkBox, Button, DrawingArea, DropDown, Entry, Image, Label,
     MenuButton, Orientation, Overlay, PasswordEntry, PolicyType, Popover, ScrolledWindow, Spinner,
-    StateFlags, StringList, Switch,
+    StateFlags, StringList,
 };
+use malus_de_common::mac_switch::MacSwitch as Switch;
 
 /// Con superelipse n=4.2, r=19.0 px iguala la profundidad visual de esquina (~2.9 px) de `border-radius: 10px` en el sidebar.
 pub(crate) const WIFI_CARD_SQUIRCLE_RADIUS: f64 = 19.0;
@@ -608,7 +609,7 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
 
     header_row.append(&icon_badge);
     header_row.append(&header_text);
-    header_row.append(&wifi_switch);
+    header_row.append(&*wifi_switch);
     top_card.append(&header_row);
 
     let top_sep = GtkBox::builder()
@@ -2418,7 +2419,7 @@ fn show_network_details_dialog(
             glib::Propagation::Proceed
         });
         auto_row.append(&auto_lbl);
-        auto_row.append(&auto_sw);
+        auto_row.append(&*auto_sw);
         vbox.append(&auto_row);
     }
 

@@ -1,8 +1,9 @@
 use gtk4::prelude::*;
 use gtk4::{
     Align, ApplicationWindow, Box as GtkBox, Button, DropDown, Entry, FileDialog, FileFilter,
-    Label, Orientation, PasswordEntry, PolicyType, Popover, ScrolledWindow, StringList, Switch,
+    Label, Orientation, PasswordEntry, PolicyType, Popover, ScrolledWindow, StringList,
 };
+use malus_de_common::mac_switch::MacSwitch as Switch;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
@@ -347,7 +348,7 @@ fn populate_vpn_profiles_card(
 
         row.append(&badge);
         row.append(&text_col);
-        row.append(&sw);
+        row.append(&*sw);
         row.append(&info_wrap);
         container.append(&row);
     }
@@ -786,7 +787,7 @@ fn show_vpn_details_dialog(
         });
         glib::Propagation::Proceed
     });
-    auto_row.append(&auto_sw);
+    auto_row.append(&*auto_sw);
     card.append(&auto_row);
     vbox.append(&wrap_squircle_card(&card, WIFI_CARD_SQUIRCLE_RADIUS));
 

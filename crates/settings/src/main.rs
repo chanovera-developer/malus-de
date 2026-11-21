@@ -4,9 +4,10 @@ use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, CssProvider,
     DrawingArea, DropDown, Entry, EventControllerFocus, FileDialog, FileFilter, FlowBox,
     GestureClick, GestureDrag, Image, Label, Orientation, Overlay, PackType, Paned, Picture,
-    PolicyType, Scale, ScrolledWindow, SearchEntry, Stack, StackTransitionType, Switch,
+    PolicyType, Scale, ScrolledWindow, SearchEntry, Stack, StackTransitionType,
     WindowControls, WindowHandle,
 };
+use malus_de_common::mac_switch::MacSwitch as Switch;
 use malus_de_common::config::{
     AppSwitcherStyle, DisplayModeConfig, DisplaysConfig, DockConfig, InputConfig,
 };
@@ -2788,7 +2789,7 @@ fn create_keyboard_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         .active(InputConfig::load().natural_scrolling)
         .build();
     nat_row.append(&nat_lbl);
-    nat_row.append(&nat_switch);
+    nat_row.append(&*nat_switch);
     input_opts_card.append(&nat_row);
 
     nat_switch.connect_state_set(|_, active| {
@@ -3946,7 +3947,7 @@ fn create_dock_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         glib::Propagation::Proceed
     });
     mag_row.append(&mag_lbl);
-    mag_row.append(&mag_sw);
+    mag_row.append(&*mag_sw);
     card.append(&mag_row);
 
     // Efecto de minimización

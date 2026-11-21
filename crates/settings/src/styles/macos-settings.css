@@ -799,6 +799,55 @@ menubutton.wifi-help-btn > button > box {
     margin: 0px;
 }
 
+/* Toggle personalizado estilo macOS Tahoe (40×19 px con perilla blanca de 26×15 px) */
+box.mac-switch {
+    min-width: 36px;
+    min-height: 15px;
+    padding: 2px;
+    margin: 0px;
+    border-radius: 999px;
+    border: none;
+    background-image: none;
+    background-color: alpha(@window_fg_color, 0.15);
+    box-shadow: inset 0 1px 1.5px rgba(0, 0, 0, 0.08), inset 0 0 0 1px alpha(@window_fg_color, 0.05);
+    transition: background-color 140ms ease;
+}
+
+box.mac-switch:hover:not(:checked):not(:disabled) {
+    background-color: alpha(@window_fg_color, 0.20);
+}
+
+box.mac-switch:checked {
+    background-color: @accent_bg_color;
+    background-image: none;
+    box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.10);
+}
+
+box.mac-switch:disabled {
+    opacity: 0.45;
+}
+
+box.mac-switch:focus-visible {
+    outline: 2px solid alpha(@accent_bg_color, 0.55);
+    outline-offset: 2px;
+}
+
+box.mac-switch > box.mac-switch-knob {
+    min-width: 26px;
+    min-height: 15px;
+    margin: 0px;
+    padding: 0px;
+    border-radius: 999px;
+    border: none;
+    background-image: none;
+    background-color: #ffffff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22), 0 0 1px rgba(0, 0, 0, 0.10);
+}
+
+box.mac-switch:active:not(:disabled) > box.mac-switch-knob {
+    background-color: #f4f4f6;
+}
+
 /* Toggle estilo macOS Tahoe (píldora 2:1 con perilla blanca ancha) */
 switch.macos-switch {
     min-width: 36px;

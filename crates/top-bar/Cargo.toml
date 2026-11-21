@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-malus-de-common.workspace = true
+malus-de-common = { workspace = true, features = ["gtk-ui"] }
 malus-de-dialogs.workspace = true
 gtk4.workspace = true
 libadwaita.workspace = true

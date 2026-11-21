@@ -2,8 +2,8 @@ use gtk4::prelude::*;
 use gtk4::{
     Adjustment, Align, ApplicationWindow, Box as GtkBox, Button, CheckButton, DrawingArea, Image,
     Label, MenuButton, Orientation, Overlay, PolicyType, Popover, Scale, ScrolledWindow, Stack,
-    Switch,
 };
+use malus_de_common::mac_switch::MacSwitch as Switch;
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -835,7 +835,7 @@ fn build_voiceover_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWindo
         });
     }
     row.append(&col);
-    row.append(&sw);
+    row.append(&*sw);
     card.append(&row);
     pane.append(&wrap_squircle_card(&card, WIFI_CARD_SQUIRCLE_RADIUS));
 
@@ -2569,7 +2569,7 @@ fn a11y_switch_row<F: Fn(bool) + 'static>(
         on_toggle(active);
         glib::Propagation::Proceed
     });
-    row.append(&sw);
+    row.append(&*sw);
     row
 }
 

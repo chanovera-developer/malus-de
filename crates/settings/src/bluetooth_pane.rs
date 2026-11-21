@@ -6,8 +6,9 @@ use crate::wifi_pane::{
 use gtk4::prelude::*;
 use gtk4::{
     Align, ApplicationWindow, Box as GtkBox, Button, EventControllerMotion, Image, Label,
-    Orientation, PolicyType, Popover, ScrolledWindow, Spinner, Switch,
+    Orientation, PolicyType, Popover, ScrolledWindow, Spinner,
 };
+use malus_de_common::mac_switch::MacSwitch as Switch;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -127,7 +128,7 @@ pub fn create_bluetooth_pane(parent_window: &ApplicationWindow) -> (ScrolledWind
 
     header_row.append(&icon_badge);
     header_row.append(&header_text);
-    header_row.append(&bt_switch);
+    header_row.append(&*bt_switch);
     top_card.append(&header_row);
 
     let top_sep = GtkBox::builder()
@@ -886,7 +887,7 @@ fn show_bt_device_details_dialog(
         glib::Propagation::Proceed
     });
     trust_row.append(&trust_lbl);
-    trust_row.append(&trust_sw);
+    trust_row.append(&*trust_sw);
     card.append(&trust_row);
     vbox.append(&wrap_squircle_card(&card, WIFI_CARD_SQUIRCLE_RADIUS));
 

@@ -1,8 +1,9 @@
 use gtk4::prelude::*;
 use gtk4::{
     Align, ApplicationWindow, Box as GtkBox, Button, CheckButton, DrawingArea, Entry, Image, Label,
-    Orientation, Overlay, PolicyType, ScrolledWindow, Stack, Switch,
+    Orientation, Overlay, PolicyType, ScrolledWindow, Stack,
 };
+use malus_de_common::mac_switch::MacSwitch as Switch;
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -1189,7 +1190,7 @@ fn build_software_update_subpane(
                 .css_classes(["macos-switch"])
                 .valign(Align::Center)
                 .build();
-            row.append(&sw);
+            row.append(&*sw);
             card.append(&row);
             vbox.append(&wrap_squircle_card(&card, WIFI_CARD_SQUIRCLE_RADIUS));
 
@@ -2297,7 +2298,7 @@ fn sharing_service_row(
             glib::Propagation::Proceed
         });
     }
-    row.append(&sw);
+    row.append(&*sw);
     row
 }
 
@@ -3611,7 +3612,7 @@ fn pref_switch_row<F: Fn(bool) + 'static>(
         glib::Propagation::Proceed
     });
     row.append(&col);
-    row.append(&sw);
+    row.append(&*sw);
     row
 }
 

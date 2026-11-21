@@ -1,8 +1,9 @@
 use gtk4::prelude::*;
 use gtk4::{
     Align, Box as GtkBox, Button, Image, Label, MenuButton, Orientation, PolicyType, Popover,
-    Scale, ScrolledWindow, Separator, Switch,
+    Scale, ScrolledWindow, Separator,
 };
+use malus_de_common::mac_switch::MacSwitch as Switch;
 use std::cell::RefCell;
 use std::process::Command;
 use std::rc::Rc;
@@ -152,7 +153,7 @@ fn create_wifi_tray_button() -> MenuButton {
     let wifi_switch = Switch::builder().valign(Align::Center).build();
 
     header.append(&title_lbl);
-    header.append(&wifi_switch);
+    header.append(&*wifi_switch);
     popover_box.append(&header);
 
     // Scrolled list de redes
@@ -490,7 +491,7 @@ fn create_bluetooth_tray_button() -> MenuButton {
     let bt_switch = Switch::builder().valign(Align::Center).build();
 
     header.append(&title_lbl);
-    header.append(&bt_switch);
+    header.append(&*bt_switch);
     popover_box.append(&header);
 
     // Scrolled list de dispositivos

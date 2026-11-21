@@ -1,8 +1,9 @@
 use gtk4::prelude::*;
 use gtk4::{
     Adjustment, Align, ApplicationWindow, Box as GtkBox, Button, DrawingArea, Image, Label,
-    MenuButton, Orientation, Overlay, PolicyType, Popover, Scale, ScrolledWindow, Switch,
+    MenuButton, Orientation, Overlay, PolicyType, Popover, Scale, ScrolledWindow,
 };
+use malus_de_common::mac_switch::MacSwitch as Switch;
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
 use std::fs::{self, OpenOptions};
@@ -1026,7 +1027,7 @@ fn show_battery_charging_dialog(
         .valign(Align::Center)
         .build();
     opt_row.append(&opt_text);
-    opt_row.append(&opt_sw);
+    opt_row.append(&*opt_sw);
     card.append(&opt_row);
 
     // Nota de detalles Linux (oculta salvo "Obtén detalles...")
@@ -1261,7 +1262,7 @@ fn build_option_switch(title: &str, subtitle: Option<&str>, active: bool) -> (Gt
         .valign(Align::Center)
         .build();
     row.append(&col);
-    row.append(&sw);
+    row.append(&*sw);
     (row, sw)
 }
 

@@ -1,8 +1,9 @@
 use gtk4::prelude::*;
 use gtk4::{
     Align, ApplicationWindow, Box as GtkBox, Button, DropDown, Entry, Image, Label, MenuButton,
-    Orientation, Overlay, PolicyType, Popover, ScrolledWindow, StringList, Switch,
+    Orientation, Overlay, PolicyType, Popover, ScrolledWindow, StringList,
 };
+use malus_de_common::mac_switch::MacSwitch as Switch;
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap};
@@ -381,7 +382,7 @@ pub fn create_network_panes(
 
     fw_top_row.append(&fw_hero_badge);
     fw_top_row.append(&fw_text_col);
-    fw_top_row.append(&fw_switch);
+    fw_top_row.append(&*fw_switch);
     fw_hero_card.append(&fw_top_row);
 
     let fw_sep = GtkBox::builder().css_classes(["wifi-hairline-sep"]).build();
@@ -1801,7 +1802,7 @@ fn build_option_switch_row(title: &str, subtitle: Option<&str>, active: bool) ->
         .build();
 
     row.append(&text_col);
-    row.append(&sw);
+    row.append(&*sw);
     (row, sw)
 }
 

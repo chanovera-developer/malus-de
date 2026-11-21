@@ -1,8 +1,9 @@
 use gtk4::prelude::*;
 use gtk4::{
     Adjustment, Align, Box as GtkBox, Button, CheckButton, DrawingArea, GestureClick, Image, Label,
-    MenuButton, Orientation, PolicyType, Popover, Scale, ScrolledWindow, Stack, Switch,
+    MenuButton, Orientation, PolicyType, Popover, Scale, ScrolledWindow, Stack,
 };
+use malus_de_common::mac_switch::MacSwitch as Switch;
 use malus_de_common::config::DesktopIconsConfig;
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
@@ -702,7 +703,7 @@ fn build_appearance_main_pane(
             glib::Propagation::Proceed
         });
     }
-    tint_row.append(&tint_sw);
+    tint_row.append(&*tint_sw);
     win_card1.append(&tint_row);
     pane.append(&wrap_squircle_card(&win_card1, WIFI_CARD_SQUIRCLE_RADIUS));
 
@@ -1737,7 +1738,7 @@ fn apple_switch_row<F: Fn(bool) + 'static>(
         glib::Propagation::Proceed
     });
     row.append(&col);
-    row.append(&sw);
+    row.append(&*sw);
     row
 }
 

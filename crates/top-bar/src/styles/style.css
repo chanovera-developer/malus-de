@@ -1215,6 +1215,50 @@ popover.light-popover button.popover-menu-item.malus-squircle-menu-item:hover > 
     color: #ffffff;
 }
 
+/* Toggle personalizado estilo macOS Tahoe (40×19 px con perilla blanca de 26×15 px) */
+box.mac-switch {
+    min-width: 36px;
+    min-height: 15px;
+    padding: 2px;
+    margin: 0px;
+    border-radius: 999px;
+    border: none;
+    background-image: none;
+    background-color: rgba(120, 120, 128, 0.34);
+    box-shadow: inset 0 1px 1.5px rgba(0, 0, 0, 0.24), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+    transition: background-color 140ms ease;
+}
+
+popover.light-popover box.mac-switch,
+.light-mode box.mac-switch {
+    background-color: rgba(120, 120, 128, 0.22);
+    box-shadow: inset 0 1px 1.5px rgba(0, 0, 0, 0.08), inset 0 0 0 1px rgba(0, 0, 0, 0.04);
+}
+
+box.mac-switch:checked,
+popover.light-popover box.mac-switch:checked,
+.light-mode box.mac-switch:checked {
+    background-color: @accent_bg_color;
+    background-image: none;
+    box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.10);
+}
+
+box.mac-switch:disabled {
+    opacity: 0.45;
+}
+
+box.mac-switch > box.mac-switch-knob {
+    min-width: 26px;
+    min-height: 15px;
+    margin: 0px;
+    padding: 0px;
+    border-radius: 999px;
+    border: none;
+    background-image: none;
+    background-color: #ffffff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22), 0 0 1px rgba(0, 0, 0, 0.10);
+}
+
 /* Toggles estilo macOS Tahoe para Centro de Control y Bandeja de Estado */
 switch {
     min-width: 36px;
