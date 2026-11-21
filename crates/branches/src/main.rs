@@ -362,6 +362,14 @@ mod tests {
             ".branches-sidebar-row-favorite .branches-sidebar-icon {\n    color: @accent_bg_color;"
         ));
         assert!(css.contains(".branches-sidebar-row-location .branches-sidebar-icon"));
+        let selected_row_block = css
+            .split(".branches-sidebar-row:selected,")
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .expect("Debe existir .branches-sidebar-row:selected");
+        assert!(selected_row_block.contains("alpha(@accent_bg_color, 0.16)"));
+        assert!(selected_row_block.contains("color: @accent_bg_color;"));
+        assert!(selected_row_block.contains("alpha(@accent_bg_color, 0.28)"));
 
         // Contenedores squircle afilados en barra superior con altura uniforme + input 999px
         let pill_block = css
