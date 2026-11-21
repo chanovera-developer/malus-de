@@ -2366,6 +2366,151 @@ impl DesktopDockConfig {
     }
 }
 
+/// Modo de fondo de pantalla activo en Malus DE.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WallpaperMode {
+    #[default]
+    Image,
+    DynamicPair,
+    Gradient,
+    SolidColor,
+}
+
+/// Modo de ajuste / encuadre para fondos de pantalla basados en imagen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WallpaperFitMode {
+    #[default]
+    Fill,
+    Fit,
+    Stretch,
+    Center,
+}
+
+impl WallpaperFitMode {
+    pub fn as_index(self) -> usize {
+        match self {
+            Self::Fill => 0,
+            Self::Fit => 1,
+            Self::Stretch => 2,
+            Self::Center => 3,
+        }
+    }
+
+    pub fn from_index(idx: usize) -> Self {
+        match idx {
+            1 => Self::Fit,
+            2 => Self::Stretch,
+            3 => Self::Center,
+            _ => Self::Fill,
+        }
+    }
+}
+
+/// Directorio canónico de configuración de Malus DE para el fondo de pantalla
+/// (respeta `XDG_CONFIG_HOME` dentro de sesiones aisladas o `~/.config/malus-de`).
+pub fn malus_wallpaper_config_dir() -> PathBuf {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            PathBuf::from(home).join(".config/malus-de")
+        })
+}
+
+/// Parsea un color hexadecimal `#RRGGBB` o `RRGGBB` en componentes RGB `[0..255]`.
+pub fn parse_wallpaper_hex_color(hex: &str) -> Option<(u8, u8, u8)> {
+    let trimmed = hex.trim().trim_start_matches('#');
+    if trimmed.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&trimmed[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&trimmed[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&trimmed[4..6], 16).ok()?;
+    Some((r, g, b))
+}
+
+/// Normaliza una cadena hexadecimal a formato `#RRGGBB` en mayúsculas.
+pub fn normalize_wallpaper_hex_color(hex: &str) -> Option<String> {
+    let (r, g, b) = parse_wallpaper_hex_color(hex)?;
+    Some(format!("#{:02X}{:02X}{:02X}", r, g, b))
+}
+
+/// Configuración persistente de Fondo de pantalla de Malus DE (`~/.config/malus-de/wallpaper.toml`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WallpaperConfig {
+    pub mode: WallpaperMode,
+    pub fit_mode: WallpaperFitMode,
+    pub image_path: Option<String>,
+    pub light_image_path: Option<String>,
+    pub dark_image_path: Option<String>,
+    pub color_hex: String,
+    pub active_title: Option<String>,
+    pub show_on_all_spaces: bool,
+    pub custom_photos: Vec<String>,
+    pub custom_colors: Vec<String>,
+}
+
+impl Default for WallpaperConfig {
+    fn default() -> Self {
+        Self {
+            mode: WallpaperMode::Image,
+            fit_mode: WallpaperFitMode::Fill,
+            image_path: None,
+            light_image_path: None,
+            dark_image_path: None,
+            color_hex: "#4DA6C2".to_string(),
+            active_title: None,
+            show_on_all_spaces: true,
+            custom_photos: Vec::new(),
+            custom_colors: Vec::new(),
+        }
+    }
+}
+
+impl WallpaperConfig {
+    pub fn config_path_in(dir: &Path) -> PathBuf {
+        dir.join("wallpaper.toml")
+    }
+
+    pub fn config_path() -> PathBuf {
+        Self::config_path_in(&malus_wallpaper_config_dir())
+    }
+
+    pub fn load_in(dir: &Path) -> Self {
+        let path = Self::config_path_in(dir);
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(parsed) = toml::from_str::<Self>(&content) {
+                return parsed;
+            }
+        }
+        let mut cfg = Self::default();
+        if dir.join(".wallpaper-gradient").exists() {
+            cfg.mode = WallpaperMode::Gradient;
+            cfg.active_title = Some("Degradado Aurora".to_string());
+        }
+        cfg
+    }
+
+    pub fn load() -> Self {
+        Self::load_in(&malus_wallpaper_config_dir())
+    }
+
+    pub fn save_in(&self, dir: &Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(dir)?;
+        let toml_str = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let header = "# Configuración de Fondo de pantalla de Malus DE\n\n";
+        std::fs::write(Self::config_path_in(dir), format!("{header}{toml_str}"))
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        self.save_in(&malus_wallpaper_config_dir())
+    }
+}
+
 pub fn set_default_web_browser_desktop(desktop_id: &str) -> bool {
     std::process::Command::new("xdg-settings")
         .args(["set", "default-web-browser", desktop_id])
@@ -4452,6 +4597,41 @@ apps = []
             assert!(keyfile.contains("[org/gnome/desktop/wm/preferences]"));
             assert!(keyfile.contains(&format!("action-double-click-titlebar='{expected}'")));
         }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wallpaper_config_parses_hex_and_persists_in_dir() {
+        assert_eq!(parse_wallpaper_hex_color("#4da6c2"), Some((0x4D, 0xA6, 0xC2)));
+        assert_eq!(parse_wallpaper_hex_color("000000"), Some((0, 0, 0)));
+        assert_eq!(parse_wallpaper_hex_color("bad"), None);
+        assert_eq!(
+            normalize_wallpaper_hex_color("6c6ea0"),
+            Some("#6C6EA0".to_string())
+        );
+
+        let dir = std::env::temp_dir().join(format!(
+            "malus-wallpaper-cfg-test-{}-{}",
+            std::process::id(),
+            super::ATOMIC_TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::fs::write(dir.join(".wallpaper-gradient"), b"1").unwrap();
+        let migrated = WallpaperConfig::load_in(&dir);
+        assert_eq!(migrated.mode, WallpaperMode::Gradient);
+
+        let mut cfg = WallpaperConfig::default();
+        cfg.mode = WallpaperMode::SolidColor;
+        cfg.fit_mode = WallpaperFitMode::Fit;
+        cfg.color_hex = "#C86B6C".to_string();
+        cfg.custom_colors.push("#123456".to_string());
+        cfg.custom_photos.push("/tmp/foto.png".to_string());
+        cfg.save_in(&dir).unwrap();
+
+        let loaded = WallpaperConfig::load_in(&dir);
+        assert_eq!(loaded, cfg);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

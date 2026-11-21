@@ -648,6 +648,128 @@ viewport {
 }
 
 /* ==========================================
+   Panel Fondo de pantalla estilo macOS Tahoe
+   ========================================== */
+.wp-hero-box {
+    padding: 12px 14px;
+}
+
+.wp-hero-title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: @window_fg_color;
+}
+
+.wp-spaces-row {
+    padding: 8px 12px;
+}
+
+.wp-hero-action-lbl {
+    font-size: 12px;
+    font-weight: 500;
+    color: @window_fg_color;
+}
+
+.wp-section-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: @window_fg_color;
+}
+
+.wp-show-all-btn {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 2px 6px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: alpha(@window_fg_color, 0.60);
+}
+
+.wp-show-all-btn:hover {
+    background: alpha(@window_fg_color, 0.06);
+    color: @window_fg_color;
+}
+
+.wp-tile-btn {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 2px;
+    border-radius: 10px;
+}
+
+.wp-tile-btn:hover {
+    background: alpha(@window_fg_color, 0.04);
+}
+
+.wp-tile-btn-active {
+    background: transparent;
+}
+
+.wp-tile-label {
+    font-size: 11px;
+    font-weight: 400;
+    color: alpha(@window_fg_color, 0.78);
+}
+
+.wp-add-photo-card {
+    background-color: alpha(@window_fg_color, 0.06);
+    border: 1px solid alpha(@window_fg_color, 0.12);
+    border-radius: 10px;
+    padding: 8px 10px;
+}
+
+.wp-add-photo-tile:hover .wp-add-photo-card {
+    background-color: alpha(@window_fg_color, 0.10);
+    border-color: alpha(@accent_bg_color, 0.55);
+}
+
+.wp-add-photo-icon {
+    color: alpha(@window_fg_color, 0.65);
+}
+
+.wp-pending-card {
+    padding: 9px 13px;
+}
+
+.wp-pending-icon {
+    color: alpha(@window_fg_color, 0.45);
+}
+
+.wp-color-circle-btn {
+    min-width: 36px;
+    min-height: 36px;
+    padding: 0px;
+    border-radius: 999px;
+    background-color: alpha(@window_fg_color, 0.09);
+    border: 1px solid alpha(@window_fg_color, 0.14);
+    color: @window_fg_color;
+}
+
+.wp-color-circle-btn:hover {
+    background-color: alpha(@window_fg_color, 0.15);
+}
+
+.wp-swatch-btn {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 0px;
+    min-width: 36px;
+    min-height: 36px;
+    border-radius: 999px;
+}
+
+.wp-fit-dropdown > button {
+    min-height: 26px;
+    padding: 2px 10px;
+    font-size: 12px;
+    border-radius: 7px;
+}
+
+/* ==========================================
    Panel Wi-Fi estilo macOS System Settings
    ========================================== */
 .wifi-content-pane {

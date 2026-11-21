@@ -122,10 +122,84 @@ fn build_gradient_pixbuf(target_w: i32, target_h: i32) -> Option<gdk_pixbuf::Pix
     ))
 }
 
+fn build_solid_color_pixbuf(
+    target_w: i32,
+    target_h: i32,
+    r: u8,
+    g: u8,
+    b: u8,
+) -> Option<gdk_pixbuf::Pixbuf> {
+    let w = target_w.max(1);
+    let h = target_h.max(1);
+    let mut rgba = vec![255u8; (w as usize) * (h as usize) * 4];
+    for px in rgba.chunks_exact_mut(4) {
+        px[0] = r;
+        px[1] = g;
+        px[2] = b;
+        px[3] = 255;
+    }
+    Some(gdk_pixbuf::Pixbuf::from_bytes(
+        &glib::Bytes::from_owned(rgba),
+        gdk_pixbuf::Colorspace::Rgb,
+        true,
+        8,
+        w,
+        h,
+        w * 4,
+    ))
+}
+
 fn load_cover_cropped_pixbuf(target_w: i32, target_h: i32) -> Option<gdk_pixbuf::Pixbuf> {
     let target_w = target_w.max(1);
     let target_h = target_h.max(1);
-    resolve_desktop_wallpaper_path()
+    let wp_cfg = malus_de_common::config::WallpaperConfig::load();
+    match wp_cfg.mode {
+        malus_de_common::config::WallpaperMode::SolidColor => {
+            let (r, g, b) = malus_de_common::config::parse_wallpaper_hex_color(&wp_cfg.color_hex)
+                .unwrap_or((0x4D, 0xA6, 0xC2));
+            return build_solid_color_pixbuf(target_w, target_h, r, g, b);
+        }
+        malus_de_common::config::WallpaperMode::Gradient => {
+            return build_gradient_pixbuf(target_w, target_h);
+        }
+        malus_de_common::config::WallpaperMode::DynamicPair => {
+            let is_dark = malus_de_common::config::is_dark_mode_active();
+            let chosen = if is_dark {
+                wp_cfg.dark_image_path.as_deref()
+            } else {
+                wp_cfg.light_image_path.as_deref()
+            };
+            if let Some(p) = chosen.map(PathBuf::from).filter(|p| p.is_file()) {
+                if let Ok(loaded) = gdk_pixbuf::Pixbuf::from_file(p) {
+                    let pixbuf = loaded.apply_embedded_orientation().unwrap_or(loaded);
+                    let (sw, sh, cx, cy) = compute_cover_crop_geometry(
+                        pixbuf.width(),
+                        pixbuf.height(),
+                        target_w,
+                        target_h,
+                    );
+                    if let Some(scaled) = pixbuf.scale_simple(sw, sh, gdk_pixbuf::InterpType::Bilinear) {
+                        if scaled.width() == target_w && scaled.height() == target_h {
+                            return Some(scaled);
+                        }
+                        if let Some(cropped) = scaled.new_subpixbuf(cx, cy, target_w, target_h).copy() {
+                            return Some(cropped);
+                        }
+                    }
+                }
+            }
+        }
+        malus_de_common::config::WallpaperMode::Image => {}
+    }
+
+    let explicit_image = wp_cfg
+        .image_path
+        .as_deref()
+        .map(PathBuf::from)
+        .filter(|p| p.is_file())
+        .or_else(resolve_desktop_wallpaper_path);
+
+    explicit_image
         .and_then(|path| {
             let loaded = gdk_pixbuf::Pixbuf::from_file(path).ok()?;
             let pixbuf = loaded.apply_embedded_orientation().unwrap_or(loaded);

@@ -189,6 +189,8 @@ pub enum IpcMessage {
     ReloadMenuBarConfig,
     /// Solicitud de recarga en caliente de la configuración de pantallas y escalado (monitors.toml)
     ReloadDisplaysConfig,
+    /// Notificación o solicitud de recarga de configuración de Fondo de pantalla (wallpaper.toml)
+    ReloadWallpaperConfig,
     /// Solicitud de cambio en vivo de la distribución de teclado XKB (ej. "latam", "es", "us")
     SetKeyboardLayout {
         layout: String,

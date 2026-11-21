@@ -11,7 +11,10 @@ use gtk4::{
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use malus_de_common::{
-    config::{DesktopIconsConfig, DisplaysConfig},
+    config::{
+        parse_wallpaper_hex_color, DesktopIconsConfig, DisplaysConfig, WallpaperConfig,
+        WallpaperFitMode, WallpaperMode,
+    },
     logging::init_logging,
 };
 use std::cell::{Cell, RefCell};
@@ -220,6 +223,14 @@ fn squircle_clip_pixbuf(pixbuf: &gdk_pixbuf::Pixbuf) -> Option<gdk_pixbuf::Pixbu
 }
 
 fn build_default_gradient_texture(target_w: i32, target_h: i32) -> Option<gtk4::gdk::Texture> {
+    build_aurora_gradient_texture(target_w, target_h, true)
+}
+
+fn build_aurora_gradient_texture(
+    target_w: i32,
+    target_h: i32,
+    is_dark: bool,
+) -> Option<gtk4::gdk::Texture> {
     let target_w = target_w.max(1);
     let target_h = target_h.max(1);
     let surface =
@@ -230,34 +241,17 @@ fn build_default_gradient_texture(target_w: i32, target_h: i32) -> Option<gtk4::
         let cy = target_h as f64 * 0.25;
         let radius = (target_w as f64 - cx).hypot(target_h as f64 - cy);
         let grad = gtk4::cairo::RadialGradient::new(cx, cy, 0.0, cx, cy, radius);
-        grad.add_color_stop_rgba(
-            0.0,
-            0x2e as f64 / 255.0,
-            0x10 as f64 / 255.0,
-            0x65 as f64 / 255.0,
-            1.0,
-        );
-        grad.add_color_stop_rgba(
-            0.35,
-            0x17 as f64 / 255.0,
-            0x25 as f64 / 255.0,
-            0x54 as f64 / 255.0,
-            1.0,
-        );
-        grad.add_color_stop_rgba(
-            0.70,
-            0x0f as f64 / 255.0,
-            0x17 as f64 / 255.0,
-            0x2a as f64 / 255.0,
-            1.0,
-        );
-        grad.add_color_stop_rgba(
-            1.0,
-            0x0d as f64 / 255.0,
-            0x15 as f64 / 255.0,
-            0x26 as f64 / 255.0,
-            1.0,
-        );
+        if is_dark {
+            grad.add_color_stop_rgba(0.0, 0x2e as f64 / 255.0, 0x10 as f64 / 255.0, 0x65 as f64 / 255.0, 1.0);
+            grad.add_color_stop_rgba(0.35, 0x17 as f64 / 255.0, 0x25 as f64 / 255.0, 0x54 as f64 / 255.0, 1.0);
+            grad.add_color_stop_rgba(0.70, 0x0f as f64 / 255.0, 0x17 as f64 / 255.0, 0x2a as f64 / 255.0, 1.0);
+            grad.add_color_stop_rgba(1.0, 0x0d as f64 / 255.0, 0x15 as f64 / 255.0, 0x26 as f64 / 255.0, 1.0);
+        } else {
+            grad.add_color_stop_rgba(0.0, 0x7c as f64 / 255.0, 0xb8 as f64 / 255.0, 0xff as f64 / 255.0, 1.0);
+            grad.add_color_stop_rgba(0.38, 0x4f as f64 / 255.0, 0x8a as f64 / 255.0, 0xe8 as f64 / 255.0, 1.0);
+            grad.add_color_stop_rgba(0.72, 0x5a as f64 / 255.0, 0x67 as f64 / 255.0, 0xd8 as f64 / 255.0, 1.0);
+            grad.add_color_stop_rgba(1.0, 0x2d as f64 / 255.0, 0x3a as f64 / 255.0, 0x8c as f64 / 255.0, 1.0);
+        }
         let _ = cr.set_source(&grad);
         let _ = cr.paint();
     }
@@ -271,6 +265,207 @@ fn build_default_gradient_texture(target_w: i32, target_h: i32) -> Option<gtk4::
         (target_w as usize) * 4,
     );
     Some(tex.upcast())
+}
+
+fn build_solid_color_texture(color_hex: &str) -> Option<gtk4::gdk::Texture> {
+    let (r, g, b) = parse_wallpaper_hex_color(color_hex).unwrap_or((0x4D, 0xA6, 0xC2));
+    // Cairo/GDK B8g8r8a8Premultiplied en little-endian: B, G, R, A
+    let pixel = [b, g, r, 255u8];
+    let mut buf = Vec::with_capacity(64 * 4);
+    for _ in 0..64 {
+        buf.extend_from_slice(&pixel);
+    }
+    let bytes = glib::Bytes::from_owned(buf);
+    let tex = gtk4::gdk::MemoryTexture::new(
+        8,
+        8,
+        gtk4::gdk::MemoryFormat::B8g8r8a8Premultiplied,
+        &bytes,
+        8 * 4,
+    );
+    Some(tex.upcast())
+}
+
+fn build_centered_wallpaper_texture(
+    path: &Path,
+    target_w: i32,
+    target_h: i32,
+) -> Option<gtk4::gdk::Texture> {
+    let target_w = target_w.max(1);
+    let target_h = target_h.max(1);
+    let loaded = gdk_pixbuf::Pixbuf::from_file(path).ok()?;
+    let pixbuf = loaded.apply_embedded_orientation().unwrap_or(loaded);
+    let surface =
+        gtk4::cairo::ImageSurface::create(gtk4::cairo::Format::ARgb32, target_w, target_h).ok()?;
+    {
+        let cr = gtk4::cairo::Context::new(&surface).ok()?;
+        cr.set_source_rgb(0.05, 0.08, 0.14);
+        let _ = cr.paint();
+        let dx = (target_w - pixbuf.width()) as f64 / 2.0;
+        let dy = (target_h - pixbuf.height()) as f64 / 2.0;
+        gtk4::cairo::Context::set_source_pixbuf(&cr, &pixbuf, dx, dy);
+        let _ = cr.paint();
+    }
+    let data = surface.take_data().ok()?;
+    let bytes = glib::Bytes::from_owned(data.to_vec());
+    let tex = gtk4::gdk::MemoryTexture::new(
+        target_w,
+        target_h,
+        gtk4::gdk::MemoryFormat::B8g8r8a8Premultiplied,
+        &bytes,
+        (target_w as usize) * 4,
+    );
+    Some(tex.upcast())
+}
+
+fn apply_image_with_fit_mode(
+    picture: &Picture,
+    img_path: &Path,
+    target_phys_w: i32,
+    target_phys_h: i32,
+    fit_mode: WallpaperFitMode,
+) {
+    match fit_mode {
+        WallpaperFitMode::Fill => {
+            if let Some(tex) = build_scaled_wallpaper_texture(img_path, target_phys_w, target_phys_h)
+            {
+                picture.set_paintable(Some(&tex));
+                picture.set_content_fit(gtk4::ContentFit::Fill);
+            } else {
+                picture.set_filename(Some(img_path));
+                picture.set_content_fit(gtk4::ContentFit::Cover);
+            }
+        }
+        WallpaperFitMode::Fit => {
+            if let Ok(loaded) = gdk_pixbuf::Pixbuf::from_file(img_path) {
+                let pb = loaded.apply_embedded_orientation().unwrap_or(loaded);
+                let tex = gtk4::gdk::Texture::for_pixbuf(&pb);
+                picture.set_paintable(Some(&tex));
+            } else {
+                picture.set_filename(Some(img_path));
+            }
+            picture.set_content_fit(gtk4::ContentFit::Contain);
+        }
+        WallpaperFitMode::Stretch => {
+            if let Ok(loaded) = gdk_pixbuf::Pixbuf::from_file(img_path) {
+                let pb = loaded.apply_embedded_orientation().unwrap_or(loaded);
+                let tex = gtk4::gdk::Texture::for_pixbuf(&pb);
+                picture.set_paintable(Some(&tex));
+            } else {
+                picture.set_filename(Some(img_path));
+            }
+            picture.set_content_fit(gtk4::ContentFit::Fill);
+        }
+        WallpaperFitMode::Center => {
+            if let Some(tex) =
+                build_centered_wallpaper_texture(img_path, target_phys_w, target_phys_h)
+            {
+                picture.set_paintable(Some(&tex));
+                picture.set_content_fit(gtk4::ContentFit::Fill);
+            } else {
+                picture.set_filename(Some(img_path));
+                picture.set_content_fit(gtk4::ContentFit::ScaleDown);
+            }
+        }
+    }
+}
+
+fn apply_wallpaper_to_picture(
+    picture: &Picture,
+    window: &ApplicationWindow,
+    cli_image: &Option<PathBuf>,
+    target_phys_w: i32,
+    target_phys_h: i32,
+) {
+    if let Some(ref img_path) = cli_image.as_ref().filter(|p| p.exists()) {
+        apply_image_with_fit_mode(
+            picture,
+            img_path,
+            target_phys_w,
+            target_phys_h,
+            WallpaperFitMode::Fill,
+        );
+        window.add_css_class("has-wallpaper-texture");
+        return;
+    }
+
+    let wp_cfg = WallpaperConfig::load();
+    let is_dark = is_dark_mode_active();
+    match wp_cfg.mode {
+        WallpaperMode::SolidColor => {
+            if let Some(tex) = build_solid_color_texture(&wp_cfg.color_hex) {
+                picture.set_paintable(Some(&tex));
+                picture.set_content_fit(gtk4::ContentFit::Fill);
+                window.add_css_class("has-wallpaper-texture");
+                return;
+            }
+        }
+        WallpaperMode::Gradient => {
+            if let Some(tex) =
+                build_aurora_gradient_texture(target_phys_w, target_phys_h, is_dark)
+            {
+                picture.set_paintable(Some(&tex));
+                picture.set_content_fit(gtk4::ContentFit::Fill);
+                window.add_css_class("has-wallpaper-texture");
+                return;
+            }
+        }
+        WallpaperMode::DynamicPair => {
+            let chosen = if is_dark {
+                wp_cfg.dark_image_path.as_deref()
+            } else {
+                wp_cfg.light_image_path.as_deref()
+            };
+            if let Some(p) = chosen.map(PathBuf::from).filter(|p| p.is_file()) {
+                info!("Cargando fondo dinámico ({}): {:?}", if is_dark { "obscuro" } else { "claro" }, p);
+                apply_image_with_fit_mode(
+                    picture,
+                    &p,
+                    target_phys_w,
+                    target_phys_h,
+                    wp_cfg.fit_mode,
+                );
+                window.add_css_class("has-wallpaper-texture");
+                return;
+            }
+        }
+        WallpaperMode::Image => {
+            if let Some(p) = wp_cfg
+                .image_path
+                .as_deref()
+                .map(PathBuf::from)
+                .filter(|p| p.is_file())
+            {
+                info!("Cargando imagen configurada de fondo: {:?}", p);
+                apply_image_with_fit_mode(
+                    picture,
+                    &p,
+                    target_phys_w,
+                    target_phys_h,
+                    wp_cfg.fit_mode,
+                );
+                window.add_css_class("has-wallpaper-texture");
+                return;
+            }
+        }
+    }
+
+    let fallback_path = resolve_wallpaper_image_path(&None);
+    if let Some(ref img_path) = fallback_path.as_ref().filter(|p| p.exists()) {
+        info!("Cargando imagen de fondo: {:?}", img_path);
+        apply_image_with_fit_mode(
+            picture,
+            img_path,
+            target_phys_w,
+            target_phys_h,
+            wp_cfg.fit_mode,
+        );
+        window.add_css_class("has-wallpaper-texture");
+    } else if let Some(tex) = build_aurora_gradient_texture(target_phys_w, target_phys_h, is_dark) {
+        picture.set_paintable(Some(&tex));
+        picture.set_content_fit(gtk4::ContentFit::Fill);
+        window.add_css_class("has-wallpaper-texture");
+    }
 }
 
 static CURRENT_IS_DARK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -3510,7 +3705,7 @@ type DesktopShortcutHandler = Rc<RefCell<Option<Rc<dyn Fn(String, f64, f64)>>>>;
 fn create_wallpaper_window(
     application: &Application,
     monitor: Option<&gtk4::gdk::Monitor>,
-    resolved_path: &Option<PathBuf>,
+    cli_image: &Option<PathBuf>,
     desktop_dir: Option<&Path>,
     desktop_monitors: &Rc<RefCell<Vec<gio::FileMonitor>>>,
     icon_positions: &Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
@@ -3518,7 +3713,7 @@ fn create_wallpaper_window(
     active_icon_drag: &Rc<RefCell<Option<(PathBuf, (f64, f64), (f64, f64))>>>,
     shortcut_handler: &DesktopShortcutHandler,
     is_primary: bool,
-) -> ApplicationWindow {
+) -> (ApplicationWindow, Picture, i32, i32) {
     let window = ApplicationWindow::builder()
         .application(application)
         .title("Fondo de Pantalla Malus DE")
@@ -3553,33 +3748,13 @@ fn create_wallpaper_window(
         })
         .unwrap_or((1920, 1080));
 
-    let bg_picture = if let Some(ref img_path) = resolved_path.as_ref().filter(|p| p.exists()) {
-        info!("Cargando imagen de fondo: {:?}", img_path);
-        if let Some(tex) = build_scaled_wallpaper_texture(img_path, target_phys_w, target_phys_h) {
-            let pic = Picture::for_paintable(&tex);
-            pic.set_content_fit(gtk4::ContentFit::Fill);
-            Some(pic)
-        } else {
-            let pic = Picture::for_filename(img_path);
-            pic.set_content_fit(gtk4::ContentFit::Cover);
-            Some(pic)
-        }
-    } else {
-        build_default_gradient_texture(target_phys_w, target_phys_h).map(|tex| {
-            let pic = Picture::for_paintable(&tex);
-            pic.set_content_fit(gtk4::ContentFit::Fill);
-            pic
-        })
-    };
-
-    if let Some(picture) = bg_picture {
-        picture.set_hexpand(true);
-        picture.set_vexpand(true);
-        picture.set_halign(Align::Fill);
-        picture.set_valign(Align::Fill);
-        window.add_css_class("has-wallpaper-texture");
-        overlay.set_child(Some(&picture));
-    }
+    let picture = Picture::new();
+    picture.set_hexpand(true);
+    picture.set_vexpand(true);
+    picture.set_halign(Align::Fill);
+    picture.set_valign(Align::Fill);
+    apply_wallpaper_to_picture(&picture, &window, cli_image, target_phys_w, target_phys_h);
+    overlay.set_child(Some(&picture));
 
     if let Some(desktop_dir) = desktop_dir {
         let desktop_size = monitor
@@ -4844,7 +5019,7 @@ fn create_wallpaper_window(
 
     window.set_child(Some(&overlay));
     window.present();
-    window
+    (window, picture, target_phys_w, target_phys_h)
 }
 
 fn resolve_wallpaper_image_path(image_path: &Option<PathBuf>) -> Option<PathBuf> {
@@ -4912,10 +5087,15 @@ fn main() -> Result<()> {
     let image_path = args.image;
     let desktop_dir = resolve_desktop_dir();
     let desktop_monitors = Rc::new(RefCell::new(Vec::new()));
-    let wallpaper_windows: Rc<RefCell<Vec<ApplicationWindow>>> = Rc::new(RefCell::new(Vec::new()));
+    let wallpaper_surfaces: Rc<RefCell<Vec<(ApplicationWindow, Picture, i32, i32)>>> =
+        Rc::new(RefCell::new(Vec::new()));
+    let wallpaper_cfg_monitors: Rc<RefCell<Vec<gio::FileMonitor>>> =
+        Rc::new(RefCell::new(Vec::new()));
     let hold_guard: Rc<RefCell<Option<gio::ApplicationHoldGuard>>> = Rc::new(RefCell::new(None));
     let sync_handler: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
     let sync_handler_ipc = sync_handler.clone();
+    let bg_refresh_handler: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let bg_refresh_ipc = bg_refresh_handler.clone();
     let icon_positions = Rc::new(RefCell::new(load_icon_positions()));
     let internal_drag_paths = Rc::new(RefCell::new(HashSet::new()));
     let active_icon_drag = Rc::new(RefCell::new(None));
@@ -4926,16 +5106,26 @@ fn main() -> Result<()> {
         let initial_dark = malus_de_common::config::is_dark_mode_active();
         set_is_dark_mode(initial_dark);
 
-        // 1. Escuchar mensajes IPC del compositor (ThemeChanged, ReloadDisplaysConfig y accesos de Spotlight)
+        // 1. Escuchar mensajes IPC del compositor (ThemeChanged, ReloadWallpaperConfig, ReloadDisplaysConfig y accesos de Spotlight)
         let (tx, rx) = async_channel::unbounded::<malus_de_common::ipc::IpcMessage>();
         let shortcut_handler_rx = shortcut_handler_ipc.clone();
         let sync_handler_rx = sync_handler_ipc.clone();
+        let bg_refresh_rx = bg_refresh_ipc.clone();
         glib::spawn_future_local(async move {
             while let Ok(msg) = rx.recv().await {
                 match msg {
                     malus_de_common::ipc::IpcMessage::ThemeChanged { is_dark, .. } => {
                         info!("🎨 [Wallpaper] IPC ThemeChanged recibido: is_dark={}", is_dark);
                         set_is_dark_mode(is_dark);
+                        if let Some(ref refresh_bg) = *bg_refresh_rx.borrow() {
+                            refresh_bg();
+                        }
+                    }
+                    malus_de_common::ipc::IpcMessage::ReloadWallpaperConfig => {
+                        info!("🖼 [Wallpaper] IPC ReloadWallpaperConfig recibido — actualizando fondo");
+                        if let Some(ref refresh_bg) = *bg_refresh_rx.borrow() {
+                            refresh_bg();
+                        }
                     }
                     malus_de_common::ipc::IpcMessage::LiquidGlassOpacityChanged { opacity } => {
                         info!("✨ [Wallpaper] IPC LiquidGlassOpacityChanged recibido: opacity={:.2}", opacity);
@@ -4984,11 +5174,15 @@ fn main() -> Result<()> {
             .unwrap_or(false);
         if has_schema {
             let gsettings = gio::Settings::new("org.gnome.desktop.interface");
+            let bg_refresh_gs = bg_refresh_ipc.clone();
             gsettings.connect_changed(Some("color-scheme"), move |settings, _| {
                 let scheme = settings.string("color-scheme");
                 let to_dark = scheme.contains("dark");
                 info!("🎨 [Wallpaper] GSettings color-scheme: {}", scheme);
                 set_is_dark_mode(to_dark);
+                if let Some(ref refresh_bg) = *bg_refresh_gs.borrow() {
+                    refresh_bg();
+                }
             });
             Box::leak(Box::new(gsettings));
         }
@@ -5038,22 +5232,63 @@ fn main() -> Result<()> {
 
         let app_sync = application.clone();
         let image_path_sync = image_path.clone();
+        let image_path_bg = image_path.clone();
         let desktop_dir_sync = desktop_dir.clone();
         let desktop_monitors_sync = desktop_monitors.clone();
-        let wallpaper_windows_sync = wallpaper_windows.clone();
+        let wallpaper_surfaces_sync = wallpaper_surfaces.clone();
+        let wallpaper_surfaces_bg = wallpaper_surfaces.clone();
         let icon_positions_sync = icon_positions.clone();
         let internal_drag_sync = internal_drag_paths.clone();
         let active_drag_sync = active_icon_drag.clone();
         let shortcut_handler_sync = shortcut_handler.clone();
 
+        let refresh_backgrounds: Rc<dyn Fn()> = Rc::new(move || {
+            for (win, pic, w, h) in wallpaper_surfaces_bg.borrow().iter() {
+                apply_wallpaper_to_picture(pic, win, &image_path_bg, *w, *h);
+            }
+        });
+        let pending_bg_refresh: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
+        let schedule_bg_refresh: Rc<dyn Fn()> = {
+            let refresh_c = refresh_backgrounds.clone();
+            let pending_c = pending_bg_refresh.clone();
+            Rc::new(move || {
+                if let Some(source) = pending_c.borrow_mut().take() {
+                    source.remove();
+                }
+                let cb = refresh_c.clone();
+                let done_c = pending_c.clone();
+                let source = glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(60),
+                    move || {
+                        *done_c.borrow_mut() = None;
+                        cb();
+                    },
+                );
+                *pending_c.borrow_mut() = Some(source);
+            })
+        };
+        *bg_refresh_handler.borrow_mut() = Some(schedule_bg_refresh.clone());
+
+        if wallpaper_cfg_monitors.borrow().is_empty() {
+            let wp_cfg_file = gio::File::for_path(WallpaperConfig::config_path());
+            if let Ok(mon) =
+                wp_cfg_file.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
+            {
+                let sched = schedule_bg_refresh.clone();
+                mon.connect_changed(move |_, _, _, _| {
+                    sched();
+                });
+                wallpaper_cfg_monitors.borrow_mut().push(mon);
+            }
+        }
+
         let sync_windows: Rc<dyn Fn()> = Rc::new(move || {
-            let resolved_path = resolve_wallpaper_image_path(&image_path_sync);
-            let prev_windows: Vec<ApplicationWindow> =
-                wallpaper_windows_sync.borrow_mut().drain(..).collect();
+            let prev_surfaces: Vec<(ApplicationWindow, Picture, i32, i32)> =
+                wallpaper_surfaces_sync.borrow_mut().drain(..).collect();
             desktop_monitors_sync.borrow_mut().clear();
             *shortcut_handler_sync.borrow_mut() = None;
 
-            let mut new_windows = Vec::new();
+            let mut new_surfaces = Vec::new();
             if let Some(display) = gtk4::gdk::Display::default() {
                 let monitors = display.monitors();
                 let displays_cfg = DisplaysConfig::load();
@@ -5081,10 +5316,10 @@ fn main() -> Result<()> {
 
                 for (index, monitor) in monitor_list.iter().enumerate() {
                     let is_primary = index == primary_index;
-                    let win = create_wallpaper_window(
+                    let surface_tuple = create_wallpaper_window(
                         &app_sync,
                         Some(monitor),
-                        &resolved_path,
+                        &image_path_sync,
                         if is_primary {
                             desktop_dir_sync.as_deref()
                         } else {
@@ -5097,15 +5332,15 @@ fn main() -> Result<()> {
                         &shortcut_handler_sync,
                         is_primary,
                     );
-                    new_windows.push(win);
+                    new_surfaces.push(surface_tuple);
                 }
             }
 
-            if new_windows.is_empty() {
-                let win = create_wallpaper_window(
+            if new_surfaces.is_empty() {
+                let surface_tuple = create_wallpaper_window(
                     &app_sync,
                     None,
-                    &resolved_path,
+                    &image_path_sync,
                     desktop_dir_sync.as_deref(),
                     &desktop_monitors_sync,
                     &icon_positions_sync,
@@ -5114,11 +5349,11 @@ fn main() -> Result<()> {
                     &shortcut_handler_sync,
                     true,
                 );
-                new_windows.push(win);
+                new_surfaces.push(surface_tuple);
             }
 
-            *wallpaper_windows_sync.borrow_mut() = new_windows;
-            for old_win in prev_windows {
+            *wallpaper_surfaces_sync.borrow_mut() = new_surfaces;
+            for (old_win, _, _, _) in prev_surfaces {
                 old_win.close();
             }
         });

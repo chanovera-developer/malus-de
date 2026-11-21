@@ -2180,6 +2180,13 @@ impl MalusState {
                     self.ipc_broadcaster
                         .broadcast(&IpcMessage::ReloadDesktopDockConfig);
                 }
+                IpcMessage::ReloadWallpaperConfig => {
+                    tracing::info!(
+                        "📥 IPC ReloadWallpaperConfig recibido — retransmitiendo a clientes shell"
+                    );
+                    self.ipc_broadcaster
+                        .broadcast(&IpcMessage::ReloadWallpaperConfig);
+                }
                 IpcMessage::ReloadInputConfig => {
                     tracing::info!("📥 IPC ReloadInputConfig recibido");
                     self.input_cfg = malus_de_common::config::InputConfig::load();
