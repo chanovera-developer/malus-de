@@ -306,7 +306,7 @@ switch:checked {
 }
 
 switch slider {
-    min-width: 26px;
+    min-width: 19px;
     min-height: 16px;
     border-radius: 999px;
     background-color: #ffffff;
@@ -317,6 +317,8 @@ switch slider {
 }
 
 switch image {
+    min-width: 0px;
+    min-height: 0px;
     opacity: 0;
     color: transparent;
 }
