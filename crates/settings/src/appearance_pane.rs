@@ -1424,11 +1424,14 @@ fn draw_liquid_glass_preview(cr: &gtk4::cairo::Context, w: f64, h: f64, glass_op
 
     // Píldoras superiores Liquid Glass (cambia su opacidad con el deslizador)
     let alpha = glass_opacity.clamp(0.18, 0.94);
-    for (px, pw, txt) in [
-        (10.0, 56.0, "↑   •••"),
-        (72.0, 28.0, "⧉"),
-        (106.0, w - 116.0, "🔍  Buscar"),
-    ] {
+    for (idx, (px, pw)) in [
+        (10.0_f64, 56.0_f64),
+        (72.0, 28.0),
+        (106.0, w - 116.0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         cr.set_source_rgba(0.96, 0.97, 0.99, alpha);
         let _ = cr.save();
         cr.translate(px, 10.0);
@@ -1439,10 +1442,74 @@ fn draw_liquid_glass_preview(cr: &gtk4::cairo::Context, w: f64, h: f64, glass_op
         cr.set_line_width(1.0);
         let _ = cr.stroke();
 
+        let _ = cr.save();
         cr.set_source_rgba(0.12, 0.13, 0.16, 0.88);
-        cr.set_font_size(10.5);
-        cr.move_to(px + 9.0, 25.5);
-        let _ = cr.show_text(txt);
+        cr.set_line_cap(gtk4::cairo::LineCap::Round);
+        cr.set_line_join(gtk4::cairo::LineJoin::Round);
+        cr.set_line_width(1.25);
+
+        match idx {
+            0 => {
+                // Ícono Compartir (bandeja + flecha arriba)
+                let sx = px + 17.0;
+                let sy = 22.5;
+                cr.move_to(sx - 2.4, sy - 1.5);
+                cr.line_to(sx - 4.0, sy - 1.5);
+                cr.line_to(sx - 4.0, sy + 4.0);
+                cr.line_to(sx + 4.0, sy + 4.0);
+                cr.line_to(sx + 4.0, sy - 1.5);
+                cr.line_to(sx + 2.4, sy - 1.5);
+                let _ = cr.stroke();
+
+                cr.move_to(sx, sy + 1.0);
+                cr.line_to(sx, sy - 5.2);
+                let _ = cr.stroke();
+                cr.move_to(sx - 2.5, sy - 2.8);
+                cr.line_to(sx, sy - 5.3);
+                cr.line_to(sx + 2.5, sy - 2.8);
+                let _ = cr.stroke();
+
+                // Tres puntos (•••)
+                for dx in [-4.0_f64, 0.0, 4.0] {
+                    cr.arc(px + 41.0 + dx, 22.0, 1.25, 0.0, std::f64::consts::TAU);
+                    let _ = cr.fill();
+                }
+            }
+            1 => {
+                // Ícono Copiar / Ventanas superpuestas
+                let cx = px + 14.0;
+                let cy = 22.0;
+                // Cuadro trasero (L superior-izquierda)
+                cr.move_to(cx - 1.2, cy - 4.5);
+                cr.line_to(cx - 4.5, cy - 4.5);
+                cr.line_to(cx - 4.5, cy + 1.5);
+                cr.line_to(cx - 1.8, cy + 1.5);
+                let _ = cr.stroke();
+                // Cuadro frontal
+                cr.rectangle(cx - 1.5, cy - 1.5, 6.0, 6.0);
+                let _ = cr.stroke();
+            }
+            _ => {
+                // Lupa vectorial + texto "Buscar"
+                let lx = px + 15.0;
+                let ly = 21.2;
+                cr.arc(lx, ly, 3.3, 0.0, std::f64::consts::TAU);
+                let _ = cr.stroke();
+                cr.move_to(lx + 2.3, ly + 2.3);
+                cr.line_to(lx + 4.9, ly + 4.9);
+                let _ = cr.stroke();
+
+                cr.select_font_face(
+                    "Sans",
+                    gtk4::cairo::FontSlant::Normal,
+                    gtk4::cairo::FontWeight::Normal,
+                );
+                cr.set_font_size(10.5);
+                cr.move_to(px + 25.0, 25.5);
+                let _ = cr.show_text("Buscar");
+            }
+        }
+        let _ = cr.restore();
     }
 
     // Faldón inferior translúcido
