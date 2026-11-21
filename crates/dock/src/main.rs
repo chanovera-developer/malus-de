@@ -39,6 +39,115 @@ struct DockLayoutRefs {
     dock_corner_radius: Rc<Cell<f64>>,
 }
 
+fn dock_bar_cross_size(cfg: &DockConfig) -> i32 {
+    let edge_pad = ((cfg.icon_size as f64) * 0.308).round().clamp(10.0, 32.0) as i32;
+    cfg.icon_size as i32 + edge_pad * 2
+}
+
+fn apply_popover_dock_placement(popover: &Popover, position: DockPosition) {
+    match position {
+        DockPosition::Bottom => {
+            popover.set_position(gtk4::PositionType::Top);
+            popover.set_offset(0, POPOVER_SHADOW_GUTTER);
+        }
+        DockPosition::Left => {
+            popover.set_position(gtk4::PositionType::Right);
+            popover.set_offset(-POPOVER_SHADOW_GUTTER, 0);
+        }
+        DockPosition::Right => {
+            popover.set_position(gtk4::PositionType::Left);
+            popover.set_offset(POPOVER_SHADOW_GUTTER, 0);
+        }
+    }
+}
+
+fn dock_item_cross_alignment(position: DockPosition) -> (gtk4::Align, gtk4::Align) {
+    match position {
+        DockPosition::Bottom => (gtk4::Align::Center, gtk4::Align::End),
+        DockPosition::Left => (gtk4::Align::Start, gtk4::Align::Center),
+        DockPosition::Right => (gtk4::Align::End, gtk4::Align::Center),
+    }
+}
+
+fn sync_dock_item_child_alignment(widget: &gtk4::Widget, position: DockPosition) {
+    let (cross_h, cross_v) = dock_item_cross_alignment(position);
+    if widget.is::<Button>()
+        || widget.is::<Overlay>()
+        || widget.has_css_class("dock-icon-shadow")
+        || widget.has_css_class("dock-window-card")
+        || widget.has_css_class("dock-primary-icon")
+    {
+        widget.set_halign(cross_h);
+        widget.set_valign(cross_v);
+    }
+    if widget.has_css_class("dock-icon-inset") {
+        widget.set_margin_top(0);
+        widget.set_margin_bottom(if position == DockPosition::Bottom { 5 } else { 0 });
+        widget.set_margin_start(if position == DockPosition::Left { 5 } else { 0 });
+        widget.set_margin_end(if position == DockPosition::Right { 5 } else { 0 });
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        sync_dock_item_child_alignment(&c, position);
+        child = c.next_sibling();
+    }
+}
+
+fn apply_dock_item_geometry(item: &GtkBox, position: DockPosition) {
+    let (cross_h, cross_v) = dock_item_cross_alignment(position);
+    item.set_orientation(if position == DockPosition::Bottom {
+        Orientation::Vertical
+    } else {
+        Orientation::Horizontal
+    });
+    item.set_halign(cross_h);
+    item.set_valign(cross_v);
+
+    let mut main_child: Option<gtk4::Widget> = None;
+    let mut indicator_child: Option<gtk4::Widget> = None;
+    let mut child = item.first_child();
+    while let Some(c) = child {
+        if c.has_css_class("dock-indicator") {
+            indicator_child = Some(c.clone());
+        } else {
+            main_child = Some(c.clone());
+        }
+        child = c.next_sibling();
+    }
+
+    if let (Some(main), Some(indicator)) = (main_child, indicator_child) {
+        indicator.set_halign(cross_h);
+        indicator.set_valign(cross_v);
+        sync_dock_item_child_alignment(&main, position);
+        match position {
+            DockPosition::Left => {
+                item.reorder_child_after(&main, Some(&indicator));
+            }
+            DockPosition::Bottom | DockPosition::Right => {
+                item.reorder_child_after(&indicator, Some(&main));
+            }
+        }
+    }
+}
+
+fn sync_all_dock_items_geometry(refs: &DockLayoutRefs, position: DockPosition) {
+    let mut child = refs.apps_box.first_child();
+    while let Some(c) = child {
+        if let Ok(item) = c.clone().downcast::<GtkBox>() {
+            apply_dock_item_geometry(&item, position);
+        }
+        child = c.next_sibling();
+    }
+    let mut min_child = refs.minimized_box.first_child();
+    while let Some(c) = min_child {
+        if let Ok(item) = c.clone().downcast::<GtkBox>() {
+            apply_dock_item_geometry(&item, position);
+        }
+        min_child = c.next_sibling();
+    }
+    apply_dock_item_geometry(&refs.trash_widget, position);
+}
+
 fn apply_dock_layout_config(
     refs: &DockLayoutRefs,
     cfg: &DockConfig,
@@ -50,6 +159,7 @@ fn apply_dock_layout_config(
     let edge_pad = ((cfg.icon_size as f64) * 0.308).round().clamp(10.0, 32.0) as i32;
     let dock_content_spacing = (edge_pad as f64 * 0.45).round().clamp(4.0, 14.0) as i32;
 
+    DOCK_CURRENT_POSITION.set(cfg.position);
     apply_dock_scale_css(cfg);
     refs.dock_corner_radius.set(cfg.dock_corner_radius() as f64);
     refs.dock_highlights.queue_draw();
@@ -80,8 +190,13 @@ fn apply_dock_layout_config(
 
         if cfg.auto_hide {
             refs.window.set_exclusive_zone(0);
-        } else {
+        } else if is_horizontal {
             refs.window.auto_exclusive_zone_enable();
+        } else {
+            // Excluir únicamente la anchura visible de la barra (sin magnification_headroom)
+            // para no desplazar ventanas ni agregar padding al top-bar.
+            refs.window
+                .set_exclusive_zone(dock_bar_cross_size(cfg) + gap);
         }
     }
 
@@ -90,10 +205,31 @@ fn apply_dock_layout_config(
     } else {
         Orientation::Horizontal
     });
-    refs.magnification_headroom
-        .set_visible(is_horizontal && is_revealed);
-    refs.magnification_headroom
-        .set_size_request(-1, dock_headroom_height(cfg));
+    let headroom = dock_headroom_height(cfg);
+    match cfg.position {
+        DockPosition::Bottom => {
+            refs.magnification_headroom.set_size_request(-1, headroom);
+            refs.dock_root
+                .reorder_child_after(&refs.dock_bar, Some(&refs.magnification_headroom));
+            refs.dock_root
+                .reorder_child_after(&refs.edge_sensor, Some(&refs.dock_bar));
+        }
+        DockPosition::Left => {
+            refs.magnification_headroom.set_size_request(headroom, -1);
+            refs.dock_root
+                .reorder_child_after(&refs.dock_bar, Some(&refs.edge_sensor));
+            refs.dock_root
+                .reorder_child_after(&refs.magnification_headroom, Some(&refs.dock_bar));
+        }
+        DockPosition::Right => {
+            refs.magnification_headroom.set_size_request(headroom, -1);
+            refs.dock_root
+                .reorder_child_after(&refs.dock_bar, Some(&refs.magnification_headroom));
+            refs.dock_root
+                .reorder_child_after(&refs.edge_sensor, Some(&refs.dock_bar));
+        }
+    }
+    refs.magnification_headroom.set_visible(is_revealed);
 
     match cfg.position {
         DockPosition::Bottom => {
@@ -122,15 +258,21 @@ fn apply_dock_layout_config(
         Orientation::Vertical
     });
     refs.apps_box.set_spacing(edge_pad);
-    if is_horizontal {
-        refs.apps_box.set_halign(gtk4::Align::Start);
-        refs.apps_box.set_valign(gtk4::Align::End);
-        refs.apps_box.set_margin_bottom(0);
-    } else {
-        refs.apps_box.set_halign(gtk4::Align::Center);
-        refs.apps_box.set_valign(gtk4::Align::Start);
-        refs.apps_box.set_margin_bottom(0);
+    match cfg.position {
+        DockPosition::Bottom => {
+            refs.apps_box.set_halign(gtk4::Align::Start);
+            refs.apps_box.set_valign(gtk4::Align::End);
+        }
+        DockPosition::Left => {
+            refs.apps_box.set_halign(gtk4::Align::Start);
+            refs.apps_box.set_valign(gtk4::Align::Center);
+        }
+        DockPosition::Right => {
+            refs.apps_box.set_halign(gtk4::Align::End);
+            refs.apps_box.set_valign(gtk4::Align::Center);
+        }
     }
+    refs.apps_box.set_margin_bottom(0);
 
     refs.separator.set_orientation(if is_horizontal {
         Orientation::Vertical
@@ -142,7 +284,7 @@ fn apply_dock_layout_config(
         refs.separator.set_valign(gtk4::Align::End);
     } else {
         refs.separator.set_halign(gtk4::Align::Fill);
-        refs.separator.set_valign(gtk4::Align::Fill);
+        refs.separator.set_valign(gtk4::Align::Center);
     }
 
     refs.minimized_box.set_orientation(if is_horizontal {
@@ -150,13 +292,24 @@ fn apply_dock_layout_config(
     } else {
         Orientation::Vertical
     });
-    refs.minimized_box.set_valign(if is_horizontal {
-        gtk4::Align::End
-    } else {
-        gtk4::Align::Center
-    });
+    match cfg.position {
+        DockPosition::Bottom => {
+            refs.minimized_box.set_halign(gtk4::Align::Center);
+            refs.minimized_box.set_valign(gtk4::Align::End);
+        }
+        DockPosition::Left => {
+            refs.minimized_box.set_halign(gtk4::Align::Start);
+            refs.minimized_box.set_valign(gtk4::Align::Center);
+        }
+        DockPosition::Right => {
+            refs.minimized_box.set_halign(gtk4::Align::End);
+            refs.minimized_box.set_valign(gtk4::Align::Center);
+        }
+    }
     refs.minimized_box
         .set_visible(has_minimized_windows && !cfg.minimize_to_app_icon);
+
+    sync_all_dock_items_geometry(refs, cfg.position);
 
     refs.dock_bar.set_visible(is_revealed);
     if cfg.auto_hide && !auto_hide_revealed {
@@ -180,6 +333,7 @@ fn apply_dock_icons_size_in_place(
     animations: &Rc<RefCell<Vec<IconSizeAnimation>>>,
     is_hovered: bool,
 ) {
+    let pos = DOCK_CURRENT_POSITION.get();
     let mut anims = animations.borrow_mut();
     if is_hovered {
         for anim in anims.iter_mut() {
@@ -193,10 +347,15 @@ fn apply_dock_icons_size_in_place(
 
     let mut child = refs.apps_box.first_child();
     while let Some(c) = child {
-        update_icon_size_recursive(&c, base_size, base_size);
+        update_icon_size_recursive(&c, base_size, base_size, pos);
         child = c.next_sibling();
     }
-    update_icon_size_recursive(refs.trash_widget.upcast_ref(), base_size, base_size);
+    let mut min_child = refs.minimized_box.first_child();
+    while let Some(c) = min_child {
+        update_icon_size_recursive(&c, base_size, base_size, pos);
+        min_child = c.next_sibling();
+    }
+    update_icon_size_recursive(refs.trash_widget.upcast_ref(), base_size, base_size, pos);
     queue_dock_icon_backgrounds(refs.dock_content.upcast_ref());
     queue_dock_resize(&refs.window, &refs.dock_root, &refs.dock_bar);
     let win = refs.window.clone();
@@ -264,6 +423,7 @@ thread_local! {
     static DOCK_GLASS_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
     static DOCK_ACCENT_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
     static DOCK_SCALE_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
+    static DOCK_CURRENT_POSITION: Cell<DockPosition> = const { Cell::new(DockPosition::Bottom) };
     static DOCK_APPEARANCE_MONITOR: RefCell<Option<gtk4::gio::FileMonitor>> =
         const { RefCell::new(None) };
     static DOCK_REPAINT_TARGETS: RefCell<
@@ -278,19 +438,40 @@ thread_local! {
 fn apply_dock_scale_css(cfg: &DockConfig) {
     let scale = (cfg.icon_size as f64 / 48.0).clamp(0.75, 2.0);
     // Calibrado a partir de macOS Tahoe (Dock3.png):
-    // padding simétrico (~31% del icon_size) en bordes superior, inferior, izquierdo, derecho y separación entre iconos,
-    // con el punto indicador centrado verticalmente dentro de esa banda inferior.
+    // padding simétrico (~31% del icon_size) adaptado a la orientación (Bottom / Left / Right),
+    // con el punto indicador en el borde exterior y el separador fino de 1px entre bloques.
     let edge_pad = ((cfg.icon_size as f64) * 0.308).round().clamp(10.0, 32.0) as i32;
     let btn_radius = (14.0 * scale).round().max(10.0) as i32;
-    let sep_height = cfg.icon_size as i32;
-    let sep_margin_h = (edge_pad as f64 * 0.25).round().clamp(2.0, 8.0) as i32;
+    let sep_len = cfg.icon_size as i32;
+    let sep_gap = (edge_pad as f64 * 0.25).round().clamp(2.0, 8.0) as i32;
     let ind_font = (7.0 * scale.sqrt()).round().clamp(6.0, 10.0) as i32;
+    let (items_pad, sep_rule, ind_rule, card_margin) = match cfg.position {
+        DockPosition::Bottom => (
+            format!("{edge_pad}px {edge_pad}px 0px {edge_pad}px"),
+            format!("min-width: 1px; min-height: {sep_len}px; margin: 0px {sep_gap}px {edge_pad}px {sep_gap}px;"),
+            format!("font-size: {ind_font}px; min-width: 0px; min-height: {edge_pad}px; margin: 0px; padding: 0px;"),
+            "0px 2px",
+        ),
+        DockPosition::Left => (
+            format!("{edge_pad}px {edge_pad}px {edge_pad}px 0px"),
+            format!("min-width: {sep_len}px; min-height: 1px; margin: {sep_gap}px 0px {sep_gap}px {edge_pad}px;"),
+            format!("font-size: {ind_font}px; min-width: {edge_pad}px; min-height: 0px; margin: 0px; padding: 0px;"),
+            "2px 0px",
+        ),
+        DockPosition::Right => (
+            format!("{edge_pad}px 0px {edge_pad}px {edge_pad}px"),
+            format!("min-width: {sep_len}px; min-height: 1px; margin: {sep_gap}px {edge_pad}px {sep_gap}px 0px;"),
+            format!("font-size: {ind_font}px; min-width: {edge_pad}px; min-height: 0px; margin: 0px; padding: 0px;"),
+            "2px 0px",
+        ),
+    };
     let css = format!(
-        ".dock-items {{ padding: {edge_pad}px {edge_pad}px 0px {edge_pad}px; }}\n\
+        ".dock-items {{ padding: {items_pad}; }}\n\
          .dock-item-box {{ padding: 0px; }}\n\
          .dock-item-btn {{ padding: 0px; border-radius: {btn_radius}px; }}\n\
-         .dock-separator {{ min-height: {sep_height}px; margin: 0px {sep_margin_h}px {edge_pad}px {sep_margin_h}px; }}\n\
-         .dock-indicator {{ font-size: {ind_font}px; min-height: {edge_pad}px; margin: 0px; padding: 0px; }}\n"
+         .dock-separator {{ {sep_rule} }}\n\
+         .dock-indicator {{ {ind_rule} }}\n\
+         .dock-window-card {{ margin: {card_margin}; }}\n"
     );
     DOCK_SCALE_PROVIDER.with(|cell| {
         if let Some(provider) = cell.borrow().as_ref() {
@@ -772,12 +953,18 @@ fn draw_dock_edge_highlights(
     width: i32,
     height: i32,
     corner_radius: f64,
+    position: DockPosition,
 ) {
     if width <= 0 || height <= 0 {
         return;
     }
 
-    let gradient = gtk4::cairo::LinearGradient::new(0.0, 0.0, width as f64, 0.0);
+    let is_horizontal = position == DockPosition::Bottom;
+    let gradient = if is_horizontal {
+        gtk4::cairo::LinearGradient::new(0.0, 0.0, width as f64, 0.0)
+    } else {
+        gtk4::cairo::LinearGradient::new(0.0, 0.0, 0.0, height as f64)
+    };
     gradient.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 0.0);
     gradient.add_color_stop_rgba(0.08, 1.0, 1.0, 1.0, 0.42);
     gradient.add_color_stop_rgba(0.5, 1.0, 1.0, 1.0, 0.58);
@@ -790,12 +977,21 @@ fn draw_dock_edge_highlights(
     context.set_line_width(1.5);
     context.set_line_cap(gtk4::cairo::LineCap::Round);
     let _ = context.set_source(&gradient);
-    context.move_to(3.0, 1.5);
-    context.line_to(width as f64 - 3.0, 1.5);
-    let _ = context.stroke();
-    context.move_to(3.0, height as f64 - 1.5);
-    context.line_to(width as f64 - 3.0, height as f64 - 1.5);
-    let _ = context.stroke();
+    if is_horizontal {
+        context.move_to(3.0, 1.5);
+        context.line_to(width as f64 - 3.0, 1.5);
+        let _ = context.stroke();
+        context.move_to(3.0, height as f64 - 1.5);
+        context.line_to(width as f64 - 3.0, height as f64 - 1.5);
+        let _ = context.stroke();
+    } else {
+        context.move_to(1.5, 3.0);
+        context.line_to(1.5, height as f64 - 3.0);
+        let _ = context.stroke();
+        context.move_to(width as f64 - 1.5, 3.0);
+        context.line_to(width as f64 - 1.5, height as f64 - 3.0);
+        let _ = context.stroke();
+    }
     let _ = context.restore();
 }
 
@@ -1247,7 +1443,13 @@ fn build_dock_ui(app: &Application) {
     {
         let radius_draw = dock_corner_radius.clone();
         highlights.set_draw_func(move |_, context, width, height| {
-            draw_dock_edge_highlights(context, width, height, radius_draw.get());
+            draw_dock_edge_highlights(
+                context,
+                width,
+                height,
+                radius_draw.get(),
+                DOCK_CURRENT_POSITION.get(),
+            );
         });
     }
     dock_background.set_child(Some(&dock_bg_box));
@@ -1522,6 +1724,9 @@ fn build_dock_ui(app: &Application) {
                     auto_hide_mon.get(),
                     !min_map_mon.borrow().is_empty(),
                 );
+                if old_cfg.position != new_cfg.position {
+                    anims_mon.borrow_mut().clear();
+                }
                 sync_dock_indicators(
                     &indicators_mon,
                     &running_mon.borrow(),
@@ -1791,11 +1996,17 @@ fn build_dock_ui(app: &Application) {
                                 &gtk4::graphene::Point::new(dock_x as f32, 0.0),
                             )
                             .map(|pt| {
+                                let coord = if apps_box_ipc.orientation() == Orientation::Horizontal
+                                {
+                                    pt.x() as f64
+                                } else {
+                                    pt.y() as f64
+                                };
                                 compute_pinned_insert_index(
                                     &apps_box_ipc,
                                     None,
                                     cfg.apps.len(),
-                                    pt.x() as f64,
+                                    coord,
                                 )
                             })
                     });
@@ -1848,7 +2059,12 @@ fn build_dock_ui(app: &Application) {
                         auto_hide_ipc.set(hovered_ipc.get());
                     }
                     let has_min = !min_map.borrow().is_empty();
+                    let position_changed = old_cfg.position != new_cfg.position;
+                    let new_pos = new_cfg.position;
                     apply_dock_layout_config(&layout_ipc, &new_cfg, auto_hide_ipc.get(), has_min);
+                    if position_changed {
+                        anims_ipc.borrow_mut().clear();
+                    }
                     sync_dock_indicators(
                         &indicators_ipc,
                         &cache_ipc.borrow(),
@@ -1861,13 +2077,14 @@ fn build_dock_ui(app: &Application) {
                         .map(|(id, widget)| (*id, widget.clone()))
                         .collect();
                     for (_, card) in &cards {
-                        update_icon_size_recursive(card, base_size, base_size);
+                        update_icon_size_recursive(card, base_size, base_size, new_pos);
                     }
                     if rebuild_needed {
                         update_icon_size_recursive(
                             layout_ipc.trash_widget.upcast_ref(),
                             base_size,
                             base_size,
+                            new_pos,
                         );
                         queue_dock_resize(&win_ref, &dock_root_ref, &dock_bar_ref);
                         on_rf_ipc();
@@ -2531,7 +2748,12 @@ fn attach_dock_drop_target(
                 &gtk4::graphene::Point::new(x as f32, y as f32),
             )
             .map(|pt| {
-                compute_pinned_insert_index(&apps_box_drop, None, cfg.apps.len(), pt.x() as f64)
+                let coord = if apps_box_drop.orientation() == Orientation::Horizontal {
+                    pt.x() as f64
+                } else {
+                    pt.y() as f64
+                };
+                compute_pinned_insert_index(&apps_box_drop, None, cfg.apps.len(), coord)
             })
             .unwrap_or(cfg.apps.len());
 
@@ -2583,8 +2805,9 @@ fn compute_pinned_insert_index(
     apps_box: &GtkBox,
     ignore_child: Option<&gtk4::Widget>,
     total_pinned: usize,
-    local_x: f64,
+    local_coord: f64,
 ) -> usize {
+    let is_horizontal = apps_box.orientation() == Orientation::Horizontal;
     let mut child = apps_box.first_child();
     let mut idx = 0usize;
     while let Some(c) = child {
@@ -2598,8 +2821,12 @@ fn compute_pinned_insert_index(
             break;
         }
         if let Some(bounds) = c.compute_bounds(apps_box) {
-            let center_x = bounds.x() as f64 + (bounds.width() as f64) * 0.5;
-            if local_x < center_x {
+            let center = if is_horizontal {
+                bounds.x() as f64 + (bounds.width() as f64) * 0.5
+            } else {
+                bounds.y() as f64 + (bounds.height() as f64) * 0.5
+            };
+            if local_coord < center {
                 return idx;
             }
         }
@@ -2924,37 +3151,61 @@ fn render_dock_apps(
     }
 }
 
-fn update_icon_size_recursive(widget: &gtk4::Widget, size: i32, base_size: i32) -> bool {
+fn update_icon_size_recursive(
+    widget: &gtk4::Widget,
+    size: i32,
+    base_size: i32,
+    position: DockPosition,
+) -> bool {
     let mut changed = false;
     let clamped_size = size.clamp(1, 512);
     let clamped_base = base_size.clamp(1, 512);
+    let is_horizontal = position == DockPosition::Bottom;
+    let (slot_w, slot_h) = if is_horizontal {
+        (clamped_size, clamped_base)
+    } else {
+        (clamped_base, clamped_size)
+    };
     if (widget.has_css_class("dock-icon-placeholder")
         || widget.has_css_class("dock-min-thumb-slot"))
-        && (widget.width_request() != clamped_size || widget.height_request() != clamped_base)
+        && (widget.width_request() != slot_w || widget.height_request() != slot_h)
     {
-        widget.set_size_request(clamped_size, clamped_base);
+        widget.set_size_request(slot_w, slot_h);
         changed = true;
     }
     if let Ok(overlay) = widget.clone().downcast::<Overlay>() {
-        let height = if overlay.has_css_class("dock-window-card") {
-            -1
+        let (target_w, target_h) = if overlay.has_css_class("dock-window-card") {
+            if is_horizontal {
+                (clamped_size, -1)
+            } else {
+                (-1, clamped_size)
+            }
         } else {
-            clamped_base
+            (slot_w, slot_h)
         };
-        if overlay.width_request() != clamped_size || overlay.height_request() != height {
-            overlay.set_size_request(clamped_size, height);
+        if overlay.width_request() != target_w || overlay.height_request() != target_h {
+            overlay.set_size_request(target_w, target_h);
             changed = true;
         }
     }
     if let Ok(picture) = widget.clone().downcast::<Picture>() {
-        let target_w = size.clamp(1, 512);
         let current_width = picture.width_request().max(1);
         let current_height = picture.height_request().max(1);
-        let height = ((target_w as f64 * current_height as f64) / current_width as f64)
-            .round()
-            .clamp(1.0, 512.0) as i32;
-        if picture.width_request() != target_w || picture.height_request() != height {
-            picture.set_size_request(target_w, height);
+        let (target_w, target_h) = if is_horizontal {
+            let w = clamped_size;
+            let h = ((w as f64 * current_height as f64) / current_width as f64)
+                .round()
+                .clamp(1.0, 512.0) as i32;
+            (w, h)
+        } else {
+            let h = clamped_size;
+            let w = ((h as f64 * current_width as f64) / current_height as f64)
+                .round()
+                .clamp(1.0, 512.0) as i32;
+            (w, h)
+        };
+        if picture.width_request() != target_w || picture.height_request() != target_h {
+            picture.set_size_request(target_w, target_h);
             changed = true;
         }
     }
@@ -2984,7 +3235,7 @@ fn update_icon_size_recursive(widget: &gtk4::Widget, size: i32, base_size: i32) 
     }
     let mut child = widget.first_child();
     while let Some(c) = child {
-        changed |= update_icon_size_recursive(&c, size, base_size);
+        changed |= update_icon_size_recursive(&c, size, base_size, position);
         child = c.next_sibling();
     }
     changed
@@ -3069,6 +3320,7 @@ fn start_icon_size_animation(
                 &animation.widget,
                 animation.current_size.round() as i32,
                 animation.base_size,
+                DOCK_CURRENT_POSITION.get(),
             );
             true
         });
@@ -3948,6 +4200,7 @@ fn create_minimized_window_item(info: &MinimizedWindowInfo, icon_size: i32) -> (
 
     item_container.append(&icon_band);
     item_container.append(&spacer);
+    apply_dock_item_geometry(&item_container, DOCK_CURRENT_POSITION.get());
 
     // Clic para restaurar la ventana vía animación inversa desde el Dock
     let gesture = GestureClick::new();
@@ -4124,6 +4377,7 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
     right_click.set_button(3);
     let p = popover.clone();
     right_click.connect_pressed(move |_, _, _, _| {
+        apply_popover_dock_placement(&p, DOCK_CURRENT_POSITION.get());
         p.popup();
     });
     btn.add_controller(right_click);
@@ -4137,6 +4391,7 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
         .valign(gtk4::Align::End)
         .build();
     item_container.append(&spacer);
+    apply_dock_item_geometry(&item_container, DOCK_CURRENT_POSITION.get());
 
     (item_container, trash_img)
 }
@@ -4473,6 +4728,7 @@ fn create_dock_item(
             &cfg_rc,
             &on_rf_rc,
         );
+        apply_popover_dock_placement(&p_rc, DOCK_CURRENT_POSITION.get());
         p_rc.popup();
     });
     btn.add_controller(right_click);
@@ -4488,6 +4744,7 @@ fn create_dock_item(
         .valign(gtk4::Align::End)
         .build();
     item_container.append(&indicator);
+    apply_dock_item_geometry(&item_container, DOCK_CURRENT_POSITION.get());
 
     (item_container, indicator)
 }

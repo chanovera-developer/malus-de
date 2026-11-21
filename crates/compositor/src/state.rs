@@ -6879,13 +6879,31 @@ impl WlrLayerShellHandler for MalusState {
                 });
             });
             let is_malus_lock = namespace == "malus-lock";
+            let is_top_bar = namespace == "malus-top-bar";
             let desktop_surface = smithay::desktop::LayerSurface::new(surface, namespace);
             if is_malus_lock {
                 self.malus_lock_layers
                     .push((output.clone(), desktop_surface.clone()));
             }
             let mut map = layer_map_for_output(&output);
-            let _ = map.map_layer(&desktop_surface);
+            if is_top_bar {
+                // Asegurar que `malus-top-bar` se organice siempre antes que `malus-dock` en LayerMap
+                // para que un Dock lateral no recorte ni desplace horizontalmente la Top Bar.
+                let docked: Vec<_> = map
+                    .layers()
+                    .filter(|l| l.namespace() == "malus-dock")
+                    .cloned()
+                    .collect();
+                for d in &docked {
+                    map.unmap_layer(d);
+                }
+                let _ = map.map_layer(&desktop_surface);
+                for d in &docked {
+                    let _ = map.map_layer(d);
+                }
+            } else {
+                let _ = map.map_layer(&desktop_surface);
+            }
             map.arrange();
         }
     }

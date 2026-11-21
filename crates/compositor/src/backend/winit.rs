@@ -1344,19 +1344,13 @@ pub fn run_winit() -> Result<()> {
                             if let Some(root_elem) =
                                 s_elems.iter().find(|elem| *elem.id() == root_id)
                             {
-                                let headroom = if state.dock_cfg.position
-                                    == malus_de_common::config::DockPosition::Bottom
-                                {
-                                    state.dock_blur_headroom
-                                } else {
-                                    0
-                                };
                                 dock_clip_roots.push((
                                     root_id,
                                     super::dock_clip_rect(
                                         root_elem.geometry(smithay::utils::Scale::from(1.0)),
-                                        headroom,
+                                        state.dock_blur_headroom,
                                         1.0,
+                                        state.dock_cfg.position,
                                     ),
                                 ));
                             }
