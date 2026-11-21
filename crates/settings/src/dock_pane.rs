@@ -520,6 +520,7 @@ pub fn create_dock_pane(
         chk_items_desk.set_active(DesktopIconsConfig::load().show_icons);
         chk_items_sm.set_active(c.show_items_in_stage_manager);
     }));
+    show_items_row.insert_child_after(&make_pending_badge(), show_items_row.first_child().as_ref());
     desk_card1.append(&show_items_row);
     desk_card1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 
@@ -569,6 +570,7 @@ pub fn create_dock_pane(
     dd_hooks
         .borrow_mut()
         .push(Box::new(move |c| sm_sw.set_active(c.stage_manager_enabled)));
+    sm_row.insert_child_after(&make_pending_badge(), sm_row.first_child().as_ref());
     desk_card2.append(&sm_row);
     desk_card2.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 
@@ -622,14 +624,20 @@ pub fn create_dock_pane(
     // ========================================================================
     // Sección 3: Widgets & Navegador predeterminado
     // ========================================================================
-    pane.append(
+    let widgets_hdr = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .margin_top(6)
+        .build();
+    widgets_hdr.append(
         &Label::builder()
             .label("Widgets")
             .css_classes(["wifi-section-title"])
             .xalign(0.0)
-            .margin_top(6)
             .build(),
     );
+    widgets_hdr.append(&make_pending_badge());
+    pane.append(&widgets_hdr);
 
     let widgets_card = GtkBox::builder().orientation(Orientation::Vertical).build();
     let (w_show_row, chk_w_desk, chk_w_sm) = build_dual_checkbox_row(
