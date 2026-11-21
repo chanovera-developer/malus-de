@@ -6,8 +6,8 @@
 //! consistente y actualización en vivo al cambiar «Íconos de la barra lateral» en Aspecto.
 
 use crate::config::{
-    appearance_settings_path, load_sidebar_icon_size_index, sidebar_icon_metrics,
-    sidebar_icon_size_css,
+    appearance_settings_path, load_sidebar_icon_size_index, load_tint_windows_with_wallpaper,
+    sidebar_icon_metrics, sidebar_icon_size_css,
 };
 use gtk4::gdk::Display;
 use gtk4::gio;
@@ -20,6 +20,7 @@ thread_local! {
     static SIDEBAR_CSS_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
     static SIDEBAR_MONITOR: RefCell<Option<gio::FileMonitor>> = const { RefCell::new(None) };
     static LAST_SIDEBAR_IDX: Cell<usize> = const { Cell::new(usize::MAX) };
+    static LAST_SIDEBAR_TINT: Cell<Option<bool>> = const { Cell::new(None) };
     static SIDEBAR_ICONS: RefCell<Vec<glib::WeakRef<Image>>> = const { RefCell::new(Vec::new()) };
     static SIDEBAR_ROWS: RefCell<Vec<glib::WeakRef<Widget>>> = const { RefCell::new(Vec::new()) };
 }
@@ -44,7 +45,10 @@ pub fn install_sidebar_size_sync(display: &Display) {
         {
             monitor.connect_changed(|_, _, _, _| {
                 let idx = load_sidebar_icon_size_index();
-                if LAST_SIDEBAR_IDX.with(|c| c.get()) != idx {
+                let tint = load_tint_windows_with_wallpaper();
+                let changed = LAST_SIDEBAR_IDX.with(|c| c.get()) != idx
+                    || LAST_SIDEBAR_TINT.with(|c| c.get()) != Some(tint);
+                if changed {
                     apply_sidebar_size_index(idx);
                 }
             });
@@ -89,7 +93,9 @@ pub fn apply_sidebar_size_now() {
 /// Aplica un índice explícito (`0 = Pequeños`, `1 = Medianos`, `2 = Grandes`) al instante.
 pub fn apply_sidebar_size_index(index: usize) {
     let idx = index.min(2);
+    let tint = load_tint_windows_with_wallpaper();
     LAST_SIDEBAR_IDX.with(|c| c.set(idx));
+    LAST_SIDEBAR_TINT.with(|c| c.set(Some(tint)));
     let metrics = sidebar_icon_metrics(idx);
     let css = sidebar_icon_size_css(idx);
 

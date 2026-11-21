@@ -210,9 +210,13 @@ pub(crate) fn apply_branches_liquid_glass_opacity(opacity: f64) {
     } else {
         pop_light_a
     };
+    let side_tint = malus_de_common::config::sidebar_tint_background_image_css(
+        malus_de_common::config::load_tint_windows_with_wallpaper(),
+    );
     let css = format!(
         ".branches-sidebar-pane {{ \
              background-color: alpha(@window_bg_color, {side_a:.3}); \
+             background-image: {side_tint}; \
          }} \
          window.branches-window popover > contents, \
          window.branches-window popover.menu > contents, \

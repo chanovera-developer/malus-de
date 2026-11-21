@@ -763,6 +763,8 @@ fn build_appearance_main_pane(
         tint_sw.connect_state_set(move |_, active| {
             p.borrow_mut().tint_windows_with_wallpaper = active;
             p.borrow().save();
+            crate::apply_liquid_glass_opacity_css(p.borrow().liquid_glass_opacity);
+            malus_de_common::sidebar_style::apply_sidebar_size_now();
             glib::Propagation::Proceed
         });
     }

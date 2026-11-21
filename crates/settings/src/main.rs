@@ -137,6 +137,9 @@ pub(crate) fn apply_liquid_glass_opacity_css(opacity: f64) {
     let scale = malus_de_common::config::liquid_glass_scale_for(opacity);
     let pop_a = malus_de_common::config::scaled_liquid_glass_alpha(0.78, scale, 0.14, 0.96);
     let side_a = malus_de_common::config::scaled_liquid_glass_alpha(0.72, scale, 0.12, 0.96);
+    let side_tint = malus_de_common::config::sidebar_tint_background_image_css(
+        malus_de_common::config::load_tint_windows_with_wallpaper(),
+    );
     let css = format!(
         "window.macos-settings-window popover > contents, \
          window.macos-settings-window popover.menu > contents, \
@@ -147,6 +150,7 @@ pub(crate) fn apply_liquid_glass_opacity_css(opacity: f64) {
          }} \
          .macos-sidebar {{ \
              background-color: alpha(@window_bg_color, {side_a:.3}); \
+             background-image: {side_tint}; \
          }}"
     );
     SETTINGS_GLASS_PROVIDER.with(|cell| {

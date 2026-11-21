@@ -193,11 +193,35 @@ pub fn load_sidebar_icon_metrics() -> SidebarSizeMetrics {
     sidebar_icon_metrics(load_sidebar_icon_size_index())
 }
 
+/// Indica si las barras laterales deben recibir un tinte sutil con el color de énfasis.
+pub fn load_tint_windows_with_wallpaper() -> bool {
+    let Ok(raw) = std::fs::read_to_string(appearance_settings_path()) else {
+        return true;
+    };
+    toml::from_str::<toml::Value>(&raw)
+        .ok()
+        .and_then(|settings| settings.get("tint_windows_with_wallpaper")?.as_bool())
+        .unwrap_or(true)
+}
+
+/// Degradado CSS (`background-image`) para teñir sutilmente las barras laterales con `@accent_bg_color`.
+pub fn sidebar_tint_background_image_css(enabled: bool) -> &'static str {
+    if enabled {
+        "linear-gradient(to bottom, alpha(@accent_bg_color, 0.085), alpha(@accent_bg_color, 0.085))"
+    } else {
+        "none"
+    }
+}
+
 /// Genera CSS compartido para escalar barras laterales (`.malus-sidebar-*`, Branches y Ajustes).
 pub fn sidebar_icon_size_css(index: usize) -> String {
     let m = sidebar_icon_metrics(index);
+    let tint_bg = sidebar_tint_background_image_css(load_tint_windows_with_wallpaper());
     format!(
-        ".malus-sidebar-row, .branches-sidebar-row, .sidebar-btn {{ \
+        ".malus-sidebar-pane {{ \
+             background-image: {tint}; \
+         }} \
+         .malus-sidebar-row, .branches-sidebar-row, .sidebar-btn {{ \
              font-size: {fp}px; min-height: {mh}px; padding: {pv}px 10px; \
          }} \
          .malus-sidebar-icon, .branches-sidebar-icon, .settings-sidebar-icon {{ \
@@ -206,6 +230,7 @@ pub fn sidebar_icon_size_css(index: usize) -> String {
          .malus-sidebar-label, .branches-sidebar-label, .settings-sidebar-label {{ \
              font-size: {fp}px; \
          }}",
+        tint = tint_bg,
         fp = m.font_px,
         mh = m.row_min_height,
         pv = m.row_pad_v,
