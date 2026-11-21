@@ -22,6 +22,7 @@ use crate::squircle_path;
 use crate::wifi_pane::{make_squircle_button, wrap_squircle_card, WIFI_CARD_SQUIRCLE_RADIUS};
 
 const FIT_MODE_LABELS: [&str; 4] = ["Llenar pantalla", "Ajustar", "Estirar", "Centrar"];
+const WP_THUMB_SQUIRCLE_RADIUS: f64 = WIFI_CARD_SQUIRCLE_RADIUS;
 
 const CURATED_SOLID_COLORS: [(&str, &str); 21] = [
     ("Negro", "#000000"),
@@ -1000,12 +1001,13 @@ fn make_thumbnail_tile(
     let btn = Button::builder()
         .css_classes(["wp-tile-btn"])
         .has_frame(false)
+        .valign(Align::Start)
         .build();
 
     let vbox = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(5)
-        .width_request(116)
+        .width_request(114)
         .build();
 
     let area = DrawingArea::builder()
@@ -1028,7 +1030,7 @@ fn make_thumbnail_tile(
             return;
         }
         let _ = cr.save();
-        squircle_path(cr, w, h, 8.0);
+        squircle_path(cr, w, h, WP_THUMB_SQUIRCLE_RADIUS);
         cr.clip();
 
         match &item_for_draw.kind {
@@ -1084,17 +1086,14 @@ fn make_thumbnail_tile(
         let active = is_active_draw(&item_for_draw);
         let _ = cr.save();
         if active {
-            squircle_path(cr, w - 2.0, h - 2.0, 7.5);
-            let _ = cr.restore();
-            let _ = cr.save();
             cr.translate(1.0, 1.0);
-            squircle_path(cr, w - 2.0, h - 2.0, 7.5);
+            squircle_path(cr, w - 2.0, h - 2.0, (WP_THUMB_SQUIRCLE_RADIUS - 1.0).max(2.0));
             cr.set_source_rgba(0.04, 0.52, 1.0, 0.96);
             cr.set_line_width(2.2);
             let _ = cr.stroke();
         } else {
             cr.translate(0.5, 0.5);
-            squircle_path(cr, w - 1.0, h - 1.0, 8.0);
+            squircle_path(cr, w - 1.0, h - 1.0, WP_THUMB_SQUIRCLE_RADIUS);
             cr.set_source_rgba(0.0, 0.0, 0.0, 0.14);
             cr.set_line_width(1.0);
             let _ = cr.stroke();
@@ -1298,7 +1297,7 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
             }
             let cfg = cfg_draw.borrow().clone();
             let _ = cr.save();
-            squircle_path(cr, w, h, 10.0);
+            squircle_path(cr, w, h, WP_THUMB_SQUIRCLE_RADIUS);
             cr.clip();
 
             match cfg.mode {
@@ -1343,7 +1342,7 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
 
             let _ = cr.save();
             cr.translate(0.5, 0.5);
-            squircle_path(cr, w - 1.0, h - 1.0, 10.0);
+            squircle_path(cr, w - 1.0, h - 1.0, WP_THUMB_SQUIRCLE_RADIUS);
             cr.set_source_rgba(0.0, 0.0, 0.0, 0.16);
             cr.set_line_width(1.0);
             let _ = cr.stroke();
@@ -1478,20 +1477,85 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
     let add_photo_btn = Button::builder()
         .css_classes(["wp-tile-btn", "wp-add-photo-tile"])
         .has_frame(false)
+        .valign(Align::Start)
+        .halign(Align::Start)
         .build();
-    let add_photo_inner = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .spacing(6)
+
+    let add_photo_overlay = Overlay::builder()
         .width_request(114)
         .height_request(70)
         .halign(Align::Center)
+        .valign(Align::Start)
+        .build();
+
+    let add_photo_bg = DrawingArea::builder()
+        .content_width(114)
+        .content_height(70)
+        .can_target(false)
+        .build();
+    {
+        let btn_weak = add_photo_btn.downgrade();
+        add_photo_bg.set_draw_func(move |_, cr, width, height| {
+            let w = width as f64;
+            let h = height as f64;
+            if w <= 2.0 || h <= 2.0 {
+                return;
+            }
+            let hovered = btn_weak
+                .upgrade()
+                .map(|b| b.state_flags().contains(gtk4::StateFlags::PRELIGHT))
+                .unwrap_or(false);
+            let is_dark = libadwaita::StyleManager::default().is_dark();
+
+            let _ = cr.save();
+            squircle_path(cr, w, h, WP_THUMB_SQUIRCLE_RADIUS);
+            if is_dark {
+                cr.set_source_rgba(1.0, 1.0, 1.0, if hovered { 0.11 } else { 0.07 });
+            } else {
+                cr.set_source_rgba(0.0, 0.0, 0.0, if hovered { 0.09 } else { 0.055 });
+            }
+            let _ = cr.fill();
+            let _ = cr.restore();
+
+            let _ = cr.save();
+            cr.translate(0.5, 0.5);
+            squircle_path(cr, w - 1.0, h - 1.0, WP_THUMB_SQUIRCLE_RADIUS);
+            if hovered {
+                let (r, g, b) = crate::accent_color();
+                cr.set_source_rgba(r, g, b, 0.65);
+            } else if is_dark {
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.14);
+            } else {
+                cr.set_source_rgba(0.0, 0.0, 0.0, 0.12);
+            }
+            cr.set_line_width(1.0);
+            let _ = cr.stroke();
+            let _ = cr.restore();
+        });
+    }
+    {
+        let bg_c = add_photo_bg.clone();
+        add_photo_btn.connect_state_flags_changed(move |_, _| bg_c.queue_draw());
+    }
+    {
+        let bg_weak = add_photo_bg.downgrade();
+        libadwaita::StyleManager::default().connect_dark_notify(move |_| {
+            if let Some(bg) = bg_weak.upgrade() {
+                bg.queue_draw();
+            }
+        });
+    }
+
+    let add_photo_inner = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(4)
+        .halign(Align::Center)
         .valign(Align::Center)
-        .css_classes(["wp-add-photo-card"])
         .build();
     add_photo_inner.append(
         &Image::builder()
             .icon_name("insert-image-symbolic")
-            .pixel_size(24)
+            .pixel_size(22)
             .css_classes(["wp-add-photo-icon"])
             .valign(Align::Center)
             .build(),
@@ -1503,7 +1567,9 @@ pub fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<
             .valign(Align::Center)
             .build(),
     );
-    add_photo_btn.set_child(Some(&add_photo_inner));
+    add_photo_overlay.set_child(Some(&add_photo_bg));
+    add_photo_overlay.add_overlay(&add_photo_inner);
+    add_photo_btn.set_child(Some(&add_photo_overlay));
 
     // ========================================================================
     // 4-9. Colecciones de vistas aéreas / Mac sin contenido local ("por implementar")
