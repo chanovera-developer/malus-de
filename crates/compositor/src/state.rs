@@ -1705,6 +1705,41 @@ impl MalusState {
         }
     }
 
+    fn fallback_dock_slot(&self) -> Rectangle<i32, Logical> {
+        use malus_de_common::config::DockPosition;
+        if let Some((dock_geo, _)) = self.dock_surface_geometry() {
+            let (slot_x, slot_y) = match self.dock_cfg.position {
+                DockPosition::Bottom => (
+                    (dock_geo.loc.x + dock_geo.size.w - 110).max(dock_geo.loc.x),
+                    (dock_geo.loc.y + dock_geo.size.h - 58).max(dock_geo.loc.y),
+                ),
+                DockPosition::Left => (
+                    dock_geo.loc.x + 12,
+                    dock_geo.loc.y + (dock_geo.size.h / 2) - 22,
+                ),
+                DockPosition::Right => (
+                    (dock_geo.loc.x + dock_geo.size.w - 66).max(dock_geo.loc.x),
+                    dock_geo.loc.y + (dock_geo.size.h / 2) - 22,
+                ),
+            };
+            Rectangle::new((slot_x, slot_y).into(), (54, 44).into())
+        } else {
+            let output_size = self
+                .space
+                .outputs()
+                .next()
+                .and_then(|o| self.space.output_geometry(o))
+                .map(|g| g.size)
+                .unwrap_or_else(|| (1920, 1080).into());
+            let (slot_x, slot_y) = match self.dock_cfg.position {
+                DockPosition::Bottom => ((output_size.w / 2) + 80, output_size.h - 58),
+                DockPosition::Left => (12, (output_size.h / 2) - 22),
+                DockPosition::Right => (output_size.w - 66, (output_size.h / 2) - 22),
+            };
+            Rectangle::new((slot_x, slot_y).into(), (54, 44).into())
+        }
+    }
+
     pub fn restore_window_by_id(&mut self, target_id: u64) -> bool {
         let entry = self
             .minimized_windows
@@ -1722,24 +1757,10 @@ impl MalusState {
                 self.minimized_window_workspaces.remove(&surf);
                 self.remove_minimized_thumbnail(target_id);
                 let geo = window.geometry();
-                let dock_slot = self.dock_slots.remove(&target_id).unwrap_or_else(|| {
-                    if let Some((dock_geo, _)) = self.dock_surface_geometry() {
-                        let slot_x = dock_geo.loc.x + (dock_geo.size.w / 2) + 20;
-                        let slot_y = dock_geo.loc.y + (dock_geo.size.h / 2) - 22;
-                        Rectangle::new((slot_x, slot_y).into(), (54, 44).into())
-                    } else {
-                        let output_size = self
-                            .space
-                            .outputs()
-                            .next()
-                            .and_then(|o| self.space.output_geometry(o))
-                            .map(|g| g.size)
-                            .unwrap_or_else(|| (1920, 1080).into());
-                        let slot_x = (output_size.w / 2) + 80;
-                        let slot_y = output_size.h - 58;
-                        Rectangle::new((slot_x, slot_y).into(), (54, 44).into())
-                    }
-                });
+                let dock_slot = self
+                    .dock_slots
+                    .remove(&target_id)
+                    .unwrap_or_else(|| self.fallback_dock_slot());
 
                 // Iniciar animación Genie Effect inversa (expansión desde el Dock)
                 let anim = GenieAnimation {
@@ -1802,24 +1823,7 @@ impl MalusState {
             // de sombra/estado activo en la ventana viva causaría parpadeo antes de iniciar el Genie.
             let registered_dock_slot = self.dock_slots.get(&window_id).cloned();
             let waiting_for_dock_slot = false;
-            let dock_slot = registered_dock_slot.unwrap_or_else(|| {
-                if let Some((dock_geo, _)) = self.dock_surface_geometry() {
-                    let slot_x = (dock_geo.loc.x + dock_geo.size.w - 110).max(dock_geo.loc.x);
-                    let slot_y = dock_geo.loc.y + (dock_geo.size.h / 2) - 22;
-                    Rectangle::new((slot_x, slot_y).into(), (54, 44).into())
-                } else {
-                    let output_size = self
-                        .space
-                        .outputs()
-                        .next()
-                        .and_then(|o| self.space.output_geometry(o))
-                        .map(|g| g.size)
-                        .unwrap_or_else(|| (1920, 1080).into());
-                    let slot_x = (output_size.w / 2) + 90;
-                    let slot_y = output_size.h - 58;
-                    Rectangle::new((slot_x, slot_y).into(), (54, 44).into())
-                }
-            });
+            let dock_slot = registered_dock_slot.unwrap_or_else(|| self.fallback_dock_slot());
 
             // Registrar animación Genie Effect (Lámpara de Aladino hacia el Dock)
             let anim = GenieAnimation {

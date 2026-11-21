@@ -1,10 +1,12 @@
 use crate::genie::GenieRect;
+use malus_de_common::config::DockPosition;
 use smithay::backend::renderer::gles::{ffi, GlesTexture};
 use std::ffi::CString;
 
 pub struct MagicLampAnimation {
     window: GenieRect,
     target: GenieRect,
+    position: DockPosition,
     k: f32,
     j: f32,
 }
@@ -65,6 +67,22 @@ impl MagicLampAnimation {
         raw_progress: f32,
         is_minimizing: bool,
     ) -> Self {
+        Self::new_oriented(
+            window,
+            target,
+            raw_progress,
+            is_minimizing,
+            DockPosition::Bottom,
+        )
+    }
+
+    pub fn new_oriented(
+        window: GenieRect,
+        target: GenieRect,
+        raw_progress: f32,
+        is_minimizing: bool,
+        position: DockPosition,
+    ) -> Self {
         let (k, j) = Self::compute_kj(raw_progress, is_minimizing);
 
         Self {
@@ -75,6 +93,7 @@ impl MagicLampAnimation {
                 width: target.width.max(24.0),
                 height: target.height.max(24.0),
             },
+            position,
             k,
             j,
         }
@@ -84,32 +103,77 @@ impl MagicLampAnimation {
         (self.k, self.j, self.alpha())
     }
 
+    /// Calcula `(pos_eje_primario, inicio_eje_transversal, extension_eje_transversal)` para `slice` en `[0, 1]`.
+    /// - En `Bottom`: `(screen_y, slice_x, slice_w)`.
+    /// - En `Left` / `Right`: `(screen_x, slice_y, slice_h)`.
     pub fn deform_slice(&self, slice: f32) -> (f32, f32, f32) {
         let s = slice.clamp(0.0, 1.0);
 
-        let win_top = self.window.y;
-        let win_bottom = self.window.y + self.window.height;
-        let dock_top = self.target.y;
-        let dock_bottom = self.target.y + self.target.height;
+        let (
+            win_trail,
+            win_lead,
+            dock_trail,
+            dock_lead,
+            win_cross_center,
+            win_cross_span,
+            dock_cross_center,
+            dock_cross_span,
+            axis_sign,
+        ) = match self.position {
+            DockPosition::Bottom => (
+                self.window.y,
+                self.window.y + self.window.height,
+                self.target.y,
+                self.target.y + self.target.height,
+                self.window.x + self.window.width * 0.5,
+                self.window.width,
+                self.target.x + self.target.width * 0.5,
+                self.target.width,
+                1.0_f32,
+            ),
+            DockPosition::Left => (
+                self.window.x + self.window.width,
+                self.window.x,
+                self.target.x + self.target.width,
+                self.target.x,
+                self.window.y + self.window.height * 0.5,
+                self.window.height,
+                self.target.y + self.target.height * 0.5,
+                self.target.height,
+                -1.0_f32,
+            ),
+            DockPosition::Right => (
+                self.window.x,
+                self.window.x + self.window.width,
+                self.target.x,
+                self.target.x + self.target.width,
+                self.window.y + self.window.height * 0.5,
+                self.window.height,
+                self.target.y + self.target.height * 0.5,
+                self.target.height,
+                1.0_f32,
+            ),
+        };
 
-        // 1. Posición vertical de la rebanada `s`:
-        // Durante Fase 1 (k: 0 -> 1, j = 0), el borde superior sigue en win_top y el inferior baja de win_bottom a dock_bottom.
-        // Durante Fase 2 (k = 1, j: 0 -> 1), el borde superior baja de win_top a dock_top mientras las rebanadas
-        // se comprimen progresivamente al entrar en el cuello del embudo.
-        let top_y = win_top + (dock_top - win_top) * self.j.powf(1.12);
+        // 1. Posición a lo largo del eje del embudo (`Bottom` en Y; `Left`/`Right` en X):
+        // Durante Fase 1 (k: 0 -> 1, j = 0), el borde trasero sigue en win_trail y el delantero avanza hacia dock_lead.
+        // Durante Fase 2 (k = 1, j: 0 -> 1), el borde trasero viaja hacia dock_trail mientras las rebanadas
+        // se comprimen progresivamente hacia el cuello del embudo.
+        let trail_pos = win_trail
+            + (dock_trail - win_trail) * if self.j <= 0.0 { 0.0 } else { self.j.powf(1.12) };
         let reach = self.k.max(self.j);
-        let bottom_y = win_bottom + (dock_bottom - win_bottom) * reach;
+        let lead_pos = win_lead + (dock_lead - win_lead) * reach;
 
-        // Ligera aceleración vertical de las rebanadas inferiores hacia el cuello durante la succión
+        // Ligera aceleración de las rebanadas hacia el cuello durante la succión
         let suction_warp = s + self.k * (1.0 - self.j) * 0.22 * s * (1.0 - s);
-        let screen_y = top_y + suction_warp * (bottom_y - top_y);
+        let screen_primary = trail_pos + suction_warp * (lead_pos - trail_pos);
 
-        // 2. Coordenada espacial normalizada dentro del embudo vertical [win_top .. dock_bottom]
-        let total_span = (dock_bottom - win_top).abs().max(1.0);
-        let spatial_u = ((screen_y - win_top) / total_span).clamp(0.0, 1.0);
+        // 2. Coordenada espacial normalizada dentro del embudo [win_trail .. dock_lead]
+        let total_span = (dock_lead - win_trail).abs().max(1.0);
+        let spatial_u = (((screen_primary - win_trail) * axis_sign) / total_span).clamp(0.0, 1.0);
 
-        // El hombro superior del embudo acompaña el descenso de la ventana durante la primera parte de `j`,
-        // manteniendo la parte alta ancha antes de estrecharse rápidamente al acercarse al Dock.
+        // El hombro del embudo acompaña el avance de la ventana durante la primera parte de `j`,
+        // manteniendo ancha la zona trasera antes de estrecharse hacia el Dock.
         let neck_start = (self.j * 0.52).clamp(0.0, 0.72);
         let funnel_t = if self.j > 0.0 {
             ((spatial_u - neck_start) / (1.0 - neck_start).max(0.05)).clamp(0.0, 1.0)
@@ -121,26 +185,25 @@ impl MagicLampAnimation {
         // para garantizar convergencia exacta en los extremos (s = 0 y j = 1).
         let tau = (funnel_t * (1.0 - self.j) + self.j).clamp(0.0, 1.0);
 
-        // 3. Curva de estrechamiento (Pinch) y curva en S de desplazamiento horizontal (Sweep):
-        // - `pinch_curve` estrecha el ancho más rápido en la mitad inferior para formar el cuello esbelto de macOS.
-        // - `sweep_curve` usa una quíntica C2 (derivadas 1ª y 2ª nulas en 0 y 1) para que los bordes laterales
-        //   salgan verticales de la ventana, tracen una S suave y entren verticales al icono del Dock.
+        // 3. Curva de estrechamiento (Pinch) y curva en S de desplazamiento transversal (Sweep):
         let base_s = smoothstep(tau);
         let pinch_curve = (1.0 - (1.0 - base_s).powf(1.85)) * self.k;
         let sweep_curve = smootherstep(tau) * self.k;
 
-        // Colapso final hacia el ancho y centro exactos del slot a medida que j -> 1
+        // Colapso final hacia el tamaño y centro exactos del slot a medida que j -> 1
         let width_factor = (pinch_curve + (1.0 - pinch_curve) * self.j).clamp(0.0, 1.0);
         let center_factor = (sweep_curve + (1.0 - sweep_curve) * self.j).clamp(0.0, 1.0);
 
-        let slice_w =
-            (self.window.width + (self.target.width - self.window.width) * width_factor).max(2.0);
+        let cross_span =
+            (win_cross_span + (dock_cross_span - win_cross_span) * width_factor).max(2.0);
+        let current_cross_center =
+            win_cross_center + (dock_cross_center - win_cross_center) * center_factor;
 
-        let win_center_x = self.window.x + self.window.width * 0.5;
-        let target_center_x = self.target.x + self.target.width * 0.5;
-        let current_center_x = win_center_x + (target_center_x - win_center_x) * center_factor;
-
-        (screen_y, current_center_x - slice_w * 0.5, slice_w)
+        (
+            screen_primary,
+            current_cross_center - cross_span * 0.5,
+            cross_span,
+        )
     }
 
     pub fn alpha(&self) -> f32 {
@@ -157,13 +220,15 @@ impl MagicLampAnimation {
 pub struct MinimizeRenderFrame {
     pub win_rect: GenieRect,
     pub target_rect: GenieRect,
+    pub direction: DockPosition,
     pub k: f32,
     pub j: f32,
     pub alpha: f32,
     pub shadow_k: f32,
 }
 
-/// Calcula los parámetros del efecto de minimización según la preferencia activa (`use_genie`).
+/// Calcula los parámetros del efecto de minimización según la preferencia activa (`use_genie`)
+/// y la posición actual del Dock (`position`: Bottom, Left o Right).
 /// En modo escala (`use_genie == false`) interpola el rectángulo de forma uniforme hasta el slot
 /// del Dock sin deformación en cuello ni curva S.
 pub fn compute_minimize_frame(
@@ -172,13 +237,21 @@ pub fn compute_minimize_frame(
     raw_progress: f32,
     is_minimizing: bool,
     use_genie: bool,
+    position: DockPosition,
 ) -> MinimizeRenderFrame {
     if use_genie {
-        let (k, j, alpha) =
-            MagicLampAnimation::new(win_rect, target_rect, raw_progress, is_minimizing).params();
+        let (k, j, alpha) = MagicLampAnimation::new_oriented(
+            win_rect,
+            target_rect,
+            raw_progress,
+            is_minimizing,
+            position,
+        )
+        .params();
         MinimizeRenderFrame {
             win_rect,
             target_rect,
+            direction: position,
             k,
             j,
             alpha,
@@ -210,6 +283,7 @@ pub fn compute_minimize_frame(
         MinimizeRenderFrame {
             win_rect: scaled_rect,
             target_rect: scaled_rect,
+            direction: position,
             k: 0.0,
             j: 0.0,
             alpha,
@@ -227,6 +301,7 @@ uniform vec4 u_target_rect;  // (x, y, w, h) del slot del Dock en píxeles físi
 uniform float u_k;
 uniform float u_j;
 uniform int u_n_rows;
+uniform int u_direction;     // 0 = Bottom, 1 = Left, 2 = Right
 
 out vec2 v_uv;
 
@@ -246,20 +321,61 @@ float smoother_01(float x) {
 
 vec3 eval_genie_slice(float slice_s) {
     float s = clamp(slice_s, 0.0, 1.0);
-    float win_top = u_win_rect.y;
-    float win_bottom = u_win_rect.y + u_win_rect.w;
-    float dock_top = u_target_rect.y;
-    float dock_bottom = u_target_rect.y + u_target_rect.w;
 
-    float top_y = win_top + (dock_top - win_top) * safe_pow(u_j, 1.12);
+    float win_trail;
+    float win_lead;
+    float dock_trail;
+    float dock_lead;
+    float win_cross_center;
+    float win_cross_span;
+    float dock_cross_center;
+    float dock_cross_span;
+    float axis_sign;
+
+    if (u_direction == 1) {
+        // Left: desde borde derecho (s=0) estirándose hacia la izquierda (s=1)
+        win_trail = u_win_rect.x + u_win_rect.z;
+        win_lead = u_win_rect.x;
+        dock_trail = u_target_rect.x + u_target_rect.z;
+        dock_lead = u_target_rect.x;
+        win_cross_center = u_win_rect.y + u_win_rect.w * 0.5;
+        win_cross_span = u_win_rect.w;
+        dock_cross_center = u_target_rect.y + u_target_rect.w * 0.5;
+        dock_cross_span = u_target_rect.w;
+        axis_sign = -1.0;
+    } else if (u_direction == 2) {
+        // Right: desde borde izquierdo (s=0) estirándose hacia la derecha (s=1)
+        win_trail = u_win_rect.x;
+        win_lead = u_win_rect.x + u_win_rect.z;
+        dock_trail = u_target_rect.x;
+        dock_lead = u_target_rect.x + u_target_rect.z;
+        win_cross_center = u_win_rect.y + u_win_rect.w * 0.5;
+        win_cross_span = u_win_rect.w;
+        dock_cross_center = u_target_rect.y + u_target_rect.w * 0.5;
+        dock_cross_span = u_target_rect.w;
+        axis_sign = 1.0;
+    } else {
+        // Bottom: desde borde superior (s=0) estirándose hacia abajo (s=1)
+        win_trail = u_win_rect.y;
+        win_lead = u_win_rect.y + u_win_rect.w;
+        dock_trail = u_target_rect.y;
+        dock_lead = u_target_rect.y + u_target_rect.w;
+        win_cross_center = u_win_rect.x + u_win_rect.z * 0.5;
+        win_cross_span = u_win_rect.z;
+        dock_cross_center = u_target_rect.x + u_target_rect.z * 0.5;
+        dock_cross_span = u_target_rect.z;
+        axis_sign = 1.0;
+    }
+
+    float trail_pos = win_trail + (dock_trail - win_trail) * safe_pow(u_j, 1.12);
     float reach = max(u_k, u_j);
-    float bottom_y = win_bottom + (dock_bottom - win_bottom) * reach;
+    float lead_pos = win_lead + (dock_lead - win_lead) * reach;
 
     float suction_warp = s + u_k * (1.0 - u_j) * 0.22 * s * (1.0 - s);
-    float screen_y = top_y + suction_warp * (bottom_y - top_y);
+    float screen_primary = trail_pos + suction_warp * (lead_pos - trail_pos);
 
-    float total_span = max(abs(dock_bottom - win_top), 1.0);
-    float spatial_u = clamp((screen_y - win_top) / total_span, 0.0, 1.0);
+    float total_span = max(abs(dock_lead - win_trail), 1.0);
+    float spatial_u = clamp(((screen_primary - win_trail) * axis_sign) / total_span, 0.0, 1.0);
 
     float neck_start = clamp(u_j * 0.52, 0.0, 0.72);
     float funnel_t = (u_j > 0.0)
@@ -275,13 +391,10 @@ vec3 eval_genie_slice(float slice_s) {
     float width_factor = clamp(pinch_curve + (1.0 - pinch_curve) * u_j, 0.0, 1.0);
     float center_factor = clamp(sweep_curve + (1.0 - sweep_curve) * u_j, 0.0, 1.0);
 
-    float slice_w = max(u_win_rect.z + (u_target_rect.z - u_win_rect.z) * width_factor, 2.0);
+    float cross_span = max(win_cross_span + (dock_cross_span - win_cross_span) * width_factor, 2.0);
+    float current_cross_center = win_cross_center + (dock_cross_center - win_cross_center) * center_factor;
 
-    float win_center_x = u_win_rect.x + u_win_rect.z * 0.5;
-    float target_center_x = u_target_rect.x + u_target_rect.z * 0.5;
-    float current_center_x = win_center_x + (target_center_x - win_center_x) * center_factor;
-
-    return vec3(screen_y, current_center_x - slice_w * 0.5, slice_w);
+    return vec3(screen_primary, current_cross_center - cross_span * 0.5, cross_span);
 }
 
 void main() {
@@ -292,8 +405,17 @@ void main() {
 
     float s = (float(row) + vy) / float(u_n_rows);
     vec3 sl = eval_genie_slice(s);
-    vec2 pos = vec2(sl.y + vx * sl.z, sl.x);
-    v_uv = vec2(vx, s);
+    vec2 pos;
+    if (u_direction == 1) {
+        pos = vec2(sl.x, sl.y + vx * sl.z);
+        v_uv = vec2(1.0 - s, vx);
+    } else if (u_direction == 2) {
+        pos = vec2(sl.x, sl.y + vx * sl.z);
+        v_uv = vec2(s, vx);
+    } else {
+        pos = vec2(sl.y + vx * sl.z, sl.x);
+        v_uv = vec2(vx, s);
+    }
 
     vec3 ndc = u_matrix * vec3(pos, 1.0);
     gl_Position = vec4(ndc.xy, 0.0, 1.0);
@@ -327,6 +449,7 @@ pub struct GeniePipeline {
     u_k: ffi::types::GLint,
     u_j: ffi::types::GLint,
     u_n_rows: ffi::types::GLint,
+    u_direction: ffi::types::GLint,
     u_tex: ffi::types::GLint,
     u_alpha: ffi::types::GLint,
 }
@@ -348,6 +471,7 @@ impl GeniePipeline {
                 u_k: get_loc("u_k"),
                 u_j: get_loc("u_j"),
                 u_n_rows: get_loc("u_n_rows"),
+                u_direction: get_loc("u_direction"),
                 u_tex: get_loc("u_tex"),
                 u_alpha: get_loc("u_alpha"),
                 program,
@@ -363,6 +487,7 @@ impl GeniePipeline {
         texture: &GlesTexture,
         win_rect: GenieRect,
         target_rect: GenieRect,
+        direction: DockPosition,
         k: f32,
         j: f32,
         alpha: f32,
@@ -371,7 +496,16 @@ impl GeniePipeline {
             return;
         }
 
-        let n_rows = ((win_rect.height / 2.0).round() as i32).clamp(120, 280);
+        let dir_id = match direction {
+            DockPosition::Bottom => 0,
+            DockPosition::Left => 1,
+            DockPosition::Right => 2,
+        };
+        let n_rows = if direction == DockPosition::Bottom {
+            ((win_rect.height / 2.0).round() as i32).clamp(120, 280)
+        } else {
+            ((win_rect.width / 2.0).round() as i32).clamp(120, 280)
+        };
         let tw = target_rect.width.max(24.0);
         let th = target_rect.height.max(24.0);
 
@@ -439,6 +573,7 @@ impl GeniePipeline {
             gl.Uniform1f(self.u_k, k);
             gl.Uniform1f(self.u_j, j);
             gl.Uniform1i(self.u_n_rows, n_rows);
+            gl.Uniform1i(self.u_direction, dir_id);
             gl.Uniform1i(self.u_tex, 0);
             gl.Uniform1f(self.u_alpha, alpha);
 
@@ -628,37 +763,97 @@ mod tests {
 
     #[test]
     fn scale_minimize_effect_interpolates_uniformly_without_genie_warp() {
+        use malus_de_common::config::DockPosition;
         let window = rect(100.0, 80.0, 800.0, 600.0);
         let target = rect(500.0, 960.0, 64.0, 48.0);
 
-        let start = super::compute_minimize_frame(window, target, 0.0, true, false);
+        let start =
+            super::compute_minimize_frame(window, target, 0.0, true, false, DockPosition::Bottom);
         assert_eq!(start.k, 0.0);
         assert_eq!(start.j, 0.0);
         assert!((start.win_rect.x - window.x).abs() < 0.001);
         assert!((start.win_rect.width - window.width).abs() < 0.001);
         assert!((start.alpha - 1.0).abs() < 0.001);
 
-        let mid = super::compute_minimize_frame(window, target, 0.5, true, false);
+        let mid =
+            super::compute_minimize_frame(window, target, 0.5, true, false, DockPosition::Bottom);
         assert_eq!(mid.k, 0.0);
         assert_eq!(mid.j, 0.0);
         assert!((mid.alpha - 1.0).abs() < 0.001);
         assert!(mid.win_rect.width < window.width && mid.win_rect.width > target.width);
         assert!(mid.win_rect.y > window.y && mid.win_rect.y < target.y);
 
-        let near_end = super::compute_minimize_frame(window, target, 0.9, true, false);
+        let near_end =
+            super::compute_minimize_frame(window, target, 0.9, true, false, DockPosition::Bottom);
         assert!((near_end.alpha - 1.0).abs() < 0.001);
 
-        let end = super::compute_minimize_frame(window, target, 1.0, true, false);
+        let end =
+            super::compute_minimize_frame(window, target, 1.0, true, false, DockPosition::Bottom);
         assert!(end.alpha >= 0.74);
         assert!((end.win_rect.x - target.x).abs() < 0.001);
         assert!((end.win_rect.y - target.y).abs() < 0.001);
         assert!((end.win_rect.width - target.width).abs() < 0.001);
         assert!((end.win_rect.height - target.height).abs() < 0.001);
 
-        let restore_start = super::compute_minimize_frame(window, target, 0.0, false, false);
+        let restore_start =
+            super::compute_minimize_frame(window, target, 0.0, false, false, DockPosition::Bottom);
         assert!((restore_start.alpha - 1.0).abs() < 0.001);
         assert!((restore_start.win_rect.width - target.width).abs() < 0.001);
-        let restore_end = super::compute_minimize_frame(window, target, 1.0, false, false);
+        let restore_end =
+            super::compute_minimize_frame(window, target, 1.0, false, false, DockPosition::Bottom);
         assert!((restore_end.win_rect.width - window.width).abs() < 0.001);
+    }
+
+    #[test]
+    fn side_genie_stretches_horizontally_to_left_and_right_dock_slots() {
+        use malus_de_common::config::DockPosition;
+        let window = rect(400.0, 140.0, 800.0, 600.0);
+        let left_target = rect(16.0, 520.0, 54.0, 44.0);
+        let right_target = rect(1840.0, 520.0, 54.0, 44.0);
+
+        for (pos, target) in [
+            (DockPosition::Left, left_target),
+            (DockPosition::Right, right_target),
+        ] {
+            let start = MagicLampAnimation::new_oriented(window, target, 0.0, true, pos);
+            for s in [0.0, 0.5, 1.0] {
+                let (x, y, h) = start.deform_slice(s);
+                let expected_x = if pos == DockPosition::Left {
+                    window.x + window.width * (1.0 - s)
+                } else {
+                    window.x + window.width * s
+                };
+                assert!((x - expected_x).abs() < 0.001);
+                assert!((y - window.y).abs() < 0.001);
+                assert!((h - window.height).abs() < 0.001);
+            }
+
+            let mid = MagicLampAnimation::new_oriented(window, target, 0.2, true, pos);
+            let (_, _, trail_h) = mid.deform_slice(0.0);
+            let (lead_x, _, lead_h) = mid.deform_slice(1.0);
+            assert!(lead_h < trail_h, "el extremo hacia el dock debe estrecharse");
+            if pos == DockPosition::Left {
+                assert!(lead_x < window.x, "en Dock Left debe estirarse a la izquierda");
+            } else {
+                assert!(
+                    lead_x > window.x + window.width,
+                    "en Dock Right debe estirarse a la derecha"
+                );
+            }
+
+            let end = MagicLampAnimation::new_oriented(window, target, 1.0, true, pos);
+            for s in [0.0, 0.5, 1.0] {
+                let (x, y, h) = end.deform_slice(s);
+                let expected_x = if pos == DockPosition::Left {
+                    target.x + target.width * (1.0 - s)
+                } else {
+                    target.x + target.width * s
+                };
+                assert!((x - expected_x).abs() < 0.001);
+                assert!((y - target.y).abs() < 0.001);
+                assert!((h - target.height).abs() < 0.001);
+            }
+            assert_eq!(end.alpha(), 0.0);
+        }
     }
 }

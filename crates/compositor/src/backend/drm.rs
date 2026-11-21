@@ -6425,6 +6425,7 @@ pub fn run_drm() -> Result<()> {
                                             raw_t,
                                             anim.is_minimizing,
                                             state.dock_cfg.genie_effect,
+                                            state.dock_cfg.position,
                                         );
                                         let is_fullscreen_or_max = anim
                                             .window
@@ -6458,6 +6459,7 @@ pub fn run_drm() -> Result<()> {
                                             &snap.texture,
                                             mf.win_rect,
                                             mf.target_rect,
+                                            mf.direction,
                                             mf.k,
                                             mf.j,
                                             mf.alpha,
