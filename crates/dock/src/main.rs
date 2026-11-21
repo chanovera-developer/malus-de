@@ -696,10 +696,12 @@ fn queue_dock_resize(window: &ApplicationWindow, dock_root: &GtkBox, dock_bar: &
     dock_bar.queue_resize();
     dock_root.queue_resize();
 
-    let (_, width, _, _) = dock_root.measure(Orientation::Horizontal, -1);
-    if width > 0 {
-        let (_, height, _, _) = dock_root.measure(Orientation::Vertical, width);
-        if height > 0 && (width != window.width() || height != window.height()) {
+    let (min_w, nat_w, _, _) = dock_root.measure(Orientation::Horizontal, -1);
+    let width = nat_w.max(min_w);
+    if (1..=16384).contains(&width) {
+        let (min_h, nat_h, _, _) = dock_root.measure(Orientation::Vertical, width);
+        let height = nat_h.max(min_h);
+        if (1..=16384).contains(&height) && (width < window.width() || height < window.height()) {
             window.set_default_size(width, height);
         }
     }
@@ -1621,11 +1623,17 @@ fn build_dock_ui(app: &Application) {
             child = c.next_sibling();
         }
 
-        // Magnificar cada miniatura en minimized_box si está visible
+        // Magnificar cada miniatura en minimized_box si está visible y activa
         if min_box_motion.is_visible() {
             let mut min_child = min_box_motion.first_child();
             while let Some(c) = min_child {
-                update_item(&c);
+                let is_closing = c.opacity() <= 0.01
+                    || c.clone()
+                        .downcast::<gtk4::Revealer>()
+                        .is_ok_and(|r| !r.reveals_child());
+                if !is_closing {
+                    update_item(&c);
+                }
                 min_child = c.next_sibling();
             }
         }
@@ -1915,7 +1923,7 @@ fn build_dock_ui(app: &Application) {
                                     let dock_root_ref = dock_root_ref.clone();
                                     let dock_bar_ref = dock_bar_ref.clone();
                                     glib::timeout_add_local_once(
-                                        Duration::from_millis(200),
+                                        Duration::from_millis(240),
                                         move || {
                                             let still_current = min_map
                                                 .borrow()
@@ -2940,13 +2948,14 @@ fn update_icon_size_recursive(widget: &gtk4::Widget, size: i32, base_size: i32) 
         }
     }
     if let Ok(picture) = widget.clone().downcast::<Picture>() {
+        let target_w = size.clamp(1, 512);
         let current_width = picture.width_request().max(1);
         let current_height = picture.height_request().max(1);
-        let height = ((size as f64 * current_height as f64) / current_width as f64)
+        let height = ((target_w as f64 * current_height as f64) / current_width as f64)
             .round()
-            .max(1.0) as i32;
-        if picture.width_request() != size || picture.height_request() != height {
-            picture.set_size_request(size, height);
+            .clamp(1.0, 512.0) as i32;
+        if picture.width_request() != target_w || picture.height_request() != height {
+            picture.set_size_request(target_w, height);
             changed = true;
         }
     }
@@ -3039,7 +3048,14 @@ fn start_icon_size_animation(
         let mut settled = true;
         let mut animations = animations.borrow_mut();
         animations.retain_mut(|animation| {
-            if animation.widget.parent().is_none() {
+            if animation.widget.parent().is_none()
+                || animation.widget.opacity() <= 0.01
+                || animation
+                    .widget
+                    .clone()
+                    .downcast::<gtk4::Revealer>()
+                    .is_ok_and(|r| !r.reveals_child())
+            {
                 return false;
             }
 
