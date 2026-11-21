@@ -292,11 +292,12 @@ fn build_appearance_main_pane(
         .build();
     let glass_preview = DrawingArea::new();
     glass_preview.set_content_width(246);
-    glass_preview.set_content_height(164);
+    glass_preview.set_content_height(160);
     glass_preview.set_tooltip_text(Some(
         "Desplaza la rueda sobre la reseña para probar Liquid Glass sobre texto e imagen",
     ));
-    let glass_op = Rc::new(Cell::new(if prefs.borrow().reduce_transparency {
+    let glass_reduce = Rc::new(Cell::new(prefs.borrow().reduce_transparency));
+    let glass_op = Rc::new(Cell::new(if glass_reduce.get() {
         0.95
     } else {
         prefs.borrow().liquid_glass_opacity
@@ -305,8 +306,16 @@ fn build_appearance_main_pane(
     {
         let op_c = glass_op.clone();
         let sc_c = glass_scroll_y.clone();
+        let red_c = glass_reduce.clone();
         glass_preview.set_draw_func(move |_, cr, w, h| {
-            draw_liquid_glass_preview(cr, w as f64, h as f64, op_c.get(), sc_c.get());
+            draw_liquid_glass_preview(
+                cr,
+                w as f64,
+                h as f64,
+                op_c.get(),
+                sc_c.get(),
+                red_c.get(),
+            );
         });
     }
     {
@@ -314,7 +323,7 @@ fn build_appearance_main_pane(
         let sc_c = glass_scroll_y.clone();
         let prev_c = glass_preview.clone();
         scroll_ctrl.connect_scroll(move |_, _dx, dy| {
-            let next = (sc_c.get() + dy * 18.0).clamp(0.0, 82.0);
+            let next = (sc_c.get() + dy * 20.0).clamp(0.0, 128.0);
             if (next - sc_c.get()).abs() > f64::EPSILON {
                 sc_c.set(next);
                 prev_c.queue_draw();
@@ -384,6 +393,7 @@ fn build_appearance_main_pane(
         let slider_c = glass_slider.clone();
         let preview_c = glass_preview_ref.clone();
         let op_c = glass_op.clone();
+        let red_c = glass_reduce.clone();
         top_card.append(&apple_switch_row(
             "Reducir transparencia",
             Some("Muestra menús, Dock y barras laterales con fondos sólidos y desactiva el desenfoque."),
@@ -392,6 +402,7 @@ fn build_appearance_main_pane(
                 prefs_c.borrow_mut().reduce_transparency = active;
                 prefs_c.borrow().save();
                 slider_c.set_sensitive(!active);
+                red_c.set(active);
                 op_c.set(if active { 0.95 } else { prefs_c.borrow().liquid_glass_opacity });
                 preview_c.queue_draw();
                 let v = prefs_c.borrow().liquid_glass_opacity;
@@ -1461,29 +1472,22 @@ fn paint_malus_symbolic_glyph(
     });
 }
 
-fn draw_liquid_glass_preview(
+fn draw_liquid_glass_article_content(
     cr: &gtk4::cairo::Context,
     w: f64,
-    h: f64,
-    glass_opacity: f64,
     scroll_y: f64,
 ) {
-    let _ = cr.save();
-    crate::squircle_path(cr, w, h, 20.0);
-    cr.clip();
-
     // Fondo papel del artículo de prueba
-    cr.set_source_rgb(0.965, 0.968, 0.980);
+    cr.set_source_rgb(0.968, 0.970, 0.982);
     let _ = cr.paint();
 
-    let hero_h = 90.0_f64;
-    let clamped_scroll = scroll_y.clamp(0.0, 82.0);
+    let hero_h = 132.0_f64;
+    let clamped_scroll = scroll_y.clamp(0.0, 128.0);
 
-    // Contenido desplazable (imagen + título + reseña de Malus DE)
     let _ = cr.save();
     cr.translate(0.0, -clamped_scroll);
 
-    // Cabecera fotográfica del artículo
+    // Cabecera fotográfica del artículo (ocupa la mayor parte de la vista inicial)
     let _ = cr.save();
     cr.rectangle(0.0, 0.0, w, hero_h);
     cr.clip();
@@ -1513,10 +1517,10 @@ fn draw_liquid_glass_preview(
         let _ = cr.fill();
 
         cr.set_source_rgb(0.20, 0.38, 0.16);
-        cr.arc(w * 0.22, hero_h * 0.75, 42.0, 0.0, std::f64::consts::TAU);
+        cr.arc(w * 0.22, hero_h * 0.78, 48.0, 0.0, std::f64::consts::TAU);
         let _ = cr.fill();
         cr.set_source_rgb(0.84, 0.86, 0.88);
-        cr.arc(w * 0.92, hero_h * 0.68, 54.0, 0.0, std::f64::consts::TAU);
+        cr.arc(w * 0.92, hero_h * 0.72, 62.0, 0.0, std::f64::consts::TAU);
         let _ = cr.fill();
     }
     let _ = cr.restore();
@@ -1526,15 +1530,15 @@ fn draw_liquid_glass_preview(
     cr.rectangle(0.0, hero_h, w, 1.0);
     let _ = cr.fill();
 
-    // Titular y reseña sobre Malus DE
-    cr.set_source_rgba(0.08, 0.09, 0.12, 0.94);
+    // Titular y reseña ampliados sobre Malus DE
+    cr.set_source_rgba(0.08, 0.09, 0.12, 0.95);
     cr.select_font_face(
         "Sans",
         gtk4::cairo::FontSlant::Normal,
         gtk4::cairo::FontWeight::Bold,
     );
-    cr.set_font_size(11.5);
-    cr.move_to(14.0, hero_h + 19.0);
+    cr.set_font_size(14.5);
+    cr.move_to(14.0, hero_h + 21.5);
     let _ = cr.show_text("Bienvenido a Malus DE");
 
     cr.set_source_rgba(0.36, 0.39, 0.45, 0.92);
@@ -1543,35 +1547,197 @@ fn draw_liquid_glass_preview(
         gtk4::cairo::FontSlant::Normal,
         gtk4::cairo::FontWeight::Normal,
     );
-    cr.set_font_size(8.2);
-    cr.move_to(14.0, hero_h + 31.5);
+    cr.set_font_size(9.8);
+    cr.move_to(14.0, hero_h + 38.5);
     let _ = cr.show_text("Reseña · Entorno Wayland nativo en Rust");
 
-    cr.set_source_rgba(0.16, 0.18, 0.22, 0.90);
-    cr.set_font_size(8.7);
+    cr.set_source_rgba(0.15, 0.17, 0.21, 0.92);
+    cr.set_font_size(10.4);
     let review_lines_1 = [
-        "Un escritorio artesanal con compositor DRM,",
-        "geometría squircle continua y motor WGPU",
-        "para efectos Liquid Glass fluidos a 60+ FPS.",
+        "Un escritorio artesanal en Rust con",
+        "compositor DRM propio, geometría",
+        "squircle y motor WGPU Liquid Glass.",
     ];
     for (i, line) in review_lines_1.iter().enumerate() {
-        cr.move_to(14.0, hero_h + 46.5 + (i as f64) * 11.5);
+        cr.move_to(14.0, hero_h + 57.5 + (i as f64) * 14.5);
         let _ = cr.show_text(line);
     }
 
     let review_lines_2 = [
-        "Su barra superior unificada, menú global y",
-        "dock flotante combinan ligereza, nitidez",
-        "tipográfica y control visual en cada ventana.",
+        "Su barra superior unificada, menú",
+        "global y dock flotante ofrecen gran",
+        "fluidez, nitidez y control visual.",
     ];
     for (i, line) in review_lines_2.iter().enumerate() {
-        cr.move_to(14.0, hero_h + 87.5 + (i as f64) * 11.5);
+        cr.move_to(14.0, hero_h + 109.0 + (i as f64) * 14.5);
         let _ = cr.show_text(line);
     }
-    let _ = cr.restore();
 
-    // Píldoras superiores Liquid Glass fijas sobre el artículo desplazable
-    let alpha = glass_opacity.clamp(0.18, 0.94);
+    let _ = cr.restore();
+}
+
+fn box_blur_argb_strip(
+    src: &mut gtk4::cairo::ImageSurface,
+    strip_h: i32,
+    radius: usize,
+) -> Option<gtk4::cairo::ImageSurface> {
+    src.flush();
+    let w = src.width();
+    let h = strip_h.min(src.height());
+    if w <= 0 || h <= 0 || radius == 0 {
+        return None;
+    }
+    let src_stride = src.stride() as usize;
+    let src_data = src.data().ok()?;
+
+    let mut dst = gtk4::cairo::ImageSurface::create(gtk4::cairo::Format::ARgb32, w, h).ok()?;
+    let dst_stride = dst.stride() as usize;
+    let uw = w as usize;
+    let uh = h as usize;
+    let mut buf_a = vec![0u32; uw * uh];
+    let mut buf_b = vec![0u32; uw * uh];
+
+    for y in 0..uh {
+        let row = &src_data[y * src_stride..y * src_stride + uw * 4];
+        for x in 0..uw {
+            let p = &row[x * 4..x * 4 + 4];
+            buf_a[y * uw + x] = u32::from_ne_bytes([p[0], p[1], p[2], p[3]]);
+        }
+    }
+    drop(src_data);
+
+    let win = (radius * 2 + 1) as u32;
+    for _pass in 0..3 {
+        // Pasada horizontal
+        for y in 0..uh {
+            let row_off = y * uw;
+            let mut s0 = 0u32;
+            let mut s1 = 0u32;
+            let mut s2 = 0u32;
+            let mut s3 = 0u32;
+            for d in -(radius as isize)..=(radius as isize) {
+                let sx = d.clamp(0, (uw - 1) as isize) as usize;
+                let px = buf_a[row_off + sx].to_ne_bytes();
+                s0 += px[0] as u32;
+                s1 += px[1] as u32;
+                s2 += px[2] as u32;
+                s3 += px[3] as u32;
+            }
+            for x in 0..uw {
+                buf_b[row_off + x] = u32::from_ne_bytes([
+                    (s0 / win) as u8,
+                    (s1 / win) as u8,
+                    (s2 / win) as u8,
+                    (s3 / win) as u8,
+                ]);
+                let rem_x = (x as isize - radius as isize).max(0) as usize;
+                let add_x = (x + radius + 1).min(uw - 1);
+                let pr = buf_a[row_off + rem_x].to_ne_bytes();
+                let pa = buf_a[row_off + add_x].to_ne_bytes();
+                s0 = s0 + pa[0] as u32 - pr[0] as u32;
+                s1 = s1 + pa[1] as u32 - pr[1] as u32;
+                s2 = s2 + pa[2] as u32 - pr[2] as u32;
+                s3 = s3 + pa[3] as u32 - pr[3] as u32;
+            }
+        }
+        // Pasada vertical
+        for x in 0..uw {
+            let mut s0 = 0u32;
+            let mut s1 = 0u32;
+            let mut s2 = 0u32;
+            let mut s3 = 0u32;
+            for d in -(radius as isize)..=(radius as isize) {
+                let sy = d.clamp(0, (uh - 1) as isize) as usize;
+                let px = buf_b[sy * uw + x].to_ne_bytes();
+                s0 += px[0] as u32;
+                s1 += px[1] as u32;
+                s2 += px[2] as u32;
+                s3 += px[3] as u32;
+            }
+            for y in 0..uh {
+                buf_a[y * uw + x] = u32::from_ne_bytes([
+                    (s0 / win) as u8,
+                    (s1 / win) as u8,
+                    (s2 / win) as u8,
+                    (s3 / win) as u8,
+                ]);
+                let rem_y = (y as isize - radius as isize).max(0) as usize;
+                let add_y = (y + radius + 1).min(uh - 1);
+                let pr = buf_b[rem_y * uw + x].to_ne_bytes();
+                let pa = buf_b[add_y * uw + x].to_ne_bytes();
+                s0 = s0 + pa[0] as u32 - pr[0] as u32;
+                s1 = s1 + pa[1] as u32 - pr[1] as u32;
+                s2 = s2 + pa[2] as u32 - pr[2] as u32;
+                s3 = s3 + pa[3] as u32 - pr[3] as u32;
+            }
+        }
+    }
+
+    {
+        let mut dst_data = dst.data().ok()?;
+        for y in 0..uh {
+            let row = &mut dst_data[y * dst_stride..y * dst_stride + uw * 4];
+            for x in 0..uw {
+                let bytes = buf_a[y * uw + x].to_ne_bytes();
+                row[x * 4..x * 4 + 4].copy_from_slice(&bytes);
+            }
+        }
+    }
+    dst.mark_dirty();
+    Some(dst)
+}
+
+fn draw_liquid_glass_preview(
+    cr: &gtk4::cairo::Context,
+    w: f64,
+    h: f64,
+    glass_opacity: f64,
+    scroll_y: f64,
+    reduce_transparency: bool,
+) {
+    let _ = cr.save();
+    crate::squircle_path(cr, w, h, 20.0);
+    cr.clip();
+
+    // Renderizamos el artículo a 2x en una superficie intermedia para aplicar blur real bajo las píldoras
+    let scale = 2.0_f64;
+    let sw = (w * scale).round().max(1.0) as i32;
+    let sh = (h * scale).round().max(1.0) as i32;
+    let mut blurred_strip: Option<gtk4::cairo::ImageSurface> = None;
+
+    if let Ok(mut article_surface) =
+        gtk4::cairo::ImageSurface::create(gtk4::cairo::Format::ARgb32, sw, sh)
+    {
+        if let Ok(acr) = gtk4::cairo::Context::new(&article_surface) {
+            acr.scale(scale, scale);
+            draw_liquid_glass_article_content(&acr, w, scroll_y);
+        }
+        let _ = cr.save();
+        cr.scale(1.0 / scale, 1.0 / scale);
+        let _ = cr.set_source_surface(&article_surface, 0.0, 0.0);
+        cr.source().set_filter(gtk4::cairo::Filter::Bilinear);
+        let _ = cr.paint();
+        let _ = cr.restore();
+
+        if !reduce_transparency {
+            blurred_strip = box_blur_argb_strip(&mut article_surface, (48.0 * scale) as i32, 9);
+        }
+    } else {
+        draw_liquid_glass_article_content(cr, w, scroll_y);
+    }
+
+    // Píldoras superiores Liquid Glass fijas con backdrop blur real + tinte translúcido
+    let alpha = if reduce_transparency {
+        0.98
+    } else {
+        glass_opacity.clamp(0.15, 0.94)
+    };
+    let tint_alpha = if reduce_transparency {
+        0.98
+    } else {
+        (0.12 + (alpha - 0.15) * 0.90).clamp(0.12, 0.92)
+    };
+
     for (idx, (px, pw)) in [
         (10.0_f64, 56.0_f64),
         (72.0, 28.0),
@@ -1581,25 +1747,54 @@ fn draw_liquid_glass_preview(
     .enumerate()
     {
         // Sombra suave bajo la píldora de cristal
-        cr.set_source_rgba(0.0, 0.0, 0.0, 0.09);
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.10);
         let _ = cr.save();
         cr.translate(px, 11.5);
         crate::squircle_path(cr, pw, 24.0, 11.0);
         let _ = cr.restore();
         let _ = cr.fill();
 
-        cr.set_source_rgba(0.96, 0.97, 0.99, alpha);
+        // Fondo blur + tinte Liquid Glass dentro del squircle de la píldora
         let _ = cr.save();
         cr.translate(px, 10.0);
         crate::squircle_path(cr, pw, 24.0, 11.0);
+        cr.clip();
+
+        if let Some(ref blur_surf) = blurred_strip {
+            let _ = cr.save();
+            cr.translate(-px, -10.0);
+            cr.scale(1.0 / scale, 1.0 / scale);
+            let _ = cr.set_source_surface(blur_surf, 0.0, 0.0);
+            cr.source().set_filter(gtk4::cairo::Filter::Bilinear);
+            let _ = cr.paint();
+            let _ = cr.restore();
+        }
+
+        cr.set_source_rgba(0.96, 0.97, 0.99, tint_alpha);
+        let _ = cr.paint();
+
+        // Reflejo especular sutil superior Liquid Glass
+        if !reduce_transparency {
+            let sheen = gtk4::cairo::LinearGradient::new(0.0, 0.0, 0.0, 24.0);
+            sheen.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 0.34);
+            sheen.add_color_stop_rgba(0.45, 1.0, 1.0, 1.0, 0.06);
+            sheen.add_color_stop_rgba(1.0, 1.0, 1.0, 1.0, 0.0);
+            let _ = cr.set_source(&sheen);
+            let _ = cr.paint();
+        }
         let _ = cr.restore();
-        let _ = cr.fill_preserve();
-        cr.set_source_rgba(1.0, 1.0, 1.0, 0.55);
+
+        // Borde especular del cristal
+        let _ = cr.save();
+        cr.translate(px, 10.0);
+        crate::squircle_path(cr, pw, 24.0, 11.0);
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.68);
         cr.set_line_width(1.0);
         let _ = cr.stroke();
+        let _ = cr.restore();
 
         let _ = cr.save();
-        cr.set_source_rgba(0.12, 0.13, 0.16, 0.88);
+        cr.set_source_rgba(0.12, 0.13, 0.16, 0.90);
         cr.set_line_cap(gtk4::cairo::LineCap::Round);
         cr.set_line_join(gtk4::cairo::LineJoin::Round);
         cr.set_line_width(1.25);
