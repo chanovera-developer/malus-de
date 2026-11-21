@@ -177,6 +177,8 @@ pub enum IpcMessage {
     EndDockIconDrag { poof: bool },
     /// Notificación o solicitud de recarga de configuración del Dock (dock.toml)
     ReloadDockConfig,
+    /// Notificación o solicitud de recarga de configuración de la Barra de menús (menubar.toml)
+    ReloadMenuBarConfig,
     /// Solicitud de recarga en caliente de la configuración de pantallas y escalado (monitors.toml)
     ReloadDisplaysConfig,
     /// Solicitud de cambio en vivo de la distribución de teclado XKB (ej. "latam", "es", "us")

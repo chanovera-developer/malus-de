@@ -364,6 +364,35 @@ button.branches-nav-btn:disabled {
     color: @accent_fg_color;
 }
 
+window.macos-settings-window checkbutton.menubar-check {
+    min-height: 18px;
+    padding: 0px;
+    margin: 0px;
+}
+
+window.macos-settings-window checkbutton.menubar-check check {
+    min-width: 15px;
+    min-height: 15px;
+    padding: 0px;
+    margin: 0px;
+    border-radius: 4.5px;
+    border: 1px solid alpha(@window_fg_color, 0.16);
+    background-color: alpha(@window_fg_color, 0.06);
+    background-image: none;
+    box-shadow: none;
+}
+
+window.macos-settings-window checkbutton.menubar-check:hover check:not(:checked) {
+    background-color: alpha(@window_fg_color, 0.12);
+}
+
+window.macos-settings-window checkbutton.menubar-check:checked check {
+    background-color: @accent_bg_color;
+    border-color: @accent_bg_color;
+    color: #ffffff;
+    box-shadow: none;
+}
+
 .content-pane {
     background-color: @view_bg_color;
     padding: 16px 22px 24px 22px;

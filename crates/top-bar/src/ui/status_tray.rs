@@ -13,6 +13,18 @@ use crate::services::audio::AudioService;
 use crate::services::bluetooth::BluetoothService;
 use crate::services::network::{NetworkService, WifiApInfo};
 
+thread_local! {
+    static TRAY_VISIBILITY_REFRESH: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
+}
+
+pub fn refresh_tray_visibility() {
+    TRAY_VISIBILITY_REFRESH.with(|cell| {
+        if let Some(ref f) = *cell.borrow() {
+            f();
+        }
+    });
+}
+
 pub fn create_status_tray_widget() -> GtkBox {
     let tray = GtkBox::builder()
         .orientation(Orientation::Horizontal)
@@ -46,6 +58,20 @@ pub fn create_status_tray_widget() -> GtkBox {
     // 6. Centro de Control macOS Unificado (Esquina derecha junto al Reloj)
     let cc_widget = super::control_center::create_control_center_widget();
     tray.append(&cc_widget);
+
+    let apply_vis: Rc<dyn Fn()> = Rc::new(move || {
+        let cfg = malus_de_common::config::MenuBarConfig::load();
+        kb_widget.set_visible(cfg.input_source);
+        link_widget.set_visible(cfg.airdrop);
+        bt_widget.set_visible(cfg.bluetooth);
+        wifi_widget.set_visible(cfg.wifi);
+        vol_widget.set_visible(cfg.sound);
+        spotlight_btn.set_visible(cfg.spotlight);
+    });
+    apply_vis();
+    TRAY_VISIBILITY_REFRESH.with(|cell| {
+        *cell.borrow_mut() = Some(apply_vis);
+    });
 
     tray
 }

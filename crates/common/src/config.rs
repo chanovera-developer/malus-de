@@ -2027,6 +2027,159 @@ impl Default for TopBarConfig {
     }
 }
 
+/// Configuración persistente de la Barra de menús y Centro de control (~/.config/malus-de/menubar.toml).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MenuBarConfig {
+    /// 0 = Sólo en pantalla completa, 1 = Siempre, 2 = En escritorio solamente, 3 = Nunca
+    pub auto_hide_mode: u8,
+    /// Mostrar fondo tintado traslúcido en la barra de menús superior
+    pub show_background: bool,
+    /// Cantidad máxima de documentos, apps y servidores recientes (0..=50)
+    pub recent_items_count: u32,
+    /// Mostrar sugerencias en la galería de controles
+    pub show_gallery_suggestions: bool,
+
+    // Opciones de reloj
+    /// 0 = Al haber espacio, 1 = Siempre, 2 = Nunca
+    pub clock_show_date: u8,
+    pub clock_show_day_of_week: bool,
+    pub clock_24h: bool,
+    pub clock_show_am_pm: bool,
+    pub clock_show_seconds: bool,
+    pub clock_flash_separators: bool,
+
+    // Opciones de batería
+    pub battery_show_percentage: bool,
+    pub battery_show_in_control_center: bool,
+
+    // Visibilidad y modo de controles individuales en barra de menús / centro de control
+    pub spotlight: bool,
+    pub wifi: bool,
+    pub bluetooth: bool,
+    pub battery: bool,
+    pub airdrop: bool,
+    pub focus: bool,
+    /// 0 = Mostrar siempre, 1 = Mostrar cuando se haya activado
+    pub focus_mode: u8,
+    pub screen_mirroring: bool,
+    pub screen_mirroring_mode: u8,
+    pub display: bool,
+    pub display_mode: u8,
+    pub sound: bool,
+    pub sound_mode: u8,
+    pub now_playing: bool,
+    pub now_playing_mode: u8,
+    pub fast_user_switching: bool,
+    /// 0 = Nombre completo, 1 = Nombre de la cuenta, 2 = Ícono
+    pub fast_user_switching_mode: u8,
+    pub input_source: bool,
+    pub time_machine: bool,
+    pub keyboard_brightness: bool,
+    pub timer: bool,
+    pub timer_mode: u8,
+    pub weather: bool,
+}
+
+impl Default for MenuBarConfig {
+    fn default() -> Self {
+        Self {
+            auto_hide_mode: 0,
+            show_background: false,
+            recent_items_count: 10,
+            show_gallery_suggestions: true,
+            clock_show_date: 1,
+            clock_show_day_of_week: true,
+            clock_24h: true,
+            clock_show_am_pm: false,
+            clock_show_seconds: false,
+            clock_flash_separators: false,
+            battery_show_percentage: true,
+            battery_show_in_control_center: true,
+            spotlight: true,
+            wifi: true,
+            bluetooth: false,
+            battery: true,
+            airdrop: false,
+            focus: true,
+            focus_mode: 1,
+            screen_mirroring: true,
+            screen_mirroring_mode: 1,
+            display: true,
+            display_mode: 1,
+            sound: true,
+            sound_mode: 1,
+            now_playing: true,
+            now_playing_mode: 1,
+            fast_user_switching: false,
+            fast_user_switching_mode: 2,
+            input_source: false,
+            time_machine: false,
+            keyboard_brightness: false,
+            timer: true,
+            timer_mode: 1,
+            weather: false,
+        }
+    }
+}
+
+impl MenuBarConfig {
+    pub fn config_path() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/malus-de/menubar.toml")
+    }
+
+    pub fn load() -> Self {
+        std::fs::read_to_string(Self::config_path())
+            .ok()
+            .and_then(|content| toml::from_str::<MenuBarConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let toml_str = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let header = "# Configuración de Barra de menús y Centro de control de Malus DE\n\n";
+        std::fs::write(path, format!("{header}{toml_str}"))
+    }
+
+    /// Genera la cadena de formato `strftime` para el reloj de la barra superior.
+    pub fn clock_strftime_format(&self, blink_sep_visible: bool) -> String {
+        let mut date_parts = Vec::new();
+        if self.clock_show_day_of_week {
+            date_parts.push("%a");
+        }
+        if self.clock_show_date != 2 {
+            date_parts.push("%-d %b");
+        }
+        let sep = if self.clock_flash_separators && !blink_sep_visible {
+            " "
+        } else {
+            ":"
+        };
+        let mut time_part = if self.clock_24h {
+            format!("%H{sep}%M")
+        } else {
+            format!("%-I{sep}%M")
+        };
+        if self.clock_show_seconds {
+            time_part.push_str(&format!("{sep}%S"));
+        }
+        if !self.clock_24h && self.clock_show_am_pm {
+            time_part.push_str(" %p");
+        }
+        if date_parts.is_empty() {
+            time_part
+        } else {
+            format!("{}  {time_part}", date_parts.join(" "))
+        }
+    }
+}
+
 /// Métricas de celda y caja calculadas a partir de un tamaño de icono lógico.
 /// Compartidas entre la superficie de Escritorio y Branches para mantener proporciones idénticas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4055,5 +4208,28 @@ apps = []
         assert!(css_large.contains(".malus-sidebar-icon"));
         assert!(css_large.contains("-gtk-icon-size: 20px;"));
         assert!(css_large.contains("font-size: 14px;"));
+    }
+
+    #[test]
+    fn menubar_config_defaults_roundtrip_and_clock_format() {
+        let def = MenuBarConfig::default();
+        assert_eq!(def.auto_hide_mode, 0);
+        assert!(!def.show_background);
+        assert_eq!(def.recent_items_count, 10);
+        assert!(def.show_gallery_suggestions);
+        assert!(def.spotlight && def.wifi && def.battery && !def.bluetooth && !def.airdrop);
+
+        let serialized = toml::to_string_pretty(&def).unwrap();
+        let parsed: MenuBarConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(def, parsed);
+
+        assert_eq!(def.clock_strftime_format(true), "%a %-d %b  %H:%M");
+        let mut sec_12h = def;
+        sec_12h.clock_24h = false;
+        sec_12h.clock_show_am_pm = true;
+        sec_12h.clock_show_seconds = true;
+        sec_12h.clock_flash_separators = true;
+        assert_eq!(sec_12h.clock_strftime_format(true), "%a %-d %b  %-I:%M:%S %p");
+        assert_eq!(sec_12h.clock_strftime_format(false), "%a %-d %b  %-I %M %S %p");
     }
 }

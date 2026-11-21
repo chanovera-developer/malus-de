@@ -23,6 +23,7 @@ mod appearance_pane;
 mod battery_pane;
 mod bluetooth_pane;
 mod general_pane;
+mod menubar_pane;
 mod network_pane;
 mod vpn_pane;
 mod wifi_pane;
@@ -572,6 +573,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             "preferences-desktop-appearance-symbolic",
             "Aspecto",
         ),
+        ("menubar", "control-center-symbolic", "Barra de menús"),
         ("dock", "user-desktop-symbolic", "Escritorio y Dock"),
         (
             "wallpaper",
@@ -632,6 +634,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                     "wallpaper" => "fondo pantalla wallpaper imagen",
                     "keyboard" => "teclado distribucion lenguaje idioma xkb",
                     "appearance" => "aspecto tema oscuro claro cursor",
+                    "menubar" => "barra de menus menubar centro de control reloj bateria spotlight bluetooth airdrop enfoque pantalla sonido clima",
                     "dock" => "escritorio dock iconos aladino genie",
                     "spotlight" => "spotlight busqueda aplicaciones archivos",
                     "sound" => "sonido volumen audio",
@@ -820,6 +823,9 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
 
     let refresh_appearance_pane =
         appearance_pane::register_appearance_panes(&stack, nav_general.clone());
+    let (menubar_pane, refresh_menubar_pane) =
+        menubar_pane::create_menubar_pane(&window, nav_general.clone());
+    stack.add_named(&menubar_pane, Some("menubar"));
     configure_right_pane_stack(&stack);
 
     // Historial de navegación para botones atrás / adelante (estilo Branches)
@@ -831,13 +837,13 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         "accesibilidad" => "accessibility",
         "aspecto" => "appearance",
         "temas" => "appearance-themes",
+        "barra de menus" | "barra de menús" => "menubar",
         p if general_pane::is_general_subpanel(p) => p,
         p if accessibility_pane::is_accessibility_subpanel(p) => p,
         p if appearance_pane::is_appearance_subpanel(p) => p,
         "wifi" | "bluetooth" | "network" | "network-firewall" | "vpn" | "battery" | "wallpaper"
-        | "keyboard" | "appearance" | "sound" | "about" | "dock" | "spotlight" | "displays" => {
-            initial_panel
-        }
+        | "keyboard" | "appearance" | "menubar" | "sound" | "about" | "dock" | "spotlight"
+        | "displays" => initial_panel,
         _ => "spotlight",
     };
 
@@ -862,6 +868,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         let ref_wall = refresh_wallpaper_pane.clone();
         let ref_kb = refresh_keyboard_pane.clone();
         let ref_app = refresh_appearance_pane.clone();
+        let ref_mb = refresh_menubar_pane.clone();
         let ref_dock = refresh_dock_pane.clone();
         let ref_spot = refresh_spotlight_pane.clone();
         let history_c = nav_history.clone();
@@ -919,6 +926,8 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                 ref_kb();
             } else if appearance_pane::is_appearance_subpanel(target) {
                 ref_app();
+            } else if target == "menubar" {
+                ref_mb();
             } else if target == "dock" {
                 ref_dock();
             } else if target == "spotlight" {
@@ -938,6 +947,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                     "wallpaper" => "Fondo de pantalla",
                     "keyboard" => "Teclado",
                     "appearance" => "Aspecto",
+                    "menubar" => "Barra de menús",
                     "dock" => "Escritorio y Dock",
                     "spotlight" => "Spotlight",
                     "sound" => "Sonido",

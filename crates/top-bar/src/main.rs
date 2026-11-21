@@ -68,8 +68,18 @@ fn apply_topbar_liquid_glass_opacity(opacity: f64) {
     let dark_cc = malus_de_common::config::scaled_liquid_glass_alpha(0.82, scale, 0.16, 0.96);
     let light_pop = malus_de_common::config::scaled_liquid_glass_alpha(0.76, scale, 0.14, 0.96);
     let light_cc = malus_de_common::config::scaled_liquid_glass_alpha(0.78, scale, 0.14, 0.96);
+    let bar_bg = if malus_de_common::config::MenuBarConfig::load().show_background {
+        let bar_a = malus_de_common::config::scaled_liquid_glass_alpha(0.44, scale, 0.14, 0.85);
+        format!(
+            "window.malus-topbar {{ background-color: alpha(@window_bg_color, {bar_a:.3}); \
+             border-bottom: 1px solid alpha(@borders, 0.18); }}"
+        )
+    } else {
+        "window.malus-topbar { background-color: transparent; border-bottom: none; }".to_string()
+    };
     let css = format!(
-        "popover.malus-popover-menu>contents {{ background-color: rgba(30, 30, 36, {dark_pop:.3}); }} \
+        "{bar_bg} \
+         popover.malus-popover-menu>contents {{ background-color: rgba(30, 30, 36, {dark_pop:.3}); }} \
          popover.control-center-popover>contents {{ background-color: rgba(30, 30, 36, {dark_cc:.3}); }} \
          popover.light-popover.malus-popover-menu>contents, \
          popover.light-popover>contents, \
@@ -309,6 +319,15 @@ fn build_ui(app: &Application) {
                 malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig => {
                     info!("🖥 [TopBar] IPC ReloadDisplaysConfig recibido — reajustando top bar");
                     win_ipc.queue_resize();
+                    win_ipc.queue_draw();
+                }
+                malus_de_common::ipc::IpcMessage::ReloadMenuBarConfig => {
+                    info!("🎛 [TopBar] IPC ReloadMenuBarConfig recibido — aplicando Barra de menús");
+                    apply_topbar_liquid_glass_opacity(
+                        malus_de_common::config::load_liquid_glass_opacity(),
+                    );
+                    ui::status_tray::refresh_tray_visibility();
+                    ui::clock::refresh_clock_now();
                     win_ipc.queue_draw();
                 }
                 _ => {}
