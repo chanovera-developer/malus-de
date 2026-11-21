@@ -1196,8 +1196,8 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
 
     let pane = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .css_classes(["wifi-content-pane"])
-        .spacing(12)
+        .css_classes(["disp-content-pane"])
+        .spacing(0)
         .valign(Align::Start)
         .vexpand(false)
         .build();
@@ -1207,14 +1207,20 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
     let show_all_modes = Rc::new(Cell::new(false));
 
     // ========================================================================
-    // 1. Escenario superior de selección de pantallas + Tarjeta 1 con triángulo integrado
+    // 1. Banner superior gris (Pantallas0/1) con escenario de pantallas y separador
     // ========================================================================
-    let stage_and_main_box = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .spacing(0)
+    let stage_overlay = gtk4::Overlay::builder()
+        .css_classes(["disp-stage-banner"])
+        .hexpand(true)
         .build();
 
-    let stage_overlay = gtk4::Overlay::builder().hexpand(true).build();
+    let cards_col = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(12)
+        .margin_start(22)
+        .margin_end(22)
+        .margin_top(14)
+        .build();
 
     let stage_area = DrawingArea::builder()
         .content_height(114)
@@ -1322,10 +1328,10 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
     let (arrange_wrap, arrange_btn) = make_squircle_button("Ordenar...", false, None);
     arrange_wrap.set_halign(Align::Start);
     arrange_wrap.set_valign(Align::End);
-    arrange_wrap.set_margin_bottom(8);
+    arrange_wrap.set_margin_bottom(2);
     stage_overlay.set_child(Some(&stage_area));
     stage_overlay.add_overlay(&arrange_wrap);
-    stage_and_main_box.append(&stage_overlay);
+    pane.append(&stage_overlay);
 
     // ========================================================================
     // 2. Tarjeta 1: Usar como + Escala (con triángulo integrado si hay >1 pantalla)
@@ -1596,8 +1602,7 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
     main_card_overlay.set_child(Some(&main_card_bg));
     main_card_overlay.add_overlay(&main_card);
     main_card_overlay.set_measure_overlay(&main_card, true);
-    stage_and_main_box.append(&main_card_overlay);
-    pane.append(&stage_and_main_box);
+    cards_col.append(&main_card_overlay);
 
     // ========================================================================
     // 3. Tarjeta 2: Brillo + Brillo automático + True Tone
@@ -1664,7 +1669,7 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
         |_| {},
     );
     brightness_card.append(&true_tone_row);
-    pane.append(&wrap_squircle_card(
+    cards_col.append(&wrap_squircle_card(
         &brightness_card,
         WIFI_CARD_SQUIRCLE_RADIUS,
     ));
@@ -1730,7 +1735,7 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
     ts_presets_box.append(&ts_math_lbl);
     truesize_inner.append(&ts_presets_box);
     let truesize_card_wrap = wrap_squircle_card(&truesize_inner, WIFI_CARD_SQUIRCLE_RADIUS);
-    pane.append(&truesize_card_wrap);
+    cards_col.append(&truesize_card_wrap);
 
     // ========================================================================
     // 5. Tarjeta 4: Perfil de color (por implementar)
@@ -1743,7 +1748,7 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
         true,
         |_| {},
     );
-    pane.append(&wrap_squircle_card(&color_row, WIFI_CARD_SQUIRCLE_RADIUS));
+    cards_col.append(&wrap_squircle_card(&color_row, WIFI_CARD_SQUIRCLE_RADIUS));
 
     // ========================================================================
     // 6. Tarjeta 5: Frecuencia de actualización + Alto rango dinámico + Rotación
@@ -1816,7 +1821,7 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
         |_| {},
     );
     display_tech_card.append(&rot_row);
-    pane.append(&wrap_squircle_card(
+    cards_col.append(&wrap_squircle_card(
         &display_tech_card,
         WIFI_CARD_SQUIRCLE_RADIUS,
     ));
@@ -1832,7 +1837,7 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
         true,
         |_| {},
     );
-    pane.append(&wrap_squircle_card(&tv_row, WIFI_CARD_SQUIRCLE_RADIUS));
+    cards_col.append(&wrap_squircle_card(&tv_row, WIFI_CARD_SQUIRCLE_RADIUS));
 
     // ========================================================================
     // 8. Barra inferior derecha: Avanzado... | Night Shift... | ?
@@ -1868,7 +1873,8 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
     bottom_actions.append(&adv_wrap);
     bottom_actions.append(&ns_wrap);
     bottom_actions.append(&help_wrap);
-    pane.append(&bottom_actions);
+    cards_col.append(&bottom_actions);
+    pane.append(&cards_col);
 
     scrolled.set_child(Some(&pane));
 
@@ -1883,6 +1889,7 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
         let stage_c = stage_area.clone();
         let main_bg_c = main_card_bg.clone();
         let main_card_c = main_card.clone();
+        let cards_col_c = cards_col.clone();
         let wp_cache_c = wallpaper_thumb_cache.clone();
         let arrange_wrap_c = arrange_wrap.clone();
         let arrange_c = arrange_btn.clone();
@@ -1934,6 +1941,7 @@ pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<d
             use_as_row_c.set_visible(multi);
             use_as_sep_c.set_visible(multi);
             main_card_c.set_margin_top(if multi { 8 } else { 0 });
+            cards_col_c.set_margin_top(if multi { 6 } else { 14 });
             stage_c.queue_draw();
             main_bg_c.queue_draw();
 

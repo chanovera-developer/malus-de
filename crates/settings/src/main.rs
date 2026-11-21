@@ -863,6 +863,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     let select_panel = {
         let btns = all_btns.clone();
         let stack_c = stack.clone();
+        let header_tb_c = header_toolbar.clone();
         let title_lbl = active_pane_title.clone();
         let sub_row_c = header_sub_row.clone();
         let ref_wifi = refresh_wifi_pane.clone();
@@ -912,6 +913,11 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                 }
             }
             sub_row_c.set_visible(target == "battery");
+            if target == "displays" {
+                header_tb_c.add_css_class("disp-header-toolbar");
+            } else {
+                header_tb_c.remove_css_class("disp-header-toolbar");
+            }
             if target == "wifi" {
                 ref_wifi();
             } else if target == "bluetooth" {
