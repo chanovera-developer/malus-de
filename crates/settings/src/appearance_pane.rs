@@ -1314,6 +1314,40 @@ const ASPECTO_AUTOMATICO_PNG: &[u8] =
     include_bytes!("../../../assets/screenshots/aspecto-automatico.png");
 const ASPECTO_LIQUID_GLASS_WEBP: &[u8] =
     include_bytes!("../../../assets/screenshots/aspecto-liquid-glass.webp");
+const ASPECTO_ICONOS_PREDETERMINADO_PNG: &[u8] =
+    include_bytes!("../../../assets/screenshots/aspecto-iconos-predeterminado.png");
+const ASPECTO_ICONOS_OBSCURO_PNG: &[u8] =
+    include_bytes!("../../../assets/screenshots/aspecto-iconos-obscuro.png");
+const ASPECTO_ICONOS_TRANSPARENTE_PNG: &[u8] =
+    include_bytes!("../../../assets/screenshots/aspecto-iconos-transparente.png");
+const ASPECTO_ICONOS_TENIDO_PNG: &[u8] =
+    include_bytes!("../../../assets/screenshots/aspecto-iconos-tenido.png");
+
+fn with_icon_style_pixbuf<F: FnOnce(&gdk_pixbuf::Pixbuf)>(style_idx: usize, f: F) -> bool {
+    thread_local! {
+        static ICON_STYLE_PIXBUFS: RefCell<[Option<gdk_pixbuf::Pixbuf>; 4]> =
+            const { RefCell::new([None, None, None, None]) };
+    }
+    let idx = style_idx.min(3);
+    ICON_STYLE_PIXBUFS.with(|cache| {
+        let mut arr = cache.borrow_mut();
+        if arr[idx].is_none() {
+            let bytes = match idx {
+                0 => ASPECTO_ICONOS_PREDETERMINADO_PNG,
+                1 => ASPECTO_ICONOS_OBSCURO_PNG,
+                2 => ASPECTO_ICONOS_TRANSPARENTE_PNG,
+                _ => ASPECTO_ICONOS_TENIDO_PNG,
+            };
+            arr[idx] = load_pixbuf_from_bytes(bytes, "png");
+        }
+        if let Some(pb) = arr[idx].as_ref() {
+            f(pb);
+            true
+        } else {
+            false
+        }
+    })
+}
 
 fn load_pixbuf_from_bytes(bytes: &[u8], image_type: &str) -> Option<gdk_pixbuf::Pixbuf> {
     let loader = gdk_pixbuf::PixbufLoader::with_type(image_type).ok()?;
@@ -1894,39 +1928,77 @@ fn draw_widget_style_tile(
     cr.translate(3.0, 3.0);
     let iw = w - 6.0;
     let ih = h - 6.0;
-    crate::squircle_path(cr, iw, ih, 11.0);
+    crate::squircle_path(cr, iw, ih, 10.0);
+    let _ = cr.save();
+    cr.clip();
 
-    match style_idx {
-        0 => cr.set_source_rgb(0.24, 0.62, 0.98),
-        1 => cr.set_source_rgb(0.14, 0.15, 0.18),
-        2 => cr.set_source_rgba(0.55, 0.56, 0.60, 0.45),
-        _ => cr.set_source_rgb(tint.0, tint.1, tint.2),
+    let painted = with_icon_style_pixbuf(style_idx, |pb| {
+        let sw = pb.width() as f64;
+        let sh = pb.height() as f64;
+        if sw > 0.0 && sh > 0.0 {
+            // Recortamos levemente los bordes externos de la captura para evitar anillos fijos
+            let crop = if style_idx == 0 { 6.0 } else { 2.5 };
+            let eff_w = (sw - crop * 2.0).max(1.0);
+            let eff_h = (sh - crop * 2.0).max(1.0);
+            let scale = (iw / eff_w).max(ih / eff_h);
+            let dx = (iw - sw * scale) * 0.5;
+            let dy = (ih - sh * scale) * 0.5;
+            let _ = cr.save();
+            cr.translate(dx, dy);
+            cr.scale(scale, scale);
+            cr.set_source_pixbuf(pb, 0.0, 0.0);
+            cr.source().set_filter(gtk4::cairo::Filter::Bilinear);
+            let _ = cr.paint();
+            let _ = cr.restore();
+        }
+    });
+
+    if !painted {
+        match style_idx {
+            0 => cr.set_source_rgb(0.24, 0.62, 0.98),
+            1 => cr.set_source_rgb(0.14, 0.15, 0.18),
+            2 => cr.set_source_rgba(0.55, 0.56, 0.60, 0.45),
+            _ => cr.set_source_rgb(tint.0, tint.1, tint.2),
+        }
+        let _ = cr.fill();
+
+        // Sol + nube dentro del mosaico (respaldo)
+        if style_idx == 2 {
+            cr.set_source_rgba(0.95, 0.95, 0.97, 0.85);
+        } else {
+            cr.set_source_rgb(0.98, 0.78, 0.18);
+        }
+        cr.arc(iw * 0.40, ih * 0.44, 5.5, 0.0, std::f64::consts::TAU);
+        let _ = cr.fill();
+
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.92);
+        cr.arc(iw * 0.56, ih * 0.56, 5.5, 0.0, std::f64::consts::TAU);
+        cr.arc(iw * 0.42, ih * 0.58, 4.5, 0.0, std::f64::consts::TAU);
+        let _ = cr.fill();
     }
-    let _ = cr.fill_preserve();
+    let _ = cr.restore();
 
     if selected {
+        // Doble anillo macOS: aro blanco interior + borde azul/énfasis exterior
+        crate::squircle_path(cr, iw, ih, 10.0);
+        cr.set_source_rgb(1.0, 1.0, 1.0);
+        cr.set_line_width(2.0);
+        let _ = cr.stroke();
+
+        let _ = cr.save();
+        cr.translate(-1.5, -1.5);
+        crate::squircle_path(cr, iw + 3.0, ih + 3.0, 11.5);
         let (r, g, b) = crate::accent_color();
         cr.set_source_rgb(r, g, b);
-        cr.set_line_width(2.2);
+        cr.set_line_width(2.0);
+        let _ = cr.stroke();
+        let _ = cr.restore();
     } else {
-        cr.set_source_rgba(0.5, 0.5, 0.54, 0.28);
+        crate::squircle_path(cr, iw, ih, 10.0);
+        cr.set_source_rgba(0.5, 0.5, 0.54, 0.25);
         cr.set_line_width(1.0);
+        let _ = cr.stroke();
     }
-    let _ = cr.stroke();
-
-    // Sol + nube dentro del mosaico
-    if style_idx == 2 {
-        cr.set_source_rgba(0.95, 0.95, 0.97, 0.85);
-    } else {
-        cr.set_source_rgb(0.98, 0.78, 0.18);
-    }
-    cr.arc(iw * 0.40, ih * 0.44, 5.5, 0.0, std::f64::consts::TAU);
-    let _ = cr.fill();
-
-    cr.set_source_rgba(1.0, 1.0, 1.0, 0.92);
-    cr.arc(iw * 0.56, ih * 0.56, 5.5, 0.0, std::f64::consts::TAU);
-    cr.arc(iw * 0.42, ih * 0.58, 4.5, 0.0, std::f64::consts::TAU);
-    let _ = cr.fill();
 
     let _ = cr.restore();
 }
