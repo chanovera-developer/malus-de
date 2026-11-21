@@ -23,14 +23,16 @@ use gtk4::{Application, CssProvider};
 use malus_de_common::logging::init_logging;
 use std::path::{Path, PathBuf};
 
-use quick_look::QuickLook;
 use fs_backend::{percent_decode_file_uri, FileItem};
+use quick_look::QuickLook;
 
 const APP_ID: &str = "dev.malus.Branches";
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "malus-de-branches")]
-#[command(about = "Branches - Explorador de Archivos Nativo de Malus DE (inspirado fielmente en macOS Finder)")]
+#[command(
+    about = "Branches - Explorador de Archivos Nativo de Malus DE (inspirado fielmente en macOS Finder)"
+)]
 struct Args {
     /// Abrir previsualización Quick Look para un archivo específico
     #[arg(short = 'q', long = "quick-look", value_name = "ARCHIVO")]
@@ -168,10 +170,32 @@ fn main() {
 }
 
 thread_local! {
+    static BRANCHES_ACCENT_PROVIDER: std::cell::RefCell<Option<CssProvider>> =
+        const { std::cell::RefCell::new(None) };
+    static BRANCHES_FOLDER_PROVIDER: std::cell::RefCell<Option<CssProvider>> =
+        const { std::cell::RefCell::new(None) };
     static BRANCHES_GLASS_PROVIDER: std::cell::RefCell<Option<CssProvider>> =
         const { std::cell::RefCell::new(None) };
     static BRANCHES_GLASS_MONITOR: std::cell::RefCell<Option<gio::FileMonitor>> =
         const { std::cell::RefCell::new(None) };
+}
+
+fn apply_branches_accent_color(index: usize) {
+    let css = malus_de_common::config::accent_color_css(index);
+    BRANCHES_ACCENT_PROVIDER.with(|cell| {
+        if let Some(provider) = cell.borrow().as_ref() {
+            provider.load_from_string(&css);
+        }
+    });
+}
+
+fn apply_branches_folder_color(index: usize) {
+    let css = malus_de_common::config::folder_color_css(index);
+    BRANCHES_FOLDER_PROVIDER.with(|cell| {
+        if let Some(provider) = cell.borrow().as_ref() {
+            provider.load_from_string(&css);
+        }
+    });
 }
 
 pub(crate) fn apply_branches_liquid_glass_opacity(opacity: f64) {
@@ -209,6 +233,8 @@ fn load_custom_css() {
     let css = include_str!("styles/macos-branches.css");
     provider.load_from_string(css);
     let glass_provider = CssProvider::new();
+    let accent_provider = CssProvider::new();
+    let folder_provider = CssProvider::new();
 
     if let Some(display) = Display::default() {
         let icon_theme = gtk4::IconTheme::for_display(&display);
@@ -227,11 +253,29 @@ fn load_custom_css() {
             &glass_provider,
             gtk4::STYLE_PROVIDER_PRIORITY_USER + 1,
         );
+        gtk4::style_context_add_provider_for_display(
+            &display,
+            &accent_provider,
+            gtk4::STYLE_PROVIDER_PRIORITY_USER + 2,
+        );
+        gtk4::style_context_add_provider_for_display(
+            &display,
+            &folder_provider,
+            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+        );
     }
 
+    BRANCHES_ACCENT_PROVIDER.with(|cell| {
+        *cell.borrow_mut() = Some(accent_provider);
+    });
+    BRANCHES_FOLDER_PROVIDER.with(|cell| {
+        *cell.borrow_mut() = Some(folder_provider);
+    });
     BRANCHES_GLASS_PROVIDER.with(|cell| {
         *cell.borrow_mut() = Some(glass_provider);
     });
+    apply_branches_accent_color(malus_de_common::config::load_accent_color_index());
+    apply_branches_folder_color(malus_de_common::config::load_folder_color_index());
     apply_branches_liquid_glass_opacity(malus_de_common::config::load_liquid_glass_opacity());
 
     let app_cfg_file = gio::File::for_path(malus_de_common::config::appearance_settings_path());
@@ -239,6 +283,8 @@ fn load_custom_css() {
         app_cfg_file.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
     {
         monitor.connect_changed(|_, _, _, _| {
+            apply_branches_accent_color(malus_de_common::config::load_accent_color_index());
+            apply_branches_folder_color(malus_de_common::config::load_folder_color_index());
             apply_branches_liquid_glass_opacity(
                 malus_de_common::config::load_liquid_glass_opacity(),
             );
@@ -287,9 +333,11 @@ mod tests {
             .expect("Debe existir .branches-sidebar-section-title");
         assert!(!title_block.contains("text-transform: uppercase"));
 
-        // Colores de iconos en barra lateral (Favoritos azul macOS, Ubicaciones gris neutro)
+        // Los Favoritos usan el color de énfasis configurable y las Ubicaciones un gris neutro.
         assert!(css.contains(".branches-sidebar-row-favorite .branches-sidebar-icon"));
-        assert!(css.contains("#0a84ff"));
+        assert!(css.contains(
+            ".branches-sidebar-row-favorite .branches-sidebar-icon {\n    color: @accent_bg_color;"
+        ));
         assert!(css.contains(".branches-sidebar-row-location .branches-sidebar-icon"));
 
         // Contenedores squircle afilados en barra superior con altura uniforme + input 999px
@@ -338,8 +386,8 @@ mod tests {
 
     #[test]
     fn test_resolve_cli_target_path_handles_trash_file_uri_and_tilde() {
-        use clap::Parser;
         use super::resolve_cli_target_path;
+        use clap::Parser;
         use std::path::{Path, PathBuf};
 
         let home = Path::new("/home/cristian");
@@ -379,11 +427,15 @@ mod tests {
         assert!(css.contains("button.branches-tab-close-btn"));
         assert!(css.contains("button.branches-tab-add-btn"));
         // El botón de nueva pestaña debe tener las mismas dimensiones que el botón de búsqueda (30x30px)
-        assert!(css.contains("button.branches-tab-add-btn {\n    min-width: 30px;\n    min-height: 30px;"));
+        assert!(css.contains(
+            "button.branches-tab-add-btn {\n    min-width: 30px;\n    min-height: 30px;"
+        ));
         // Las pestañas deben tener la misma altura que los botones internos de vista (26px)
         assert!(css.contains(".branches-tab {\n    min-height: 26px;"));
         // El botón de cerrar pestaña debe ser compacto (14x14px), oculto por defecto y visible en hover
-        assert!(css.contains("button.branches-tab-close-btn {\n    min-width: 14px;\n    min-height: 14px;"));
+        assert!(css.contains(
+            "button.branches-tab-close-btn {\n    min-width: 14px;\n    min-height: 14px;"
+        ));
         assert!(css.contains(".branches-tab:hover button.branches-tab-close-btn"));
         assert!(css.contains(".branches-tab-spacer"));
 

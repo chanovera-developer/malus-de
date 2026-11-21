@@ -192,7 +192,10 @@ mod tests {
 
         assert_eq!(st.go_back_steps(2), Some(PathBuf::from("/b")));
         assert_eq!(st.current_path, PathBuf::from("/b"));
-        assert_eq!(st.history_forward, vec![PathBuf::from("/d"), PathBuf::from("/c")]);
+        assert_eq!(
+            st.history_forward,
+            vec![PathBuf::from("/d"), PathBuf::from("/c")]
+        );
         assert_eq!(st.go_forward_steps(2), Some(PathBuf::from("/d")));
         assert_eq!(st.current_path, PathBuf::from("/d"));
     }

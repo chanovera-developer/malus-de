@@ -6,9 +6,7 @@ use crate::views::icon_view::IconView;
 use crate::views::list_view::ListView;
 use gtk4::gdk;
 use gtk4::prelude::*;
-use gtk4::{
-    Align, Box as GtkBox, Button, GestureClick, Image, Label, Orientation, Stack,
-};
+use gtk4::{Align, Box as GtkBox, Button, GestureClick, Image, Label, Orientation, Stack};
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
@@ -249,7 +247,8 @@ impl FolderPane {
             s.icon_size = icon_size;
             s.grid_spacing = grid_spacing;
         }
-        self.icon_view.set_layout_preferences(icon_size, grid_spacing);
+        self.icon_view
+            .set_layout_preferences(icon_size, grid_spacing);
         self.list_view.set_icon_size(cfg.clamped_list_icon_size());
     }
 
@@ -301,7 +300,13 @@ impl FolderPane {
     }
 
     pub fn history_back_list(&self) -> Vec<PathBuf> {
-        self.state.borrow().history_back.iter().rev().cloned().collect()
+        self.state
+            .borrow()
+            .history_back
+            .iter()
+            .rev()
+            .cloned()
+            .collect()
     }
 
     pub fn history_forward_list(&self) -> Vec<PathBuf> {
@@ -450,7 +455,13 @@ impl FolderPane {
             return;
         }
 
-        match load_directory(&current_path, show_hidden, sort_by, sort_order, &search_query) {
+        match load_directory(
+            &current_path,
+            show_hidden,
+            sort_by,
+            sort_order,
+            &search_query,
+        ) {
             Ok(items) => {
                 let count = items.len();
                 self.icon_view.set_current_folder(Some(&current_path));
@@ -459,7 +470,8 @@ impl FolderPane {
                 self.gallery_view.set_current_folder(Some(&current_path));
                 self.icon_view.set_items(&items);
                 self.list_view.set_items(&items);
-                self.column_view.set_root(&current_path, &items, show_hidden, sort_by, sort_order);
+                self.column_view
+                    .set_root(&current_path, &items, show_hidden, sort_by, sort_order);
                 self.gallery_view.set_items(&items);
                 *self.items_cache.borrow_mut() = items;
                 (self.on_selection_changed)(
@@ -546,15 +558,13 @@ impl FolderPane {
             }
             let weak_for_timer = Rc::downgrade(&pane);
             let pending_for_timer = pending_sync_ref.clone();
-            let source_id = glib::timeout_add_local_once(
-                std::time::Duration::from_millis(40),
-                move || {
+            let source_id =
+                glib::timeout_add_local_once(std::time::Duration::from_millis(40), move || {
                     pending_for_timer.set(None);
                     if let Some(p) = weak_for_timer.upgrade() {
                         p.sync_from_filesystem();
                     }
-                },
-            );
+                });
             pending_sync_ref.set(Some(source_id));
         });
 
@@ -575,8 +585,13 @@ impl FolderPane {
                 s.search_query.clone(),
             )
         };
-        let Ok(items) = load_directory(&current_path, show_hidden, sort_by, sort_order, &search_query)
-        else {
+        let Ok(items) = load_directory(
+            &current_path,
+            show_hidden,
+            sort_by,
+            sort_order,
+            &search_query,
+        ) else {
             return;
         };
 
@@ -683,9 +698,10 @@ impl FolderPane {
         match crate::operations::create_new_folder(&current_path, default_name) {
             Ok(created_path) => {
                 let created_str = created_path.to_string_lossy().to_string();
-                let _ = self
-                    .container
-                    .activate_action("win.record_undo_created", Some(&vec![created_str].to_variant()));
+                let _ = self.container.activate_action(
+                    "win.record_undo_created",
+                    Some(&vec![created_str].to_variant()),
+                );
                 if let Some(new_name) = created_path.file_name() {
                     self.queue_select_name_active(&new_name.to_string_lossy());
                 }
@@ -742,7 +758,9 @@ impl FolderPane {
     pub fn get_selected_items(&self) -> Vec<FileItem> {
         let mode = self.view_stack.visible_child_name().unwrap_or_default();
         match mode.as_str() {
-            "icons" => self.icon_view.get_selected_items(&self.items_cache.borrow()),
+            "icons" => self
+                .icon_view
+                .get_selected_items(&self.items_cache.borrow()),
             "list" => self.list_view.get_selected_items(),
             "columns" => self.column_view.get_selected_items(),
             "gallery" => self.gallery_view.get_selected_items(),
@@ -828,7 +846,12 @@ impl FolderPane {
     fn apply_items_snapshot(&self, items: Vec<FileItem>) {
         let (current_path, show_hidden, sort_by, sort_order) = {
             let s = self.state.borrow();
-            (s.current_path.clone(), s.show_hidden, s.sort_by, s.sort_order)
+            (
+                s.current_path.clone(),
+                s.show_hidden,
+                s.sort_by,
+                s.sort_order,
+            )
         };
         let count = items.len();
         self.icon_view.set_current_folder(None);
@@ -837,7 +860,8 @@ impl FolderPane {
         self.gallery_view.set_current_folder(None);
         self.icon_view.set_items(&items);
         self.list_view.set_items(&items);
-        self.column_view.set_root(&current_path, &items, show_hidden, sort_by, sort_order);
+        self.column_view
+            .set_root(&current_path, &items, show_hidden, sort_by, sort_order);
         self.gallery_view.set_items(&items);
         *self.items_cache.borrow_mut() = items;
         (self.on_selection_changed)(
@@ -949,13 +973,15 @@ impl FolderPane {
     }
 }
 
-
 fn setup_drop_target<F: Fn() + 'static>(
     widget: &impl IsA<gtk4::Widget>,
     state: Rc<RefCell<AppState>>,
     on_reload: F,
 ) {
-    let drop_target = gtk4::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::MOVE | gdk::DragAction::COPY);
+    let drop_target = gtk4::DropTarget::new(
+        gdk::FileList::static_type(),
+        gdk::DragAction::MOVE | gdk::DragAction::COPY,
+    );
     drop_target.connect_enter(move |_, _, _| gdk::DragAction::MOVE);
     drop_target.connect_motion(move |_, _, _| gdk::DragAction::MOVE);
     let on_reload = Rc::new(on_reload);
@@ -968,9 +994,7 @@ fn setup_drop_target<F: Fn() + 'static>(
                 .files()
                 .into_iter()
                 .filter_map(|f| f.path())
-                .filter(|src| {
-                    src != &dest_dir && !(src.is_dir() && dest_dir.starts_with(src))
-                })
+                .filter(|src| src != &dest_dir && !(src.is_dir() && dest_dir.starts_with(src)))
                 .collect();
             if paths.is_empty() {
                 return false;

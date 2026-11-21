@@ -96,10 +96,7 @@ pub fn set_clipboard(action: ClipboardAction, paths: Vec<PathBuf>) {
         .collect();
 
     FILE_CLIPBOARD.with(|slot| {
-        *slot.borrow_mut() = Some(ClipboardPayload {
-            action,
-            paths,
-        });
+        *slot.borrow_mut() = Some(ClipboardPayload { action, paths });
     });
 
     if let Some(display) = gtk4::gdk::Display::default() {
@@ -324,14 +321,16 @@ pub fn parse_trash_info_in(trash_base: &Path, trash_item_path: &Path) -> Option<
 }
 
 pub fn restore_from_trash_in(trash_base: &Path, trash_item_path: &Path) -> Result<PathBuf, String> {
-    let info = parse_trash_info_in(trash_base, trash_item_path)
-        .ok_or_else(|| "No se encontró metadato .trashinfo para restaurar el elemento".to_string())?;
+    let info = parse_trash_info_in(trash_base, trash_item_path).ok_or_else(|| {
+        "No se encontró metadato .trashinfo para restaurar el elemento".to_string()
+    })?;
     let mut target = info.original_path;
     let parent = target
         .parent()
         .ok_or_else(|| "Ruta original inválida".to_string())?;
     if !parent.exists() {
-        fs::create_dir_all(parent).map_err(|e| format!("No se pudo crear carpeta destino: {}", e))?;
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("No se pudo crear carpeta destino: {}", e))?;
     }
     if target.exists() || target.symlink_metadata().is_ok() {
         target = unique_destination_for_copy(&target, parent)?;
@@ -456,8 +455,7 @@ pub fn duplicate_item(path: &Path) -> Result<PathBuf, String> {
     if path.is_dir() {
         copy_dir_recursive(path, &candidate)?;
     } else {
-        fs::copy(path, &candidate)
-            .map_err(|e| format!("Error al duplicar archivo: {}", e))?;
+        fs::copy(path, &candidate).map_err(|e| format!("Error al duplicar archivo: {}", e))?;
     }
 
     Ok(candidate)
@@ -494,7 +492,10 @@ pub fn copy_into(src: &Path, dest_folder: &Path) -> Result<PathBuf, String> {
 
 /// Mover archivo o carpeta a una carpeta destino (con respaldo entre sistemas de archivos y metadatos SQLite)
 pub fn move_into(src: &Path, dest_folder: &Path) -> Result<PathBuf, String> {
-    if src == dest_folder || src.parent() == Some(dest_folder) || (src.is_dir() && dest_folder.starts_with(src)) {
+    if src == dest_folder
+        || src.parent() == Some(dest_folder)
+        || (src.is_dir() && dest_folder.starts_with(src))
+    {
         return Err("No se puede mover aquí.".to_string());
     }
     let dest = unique_destination_in_folder(src, dest_folder)?;
@@ -523,7 +524,10 @@ pub fn move_into(src: &Path, dest_folder: &Path) -> Result<PathBuf, String> {
 }
 
 /// Ejecuta Pegar (`Copy` o `Cut`) de un `ClipboardPayload` sobre `dest_folder`, devolviendo las rutas resultantes.
-pub fn paste_payload_into(payload: &ClipboardPayload, dest_folder: &Path) -> Result<Vec<PathBuf>, String> {
+pub fn paste_payload_into(
+    payload: &ClipboardPayload,
+    dest_folder: &Path,
+) -> Result<Vec<PathBuf>, String> {
     if !dest_folder.is_dir() {
         return Err("La carpeta de destino no es válida.".to_string());
     }
@@ -570,7 +574,10 @@ pub fn rename_selection_end(name: &str, is_dir: bool) -> i32 {
 
 /// Valida y resuelve la ruta destino para renombrar un archivo o carpeta.
 /// Devuelve `Ok(None)` si el nombre no cambió.
-pub fn validate_rename_target(old_path: &Path, raw_new_name: &str) -> Result<Option<PathBuf>, String> {
+pub fn validate_rename_target(
+    old_path: &Path,
+    raw_new_name: &str,
+) -> Result<Option<PathBuf>, String> {
     let trimmed = raw_new_name.trim();
     if trimmed.is_empty() {
         return Err("El nombre no puede estar vacío.".to_string());
@@ -885,7 +892,8 @@ mod tests {
         assert_eq!(parsed_cut.action, ClipboardAction::Cut);
         assert_eq!(parsed_cut.paths, paths);
 
-        let uri_list = "file:///tmp/Mi%20Carpeta/archivo%20con%20espacios.txt\r\nfile:///tmp/otra\r\n";
+        let uri_list =
+            "file:///tmp/Mi%20Carpeta/archivo%20con%20espacios.txt\r\nfile:///tmp/otra\r\n";
         let parsed_uri = parse_uri_list(uri_list).unwrap();
         assert_eq!(parsed_uri.action, ClipboardAction::Copy);
         assert_eq!(parsed_uri.paths, paths);
@@ -978,9 +986,7 @@ mod tests {
         fs::write(&trashed_file, b"recuperable").unwrap();
 
         let orig_target = orig_dir.join("informe final.txt");
-        let encoded_orig = orig_target
-            .to_string_lossy()
-            .replace(' ', "%20");
+        let encoded_orig = orig_target.to_string_lossy().replace(' ', "%20");
         let info_content = format!(
             "[Trash Info]\nPath={}\nDeletionDate=2026-11-19T08:00:00\n",
             encoded_orig
@@ -999,7 +1005,11 @@ mod tests {
 
         // Probar vaciado de papelera
         fs::write(files_dir.join("otro.txt"), b"basura").unwrap();
-        fs::write(info_dir.join("otro.txt.trashinfo"), "[Trash Info]\nPath=/tmp/otro.txt\n").unwrap();
+        fs::write(
+            info_dir.join("otro.txt.trashinfo"),
+            "[Trash Info]\nPath=/tmp/otro.txt\n",
+        )
+        .unwrap();
         let emptied = empty_trash_in(&trash_base).unwrap();
         assert_eq!(emptied, 1);
         assert!(!files_dir.join("otro.txt").exists());

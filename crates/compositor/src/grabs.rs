@@ -1,12 +1,14 @@
 use smithay::{
     desktop::Window,
     input::pointer::{
-        AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent,
-        GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent,
-        GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent,
-        GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle, RelativeMotionEvent,
+        AxisFrame, ButtonEvent, GestureHoldBeginEvent, GestureHoldEndEvent, GesturePinchBeginEvent,
+        GesturePinchEndEvent, GesturePinchUpdateEvent, GestureSwipeBeginEvent,
+        GestureSwipeEndEvent, GestureSwipeUpdateEvent, GrabStartData, MotionEvent, PointerGrab,
+        PointerInnerHandle, RelativeMotionEvent,
     },
-    reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::{ResizeEdge, State as XdgState},
+    reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::{
+        ResizeEdge, State as XdgState,
+    },
     utils::{Logical, Point, Rectangle, Size},
     wayland::seat::WaylandFocus,
 };
@@ -35,7 +37,9 @@ impl PointerGrab<MalusState> for ResizeSurfaceGrab {
     ) {
         data.last_pointer_location = Some(event.location);
         if handle.current_pressed().is_empty() {
-            tracing::info!("🛑 ResizeSurfaceGrab: ratón liberado durante motion, restaurando puntero");
+            tracing::info!(
+                "🛑 ResizeSurfaceGrab: ratón liberado durante motion, restaurando puntero"
+            );
             handle.unset_grab(self, data, event.serial, event.time, false);
             let cur_loc = event.location;
             let under_target = data.space.element_under(cur_loc).and_then(|(win, loc)| {
@@ -253,11 +257,7 @@ impl PointerGrab<MalusState> for ResizeSurfaceGrab {
         handle.axis(data, details);
     }
 
-    fn frame(
-        &mut self,
-        data: &mut MalusState,
-        handle: &mut PointerInnerHandle<'_, MalusState>,
-    ) {
+    fn frame(&mut self, data: &mut MalusState, handle: &mut PointerInnerHandle<'_, MalusState>) {
         handle.frame(data);
     }
 
@@ -364,7 +364,9 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
     ) {
         data.last_pointer_location = Some(event.location);
         if handle.current_pressed().is_empty() {
-            tracing::info!("🛑 MoveSurfaceGrab: ratón liberado durante motion, restaurando puntero");
+            tracing::info!(
+                "🛑 MoveSurfaceGrab: ratón liberado durante motion, restaurando puntero"
+            );
             data.snap_preview = None;
             data.moving_window_surface = None;
             handle.unset_grab(self, data, event.serial, event.time, false);
@@ -403,9 +405,9 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
 
             if self.is_snapped {
                 let surface_ref = self.window.wl_surface();
-                let saved = surface_ref.as_ref().and_then(|surf| {
-                    data.window_restore_geometries.get(surf.as_ref()).copied()
-                });
+                let saved = surface_ref
+                    .as_ref()
+                    .and_then(|surf| data.window_restore_geometries.get(surf.as_ref()).copied());
                 let restore_size = saved.map(|(_, s)| s).filter(|s| s.w > 100 && s.h > 100);
 
                 if let Some(toplevel) = self.window.toplevel() {
@@ -421,7 +423,8 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
                 let cursor_y = event.location.y as i32;
                 let new_x = (cursor_x - float_w / 2).max(0);
                 let new_y = if crate::state::window_uses_ssd(&self.window) {
-                    (cursor_y + crate::ssd::SSD_TITLEBAR_HEIGHT / 2).max(32 + crate::ssd::SSD_TITLEBAR_HEIGHT)
+                    (cursor_y + crate::ssd::SSD_TITLEBAR_HEIGHT / 2)
+                        .max(32 + crate::ssd::SSD_TITLEBAR_HEIGHT)
                 } else {
                     (cursor_y - 15).max(32)
                 };
@@ -541,7 +544,9 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
             data.last_pointer_location = Some(cur_loc);
 
             if !self.has_dragged {
-                tracing::info!("👆 MoveSurfaceGrab finalizado sin arrastre (clic simple en título/menú)");
+                tracing::info!(
+                    "👆 MoveSurfaceGrab finalizado sin arrastre (clic simple en título/menú)"
+                );
                 handle.unset_grab(self, data, event.serial, event.time, false);
 
                 let under_target = data.space.element_under(cur_loc).and_then(|(win, loc)| {
@@ -564,7 +569,10 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
                 return;
             }
 
-            let win_loc = data.space.element_location(&self.window).unwrap_or_default();
+            let win_loc = data
+                .space
+                .element_location(&self.window)
+                .unwrap_or_default();
             let win_geo = self.window.geometry();
             let outputs_count = data.space.outputs().count();
 
@@ -603,7 +611,8 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
                 crate::state::snap_window(data, &self.window, mode, zone);
             } else if let Some(surf) = self.window.wl_surface() {
                 if !self.is_snapped && win_geo.size.w > 150 && win_geo.size.h > 150 {
-                    data.window_restore_geometries.insert(surf.into_owned(), (win_loc, win_geo.size));
+                    data.window_restore_geometries
+                        .insert(surf.into_owned(), (win_loc, win_geo.size));
                 }
             }
 
@@ -639,11 +648,7 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
         handle.axis(data, details);
     }
 
-    fn frame(
-        &mut self,
-        data: &mut MalusState,
-        handle: &mut PointerInnerHandle<'_, MalusState>,
-    ) {
+    fn frame(&mut self, data: &mut MalusState, handle: &mut PointerInnerHandle<'_, MalusState>) {
         handle.frame(data);
     }
 
@@ -780,10 +785,13 @@ pub fn check_window_resize_edge(
         return None;
     }
 
-    let is_maximized_or_fullscreen = window.toplevel().map(|t| {
-        let states = &t.current_state().states;
-        states.contains(XdgState::Fullscreen) || states.contains(XdgState::Maximized)
-    }).unwrap_or(false);
+    let is_maximized_or_fullscreen = window
+        .toplevel()
+        .map(|t| {
+            let states = &t.current_state().states;
+            states.contains(XdgState::Fullscreen) || states.contains(XdgState::Maximized)
+        })
+        .unwrap_or(false);
 
     if is_maximized_or_fullscreen {
         return None;
@@ -808,7 +816,11 @@ pub fn check_window_resize_edge(
     let rel_y = point.y - win_y;
 
     // Fuera de los límites exteriores extendidos por thickness
-    if rel_x < -thickness || rel_x > win_w + thickness || rel_y < -thickness || rel_y > win_h + thickness {
+    if rel_x < -thickness
+        || rel_x > win_w + thickness
+        || rel_y < -thickness
+        || rel_y > win_h + thickness
+    {
         return None;
     }
 
@@ -876,7 +888,9 @@ pub fn find_window_resize_edge_under(
     thickness: f64,
 ) -> Option<(Window, ResizeEdge, Point<i32, Logical>)> {
     for window in space.elements().rev() {
-        let Some(loc) = space.element_location(window) else { continue };
+        let Some(loc) = space.element_location(window) else {
+            continue;
+        };
         if let Some(edge) = check_window_resize_edge(window, loc, point, thickness) {
             return Some((window.clone(), edge, loc));
         }
@@ -897,5 +911,3 @@ pub fn find_window_resize_edge_under(
     }
     None
 }
-
-

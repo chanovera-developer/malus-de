@@ -20,19 +20,26 @@ pub struct SquircleUniforms {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct SquircleInstance {
-    pub position: [f32; 2],      // Posición superior izquierda (x, y) en píxeles
-    pub size: [f32; 2],          // Ancho y alto (width, height) en píxeles
-    pub bg_color: [f32; 4],      // Color de fondo [R, G, B, A] en rango 0.0..1.0
-    pub border_color: [f32; 4],  // Color del contorno/borde reflectante [R, G, B, A]
-    pub corner_radius: f32,       // Radio de curvatura en píxeles
-    pub border_width: f32,        // Grosor del contorno en píxeles
-    pub squircle_power: f32,      // Exponente de Lamé (4.2 para macOS, 2.0 para círculo)
-    pub z_index: f32,             // Profundidad z
+    pub position: [f32; 2],     // Posición superior izquierda (x, y) en píxeles
+    pub size: [f32; 2],         // Ancho y alto (width, height) en píxeles
+    pub bg_color: [f32; 4],     // Color de fondo [R, G, B, A] en rango 0.0..1.0
+    pub border_color: [f32; 4], // Color del contorno/borde reflectante [R, G, B, A]
+    pub corner_radius: f32,     // Radio de curvatura en píxeles
+    pub border_width: f32,      // Grosor del contorno en píxeles
+    pub squircle_power: f32,    // Exponente de Lamé (4.2 para macOS, 2.0 para círculo)
+    pub z_index: f32,           // Profundidad z
 }
 
 impl SquircleInstance {
     /// Crea un squircle con valores por defecto de macOS (potencia 4.2 y sin borde).
-    pub fn new(x: f32, y: f32, width: f32, height: f32, corner_radius: f32, bg_color: [f32; 4]) -> Self {
+    pub fn new(
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        corner_radius: f32,
+        bg_color: [f32; 4],
+    ) -> Self {
         Self {
             position: [x, y],
             size: [width, height],
@@ -147,22 +154,22 @@ impl SquirclePipeline {
                 wgpu::VertexAttribute {
                     offset: 48,
                     shader_location: 4,
-                    format: wgpu::VertexFormat::Float32,   // corner_radius
+                    format: wgpu::VertexFormat::Float32, // corner_radius
                 },
                 wgpu::VertexAttribute {
                     offset: 52,
                     shader_location: 5,
-                    format: wgpu::VertexFormat::Float32,   // border_width
+                    format: wgpu::VertexFormat::Float32, // border_width
                 },
                 wgpu::VertexAttribute {
                     offset: 56,
                     shader_location: 6,
-                    format: wgpu::VertexFormat::Float32,   // squircle_power
+                    format: wgpu::VertexFormat::Float32, // squircle_power
                 },
                 wgpu::VertexAttribute {
                     offset: 60,
                     shader_location: 7,
-                    format: wgpu::VertexFormat::Float32,   // z_index
+                    format: wgpu::VertexFormat::Float32, // z_index
                 },
             ],
         };
@@ -237,7 +244,8 @@ impl SquirclePipeline {
             let new_capacity = (self.instance_count * 2).max(16);
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Squircle Instance Buffer"),
-                size: (new_capacity * std::mem::size_of::<SquircleInstance>()) as wgpu::BufferAddress,
+                size: (new_capacity * std::mem::size_of::<SquircleInstance>())
+                    as wgpu::BufferAddress,
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });

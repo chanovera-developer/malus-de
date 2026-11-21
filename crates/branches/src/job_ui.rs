@@ -110,10 +110,7 @@ impl JobUiController {
 
     #[allow(dead_code)]
     pub fn top_undo_label(&self, es: bool) -> Option<&'static str> {
-        self.undo_stack
-            .borrow()
-            .last()
-            .map(|e| e.description(es))
+        self.undo_stack.borrow().last().map(|e| e.description(es))
     }
 
     pub fn undo_last(&self) {
@@ -363,21 +360,29 @@ fn show_conflict_dialog(
 
     let msg = if es {
         if prompt.is_dir {
-            format!("Ya existe una carpeta llamada «{}» en el destino. ¿Qué deseas hacer?", name)
+            format!(
+                "Ya existe una carpeta llamada «{}» en el destino. ¿Qué deseas hacer?",
+                name
+            )
         } else {
-            format!("Ya existe un archivo llamado «{}» en el destino. ¿Qué deseas hacer?", name)
+            format!(
+                "Ya existe un archivo llamado «{}» en el destino. ¿Qué deseas hacer?",
+                name
+            )
         }
     } else if prompt.is_dir {
-        format!("A folder named \"{}\" already exists at the destination. What would you like to do?", name)
+        format!(
+            "A folder named \"{}\" already exists at the destination. What would you like to do?",
+            name
+        )
     } else {
-        format!("A file named \"{}\" already exists at the destination. What would you like to do?", name)
+        format!(
+            "A file named \"{}\" already exists at the destination. What would you like to do?",
+            name
+        )
     };
 
-    let lbl = Label::builder()
-        .label(&msg)
-        .wrap(true)
-        .xalign(0.0)
-        .build();
+    let lbl = Label::builder().label(&msg).wrap(true).xalign(0.0).build();
     vbox.append(&lbl);
 
     let src_info = format!(
@@ -407,11 +412,7 @@ fn show_conflict_dialog(
         .build();
     vbox.append(&sub);
 
-    let apply_all = CheckButton::with_label(if es {
-        "Aplicar a todo"
-    } else {
-        "Apply to all"
-    });
+    let apply_all = CheckButton::with_label(if es { "Aplicar a todo" } else { "Apply to all" });
     vbox.append(&apply_all);
     vbox.append(&Separator::new(Orientation::Horizontal));
 
@@ -419,11 +420,7 @@ fn show_conflict_dialog(
     btn_box.set_halign(Align::End);
 
     let skip_btn = Button::with_label(if es { "Saltar" } else { "Skip" });
-    let both_btn = Button::with_label(if es {
-        "Mantener ambos"
-    } else {
-        "Keep Both"
-    });
+    let both_btn = Button::with_label(if es { "Mantener ambos" } else { "Keep Both" });
     let replace_btn = Button::builder()
         .label(if es { "Reemplazar" } else { "Replace" })
         .css_classes(["destructive-action"])

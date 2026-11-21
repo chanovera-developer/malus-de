@@ -265,15 +265,7 @@ impl SurfaceTexParams {
         let ip = -(ia * p + ic * q);
         let iq = -(ib * p + id * q);
         [
-            ia as f32,
-            ib as f32,
-            0.0,
-            ic as f32,
-            id as f32,
-            0.0,
-            ip as f32,
-            iq as f32,
-            1.0,
+            ia as f32, ib as f32, 0.0, ic as f32, id as f32, 0.0, ip as f32, iq as f32, 1.0,
         ]
     }
 }
@@ -362,8 +354,8 @@ pub fn should_clip_subsurface_to_window(
     // Subsuperficie principal de contenido (p. ej. Chromium/Brave GPU) desfasada momentáneamente al encoger
     let anchored_to_window = (elem_geo.loc.x - win_rect.loc.x).abs() <= 4
         && (elem_geo.loc.y - win_rect.loc.y).abs() <= 160;
-    let covers_major_body = elem_geo.size.w * 3 >= win_rect.size.w * 2
-        && elem_geo.size.h * 3 >= win_rect.size.h * 2;
+    let covers_major_body =
+        elem_geo.size.w * 3 >= win_rect.size.w * 2 && elem_geo.size.h * 3 >= win_rect.size.h * 2;
     anchored_to_window && covers_major_body
 }
 
@@ -390,7 +382,10 @@ impl WindowSquircleShader {
                 Some(Self { program })
             }
             Err(e) => {
-                error!("❌ [WindowSquircleShader] Error al compilar shader custom de ventanas: {:?}", e);
+                error!(
+                    "❌ [WindowSquircleShader] Error al compilar shader custom de ventanas: {:?}",
+                    e
+                );
                 None
             }
         }
@@ -404,7 +399,16 @@ impl WindowSquircleShader {
         content_size: Size<i32, Physical>,
         radius: i32,
     ) {
-        self.apply_surface_to_frame(frame, None, buf_size, offset, content_size, radius, 1.0, false);
+        self.apply_surface_to_frame(
+            frame,
+            None,
+            buf_size,
+            offset,
+            content_size,
+            radius,
+            1.0,
+            false,
+        );
     }
 
     pub fn apply_clip_to_frame(
@@ -415,7 +419,16 @@ impl WindowSquircleShader {
         content_size: Size<i32, Physical>,
         radius: i32,
     ) {
-        self.apply_surface_to_frame(frame, None, buf_size, offset, content_size, radius, 0.0, false);
+        self.apply_surface_to_frame(
+            frame,
+            None,
+            buf_size,
+            offset,
+            content_size,
+            radius,
+            0.0,
+            false,
+        );
     }
 
     pub fn apply_dock_clip_to_frame(
@@ -426,7 +439,16 @@ impl WindowSquircleShader {
         content_size: Size<i32, Physical>,
         radius: i32,
     ) {
-        self.apply_surface_to_frame(frame, None, buf_size, offset, content_size, radius, 0.0, true);
+        self.apply_surface_to_frame(
+            frame,
+            None,
+            buf_size,
+            offset,
+            content_size,
+            radius,
+            0.0,
+            true,
+        );
     }
 
     pub fn apply_wayland_element_to_frame(
@@ -486,7 +508,10 @@ impl WindowSquircleShader {
             Uniform::new("u_corner_radius", radius as f32),
             Uniform::new("u_exponent", 4.2f32),
             Uniform::new("u_border_strength", border_strength),
-            Uniform::new("u_preserve_outside", if preserve_outside { 1.0f32 } else { 0.0f32 }),
+            Uniform::new(
+                "u_preserve_outside",
+                if preserve_outside { 1.0f32 } else { 0.0f32 },
+            ),
         ];
 
         frame.override_default_tex_program(self.program.clone(), uniforms);
@@ -545,38 +570,39 @@ pub fn render_window_elements(
         surface_rect
     };
 
-    let draw_surface = |frame: &mut GlesFrame<'_, '_>,
-                        elem: &WaylandSurfaceRenderElement<GlesRenderer>,
-                        clip_params: Option<(Point<i32, Physical>, Size<i32, Physical>, i32, f32)>| {
-        if surface_damage.is_empty() {
-            return;
-        }
-        let elem_geo = elem.geometry(scale_f);
-        let applied_shader = if let (Some((offset, size, r, border_strength)), Some(sh)) =
-            (clip_params, shader)
-        {
-            let tex_params = SurfaceTexParams::from_wayland_element(elem);
-            sh.apply_surface_to_frame(
-                frame,
-                tex_params,
-                elem_geo.size,
-                offset,
-                size,
-                r,
-                border_strength,
-                false,
-            );
-            true
-        } else {
-            false
+    let draw_surface =
+        |frame: &mut GlesFrame<'_, '_>,
+         elem: &WaylandSurfaceRenderElement<GlesRenderer>,
+         clip_params: Option<(Point<i32, Physical>, Size<i32, Physical>, i32, f32)>| {
+            if surface_damage.is_empty() {
+                return;
+            }
+            let elem_geo = elem.geometry(scale_f);
+            let applied_shader = if let (Some((offset, size, r, border_strength)), Some(sh)) =
+                (clip_params, shader)
+            {
+                let tex_params = SurfaceTexParams::from_wayland_element(elem);
+                sh.apply_surface_to_frame(
+                    frame,
+                    tex_params,
+                    elem_geo.size,
+                    offset,
+                    size,
+                    r,
+                    border_strength,
+                    false,
+                );
+                true
+            } else {
+                false
+            };
+
+            let _ = draw_render_elements(frame, scale, std::slice::from_ref(elem), surface_damage);
+
+            if applied_shader {
+                frame.clear_tex_program_override();
+            }
         };
-
-        let _ = draw_render_elements(frame, scale, std::slice::from_ref(elem), surface_damage);
-
-        if applied_shader {
-            frame.clear_tex_program_override();
-        }
-    };
 
     if should_round {
         let clip_radius = if shader.is_some() { win_phys_r } else { None };
@@ -616,15 +642,15 @@ pub fn render_window_elements(
             if !ssd_damage.is_empty() {
                 if let (Some(r), Some(sh)) = (clip_radius, shader) {
                     let tb_geo = tb_elem.geometry(Scale::from(1.0));
-                    let sub_offset = Point::from((
-                        win_rect.loc.x - tb_geo.loc.x,
-                        win_rect.loc.y - tb_geo.loc.y,
-                    ));
+                    let sub_offset =
+                        Point::from((win_rect.loc.x - tb_geo.loc.x, win_rect.loc.y - tb_geo.loc.y));
                     sh.apply_to_frame(frame, tb_geo.size, sub_offset, win_rect.size, r);
-                    let _ = draw_render_elements(frame, 1.0, std::slice::from_ref(tb_elem), ssd_damage);
+                    let _ =
+                        draw_render_elements(frame, 1.0, std::slice::from_ref(tb_elem), ssd_damage);
                     frame.clear_tex_program_override();
                 } else {
-                    let _ = draw_render_elements(frame, 1.0, std::slice::from_ref(tb_elem), ssd_damage);
+                    let _ =
+                        draw_render_elements(frame, 1.0, std::slice::from_ref(tb_elem), ssd_damage);
                 }
             }
         }
@@ -726,7 +752,11 @@ impl<'a> Element for SquircleSurfaceRenderElement<'a> {
         self.element.kind()
     }
 
-    fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
+    fn damage_since(
+        &self,
+        scale: Scale<f64>,
+        commit: Option<CommitCounter>,
+    ) -> DamageSet<i32, Physical> {
         self.element.damage_since(scale, commit)
     }
 }
@@ -829,7 +859,11 @@ impl<'a> Element for SquircleMemoryRenderElement<'a> {
         self.element.kind()
     }
 
-    fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
+    fn damage_since(
+        &self,
+        scale: Scale<f64>,
+        commit: Option<CommitCounter>,
+    ) -> DamageSet<i32, Physical> {
         self.element.damage_since(scale, commit)
     }
 }
@@ -848,7 +882,13 @@ impl<'a> RenderElement<GlesRenderer> for SquircleMemoryRenderElement<'a> {
         opaque_regions: &[Rectangle<i32, Physical>],
     ) -> Result<(), GlesError> {
         if let Some(shader) = &self.shader {
-            shader.apply_to_frame(frame, self.buf_size, self.offset, self.content_size, self.radius);
+            shader.apply_to_frame(
+                frame,
+                self.buf_size,
+                self.offset,
+                self.content_size,
+                self.radius,
+            );
             let res = self.element.draw(frame, src, dst, damage, opaque_regions);
             frame.clear_tex_program_override();
             res

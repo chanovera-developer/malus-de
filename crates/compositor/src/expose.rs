@@ -431,7 +431,10 @@ impl ExposeState {
         let buf = self.highlight_cache.get(&key)?;
         MemoryRenderBufferRenderElement::from_buffer(
             renderer,
-            Point::from(((card_phys.loc.x - pad) as f64, (card_phys.loc.y - pad) as f64)),
+            Point::from((
+                (card_phys.loc.x - pad) as f64,
+                (card_phys.loc.y - pad) as f64,
+            )),
             buf,
             None,
             None,
@@ -502,10 +505,7 @@ impl ExposeState {
             query: self.filter_query.clone(),
             scale_milli: (scale * 1000.0).round() as i32,
         };
-        let needs_rebuild = self
-            .filter_cache
-            .as_ref()
-            .is_none_or(|(k, _, _)| *k != key);
+        let needs_rebuild = self.filter_cache.as_ref().is_none_or(|(k, _, _)| *k != key);
         if needs_rebuild {
             let max_w = ((output_phys_size.w as f64) * 0.45).round() as i32;
             let text = format!("Buscar: {}", self.filter_query);
@@ -598,8 +598,10 @@ impl ExposeState {
         );
         let bar_phys_w = (bar_rect_logical.size.w as f64 * scale).round().max(32.0) as i32;
         let bar_phys_h = (bar_rect_logical.size.h as f64 * scale).round().max(24.0) as i32;
-        let bar_phys_x = ((bar_rect_logical.loc.x - output_geo.loc.x) as f64 * scale).round() as i32;
-        let bar_phys_y = ((bar_rect_logical.loc.y - output_geo.loc.y) as f64 * scale).round() as i32;
+        let bar_phys_x =
+            ((bar_rect_logical.loc.x - output_geo.loc.x) as f64 * scale).round() as i32;
+        let bar_phys_y =
+            ((bar_rect_logical.loc.y - output_geo.loc.y) as f64 * scale).round() as i32;
 
         let key = SpacesBarKey {
             revision: workspace_revision,
@@ -636,8 +638,10 @@ impl ExposeState {
                 Transform::Normal,
                 None,
             );
-            self.spaces_bar_cache
-                .insert(key.clone(), (buf, bar_phys_x, bar_phys_y, bar_phys_w, bar_phys_h));
+            self.spaces_bar_cache.insert(
+                key.clone(),
+                (buf, bar_phys_x, bar_phys_y, bar_phys_w, bar_phys_h),
+            );
         }
         let (buf, _, _, _, _) = self.spaces_bar_cache.get(&key)?;
         MemoryRenderBufferRenderElement::from_buffer(
@@ -654,7 +658,9 @@ impl ExposeState {
 }
 
 /// Reserva la franja superior para la Barra de Espacios dentro del área utilizable del monitor.
-pub fn expose_usable_zone_with_spaces_bar(usable: Rectangle<i32, Logical>) -> Rectangle<i32, Logical> {
+pub fn expose_usable_zone_with_spaces_bar(
+    usable: Rectangle<i32, Logical>,
+) -> Rectangle<i32, Logical> {
     let reserve = SPACES_BAR_HEIGHT_LOGICAL.min((usable.size.h - 140).max(0));
     Rectangle::new(
         (usable.loc.x, usable.loc.y + reserve).into(),
@@ -675,7 +681,8 @@ pub fn compute_spaces_bar_hitboxes(
     let gap = 12;
     let add_w = if can_add { 52 } else { 0 };
     let max_bar_w = (usable.size.w - 48).max(160);
-    let fixed_gaps = (space_count.saturating_sub(1) as i32) * gap + if can_add { gap + add_w } else { 0 };
+    let fixed_gaps =
+        (space_count.saturating_sub(1) as i32) * gap + if can_add { gap + add_w } else { 0 };
     let thumb_w = (((max_bar_w - fixed_gaps) / space_count as i32).clamp(72, 124)) as i32;
     let thumb_h = 68;
     let total_w = space_count as i32 * thumb_w + fixed_gaps;
@@ -709,8 +716,12 @@ pub fn drag_card_rect(drag: &ExposeDragState) -> Rectangle<i32, Logical> {
     } else {
         0.64
     };
-    let w = ((drag.start_rect.size.w as f64) * scale_factor).round().max(64.0) as i32;
-    let h = ((drag.start_rect.size.h as f64) * scale_factor).round().max(44.0) as i32;
+    let w = ((drag.start_rect.size.w as f64) * scale_factor)
+        .round()
+        .max(64.0) as i32;
+    let h = ((drag.start_rect.size.h as f64) * scale_factor)
+        .round()
+        .max(44.0) as i32;
     let x = (drag.current_pointer.x - w as f64 * 0.5).round() as i32;
     let y = (drag.current_pointer.y - h as f64 * 0.5).round() as i32;
     Rectangle::new((x, y).into(), (w, h).into())
@@ -767,7 +778,8 @@ pub fn compute_expose_layout(
     let cell_w = ((avail_w - gap_x * (best_cols as i32 - 1)).max(40)) as f64 / best_cols as f64;
     let cell_h = ((avail_h - gap_y * (rows as i32 - 1)).max(40)) as f64 / rows as f64;
 
-    let grid_w = (best_cols as f64 * cell_w + (best_cols as i32 - 1) as f64 * gap_x as f64).round() as i32;
+    let grid_w =
+        (best_cols as f64 * cell_w + (best_cols as i32 - 1) as f64 * gap_x as f64).round() as i32;
     let grid_h = (rows as f64 * cell_h + (rows as i32 - 1) as f64 * gap_y as f64).round() as i32;
     let origin_x = usable_rect.loc.x + pad_x + ((avail_w - grid_w) / 2).max(0);
     let origin_y = usable_rect.loc.y + pad_top + ((avail_h - grid_h) / 2).max(0);
@@ -784,7 +796,8 @@ pub fn compute_expose_layout(
             best_cols
         };
         let row_offset_x = if items_in_row < best_cols {
-            let row_w = items_in_row as f64 * cell_w + (items_in_row.saturating_sub(1)) as f64 * gap_x as f64;
+            let row_w = items_in_row as f64 * cell_w
+                + (items_in_row.saturating_sub(1)) as f64 * gap_x as f64;
             ((grid_w as f64 - row_w) / 2.0).round() as i32
         } else {
             0
@@ -796,7 +809,8 @@ pub fn compute_expose_layout(
         let scaled_w = (w * s).round().max(32.0) as i32;
         let scaled_h = (h * s).round().max(24.0) as i32;
 
-        let cell_x = origin_x + row_offset_x + (col as f64 * (cell_w + gap_x as f64)).round() as i32;
+        let cell_x =
+            origin_x + row_offset_x + (col as f64 * (cell_w + gap_x as f64)).round() as i32;
         let cell_y = origin_y + (row as f64 * (cell_h + gap_y as f64)).round() as i32;
 
         let target_x = cell_x + ((cell_w.round() as i32 - scaled_w) / 2).max(0);
@@ -836,8 +850,12 @@ fn lerp_rect(
     let t = t as f64;
     let x = (a.loc.x as f64 + (b.loc.x - a.loc.x) as f64 * t).round() as i32;
     let y = (a.loc.y as f64 + (b.loc.y - a.loc.y) as f64 * t).round() as i32;
-    let w = (a.size.w as f64 + (b.size.w - a.size.w) as f64 * t).round().max(1.0) as i32;
-    let h = (a.size.h as f64 + (b.size.h - a.size.h) as f64 * t).round().max(1.0) as i32;
+    let w = (a.size.w as f64 + (b.size.w - a.size.w) as f64 * t)
+        .round()
+        .max(1.0) as i32;
+    let h = (a.size.h as f64 + (b.size.h - a.size.h) as f64 * t)
+        .round()
+        .max(1.0) as i32;
     Rectangle::new((x, y).into(), (w, h).into())
 }
 
@@ -907,13 +925,7 @@ fn squircle_sdf(px: f64, py: f64, bx: f64, by: f64, r: f64, exp_val: f64) -> f64
     (dx.powf(exp_val) + dy.powf(exp_val)).powf(1.0 / exp_val) - r
 }
 
-fn rasterize_highlight(
-    w: i32,
-    h: i32,
-    pad: f64,
-    scale: f64,
-    is_selected: bool,
-) -> Option<Vec<u8>> {
+fn rasterize_highlight(w: i32, h: i32, pad: f64, scale: f64, is_selected: bool) -> Option<Vec<u8>> {
     if w <= 0 || h <= 0 {
         return None;
     }
@@ -924,7 +936,8 @@ fn rasterize_highlight(
     let outer_r = (card_radius + pad).min(half_w).min(half_h);
 
     let (cr, cg, cb, ca) = if is_selected {
-        (0.04, 0.52, 1.0, 0.96)
+        let (red, green, blue) = malus_de_common::config::load_accent_color();
+        (red, green, blue, 0.96)
     } else {
         (1.0, 1.0, 1.0, 0.72)
     };
@@ -988,7 +1001,8 @@ fn rasterize_label_pill(
         let radius = h as f64 * 0.5;
         cairo_rounded_rect(&cr, 0.0, 0.0, w as f64, h as f64, radius);
         if highlighted {
-            cr.set_source_rgba(0.04, 0.52, 1.0, 0.90);
+            let (red, green, blue) = malus_de_common::config::load_accent_color();
+            cr.set_source_rgba(red, green, blue, 0.90);
         } else {
             cr.set_source_rgba(0.10, 0.11, 0.14, 0.78);
         }
@@ -1021,7 +1035,10 @@ fn truncate_text(cr: &Context, text: &str, max_w: f64) -> String {
     while !chars.is_empty() {
         chars.pop();
         let candidate: String = chars.iter().collect::<String>() + "…";
-        if cr.text_extents(&candidate).is_ok_and(|e| e.width() <= max_w) {
+        if cr
+            .text_extents(&candidate)
+            .is_ok_and(|e| e.width() <= max_w)
+        {
             return candidate;
         }
     }
@@ -1074,11 +1091,13 @@ fn rasterize_spaces_bar(
                     let Some(space) = spaces.get(idx) else {
                         continue;
                     };
+                    let (accent_r, accent_g, accent_b) =
+                        malus_de_common::config::load_accent_color();
                     let card_h = (h - 18.0 * scale).max(24.0);
                     let r = 13.0 * scale;
                     cairo_squircle_rect(&cr, x, y, w, card_h, r, EXPOSE_SQUIRCLE_EXPONENT);
                     if is_drop {
-                        cr.set_source_rgba(0.04, 0.52, 1.0, 0.34);
+                        cr.set_source_rgba(accent_r, accent_g, accent_b, 0.34);
                     } else if space.is_active {
                         cr.set_source_rgba(0.18, 0.24, 0.36, 0.88);
                     } else if is_hovered {
@@ -1089,7 +1108,7 @@ fn rasterize_spaces_bar(
                     cr.fill_preserve().ok()?;
 
                     if is_drop || space.is_active {
-                        cr.set_source_rgba(0.04, 0.52, 1.0, 0.96);
+                        cr.set_source_rgba(accent_r, accent_g, accent_b, 0.96);
                         cr.set_line_width((2.2 * scale).max(1.5));
                     } else if is_hovered {
                         cr.set_source_rgba(1.0, 1.0, 1.0, 0.60);
@@ -1109,7 +1128,15 @@ fn rasterize_spaces_bar(
                         let my = y + inner_pad + ny.clamp(0.0, 0.92) * inner_h;
                         let mw = (nw * inner_w).clamp(4.0 * scale, inner_w);
                         let mh = (nh * inner_h).clamp(3.0 * scale, inner_h);
-                        cairo_squircle_rect(&cr, mx, my, mw, mh, 3.5 * scale, EXPOSE_SQUIRCLE_EXPONENT);
+                        cairo_squircle_rect(
+                            &cr,
+                            mx,
+                            my,
+                            mw,
+                            mh,
+                            3.5 * scale,
+                            EXPOSE_SQUIRCLE_EXPONENT,
+                        );
                         cr.set_source_rgba(0.85, 0.90, 0.98, 0.58);
                         let _ = cr.fill();
                     }
@@ -1130,11 +1157,13 @@ fn rasterize_spaces_bar(
                     }
                 }
                 SpaceDropTarget::NewSpace => {
+                    let (accent_r, accent_g, accent_b) =
+                        malus_de_common::config::load_accent_color();
                     let card_h = (h - 18.0 * scale).max(24.0);
                     let r = 13.0 * scale;
                     cairo_squircle_rect(&cr, x, y, w, card_h, r, EXPOSE_SQUIRCLE_EXPONENT);
                     if is_drop {
-                        cr.set_source_rgba(0.04, 0.52, 1.0, 0.34);
+                        cr.set_source_rgba(accent_r, accent_g, accent_b, 0.34);
                     } else if is_hovered {
                         cr.set_source_rgba(1.0, 1.0, 1.0, 0.22);
                     } else {
@@ -1142,7 +1171,7 @@ fn rasterize_spaces_bar(
                     }
                     cr.fill_preserve().ok()?;
                     if is_drop {
-                        cr.set_source_rgba(0.04, 0.52, 1.0, 0.96);
+                        cr.set_source_rgba(accent_r, accent_g, accent_b, 0.96);
                         cr.set_line_width((2.0 * scale).max(1.5));
                     } else {
                         cr.set_source_rgba(1.0, 1.0, 1.0, 0.28);

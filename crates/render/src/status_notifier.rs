@@ -47,7 +47,9 @@ impl StatusNotifierWatcher {
             items.insert(item_path.clone());
         }
 
-        let _ = self.update_tx.try_send(SniUpdate::ItemRegistered(item_path.clone()));
+        let _ = self
+            .update_tx
+            .try_send(SniUpdate::ItemRegistered(item_path.clone()));
         Self::status_notifier_item_registered(&ctxt, &item_path).await?;
         Ok(())
     }

@@ -93,10 +93,9 @@ impl WaylandTopBarApp {
     ) -> Result<Self> {
         let compositor_state =
             CompositorState::bind(globals, qh).context("Protocolo wl_compositor no disponible")?;
-        let layer_shell_state =
-            LayerShell::bind(globals, qh).context("Protocolo wlr-layer-shell no disponible en el compositor")?;
-        let shm_state =
-            Shm::bind(globals, qh).context("Protocolo wl_shm no disponible")?;
+        let layer_shell_state = LayerShell::bind(globals, qh)
+            .context("Protocolo wlr-layer-shell no disponible en el compositor")?;
+        let shm_state = Shm::bind(globals, qh).context("Protocolo wl_shm no disponible")?;
         let slot_pool = SlotPool::new(1920 * 1080 * 4, &shm_state).ok();
 
         let wl_surface = compositor_state.create_surface(qh);
@@ -127,10 +126,12 @@ impl WaylandTopBarApp {
         });
 
         let raw_display_handle = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
-            NonNull::new(conn.backend().display_ptr() as *mut _).context("Puntero de display Wayland nulo")?,
+            NonNull::new(conn.backend().display_ptr() as *mut _)
+                .context("Puntero de display Wayland nulo")?,
         ));
         let raw_window_handle = RawWindowHandle::Wayland(WaylandWindowHandle::new(
-            NonNull::new(layer.wl_surface().id().as_ptr() as *mut _).context("Puntero de superficie Wayland nulo")?,
+            NonNull::new(layer.wl_surface().id().as_ptr() as *mut _)
+                .context("Puntero de superficie Wayland nulo")?,
         ));
 
         let wgpu_surface = unsafe {
@@ -142,15 +143,18 @@ impl WaylandTopBarApp {
                 .context("Error al crear wgpu::Surface nativa de Wayland")?
         };
 
-        let adapter = futures_lite::future::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            compatible_surface: Some(&wgpu_surface),
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: false,
-        }))
+        let adapter = futures_lite::future::block_on(instance.request_adapter(
+            &wgpu::RequestAdapterOptions {
+                compatible_surface: Some(&wgpu_surface),
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+            },
+        ))
         .context("No se encontró adaptador compatible con la superficie Wayland")?;
 
-        let (device, queue) = futures_lite::future::block_on(adapter.request_device(&Default::default(), None))
-            .context("Error al inicializar dispositivo WGPU")?;
+        let (device, queue) =
+            futures_lite::future::block_on(adapter.request_device(&Default::default(), None))
+                .context("Error al inicializar dispositivo WGPU")?;
 
         let caps = wgpu_surface.get_capabilities(&adapter);
         let surface_format = caps
@@ -226,25 +230,47 @@ impl WaylandTopBarApp {
                 self.configure_surface();
                 self.wgpu_surface.get_current_texture()?
             }
-            Err(e) => return Err(anyhow::anyhow!("Error al obtener textura de la superficie: {:?}", e)),
+            Err(e) => {
+                return Err(anyhow::anyhow!(
+                    "Error al obtener textura de la superficie: {:?}",
+                    e
+                ))
+            }
         };
 
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
         // 1. Recalcular disposición en Flexbox con Taffy
-        self.ui.compute_layout(self.width as f32, self.height as f32)?;
+        self.ui
+            .compute_layout(self.width as f32, self.height as f32)?;
         let instances = self.ui.generate_instances();
         let labels = self.ui.generate_text_labels();
 
         // 2. Preparar búferes de WGPU y atlas de glifos
         let screen_size = [self.width as f32, self.height as f32];
-        self.pipeline.prepare(&self.device, &self.queue, screen_size, self.scale_factor, &instances);
-        self.text_system.prepare(&self.device, &self.queue, screen_size, self.scale_factor, &labels)?;
+        self.pipeline.prepare(
+            &self.device,
+            &self.queue,
+            screen_size,
+            self.scale_factor,
+            &instances,
+        );
+        self.text_system.prepare(
+            &self.device,
+            &self.queue,
+            screen_size,
+            self.scale_factor,
+            &labels,
+        )?;
 
         // 3. RenderPass unificado con fondo transparente
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Wayland TopBar Command Encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Wayland TopBar Command Encoder"),
+            });
 
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -464,7 +490,12 @@ impl WaylandTopBarApp {
         let (sx, sw) = if let Some((x, _y, w, _h)) = layout_info {
             (x, w.max(40.0))
         } else {
-            let panel_x = self.model.active_popover.as_ref().map(|p| p.anchor_x).unwrap_or(8.0);
+            let panel_x = self
+                .model
+                .active_popover
+                .as_ref()
+                .map(|p| p.anchor_x)
+                .unwrap_or(8.0);
             (panel_x + 36.0, 240.0)
         };
 
@@ -514,7 +545,12 @@ impl WaylandTopBarApp {
             },
         );
         let badge = cfg.layout_short_badge();
-        if let Some(item) = self.model.status_items.iter_mut().find(|i| i.tag == "status:keyboard") {
+        if let Some(item) = self
+            .model
+            .status_items
+            .iter_mut()
+            .find(|i| i.tag == "status:keyboard")
+        {
             item.text = badge.to_string();
         }
         self.rebuild_ui()?;
@@ -525,7 +561,10 @@ impl WaylandTopBarApp {
     /// Actualiza la paleta del tema de color dinámicamente si el contraste del fondo cambia.
     pub fn set_dark_background(&mut self, is_dark: bool) -> Result<()> {
         if self.model.is_dark_background != is_dark {
-            info!("🎨 [TopBar] Actualizando paleta de color del sistema: is_dark_background={}", is_dark);
+            info!(
+                "🎨 [TopBar] Actualizando paleta de color del sistema: is_dark_background={}",
+                is_dark
+            );
             self.model.is_dark_background = is_dark;
             self.rebuild_ui()?;
             let _ = self.render();
@@ -552,7 +591,8 @@ impl WaylandTopBarApp {
             popover_cfg.width
         };
         let popover_h = popover.total_height(&popover_cfg);
-        let required_h = (self.config.height + self.config.margin_top + 8.0 + popover_h + 16.0) as u32;
+        let required_h =
+            (self.config.height + self.config.margin_top + 8.0 + popover_h + 16.0) as u32;
 
         info!(
             "📂 [TopBar] Desplegando popover '{}' en x={} (altura requerida: {}px)",
@@ -561,7 +601,9 @@ impl WaylandTopBarApp {
 
         // Crear superficie auxiliar de desenfoque de fondo en el compositor (namespace="malus-notifications")
         let blur_surface = self.compositor_state.create_surface(&self.qh);
-        if let Ok(empty_region) = smithay_client_toolkit::compositor::Region::new(&self.compositor_state) {
+        if let Ok(empty_region) =
+            smithay_client_toolkit::compositor::Region::new(&self.compositor_state)
+        {
             blur_surface.set_input_region(Some(empty_region.wl_region()));
         }
 
@@ -667,7 +709,9 @@ impl WaylandTopBarApp {
             }
             4 => {
                 info!("🔄 Recargando Shell de Malus DE...");
-                let _ = std::process::Command::new("malus-de-ctl").arg("reload").spawn();
+                let _ = std::process::Command::new("malus-de-ctl")
+                    .arg("reload")
+                    .spawn();
             }
             5 => {
                 info!("🔒 Bloqueando sesión con malus-de-session-lock...");
@@ -676,12 +720,16 @@ impl WaylandTopBarApp {
             6 => {
                 info!("⚡ Invocando reinicio del sistema...");
                 malus_de_common::crash::mark_clean_session_exit();
-                let _ = std::process::Command::new("systemctl").arg("reboot").spawn();
+                let _ = std::process::Command::new("systemctl")
+                    .arg("reboot")
+                    .spawn();
             }
             7 => {
                 info!("🛑 Invocando apagado del equipo...");
                 malus_de_common::crash::mark_clean_session_exit();
-                let _ = std::process::Command::new("systemctl").arg("poweroff").spawn();
+                let _ = std::process::Command::new("systemctl")
+                    .arg("poweroff")
+                    .spawn();
             }
             10 => {
                 info!("🛍️ Abriendo Software...");
@@ -694,15 +742,21 @@ impl WaylandTopBarApp {
             }
             12 => {
                 info!("💤 Poniendo el equipo en reposo...");
-                let _ = std::process::Command::new("systemctl").arg("suspend").spawn();
+                let _ = std::process::Command::new("systemctl")
+                    .arg("suspend")
+                    .spawn();
             }
             13 => {
                 info!("🚪 Cerrando sesión de usuario...");
-                let _ = std::process::Command::new("gnome-session-quit").args(["--logout", "--no-prompt"]).spawn();
+                let _ = std::process::Command::new("gnome-session-quit")
+                    .args(["--logout", "--no-prompt"])
+                    .spawn();
             }
             201 => {
                 info!("📶 Alternando estado de Wi-Fi");
-                let _ = std::process::Command::new("nmcli").args(["radio", "wifi"]).spawn();
+                let _ = std::process::Command::new("nmcli")
+                    .args(["radio", "wifi"])
+                    .spawn();
             }
             202 => {
                 info!("🌐 Abriendo Preferencias de Wi-Fi");
@@ -713,7 +767,9 @@ impl WaylandTopBarApp {
             }
             212 => {
                 info!("🔊 Alternando silencio de audio");
-                let _ = std::process::Command::new("wpctl").args(["set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"]).spawn();
+                let _ = std::process::Command::new("wpctl")
+                    .args(["set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
+                    .spawn();
             }
             213 => {
                 info!("🔊 Abriendo Preferencias de Sonido");
@@ -813,10 +869,15 @@ impl LayerShellHandler for WaylandTopBarApp {
         if let Some(ref popover) = self.model.active_popover {
             let palette = crate::luminance::AdaptivePalette::new(self.model.is_dark_background);
             let popover_h = popover.total_height(&PopoverConfig::for_palette(&palette));
-            self.height = (self.config.height + self.config.margin_top + 8.0 + popover_h + 16.0) as u32;
+            self.height =
+                (self.config.height + self.config.margin_top + 8.0 + popover_h + 16.0) as u32;
         } else {
             let base_h = (self.config.height + self.config.margin_top + 4.0) as u32;
-            self.height = if new_height > 0 { new_height.min(base_h) } else { base_h };
+            self.height = if new_height > 0 {
+                new_height.min(base_h)
+            } else {
+                base_h
+            };
             // Al cerrarse el popover, destruimos la capa de desenfoque exactamente en sincronía
             // con la reconfiguración y presentación del fotograma colapsado.
             if let Some((surface, layer, buffer)) = self.popover_blur.take() {
@@ -826,7 +887,10 @@ impl LayerShellHandler for WaylandTopBarApp {
             }
         }
 
-        info!("📐 [LayerShell] configure recibido: new_size=({}, {}), altura asignada={}", new_width, new_height, self.height);
+        info!(
+            "📐 [LayerShell] configure recibido: new_size=({}, {}), altura asignada={}",
+            new_width, new_height, self.height
+        );
         self.pending_configure = false;
         self.configure_surface();
         let _ = self.rebuild_ui();
@@ -984,8 +1048,10 @@ impl PointerHandler for WaylandTopBarApp {
                                 .and_then(|n| self.ui.absolute_layout(n))
                                 .unwrap_or((8.0, 0.0, 30.0, 24.0));
                             let popover_w = 265.0;
-                            let left_ax = bx.clamp(8.0, (self.width as f32 - popover_w - 8.0).max(8.0));
-                            let right_ax = (bx + bw - popover_w).clamp(8.0, (self.width as f32 - popover_w - 8.0).max(8.0));
+                            let left_ax =
+                                bx.clamp(8.0, (self.width as f32 - popover_w - 8.0).max(8.0));
+                            let right_ax = (bx + bw - popover_w)
+                                .clamp(8.0, (self.width as f32 - popover_w - 8.0).max(8.0));
 
                             if tag.starts_with("popover_item:") {
                                 let parts: Vec<&str> = tag.split(':').collect();
@@ -1048,19 +1114,32 @@ impl PointerHandler for WaylandTopBarApp {
 
                         if let Some((menu, ax)) = new_menu_switch {
                             match menu {
-                                "apple" => { let _ = self.toggle_apple_menu(ax); },
-                                "status:wifi" => { let _ = self.toggle_wifi_menu(ax); },
-                                "status:volume" => { let _ = self.toggle_volume_menu(ax); },
-                                "status:battery" => { let _ = self.toggle_battery_menu(ax); },
-                                "control_center" => { let _ = self.toggle_control_center_menu(ax); },
-                                other => { let _ = self.toggle_menu(other, ax); },
+                                "apple" => {
+                                    let _ = self.toggle_apple_menu(ax);
+                                }
+                                "status:wifi" => {
+                                    let _ = self.toggle_wifi_menu(ax);
+                                }
+                                "status:volume" => {
+                                    let _ = self.toggle_volume_menu(ax);
+                                }
+                                "status:battery" => {
+                                    let _ = self.toggle_battery_menu(ax);
+                                }
+                                "control_center" => {
+                                    let _ = self.toggle_control_center_menu(ax);
+                                }
+                                other => {
+                                    let _ = self.toggle_menu(other, ax);
+                                }
                             }
                         } else if needs_refresh {
                             let _ = self.rebuild_ui();
                             let _ = self.render();
                         }
                     } else if hit != self.hovered_node {
-                        let palette = crate::luminance::AdaptivePalette::new(self.model.is_dark_background);
+                        let palette =
+                            crate::luminance::AdaptivePalette::new(self.model.is_dark_background);
                         // Restaurar estilo anterior al salir del botón
                         if let Some(prev) = self.hovered_node {
                             if let Some(data) = self.ui.node_data(prev) {
@@ -1100,7 +1179,8 @@ impl PointerHandler for WaylandTopBarApp {
                             .unwrap_or((8.0, 0.0, 30.0, 24.0));
                         let popover_w = 265.0;
                         let left_ax = bx.clamp(8.0, (self.width as f32 - popover_w - 8.0).max(8.0));
-                        let right_ax = (bx + bw - popover_w).clamp(8.0, (self.width as f32 - popover_w - 8.0).max(8.0));
+                        let right_ax = (bx + bw - popover_w)
+                            .clamp(8.0, (self.width as f32 - popover_w - 8.0).max(8.0));
 
                         if tag == "apple_menu" {
                             let _ = self.toggle_apple_menu(left_ax);
@@ -1115,11 +1195,13 @@ impl PointerHandler for WaylandTopBarApp {
                             let _ = self.toggle_battery_menu(right_ax);
                         } else if tag == "status:tray" {
                             let tray_w = 240.0;
-                            let tray_ax = (bx + bw - tray_w).clamp(8.0, (self.width as f32 - tray_w - 8.0).max(8.0));
+                            let tray_ax = (bx + bw - tray_w)
+                                .clamp(8.0, (self.width as f32 - tray_w - 8.0).max(8.0));
                             let _ = self.toggle_tray_menu(tray_ax);
                         } else if tag == "control_center" || tag == "status:control_center" {
                             let cc_w = 320.0;
-                            let cc_ax = (bx + bw - cc_w).clamp(8.0, (self.width as f32 - cc_w - 8.0).max(8.0));
+                            let cc_ax = (bx + bw - cc_w)
+                                .clamp(8.0, (self.width as f32 - cc_w - 8.0).max(8.0));
                             let _ = self.toggle_control_center_menu(cc_ax);
                         } else if tag == "status:keyboard" {
                             let _ = self.cycle_keyboard_layout();
@@ -1127,7 +1209,12 @@ impl PointerHandler for WaylandTopBarApp {
                             let _ = std::process::Command::new("malus-de-spotlight").spawn();
                         } else if tag == "clock" {
                             let _ = std::process::Command::new("malus-de-notifications").spawn();
-                        } else if tag.starts_with("slider:") || tag.starts_with("slider_track:") || tag.starts_with("slider_fill:") || tag.starts_with("slider_row:") || tag.starts_with("slider_box:") {
+                        } else if tag.starts_with("slider:")
+                            || tag.starts_with("slider_track:")
+                            || tag.starts_with("slider_fill:")
+                            || tag.starts_with("slider_row:")
+                            || tag.starts_with("slider_box:")
+                        {
                             self.is_dragging_slider = Some(tag.clone());
                             self.handle_slider_interaction(&tag, x as f32, hit);
                         } else if tag == "cc:wifi" {
@@ -1136,7 +1223,9 @@ impl PointerHandler for WaylandTopBarApp {
                                     cc.wifi_enabled = !cc.wifi_enabled;
                                 }
                             }
-                            let _ = std::process::Command::new("nmcli").args(["radio", "wifi"]).spawn();
+                            let _ = std::process::Command::new("nmcli")
+                                .args(["radio", "wifi"])
+                                .spawn();
                             let _ = self.rebuild_ui();
                             let _ = self.render();
                         } else if tag == "cc:bluetooth" {
@@ -1145,7 +1234,9 @@ impl PointerHandler for WaylandTopBarApp {
                                     cc.bluetooth_enabled = !cc.bluetooth_enabled;
                                 }
                             }
-                            let _ = std::process::Command::new("rfkill").args(["toggle", "bluetooth"]).spawn();
+                            let _ = std::process::Command::new("rfkill")
+                                .args(["toggle", "bluetooth"])
+                                .spawn();
                             let _ = self.rebuild_ui();
                             let _ = self.render();
                         } else if tag == "cc:airdrop" {
@@ -1163,13 +1254,19 @@ impl PointerHandler for WaylandTopBarApp {
                                     cc.media_playing = !cc.media_playing;
                                 }
                             }
-                            let _ = std::process::Command::new("playerctl").args(["play-pause"]).spawn();
+                            let _ = std::process::Command::new("playerctl")
+                                .args(["play-pause"])
+                                .spawn();
                             let _ = self.rebuild_ui();
                             let _ = self.render();
                         } else if tag == "cc:media_prev" {
-                            let _ = std::process::Command::new("playerctl").args(["previous"]).spawn();
+                            let _ = std::process::Command::new("playerctl")
+                                .args(["previous"])
+                                .spawn();
                         } else if tag == "cc:media_next" {
-                            let _ = std::process::Command::new("playerctl").args(["next"]).spawn();
+                            let _ = std::process::Command::new("playerctl")
+                                .args(["next"])
+                                .spawn();
                         } else if tag == "cc:focus" {
                             if let Some(ref mut p) = self.model.active_popover {
                                 if let Some(ref mut cc) = p.control_center {
@@ -1183,7 +1280,11 @@ impl PointerHandler for WaylandTopBarApp {
                             malus_de_common::config::sync_system_appearance(is_dark);
                             let _ = malus_de_common::ipc::IpcClient::send_command(
                                 malus_de_common::ipc::IpcMessage::ThemeChanged {
-                                    theme_name: if is_dark { "Adwaita-Dark".to_string() } else { "Adwaita-Light".to_string() },
+                                    theme_name: if is_dark {
+                                        "Adwaita-Dark".to_string()
+                                    } else {
+                                        "Adwaita-Light".to_string()
+                                    },
                                     is_dark,
                                 },
                             );

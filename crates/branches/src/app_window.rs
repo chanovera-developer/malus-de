@@ -11,9 +11,9 @@ use gtk4::gio;
 use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, DrawingArea,
-    EventControllerFocus, EventControllerKey, GestureClick, Label, MenuButton, Orientation, Overlay,
-    PackType, Paned, SearchEntry, Stack, StackTransitionType,
-    ToggleButton, WindowControls, WindowHandle,
+    EventControllerFocus, EventControllerKey, GestureClick, Label, MenuButton, Orientation,
+    Overlay, PackType, Paned, SearchEntry, Stack, StackTransitionType, ToggleButton,
+    WindowControls, WindowHandle,
 };
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -110,10 +110,11 @@ pub(crate) fn attach_squircle_menu_hover(btn: &Button) {
         }
         let _ = cr.save();
         squircle_path(cr, width, height, 14.0);
+        let (red, green, blue) = malus_de_common::config::load_accent_color();
         if active {
-            cr.set_source_rgba(0.0, 0.39, 0.85, 0.86);
+            cr.set_source_rgba(red * 0.78, green * 0.78, blue * 0.78, 0.86);
         } else {
-            cr.set_source_rgba(0.0, 0.48, 1.0, 0.74);
+            cr.set_source_rgba(red, green, blue, 0.74);
         }
         let _ = cr.fill();
         let _ = cr.restore();
@@ -191,10 +192,11 @@ fn create_squircle_search_shell(entry: &SearchEntry) -> Overlay {
                 (BRANCHES_SEARCH_SQUIRCLE_RADIUS - inset).max(2.0),
             );
             if focused {
+                let (red, green, blue) = malus_de_common::config::load_accent_color();
                 if is_dark {
-                    cr.set_source_rgba(0.04, 0.52, 1.0, 0.85);
+                    cr.set_source_rgba(red, green, blue, 0.85);
                 } else {
-                    cr.set_source_rgba(0.0, 0.48, 1.0, 0.80);
+                    cr.set_source_rgba(red, green, blue, 0.80);
                 }
                 cr.set_line_width(1.5);
             } else {
@@ -268,7 +270,6 @@ pub struct BranchesWindow {
 
 impl BranchesWindow {
     pub fn new(app: &Application, initial_path: PathBuf) -> Rc<Self> {
-
         let window = ApplicationWindow::builder()
             .application(app)
             .title("Branches")
@@ -491,24 +492,25 @@ impl BranchesWindow {
             .css_classes(["branches-tool-btn"])
             .build();
 
-        let make_action_menu_btn = |label: &str, action: &str, target: Option<glib::Variant>, pop: &gtk4::Popover| {
-            let btn = Button::builder()
-                .label(label)
-                .has_frame(false)
-                .css_classes(["popover-menu-item"])
-                .build();
-            if let Some(lbl) = btn.child().and_then(|c| c.downcast::<Label>().ok()) {
-                lbl.set_xalign(0.0);
-            }
-            btn.set_action_name(Some(action));
-            if let Some(val) = target {
-                btn.set_action_target_value(Some(&val));
-            }
-            attach_squircle_menu_hover(&btn);
-            let p = pop.clone();
-            btn.connect_clicked(move |_| p.popdown());
-            btn
-        };
+        let make_action_menu_btn =
+            |label: &str, action: &str, target: Option<glib::Variant>, pop: &gtk4::Popover| {
+                let btn = Button::builder()
+                    .label(label)
+                    .has_frame(false)
+                    .css_classes(["popover-menu-item"])
+                    .build();
+                if let Some(lbl) = btn.child().and_then(|c| c.downcast::<Label>().ok()) {
+                    lbl.set_xalign(0.0);
+                }
+                btn.set_action_name(Some(action));
+                if let Some(val) = target {
+                    btn.set_action_target_value(Some(&val));
+                }
+                attach_squircle_menu_hover(&btn);
+                let p = pop.clone();
+                btn.connect_clicked(move |_| p.popdown());
+                btn
+            };
 
         let share_popover = gtk4::Popover::builder()
             .has_arrow(false)
@@ -545,7 +547,7 @@ impl BranchesWindow {
             .valign(Align::Center)
             .css_classes(["branches-tool-btn"])
             .build();
-        
+
         let action_popover = gtk4::Popover::builder()
             .has_arrow(false)
             .css_classes(["malus-popover-menu"])
@@ -605,7 +607,12 @@ impl BranchesWindow {
         let tag_box = GtkBox::new(Orientation::Vertical, 1);
         for def in crate::db::TAG_CATALOG.iter() {
             let label = if es_menu { def.label_es } else { def.label_en };
-            let btn = make_action_menu_btn(label, "win.toggle_tag", Some(def.id.to_variant()), &tag_popover);
+            let btn = make_action_menu_btn(
+                label,
+                "win.toggle_tag",
+                Some(def.id.to_variant()),
+                &tag_popover,
+            );
             let parent_pop = action_popover.clone();
             btn.connect_clicked(move |_| parent_pop.popdown());
             tag_box.append(&btn);
@@ -836,11 +843,7 @@ impl BranchesWindow {
             .valign(Align::Center)
             .build();
         let empty_banner_btn = Button::builder()
-            .label(if es {
-                "Vaciar Papelera"
-            } else {
-                "Empty Trash"
-            })
+            .label(if es { "Vaciar Papelera" } else { "Empty Trash" })
             .action_name("win.empty_trash")
             .valign(Align::Center)
             .css_classes(["destructive-action"])
@@ -878,9 +881,7 @@ impl BranchesWindow {
             .build();
         controls_box.append(&window_controls_start);
 
-        let traffic_handle = WindowHandle::builder()
-            .child(&controls_box)
-            .build();
+        let traffic_handle = WindowHandle::builder().child(&controls_box).build();
         left_pane.append(&traffic_handle);
 
         sidebar.widget().set_vexpand(true);
@@ -926,7 +927,8 @@ impl BranchesWindow {
         root_overlay.set_child(Some(&hpaned));
         window.set_child(Some(&root_overlay));
 
-        let config_file = gio::File::for_path(malus_de_common::config::BranchesConfig::config_path());
+        let config_file =
+            gio::File::for_path(malus_de_common::config::BranchesConfig::config_path());
         let config_monitor = config_file
             .monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
             .ok();
@@ -1035,11 +1037,13 @@ impl BranchesWindow {
         });
 
         let bw_v4 = branches_window.clone();
-        branches_window.btn_gallery_view.connect_toggled(move |btn| {
-            if !bw_v4.syncing_ui.get() && btn.is_active() {
-                bw_v4.active_pane().set_view_mode("gallery");
-            }
-        });
+        branches_window
+            .btn_gallery_view
+            .connect_toggled(move |btn| {
+                if !bw_v4.syncing_ui.get() && btn.is_active() {
+                    bw_v4.active_pane().set_view_mode("gallery");
+                }
+            });
 
         // Conectar Split View toggle
         let bw_split = branches_window.clone();
@@ -1476,7 +1480,8 @@ impl BranchesWindow {
             }
         }
 
-        self.tab_stack.set_visible_child_name(&format!("tab-{tab_id}"));
+        self.tab_stack
+            .set_visible_child_name(&format!("tab-{tab_id}"));
         self.sync_active_tab_ui();
         self.refresh_all_cut_states();
     }
@@ -1716,37 +1721,40 @@ impl BranchesWindow {
                         .build();
                     vbox.append(&hdr);
 
-                    let wire_share_btn = |btn: &Button, target_id: String, d_ref: gtk4::Window, p_list: Vec<PathBuf>| {
-                        btn.connect_clicked(move |_| {
-                            d_ref.close();
-                            let id = target_id.clone();
-                            let send_paths = p_list.clone();
-                            std::thread::spawn(move || {
-                                if let Ok(conn) =
-                                    gio::bus_get_sync(gio::BusType::Session, gio::Cancellable::NONE)
-                                {
-                                    for p in send_paths {
-                                        let args = (
-                                            id.clone(),
-                                            p.to_string_lossy().into_owned(),
-                                        )
-                                            .to_variant();
-                                        let _ = conn.call_sync(
-                                            Some("org.malus_de.Link"),
-                                            "/org/malus_de/Link",
-                                            "org.malus_de.Link",
-                                            "ShareFile",
-                                            Some(&args),
-                                            None,
-                                            gio::DBusCallFlags::NONE,
-                                            5000,
-                                            gio::Cancellable::NONE,
-                                        );
+                    let wire_share_btn =
+                        |btn: &Button,
+                         target_id: String,
+                         d_ref: gtk4::Window,
+                         p_list: Vec<PathBuf>| {
+                            btn.connect_clicked(move |_| {
+                                d_ref.close();
+                                let id = target_id.clone();
+                                let send_paths = p_list.clone();
+                                std::thread::spawn(move || {
+                                    if let Ok(conn) = gio::bus_get_sync(
+                                        gio::BusType::Session,
+                                        gio::Cancellable::NONE,
+                                    ) {
+                                        for p in send_paths {
+                                            let args =
+                                                (id.clone(), p.to_string_lossy().into_owned())
+                                                    .to_variant();
+                                            let _ = conn.call_sync(
+                                                Some("org.malus_de.Link"),
+                                                "/org/malus_de/Link",
+                                                "org.malus_de.Link",
+                                                "ShareFile",
+                                                Some(&args),
+                                                None,
+                                                gio::DBusCallFlags::NONE,
+                                                5000,
+                                                gio::Cancellable::NONE,
+                                            );
+                                        }
                                     }
-                                }
+                                });
                             });
-                        });
-                    };
+                        };
 
                     for (dev_id, dev_name, battery) in &devices {
                         let label = if *battery == 0 {
@@ -1754,10 +1762,7 @@ impl BranchesWindow {
                         } else {
                             format!("{} ({}%)", dev_name, battery)
                         };
-                        let btn = Button::builder()
-                            .label(&label)
-                            .halign(Align::Fill)
-                            .build();
+                        let btn = Button::builder().label(&label).halign(Align::Fill).build();
                         wire_share_btn(&btn, dev_id.clone(), dialog.clone(), paths.clone());
                         vbox.append(&btn);
                     }
@@ -1981,8 +1986,11 @@ impl BranchesWindow {
             .set_visible(crate::operations::is_in_trash_dir(path));
 
         let free = get_free_space(path);
-        self.status_bar
-            .update(active.items_count(), active.get_selected_items().len(), &free);
+        self.status_bar.update(
+            active.items_count(),
+            active.get_selected_items().len(),
+            &free,
+        );
     }
 
     fn refresh_all_cut_states(&self) {
@@ -2078,7 +2086,8 @@ impl BranchesWindow {
         if sources.is_empty() {
             return;
         }
-        self.job_ui.start_job(JobRequest::Duplicate { sources }, false);
+        self.job_ui
+            .start_job(JobRequest::Duplicate { sources }, false);
     }
 
     fn duplicate_selected(&self) {
@@ -2149,11 +2158,7 @@ impl BranchesWindow {
         vbox.set_margin_start(18);
         vbox.set_margin_end(18);
 
-        let lbl = Label::builder()
-            .label(body)
-            .wrap(true)
-            .xalign(0.0)
-            .build();
+        let lbl = Label::builder().label(body).wrap(true).xalign(0.0).build();
         vbox.append(&lbl);
 
         let btns = GtkBox::new(Orientation::Horizontal, 8);
@@ -2196,16 +2201,26 @@ impl BranchesWindow {
             if es {
                 format!("¿Seguro que quieres eliminar «{}» permanentemente? Esta acción no se puede deshacer.", name)
             } else {
-                format!("Are you sure you want to permanently delete \"{}\"? This cannot be undone.", name)
+                format!(
+                    "Are you sure you want to permanently delete \"{}\"? This cannot be undone.",
+                    name
+                )
             }
         } else if es {
             format!("¿Seguro que quieres eliminar {} elementos permanentemente? Esta acción no se puede deshacer.", sources.len())
         } else {
-            format!("Are you sure you want to permanently delete {} items? This cannot be undone.", sources.len())
+            format!(
+                "Are you sure you want to permanently delete {} items? This cannot be undone.",
+                sources.len()
+            )
         };
         let bw = self.clone_ref();
         self.confirm_destructive_dialog(
-            if es { "Eliminar permanentemente" } else { "Delete Permanently" },
+            if es {
+                "Eliminar permanentemente"
+            } else {
+                "Delete Permanently"
+            },
             &body,
             if es { "Eliminar" } else { "Delete" },
             move || {
@@ -2242,7 +2257,10 @@ impl BranchesWindow {
         let body = if es {
             format!("¿Vaciar los {} elementos de la Papelera permanentemente? Esta acción no se puede deshacer.", count)
         } else {
-            format!("Permanently empty {} item(s) from the Trash? This cannot be undone.", count)
+            format!(
+                "Permanently empty {} item(s) from the Trash? This cannot be undone.",
+                count
+            )
         };
         let bw = self.clone_ref();
         self.confirm_destructive_dialog(
@@ -2322,8 +2340,7 @@ impl BranchesWindow {
         actions.add_action(&act_new_tab);
 
         let bw_open_tab = self.clone_ref();
-        let act_open_tab =
-            gio::SimpleAction::new("open_in_new_tab", Some(glib::VariantTy::STRING));
+        let act_open_tab = gio::SimpleAction::new("open_in_new_tab", Some(glib::VariantTy::STRING));
         act_open_tab.connect_activate(move |_, param| {
             if let Some(target) = param.and_then(|v| v.str()) {
                 bw_open_tab.open_target_in_new_tab(target);
@@ -2368,8 +2385,7 @@ impl BranchesWindow {
         actions.add_action(&act_dup);
 
         let bw_dup_item = self.clone_ref();
-        let act_dup_item =
-            gio::SimpleAction::new("duplicate_item", Some(glib::VariantTy::STRING));
+        let act_dup_item = gio::SimpleAction::new("duplicate_item", Some(glib::VariantTy::STRING));
         act_dup_item.connect_activate(move |_, param| {
             if let Some(target) = param.and_then(|v| v.str()) {
                 let paths = bw_dup_item.selected_paths_or(PathBuf::from(target));
@@ -2459,8 +2475,7 @@ impl BranchesWindow {
         actions.add_action(&act_comp_targz);
 
         let bw_comp_item = self.clone_ref();
-        let act_comp_item =
-            gio::SimpleAction::new("compress_item", Some(glib::VariantTy::STRING));
+        let act_comp_item = gio::SimpleAction::new("compress_item", Some(glib::VariantTy::STRING));
         act_comp_item.connect_activate(move |_, param| {
             if let Some(target) = param.and_then(|v| v.str()) {
                 let paths = bw_comp_item.selected_paths_or(PathBuf::from(target));
@@ -2510,8 +2525,7 @@ impl BranchesWindow {
         actions.add_action(&act_paste);
 
         let bw_copy_item = self.clone_ref();
-        let act_copy_item =
-            gio::SimpleAction::new("copy_item", Some(glib::VariantTy::STRING));
+        let act_copy_item = gio::SimpleAction::new("copy_item", Some(glib::VariantTy::STRING));
         act_copy_item.connect_activate(move |_, param| {
             if let Some(target) = param.and_then(|v| v.str()) {
                 bw_copy_item.copy_or_cut_item_with_selection(
@@ -2523,8 +2537,7 @@ impl BranchesWindow {
         actions.add_action(&act_copy_item);
 
         let bw_cut_item = self.clone_ref();
-        let act_cut_item =
-            gio::SimpleAction::new("cut_item", Some(glib::VariantTy::STRING));
+        let act_cut_item = gio::SimpleAction::new("cut_item", Some(glib::VariantTy::STRING));
         act_cut_item.connect_activate(move |_, param| {
             if let Some(target) = param.and_then(|v| v.str()) {
                 bw_cut_item.copy_or_cut_item_with_selection(
@@ -2536,8 +2549,7 @@ impl BranchesWindow {
         actions.add_action(&act_cut_item);
 
         let bw_paste_into = self.clone_ref();
-        let act_paste_into =
-            gio::SimpleAction::new("paste_into", Some(glib::VariantTy::STRING));
+        let act_paste_into = gio::SimpleAction::new("paste_into", Some(glib::VariantTy::STRING));
         act_paste_into.connect_activate(move |_, param| {
             if let Some(target) = param.and_then(|v| v.str()) {
                 bw_paste_into.paste_into_folder(PathBuf::from(target));
@@ -2553,8 +2565,7 @@ impl BranchesWindow {
         actions.add_action(&act_trash);
 
         let bw_trash_item = self.clone_ref();
-        let act_trash_item =
-            gio::SimpleAction::new("trash_item", Some(glib::VariantTy::STRING));
+        let act_trash_item = gio::SimpleAction::new("trash_item", Some(glib::VariantTy::STRING));
         act_trash_item.connect_activate(move |_, param| {
             if let Some(target) = param.and_then(|v| v.str()) {
                 let paths = bw_trash_item.selected_paths_or(PathBuf::from(target));
@@ -2650,12 +2661,13 @@ impl BranchesWindow {
         actions.add_action(&act_del_perm_item);
 
         let bw_toggle_tag = self.clone_ref();
-        let act_toggle_tag =
-            gio::SimpleAction::new("toggle_tag", Some(glib::VariantTy::STRING));
+        let act_toggle_tag = gio::SimpleAction::new("toggle_tag", Some(glib::VariantTy::STRING));
         act_toggle_tag.connect_activate(move |_, param| {
             if let Some(tag_id) = param.and_then(|v| v.str()) {
                 let paths = bw_toggle_tag.selected_paths();
-                bw_toggle_tag.active_pane().toggle_tag_on_paths(tag_id, &paths);
+                bw_toggle_tag
+                    .active_pane()
+                    .toggle_tag_on_paths(tag_id, &paths);
             }
         });
         actions.add_action(&act_toggle_tag);
@@ -2735,7 +2747,10 @@ impl BranchesWindow {
             } else {
                 bw_email.active_pane().current_path()
             };
-            let mailto = format!("mailto:?subject=Compartido desde Malus DE&body={}", path.to_string_lossy());
+            let mailto = format!(
+                "mailto:?subject=Compartido desde Malus DE&body={}",
+                path.to_string_lossy()
+            );
             let mut cmd = std::process::Command::new("xdg-open");
             cmd.arg(mailto);
             malus_de_common::config::apply_isolated_environment(&mut cmd);
@@ -2744,16 +2759,14 @@ impl BranchesWindow {
         actions.add_action(&act_email);
 
         let bw_rec = self.clone_ref();
-        self.search_recursive_action.connect_activate(move |act, _| {
-            let next = !act
-                .state()
-                .and_then(|v| v.get::<bool>())
-                .unwrap_or(false);
-            act.set_state(&next.to_variant());
-            if !bw_rec.syncing_ui.get() {
-                bw_rec.active_pane().set_search_recursive(next);
-            }
-        });
+        self.search_recursive_action
+            .connect_activate(move |act, _| {
+                let next = !act.state().and_then(|v| v.get::<bool>()).unwrap_or(false);
+                act.set_state(&next.to_variant());
+                if !bw_rec.syncing_ui.get() {
+                    bw_rec.active_pane().set_search_recursive(next);
+                }
+            });
         actions.add_action(&self.search_recursive_action);
 
         let bw_conn = self.clone_ref();
@@ -2786,15 +2799,17 @@ impl BranchesWindow {
         key_controller.connect_key_pressed(move |_, keyval, _keycode, state| {
             let is_alt = state.contains(gdk::ModifierType::ALT_MASK);
             let is_ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
-            let is_command = state.intersects(
-                gdk::ModifierType::SUPER_MASK | gdk::ModifierType::META_MASK,
-            );
+            let is_command =
+                state.intersects(gdk::ModifierType::SUPER_MASK | gdk::ModifierType::META_MASK);
             let is_shift = state.contains(gdk::ModifierType::SHIFT_MASK);
 
             if bw.quick_look.is_open() {
                 if !is_ctrl
                     && !is_alt
-                    && matches!(keyval, gdk::Key::space | gdk::Key::KP_Space | gdk::Key::Escape)
+                    && matches!(
+                        keyval,
+                        gdk::Key::space | gdk::Key::KP_Space | gdk::Key::Escape
+                    )
                 {
                     bw.quick_look.close();
                     return glib::Propagation::Stop;
@@ -2824,20 +2839,17 @@ impl BranchesWindow {
                 return glib::Propagation::Stop;
             }
 
-            if is_ctrl && !is_alt && !is_shift && (keyval == gdk::Key::t || keyval == gdk::Key::T)
-            {
+            if is_ctrl && !is_alt && !is_shift && (keyval == gdk::Key::t || keyval == gdk::Key::T) {
                 bw.open_new_tab_matching_active();
                 return glib::Propagation::Stop;
             }
 
-            if is_ctrl && !is_alt && !is_shift && (keyval == gdk::Key::w || keyval == gdk::Key::W)
-            {
+            if is_ctrl && !is_alt && !is_shift && (keyval == gdk::Key::w || keyval == gdk::Key::W) {
                 bw.close_active_tab();
                 return glib::Propagation::Stop;
             }
 
-            if is_ctrl && !is_alt && (keyval == gdk::Key::Tab || keyval == gdk::Key::ISO_Left_Tab)
-            {
+            if is_ctrl && !is_alt && (keyval == gdk::Key::Tab || keyval == gdk::Key::ISO_Left_Tab) {
                 bw.cycle_tab(if is_shift { -1 } else { 1 });
                 return glib::Propagation::Stop;
             }
@@ -2866,7 +2878,9 @@ impl BranchesWindow {
                 return glib::Propagation::Stop;
             }
 
-            if (is_ctrl || is_command) && !is_alt && !is_shift
+            if (is_ctrl || is_command)
+                && !is_alt
+                && !is_shift
                 && (keyval == gdk::Key::k || keyval == gdk::Key::K)
             {
                 let bw_nav = bw.clone_ref();
@@ -2923,10 +2937,7 @@ impl BranchesWindow {
                 && !is_shift
                 && matches!(
                     keyval,
-                    gdk::Key::F2
-                        | gdk::Key::Return
-                        | gdk::Key::KP_Enter
-                        | gdk::Key::ISO_Enter
+                    gdk::Key::F2 | gdk::Key::Return | gdk::Key::KP_Enter | gdk::Key::ISO_Enter
                 )
             {
                 if focus_in_sidebar {
@@ -2964,7 +2975,9 @@ impl BranchesWindow {
                 bw.active_pane().go_forward();
                 return glib::Propagation::Stop;
             }
-            if (is_alt && keyval == gdk::Key::Up) || (!focus_is_editable && keyval == gdk::Key::BackSpace) {
+            if (is_alt && keyval == gdk::Key::Up)
+                || (!focus_is_editable && keyval == gdk::Key::BackSpace)
+            {
                 bw.active_pane().go_up();
                 return glib::Propagation::Stop;
             }
@@ -2972,7 +2985,9 @@ impl BranchesWindow {
                 bw.active_pane().toggle_hidden();
                 return glib::Propagation::Stop;
             }
-            if (is_ctrl && (keyval == gdk::Key::r || keyval == gdk::Key::R)) || keyval == gdk::Key::F5 {
+            if (is_ctrl && (keyval == gdk::Key::r || keyval == gdk::Key::R))
+                || keyval == gdk::Key::F5
+            {
                 bw.active_pane().reload();
                 return glib::Propagation::Stop;
             }
@@ -3003,7 +3018,11 @@ impl BranchesWindow {
                 }
             }
 
-            if (is_ctrl || is_command) && !is_alt && !is_shift && (keyval == gdk::Key::d || keyval == gdk::Key::D) {
+            if (is_ctrl || is_command)
+                && !is_alt
+                && !is_shift
+                && (keyval == gdk::Key::d || keyval == gdk::Key::D)
+            {
                 bw.duplicate_selected();
                 return glib::Propagation::Stop;
             }
@@ -3061,9 +3080,17 @@ impl BranchesWindow {
         self.search_anim_gen.set(next_gen);
 
         let btn_h = self.search_toggle_btn.height();
-        let target_h = if btn_h > 0 { btn_h } else { BRANCHES_SEARCH_HEIGHT };
+        let target_h = if btn_h > 0 {
+            btn_h
+        } else {
+            BRANCHES_SEARCH_HEIGHT
+        };
         let btn_w = self.search_toggle_btn.width();
-        let collapsed_w = if btn_w > 0 { btn_w } else { BRANCHES_SEARCH_COLLAPSED_WIDTH };
+        let collapsed_w = if btn_w > 0 {
+            btn_w
+        } else {
+            BRANCHES_SEARCH_COLLAPSED_WIDTH
+        };
         self.search_shell.set_height_request(target_h);
         self.search_entry.set_height_request(target_h);
 

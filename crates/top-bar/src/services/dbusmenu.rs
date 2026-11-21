@@ -202,7 +202,10 @@ impl DbusMenuService {
             });
 
             if let Err(e) = rt {
-                warn!("Aviso al registrar com.canonical.AppMenu.Registrar: {:?}", e);
+                warn!(
+                    "Aviso al registrar com.canonical.AppMenu.Registrar: {:?}",
+                    e
+                );
             }
         });
     }
@@ -380,8 +383,8 @@ fn parse_raw_item_from_value(val: &Value) -> Option<DbusMenuItem> {
             _ => return None,
         };
 
-        let item_type = extract_string_from_dict(&fields[1], "type")
-            .unwrap_or_else(|| "standard".to_string());
+        let item_type =
+            extract_string_from_dict(&fields[1], "type").unwrap_or_else(|| "standard".to_string());
         let is_separator = item_type == "separator";
 
         let label_raw = extract_string_from_dict(&fields[1], "label").unwrap_or_default();
@@ -394,8 +397,8 @@ fn parse_raw_item_from_value(val: &Value) -> Option<DbusMenuItem> {
             return None;
         }
 
-        let shortcut = extract_value_from_dict(&fields[1], "shortcut")
-            .and_then(parse_shortcut_value);
+        let shortcut =
+            extract_value_from_dict(&fields[1], "shortcut").and_then(parse_shortcut_value);
         let toggle_type = extract_string_from_dict(&fields[1], "toggle-type");
         let toggle_state = extract_i32_from_dict(&fields[1], "toggle-state").unwrap_or(0);
 
@@ -533,24 +536,27 @@ mod tests {
     fn test_clean_menu_label() {
         assert_eq!(clean_menu_label("_Archivo"), "Archivo");
         assert_eq!(clean_menu_label("Guardar _como..."), "Guardar como...");
-        assert_eq!(clean_menu_label("P_referencias del Sistema"), "Preferencias del Sistema");
+        assert_eq!(
+            clean_menu_label("P_referencias del Sistema"),
+            "Preferencias del Sistema"
+        );
         assert_eq!(clean_menu_label("Escape__Under"), "Escape_Under");
     }
 
     #[test]
     fn test_parse_shortcut_value() {
-        let keys_val = Value::Array(vec![
-            Value::from("Control"),
-            Value::from("s"),
-        ].into());
+        let keys_val = Value::Array(vec![Value::from("Control"), Value::from("s")].into());
         let outer_val = Value::Array(vec![keys_val].into());
         assert_eq!(parse_shortcut_value(&outer_val), Some("⌘S".to_string()));
 
-        let keys_val2 = Value::Array(vec![
-            Value::from("Control"),
-            Value::from("Shift"),
-            Value::from("p"),
-        ].into());
+        let keys_val2 = Value::Array(
+            vec![
+                Value::from("Control"),
+                Value::from("Shift"),
+                Value::from("p"),
+            ]
+            .into(),
+        );
         let outer_val2 = Value::Array(vec![keys_val2].into());
         assert_eq!(parse_shortcut_value(&outer_val2), Some("⌘⇧P".to_string()));
     }
@@ -559,15 +565,23 @@ mod tests {
     fn test_registrar_mapping() {
         let (service, _registrar) = DbusMenuService::new();
         let path = OwnedObjectPath::try_from("/MenuBar/1").unwrap();
-        
+
         let reg = RegisteredMenu {
             window_id: 1234,
             service: ":1.99".to_string(),
             path: path.as_str().to_string(),
         };
 
-        service.registrations_by_window.lock().unwrap().insert(1234, reg.clone());
-        service.registrations_by_service.lock().unwrap().insert(":1.99".to_string(), reg);
+        service
+            .registrations_by_window
+            .lock()
+            .unwrap()
+            .insert(1234, reg.clone());
+        service
+            .registrations_by_service
+            .lock()
+            .unwrap()
+            .insert(":1.99".to_string(), reg);
 
         let found = service.find_menu(Some(1234), Some("my-app"));
         assert_eq!(found, Some((":1.99".to_string(), "/MenuBar/1".to_string())));
@@ -581,7 +595,11 @@ mod tests {
             service: ":1.99".to_string(),
             path: "/MenuBar/1".to_string(),
         };
-        service.registrations_by_service.lock().unwrap().insert(reg.service.clone(), reg);
+        service
+            .registrations_by_service
+            .lock()
+            .unwrap()
+            .insert(reg.service.clone(), reg);
 
         assert_eq!(service.find_menu(None, Some("code")), None);
     }
@@ -594,7 +612,11 @@ mod tests {
             service: "org.example.Editor".to_string(),
             path: "/MenuBar/1".to_string(),
         };
-        service.registrations_by_service.lock().unwrap().insert(reg.service.clone(), reg);
+        service
+            .registrations_by_service
+            .lock()
+            .unwrap()
+            .insert(reg.service.clone(), reg);
 
         assert_eq!(
             service.find_menu(None, Some("org.example.Editor.desktop")),

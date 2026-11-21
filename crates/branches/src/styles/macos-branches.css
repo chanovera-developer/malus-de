@@ -8,6 +8,17 @@ window.branches-window {
     color: @window_fg_color;
 }
 
+window.branches-window popover .popover-menu-item:hover:not(:disabled),
+window.branches-window popover .popover-menu-item:active:not(:disabled),
+window.branches-window popover modelbutton:hover:not(:disabled),
+window.branches-window popover modelbutton:selected:not(:disabled),
+window.branches-window popover .popover-menu-item:hover:not(:disabled) *,
+window.branches-window popover .popover-menu-item:active:not(:disabled) *,
+window.branches-window popover modelbutton:hover:not(:disabled) *,
+window.branches-window popover modelbutton:selected:not(:disabled) * {
+    color: #ffffff;
+}
+
 /* ========================================================= */
 /* PANEL IZQUIERDO (Barra lateral) - SEMITRANSPARENTE ACRÍLICO */
 /* ========================================================= */
@@ -130,7 +141,7 @@ paned:not(.branches-split-paned) > separator {
 }
 
 .branches-sidebar-row-favorite .branches-sidebar-icon {
-    color: #0a84ff;
+    color: @accent_bg_color;
 }
 
 .branches-sidebar-row-location .branches-sidebar-icon {
@@ -1274,6 +1285,4 @@ button.branches-context-tag-clear-btn {
     margin-left: 2px;
     border-radius: 50%;
 }
-
-
 

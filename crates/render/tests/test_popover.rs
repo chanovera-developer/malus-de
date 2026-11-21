@@ -109,9 +109,8 @@ fn test_popover_rendering_and_png_export() {
     let width = 340u32;
     let height = 380u32;
 
-    let mut renderer =
-        SquircleRenderer::new_headless(wgpu::TextureFormat::Rgba8Unorm)
-            .expect("Error al inicializar SquircleRenderer headless");
+    let mut renderer = SquircleRenderer::new_headless(wgpu::TextureFormat::Rgba8Unorm)
+        .expect("Error al inicializar SquircleRenderer headless");
     let mut text_system =
         TextSystem::new(&renderer.device, &renderer.queue, renderer.target_format);
 
@@ -121,9 +120,8 @@ fn test_popover_rendering_and_png_export() {
     let mut model_apple = PopoverMenuModel::apple_menu(30.0, 20.0);
     model_apple.hovered_index = Some(10); // "Apagar el Equipo..." (índice 10) resaltado en azul como en menu-bar.jpg
 
-    let nodes_apple =
-        build_popover_menu(&mut ui_apple, &config, &model_apple)
-            .expect("Error al construir popover Apple");
+    let nodes_apple = build_popover_menu(&mut ui_apple, &config, &model_apple)
+        .expect("Error al construir popover Apple");
     ui_apple.set_root(nodes_apple.root_container);
 
     ui_apple
@@ -135,11 +133,20 @@ fn test_popover_rendering_and_png_export() {
 
     println!("Instances count: {}", instances_apple.len());
     for (i, inst) in instances_apple.iter().enumerate() {
-        println!("inst[{}]: pos={:?} size={:?} bg={:?} border_w={}", i, inst.position, inst.size, inst.bg_color, inst.border_width);
+        println!(
+            "inst[{}]: pos={:?} size={:?} bg={:?} border_w={}",
+            i, inst.position, inst.size, inst.bg_color, inst.border_width
+        );
     }
 
-    assert!(nodes_apple.outer_shadow.is_some(), "La sombra debe estar activada para profundidad macOS");
-    assert!(nodes_apple.inner_shadow.is_none(), "La sombra debe ser una sola sombra, no multicapa");
+    assert!(
+        nodes_apple.outer_shadow.is_some(),
+        "La sombra debe estar activada para profundidad macOS"
+    );
+    assert!(
+        nodes_apple.inner_shadow.is_none(),
+        "La sombra debe ser una sola sombra, no multicapa"
+    );
     assert!(
         !instances_apple.is_empty(),
         "Debe haber instancias generadas para el popover (tarjeta + ítems)"
@@ -167,12 +174,17 @@ fn test_popover_rendering_and_png_export() {
     let mut encoder = png::Encoder::new(w, width, height);
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header().expect("Error al escribir cabecera PNG");
+    let mut writer = encoder
+        .write_header()
+        .expect("Error al escribir cabecera PNG");
     writer
         .write_image_data(&rgba_apple)
         .expect("Error al escribir datos PNG");
 
-    assert!(out_apple.exists(), "El archivo PNG del menú Apple debe existir");
+    assert!(
+        out_apple.exists(),
+        "El archivo PNG del menú Apple debe existir"
+    );
 
     // 2. Renderizar Popover con Ítem Activo en Hover ("Archivo" -> "Guardar")
     let mut ui_file = UiTree::new();
@@ -180,9 +192,8 @@ fn test_popover_rendering_and_png_export() {
     // Simular hover sobre el ítem 4 ("Guardar")
     model_file.hovered_index = Some(4);
 
-    let nodes_file =
-        build_popover_menu(&mut ui_file, &config, &model_file)
-            .expect("Error al construir popover Archivo");
+    let nodes_file = build_popover_menu(&mut ui_file, &config, &model_file)
+        .expect("Error al construir popover Archivo");
     ui_file.set_root(nodes_file.root_container);
 
     ui_file
@@ -209,12 +220,17 @@ fn test_popover_rendering_and_png_export() {
     let mut encoder_f = png::Encoder::new(w_f, width, height);
     encoder_f.set_color(png::ColorType::Rgba);
     encoder_f.set_depth(png::BitDepth::Eight);
-    let mut writer_f = encoder_f.write_header().expect("Error al escribir cabecera PNG");
+    let mut writer_f = encoder_f
+        .write_header()
+        .expect("Error al escribir cabecera PNG");
     writer_f
         .write_image_data(&rgba_file)
         .expect("Error al escribir datos PNG");
 
-    assert!(out_file.exists(), "El archivo PNG del menú Archivo debe existir");
+    assert!(
+        out_file.exists(),
+        "El archivo PNG del menú Archivo debe existir"
+    );
 }
 
 #[test]
@@ -222,9 +238,8 @@ fn test_control_center_and_tray_rendering_and_png_export() {
     let width = 360u32;
     let height = 480u32;
 
-    let mut renderer =
-        SquircleRenderer::new_headless(wgpu::TextureFormat::Rgba8Unorm)
-            .expect("Error al inicializar SquircleRenderer headless");
+    let mut renderer = SquircleRenderer::new_headless(wgpu::TextureFormat::Rgba8Unorm)
+        .expect("Error al inicializar SquircleRenderer headless");
     let mut text_system =
         TextSystem::new(&renderer.device, &renderer.queue, renderer.target_format);
 
@@ -233,9 +248,8 @@ fn test_control_center_and_tray_rendering_and_png_export() {
     let config = PopoverConfig::default();
     let model_cc = PopoverMenuModel::control_center_popover(20.0, 20.0);
 
-    let nodes_cc =
-        build_popover_menu(&mut ui_cc, &config, &model_cc)
-            .expect("Error al construir Centro de Control");
+    let nodes_cc = build_popover_menu(&mut ui_cc, &config, &model_cc)
+        .expect("Error al construir Centro de Control");
     ui_cc.set_root(nodes_cc.root_container);
 
     ui_cc
@@ -267,20 +281,24 @@ fn test_control_center_and_tray_rendering_and_png_export() {
     let mut encoder_cc = png::Encoder::new(w_cc, width, height);
     encoder_cc.set_color(png::ColorType::Rgba);
     encoder_cc.set_depth(png::BitDepth::Eight);
-    let mut writer_cc = encoder_cc.write_header().expect("Error al escribir cabecera PNG");
+    let mut writer_cc = encoder_cc
+        .write_header()
+        .expect("Error al escribir cabecera PNG");
     writer_cc
         .write_image_data(&rgba_cc)
         .expect("Error al escribir datos PNG");
 
-    assert!(out_cc.exists(), "El archivo PNG del Centro de Control debe existir");
+    assert!(
+        out_cc.exists(),
+        "El archivo PNG del Centro de Control debe existir"
+    );
 
     // 2. Renderizar Bandeja del Sistema flotante (estilo Bartender)
     let mut ui_tray = UiTree::new();
     let model_tray = PopoverMenuModel::tray_popover(20.0, 20.0, &[]);
 
-    let nodes_tray =
-        build_popover_menu(&mut ui_tray, &config, &model_tray)
-            .expect("Error al construir Bandeja del Sistema");
+    let nodes_tray = build_popover_menu(&mut ui_tray, &config, &model_tray)
+        .expect("Error al construir Bandeja del Sistema");
     ui_tray.set_root(nodes_tray.root_container);
 
     ui_tray
@@ -307,10 +325,15 @@ fn test_control_center_and_tray_rendering_and_png_export() {
     let mut encoder_tray = png::Encoder::new(w_tray, width, height);
     encoder_tray.set_color(png::ColorType::Rgba);
     encoder_tray.set_depth(png::BitDepth::Eight);
-    let mut writer_tray = encoder_tray.write_header().expect("Error al escribir cabecera PNG");
+    let mut writer_tray = encoder_tray
+        .write_header()
+        .expect("Error al escribir cabecera PNG");
     writer_tray
         .write_image_data(&rgba_tray)
         .expect("Error al escribir datos PNG");
 
-    assert!(out_tray.exists(), "El archivo PNG de la Bandeja debe existir");
+    assert!(
+        out_tray.exists(),
+        "El archivo PNG de la Bandeja debe existir"
+    );
 }

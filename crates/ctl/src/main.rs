@@ -130,9 +130,7 @@ enum DisplaysAction {
         preset: u8,
     },
     /// Establece la escala maestra (ej. 1.5, 1.6667, 2.0) y recalcula todas las pantallas 1:1
-    SetScale {
-        scale: f64,
-    },
+    SetScale { scale: f64 },
     /// Establece la escala de un monitor específico por índice
     SetOutputScale {
         /// Índice del monitor según el orden de `malus-de-ctl displays status`
@@ -143,14 +141,9 @@ enum DisplaysAction {
     /// Intercambia el orden horizontal (Izquierda <-> Derecha) de las pantallas
     SwapOrder,
     /// Alinea verticalmente las pantallas ('top', 'center', 'bottom', 'desk')
-    Align {
-        mode: String,
-    },
+    Align { mode: String },
     /// Define la diagonal real en pulgadas para una pantalla (ej. 'DP-1 27.0')
-    SetDiagonal {
-        connector: String,
-        inches: f64,
-    },
+    SetDiagonal { connector: String, inches: f64 },
     /// Establece el radio de curvatura squircle de las esquinas del escritorio (border-radius en px)
     SetRadius {
         /// Radio en puntos lógicos (ej. 0.0 para recto, 32.0 por defecto)
@@ -272,7 +265,10 @@ fn main() -> Result<()> {
                 println!("Consultando perfil actual en power-profiles-daemon...");
                 let out = Command::new("powerprofilesctl").arg("get").output();
                 if let Ok(o) = out {
-                    println!("Perfil activo: {}", String::from_utf8_lossy(&o.stdout).trim());
+                    println!(
+                        "Perfil activo: {}",
+                        String::from_utf8_lossy(&o.stdout).trim()
+                    );
                 } else {
                     println!("Perfil activo: balanced (local fallback)");
                 }
@@ -287,7 +283,9 @@ fn main() -> Result<()> {
         Commands::Workspace { action } => match action {
             WorkspaceAction::Next => println!("Navegando al siguiente espacio de trabajo..."),
             WorkspaceAction::Prev => println!("Navegando al espacio de trabajo anterior..."),
-            WorkspaceAction::Goto { index } => println!("Saltando al espacio de trabajo #{}", index),
+            WorkspaceAction::Goto { index } => {
+                println!("Saltando al espacio de trabajo #{}", index)
+            }
         },
         Commands::Spotlight => {
             println!("Abriendo búsqueda universal Spotlight (Super + Espacio)...");
@@ -335,20 +333,39 @@ fn main() -> Result<()> {
                                 let raw: String = reply.body().deserialize().unwrap_or_default();
                                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
                                     println!("📡 AirDrop (Malus Link / owly)");
-                                    println!("   Modo:        {}", v["mode"].as_str().unwrap_or("off"));
-                                    println!("   Radio AWDL:  {}", v["radio_state"].as_str().unwrap_or("off"));
+                                    println!(
+                                        "   Modo:        {}",
+                                        v["mode"].as_str().unwrap_or("off")
+                                    );
+                                    println!(
+                                        "   Radio AWDL:  {}",
+                                        v["radio_state"].as_str().unwrap_or("off")
+                                    );
                                     let rem = v["remaining_seconds"].as_u64().unwrap_or(0);
                                     if rem > 0 {
                                         println!("   Restante:    {}m {:02}s", rem / 60, rem % 60);
                                     }
-                                    println!("   Nombre:      {}", v["device_name"].as_str().unwrap_or("Malus DE"));
-                                    println!("   Descargas:   {}", v["downloads_dir"].as_str().unwrap_or("~/Descargas"));
+                                    println!(
+                                        "   Nombre:      {}",
+                                        v["device_name"].as_str().unwrap_or("Malus DE")
+                                    );
+                                    println!(
+                                        "   Descargas:   {}",
+                                        v["downloads_dir"].as_str().unwrap_or("~/Descargas")
+                                    );
                                     println!(
                                         "   Hardware:    {} (modo: {}, interfaz: {}, canal: {})",
-                                        if v["hardware_ready"].as_bool().unwrap_or(false) { "Listo ✅" } else { "No listo ❌" },
+                                        if v["hardware_ready"].as_bool().unwrap_or(false) {
+                                            "Listo ✅"
+                                        } else {
+                                            "No listo ❌"
+                                        },
                                         v["radio_mode"].as_str().unwrap_or("-"),
                                         v["station"].as_str().unwrap_or("-"),
-                                        v["channel"].as_u64().map(|c| c.to_string()).unwrap_or_else(|| "-".to_string())
+                                        v["channel"]
+                                            .as_u64()
+                                            .map(|c| c.to_string())
+                                            .unwrap_or_else(|| "-".to_string())
                                     );
                                     if let Some(err) = v["last_error"].as_str() {
                                         println!("   Aviso:       {}", err);
@@ -402,12 +419,17 @@ fn main() -> Result<()> {
                             )
                             .await
                         {
-                            Ok(_) => println!("⏹ AirDrop desactivado. Radio AWDL liberado y Wi-Fi restaurado."),
+                            Ok(_) => println!(
+                                "⏹ AirDrop desactivado. Radio AWDL liberado y Wi-Fi restaurado."
+                            ),
                             Err(err) => eprintln!("❌ Error D-Bus: {}", err),
                         }
                     }
                     AirDropAction::Scan { seconds } => {
-                        println!("🔍 Buscando dispositivos Apple cercanos durante {}s...", seconds);
+                        println!(
+                            "🔍 Buscando dispositivos Apple cercanos durante {}s...",
+                            seconds
+                        );
                         match conn
                             .call_method(
                                 Some("org.malus_de.Link"),
@@ -460,7 +482,10 @@ fn main() -> Result<()> {
                         }
                     }
                     AirDropAction::SendUrl { url, to } => {
-                        println!("🔗 Enviando enlace '{}' vía AirDrop (destino: {})...", url, to);
+                        println!(
+                            "🔗 Enviando enlace '{}' vía AirDrop (destino: {})...",
+                            url, to
+                        );
                         match conn
                             .call_method(
                                 Some("org.malus_de.Link"),
@@ -488,7 +513,10 @@ fn main() -> Result<()> {
         }
         Commands::Reload { component } => {
             let comp = component.as_deref().unwrap_or("all");
-            println!("🔄 Recargando componentes de interfaz de Malus DE (modo: {})...", comp);
+            println!(
+                "🔄 Recargando componentes de interfaz de Malus DE (modo: {})...",
+                comp
+            );
             let bin_dir = std::env::current_exe()
                 .ok()
                 .and_then(|p| p.parent().map(|p| p.to_path_buf()))
@@ -507,7 +535,8 @@ fn main() -> Result<()> {
                 ],
             };
 
-            let wayland_disp = std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-1".to_string());
+            let wayland_disp =
+                std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-1".to_string());
             for binary in targets {
                 println!("  ↳ Reiniciando {}...", binary);
                 let _ = Command::new("killall").arg("-9").arg(binary).status();
@@ -532,28 +561,71 @@ fn main() -> Result<()> {
                     println!("╔═══════════════════════════════════════════════════════════════════════════════╗");
                     println!("║             🖥  MALUS DE: ESTADO FÍSICO Y MATEMÁTICO DE PANTALLAS              ║");
                     println!("╚═══════════════════════════════════════════════════════════════════════════════╝");
-                    println!(" 🔗 Enlace Físico 1:1 (TrueSize Link): {}", if cfg.linked_physical_1to1 { "ACTIVADO ✅" } else { "DESACTIVADO ❌" });
-                    println!(" 🎯 Escala Maestra Principal: {:.4} ({:.1}%)", cfg.master_scale, cfg.master_scale * 100.0);
-                    println!(" 📐 Radio de Esquinas (Border-Radius Pantallas): {:.1} px", cfg.screen_corner_radius);
-                    println!(" 🪟 Radio de Esquinas (Border-Radius Ventanas):   {:.1} px", cfg.window_corner_radius);
+                    println!(
+                        " 🔗 Enlace Físico 1:1 (TrueSize Link): {}",
+                        if cfg.linked_physical_1to1 {
+                            "ACTIVADO ✅"
+                        } else {
+                            "DESACTIVADO ❌"
+                        }
+                    );
+                    println!(
+                        " 🎯 Escala Maestra Principal: {:.4} ({:.1}%)",
+                        cfg.master_scale,
+                        cfg.master_scale * 100.0
+                    );
+                    println!(
+                        " 📐 Radio de Esquinas (Border-Radius Pantallas): {:.1} px",
+                        cfg.screen_corner_radius
+                    );
+                    println!(
+                        " 🪟 Radio de Esquinas (Border-Radius Ventanas):   {:.1} px",
+                        cfg.window_corner_radius
+                    );
                     println!("─────────────────────────────────────────────────────────────────────────────────");
                     for (i, o) in cfg.outputs.iter().enumerate() {
                         let (lw, lh) = o.logical_size();
                         let primary_badge = if o.primary { " [PRIMARIO]" } else { "" };
-                        println!(" Monitor #{}: {} ({}){}", i + 1, o.name, o.connector, primary_badge);
+                        println!(
+                            " Monitor #{}: {} ({}){}",
+                            i + 1,
+                            o.name,
+                            o.connector,
+                            primary_badge
+                        );
                         if let (Some(diag), Some(ppi), Some((w_mm, h_mm))) =
                             (o.effective_diagonal(), o.ppi(), o.physical_size_mm())
                         {
                             println!("   • Panel Físico:   {:.1}\" diagonal | {:.1} x {:.1} mm | {:.2} PPI", diag, w_mm, h_mm, ppi);
-                            println!("   • Resolución:     {}x{} física @ {:.1} Hz", o.width, o.height, o.refresh_rate);
-                            println!("   • Escala Activa:  {:.4}x ({:.1}%)", o.scale, o.scale * 100.0);
-                            println!("   • Espacio Lógico: {}x{} en coords ({}, {})", lw, lh, o.x, o.y);
+                            println!(
+                                "   • Resolución:     {}x{} física @ {:.1} Hz",
+                                o.width, o.height, o.refresh_rate
+                            );
+                            println!(
+                                "   • Escala Activa:  {:.4}x ({:.1}%)",
+                                o.scale,
+                                o.scale * 100.0
+                            );
+                            println!(
+                                "   • Espacio Lógico: {}x{} en coords ({}, {})",
+                                lw, lh, o.x, o.y
+                            );
                             println!("   • Densidad Real:  100 puntos lógicos = {:.1} mm reales en vidrio", (100.0 * o.scale / ppi) * 25.4);
                         } else {
                             println!("   • Panel Físico:   Tamaño físico desconocido (sin EDID ni diagonal manual)");
-                            println!("   • Resolución:     {}x{} física @ {:.1} Hz", o.width, o.height, o.refresh_rate);
-                            println!("   • Escala Activa:  {:.4}x ({:.1}%)", o.scale, o.scale * 100.0);
-                            println!("   • Espacio Lógico: {}x{} en coords ({}, {})", lw, lh, o.x, o.y);
+                            println!(
+                                "   • Resolución:     {}x{} física @ {:.1} Hz",
+                                o.width, o.height, o.refresh_rate
+                            );
+                            println!(
+                                "   • Escala Activa:  {:.4}x ({:.1}%)",
+                                o.scale,
+                                o.scale * 100.0
+                            );
+                            println!(
+                                "   • Espacio Lógico: {}x{} en coords ({}, {})",
+                                lw, lh, o.x, o.y
+                            );
                         }
                         println!();
                     }
@@ -580,7 +652,10 @@ fn main() -> Result<()> {
                 }
                 DisplaysAction::LinkPreset { preset } => {
                     if preset != 1 && preset != 2 {
-                        eprintln!("Preset inválido ({}). Solo están disponibles los ajustes 1 y 2:", preset);
+                        eprintln!(
+                            "Preset inválido ({}). Solo están disponibles los ajustes 1 y 2:",
+                            preset
+                        );
                         eprintln!("  1: Escala base equilibrada (150% en la pantalla principal)");
                         eprintln!("  2: Más espacio de trabajo (133% en la pantalla principal)");
                         return Ok(());
@@ -592,10 +667,23 @@ fn main() -> Result<()> {
                     let _ = malus_de_common::ipc::IpcClient::send_command(
                         malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig,
                     );
-                    println!("✨ Ajuste #{} de enlace de resolución aplicado exitosamente:", preset);
+                    println!(
+                        "✨ Ajuste #{} de enlace de resolución aplicado exitosamente:",
+                        preset
+                    );
                     for o in &cfg.outputs {
                         let (lw, lh) = o.logical_size();
-                        println!("   ↳ {} ({}): {:.4}x ({:.2}%) -> {}×{} en coords ({}, {})", o.name, o.connector, o.scale, o.scale * 100.0, lw, lh, o.x, o.y);
+                        println!(
+                            "   ↳ {} ({}): {:.4}x ({:.2}%) -> {}×{} en coords ({}, {})",
+                            o.name,
+                            o.connector,
+                            o.scale,
+                            o.scale * 100.0,
+                            lw,
+                            lh,
+                            o.x,
+                            o.y
+                        );
                     }
                 }
                 DisplaysAction::SetScale { scale } => {
@@ -610,9 +698,21 @@ fn main() -> Result<()> {
                     let _ = malus_de_common::ipc::IpcClient::send_command(
                         malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig,
                     );
-                    println!("✨ Escala maestra actualizada a {:.4}x ({:.1}%).", scale, scale * 100.0);
+                    println!(
+                        "✨ Escala maestra actualizada a {:.4}x ({:.1}%).",
+                        scale,
+                        scale * 100.0
+                    );
                     for o in &cfg.outputs {
-                        println!("   ↳ {} ({}): {:.4}x ({:.1}%) en ({}, {})", o.name, o.connector, o.scale, o.scale * 100.0, o.x, o.y);
+                        println!(
+                            "   ↳ {} ({}): {:.4}x ({:.1}%) en ({}, {})",
+                            o.name,
+                            o.connector,
+                            o.scale,
+                            o.scale * 100.0,
+                            o.x,
+                            o.y
+                        );
                     }
                 }
                 DisplaysAction::SetOutputScale { index, scale } => {
@@ -627,9 +727,20 @@ fn main() -> Result<()> {
                     let _ = malus_de_common::ipc::IpcClient::send_command(
                         malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig,
                     );
-                    println!("✨ Escala de monitor #{} actualizada (linked_1to1={}).", index, cfg.linked_physical_1to1);
+                    println!(
+                        "✨ Escala de monitor #{} actualizada (linked_1to1={}).",
+                        index, cfg.linked_physical_1to1
+                    );
                     for o in &cfg.outputs {
-                        println!("   ↳ {} ({}): {:.4}x ({:.1}%) en ({}, {})", o.name, o.connector, o.scale, o.scale * 100.0, o.x, o.y);
+                        println!(
+                            "   ↳ {} ({}): {:.4}x ({:.1}%) en ({}, {})",
+                            o.name,
+                            o.connector,
+                            o.scale,
+                            o.scale * 100.0,
+                            o.x,
+                            o.y
+                        );
                     }
                 }
                 DisplaysAction::SwapOrder => {
@@ -659,9 +770,16 @@ fn main() -> Result<()> {
                     }
                 }
                 DisplaysAction::SetDiagonal { connector, inches } => {
-                    if let Some(o) = cfg.outputs.iter_mut().find(|o| o.connector.eq_ignore_ascii_case(&connector)) {
+                    if let Some(o) = cfg
+                        .outputs
+                        .iter_mut()
+                        .find(|o| o.connector.eq_ignore_ascii_case(&connector))
+                    {
                         o.diagonal_inches = Some(inches);
-                        println!("📐 Diagonal del monitor {} actualizada a {:.1} pulgadas.", connector, inches);
+                        println!(
+                            "📐 Diagonal del monitor {} actualizada a {:.1} pulgadas.",
+                            connector, inches
+                        );
                         if cfg.linked_physical_1to1 {
                             cfg.apply_1to1_link();
                         } else {
@@ -679,7 +797,10 @@ fn main() -> Result<()> {
                 }
                 DisplaysAction::SetRadius { radius } => {
                     if radius < 0.0 || radius > 100.0 {
-                        eprintln!("Radio fuera de rango permitido (0.0 - 100.0 px): {}", radius);
+                        eprintln!(
+                            "Radio fuera de rango permitido (0.0 - 100.0 px): {}",
+                            radius
+                        );
                         return Ok(());
                     }
                     cfg.screen_corner_radius = radius;
@@ -689,11 +810,17 @@ fn main() -> Result<()> {
                     let _ = malus_de_common::ipc::IpcClient::send_command(
                         malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig,
                     );
-                    println!("✨ Border-radius de las pantallas actualizado a {:.1} px.", radius);
+                    println!(
+                        "✨ Border-radius de las pantallas actualizado a {:.1} px.",
+                        radius
+                    );
                 }
                 DisplaysAction::SetWindowRadius { radius } => {
                     if radius < 0.0 || radius > 100.0 {
-                        eprintln!("Radio fuera de rango permitido (0.0 - 100.0 px): {}", radius);
+                        eprintln!(
+                            "Radio fuera de rango permitido (0.0 - 100.0 px): {}",
+                            radius
+                        );
                         return Ok(());
                     }
                     cfg.window_corner_radius = radius;
@@ -703,14 +830,21 @@ fn main() -> Result<()> {
                     let _ = malus_de_common::ipc::IpcClient::send_command(
                         malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig,
                     );
-                    println!("✨ Border-radius de las ventanas actualizado a {:.1} px.", radius);
+                    println!(
+                        "✨ Border-radius de las ventanas actualizado a {:.1} px.",
+                        radius
+                    );
                 }
             }
         }
         Commands::Keyboard { action } => match action {
             KeyboardAction::Status => {
                 let cfg = malus_de_common::config::InputConfig::load();
-                println!("⌨️  Distribución XKB activa: '{}' ({})", cfg.keyboard_layout, cfg.layout_display_name());
+                println!(
+                    "⌨️  Distribución XKB activa: '{}' ({})",
+                    cfg.keyboard_layout,
+                    cfg.layout_display_name()
+                );
                 println!("   • Variante: '{}'", cfg.keyboard_variant);
                 println!("   • Modelo:   '{}'", cfg.keyboard_model);
             }
@@ -736,7 +870,9 @@ fn main() -> Result<()> {
         },
         Commands::DismissAppSwitcher => {
             println!("Descartando selector visual de aplicaciones (App Switcher)...");
-            let _ = malus_de_common::ipc::send_ipc_message(&malus_de_common::ipc::IpcMessage::HideAppSwitcher);
+            let _ = malus_de_common::ipc::send_ipc_message(
+                &malus_de_common::ipc::IpcMessage::HideAppSwitcher,
+            );
         }
         Commands::Theme { action } => {
             let is_dark_now = malus_de_common::config::is_dark_mode_active();
@@ -745,19 +881,29 @@ fn main() -> Result<()> {
                 Some(ThemeAction::Light) => false,
                 Some(ThemeAction::Toggle) | None => !is_dark_now,
                 Some(ThemeAction::Status) => {
-                    println!("Modo de apariencia: {}", if is_dark_now { "oscuro" } else { "claro" });
+                    println!(
+                        "Modo de apariencia: {}",
+                        if is_dark_now { "oscuro" } else { "claro" }
+                    );
                     return Ok(());
                 }
             };
 
-            println!("🎨 Cambiando modo de apariencia a: {}", if to_dark { "oscuro" } else { "claro" });
+            println!(
+                "🎨 Cambiando modo de apariencia a: {}",
+                if to_dark { "oscuro" } else { "claro" }
+            );
             let _ = malus_de_common::ipc::IpcClient::prepare_theme_transition();
             malus_de_common::config::sync_system_appearance(to_dark);
             let _ = malus_de_common::ipc::IpcClient::send_command(
                 malus_de_common::ipc::IpcMessage::ThemeChanged {
-                    theme_name: if to_dark { "Adwaita-Dark".to_string() } else { "Adwaita-Light".to_string() },
+                    theme_name: if to_dark {
+                        "Adwaita-Dark".to_string()
+                    } else {
+                        "Adwaita-Light".to_string()
+                    },
                     is_dark: to_dark,
-                }
+                },
             );
             println!("✓ Apariencia sincronizada exitosamente en el sistema y componentes.");
         }

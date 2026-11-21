@@ -4,8 +4,9 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 pub fn init_logging(crate_name: &str) {
     crate::crash::install_panic_hook(crate_name);
 
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(format!("{crate_name}=debug,malus_de_common=debug,info")));
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(format!("{crate_name}=debug,malus_de_common=debug,info"))
+    });
 
     tracing_subscriber::registry()
         .with(env_filter)

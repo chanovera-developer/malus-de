@@ -80,7 +80,9 @@ fn main() -> Result<()> {
     let protocol_lock = match lock_protocol::SessionLockGuard::acquire() {
         Ok(guard) => guard,
         Err(lock_protocol::LockRejection::AlreadyLocked) => {
-            tracing::warn!("La sesión ya cuenta con un bloqueo ext-session-lock-v1 activo; saliendo.");
+            tracing::warn!(
+                "La sesión ya cuenta con un bloqueo ext-session-lock-v1 activo; saliendo."
+            );
             return Ok(());
         }
         Err(lock_protocol::LockRejection::ConnectionFailed(err)) => {
@@ -159,8 +161,7 @@ fn enumerate_monitors(display: &gtk4::gdk::Display) -> (Vec<gtk4::gdk::Monitor>,
                     return true;
                 }
                 if monitor.description().is_some_and(|description| {
-                    description.contains(&config.name)
-                        || description.contains(&config.connector)
+                    description.contains(&config.name) || description.contains(&config.connector)
                 }) {
                     return true;
                 }
@@ -281,7 +282,10 @@ fn paint_frosted_backdrop(
     if cr.save().is_ok() {
         cr.translate(-(bounds.x() as f64), -(bounds.y() as f64));
         cr.scale(sx, sy);
-        if cr.set_source_surface(&assets.blurred_surface, 0.0, 0.0).is_ok() {
+        if cr
+            .set_source_surface(&assets.blurred_surface, 0.0, 0.0)
+            .is_ok()
+        {
             cr.source().set_filter(gtk4::cairo::Filter::Bilinear);
             let _ = cr.paint();
         }
@@ -305,10 +309,7 @@ fn create_squircle_entry_shell(
         .css_classes(["lock-squircle-shell"])
         .build();
 
-    let bg = DrawingArea::builder()
-        .hexpand(true)
-        .vexpand(true)
-        .build();
+    let bg = DrawingArea::builder().hexpand(true).vexpand(true).build();
     let entry_focus = entry.clone();
     let err_flag = is_error.clone();
     let shell_weak = shell.downgrade();
@@ -393,10 +394,7 @@ fn create_squircle_button_shell(
         .build();
 
     let hovered = Rc::new(Cell::new(false));
-    let bg = DrawingArea::builder()
-        .hexpand(true)
-        .vexpand(true)
-        .build();
+    let bg = DrawingArea::builder().hexpand(true).vexpand(true).build();
     let hov_draw = hovered.clone();
     let btn_draw = btn.clone();
     let shell_weak = shell.downgrade();
@@ -517,9 +515,21 @@ fn create_animated_avatar_widget(username: &str, scale_progress: &Rc<Cell<f64>>)
                 let _ = cr.paint();
                 // Silueta simple si no hay foto configurada
                 cr.set_source_rgba(1.0, 1.0, 1.0, 0.90);
-                cr.arc(cx, cy - radius * 0.20, radius * 0.28, 0.0, std::f64::consts::TAU);
+                cr.arc(
+                    cx,
+                    cy - radius * 0.20,
+                    radius * 0.28,
+                    0.0,
+                    std::f64::consts::TAU,
+                );
                 let _ = cr.fill();
-                cr.arc(cx, cy + radius * 0.72, radius * 0.56, std::f64::consts::PI, std::f64::consts::TAU);
+                cr.arc(
+                    cx,
+                    cy + radius * 0.72,
+                    radius * 0.56,
+                    std::f64::consts::PI,
+                    std::f64::consts::TAU,
+                );
                 let _ = cr.fill();
             }
             let _ = cr.restore();
@@ -765,10 +775,7 @@ fn build_lock_window(
         })
         .unwrap_or((1920, 1080));
 
-    let root_overlay = Overlay::builder()
-        .hexpand(true)
-        .vexpand(true)
-        .build();
+    let root_overlay = Overlay::builder().hexpand(true).vexpand(true).build();
 
     let assets = blur_bg::build_lock_wallpaper_assets(mon_w, mon_h);
     if let Some(ref wp) = assets {
@@ -983,10 +990,10 @@ fn build_lock_window(
                     b.set_margin_bottom(lift);
 
                     // El avatar crece con resorte Sequoia de 38px a 58px
-                    let cur_sz =
-                        (AVATAR_START_SIZE + (AVATAR_END_SIZE - AVATAR_START_SIZE) * spring)
-                            .round()
-                            .max(AVATAR_START_SIZE) as i32;
+                    let cur_sz = (AVATAR_START_SIZE
+                        + (AVATAR_END_SIZE - AVATAR_START_SIZE) * spring)
+                        .round()
+                        .max(AVATAR_START_SIZE) as i32;
                     avatar_tick.set_size_request(cur_sz, cur_sz);
                     prog_tick.set(spring);
                     avatar_tick.queue_draw();
@@ -1037,7 +1044,10 @@ fn build_lock_window(
                 rev_key();
                 return glib::Propagation::Proceed;
             }
-            if key == gtk4::gdk::Key::Escape && pwd_key.text().is_empty() && !state_key.verifying.get() {
+            if key == gtk4::gdk::Key::Escape
+                && pwd_key.text().is_empty()
+                && !state_key.verifying.get()
+            {
                 state_key.revealed.set(false);
                 box_key.set_visible(false);
                 box_key.set_opacity(0.0);

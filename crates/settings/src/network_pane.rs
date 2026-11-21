@@ -196,7 +196,10 @@ pub fn create_network_panes(
     parent_window: &ApplicationWindow,
     open_wifi: Rc<dyn Fn()>,
     open_firewall: Rc<dyn Fn()>,
-) -> ((ScrolledWindow, Rc<dyn Fn()>), (ScrolledWindow, Rc<dyn Fn()>)) {
+) -> (
+    (ScrolledWindow, Rc<dyn Fn()>),
+    (ScrolledWindow, Rc<dyn Fn()>),
+) {
     let latest_snap = Rc::new(RefCell::new(NetworkOverviewSnapshot::default()));
     let reload_lock = Rc::new(Cell::new(false));
 
@@ -228,7 +231,12 @@ pub fn create_network_panes(
 
     // Tarjeta 1: Wi-Fi -> navega a panel Wi-Fi
     let (wifi_row_btn, wifi_dot_lbl, wifi_sub_lbl) = build_nav_service_card_row(
-        make_squircle_badge(32, "network-wireless-symbolic", 17, WIFI_BADGE_SQUIRCLE_RADIUS),
+        make_squircle_badge(
+            32,
+            "network-wireless-symbolic",
+            17,
+            WIFI_BADGE_SQUIRCLE_RADIUS,
+        ),
         "Wi-Fi",
         "Conectado",
         ServiceDotState::Connected,
@@ -237,7 +245,10 @@ pub fn create_network_panes(
     wifi_row_btn.connect_clicked(move |_| open_wifi_c());
     let wifi_card_box = GtkBox::builder().orientation(Orientation::Vertical).build();
     wifi_card_box.append(&wifi_row_btn);
-    net_pane.append(&wrap_squircle_card(&wifi_card_box, WIFI_CARD_SQUIRCLE_RADIUS));
+    net_pane.append(&wrap_squircle_card(
+        &wifi_card_box,
+        WIFI_CARD_SQUIRCLE_RADIUS,
+    ));
 
     // Tarjeta 2: Firewall -> navega a subvista Firewall
     let (fw_row_btn, fw_dot_lbl, fw_sub_lbl) = build_nav_service_card_row(
@@ -272,7 +283,10 @@ pub fn create_network_panes(
         .orientation(Orientation::Vertical)
         .spacing(0)
         .build();
-    net_pane.append(&wrap_squircle_card(&other_list_box, WIFI_CARD_SQUIRCLE_RADIUS));
+    net_pane.append(&wrap_squircle_card(
+        &other_list_box,
+        WIFI_CARD_SQUIRCLE_RADIUS,
+    ));
 
     // Fila inferior derecha: [ ••• ⌄ ] [ ? ]
     let bottom_actions = GtkBox::builder()
@@ -396,7 +410,10 @@ pub fn create_network_panes(
     fw_warn_row.append(&fw_warn_lbl);
     fw_hero_card.append(&fw_warn_row);
 
-    fw_pane.append(&wrap_squircle_card(&fw_hero_card, WIFI_CARD_SQUIRCLE_RADIUS));
+    fw_pane.append(&wrap_squircle_card(
+        &fw_hero_card,
+        WIFI_CARD_SQUIRCLE_RADIUS,
+    ));
 
     // Botones "Opciones..." y "?" bajo la tarjeta del Firewall (Red01.png)
     let fw_actions = GtkBox::builder()
@@ -576,12 +593,8 @@ pub fn create_network_panes(
 
     // Conectar menú [••• ⌄] de Red00.png
     {
-        let pop = build_network_actions_popover(
-            parent_window,
-            &latest_snap,
-            &net_banner,
-            &run_reload,
-        );
+        let pop =
+            build_network_actions_popover(parent_window, &latest_snap, &net_banner, &run_reload);
         more_menu_btn.set_popover(Some(&pop));
     }
 
@@ -949,7 +962,11 @@ fn show_service_details_dialog(
     card.append(&detail_kv_row("Servicio", &svc.display_name));
     card.append(&detail_kv_row(
         "Interfaz",
-        if svc.device.is_empty() { "Virtual / Sin asignar" } else { &svc.device },
+        if svc.device.is_empty() {
+            "Virtual / Sin asignar"
+        } else {
+            &svc.device
+        },
     ));
     card.append(&detail_kv_row("Tipo", &svc.dev_type));
     card.append(&detail_kv_row("Estado", &svc.status_label));
@@ -978,7 +995,11 @@ fn show_service_details_dialog(
     if !svc.connection_name.is_empty() {
         let is_connected = svc.dot == ServiceDotState::Connected;
         let (toggle_wrap, toggle_btn) = make_squircle_button(
-            if is_connected { "Desactivar" } else { "Conectar" },
+            if is_connected {
+                "Desactivar"
+            } else {
+                "Conectar"
+            },
             false,
             None,
         );
@@ -1286,9 +1307,14 @@ fn show_service_order_dialog(
         std::thread::spawn(move || {
             for (i, conn_name) in final_items.iter().enumerate() {
                 let metric = ((i as i32 + 1) * 100).to_string();
-                if let Err(e) =
-                    run_nmcli(&["connection", "modify", "id", conn_name, "ipv4.route-metric", &metric])
-                {
+                if let Err(e) = run_nmcli(&[
+                    "connection",
+                    "modify",
+                    "id",
+                    conn_name,
+                    "ipv4.route-metric",
+                    &metric,
+                ]) {
                     let _ = tx.send_blocking(Err(e));
                     return;
                 }
@@ -1348,7 +1374,10 @@ fn show_locations_dialog(parent: &ApplicationWindow) {
             .unwrap_or(0) as u32;
         (model, selected_idx)
     };
-    let dd = DropDown::builder().model(&model).selected(selected_idx).build();
+    let dd = DropDown::builder()
+        .model(&model)
+        .selected(selected_idx)
+        .build();
 
     card.append(
         &Label::builder()
@@ -1709,13 +1738,8 @@ fn show_firewall_options_dialog(
 
         let (tx, rx) = async_channel::bounded::<Result<(), String>>(1);
         std::thread::spawn(move || {
-            let res = apply_firewall_options_batch(
-                &old_snap,
-                &prev_zone,
-                block_all,
-                stealth,
-                &new_rules,
-            );
+            let res =
+                apply_firewall_options_batch(&old_snap, &prev_zone, block_all, stealth, &new_rules);
             let _ = tx.send_blocking(res);
         });
 
@@ -1976,7 +2000,11 @@ fn run_firewall_cmd(args: &[&str]) -> Result<String, String> {
 }
 
 fn set_firewalld_enabled(enable: bool) -> Result<(), String> {
-    let action = if enable { "enable --now" } else { "disable --now" };
+    let action = if enable {
+        "enable --now"
+    } else {
+        "disable --now"
+    };
     let script = format!("systemctl {action} firewalld");
     let out = Command::new("pkexec")
         .args(["sh", "-c", &script])
@@ -2020,10 +2048,14 @@ fn apply_firewall_options_batch(
     if stealth != old_snap.stealth_mode {
         let z_flag = format!("--zone={}", shell_escape_simple(&target_zone));
         if stealth {
-            cmds.push(format!("firewall-cmd --permanent {z_flag} --add-icmp-block=echo-request"));
+            cmds.push(format!(
+                "firewall-cmd --permanent {z_flag} --add-icmp-block=echo-request"
+            ));
             cmds.push("sysctl -w net.ipv4.icmp_echo_ignore_all=1".to_string());
         } else {
-            cmds.push(format!("firewall-cmd --permanent {z_flag} --remove-icmp-block=echo-request"));
+            cmds.push(format!(
+                "firewall-cmd --permanent {z_flag} --remove-icmp-block=echo-request"
+            ));
             cmds.push("sysctl -w net.ipv4.icmp_echo_ignore_all=0".to_string());
         }
     }
@@ -2100,7 +2132,10 @@ fn shell_escape_simple(s: &str) -> String {
 }
 
 pub(crate) fn is_port_spec(s: &str) -> bool {
-    s.contains('/') && s.split('/').next().is_some_and(|p| p.chars().all(|c| c.is_ascii_digit() || c == '-'))
+    s.contains('/')
+        && s.split('/')
+            .next()
+            .is_some_and(|p| p.chars().all(|c| c.is_ascii_digit() || c == '-'))
 }
 
 pub(crate) fn map_binary_to_firewalld_service(name: &str) -> Option<String> {
@@ -2158,14 +2193,21 @@ fn collect_network_snapshot() -> NetworkOverviewSnapshot {
     if snap.nm_available {
         let dev_raw =
             run_nmcli(&["-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device"]).unwrap_or_default();
-        let conn_raw =
-            run_nmcli(&["-t", "-f", "NAME,TYPE,DEVICE,AUTOCONNECT", "connection", "show"])
-                .unwrap_or_default();
+        let conn_raw = run_nmcli(&[
+            "-t",
+            "-f",
+            "NAME,TYPE,DEVICE,AUTOCONNECT",
+            "connection",
+            "show",
+        ])
+        .unwrap_or_default();
         let mut services = parse_other_network_services(&dev_raw, &conn_raw);
 
         for svc in &mut services {
             if !svc.device.is_empty() {
-                if let Ok(det) = run_nmcli(&["-t", "-f", "GENERAL,IP4", "device", "show", &svc.device]) {
+                if let Ok(det) =
+                    run_nmcli(&["-t", "-f", "GENERAL,IP4", "device", "show", &svc.device])
+                {
                     enrich_service_device_details(svc, &det);
                 }
             }
@@ -2345,7 +2387,10 @@ pub(crate) fn parse_other_network_services(
         let ctype = &parts[1];
         let device = &parts[2];
         let auto = parts[3].eq_ignore_ascii_case("yes");
-        if ctype.contains("wireless") || ctype == "loopback" || ctype == "vpn" || ctype == "wireguard"
+        if ctype.contains("wireless")
+            || ctype == "loopback"
+            || ctype == "vpn"
+            || ctype == "wireguard"
         {
             continue;
         }
@@ -2379,9 +2424,11 @@ pub(crate) fn parse_other_network_services(
             ServiceDotState::Disconnected => 2,
             ServiceDotState::Unavailable => 3,
         };
-        rank(a.dot)
-            .cmp(&rank(b.dot))
-            .then_with(|| a.display_name.to_lowercase().cmp(&b.display_name.to_lowercase()))
+        rank(a.dot).cmp(&rank(b.dot)).then_with(|| {
+            a.display_name
+                .to_lowercase()
+                .cmp(&b.display_name.to_lowercase())
+        })
     });
     services
 }
@@ -2412,7 +2459,10 @@ fn friendly_service_label_and_icon(dev: &str, dev_type: &str, conn: &str) -> (St
         };
         (title, "network-wired-symbolic".to_string())
     } else if dev_type == "gsm" || dev_type == "cdma" {
-        ("Red móvil".to_string(), "network-cellular-symbolic".to_string())
+        (
+            "Red móvil".to_string(),
+            "network-cellular-symbolic".to_string(),
+        )
     } else {
         let title = if !conn.is_empty() {
             conn.to_string()
@@ -2474,8 +2524,13 @@ mod tests {
         let conns = "Mega_5G:802-11-wireless:wlp4s0:yes\nPuente Thunderbolt:bridge::no\nOficina Ethernet:802-3-ethernet:enp6s0:yes\n";
         let parsed = parse_other_network_services(devs, conns);
         assert_eq!(parsed.len(), 2);
-        assert!(parsed.iter().all(|s| s.dev_type != "wifi" && s.dev_type != "loopback"));
-        let tb = parsed.iter().find(|s| s.display_name == "Puente Thunderbolt").unwrap();
+        assert!(parsed
+            .iter()
+            .all(|s| s.dev_type != "wifi" && s.dev_type != "loopback"));
+        let tb = parsed
+            .iter()
+            .find(|s| s.display_name == "Puente Thunderbolt")
+            .unwrap();
         assert_eq!(tb.icon_name, "thunderbolt-symbolic");
         assert_eq!(tb.dot, ServiceDotState::Disconnected);
         assert_eq!(tb.status_label, "Sin conexión");
@@ -2483,9 +2538,18 @@ mod tests {
 
     #[test]
     fn merges_firewalld_rules_and_maps_common_daemons() {
-        assert_eq!(map_binary_to_firewalld_service("cupsd").as_deref(), Some("ipp"));
-        assert_eq!(map_binary_to_firewalld_service("smbd").as_deref(), Some("samba"));
-        assert_eq!(map_binary_to_firewalld_service("8080/tcp").as_deref(), Some("8080/tcp"));
+        assert_eq!(
+            map_binary_to_firewalld_service("cupsd").as_deref(),
+            Some("ipp")
+        );
+        assert_eq!(
+            map_binary_to_firewalld_service("smbd").as_deref(),
+            Some("samba")
+        );
+        assert_eq!(
+            map_binary_to_firewalld_service("8080/tcp").as_deref(),
+            Some("8080/tcp")
+        );
 
         let open_svcs = vec!["ssh".to_string(), "mdns".to_string()];
         let open_ports = vec!["8080/tcp".to_string()];

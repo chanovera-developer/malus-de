@@ -1,9 +1,3 @@
-use std::collections::{HashMap, HashSet};
-use std::os::unix::io::OwnedFd;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
 use crate::cpu_priority::FocusCpuPriority;
 use malus_de_common::config::{AppSwitcherStyle, DockConfig};
 use smithay::{
@@ -37,11 +31,11 @@ use smithay::{
         buffer::BufferHandler,
         compositor::{CompositorClientState, CompositorHandler, CompositorState},
         dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
-        session_lock::{
-            LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker,
+        fractional_scale::{
+            with_fractional_scale, FractionalScaleHandler, FractionalScaleManagerState,
         },
-        fractional_scale::{with_fractional_scale, FractionalScaleHandler, FractionalScaleManagerState},
         output::{OutputHandler, OutputManagerState},
+        seat::WaylandFocus,
         selection::{
             data_device::{
                 set_data_device_focus, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState,
@@ -53,19 +47,21 @@ use smithay::{
             wlr_data_control::{DataControlHandler, DataControlState},
             SelectionHandler,
         },
+        session_lock::{LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker},
         shell::{
-            wlr_layer::{
-                Layer, LayerSurface, WlrLayerShellHandler, WlrLayerShellState,
-            },
-            xdg::{
-                PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
-            },
+            wlr_layer::{Layer, LayerSurface, WlrLayerShellHandler, WlrLayerShellState},
+            xdg::{PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState},
         },
-        seat::WaylandFocus,
         shm::{ShmHandler, ShmState},
         viewporter::ViewporterState,
     },
 };
+use std::collections::{HashMap, HashSet};
+use std::os::unix::io::OwnedFd;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use malus_de_common::ipc::{AppSwitcherItem, IpcBroadcaster, IpcMessage};
 
@@ -132,12 +128,19 @@ impl SnapTransition {
         // Curva cúbica ease-out: despegue reactivo con frenado suave y elegante al aterrizar
         let p = 1.0 - (1.0 - progress).powi(3);
 
-        let cur_x = (self.start_loc.x as f64 + (self.target_loc.x - self.start_loc.x) as f64 * p).round() as i32;
-        let cur_y = (self.start_loc.y as f64 + (self.target_loc.y - self.start_loc.y) as f64 * p).round() as i32;
-        let cur_w = (self.start_size.w as f64 + (self.target_size.w - self.start_size.w) as f64 * p).round() as i32;
-        let cur_h = (self.start_size.h as f64 + (self.target_size.h - self.start_size.h) as f64 * p).round() as i32;
+        let cur_x = (self.start_loc.x as f64 + (self.target_loc.x - self.start_loc.x) as f64 * p)
+            .round() as i32;
+        let cur_y = (self.start_loc.y as f64 + (self.target_loc.y - self.start_loc.y) as f64 * p)
+            .round() as i32;
+        let cur_w = (self.start_size.w as f64 + (self.target_size.w - self.start_size.w) as f64 * p)
+            .round() as i32;
+        let cur_h = (self.start_size.h as f64 + (self.target_size.h - self.start_size.h) as f64 * p)
+            .round() as i32;
 
-        (Point::from((cur_x, cur_y)), Size::from((cur_w.max(1), cur_h.max(1))))
+        (
+            Point::from((cur_x, cur_y)),
+            Size::from((cur_w.max(1), cur_h.max(1))),
+        )
     }
 
     pub fn is_finished(&self, now: Instant) -> bool {
@@ -290,8 +293,9 @@ pub struct MalusState {
     pub dock_slots: HashMap<u64, Rectangle<i32, Logical>>,
     pub active_animations: Vec<GenieAnimation>,
     pub close_button_hints: HashMap<WlSurface, (Point<f64, Logical>, Instant)>,
-    pub renderer_context_id:
-        Option<smithay::backend::renderer::ContextId<smithay::backend::renderer::gles::GlesTexture>>,
+    pub renderer_context_id: Option<
+        smithay::backend::renderer::ContextId<smithay::backend::renderer::gles::GlesTexture>,
+    >,
     pub cached_close_snapshots:
         HashMap<WlSurface, (Vec<crate::black_hole::CachedSurfaceLayer>, Instant)>,
     pub pending_black_holes: Vec<crate::black_hole::PendingBlackHoleClose>,
@@ -311,7 +315,8 @@ pub struct MalusState {
     pub pending_drm_hotplug: bool,
     pub saved_app_window_sizes: HashMap<String, Size<i32, Logical>>,
     pub dock_blur_headroom: i32,
-    pub pending_screenshot_requests: std::collections::VecDeque<(std::path::PathBuf, Option<String>)>,
+    pub pending_screenshot_requests:
+        std::collections::VecDeque<(std::path::PathBuf, Option<String>)>,
     pub pending_theme_transition_capture: Option<ThemeTransitionCapture>,
     pub theme_transition_started_at: Option<Instant>,
     pub pending_workspace_switch: Option<crate::workspace_transition::PendingWorkspaceSwitch>,
@@ -339,15 +344,30 @@ pub fn guess_icon_name(app_id: &str, title: &str) -> String {
     let app = app_id.to_lowercase();
     let tit = title.to_lowercase();
 
-    if app.contains("nautilus") || app.contains("archivos") || tit.contains("archivos") || tit.contains("carpetas") {
+    if app.contains("nautilus")
+        || app.contains("archivos")
+        || tit.contains("archivos")
+        || tit.contains("carpetas")
+    {
         "org.gnome.Nautilus".to_string()
     } else if app.contains("ptyxis") || app.contains("terminal") || tit.contains("terminal") {
         "org.gnome.Ptyxis".to_string()
-    } else if app.contains("calculator") || app.contains("calculadora") || tit.contains("calculadora") {
+    } else if app.contains("calculator")
+        || app.contains("calculadora")
+        || tit.contains("calculadora")
+    {
         "org.gnome.Calculator".to_string()
-    } else if app.contains("texteditor") || app.contains("text-editor") || app.contains("gedit") || tit.contains("editor") {
+    } else if app.contains("texteditor")
+        || app.contains("text-editor")
+        || app.contains("gedit")
+        || tit.contains("editor")
+    {
         "org.gnome.TextEditor".to_string()
-    } else if app.contains("control-center") || app.contains("settings") || app.contains("configuración") || app.contains("configuracion") {
+    } else if app.contains("control-center")
+        || app.contains("settings")
+        || app.contains("configuración")
+        || app.contains("configuracion")
+    {
         "preferences-system".to_string()
     } else if app.contains("firefox") {
         "firefox".to_string()
@@ -362,7 +382,10 @@ pub fn guess_icon_name(app_id: &str, title: &str) -> String {
 
 pub fn toplevel_info(surface: &WlSurface) -> (Option<String>, Option<String>) {
     smithay::wayland::compositor::with_states(surface, |states| {
-        if let Some(mutex) = states.data_map.get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>() {
+        if let Some(mutex) = states
+            .data_map
+            .get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>()
+        {
             let role = mutex.lock().unwrap();
             (role.app_id.clone(), role.title.clone())
         } else {
@@ -410,11 +433,8 @@ fn matches_app_target(target_lower: &str, app_id: Option<&str>, title: Option<&s
     false
 }
 
-pub const PRIMARY_SHELL_LAYER_NAMESPACES: &[&str] = &[
-    "malus-top-bar",
-    "malus-dock",
-    "malus-app-switcher",
-];
+pub const PRIMARY_SHELL_LAYER_NAMESPACES: &[&str] =
+    &["malus-top-bar", "malus-dock", "malus-app-switcher"];
 
 pub fn is_primary_shell_layer_namespace(namespace: &str) -> bool {
     PRIMARY_SHELL_LAYER_NAMESPACES.contains(&namespace)
@@ -451,7 +471,10 @@ pub fn max_window_size_in_usable_zone(
     usable: Rectangle<i32, Logical>,
     ssd_top: i32,
 ) -> Size<i32, Logical> {
-    Size::from((usable.size.w.max(1), (usable.size.h - ssd_top.max(0)).max(1)))
+    Size::from((
+        usable.size.w.max(1),
+        (usable.size.h - ssd_top.max(0)).max(1),
+    ))
 }
 
 /// Recorta un tamaño recordado o solicitado para que nunca exceda `max_bounds`.
@@ -692,7 +715,6 @@ pub fn is_translucent_window(window: &smithay::desktop::Window) -> bool {
     false
 }
 
-
 fn parse_color_scheme(settings: &str) -> Option<bool> {
     let mut in_interface_section = false;
     for line in settings.lines().map(str::trim) {
@@ -719,12 +741,15 @@ fn settings_keyfile_path() -> Option<PathBuf> {
     Some(config_home.join("glib-2.0/settings/keyfile"))
 }
 
-fn read_system_dark_mode(settings_path: & std::path::Path) -> Option<bool> {
+fn read_system_dark_mode(settings_path: &std::path::Path) -> Option<bool> {
     match std::fs::read_to_string(settings_path) {
         Ok(settings) => parse_color_scheme(&settings),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {
-            tracing::warn!("No se pudo leer el tema GTK en {:?}: {error}", settings_path);
+            tracing::warn!(
+                "No se pudo leer el tema GTK en {:?}: {error}",
+                settings_path
+            );
             None
         }
     }
@@ -735,7 +760,9 @@ pub fn is_dark_color_scheme() -> bool {
     static THEME_CACHE: OnceLock<Mutex<Option<(Instant, Option<std::time::SystemTime>, bool)>>> =
         OnceLock::new();
     let cache = THEME_CACHE.get_or_init(|| Mutex::new(None));
-    let mut cached_theme = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut cached_theme = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
 
     let should_refresh = cached_theme
         .as_ref()
@@ -754,12 +781,17 @@ pub fn is_dark_color_scheme() -> bool {
                 .or_else(|| cached_theme.as_ref().map(|(_, _, is_dark)| *is_dark))
                 .unwrap_or(false)
         } else {
-            cached_theme.as_ref().map(|(_, _, is_dark)| *is_dark).unwrap_or(false)
+            cached_theme
+                .as_ref()
+                .map(|(_, _, is_dark)| *is_dark)
+                .unwrap_or(false)
         };
         *cached_theme = Some((Instant::now(), current_mtime, is_dark));
     }
 
-    cached_theme.as_ref().is_some_and(|(_, _, is_dark)| *is_dark)
+    cached_theme
+        .as_ref()
+        .is_some_and(|(_, _, is_dark)| *is_dark)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -825,7 +857,11 @@ pub fn snap_target_geometry(
     mode: SnapMode,
     usable_zone: Rectangle<i32, Logical>,
     ssd_top: i32,
-) -> (Point<i32, Logical>, Option<Size<i32, Logical>>, Vec<XdgState>) {
+) -> (
+    Point<i32, Logical>,
+    Option<Size<i32, Logical>>,
+    Vec<XdgState>,
+) {
     let ux = usable_zone.loc.x;
     let uy = usable_zone.loc.y;
     let uw = usable_zone.size.w;
@@ -844,23 +880,43 @@ pub fn snap_target_geometry(
     match mode {
         SnapMode::LeftHalf => {
             let (x, w) = split_interval(ux, uw, 0, 1, 2);
-            (Point::from((x, full_y)), Some(Size::from((w, full_h))), vec![XdgState::TiledLeft])
+            (
+                Point::from((x, full_y)),
+                Some(Size::from((w, full_h))),
+                vec![XdgState::TiledLeft],
+            )
         }
         SnapMode::RightHalf => {
             let (x, w) = split_interval(ux, uw, 1, 2, 2);
-            (Point::from((x, full_y)), Some(Size::from((w, full_h))), vec![XdgState::TiledRight])
+            (
+                Point::from((x, full_y)),
+                Some(Size::from((w, full_h))),
+                vec![XdgState::TiledRight],
+            )
         }
         SnapMode::LeftTwoThirds => {
             let (x, w) = split_interval(ux, uw, 0, 2, 3);
-            (Point::from((x, full_y)), Some(Size::from((w, full_h))), vec![XdgState::TiledLeft])
+            (
+                Point::from((x, full_y)),
+                Some(Size::from((w, full_h))),
+                vec![XdgState::TiledLeft],
+            )
         }
         SnapMode::RightOneThird => {
             let (x, w) = split_interval(ux, uw, 2, 3, 3);
-            (Point::from((x, full_y)), Some(Size::from((w, full_h))), vec![XdgState::TiledRight])
+            (
+                Point::from((x, full_y)),
+                Some(Size::from((w, full_h))),
+                vec![XdgState::TiledRight],
+            )
         }
         SnapMode::LeftThird => {
             let (x, w) = split_interval(ux, uw, 0, 1, 3);
-            (Point::from((x, full_y)), Some(Size::from((w, full_h))), vec![XdgState::TiledLeft])
+            (
+                Point::from((x, full_y)),
+                Some(Size::from((w, full_h))),
+                vec![XdgState::TiledLeft],
+            )
         }
         SnapMode::CenterThird => {
             let (x, w) = split_interval(ux, uw, 1, 2, 3);
@@ -872,7 +928,11 @@ pub fn snap_target_geometry(
         }
         SnapMode::RightThird => {
             let (x, w) = split_interval(ux, uw, 2, 3, 3);
-            (Point::from((x, full_y)), Some(Size::from((w, full_h))), vec![XdgState::TiledRight])
+            (
+                Point::from((x, full_y)),
+                Some(Size::from((w, full_h))),
+                vec![XdgState::TiledRight],
+            )
         }
         SnapMode::TopLeftQuarter => {
             let (x, w) = split_interval(ux, uw, 0, 1, 2);
@@ -908,7 +968,11 @@ pub fn snap_target_geometry(
         }
         SnapMode::LeftQuarter => {
             let (x, w) = split_interval(ux, uw, 0, 1, 4);
-            (Point::from((x, full_y)), Some(Size::from((w, full_h))), vec![XdgState::TiledLeft])
+            (
+                Point::from((x, full_y)),
+                Some(Size::from((w, full_h))),
+                vec![XdgState::TiledLeft],
+            )
         }
         SnapMode::CenterHalf => {
             let (x, w) = split_interval(ux, uw, 1, 3, 4);
@@ -920,7 +984,11 @@ pub fn snap_target_geometry(
         }
         SnapMode::RightQuarter => {
             let (x, w) = split_interval(ux, uw, 3, 4, 4);
-            (Point::from((x, full_y)), Some(Size::from((w, full_h))), vec![XdgState::TiledRight])
+            (
+                Point::from((x, full_y)),
+                Some(Size::from((w, full_h))),
+                vec![XdgState::TiledRight],
+            )
         }
         SnapMode::Maximize => (
             Point::from((ux, full_y)),
@@ -935,7 +1003,10 @@ impl MalusState {
     pub fn spawn_lockscreen_process(&self) {
         let lock_executable = std::env::current_exe()
             .ok()
-            .and_then(|path| path.parent().map(|parent| parent.join("malus-de-session-lock")))
+            .and_then(|path| {
+                path.parent()
+                    .map(|parent| parent.join("malus-de-session-lock"))
+            })
             .filter(|path| path.is_file())
             .unwrap_or_else(|| std::path::PathBuf::from("malus-de-session-lock"));
         let result = std::process::Command::new(lock_executable)
@@ -1056,12 +1127,7 @@ impl MalusState {
             self.screenshot_ui.recording_dest = Some(dest.clone());
             self.screenshot_ui.is_open = false;
 
-            self.start_screen_recording(
-                dest,
-                crop,
-                self.screenshot_ui.options.include_audio,
-                30,
-            );
+            self.start_screen_recording(dest, crop, self.screenshot_ui.options.include_audio, 30);
         } else {
             let options = self.screenshot_ui.options.clone();
             let mode = self.screenshot_ui.mode;
@@ -1191,12 +1257,14 @@ impl MalusState {
         let dh = display.handle();
         let compositor_state = CompositorState::new::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new::<Self>(&dh);
-        let xdg_decoration_state = smithay::wayland::shell::xdg::decoration::XdgDecorationState::new::<Self>(&dh);
+        let xdg_decoration_state =
+            smithay::wayland::shell::xdg::decoration::XdgDecorationState::new::<Self>(&dh);
         let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
         let session_lock_state = SessionLockManagerState::new::<Self, _>(&dh, |_| true);
         let fractional_scale_manager_state = FractionalScaleManagerState::new::<Self>(&dh);
         let viewporter_state = ViewporterState::new::<Self>(&dh);
-        let presentation_state = smithay::wayland::presentation::PresentationState::new::<Self>(&dh, 1);
+        let presentation_state =
+            smithay::wayland::presentation::PresentationState::new::<Self>(&dh, 1);
         let shm_state = ShmState::new::<Self>(&dh, vec![]);
         let dmabuf_state = DmabufState::new();
         let mut seat_state = SeatState::new();
@@ -1322,8 +1390,14 @@ impl MalusState {
         if path.exists() {
             if let Ok(data) = std::fs::read_to_string(&path) {
                 if let Ok(map) = serde_json::from_str::<HashMap<String, (i32, i32)>>(&data) {
-                    tracing::info!("📂 Tamaños de ventana cargados desde disco: {} aplicaciones", map.len());
-                    return map.into_iter().map(|(k, (w, h))| (k, Size::from((w, h)))).collect();
+                    tracing::info!(
+                        "📂 Tamaños de ventana cargados desde disco: {} aplicaciones",
+                        map.len()
+                    );
+                    return map
+                        .into_iter()
+                        .map(|(k, (w, h))| (k, Size::from((w, h))))
+                        .collect();
                 }
             }
         }
@@ -1380,9 +1454,10 @@ impl MalusState {
                 let app_id_str = app_id.unwrap_or_else(|| "app".to_string());
                 let title_str = title.unwrap_or_else(|| app_id_str.clone());
                 let icon_name = guess_icon_name(&app_id_str, &title_str);
-                let is_animating = self.active_animations.iter().any(|anim| {
-                    anim.window_id == window_id && anim.is_minimizing
-                });
+                let is_animating = self
+                    .active_animations
+                    .iter()
+                    .any(|anim| anim.window_id == window_id && anim.is_minimizing);
                 list.push(malus_de_common::ipc::MinimizedWindowInfo {
                     window_id,
                     app_id: app_id_str,
@@ -1393,7 +1468,8 @@ impl MalusState {
                 });
             }
         }
-        self.ipc_broadcaster.broadcast(&IpcMessage::MinimizedWindowsChanged { windows: list });
+        self.ipc_broadcaster
+            .broadcast(&IpcMessage::MinimizedWindowsChanged { windows: list });
     }
 
     pub fn remove_minimized_thumbnail(&mut self, window_id: u64) {
@@ -1406,7 +1482,10 @@ impl MalusState {
         }
     }
 
-    pub fn update_spotlight_drag_dock_hover(&mut self, point: smithay::utils::Point<f64, smithay::utils::Logical>) {
+    pub fn update_spotlight_drag_dock_hover(
+        &mut self,
+        point: smithay::utils::Point<f64, smithay::utils::Logical>,
+    ) {
         if !self.spotlight.is_dragging_app() {
             if self.spotlight.clear_dock_gap_preview() {
                 self.ipc_broadcaster
@@ -1419,7 +1498,9 @@ impl MalusState {
             return;
         };
         let dock_geo = self.dock_surface_geometry().map(|(geo, _)| geo);
-        let gap_x = self.spotlight.compute_dock_hover_gap(output_geo, point, dock_geo);
+        let gap_x = self
+            .spotlight
+            .compute_dock_hover_gap(output_geo, point, dock_geo);
 
         if self.spotlight.set_dock_gap_preview(gap_x) {
             self.ipc_broadcaster
@@ -1513,7 +1594,8 @@ impl MalusState {
                 }
             }
         }
-        self.ipc_broadcaster.broadcast(&IpcMessage::RunningAppsChanged { running_apps: apps });
+        self.ipc_broadcaster
+            .broadcast(&IpcMessage::RunningAppsChanged { running_apps: apps });
     }
 
     pub fn notify_active_app(&self, surface: Option<&WlSurface>) {
@@ -1523,7 +1605,12 @@ impl MalusState {
             (None, None)
         };
         let window_id = surface.and_then(|surf| self.window_ids.get(surf).copied());
-        self.ipc_broadcaster.broadcast(&IpcMessage::ActiveAppChanged { app_id, title, window_id });
+        self.ipc_broadcaster
+            .broadcast(&IpcMessage::ActiveAppChanged {
+                app_id,
+                title,
+                window_id,
+            });
     }
 
     pub fn window_for_surface(&self, surface: &WlSurface) -> Option<smithay::desktop::Window> {
@@ -1604,9 +1691,11 @@ impl MalusState {
     }
 
     pub fn restore_window_by_id(&mut self, target_id: u64) -> bool {
-        let entry = self.minimized_windows.iter().find(|(surf, _)| {
-            self.window_ids.get(*surf) == Some(&target_id)
-        }).map(|(surf, _)| surf.clone());
+        let entry = self
+            .minimized_windows
+            .iter()
+            .find(|(surf, _)| self.window_ids.get(*surf) == Some(&target_id))
+            .map(|(surf, _)| surf.clone());
 
         if let Some(surf) = entry {
             if self.active_animations.iter().any(|a| a.surface == surf) {
@@ -1624,7 +1713,10 @@ impl MalusState {
                         let slot_y = dock_geo.loc.y + (dock_geo.size.h / 2) - 22;
                         Rectangle::new((slot_x, slot_y).into(), (54, 44).into())
                     } else {
-                        let output_size = self.space.outputs().next()
+                        let output_size = self
+                            .space
+                            .outputs()
+                            .next()
                             .and_then(|o| self.space.output_geometry(o))
                             .map(|g| g.size)
                             .unwrap_or_else(|| (1920, 1080).into());
@@ -1649,7 +1741,10 @@ impl MalusState {
                 };
                 self.active_animations.push(anim);
 
-                tracing::info!("✨ Iniciando animación de restauración Genie para ventana id={}", target_id);
+                tracing::info!(
+                    "✨ Iniciando animación de restauración Genie para ventana id={}",
+                    target_id
+                );
                 self.notify_running_apps();
                 self.notify_minimized_windows();
                 return true;
@@ -1676,7 +1771,11 @@ impl MalusState {
         }
 
         // 3. Solo minimizar si está mapeada actualmente en Space
-        let target_window = self.space.elements().find(|w| w.wl_surface().as_deref() == Some(&surf)).cloned();
+        let target_window = self
+            .space
+            .elements()
+            .find(|w| w.wl_surface().as_deref() == Some(&surf))
+            .cloned();
         if let Some(window) = target_window {
             let loc = self.space.element_location(&window).unwrap_or_default();
             let geo = window.geometry();
@@ -1694,7 +1793,10 @@ impl MalusState {
                     let slot_y = dock_geo.loc.y + (dock_geo.size.h / 2) - 22;
                     Rectangle::new((slot_x, slot_y).into(), (54, 44).into())
                 } else {
-                    let output_size = self.space.outputs().next()
+                    let output_size = self
+                        .space
+                        .outputs()
+                        .next()
                         .and_then(|o| self.space.output_geometry(o))
                         .map(|g| g.size)
                         .unwrap_or_else(|| (1920, 1080).into());
@@ -1719,7 +1821,8 @@ impl MalusState {
             };
             self.active_animations.push(anim);
 
-            self.minimized_windows.insert(surf.clone(), (window.clone(), loc));
+            self.minimized_windows
+                .insert(surf.clone(), (window.clone(), loc));
             self.minimized_window_workspaces
                 .insert(surf.clone(), self.workspaces.active_index);
             self.space.unmap_elem(&window);
@@ -1829,7 +1932,10 @@ impl MalusState {
                     include_audio,
                     fps,
                 } => {
-                    tracing::info!("📥 Solicitud IPC de inicio de grabación recibida: {}", destination);
+                    tracing::info!(
+                        "📥 Solicitud IPC de inicio de grabación recibida: {}",
+                        destination
+                    );
                     self.start_screen_recording(
                         std::path::PathBuf::from(destination),
                         rect,
@@ -1869,7 +1975,10 @@ impl MalusState {
                     self.pending_theme_transition_capture =
                         Some(ThemeTransitionCapture { request_id, origin });
                 }
-                IpcMessage::ThemeChanged { theme_name, is_dark } => {
+                IpcMessage::ThemeChanged {
+                    theme_name,
+                    is_dark,
+                } => {
                     tracing::info!(
                         "📥 IPC ThemeChanged recibido: tema='{}', oscuro={}",
                         theme_name,
@@ -1880,6 +1989,11 @@ impl MalusState {
                         theme_name,
                         is_dark,
                     });
+                }
+                IpcMessage::AccentColorChanged { index } => {
+                    tracing::info!("📥 IPC AccentColorChanged recibido: índice={}", index);
+                    self.ipc_broadcaster
+                        .broadcast(&IpcMessage::AccentColorChanged { index });
                 }
                 IpcMessage::LiquidGlassOpacityChanged { opacity } => {
                     tracing::info!(
@@ -1895,11 +2009,27 @@ impl MalusState {
                         .broadcast(&IpcMessage::LiquidGlassOpacityChanged { opacity });
                 }
                 IpcMessage::AnimateRestore { window_id } => {
-                    tracing::info!("📥 IPC AnimateRestore recibido para ventana id={}", window_id);
+                    tracing::info!(
+                        "📥 IPC AnimateRestore recibido para ventana id={}",
+                        window_id
+                    );
                     self.restore_window_by_id(window_id);
                 }
-                IpcMessage::RegisterDockSlot { window_id, x, y, width, height } => {
-                    tracing::info!("📥 IPC RegisterDockSlot recibido: id={}, rect=({}, {}, {}, {})", window_id, x, y, width, height);
+                IpcMessage::RegisterDockSlot {
+                    window_id,
+                    x,
+                    y,
+                    width,
+                    height,
+                } => {
+                    tracing::info!(
+                        "📥 IPC RegisterDockSlot recibido: id={}, rect=({}, {}, {}, {})",
+                        window_id,
+                        x,
+                        y,
+                        width,
+                        height
+                    );
                     let dock_origin = self
                         .dock_surface_geometry()
                         .map(|(dock_geo, _)| dock_geo.loc)
@@ -1909,7 +2039,11 @@ impl MalusState {
                         (width as i32, height as i32).into(),
                     );
 
-                    tracing::info!("🎯 Dock slot ajustado con precisión: id={}, rect={:?}", window_id, final_rect);
+                    tracing::info!(
+                        "🎯 Dock slot ajustado con precisión: id={}, rect={:?}",
+                        window_id,
+                        final_rect
+                    );
                     self.dock_slots.insert(window_id, final_rect);
                     let mut windows_to_unmap = Vec::new();
                     for anim in &mut self.active_animations {
@@ -1964,11 +2098,16 @@ impl MalusState {
                 IpcMessage::ReloadDisplaysConfig => {
                     tracing::info!("📥 IPC ReloadDisplaysConfig recibido — marcando recarga inmediata de pantallas");
                     self.pending_displays_reload = true;
-                    self.ipc_broadcaster.broadcast(&IpcMessage::ReloadDisplaysConfig);
+                    self.ipc_broadcaster
+                        .broadcast(&IpcMessage::ReloadDisplaysConfig);
                 }
                 IpcMessage::ThemeTransitionPrepared { .. } => {}
                 IpcMessage::SetKeyboardLayout { layout, variant } => {
-                    tracing::info!("📥 IPC SetKeyboardLayout recibido: layout='{}', variant='{}'", layout, variant);
+                    tracing::info!(
+                        "📥 IPC SetKeyboardLayout recibido: layout='{}', variant='{}'",
+                        layout,
+                        variant
+                    );
                     self.apply_keyboard_layout(&layout, &variant);
                 }
                 IpcMessage::SwitchToWindow { window_id } => {
@@ -1981,9 +2120,12 @@ impl MalusState {
                     self.dismiss_app_switcher_immediately();
                 }
                 IpcMessage::ReloadDockConfig => {
-                    tracing::info!("📥 IPC ReloadDockConfig recibido — retransmitiendo a clientes shell");
+                    tracing::info!(
+                        "📥 IPC ReloadDockConfig recibido — retransmitiendo a clientes shell"
+                    );
                     self.reload_dock_config_fields();
-                    self.ipc_broadcaster.broadcast(&IpcMessage::ReloadDockConfig);
+                    self.ipc_broadcaster
+                        .broadcast(&IpcMessage::ReloadDockConfig);
                 }
                 msg @ (IpcMessage::PinAppToDock { .. } | IpcMessage::UnpinAppFromDock { .. }) => {
                     self.ipc_broadcaster.broadcast(&msg);
@@ -2080,10 +2222,11 @@ impl MalusState {
             }
         }
 
-        self.ipc_broadcaster.broadcast(&IpcMessage::KeyboardLayoutChanged {
-            layout: input_cfg.keyboard_layout,
-            variant: input_cfg.keyboard_variant,
-        });
+        self.ipc_broadcaster
+            .broadcast(&IpcMessage::KeyboardLayoutChanged {
+                layout: input_cfg.keyboard_layout,
+                variant: input_cfg.keyboard_variant,
+            });
     }
 
     pub fn get_active_window(&self) -> Option<smithay::desktop::Window> {
@@ -2137,9 +2280,7 @@ impl MalusState {
         } else {
             loc.y as f64
         };
-        let app_id = window
-            .wl_surface()
-            .and_then(|s| toplevel_info(&s).0);
+        let app_id = window.wl_surface().and_then(|s| toplevel_info(&s).0);
         let (dx, dy) = Self::close_button_offset_for_app_id(
             app_id.as_deref(),
             is_firefox_window(window),
@@ -2297,7 +2438,9 @@ impl MalusState {
         let activated_flag =
             smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated;
         for win in self.space.elements() {
-            let is_focused = focused.map(|s| win.wl_surface().as_deref() == Some(s)).unwrap_or(false);
+            let is_focused = focused
+                .map(|s| win.wl_surface().as_deref() == Some(s))
+                .unwrap_or(false);
             win.set_activated(is_focused);
             if let Some(toplevel) = win.toplevel() {
                 let mut changed = false;
@@ -2449,13 +2592,17 @@ impl MalusState {
 
     /// Indica si hay un grab explícito de popup (`xdg_popup.grab`) todavía vigente.
     pub fn popup_grab_active(&self) -> bool {
-        self.popup_grab.as_ref().is_some_and(|grab| !grab.has_ended())
+        self.popup_grab
+            .as_ref()
+            .is_some_and(|grab| !grab.has_ended())
     }
 
     /// Libera el grab de popup cuando el cliente ya destruyó todos sus popups
     /// y devuelve el foco de teclado a la ventana raíz sin esperar a la siguiente tecla.
     pub fn refresh_popup_grab(&mut self) {
-        let Some(grab) = self.popup_grab.clone() else { return };
+        let Some(grab) = self.popup_grab.clone() else {
+            return;
+        };
         if !grab.has_ended() {
             return;
         }
@@ -2486,9 +2633,15 @@ impl MalusState {
     /// en su `xdg_positioner`.
     fn unconstrain_popup(&self, popup: &PopupSurface) {
         let kind = PopupKind::Xdg(popup.clone());
-        let Ok(root) = find_popup_root_surface(&kind) else { return };
-        let Some(window) = self.window_for_surface(&root) else { return };
-        let Some(window_loc) = self.space.element_location(&window) else { return };
+        let Ok(root) = find_popup_root_surface(&kind) else {
+            return;
+        };
+        let Some(window) = self.window_for_surface(&root) else {
+            return;
+        };
+        let Some(window_loc) = self.space.element_location(&window) else {
+            return;
+        };
 
         let mut outputs = self.space.outputs_for_element(&window);
         if outputs.is_empty() {
@@ -2532,7 +2685,11 @@ impl MalusState {
         })
     }
 
-    fn app_switcher_item_for_surface(&mut self, surf: &WlSurface, is_minimized: bool) -> AppSwitcherItem {
+    fn app_switcher_item_for_surface(
+        &mut self,
+        surf: &WlSurface,
+        is_minimized: bool,
+    ) -> AppSwitcherItem {
         let window_id = self.get_or_assign_window_id(surf);
         let (app_id_opt, title_opt) = toplevel_info(surf);
         let app_id = app_id_opt.unwrap_or_else(|| "application-x-executable".to_string());
@@ -2549,7 +2706,10 @@ impl MalusState {
 
     /// Construye la lista de elementos para el selector visual de aplicaciones (⌘Tab)
     /// filtrando estrictamente al monitor objetivo y al escritorio activo.
-    pub fn build_app_switcher_items(&mut self, target_output: Option<&Output>) -> Vec<AppSwitcherItem> {
+    pub fn build_app_switcher_items(
+        &mut self,
+        target_output: Option<&Output>,
+    ) -> Vec<AppSwitcherItem> {
         let mut items = Vec::new();
         // 1. Ventanas activas en el escritorio actual mapeadas en `target_output` (de más reciente a más antigua)
         let windows: Vec<_> = self
@@ -2596,15 +2756,26 @@ impl MalusState {
     pub fn switch_to_window(&mut self, window_id: u64) {
         tracing::info!("🔀 AppSwitcher: cambiando foco a ventana id={}", window_id);
         // Si la ventana está minimizada, restaurar con Genie Effect
-        if self.minimized_windows.iter().any(|(s, _)| self.window_ids.get(s) == Some(&window_id)) {
+        if self
+            .minimized_windows
+            .iter()
+            .any(|(s, _)| self.window_ids.get(s) == Some(&window_id))
+        {
             self.restore_window_by_id(window_id);
             return;
         }
 
         // Si está en space, traer al frente y enfocar
-        let target = self.space.elements().find(|w| {
-            w.wl_surface().as_ref().and_then(|s| self.window_ids.get(s.as_ref())) == Some(&window_id)
-        }).cloned();
+        let target = self
+            .space
+            .elements()
+            .find(|w| {
+                w.wl_surface()
+                    .as_ref()
+                    .and_then(|s| self.window_ids.get(s.as_ref()))
+                    == Some(&window_id)
+            })
+            .cloned();
 
         if let Some(win) = target {
             self.space.raise_element(&win, true);
@@ -2651,7 +2822,10 @@ impl MalusState {
     fn compute_expose_slots_and_hitboxes(
         &self,
         mode: &crate::expose::ExposeMode,
-    ) -> (Vec<crate::expose::ExposeSlot>, Vec<crate::expose::SpaceBarHitbox>) {
+    ) -> (
+        Vec<crate::expose::ExposeSlot>,
+        Vec<crate::expose::SpaceBarHitbox>,
+    ) {
         let outputs: Vec<Output> = self.space.outputs().cloned().collect();
         let elements: Vec<smithay::desktop::Window> = self.space.elements().cloned().collect();
         let mut slots = Vec::new();
@@ -2671,7 +2845,14 @@ impl MalusState {
                 can_add,
             ));
             let usable = crate::expose::expose_usable_zone_with_spaces_bar(usable_raw);
-            let mut per_output: Vec<(usize, smithay::desktop::Window, u64, String, String, Rectangle<i32, Logical>)> = Vec::new();
+            let mut per_output: Vec<(
+                usize,
+                smithay::desktop::Window,
+                u64,
+                String,
+                String,
+                Rectangle<i32, Logical>,
+            )> = Vec::new();
 
             for (idx, win) in elements.iter().enumerate() {
                 let Some(loc) = self.space.element_location(win) else {
@@ -2700,7 +2881,10 @@ impl MalusState {
                 let app_id = raw_app.unwrap_or_default();
                 let norm_app = normalize_app_id(&app_id);
 
-                if let crate::expose::ExposeMode::AppOnly { app_id: ref target_app } = mode {
+                if let crate::expose::ExposeMode::AppOnly {
+                    app_id: ref target_app,
+                } = mode
+                {
                     if norm_app != normalize_app_id(target_app) {
                         continue;
                     }
@@ -2794,7 +2978,11 @@ impl MalusState {
             return;
         }
 
-        tracing::info!("🪟 Exposé abierto ({:?}) con {} ventanas", mode, slots.len());
+        tracing::info!(
+            "🪟 Exposé abierto ({:?}) con {} ventanas",
+            mode,
+            slots.len()
+        );
         self.expose.open(mode, slots, previous_focus);
         self.expose.spaces_bar_hitboxes = hitboxes;
     }
@@ -2857,11 +3045,17 @@ impl MalusState {
             return true;
         }
 
-        if sym == keysyms::KEY_Left.into() || sym == keysyms::KEY_Up.into() || sym == keysyms::KEY_ISO_Left_Tab.into() {
+        if sym == keysyms::KEY_Left.into()
+            || sym == keysyms::KEY_Up.into()
+            || sym == keysyms::KEY_ISO_Left_Tab.into()
+        {
             self.expose.move_selection(-1);
             return true;
         }
-        if sym == keysyms::KEY_Right.into() || sym == keysyms::KEY_Down.into() || sym == keysyms::KEY_Tab.into() {
+        if sym == keysyms::KEY_Right.into()
+            || sym == keysyms::KEY_Down.into()
+            || sym == keysyms::KEY_Tab.into()
+        {
             self.expose.move_selection(1);
             return true;
         }
@@ -2965,7 +3159,10 @@ impl MalusState {
                     }
                     crate::expose::SpaceDropTarget::NewSpace => {
                         if let Some(new_idx) = self.workspaces.add_workspace() {
-                            tracing::info!("🖥️ Nuevo espacio de trabajo creado: Escritorio {}", new_idx + 1);
+                            tracing::info!(
+                                "🖥️ Nuevo espacio de trabajo creado: Escritorio {}",
+                                new_idx + 1
+                            );
                             self.refresh_expose_layout();
                         }
                     }
@@ -3094,7 +3291,8 @@ impl MalusState {
         let incoming = std::mem::take(&mut self.workspaces.workspaces[target_index].hidden_windows);
         let mut top_win: Option<smithay::desktop::Window> = None;
         for entry in incoming {
-            self.space.map_element(entry.window.clone(), entry.location, false);
+            self.space
+                .map_element(entry.window.clone(), entry.location, false);
             top_win = Some(entry.window);
         }
         self.space.refresh();
@@ -3168,18 +3366,19 @@ impl MalusState {
         let out_geo = self.space.output_geometry(output).unwrap_or_default();
         let ow = out_geo.size.w.max(1) as f64;
         let oh = out_geo.size.h.max(1) as f64;
-        let to_norm = |loc: Point<i32, Logical>, size: Size<i32, Logical>| -> Option<(f64, f64, f64, f64)> {
-            let cx = loc.x + size.w.max(1) / 2;
-            let cy = loc.y + size.h.max(1) / 2;
-            if self.space.outputs().count() > 1 && !out_geo.contains((cx, cy)) {
-                return None;
-            }
-            let nx = ((loc.x - out_geo.loc.x) as f64 / ow).clamp(0.0, 0.95);
-            let ny = ((loc.y - out_geo.loc.y) as f64 / oh).clamp(0.0, 0.95);
-            let nw = (size.w.max(60) as f64 / ow).clamp(0.08, 1.0);
-            let nh = (size.h.max(40) as f64 / oh).clamp(0.08, 1.0);
-            Some((nx, ny, nw, nh))
-        };
+        let to_norm =
+            |loc: Point<i32, Logical>, size: Size<i32, Logical>| -> Option<(f64, f64, f64, f64)> {
+                let cx = loc.x + size.w.max(1) / 2;
+                let cy = loc.y + size.h.max(1) / 2;
+                if self.space.outputs().count() > 1 && !out_geo.contains((cx, cy)) {
+                    return None;
+                }
+                let nx = ((loc.x - out_geo.loc.x) as f64 / ow).clamp(0.0, 0.95);
+                let ny = ((loc.y - out_geo.loc.y) as f64 / oh).clamp(0.0, 0.95);
+                let nw = (size.w.max(60) as f64 / ow).clamp(0.08, 1.0);
+                let nh = (size.h.max(40) as f64 / oh).clamp(0.08, 1.0);
+                Some((nx, ny, nw, nh))
+            };
 
         self.workspaces
             .workspaces
@@ -3339,16 +3538,28 @@ impl MalusState {
     /// Cierra la ventana especificada por su window_id
     pub fn close_window_by_id(&mut self, window_id: u64) {
         tracing::info!("🚪 AppSwitcher: cerrando ventana id={}", window_id);
-        let target = self.space.elements().find(|w| {
-            w.wl_surface().as_ref().and_then(|s| self.window_ids.get(s.as_ref())) == Some(&window_id)
-        }).cloned();
+        let target = self
+            .space
+            .elements()
+            .find(|w| {
+                w.wl_surface()
+                    .as_ref()
+                    .and_then(|s| self.window_ids.get(s.as_ref()))
+                    == Some(&window_id)
+            })
+            .cloned();
 
         if let Some(win) = target {
             self.record_close_button_hint(&win);
             if let Some(toplevel) = win.toplevel() {
                 toplevel.send_close();
             }
-        } else if let Some(surf) = self.minimized_windows.keys().find(|s| self.window_ids.get(*s) == Some(&window_id)).cloned() {
+        } else if let Some(surf) = self
+            .minimized_windows
+            .keys()
+            .find(|s| self.window_ids.get(*s) == Some(&window_id))
+            .cloned()
+        {
             if let Some((win, _)) = self.minimized_windows.remove(&surf) {
                 self.minimized_window_workspaces.remove(&surf);
                 self.remove_minimized_thumbnail(window_id);
@@ -3363,9 +3574,16 @@ impl MalusState {
     /// Oculta / minimiza la ventana especificada por su window_id vía Genie Effect
     pub fn hide_window_by_id(&mut self, window_id: u64) {
         tracing::info!("🪟 AppSwitcher: ocultando ventana id={}", window_id);
-        let target = self.space.elements().find(|w| {
-            w.wl_surface().as_ref().and_then(|s| self.window_ids.get(s.as_ref())) == Some(&window_id)
-        }).cloned();
+        let target = self
+            .space
+            .elements()
+            .find(|w| {
+                w.wl_surface()
+                    .as_ref()
+                    .and_then(|s| self.window_ids.get(s.as_ref()))
+                    == Some(&window_id)
+            })
+            .cloned();
 
         if let Some(win) = target {
             if let Some(toplevel) = win.toplevel().cloned() {
@@ -3479,7 +3697,10 @@ impl MalusState {
         self.switch_to_window(window_id);
     }
 
-    fn target_app_switcher_output(&self, pointer_loc: Option<Point<f64, Logical>>) -> Option<Output> {
+    fn target_app_switcher_output(
+        &self,
+        pointer_loc: Option<Point<f64, Logical>>,
+    ) -> Option<Output> {
         if let Some(pt) = pointer_loc {
             if let Some(out) = self.space.outputs().find(|o| {
                 self.space
@@ -3501,11 +3722,17 @@ impl MalusState {
         let target_output = self.target_app_switcher_output(pointer_loc);
         let items = self.build_app_switcher_items(target_output.as_ref());
         if items.is_empty() {
-            tracing::info!("🔀 AppSwitcher: no hay ventanas abiertas en la pantalla objetivo, ignorando");
+            tracing::info!(
+                "🔀 AppSwitcher: no hay ventanas abiertas en la pantalla objetivo, ignorando"
+            );
             return;
         }
         let initial_idx = if items.len() > 1 {
-            if reverse { items.len() - 1 } else { 1 }
+            if reverse {
+                items.len() - 1
+            } else {
+                1
+            }
         } else {
             0
         };
@@ -3525,10 +3752,11 @@ impl MalusState {
             self.ipc_broadcaster.broadcast(&IpcMessage::HideAppSwitcher);
         } else {
             self.app_switcher.deck.clear();
-            self.ipc_broadcaster.broadcast(&IpcMessage::ShowAppSwitcher {
-                items: self.app_switcher.items.clone(),
-                selected_index: initial_idx,
-            });
+            self.ipc_broadcaster
+                .broadcast(&IpcMessage::ShowAppSwitcher {
+                    items: self.app_switcher.items.clone(),
+                    selected_index: initial_idx,
+                });
         }
     }
 
@@ -3547,7 +3775,9 @@ impl MalusState {
             self.app_switcher.deck.retarget_focus(idx, Instant::now());
         } else {
             self.ipc_broadcaster
-                .broadcast(&IpcMessage::UpdateAppSwitcher { selected_index: idx });
+                .broadcast(&IpcMessage::UpdateAppSwitcher {
+                    selected_index: idx,
+                });
         }
     }
 
@@ -3561,7 +3791,8 @@ impl MalusState {
         if self.app_switcher_uses_deck() {
             let now = Instant::now();
             self.app_switcher.is_active = false;
-            self.app_switcher.selected_index = index.min(self.app_switcher.items.len().saturating_sub(1));
+            self.app_switcher.selected_index =
+                index.min(self.app_switcher.items.len().saturating_sub(1));
             self.app_switcher
                 .deck
                 .retarget_focus(self.app_switcher.selected_index, now);
@@ -3617,12 +3848,15 @@ impl MalusState {
         let new_idx = idx.min(self.app_switcher.items.len() - 1);
         self.app_switcher.selected_index = new_idx;
         if self.app_switcher_uses_deck() {
-            self.app_switcher.deck.retarget_focus(new_idx, Instant::now());
+            self.app_switcher
+                .deck
+                .retarget_focus(new_idx, Instant::now());
         } else {
-            self.ipc_broadcaster.broadcast(&IpcMessage::ShowAppSwitcher {
-                items: self.app_switcher.items.clone(),
-                selected_index: new_idx,
-            });
+            self.ipc_broadcaster
+                .broadcast(&IpcMessage::ShowAppSwitcher {
+                    items: self.app_switcher.items.clone(),
+                    selected_index: new_idx,
+                });
         }
     }
 
@@ -3639,10 +3873,11 @@ impl MalusState {
         self.app_switcher.items[idx].is_minimized = true;
         self.app_switcher.deck.origin_rects.remove(&target_id);
         if !self.app_switcher_uses_deck() {
-            self.ipc_broadcaster.broadcast(&IpcMessage::ShowAppSwitcher {
-                items: self.app_switcher.items.clone(),
-                selected_index: idx,
-            });
+            self.ipc_broadcaster
+                .broadcast(&IpcMessage::ShowAppSwitcher {
+                    items: self.app_switcher.items.clone(),
+                    selected_index: idx,
+                });
         }
     }
 
@@ -3778,7 +4013,9 @@ pub fn snap_window(
     mode: SnapMode,
     usable_zone: Rectangle<i32, Logical>,
 ) {
-    let Some(surface) = window.wl_surface() else { return };
+    let Some(surface) = window.wl_surface() else {
+        return;
+    };
     let surface = surface.into_owned();
 
     let cur_loc = state.space.element_location(window).unwrap_or_default();
@@ -3794,8 +4031,14 @@ pub fn snap_window(
     let is_currently_snapped = is_window_snapped(window);
 
     // Guardar geometría previa flotante SOLO si la ventana no estaba ya snapped y su tamaño actual es válido
-    if mode != SnapMode::CenterRestore && !is_currently_snapped && cur_geo.size.w > 150 && cur_geo.size.h > 150 {
-        state.window_restore_geometries.insert(surface.clone(), (start_loc, start_size));
+    if mode != SnapMode::CenterRestore
+        && !is_currently_snapped
+        && cur_geo.size.w > 150
+        && cur_geo.size.h > 150
+    {
+        state
+            .window_restore_geometries
+            .insert(surface.clone(), (start_loc, start_size));
     }
 
     let ssd_top = if window_uses_ssd(window) {
@@ -3805,7 +4048,9 @@ pub fn snap_window(
     };
 
     let (target_loc, target_size, xdg_states) = if mode == SnapMode::CenterRestore {
-        if let Some((saved_loc, saved_size)) = state.window_restore_geometries.get(&surface).copied() {
+        if let Some((saved_loc, saved_size)) =
+            state.window_restore_geometries.get(&surface).copied()
+        {
             let size_opt = if saved_size.w > 100 && saved_size.h > 100 {
                 Some(saved_size)
             } else {
@@ -3835,7 +4080,10 @@ pub fn snap_window(
     );
 
     // Si hay un cambio perceptible en posición o tamaño, iniciamos la transición suave
-    if (start_loc != target_loc || start_size != final_target_size) && start_size.w > 0 && start_size.h > 0 {
+    if (start_loc != target_loc || start_size != final_target_size)
+        && start_size.w > 0
+        && start_size.h > 0
+    {
         state.snap_transitions.insert(
             surface.clone(),
             SnapTransition::new(
@@ -3898,9 +4146,9 @@ impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for MalusSta
     ) {
         use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
         let win_opt = self.window_for_surface(toplevel.wl_surface());
-        let cannot_have_ssd = win_opt.as_ref().is_some_and(|w| {
-            is_browser_window(w) || is_gnome_window(w)
-        });
+        let cannot_have_ssd = win_opt
+            .as_ref()
+            .is_some_and(|w| is_browser_window(w) || is_gnome_window(w));
         let effective_mode = if cannot_have_ssd {
             Mode::ClientSide
         } else {
@@ -3984,11 +4232,14 @@ pub fn is_gnome_identity(app_id: Option<&str>, title: Option<&str>) -> bool {
 
 /// Identifica si una ventana pertenece al ecosistema GNOME / GTK con CSD nativo.
 pub fn is_gnome_window(window: &smithay::desktop::Window) -> bool {
-    let matches = |surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface| {
-        let (app_id, title) = toplevel_info(surface);
-        is_gnome_identity(app_id.as_deref(), title.as_deref())
-    };
-    window.wl_surface().is_some_and(|surface| matches(surface.as_ref()))
+    let matches =
+        |surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface| {
+            let (app_id, title) = toplevel_info(surface);
+            is_gnome_identity(app_id.as_deref(), title.as_deref())
+        };
+    window
+        .wl_surface()
+        .is_some_and(|surface| matches(surface.as_ref()))
         || window
             .toplevel()
             .is_some_and(|toplevel| matches(toplevel.wl_surface()))
@@ -4008,11 +4259,14 @@ pub fn is_nautilus_identity(app_id: Option<&str>, title: Option<&str>) -> bool {
 
 /// Identifica si una ventana pertenece a Nautilus (Archivos / Finder).
 pub fn is_nautilus_window(window: &smithay::desktop::Window) -> bool {
-    let matches = |surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface| {
-        let (app_id, title) = toplevel_info(surface);
-        is_nautilus_identity(app_id.as_deref(), title.as_deref())
-    };
-    window.wl_surface().is_some_and(|surface| matches(surface.as_ref()))
+    let matches =
+        |surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface| {
+            let (app_id, title) = toplevel_info(surface);
+            is_nautilus_identity(app_id.as_deref(), title.as_deref())
+        };
+    window
+        .wl_surface()
+        .is_some_and(|surface| matches(surface.as_ref()))
         || window
             .toplevel()
             .is_some_and(|toplevel| matches(toplevel.wl_surface()))
@@ -4038,11 +4292,14 @@ pub fn is_settings_identity(app_id: Option<&str>, title: Option<&str>) -> bool {
 
 /// Identifica si una ventana pertenece a Ajustes del Sistema (Configuración).
 pub fn is_settings_window(window: &smithay::desktop::Window) -> bool {
-    let matches = |surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface| {
-        let (app_id, title) = toplevel_info(surface);
-        is_settings_identity(app_id.as_deref(), title.as_deref())
-    };
-    window.wl_surface().is_some_and(|surface| matches(surface.as_ref()))
+    let matches =
+        |surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface| {
+            let (app_id, title) = toplevel_info(surface);
+            is_settings_identity(app_id.as_deref(), title.as_deref())
+        };
+    window
+        .wl_surface()
+        .is_some_and(|surface| matches(surface.as_ref()))
         || window
             .toplevel()
             .is_some_and(|toplevel| matches(toplevel.wl_surface()))
@@ -4057,10 +4314,9 @@ pub fn window_uses_ssd(window: &smithay::desktop::Window) -> bool {
     let Some(toplevel) = window.toplevel() else {
         return false;
     };
-    let is_fullscreen = toplevel
-        .current_state()
-        .states
-        .contains(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Fullscreen);
+    let is_fullscreen = toplevel.current_state().states.contains(
+        smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Fullscreen,
+    );
     if is_fullscreen {
         return false;
     }
@@ -4160,11 +4416,13 @@ impl MalusState {
                 let under_layer = layer_map
                     .layer_under(smithay::wayland::shell::wlr_layer::Layer::Overlay, point)
                     .filter(|l| {
-                        !(l.namespace() == "malus-app-switcher" && !self.app_switcher_classic_active())
+                        !(l.namespace() == "malus-app-switcher"
+                            && !self.app_switcher_classic_active())
                     })
                     .or_else(|| {
                         if !self.has_fullscreen_window_on_output(output) {
-                            layer_map.layer_under(smithay::wayland::shell::wlr_layer::Layer::Top, point)
+                            layer_map
+                                .layer_under(smithay::wayland::shell::wlr_layer::Layer::Top, point)
                         } else {
                             None
                         }
@@ -4228,7 +4486,11 @@ impl MalusState {
 
     /// Avanza los temporizadores de apertura/cierre por hover del menú Snap Layouts.
     pub fn tick_snap_layouts(&mut self, now: Instant) {
-        if self.spotlight.is_open() || self.screenshot_ui.is_open() || self.expose.active || self.ssd.grab_active {
+        if self.spotlight.is_open()
+            || self.screenshot_ui.is_open()
+            || self.expose.active
+            || self.ssd.grab_active
+        {
             self.snap_layouts.close();
             return;
         }
@@ -4423,12 +4685,7 @@ impl MalusState {
                     };
                     self.ssd.grab_active = true;
                     self.moving_window_surface = window.wl_surface().map(|s| s.into_owned());
-                    pointer.set_grab(
-                        self,
-                        grab,
-                        serial,
-                        smithay::input::pointer::Focus::Clear,
-                    );
+                    pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Clear);
                 }
                 true
             }
@@ -4509,7 +4766,10 @@ impl MalusState {
 
         for output in self.space.outputs() {
             let map = smithay::desktop::layer_map_for_output(output);
-            if map.layer_for_surface(surface, smithay::desktop::WindowSurfaceType::all()).is_some() {
+            if map
+                .layer_for_surface(surface, smithay::desktop::WindowSurfaceType::all())
+                .is_some()
+            {
                 return output.current_scale().fractional_scale();
             }
         }
@@ -4529,7 +4789,11 @@ impl MalusState {
     ) -> Option<Output> {
         if let Some(primary_cfg) = displays_cfg.outputs.iter().find(|o| o.primary) {
             // 1. Por connector name
-            if let Some(output) = self.space.outputs().find(|o| o.name() == primary_cfg.connector) {
+            if let Some(output) = self
+                .space
+                .outputs()
+                .find(|o| o.name() == primary_cfg.connector)
+            {
                 return Some(output.clone());
             }
             // 2. Por descripción o modelo
@@ -4701,11 +4965,8 @@ impl MalusState {
                 };
                 let max_bounds = max_window_size_in_usable_zone(usable, ssd_top);
                 let target_size = clamp_size_to_bounds(geo.size, max_bounds);
-                let centered_loc = centered_window_location(
-                    usable,
-                    Rectangle::new(geo.loc, target_size),
-                    ssd_top,
-                );
+                let centered_loc =
+                    centered_window_location(usable, Rectangle::new(geo.loc, target_size), ssd_top);
                 self.space.map_element(win.clone(), centered_loc, false);
 
                 if let Some(wl_surf) = win.wl_surface() {
@@ -4720,8 +4981,7 @@ impl MalusState {
                     });
                 }
                 if let Some(toplevel) = win.toplevel() {
-                    let needs_resize =
-                        target_size.w != geo.size.w || target_size.h != geo.size.h;
+                    let needs_resize = target_size.w != geo.size.w || target_size.h != geo.size.h;
                     toplevel.with_pending_state(|s| {
                         s.bounds = Some(max_bounds);
                         if needs_resize {
@@ -4750,11 +5010,8 @@ impl MalusState {
                 };
                 let max_bounds = max_window_size_in_usable_zone(usable, ssd_top);
                 let target_size = clamp_size_to_bounds(geo.size, max_bounds);
-                *prev_loc = centered_window_location(
-                    usable,
-                    Rectangle::new(geo.loc, target_size),
-                    ssd_top,
-                );
+                *prev_loc =
+                    centered_window_location(usable, Rectangle::new(geo.loc, target_size), ssd_top);
             }
         }
 
@@ -4835,10 +5092,16 @@ impl MalusState {
         } else {
             output_geo.size.h - top_offset
         };
-        let usable_height = (raw_height + headroom).min(output_geo.size.h - top_offset).max(100);
+        let usable_height = (raw_height + headroom)
+            .min(output_geo.size.h - top_offset)
+            .max(100);
 
         Rectangle::new(
-            (output_geo.loc.x + zone.loc.x.max(0), output_geo.loc.y + top_offset).into(),
+            (
+                output_geo.loc.x + zone.loc.x.max(0),
+                output_geo.loc.y + top_offset,
+            )
+                .into(),
             (width, usable_height).into(),
         )
     }
@@ -4888,7 +5151,10 @@ impl MalusState {
                 .toplevel()
                 .map(|t| t.current_state().states.contains(XdgState::Fullscreen))
                 .unwrap_or_else(|| {
-                    window.x11_surface().map(|x| x.is_fullscreen()).unwrap_or(false)
+                    window
+                        .x11_surface()
+                        .map(|x| x.is_fullscreen())
+                        .unwrap_or(false)
                 });
             if is_fullscreen {
                 // La ventana en pantalla completa debe pertenecer estrictamente a este monitor específico.
@@ -4906,11 +5172,11 @@ impl MalusState {
     /// Si su coordenada Y es menor que la parte inferior de la Top Bar del monitor donde reside,
     /// ajusta su posición atómicamente para que su barra de título quede completamente visible.
     pub fn ensure_window_below_topbar(&mut self, window: &smithay::desktop::Window) {
-        let is_fullscreen = window.toplevel().map(|t| {
-            t.current_state().states.contains(XdgState::Fullscreen)
-        }).or_else(|| {
-            window.x11_surface().map(|s| s.is_fullscreen())
-        }).unwrap_or(false);
+        let is_fullscreen = window
+            .toplevel()
+            .map(|t| t.current_state().states.contains(XdgState::Fullscreen))
+            .or_else(|| window.x11_surface().map(|s| s.is_fullscreen()))
+            .unwrap_or(false);
 
         if is_fullscreen {
             return;
@@ -5133,8 +5399,8 @@ impl CompositorHandler for MalusState {
             window.on_commit();
             if is_root_window_surface(&window, surface) {
                 if let Some(toplevel) = window.toplevel() {
-                    let is_system_action_confirmation =
-                        toplevel.parent().is_some() || is_system_action_confirmation_surface(surface);
+                    let is_system_action_confirmation = toplevel.parent().is_some()
+                        || is_system_action_confirmation_surface(surface);
                     let geometry = window.geometry();
                     if is_system_action_confirmation
                         && self.centered_transient_windows.get(surface)
@@ -5153,8 +5419,12 @@ impl CompositorHandler for MalusState {
                                     let location = self.space.element_location(&parent)?;
                                     let parent_geometry = parent.geometry();
                                     let center = Point::<i32, Logical>::from((
-                                        location.x + parent_geometry.loc.x + parent_geometry.size.w / 2,
-                                        location.y + parent_geometry.loc.y + parent_geometry.size.h / 2,
+                                        location.x
+                                            + parent_geometry.loc.x
+                                            + parent_geometry.size.w / 2,
+                                        location.y
+                                            + parent_geometry.loc.y
+                                            + parent_geometry.size.h / 2,
                                     ));
                                     self.space.outputs().find(|output| {
                                         self.space
@@ -5173,7 +5443,9 @@ impl CompositorHandler for MalusState {
                                 self.space.outputs().find(|output| {
                                     self.space
                                         .output_geometry(output)
-                                        .map(|output_geometry| output_geometry.contains(current_center))
+                                        .map(|output_geometry| {
+                                            output_geometry.contains(current_center)
+                                        })
                                         .unwrap_or(false)
                                 })
                             });
@@ -5265,7 +5537,8 @@ impl CompositorHandler for MalusState {
                     let geo = window.geometry();
                     let loc = self.space.element_location(&window).unwrap_or_default();
                     if geo.size.w > 150 && geo.size.h > 150 {
-                        self.window_restore_geometries.insert(surface.clone(), (loc, geo.size));
+                        self.window_restore_geometries
+                            .insert(surface.clone(), (loc, geo.size));
                     }
                 }
             }
@@ -5275,7 +5548,8 @@ impl CompositorHandler for MalusState {
         let outputs: Vec<_> = self.space.outputs().cloned().collect();
         let target_output = outputs.into_iter().find(|o| {
             let map = smithay::desktop::layer_map_for_output(o);
-            map.layer_for_surface(surface, smithay::desktop::WindowSurfaceType::all()).is_some()
+            map.layer_for_surface(surface, smithay::desktop::WindowSurfaceType::all())
+                .is_some()
         });
 
         if let Some(output) = target_output {
@@ -5284,19 +5558,24 @@ impl CompositorHandler for MalusState {
                 let mut map = smithay::desktop::layer_map_for_output(&output);
                 map.arrange();
 
-                if let Some(layer) = map.layer_for_surface(surface, smithay::desktop::WindowSurfaceType::TOPLEVEL) {
-                    let initial_configure_sent = smithay::wayland::compositor::with_states(layer.wl_surface(), |states| {
-                        states
-                            .data_map
-                            .get::<smithay::wayland::shell::wlr_layer::LayerSurfaceData>()
-                            .map(|d| d.lock().unwrap().initial_configure_sent)
-                            .unwrap_or(false)
-                    });
+                if let Some(layer) =
+                    map.layer_for_surface(surface, smithay::desktop::WindowSurfaceType::TOPLEVEL)
+                {
+                    let initial_configure_sent =
+                        smithay::wayland::compositor::with_states(layer.wl_surface(), |states| {
+                            states
+                                .data_map
+                                .get::<smithay::wayland::shell::wlr_layer::LayerSurfaceData>()
+                                .map(|d| d.lock().unwrap().initial_configure_sent)
+                                .unwrap_or(false)
+                        });
                     if !initial_configure_sent {
                         tracing::info!("📤 Enviando initial configure a layer surface");
                         layer.layer_surface().send_configure();
                     }
-                    if layer.layer() == smithay::wayland::shell::wlr_layer::Layer::Overlay && layer.can_receive_keyboard_focus() {
+                    if layer.layer() == smithay::wayland::shell::wlr_layer::Layer::Overlay
+                        && layer.can_receive_keyboard_focus()
+                    {
                         should_focus_overlay = Some(layer.wl_surface().clone());
                     }
                 }
@@ -5329,7 +5608,12 @@ impl DmabufHandler for MalusState {
         &mut self.dmabuf_state
     }
 
-    fn dmabuf_imported(&mut self, _global: &DmabufGlobal, dmabuf: Dmabuf, notifier: ImportNotifier) {
+    fn dmabuf_imported(
+        &mut self,
+        _global: &DmabufGlobal,
+        dmabuf: Dmabuf,
+        notifier: ImportNotifier,
+    ) {
         self.pending_dmabuf_imports.push((dmabuf, notifier));
     }
 }
@@ -5369,7 +5653,10 @@ impl SeatHandler for MalusState {
 
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
         let dh = &self.display_handle;
-        let client = focused.and_then(|s| dh.get_client(smithay::reexports::wayland_server::Resource::id(s)).ok());
+        let client = focused.and_then(|s| {
+            dh.get_client(smithay::reexports::wayland_server::Resource::id(s))
+                .ok()
+        });
         let is_regular_window = focused.and_then(|s| self.window_for_surface(s)).is_some();
         if focused.is_none() || is_regular_window {
             let focused_pid = client.as_ref().and_then(|client| {
@@ -5388,7 +5675,11 @@ impl SeatHandler for MalusState {
         // Actualizar el estado Activated de las ventanas cuyo foco haya cambiado realmente
         self.sync_window_activation(focused);
     }
-    fn cursor_image(&mut self, _seat: &Seat<Self>, image: smithay::input::pointer::CursorImageStatus) {
+    fn cursor_image(
+        &mut self,
+        _seat: &Seat<Self>,
+        image: smithay::input::pointer::CursorImageStatus,
+    ) {
         // IMPORTANTE: Nunca invocar métodos de `PointerHandle` (`is_grabbed`, `current_location`, etc.)
         // aquí porque Smithay llama a `SeatHandler::cursor_image` desde `PointerInternal::motion` /
         // `PointerTarget::replace` mientras el `Mutex<PointerInternal>` ya está bloqueado en el mismo hilo.
@@ -5601,14 +5892,25 @@ impl XdgShellHandler for MalusState {
                 tracing::warn!("⚠️ Error al enviar configure a popup: {:?}", err);
             }
         }
-        if !self.active_popups.iter().any(|p| p.wl_surface() == surface.wl_surface()) {
+        if !self
+            .active_popups
+            .iter()
+            .any(|p| p.wl_surface() == surface.wl_surface())
+        {
             self.active_popups.push(surface);
         }
     }
 
     fn grab(&mut self, surface: PopupSurface, seat: WlSeat, serial: Serial) {
-        tracing::info!("🎯 [XdgShell] grab request recibido para popup surface: {:?}", smithay::reexports::wayland_server::Resource::id(surface.wl_surface()));
-        if !self.active_popups.iter().any(|p| p.wl_surface() == surface.wl_surface()) {
+        tracing::info!(
+            "🎯 [XdgShell] grab request recibido para popup surface: {:?}",
+            smithay::reexports::wayland_server::Resource::id(surface.wl_surface())
+        );
+        if !self
+            .active_popups
+            .iter()
+            .any(|p| p.wl_surface() == surface.wl_surface())
+        {
             self.active_popups.push(surface.clone());
         }
 
@@ -5640,10 +5942,15 @@ impl XdgShellHandler for MalusState {
                     );
                 }
                 self.popup_grab = Some(popup_grab);
-                tracing::info!("✅ [XdgShell] Popup grab (teclado + puntero) establecido exitosamente");
+                tracing::info!(
+                    "✅ [XdgShell] Popup grab (teclado + puntero) establecido exitosamente"
+                );
             }
             Err(err) => {
-                tracing::warn!("⚠️ Error al registrar popup grab en PopupManager: {:?}", err);
+                tracing::warn!(
+                    "⚠️ Error al registrar popup grab en PopupManager: {:?}",
+                    err
+                );
             }
         }
     }
@@ -5660,7 +5967,10 @@ impl XdgShellHandler for MalusState {
     }
 
     fn move_request(&mut self, surface: ToplevelSurface, seat: WlSeat, serial: Serial) {
-        tracing::info!("🖱️ [XdgShell] move_request recibido del cliente: serial={:?}", serial);
+        tracing::info!(
+            "🖱️ [XdgShell] move_request recibido del cliente: serial={:?}",
+            serial
+        );
         let seat: Seat<Self> = Seat::from_resource(&seat).unwrap();
         let pointer = seat.get_pointer().unwrap();
 
@@ -5690,7 +6000,9 @@ impl XdgShellHandler for MalusState {
         self.ssd.grab_active = true;
         self.moving_window_surface = window.wl_surface().map(|s| s.into_owned());
         pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Clear);
-        tracing::info!("✅ [XdgShell] MoveSurfaceGrab activado exitosamente para arrastre por título!");
+        tracing::info!(
+            "✅ [XdgShell] MoveSurfaceGrab activado exitosamente para arrastre por título!"
+        );
     }
 
     fn resize_request(
@@ -5700,16 +6012,27 @@ impl XdgShellHandler for MalusState {
         serial: Serial,
         edges: ResizeEdge,
     ) {
-        tracing::info!("📐 [XdgShell] resize_request recibido del cliente: edges={:?}", edges);
-        let Some(seat) = Seat::from_resource(&seat) else { return };
-        let Some(pointer) = seat.get_pointer() else { return };
+        tracing::info!(
+            "📐 [XdgShell] resize_request recibido del cliente: edges={:?}",
+            edges
+        );
+        let Some(seat) = Seat::from_resource(&seat) else {
+            return;
+        };
+        let Some(pointer) = seat.get_pointer() else {
+            return;
+        };
 
         if !pointer.has_grab(serial) {
-            tracing::warn!("⚠️ resize_request rechazado: el puntero no tiene un grab con este serial");
+            tracing::warn!(
+                "⚠️ resize_request rechazado: el puntero no tiene un grab con este serial"
+            );
             return;
         }
 
-        let Some(window) = self.window_for_surface(surface.wl_surface()) else { return };
+        let Some(window) = self.window_for_surface(surface.wl_surface()) else {
+            return;
+        };
 
         let is_maximized_or_snapped = is_window_snapped(&window);
 
@@ -5739,7 +6062,9 @@ impl XdgShellHandler for MalusState {
             crate::grabs::cursor_icon_for_resize_edge(edges),
         );
         pointer.set_grab(self, grab, serial, smithay::input::pointer::Focus::Clear);
-        tracing::info!("✅ [XdgShell] ResizeSurfaceGrab activado exitosamente para redimensión de ventana!");
+        tracing::info!(
+            "✅ [XdgShell] ResizeSurfaceGrab activado exitosamente para redimensión de ventana!"
+        );
     }
 
     fn reposition_request(
@@ -5759,7 +6084,9 @@ impl XdgShellHandler for MalusState {
 
     fn maximize_request(&mut self, surface: ToplevelSurface) {
         tracing::info!("🪟 [XdgShell] maximize_request recibido del cliente");
-        let Some(window) = self.window_for_surface(surface.wl_surface()) else { return };
+        let Some(window) = self.window_for_surface(surface.wl_surface()) else {
+            return;
+        };
         let output = self
             .origin_output_for_window(&window)
             .or_else(|| self.primary_output());
@@ -5773,7 +6100,9 @@ impl XdgShellHandler for MalusState {
     fn unmaximize_request(&mut self, surface: ToplevelSurface) {
         tracing::info!("🪟 [XdgShell] unmaximize_request recibido del cliente");
         let surf = surface.wl_surface();
-        let Some(window) = self.window_for_surface(surf) else { return };
+        let Some(window) = self.window_for_surface(surf) else {
+            return;
+        };
         let output = self
             .origin_output_for_window(&window)
             .or_else(|| self.primary_output());
@@ -5792,12 +6121,9 @@ impl XdgShellHandler for MalusState {
         };
         // Siempre respetar la pantalla de origen donde reside la ventana para que los vídeos
         // o aplicaciones en pantalla completa no salten arbitrariamente al monitor primario.
-        let output = self.origin_output_for_window(&window)
-            .or_else(|| {
-                requested_output
-                    .as_ref()
-                    .and_then(Output::from_resource)
-            })
+        let output = self
+            .origin_output_for_window(&window)
+            .or_else(|| requested_output.as_ref().and_then(Output::from_resource))
             .or_else(|| self.primary_output());
         let Some(output) = output else {
             tracing::warn!("⚠️ fullscreen_request ignorado: no hay una pantalla disponible");
@@ -5818,10 +6144,8 @@ impl XdgShellHandler for MalusState {
             if let Some(surface) = window.wl_surface() {
                 let geometry = window.geometry();
                 let loc = self.space.element_location(&window).unwrap_or_default();
-                self.window_restore_geometries.insert(
-                    surface.into_owned(),
-                    (loc, geometry.size),
-                );
+                self.window_restore_geometries
+                    .insert(surface.into_owned(), (loc, geometry.size));
             }
         }
 
@@ -5846,7 +6170,8 @@ impl XdgShellHandler for MalusState {
         let Some(toplevel) = window.toplevel() else {
             return;
         };
-        let output = self.origin_output_for_window(&window)
+        let output = self
+            .origin_output_for_window(&window)
             .or_else(|| self.primary_output());
         let restore = self.window_restore_geometries.get(surf).copied();
         let (location, size) = if let Some((saved_loc, saved_size)) = restore {
@@ -5918,13 +6243,23 @@ impl XdgShellHandler for MalusState {
                     if let Some(ref win) = window {
                         let geo = win.geometry();
                         if geo.size.w >= 200 && geo.size.h >= 200 {
-                            tracing::info!("💾 Recordando tamaño de ventana para {}: {:?}", id, geo.size);
+                            tracing::info!(
+                                "💾 Recordando tamaño de ventana para {}: {:?}",
+                                id,
+                                geo.size
+                            );
                             self.save_app_window_size(&id, geo.size);
                         }
                     }
-                } else if let Some((_, saved_size)) = self.window_restore_geometries.get(surf).copied() {
+                } else if let Some((_, saved_size)) =
+                    self.window_restore_geometries.get(surf).copied()
+                {
                     if saved_size.w >= 200 && saved_size.h >= 200 {
-                        tracing::info!("💾 Recordando tamaño previo no maximizado para {}: {:?}", id, saved_size);
+                        tracing::info!(
+                            "💾 Recordando tamaño previo no maximizado para {}: {:?}",
+                            id,
+                            saved_size
+                        );
                         self.save_app_window_size(&id, saved_size);
                     }
                 }
@@ -5932,7 +6267,8 @@ impl XdgShellHandler for MalusState {
         }
 
         let hint_entry = self.close_button_hints.remove(surf);
-        let skip_black_hole = should_skip_black_hole_for_app_id(app_id_for_surface(surf).as_deref());
+        let skip_black_hole =
+            should_skip_black_hole_for_app_id(app_id_for_surface(surf).as_deref());
         if let Some(ref win) = window {
             let geo = win.geometry();
             if !skip_black_hole
@@ -6031,7 +6367,9 @@ impl XdgShellHandler for MalusState {
 
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
         let next_win = self.space.elements().rev().next().cloned();
-        let next_surface = next_win.as_ref().and_then(|w| w.wl_surface().map(|s| s.into_owned()));
+        let next_surface = next_win
+            .as_ref()
+            .and_then(|w| w.wl_surface().map(|s| s.into_owned()));
         if let Some(ref win) = next_win {
             if let Some(toplevel) = win.toplevel() {
                 toplevel.send_configure();
@@ -6074,7 +6412,9 @@ impl XdgShellHandler for MalusState {
                 if let Some(saved) = self.get_saved_window_size(&id) {
                     let win_opt = self.window_for_surface(surface.wl_surface());
                     let cur_geo = win_opt.as_ref().map(|w| w.geometry());
-                    let is_unconfigured = cur_geo.map(|g| g.size.w <= 200 || g.size.h <= 200).unwrap_or(true);
+                    let is_unconfigured = cur_geo
+                        .map(|g| g.size.w <= 200 || g.size.h <= 200)
+                        .unwrap_or(true);
                     if is_unconfigured {
                         let output = win_opt
                             .as_ref()
@@ -6144,7 +6484,8 @@ impl WlrLayerShellHandler for MalusState {
                 .ok()
                 .and_then(|c| c.get_credentials(&self.display_handle).ok())
                 .map(|cred| cred.pid);
-            if let (Some(expected_pid), Some(got_pid)) = (self.ext_lock_client_pid, layer_client_pid)
+            if let (Some(expected_pid), Some(got_pid)) =
+                (self.ext_lock_client_pid, layer_client_pid)
             {
                 if expected_pid != got_pid {
                     tracing::warn!(
@@ -6194,17 +6535,30 @@ impl WlrLayerShellHandler for MalusState {
         }
     }
 
-    fn new_popup(&mut self, _parent: LayerSurface, popup: smithay::wayland::shell::xdg::PopupSurface) {
-        tracing::info!("✨ [LayerShell] Nuevo Popup para Layer Surface recibido; registrando en PopupManager");
+    fn new_popup(
+        &mut self,
+        _parent: LayerSurface,
+        popup: smithay::wayland::shell::xdg::PopupSurface,
+    ) {
+        tracing::info!(
+            "✨ [LayerShell] Nuevo Popup para Layer Surface recibido; registrando en PopupManager"
+        );
         if self.popups.find_popup(popup.wl_surface()).is_none() {
             if let Err(err) = self.popups.track_popup(PopupKind::Xdg(popup.clone())) {
-                tracing::warn!("⚠️ Error al registrar layer popup en PopupManager: {:?}", err);
+                tracing::warn!(
+                    "⚠️ Error al registrar layer popup en PopupManager: {:?}",
+                    err
+                );
             }
         }
         if let Err(err) = popup.send_configure() {
             tracing::warn!("⚠️ Error al enviar configure a layer popup: {:?}", err);
         }
-        if !self.active_popups.iter().any(|p| p.wl_surface() == popup.wl_surface()) {
+        if !self
+            .active_popups
+            .iter()
+            .any(|p| p.wl_surface() == popup.wl_surface())
+        {
             self.active_popups.push(popup);
         }
     }
@@ -6225,7 +6579,10 @@ impl WlrLayerShellHandler for MalusState {
                 .cloned();
             if let Some(layer) = layer {
                 map.unmap_layer(&layer);
-                tracing::info!("🧹 Layer surface desmapeada de LayerMap: namespace={}", layer.namespace());
+                tracing::info!(
+                    "🧹 Layer surface desmapeada de LayerMap: namespace={}",
+                    layer.namespace()
+                );
             }
             map.cleanup();
         }
@@ -6331,7 +6688,10 @@ impl SessionLockHandler for MalusState {
 
         confirmation.lock();
         self.surface_commit_counter = self.surface_commit_counter.wrapping_add(1);
-        tracing::info!("🔒 Sesión bloqueada mediante protocolo ext-session-lock-v1 (pid={:?})", client_pid);
+        tracing::info!(
+            "🔒 Sesión bloqueada mediante protocolo ext-session-lock-v1 (pid={:?})",
+            client_pid
+        );
     }
 
     fn unlock(&mut self) {
@@ -6382,7 +6742,9 @@ fn should_skip_black_hole_for_app_id(app_id: Option<&str>) -> bool {
         return false;
     };
     let lower = id.to_ascii_lowercase();
-    lower.contains("branches.quicklook") || lower == "dev.malus.preview" || lower == "malus-de-preview"
+    lower.contains("branches.quicklook")
+        || lower == "dev.malus.preview"
+        || lower == "malus-de-preview"
 }
 
 #[cfg(test)]
@@ -6450,16 +6812,28 @@ mod tests {
 
     #[test]
     fn reads_dark_and_light_color_scheme_from_session_keyfile() {
-        assert_eq!(parse_color_scheme("[org/gnome/desktop/interface]\ncolor-scheme='prefer-dark'\n"), Some(true));
-        assert_eq!(parse_color_scheme("[org/gnome/desktop/interface]\ncolor-scheme='prefer-light'\n"), Some(false));
-        assert_eq!(parse_color_scheme("[org/gnome/desktop/interface]\ncolor-scheme='default'\n"), None);
-        assert_eq!(parse_color_scheme("[org/gnome/desktop/wm/preferences]\ncolor-scheme='prefer-light'\n"), None);
+        assert_eq!(
+            parse_color_scheme("[org/gnome/desktop/interface]\ncolor-scheme='prefer-dark'\n"),
+            Some(true)
+        );
+        assert_eq!(
+            parse_color_scheme("[org/gnome/desktop/interface]\ncolor-scheme='prefer-light'\n"),
+            Some(false)
+        );
+        assert_eq!(
+            parse_color_scheme("[org/gnome/desktop/interface]\ncolor-scheme='default'\n"),
+            None
+        );
+        assert_eq!(
+            parse_color_scheme("[org/gnome/desktop/wm/preferences]\ncolor-scheme='prefer-light'\n"),
+            None
+        );
     }
 
     #[test]
     fn snap_transition_interpolates_smoothly_with_cubic_ease_out() {
-        use std::time::Duration;
         use smithay::utils::{Point, Size};
+        use std::time::Duration;
 
         let start_time = std::time::Instant::now();
         let trans = super::SnapTransition {
@@ -6849,7 +7223,8 @@ mod tests {
                     smithay::utils::Point<f64, smithay::utils::Logical>,
                 )>,
                 _event: &smithay::input::pointer::MotionEvent,
-            ) {}
+            ) {
+            }
             fn relative_motion(
                 &mut self,
                 _data: &mut super::MalusState,
@@ -6859,72 +7234,84 @@ mod tests {
                     smithay::utils::Point<f64, smithay::utils::Logical>,
                 )>,
                 _event: &smithay::input::pointer::RelativeMotionEvent,
-            ) {}
+            ) {
+            }
             fn button(
                 &mut self,
                 _data: &mut super::MalusState,
                 _handle: &mut PointerInnerHandle<'_, super::MalusState>,
                 _event: &smithay::input::pointer::ButtonEvent,
-            ) {}
+            ) {
+            }
             fn axis(
                 &mut self,
                 _data: &mut super::MalusState,
                 _handle: &mut PointerInnerHandle<'_, super::MalusState>,
                 _details: smithay::input::pointer::AxisFrame,
-            ) {}
+            ) {
+            }
             fn frame(
                 &mut self,
                 _data: &mut super::MalusState,
                 _handle: &mut PointerInnerHandle<'_, super::MalusState>,
-            ) {}
+            ) {
+            }
             fn gesture_swipe_begin(
                 &mut self,
                 _data: &mut super::MalusState,
                 _handle: &mut PointerInnerHandle<'_, super::MalusState>,
                 _event: &smithay::input::pointer::GestureSwipeBeginEvent,
-            ) {}
+            ) {
+            }
             fn gesture_swipe_update(
                 &mut self,
                 _data: &mut super::MalusState,
                 _handle: &mut PointerInnerHandle<'_, super::MalusState>,
                 _event: &smithay::input::pointer::GestureSwipeUpdateEvent,
-            ) {}
+            ) {
+            }
             fn gesture_swipe_end(
                 &mut self,
                 _data: &mut super::MalusState,
                 _handle: &mut PointerInnerHandle<'_, super::MalusState>,
                 _event: &smithay::input::pointer::GestureSwipeEndEvent,
-            ) {}
+            ) {
+            }
             fn gesture_pinch_begin(
                 &mut self,
                 _data: &mut super::MalusState,
                 _handle: &mut PointerInnerHandle<'_, super::MalusState>,
                 _event: &smithay::input::pointer::GesturePinchBeginEvent,
-            ) {}
+            ) {
+            }
             fn gesture_pinch_update(
                 &mut self,
                 _data: &mut super::MalusState,
                 _handle: &mut PointerInnerHandle<'_, super::MalusState>,
                 _event: &smithay::input::pointer::GesturePinchUpdateEvent,
-            ) {}
+            ) {
+            }
             fn gesture_pinch_end(
                 &mut self,
                 _data: &mut super::MalusState,
                 _handle: &mut PointerInnerHandle<'_, super::MalusState>,
                 _event: &smithay::input::pointer::GesturePinchEndEvent,
-            ) {}
+            ) {
+            }
             fn gesture_hold_begin(
                 &mut self,
                 _data: &mut super::MalusState,
                 _handle: &mut PointerInnerHandle<'_, super::MalusState>,
                 _event: &smithay::input::pointer::GestureHoldBeginEvent,
-            ) {}
+            ) {
+            }
             fn gesture_hold_end(
                 &mut self,
                 _data: &mut super::MalusState,
                 _handle: &mut PointerInnerHandle<'_, super::MalusState>,
                 _event: &smithay::input::pointer::GestureHoldEndEvent,
-            ) {}
+            ) {
+            }
             fn start_data(&self) -> &GrabStartData<super::MalusState> {
                 &self.0
             }
@@ -6933,11 +7320,18 @@ mod tests {
 
         let display: Display<super::MalusState> = Display::new().unwrap();
         let mut state = super::MalusState::new(&display);
-        let kb = state.seat.add_keyboard(Default::default(), 200, 25).unwrap();
+        let kb = state
+            .seat
+            .add_keyboard(Default::default(), 200, 25)
+            .unwrap();
         let ptr = state.seat.add_pointer();
         let serial = SERIAL_COUNTER.next_serial();
 
-        kb.set_grab(&mut state, DummyKbGrab(KbGrabStartData { focus: None }), serial);
+        kb.set_grab(
+            &mut state,
+            DummyKbGrab(KbGrabStartData { focus: None }),
+            serial,
+        );
         ptr.set_grab(
             &mut state,
             DummyPtrGrab(GrabStartData {
@@ -6974,8 +7368,10 @@ mod tests {
         let ssd_top = crate::ssd::SSD_TITLEBAR_HEIGHT;
 
         // 2/3 + 1/3
-        let (l_loc, l_sz, _) = super::snap_target_geometry(super::SnapMode::LeftTwoThirds, usable, 0);
-        let (r_loc, r_sz, _) = super::snap_target_geometry(super::SnapMode::RightOneThird, usable, 0);
+        let (l_loc, l_sz, _) =
+            super::snap_target_geometry(super::SnapMode::LeftTwoThirds, usable, 0);
+        let (r_loc, r_sz, _) =
+            super::snap_target_geometry(super::SnapMode::RightOneThird, usable, 0);
         assert_eq!(l_loc.x, 0);
         assert_eq!(l_sz.unwrap().w + r_sz.unwrap().w, 1920);
         assert_eq!(l_loc.x + l_sz.unwrap().w, r_loc.x);
@@ -6999,8 +7395,10 @@ mod tests {
         assert_eq!(qs3.unwrap().w, 480);
 
         // Cuartos verticales con barra SSD (sin solapamiento de barra de título)
-        let (tl_loc, tl_sz, _) = super::snap_target_geometry(super::SnapMode::TopLeftQuarter, usable, ssd_top);
-        let (bl_loc, bl_sz, _) = super::snap_target_geometry(super::SnapMode::BottomLeftQuarter, usable, ssd_top);
+        let (tl_loc, tl_sz, _) =
+            super::snap_target_geometry(super::SnapMode::TopLeftQuarter, usable, ssd_top);
+        let (bl_loc, bl_sz, _) =
+            super::snap_target_geometry(super::SnapMode::BottomLeftQuarter, usable, ssd_top);
         assert_eq!(tl_loc.y - ssd_top, 32);
         assert_eq!(tl_loc.y + tl_sz.unwrap().h, bl_loc.y - ssd_top);
         assert_eq!(bl_loc.y + bl_sz.unwrap().h, 1032);
@@ -7032,8 +7430,8 @@ mod tests {
 
     #[test]
     fn snap_transition_render_geometry_keeps_static_1_to_1_scale() {
-        use std::time::Duration;
         use smithay::utils::{Logical, Point, Rectangle, Size};
+        use std::time::Duration;
 
         let start_time = std::time::Instant::now();
         let trans = super::SnapTransition {
@@ -7049,10 +7447,14 @@ mod tests {
 
         // Antes de que el cliente envíe el buffer maximizado (geo = 800x600 con márgenes CSD 26px):
         // la superficie se posiciona 1:1 (phys_loc = effective_loc - geo.loc) y se recorta a 800x600.
-        let uncommited_geo = Rectangle::<i32, Logical>::new(Point::from((26, 26)), Size::from((800, 600)));
+        let uncommited_geo =
+            Rectangle::<i32, Logical>::new(Point::from((26, 26)), Size::from((800, 600)));
         let (eff_loc, eff_sz, phys_loc_before, clip_before, _, _, win_rect_before) =
             trans.render_geometry(uncommited_geo, Point::from((0, 0)), 1.0, mid);
-        assert_eq!(phys_loc_before, Point::from((eff_loc.x - 26, eff_loc.y - 26)));
+        assert_eq!(
+            phys_loc_before,
+            Point::from((eff_loc.x - 26, eff_loc.y - 26))
+        );
         let clip_before = clip_before.expect("debe devolver recorte en transición");
         assert_eq!(clip_before.loc, win_rect_before.loc);
         assert_eq!(clip_before.size, Size::from((800, 600)));
@@ -7060,7 +7462,8 @@ mod tests {
 
         // Una vez que el cliente confirma el tamaño maximizado (geo = 1920x1048 >= effective_size):
         // el recorte coincide exactamente con win_screen_rect y mantiene escala 1:1.
-        let committed_geo = Rectangle::<i32, Logical>::new(Point::from((0, 0)), Size::from((1920, 1048)));
+        let committed_geo =
+            Rectangle::<i32, Logical>::new(Point::from((0, 0)), Size::from((1920, 1048)));
         let (eff_loc2, _, phys_loc_after, clip_after, _, _, win_rect_after) =
             trans.render_geometry(committed_geo, Point::from((0, 0)), 1.0, mid);
         assert_eq!(phys_loc_after, eff_loc2.to_physical_precise_round(1.0));
@@ -7077,8 +7480,12 @@ mod tests {
         assert!(!super::should_include_minimized_in_app_switcher(true, 0, 1));
 
         // Pantalla secundaria (sin Dock) -> nunca se incluyen minimizadas
-        assert!(!super::should_include_minimized_in_app_switcher(false, 0, 0));
-        assert!(!super::should_include_minimized_in_app_switcher(false, 1, 0));
+        assert!(!super::should_include_minimized_in_app_switcher(
+            false, 0, 0
+        ));
+        assert!(!super::should_include_minimized_in_app_switcher(
+            false, 1, 0
+        ));
     }
 
     #[test]
@@ -7123,7 +7530,10 @@ mod tests {
         );
         state.space.map_output(&output, (0, 0));
 
-        let outputs = vec![(output.clone(), Rectangle::new((0, 0).into(), (1920, 1080).into()))];
+        let outputs = vec![(
+            output.clone(),
+            Rectangle::new((0, 0).into(), (1920, 1080).into()),
+        )];
         // Ventana SSD arrastrada a esquina inferior derecha: cliente en y=1100 >= 1080, barra SSD en [1062, 1100).
         let resolved_bottom = super::resolve_origin_output_from_bounds(
             &outputs,
@@ -7153,7 +7563,10 @@ mod tests {
                 &mut self,
                 data: &mut super::MalusState,
                 handle: &mut PointerInnerHandle<'_, super::MalusState>,
-                _focus: Option<(<super::MalusState as SeatHandler>::PointerFocus, Point<f64, Logical>)>,
+                _focus: Option<(
+                    <super::MalusState as SeatHandler>::PointerFocus,
+                    Point<f64, Logical>,
+                )>,
                 event: &MotionEvent,
             ) {
                 data.last_pointer_location = Some(event.location);
@@ -7165,7 +7578,10 @@ mod tests {
                 &mut self,
                 data: &mut super::MalusState,
                 handle: &mut PointerInnerHandle<'_, super::MalusState>,
-                focus: Option<(<super::MalusState as SeatHandler>::PointerFocus, Point<f64, Logical>)>,
+                focus: Option<(
+                    <super::MalusState as SeatHandler>::PointerFocus,
+                    Point<f64, Logical>,
+                )>,
                 event: &RelativeMotionEvent,
             ) {
                 handle.relative_motion(data, focus, event);
@@ -7305,7 +7721,10 @@ mod tests {
                 time: 20,
             },
         );
-        assert_eq!(state.last_pointer_location, Some(Point::from((1919.0, 1079.0))));
+        assert_eq!(
+            state.last_pointer_location,
+            Some(Point::from((1919.0, 1079.0)))
+        );
         assert!(!state.ssd.grab_active);
     }
 
@@ -7330,11 +7749,19 @@ mod tests {
             (crate::ssd::BTN_CLOSE_X, crate::ssd::BTN_Y)
         );
         assert_eq!(
-            super::MalusState::close_button_offset_for_app_id(Some("dev.malus.Branches"), false, false),
+            super::MalusState::close_button_offset_for_app_id(
+                Some("dev.malus.Branches"),
+                false,
+                false
+            ),
             (28.5, 24.0)
         );
         assert_eq!(
-            super::MalusState::close_button_offset_for_app_id(Some("dev.malus.Settings"), false, false),
+            super::MalusState::close_button_offset_for_app_id(
+                Some("dev.malus.Settings"),
+                false,
+                false
+            ),
             (25.5, 23.5)
         );
         assert_eq!(
@@ -7346,7 +7773,11 @@ mod tests {
             (16.5, 21.0)
         );
         assert_eq!(
-            super::MalusState::close_button_offset_for_app_id(Some("org.gnome.TextEditor"), false, false),
+            super::MalusState::close_button_offset_for_app_id(
+                Some("org.gnome.TextEditor"),
+                false,
+                false
+            ),
             (22.5, 23.0)
         );
     }
@@ -7359,7 +7790,8 @@ mod tests {
             super::max_window_size_in_usable_zone(usable, 0),
             Size::from((1920, 960))
         );
-        let ssd_max = super::max_window_size_in_usable_zone(usable, crate::ssd::SSD_TITLEBAR_HEIGHT);
+        let ssd_max =
+            super::max_window_size_in_usable_zone(usable, crate::ssd::SSD_TITLEBAR_HEIGHT);
         assert_eq!(
             ssd_max,
             Size::from((1920, 960 - crate::ssd::SSD_TITLEBAR_HEIGHT))
@@ -7421,7 +7853,12 @@ mod tests {
             size: (1920, 1080).into(),
             refresh: 60_000,
         };
-        primary.change_current_state(Some(p_mode), Some(Transform::Normal), None, Some((0, 0).into()));
+        primary.change_current_state(
+            Some(p_mode),
+            Some(Transform::Normal),
+            None,
+            Some((0, 0).into()),
+        );
         primary.set_preferred(p_mode);
         state.space.map_output(&primary, (0, 0));
 
@@ -7447,7 +7884,10 @@ mod tests {
 
         let display: Display<super::MalusState> = Display::new().unwrap();
         let mut state = super::MalusState::new(&display);
-        let _keyboard = state.seat.add_keyboard(Default::default(), 200, 200).unwrap();
+        let _keyboard = state
+            .seat
+            .add_keyboard(Default::default(), 200, 200)
+            .unwrap();
 
         let output = Output::new(
             "DP-1".to_string(),
@@ -7462,7 +7902,12 @@ mod tests {
             size: (1920, 1080).into(),
             refresh: 60_000,
         };
-        output.change_current_state(Some(mode), Some(Transform::Normal), None, Some((0, 0).into()));
+        output.change_current_state(
+            Some(mode),
+            Some(Transform::Normal),
+            None,
+            Some((0, 0).into()),
+        );
         output.set_preferred(mode);
         state.space.map_output(&output, (0, 0));
 
@@ -7510,7 +7955,12 @@ mod tests {
                 size: (1920, 1080).into(),
                 refresh: 60_000,
             };
-            out.change_current_state(Some(mode), Some(Transform::Normal), None, Some((x, 0).into()));
+            out.change_current_state(
+                Some(mode),
+                Some(Transform::Normal),
+                None,
+                Some((x, 0).into()),
+            );
             out.set_preferred(mode);
             out
         };
@@ -7562,7 +8012,9 @@ mod tests {
         );
         assert!(super::is_primary_shell_layer_namespace("malus-top-bar"));
         assert!(super::is_primary_shell_layer_namespace("malus-dock"));
-        assert!(super::is_primary_shell_layer_namespace("malus-app-switcher"));
+        assert!(super::is_primary_shell_layer_namespace(
+            "malus-app-switcher"
+        ));
         assert!(!super::is_primary_shell_layer_namespace("malus-wallpaper"));
     }
 }

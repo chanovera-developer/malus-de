@@ -43,11 +43,16 @@ impl ScreenRecordingSession {
         let mut cmd = Command::new("ffmpeg");
         cmd.args([
             "-y",
-            "-f", "rawvideo",
-            "-pixel_format", "rgba",
-            "-video_size", &format!("{w}x{h}"),
-            "-framerate", &fps.to_string(),
-            "-i", "-",
+            "-f",
+            "rawvideo",
+            "-pixel_format",
+            "rgba",
+            "-video_size",
+            &format!("{w}x{h}"),
+            "-framerate",
+            &fps.to_string(),
+            "-i",
+            "-",
         ]);
 
         if include_audio {
@@ -56,12 +61,18 @@ impl ScreenRecordingSession {
 
         // Formato abierto estándar WebM con códec VP8/VP9 y Opus (100% libre de patentes)
         cmd.args([
-            "-c:v", "libvpx",
-            "-deadline", "realtime",
-            "-quality", "realtime",
-            "-cpu-used", "6",
-            "-b:v", "3M",
-            "-pix_fmt", "yuv420p",
+            "-c:v",
+            "libvpx",
+            "-deadline",
+            "realtime",
+            "-quality",
+            "realtime",
+            "-cpu-used",
+            "6",
+            "-b:v",
+            "3M",
+            "-pix_fmt",
+            "yuv420p",
         ]);
 
         if include_audio {
@@ -74,8 +85,13 @@ impl ScreenRecordingSession {
         cmd.stdout(Stdio::null());
         cmd.stderr(Stdio::null());
 
-        let mut child = cmd.spawn().context("No se pudo iniciar ffmpeg para grabación de pantalla")?;
-        let mut stdin = child.stdin.take().context("No se pudo abrir stdin de ffmpeg")?;
+        let mut child = cmd
+            .spawn()
+            .context("No se pudo iniciar ffmpeg para grabación de pantalla")?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .context("No se pudo abrir stdin de ffmpeg")?;
 
         let (sender, receiver) = sync_channel::<Vec<u8>>(4);
 
@@ -99,14 +115,19 @@ impl ScreenRecordingSession {
                     false
                 }
             };
-            info!("Grabación de pantalla finalizada: {} fotogramas, éxito: {}", total_frames, success);
+            info!(
+                "Grabación de pantalla finalizada: {} fotogramas, éxito: {}",
+                total_frames, success
+            );
 
             if success {
                 let path_str = dest_clone.to_string_lossy().to_string();
                 let _ = Command::new("notify-send")
                     .args([
-                        "-a", "Malus DE",
-                        "-i", "video-x-generic",
+                        "-a",
+                        "Malus DE",
+                        "-i",
+                        "video-x-generic",
                         "Grabación de pantalla completada",
                         &format!("Guardada en {}", path_str),
                     ])
@@ -116,13 +137,20 @@ impl ScreenRecordingSession {
             broadcaster.broadcast(&malus_de_common::ipc::IpcMessage::ScreenRecordingFinished {
                 destination: dest_clone.to_string_lossy().to_string(),
                 success,
-                error: if success { None } else { Some("ffmpeg finalizó con error".to_string()) },
+                error: if success {
+                    None
+                } else {
+                    Some("ffmpeg finalizó con error".to_string())
+                },
             });
         });
 
         info!(
             "Grabación iniciada en formato abierto WebM: {}x{} @ {} fps en {}",
-            w, h, fps, destination.display()
+            w,
+            h,
+            fps,
+            destination.display()
         );
 
         Ok(Self {

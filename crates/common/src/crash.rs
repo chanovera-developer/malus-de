@@ -150,7 +150,13 @@ pub fn write_panic_report(
     let stamp = unix_timestamp_secs();
     let safe_comp: String = component
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let path = dir.join(format!("pending-{stamp}-{safe_comp}.txt"));
 
@@ -220,7 +226,10 @@ pub fn format_panic_report_text(
 
 /// Reemplaza rutas absolutas del directorio personal del usuario por `~` para evitar filtrar su nombre de usuario.
 pub fn sanitize_home_paths(text: &str, home_dir: Option<&str>) -> String {
-    match home_dir.map(str::trim).filter(|h| !h.is_empty() && *h != "/") {
+    match home_dir
+        .map(str::trim)
+        .filter(|h| !h.is_empty() && *h != "/")
+    {
         Some(home) => text.replace(home, "~"),
         None => text.to_string(),
     }
@@ -297,7 +306,11 @@ fn read_configured_endpoint() -> Option<String> {
             continue;
         };
         if let Ok(cfg) = toml::from_str::<CrashReporterConfig>(&content) {
-            if let Some(url) = cfg.endpoint.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+            if let Some(url) = cfg
+                .endpoint
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+            {
                 return Some(url);
             }
         }
@@ -415,12 +428,20 @@ fn parse_curl_http_output(raw_stdout: &str) -> Result<String, String> {
     Err(if body.is_empty() {
         format!("El servidor respondió con estado HTTP {status}")
     } else {
-        format!("HTTP {status}: {}", body.chars().take(180).collect::<String>())
+        format!(
+            "HTTP {status}: {}",
+            body.chars().take(180).collect::<String>()
+        )
     })
 }
 
 /// Construye un enlace `mailto:` compacto para abrir el cliente de correo predeterminado.
-pub fn build_mailto_uri(recipient: &str, component: &str, report_path: &Path, summary_line: &str) -> String {
+pub fn build_mailto_uri(
+    recipient: &str,
+    component: &str,
+    report_path: &Path,
+    summary_line: &str,
+) -> String {
     let subject = format!("Reporte de fallo Malus DE ({component})");
     let body = format!(
         "Hola,\n\n\

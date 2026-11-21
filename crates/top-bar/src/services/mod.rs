@@ -21,9 +21,16 @@ mod tests {
             println!("Active Wi-Fi SSID via D-Bus: {:?}", active_ssid);
 
             let (scan_ok, networks) = NetworkService::scan_networks().await;
-            println!("Wi-Fi scan result: enabled={}, total redes={}", scan_ok, networks.len());
+            println!(
+                "Wi-Fi scan result: enabled={}, total redes={}",
+                scan_ok,
+                networks.len()
+            );
             for net in &networks {
-                println!("  - Red: '{}' (señal: {}%, segura: {}, en uso: {})", net.ssid, net.signal, net.is_encrypted, net.in_use);
+                println!(
+                    "  - Red: '{}' (señal: {}%, segura: {}, en uso: {})",
+                    net.ssid, net.signal, net.is_encrypted, net.in_use
+                );
             }
         });
     }
@@ -40,7 +47,10 @@ mod tests {
             let paired = BluetoothService::get_paired_devices().await;
             println!("Paired Bluetooth devices count: {}", paired.len());
             for dev in &paired {
-                println!("  - Dispositivo: '{}' ({}) [conectado: {}, batería: {:?}]", dev.name, dev.address, dev.connected, dev.battery);
+                println!(
+                    "  - Dispositivo: '{}' ({}) [conectado: {}, batería: {:?}]",
+                    dev.name, dev.address, dev.connected, dev.battery
+                );
             }
         });
     }

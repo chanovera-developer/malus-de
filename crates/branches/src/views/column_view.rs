@@ -145,7 +145,8 @@ impl ColumnView {
         }
 
         self.inner.clear_all();
-        self.inner.push_column(0, path.to_path_buf(), items.to_vec());
+        self.inner
+            .push_column(0, path.to_path_buf(), items.to_vec());
     }
 
     pub fn queue_select_name(&self, name: &str) {
@@ -317,8 +318,9 @@ impl ColumnViewInner {
                 y,
                 col_dir.clone(),
                 Rc::new(move |created_path| {
-                    if let Some(new_name) =
-                        created_path.file_name().map(|n| n.to_string_lossy().into_owned())
+                    if let Some(new_name) = created_path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
                     {
                         *self_create.pending_select_name.borrow_mut() = Some(new_name);
                     }
@@ -440,7 +442,9 @@ impl ColumnViewInner {
             let sort_by = *self.sort_by.borrow();
             let sort_order = *self.sort_order.borrow();
 
-            if let Ok(child_items) = load_directory(&item.path, show_hidden, sort_by, sort_order, "") {
+            if let Ok(child_items) =
+                load_directory(&item.path, show_hidden, sort_by, sort_order, "")
+            {
                 self.push_column(col_idx + 1, item.path.clone(), child_items);
             }
         } else {
@@ -471,7 +475,12 @@ impl ColumnViewInner {
 
         let is_img = ["png", "jpg", "jpeg", "webp", "gif", "svg", "bmp"]
             .iter()
-            .any(|ext| item.path.extension().map(|e| e.to_string_lossy().to_lowercase() == *ext).unwrap_or(false));
+            .any(|ext| {
+                item.path
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_lowercase() == *ext)
+                    .unwrap_or(false)
+            });
 
         let thumb_widget: gtk4::Widget = if is_img {
             if let Ok(pixbuf) = Pixbuf::from_file_at_scale(&item.path, 160, 160, true) {
@@ -481,11 +490,13 @@ impl ColumnViewInner {
                 img.upcast()
             } else {
                 let img = Image::from_gicon(&item.gicon);
+                crate::views::apply_folder_icon_tint(&img, item);
                 img.set_pixel_size(96);
                 img.upcast()
             }
         } else {
             let img = Image::from_gicon(&item.gicon);
+            crate::views::apply_folder_icon_tint(&img, item);
             img.set_pixel_size(96);
             img.upcast()
         };
@@ -782,7 +793,10 @@ fn create_column_row(
             }
         } else if button == gdk::BUTTON_SECONDARY {
             g.set_state(gtk4::EventSequenceState::Claimed);
-            if let Some(lb) = row_for_menu.parent().and_then(|p| p.downcast::<ListBox>().ok()) {
+            if let Some(lb) = row_for_menu
+                .parent()
+                .and_then(|p| p.downcast::<ListBox>().ok())
+            {
                 if !row_for_menu.is_selected() {
                     lb.unselect_all();
                     lb.select_row(Some(&row_for_menu));

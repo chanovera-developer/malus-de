@@ -581,12 +581,7 @@ impl ScreenshotUiState {
         }
 
         let full_phys = Rectangle::new((0, 0).into(), (phys_w, phys_h).into());
-        Some((
-            full_phys,
-            Some(&self.mask_buffer),
-            (phys_w, phys_h),
-            1.0,
-        ))
+        Some((full_phys, Some(&self.mask_buffer), (phys_w, phys_h), 1.0))
     }
 
     pub fn create_render_element(
@@ -694,14 +689,7 @@ impl ScreenshotUiState {
         }
     }
 
-    fn draw_toolbar(
-        &self,
-        ctx: &Context,
-        mask_ctx: &Context,
-        sw: f64,
-        sh: f64,
-        is_dark: bool,
-    ) {
+    fn draw_toolbar(&self, ctx: &Context, mask_ctx: &Context, sw: f64, sh: f64, is_dark: bool) {
         let (x, y, w, h) = toolbar_geometry(sw, sh);
         let r = 14.0;
 
@@ -745,7 +733,11 @@ impl ScreenshotUiState {
         ctx.set_line_width(1.0);
         let _ = ctx.stroke();
 
-        let fg = if is_dark { [0.96, 0.96, 0.98] } else { [0.12, 0.12, 0.14] };
+        let fg = if is_dark {
+            [0.96, 0.96, 0.98]
+        } else {
+            [0.12, 0.12, 0.14]
+        };
 
         // Botón Cerrar (✕ dentro de círculo)
         draw_close_button(
@@ -765,13 +757,34 @@ impl ScreenshotUiState {
         let btn2_act = self.mode == ScreenshotUiMode::CaptureWindow;
         let btn3_act = self.mode == ScreenshotUiMode::CaptureArea;
 
-        draw_mode_button_plate(ctx, x + 66.0, y + 6.0, btn1_act, self.hovered_item == Some(1), is_dark);
+        draw_mode_button_plate(
+            ctx,
+            x + 66.0,
+            y + 6.0,
+            btn1_act,
+            self.hovered_item == Some(1),
+            is_dark,
+        );
         draw_monitor_icon(ctx, x + 66.0, y + 22.0, fg, false);
 
-        draw_mode_button_plate(ctx, x + 110.0, y + 6.0, btn2_act, self.hovered_item == Some(2), is_dark);
+        draw_mode_button_plate(
+            ctx,
+            x + 110.0,
+            y + 6.0,
+            btn2_act,
+            self.hovered_item == Some(2),
+            is_dark,
+        );
         draw_window_icon(ctx, x + 110.0, y + 22.0, fg);
 
-        draw_mode_button_plate(ctx, x + 154.0, y + 6.0, btn3_act, self.hovered_item == Some(3), is_dark);
+        draw_mode_button_plate(
+            ctx,
+            x + 154.0,
+            y + 6.0,
+            btn3_act,
+            self.hovered_item == Some(3),
+            is_dark,
+        );
         draw_marquee_icon(ctx, x + 154.0, y + 22.0, fg, false);
 
         // Separador 2
@@ -781,10 +794,24 @@ impl ScreenshotUiState {
         let btn4_act = self.mode == ScreenshotUiMode::RecordFull;
         let btn5_act = self.mode == ScreenshotUiMode::RecordArea;
 
-        draw_mode_button_plate(ctx, x + 199.0, y + 6.0, btn4_act, self.hovered_item == Some(4), is_dark);
+        draw_mode_button_plate(
+            ctx,
+            x + 199.0,
+            y + 6.0,
+            btn4_act,
+            self.hovered_item == Some(4),
+            is_dark,
+        );
         draw_monitor_icon(ctx, x + 199.0, y + 22.0, fg, true);
 
-        draw_mode_button_plate(ctx, x + 245.0, y + 6.0, btn5_act, self.hovered_item == Some(5), is_dark);
+        draw_mode_button_plate(
+            ctx,
+            x + 245.0,
+            y + 6.0,
+            btn5_act,
+            self.hovered_item == Some(5),
+            is_dark,
+        );
         draw_marquee_icon(ctx, x + 245.0, y + 22.0, fg, true);
 
         // Separador 3
@@ -808,7 +835,11 @@ impl ScreenshotUiState {
         draw_v_sep(ctx, x + 376.0, y + 8.0, 28.0, is_dark);
 
         // Botón de Acción Principal ("Capturar" o "Grabar")
-        let act_label = if self.mode.is_video() { "Grabar" } else { "Capturar" };
+        let act_label = if self.mode.is_video() {
+            "Grabar"
+        } else {
+            "Capturar"
+        };
         let act_hov = self.hovered_item == Some(7);
         draw_action_button(
             ctx,
@@ -854,7 +885,11 @@ impl ScreenshotUiState {
         ctx.set_source_rgba(1.0, 1.0, 1.0, if is_dark { 0.18 } else { 0.45 });
         let _ = ctx.stroke();
 
-        let fg = if is_dark { [0.96, 0.96, 0.98] } else { [0.12, 0.12, 0.14] };
+        let fg = if is_dark {
+            [0.96, 0.96, 0.98]
+        } else {
+            [0.12, 0.12, 0.14]
+        };
 
         // Cabecera: GUARDAR EN
         draw_menu_header(ctx, x + 28.0, y + 19.0, "Guardar en", fg);
@@ -871,7 +906,17 @@ impl ScreenshotUiState {
             let iy = y + 24.0 + i as f64 * 20.0;
             let checked = self.options.save_to == *tgt;
             let hovered = self.hovered_menu_item == Some(i);
-            draw_menu_row(ctx, x + 5.0, iy, w - 10.0, 20.0, checked, label, hovered, fg);
+            draw_menu_row(
+                ctx,
+                x + 5.0,
+                iy,
+                w - 10.0,
+                20.0,
+                checked,
+                label,
+                hovered,
+                fg,
+            );
         }
 
         // Separador 1
@@ -886,7 +931,17 @@ impl ScreenshotUiState {
             let iy = y + 130.0 + i as f64 * 20.0;
             let checked = self.options.timer_seconds == *sec;
             let hovered = self.hovered_menu_item == Some(item_idx);
-            draw_menu_row(ctx, x + 5.0, iy, w - 10.0, 20.0, checked, label, hovered, fg);
+            draw_menu_row(
+                ctx,
+                x + 5.0,
+                iy,
+                w - 10.0,
+                20.0,
+                checked,
+                label,
+                hovered,
+                fg,
+            );
         }
 
         // Separador 2
@@ -902,17 +957,21 @@ impl ScreenshotUiState {
         for (i, (item_idx, checked, label)) in opts.iter().enumerate() {
             let iy = y + 216.0 + i as f64 * 20.0;
             let hovered = self.hovered_menu_item == Some(*item_idx);
-            draw_menu_row(ctx, x + 5.0, iy, w - 10.0, 20.0, *checked, label, hovered, fg);
+            draw_menu_row(
+                ctx,
+                x + 5.0,
+                iy,
+                w - 10.0,
+                20.0,
+                *checked,
+                label,
+                hovered,
+                fg,
+            );
         }
     }
 
-    fn draw_recording_indicator(
-        &self,
-        ctx: &Context,
-        mask_ctx: &Context,
-        sw: f64,
-        is_dark: bool,
-    ) {
+    fn draw_recording_indicator(&self, ctx: &Context, mask_ctx: &Context, sw: f64, is_dark: bool) {
         let (rx, ry, rw, rh) = recording_indicator_geometry(sw);
         let r = 14.0;
 
@@ -940,7 +999,10 @@ impl ScreenshotUiState {
         let _ = ctx.fill();
 
         // Tiempo transcurrido
-        let secs = self.recording_start.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+        let secs = self
+            .recording_start
+            .map(|t| t.elapsed().as_secs())
+            .unwrap_or(0);
         let timer_str = format!("{:02}:{:02}", secs / 60, secs % 60);
         ctx.set_font_size(11.5);
         ctx.set_source_rgba(1.0, 1.0, 1.0, 0.96);
@@ -1072,15 +1134,7 @@ pub fn path_squircle_rect(ctx: &Context, x: f64, y: f64, w: f64, h: f64, r: f64)
     ctx.close_path();
 }
 
-fn draw_soft_shadow(
-    ctx: &Context,
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
-    r: f64,
-    is_dark: bool,
-) {
+fn draw_soft_shadow(ctx: &Context, x: f64, y: f64, w: f64, h: f64, r: f64, is_dark: bool) {
     let alpha = if is_dark { 0.04 } else { 0.025 };
     for i in 1..=4 {
         let spread = i as f64 * 2.5;
@@ -1097,14 +1151,7 @@ fn draw_soft_shadow(
     }
 }
 
-fn draw_close_button(
-    ctx: &Context,
-    cx: f64,
-    cy: f64,
-    is_hover: bool,
-    fg: [f64; 3],
-    is_dark: bool,
-) {
+fn draw_close_button(ctx: &Context, cx: f64, cy: f64, is_hover: bool, fg: [f64; 3], is_dark: bool) {
     let r = 8.5;
     ctx.arc(cx, cy, r, 0.0, TAU);
     if is_hover {
@@ -1335,7 +1382,8 @@ fn draw_menu_row(
 ) {
     let item_fg = if is_hover {
         path_squircle_rect(ctx, x, y, w, h, 5.0);
-        ctx.set_source_rgba(0.05, 0.48, 0.98, 0.95);
+        let (red, green, blue) = malus_de_common::config::load_accent_color();
+        ctx.set_source_rgba(red, green, blue, 0.95);
         let _ = ctx.fill();
         [1.0, 1.0, 1.0]
     } else {

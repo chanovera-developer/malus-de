@@ -6,7 +6,10 @@ pub fn try_calculate(input: &str) -> Option<String> {
     }
 
     // Comprobar que solo contiene dígitos, espacios y operadores permitidos
-    if !clean.chars().all(|c| c.is_ascii_digit() || "+-*/^. ()".contains(c)) {
+    if !clean
+        .chars()
+        .all(|c| c.is_ascii_digit() || "+-*/^. ()".contains(c))
+    {
         return None;
     }
 

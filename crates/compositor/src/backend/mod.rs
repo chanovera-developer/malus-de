@@ -77,9 +77,7 @@ pub fn translucent_window_blur_rect(
     scale: f64,
 ) -> Rectangle<i32, Physical> {
     if is_branches || is_translucent {
-        let sidebar_blur_w = ((212.0 * scale).round() as i32
-            + win_phys_r.unwrap_or(0) as i32
-            + 4)
+        let sidebar_blur_w = ((212.0 * scale).round() as i32 + win_phys_r.unwrap_or(0) as i32 + 4)
             .min(win_rect.size.w);
         Rectangle::new(win_rect.loc, (sidebar_blur_w, win_rect.size.h).into())
     } else {
@@ -319,10 +317,12 @@ pub fn build_cached_dnd_fallback(
     draw_x: f64,
     draw_y: f64,
     scale: f64,
-) -> Option<smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement<smithay::backend::renderer::gles::GlesRenderer>> {
-    use smithay::backend::renderer::element::{
-        memory::MemoryRenderBufferRenderElement, Kind,
-    };
+) -> Option<
+    smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement<
+        smithay::backend::renderer::gles::GlesRenderer,
+    >,
+> {
+    use smithay::backend::renderer::element::{memory::MemoryRenderBufferRenderElement, Kind};
     use smithay::utils::Point;
 
     let cached = state.dnd_icon_cache.as_ref()?;

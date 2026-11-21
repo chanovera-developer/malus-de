@@ -75,11 +75,19 @@ impl SquircleRenderer {
         instances: &[SquircleInstance],
         clear_color: Option<wgpu::Color>,
     ) {
-        self.pipeline.prepare(&self.device, &self.queue, screen_size, scale_factor, instances);
+        self.pipeline.prepare(
+            &self.device,
+            &self.queue,
+            screen_size,
+            scale_factor,
+            instances,
+        );
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Squircle Render Command Encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Squircle Render Command Encoder"),
+            });
 
         {
             let load_op = match clear_color {
@@ -119,12 +127,20 @@ impl SquircleRenderer {
         labels: &[(TextLabel, [f32; 2], [f32; 2])],
         clear_color: Option<wgpu::Color>,
     ) -> Result<()> {
-        self.pipeline.prepare(&self.device, &self.queue, screen_size, scale_factor, instances);
+        self.pipeline.prepare(
+            &self.device,
+            &self.queue,
+            screen_size,
+            scale_factor,
+            instances,
+        );
         text_system.prepare(&self.device, &self.queue, screen_size, scale_factor, labels)?;
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Scene Render Command Encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Scene Render Command Encoder"),
+            });
 
         {
             let load_op = match clear_color {
@@ -255,9 +271,11 @@ impl SquircleRenderer {
             mapped_at_creation: false,
         });
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("Texture Copy Encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Texture Copy Encoder"),
+            });
 
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {

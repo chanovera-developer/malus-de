@@ -118,7 +118,9 @@ impl Sidebar {
 
         let es = malus_de_common::is_spanish_locale();
 
-        let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/"));
+        let home = std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/"));
         let shared_path = resolve_user_dir(&home, "XDG_PUBLICSHARE_DIR", "Público", "Public");
 
         // 0. Accesos superiores sin encabezado (Recientes y Compartidos, estilo Finder)
@@ -141,7 +143,8 @@ impl Sidebar {
         list_box.append(&shared_row);
 
         // 1. Sección Favoritos
-        let favorites_header = add_section_title(&list_box, if es { "Favoritos" } else { "Favorites" });
+        let favorites_header =
+            add_section_title(&list_box, if es { "Favoritos" } else { "Favorites" });
         attach_bookmark_drop_target(&favorites_header);
         let apps_row = create_virtual_row(
             if es { "Aplicaciones" } else { "Applications" },
@@ -162,37 +165,65 @@ impl Sidebar {
 
         let favorites = [
             SidebarEntry {
-                title: if es { "Escritorio".to_string() } else { "Desktop".to_string() },
+                title: if es {
+                    "Escritorio".to_string()
+                } else {
+                    "Desktop".to_string()
+                },
                 icon_name: "user-desktop-symbolic",
                 path: desktop_path,
             },
             SidebarEntry {
-                title: if es { "Documentos".to_string() } else { "Documents".to_string() },
+                title: if es {
+                    "Documentos".to_string()
+                } else {
+                    "Documents".to_string()
+                },
                 icon_name: "folder-documents-symbolic",
                 path: docs_path,
             },
             SidebarEntry {
-                title: if es { "Descargas".to_string() } else { "Downloads".to_string() },
+                title: if es {
+                    "Descargas".to_string()
+                } else {
+                    "Downloads".to_string()
+                },
                 icon_name: "folder-download-symbolic",
                 path: downloads_path,
             },
             SidebarEntry {
-                title: if es { "Imágenes".to_string() } else { "Pictures".to_string() },
+                title: if es {
+                    "Imágenes".to_string()
+                } else {
+                    "Pictures".to_string()
+                },
                 icon_name: "folder-pictures-symbolic",
                 path: pictures_path,
             },
             SidebarEntry {
-                title: if es { "Música".to_string() } else { "Music".to_string() },
+                title: if es {
+                    "Música".to_string()
+                } else {
+                    "Music".to_string()
+                },
                 icon_name: "folder-music-symbolic",
                 path: music_path,
             },
             SidebarEntry {
-                title: if es { "Vídeos".to_string() } else { "Videos".to_string() },
+                title: if es {
+                    "Vídeos".to_string()
+                } else {
+                    "Videos".to_string()
+                },
                 icon_name: "folder-videos-symbolic",
                 path: videos_path,
             },
             SidebarEntry {
-                title: if es { "Proyectos".to_string() } else { "Projects".to_string() },
+                title: if es {
+                    "Proyectos".to_string()
+                } else {
+                    "Projects".to_string()
+                },
                 icon_name: "folder-projects-symbolic",
                 path: projects_path,
             },
@@ -214,13 +245,20 @@ impl Sidebar {
         attach_bookmark_drop_target(&bookmarks_header);
 
         // 3. Sección Ubicaciones (estilo macOS Finder: usuario, equipo, red, papelera)
-        let locations_header = add_section_title(&list_box, if es { "Ubicaciones" } else { "Locations" });
+        let locations_header =
+            add_section_title(&list_box, if es { "Ubicaciones" } else { "Locations" });
         attach_bookmark_drop_target(&locations_header);
         let home_label = home
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .filter(|n| !n.is_empty())
-            .unwrap_or_else(|| if es { "Inicio".to_string() } else { "Home".to_string() });
+            .unwrap_or_else(|| {
+                if es {
+                    "Inicio".to_string()
+                } else {
+                    "Home".to_string()
+                }
+            });
         let locations = [
             SidebarEntry {
                 title: home_label,
@@ -228,17 +266,29 @@ impl Sidebar {
                 path: home.clone(),
             },
             SidebarEntry {
-                title: if es { "Este Equipo".to_string() } else { "This Computer".to_string() },
+                title: if es {
+                    "Este Equipo".to_string()
+                } else {
+                    "This Computer".to_string()
+                },
                 icon_name: "drive-harddisk-symbolic",
                 path: PathBuf::from("/"),
             },
             SidebarEntry {
-                title: if es { "Red".to_string() } else { "Network".to_string() },
+                title: if es {
+                    "Red".to_string()
+                } else {
+                    "Network".to_string()
+                },
                 icon_name: "network-workgroup-symbolic",
                 path: PathBuf::from("/mnt"),
             },
             SidebarEntry {
-                title: if es { "Papelera".to_string() } else { "Trash".to_string() },
+                title: if es {
+                    "Papelera".to_string()
+                } else {
+                    "Trash".to_string()
+                },
                 icon_name: "user-trash-symbolic",
                 path: trash_path,
             },
@@ -475,8 +525,19 @@ impl Drop for SidebarInner {
 /// Puntos de montaje del sistema que nunca deben mostrarse como "disco externo".
 fn is_system_mount_path(path: &Path) -> bool {
     const SYSTEM: [&str; 13] = [
-        "/", "/boot", "/boot/efi", "/efi", "/home", "/var", "/usr", "/tmp", "/proc", "/sys",
-        "/dev", "/nix", "/snap",
+        "/",
+        "/boot",
+        "/boot/efi",
+        "/efi",
+        "/home",
+        "/var",
+        "/usr",
+        "/tmp",
+        "/proc",
+        "/sys",
+        "/dev",
+        "/nix",
+        "/snap",
     ];
     if SYSTEM.iter().any(|s| path == Path::new(s)) {
         return true;
@@ -580,10 +641,9 @@ impl SidebarInner {
     }
 
     fn rebuild_devices(&self) {
-        let selected_path = self
-            .list_box
-            .selected_row()
-            .and_then(|r| unsafe { r.data::<PathBuf>("target_path") }.map(|p| unsafe { p.as_ref() }.clone()));
+        let selected_path = self.list_box.selected_row().and_then(|r| {
+            unsafe { r.data::<PathBuf>("target_path") }.map(|p| unsafe { p.as_ref() }.clone())
+        });
 
         for old in self.device_rows.borrow_mut().drain(..) {
             self.list_box.remove(&old);
@@ -626,12 +686,7 @@ impl SidebarInner {
             } else {
                 "drive-harddisk-symbolic"
             };
-            let row = create_sidebar_row(
-                mount.name().as_str(),
-                icon,
-                root.clone(),
-                false,
-            );
+            let row = create_sidebar_row(mount.name().as_str(), icon, root.clone(), false);
             attach_folder_navigation_handlers(&row, &self.on_navigate, root.clone());
             attach_folder_drop_target(&row, root, &self.on_files_dropped);
             if mount.can_eject() || mount.can_unmount() {
@@ -706,14 +761,17 @@ impl SidebarInner {
             scan_dirs.push(PathBuf::from("/run/media").join(user));
         }
         for dir in scan_dirs {
-            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
             for entry in entries.flatten() {
                 let p = entry.path();
                 if !p.is_dir() || !seen.insert(p.clone()) {
                     continue;
                 }
                 let name = entry.file_name().to_string_lossy().to_string();
-                let row = create_sidebar_row(&name, "drive-removable-media-symbolic", p.clone(), false);
+                let row =
+                    create_sidebar_row(&name, "drive-removable-media-symbolic", p.clone(), false);
                 attach_folder_navigation_handlers(&row, &self.on_navigate, p.clone());
                 attach_folder_drop_target(&row, p, &self.on_files_dropped);
                 rows.push(row);
@@ -759,12 +817,7 @@ impl SidebarInner {
             } else {
                 "text-x-generic-symbolic"
             };
-            let row = create_sidebar_row(
-                &entry.title,
-                icon_name,
-                entry.folder_path.clone(),
-                true,
-            );
+            let row = create_sidebar_row(&entry.title, icon_name, entry.folder_path.clone(), true);
             unsafe {
                 row.set_data("is_bookmark", true);
             }
@@ -852,7 +905,11 @@ fn show_add_bookmark_popover(
         vbox.append(&btn_cur);
     }
 
-    let btn_pick = make_sidebar_menu_item(if es { "Elegir carpeta…" } else { "Choose Folder…" });
+    let btn_pick = make_sidebar_menu_item(if es {
+        "Elegir carpeta…"
+    } else {
+        "Choose Folder…"
+    });
     let pop_p = pop.clone();
     let parent_for_dialog = anchor.clone().upcast::<gtk4::Widget>();
     btn_pick.connect_clicked(move |_| {
@@ -904,7 +961,11 @@ fn add_bookmarks_section_header(
     let add_btn = Button::builder()
         .icon_name("list-add-symbolic")
         .has_frame(false)
-        .tooltip_text(if es { "Añadir marcador" } else { "Add Bookmark" })
+        .tooltip_text(if es {
+            "Añadir marcador"
+        } else {
+            "Add Bookmark"
+        })
         .css_classes(["branches-sidebar-add-btn"])
         .valign(Align::Center)
         .build();
@@ -1113,11 +1174,7 @@ fn attach_bookmark_activation_handlers(
     });
 }
 
-fn attach_folder_drop_target(
-    row: &ListBoxRow,
-    dest_dir: PathBuf,
-    on_files_dropped: &Rc<dyn Fn()>,
-) {
+fn attach_folder_drop_target(row: &ListBoxRow, dest_dir: PathBuf, on_files_dropped: &Rc<dyn Fn()>) {
     let drop_target = DropTarget::new(
         gdk::FileList::static_type(),
         gdk::DragAction::COPY | gdk::DragAction::MOVE,
@@ -1640,11 +1697,7 @@ fn create_sidebar_row(
     row
 }
 
-fn attach_network_context_menu(
-    row: &ListBoxRow,
-    es: bool,
-    on_navigate: &Rc<dyn Fn(PathBuf)>,
-) {
+fn attach_network_context_menu(row: &ListBoxRow, es: bool, on_navigate: &Rc<dyn Fn(PathBuf)>) {
     let click = GestureClick::new();
     click.set_button(gdk::BUTTON_SECONDARY);
     let row_ref = row.clone();

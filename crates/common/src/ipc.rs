@@ -44,19 +44,13 @@ pub enum IpcMessage {
         selected_index: usize,
     },
     /// Actualizar índice seleccionado en el selector visual de aplicaciones
-    UpdateAppSwitcher {
-        selected_index: usize,
-    },
+    UpdateAppSwitcher { selected_index: usize },
     /// Ocultar y descartar el selector visual de aplicaciones
     HideAppSwitcher,
     /// Conmutar a una ventana específica por su identificador
-    SwitchToWindow {
-        window_id: u64,
-    },
+    SwitchToWindow { window_id: u64 },
     /// Activar o restaurar ventana de una aplicación desde el Dock o lanzador
-    ActivateApp {
-        app_id: String,
-    },
+    ActivateApp { app_id: String },
     /// Notificación de cambio de ventana activa / enfocada
     ActiveAppChanged {
         app_id: Option<String>,
@@ -65,13 +59,9 @@ pub enum IpcMessage {
         window_id: Option<u64>,
     },
     /// Notificación de lista de aplicaciones en ejecución (app_ids o títulos)
-    RunningAppsChanged {
-        running_apps: Vec<String>,
-    },
+    RunningAppsChanged { running_apps: Vec<String> },
     /// Notificación de lista de ventanas minimizadas en el Dock
-    MinimizedWindowsChanged {
-        windows: Vec<MinimizedWindowInfo>,
-    },
+    MinimizedWindowsChanged { windows: Vec<MinimizedWindowInfo> },
     /// Notificación de coordenadas de slot en el Dock para animación Genie Effect
     RegisterDockSlot {
         window_id: u64,
@@ -81,17 +71,11 @@ pub enum IpcMessage {
         height: u32,
     },
     /// Solicitud de minimización con efecto Genie
-    AnimateMinimize {
-        window_id: u64,
-    },
+    AnimateMinimize { window_id: u64 },
     /// Solicitud de restauración con efecto Genie inverso
-    AnimateRestore {
-        window_id: u64,
-    },
+    AnimateRestore { window_id: u64 },
     /// Cambio de espacio de trabajo virtual
-    SwitchWorkspace {
-        index: usize,
-    },
+    SwitchWorkspace { index: usize },
     /// Toggle Mission Control (Exposé)
     ToggleMissionControl,
     /// Toggle Dispersión de Ventanas para Mostrar / Ocultar Escritorio (Super + D)
@@ -141,15 +125,11 @@ pub enum IpcMessage {
     /// Conmutar Picture-in-Picture universal para la ventana activa (Super + P)
     TogglePictureInPicture,
     /// Filtrado difuso dinámico de ventanas en Mission Control al teclear
-    MissionControlFilter {
-        query: String,
-    },
+    MissionControlFilter { query: String },
     /// Disparar localizador acústico del teléfono (Hacer sonar teléfono)
     MalusLinkRingPhone,
     /// Enviar archivo al teléfono móvil emparejado (AirDrop Linux)
-    MalusLinkSendFile {
-        file_path: String,
-    },
+    MalusLinkSendFile { file_path: String },
     /// Solicitud de cambio de modo de rendimiento (power-profiles-daemon)
     SetPowerProfile {
         profile: crate::config::PowerProfile,
@@ -159,14 +139,11 @@ pub enum IpcMessage {
         profile: crate::config::PowerProfile,
     },
     /// Notificación de recarga de tema
-    ThemeChanged {
-        theme_name: String,
-        is_dark: bool,
-    },
+    ThemeChanged { theme_name: String, is_dark: bool },
+    /// Notificación de cambio del color de énfasis
+    AccentColorChanged { index: usize },
     /// Notificación de cambio en el nivel de transparencia / opacidad de Liquid Glass (`[0.15, 0.95]`)
-    LiquidGlassOpacityChanged {
-        opacity: f64,
-    },
+    LiquidGlassOpacityChanged { opacity: f64 },
     /// Solicita al compositor capturar el fotograma actual antes de cambiar el tema.
     PrepareThemeTransition { request_id: String },
     /// Confirmación enviada cuando el fotograma anterior quedó guardado.
@@ -188,23 +165,16 @@ pub enum IpcMessage {
         drop_y: f64,
     },
     /// Solicitud de desanclar una aplicación del Dock
-    UnpinAppFromDock {
-        name: String,
-    },
+    UnpinAppFromDock { name: String },
     /// Notificación de previsualización del hueco de inserción en el Dock al arrastrar un elemento (ej. desde Spotlight)
     PreviewDockDropGap {
         #[serde(default)]
         dock_x: Option<i32>,
     },
     /// Notificación de inicio de arrastre de un icono del Dock para que el compositor lo dibuje pegado al cursor
-    StartDockIconDrag {
-        name: String,
-        icon: String,
-    },
+    StartDockIconDrag { name: String, icon: String },
     /// Notificación de fin de arrastre de un icono del Dock (`poof = true` reproduce la animación puff al soltar fuera)
-    EndDockIconDrag {
-        poof: bool,
-    },
+    EndDockIconDrag { poof: bool },
     /// Notificación o solicitud de recarga de configuración del Dock (dock.toml)
     ReloadDockConfig,
     /// Solicitud de recarga en caliente de la configuración de pantallas y escalado (monitors.toml)
@@ -322,7 +292,9 @@ impl IpcBroadcaster {
 
     /// Difunde un mensaje JSON a todos los clientes shell conectados (Top Bar, Dock, etc.)
     pub fn broadcast(&self, msg: &IpcMessage) {
-        let Ok(json) = serde_json::to_string(msg) else { return };
+        let Ok(json) = serde_json::to_string(msg) else {
+            return;
+        };
         let line = format!("{}\n", json);
         let bytes = line.as_bytes();
 
@@ -352,9 +324,7 @@ impl IpcBroadcaster {
         }
 
         let mut clients = self.clients.lock().unwrap();
-        clients.retain_mut(|client| {
-            client.write_all(bytes).is_ok()
-        });
+        clients.retain_mut(|client| client.write_all(bytes).is_ok());
     }
 }
 
@@ -449,16 +419,14 @@ mod tests {
     #[test]
     fn test_minimized_windows_serialization() {
         let msg = IpcMessage::MinimizedWindowsChanged {
-            windows: vec![
-                MinimizedWindowInfo {
-                    window_id: 42,
-                    app_id: "org.gnome.Nautilus".to_string(),
-                    title: "Archivos — Documentos".to_string(),
-                    icon_name: Some("system-file-manager".to_string()),
-                    thumbnail_path: None,
-                    is_animating: true,
-                },
-            ],
+            windows: vec![MinimizedWindowInfo {
+                window_id: 42,
+                app_id: "org.gnome.Nautilus".to_string(),
+                title: "Archivos — Documentos".to_string(),
+                icon_name: Some("system-file-manager".to_string()),
+                thumbnail_path: None,
+                is_animating: true,
+            }],
         };
 
         let json = serde_json::to_string(&msg).expect("Debe serializar");
@@ -522,7 +490,11 @@ mod tests {
 
         let json = serde_json::to_string(&msg).expect("Serialización falló");
         let parsed: IpcMessage = serde_json::from_str(&json).expect("Deserialización falló");
-        if let IpcMessage::ShowAppSwitcher { items, selected_index } = parsed {
+        if let IpcMessage::ShowAppSwitcher {
+            items,
+            selected_index,
+        } = parsed
+        {
             assert_eq!(items.len(), 2);
             assert_eq!(selected_index, 1);
             assert!(items[1].is_minimized);

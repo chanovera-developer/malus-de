@@ -163,11 +163,7 @@ impl ThemeTransitionPipeline {
             return false;
         };
         let elapsed = now.saturating_duration_since(started_at);
-        if elapsed >= DURATION
-            || size.w <= 0
-            || size.h <= 0
-            || snapshot.size != (size.w, size.h)
-        {
+        if elapsed >= DURATION || size.w <= 0 || size.h <= 0 || snapshot.size != (size.w, size.h) {
             return false;
         }
 

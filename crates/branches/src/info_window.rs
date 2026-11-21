@@ -194,12 +194,22 @@ pub fn show_get_info_window(
         *r += 1;
     };
 
-    add_row(&grid, &mut row, if es { "Clase:" } else { "Kind:" }, &item.kind_str);
+    add_row(
+        &grid,
+        &mut row,
+        if es { "Clase:" } else { "Kind:" },
+        &item.kind_str,
+    );
     let where_str = path
         .parent()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| "/".to_string());
-    add_row(&grid, &mut row, if es { "Ubicación:" } else { "Where:" }, &where_str);
+    add_row(
+        &grid,
+        &mut row,
+        if es { "Ubicación:" } else { "Where:" },
+        &where_str,
+    );
     add_row(
         &grid,
         &mut row,
@@ -245,11 +255,7 @@ pub fn show_get_info_window(
                 })
                 .unwrap_or_default();
             if names.is_empty() {
-                lbl_ref.set_label(if es {
-                    "Sin etiquetas"
-                } else {
-                    "No tags"
-                });
+                lbl_ref.set_label(if es { "Sin etiquetas" } else { "No tags" });
             } else {
                 lbl_ref.set_label(&names.join(", "));
             }
@@ -282,11 +288,7 @@ pub fn show_get_info_window(
     let clear_btn = Button::builder()
         .icon_name("edit-clear-symbolic")
         .has_frame(false)
-        .tooltip_text(if es {
-            "Quitar etiquetas"
-        } else {
-            "Clear Tags"
-        })
+        .tooltip_text(if es { "Quitar etiquetas" } else { "Clear Tags" })
         .build();
     {
         let p_clr = path.clone();
@@ -410,7 +412,10 @@ pub fn show_get_info_window(
                 }
 
                 let groups: [(&str, [u32; 3]); 3] = [
-                    (if es { "Propietario" } else { "Owner" }, [0o400, 0o200, 0o100]),
+                    (
+                        if es { "Propietario" } else { "Owner" },
+                        [0o400, 0o200, 0o100],
+                    ),
                     (if es { "Grupo" } else { "Group" }, [0o040, 0o020, 0o010]),
                     (if es { "Otros" } else { "Everyone" }, [0o004, 0o002, 0o001]),
                 ];

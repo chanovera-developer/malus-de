@@ -403,13 +403,33 @@ pub fn compute_deck_layout(
             0.0
         };
 
-        raw.push((abs_d, delta, i, window_id, rect, depth_scale, depth_dim, corner_radius_logical, header_alpha));
+        raw.push((
+            abs_d,
+            delta,
+            i,
+            window_id,
+            rect,
+            depth_scale,
+            depth_dim,
+            corner_radius_logical,
+            header_alpha,
+        ));
     }
 
     let mut result: Vec<DeckCardLayout> = raw
         .into_iter()
         .map(
-            |(abs_d, delta, index, window_id, rect, depth_scale, depth_dim, corner_radius_logical, header_alpha)| {
+            |(
+                abs_d,
+                delta,
+                index,
+                window_id,
+                rect,
+                depth_scale,
+                depth_dim,
+                corner_radius_logical,
+                header_alpha,
+            )| {
                 let is_front = abs_d < 0.35;
                 let header_y = rect.loc.y - HEADER_HEIGHT_LOGICAL - HEADER_GAP_LOGICAL;
                 let (header_pos, header_max_w, header_align_right, show_title) = if is_front {
@@ -419,12 +439,19 @@ pub fn compute_deck_layout(
                 } else if delta < 0.0 {
                     let exposed_w = (front_rect.loc.x - rect.loc.x - 16).max(36);
                     let hx = rect.loc.x + 12;
-                    (Point::from((hx, header_y)), exposed_w.min(rect.size.w - 16), false, false)
+                    (
+                        Point::from((hx, header_y)),
+                        exposed_w.min(rect.size.w - 16),
+                        false,
+                        false,
+                    )
                 } else {
                     let front_right = front_rect.loc.x + front_rect.size.w;
                     let card_right = rect.loc.x + rect.size.w;
                     let icon_box_w = HEADER_ICON_LOGICAL + 12;
-                    let hx = (card_right - icon_box_w - 10).max(front_right + 6).min(card_right - icon_box_w);
+                    let hx = (card_right - icon_box_w - 10)
+                        .max(front_right + 6)
+                        .min(card_right - icon_box_w);
                     (Point::from((hx, header_y)), icon_box_w, true, false)
                 };
 
@@ -682,40 +709,36 @@ pub fn prepare_deck_cards(
         let item = &items[layout.index];
         let win_entry = windows_by_id.iter().find(|(id, ..)| *id == item.window_id);
 
-        let (draw_rect, card_alpha, radius_logical) =
-            if let Some(&orig_rect) = deck.origin_rects.get(&item.window_id) {
-                let rect = lerp_rect(orig_rect, layout.rect, progress);
-                let radius = DESKTOP_CARD_RADIUS_LOGICAL
-                    + (layout.corner_radius_logical - DESKTOP_CARD_RADIUS_LOGICAL)
-                        * progress as f64;
-                (rect, 1.0_f32, radius)
-            } else {
-                let start_w = ((layout.rect.size.w as f32) * 0.80).round().max(32.0) as i32;
-                let start_h = ((layout.rect.size.h as f32) * 0.80).round().max(24.0) as i32;
-                let start_rect = Rectangle::new(
-                    (
-                        layout.rect.loc.x + (layout.rect.size.w - start_w) / 2,
-                        layout.rect.loc.y + (layout.rect.size.h - start_h) / 2 + 28,
-                    )
-                        .into(),
-                    (start_w, start_h).into(),
-                );
+        let (draw_rect, card_alpha, radius_logical) = if let Some(&orig_rect) =
+            deck.origin_rects.get(&item.window_id)
+        {
+            let rect = lerp_rect(orig_rect, layout.rect, progress);
+            let radius = DESKTOP_CARD_RADIUS_LOGICAL
+                + (layout.corner_radius_logical - DESKTOP_CARD_RADIUS_LOGICAL) * progress as f64;
+            (rect, 1.0_f32, radius)
+        } else {
+            let start_w = ((layout.rect.size.w as f32) * 0.80).round().max(32.0) as i32;
+            let start_h = ((layout.rect.size.h as f32) * 0.80).round().max(24.0) as i32;
+            let start_rect = Rectangle::new(
                 (
-                    lerp_rect(start_rect, layout.rect, progress),
-                    progress,
-                    layout.corner_radius_logical,
+                    layout.rect.loc.x + (layout.rect.size.w - start_w) / 2,
+                    layout.rect.loc.y + (layout.rect.size.h - start_h) / 2 + 28,
                 )
-            };
+                    .into(),
+                (start_w, start_h).into(),
+            );
+            (
+                lerp_rect(start_rect, layout.rect, progress),
+                progress,
+                layout.corner_radius_logical,
+            )
+        };
 
         let card_phys_loc = (draw_rect.loc - output_geo.loc)
             .to_f64()
             .to_physical(scale)
             .to_i32_round();
-        let card_phys_size = draw_rect
-            .size
-            .to_f64()
-            .to_physical(scale)
-            .to_i32_round();
+        let card_phys_size = draw_rect.size.to_f64().to_physical(scale).to_i32_round();
         let card_phys = Rectangle::new(card_phys_loc, card_phys_size);
         let card_radius_phys = (radius_logical * scale).round().max(8.0) as i32;
         let is_front = layout.delta.abs() < 0.35;
@@ -959,7 +982,12 @@ pub fn render_deck_frame(
                             card.card_radius_phys as f32,
                             [0.0, 0.0, 0.0, 0.0],
                             (1.2 * scale as f32).max(1.0),
-                            [1.0, 1.0, 1.0, 0.24 * ((eased - 0.15) / 0.85).clamp(0.0, 1.0)],
+                            [
+                                1.0,
+                                1.0,
+                                1.0,
+                                0.24 * ((eased - 0.15) / 0.85).clamp(0.0, 1.0),
+                            ],
                         );
                     });
                 }

@@ -1,11 +1,11 @@
 use clap::Parser;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, CssProvider, DropDown,
-    DrawingArea, Entry, EventControllerFocus, FileDialog, FileFilter, FlowBox, GestureClick,
-    GestureDrag, Image, Label, Orientation, Overlay, PackType, Paned, Picture, PolicyType,
-    Scale, ScrolledWindow, SearchEntry, Stack, StackTransitionType, Switch, WindowControls,
-    WindowHandle,
+    Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, CssProvider,
+    DrawingArea, DropDown, Entry, EventControllerFocus, FileDialog, FileFilter, FlowBox,
+    GestureClick, GestureDrag, Image, Label, Orientation, Overlay, PackType, Paned, Picture,
+    PolicyType, Scale, ScrolledWindow, SearchEntry, Stack, StackTransitionType, Switch,
+    WindowControls, WindowHandle,
 };
 use malus_de_common::config::{
     AppSwitcherStyle, DisplayModeConfig, DisplaysConfig, DockConfig, InputConfig,
@@ -17,14 +17,14 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::rc::Rc;
 
-mod wifi_pane;
-mod bluetooth_pane;
-mod network_pane;
-mod vpn_pane;
-mod battery_pane;
-mod general_pane;
 mod accessibility_pane;
 mod appearance_pane;
+mod battery_pane;
+mod bluetooth_pane;
+mod general_pane;
+mod network_pane;
+mod vpn_pane;
+mod wifi_pane;
 
 const APP_ID: &str = "dev.malus.Settings";
 const SETTINGS_SIDEBAR_WIDTH: i32 = 212;
@@ -60,45 +60,51 @@ fn main() {
     let args = Args::parse();
     if let Some(theme) = args.theme {
         set_gtk_theme(&theme);
-        println!("✓ Tema GTK '{}' aplicado con éxito a GTK3, GTK4 y Libadwaita.", theme);
+        println!(
+            "✓ Tema GTK '{}' aplicado con éxito a GTK3, GTK4 y Libadwaita.",
+            theme
+        );
         return;
     }
 
-    libadwaita::StyleManager::default().set_color_scheme(
-        if is_dark_mode_active() {
-            libadwaita::ColorScheme::ForceDark
-        } else {
-            libadwaita::ColorScheme::ForceLight
-        }
-    );
+    libadwaita::StyleManager::default().set_color_scheme(if is_dark_mode_active() {
+        libadwaita::ColorScheme::ForceDark
+    } else {
+        libadwaita::ColorScheme::ForceLight
+    });
 
     // Escuchar reactivamente cambios en el modo de apariencia desde el Centro de Control o scripts
-    let gsettings = Box::leak(Box::new(gtk4::gio::Settings::new("org.gnome.desktop.interface")));
+    let gsettings = Box::leak(Box::new(gtk4::gio::Settings::new(
+        "org.gnome.desktop.interface",
+    )));
     gsettings.connect_changed(Some("color-scheme"), move |settings, _| {
         let scheme = settings.string("color-scheme");
         let to_dark = scheme.contains("dark");
-        tracing::info!("🎨 Detección reactiva de cambio de apariencia: {} (to_dark: {})", scheme, to_dark);
-        libadwaita::StyleManager::default().set_color_scheme(
-            if to_dark {
-                libadwaita::ColorScheme::ForceDark
-            } else {
-                libadwaita::ColorScheme::ForceLight
-            }
+        tracing::info!(
+            "🎨 Detección reactiva de cambio de apariencia: {} (to_dark: {})",
+            scheme,
+            to_dark
         );
+        libadwaita::StyleManager::default().set_color_scheme(if to_dark {
+            libadwaita::ColorScheme::ForceDark
+        } else {
+            libadwaita::ColorScheme::ForceLight
+        });
     });
 
     let initial_panel = args.panel.clone();
 
-    let app = Application::builder()
-        .application_id(APP_ID)
-        .build();
+    let app = Application::builder().application_id(APP_ID).build();
 
     app.connect_startup(|_| {
         load_macos_settings_css();
     });
 
     app.connect_activate(move |app| {
-        if let Some(win) = app.active_window().or_else(|| app.windows().into_iter().next()) {
+        if let Some(win) = app
+            .active_window()
+            .or_else(|| app.windows().into_iter().next())
+        {
             win.present();
             return;
         }
@@ -110,6 +116,20 @@ fn main() {
 
 thread_local! {
     static SETTINGS_GLASS_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
+    static SETTINGS_ACCENT_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
+    static SETTINGS_ACCENT_DRAW_AREAS: RefCell<Vec<glib::WeakRef<DrawingArea>>> = const { RefCell::new(Vec::new()) };
+}
+
+pub(crate) fn register_accent_draw_area(area: &DrawingArea) {
+    SETTINGS_ACCENT_DRAW_AREAS.with(|areas| {
+        let mut areas = areas.borrow_mut();
+        areas.retain(|area| area.upgrade().is_some());
+        areas.push(area.downgrade());
+    });
+}
+
+pub(crate) fn accent_color() -> (f64, f64, f64) {
+    malus_de_common::config::load_accent_color()
 }
 
 pub(crate) fn apply_liquid_glass_opacity_css(opacity: f64) {
@@ -135,11 +155,40 @@ pub(crate) fn apply_liquid_glass_opacity_css(opacity: f64) {
     });
 }
 
+pub(crate) fn apply_accent_color_css(index: usize) {
+    SETTINGS_ACCENT_PROVIDER.with(|cell| {
+        if let Some(provider) = cell.borrow().as_ref() {
+            provider.load_from_string(&settings_accent_color_css(index));
+        }
+    });
+    SETTINGS_ACCENT_DRAW_AREAS.with(|areas| {
+        areas.borrow_mut().retain(|area| {
+            if let Some(area) = area.upgrade() {
+                area.queue_draw();
+                true
+            } else {
+                false
+            }
+        });
+    });
+}
+
+fn settings_accent_color_css(index: usize) -> String {
+    format!(
+        "{}\nimage.settings-sidebar-icon {{ color: @accent_bg_color; }}",
+        malus_de_common::config::accent_color_css(index)
+    )
+}
+
 fn load_macos_settings_css() {
     let provider = CssProvider::new();
     let css = include_str!("styles/macos-settings.css");
     provider.load_from_string(css);
     let glass_provider = CssProvider::new();
+    let accent_provider = CssProvider::new();
+    accent_provider.load_from_string(&settings_accent_color_css(
+        malus_de_common::config::load_accent_color_index(),
+    ));
     if let Some(display) = gtk4::gdk::Display::default() {
         let icon_theme = gtk4::IconTheme::for_display(&display);
         for icon_dir in malus_de_common::apps::extra_icon_search_paths() {
@@ -157,9 +206,17 @@ fn load_macos_settings_css() {
             &glass_provider,
             gtk4::STYLE_PROVIDER_PRIORITY_USER + 1,
         );
+        gtk4::style_context_add_provider_for_display(
+            &display,
+            &accent_provider,
+            gtk4::STYLE_PROVIDER_PRIORITY_USER + 2,
+        );
     }
     SETTINGS_GLASS_PROVIDER.with(|cell| {
         *cell.borrow_mut() = Some(glass_provider);
+    });
+    SETTINGS_ACCENT_PROVIDER.with(|cell| {
+        *cell.borrow_mut() = Some(accent_provider);
     });
     apply_liquid_glass_opacity_css(malus_de_common::config::load_liquid_glass_opacity());
 }
@@ -314,6 +371,7 @@ fn create_squircle_search_shell(entry: &SearchEntry) -> Overlay {
         .vexpand(true)
         .can_target(false)
         .build();
+    register_accent_draw_area(&bg);
 
     let focus_ctrl = EventControllerFocus::new();
     let focus_state = focus_ctrl.clone();
@@ -360,11 +418,8 @@ fn create_squircle_search_shell(entry: &SearchEntry) -> Overlay {
                 (SIDEBAR_SEARCH_SQUIRCLE_RADIUS - inset).max(2.0),
             );
             if focused {
-                if is_dark {
-                    cr.set_source_rgba(0.04, 0.52, 1.0, 0.85);
-                } else {
-                    cr.set_source_rgba(0.0, 0.48, 1.0, 0.80);
-                }
+                let (r, g, b) = accent_color();
+                cr.set_source_rgba(r, g, b, if is_dark { 0.85 } else { 0.80 });
                 cr.set_line_width(1.5);
             } else {
                 if is_dark {
@@ -397,9 +452,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
 
     // Reemplaza la barra superior de GNOME por un contenedor invisible,
     // preservando los márgenes CSD de redimensión interactiva y la sombra perimetral.
-    let dummy_titlebar = GtkBox::builder()
-        .visible(false)
-        .build();
+    let dummy_titlebar = GtkBox::builder().visible(false).build();
     window.set_titlebar(Some(&dummy_titlebar));
 
     // ==========================================
@@ -425,9 +478,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         .build();
     controls_box.append(&window_controls_start);
 
-    let traffic_handle = WindowHandle::builder()
-        .child(&controls_box)
-        .build();
+    let traffic_handle = WindowHandle::builder().child(&controls_box).build();
     sidebar.append(&traffic_handle);
 
     let sidebar_body = GtkBox::builder()
@@ -472,7 +523,11 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         .hexpand(true)
         .build();
     let profile_name = Label::builder()
-        .label(&format!("{}{}", &initial_char, &user_name.chars().skip(1).collect::<String>()))
+        .label(&format!(
+            "{}{}",
+            &initial_char,
+            &user_name.chars().skip(1).collect::<String>()
+        ))
         .css_classes(["card-section-title"])
         .xalign(0.0)
         .ellipsize(gtk4::pango::EllipsizeMode::End)
@@ -498,10 +553,22 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         ("vpn", "network-vpn-symbolic", "VPN"),
         ("battery", "battery-level-100-symbolic", "Batería"),
         ("about", "preferences-system-symbolic", "General"),
-        ("accessibility", "preferences-desktop-accessibility-symbolic", "Accesibilidad"),
-        ("appearance", "preferences-desktop-appearance-symbolic", "Aspecto"),
+        (
+            "accessibility",
+            "preferences-desktop-accessibility-symbolic",
+            "Accesibilidad",
+        ),
+        (
+            "appearance",
+            "preferences-desktop-appearance-symbolic",
+            "Aspecto",
+        ),
         ("dock", "user-desktop-symbolic", "Escritorio y Dock"),
-        ("wallpaper", "preferences-desktop-wallpaper-symbolic", "Fondo de pantalla"),
+        (
+            "wallpaper",
+            "preferences-desktop-wallpaper-symbolic",
+            "Fondo de pantalla",
+        ),
         ("displays", "video-display-symbolic", "Pantallas"),
         ("spotlight", "system-search-symbolic", "Spotlight"),
         ("sound", "audio-volume-high-symbolic", "Sonido"),
@@ -756,9 +823,10 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         p if general_pane::is_general_subpanel(p) => p,
         p if accessibility_pane::is_accessibility_subpanel(p) => p,
         p if appearance_pane::is_appearance_subpanel(p) => p,
-        "wifi" | "bluetooth" | "network" | "network-firewall" | "vpn" | "battery"
-        | "wallpaper" | "keyboard" | "appearance" | "sound" | "about" | "dock" | "spotlight"
-        | "displays" => initial_panel,
+        "wifi" | "bluetooth" | "network" | "network-firewall" | "vpn" | "battery" | "wallpaper"
+        | "keyboard" | "appearance" | "sound" | "about" | "dock" | "spotlight" | "displays" => {
+            initial_panel
+        }
         _ => "spotlight",
     };
 
@@ -1143,6 +1211,7 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         .content_height(225)
         .hexpand(true)
         .build();
+    register_accent_draw_area(&drawing_area);
     canvas_card.append(&drawing_area);
 
     // Barra de herramientas de disposición debajo del lienzo
@@ -1378,11 +1447,31 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     radius_slider.set_hexpand(true);
     radius_slider.set_draw_value(false);
 
-    let preset_0 = Button::builder().label("0 px (Recto)").css_classes(["macos-action-btn"]).has_frame(false).build();
-    let preset_16 = Button::builder().label("16 px").css_classes(["macos-action-btn"]).has_frame(false).build();
-    let preset_20 = Button::builder().label("20 px").css_classes(["macos-action-btn"]).has_frame(false).build();
-    let preset_24 = Button::builder().label("24 px (Recomendado)").css_classes(["macos-action-btn-primary"]).has_frame(false).build();
-    let preset_32 = Button::builder().label("32 px").css_classes(["macos-action-btn"]).has_frame(false).build();
+    let preset_0 = Button::builder()
+        .label("0 px (Recto)")
+        .css_classes(["macos-action-btn"])
+        .has_frame(false)
+        .build();
+    let preset_16 = Button::builder()
+        .label("16 px")
+        .css_classes(["macos-action-btn"])
+        .has_frame(false)
+        .build();
+    let preset_20 = Button::builder()
+        .label("20 px")
+        .css_classes(["macos-action-btn"])
+        .has_frame(false)
+        .build();
+    let preset_24 = Button::builder()
+        .label("24 px (Recomendado)")
+        .css_classes(["macos-action-btn-primary"])
+        .has_frame(false)
+        .build();
+    let preset_32 = Button::builder()
+        .label("32 px")
+        .css_classes(["macos-action-btn"])
+        .has_frame(false)
+        .build();
 
     radius_controls_row.append(&radius_slider);
     radius_controls_row.append(&preset_0);
@@ -1446,11 +1535,31 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     win_radius_slider.set_hexpand(true);
     win_radius_slider.set_draw_value(false);
 
-    let win_preset_0 = Button::builder().label("0 px (Recto)").css_classes(["macos-action-btn"]).has_frame(false).build();
-    let win_preset_16 = Button::builder().label("16 px").css_classes(["macos-action-btn"]).has_frame(false).build();
-    let win_preset_24 = Button::builder().label("24 px").css_classes(["macos-action-btn"]).has_frame(false).build();
-    let win_preset_32 = Button::builder().label("32 px (Recomendado)").css_classes(["macos-action-btn-primary"]).has_frame(false).build();
-    let win_preset_40 = Button::builder().label("40 px").css_classes(["macos-action-btn"]).has_frame(false).build();
+    let win_preset_0 = Button::builder()
+        .label("0 px (Recto)")
+        .css_classes(["macos-action-btn"])
+        .has_frame(false)
+        .build();
+    let win_preset_16 = Button::builder()
+        .label("16 px")
+        .css_classes(["macos-action-btn"])
+        .has_frame(false)
+        .build();
+    let win_preset_24 = Button::builder()
+        .label("24 px")
+        .css_classes(["macos-action-btn"])
+        .has_frame(false)
+        .build();
+    let win_preset_32 = Button::builder()
+        .label("32 px (Recomendado)")
+        .css_classes(["macos-action-btn-primary"])
+        .has_frame(false)
+        .build();
+    let win_preset_40 = Button::builder()
+        .label("40 px")
+        .css_classes(["macos-action-btn"])
+        .has_frame(false)
+        .build();
 
     win_radius_controls_row.append(&win_radius_slider);
     win_radius_controls_row.append(&win_preset_0);
@@ -1556,10 +1665,34 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
             // Dibujar rectángulo redondeado del monitor (estilo macOS Sonoma)
             let radius = 8.0;
             cr.new_sub_path();
-            cr.arc(rx + rw - radius, ry + radius, radius, -std::f64::consts::FRAC_PI_2, 0.0);
-            cr.arc(rx + rw - radius, ry + rh - radius, radius, 0.0, std::f64::consts::FRAC_PI_2);
-            cr.arc(rx + radius, ry + rh - radius, radius, std::f64::consts::FRAC_PI_2, std::f64::consts::PI);
-            cr.arc(rx + radius, ry + radius, radius, std::f64::consts::PI, 3.0 * std::f64::consts::FRAC_PI_2);
+            cr.arc(
+                rx + rw - radius,
+                ry + radius,
+                radius,
+                -std::f64::consts::FRAC_PI_2,
+                0.0,
+            );
+            cr.arc(
+                rx + rw - radius,
+                ry + rh - radius,
+                radius,
+                0.0,
+                std::f64::consts::FRAC_PI_2,
+            );
+            cr.arc(
+                rx + radius,
+                ry + rh - radius,
+                radius,
+                std::f64::consts::FRAC_PI_2,
+                std::f64::consts::PI,
+            );
+            cr.arc(
+                rx + radius,
+                ry + radius,
+                radius,
+                std::f64::consts::PI,
+                3.0 * std::f64::consts::FRAC_PI_2,
+            );
             cr.close_path();
 
             if idx == 0 {
@@ -1571,7 +1704,8 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
 
             if is_dark {
                 if st.selected_output_idx == idx || st.dragging_idx == Some(idx) {
-                    cr.set_source_rgb(0.04, 0.52, 1.0);
+                    let (r, g, b) = accent_color();
+                    cr.set_source_rgb(r, g, b);
                     cr.set_line_width(2.5);
                 } else {
                     cr.set_source_rgba(1.0, 1.0, 1.0, 0.35);
@@ -1579,7 +1713,8 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
                 }
             } else {
                 if st.selected_output_idx == idx || st.dragging_idx == Some(idx) {
-                    cr.set_source_rgb(0.0, 0.48, 1.0);
+                    let (r, g, b) = accent_color();
+                    cr.set_source_rgb(r, g, b);
                     cr.set_line_width(2.5);
                 } else {
                     cr.set_source_rgba(0.0, 0.0, 0.0, 0.22);
@@ -1942,7 +2077,9 @@ fn create_displays_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     let ref_drag_end = refresh_all.clone();
     drag_gesture.connect_drag_end(move |_, offset_x, offset_y| {
         let mut st = cs_drag_end.borrow_mut();
-        let Some(drag_idx) = st.dragging_idx.take() else { return };
+        let Some(drag_idx) = st.dragging_idx.take() else {
+            return;
+        };
         st.drag_offset_x = 0.0;
         st.drag_offset_y = 0.0;
 
@@ -2298,7 +2435,9 @@ fn rebuild_monitors_grid(
     if cfg.outputs.is_empty() {
         monitors_grid.append(
             &Label::builder()
-                .label("No hay pantallas activas detectadas. Conecta una pantalla para configurarla.")
+                .label(
+                    "No hay pantallas activas detectadas. Conecta una pantalla para configurarla.",
+                )
                 .css_classes(["card-section-sub"])
                 .xalign(0.0)
                 .build(),
@@ -2320,8 +2459,7 @@ fn rebuild_monitors_grid(
                 )
             })
             .collect();
-        let (card, widgets) =
-            create_macos_monitor_scaling_card(&title, &specs, &presets, output);
+        let (card, widgets) = create_macos_monitor_scaling_card(&title, &specs, &presets, output);
         wire_monitor_card_events(idx, &widgets, is_syncing, refresh_all);
         monitors_grid.append(&card);
         widgets_guard.push(widgets);
@@ -2339,8 +2477,7 @@ fn update_monitor_card_ui(
         .set_label(&format!("{:.1}% · {} × {}", o.scale * 100.0, lw, lh));
     w.scale_slider
         .set_value((o.scale * 100.0).clamp(100.0, 250.0));
-    w.scale_entry
-        .set_text(&format!("{:.2}%", o.scale * 100.0));
+    w.scale_entry.set_text(&format!("{:.2}%", o.scale * 100.0));
     let selected_mode = w.modes.iter().position(|mode| {
         mode.width == o.width
             && mode.height == o.height
@@ -2387,7 +2524,10 @@ fn wire_monitor_card_events(
 
         let mut cfg = DisplaysConfig::load();
         let Some(output) = cfg.outputs.get_mut(output_idx) else {
-            tracing::error!("No existe la pantalla de índice {} en la configuración", output_idx);
+            tracing::error!(
+                "No existe la pantalla de índice {} en la configuración",
+                output_idx
+            );
             return;
         };
         if output.width == mode.width
@@ -2411,7 +2551,10 @@ fn wire_monitor_card_events(
             return;
         }
         if let Err(err) = IpcClient::send_command(IpcMessage::ReloadDisplaysConfig) {
-            tracing::error!("No se pudo aplicar la nueva resolución en el compositor: {}", err);
+            tracing::error!(
+                "No se pudo aplicar la nueva resolución en el compositor: {}",
+                err
+            );
             return;
         }
         ref_mode();
@@ -2465,7 +2608,12 @@ fn wire_monitor_card_events(
             if *is_sync_c.borrow() {
                 return;
             }
-            let text = entry_c.text().trim().trim_end_matches('%').trim().to_string();
+            let text = entry_c
+                .text()
+                .trim()
+                .trim_end_matches('%')
+                .trim()
+                .to_string();
             if let Ok(mut val) = text.parse::<f64>() {
                 if val <= 0.0 {
                     return;
@@ -2660,7 +2808,10 @@ fn create_keyboard_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
 
     let refresh_kb: Rc<dyn Fn()> = Rc::new(move || {
         let cfg = InputConfig::load();
-        st_lbl.set_label(&format!("Distribución activa: {}", cfg.layout_display_name()));
+        st_lbl.set_label(&format!(
+            "Distribución activa: {}",
+            cfg.layout_display_name()
+        ));
         b_latam.remove_css_class("res-thumb-btn-active");
         b_es.remove_css_class("res-thumb-btn-active");
         b_us.remove_css_class("res-thumb-btn-active");
@@ -2718,8 +2869,13 @@ pub(crate) fn get_installed_cursor_themes() -> Vec<(String, String, &'static str
                     if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                         if name != "default" && found_names.insert(name.to_string()) {
                             let (label, desc) = match name {
-                                "macOS" => ("macOS Original", "Flecha negra clásica con contorno blanco Apple"),
-                                "macOS-White" => ("macOS Blanco", "Variante blanca oficial de Apple"),
+                                "macOS" => (
+                                    "macOS Original",
+                                    "Flecha negra clásica con contorno blanco Apple",
+                                ),
+                                "macOS-White" => {
+                                    ("macOS Blanco", "Variante blanca oficial de Apple")
+                                }
                                 "Adwaita" => ("Adwaita", "Tema estándar de GNOME Linux"),
                                 "AdwaitaLegacy" => ("Adwaita Legacy", "Tema clásico de GNOME"),
                                 other => (other, "Tema instalado por el usuario"),
@@ -2733,9 +2889,21 @@ pub(crate) fn get_installed_cursor_themes() -> Vec<(String, String, &'static str
     }
 
     if themes.is_empty() {
-        themes.push(("macOS".to_string(), "macOS Original".to_string(), "Flecha negra clásica con contorno blanco Apple"));
-        themes.push(("macOS-White".to_string(), "macOS Blanco".to_string(), "Variante blanca oficial de Apple"));
-        themes.push(("Adwaita".to_string(), "Adwaita".to_string(), "Tema estándar de GNOME Linux"));
+        themes.push((
+            "macOS".to_string(),
+            "macOS Original".to_string(),
+            "Flecha negra clásica con contorno blanco Apple",
+        ));
+        themes.push((
+            "macOS-White".to_string(),
+            "macOS Blanco".to_string(),
+            "Variante blanca oficial de Apple",
+        ));
+        themes.push((
+            "Adwaita".to_string(),
+            "Adwaita".to_string(),
+            "Tema estándar de GNOME Linux",
+        ));
     }
 
     // Ordenar con temas de macOS al principio
@@ -2808,7 +2976,11 @@ pub(crate) fn set_gtk_theme(theme_name: &str) {
 }
 
 pub(crate) fn set_system_appearance_mode(to_dark: bool) {
-    let target = if to_dark { "prefer-dark" } else { "prefer-light" };
+    let target = if to_dark {
+        "prefer-dark"
+    } else {
+        "prefer-light"
+    };
     tracing::info!("🎨 Cambiando modo de apariencia de Malus DE: {}", target);
 
     match IpcClient::prepare_theme_transition() {
@@ -2824,16 +2996,18 @@ pub(crate) fn set_system_appearance_mode(to_dark: bool) {
 
     malus_de_common::config::sync_system_appearance(to_dark);
 
-    libadwaita::StyleManager::default().set_color_scheme(
-        if to_dark {
-            libadwaita::ColorScheme::ForceDark
-        } else {
-            libadwaita::ColorScheme::ForceLight
-        }
-    );
+    libadwaita::StyleManager::default().set_color_scheme(if to_dark {
+        libadwaita::ColorScheme::ForceDark
+    } else {
+        libadwaita::ColorScheme::ForceLight
+    });
 
     let _ = IpcClient::send_command(IpcMessage::ThemeChanged {
-        theme_name: if to_dark { "Adwaita-Dark".to_string() } else { "Adwaita-Light".to_string() },
+        theme_name: if to_dark {
+            "Adwaita-Dark".to_string()
+        } else {
+            "Adwaita-Light".to_string()
+        },
         is_dark: to_dark,
     });
 }
@@ -2849,7 +3023,12 @@ pub(crate) fn set_cursor_theme_and_size(theme: &str, size: u32) {
     let _ = Command::new("gsettings")
         .env("XDG_CONFIG_HOME", &malus_config_dir)
         .env("GSETTINGS_BACKEND", "keyfile")
-        .args(["set", "org.gnome.desktop.interface", "cursor-size", &size.to_string()])
+        .args([
+            "set",
+            "org.gnome.desktop.interface",
+            "cursor-size",
+            &size.to_string(),
+        ])
         .status();
     let dark_active = is_dark_mode_active();
     let dark_num = if dark_active { "1" } else { "0" };
@@ -2981,7 +3160,12 @@ fn apply_system_wallpaper(source: Option<&std::path::Path>) {
         let _ = Command::new("gsettings")
             .env("XDG_CONFIG_HOME", &malus_dir)
             .env("GSETTINGS_BACKEND", "keyfile")
-            .args(["set", "org.gnome.desktop.background", "picture-uri-dark", &uri])
+            .args([
+                "set",
+                "org.gnome.desktop.background",
+                "picture-uri-dark",
+                &uri,
+            ])
             .status();
     } else {
         let _ = std::fs::write(&gradient_marker, b"1");
@@ -2998,7 +3182,9 @@ fn apply_system_wallpaper(source: Option<&std::path::Path>) {
     }
 
     // Reiniciar malus-de-wallpaper
-    let _ = Command::new("killall").args(["-9", "malus-de-wallpaper"]).status();
+    let _ = Command::new("killall")
+        .args(["-9", "malus-de-wallpaper"])
+        .status();
     let wayland_disp = std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-1".to_string());
 
     let mut bin_candidates = [
@@ -3065,7 +3251,11 @@ fn get_available_wallpaper_presets() -> Vec<WallpaperPreset> {
             user_files.sort();
             user_files.truncate(8);
             for p in user_files {
-                let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Fondo").to_string();
+                let stem = p
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("Fondo")
+                    .to_string();
                 let title = if stem.contains("beach-aerial") {
                     "Costa de California (macOS)".to_string()
                 } else if stem.contains("Blueprint") {
@@ -3092,7 +3282,10 @@ fn get_available_wallpaper_presets() -> Vec<WallpaperPreset> {
         }
     }
 
-    for dir in &["/usr/share/backgrounds/fedora-workstation", "/usr/share/backgrounds/gnome"] {
+    for dir in &[
+        "/usr/share/backgrounds/fedora-workstation",
+        "/usr/share/backgrounds/gnome",
+    ] {
         if let Ok(entries) = std::fs::read_dir(dir) {
             let mut sys_files: Vec<PathBuf> = entries
                 .filter_map(|e| e.ok())
@@ -3109,7 +3302,11 @@ fn get_available_wallpaper_presets() -> Vec<WallpaperPreset> {
             sys_files.sort();
             sys_files.truncate(4);
             for p in sys_files {
-                let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("Fondo").to_string();
+                let stem = p
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("Fondo")
+                    .to_string();
                 if stem.ends_with("-d") || stem.ends_with("_dark") {
                     continue;
                 }
@@ -3234,7 +3431,9 @@ fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<dyn 
         .build();
 
     let gallery_sub = Label::builder()
-        .label("Haz clic en cualquier diseño para aplicarlo instantáneamente como fondo de pantalla.")
+        .label(
+            "Haz clic en cualquier diseño para aplicarlo instantáneamente como fondo de pantalla.",
+        )
         .css_classes(["card-section-sub"])
         .xalign(0.0)
         .build();
@@ -3252,7 +3451,8 @@ fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<dyn 
         .build();
 
     let presets = get_available_wallpaper_presets();
-    let preset_buttons: Rc<RefCell<Vec<(WallpaperPreset, Button)>>> = Rc::new(RefCell::new(Vec::new()));
+    let preset_buttons: Rc<RefCell<Vec<(WallpaperPreset, Button)>>> =
+        Rc::new(RefCell::new(Vec::new()));
 
     for preset in &presets {
         let btn = Button::builder()
@@ -3346,9 +3546,7 @@ fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<dyn 
         for (preset, btn) in p_btns_c.borrow().iter() {
             let is_match = match (&preset.path, &active_file) {
                 (None, None) => true,
-                (Some(p), Some(act)) => {
-                    p == act || p.file_name() == act.file_name()
-                }
+                (Some(p), Some(act)) => p == act || p.file_name() == act.file_name(),
                 _ => false,
             };
 
@@ -3404,18 +3602,14 @@ fn create_wallpaper_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<dyn 
         }
 
         let ref_sub = ref_choose.clone();
-        chooser.open(
-            Some(&win_c),
-            gtk4::gio::Cancellable::NONE,
-            move |res| {
-                if let Ok(file) = res {
-                    if let Some(path) = file.path() {
-                        apply_system_wallpaper(Some(&path));
-                        ref_sub();
-                    }
+        chooser.open(Some(&win_c), gtk4::gio::Cancellable::NONE, move |res| {
+            if let Ok(file) = res {
+                if let Some(path) = file.path() {
+                    apply_system_wallpaper(Some(&path));
+                    ref_sub();
                 }
-            },
-        );
+            }
+        });
     });
 
     (scrolled, refresh_wallpaper_pane)
@@ -3889,7 +4083,8 @@ mod tests {
         assert!(SIDEBAR_SEARCH_HEIGHT <= SIDEBAR_SEARCH_MAX_HEIGHT);
 
         // 3. Verificar altura fija (sin vexpand) y alineación izquierda en ítems de la sidebar
-        let nav_btn = build_sidebar_nav_button("preferences-desktop-appearance-symbolic", "Aspecto");
+        let nav_btn =
+            build_sidebar_nav_button("preferences-desktop-appearance-symbolic", "Aspecto");
         assert!(!nav_btn.property::<bool>("vexpand"));
         assert_eq!(nav_btn.valign(), Align::Start);
         let (btn_min_h, btn_nat_h, _, _) = nav_btn.measure(Orientation::Vertical, 200);

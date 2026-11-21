@@ -68,7 +68,10 @@ impl NetworkService {
                 wifi_dev_path.as_str(),
                 Some("org.freedesktop.DBus.Properties"),
                 "Get",
-                &("org.freedesktop.NetworkManager.Device.Wireless", "ActiveAccessPoint"),
+                &(
+                    "org.freedesktop.NetworkManager.Device.Wireless",
+                    "ActiveAccessPoint",
+                ),
             )
             .await
             .ok()?;
@@ -146,7 +149,11 @@ impl NetworkService {
             }
         }
 
-        networks.sort_by(|a, b| b.in_use.cmp(&a.in_use).then_with(|| b.signal.cmp(&a.signal)));
+        networks.sort_by(|a, b| {
+            b.in_use
+                .cmp(&a.in_use)
+                .then_with(|| b.signal.cmp(&a.signal))
+        });
         (true, networks)
     }
 
@@ -208,7 +215,10 @@ impl NetworkService {
                 dev_path,
                 Some("org.freedesktop.DBus.Properties"),
                 "Get",
-                &("org.freedesktop.NetworkManager.Device.Wireless", "ActiveAccessPoint"),
+                &(
+                    "org.freedesktop.NetworkManager.Device.Wireless",
+                    "ActiveAccessPoint",
+                ),
             )
             .await
             .ok()?;
@@ -242,10 +252,13 @@ impl NetworkService {
         let val: OwnedValue = reply.body().deserialize().ok()?;
         match &*val {
             Value::Array(arr) => {
-                let bytes: Vec<u8> = arr.iter().filter_map(|v| match v {
-                    Value::U8(b) => Some(*b),
-                    _ => None,
-                }).collect();
+                let bytes: Vec<u8> = arr
+                    .iter()
+                    .filter_map(|v| match v {
+                        Value::U8(b) => Some(*b),
+                        _ => None,
+                    })
+                    .collect();
                 let ssid = String::from_utf8_lossy(&bytes).trim().to_string();
                 if !ssid.is_empty() {
                     Some(ssid)
@@ -265,7 +278,11 @@ impl NetworkService {
         }
     }
 
-    async fn get_ap_details(conn: &Connection, ap_path: &str, is_active: bool) -> Option<WifiApInfo> {
+    async fn get_ap_details(
+        conn: &Connection,
+        ap_path: &str,
+        is_active: bool,
+    ) -> Option<WifiApInfo> {
         let ssid = Self::get_ap_ssid(conn, ap_path).await?;
 
         let mut signal = 0u8;
@@ -281,7 +298,10 @@ impl NetworkService {
             )
             .await
         {
-            if let Ok(props) = reply.body().deserialize::<std::collections::HashMap<String, OwnedValue>>() {
+            if let Ok(props) = reply
+                .body()
+                .deserialize::<std::collections::HashMap<String, OwnedValue>>()
+            {
                 if let Some(s_val) = props.get("Strength") {
                     if let Some(s) = extract_u8(s_val) {
                         signal = s;

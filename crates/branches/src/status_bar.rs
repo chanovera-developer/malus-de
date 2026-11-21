@@ -18,10 +18,7 @@ impl StatusBar {
             .hexpand(true)
             .build();
 
-        let free_space_label = Label::builder()
-            .label("")
-            .halign(Align::End)
-            .build();
+        let free_space_label = Label::builder().label("").halign(Align::End).build();
 
         container.append(&items_label);
         container.append(&free_space_label);
@@ -44,7 +41,8 @@ impl StatusBar {
                 selected_items, total_items
             ));
         } else {
-            self.items_label.set_label(&format!("{} ítems", total_items));
+            self.items_label
+                .set_label(&format!("{} ítems", total_items));
         }
 
         self.free_space_label.set_label(free_space_str);

@@ -84,7 +84,11 @@ fn main() -> Result<()> {
                 tracing::warn!("No se pudo enviar solicitud nativa al compositor: {e}");
                 let action = toolbar::run_interactive_toolbar(None)?;
                 match action {
-                    toolbar::ToolbarResult::Capture { mode: _, rect, options } => {
+                    toolbar::ToolbarResult::Capture {
+                        mode: _,
+                        rect,
+                        options,
+                    } => {
                         if options.timer_seconds > 0 {
                             recorder::run_countdown(options.timer_seconds)?;
                         }
@@ -123,11 +127,21 @@ fn main() -> Result<()> {
                             }
                             _ => screenshots_directory(),
                         };
-                        let clipboard_only = options.destination == toolbar::SaveDestination::Clipboard
+                        let clipboard_only = options.destination
+                            == toolbar::SaveDestination::Clipboard
                             || args.clipboard_only;
-                        finish_capture_with_dir(CaptureMode::Toolbar, final_source, clipboard_only, &save_dir)?;
+                        finish_capture_with_dir(
+                            CaptureMode::Toolbar,
+                            final_source,
+                            clipboard_only,
+                            &save_dir,
+                        )?;
                     }
-                    toolbar::ToolbarResult::Record { mode: _, rect, options } => {
+                    toolbar::ToolbarResult::Record {
+                        mode: _,
+                        rect,
+                        options,
+                    } => {
                         if options.timer_seconds > 0 {
                             recorder::run_countdown(options.timer_seconds)?;
                         }
@@ -196,7 +210,12 @@ fn main() -> Result<()> {
             let crop_result = crop_capture(&source, &selection);
             remove_temporary_capture(&source);
             let dest_dir = args.save_dir.unwrap_or_else(screenshots_directory);
-            finish_capture_with_dir(CaptureMode::Area, crop_result?, args.clipboard_only, &dest_dir)?;
+            finish_capture_with_dir(
+                CaptureMode::Area,
+                crop_result?,
+                args.clipboard_only,
+                &dest_dir,
+            )?;
         }
         CaptureMode::Record => {
             let options = toolbar::ToolbarOptions {
@@ -307,7 +326,9 @@ fn play_capture_sound() {
             "/usr/share/sounds/freedesktop/stereo/screen-capture.oga",
             "/usr/share/sounds/freedesktop/stereo/camera-shutter.oga",
         ];
-        let sound_file = sound_candidates.iter().find(|p| std::path::Path::new(p).exists());
+        let sound_file = sound_candidates
+            .iter()
+            .find(|p| std::path::Path::new(p).exists());
 
         // 1. pw-play (PipeWire nativo - latencia casi cero)
         if let Some(&file) = sound_file {
@@ -320,7 +341,10 @@ fn play_capture_sound() {
 
         // 2. canberra-gtk-play (libcanberra - integración con temas de sonido de escritorio)
         for id in ["screen-capture", "camera-shutter"] {
-            if let Ok(status) = Command::new("canberra-gtk-play").args(["--id", id]).status() {
+            if let Ok(status) = Command::new("canberra-gtk-play")
+                .args(["--id", id])
+                .status()
+            {
                 if status.success() {
                     return;
                 }
@@ -1065,8 +1089,8 @@ fn show_capture_ui(mode: CaptureMode, capture_path: Option<PathBuf>, clipboard_s
                 let win_clone = window.clone();
                 let status_label_for_copy = status_label.clone();
                 let capture_path_for_copy = path.clone();
-                copy_btn.connect_clicked(
-                    move |_| match copy_image_to_clipboard(&capture_path_for_copy) {
+                copy_btn.connect_clicked(move |_| {
+                    match copy_image_to_clipboard(&capture_path_for_copy) {
                         Ok(()) => {
                             info!("Captura copiada al portapapeles.");
                             win_clone.close();
@@ -1076,8 +1100,8 @@ fn show_capture_ui(mode: CaptureMode, capture_path: Option<PathBuf>, clipboard_s
                             status_label_for_copy.set_label(&message);
                             tracing::error!("{message}");
                         }
-                    },
-                );
+                    }
+                });
                 btn_box.append(&copy_btn);
             }
 

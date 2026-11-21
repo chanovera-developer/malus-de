@@ -46,20 +46,34 @@ fn test_cosmic_text_typography_and_topbar_rendering() -> Result<()> {
     let instances = ui.generate_instances();
     let labels = ui.generate_text_labels();
 
-    assert!(!instances.is_empty(), "Deben generarse instancias de squircle");
-    assert!(labels.len() >= 10, "Deben generarse al menos 10 etiquetas de texto para los botones");
+    assert!(
+        !instances.is_empty(),
+        "Deben generarse instancias de squircle"
+    );
+    assert!(
+        labels.len() >= 10,
+        "Deben generarse al menos 10 etiquetas de texto para los botones"
+    );
 
     // Verificar que existen las etiquetas clave
     let has_finder = labels.iter().any(|(lbl, _, _)| lbl.text == "Finder");
-    let has_clock = labels.iter().any(|(lbl, _, _)| lbl.text == "Mié 4 Nov 21:30");
-    let has_apple = labels.iter().any(|(lbl, _, _)| lbl.text == "\u{F179}" || lbl.text == "");
-    assert!(has_finder, "Debe contener la etiqueta de la app activa 'Finder'");
+    let has_clock = labels
+        .iter()
+        .any(|(lbl, _, _)| lbl.text == "Mié 4 Nov 21:30");
+    let has_apple = labels
+        .iter()
+        .any(|(lbl, _, _)| lbl.text == "\u{F179}" || lbl.text == "");
+    assert!(
+        has_finder,
+        "Debe contener la etiqueta de la app activa 'Finder'"
+    );
     assert!(has_clock, "Debe contener la etiqueta del reloj");
     assert!(has_apple, "Debe contener el icono de Apple");
 
     // 4. Inicializar WGPU y el subsistema de texto cosmic-text / glyphon
     let mut renderer = SquircleRenderer::new_headless(wgpu::TextureFormat::Rgba8Unorm)?;
-    let mut text_system = TextSystem::new(&renderer.device, &renderer.queue, renderer.target_format);
+    let mut text_system =
+        TextSystem::new(&renderer.device, &renderer.queue, renderer.target_format);
 
     // 5. Renderizar escena completa (geometría + texto)
     let rgba_pixels = renderer.render_scene_to_rgba_image(
@@ -71,10 +85,14 @@ fn test_cosmic_text_typography_and_topbar_rendering() -> Result<()> {
         &labels,
     )?;
 
-    assert_eq!(rgba_pixels.len(), (screen_w as u32 * screen_h as u32 * 4) as usize);
+    assert_eq!(
+        rgba_pixels.len(),
+        (screen_w as u32 * screen_h as u32 * 4) as usize
+    );
 
     // 6. Guardar imagen compuesta como PNG
-    let output_path = Path::new("/home/cristian/Proyectos/malus-de/target/malus_topbar_complete.png");
+    let output_path =
+        Path::new("/home/cristian/Proyectos/malus-de/target/malus_topbar_complete.png");
     let file = File::create(output_path)?;
     let ref mut w = BufWriter::new(file);
 
@@ -84,7 +102,10 @@ fn test_cosmic_text_typography_and_topbar_rendering() -> Result<()> {
     let mut writer = encoder.write_header()?;
     writer.write_image_data(&rgba_pixels)?;
 
-    println!("✅ Top-Bar completa con texto y squircles renderizada en: {:?}", output_path);
+    println!(
+        "✅ Top-Bar completa con texto y squircles renderizada en: {:?}",
+        output_path
+    );
     assert!(output_path.exists());
     assert!(std::fs::metadata(output_path)?.len() > 0);
 
@@ -101,7 +122,9 @@ fn test_cosmic_text_system_font_matching() {
     buffer.set_text(
         &mut fs,
         "Acerca de este equipo",
-        Attrs::new().family(Family::SansSerif).weight(Weight::NORMAL),
+        Attrs::new()
+            .family(Family::SansSerif)
+            .weight(Weight::NORMAL),
         Shaping::Advanced,
     );
     buffer.shape_until_scroll(&mut fs, false);
@@ -123,7 +146,9 @@ fn test_cosmic_text_inter_font_matching() {
     buffer.set_text(
         &mut fs,
         "Hello World",
-        Attrs::new().family(Family::SansSerif).weight(Weight::MEDIUM),
+        Attrs::new()
+            .family(Family::SansSerif)
+            .weight(Weight::MEDIUM),
         Shaping::Advanced,
     );
     buffer.shape_until_scroll(&mut fs, false);

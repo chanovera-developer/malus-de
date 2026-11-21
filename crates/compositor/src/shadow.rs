@@ -190,26 +190,50 @@ impl WindowShadowPipeline {
                 let mut len = 0;
                 gl.GetProgramiv(program, ffi::INFO_LOG_LENGTH, &mut len);
                 let mut buffer = vec![0u8; len as usize];
-                gl.GetProgramInfoLog(program, len, std::ptr::null_mut(), buffer.as_mut_ptr() as *mut ffi::types::GLchar);
+                gl.GetProgramInfoLog(
+                    program,
+                    len,
+                    std::ptr::null_mut(),
+                    buffer.as_mut_ptr() as *mut ffi::types::GLchar,
+                );
                 error!(
                     "❌ [WindowShadowPipeline] Error en enlace de shaders: {}",
-                    String::from_utf8_lossy(&buffer).trim_end_matches('\0').trim()
+                    String::from_utf8_lossy(&buffer)
+                        .trim_end_matches('\0')
+                        .trim()
                 );
                 gl.DeleteProgram(program);
                 return None;
             }
 
-            let u_matrix = gl.GetUniformLocation(program, c"u_matrix".as_ptr() as *const ffi::types::GLchar);
-            let u_quad_rect = gl.GetUniformLocation(program, c"u_quad_rect".as_ptr() as *const ffi::types::GLchar);
-            let u_cut_rect = gl.GetUniformLocation(program, c"u_cut_rect".as_ptr() as *const ffi::types::GLchar);
-            let u_win_size = gl.GetUniformLocation(program, c"u_win_size".as_ptr() as *const ffi::types::GLchar);
-            let u_pad = gl.GetUniformLocation(program, c"u_pad".as_ptr() as *const ffi::types::GLchar);
-            let u_corner_radius = gl.GetUniformLocation(program, c"u_corner_radius".as_ptr() as *const ffi::types::GLchar);
-            let u_exponent = gl.GetUniformLocation(program, c"u_exponent".as_ptr() as *const ffi::types::GLchar);
-            let u_blur_radius = gl.GetUniformLocation(program, c"u_blur_radius".as_ptr() as *const ffi::types::GLchar);
-            let u_spread = gl.GetUniformLocation(program, c"u_spread".as_ptr() as *const ffi::types::GLchar);
-            let u_offset_y = gl.GetUniformLocation(program, c"u_offset_y".as_ptr() as *const ffi::types::GLchar);
-            let u_opacity = gl.GetUniformLocation(program, c"u_opacity".as_ptr() as *const ffi::types::GLchar);
+            let u_matrix =
+                gl.GetUniformLocation(program, c"u_matrix".as_ptr() as *const ffi::types::GLchar);
+            let u_quad_rect = gl.GetUniformLocation(
+                program,
+                c"u_quad_rect".as_ptr() as *const ffi::types::GLchar,
+            );
+            let u_cut_rect =
+                gl.GetUniformLocation(program, c"u_cut_rect".as_ptr() as *const ffi::types::GLchar);
+            let u_win_size =
+                gl.GetUniformLocation(program, c"u_win_size".as_ptr() as *const ffi::types::GLchar);
+            let u_pad =
+                gl.GetUniformLocation(program, c"u_pad".as_ptr() as *const ffi::types::GLchar);
+            let u_corner_radius = gl.GetUniformLocation(
+                program,
+                c"u_corner_radius".as_ptr() as *const ffi::types::GLchar,
+            );
+            let u_exponent =
+                gl.GetUniformLocation(program, c"u_exponent".as_ptr() as *const ffi::types::GLchar);
+            let u_blur_radius = gl.GetUniformLocation(
+                program,
+                c"u_blur_radius".as_ptr() as *const ffi::types::GLchar,
+            );
+            let u_spread =
+                gl.GetUniformLocation(program, c"u_spread".as_ptr() as *const ffi::types::GLchar);
+            let u_offset_y =
+                gl.GetUniformLocation(program, c"u_offset_y".as_ptr() as *const ffi::types::GLchar);
+            let u_opacity =
+                gl.GetUniformLocation(program, c"u_opacity".as_ptr() as *const ffi::types::GLchar);
             let u_contact_strength = gl.GetUniformLocation(
                 program,
                 c"u_contact_strength".as_ptr() as *const ffi::types::GLchar,
@@ -278,19 +302,9 @@ impl WindowShadowPipeline {
         // - Luz cenital superior: la sombra se proyecta suavemente hacia abajo (offset_y)
         // - Penumbra amplia y circular que aporta flotabilidad tridimensional limpia y orgánica
         let (blur_radius, spread, offset_y, opacity) = if is_active {
-            (
-                36.0 * scale as f32,
-                0.0f32,
-                10.0 * scale as f32,
-                0.12f32,
-            )
+            (36.0 * scale as f32, 0.0f32, 10.0 * scale as f32, 0.12f32)
         } else {
-            (
-                8.0 * scale as f32,
-                0.0f32,
-                2.0 * scale as f32,
-                0.04f32,
-            )
+            (8.0 * scale as f32, 0.0f32, 2.0 * scale as f32, 0.04f32)
         };
 
         self.render_shadow_with_style(
@@ -465,13 +479,29 @@ impl WindowShadowPipeline {
             gl.UseProgram(self.program);
 
             gl.UniformMatrix3fv(self.u_matrix, 1, ffi::FALSE, projection.as_ptr());
-            gl.Uniform4f(self.u_quad_rect, quad_x as f32, quad_y as f32, quad_w as f32, quad_h as f32);
+            gl.Uniform4f(
+                self.u_quad_rect,
+                quad_x as f32,
+                quad_y as f32,
+                quad_w as f32,
+                quad_h as f32,
+            );
             if use_ring {
-                gl.Uniform4f(self.u_cut_rect, cut_x as f32, cut_y as f32, cut_w as f32, cut_h as f32);
+                gl.Uniform4f(
+                    self.u_cut_rect,
+                    cut_x as f32,
+                    cut_y as f32,
+                    cut_w as f32,
+                    cut_h as f32,
+                );
             } else {
                 gl.Uniform4f(self.u_cut_rect, 0.0, 0.0, 0.0, 0.0);
             }
-            gl.Uniform2f(self.u_win_size, win_rect.size.w as f32, win_rect.size.h as f32);
+            gl.Uniform2f(
+                self.u_win_size,
+                win_rect.size.w as f32,
+                win_rect.size.h as f32,
+            );
             gl.Uniform2f(self.u_pad, pad_x as f32, pad_y_top as f32);
             gl.Uniform1f(self.u_corner_radius, corner_radius);
             gl.Uniform1f(self.u_exponent, 4.2f32);
@@ -547,7 +577,9 @@ unsafe fn compile_shader(
         );
         error!(
             "❌ [WindowShadowPipeline] Error compilando shader: {}",
-            String::from_utf8_lossy(&buffer).trim_end_matches('\0').trim()
+            String::from_utf8_lossy(&buffer)
+                .trim_end_matches('\0')
+                .trim()
         );
         gl.DeleteShader(shader);
         return None;
@@ -648,7 +680,11 @@ impl Element for WindowShadowRenderElement {
         Kind::Unspecified
     }
 
-    fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
+    fn damage_since(
+        &self,
+        scale: Scale<f64>,
+        commit: Option<CommitCounter>,
+    ) -> DamageSet<i32, Physical> {
         if commit != Some(self.current_commit()) {
             DamageSet::from_slice(&[Rectangle::from_size(self.geometry(scale).size)])
         } else {
@@ -755,7 +791,11 @@ impl Element for DockShadowRenderElement {
         Kind::Unspecified
     }
 
-    fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
+    fn damage_since(
+        &self,
+        scale: Scale<f64>,
+        commit: Option<CommitCounter>,
+    ) -> DamageSet<i32, Physical> {
         if commit != Some(self.current_commit()) {
             DamageSet::from_slice(&[Rectangle::from_size(self.geometry(scale).size)])
         } else {
@@ -864,7 +904,11 @@ impl Element for MenuShadowRenderElement {
         Kind::Unspecified
     }
 
-    fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
+    fn damage_since(
+        &self,
+        scale: Scale<f64>,
+        commit: Option<CommitCounter>,
+    ) -> DamageSet<i32, Physical> {
         if commit != Some(self.current_commit()) {
             DamageSet::from_slice(&[Rectangle::from_size(self.geometry(scale).size)])
         } else {

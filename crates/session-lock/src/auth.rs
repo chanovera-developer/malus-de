@@ -111,7 +111,8 @@ unsafe extern "C" fn pam_conv_cb(
         return PAM_CONV_ERR;
     }
     let payload = &*(appdata_ptr as *const ConvPayload);
-    let replies = libc::calloc(num_msg as usize, std::mem::size_of::<PamResponse>()) as *mut PamResponse;
+    let replies =
+        libc::calloc(num_msg as usize, std::mem::size_of::<PamResponse>()) as *mut PamResponse;
     if replies.is_null() {
         return PAM_CONV_ERR;
     }
@@ -175,7 +176,8 @@ pub fn current_username() -> String {
 pub fn verify_user_password(username: &str, password: &str) -> Result<bool, String> {
     let api = load_pam_api()?;
     let c_user = CString::new(username).map_err(|_| "Nombre de usuario inválido".to_string())?;
-    let c_pass = CString::new(password).map_err(|_| "La contraseña contiene bytes nulos".to_string())?;
+    let c_pass =
+        CString::new(password).map_err(|_| "La contraseña contiene bytes nulos".to_string())?;
 
     let payload = ConvPayload {
         username: c_user.clone(),
@@ -192,14 +194,8 @@ pub fn verify_user_password(username: &str, password: &str) -> Result<bool, Stri
             continue;
         };
         let mut pamh: *mut c_void = std::ptr::null_mut();
-        let rc_start = unsafe {
-            (api.pam_start)(
-                c_service.as_ptr(),
-                c_user.as_ptr(),
-                &conv,
-                &mut pamh,
-            )
-        };
+        let rc_start =
+            unsafe { (api.pam_start)(c_service.as_ptr(), c_user.as_ptr(), &conv, &mut pamh) };
         if rc_start != PAM_SUCCESS || pamh.is_null() {
             if !pamh.is_null() {
                 unsafe { (api.pam_end)(pamh, rc_start) };
@@ -214,16 +210,24 @@ pub fn verify_user_password(username: &str, password: &str) -> Result<bool, Stri
             unsafe { (api.pam_end)(pamh, rc_acct) };
             match rc_acct {
                 PAM_SUCCESS => Ok(true),
-                PAM_AUTH_ERR | PAM_CRED_INSUFFICIENT | PAM_AUTHINFO_UNAVAIL | PAM_USER_UNKNOWN
+                PAM_AUTH_ERR
+                | PAM_CRED_INSUFFICIENT
+                | PAM_AUTHINFO_UNAVAIL
+                | PAM_USER_UNKNOWN
                 | PAM_MAXTRIES => Ok(false),
                 code => Err(format!("pam_acct_mgmt devolvió código {code}")),
             }
         } else {
             unsafe { (api.pam_end)(pamh, rc_auth) };
             match rc_auth {
-                PAM_AUTH_ERR | PAM_CRED_INSUFFICIENT | PAM_AUTHINFO_UNAVAIL | PAM_USER_UNKNOWN
+                PAM_AUTH_ERR
+                | PAM_CRED_INSUFFICIENT
+                | PAM_AUTHINFO_UNAVAIL
+                | PAM_USER_UNKNOWN
                 | PAM_MAXTRIES => Ok(false),
-                code => Err(format!("pam_authenticate({service}) devolvió código {code}")),
+                code => Err(format!(
+                    "pam_authenticate({service}) devolvió código {code}"
+                )),
             }
         };
 
@@ -249,4 +253,3 @@ mod tests {
         assert!(load_pam_api().is_ok());
     }
 }
-

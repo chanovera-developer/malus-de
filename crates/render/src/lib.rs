@@ -21,9 +21,7 @@ pub use popover::{
     PopoverMenuModel, PopoverNodes,
 };
 pub use renderer::SquircleRenderer;
-pub use squircle::{
-    SquircleInstance, SquirclePipeline, SquircleUniforms, MACOS_SQUIRCLE_POWER,
-};
+pub use squircle::{SquircleInstance, SquirclePipeline, SquircleUniforms, MACOS_SQUIRCLE_POWER};
 pub use status_notifier::{SniService, SniUpdate, StatusNotifierWatcher};
 pub use text::{FontSystem, TextBounds, TextLabel, TextSystem, Weight};
 pub use top_bar::{build_top_bar, StatusItem, TopBarConfig, TopBarModel, TopBarNodes};

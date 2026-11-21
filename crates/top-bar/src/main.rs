@@ -5,8 +5,8 @@ use libadwaita as adw;
 use malus_de_common::logging::init_logging;
 use tracing::info;
 
-mod ui;
 pub mod services;
+mod ui;
 
 const STYLE_CSS: &str = include_str!("styles/style.css");
 
@@ -47,6 +47,19 @@ fn main() {
 thread_local! {
     static TOPBAR_GLASS_PROVIDER: std::cell::RefCell<Option<CssProvider>> =
         const { std::cell::RefCell::new(None) };
+    static TOPBAR_ACCENT_PROVIDER: std::cell::RefCell<Option<CssProvider>> =
+        const { std::cell::RefCell::new(None) };
+    static TOPBAR_APPEARANCE_MONITOR: std::cell::RefCell<Option<gtk4::gio::FileMonitor>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn apply_topbar_accent_color(index: usize) {
+    let css = malus_de_common::config::accent_color_css(index);
+    TOPBAR_ACCENT_PROVIDER.with(|cell| {
+        if let Some(provider) = cell.borrow().as_ref() {
+            provider.load_from_string(&css);
+        }
+    });
 }
 
 fn apply_topbar_liquid_glass_opacity(opacity: f64) {
@@ -75,6 +88,7 @@ fn load_css() {
     let provider = CssProvider::new();
     provider.load_from_string(STYLE_CSS);
     let glass_provider = CssProvider::new();
+    let accent_provider = CssProvider::new();
 
     if let Some(display) = gtk4::gdk::Display::default() {
         gtk4::style_context_add_provider_for_display(
@@ -86,6 +100,11 @@ fn load_css() {
             &display,
             &glass_provider,
             gtk4::STYLE_PROVIDER_PRIORITY_USER + 1,
+        );
+        gtk4::style_context_add_provider_for_display(
+            &display,
+            &accent_provider,
+            gtk4::STYLE_PROVIDER_PRIORITY_USER + 2,
         );
 
         let icon_theme = gtk4::IconTheme::for_display(&display);
@@ -114,7 +133,26 @@ fn load_css() {
     TOPBAR_GLASS_PROVIDER.with(|cell| {
         *cell.borrow_mut() = Some(glass_provider);
     });
+    TOPBAR_ACCENT_PROVIDER.with(|cell| {
+        *cell.borrow_mut() = Some(accent_provider);
+    });
+    apply_topbar_accent_color(malus_de_common::config::load_accent_color_index());
     apply_topbar_liquid_glass_opacity(malus_de_common::config::load_liquid_glass_opacity());
+
+    let config_file =
+        gtk4::gio::File::for_path(malus_de_common::config::appearance_settings_path());
+    if let Ok(monitor) = config_file.monitor_file(
+        gtk4::gio::FileMonitorFlags::NONE,
+        gtk4::gio::Cancellable::NONE,
+    ) {
+        monitor.connect_changed(|_, _, _, _| {
+            apply_topbar_accent_color(malus_de_common::config::load_accent_color_index());
+            apply_topbar_liquid_glass_opacity(malus_de_common::config::load_liquid_glass_opacity());
+        });
+        TOPBAR_APPEARANCE_MONITOR.with(|cell| {
+            *cell.borrow_mut() = Some(monitor);
+        });
+    }
 }
 
 fn build_ui(app: &Application) {
@@ -186,7 +224,10 @@ fn build_ui(app: &Application) {
                 None => true,
             };
             if should_update {
-                info!("🔄 [TopBar] Actualizando menú dinámico tras registro D-Bus de ventana {}", reg.window_id);
+                info!(
+                    "🔄 [TopBar] Actualizando menú dinámico tras registro D-Bus de ventana {}",
+                    reg.window_id
+                );
                 ui::global_menu::update_global_menu(
                     &handles_for_reg,
                     app_id.as_deref(),
@@ -213,7 +254,11 @@ fn build_ui(app: &Application) {
     glib::spawn_future_local(async move {
         while let Ok(msg) = rx.recv().await {
             match msg {
-                malus_de_common::ipc::IpcMessage::ActiveAppChanged { app_id, title, window_id } => {
+                malus_de_common::ipc::IpcMessage::ActiveAppChanged {
+                    app_id,
+                    title,
+                    window_id,
+                } => {
                     let display = format_app_name(app_id.as_deref(), title.as_deref());
                     title_label.set_label(&display);
                     let es = std::env::var("LC_ALL")
@@ -222,11 +267,24 @@ fn build_ui(app: &Application) {
                         .unwrap_or_default()
                         .to_lowercase()
                         .starts_with("es");
-                    let hide_txt = if es { format!("Ocultar {}", display) } else { format!("Hide {}", display) };
-                    let quit_txt = if es { format!("Salir de {}", display) } else { format!("Quit {}", display) };
+                    let hide_txt = if es {
+                        format!("Ocultar {}", display)
+                    } else {
+                        format!("Hide {}", display)
+                    };
+                    let quit_txt = if es {
+                        format!("Salir de {}", display)
+                    } else {
+                        format!("Quit {}", display)
+                    };
                     ui::global_menu::update_menu_row_label(&hide_btn, &hide_txt);
                     ui::global_menu::update_menu_row_label(&quit_btn, &quit_txt);
-                    ui::global_menu::update_global_menu(&handles_clone, app_id.as_deref(), title.as_deref(), window_id);
+                    ui::global_menu::update_global_menu(
+                        &handles_clone,
+                        app_id.as_deref(),
+                        title.as_deref(),
+                        window_id,
+                    );
                 }
                 malus_de_common::ipc::IpcMessage::ThemeChanged { is_dark, .. } => {
                     adw::StyleManager::default().set_color_scheme(if is_dark {
@@ -236,8 +294,15 @@ fn build_ui(app: &Application) {
                     });
                     ui::theme::update_all_popovers_theme(is_dark);
                 }
+                malus_de_common::ipc::IpcMessage::AccentColorChanged { index } => {
+                    apply_topbar_accent_color(index);
+                    win_ipc.queue_draw();
+                }
                 malus_de_common::ipc::IpcMessage::LiquidGlassOpacityChanged { opacity } => {
-                    info!("✨ [TopBar] IPC LiquidGlassOpacityChanged recibido: opacity={:.2}", opacity);
+                    info!(
+                        "✨ [TopBar] IPC LiquidGlassOpacityChanged recibido: opacity={:.2}",
+                        opacity
+                    );
                     apply_topbar_liquid_glass_opacity(opacity);
                     win_ipc.queue_draw();
                 }
@@ -266,7 +331,9 @@ fn build_ui(app: &Application) {
                 let reader = std::io::BufReader::new(stream);
                 for line in std::io::BufRead::lines(reader) {
                     if let Ok(line) = line {
-                        if let Ok(msg) = serde_json::from_str::<malus_de_common::ipc::IpcMessage>(&line) {
+                        if let Ok(msg) =
+                            serde_json::from_str::<malus_de_common::ipc::IpcMessage>(&line)
+                        {
                             let _ = tx.send_blocking(msg);
                         }
                     }
@@ -355,7 +422,10 @@ fn format_app_name(app_id: Option<&str>, title: Option<&str>) -> String {
             return if es { "Calculadora" } else { "Calculator" }.to_string();
         } else if lower.contains("ptyxis") || lower.contains("terminal") {
             return "Terminal".to_string();
-        } else if lower.contains("texteditor") || lower.contains("text-editor") || lower.contains("gedit") {
+        } else if lower.contains("texteditor")
+            || lower.contains("text-editor")
+            || lower.contains("gedit")
+        {
             return if es { "Editor de Texto" } else { "Text Editor" }.to_string();
         } else if lower.contains("control-center") || lower.contains("settings") {
             return if es { "Configuración" } else { "Settings" }.to_string();

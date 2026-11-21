@@ -192,11 +192,7 @@ impl AirDropEngine {
             }
         }
         let installed = find_owly_binary().is_some();
-        let report = if installed {
-            run_owly_doctor()
-        } else {
-            None
-        };
+        let report = if installed { run_owly_doctor() } else { None };
         self.doctor_cache = Some((Instant::now(), installed, report.clone()));
         (installed, report)
     }
@@ -204,37 +200,46 @@ impl AirDropEngine {
     pub fn status_snapshot(&mut self, force_doctor: bool) -> AirDropStatusSnapshot {
         self.refresh_expiration_if_needed();
         let (backend_installed, report) = self.doctor_report(force_doctor);
-        let (hardware_ready, radio_mode, station, driver, device_pci, channel, hardware_status, issues, missing) =
-            if let Some(rep) = report {
-                let ready = rep.hardware && rep.missing.is_empty();
-                (
-                    ready,
-                    rep.mode,
-                    rep.station,
-                    rep.driver,
-                    rep.device,
-                    rep.channel,
-                    rep.status,
-                    rep.issues,
-                    rep.missing.into_iter().map(|m| m.say).collect(),
-                )
-            } else {
-                (
-                    false,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    Vec::new(),
-                    if backend_installed {
-                        vec!["No se pudo consultar owlyd (verifica que owlyd esté instalado en el bus del sistema).".to_string()]
-                    } else {
-                        vec!["El binario 'owly' no está instalado en el sistema.".to_string()]
-                    },
-                )
-            };
+        let (
+            hardware_ready,
+            radio_mode,
+            station,
+            driver,
+            device_pci,
+            channel,
+            hardware_status,
+            issues,
+            missing,
+        ) = if let Some(rep) = report {
+            let ready = rep.hardware && rep.missing.is_empty();
+            (
+                ready,
+                rep.mode,
+                rep.station,
+                rep.driver,
+                rep.device,
+                rep.channel,
+                rep.status,
+                rep.issues,
+                rep.missing.into_iter().map(|m| m.say).collect(),
+            )
+        } else {
+            (
+                false,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Vec::new(),
+                if backend_installed {
+                    vec!["No se pudo consultar owlyd (verifica que owlyd esté instalado en el bus del sistema).".to_string()]
+                } else {
+                    vec!["El binario 'owly' no está instalado en el sistema.".to_string()]
+                },
+            )
+        };
 
         AirDropStatusSnapshot {
             mode: self.mode.as_str().to_string(),
@@ -314,8 +319,12 @@ pub fn set_airdrop_mode(engine: &Arc<Mutex<AirDropEngine>>, mode: AirDropMode) -
                     st.mode = AirDropMode::Off;
                     st.everyone_until = None;
                     st.radio_state = "error".to_string();
-                    st.last_error = Some("No se encontró el binario 'owly' en el sistema.".to_string());
-                    notify_airdrop("Error de AirDrop", "No se encontró el motor 'owly' instalado.");
+                    st.last_error =
+                        Some("No se encontró el binario 'owly' en el sistema.".to_string());
+                    notify_airdrop(
+                        "Error de AirDrop",
+                        "No se encontró el motor 'owly' instalado.",
+                    );
                     return false;
                 }
                 if let Some(ref rep) = report {
@@ -334,7 +343,8 @@ pub fn set_airdrop_mode(engine: &Arc<Mutex<AirDropEngine>>, mode: AirDropMode) -
                     }
                 }
                 st.mode = AirDropMode::Everyone;
-                st.everyone_until = Some(Instant::now() + Duration::from_secs(EVERYONE_DURATION_SECS));
+                st.everyone_until =
+                    Some(Instant::now() + Duration::from_secs(EVERYONE_DURATION_SECS));
                 st.radio_state = "starting".to_string();
                 let rmode = report.and_then(|r| r.mode);
                 (
@@ -706,7 +716,10 @@ where
 
     let mut temp_radio: Option<Child> = None;
     if need_temp_radio {
-        info!("📡 [AirDrop] Levantando radio AWDL temporal (120s) para enviar '{}'...", label);
+        info!(
+            "📡 [AirDrop] Levantando radio AWDL temporal (120s) para enviar '{}'...",
+            label
+        );
         notify_airdrop(
             "AirDrop: iniciando envío",
             &format!("Activando radio AWDL temporal para enviar '{}'...", label),
@@ -986,12 +999,7 @@ pub fn resolve_downloads_dir() -> PathBuf {
 
 pub fn resolve_computer_name() -> String {
     if let Ok(raw) = std::fs::read_to_string("/etc/hostname") {
-        let name = raw
-            .trim()
-            .split('.')
-            .next()
-            .unwrap_or("")
-            .trim();
+        let name = raw.trim().split('.').next().unwrap_or("").trim();
         if !name.is_empty() && name != "localhost" {
             return name.to_string();
         }
@@ -1314,4 +1322,3 @@ no AWDL peer answered /Discover
         assert_eq!(parse_owly_receive_line("listening on awdl0:8771"), None);
     }
 }
-

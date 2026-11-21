@@ -4,8 +4,8 @@ use crate::views::{show_item_context_menu, NavigateCallback, SelectionCallback};
 use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Box as GtkBox, Fixed, GestureClick, GestureDrag, Image, Label,
-    Orientation, PolicyType, Popover, ScrolledWindow,
+    Align, Box as GtkBox, Fixed, GestureClick, GestureDrag, Image, Label, Orientation, PolicyType,
+    Popover, ScrolledWindow,
 };
 use malus_de_common::config::{BranchesConfig, IconGridMetrics};
 use std::cell::{Cell, RefCell};
@@ -147,11 +147,7 @@ pub(crate) fn columns_for_width(available_width: i32, cell_w: i32) -> i32 {
 }
 
 #[inline]
-fn exact_drop_position(
-    drop_x: f64,
-    drop_y: f64,
-    grab_offset: (f64, f64),
-) -> (i32, i32) {
+fn exact_drop_position(drop_x: f64, drop_y: f64, grab_offset: (f64, f64)) -> (i32, i32) {
     (
         (drop_x - grab_offset.0).round().max(0.0) as i32,
         (drop_y - grab_offset.1).round().max(0.0) as i32,
@@ -410,7 +406,9 @@ impl IconView {
     }
 
     pub fn queue_select_name(&self, name: &str) {
-        self.pending_select_names.borrow_mut().insert(name.to_string());
+        self.pending_select_names
+            .borrow_mut()
+            .insert(name.to_string());
     }
 
     /// Navega entre iconos de la rejilla con las teclas de dirección (`←`, `→`, `↑`, `↓`).
@@ -541,7 +539,10 @@ impl IconView {
         true
     }
 
-    pub fn get_selected_item_and_widget(&self, items: &[FileItem]) -> Option<(FileItem, gtk4::Widget)> {
+    pub fn get_selected_item_and_widget(
+        &self,
+        items: &[FileItem],
+    ) -> Option<(FileItem, gtk4::Widget)> {
         let sel = self.selected_items.borrow();
         if sel.is_empty() {
             return None;
@@ -665,7 +666,8 @@ impl IconView {
     }
 
     fn apply_active_metrics(&self, icon_size: i32, grid_spacing: i32) {
-        self.active_icon_size.set(clamp_branches_icon_size(icon_size));
+        self.active_icon_size
+            .set(clamp_branches_icon_size(icon_size));
         self.grid_spacing.set(clamp_grid_spacing(grid_spacing));
         let metrics = self.current_metrics();
         let cell_w = metrics.cell_width();
@@ -683,7 +685,8 @@ impl IconView {
             drop(widgets_map);
             for data_rc in self.item_widgets.borrow().values() {
                 let d = data_rc.borrow();
-                d.image.set_size_request(metrics.icon_size, metrics.icon_size);
+                d.image
+                    .set_size_request(metrics.icon_size, metrics.icon_size);
                 crate::views::update_item_image_thumbnail(
                     &d.image,
                     &d.item,
@@ -693,8 +696,10 @@ impl IconView {
                 d.widget.set_width_request(metrics.box_width);
                 d.widget.set_height_request(metrics.box_height);
             }
-            self.last_auto_cols.set(if viewport_w > 0 { cols } else { 0 });
-            self.make_weak().relayout_auto_grid_with_width(viewport_w, true);
+            self.last_auto_cols
+                .set(if viewport_w > 0 { cols } else { 0 });
+            self.make_weak()
+                .relayout_auto_grid_with_width(viewport_w, true);
             return;
         }
 
@@ -710,7 +715,8 @@ impl IconView {
         let mut moves = Vec::new();
         for data_rc in ordered {
             let d = data_rc.borrow();
-            d.image.set_size_request(metrics.icon_size, metrics.icon_size);
+            d.image
+                .set_size_request(metrics.icon_size, metrics.icon_size);
             crate::views::update_item_image_thumbnail(
                 &d.image,
                 &d.item,
@@ -743,7 +749,8 @@ impl IconView {
                 px = target_x;
                 py = target_y;
                 d.pos.set((px, py));
-                if (start_pos.0 - px as f64).abs() >= 1.0 || (start_pos.1 - py as f64).abs() >= 1.0 {
+                if (start_pos.0 - px as f64).abs() >= 1.0 || (start_pos.1 - py as f64).abs() >= 1.0
+                {
                     moves.push((d.widget.clone(), start_pos, (px as f64, py as f64)));
                 }
             }
@@ -795,7 +802,11 @@ impl IconView {
             return;
         }
 
-        let folder = items[0].path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("/"));
+        let folder = items[0]
+            .path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("/"));
         *self.current_folder.borrow_mut() = folder.clone();
 
         // Cargar posiciones, modo de layout y tamaño personalizado de carpeta desde SQLite
@@ -820,7 +831,8 @@ impl IconView {
         let cell_h = metrics.cell_height();
         let viewport_w = self.viewport_width();
         let cols = columns_for_width(viewport_w, cell_w);
-        self.last_auto_cols.set(if viewport_w > 0 { cols } else { 0 });
+        self.last_auto_cols
+            .set(if viewport_w > 0 { cols } else { 0 });
 
         // Calcular colocación para cada elemento
         let mut occupied_slots: HashSet<(i32, i32)> = HashSet::new();
@@ -840,37 +852,38 @@ impl IconView {
         let mut new_positions_to_save: HashMap<String, (i32, i32)> = HashMap::new();
 
         for item in items {
-            let (pos_x, pos_y) = if current_mode != LayoutMode::Auto && db_positions.contains_key(&item.name) {
-                let pos = db_positions[&item.name];
-                if current_mode == LayoutMode::SnapToGrid {
-                    snap_to_grid_cell(pos.0, pos.1, cell_w, cell_h)
+            let (pos_x, pos_y) =
+                if current_mode != LayoutMode::Auto && db_positions.contains_key(&item.name) {
+                    let pos = db_positions[&item.name];
+                    if current_mode == LayoutMode::SnapToGrid {
+                        snap_to_grid_cell(pos.0, pos.1, cell_w, cell_h)
+                    } else {
+                        (pos.0, pos.1)
+                    }
                 } else {
-                    (pos.0, pos.1)
-                }
-            } else {
-                // Asignar siguiente celda libre según el ancho actual de la ventana
-                while occupied_slots.contains(&(next_col, next_row)) {
+                    // Asignar siguiente celda libre según el ancho actual de la ventana
+                    while occupied_slots.contains(&(next_col, next_row)) {
+                        next_col += 1;
+                        if next_col >= cols {
+                            next_col = 0;
+                            row_advance(&mut next_row);
+                        }
+                    }
+                    let x = MARGIN_LEFT + next_col * cell_w;
+                    let y = MARGIN_TOP + next_row * cell_h;
+                    occupied_slots.insert((next_col, next_row));
+
                     next_col += 1;
                     if next_col >= cols {
                         next_col = 0;
                         row_advance(&mut next_row);
                     }
-                }
-                let x = MARGIN_LEFT + next_col * cell_w;
-                let y = MARGIN_TOP + next_row * cell_h;
-                occupied_slots.insert((next_col, next_row));
 
-                next_col += 1;
-                if next_col >= cols {
-                    next_col = 0;
-                    row_advance(&mut next_row);
-                }
-
-                if current_mode != LayoutMode::Auto {
-                    new_positions_to_save.insert(item.name.clone(), (x, y));
-                }
-                (x, y)
-            };
+                    if current_mode != LayoutMode::Auto {
+                        new_positions_to_save.insert(item.name.clone(), (x, y));
+                    }
+                    (x, y)
+                };
 
             max_x = max_x.max(pos_x + cell_w);
             max_y = max_y.max(pos_y + cell_h);
@@ -892,7 +905,9 @@ impl IconView {
                 item: item.clone(),
                 pos: pos_cell,
             }));
-            self.item_widgets.borrow_mut().insert(item.name.clone(), data);
+            self.item_widgets
+                .borrow_mut()
+                .insert(item.name.clone(), data);
         }
 
         let sel_count = self.selected_items.borrow().len();
@@ -1126,11 +1141,8 @@ impl IconView {
             vbox.add_css_class("branches-cut-item");
         }
 
-        let img = crate::views::create_item_image(
-            item,
-            metrics.icon_size,
-            Some("branches-item-thumb"),
-        );
+        let img =
+            crate::views::create_item_image(item, metrics.icon_size, Some("branches-item-thumb"));
         img.set_size_request(metrics.icon_size, metrics.icon_size);
         img.set_halign(Align::Center);
         img.set_valign(Align::Center);
@@ -1368,10 +1380,14 @@ impl IconView {
                     rounded_offset.0,
                     rounded_offset.1,
                 );
-                Some(crate::views::build_file_drag_content_provider(&path_for_drag))
+                Some(crate::views::build_file_drag_content_provider(
+                    &path_for_drag,
+                ))
             } else {
                 malus_de_common::write_drag_anchors(&anchors);
-                Some(crate::views::build_files_drag_content_provider(&selected_paths))
+                Some(crate::views::build_files_drag_content_provider(
+                    &selected_paths,
+                ))
             }
         });
 
@@ -1540,9 +1556,7 @@ impl IconView {
                 vbox_hover.add_css_class("folder-drop-hover");
                 gdk::DragAction::MOVE
             });
-            folder_drop.connect_motion(move |_, _x, _y| {
-                gdk::DragAction::MOVE
-            });
+            folder_drop.connect_motion(move |_, _x, _y| gdk::DragAction::MOVE);
 
             let vbox_leave = vbox.clone();
             folder_drop.connect_leave(move |_| {
@@ -1637,7 +1651,14 @@ impl IconView {
             } else if button == gdk::BUTTON_SECONDARY {
                 // Menú contextual del lienzo de fondo
                 if let Some(ref w) = *weak_for_click.borrow() {
-                    show_canvas_context_menu(&fixed, x, y, folder_ref.clone(), layout_ref.clone(), w);
+                    show_canvas_context_menu(
+                        &fixed,
+                        x,
+                        y,
+                        folder_ref.clone(),
+                        layout_ref.clone(),
+                        w,
+                    );
                 }
             }
         });
@@ -1760,12 +1781,8 @@ impl IconView {
             gdk::FileList::static_type(),
             gdk::DragAction::COPY | gdk::DragAction::MOVE,
         );
-        canvas_drop.connect_enter(move |_, _x, _y| {
-            gdk::DragAction::MOVE
-        });
-        canvas_drop.connect_motion(move |_, _x, _y| {
-            gdk::DragAction::MOVE
-        });
+        canvas_drop.connect_enter(move |_, _x, _y| gdk::DragAction::MOVE);
+        canvas_drop.connect_motion(move |_, _x, _y| gdk::DragAction::MOVE);
         let folder_drop_ref = self.current_folder.clone();
         let layout_drop_ref = self.layout_mode.clone();
         let icon_size_drop_ref = self.active_icon_size.clone();
@@ -1829,7 +1846,11 @@ impl IconView {
                                 if let Some(item_data) = widgets_drop_map.borrow().get(&fname_str) {
                                     let d = item_data.borrow();
                                     d.pos.set((final_x, final_y));
-                                    fixed_drop_canvas.move_(&d.widget, final_x as f64, final_y as f64);
+                                    fixed_drop_canvas.move_(
+                                        &d.widget,
+                                        final_x as f64,
+                                        final_y as f64,
+                                    );
                                 }
                                 dropped_positions.insert(fname_str, (final_x, final_y));
 
@@ -1840,7 +1861,8 @@ impl IconView {
                                     max_x = max_x.max(px + cell_w);
                                     max_y = max_y.max(py + cell_h);
                                 }
-                                let vw = container_drop_ref.hadjustment().page_size().floor() as i32;
+                                let vw =
+                                    container_drop_ref.hadjustment().page_size().floor() as i32;
                                 let min_w = if vw > 0 && max_x <= vw { 1 } else { max_x + 24 };
                                 fixed_drop_canvas.set_size_request(min_w, max_y + 80);
                                 moved_internal = true;
@@ -1862,20 +1884,21 @@ impl IconView {
                                     cell_w,
                                     cell_h,
                                 );
-                                let transferred = if malus_de_common::apps::is_application_desktop_file(&src) {
-                                    dest.symlink_metadata().is_err()
-                                        && std::os::unix::fs::symlink(&src, &dest).is_ok()
-                                } else {
-                                    let dest_file = gio::File::for_path(&dest);
-                                    file.move_(
-                                        &dest_file,
-                                        gio::FileCopyFlags::NONE,
-                                        gio::Cancellable::NONE,
-                                        None,
-                                    )
-                                    .is_ok()
-                                        || std::fs::rename(&src, &dest).is_ok()
-                                };
+                                let transferred =
+                                    if malus_de_common::apps::is_application_desktop_file(&src) {
+                                        dest.symlink_metadata().is_err()
+                                            && std::os::unix::fs::symlink(&src, &dest).is_ok()
+                                    } else {
+                                        let dest_file = gio::File::for_path(&dest);
+                                        file.move_(
+                                            &dest_file,
+                                            gio::FileCopyFlags::NONE,
+                                            gio::Cancellable::NONE,
+                                            None,
+                                        )
+                                        .is_ok()
+                                            || std::fs::rename(&src, &dest).is_ok()
+                                    };
                                 if transferred {
                                     dropped_positions.insert(fname_str.clone(), (final_x, final_y));
                                     external_selected_names.push(fname_str);
@@ -2000,10 +2023,8 @@ impl IconViewWeak {
     }
 
     fn relayout_auto_grid_with_width(&self, available_width: i32, animate: bool) {
-        let metrics = IconGridMetrics::from_icon_size(
-            self.active_icon_size.get(),
-            self.grid_spacing.get(),
-        );
+        let metrics =
+            IconGridMetrics::from_icon_size(self.active_icon_size.get(), self.grid_spacing.get());
         let cell_w = metrics.cell_width();
         let cell_h = metrics.cell_height();
         let cols = columns_for_width(available_width, cell_w);
@@ -2027,7 +2048,9 @@ impl IconViewWeak {
                 d.pos.set((x, y));
                 if !animate {
                     self.fixed.move_(&d.widget, x as f64, y as f64);
-                } else if (start_pos.0 - x as f64).abs() >= 1.0 || (start_pos.1 - y as f64).abs() >= 1.0 {
+                } else if (start_pos.0 - x as f64).abs() >= 1.0
+                    || (start_pos.1 - y as f64).abs() >= 1.0
+                {
                     moves.push((d.widget.clone(), start_pos, (x as f64, y as f64)));
                 }
                 max_y = max_y.max(y + cell_h);
@@ -2052,10 +2075,8 @@ impl IconViewWeak {
     }
 
     fn snap_existing_to_grid(&self) {
-        let metrics = IconGridMetrics::from_icon_size(
-            self.active_icon_size.get(),
-            self.grid_spacing.get(),
-        );
+        let metrics =
+            IconGridMetrics::from_icon_size(self.active_icon_size.get(), self.grid_spacing.get());
         let cell_w = metrics.cell_width();
         let cell_h = metrics.cell_height();
         let viewport_w = self.viewport_width();
@@ -2121,18 +2142,18 @@ impl IconViewWeak {
             list.sort_by(|a, b| {
                 let a_ref = a.borrow();
                 let b_ref = b.borrow();
-                b_ref
-                    .item
-                    .is_dir
-                    .cmp(&a_ref.item.is_dir)
-                    .then_with(|| a_ref.item.name.to_lowercase().cmp(&b_ref.item.name.to_lowercase()))
+                b_ref.item.is_dir.cmp(&a_ref.item.is_dir).then_with(|| {
+                    a_ref
+                        .item
+                        .name
+                        .to_lowercase()
+                        .cmp(&b_ref.item.name.to_lowercase())
+                })
             });
         }
 
-        let metrics = IconGridMetrics::from_icon_size(
-            self.active_icon_size.get(),
-            self.grid_spacing.get(),
-        );
+        let metrics =
+            IconGridMetrics::from_icon_size(self.active_icon_size.get(), self.grid_spacing.get());
         let cell_w = metrics.cell_width();
         let cell_h = metrics.cell_height();
         let viewport_w = self.viewport_width();
@@ -2229,7 +2250,10 @@ fn show_canvas_context_menu(
         );
         let dir_create = target_dir.clone();
         let on_created: crate::views::RenameCallback = Rc::new(move |created_path| {
-            if let Some(new_name) = created_path.file_name().map(|n| n.to_string_lossy().into_owned()) {
+            if let Some(new_name) = created_path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+            {
                 if layout_create != LayoutMode::Auto {
                     let (px, py) = if layout_create == LayoutMode::SnapToGrid {
                         snap_to_grid_cell(
@@ -2239,7 +2263,10 @@ fn show_canvas_context_menu(
                             metrics.cell_height(),
                         )
                     } else {
-                        ((x.round() as i32).max(MARGIN_LEFT), (y.round() as i32).max(MARGIN_TOP))
+                        (
+                            (x.round() as i32).max(MARGIN_LEFT),
+                            (y.round() as i32).max(MARGIN_TOP),
+                        )
                     };
                     if let Ok(conn) = db::open_db() {
                         let _ = db::save_position(&conn, &dir_create, &new_name, px, py);
@@ -2325,7 +2352,9 @@ fn show_canvas_context_menu(
             w_auto.active_icon_size.get(),
             w_auto.grid_spacing.get(),
         );
-        w_auto.last_auto_cols.set(columns_for_width(vw, metrics.cell_width()));
+        w_auto
+            .last_auto_cols
+            .set(columns_for_width(vw, metrics.cell_width()));
         w_auto.relayout_auto_grid_with_width(vw, true);
         if let Ok(conn) = db::open_db() {
             let _ = db::set_layout_mode(&conn, &f_auto.borrow(), LayoutMode::Auto);
@@ -2453,8 +2482,12 @@ mod tests {
         assert!(!point_in_icon_bounds(10.0, 60.0, 24.0, 24.0, 108.0, 112.0));
 
         // Selección de área por rectángulo elástico (marquee)
-        assert!(rects_intersect(10.0, 10.0, 80.0, 80.0, 24.0, 24.0, 132.0, 136.0));
-        assert!(!rects_intersect(200.0, 200.0, 300.0, 300.0, 24.0, 24.0, 132.0, 136.0));
+        assert!(rects_intersect(
+            10.0, 10.0, 80.0, 80.0, 24.0, 24.0, 132.0, 136.0
+        ));
+        assert!(!rects_intersect(
+            200.0, 200.0, 300.0, 300.0, 24.0, 24.0, 132.0, 136.0
+        ));
 
         // Modificadores individuales (Ctrl solo, Super solo, Shift solo)
         assert!(has_multi_select_modifier(gdk::ModifierType::CONTROL_MASK));

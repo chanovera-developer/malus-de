@@ -1,8 +1,8 @@
 use gtk4::prelude::*;
 use gtk4::{
     Align, ApplicationWindow, Box as GtkBox, Button, DrawingArea, DropDown, Entry, Image, Label,
-    MenuButton, Orientation, Overlay, PasswordEntry, PolicyType, Popover, ScrolledWindow,
-    Spinner, StateFlags, StringList, Switch,
+    MenuButton, Orientation, Overlay, PasswordEntry, PolicyType, Popover, ScrolledWindow, Spinner,
+    StateFlags, StringList, Switch,
 };
 
 /// Con superelipse n=4.2, r=19.0 px iguala la profundidad visual de esquina (~2.9 px) de `border-radius: 10px` en el sidebar.
@@ -12,7 +12,12 @@ pub(crate) const WIFI_BADGE_SQUIRCLE_RADIUS: f64 = 15.0;
 const WIFI_MENU_ITEM_SQUIRCLE_RADIUS: f64 = 14.0;
 
 /// Dibuja una insignia cuadrada-squircle azul estilo macOS con el glifo centrado.
-pub(crate) fn make_squircle_badge(size: i32, icon_name: &str, icon_px: i32, radius: f64) -> Overlay {
+pub(crate) fn make_squircle_badge(
+    size: i32,
+    icon_name: &str,
+    icon_px: i32,
+    radius: f64,
+) -> Overlay {
     // Colores muestreados exactamente de macOS: (66, 144, 249) -> (60, 132, 242)
     make_squircle_colored_badge(
         size,
@@ -138,7 +143,11 @@ pub(crate) fn wrap_squircle_card(inner: &GtkBox, radius: f64) -> Overlay {
 }
 
 /// Crea un botón estilo macOS compacto y ajustado al texto con forma cápsula/squircle.
-pub(crate) fn make_squircle_button(label: &str, primary: bool, tooltip: Option<&str>) -> (Overlay, Button) {
+pub(crate) fn make_squircle_button(
+    label: &str,
+    primary: bool,
+    tooltip: Option<&str>,
+) -> (Overlay, Button) {
     let btn = Button::builder()
         .label(label)
         .has_frame(false)
@@ -160,6 +169,7 @@ pub(crate) fn make_squircle_button(label: &str, primary: bool, tooltip: Option<&
     bg.set_can_target(false);
     bg.set_hexpand(true);
     bg.set_vexpand(true);
+    crate::register_accent_draw_area(&bg);
 
     let btn_weak = btn.downgrade();
     bg.set_draw_func(move |_, cr, w, h| {
@@ -183,15 +193,21 @@ pub(crate) fn make_squircle_button(label: &str, primary: bool, tooltip: Option<&
         crate::squircle_path(cr, width - 1.0, height - 1.0, pill_r);
         if primary {
             let alpha = if insensitive { 0.45 } else { 1.0 };
+            let (r, g, b) = crate::accent_color();
             if active {
-                cr.set_source_rgba(0.0, 0.38, 0.80, alpha);
+                cr.set_source_rgba(r * 0.8, g * 0.8, b * 0.8, alpha);
             } else if hovered {
-                cr.set_source_rgba(0.04, 0.52, 1.0, alpha);
+                cr.set_source_rgba(
+                    r + (1.0 - r) * 0.08,
+                    g + (1.0 - g) * 0.08,
+                    b + (1.0 - b) * 0.08,
+                    alpha,
+                );
             } else {
-                cr.set_source_rgba(0.0, 0.48, 1.0, alpha);
+                cr.set_source_rgba(r, g, b, alpha);
             }
             let _ = cr.fill_preserve();
-            cr.set_source_rgba(0.0, 0.25, 0.65, 0.25 * alpha);
+            cr.set_source_rgba(r * 0.75, g * 0.75, b * 0.75, 0.25 * alpha);
             cr.set_line_width(1.0);
             let _ = cr.stroke();
         } else {
@@ -673,7 +689,8 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .pixel_size(15)
         .visible(false)
         .build();
-    let (active_details_wrap, active_details_btn) = make_squircle_button("Detalles...", false, None);
+    let (active_details_wrap, active_details_btn) =
+        make_squircle_button("Detalles...", false, None);
 
     active_right_box.append(&active_lock_icon);
     active_right_box.append(&active_signal_icon);
@@ -967,10 +984,7 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
                     ssid_lbl.set_label(&active_net.ssid);
                     set_status_dot(&dot, "connected");
                     let sub_info = if !active_net.freq.is_empty() && !active_net.rate.is_empty() {
-                        format!(
-                            "Con conexión · {} · {}",
-                            active_net.freq, active_net.rate
-                        )
+                        format!("Con conexión · {} · {}", active_net.freq, active_net.rate)
                     } else {
                         "Con conexión".to_string()
                     };
@@ -993,13 +1007,16 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
                     known_sec.set_visible(true);
                     others_sec.set_visible(true);
                 } else {
-                    ssid_lbl.set_label(
-                        snap.active_connection
-                            .as_deref()
-                            .unwrap_or("Sin conexión"),
-                    );
+                    ssid_lbl.set_label(snap.active_connection.as_deref().unwrap_or("Sin conexión"));
                     let connecting = snap.interface_state.contains("connecting");
-                    set_status_dot(&dot, if connecting { "connecting" } else { "disconnected" });
+                    set_status_dot(
+                        &dot,
+                        if connecting {
+                            "connecting"
+                        } else {
+                            "disconnected"
+                        },
+                    );
                     st_txt.set_label(if connecting {
                         "Conectando..."
                     } else {
@@ -1132,9 +1149,7 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
         .has_arrow(false)
         .css_classes(["wifi-macos-popover"])
         .build();
-    let help_pop_box = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .build();
+    let help_pop_box = GtkBox::builder().orientation(Orientation::Vertical).build();
     let help_lbl = Label::builder()
         .label("• Haz clic en cualquier red conocida para alternar conexión.\n• Pulsa ⋯ en cada red para ver detalles u olvidar su perfil.\n• En tarjetas Intel AX210, activar AirDrop pausa temporalmente el Wi-Fi mientras dura la transferencia.")
         .wrap(true)
@@ -1356,7 +1371,8 @@ fn populate_wifi_list_card(
                 .valign(Align::Center)
                 .tooltip_text("Opciones de red")
                 .build();
-            let more_wrap = wrap_squircle_round_control(&more_btn, 20, RoundControlStyle::CircleOutline);
+            let more_wrap =
+                wrap_squircle_round_control(&more_btn, 20, RoundControlStyle::CircleOutline);
             right_icons.append(&more_wrap);
 
             let popover = Popover::builder()
@@ -1386,7 +1402,14 @@ fn populate_wifi_list_card(
                 let r = rel_c.clone();
                 let (tx, rx) = async_channel::bounded::<()>(1);
                 std::thread::spawn(move || {
-                    let _ = run_nmcli(&["connection", "modify", "id", &s, "connection.autoconnect", next_val]);
+                    let _ = run_nmcli(&[
+                        "connection",
+                        "modify",
+                        "id",
+                        &s,
+                        "connection.autoconnect",
+                        next_val,
+                    ]);
                     let _ = tx.send_blocking(());
                 });
                 glib::spawn_future_local(async move {
@@ -1472,7 +1495,8 @@ fn populate_wifi_list_card(
                 .valign(Align::Center)
                 .tooltip_text("Dirección Wi-Fi privada")
                 .build();
-            let more_wrap = wrap_squircle_round_control(&more_btn, 20, RoundControlStyle::CircleOutline);
+            let more_wrap =
+                wrap_squircle_round_control(&more_btn, 20, RoundControlStyle::CircleOutline);
             right_icons.append(&more_wrap);
 
             let win_c = parent_window.clone();
@@ -1494,9 +1518,20 @@ fn populate_wifi_list_card(
                     return;
                 }
                 if net_click.known || !net_click.is_secured() {
-                    connect_wifi_async(net_click.ssid.clone(), None, net_click.known, &ban_click, &rel_click);
+                    connect_wifi_async(
+                        net_click.ssid.clone(),
+                        None,
+                        net_click.known,
+                        &ban_click,
+                        &rel_click,
+                    );
                 } else {
-                    show_password_prompt_dialog(&win_click, &net_click.ssid, &ban_click, &rel_click);
+                    show_password_prompt_dialog(
+                        &win_click,
+                        &net_click.ssid,
+                        &ban_click,
+                        &rel_click,
+                    );
                 }
             })
         };
@@ -1546,12 +1581,7 @@ pub(crate) fn build_squircle_chevron_menu_button(
         .halign(Align::Center)
         .valign(Align::Center)
         .build();
-    row.append(
-        &Image::builder()
-            .icon_name(icon_name)
-            .pixel_size(12)
-            .build(),
-    );
+    row.append(&Image::builder().icon_name(icon_name).pixel_size(12).build());
     row.append(
         &Image::builder()
             .icon_name("pan-down-symbolic")
@@ -1576,6 +1606,7 @@ pub(crate) fn build_squircle_chevron_menu_button(
     bg.set_can_target(false);
     bg.set_hexpand(true);
     bg.set_vexpand(true);
+    crate::register_accent_draw_area(&bg);
 
     let btn_weak = btn.downgrade();
     bg.set_draw_func(move |_, cr, w, h| {
@@ -1649,7 +1680,11 @@ pub(crate) fn build_squircle_chevron_menu_button(
     (overlay, btn)
 }
 
-pub(crate) fn make_popover_action_row(text: &str, reserve_check_col: bool, check: Option<&str>) -> (Overlay, Button) {
+pub(crate) fn make_popover_action_row(
+    text: &str,
+    reserve_check_col: bool,
+    check: Option<&str>,
+) -> (Overlay, Button) {
     let row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(if reserve_check_col { 6 } else { 0 })
@@ -1703,10 +1738,11 @@ pub(crate) fn make_popover_action_row(text: &str, reserve_check_col: bool, check
         }
         let _ = cr.save();
         crate::squircle_path(cr, width, height, WIFI_MENU_ITEM_SQUIRCLE_RADIUS);
+        let (r, g, b) = crate::accent_color();
         if active {
-            cr.set_source_rgba(0.0, 0.39, 0.85, 0.86);
+            cr.set_source_rgba(r * 0.8, g * 0.8, b * 0.8, 0.86);
         } else {
-            cr.set_source_rgba(0.0, 0.48, 1.0, 0.74);
+            cr.set_source_rgba(r, g, b, 0.74);
         }
         let _ = cr.fill();
         let _ = cr.restore();
@@ -1895,7 +1931,14 @@ fn show_private_wifi_address_dialog(
         };
         let s = ssid_ok.clone();
         std::thread::spawn(move || {
-            let _ = run_nmcli(&["connection", "modify", "id", &s, "wifi.cloned-mac-address", nm_mode]);
+            let _ = run_nmcli(&[
+                "connection",
+                "modify",
+                "id",
+                &s,
+                "wifi.cloned-mac-address",
+                nm_mode,
+            ]);
         });
         d_ok.close();
     });
@@ -2137,14 +2180,7 @@ fn show_hidden_network_dialog(
                 run_nmcli(&["device", "wifi", "connect", &ssid, "hidden", "yes"]).map(|_| ())
             } else {
                 run_nmcli(&[
-                    "device",
-                    "wifi",
-                    "connect",
-                    &ssid,
-                    "password",
-                    &pw,
-                    "hidden",
-                    "yes",
+                    "device", "wifi", "connect", &ssid, "password", &pw, "hidden", "yes",
                 ])
                 .map(|_| ())
             };
@@ -2365,7 +2401,14 @@ fn show_network_details_dialog(
             let r = rel_auto.clone();
             let (tx, rx) = async_channel::bounded::<()>(1);
             std::thread::spawn(move || {
-                let _ = run_nmcli(&["connection", "modify", "id", &s, "connection.autoconnect", val]);
+                let _ = run_nmcli(&[
+                    "connection",
+                    "modify",
+                    "id",
+                    &s,
+                    "connection.autoconnect",
+                    val,
+                ]);
                 let _ = tx.send_blocking(());
             });
             glib::spawn_future_local(async move {
@@ -2516,7 +2559,10 @@ fn show_advanced_dialog(
             profiles_card.append(&r);
         }
     }
-    vbox.append(&wrap_squircle_card(&profiles_card, WIFI_CARD_SQUIRCLE_RADIUS));
+    vbox.append(&wrap_squircle_card(
+        &profiles_card,
+        WIFI_CARD_SQUIRCLE_RADIUS,
+    ));
 
     let (ok_wrap, ok_btn) = make_squircle_button("Aceptar", true, None);
     ok_wrap.set_halign(Align::End);
@@ -2589,12 +2635,18 @@ pub fn collect_wifi_snapshot(rescan: bool) -> WifiSnapshot {
     };
     let radio_enabled = radio_raw.trim().eq_ignore_ascii_case("enabled");
 
-    let dev_raw = run_nmcli(&["-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"])
-        .unwrap_or_default();
+    let dev_raw = run_nmcli(&[
+        "-t",
+        "-f",
+        "DEVICE,TYPE,STATE,CONNECTION",
+        "device",
+        "status",
+    ])
+    .unwrap_or_default();
     let (interface_name, interface_state, active_connection) = parse_wifi_device_status(&dev_raw);
 
-    let saved_raw = run_nmcli(&["-t", "-f", "NAME,TYPE,AUTOCONNECT", "connection", "show"])
-        .unwrap_or_default();
+    let saved_raw =
+        run_nmcli(&["-t", "-f", "NAME,TYPE,AUTOCONNECT", "connection", "show"]).unwrap_or_default();
     let saved_profiles = parse_saved_wifi_profiles(&saved_raw);
 
     let scanned = if radio_enabled {
@@ -2686,7 +2738,11 @@ pub fn parse_wifi_device_status(raw: &str) -> (Option<String>, String, Option<St
             } else {
                 Some(parts[3].trim().to_string())
             };
-            return (Some(parts[0].trim().to_string()), parts[2].trim().to_string(), conn);
+            return (
+                Some(parts[0].trim().to_string()),
+                parts[2].trim().to_string(),
+                conn,
+            );
         }
     }
     (None, String::new(), None)
@@ -2723,10 +2779,8 @@ pub fn parse_scanned_wifi_aps(raw: &str) -> Vec<ScannedWifiAp> {
             continue;
         }
         let in_use_tok = parts[0].trim().to_lowercase();
-        let in_use = in_use_tok == "*"
-            || in_use_tok == "yes"
-            || in_use_tok == "sí"
-            || in_use_tok == "si";
+        let in_use =
+            in_use_tok == "*" || in_use_tok == "yes" || in_use_tok == "sí" || in_use_tok == "si";
         let ssid = parts[1].trim().to_string();
         if ssid.is_empty() {
             continue;
@@ -2803,8 +2857,8 @@ pub fn classify_wifi_networks(
     for profile in saved {
         known_set.insert(profile.name.clone());
         let ap = scan_map.get(&profile.name).copied();
-        let connected = active_connection == Some(profile.name.as_str())
-            || ap.is_some_and(|a| a.in_use);
+        let connected =
+            active_connection == Some(profile.name.as_str()) || ap.is_some_and(|a| a.in_use);
         known.push(WifiDisplayNetwork {
             ssid: profile.name.clone(),
             known: true,
@@ -2862,7 +2916,10 @@ no:Red\\:ConDosPuntos:11\\:22\\:33\\:44\\:55\\:66:Infra:6:2437 MHz:130 Mbit/s:45
 ";
         let scanned = parse_scanned_wifi_aps(scan_raw);
         assert_eq!(scanned.len(), 3);
-        let custom = scanned.iter().find(|s| s.ssid == "Red:ConDosPuntos").unwrap();
+        let custom = scanned
+            .iter()
+            .find(|s| s.ssid == "Red:ConDosPuntos")
+            .unwrap();
         assert_eq!(custom.bssid, "11:22:33:44:55:66");
 
         let (known, others) = classify_wifi_networks(&saved, &scanned, Some("Mega_5G_B982"));

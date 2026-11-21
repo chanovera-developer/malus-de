@@ -1,5 +1,5 @@
 use crate::genie::GenieRect;
-use smithay::backend::renderer::gles::{GlesTexture, ffi};
+use smithay::backend::renderer::gles::{ffi, GlesTexture};
 use std::ffi::CString;
 
 pub struct MagicLampAnimation {
@@ -133,8 +133,8 @@ impl MagicLampAnimation {
         let width_factor = (pinch_curve + (1.0 - pinch_curve) * self.j).clamp(0.0, 1.0);
         let center_factor = (sweep_curve + (1.0 - sweep_curve) * self.j).clamp(0.0, 1.0);
 
-        let slice_w = (self.window.width + (self.target.width - self.window.width) * width_factor)
-            .max(2.0);
+        let slice_w =
+            (self.window.width + (self.target.width - self.window.width) * width_factor).max(2.0);
 
         let win_center_x = self.window.x + self.window.width * 0.5;
         let target_center_x = self.target.x + self.target.width * 0.5;
@@ -490,11 +490,15 @@ mod tests {
                 let (k, j, _) = anim.params();
                 for s in [0.0_f32, 0.25, 0.5, 0.75, 1.0] {
                     let (cpu_y, cpu_x, cpu_w) = anim.deform_slice(s);
-                    let top_y = window.y + (target.y - window.y) * if j <= 0.0 { 0.0 } else { j.powf(1.12) };
+                    let top_y = window.y
+                        + (target.y - window.y) * if j <= 0.0 { 0.0 } else { j.powf(1.12) };
                     let bottom_y = (window.y + window.height)
                         + ((target.y + target.height) - (window.y + window.height)) * k.max(j);
-                    let screen_y = top_y + (s + k * (1.0 - j) * 0.22 * s * (1.0 - s)) * (bottom_y - top_y);
-                    let spatial_u = ((screen_y - window.y) / ((target.y + target.height) - window.y).abs().max(1.0)).clamp(0.0, 1.0);
+                    let screen_y =
+                        top_y + (s + k * (1.0 - j) * 0.22 * s * (1.0 - s)) * (bottom_y - top_y);
+                    let spatial_u = ((screen_y - window.y)
+                        / ((target.y + target.height) - window.y).abs().max(1.0))
+                    .clamp(0.0, 1.0);
                     let neck_start = (j * 0.52).clamp(0.0, 0.72);
                     let funnel_t = if j > 0.0 {
                         ((spatial_u - neck_start) / (1.0 - neck_start).max(0.05)).clamp(0.0, 1.0)
@@ -503,11 +507,21 @@ mod tests {
                     };
                     let tau: f32 = (funnel_t * (1.0 - j) + j).clamp(0.0, 1.0);
                     let base_s: f32 = super::smoothstep(tau);
-                    let pinch = (1.0_f32 - if 1.0_f32 - base_s <= 0.0 { 0.0 } else { (1.0_f32 - base_s).powf(1.85) }) * k;
+                    let pinch = (1.0_f32
+                        - if 1.0_f32 - base_s <= 0.0 {
+                            0.0
+                        } else {
+                            (1.0_f32 - base_s).powf(1.85)
+                        })
+                        * k;
                     let sweep = super::smootherstep(tau) * k;
-                    let slice_w = (window.width + (target.width - window.width) * (pinch + (1.0 - pinch) * j).clamp(0.0, 1.0)).max(2.0);
+                    let slice_w = (window.width
+                        + (target.width - window.width)
+                            * (pinch + (1.0 - pinch) * j).clamp(0.0, 1.0))
+                    .max(2.0);
                     let center_x = (window.x + window.width * 0.5)
-                        + ((target.x + target.width * 0.5) - (window.x + window.width * 0.5)) * (sweep + (1.0 - sweep) * j).clamp(0.0, 1.0);
+                        + ((target.x + target.width * 0.5) - (window.x + window.width * 0.5))
+                            * (sweep + (1.0 - sweep) * j).clamp(0.0, 1.0);
                     assert!((cpu_y - screen_y).abs() < 0.001);
                     assert!((cpu_x - (center_x - slice_w * 0.5)).abs() < 0.001);
                     assert!((cpu_w - slice_w).abs() < 0.001);

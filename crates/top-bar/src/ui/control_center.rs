@@ -115,7 +115,11 @@ pub fn create_control_center_widget() -> MenuButton {
     let screen_mirror_btn = Button::builder()
         .css_classes(["cc-circle-btn-sm"])
         .has_frame(false)
-        .tooltip_text(if is_es { "Disposición y Escalas de Pantallas" } else { "Displays & Screen Mirroring" })
+        .tooltip_text(if is_es {
+            "Disposición y Escalas de Pantallas"
+        } else {
+            "Displays & Screen Mirroring"
+        })
         .build();
     let mirror_icon = Image::from_icon_name("video-display-symbolic");
     mirror_icon.set_pixel_size(20);
@@ -224,7 +228,11 @@ pub fn create_control_center_widget() -> MenuButton {
     let sound_output_btn = Button::builder()
         .css_classes(["cc-sound-output-btn"])
         .has_frame(false)
-        .tooltip_text(if is_es { "Salidas de audio / Dispositivos" } else { "Sound Output Devices" })
+        .tooltip_text(if is_es {
+            "Salidas de audio / Dispositivos"
+        } else {
+            "Sound Output Devices"
+        })
         .build();
     let sound_output_icon = Image::from_icon_name("audio-card-symbolic");
     sound_output_icon.set_pixel_size(16);
@@ -270,7 +278,11 @@ pub fn create_control_center_widget() -> MenuButton {
     let screenshot_btn = Button::builder()
         .css_classes(["cc-circle-quick-btn"])
         .has_frame(false)
-        .tooltip_text(if is_es { "Captura de Pantalla" } else { "Screenshot" })
+        .tooltip_text(if is_es {
+            "Captura de Pantalla"
+        } else {
+            "Screenshot"
+        })
         .build();
     let sc_icon = Image::from_icon_name("camera-photo-symbolic");
     sc_icon.set_pixel_size(20);
@@ -288,7 +300,11 @@ pub fn create_control_center_widget() -> MenuButton {
     let night_shift_quick_btn = Button::builder()
         .css_classes(["cc-circle-quick-btn"])
         .has_frame(false)
-        .tooltip_text(if is_es { "Modo Noche (Temperatura cálida)" } else { "Night Shift" })
+        .tooltip_text(if is_es {
+            "Modo Noche (Temperatura cálida)"
+        } else {
+            "Night Shift"
+        })
         .build();
     let ns_icon = Image::from_icon_name("night-light-symbolic");
     ns_icon.set_pixel_size(20);
@@ -302,7 +318,11 @@ pub fn create_control_center_widget() -> MenuButton {
 
     let edit_controls_btn = Button::builder()
         .css_classes(["cc-edit-controls-btn"])
-        .label(if is_es { "Editar Controles" } else { "Edit Controls" })
+        .label(if is_es {
+            "Editar Controles"
+        } else {
+            "Edit Controls"
+        })
         .halign(Align::Center)
         .has_frame(false)
         .build();
@@ -318,7 +338,11 @@ pub fn create_control_center_widget() -> MenuButton {
         .has_frame(false)
         .build();
     let link_icon_label = Label::builder()
-        .label(if current_cfg.linked_physical_1to1 { "🔗 TrueSize 1:1" } else { "🔓 Escala Libre" })
+        .label(if current_cfg.linked_physical_1to1 {
+            "🔗 TrueSize 1:1"
+        } else {
+            "🔓 Escala Libre"
+        })
         .build();
     link_btn.set_child(Some(&link_icon_label));
     let master_scale_slider = Scale::with_range(Orientation::Horizontal, 100.0, 250.0, 5.0);
@@ -340,8 +364,13 @@ pub fn create_control_center_widget() -> MenuButton {
     let bt_dummy_power = Button::new();
     let bt_dummy_icon = Image::new();
     let bt_dummy_sub = Label::new(None);
-    let (bt_subview, refresh_bt) =
-        create_bt_subview(&stack, &popover, &bt_dummy_power, &bt_dummy_icon, &bt_dummy_sub);
+    let (bt_subview, refresh_bt) = create_bt_subview(
+        &stack,
+        &popover,
+        &bt_dummy_power,
+        &bt_dummy_icon,
+        &bt_dummy_sub,
+    );
     stack.add_named(&bt_subview, Some("bluetooth"));
 
     let ad_dummy_power = Button::new();
@@ -463,7 +492,13 @@ pub fn create_control_center_widget() -> MenuButton {
         let target_dark = !is_dark;
         apply_system_appearance_mode(target_dark);
         crate::ui::theme::update_all_popovers_theme(target_dark);
-        update_dark_mode_ui_state(&dark_btn_c, &dark_icon_c, &dark_sub_c, Some(&popover_dark), target_dark);
+        update_dark_mode_ui_state(
+            &dark_btn_c,
+            &dark_icon_c,
+            &dark_sub_c,
+            Some(&popover_dark),
+            target_dark,
+        );
     });
 
     // Accesos Rápidos Inferiores
@@ -680,7 +715,12 @@ fn is_focus_active() -> bool {
 fn set_focus_active(active: bool) {
     let val = if active { "false" } else { "true" };
     let _ = Command::new("gsettings")
-        .args(["set", "org.gnome.desktop.notifications", "show-banners", val])
+        .args([
+            "set",
+            "org.gnome.desktop.notifications",
+            "show-banners",
+            val,
+        ])
         .spawn();
 }
 
@@ -735,7 +775,11 @@ fn create_wifi_tahoe_tile() -> (GtkBox, Button, Button, Image, Label) {
         .build();
 
     let sub_lbl = Label::builder()
-        .label(if malus_de_common::is_spanish_locale() { "Buscando..." } else { "Searching..." })
+        .label(if malus_de_common::is_spanish_locale() {
+            "Buscando..."
+        } else {
+            "Searching..."
+        })
         .css_classes(["cc-tile-subtitle"])
         .xalign(0.0)
         .ellipsize(gtk4::pango::EllipsizeMode::End)
@@ -843,7 +887,11 @@ fn create_focus_tahoe_tile() -> (Button, Image, Label) {
     icon_circle.append(&icon);
 
     let label = Label::builder()
-        .label(if malus_de_common::is_spanish_locale() { "Concentración" } else { "Focus" })
+        .label(if malus_de_common::is_spanish_locale() {
+            "Concentración"
+        } else {
+            "Focus"
+        })
         .css_classes(["cc-tile-title"])
         .xalign(0.0)
         .build();
@@ -891,13 +939,21 @@ fn create_dark_mode_tahoe_pill() -> (Button, Image, Label) {
         .build();
 
     let title_lbl = Label::builder()
-        .label(if malus_de_common::is_spanish_locale() { "Modo Oscuro" } else { "Dark Mode" })
+        .label(if malus_de_common::is_spanish_locale() {
+            "Modo Oscuro"
+        } else {
+            "Dark Mode"
+        })
         .css_classes(["cc-tile-title"])
         .xalign(0.0)
         .build();
 
     let sub_lbl = Label::builder()
-        .label(if malus_de_common::is_spanish_locale() { "Activado" } else { "On" })
+        .label(if malus_de_common::is_spanish_locale() {
+            "Activado"
+        } else {
+            "On"
+        })
         .css_classes(["cc-tile-subtitle"])
         .xalign(0.0)
         .build();
@@ -952,7 +1008,11 @@ fn create_keyboard_tahoe_pill() -> (Button, Label, Rc<dyn Fn()>) {
         .build();
 
     let title_lbl = Label::builder()
-        .label(if malus_de_common::is_spanish_locale() { "Teclado" } else { "Keyboard" })
+        .label(if malus_de_common::is_spanish_locale() {
+            "Teclado"
+        } else {
+            "Keyboard"
+        })
         .css_classes(["cc-tile-title"])
         .xalign(0.0)
         .build();
@@ -1178,7 +1238,11 @@ fn create_mpris_media_card() -> (GtkBox, Rc<dyn Fn()>) {
 
     let is_es = malus_de_common::is_spanish_locale();
     let title_lbl = Label::builder()
-        .label(if is_es { "Sin reproducción" } else { "Not Playing" })
+        .label(if is_es {
+            "Sin reproducción"
+        } else {
+            "Not Playing"
+        })
         .css_classes(["cc-media-title"])
         .xalign(0.0)
         .ellipsize(gtk4::pango::EllipsizeMode::End)
@@ -1210,7 +1274,11 @@ fn create_mpris_media_card() -> (GtkBox, Rc<dyn Fn()>) {
     let prev_btn = Button::builder()
         .css_classes(["cc-media-btn"])
         .has_frame(false)
-        .tooltip_text(if is_es { "Pista anterior" } else { "Previous track" })
+        .tooltip_text(if is_es {
+            "Pista anterior"
+        } else {
+            "Previous track"
+        })
         .build();
     let prev_icon = Image::from_icon_name("media-skip-backward-symbolic");
     prev_btn.set_child(Some(&prev_icon));
@@ -1218,7 +1286,11 @@ fn create_mpris_media_card() -> (GtkBox, Rc<dyn Fn()>) {
     let play_btn = Button::builder()
         .css_classes(["cc-media-btn", "cc-media-play-btn"])
         .has_frame(false)
-        .tooltip_text(if is_es { "Reproducir / Pausar" } else { "Play / Pause" })
+        .tooltip_text(if is_es {
+            "Reproducir / Pausar"
+        } else {
+            "Play / Pause"
+        })
         .build();
     let play_icon = Image::from_icon_name("media-playback-start-symbolic");
     play_btn.set_child(Some(&play_icon));
@@ -1226,7 +1298,11 @@ fn create_mpris_media_card() -> (GtkBox, Rc<dyn Fn()>) {
     let next_btn = Button::builder()
         .css_classes(["cc-media-btn"])
         .has_frame(false)
-        .tooltip_text(if is_es { "Siguiente pista" } else { "Next track" })
+        .tooltip_text(if is_es {
+            "Siguiente pista"
+        } else {
+            "Next track"
+        })
         .build();
     let next_icon = Image::from_icon_name("media-skip-forward-symbolic");
     next_btn.set_child(Some(&next_icon));
@@ -1363,7 +1439,9 @@ fn create_airdrop_subview(
     view_box.append(&header);
 
     let desc_lbl = Label::builder()
-        .label("Comparte archivos vía AirDrop nativo (AWDL/owly) con MacBook, iPhone o iPad cercanos.")
+        .label(
+            "Comparte archivos vía AirDrop nativo (AWDL/owly) con MacBook, iPhone o iPad cercanos.",
+        )
         .css_classes(["cc-airdrop-desc"])
         .wrap(true)
         .xalign(0.0)
@@ -1583,7 +1661,9 @@ fn create_airdrop_subview(
     let st_every = status_lbl.clone();
     row_everyone.connect_clicked(move |_| {
         sel_every("everyone");
-        st_every.set_label("Levantando radio AWDL (awdl0)... En Intel AX210 el Wi-Fi se pausa temporalmente.");
+        st_every.set_label(
+            "Levantando radio AWDL (awdl0)... En Intel AX210 el Wi-Fi se pausa temporalmente.",
+        );
         let r = ref_every.clone();
         glib::MainContext::default().spawn_local(async move {
             set_airdrop_mode_dbus("everyone").await;
@@ -1624,7 +1704,10 @@ fn format_airdrop_status_cc(v: &serde_json::Value) -> String {
         _ => {
             if hw_ready {
                 if rmode == "exclusive" {
-                    format!("Listo ({} · modo exclusivo: pausa Wi-Fi al activar)", station)
+                    format!(
+                        "Listo ({} · modo exclusivo: pausa Wi-Fi al activar)",
+                        station
+                    )
                 } else {
                     format!("Listo ({} · modo compartido)", station)
                 }
@@ -1676,27 +1759,31 @@ fn pick_and_send_airdrop_file_cc(target: String) {
     let dialog = gtk4::FileDialog::builder()
         .title("Enviar archivo por AirDrop")
         .build();
-    dialog.open(None::<&gtk4::Window>, None::<&gtk4::gio::Cancellable>, move |res| {
-        if let Ok(file) = res {
-            if let Some(path) = file.path() {
-                let path_str = path.to_string_lossy().into_owned();
-                let target_c = target.clone();
-                glib::MainContext::default().spawn_local(async move {
-                    if let Ok(conn) = zbus::Connection::session().await {
-                        let _ = conn
-                            .call_method(
-                                Some("org.malus_de.Link"),
-                                "/org/malus_de/Link",
-                                Some("org.malus_de.Link"),
-                                "SendAirDropFile",
-                                &(target_c, path_str),
-                            )
-                            .await;
-                    }
-                });
+    dialog.open(
+        None::<&gtk4::Window>,
+        None::<&gtk4::gio::Cancellable>,
+        move |res| {
+            if let Ok(file) = res {
+                if let Some(path) = file.path() {
+                    let path_str = path.to_string_lossy().into_owned();
+                    let target_c = target.clone();
+                    glib::MainContext::default().spawn_local(async move {
+                        if let Ok(conn) = zbus::Connection::session().await {
+                            let _ = conn
+                                .call_method(
+                                    Some("org.malus_de.Link"),
+                                    "/org/malus_de/Link",
+                                    Some("org.malus_de.Link"),
+                                    "SendAirDropFile",
+                                    &(target_c, path_str),
+                                )
+                                .await;
+                        }
+                    });
+                }
             }
-        }
-    });
+        },
+    );
 }
 
 async fn get_airdrop_status_json_cc_dbus() -> Option<serde_json::Value> {
@@ -1962,13 +2049,7 @@ fn create_wifi_subview(
             let _ = NetworkService::set_wifi_enabled(state).await;
             update_wifi_ui_async(&mb_inner, &mi_inner, &ms_inner).await;
             trigger_wifi_scan(
-                &cb_inner,
-                &sw_inner,
-                &upd_inner,
-                &mb_inner,
-                &mi_inner,
-                &ms_inner,
-                &st_inner,
+                &cb_inner, &sw_inner, &upd_inner, &mb_inner, &mi_inner, &ms_inner, &st_inner,
                 &po_inner,
             );
         });
@@ -2169,14 +2250,7 @@ fn populate_wifi_list(
     let po_ref = popover.clone();
     refresh_btn.connect_clicked(move |_| {
         trigger_wifi_scan(
-            &cb_ref,
-            &sw_ref,
-            &upd_ref,
-            &mb_ref,
-            &mi_ref,
-            &ms_ref,
-            &st_ref,
-            &po_ref,
+            &cb_ref, &sw_ref, &upd_ref, &mb_ref, &mi_ref, &ms_ref, &st_ref, &po_ref,
         );
     });
 
@@ -2256,14 +2330,8 @@ fn populate_wifi_list(
                 glib::MainContext::default().spawn_local(async move {
                     let _ = NetworkService::connect_to_ssid(&target).await;
                     trigger_wifi_scan(
-                        &cb_inner,
-                        &sw_inner,
-                        &upd_inner,
-                        &mb_inner,
-                        &mi_inner,
-                        &ms_inner,
-                        &st_inner,
-                        &po_inner,
+                        &cb_inner, &sw_inner, &upd_inner, &mb_inner, &mi_inner, &ms_inner,
+                        &st_inner, &po_inner,
                     );
                 });
             });
@@ -2396,13 +2464,7 @@ fn create_bt_subview(
             let _ = BluetoothService::set_powered(state).await;
             update_bluetooth_ui_async(&mb_inner, &mi_inner, &ms_inner).await;
             trigger_bt_scan(
-                &cb_inner,
-                &sw_inner,
-                &upd_inner,
-                &mb_inner,
-                &mi_inner,
-                &ms_inner,
-                &st_inner,
+                &cb_inner, &sw_inner, &upd_inner, &mb_inner, &mi_inner, &ms_inner, &st_inner,
                 &po_inner,
             );
         });
@@ -2561,14 +2623,7 @@ fn populate_bt_list(
     let po_ref = popover.clone();
     refresh_btn.connect_clicked(move |_| {
         trigger_bt_scan(
-            &cb_ref,
-            &sw_ref,
-            &upd_ref,
-            &mb_ref,
-            &mi_ref,
-            &ms_ref,
-            &st_ref,
-            &po_ref,
+            &cb_ref, &sw_ref, &upd_ref, &mb_ref, &mi_ref, &ms_ref, &st_ref, &po_ref,
         );
     });
 
@@ -2679,14 +2734,8 @@ fn populate_bt_list(
                         BluetoothService::connect_device(&p).await;
                     }
                     trigger_bt_scan(
-                        &cb_inner,
-                        &sw_inner,
-                        &upd_inner,
-                        &mb_inner,
-                        &mi_inner,
-                        &ms_inner,
-                        &st_inner,
-                        &po_inner,
+                        &cb_inner, &sw_inner, &upd_inner, &mb_inner, &mi_inner, &ms_inner,
+                        &st_inner, &po_inner,
                     );
                 });
             });
@@ -2798,7 +2847,11 @@ async fn update_night_shift_quick_ui(btn: &Button) {
 }
 
 pub fn apply_system_appearance_mode(to_dark: bool) {
-    let target = if to_dark { "prefer-dark" } else { "prefer-light" };
+    let target = if to_dark {
+        "prefer-dark"
+    } else {
+        "prefer-light"
+    };
     info!("🎨 Aplicando modo de apariencia de Malus DE: {}", target);
 
     match malus_de_common::ipc::IpcClient::prepare_theme_transition() {
@@ -2816,13 +2869,11 @@ pub fn apply_system_appearance_mode(to_dark: bool) {
     malus_de_common::config::sync_system_appearance(to_dark);
 
     // 2. Actualizar AdwStyleManager y popovers en el proceso actual sin doble recálculo CSS.
-    libadwaita::StyleManager::default().set_color_scheme(
-        if to_dark {
-            libadwaita::ColorScheme::ForceDark
-        } else {
-            libadwaita::ColorScheme::ForceLight
-        }
-    );
+    libadwaita::StyleManager::default().set_color_scheme(if to_dark {
+        libadwaita::ColorScheme::ForceDark
+    } else {
+        libadwaita::ColorScheme::ForceLight
+    });
     crate::ui::theme::update_all_popovers_theme(to_dark);
 
     // 3. Notificar a otros módulos mediante IPC
@@ -2830,7 +2881,7 @@ pub fn apply_system_appearance_mode(to_dark: bool) {
         malus_de_common::ipc::IpcMessage::ThemeChanged {
             theme_name: "macOS".to_string(),
             is_dark: to_dark,
-        }
+        },
     );
 }
 
@@ -3647,9 +3698,10 @@ fn create_displays_subview(
     }
     if let Ok(home) = std::env::var("HOME") {
         let toml_path = std::path::PathBuf::from(home).join(".config/malus-de/monitors.toml");
-        if let Ok(file_mon) = gtk4::gio::File::for_path(toml_path)
-            .monitor_file(gtk4::gio::FileMonitorFlags::NONE, gtk4::gio::Cancellable::NONE)
-        {
+        if let Ok(file_mon) = gtk4::gio::File::for_path(toml_path).monitor_file(
+            gtk4::gio::FileMonitorFlags::NONE,
+            gtk4::gio::Cancellable::NONE,
+        ) {
             let ref_file = refresh_ui.clone();
             file_mon.connect_changed(move |_, _, _, ev| {
                 if matches!(
@@ -3666,8 +3718,7 @@ fn create_displays_subview(
     }
 
     // Helper para guardar cambios, notificar al compositor en vivo y refrescar la UI
-    let apply_and_notify = |cfg: malus_de_common::config::DisplaysConfig,
-                            ref_fn: &Rc<dyn Fn()>| {
+    let apply_and_notify = |cfg: malus_de_common::config::DisplaysConfig, ref_fn: &Rc<dyn Fn()>| {
         let _ = cfg.save();
         let _ = malus_de_common::ipc::IpcClient::send_command(
             malus_de_common::ipc::IpcMessage::ReloadDisplaysConfig,

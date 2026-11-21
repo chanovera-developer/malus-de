@@ -3,10 +3,10 @@
 // ==============================================================================
 
 use anyhow::Result;
-pub use cosmic_text::{
-    Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache, Weight,
+pub use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, SwashCache, Weight};
+pub use glyphon::{
+    Cache, Color, Resolution, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
 };
-pub use glyphon::{Cache, Color, Resolution, TextAtlas, TextArea, TextBounds, TextRenderer, Viewport};
 
 /// Estima el ancho en píxeles de una etiqueta de texto tipográfico con alta precisión.
 pub fn estimate_label_width(text: &str, font_size: f32, weight: Weight) -> f32 {
@@ -18,11 +18,27 @@ pub fn estimate_label_width(text: &str, font_size: f32, weight: Weight) -> f32 {
             total_w += font_size * 1.1;
         } else if (c as u32) >= 0xF000 && (c as u32) <= 0xF8FF {
             total_w += font_size * 1.1;
-        } else if c == '%' || c == '@' || c == '#' || c == '&' || c == 'm' || c == 'w' || c == 'M' || c == 'W' {
+        } else if c == '%'
+            || c == '@'
+            || c == '#'
+            || c == '&'
+            || c == 'm'
+            || c == 'w'
+            || c == 'M'
+            || c == 'W'
+        {
             total_w += font_size * 0.90;
         } else if c.is_ascii_uppercase() {
             total_w += font_size * 0.74;
-        } else if c == 'i' || c == 'l' || c == 'j' || c == '!' || c == '|' || c == ':' || c == '.' || c == '\'' {
+        } else if c == 'i'
+            || c == 'l'
+            || c == 'j'
+            || c == '!'
+            || c == '|'
+            || c == ':'
+            || c == '.'
+            || c == '\''
+        {
             total_w += font_size * 0.32;
         } else if c.is_ascii_punctuation() || c == ' ' {
             total_w += font_size * 0.45;
@@ -160,20 +176,22 @@ pub struct TextSystem {
 
 impl TextSystem {
     /// Inicializa el atlas de glifos GPU, el viewport y el motor de rasterización.
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, target_format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target_format: wgpu::TextureFormat,
+    ) -> Self {
         let mut font_system = FontSystem::new();
         let system_font_family = detect_system_font_family();
-        font_system.db_mut().set_sans_serif_family(&system_font_family);
+        font_system
+            .db_mut()
+            .set_sans_serif_family(&system_font_family);
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
         let viewport = Viewport::new(device, &cache);
         let mut atlas = TextAtlas::new(device, queue, &cache, target_format);
-        let text_renderer = TextRenderer::new(
-            &mut atlas,
-            device,
-            wgpu::MultisampleState::default(),
-            None,
-        );
+        let text_renderer =
+            TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
 
         Self {
             font_system,
@@ -214,8 +232,15 @@ impl TextSystem {
             let metrics = Metrics::new(label.font_size, label.line_height);
             let mut buffer = Buffer::new(&mut self.font_system, metrics);
 
-            let is_brands = label.text.contains('\u{F179}') || label.text.contains('') || label.text.contains('\u{F8FF}') || label.text.contains('\u{F294}') || label.text.contains('\u{F293}');
-            let is_icons = label.text.chars().any(|c| (c as u32) >= 0xF000 && (c as u32) <= 0xF8FF);
+            let is_brands = label.text.contains('\u{F179}')
+                || label.text.contains('')
+                || label.text.contains('\u{F8FF}')
+                || label.text.contains('\u{F294}')
+                || label.text.contains('\u{F293}');
+            let is_icons = label
+                .text
+                .chars()
+                .any(|c| (c as u32) >= 0xF000 && (c as u32) <= 0xF8FF);
 
             let (family, weight) = if is_brands {
                 (Family::Name("Font Awesome 6 Brands"), label.weight)
@@ -228,9 +253,7 @@ impl TextSystem {
             buffer.set_text(
                 &mut self.font_system,
                 &label.text,
-                Attrs::new()
-                    .family(family)
-                    .weight(weight),
+                Attrs::new().family(family).weight(weight),
                 Shaping::Advanced,
             );
             buffer.shape_until_scroll(&mut self.font_system, false);
@@ -249,12 +272,13 @@ impl TextSystem {
                     let offset_y = ((size[1] - text_h) * 0.5).max(0.0);
                     (pos[0] + offset_x, pos[1] + offset_y)
                 }
-                TextAlign::Left => {
-                    (pos[0] + 6.0, pos[1] + ((size[1] - text_h) * 0.5).max(0.0))
-                }
+                TextAlign::Left => (pos[0] + 6.0, pos[1] + ((size[1] - text_h) * 0.5).max(0.0)),
                 TextAlign::Right => {
                     let offset_x = (size[0] - text_w - 6.0).max(0.0);
-                    (pos[0] + offset_x, pos[1] + ((size[1] - text_h) * 0.5).max(0.0))
+                    (
+                        pos[0] + offset_x,
+                        pos[1] + ((size[1] - text_h) * 0.5).max(0.0),
+                    )
                 }
             };
 

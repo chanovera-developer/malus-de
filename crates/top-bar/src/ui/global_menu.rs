@@ -35,7 +35,11 @@ pub struct MenuItemDef {
 }
 
 impl MenuItemDef {
-    pub const fn item(label: &'static str, shortcut: Option<&'static str>, action: MenuAction) -> Self {
+    pub const fn item(
+        label: &'static str,
+        shortcut: Option<&'static str>,
+        action: MenuAction,
+    ) -> Self {
         Self {
             label,
             shortcut,
@@ -68,9 +72,21 @@ const FIREFOX_MENUS: &[MenuCategoryDef] = &[
     MenuCategoryDef {
         title: "Archivo",
         items: &[
-            MenuItemDef::item("Nueva pestaña", Some("⌘T"), MenuAction::Command(&["firefox", "--new-tab", "about:blank"])),
-            MenuItemDef::item("Nueva ventana", Some("⌘N"), MenuAction::Command(&["firefox", "--new-window"])),
-            MenuItemDef::item("Nueva ventana privada", Some("⇧⌘P"), MenuAction::Command(&["firefox", "--private-window"])),
+            MenuItemDef::item(
+                "Nueva pestaña",
+                Some("⌘T"),
+                MenuAction::Command(&["firefox", "--new-tab", "about:blank"]),
+            ),
+            MenuItemDef::item(
+                "Nueva ventana",
+                Some("⌘N"),
+                MenuAction::Command(&["firefox", "--new-window"]),
+            ),
+            MenuItemDef::item(
+                "Nueva ventana privada",
+                Some("⇧⌘P"),
+                MenuAction::Command(&["firefox", "--private-window"]),
+            ),
             MenuItemDef::item("Abrir archivo...", Some("⌘O"), MenuAction::None),
             MenuItemDef::separator(),
             MenuItemDef::item("Cerrar pestaña", Some("⌘W"), MenuAction::None),
@@ -111,24 +127,44 @@ const FIREFOX_MENUS: &[MenuCategoryDef] = &[
             MenuItemDef::item("Atrás", Some("⌘["), MenuAction::None),
             MenuItemDef::item("Adelante", Some("⌘]"), MenuAction::None),
             MenuItemDef::separator(),
-            MenuItemDef::item("Pestañas cerradas recientemente", Some("⇧⌘T"), MenuAction::None),
+            MenuItemDef::item(
+                "Pestañas cerradas recientemente",
+                Some("⇧⌘T"),
+                MenuAction::None,
+            ),
             MenuItemDef::item("Mostrar todo el historial", Some("⇧⌘H"), MenuAction::None),
-            MenuItemDef::item("Limpiar el historial reciente...", Some("⇧⌘Supr"), MenuAction::None),
+            MenuItemDef::item(
+                "Limpiar el historial reciente...",
+                Some("⇧⌘Supr"),
+                MenuAction::None,
+            ),
         ],
     },
     MenuCategoryDef {
         title: "Marcadores",
         items: &[
             MenuItemDef::item("Añadir a marcadores", Some("⌘D"), MenuAction::None),
-            MenuItemDef::item("Mostrar todos los marcadores", Some("⌥⌘B"), MenuAction::None),
+            MenuItemDef::item(
+                "Mostrar todos los marcadores",
+                Some("⌥⌘B"),
+                MenuAction::None,
+            ),
         ],
     },
     MenuCategoryDef {
         title: "Herramientas",
         items: &[
             MenuItemDef::item("Descargas", Some("⌘J"), MenuAction::None),
-            MenuItemDef::item("Complementos y temas", Some("⇧⌘A"), MenuAction::Command(&["firefox", "about:addons"])),
-            MenuItemDef::item("Herramientas para desarrolladores", Some("F12"), MenuAction::None),
+            MenuItemDef::item(
+                "Complementos y temas",
+                Some("⇧⌘A"),
+                MenuAction::Command(&["firefox", "about:addons"]),
+            ),
+            MenuItemDef::item(
+                "Herramientas para desarrolladores",
+                Some("F12"),
+                MenuAction::None,
+            ),
         ],
     },
     MenuCategoryDef {
@@ -144,10 +180,22 @@ const FIREFOX_MENUS: &[MenuCategoryDef] = &[
     MenuCategoryDef {
         title: "Ayuda",
         items: &[
-            MenuItemDef::item("Ayuda de Firefox", Some("F1"), MenuAction::Command(&["firefox", "https://support.mozilla.org"])),
-            MenuItemDef::item("Información para solucionar problemas", None, MenuAction::Command(&["firefox", "about:support"])),
+            MenuItemDef::item(
+                "Ayuda de Firefox",
+                Some("F1"),
+                MenuAction::Command(&["firefox", "https://support.mozilla.org"]),
+            ),
+            MenuItemDef::item(
+                "Información para solucionar problemas",
+                None,
+                MenuAction::Command(&["firefox", "about:support"]),
+            ),
             MenuItemDef::separator(),
-            MenuItemDef::item("Acerca de Firefox", None, MenuAction::Command(&["firefox", "about:about"])),
+            MenuItemDef::item(
+                "Acerca de Firefox",
+                None,
+                MenuAction::Command(&["firefox", "about:about"]),
+            ),
         ],
     },
 ];
@@ -157,7 +205,11 @@ const NAUTILUS_MENUS: &[MenuCategoryDef] = &[
     MenuCategoryDef {
         title: "Archivo",
         items: &[
-            MenuItemDef::item("Nueva ventana", Some("⌘N"), MenuAction::Command(&["nautilus", "--new-window"])),
+            MenuItemDef::item(
+                "Nueva ventana",
+                Some("⌘N"),
+                MenuAction::Command(&["nautilus", "--new-window"]),
+            ),
             MenuItemDef::item("Nueva pestaña", Some("⌘T"), MenuAction::None),
             MenuItemDef::item("Nueva carpeta", Some("⇧⌘N"), MenuAction::None),
             MenuItemDef::separator(),
@@ -187,10 +239,26 @@ const NAUTILUS_MENUS: &[MenuCategoryDef] = &[
     MenuCategoryDef {
         title: "Ir",
         items: &[
-            MenuItemDef::item("Carpeta personal", Some("⌥⌘H"), MenuAction::Command(&["nautilus"])),
-            MenuItemDef::item("Descargas", Some("⌥⌘L"), MenuAction::Command(&["nautilus", "Downloads"])),
-            MenuItemDef::item("Documentos", Some("⌥⌘D"), MenuAction::Command(&["nautilus", "Documents"])),
-            MenuItemDef::item("Papelera", Some("⌥⌘T"), MenuAction::Command(&["nautilus", "trash:///"])),
+            MenuItemDef::item(
+                "Carpeta personal",
+                Some("⌥⌘H"),
+                MenuAction::Command(&["nautilus"]),
+            ),
+            MenuItemDef::item(
+                "Descargas",
+                Some("⌥⌘L"),
+                MenuAction::Command(&["nautilus", "Downloads"]),
+            ),
+            MenuItemDef::item(
+                "Documentos",
+                Some("⌥⌘D"),
+                MenuAction::Command(&["nautilus", "Documents"]),
+            ),
+            MenuItemDef::item(
+                "Papelera",
+                Some("⌥⌘T"),
+                MenuAction::Command(&["nautilus", "trash:///"]),
+            ),
         ],
     },
     MenuCategoryDef {
@@ -214,7 +282,11 @@ const LIBREOFFICE_MENUS: &[MenuCategoryDef] = &[
     MenuCategoryDef {
         title: "Archivo",
         items: &[
-            MenuItemDef::item("Nuevo", Some("⌘N"), MenuAction::Command(&["libreoffice", "--writer"])),
+            MenuItemDef::item(
+                "Nuevo",
+                Some("⌘N"),
+                MenuAction::Command(&["libreoffice", "--writer"]),
+            ),
             MenuItemDef::item("Abrir...", Some("⌘O"), MenuAction::None),
             MenuItemDef::separator(),
             MenuItemDef::item("Guardar", Some("⌘S"), MenuAction::None),
@@ -315,8 +387,16 @@ const TERMINAL_MENUS: &[MenuCategoryDef] = &[
     MenuCategoryDef {
         title: "Terminal",
         items: &[
-            MenuItemDef::item("Nueva ventana", Some("⇧⌘N"), MenuAction::Command(&["ptyxis", "--new-window"])),
-            MenuItemDef::item("Nueva pestaña", Some("⇧⌘T"), MenuAction::Command(&["ptyxis", "--tab"])),
+            MenuItemDef::item(
+                "Nueva ventana",
+                Some("⇧⌘N"),
+                MenuAction::Command(&["ptyxis", "--new-window"]),
+            ),
+            MenuItemDef::item(
+                "Nueva pestaña",
+                Some("⇧⌘T"),
+                MenuAction::Command(&["ptyxis", "--tab"]),
+            ),
             MenuItemDef::separator(),
             MenuItemDef::item("Cerrar pestaña", Some("⇧⌘W"), MenuAction::None),
             MenuItemDef::item("Cerrar ventana", Some("⇧⌘Q"), MenuAction::CloseActiveWindow),
@@ -344,9 +424,11 @@ const TERMINAL_MENUS: &[MenuCategoryDef] = &[
     },
     MenuCategoryDef {
         title: "Ventana",
-        items: &[
-            MenuItemDef::item("Minimizar", Some("⌘M"), MenuAction::HideActiveWindow),
-        ],
+        items: &[MenuItemDef::item(
+            "Minimizar",
+            Some("⌘M"),
+            MenuAction::HideActiveWindow,
+        )],
     },
     MenuCategoryDef {
         title: "Ayuda",
@@ -362,7 +444,11 @@ const TEXT_EDITOR_MENUS: &[MenuCategoryDef] = &[
     MenuCategoryDef {
         title: "Archivo",
         items: &[
-            MenuItemDef::item("Nuevo documento", Some("⌘N"), MenuAction::Command(&["gnome-text-editor"])),
+            MenuItemDef::item(
+                "Nuevo documento",
+                Some("⌘N"),
+                MenuAction::Command(&["gnome-text-editor"]),
+            ),
             MenuItemDef::item("Abrir...", Some("⌘O"), MenuAction::None),
             MenuItemDef::item("Guardar", Some("⌘S"), MenuAction::None),
             MenuItemDef::item("Guardar como...", Some("⇧⌘S"), MenuAction::None),
@@ -393,15 +479,19 @@ const TEXT_EDITOR_MENUS: &[MenuCategoryDef] = &[
     },
     MenuCategoryDef {
         title: "Ventana",
-        items: &[
-            MenuItemDef::item("Minimizar", Some("⌘M"), MenuAction::HideActiveWindow),
-        ],
+        items: &[MenuItemDef::item(
+            "Minimizar",
+            Some("⌘M"),
+            MenuAction::HideActiveWindow,
+        )],
     },
     MenuCategoryDef {
         title: "Ayuda",
-        items: &[
-            MenuItemDef::item("Acerca de Editor de Texto", None, MenuAction::None),
-        ],
+        items: &[MenuItemDef::item(
+            "Acerca de Editor de Texto",
+            None,
+            MenuAction::None,
+        )],
     },
 ];
 
@@ -426,9 +516,11 @@ const CALCULATOR_MENUS: &[MenuCategoryDef] = &[
     },
     MenuCategoryDef {
         title: "Ver",
-        items: &[
-            MenuItemDef::item("Historial de cálculos", Some("⌘H"), MenuAction::None),
-        ],
+        items: &[MenuItemDef::item(
+            "Historial de cálculos",
+            Some("⌘H"),
+            MenuAction::None,
+        )],
     },
     MenuCategoryDef {
         title: "Ventana",
@@ -439,9 +531,11 @@ const CALCULATOR_MENUS: &[MenuCategoryDef] = &[
     },
     MenuCategoryDef {
         title: "Ayuda",
-        items: &[
-            MenuItemDef::item("Acerca de Calculadora", None, MenuAction::None),
-        ],
+        items: &[MenuItemDef::item(
+            "Acerca de Calculadora",
+            None,
+            MenuAction::None,
+        )],
     },
 ];
 
@@ -450,27 +544,47 @@ const DEFAULT_MENUS: &[MenuCategoryDef] = &[
     MenuCategoryDef {
         title: "Archivo",
         items: &[
-            MenuItemDef::item("Búsqueda Spotlight", Some("⌘Espacio"), MenuAction::Command(&["malus-de-spotlight"])),
-            MenuItemDef::item("Bloquear pantalla", Some("⌘L"), MenuAction::Command(&["malus-de-session-lock"])),
+            MenuItemDef::item(
+                "Búsqueda Spotlight",
+                Some("⌘Espacio"),
+                MenuAction::Command(&["malus-de-spotlight"]),
+            ),
+            MenuItemDef::item(
+                "Bloquear pantalla",
+                Some("⌘L"),
+                MenuAction::Command(&["malus-de-session-lock"]),
+            ),
         ],
     },
     MenuCategoryDef {
         title: "Edición",
-        items: &[
-            MenuItemDef::item("Preferencias del Sistema...", Some("⌘,"), MenuAction::Command(&["gnome-control-center"])),
-        ],
+        items: &[MenuItemDef::item(
+            "Preferencias del Sistema...",
+            Some("⌘,"),
+            MenuAction::Command(&["gnome-control-center"]),
+        )],
     },
     MenuCategoryDef {
         title: "Ver",
-        items: &[
-            MenuItemDef::item("Alternar Modo Oscuro", None, MenuAction::None),
-        ],
+        items: &[MenuItemDef::item(
+            "Alternar Modo Oscuro",
+            None,
+            MenuAction::None,
+        )],
     },
     MenuCategoryDef {
         title: "Ventana",
         items: &[
-            MenuItemDef::item("Minimizar ventana activa", Some("⌘M"), MenuAction::HideActiveWindow),
-            MenuItemDef::item("Cerrar ventana activa", Some("⌘W"), MenuAction::CloseActiveWindow),
+            MenuItemDef::item(
+                "Minimizar ventana activa",
+                Some("⌘M"),
+                MenuAction::HideActiveWindow,
+            ),
+            MenuItemDef::item(
+                "Cerrar ventana activa",
+                Some("⌘W"),
+                MenuAction::CloseActiveWindow,
+            ),
         ],
     },
     MenuCategoryDef {
@@ -528,21 +642,33 @@ pub fn create_global_menu_widget(dbus_menu_service: Arc<DbusMenuService>) -> Glo
         .unwrap_or_default()
         .to_lowercase()
         .starts_with("es");
-    let hide_init = if es { "Ocultar Malus DE" } else { "Hide Malus DE" };
-    let quit_init = if es { "Salir de Malus DE" } else { "Quit Malus DE" };
+    let hide_init = if es {
+        "Ocultar Malus DE"
+    } else {
+        "Hide Malus DE"
+    };
+    let quit_init = if es {
+        "Salir de Malus DE"
+    } else {
+        "Quit Malus DE"
+    };
 
     let hide_btn = create_menu_row(hide_init, Some("⌘H"));
     let popover_hide = popover.clone();
     hide_btn.connect_clicked(move |_| {
         popover_hide.popdown();
-        let _ = malus_de_common::ipc::send_ipc_message(&malus_de_common::ipc::IpcMessage::HideActiveWindow);
+        let _ = malus_de_common::ipc::send_ipc_message(
+            &malus_de_common::ipc::IpcMessage::HideActiveWindow,
+        );
     });
 
     let quit_btn = create_menu_row(quit_init, Some("⌘Q"));
     let popover_quit = popover.clone();
     quit_btn.connect_clicked(move |_| {
         popover_quit.popdown();
-        let _ = malus_de_common::ipc::send_ipc_message(&malus_de_common::ipc::IpcMessage::CloseActiveWindow);
+        let _ = malus_de_common::ipc::send_ipc_message(
+            &malus_de_common::ipc::IpcMessage::CloseActiveWindow,
+        );
     });
 
     content.append(&hide_btn);
@@ -585,15 +711,15 @@ pub fn update_global_menu(
     window_id: Option<u64>,
 ) {
     // Actualizar estado activo en handles
-    *handles.current_active.borrow_mut() = (
-        app_id.map(String::from),
-        title.map(String::from),
-        window_id,
-    );
+    *handles.current_active.borrow_mut() =
+        (app_id.map(String::from), title.map(String::from), window_id);
 
     // Intentar buscar menú D-Bus registrado dinámico
     if let Some((service, path)) = handles.dbus_menu_service.find_menu(window_id, app_id) {
-        info!("🔍 Menú D-Bus encontrado para {:?} (id={:?}): {}:{}", app_id, window_id, service, path);
+        info!(
+            "🔍 Menú D-Bus encontrado para {:?} (id={:?}): {}:{}",
+            app_id, window_id, service, path
+        );
         let h_clone = handles.clone();
         let srv = service.clone();
         let pth = path.clone();
@@ -606,7 +732,11 @@ pub fn update_global_menu(
                     if !is_current_menu(&h_clone, &a_id, &t_id, window_id, &srv, &pth) {
                         return;
                     }
-                    info!("✨ Menú dinámico D-Bus renderizado para {} ({} categorías)", srv, categories.len());
+                    info!(
+                        "✨ Menú dinámico D-Bus renderizado para {} ({} categorías)",
+                        srv,
+                        categories.len()
+                    );
                     render_dbus_categories(&h_clone, categories, &srv, &pth);
                 }
                 Err(err) => {
@@ -829,18 +959,29 @@ fn append_dbus_menu_item(
     menu_box.append(&btn);
 }
 
-fn get_static_categories(app_id: Option<&str>, title: Option<&str>) -> Option<&'static [MenuCategoryDef]> {
+fn get_static_categories(
+    app_id: Option<&str>,
+    title: Option<&str>,
+) -> Option<&'static [MenuCategoryDef]> {
     if let Some(id) = app_id {
         let lower = id.to_lowercase();
         if lower.contains("firefox") || lower.contains("mozilla") {
             return Some(FIREFOX_MENUS);
-        } else if lower.contains("libreoffice") || lower.contains("soffice") || lower.contains("writer") || lower.contains("calc") || lower.contains("impress") {
+        } else if lower.contains("libreoffice")
+            || lower.contains("soffice")
+            || lower.contains("writer")
+            || lower.contains("calc")
+            || lower.contains("impress")
+        {
             return Some(LIBREOFFICE_MENUS);
         } else if lower.contains("nautilus") || lower.contains("archivos") {
             return Some(NAUTILUS_MENUS);
         } else if lower.contains("ptyxis") || lower.contains("terminal") {
             return Some(TERMINAL_MENUS);
-        } else if lower.contains("texteditor") || lower.contains("text-editor") || lower.contains("gedit") {
+        } else if lower.contains("texteditor")
+            || lower.contains("text-editor")
+            || lower.contains("gedit")
+        {
             return Some(TEXT_EDITOR_MENUS);
         } else if lower.contains("calculator") || lower.contains("calculadora") {
             return Some(CALCULATOR_MENUS);
@@ -851,7 +992,13 @@ fn get_static_categories(app_id: Option<&str>, title: Option<&str>) -> Option<&'
         let lower = t.to_lowercase();
         if lower.contains("firefox") {
             return Some(FIREFOX_MENUS);
-        } else if lower.contains("libreoffice") || lower.contains("writer") || lower.contains("calc") || lower.contains("impress") || lower.contains("documento") || lower.contains("sin título") {
+        } else if lower.contains("libreoffice")
+            || lower.contains("writer")
+            || lower.contains("calc")
+            || lower.contains("impress")
+            || lower.contains("documento")
+            || lower.contains("sin título")
+        {
             return Some(LIBREOFFICE_MENUS);
         } else if lower.contains("archivos") || lower.contains("nautilus") {
             return Some(NAUTILUS_MENUS);
@@ -867,11 +1014,7 @@ fn get_static_categories(app_id: Option<&str>, title: Option<&str>) -> Option<&'
     None
 }
 
-fn render_static_or_clear(
-    handles: &GlobalMenuHandles,
-    app_id: Option<&str>,
-    title: Option<&str>,
-) {
+fn render_static_or_clear(handles: &GlobalMenuHandles, app_id: Option<&str>, title: Option<&str>) {
     if let Some(categories) = get_static_categories(app_id, title) {
         render_static_categories(handles, categories);
     } else if app_id.is_none() && title.is_none() {
@@ -881,10 +1024,7 @@ fn render_static_or_clear(
     }
 }
 
-fn render_static_categories(
-    handles: &GlobalMenuHandles,
-    categories: &[MenuCategoryDef],
-) {
+fn render_static_categories(handles: &GlobalMenuHandles, categories: &[MenuCategoryDef]) {
     // Limpiar menús previos
     while let Some(child) = handles.menus_container.first_child() {
         handles.menus_container.remove(&child);
@@ -936,10 +1076,14 @@ fn render_static_categories(
                 pop_clone.popdown();
                 match action {
                     MenuAction::HideActiveWindow => {
-                        let _ = malus_de_common::ipc::send_ipc_message(&malus_de_common::ipc::IpcMessage::HideActiveWindow);
+                        let _ = malus_de_common::ipc::send_ipc_message(
+                            &malus_de_common::ipc::IpcMessage::HideActiveWindow,
+                        );
                     }
                     MenuAction::CloseActiveWindow => {
-                        let _ = malus_de_common::ipc::send_ipc_message(&malus_de_common::ipc::IpcMessage::CloseActiveWindow);
+                        let _ = malus_de_common::ipc::send_ipc_message(
+                            &malus_de_common::ipc::IpcMessage::CloseActiveWindow,
+                        );
                     }
                     MenuAction::Command(args) => {
                         if !args.is_empty() {

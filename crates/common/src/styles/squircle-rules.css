@@ -184,10 +184,10 @@ menu menuitem:hover:not(:disabled),
 menu menuitem:selected:not(:disabled),
 .menu menuitem:hover:not(:disabled),
 .menu menuitem:selected:not(:disabled) {
-    background-color: rgba(0, 122, 255, 0.70);
+    background-color: alpha(@accent_bg_color, 0.70);
     background-image: none;
     border-radius: 6px;
-    color: #ffffff;
+    color: @accent_fg_color;
     box-shadow: none;
 }
 
@@ -197,8 +197,8 @@ popover .popover-menu-item:active:not(:disabled),
 popover.malus-popover-menu button:active:not(:disabled),
 menu menuitem:active:not(:disabled),
 .menu menuitem:active:not(:disabled) {
-    background-color: rgba(0, 122, 255, 0.85);
-    color: #ffffff;
+    background-color: alpha(@accent_bg_color, 0.85);
+    color: @accent_fg_color;
 }
 
 popover .popover-menu-item.malus-squircle-menu-item,
@@ -258,7 +258,7 @@ popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:hov
 popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > overlay > box > image,
 popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > overlay > box > box > label,
 popover.malus-popover-menu button.popover-menu-item.malus-squircle-menu-item:hover:not(:disabled) > overlay > box > box > image {
-    color: #ffffff;
+    color: @accent_fg_color;
 }
 
 popover modelbutton:hover:not(:disabled) > label,
@@ -299,7 +299,7 @@ popover listbox > row:hover:not(:disabled) > label,
 popover listbox > row:selected:not(:disabled) > label,
 menu menuitem:hover:not(:disabled) > label,
 .menu menuitem:hover:not(:disabled) > label {
-    color: #ffffff;
+    color: @accent_fg_color;
 }
 
 popover separator,

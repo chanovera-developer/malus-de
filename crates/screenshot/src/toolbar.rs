@@ -196,14 +196,14 @@ pub fn run_interactive_toolbar(default_mode: Option<ToolbarMode>) -> Result<Tool
                     // 8 tiradores de redimensión (círculos blancos con borde sutil)
                     let handle_radius = 5.0;
                     let handles = [
-                        (rx, ry),                     // NW
-                        (rx + rw * 0.5, ry),          // N
-                        (rx + rw, ry),                // NE
-                        (rx + rw, ry + rh * 0.5),     // E
-                        (rx + rw, ry + rh),           // SE
-                        (rx + rw * 0.5, ry + rh),     // S
-                        (rx, ry + rh),                // SW
-                        (rx, ry + rh * 0.5),          // W
+                        (rx, ry),                 // NW
+                        (rx + rw * 0.5, ry),      // N
+                        (rx + rw, ry),            // NE
+                        (rx + rw, ry + rh * 0.5), // E
+                        (rx + rw, ry + rh),       // SE
+                        (rx + rw * 0.5, ry + rh), // S
+                        (rx, ry + rh),            // SW
+                        (rx, ry + rh * 0.5),      // W
                     ];
 
                     for (hx, hy) in handles {
@@ -721,14 +721,7 @@ pub fn run_interactive_toolbar(default_mode: Option<ToolbarMode>) -> Result<Tool
     Ok(res)
 }
 
-fn draw_rounded_rectangle(
-    context: &gtk4::cairo::Context,
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
-    r: f64,
-) {
+fn draw_rounded_rectangle(context: &gtk4::cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
     context.new_sub_path();
     context.arc(x + w - r, y + r, r, -PI * 0.5, 0.0);
     context.arc(x + w - r, y + h - r, r, 0.0, PI * 0.5);

@@ -211,8 +211,9 @@ impl ListView {
                 y,
                 dir,
                 Rc::new(move |created_path| {
-                    if let Some(new_name) =
-                        created_path.file_name().map(|n| n.to_string_lossy().into_owned())
+                    if let Some(new_name) = created_path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
                     {
                         *pending_create.borrow_mut() = Some(new_name);
                     }
@@ -510,7 +511,9 @@ fn create_list_header(
             let bands = bands.clone();
             drag.connect_drag_update(move |_, dx, _| {
                 let Some(i) = active.get() else { return };
-                let Some(header) = weak_header.upgrade() else { return };
+                let Some(header) = weak_header.upgrade() else {
+                    return;
+                };
                 let new_w = (start_width.get() - dx.round() as i32)
                     .clamp(MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH);
                 let mut w = widths.get();
@@ -604,9 +607,7 @@ fn create_list_row(
     hbox.append(&label_kind);
     apply_widths_to_box(&hbox, widths);
 
-    let row = ListBoxRow::builder()
-        .child(&hbox)
-        .build();
+    let row = ListBoxRow::builder().child(&hbox).build();
 
     // Gestos: Doble clic, segundo clic lento para renombrar (estilo Finder) y Clic derecho
     let gesture = GestureClick::new();
@@ -658,11 +659,7 @@ fn create_list_row(
                                 }) as crate::views::RenameCallback
                             });
                             crate::views::show_rename_popover(
-                                &row_ren,
-                                path_ren,
-                                is_dir,
-                                None,
-                                on_renamed,
+                                &row_ren, path_ren, is_dir, None, on_renamed,
                             );
                         },
                     );
@@ -678,13 +675,23 @@ fn create_list_row(
             }
         } else if button == gdk::BUTTON_SECONDARY {
             g.set_state(gtk4::EventSequenceState::Claimed);
-            if let Some(lb) = row_for_menu.parent().and_then(|p| p.downcast::<ListBox>().ok()) {
+            if let Some(lb) = row_for_menu
+                .parent()
+                .and_then(|p| p.downcast::<ListBox>().ok())
+            {
                 if !row_for_menu.is_selected() {
                     lb.unselect_all();
                     lb.select_row(Some(&row_for_menu));
                 }
             }
-            show_item_context_menu(&hbox, &path, is_dir, Some((x, y)), Some(&on_nav_click), None);
+            show_item_context_menu(
+                &hbox,
+                &path,
+                is_dir,
+                Some((x, y)),
+                Some(&on_nav_click),
+                None,
+            );
         }
     });
 
@@ -754,9 +761,7 @@ fn create_list_row(
             row_hover.add_css_class("folder-drop-hover");
             gdk::DragAction::MOVE
         });
-        folder_drop.connect_motion(move |_, _, _| {
-            gdk::DragAction::MOVE
-        });
+        folder_drop.connect_motion(move |_, _, _| gdk::DragAction::MOVE);
 
         let row_leave = row.clone();
         folder_drop.connect_leave(move |_| {
@@ -776,12 +781,16 @@ fn create_list_row(
                             let target = target_dir.join(fname);
                             if target != src {
                                 let dest_file = gio::File::for_path(&target);
-                                if file.move_(
-                                    &dest_file,
-                                    gio::FileCopyFlags::NONE,
-                                    gio::Cancellable::NONE,
-                                    None,
-                                ).is_ok() || std::fs::rename(&src, &target).is_ok() {
+                                if file
+                                    .move_(
+                                        &dest_file,
+                                        gio::FileCopyFlags::NONE,
+                                        gio::Cancellable::NONE,
+                                        None,
+                                    )
+                                    .is_ok()
+                                    || std::fs::rename(&src, &target).is_ok()
+                                {
                                     moved = true;
                                 }
                             }

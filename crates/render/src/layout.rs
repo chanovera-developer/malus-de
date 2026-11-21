@@ -96,7 +96,8 @@ impl SquircleStyle {
     /// Indica si el elemento tiene contenido visible que deba ser enviado al pipeline de GPU.
     pub fn is_visible(&self) -> bool {
         let has_bg = self.bg_color.map_or(false, |c| c[3] > 0.001);
-        let has_border = self.border_width > 0.0 && self.border_color.map_or(false, |c| c[3] > 0.001);
+        let has_border =
+            self.border_width > 0.0 && self.border_color.map_or(false, |c| c[3] > 0.001);
         has_bg || has_border
     }
 }
@@ -157,13 +158,24 @@ impl UiTree {
     }
 
     /// Crea un nodo hoja (botón, etiqueta o elemento sin hijos).
-    pub fn add_leaf(&mut self, layout_style: Style, visual_style: SquircleStyle, tag: Option<impl Into<String>>) -> Result<NodeId> {
-        let node = self.taffy.new_leaf(layout_style).context("Error al crear nodo hoja en Taffy")?;
-        self.node_data.insert(node, UiNodeData {
-            style: visual_style,
-            tag: tag.map(Into::into),
-            text: None,
-        });
+    pub fn add_leaf(
+        &mut self,
+        layout_style: Style,
+        visual_style: SquircleStyle,
+        tag: Option<impl Into<String>>,
+    ) -> Result<NodeId> {
+        let node = self
+            .taffy
+            .new_leaf(layout_style)
+            .context("Error al crear nodo hoja en Taffy")?;
+        self.node_data.insert(
+            node,
+            UiNodeData {
+                style: visual_style,
+                tag: tag.map(Into::into),
+                text: None,
+            },
+        );
         Ok(node)
     }
 
@@ -175,12 +187,18 @@ impl UiTree {
         children: &[NodeId],
         tag: Option<impl Into<String>>,
     ) -> Result<NodeId> {
-        let node = self.taffy.new_with_children(layout_style, children).context("Error al crear contenedor en Taffy")?;
-        self.node_data.insert(node, UiNodeData {
-            style: visual_style,
-            tag: tag.map(Into::into),
-            text: None,
-        });
+        let node = self
+            .taffy
+            .new_with_children(layout_style, children)
+            .context("Error al crear contenedor en Taffy")?;
+        self.node_data.insert(
+            node,
+            UiNodeData {
+                style: visual_style,
+                tag: tag.map(Into::into),
+                text: None,
+            },
+        );
         Ok(node)
     }
 
@@ -200,7 +218,12 @@ impl UiTree {
         labels
     }
 
-    fn collect_text_labels(&self, node: NodeId, parent_offset: (f32, f32), out: &mut Vec<(TextLabel, [f32; 2], [f32; 2])>) {
+    fn collect_text_labels(
+        &self,
+        node: NodeId,
+        parent_offset: (f32, f32),
+        out: &mut Vec<(TextLabel, [f32; 2], [f32; 2])>,
+    ) {
         let layout = match self.taffy.layout(node) {
             Ok(l) => l,
             Err(_) => return,
@@ -211,7 +234,11 @@ impl UiTree {
 
         if let Some(data) = self.node_data.get(&node) {
             if let Some(ref text) = data.text {
-                out.push((text.clone(), [abs_x, abs_y], [layout.size.width, layout.size.height]));
+                out.push((
+                    text.clone(),
+                    [abs_x, abs_y],
+                    [layout.size.width, layout.size.height],
+                ));
             }
         }
 
@@ -236,14 +263,18 @@ impl UiTree {
 
     /// Calcula la disposición espacial en todo el árbol de acuerdo a las dimensiones dadas.
     pub fn compute_layout(&mut self, available_width: f32, available_height: f32) -> Result<()> {
-        let root = self.root.context("No se ha definido un nodo raíz en el árbol de UI")?;
-        self.taffy.compute_layout(
-            root,
-            Size {
-                width: AvailableSpace::Definite(available_width),
-                height: AvailableSpace::Definite(available_height),
-            },
-        ).context("Error al calcular layout con Taffy")?;
+        let root = self
+            .root
+            .context("No se ha definido un nodo raíz en el árbol de UI")?;
+        self.taffy
+            .compute_layout(
+                root,
+                Size {
+                    width: AvailableSpace::Definite(available_width),
+                    height: AvailableSpace::Definite(available_height),
+                },
+            )
+            .context("Error al calcular layout con Taffy")?;
         Ok(())
     }
 
@@ -256,7 +287,12 @@ impl UiTree {
         instances
     }
 
-    fn collect_instances(&self, node: NodeId, parent_offset: (f32, f32), out: &mut Vec<SquircleInstance>) {
+    fn collect_instances(
+        &self,
+        node: NodeId,
+        parent_offset: (f32, f32),
+        out: &mut Vec<SquircleInstance>,
+    ) {
         let layout = match self.taffy.layout(node) {
             Ok(l) => l,
             Err(_) => return,
@@ -292,10 +328,16 @@ impl UiTree {
 
     /// Realiza hit-testing matemático para determinar qué nodo se encuentra bajo las coordenadas (x, y).
     pub fn hit_test(&self, point: [f32; 2]) -> Option<NodeId> {
-        self.root.and_then(|root| self.hit_test_recursive(root, (0.0, 0.0), point))
+        self.root
+            .and_then(|root| self.hit_test_recursive(root, (0.0, 0.0), point))
     }
 
-    fn hit_test_recursive(&self, node: NodeId, parent_offset: (f32, f32), point: [f32; 2]) -> Option<NodeId> {
+    fn hit_test_recursive(
+        &self,
+        node: NodeId,
+        parent_offset: (f32, f32),
+        point: [f32; 2],
+    ) -> Option<NodeId> {
         let layout = self.taffy.layout(node).ok()?;
         let abs_x = parent_offset.0 + layout.location.x;
         let abs_y = parent_offset.1 + layout.location.y;
@@ -312,7 +354,11 @@ impl UiTree {
         // Comprobar si el punto está dentro del área del nodo actual
         let width = layout.size.width;
         let height = layout.size.height;
-        if point[0] >= abs_x && point[0] <= abs_x + width && point[1] >= abs_y && point[1] <= abs_y + height {
+        if point[0] >= abs_x
+            && point[0] <= abs_x + width
+            && point[1] >= abs_y
+            && point[1] <= abs_y + height
+        {
             if let Some(data) = self.node_data.get(&node) {
                 // Los contenedores estructurales transparentes no interceptan eventos,
                 // excepto si son elementos interactivos identificados con texto o ítems de popover.
@@ -327,8 +373,16 @@ impl UiTree {
 
                 // Comprobación analítica con la superelipse para respetar esquinas redondeadas
                 let half_size = [width * 0.5, height * 0.5];
-                let local_p = [point[0] - abs_x - half_size[0], point[1] - abs_y - half_size[1]];
-                let dist = squircle_sdf_cpu(local_p, half_size, data.style.corner_radius, data.style.squircle_power);
+                let local_p = [
+                    point[0] - abs_x - half_size[0],
+                    point[1] - abs_y - half_size[1],
+                ];
+                let dist = squircle_sdf_cpu(
+                    local_p,
+                    half_size,
+                    data.style.corner_radius,
+                    data.style.squircle_power,
+                );
                 if dist <= 0.0 {
                     return Some(node);
                 }
@@ -340,7 +394,8 @@ impl UiTree {
 
     /// Obtiene las coordenadas absolutas en pantalla (x, y, width, height) de un nodo del árbol.
     pub fn absolute_layout(&self, target_node: NodeId) -> Option<(f32, f32, f32, f32)> {
-        self.root.and_then(|root| self.find_absolute_layout(root, (0.0, 0.0), target_node))
+        self.root
+            .and_then(|root| self.find_absolute_layout(root, (0.0, 0.0), target_node))
     }
 
     fn find_absolute_layout(

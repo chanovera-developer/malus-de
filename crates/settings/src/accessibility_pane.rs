@@ -288,18 +288,30 @@ pub fn register_accessibility_panes(
 ) {
     let cfg = Rc::new(RefCell::new(AccessibilityConfig::load()));
 
-    stack.add_named(&build_a11y_hub_pane(parent_window, &navigate), Some("accessibility"));
+    stack.add_named(
+        &build_a11y_hub_pane(parent_window, &navigate),
+        Some("accessibility"),
+    );
     stack.add_named(&build_voiceover_pane(&cfg), Some("a11y-voiceover"));
     stack.add_named(&build_zoom_pane(&cfg), Some("a11y-zoom"));
     stack.add_named(&build_hover_text_pane(&cfg), Some("a11y-hover-text"));
     stack.add_named(&build_display_pane(&cfg), Some("a11y-display"));
     stack.add_named(&build_motion_pane(&cfg), Some("a11y-motion"));
     stack.add_named(&build_spoken_content_pane(&cfg), Some("a11y-spoken"));
-    stack.add_named(&build_audio_descriptions_pane(&cfg), Some("a11y-audio-desc"));
+    stack.add_named(
+        &build_audio_descriptions_pane(&cfg),
+        Some("a11y-audio-desc"),
+    );
     stack.add_named(&build_voice_control_pane(&cfg), Some("a11y-voice-control"));
-    stack.add_named(&build_keyboard_a11y_pane(&cfg, &navigate), Some("a11y-keyboard"));
+    stack.add_named(
+        &build_keyboard_a11y_pane(&cfg, &navigate),
+        Some("a11y-keyboard"),
+    );
     stack.add_named(&build_pointer_control_pane(&cfg), Some("a11y-pointer"));
-    stack.add_named(&build_switch_control_pane(&cfg, &navigate), Some("a11y-switch-control"));
+    stack.add_named(
+        &build_switch_control_pane(&cfg, &navigate),
+        Some("a11y-switch-control"),
+    );
     stack.add_named(&build_audio_a11y_pane(&cfg, &navigate), Some("a11y-audio"));
     stack.add_named(&build_captions_pane(&cfg), Some("a11y-captions"));
     stack.add_named(&build_live_captions_pane(&cfg), Some("a11y-live-captions"));
@@ -336,7 +348,10 @@ fn hub_row(
     target_id: &'static str,
     navigate: &Rc<dyn Fn(&str)>,
 ) -> Button {
-    let row = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).build();
+    let row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .build();
     badge.set_valign(Align::Center);
     row.append(&badge);
     row.append(
@@ -392,8 +407,18 @@ fn build_a11y_hub_pane(
         18,
         WIFI_BADGE_SQUIRCLE_RADIUS,
     ));
-    let hero_text = GtkBox::builder().orientation(Orientation::Vertical).spacing(2).hexpand(true).build();
-    hero_text.append(&Label::builder().label("Accesibilidad").css_classes(["card-section-title"]).xalign(0.0).build());
+    let hero_text = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .build();
+    hero_text.append(
+        &Label::builder()
+            .label("Accesibilidad")
+            .css_classes(["card-section-title"])
+            .xalign(0.0)
+            .build(),
+    );
     let desc_lbl = Label::builder()
         .label("Personaliza las funciones de accesibilidad del equipo diseñadas para mejorar tu experiencia visual, auditiva, motriz, de lectura y cognición. <a href=\"details\">Obtén detalles...</a>")
         .use_markup(true)
@@ -429,66 +454,282 @@ fn build_a11y_hub_pane(
     pane.append(&wrap_squircle_card(&hero_card, WIFI_CARD_SQUIRCLE_RADIUS));
 
     // Visión
-    pane.append(&Label::builder().label("Visión").css_classes(["wifi-section-title"]).xalign(0.0).margin_top(4).build());
+    pane.append(
+        &Label::builder()
+            .label("Visión")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .margin_top(4)
+            .build(),
+    );
     let vision_card = GtkBox::builder().orientation(Orientation::Vertical).build();
-    let vision_items: [(&str, (f64, f64, f64), (f64, f64, f64), &str, bool, &'static str); 7] = [
-        ("preferences-desktop-accessibility-symbolic", DARK_TOP, DARK_BOT, "VoiceOver", false, "a11y-voiceover"),
-        ("edit-find-symbolic", DARK_TOP, DARK_BOT, "Zoom", false, "a11y-zoom"),
-        ("insert-text-symbolic", (0.259, 0.565, 0.976), (0.235, 0.518, 0.949), "Texto flotante", true, "a11y-hover-text"),
-        ("video-display-symbolic", (0.259, 0.565, 0.976), (0.235, 0.518, 0.949), "Pantalla", false, "a11y-display"),
-        ("media-playlist-repeat-symbolic", GREEN_TOP, GREEN_BOT, "Movimiento", false, "a11y-motion"),
-        ("user-available-symbolic", DARK_TOP, DARK_BOT, "Lectura y voz", false, "a11y-spoken"),
-        ("audio-speakers-symbolic", (0.259, 0.565, 0.976), (0.235, 0.518, 0.949), "Descripciones de audio", true, "a11y-audio-desc"),
+    let vision_items: [(
+        &str,
+        (f64, f64, f64),
+        (f64, f64, f64),
+        &str,
+        bool,
+        &'static str,
+    ); 7] = [
+        (
+            "preferences-desktop-accessibility-symbolic",
+            DARK_TOP,
+            DARK_BOT,
+            "VoiceOver",
+            false,
+            "a11y-voiceover",
+        ),
+        (
+            "edit-find-symbolic",
+            DARK_TOP,
+            DARK_BOT,
+            "Zoom",
+            false,
+            "a11y-zoom",
+        ),
+        (
+            "insert-text-symbolic",
+            (0.259, 0.565, 0.976),
+            (0.235, 0.518, 0.949),
+            "Texto flotante",
+            true,
+            "a11y-hover-text",
+        ),
+        (
+            "video-display-symbolic",
+            (0.259, 0.565, 0.976),
+            (0.235, 0.518, 0.949),
+            "Pantalla",
+            false,
+            "a11y-display",
+        ),
+        (
+            "media-playlist-repeat-symbolic",
+            GREEN_TOP,
+            GREEN_BOT,
+            "Movimiento",
+            false,
+            "a11y-motion",
+        ),
+        (
+            "user-available-symbolic",
+            DARK_TOP,
+            DARK_BOT,
+            "Lectura y voz",
+            false,
+            "a11y-spoken",
+        ),
+        (
+            "audio-speakers-symbolic",
+            (0.259, 0.565, 0.976),
+            (0.235, 0.518, 0.949),
+            "Descripciones de audio",
+            true,
+            "a11y-audio-desc",
+        ),
     ];
     append_hub_group(&vision_card, &vision_items, navigate);
     pane.append(&wrap_squircle_card(&vision_card, WIFI_CARD_SQUIRCLE_RADIUS));
 
     // Físico y motriz
-    pane.append(&Label::builder().label("Físico y motriz").css_classes(["wifi-section-title"]).xalign(0.0).margin_top(6).build());
+    pane.append(
+        &Label::builder()
+            .label("Físico y motriz")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .margin_top(6)
+            .build(),
+    );
     let motor_card = GtkBox::builder().orientation(Orientation::Vertical).build();
-    let motor_items: [(&str, (f64, f64, f64), (f64, f64, f64), &str, bool, &'static str); 4] = [
-        ("audio-input-microphone-symbolic", (0.259, 0.565, 0.976), (0.235, 0.518, 0.949), "Control por voz", true, "a11y-voice-control"),
-        ("input-keyboard-symbolic", GRAY_TOP, GRAY_BOT, "Teclado", false, "a11y-keyboard"),
-        ("input-mouse-symbolic", GRAY_TOP, GRAY_BOT, "Control del puntero", false, "a11y-pointer"),
-        ("view-grid-symbolic", DARK_TOP, DARK_BOT, "Control por botón", true, "a11y-switch-control"),
+    let motor_items: [(
+        &str,
+        (f64, f64, f64),
+        (f64, f64, f64),
+        &str,
+        bool,
+        &'static str,
+    ); 4] = [
+        (
+            "audio-input-microphone-symbolic",
+            (0.259, 0.565, 0.976),
+            (0.235, 0.518, 0.949),
+            "Control por voz",
+            true,
+            "a11y-voice-control",
+        ),
+        (
+            "input-keyboard-symbolic",
+            GRAY_TOP,
+            GRAY_BOT,
+            "Teclado",
+            false,
+            "a11y-keyboard",
+        ),
+        (
+            "input-mouse-symbolic",
+            GRAY_TOP,
+            GRAY_BOT,
+            "Control del puntero",
+            false,
+            "a11y-pointer",
+        ),
+        (
+            "view-grid-symbolic",
+            DARK_TOP,
+            DARK_BOT,
+            "Control por botón",
+            true,
+            "a11y-switch-control",
+        ),
     ];
     append_hub_group(&motor_card, &motor_items, navigate);
     pane.append(&wrap_squircle_card(&motor_card, WIFI_CARD_SQUIRCLE_RADIUS));
 
     // Audición
-    pane.append(&Label::builder().label("Audición").css_classes(["wifi-section-title"]).xalign(0.0).margin_top(6).build());
+    pane.append(
+        &Label::builder()
+            .label("Audición")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .margin_top(6)
+            .build(),
+    );
     let hearing_card = GtkBox::builder().orientation(Orientation::Vertical).build();
-    let hearing_items: [(&str, (f64, f64, f64), (f64, f64, f64), &str, bool, &'static str); 4] = [
-        ("audio-volume-high-symbolic", RED_TOP, RED_BOT, "Audio", false, "a11y-audio"),
-        ("media-view-subtitles-symbolic", (0.259, 0.565, 0.976), (0.235, 0.518, 0.949), "Subtítulos", false, "a11y-captions"),
-        ("user-available-symbolic", (0.259, 0.565, 0.976), (0.235, 0.518, 0.949), "Subtítulos en vivo", true, "a11y-live-captions"),
-        ("avatar-default-symbolic", (0.259, 0.565, 0.976), (0.235, 0.518, 0.949), "Reconocimiento de nombres", true, "a11y-name-rec"),
+    let hearing_items: [(
+        &str,
+        (f64, f64, f64),
+        (f64, f64, f64),
+        &str,
+        bool,
+        &'static str,
+    ); 4] = [
+        (
+            "audio-volume-high-symbolic",
+            RED_TOP,
+            RED_BOT,
+            "Audio",
+            false,
+            "a11y-audio",
+        ),
+        (
+            "media-view-subtitles-symbolic",
+            (0.259, 0.565, 0.976),
+            (0.235, 0.518, 0.949),
+            "Subtítulos",
+            false,
+            "a11y-captions",
+        ),
+        (
+            "user-available-symbolic",
+            (0.259, 0.565, 0.976),
+            (0.235, 0.518, 0.949),
+            "Subtítulos en vivo",
+            true,
+            "a11y-live-captions",
+        ),
+        (
+            "avatar-default-symbolic",
+            (0.259, 0.565, 0.976),
+            (0.235, 0.518, 0.949),
+            "Reconocimiento de nombres",
+            true,
+            "a11y-name-rec",
+        ),
     ];
     append_hub_group(&hearing_card, &hearing_items, navigate);
-    pane.append(&wrap_squircle_card(&hearing_card, WIFI_CARD_SQUIRCLE_RADIUS));
+    pane.append(&wrap_squircle_card(
+        &hearing_card,
+        WIFI_CARD_SQUIRCLE_RADIUS,
+    ));
 
     // Lectura
-    pane.append(&Label::builder().label("Lectura").css_classes(["wifi-section-title"]).xalign(0.0).margin_top(6).build());
+    pane.append(
+        &Label::builder()
+            .label("Lectura")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .margin_top(6)
+            .build(),
+    );
     let speech_card = GtkBox::builder().orientation(Orientation::Vertical).build();
-    let speech_items: [(&str, (f64, f64, f64), (f64, f64, f64), &str, bool, &'static str); 3] = [
-        ("input-keyboard-symbolic", DARK_TOP, DARK_BOT, "Lectura en vivo", false, "a11y-live-speech"),
-        ("avatar-default-symbolic", (0.259, 0.565, 0.976), (0.235, 0.518, 0.949), "Voz personal", true, "a11y-personal-voice"),
-        ("audio-input-microphone-symbolic", DARK_TOP, DARK_BOT, "Atajos de voz", true, "a11y-vocal-shortcuts"),
+    let speech_items: [(
+        &str,
+        (f64, f64, f64),
+        (f64, f64, f64),
+        &str,
+        bool,
+        &'static str,
+    ); 3] = [
+        (
+            "input-keyboard-symbolic",
+            DARK_TOP,
+            DARK_BOT,
+            "Lectura en vivo",
+            false,
+            "a11y-live-speech",
+        ),
+        (
+            "avatar-default-symbolic",
+            (0.259, 0.565, 0.976),
+            (0.235, 0.518, 0.949),
+            "Voz personal",
+            true,
+            "a11y-personal-voice",
+        ),
+        (
+            "audio-input-microphone-symbolic",
+            DARK_TOP,
+            DARK_BOT,
+            "Atajos de voz",
+            true,
+            "a11y-vocal-shortcuts",
+        ),
     ];
     append_hub_group(&speech_card, &speech_items, navigate);
     pane.append(&wrap_squircle_card(&speech_card, WIFI_CARD_SQUIRCLE_RADIUS));
 
     // General
-    pane.append(&Label::builder().label("General").css_classes(["wifi-section-title"]).xalign(0.0).margin_top(6).build());
+    pane.append(
+        &Label::builder()
+            .label("General")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .margin_top(6)
+            .build(),
+    );
     let gen_card = GtkBox::builder().orientation(Orientation::Vertical).build();
-    let gen_items: [(&str, (f64, f64, f64), (f64, f64, f64), &str, bool, &'static str); 2] = [
-        ("audio-input-microphone-symbolic", PURPLE_TOP, PURPLE_BOT, "Siri", true, "a11y-siri"),
-        ("preferences-desktop-accessibility-symbolic", (0.259, 0.565, 0.976), (0.235, 0.518, 0.949), "Atajo", false, "a11y-shortcut"),
+    let gen_items: [(
+        &str,
+        (f64, f64, f64),
+        (f64, f64, f64),
+        &str,
+        bool,
+        &'static str,
+    ); 2] = [
+        (
+            "audio-input-microphone-symbolic",
+            PURPLE_TOP,
+            PURPLE_BOT,
+            "Siri",
+            true,
+            "a11y-siri",
+        ),
+        (
+            "preferences-desktop-accessibility-symbolic",
+            (0.259, 0.565, 0.976),
+            (0.235, 0.518, 0.949),
+            "Atajo",
+            false,
+            "a11y-shortcut",
+        ),
     ];
     append_hub_group(&gen_card, &gen_items, navigate);
     pane.append(&wrap_squircle_card(&gen_card, WIFI_CARD_SQUIRCLE_RADIUS));
 
-    let footer = GtkBox::builder().orientation(Orientation::Horizontal).halign(Align::End).build();
+    let footer = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .halign(Align::End)
+        .build();
     let (hw, _) = make_help_circle_button("Ayuda de Accesibilidad");
     footer.append(&hw);
     pane.append(&footer);
@@ -498,7 +739,14 @@ fn build_a11y_hub_pane(
 
 fn append_hub_group(
     card: &GtkBox,
-    items: &[(&str, (f64, f64, f64), (f64, f64, f64), &str, bool, &'static str)],
+    items: &[(
+        &str,
+        (f64, f64, f64),
+        (f64, f64, f64),
+        &str,
+        bool,
+        &'static str,
+    )],
     navigate: &Rc<dyn Fn(&str)>,
 ) {
     for (idx, (ico, top, bot, title, pending, target)) in items.iter().enumerate() {
@@ -535,8 +783,18 @@ fn build_voiceover_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWindo
         DARK_TOP,
         DARK_BOT,
     ));
-    let col = GtkBox::builder().orientation(Orientation::Vertical).spacing(4).hexpand(true).build();
-    col.append(&Label::builder().label("VoiceOver (Lector de pantalla Orca)").css_classes(["card-section-title"]).xalign(0.0).build());
+    let col = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(4)
+        .hexpand(true)
+        .build();
+    col.append(
+        &Label::builder()
+            .label("VoiceOver (Lector de pantalla Orca)")
+            .css_classes(["card-section-title"])
+            .xalign(0.0)
+            .build(),
+    );
     col.append(
         &Label::builder()
             .label("Proporciona descripciones en voz alta y en braille de los elementos de la pantalla y permite controlar la computadora mediante el uso del teclado.")
@@ -563,7 +821,11 @@ fn build_voiceover_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWindo
         sw.connect_state_set(move |_, active| {
             c.borrow_mut().voiceover_enabled = active;
             c.borrow().save();
-            set_gsetting_bool("org.gnome.desktop.a11y.applications", "screen-reader-enabled", active);
+            set_gsetting_bool(
+                "org.gnome.desktop.a11y.applications",
+                "screen-reader-enabled",
+                active,
+            );
             if active {
                 let _ = Command::new("orca").spawn();
             } else {
@@ -577,7 +839,11 @@ fn build_voiceover_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWindo
     card.append(&row);
     pane.append(&wrap_squircle_card(&card, WIFI_CARD_SQUIRCLE_RADIUS));
 
-    let actions = GtkBox::builder().orientation(Orientation::Horizontal).spacing(8).halign(Align::End).build();
+    let actions = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .halign(Align::End)
+        .build();
     let (tut_w, _) = make_squircle_button("Abrir tutorial de VoiceOver...", false, None);
     let (util_w, util_btn) = make_squircle_button("Abrir Utilidad VoiceOver...", false, None);
     util_btn.connect_clicked(|_| {
@@ -609,7 +875,11 @@ fn build_zoom_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWindow {
             move |val| {
                 c.borrow_mut().zoom_shortcuts = val;
                 c.borrow().save();
-                set_gsetting_bool("org.gnome.desktop.a11y.applications", "screen-magnifier-enabled", val);
+                set_gsetting_bool(
+                    "org.gnome.desktop.a11y.applications",
+                    "screen-magnifier-enabled",
+                    val,
+                );
             }
         },
     ));
@@ -657,7 +927,11 @@ fn build_zoom_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWindow {
     card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
     card.append(&a11y_selector_row(
         "Estilo de zoom",
-        &["Pantalla completa", "Pantalla dividida", "Imagen dentro de otra"],
+        &[
+            "Pantalla completa",
+            "Pantalla dividida",
+            "Imagen dentro de otra",
+        ],
         cfg.borrow().zoom_style_idx,
         {
             let c = cfg.clone();
@@ -668,7 +942,11 @@ fn build_zoom_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWindow {
         },
     ));
 
-    let adv_row = GtkBox::builder().orientation(Orientation::Horizontal).halign(Align::End).css_classes(["wifi-pref-row"]).build();
+    let adv_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .halign(Align::End)
+        .css_classes(["wifi-pref-row"])
+        .build();
     let (adv_w, _) = make_squircle_button("Avanzado...", false, None);
     adv_row.append(&adv_w);
     card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
@@ -711,18 +989,35 @@ fn build_display_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWindow 
     let (scrolled, pane) = make_scrolled_pane();
 
     let c1 = GtkBox::builder().orientation(Orientation::Vertical).build();
-    c1.append(&a11y_switch_row("Invertir colores", None, cfg.borrow().invert_colors, false, {
-        let c = cfg.clone();
-        move |v| {
-            c.borrow_mut().invert_colors = v;
-            c.borrow().save();
-            set_gsetting_bool("org.gnome.desktop.a11y.magnifier", "invert-lightness", v);
-        }
-    }));
+    c1.append(&a11y_switch_row(
+        "Invertir colores",
+        None,
+        cfg.borrow().invert_colors,
+        false,
+        {
+            let c = cfg.clone();
+            move |v| {
+                c.borrow_mut().invert_colors = v;
+                c.borrow().save();
+                set_gsetting_bool("org.gnome.desktop.a11y.magnifier", "invert-lightness", v);
+            }
+        },
+    ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 
-    let inv_mode = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).css_classes(["wifi-pref-row"]).build();
-    inv_mode.append(&Label::builder().label("Modo de inversión de colores").css_classes(["wifi-row-title"]).xalign(0.0).hexpand(true).build());
+    let inv_mode = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["wifi-pref-row"])
+        .build();
+    inv_mode.append(
+        &Label::builder()
+            .label("Modo de inversión de colores")
+            .css_classes(["wifi-row-title"])
+            .xalign(0.0)
+            .hexpand(true)
+            .build(),
+    );
     let rb_smart = CheckButton::with_label("Inteligente");
     let rb_classic = CheckButton::with_label("Clásico");
     rb_classic.set_group(Some(&rb_smart));
@@ -732,39 +1027,63 @@ fn build_display_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWindow 
     c1.append(&inv_mode);
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 
-    c1.append(&a11y_switch_row("Aumentar contraste", None, cfg.borrow().increase_contrast, false, {
-        let c = cfg.clone();
-        move |v| {
-            c.borrow_mut().increase_contrast = v;
-            c.borrow().save();
-            set_gsetting_bool("org.gnome.desktop.a11y.interface", "high-contrast", v);
-        }
-    }));
+    c1.append(&a11y_switch_row(
+        "Aumentar contraste",
+        None,
+        cfg.borrow().increase_contrast,
+        false,
+        {
+            let c = cfg.clone();
+            move |v| {
+                c.borrow_mut().increase_contrast = v;
+                c.borrow().save();
+                set_gsetting_bool("org.gnome.desktop.a11y.interface", "high-contrast", v);
+            }
+        },
+    ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c1.append(&a11y_switch_row("Reducir transparencia", None, cfg.borrow().reduce_transparency, false, {
-        let c = cfg.clone();
-        move |v| {
-            c.borrow_mut().reduce_transparency = v;
-            c.borrow().save();
-        }
-    }));
+    c1.append(&a11y_switch_row(
+        "Reducir transparencia",
+        None,
+        cfg.borrow().reduce_transparency,
+        false,
+        {
+            let c = cfg.clone();
+            move |v| {
+                c.borrow_mut().reduce_transparency = v;
+                c.borrow().save();
+            }
+        },
+    ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c1.append(&a11y_switch_row("Mostrar bordes", None, cfg.borrow().show_borders, false, {
-        let c = cfg.clone();
-        move |v| {
-            c.borrow_mut().show_borders = v;
-            c.borrow().save();
-        }
-    }));
+    c1.append(&a11y_switch_row(
+        "Mostrar bordes",
+        None,
+        cfg.borrow().show_borders,
+        false,
+        {
+            let c = cfg.clone();
+            move |v| {
+                c.borrow_mut().show_borders = v;
+                c.borrow().save();
+            }
+        },
+    ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c1.append(&a11y_switch_row("Diferenciar sin color", None, cfg.borrow().differentiate_without_color, false, {
-        let c = cfg.clone();
-        move |v| {
-            c.borrow_mut().differentiate_without_color = v;
-            c.borrow().save();
-            set_gsetting_bool("org.gnome.desktop.a11y.interface", "show-status-shapes", v);
-        }
-    }));
+    c1.append(&a11y_switch_row(
+        "Diferenciar sin color",
+        None,
+        cfg.borrow().differentiate_without_color,
+        false,
+        {
+            let c = cfg.clone();
+            move |v| {
+                c.borrow_mut().differentiate_without_color = v;
+                c.borrow().save();
+                set_gsetting_bool("org.gnome.desktop.a11y.interface", "show-status-shapes", v);
+            }
+        },
+    ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
     c1.append(&a11y_switch_row(
         "Atenuar luces parpadeantes",
@@ -780,17 +1099,32 @@ fn build_display_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWindow 
         },
     ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c1.append(&a11y_slider_row("Contraste de la pantalla", "Normal", "Máximo", 0.0, 1.0, cfg.borrow().display_contrast, {
-        let c = cfg.clone();
-        move |val| {
-            c.borrow_mut().display_contrast = val;
-            c.borrow().save();
-        }
-    }));
+    c1.append(&a11y_slider_row(
+        "Contraste de la pantalla",
+        "Normal",
+        "Máximo",
+        0.0,
+        1.0,
+        cfg.borrow().display_contrast,
+        {
+            let c = cfg.clone();
+            move |val| {
+                c.borrow_mut().display_contrast = val;
+                c.borrow().save();
+            }
+        },
+    ));
     pane.append(&wrap_squircle_card(&c1, WIFI_CARD_SQUIRCLE_RADIUS));
 
     // Texto
-    pane.append(&Label::builder().label("Texto").css_classes(["wifi-section-title"]).xalign(0.0).margin_top(6).build());
+    pane.append(
+        &Label::builder()
+            .label("Texto")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .margin_top(6)
+            .build(),
+    );
     let c2 = GtkBox::builder().orientation(Orientation::Vertical).build();
     c2.append(&a11y_selector_row(
         "Tamaño del texto",
@@ -814,17 +1148,30 @@ fn build_display_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWindow 
         },
     ));
     c2.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c2.append(&a11y_switch_row("Preferir texto en horizontal", None, cfg.borrow().prefer_horizontal_text, true, {
-        let c = cfg.clone();
-        move |v| {
-            c.borrow_mut().prefer_horizontal_text = v;
-            c.borrow().save();
-        }
-    }));
+    c2.append(&a11y_switch_row(
+        "Preferir texto en horizontal",
+        None,
+        cfg.borrow().prefer_horizontal_text,
+        true,
+        {
+            let c = cfg.clone();
+            move |v| {
+                c.borrow_mut().prefer_horizontal_text = v;
+                c.borrow().save();
+            }
+        },
+    ));
     pane.append(&wrap_squircle_card(&c2, WIFI_CARD_SQUIRCLE_RADIUS));
 
     // Puntero
-    pane.append(&Label::builder().label("Puntero").css_classes(["wifi-section-title"]).xalign(0.0).margin_top(6).build());
+    pane.append(
+        &Label::builder()
+            .label("Puntero")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .margin_top(6)
+            .build(),
+    );
     let c3 = GtkBox::builder().orientation(Orientation::Vertical).build();
     c3.append(&a11y_switch_row(
         "Agitar puntero del mouse para encontrarlo",
@@ -840,20 +1187,35 @@ fn build_display_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWindow 
         },
     ));
     c3.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c3.append(&a11y_slider_row("Tamaño del puntero", "Normal", "Grande", 24.0, 64.0, cfg.borrow().cursor_size as f64, {
-        let c = cfg.clone();
-        move |val| {
-            let sz = val.round() as i32;
-            c.borrow_mut().cursor_size = sz;
-            c.borrow().save();
-            let gs = gtk4::gio::Settings::new("org.gnome.desktop.interface");
-            let _ = gs.set_int("cursor-size", sz);
-        }
-    }));
+    c3.append(&a11y_slider_row(
+        "Tamaño del puntero",
+        "Normal",
+        "Grande",
+        24.0,
+        64.0,
+        cfg.borrow().cursor_size as f64,
+        {
+            let c = cfg.clone();
+            move |val| {
+                let sz = val.round() as i32;
+                c.borrow_mut().cursor_size = sz;
+                c.borrow().save();
+                let gs = gtk4::gio::Settings::new("org.gnome.desktop.interface");
+                let _ = gs.set_int("cursor-size", sz);
+            }
+        },
+    ));
     pane.append(&wrap_squircle_card(&c3, WIFI_CARD_SQUIRCLE_RADIUS));
 
     // Filtros de colores con ilustración Cairo de 12 lápices de colores (Accesibilidad5.png)
-    pane.append(&Label::builder().label("Filtros de colores").css_classes(["wifi-section-title"]).xalign(0.0).margin_top(6).build());
+    pane.append(
+        &Label::builder()
+            .label("Filtros de colores")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .margin_top(6)
+            .build(),
+    );
     let c4 = GtkBox::builder().orientation(Orientation::Vertical).build();
     let pencils = DrawingArea::new();
     pencils.set_content_height(110);
@@ -863,19 +1225,30 @@ fn build_display_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWindow 
     });
     c4.append(&pencils);
     c4.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c4.append(&a11y_switch_row("Filtros de colores", None, cfg.borrow().color_filters_enabled, false, {
-        let c = cfg.clone();
-        move |v| {
-            c.borrow_mut().color_filters_enabled = v;
-            c.borrow().save();
-            let gs = gtk4::gio::Settings::new("org.gnome.desktop.a11y.magnifier");
-            let _ = gs.set_double("color-saturation", if v { 0.0 } else { 1.0 });
-        }
-    }));
+    c4.append(&a11y_switch_row(
+        "Filtros de colores",
+        None,
+        cfg.borrow().color_filters_enabled,
+        false,
+        {
+            let c = cfg.clone();
+            move |v| {
+                c.borrow_mut().color_filters_enabled = v;
+                c.borrow().save();
+                let gs = gtk4::gio::Settings::new("org.gnome.desktop.a11y.magnifier");
+                let _ = gs.set_double("color-saturation", if v { 0.0 } else { 1.0 });
+            }
+        },
+    ));
     c4.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
     c4.append(&a11y_selector_row(
         "Tipo de filtro",
-        &["Escala de grises", "Rojo/verde (Protanopía)", "Verde/rojo (Deuteranopía)", "Azul/amarillo (Tritanopía)"],
+        &[
+            "Escala de grises",
+            "Rojo/verde (Protanopía)",
+            "Verde/rojo (Deuteranopía)",
+            "Azul/amarillo (Tritanopía)",
+        ],
         cfg.borrow().color_filter_type_idx,
         {
             let c = cfg.clone();
@@ -886,13 +1259,21 @@ fn build_display_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWindow 
         },
     ));
     c4.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c4.append(&a11y_slider_row("Intensidad", "Baja", "Alta", 0.0, 1.0, cfg.borrow().color_filter_intensity, {
-        let c = cfg.clone();
-        move |val| {
-            c.borrow_mut().color_filter_intensity = val;
-            c.borrow().save();
-        }
-    }));
+    c4.append(&a11y_slider_row(
+        "Intensidad",
+        "Baja",
+        "Alta",
+        0.0,
+        1.0,
+        cfg.borrow().color_filter_intensity,
+        {
+            let c = cfg.clone();
+            move |val| {
+                c.borrow_mut().color_filter_intensity = val;
+                c.borrow().save();
+            }
+        },
+    ));
     pane.append(&wrap_squircle_card(&c4, WIFI_CARD_SQUIRCLE_RADIUS));
 
     scrolled
@@ -954,31 +1335,49 @@ fn draw_color_pencils_preview(cr: &gtk4::cairo::Context, w: f64, h: f64) {
 fn build_motion_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWindow {
     let (scrolled, pane) = make_scrolled_pane();
     let card = GtkBox::builder().orientation(Orientation::Vertical).build();
-    card.append(&a11y_switch_row("Reducir movimiento", None, cfg.borrow().reduce_motion, false, {
-        let c = cfg.clone();
-        move |v| {
-            c.borrow_mut().reduce_motion = v;
-            c.borrow().save();
-            set_gsetting_bool("org.gnome.desktop.a11y.interface", "reduced-motion", v);
-        }
-    }));
+    card.append(&a11y_switch_row(
+        "Reducir movimiento",
+        None,
+        cfg.borrow().reduce_motion,
+        false,
+        {
+            let c = cfg.clone();
+            move |v| {
+                c.borrow_mut().reduce_motion = v;
+                c.borrow().save();
+                set_gsetting_bool("org.gnome.desktop.a11y.interface", "reduced-motion", v);
+            }
+        },
+    ));
     card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    card.append(&a11y_switch_row("Reproducir automáticamente imágenes animadas", None, cfg.borrow().autoplay_animated_images, false, {
-        let c = cfg.clone();
-        move |v| {
-            c.borrow_mut().autoplay_animated_images = v;
-            c.borrow().save();
-        }
-    }));
+    card.append(&a11y_switch_row(
+        "Reproducir automáticamente imágenes animadas",
+        None,
+        cfg.borrow().autoplay_animated_images,
+        false,
+        {
+            let c = cfg.clone();
+            move |v| {
+                c.borrow_mut().autoplay_animated_images = v;
+                c.borrow().save();
+            }
+        },
+    ));
     card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    card.append(&a11y_switch_row("Preferir que el cursor no parpadee", None, cfg.borrow().prefer_non_blinking_cursor, false, {
-        let c = cfg.clone();
-        move |v| {
-            c.borrow_mut().prefer_non_blinking_cursor = v;
-            c.borrow().save();
-            set_gsetting_bool("org.gnome.desktop.interface", "cursor-blink", !v);
-        }
-    }));
+    card.append(&a11y_switch_row(
+        "Preferir que el cursor no parpadee",
+        None,
+        cfg.borrow().prefer_non_blinking_cursor,
+        false,
+        {
+            let c = cfg.clone();
+            move |v| {
+                c.borrow_mut().prefer_non_blinking_cursor = v;
+                c.borrow().save();
+                set_gsetting_bool("org.gnome.desktop.interface", "cursor-blink", !v);
+            }
+        },
+    ));
     pane.append(&wrap_squircle_card(&card, WIFI_CARD_SQUIRCLE_RADIUS));
     scrolled
 }
@@ -1005,7 +1404,12 @@ fn build_spoken_content_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> Scrolled
     let voice_card = GtkBox::builder().orientation(Orientation::Vertical).build();
     voice_card.append(&a11y_selector_row(
         "Idioma de la voz del sistema",
-        &["Usar idioma del sistema (Español)", "Español (México)", "Español (España)", "English (US)"],
+        &[
+            "Usar idioma del sistema (Español)",
+            "Español (México)",
+            "Español (España)",
+            "English (US)",
+        ],
         cfg.borrow().voice_lang_idx,
         {
             let c = cfg.clone();
@@ -1018,25 +1422,38 @@ fn build_spoken_content_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> Scrolled
     voice_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
     voice_card.append(&a11y_selector_row(
         "Voz del sistema",
-        &["Mónica (es-MX)", "Paulina (es-MX)", "Jorge (es-ES)", "eSpeak-NG Predeterminada"],
+        &[
+            "Mónica (es-MX)",
+            "Paulina (es-MX)",
+            "Jorge (es-ES)",
+            "eSpeak-NG Predeterminada",
+        ],
         cfg.borrow().system_voice_idx,
         {
             let c = cfg.clone();
             move |idx| {
                 c.borrow_mut().system_voice_idx = idx;
                 c.borrow().save();
-                let _ = Command::new("spd-say").args(["-l", "es", "Voz del sistema activada"]).spawn();
+                let _ = Command::new("spd-say")
+                    .args(["-l", "es", "Voz del sistema activada"])
+                    .spawn();
             }
         },
     ));
     voice_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    voice_card.append(&a11y_switch_row("Detectar idiomas", None, cfg.borrow().detect_languages, false, {
-        let c = cfg.clone();
-        move |v| {
-            c.borrow_mut().detect_languages = v;
-            c.borrow().save();
-        }
-    }));
+    voice_card.append(&a11y_switch_row(
+        "Detectar idiomas",
+        None,
+        cfg.borrow().detect_languages,
+        false,
+        {
+            let c = cfg.clone();
+            move |v| {
+                c.borrow_mut().detect_languages = v;
+                c.borrow().save();
+            }
+        },
+    ));
     pane.append(&wrap_squircle_card(&voice_card, WIFI_CARD_SQUIRCLE_RADIUS));
     scrolled
 }
@@ -1086,19 +1503,57 @@ fn build_voice_control_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledW
         },
     ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c1.append(&a11y_selector_row("Idioma", &["Español (México)", "Español (España)", "English (US)"], 0, |_| {}));
+    c1.append(&a11y_selector_row(
+        "Idioma",
+        &["Español (México)", "Español (España)", "English (US)"],
+        0,
+        |_| {},
+    ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c1.append(&a11y_selector_row("Micrófono", &["Automático (Micrófono predeterminado PipeWire)"], 0, |_| {}));
+    c1.append(&a11y_selector_row(
+        "Micrófono",
+        &["Automático (Micrófono predeterminado PipeWire)"],
+        0,
+        |_| {},
+    ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c1.append(&a11y_switch_row("Mostrar consejos", None, cfg.borrow().voice_control_show_hints, false, |_| {}));
+    c1.append(&a11y_switch_row(
+        "Mostrar consejos",
+        None,
+        cfg.borrow().voice_control_show_hints,
+        false,
+        |_| {},
+    ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c1.append(&a11y_switch_row("Reproducir sonido al reconocer un comando", None, cfg.borrow().voice_control_play_sound, false, |_| {}));
+    c1.append(&a11y_switch_row(
+        "Reproducir sonido al reconocer un comando",
+        None,
+        cfg.borrow().voice_control_play_sound,
+        false,
+        |_| {},
+    ));
     pane.append(&wrap_squircle_card(&c1, WIFI_CARD_SQUIRCLE_RADIUS));
 
     let c2 = GtkBox::builder().orientation(Orientation::Vertical).build();
-    c2.append(&a11y_selector_row("Sobreposición", &["Ninguna", "Números de elementos", "Nombres de elementos", "Cuadrícula numerada"], 0, |_| {}));
+    c2.append(&a11y_selector_row(
+        "Sobreposición",
+        &[
+            "Ninguna",
+            "Números de elementos",
+            "Nombres de elementos",
+            "Cuadrícula numerada",
+        ],
+        0,
+        |_| {},
+    ));
     c2.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c2.append(&a11y_switch_row("Desvanecer sobreposición después de inactividad", None, false, false, |_| {}));
+    c2.append(&a11y_switch_row(
+        "Desvanecer sobreposición después de inactividad",
+        None,
+        false,
+        false,
+        |_| {},
+    ));
     pane.append(&wrap_squircle_card(&c2, WIFI_CARD_SQUIRCLE_RADIUS));
     scrolled
 }
@@ -1128,7 +1583,11 @@ fn build_keyboard_a11y_pane(
         },
     ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    let kb_link_row = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).css_classes(["wifi-pref-row"]).build();
+    let kb_link_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["wifi-pref-row"])
+        .build();
     kb_link_row.append(
         &Label::builder()
             .label("Puedes establecer más atajos de teclado en la configuración de Teclado.")
@@ -1188,7 +1647,11 @@ fn build_keyboard_a11y_pane(
             move |v| {
                 c.borrow_mut().onscreen_keyboard = v;
                 c.borrow().save();
-                set_gsetting_bool("org.gnome.desktop.a11y.applications", "screen-keyboard-enabled", v);
+                set_gsetting_bool(
+                    "org.gnome.desktop.a11y.applications",
+                    "screen-keyboard-enabled",
+                    v,
+                );
             }
         },
     ));
@@ -1202,42 +1665,83 @@ fn build_keyboard_a11y_pane(
 
 fn build_pointer_control_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWindow {
     let (scrolled, pane) = make_scrolled_pane();
-    pane.append(&Label::builder().label("Mouse y trackpad").css_classes(["wifi-section-title"]).xalign(0.0).build());
+    pane.append(
+        &Label::builder()
+            .label("Mouse y trackpad")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .build(),
+    );
     let c1 = GtkBox::builder().orientation(Orientation::Vertical).build();
-    c1.append(&a11y_slider_row("Velocidad de doble clic", "Lenta", "Rápida", 0.1, 1.0, cfg.borrow().double_click_speed, {
-        let c = cfg.clone();
-        move |v| {
-            c.borrow_mut().double_click_speed = v;
-            c.borrow().save();
-        }
-    }));
+    c1.append(&a11y_slider_row(
+        "Velocidad de doble clic",
+        "Lenta",
+        "Rápida",
+        0.1,
+        1.0,
+        cfg.borrow().double_click_speed,
+        {
+            let c = cfg.clone();
+            move |v| {
+                c.borrow_mut().double_click_speed = v;
+                c.borrow().save();
+            }
+        },
+    ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c1.append(&a11y_switch_row("Apertura automática", None, cfg.borrow().spring_loading, false, {
-        let c = cfg.clone();
-        move |v| {
-            c.borrow_mut().spring_loading = v;
-            c.borrow().save();
-        }
-    }));
+    c1.append(&a11y_switch_row(
+        "Apertura automática",
+        None,
+        cfg.borrow().spring_loading,
+        false,
+        {
+            let c = cfg.clone();
+            move |v| {
+                c.borrow_mut().spring_loading = v;
+                c.borrow().save();
+            }
+        },
+    ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c1.append(&a11y_slider_row("Velocidad de apertura automática", "Lenta", "Rápida", 0.1, 1.0, cfg.borrow().spring_loading_speed, {
-        let c = cfg.clone();
-        move |v| {
-            c.borrow_mut().spring_loading_speed = v;
-            c.borrow().save();
-        }
-    }));
+    c1.append(&a11y_slider_row(
+        "Velocidad de apertura automática",
+        "Lenta",
+        "Rápida",
+        0.1,
+        1.0,
+        cfg.borrow().spring_loading_speed,
+        {
+            let c = cfg.clone();
+            move |v| {
+                c.borrow_mut().spring_loading_speed = v;
+                c.borrow().save();
+            }
+        },
+    ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c1.append(&a11y_switch_row("Ignorar el trackpad integrado cuando haya un mouse o trackpad inalámbrico", None, cfg.borrow().ignore_trackpad_with_mouse, false, {
-        let c = cfg.clone();
-        move |v| {
-            c.borrow_mut().ignore_trackpad_with_mouse = v;
-            c.borrow().save();
-        }
-    }));
+    c1.append(&a11y_switch_row(
+        "Ignorar el trackpad integrado cuando haya un mouse o trackpad inalámbrico",
+        None,
+        cfg.borrow().ignore_trackpad_with_mouse,
+        false,
+        {
+            let c = cfg.clone();
+            move |v| {
+                c.borrow_mut().ignore_trackpad_with_mouse = v;
+                c.borrow().save();
+            }
+        },
+    ));
     pane.append(&wrap_squircle_card(&c1, WIFI_CARD_SQUIRCLE_RADIUS));
 
-    pane.append(&Label::builder().label("Métodos de control alternativos").css_classes(["wifi-section-title"]).xalign(0.0).margin_top(6).build());
+    pane.append(
+        &Label::builder()
+            .label("Métodos de control alternativos")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .margin_top(6)
+            .build(),
+    );
     let c2 = GtkBox::builder().orientation(Orientation::Vertical).build();
     c2.append(&a11y_switch_row(
         "Teclas para el mouse",
@@ -1309,12 +1813,30 @@ fn build_switch_control_pane(
         },
     ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c1.append(&a11y_switch_row("Exploración automática", Some("Recorre secuencialmente los elementos de la interfaz."), cfg.borrow().switch_auto_scan, false, |_| {}));
+    c1.append(&a11y_switch_row(
+        "Exploración automática",
+        Some("Recorre secuencialmente los elementos de la interfaz."),
+        cfg.borrow().switch_auto_scan,
+        false,
+        |_| {},
+    ));
     pane.append(&wrap_squircle_card(&c1, WIFI_CARD_SQUIRCLE_RADIUS));
 
     let c2 = GtkBox::builder().orientation(Orientation::Vertical).build();
-    let r_kb = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).css_classes(["wifi-pref-row"]).build();
-    r_kb.append(&Label::builder().label("En la configuración de Teclado puedes activar más funciones de escritura.").css_classes(["card-section-sub"]).wrap(true).xalign(0.0).hexpand(true).build());
+    let r_kb = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["wifi-pref-row"])
+        .build();
+    r_kb.append(
+        &Label::builder()
+            .label("En la configuración de Teclado puedes activar más funciones de escritura.")
+            .css_classes(["card-section-sub"])
+            .wrap(true)
+            .xalign(0.0)
+            .hexpand(true)
+            .build(),
+    );
     let (kb_w, kb_b) = make_squircle_button("Configuración de Teclado...", false, None);
     let nav = navigate.clone();
     kb_b.connect_clicked(move |_| nav("keyboard"));
@@ -1349,16 +1871,29 @@ fn build_audio_a11y_pane(
         },
     ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c1.append(&a11y_switch_row("Reproducir el audio estéreo como mono", None, cfg.borrow().mono_audio, true, {
-        let c = cfg.clone();
-        move |v| {
-            c.borrow_mut().mono_audio = v;
-            c.borrow().save();
-        }
-    }));
+    c1.append(&a11y_switch_row(
+        "Reproducir el audio estéreo como mono",
+        None,
+        cfg.borrow().mono_audio,
+        true,
+        {
+            let c = cfg.clone();
+            move |v| {
+                c.borrow_mut().mono_audio = v;
+                c.borrow().save();
+            }
+        },
+    ));
     pane.append(&wrap_squircle_card(&c1, WIFI_CARD_SQUIRCLE_RADIUS));
 
-    pane.append(&Label::builder().label("Sonidos de fondo").css_classes(["wifi-section-title"]).xalign(0.0).margin_top(6).build());
+    pane.append(
+        &Label::builder()
+            .label("Sonidos de fondo")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .margin_top(6)
+            .build(),
+    );
     let c2 = GtkBox::builder().orientation(Orientation::Vertical).build();
     c2.append(&a11y_switch_row(
         "Sonidos de fondo",
@@ -1374,24 +1909,55 @@ fn build_audio_a11y_pane(
         },
     ));
     c2.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c2.append(&a11y_selector_row("Sonido de fondo", &["Lluvia", "Océano", "Arroyo", "Ruido blanco", "Ruido equilibrado"], cfg.borrow().background_sound_idx, {
-        let c = cfg.clone();
-        move |idx| {
-            c.borrow_mut().background_sound_idx = idx;
-            c.borrow().save();
-        }
-    }));
+    c2.append(&a11y_selector_row(
+        "Sonido de fondo",
+        &[
+            "Lluvia",
+            "Océano",
+            "Arroyo",
+            "Ruido blanco",
+            "Ruido equilibrado",
+        ],
+        cfg.borrow().background_sound_idx,
+        {
+            let c = cfg.clone();
+            move |idx| {
+                c.borrow_mut().background_sound_idx = idx;
+                c.borrow().save();
+            }
+        },
+    ));
     c2.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c2.append(&a11y_slider_row("Volumen de sonidos de fondo", "0%", "100%", 0.0, 1.0, cfg.borrow().background_sound_volume, {
-        let c = cfg.clone();
-        move |v| {
-            c.borrow_mut().background_sound_volume = v;
-            c.borrow().save();
-        }
-    }));
+    c2.append(&a11y_slider_row(
+        "Volumen de sonidos de fondo",
+        "0%",
+        "100%",
+        0.0,
+        1.0,
+        cfg.borrow().background_sound_volume,
+        {
+            let c = cfg.clone();
+            move |v| {
+                c.borrow_mut().background_sound_volume = v;
+                c.borrow().save();
+            }
+        },
+    ));
     c2.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    let snd_row = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).css_classes(["wifi-pref-row"]).build();
-    snd_row.append(&Label::builder().label("El volumen del sistema puede ajustarse en la configuración de Sonido.").css_classes(["card-section-sub"]).wrap(true).xalign(0.0).hexpand(true).build());
+    let snd_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["wifi-pref-row"])
+        .build();
+    snd_row.append(
+        &Label::builder()
+            .label("El volumen del sistema puede ajustarse en la configuración de Sonido.")
+            .css_classes(["card-section-sub"])
+            .wrap(true)
+            .xalign(0.0)
+            .hexpand(true)
+            .build(),
+    );
     let (sw, sb) = make_squircle_button("Configuración de Sonido...", false, None);
     let nav = navigate.clone();
     sb.connect_clicked(move |_| nav("sound"));
@@ -1399,17 +1965,35 @@ fn build_audio_a11y_pane(
     c2.append(&snd_row);
     pane.append(&wrap_squircle_card(&c2, WIFI_CARD_SQUIRCLE_RADIUS));
 
-    pane.append(&Label::builder().label("Adaptaciones de audífonos").css_classes(["wifi-section-title"]).xalign(0.0).margin_top(6).build());
+    pane.append(
+        &Label::builder()
+            .label("Adaptaciones de audífonos")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .margin_top(6)
+            .build(),
+    );
     let c3 = GtkBox::builder().orientation(Orientation::Vertical).build();
-    c3.append(&a11y_switch_row("Adaptaciones de audífonos", Some("Personaliza el perfil de frecuencias de audio de tus audífonos."), cfg.borrow().headphone_accommodations, true, {
-        let c = cfg.clone();
-        move |v| {
-            c.borrow_mut().headphone_accommodations = v;
-            c.borrow().save();
-        }
-    }));
+    c3.append(&a11y_switch_row(
+        "Adaptaciones de audífonos",
+        Some("Personaliza el perfil de frecuencias de audio de tus audífonos."),
+        cfg.borrow().headphone_accommodations,
+        true,
+        {
+            let c = cfg.clone();
+            move |v| {
+                c.borrow_mut().headphone_accommodations = v;
+                c.borrow().save();
+            }
+        },
+    ));
     c3.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c3.append(&a11y_selector_row("Ajuste de audio", &["Tono balanceado", "Rango vocal", "Brillo"], cfg.borrow().headphone_tune_idx, |_| {}));
+    c3.append(&a11y_selector_row(
+        "Ajuste de audio",
+        &["Tono balanceado", "Rango vocal", "Brillo"],
+        cfg.borrow().headphone_tune_idx,
+        |_| {},
+    ));
     pane.append(&wrap_squircle_card(&c3, WIFI_CARD_SQUIRCLE_RADIUS));
     scrolled
 }
@@ -1436,7 +2020,12 @@ fn build_captions_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWindow
     style_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 
     let styles_box = GtkBox::builder().orientation(Orientation::Vertical).build();
-    let style_names = ["Fondo transparente", "Clásico", "Texto con contorno", "Texto grande"];
+    let style_names = [
+        "Fondo transparente",
+        "Clásico",
+        "Texto con contorno",
+        "Texto grande",
+    ];
     let rebuild_styles: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
     let reb_fn: Rc<dyn Fn()> = {
         let sbox = styles_box.clone();
@@ -1457,7 +2046,14 @@ fn build_captions_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWindow
                         vec!["fw-app-row"]
                     })
                     .build();
-                r.append(&Label::builder().label(*name).css_classes(["wifi-row-title"]).xalign(0.0).hexpand(true).build());
+                r.append(
+                    &Label::builder()
+                        .label(*name)
+                        .css_classes(["wifi-row-title"])
+                        .xalign(0.0)
+                        .hexpand(true)
+                        .build(),
+                );
                 let click = gtk4::GestureClick::new();
                 let sc = st_c.clone();
                 let cc = cfg_c.clone();
@@ -1483,15 +2079,45 @@ fn build_captions_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWindow
     pane.append(&wrap_squircle_card(&style_card, WIFI_CARD_SQUIRCLE_RADIUS));
 
     let opts_card = GtkBox::builder().orientation(Orientation::Vertical).build();
-    opts_card.append(&a11y_switch_row("Preferir subtítulos opcionales y auxiliares para sordera (SDH)", Some("Si están disponibles, se utilizarán subtítulos SDH en lugar de los estándar."), cfg.borrow().prefer_sdh_captions, false, |_| {}));
+    opts_card.append(&a11y_switch_row(
+        "Preferir subtítulos opcionales y auxiliares para sordera (SDH)",
+        Some("Si están disponibles, se utilizarán subtítulos SDH en lugar de los estándar."),
+        cfg.borrow().prefer_sdh_captions,
+        false,
+        |_| {},
+    ));
     opts_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    opts_card.append(&a11y_switch_row("Mostrar automáticamente cuando los idiomas no coincidan", None, cfg.borrow().auto_captions_on_lang_mismatch, false, |_| {}));
+    opts_card.append(&a11y_switch_row(
+        "Mostrar automáticamente cuando los idiomas no coincidan",
+        None,
+        cfg.borrow().auto_captions_on_lang_mismatch,
+        false,
+        |_| {},
+    ));
     opts_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    opts_card.append(&a11y_switch_row("Mostrar al silenciar", None, cfg.borrow().show_captions_on_mute, false, |_| {}));
+    opts_card.append(&a11y_switch_row(
+        "Mostrar al silenciar",
+        None,
+        cfg.borrow().show_captions_on_mute,
+        false,
+        |_| {},
+    ));
     opts_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    opts_card.append(&a11y_switch_row("Mostrar al retroceder", None, cfg.borrow().show_captions_on_skip_back, false, |_| {}));
+    opts_card.append(&a11y_switch_row(
+        "Mostrar al retroceder",
+        None,
+        cfg.borrow().show_captions_on_skip_back,
+        false,
+        |_| {},
+    ));
     opts_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    opts_card.append(&a11y_switch_row("Aplicar a todas las apps", None, cfg.borrow().apply_captions_to_all_apps, false, |_| {}));
+    opts_card.append(&a11y_switch_row(
+        "Aplicar a todas las apps",
+        None,
+        cfg.borrow().apply_captions_to_all_apps,
+        false,
+        |_| {},
+    ));
     pane.append(&wrap_squircle_card(&opts_card, WIFI_CARD_SQUIRCLE_RADIUS));
     scrolled
 }
@@ -1505,7 +2131,11 @@ fn draw_caption_preview(cr: &gtk4::cairo::Context, w: f64, h: f64, style_idx: us
     let _ = cr.fill();
 
     let font_sz = if style_idx == 3 { 16.5 } else { 13.5 };
-    cr.select_font_face("Sans", gtk4::cairo::FontSlant::Normal, gtk4::cairo::FontWeight::Bold);
+    cr.select_font_face(
+        "Sans",
+        gtk4::cairo::FontSlant::Normal,
+        gtk4::cairo::FontWeight::Bold,
+    );
     cr.set_font_size(font_sz);
     let text = "Los subtítulos se verán así.";
     let ext = cr.text_extents(text).ok();
@@ -1559,9 +2189,19 @@ fn build_live_captions_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledW
         },
     ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c1.append(&a11y_selector_row("Familia tipográfica", &["Predeterminado (Sans)", "Monoespaciada", "Serif"], 0, |_| {}));
+    c1.append(&a11y_selector_row(
+        "Familia tipográfica",
+        &["Predeterminado (Sans)", "Monoespaciada", "Serif"],
+        0,
+        |_| {},
+    ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c1.append(&a11y_selector_row("Idioma", &["español (México)", "español (España)", "English (US)"], 0, |_| {}));
+    c1.append(&a11y_selector_row(
+        "Idioma",
+        &["español (México)", "español (España)", "English (US)"],
+        0,
+        |_| {},
+    ));
     pane.append(&wrap_squircle_card(&c1, WIFI_CARD_SQUIRCLE_RADIUS));
     scrolled
 }
@@ -1569,11 +2209,36 @@ fn build_live_captions_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledW
 fn build_name_recognition_pane() -> ScrolledWindow {
     let (scrolled, pane) = make_scrolled_pane();
     let card = GtkBox::builder().orientation(Orientation::Vertical).build();
-    let r = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).css_classes(["wifi-pref-row"]).build();
-    r.append(&make_squircle_badge(30, "avatar-default-symbolic", 16, WIFI_BADGE_SQUIRCLE_RADIUS));
-    let col = GtkBox::builder().orientation(Orientation::Vertical).spacing(2).hexpand(true).build();
-    col.append(&Label::builder().label("Reconocimiento de nombres").css_classes(["wifi-row-title"]).xalign(0.0).build());
-    col.append(&Label::builder().label("Enseña a tu equipo a reconocer tu nombre mediante el micrófono.").css_classes(["card-section-sub"]).xalign(0.0).build());
+    let r = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["wifi-pref-row"])
+        .build();
+    r.append(&make_squircle_badge(
+        30,
+        "avatar-default-symbolic",
+        16,
+        WIFI_BADGE_SQUIRCLE_RADIUS,
+    ));
+    let col = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .build();
+    col.append(
+        &Label::builder()
+            .label("Reconocimiento de nombres")
+            .css_classes(["wifi-row-title"])
+            .xalign(0.0)
+            .build(),
+    );
+    col.append(
+        &Label::builder()
+            .label("Enseña a tu equipo a reconocer tu nombre mediante el micrófono.")
+            .css_classes(["card-section-sub"])
+            .xalign(0.0)
+            .build(),
+    );
     r.append(&col);
     r.append(&make_pending_badge());
     let (cw, _) = make_squircle_button("Configurar", false, None);
@@ -1603,20 +2268,58 @@ fn build_live_speech_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWin
         },
     ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c1.append(&a11y_selector_row("Idioma de la voz del sistema", &["Usar idioma del sistema", "Español (México)", "English (US)"], 0, |_| {}));
+    c1.append(&a11y_selector_row(
+        "Idioma de la voz del sistema",
+        &[
+            "Usar idioma del sistema",
+            "Español (México)",
+            "English (US)",
+        ],
+        0,
+        |_| {},
+    ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c1.append(&a11y_selector_row("Voz", &["Usar la voz del sistema (speech-dispatcher)"], 0, |_| {}));
+    c1.append(&a11y_selector_row(
+        "Voz",
+        &["Usar la voz del sistema (speech-dispatcher)"],
+        0,
+        |_| {},
+    ));
     pane.append(&wrap_squircle_card(&c1, WIFI_CARD_SQUIRCLE_RADIUS));
 
-    pane.append(&Label::builder().label("Categorías").css_classes(["wifi-section-title"]).xalign(0.0).margin_top(6).build());
+    pane.append(
+        &Label::builder()
+            .label("Categorías")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .margin_top(6)
+            .build(),
+    );
     let c2 = GtkBox::builder().orientation(Orientation::Vertical).build();
-    for (idx, (ico, txt)) in [("document-open-recent-symbolic", "Recientes"), ("user-bookmarks-symbolic", "Guardadas")].into_iter().enumerate() {
+    for (idx, (ico, txt)) in [
+        ("document-open-recent-symbolic", "Recientes"),
+        ("user-bookmarks-symbolic", "Guardadas"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         if idx > 0 {
             c2.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
         }
-        let r = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).css_classes(["wifi-pref-row"]).build();
+        let r = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(12)
+            .css_classes(["wifi-pref-row"])
+            .build();
         r.append(&Image::builder().icon_name(ico).pixel_size(16).build());
-        r.append(&Label::builder().label(txt).css_classes(["wifi-row-title"]).xalign(0.0).hexpand(true).build());
+        r.append(
+            &Label::builder()
+                .label(txt)
+                .css_classes(["wifi-row-title"])
+                .xalign(0.0)
+                .hexpand(true)
+                .build(),
+        );
         c2.append(&r);
     }
     pane.append(&wrap_squircle_card(&c2, WIFI_CARD_SQUIRCLE_RADIUS));
@@ -1625,15 +2328,34 @@ fn build_live_speech_pane(cfg: &Rc<RefCell<AccessibilityConfig>>) -> ScrolledWin
 
 fn build_personal_voice_pane() -> ScrolledWindow {
     let (scrolled, pane) = make_scrolled_pane();
-    let hdr = GtkBox::builder().orientation(Orientation::Horizontal).spacing(8).build();
-    hdr.append(&Label::builder().label("Voz personal").css_classes(["wifi-section-title"]).xalign(0.0).build());
+    let hdr = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .build();
+    hdr.append(
+        &Label::builder()
+            .label("Voz personal")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .build(),
+    );
     hdr.append(&make_pending_badge());
     pane.append(&hdr);
     pane.append(&Label::builder().label("Voz personal es una manera sencilla y segura de crear una voz sintetizada local que suene como tú.").css_classes(["card-section-sub"]).wrap(true).xalign(0.0).build());
     let c1 = GtkBox::builder().orientation(Orientation::Vertical).build();
-    c1.append(&Label::builder().label("Sin voces personales").css_classes(["vpn-empty-label"]).halign(Align::Center).build());
+    c1.append(
+        &Label::builder()
+            .label("Sin voces personales")
+            .css_classes(["vpn-empty-label"])
+            .halign(Align::Center)
+            .build(),
+    );
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    let r = GtkBox::builder().orientation(Orientation::Horizontal).halign(Align::End).css_classes(["wifi-pref-row"]).build();
+    let r = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .halign(Align::End)
+        .css_classes(["wifi-pref-row"])
+        .build();
     let (bw, _) = make_squircle_button("Crear una voz personal", false, None);
     r.append(&bw);
     c1.append(&r);
@@ -1644,10 +2366,31 @@ fn build_personal_voice_pane() -> ScrolledWindow {
 fn build_vocal_shortcuts_pane() -> ScrolledWindow {
     let (scrolled, pane) = make_scrolled_pane();
     let card = GtkBox::builder().orientation(Orientation::Vertical).build();
-    let r = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).css_classes(["wifi-pref-row"]).build();
-    r.append(&make_squircle_colored_badge(30, "audio-input-microphone-symbolic", 16, WIFI_BADGE_SQUIRCLE_RADIUS, DARK_TOP, DARK_BOT));
-    let col = GtkBox::builder().orientation(Orientation::Vertical).spacing(2).hexpand(true).build();
-    col.append(&Label::builder().label("Atajos de voz").css_classes(["wifi-row-title"]).xalign(0.0).build());
+    let r = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["wifi-pref-row"])
+        .build();
+    r.append(&make_squircle_colored_badge(
+        30,
+        "audio-input-microphone-symbolic",
+        16,
+        WIFI_BADGE_SQUIRCLE_RADIUS,
+        DARK_TOP,
+        DARK_BOT,
+    ));
+    let col = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .build();
+    col.append(
+        &Label::builder()
+            .label("Atajos de voz")
+            .css_classes(["wifi-row-title"])
+            .xalign(0.0)
+            .build(),
+    );
     col.append(&Label::builder().label("Enséñale a tu equipo a reconocer una frase personalizada que puedes decir para ejecutar rápidamente una acción.").css_classes(["card-section-sub"]).wrap(true).xalign(0.0).build());
     r.append(&col);
     r.append(&make_pending_badge());
@@ -1795,9 +2538,23 @@ fn a11y_switch_row<F: Fn(bool) + 'static>(
         .hexpand(true)
         .valign(Align::Center)
         .build();
-    col.append(&Label::builder().label(title).css_classes(["wifi-row-title"]).wrap(true).xalign(0.0).build());
+    col.append(
+        &Label::builder()
+            .label(title)
+            .css_classes(["wifi-row-title"])
+            .wrap(true)
+            .xalign(0.0)
+            .build(),
+    );
     if let Some(sub) = subtitle {
-        col.append(&Label::builder().label(sub).css_classes(["card-section-sub"]).wrap(true).xalign(0.0).build());
+        col.append(
+            &Label::builder()
+                .label(sub)
+                .css_classes(["card-section-sub"])
+                .wrap(true)
+                .xalign(0.0)
+                .build(),
+        );
     }
     row.append(&col);
     if pending {
@@ -1827,19 +2584,36 @@ fn a11y_selector_row<F: Fn(usize) + 'static>(
         .spacing(12)
         .css_classes(["wifi-pref-row"])
         .build();
-    row.append(&Label::builder().label(title).css_classes(["wifi-row-title"]).wrap(true).xalign(0.0).hexpand(true).build());
+    row.append(
+        &Label::builder()
+            .label(title)
+            .css_classes(["wifi-row-title"])
+            .wrap(true)
+            .xalign(0.0)
+            .hexpand(true)
+            .build(),
+    );
 
     let selected = Rc::new(Cell::new(initial_idx.min(options.len().saturating_sub(1))));
     let opts: Vec<String> = options.iter().map(|s| s.to_string()).collect();
     let cb = Rc::new(on_select);
 
-    let inner = GtkBox::builder().orientation(Orientation::Horizontal).spacing(6).valign(Align::Center).build();
+    let inner = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(6)
+        .valign(Align::Center)
+        .build();
     let cur_lbl = Label::builder()
         .label(opts.get(selected.get()).map(String::as_str).unwrap_or(""))
         .css_classes(["card-section-sub"])
         .build();
     inner.append(&cur_lbl);
-    inner.append(&Image::builder().icon_name("pan-down-symbolic").pixel_size(12).build());
+    inner.append(
+        &Image::builder()
+            .icon_name("pan-down-symbolic")
+            .pixel_size(12)
+            .build(),
+    );
 
     let btn = MenuButton::builder()
         .child(&inner)
@@ -1848,7 +2622,10 @@ fn a11y_selector_row<F: Fn(usize) + 'static>(
         .css_classes(["fw-rule-action-btn"])
         .valign(Align::Center)
         .build();
-    let pop = Popover::builder().has_arrow(false).css_classes(["wifi-macos-popover"]).build();
+    let pop = Popover::builder()
+        .has_arrow(false)
+        .css_classes(["wifi-macos-popover"])
+        .build();
     btn.set_popover(Some(&pop));
 
     let rebuild: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
@@ -1860,7 +2637,14 @@ fn a11y_selector_row<F: Fn(usize) + 'static>(
         let cb_c = cb;
         let self_ref = rebuild.clone();
         Rc::new(move || {
-            let mbox = GtkBox::builder().orientation(Orientation::Vertical).spacing(1).margin_top(4).margin_bottom(4).margin_start(4).margin_end(4).build();
+            let mbox = GtkBox::builder()
+                .orientation(Orientation::Vertical)
+                .spacing(1)
+                .margin_top(4)
+                .margin_bottom(4)
+                .margin_start(4)
+                .margin_end(4)
+                .build();
             let cur = sel_c.get();
             for (idx, opt) in opts_c.iter().enumerate() {
                 let (w, b) = make_popover_action_row(opt, true, (idx == cur).then_some("✓"));
@@ -1904,9 +2688,23 @@ fn a11y_slider_row<F: Fn(f64) + 'static>(
         .spacing(12)
         .css_classes(["wifi-pref-row"])
         .build();
-    row.append(&Label::builder().label(title).css_classes(["wifi-row-title"]).xalign(0.0).hexpand(true).build());
+    row.append(
+        &Label::builder()
+            .label(title)
+            .css_classes(["wifi-row-title"])
+            .xalign(0.0)
+            .hexpand(true)
+            .build(),
+    );
     let step = ((max_val - min_val) / 20.0).max(0.05);
-    let adj = Adjustment::new(initial.clamp(min_val, max_val), min_val, max_val, step, step, 0.0);
+    let adj = Adjustment::new(
+        initial.clamp(min_val, max_val),
+        min_val,
+        max_val,
+        step,
+        step,
+        0.0,
+    );
     let slider = Scale::builder()
         .orientation(Orientation::Horizontal)
         .adjustment(&adj)
@@ -1932,9 +2730,14 @@ mod tests {
         assert!(is_accessibility_subpanel("a11y-voiceover"));
         assert!(is_accessibility_subpanel("a11y-shortcut"));
         assert!(!is_accessibility_subpanel("wifi"));
-        assert_eq!(accessibility_subpanel_title("a11y-display"), Some("Pantalla"));
-        assert_eq!(accessibility_subpanel_title("a11y-pointer"), Some("Control del puntero"));
+        assert_eq!(
+            accessibility_subpanel_title("a11y-display"),
+            Some("Pantalla")
+        );
+        assert_eq!(
+            accessibility_subpanel_title("a11y-pointer"),
+            Some("Control del puntero")
+        );
         assert_eq!(SHORTCUT_FEATURE_NAMES.len(), 20);
     }
 }
-

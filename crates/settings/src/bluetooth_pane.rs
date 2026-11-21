@@ -1,7 +1,7 @@
 use crate::wifi_pane::{
     detail_kv_row, make_help_circle_button, make_squircle_badge, make_squircle_button,
-    wrap_squircle_card, wrap_squircle_round_control, RoundControlStyle,
-    WIFI_BADGE_SQUIRCLE_RADIUS, WIFI_CARD_SQUIRCLE_RADIUS,
+    wrap_squircle_card, wrap_squircle_round_control, RoundControlStyle, WIFI_BADGE_SQUIRCLE_RADIUS,
+    WIFI_CARD_SQUIRCLE_RADIUS,
 };
 use gtk4::prelude::*;
 use gtk4::{
@@ -252,8 +252,7 @@ pub fn create_bluetooth_pane(parent_window: &ApplicationWindow) -> (ScrolledWind
     let discovery_active = Rc::new(Cell::new(false));
     let refresh_gen = Rc::new(Cell::new(0u64));
     let refresh_slot: Rc<RefCell<Option<Rc<dyn Fn(bool)>>>> = Rc::new(RefCell::new(None));
-    let rendered_my_devices: Rc<RefCell<Vec<BtDeviceEntry>>> =
-        Rc::new(RefCell::new(Vec::new()));
+    let rendered_my_devices: Rc<RefCell<Vec<BtDeviceEntry>>> = Rc::new(RefCell::new(Vec::new()));
     let rendered_nearby_devices: Rc<RefCell<Vec<BtDeviceEntry>>> =
         Rc::new(RefCell::new(Vec::new()));
     let remembered_my_devices: Rc<RefCell<HashMap<String, BtDeviceEntry>>> =
@@ -322,9 +321,9 @@ pub fn create_bluetooth_pane(parent_window: &ApplicationWindow) -> (ScrolledWind
                     remembered.insert(dev.path.clone(), dev.clone());
                 }
 
-                let remembered_paths: HashSet<String> =
-                    remembered.keys().cloned().collect();
-                snap.nearby_devices.retain(|dev| !remembered_paths.contains(&dev.path));
+                let remembered_paths: HashSet<String> = remembered.keys().cloned().collect();
+                snap.nearby_devices
+                    .retain(|dev| !remembered_paths.contains(&dev.path));
                 snap.my_devices = remembered.values().cloned().collect();
                 snap.my_devices.sort_by(|a, b| {
                     b.connected
@@ -484,9 +483,7 @@ pub fn create_bluetooth_pane(parent_window: &ApplicationWindow) -> (ScrolledWind
         .has_arrow(false)
         .css_classes(["wifi-macos-popover"])
         .build();
-    let help_pop_box = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .build();
+    let help_pop_box = GtkBox::builder().orientation(Orientation::Vertical).build();
     let help_lbl_pop = Label::builder()
         .label("• Pasa el cursor sobre un dispositivo para conectarte o desconectarte rápidamente.\n• Pulsa ⓘ en «Mis dispositivos» para consultar batería, confianza automática o olvidar el dispositivo.\n• Al mantener este panel abierto, el equipo permanece visible para emparejar nuevos accesorios cercanos.")
         .wrap(true)
@@ -713,7 +710,8 @@ fn populate_bluetooth_devices_card(
                 .valign(Align::Center)
                 .tooltip_text("Información y opciones del dispositivo")
                 .build();
-            let info_wrap = wrap_squircle_round_control(&info_btn, 20, RoundControlStyle::CircleOutline);
+            let info_wrap =
+                wrap_squircle_round_control(&info_btn, 20, RoundControlStyle::CircleOutline);
             right_controls.append(&info_wrap);
 
             let win_d = parent_window.clone();
@@ -722,13 +720,7 @@ fn populate_bluetooth_devices_card(
             let rel_d = trigger_reload.clone();
             let remembered_d = remembered_my_devices.clone();
             info_btn.connect_clicked(move |_| {
-                show_bt_device_details_dialog(
-                    &win_d,
-                    &dev_d,
-                    &ban_d,
-                    &rel_d,
-                    &remembered_d,
-                );
+                show_bt_device_details_dialog(&win_d, &dev_d, &ban_d, &rel_d, &remembered_d);
             });
         }
 
@@ -1004,33 +996,60 @@ pub(crate) fn resolve_bt_icon_and_type(raw_icon: &str, name: &str) -> (String, S
         || name_l.contains("wf-")
         || name_l.contains("beats")
     {
-        ("audio-headset-symbolic".to_string(), "Auriculares".to_string())
-    } else if icon_l.contains("audio-card") || icon_l.contains("speaker") || name_l.contains("speaker") {
+        (
+            "audio-headset-symbolic".to_string(),
+            "Auriculares".to_string(),
+        )
+    } else if icon_l.contains("audio-card")
+        || icon_l.contains("speaker")
+        || name_l.contains("speaker")
+    {
         ("audio-speakers-symbolic".to_string(), "Altavoz".to_string())
-    } else if icon_l.contains("input-keyboard") || name_l.contains("keyboard") || name_l.contains("teclado") {
+    } else if icon_l.contains("input-keyboard")
+        || name_l.contains("keyboard")
+        || name_l.contains("teclado")
+    {
         ("input-keyboard-symbolic".to_string(), "Teclado".to_string())
-    } else if icon_l.contains("input-mouse") || name_l.contains("mouse") || name_l.contains("ratón") || name_l.contains("raton") {
+    } else if icon_l.contains("input-mouse")
+        || name_l.contains("mouse")
+        || name_l.contains("ratón")
+        || name_l.contains("raton")
+    {
         ("input-mouse-symbolic".to_string(), "Ratón".to_string())
-    } else if icon_l.contains("input-gaming") || name_l.contains("controller") || name_l.contains("gamepad") || name_l.contains("dualsense") || name_l.contains("xbox") {
+    } else if icon_l.contains("input-gaming")
+        || name_l.contains("controller")
+        || name_l.contains("gamepad")
+        || name_l.contains("dualsense")
+        || name_l.contains("xbox")
+    {
         ("input-gaming-symbolic".to_string(), "Mando".to_string())
-    } else if icon_l.contains("phone") || name_l.contains("iphone") || name_l.contains("pixel") || name_l.contains("galaxy") {
+    } else if icon_l.contains("phone")
+        || name_l.contains("iphone")
+        || name_l.contains("pixel")
+        || name_l.contains("galaxy")
+    {
         ("phone-symbolic".to_string(), "Teléfono".to_string())
-    } else if icon_l.contains("computer") || name_l.contains("macbook") || name_l.contains("laptop") {
+    } else if icon_l.contains("computer") || name_l.contains("macbook") || name_l.contains("laptop")
+    {
         ("computer-symbolic".to_string(), "Ordenador".to_string())
     } else {
-        ("bluetooth-active-symbolic".to_string(), "Dispositivo Bluetooth".to_string())
+        (
+            "bluetooth-active-symbolic".to_string(),
+            "Dispositivo Bluetooth".to_string(),
+        )
     }
 }
 
-pub(crate) fn classify_bluetooth_devices(raw_devices: Vec<BtDeviceEntry>) -> (Vec<BtDeviceEntry>, Vec<BtDeviceEntry>) {
+pub(crate) fn classify_bluetooth_devices(
+    raw_devices: Vec<BtDeviceEntry>,
+) -> (Vec<BtDeviceEntry>, Vec<BtDeviceEntry>) {
     let mut my_devices = Vec::new();
     let mut nearby_devices = Vec::new();
 
     for dev in raw_devices {
         if dev.paired || dev.connected {
             my_devices.push(dev);
-        } else if dev.rssi.is_some()
-            || (!dev.address.trim().is_empty() && dev.name != dev.address)
+        } else if dev.rssi.is_some() || (!dev.address.trim().is_empty() && dev.name != dev.address)
         {
             nearby_devices.push(dev);
         }
@@ -1082,7 +1101,10 @@ async fn collect_bluetooth_snapshot() -> BluetoothSnapshot {
 
     for (path, ifaces) in &objects {
         if let Some(ap) = ifaces.get("org.bluez.Adapter1") {
-            let addr = ap.get("Address").and_then(extract_string).unwrap_or_default();
+            let addr = ap
+                .get("Address")
+                .and_then(extract_string)
+                .unwrap_or_default();
             let name = ap
                 .get("Name")
                 .and_then(extract_string)
@@ -1126,7 +1148,10 @@ async fn collect_bluetooth_snapshot() -> BluetoothSnapshot {
             continue;
         }
         if let Some(dp) = ifaces.get("org.bluez.Device1") {
-            let address = dp.get("Address").and_then(extract_string).unwrap_or_default();
+            let address = dp
+                .get("Address")
+                .and_then(extract_string)
+                .unwrap_or_default();
             let name = dp
                 .get("Name")
                 .or_else(|| dp.get("Alias"))
@@ -1212,27 +1237,25 @@ async fn ensure_adapter_discovering(enable: bool) -> Result<(), String> {
         )
         .await;
     if enable && !discovering {
-        conn
-            .call_method(
-                Some("org.bluez"),
-                adapter_path.as_str(),
-                Some("org.bluez.Adapter1"),
-                "StartDiscovery",
-                &(),
-            )
-            .await
-            .map_err(|e| e.to_string())?;
+        conn.call_method(
+            Some("org.bluez"),
+            adapter_path.as_str(),
+            Some("org.bluez.Adapter1"),
+            "StartDiscovery",
+            &(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
     } else if !enable && discovering {
-        conn
-            .call_method(
-                Some("org.bluez"),
-                adapter_path.as_str(),
-                Some("org.bluez.Adapter1"),
-                "StopDiscovery",
-                &(),
-            )
-            .await
-            .map_err(|e| e.to_string())?;
+        conn.call_method(
+            Some("org.bluez"),
+            adapter_path.as_str(),
+            Some("org.bluez.Adapter1"),
+            "StopDiscovery",
+            &(),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -1253,9 +1276,15 @@ async fn set_adapter_powered(adapter_path: &str, powered: bool) -> Result<(), St
 
 async fn connect_bt_device(path: &str) -> Result<(), String> {
     let conn = Connection::system().await.map_err(|e| e.to_string())?;
-    conn.call_method(Some("org.bluez"), path, Some("org.bluez.Device1"), "Connect", &())
-        .await
-        .map_err(|e| e.to_string())?;
+    conn.call_method(
+        Some("org.bluez"),
+        path,
+        Some("org.bluez.Device1"),
+        "Connect",
+        &(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1289,9 +1318,15 @@ async fn set_device_trusted(path: &str, trusted: bool) -> Result<(), String> {
 
 async fn pair_and_connect_bt_device(path: &str) -> Result<(), String> {
     let conn = Connection::system().await.map_err(|e| e.to_string())?;
-    conn.call_method(Some("org.bluez"), path, Some("org.bluez.Device1"), "Pair", &())
-        .await
-        .map_err(|e| e.to_string())?;
+    conn.call_method(
+        Some("org.bluez"),
+        path,
+        Some("org.bluez.Device1"),
+        "Pair",
+        &(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     let _ = set_device_trusted(path, true).await;
     connect_bt_device(path).await
 }

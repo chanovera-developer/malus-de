@@ -1,4 +1,6 @@
-use malus_de_render::dbus_menu::{clean_menu_label, normalize_app_id, DbusMenuService, RegisteredMenu};
+use malus_de_render::dbus_menu::{
+    clean_menu_label, normalize_app_id, DbusMenuService, RegisteredMenu,
+};
 
 #[test]
 fn test_dbus_menu_label_cleaning_and_normalization() {

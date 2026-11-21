@@ -7,8 +7,8 @@ pub mod apps;
 pub mod config;
 pub mod crash;
 pub mod ipc;
-pub mod theme;
 pub mod logging;
+pub mod theme;
 pub mod wayland;
 
 /// Detecta si el locale activo del sistema corresponde a idioma español (`es_*`).
@@ -131,4 +131,3 @@ mod tests {
         );
     }
 }
-

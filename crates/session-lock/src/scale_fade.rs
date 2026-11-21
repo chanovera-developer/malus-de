@@ -102,4 +102,3 @@ impl ScaleFadeBox {
         self.queue_draw();
     }
 }
-

@@ -217,18 +217,15 @@ pub fn register_general_panes(
     stack.add_named(&hub_pane, Some("about"));
 
     // 2. "Información" (General02.png)
-    let (info_pane, refresh_info) =
-        build_info_subpane(parent_window, &sys_snap, &navigate);
+    let (info_pane, refresh_info) = build_info_subpane(parent_window, &sys_snap, &navigate);
     stack.add_named(&info_pane, Some("general-info"));
 
     // 3. "Actualización de software" (General03.png)
-    let (upd_pane, refresh_upd) =
-        build_software_update_subpane(parent_window, &prefs, &sys_snap);
+    let (upd_pane, refresh_upd) = build_software_update_subpane(parent_window, &prefs, &sys_snap);
     stack.add_named(&upd_pane, Some("general-update"));
 
     // 4. "Almacenamiento" (General04.png)
-    let (stor_pane, refresh_stor) =
-        build_storage_subpane(parent_window, &prefs, &sys_snap);
+    let (stor_pane, refresh_stor) = build_storage_subpane(parent_window, &prefs, &sys_snap);
     stack.add_named(&stor_pane, Some("general-storage"));
 
     // 5. "AppleCare y garantía" (General01 row -> stub con etiqueta por implementar)
@@ -251,28 +248,23 @@ pub fn register_general_panes(
     stack.add_named(&autofill_pane, Some("general-autofill"));
 
     // 8. "Compartir" (General07.png)
-    let (sharing_pane, refresh_sharing) =
-        build_sharing_subpane(parent_window, &sys_snap);
+    let (sharing_pane, refresh_sharing) = build_sharing_subpane(parent_window, &sys_snap);
     stack.add_named(&sharing_pane, Some("general-sharing"));
 
     // 9. "Disco de arranque" (General08.png)
-    let (boot_pane, refresh_boot) =
-        build_startup_disk_subpane(parent_window, &sys_snap);
+    let (boot_pane, refresh_boot) = build_startup_disk_subpane(parent_window, &sys_snap);
     stack.add_named(&boot_pane, Some("general-startup-disk"));
 
     // 10. "Elementos de inicio y extensiones" (General09.png & General10.png)
-    let (login_pane, refresh_login) =
-        build_login_items_subpane(parent_window);
+    let (login_pane, refresh_login) = build_login_items_subpane(parent_window);
     stack.add_named(&login_pane, Some("general-login-items"));
 
     // 11. "Fecha y hora" (General11.png)
-    let (dt_pane, refresh_dt) =
-        build_datetime_subpane(parent_window, &prefs, &sys_snap);
+    let (dt_pane, refresh_dt) = build_datetime_subpane(parent_window, &prefs, &sys_snap);
     stack.add_named(&dt_pane, Some("general-datetime"));
 
     // 12. "Idioma y región" (General12.png)
-    let (loc_pane, refresh_loc) =
-        build_locale_subpane(parent_window, &prefs);
+    let (loc_pane, refresh_loc) = build_locale_subpane(parent_window, &prefs);
     stack.add_named(&loc_pane, Some("general-locale"));
 
     // 13. "Time Machine"
@@ -401,14 +393,8 @@ fn build_general_hub_pane(navigate: &Rc<dyn Fn(&str)>) -> ScrolledWindow {
         .halign(Align::Center)
         .css_classes(["gen-hero-card"])
         .build();
-    let hero_badge = make_squircle_colored_badge(
-        52,
-        "emblem-system-symbolic",
-        28,
-        18.0,
-        GRAY_TOP,
-        GRAY_BOT,
-    );
+    let hero_badge =
+        make_squircle_colored_badge(52, "emblem-system-symbolic", 28, 18.0, GRAY_TOP, GRAY_BOT);
     hero_badge.set_halign(Align::Center);
     hero_box.append(&hero_badge);
     hero_box.append(
@@ -428,16 +414,24 @@ fn build_general_hub_pane(navigate: &Rc<dyn Fn(&str)>) -> ScrolledWindow {
             .halign(Align::Center)
             .build(),
     );
-    let hero_wrap_box = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .build();
+    let hero_wrap_box = GtkBox::builder().orientation(Orientation::Vertical).build();
     hero_wrap_box.append(&hero_box);
-    pane.append(&wrap_squircle_card(&hero_wrap_box, WIFI_CARD_SQUIRCLE_RADIUS));
+    pane.append(&wrap_squircle_card(
+        &hero_wrap_box,
+        WIFI_CARD_SQUIRCLE_RADIUS,
+    ));
 
     // Grupo 1: Información / Actualización de software / Almacenamiento
     let g1 = GtkBox::builder().orientation(Orientation::Vertical).build();
     g1.append(&build_hub_nav_row(
-        make_squircle_colored_badge(28, "computer-symbolic", 15, WIFI_BADGE_SQUIRCLE_RADIUS, GRAY_TOP, GRAY_BOT),
+        make_squircle_colored_badge(
+            28,
+            "computer-symbolic",
+            15,
+            WIFI_BADGE_SQUIRCLE_RADIUS,
+            GRAY_TOP,
+            GRAY_BOT,
+        ),
         "Información",
         false,
         "general-info",
@@ -445,7 +439,14 @@ fn build_general_hub_pane(navigate: &Rc<dyn Fn(&str)>) -> ScrolledWindow {
     ));
     g1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
     g1.append(&build_hub_nav_row(
-        make_squircle_colored_badge(28, "emblem-system-symbolic", 15, WIFI_BADGE_SQUIRCLE_RADIUS, GRAY_TOP, GRAY_BOT),
+        make_squircle_colored_badge(
+            28,
+            "emblem-system-symbolic",
+            15,
+            WIFI_BADGE_SQUIRCLE_RADIUS,
+            GRAY_TOP,
+            GRAY_BOT,
+        ),
         "Actualización de software",
         false,
         "general-update",
@@ -453,7 +454,14 @@ fn build_general_hub_pane(navigate: &Rc<dyn Fn(&str)>) -> ScrolledWindow {
     ));
     g1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
     g1.append(&build_hub_nav_row(
-        make_squircle_colored_badge(28, "drive-harddisk-symbolic", 15, WIFI_BADGE_SQUIRCLE_RADIUS, GRAY_TOP, GRAY_BOT),
+        make_squircle_colored_badge(
+            28,
+            "drive-harddisk-symbolic",
+            15,
+            WIFI_BADGE_SQUIRCLE_RADIUS,
+            GRAY_TOP,
+            GRAY_BOT,
+        ),
         "Almacenamiento",
         false,
         "general-storage",
@@ -464,7 +472,14 @@ fn build_general_hub_pane(navigate: &Rc<dyn Fn(&str)>) -> ScrolledWindow {
     // Grupo 2: AppleCare y garantía
     let g2 = GtkBox::builder().orientation(Orientation::Vertical).build();
     g2.append(&build_hub_nav_row(
-        make_squircle_colored_badge(28, "emblem-favorite-symbolic", 15, WIFI_BADGE_SQUIRCLE_RADIUS, RED_TOP, RED_BOT),
+        make_squircle_colored_badge(
+            28,
+            "emblem-favorite-symbolic",
+            15,
+            WIFI_BADGE_SQUIRCLE_RADIUS,
+            RED_TOP,
+            RED_BOT,
+        ),
         "AppleCare y garantía",
         true,
         "general-warranty",
@@ -475,7 +490,12 @@ fn build_general_hub_pane(navigate: &Rc<dyn Fn(&str)>) -> ScrolledWindow {
     // Grupo 3: AirDrop y continuidad
     let g3 = GtkBox::builder().orientation(Orientation::Vertical).build();
     g3.append(&build_hub_nav_row(
-        make_squircle_badge(28, "network-wireless-hotspot-symbolic", 15, WIFI_BADGE_SQUIRCLE_RADIUS),
+        make_squircle_badge(
+            28,
+            "network-wireless-hotspot-symbolic",
+            15,
+            WIFI_BADGE_SQUIRCLE_RADIUS,
+        ),
         "AirDrop y continuidad",
         true,
         "general-airdrop",
@@ -485,14 +505,70 @@ fn build_general_hub_pane(navigate: &Rc<dyn Fn(&str)>) -> ScrolledWindow {
 
     // Grupo 4: Autorrelleno, Compartir, Disco de arranque, Elementos de inicio, Fecha y hora, Idioma y región, Time Machine
     let g4 = GtkBox::builder().orientation(Orientation::Vertical).build();
-    let g4_items: [(&str, (f64, f64, f64), (f64, f64, f64), &str, bool, &'static str); 7] = [
-        ("dialog-password-symbolic", GRAY_TOP, GRAY_BOT, "Autorrelleno y contraseñas", false, "general-autofill"),
-        ("folder-publicshare-symbolic", GRAY_TOP, GRAY_BOT, "Compartir", false, "general-sharing"),
-        ("drive-harddisk-symbolic", GRAY_TOP, GRAY_BOT, "Disco de arranque", false, "general-startup-disk"),
-        ("view-list-symbolic", GRAY_TOP, GRAY_BOT, "Elementos de inicio y extensiones", false, "general-login-items"),
-        ("x-office-calendar-symbolic", (0.259, 0.565, 0.976), (0.235, 0.518, 0.949), "Fecha y hora", false, "general-datetime"),
-        ("preferences-desktop-locale-symbolic", (0.259, 0.565, 0.976), (0.235, 0.518, 0.949), "Idioma y región", false, "general-locale"),
-        ("document-open-recent-symbolic", TEAL_TOP, TEAL_BOT, "Time Machine", true, "general-timemachine"),
+    let g4_items: [(
+        &str,
+        (f64, f64, f64),
+        (f64, f64, f64),
+        &str,
+        bool,
+        &'static str,
+    ); 7] = [
+        (
+            "dialog-password-symbolic",
+            GRAY_TOP,
+            GRAY_BOT,
+            "Autorrelleno y contraseñas",
+            false,
+            "general-autofill",
+        ),
+        (
+            "folder-publicshare-symbolic",
+            GRAY_TOP,
+            GRAY_BOT,
+            "Compartir",
+            false,
+            "general-sharing",
+        ),
+        (
+            "drive-harddisk-symbolic",
+            GRAY_TOP,
+            GRAY_BOT,
+            "Disco de arranque",
+            false,
+            "general-startup-disk",
+        ),
+        (
+            "view-list-symbolic",
+            GRAY_TOP,
+            GRAY_BOT,
+            "Elementos de inicio y extensiones",
+            false,
+            "general-login-items",
+        ),
+        (
+            "x-office-calendar-symbolic",
+            (0.259, 0.565, 0.976),
+            (0.235, 0.518, 0.949),
+            "Fecha y hora",
+            false,
+            "general-datetime",
+        ),
+        (
+            "preferences-desktop-locale-symbolic",
+            (0.259, 0.565, 0.976),
+            (0.235, 0.518, 0.949),
+            "Idioma y región",
+            false,
+            "general-locale",
+        ),
+        (
+            "document-open-recent-symbolic",
+            TEAL_TOP,
+            TEAL_BOT,
+            "Time Machine",
+            true,
+            "general-timemachine",
+        ),
     ];
     for (idx, (ico, top, bot, title, pending, target)) in g4_items.into_iter().enumerate() {
         if idx > 0 {
@@ -511,7 +587,14 @@ fn build_general_hub_pane(navigate: &Rc<dyn Fn(&str)>) -> ScrolledWindow {
     // Grupo 5: Admón. de dispositivos
     let g5 = GtkBox::builder().orientation(Orientation::Vertical).build();
     g5.append(&build_hub_nav_row(
-        make_squircle_colored_badge(28, "security-high-symbolic", 15, WIFI_BADGE_SQUIRCLE_RADIUS, GRAY_TOP, GRAY_BOT),
+        make_squircle_colored_badge(
+            28,
+            "security-high-symbolic",
+            15,
+            WIFI_BADGE_SQUIRCLE_RADIUS,
+            GRAY_TOP,
+            GRAY_BOT,
+        ),
         "Admón. de dispositivos",
         true,
         "general-mdm",
@@ -522,7 +605,14 @@ fn build_general_hub_pane(navigate: &Rc<dyn Fn(&str)>) -> ScrolledWindow {
     // Grupo 6: Transferir o restablecer
     let g6 = GtkBox::builder().orientation(Orientation::Vertical).build();
     g6.append(&build_hub_nav_row(
-        make_squircle_colored_badge(28, "view-refresh-symbolic", 15, WIFI_BADGE_SQUIRCLE_RADIUS, GRAY_TOP, GRAY_BOT),
+        make_squircle_colored_badge(
+            28,
+            "view-refresh-symbolic",
+            15,
+            WIFI_BADGE_SQUIRCLE_RADIUS,
+            GRAY_TOP,
+            GRAY_BOT,
+        ),
         "Transferir o restablecer",
         false,
         "general-reset",
@@ -623,7 +713,8 @@ fn build_info_subpane(
         .spacing(12)
         .css_classes(["wifi-pref-row"])
         .build();
-    let os_badge = make_squircle_badge(30, "emblem-system-symbolic", 16, WIFI_BADGE_SQUIRCLE_RADIUS);
+    let os_badge =
+        make_squircle_badge(30, "emblem-system-symbolic", 16, WIFI_BADGE_SQUIRCLE_RADIUS);
     let os_name_lbl = Label::builder()
         .label("Malus DE · Fedora Linux")
         .css_classes(["wifi-row-title"])
@@ -686,7 +777,8 @@ fn build_info_subpane(
         .halign(Align::End)
         .css_classes(["wifi-pref-row"])
         .build();
-    let (disp_btn_wrap, disp_btn) = make_squircle_button("Configuración de Pantallas...", false, None);
+    let (disp_btn_wrap, disp_btn) =
+        make_squircle_button("Configuración de Pantallas...", false, None);
     let nav_disp = navigate.clone();
     disp_btn.connect_clicked(move |_| nav_disp("displays"));
     disp_footer.append(&disp_btn_wrap);
@@ -733,7 +825,8 @@ fn build_info_subpane(
         .halign(Align::End)
         .css_classes(["wifi-pref-row"])
         .build();
-    let (stor_btn_wrap, stor_btn) = make_squircle_button("Configuración de almacenamiento...", false, None);
+    let (stor_btn_wrap, stor_btn) =
+        make_squircle_button("Configuración de almacenamiento...", false, None);
     let nav_stor = navigate.clone();
     stor_btn.connect_clicked(move |_| nav_stor("general-storage"));
     stor_footer.append(&stor_btn_wrap);
@@ -808,7 +901,12 @@ fn build_info_subpane(
                     .spacing(12)
                     .css_classes(["wifi-pref-row"])
                     .build();
-                r.append(&Image::builder().icon_name("video-display-symbolic").pixel_size(20).build());
+                r.append(
+                    &Image::builder()
+                        .icon_name("video-display-symbolic")
+                        .pixel_size(20)
+                        .build(),
+                );
                 r.append(
                     &Label::builder()
                         .label(dname)
@@ -817,7 +915,12 @@ fn build_info_subpane(
                         .hexpand(true)
                         .build(),
                 );
-                r.append(&Label::builder().label(dres).css_classes(["card-section-sub"]).build());
+                r.append(
+                    &Label::builder()
+                        .label(dres)
+                        .css_classes(["card-section-sub"])
+                        .build(),
+                );
                 d_box.append(&r);
             }
         })
@@ -1005,7 +1108,8 @@ fn build_software_update_subpane(
         .orientation(Orientation::Horizontal)
         .halign(Align::End)
         .build();
-    let (help_wrap, _) = make_help_circle_button("Comprueba actualizaciones mediante dnf check-update");
+    let (help_wrap, _) =
+        make_help_circle_button("Comprueba actualizaciones mediante dnf check-update");
     help_row.append(&help_wrap);
     pane.append(&help_row);
 
@@ -1112,7 +1216,10 @@ fn build_software_update_subpane(
         let snap_c = sys_snap.clone();
         Rc::new(move || {
             let s = snap_c.borrow();
-            ver_c.set_label(&format!("{} · Kernel {}", s.os_pretty_name, s.kernel_version));
+            ver_c.set_label(&format!(
+                "{} · Kernel {}",
+                s.os_pretty_name, s.kernel_version
+            ));
         })
     };
     (scrolled, refresh)
@@ -1173,9 +1280,17 @@ fn build_storage_subpane(
         ("net-dot-gray", "Datos del sistema"),
         ("net-dot-green", "Sistema Linux"),
     ] {
-        let item = GtkBox::builder().orientation(Orientation::Horizontal).spacing(5).build();
+        let item = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(5)
+            .build();
         item.append(&Label::builder().label("●").css_classes([cls]).build());
-        item.append(&Label::builder().label(txt).css_classes(["card-section-sub"]).build());
+        item.append(
+            &Label::builder()
+                .label(txt)
+                .css_classes(["card-section-sub"])
+                .build(),
+        );
         legend.append(&item);
     }
     bar_card.append(&legend);
@@ -1197,9 +1312,26 @@ fn build_storage_subpane(
         .spacing(12)
         .css_classes(["wifi-pref-row"])
         .build();
-    trash_rec.append(&make_squircle_colored_badge(28, "user-trash-symbolic", 15, WIFI_BADGE_SQUIRCLE_RADIUS, GRAY_TOP, GRAY_BOT));
-    let tr_text = GtkBox::builder().orientation(Orientation::Vertical).spacing(2).hexpand(true).build();
-    tr_text.append(&Label::builder().label("Vaciar basurero automáticamente").css_classes(["wifi-row-title"]).xalign(0.0).build());
+    trash_rec.append(&make_squircle_colored_badge(
+        28,
+        "user-trash-symbolic",
+        15,
+        WIFI_BADGE_SQUIRCLE_RADIUS,
+        GRAY_TOP,
+        GRAY_BOT,
+    ));
+    let tr_text = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .build();
+    tr_text.append(
+        &Label::builder()
+            .label("Vaciar basurero automáticamente")
+            .css_classes(["wifi-row-title"])
+            .xalign(0.0)
+            .build(),
+    );
     tr_text.append(
         &Label::builder()
             .label("Puedes ahorrar espacio permitiendo que se eliminen automáticamente los elementos que llevan más de 30 días en el basurero.")
@@ -1251,12 +1383,35 @@ fn build_storage_subpane(
 
     // Categorías de usuario
     let cat_card = GtkBox::builder().orientation(Orientation::Vertical).build();
-    let (r_apps, l_apps) = storage_cat_row("system-software-install-symbolic", GRAY_TOP, GRAY_BOT, "Aplicaciones");
+    let (r_apps, l_apps) = storage_cat_row(
+        "system-software-install-symbolic",
+        GRAY_TOP,
+        GRAY_BOT,
+        "Aplicaciones",
+    );
     let (r_trash, l_trash) = storage_cat_row("user-trash-symbolic", GRAY_TOP, GRAY_BOT, "Basurero");
-    let (r_docs, l_docs) = storage_cat_row("folder-documents-symbolic", GRAY_TOP, GRAY_BOT, "Documentos");
-    let (r_phot, l_phot) = storage_cat_row("folder-pictures-symbolic", ORANGE_TOP, ORANGE_BOT, "Fotos e Imágenes");
-    let (r_down, l_down) = storage_cat_row("folder-download-symbolic", (0.259, 0.565, 0.976), (0.235, 0.518, 0.949), "Descargas");
-    for (idx, r) in [r_apps, r_trash, r_docs, r_phot, r_down].into_iter().enumerate() {
+    let (r_docs, l_docs) = storage_cat_row(
+        "folder-documents-symbolic",
+        GRAY_TOP,
+        GRAY_BOT,
+        "Documentos",
+    );
+    let (r_phot, l_phot) = storage_cat_row(
+        "folder-pictures-symbolic",
+        ORANGE_TOP,
+        ORANGE_BOT,
+        "Fotos e Imágenes",
+    );
+    let (r_down, l_down) = storage_cat_row(
+        "folder-download-symbolic",
+        (0.259, 0.565, 0.976),
+        (0.235, 0.518, 0.949),
+        "Descargas",
+    );
+    for (idx, r) in [r_apps, r_trash, r_docs, r_phot, r_down]
+        .into_iter()
+        .enumerate()
+    {
         if idx > 0 {
             cat_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
         }
@@ -1266,9 +1421,24 @@ fn build_storage_subpane(
 
     // Categorías del sistema
     let sys_card = GtkBox::builder().orientation(Orientation::Vertical).build();
-    let (r_usr, l_usr) = storage_cat_row("system-users-symbolic", GRAY_TOP, GRAY_BOT, "Otros usuarios y compartido");
-    let (r_os, l_os) = storage_cat_row("computer-symbolic", GRAY_TOP, GRAY_BOT, "Sistema Linux / Malus DE");
-    let (r_dat, l_dat) = storage_cat_row("view-more-symbolic", GRAY_TOP, GRAY_BOT, "Datos del sistema");
+    let (r_usr, l_usr) = storage_cat_row(
+        "system-users-symbolic",
+        GRAY_TOP,
+        GRAY_BOT,
+        "Otros usuarios y compartido",
+    );
+    let (r_os, l_os) = storage_cat_row(
+        "computer-symbolic",
+        GRAY_TOP,
+        GRAY_BOT,
+        "Sistema Linux / Malus DE",
+    );
+    let (r_dat, l_dat) = storage_cat_row(
+        "view-more-symbolic",
+        GRAY_TOP,
+        GRAY_BOT,
+        "Datos del sistema",
+    );
     sys_card.append(&r_usr);
     sys_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
     sys_card.append(&r_os);
@@ -1336,7 +1506,14 @@ fn storage_cat_row(
         .spacing(12)
         .css_classes(["wifi-pref-row"])
         .build();
-    r.append(&make_squircle_colored_badge(28, icon, 15, WIFI_BADGE_SQUIRCLE_RADIUS, top, bot));
+    r.append(&make_squircle_colored_badge(
+        28,
+        icon,
+        15,
+        WIFI_BADGE_SQUIRCLE_RADIUS,
+        top,
+        bot,
+    ));
     r.append(
         &Label::builder()
             .label(title)
@@ -1357,10 +1534,34 @@ fn draw_storage_bar(cr: &gtk4::cairo::Context, w: f64, h: f64, snap: &SystemInfo
     let dark = libadwaita::StyleManager::default().is_dark();
     let radius = 6.0;
     cr.new_sub_path();
-    cr.arc(w - radius, radius, radius, -std::f64::consts::FRAC_PI_2, 0.0);
-    cr.arc(w - radius, h - radius, radius, 0.0, std::f64::consts::FRAC_PI_2);
-    cr.arc(radius, h - radius, radius, std::f64::consts::FRAC_PI_2, std::f64::consts::PI);
-    cr.arc(radius, radius, radius, std::f64::consts::PI, 1.5 * std::f64::consts::PI);
+    cr.arc(
+        w - radius,
+        radius,
+        radius,
+        -std::f64::consts::FRAC_PI_2,
+        0.0,
+    );
+    cr.arc(
+        w - radius,
+        h - radius,
+        radius,
+        0.0,
+        std::f64::consts::FRAC_PI_2,
+    );
+    cr.arc(
+        radius,
+        h - radius,
+        radius,
+        std::f64::consts::FRAC_PI_2,
+        std::f64::consts::PI,
+    );
+    cr.arc(
+        radius,
+        radius,
+        radius,
+        std::f64::consts::PI,
+        1.5 * std::f64::consts::PI,
+    );
     cr.close_path();
     cr.clip();
 
@@ -1374,7 +1575,10 @@ fn draw_storage_bar(cr: &gtk4::cairo::Context, w: f64, h: f64, snap: &SystemInfo
 
     let total = snap.root_total_bytes.max(1) as f64;
     let segments = [
-        (snap.home_other_bytes + snap.docs_bytes + snap.photos_bytes + snap.downloads_bytes, (0.98, 0.24, 0.20)),
+        (
+            snap.home_other_bytes + snap.docs_bytes + snap.photos_bytes + snap.downloads_bytes,
+            (0.98, 0.24, 0.20),
+        ),
         (snap.apps_bytes, (1.0, 0.58, 0.0)),
         (snap.system_data_bytes, (0.42, 0.42, 0.45)),
         (snap.os_base_bytes, (0.20, 0.78, 0.35)),
@@ -1415,15 +1619,38 @@ fn build_airdrop_subpane(
 ) -> ScrolledWindow {
     let (scrolled, pane) = make_scrolled_pane();
 
-    let hdr = GtkBox::builder().orientation(Orientation::Horizontal).spacing(8).build();
-    hdr.append(&Label::builder().label("AirDrop").css_classes(["wifi-section-title"]).xalign(0.0).build());
+    let hdr = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .build();
+    hdr.append(
+        &Label::builder()
+            .label("AirDrop")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .build(),
+    );
     hdr.append(&make_pending_badge());
     pane.append(&hdr);
 
     let c1 = GtkBox::builder().orientation(Orientation::Vertical).build();
-    let r_ad = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).css_classes(["wifi-pref-row"]).build();
-    let ad_col = GtkBox::builder().orientation(Orientation::Vertical).spacing(2).hexpand(true).build();
-    ad_col.append(&Label::builder().label("AirDrop").css_classes(["wifi-row-title"]).xalign(0.0).build());
+    let r_ad = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["wifi-pref-row"])
+        .build();
+    let ad_col = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .build();
+    ad_col.append(
+        &Label::builder()
+            .label("AirDrop")
+            .css_classes(["wifi-row-title"])
+            .xalign(0.0)
+            .build(),
+    );
     ad_col.append(
         &Label::builder()
             .label("AirDrop te permite compartir instantáneamente con personas que están cerca. Puedes ser visible para recibir elementos de todos o sólo de tus contactos.")
@@ -1448,9 +1675,23 @@ fn build_airdrop_subpane(
     c1.append(&r_ad);
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 
-    let r_known = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).css_classes(["wifi-pref-row"]).build();
-    let kn_col = GtkBox::builder().orientation(Orientation::Vertical).spacing(2).hexpand(true).build();
-    kn_col.append(&Label::builder().label("Contactos de AirDrop conocidos").css_classes(["wifi-row-title"]).xalign(0.0).build());
+    let r_known = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["wifi-pref-row"])
+        .build();
+    let kn_col = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .build();
+    kn_col.append(
+        &Label::builder()
+            .label("Contactos de AirDrop conocidos")
+            .css_classes(["wifi-row-title"])
+            .xalign(0.0)
+            .build(),
+    );
     kn_col.append(
         &Label::builder()
             .label("Las personas con las que hayas compartido un código de un solo uso podrán encontrarte durante 30 días.")
@@ -1466,8 +1707,18 @@ fn build_airdrop_subpane(
     pane.append(&wrap_squircle_card(&c1, WIFI_CARD_SQUIRCLE_RADIUS));
 
     // Continuidad
-    let hdr2 = GtkBox::builder().orientation(Orientation::Horizontal).spacing(8).margin_top(6).build();
-    hdr2.append(&Label::builder().label("Continuidad").css_classes(["wifi-section-title"]).xalign(0.0).build());
+    let hdr2 = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .margin_top(6)
+        .build();
+    hdr2.append(
+        &Label::builder()
+            .label("Continuidad")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .build(),
+    );
     hdr2.append(&make_pending_badge());
     pane.append(&hdr2);
     let c2 = GtkBox::builder().orientation(Orientation::Vertical).build();
@@ -1486,8 +1737,18 @@ fn build_airdrop_subpane(
     pane.append(&wrap_squircle_card(&c2, WIFI_CARD_SQUIRCLE_RADIUS));
 
     // Widgets y duplicación
-    let hdr3 = GtkBox::builder().orientation(Orientation::Horizontal).spacing(8).margin_top(6).build();
-    hdr3.append(&Label::builder().label("Widgets y duplicación del teléfono").css_classes(["wifi-section-title"]).xalign(0.0).build());
+    let hdr3 = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .margin_top(6)
+        .build();
+    hdr3.append(
+        &Label::builder()
+            .label("Widgets y duplicación del teléfono")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .build(),
+    );
     hdr3.append(&make_pending_badge());
     pane.append(&hdr3);
     let c3 = GtkBox::builder().orientation(Orientation::Vertical).build();
@@ -1506,8 +1767,18 @@ fn build_airdrop_subpane(
     pane.append(&wrap_squircle_card(&c3, WIFI_CARD_SQUIRCLE_RADIUS));
 
     // AirPlay
-    let hdr4 = GtkBox::builder().orientation(Orientation::Horizontal).spacing(8).margin_top(6).build();
-    hdr4.append(&Label::builder().label("AirPlay").css_classes(["wifi-section-title"]).xalign(0.0).build());
+    let hdr4 = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .margin_top(6)
+        .build();
+    hdr4.append(
+        &Label::builder()
+            .label("AirPlay")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .build(),
+    );
     hdr4.append(&make_pending_badge());
     pane.append(&hdr4);
     let c4 = GtkBox::builder().orientation(Orientation::Vertical).build();
@@ -1524,10 +1795,31 @@ fn build_airdrop_subpane(
         },
     ));
     c4.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    let r_ap_who = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).css_classes(["wifi-pref-row"]).build();
-    let ap_col = GtkBox::builder().orientation(Orientation::Vertical).spacing(2).hexpand(true).build();
-    ap_col.append(&Label::builder().label("Permitir AirPlay para").css_classes(["wifi-row-title"]).xalign(0.0).build());
-    ap_col.append(&Label::builder().label("Controla quién puede ver y transmitir por AirPlay a esta computadora.").css_classes(["card-section-sub"]).wrap(true).xalign(0.0).build());
+    let r_ap_who = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["wifi-pref-row"])
+        .build();
+    let ap_col = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .build();
+    ap_col.append(
+        &Label::builder()
+            .label("Permitir AirPlay para")
+            .css_classes(["wifi-row-title"])
+            .xalign(0.0)
+            .build(),
+    );
+    ap_col.append(
+        &Label::builder()
+            .label("Controla quién puede ver y transmitir por AirPlay a esta computadora.")
+            .css_classes(["card-section-sub"])
+            .wrap(true)
+            .xalign(0.0)
+            .build(),
+    );
     r_ap_who.append(&ap_col);
     r_ap_who.append(&make_simple_selector(
         &["Usuario actual", "Cualquiera en la misma red", "Todos"],
@@ -1561,10 +1853,30 @@ fn build_autofill_subpane(
         .spacing(8)
         .css_classes(["wifi-card-compact", "wifi-header-section"])
         .build();
-    let b_top = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).build();
-    b_top.append(&make_squircle_colored_badge(32, "dialog-password-symbolic", 17, WIFI_BADGE_SQUIRCLE_RADIUS, GRAY_TOP, GRAY_BOT));
-    let b_txt = GtkBox::builder().orientation(Orientation::Vertical).spacing(2).hexpand(true).build();
-    b_txt.append(&Label::builder().label("Todas tus contraseñas en un solo lugar").css_classes(["card-section-title"]).xalign(0.0).build());
+    let b_top = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .build();
+    b_top.append(&make_squircle_colored_badge(
+        32,
+        "dialog-password-symbolic",
+        17,
+        WIFI_BADGE_SQUIRCLE_RADIUS,
+        GRAY_TOP,
+        GRAY_BOT,
+    ));
+    let b_txt = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .build();
+    b_txt.append(
+        &Label::builder()
+            .label("Todas tus contraseñas en un solo lugar")
+            .css_classes(["card-section-title"])
+            .xalign(0.0)
+            .build(),
+    );
     b_txt.append(
         &Label::builder()
             .label("Las contraseñas, llaves de acceso y códigos de verificación se almacenan en el llavero Secret Service del sistema.")
@@ -1579,7 +1891,9 @@ fn build_autofill_subpane(
     let (open_pw_wrap, open_pw_btn) = make_squircle_button("Abrir Contraseñas", false, None);
     open_pw_wrap.set_halign(Align::End);
     open_pw_btn.connect_clicked(|_| {
-        let _ = Command::new("seahorse").spawn().or_else(|_| Command::new("keepassxc").spawn());
+        let _ = Command::new("seahorse")
+            .spawn()
+            .or_else(|_| Command::new("keepassxc").spawn());
     });
     banner.append(&open_pw_wrap);
     pane.append(&wrap_squircle_card(&banner, WIFI_CARD_SQUIRCLE_RADIUS));
@@ -1599,7 +1913,14 @@ fn build_autofill_subpane(
     ));
     pane.append(&wrap_squircle_card(&c1, WIFI_CARD_SQUIRCLE_RADIUS));
 
-    pane.append(&Label::builder().label("Autorrellenar con:").css_classes(["wifi-section-title"]).xalign(0.0).margin_top(6).build());
+    pane.append(
+        &Label::builder()
+            .label("Autorrellenar con:")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .margin_top(6)
+            .build(),
+    );
     let c2 = GtkBox::builder().orientation(Orientation::Vertical).build();
     c2.append(&pref_switch_row(
         "Contraseñas (Llavero Secret Service)",
@@ -1615,7 +1936,14 @@ fn build_autofill_subpane(
     ));
     pane.append(&wrap_squircle_card(&c2, WIFI_CARD_SQUIRCLE_RADIUS));
 
-    pane.append(&Label::builder().label("Códigos de verificación").css_classes(["wifi-section-title"]).xalign(0.0).margin_top(6).build());
+    pane.append(
+        &Label::builder()
+            .label("Códigos de verificación")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .margin_top(6)
+            .build(),
+    );
     let c3 = GtkBox::builder().orientation(Orientation::Vertical).build();
     c3.append(&pref_switch_row(
         "Borrar después de usar",
@@ -1644,39 +1972,150 @@ fn build_sharing_subpane(
 ) -> (ScrolledWindow, Rc<dyn Fn()>) {
     let (scrolled, pane) = make_scrolled_pane();
 
-    pane.append(&Label::builder().label("Contenido").css_classes(["wifi-section-title"]).xalign(0.0).build());
+    pane.append(
+        &Label::builder()
+            .label("Contenido")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .build(),
+    );
     let c1 = GtkBox::builder().orientation(Orientation::Vertical).build();
-    c1.append(&sharing_service_row("folder-publicshare-symbolic", (0.259, 0.565, 0.976), (0.235, 0.518, 0.949), "Compartir archivos (Samba)", sys_snap.borrow().smb_active, true, None));
+    c1.append(&sharing_service_row(
+        "folder-publicshare-symbolic",
+        (0.259, 0.565, 0.976),
+        (0.235, 0.518, 0.949),
+        "Compartir archivos (Samba)",
+        sys_snap.borrow().smb_active,
+        true,
+        None,
+    ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c1.append(&sharing_service_row("folder-music-symbolic", ORANGE_TOP, ORANGE_BOT, "Compartir contenido multimedia", false, true, None));
+    c1.append(&sharing_service_row(
+        "folder-music-symbolic",
+        ORANGE_TOP,
+        ORANGE_BOT,
+        "Compartir contenido multimedia",
+        false,
+        true,
+        None,
+    ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c1.append(&sharing_service_row("video-display-symbolic", PURPLE_TOP, PURPLE_BOT, "Compartir pantalla (PipeWire / RDP)", false, true, None));
+    c1.append(&sharing_service_row(
+        "video-display-symbolic",
+        PURPLE_TOP,
+        PURPLE_BOT,
+        "Compartir pantalla (PipeWire / RDP)",
+        false,
+        true,
+        None,
+    ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c1.append(&sharing_service_row("emblem-Downloads", GRAY_TOP, GRAY_BOT, "Contenido en caché", false, true, None));
+    c1.append(&sharing_service_row(
+        "emblem-Downloads",
+        GRAY_TOP,
+        GRAY_BOT,
+        "Contenido en caché",
+        false,
+        true,
+        None,
+    ));
     pane.append(&wrap_squircle_card(&c1, WIFI_CARD_SQUIRCLE_RADIUS));
 
-    pane.append(&Label::builder().label("Accesorios e Internet").css_classes(["wifi-section-title"]).xalign(0.0).margin_top(6).build());
+    pane.append(
+        &Label::builder()
+            .label("Accesorios e Internet")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .margin_top(6)
+            .build(),
+    );
     let c2 = GtkBox::builder().orientation(Orientation::Vertical).build();
-    c2.append(&sharing_service_row("bluetooth-active-symbolic", (0.259, 0.565, 0.976), (0.235, 0.518, 0.949), "Compartir Bluetooth (OBEX)", false, true, None));
+    c2.append(&sharing_service_row(
+        "bluetooth-active-symbolic",
+        (0.259, 0.565, 0.976),
+        (0.235, 0.518, 0.949),
+        "Compartir Bluetooth (OBEX)",
+        false,
+        true,
+        None,
+    ));
     c2.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c2.append(&sharing_service_row("printer-symbolic", GRAY_TOP, GRAY_BOT, "Compartir impresora (CUPS)", sys_snap.borrow().cups_active, false, Some("cups")));
+    c2.append(&sharing_service_row(
+        "printer-symbolic",
+        GRAY_TOP,
+        GRAY_BOT,
+        "Compartir impresora (CUPS)",
+        sys_snap.borrow().cups_active,
+        false,
+        Some("cups"),
+    ));
     c2.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c2.append(&sharing_service_row("network-workgroup-symbolic", (0.259, 0.565, 0.976), (0.235, 0.518, 0.949), "Compartir Internet (Hotspot)", false, true, None));
+    c2.append(&sharing_service_row(
+        "network-workgroup-symbolic",
+        (0.259, 0.565, 0.976),
+        (0.235, 0.518, 0.949),
+        "Compartir Internet (Hotspot)",
+        false,
+        true,
+        None,
+    ));
     pane.append(&wrap_squircle_card(&c2, WIFI_CARD_SQUIRCLE_RADIUS));
 
-    pane.append(&Label::builder().label("Avanzado").css_classes(["wifi-section-title"]).xalign(0.0).margin_top(6).build());
+    pane.append(
+        &Label::builder()
+            .label("Avanzado")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .margin_top(6)
+            .build(),
+    );
     let c3 = GtkBox::builder().orientation(Orientation::Vertical).build();
-    c3.append(&sharing_service_row("preferences-system-symbolic", GRAY_TOP, GRAY_BOT, "Administración remota", false, true, None));
+    c3.append(&sharing_service_row(
+        "preferences-system-symbolic",
+        GRAY_TOP,
+        GRAY_BOT,
+        "Administración remota",
+        false,
+        true,
+        None,
+    ));
     c3.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c3.append(&sharing_service_row("utilities-terminal-symbolic", GRAY_TOP, GRAY_BOT, "Sesión remota (SSH / sshd)", sys_snap.borrow().sshd_active, false, Some("sshd")));
+    c3.append(&sharing_service_row(
+        "utilities-terminal-symbolic",
+        GRAY_TOP,
+        GRAY_BOT,
+        "Sesión remota (SSH / sshd)",
+        sys_snap.borrow().sshd_active,
+        false,
+        Some("sshd"),
+    ));
     c3.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    c3.append(&sharing_service_row("applications-engineering-symbolic", GRAY_TOP, GRAY_BOT, "Scripts de apps remotas", false, true, None));
+    c3.append(&sharing_service_row(
+        "applications-engineering-symbolic",
+        GRAY_TOP,
+        GRAY_BOT,
+        "Scripts de apps remotas",
+        false,
+        true,
+        None,
+    ));
     pane.append(&wrap_squircle_card(&c3, WIFI_CARD_SQUIRCLE_RADIUS));
 
     // Nombre del host local
     let host_card = GtkBox::builder().orientation(Orientation::Vertical).build();
-    let r_host1 = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).css_classes(["wifi-pref-row"]).build();
-    r_host1.append(&Label::builder().label("Nombre del host local").css_classes(["wifi-row-title"]).xalign(0.0).hexpand(true).build());
+    let r_host1 = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["wifi-pref-row"])
+        .build();
+    r_host1.append(
+        &Label::builder()
+            .label("Nombre del host local")
+            .css_classes(["wifi-row-title"])
+            .xalign(0.0)
+            .hexpand(true)
+            .build(),
+    );
     let host_val_lbl = Label::builder()
         .label(&format!("{}.local", sys_snap.borrow().hostname))
         .css_classes(["card-section-sub"])
@@ -1685,7 +2124,11 @@ fn build_sharing_subpane(
     host_card.append(&r_host1);
     host_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 
-    let r_host2 = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).css_classes(["wifi-pref-row"]).build();
+    let r_host2 = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["wifi-pref-row"])
+        .build();
     r_host2.append(
         &Label::builder()
             .label("Las computadoras de tu red local pueden acceder a tu computadora en esta dirección.")
@@ -1714,11 +2157,28 @@ fn build_sharing_subpane(
                 .default_width(380)
                 .build();
             crate::attach_modal_scrim(&dlg, &win_c);
-            let vbox = GtkBox::builder().orientation(Orientation::Vertical).spacing(10).margin_top(18).margin_bottom(18).margin_start(20).margin_end(20).build();
+            let vbox = GtkBox::builder()
+                .orientation(Orientation::Vertical)
+                .spacing(10)
+                .margin_top(18)
+                .margin_bottom(18)
+                .margin_start(20)
+                .margin_end(20)
+                .build();
             let entry = Entry::builder().text(&snap_c.borrow().hostname).build();
-            vbox.append(&Label::builder().label("Nombre del equipo (hostnamectl):").css_classes(["card-section-sub"]).xalign(0.0).build());
+            vbox.append(
+                &Label::builder()
+                    .label("Nombre del equipo (hostnamectl):")
+                    .css_classes(["card-section-sub"])
+                    .xalign(0.0)
+                    .build(),
+            );
             vbox.append(&entry);
-            let actions = GtkBox::builder().orientation(Orientation::Horizontal).spacing(8).halign(Align::End).build();
+            let actions = GtkBox::builder()
+                .orientation(Orientation::Horizontal)
+                .spacing(8)
+                .halign(Align::End)
+                .build();
             let (cw, cb) = make_squircle_button("Cancelar", false, None);
             let (ow, ob) = make_squircle_button("OK", true, None);
             actions.append(&cw);
@@ -1729,12 +2189,19 @@ fn build_sharing_subpane(
             let hl = h_lbl.clone();
             let sc = snap_c.clone();
             ob.connect_clicked(move |_| {
-                let new_h: String = entry.text().trim().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+                let new_h: String = entry
+                    .text()
+                    .trim()
+                    .chars()
+                    .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+                    .collect();
                 if !new_h.is_empty() {
                     sc.borrow_mut().hostname = new_h.clone();
                     hl.set_label(&format!("{new_h}.local"));
                     std::thread::spawn(move || {
-                        let _ = Command::new("pkexec").args(["hostnamectl", "set-hostname", &new_h]).output();
+                        let _ = Command::new("pkexec")
+                            .args(["hostnamectl", "set-hostname", &new_h])
+                            .output();
                     });
                 }
                 d2.close();
@@ -1769,10 +2236,27 @@ fn sharing_service_row(
         .spacing(12)
         .css_classes(["wifi-pref-row"])
         .build();
-    row.append(&make_squircle_colored_badge(28, icon, 15, WIFI_BADGE_SQUIRCLE_RADIUS, top, bot));
+    row.append(&make_squircle_colored_badge(
+        28,
+        icon,
+        15,
+        WIFI_BADGE_SQUIRCLE_RADIUS,
+        top,
+        bot,
+    ));
 
-    let col = GtkBox::builder().orientation(Orientation::Vertical).spacing(2).hexpand(true).build();
-    col.append(&Label::builder().label(title).css_classes(["wifi-row-title"]).xalign(0.0).build());
+    let col = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .build();
+    col.append(
+        &Label::builder()
+            .label(title)
+            .css_classes(["wifi-row-title"])
+            .xalign(0.0)
+            .build(),
+    );
     let sub_txt = if active {
         "Activo"
     } else if pending {
@@ -1780,7 +2264,13 @@ fn sharing_service_row(
     } else {
         "Desactivado"
     };
-    col.append(&Label::builder().label(sub_txt).css_classes(["card-section-sub"]).xalign(0.0).build());
+    col.append(
+        &Label::builder()
+            .label(sub_txt)
+            .css_classes(["card-section-sub"])
+            .xalign(0.0)
+            .build(),
+    );
     row.append(&col);
 
     if pending {
@@ -1795,7 +2285,11 @@ fn sharing_service_row(
     if let Some(unit) = systemd_unit {
         sw.connect_state_set(move |_, enable| {
             std::thread::spawn(move || {
-                let act = if enable { "enable --now" } else { "disable --now" };
+                let act = if enable {
+                    "enable --now"
+                } else {
+                    "disable --now"
+                };
                 let _ = Command::new("pkexec")
                     .args(["sh", "-c", &format!("systemctl {act} {unit}")])
                     .output();
@@ -1838,7 +2332,12 @@ fn build_startup_disk_subpane(
         .margin_top(12)
         .margin_bottom(12)
         .build();
-    tile.append(&Image::builder().icon_name("drive-harddisk-symbolic").pixel_size(54).build());
+    tile.append(
+        &Image::builder()
+            .icon_name("drive-harddisk-symbolic")
+            .pixel_size(54)
+            .build(),
+    );
     let disk_lbl = Label::builder()
         .label(&sys_snap.borrow().root_device)
         .css_classes(["wifi-row-title"])
@@ -1881,9 +2380,26 @@ fn build_startup_disk_subpane(
             .default_width(360)
             .build();
         crate::attach_modal_scrim(&dlg, &win_c);
-        let vb = GtkBox::builder().orientation(Orientation::Vertical).spacing(12).margin_top(18).margin_bottom(18).margin_start(20).margin_end(20).build();
-        vb.append(&Label::builder().label("¿Quieres reiniciar el equipo ahora?").css_classes(["card-section-title"]).xalign(0.0).build());
-        let act = GtkBox::builder().orientation(Orientation::Horizontal).spacing(8).halign(Align::End).build();
+        let vb = GtkBox::builder()
+            .orientation(Orientation::Vertical)
+            .spacing(12)
+            .margin_top(18)
+            .margin_bottom(18)
+            .margin_start(20)
+            .margin_end(20)
+            .build();
+        vb.append(
+            &Label::builder()
+                .label("¿Quieres reiniciar el equipo ahora?")
+                .css_classes(["card-section-title"])
+                .xalign(0.0)
+                .build(),
+        );
+        let act = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(8)
+            .halign(Align::End)
+            .build();
         let (cw, cb) = make_squircle_button("Cancelar", false, None);
         let (rw, rb) = make_squircle_button("Reiniciar", true, None);
         act.append(&cw);
@@ -1927,12 +2443,16 @@ fn build_startup_disk_subpane(
 // 9. Subvista "Elementos de inicio y extensiones" (General09.png & General10.png)
 // ============================================================================
 
-fn build_login_items_subpane(
-    parent_window: &ApplicationWindow,
-) -> (ScrolledWindow, Rc<dyn Fn()>) {
+fn build_login_items_subpane(parent_window: &ApplicationWindow) -> (ScrolledWindow, Rc<dyn Fn()>) {
     let (scrolled, pane) = make_scrolled_pane();
 
-    pane.append(&Label::builder().label("Abrir al iniciar sesión").css_classes(["wifi-section-title"]).xalign(0.0).build());
+    pane.append(
+        &Label::builder()
+            .label("Abrir al iniciar sesión")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .build(),
+    );
     pane.append(&Label::builder().label("Estos elementos se abrirán automáticamente al iniciar la sesión (~/.config/autostart).").css_classes(["card-section-sub"]).xalign(0.0).build());
 
     let table_card = GtkBox::builder().orientation(Orientation::Vertical).build();
@@ -1941,8 +2461,22 @@ fn build_login_items_subpane(
         .spacing(12)
         .css_classes(["wifi-pref-row", "gen-autostart-header"])
         .build();
-    th.append(&Label::builder().label("Elemento").css_classes(["card-section-sub"]).xalign(0.0).hexpand(true).build());
-    th.append(&Label::builder().label("Clase").css_classes(["card-section-sub"]).width_request(110).xalign(0.0).build());
+    th.append(
+        &Label::builder()
+            .label("Elemento")
+            .css_classes(["card-section-sub"])
+            .xalign(0.0)
+            .hexpand(true)
+            .build(),
+    );
+    th.append(
+        &Label::builder()
+            .label("Clase")
+            .css_classes(["card-section-sub"])
+            .width_request(110)
+            .xalign(0.0)
+            .build(),
+    );
     table_card.append(&th);
     table_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 
@@ -1969,14 +2503,29 @@ fn build_login_items_subpane(
         .sensitive(false)
         .build();
     toolbar.append(&add_btn);
-    toolbar.append(&GtkBox::builder().css_classes(["fw-apps-tool-sep"]).valign(Align::Center).build());
+    toolbar.append(
+        &GtkBox::builder()
+            .css_classes(["fw-apps-tool-sep"])
+            .valign(Align::Center)
+            .build(),
+    );
     toolbar.append(&rem_btn);
     table_card.append(&toolbar);
     pane.append(&wrap_squircle_card(&table_card, WIFI_CARD_SQUIRCLE_RADIUS));
 
     // Extensiones con selector [Por app | Por categoría] (General09 & General10)
-    let ext_hdr = GtkBox::builder().orientation(Orientation::Horizontal).spacing(8).margin_top(8).build();
-    ext_hdr.append(&Label::builder().label("Extensiones").css_classes(["wifi-section-title"]).xalign(0.0).build());
+    let ext_hdr = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .margin_top(8)
+        .build();
+    ext_hdr.append(
+        &Label::builder()
+            .label("Extensiones")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .build(),
+    );
     ext_hdr.append(&make_pending_badge());
     pane.append(&ext_hdr);
     pane.append(
@@ -2071,9 +2620,28 @@ fn build_login_items_subpane(
                         vec!["fw-app-row"]
                     })
                     .build();
-                row.append(&Image::builder().icon_name("application-x-executable-symbolic").pixel_size(16).build());
-                row.append(&Label::builder().label(&item.name).css_classes(["wifi-row-title"]).xalign(0.0).hexpand(true).build());
-                row.append(&Label::builder().label(&item.kind_label).css_classes(["card-section-sub"]).width_request(110).xalign(0.0).build());
+                row.append(
+                    &Image::builder()
+                        .icon_name("application-x-executable-symbolic")
+                        .pixel_size(16)
+                        .build(),
+                );
+                row.append(
+                    &Label::builder()
+                        .label(&item.name)
+                        .css_classes(["wifi-row-title"])
+                        .xalign(0.0)
+                        .hexpand(true)
+                        .build(),
+                );
+                row.append(
+                    &Label::builder()
+                        .label(&item.kind_label)
+                        .css_classes(["card-section-sub"])
+                        .width_request(110)
+                        .xalign(0.0)
+                        .build(),
+                );
 
                 let click = gtk4::GestureClick::new();
                 let sc = sel_c.clone();
@@ -2119,12 +2687,27 @@ fn build_login_items_subpane(
                 .default_width(380)
                 .build();
             crate::attach_modal_scrim(&dlg, &win_c);
-            let vb = GtkBox::builder().orientation(Orientation::Vertical).spacing(10).margin_top(18).margin_bottom(18).margin_start(20).margin_end(20).build();
-            let name_e = Entry::builder().placeholder_text("Nombre de la aplicación").build();
-            let exec_e = Entry::builder().placeholder_text("Comando (ej. flatpak run ... o binario)").build();
+            let vb = GtkBox::builder()
+                .orientation(Orientation::Vertical)
+                .spacing(10)
+                .margin_top(18)
+                .margin_bottom(18)
+                .margin_start(20)
+                .margin_end(20)
+                .build();
+            let name_e = Entry::builder()
+                .placeholder_text("Nombre de la aplicación")
+                .build();
+            let exec_e = Entry::builder()
+                .placeholder_text("Comando (ej. flatpak run ... o binario)")
+                .build();
             vb.append(&name_e);
             vb.append(&exec_e);
-            let act = GtkBox::builder().orientation(Orientation::Horizontal).spacing(8).halign(Align::End).build();
+            let act = GtkBox::builder()
+                .orientation(Orientation::Horizontal)
+                .spacing(8)
+                .halign(Align::End)
+                .build();
             let (cw, cb) = make_squircle_button("Cancelar", false, None);
             let (aw, ab) = make_squircle_button("Añadir", true, None);
             act.append(&cw);
@@ -2157,21 +2740,93 @@ fn populate_extensions_list(card: &GtkBox, by_category: bool) {
     }
     let items: &[(&str, (f64, f64, f64), (f64, f64, f64), &str, &str)] = if !by_category {
         &[
-            ("system-run-symbolic", PURPLE_TOP, PURPLE_BOT, "Atajos", "Compartir"),
-            ("accessories-dictionary-symbolic", PURPLE_TOP, PURPLE_BOT, "Diario", "Compartir"),
-            ("applications-graphics-symbolic", TEAL_TOP, TEAL_BOT, "Freeform", "Compartir"),
-            ("accessories-text-editor-symbolic", ORANGE_TOP, ORANGE_BOT, "Notas y Libros", "Compartir"),
-            ("view-list-symbolic", GRAY_TOP, GRAY_BOT, "Recordatorios", "Compartir"),
-            ("emblem-system-symbolic", GRAY_TOP, GRAY_BOT, "Servicios del sistema", "Acortar, Convertir imagen, Crear PDF, Girar a la izquierda, Marcado"),
+            (
+                "system-run-symbolic",
+                PURPLE_TOP,
+                PURPLE_BOT,
+                "Atajos",
+                "Compartir",
+            ),
+            (
+                "accessories-dictionary-symbolic",
+                PURPLE_TOP,
+                PURPLE_BOT,
+                "Diario",
+                "Compartir",
+            ),
+            (
+                "applications-graphics-symbolic",
+                TEAL_TOP,
+                TEAL_BOT,
+                "Freeform",
+                "Compartir",
+            ),
+            (
+                "accessories-text-editor-symbolic",
+                ORANGE_TOP,
+                ORANGE_BOT,
+                "Notas y Libros",
+                "Compartir",
+            ),
+            (
+                "view-list-symbolic",
+                GRAY_TOP,
+                GRAY_BOT,
+                "Recordatorios",
+                "Compartir",
+            ),
+            (
+                "emblem-system-symbolic",
+                GRAY_TOP,
+                GRAY_BOT,
+                "Servicios del sistema",
+                "Acortar, Convertir imagen, Crear PDF, Girar a la izquierda, Marcado",
+            ),
         ]
     } else {
         &[
-            ("applications-graphics-symbolic", GRAY_TOP, GRAY_BOT, "Acciones", "Marcado"),
-            ("system-search-symbolic", GRAY_TOP, GRAY_BOT, "Indexador de Spotlight", "PDFImporter, AudioMetadataImporter"),
-            ("emblem-shared-symbolic", GRAY_TOP, GRAY_BOT, "Compartir", "Agregar a Fotos, AirDrop, Atajos, Correo"),
-            ("camera-photo-symbolic", GRAY_TOP, GRAY_BOT, "Edición de fotos", "Marcado"),
-            ("drive-harddisk-symbolic", GRAY_TOP, GRAY_BOT, "Extensiones del sistema de archivos", "ftp, exfat, msdos, btrfs"),
-            ("folder-symbolic", GRAY_TOP, GRAY_BOT, "Branches (Finder)", "Crear PDF, Girar imagen, Comprimir archivo"),
+            (
+                "applications-graphics-symbolic",
+                GRAY_TOP,
+                GRAY_BOT,
+                "Acciones",
+                "Marcado",
+            ),
+            (
+                "system-search-symbolic",
+                GRAY_TOP,
+                GRAY_BOT,
+                "Indexador de Spotlight",
+                "PDFImporter, AudioMetadataImporter",
+            ),
+            (
+                "emblem-shared-symbolic",
+                GRAY_TOP,
+                GRAY_BOT,
+                "Compartir",
+                "Agregar a Fotos, AirDrop, Atajos, Correo",
+            ),
+            (
+                "camera-photo-symbolic",
+                GRAY_TOP,
+                GRAY_BOT,
+                "Edición de fotos",
+                "Marcado",
+            ),
+            (
+                "drive-harddisk-symbolic",
+                GRAY_TOP,
+                GRAY_BOT,
+                "Extensiones del sistema de archivos",
+                "ftp, exfat, msdos, btrfs",
+            ),
+            (
+                "folder-symbolic",
+                GRAY_TOP,
+                GRAY_BOT,
+                "Branches (Finder)",
+                "Crear PDF, Girar imagen, Comprimir archivo",
+            ),
         ]
     };
     for (idx, (ico, top, bot, title, sub)) in items.iter().enumerate() {
@@ -2183,10 +2838,34 @@ fn populate_extensions_list(card: &GtkBox, by_category: bool) {
             .spacing(12)
             .css_classes(["wifi-pref-row"])
             .build();
-        r.append(&make_squircle_colored_badge(28, ico, 15, WIFI_BADGE_SQUIRCLE_RADIUS, *top, *bot));
-        let col = GtkBox::builder().orientation(Orientation::Vertical).spacing(2).hexpand(true).build();
-        col.append(&Label::builder().label(*title).css_classes(["wifi-row-title"]).xalign(0.0).build());
-        col.append(&Label::builder().label(*sub).css_classes(["card-section-sub"]).wrap(true).xalign(0.0).build());
+        r.append(&make_squircle_colored_badge(
+            28,
+            ico,
+            15,
+            WIFI_BADGE_SQUIRCLE_RADIUS,
+            *top,
+            *bot,
+        ));
+        let col = GtkBox::builder()
+            .orientation(Orientation::Vertical)
+            .spacing(2)
+            .hexpand(true)
+            .build();
+        col.append(
+            &Label::builder()
+                .label(*title)
+                .css_classes(["wifi-row-title"])
+                .xalign(0.0)
+                .build(),
+        );
+        col.append(
+            &Label::builder()
+                .label(*sub)
+                .css_classes(["card-section-sub"])
+                .wrap(true)
+                .xalign(0.0)
+                .build(),
+        );
         r.append(&col);
         card.append(&r);
     }
@@ -2211,21 +2890,42 @@ fn build_datetime_subpane(
         move |enable| {
             std::thread::spawn(move || {
                 let val = if enable { "true" } else { "false" };
-                let _ = Command::new("pkexec").args(["timedatectl", "set-ntp", val]).output();
+                let _ = Command::new("pkexec")
+                    .args(["timedatectl", "set-ntp", val])
+                    .output();
             });
         },
     ));
     c1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
-    let r_src = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).css_classes(["wifi-pref-row"]).build();
-    r_src.append(&Label::builder().label("Fuente").css_classes(["wifi-row-title"]).xalign(0.0).hexpand(true).build());
-    r_src.append(&Label::builder().label(&format!("NTP ({})", prefs.borrow().ntp_server)).css_classes(["card-section-sub"]).build());
+    let r_src = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["wifi-pref-row"])
+        .build();
+    r_src.append(
+        &Label::builder()
+            .label("Fuente")
+            .css_classes(["wifi-row-title"])
+            .xalign(0.0)
+            .hexpand(true)
+            .build(),
+    );
+    r_src.append(
+        &Label::builder()
+            .label(&format!("NTP ({})", prefs.borrow().ntp_server))
+            .css_classes(["card-section-sub"])
+            .build(),
+    );
     let (set_ntp_w, _) = make_squircle_button("Establecer...", false, None);
     r_src.append(&set_ntp_w);
     c1.append(&r_src);
     pane.append(&wrap_squircle_card(&c1, WIFI_CARD_SQUIRCLE_RADIUS));
 
     let c2 = GtkBox::builder().orientation(Orientation::Vertical).build();
-    let (r_now, now_val_lbl) = info_kv_row("Fecha y hora", &format_current_datetime(prefs.borrow().clock_24h));
+    let (r_now, now_val_lbl) = info_kv_row(
+        "Fecha y hora",
+        &format_current_datetime(prefs.borrow().clock_24h),
+    );
     c2.append(&r_now);
     c2.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
     let now_lbl_c = now_val_lbl.clone();
@@ -2296,17 +2996,39 @@ fn build_locale_subpane(
 ) -> (ScrolledWindow, Rc<dyn Fn()>) {
     let (scrolled, pane) = make_scrolled_pane();
 
-    pane.append(&Label::builder().label("Idiomas preferidos").css_classes(["wifi-section-title"]).xalign(0.0).build());
+    pane.append(
+        &Label::builder()
+            .label("Idiomas preferidos")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .build(),
+    );
     let lang_card = GtkBox::builder().orientation(Orientation::Vertical).build();
     let lang_list = GtkBox::builder().orientation(Orientation::Vertical).build();
     lang_card.append(&lang_list);
     lang_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 
-    let lang_tools = GtkBox::builder().orientation(Orientation::Horizontal).css_classes(["fw-apps-toolbar"]).build();
-    let add_lang_btn = Button::builder().icon_name("list-add-symbolic").has_frame(false).css_classes(["fw-apps-tool-btn"]).build();
-    let rem_lang_btn = Button::builder().icon_name("list-remove-symbolic").has_frame(false).css_classes(["fw-apps-tool-btn"]).build();
+    let lang_tools = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .css_classes(["fw-apps-toolbar"])
+        .build();
+    let add_lang_btn = Button::builder()
+        .icon_name("list-add-symbolic")
+        .has_frame(false)
+        .css_classes(["fw-apps-tool-btn"])
+        .build();
+    let rem_lang_btn = Button::builder()
+        .icon_name("list-remove-symbolic")
+        .has_frame(false)
+        .css_classes(["fw-apps-tool-btn"])
+        .build();
     lang_tools.append(&add_lang_btn);
-    lang_tools.append(&GtkBox::builder().css_classes(["fw-apps-tool-sep"]).valign(Align::Center).build());
+    lang_tools.append(
+        &GtkBox::builder()
+            .css_classes(["fw-apps-tool-sep"])
+            .valign(Align::Center)
+            .build(),
+    );
     lang_tools.append(&rem_lang_btn);
     lang_card.append(&lang_tools);
     pane.append(&wrap_squircle_card(&lang_card, WIFI_CARD_SQUIRCLE_RADIUS));
@@ -2332,8 +3054,19 @@ fn build_locale_subpane(
         })
     };
 
-    let regions = ["México", "España", "Colombia", "Argentina", "Chile", "Perú", "Estados Unidos"];
-    let cur_reg_idx = regions.iter().position(|r| *r == prefs.borrow().region).unwrap_or(0);
+    let regions = [
+        "México",
+        "España",
+        "Colombia",
+        "Argentina",
+        "Chile",
+        "Perú",
+        "Estados Unidos",
+    ];
+    let cur_reg_idx = regions
+        .iter()
+        .position(|r| *r == prefs.borrow().region)
+        .unwrap_or(0);
     reg_card.append(&selector_row("Región", &regions, cur_reg_idx, {
         let p = prefs.clone();
         let up = update_preview.clone();
@@ -2356,8 +3089,19 @@ fn build_locale_subpane(
     reg_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 
     // Temperatura (Radio buttons: Celsius / Fahrenheit)
-    let temp_row = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).css_classes(["wifi-pref-row"]).build();
-    temp_row.append(&Label::builder().label("Temperatura").css_classes(["wifi-row-title"]).xalign(0.0).hexpand(true).build());
+    let temp_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["wifi-pref-row"])
+        .build();
+    temp_row.append(
+        &Label::builder()
+            .label("Temperatura")
+            .css_classes(["wifi-row-title"])
+            .xalign(0.0)
+            .hexpand(true)
+            .build(),
+    );
     let rb_c = CheckButton::with_label("Celsius (°C)");
     let rb_f = CheckButton::with_label("Fahrenheit (°F)");
     rb_f.set_group(Some(&rb_c));
@@ -2390,8 +3134,19 @@ fn build_locale_subpane(
     reg_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 
     // Sistema de medición (Radio buttons: Métrico / Estadounidense / Imperial)
-    let meas_row = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).css_classes(["wifi-pref-row"]).build();
-    meas_row.append(&Label::builder().label("Sistema de medición").css_classes(["wifi-row-title"]).xalign(0.0).hexpand(true).build());
+    let meas_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["wifi-pref-row"])
+        .build();
+    meas_row.append(
+        &Label::builder()
+            .label("Sistema de medición")
+            .css_classes(["wifi-row-title"])
+            .xalign(0.0)
+            .hexpand(true)
+            .build(),
+    );
     let rb_m = CheckButton::with_label("Métrico");
     let rb_u = CheckButton::with_label("Estadounidense");
     let rb_i = CheckButton::with_label("Imperial");
@@ -2527,8 +3282,19 @@ fn build_locale_subpane(
                 if idx > 0 {
                     lbox.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
                 }
-                let r = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).css_classes(["wifi-pref-row"]).build();
-                r.append(&Label::builder().label(lang).css_classes(["wifi-row-title"]).xalign(0.0).hexpand(true).build());
+                let r = GtkBox::builder()
+                    .orientation(Orientation::Horizontal)
+                    .spacing(12)
+                    .css_classes(["wifi-pref-row"])
+                    .build();
+                r.append(
+                    &Label::builder()
+                        .label(lang)
+                        .css_classes(["wifi-row-title"])
+                        .xalign(0.0)
+                        .hexpand(true)
+                        .build(),
+                );
                 lbox.append(&r);
             }
         })
@@ -2549,10 +3315,23 @@ fn build_locale_subpane(
                 .default_width(340)
                 .build();
             crate::attach_modal_scrim(&dlg, &win_c);
-            let vb = GtkBox::builder().orientation(Orientation::Vertical).spacing(10).margin_top(18).margin_bottom(18).margin_start(20).margin_end(20).build();
-            let entry = Entry::builder().placeholder_text("Ej. English (US) o Français").build();
+            let vb = GtkBox::builder()
+                .orientation(Orientation::Vertical)
+                .spacing(10)
+                .margin_top(18)
+                .margin_bottom(18)
+                .margin_start(20)
+                .margin_end(20)
+                .build();
+            let entry = Entry::builder()
+                .placeholder_text("Ej. English (US) o Français")
+                .build();
             vb.append(&entry);
-            let act = GtkBox::builder().orientation(Orientation::Horizontal).spacing(8).halign(Align::End).build();
+            let act = GtkBox::builder()
+                .orientation(Orientation::Horizontal)
+                .spacing(8)
+                .halign(Align::End)
+                .build();
             let (cw, cb) = make_squircle_button("Cancelar", false, None);
             let (aw, ab) = make_squircle_button("Añadir", true, None);
             act.append(&cw);
@@ -2611,11 +3390,38 @@ fn build_pending_feature_subpane(
         .spacing(10)
         .css_classes(["wifi-card-compact", "wifi-header-section"])
         .build();
-    let hdr = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).build();
-    hdr.append(&make_squircle_colored_badge(34, icon, 18, WIFI_BADGE_SQUIRCLE_RADIUS, top, bot));
-    let col = GtkBox::builder().orientation(Orientation::Vertical).spacing(2).hexpand(true).build();
-    col.append(&Label::builder().label(title).css_classes(["card-section-title"]).xalign(0.0).build());
-    col.append(&Label::builder().label(description).css_classes(["card-section-sub"]).wrap(true).xalign(0.0).build());
+    let hdr = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .build();
+    hdr.append(&make_squircle_colored_badge(
+        34,
+        icon,
+        18,
+        WIFI_BADGE_SQUIRCLE_RADIUS,
+        top,
+        bot,
+    ));
+    let col = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .build();
+    col.append(
+        &Label::builder()
+            .label(title)
+            .css_classes(["card-section-title"])
+            .xalign(0.0)
+            .build(),
+    );
+    col.append(
+        &Label::builder()
+            .label(description)
+            .css_classes(["card-section-sub"])
+            .wrap(true)
+            .xalign(0.0)
+            .build(),
+    );
     hdr.append(&col);
     hdr.append(&make_pending_badge());
     card.append(&hdr);
@@ -2639,10 +3445,30 @@ fn build_reset_subpane(parent_window: &ApplicationWindow) -> ScrolledWindow {
         .spacing(10)
         .css_classes(["wifi-card-compact", "wifi-header-section"])
         .build();
-    let r1 = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).build();
-    r1.append(&make_squircle_colored_badge(32, "view-refresh-symbolic", 17, WIFI_BADGE_SQUIRCLE_RADIUS, GRAY_TOP, GRAY_BOT));
-    let c1 = GtkBox::builder().orientation(Orientation::Vertical).spacing(2).hexpand(true).build();
-    c1.append(&Label::builder().label("Restablecer preferencias de Malus DE").css_classes(["card-section-title"]).xalign(0.0).build());
+    let r1 = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .build();
+    r1.append(&make_squircle_colored_badge(
+        32,
+        "view-refresh-symbolic",
+        17,
+        WIFI_BADGE_SQUIRCLE_RADIUS,
+        GRAY_TOP,
+        GRAY_BOT,
+    ));
+    let c1 = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .build();
+    c1.append(
+        &Label::builder()
+            .label("Restablecer preferencias de Malus DE")
+            .css_classes(["card-section-title"])
+            .xalign(0.0)
+            .build(),
+    );
     c1.append(
         &Label::builder()
             .label("Restaura los ajustes de apariencia, dock, pantallas y paneles de ~/.config/malus-de a sus valores predeterminados sin borrar tus archivos personales.")
@@ -2663,9 +3489,27 @@ fn build_reset_subpane(parent_window: &ApplicationWindow) -> ScrolledWindow {
             .default_width(380)
             .build();
         crate::attach_modal_scrim(&dlg, &win_c);
-        let vb = GtkBox::builder().orientation(Orientation::Vertical).spacing(12).margin_top(18).margin_bottom(18).margin_start(20).margin_end(20).build();
-        vb.append(&Label::builder().label("¿Restaurar las preferencias de General a sus valores por defecto?").css_classes(["card-section-title"]).wrap(true).xalign(0.0).build());
-        let act = GtkBox::builder().orientation(Orientation::Horizontal).spacing(8).halign(Align::End).build();
+        let vb = GtkBox::builder()
+            .orientation(Orientation::Vertical)
+            .spacing(12)
+            .margin_top(18)
+            .margin_bottom(18)
+            .margin_start(20)
+            .margin_end(20)
+            .build();
+        vb.append(
+            &Label::builder()
+                .label("¿Restaurar las preferencias de General a sus valores por defecto?")
+                .css_classes(["card-section-title"])
+                .wrap(true)
+                .xalign(0.0)
+                .build(),
+        );
+        let act = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(8)
+            .halign(Align::End)
+            .build();
         let (cw, cb) = make_squircle_button("Cancelar", false, None);
         let (ow, ob) = make_squircle_button("Restablecer", true, None);
         act.append(&cw);
@@ -2686,10 +3530,30 @@ fn build_reset_subpane(parent_window: &ApplicationWindow) -> ScrolledWindow {
     card.append(&r1);
     card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 
-    let r2 = GtkBox::builder().orientation(Orientation::Horizontal).spacing(12).build();
-    let c2 = GtkBox::builder().orientation(Orientation::Vertical).spacing(2).hexpand(true).build();
-    c2.append(&Label::builder().label("Asistente de Migración y Borrado total").css_classes(["wifi-row-title"]).xalign(0.0).build());
-    c2.append(&Label::builder().label("Transferencia guiada de cuentas de usuario y borrado criptográfico LUKS.").css_classes(["card-section-sub"]).wrap(true).xalign(0.0).build());
+    let r2 = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .build();
+    let c2 = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .hexpand(true)
+        .build();
+    c2.append(
+        &Label::builder()
+            .label("Asistente de Migración y Borrado total")
+            .css_classes(["wifi-row-title"])
+            .xalign(0.0)
+            .build(),
+    );
+    c2.append(
+        &Label::builder()
+            .label("Transferencia guiada de cuentas de usuario y borrado criptográfico LUKS.")
+            .css_classes(["card-section-sub"])
+            .wrap(true)
+            .xalign(0.0)
+            .build(),
+    );
     r2.append(&c2);
     r2.append(&make_pending_badge());
     card.append(&r2);
@@ -2719,9 +3583,23 @@ fn pref_switch_row<F: Fn(bool) + 'static>(
         .hexpand(true)
         .valign(Align::Center)
         .build();
-    col.append(&Label::builder().label(title).css_classes(["wifi-row-title"]).wrap(true).xalign(0.0).build());
+    col.append(
+        &Label::builder()
+            .label(title)
+            .css_classes(["wifi-row-title"])
+            .wrap(true)
+            .xalign(0.0)
+            .build(),
+    );
     if let Some(sub) = subtitle {
-        col.append(&Label::builder().label(sub).css_classes(["card-section-sub"]).wrap(true).xalign(0.0).build());
+        col.append(
+            &Label::builder()
+                .label(sub)
+                .css_classes(["card-section-sub"])
+                .wrap(true)
+                .xalign(0.0)
+                .build(),
+        );
     }
     let sw = Switch::builder()
         .active(initial)
@@ -2769,13 +3647,22 @@ fn make_simple_selector<F: Fn(usize) + 'static>(
     let opts: Vec<String> = options.iter().map(|s| s.to_string()).collect();
     let cb = Rc::new(on_select);
 
-    let inner = GtkBox::builder().orientation(Orientation::Horizontal).spacing(6).valign(Align::Center).build();
+    let inner = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(6)
+        .valign(Align::Center)
+        .build();
     let cur_lbl = Label::builder()
         .label(opts.get(selected.get()).map(String::as_str).unwrap_or(""))
         .css_classes(["card-section-sub"])
         .build();
     inner.append(&cur_lbl);
-    inner.append(&Image::builder().icon_name("pan-down-symbolic").pixel_size(12).build());
+    inner.append(
+        &Image::builder()
+            .icon_name("pan-down-symbolic")
+            .pixel_size(12)
+            .build(),
+    );
 
     let btn = gtk4::MenuButton::builder()
         .child(&inner)
@@ -2784,7 +3671,10 @@ fn make_simple_selector<F: Fn(usize) + 'static>(
         .css_classes(["fw-rule-action-btn"])
         .valign(Align::Center)
         .build();
-    let pop = gtk4::Popover::builder().has_arrow(false).css_classes(["wifi-macos-popover"]).build();
+    let pop = gtk4::Popover::builder()
+        .has_arrow(false)
+        .css_classes(["wifi-macos-popover"])
+        .build();
     btn.set_popover(Some(&pop));
 
     let rebuild: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
@@ -2796,7 +3686,14 @@ fn make_simple_selector<F: Fn(usize) + 'static>(
         let cb_c = cb;
         let self_ref = rebuild.clone();
         Rc::new(move || {
-            let mbox = GtkBox::builder().orientation(Orientation::Vertical).spacing(1).margin_top(4).margin_bottom(4).margin_start(4).margin_end(4).build();
+            let mbox = GtkBox::builder()
+                .orientation(Orientation::Vertical)
+                .spacing(1)
+                .margin_top(4)
+                .margin_bottom(4)
+                .margin_start(4)
+                .margin_end(4)
+                .build();
             let cur = sel_c.get();
             for (idx, opt) in opts_c.iter().enumerate() {
                 let (w, b) = make_popover_action_row(opt, true, (idx == cur).then_some("✓"));
@@ -2856,7 +3753,8 @@ fn collect_system_info_fast() -> SystemInfoSnapshot {
     };
 
     let cpu_raw = fs::read_to_string("/proc/cpuinfo").unwrap_or_default();
-    let cpu_model = parse_proc_cpu_model(&cpu_raw).unwrap_or_else(|| "Procesador x86_64".to_string());
+    let cpu_model =
+        parse_proc_cpu_model(&cpu_raw).unwrap_or_else(|| "Procesador x86_64".to_string());
 
     let mem_raw = fs::read_to_string("/proc/meminfo").unwrap_or_default();
     let memory_gb = parse_proc_mem_total_gb(&mem_raw).unwrap_or_else(|| "—".to_string());
@@ -2885,7 +3783,10 @@ fn collect_system_info_fast() -> SystemInfoSnapshot {
         ));
     }
     if displays.is_empty() {
-        displays.push(("Pantalla principal Wayland".to_string(), "1920 × 1080".to_string()));
+        displays.push((
+            "Pantalla principal Wayland".to_string(),
+            "1920 × 1080".to_string(),
+        ));
     }
 
     let (root_device, root_total_bytes, root_used_bytes, root_avail_bytes) =
@@ -2945,7 +3846,12 @@ fn query_root_filesystem_usage() -> (String, u64, u64, u64) {
             }
         }
     }
-    ("Volumen raíz (/)".to_string(), 250_000_000_000, 45_000_000_000, 205_000_000_000)
+    (
+        "Volumen raíz (/)".to_string(),
+        250_000_000_000,
+        45_000_000_000,
+        205_000_000_000,
+    )
 }
 
 pub(crate) fn parse_df_bytes_output(raw: &str) -> Option<(String, u64, u64, u64)> {
@@ -2965,12 +3871,12 @@ fn populate_storage_breakdown(snap: &mut SystemInfoSnapshot) {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/home".to_string());
     let home_p = Path::new(&home);
     snap.trash_bytes = dir_size_quick(&home_p.join(".local/share/Trash"));
-    snap.docs_bytes = dir_size_quick(&home_p.join("Documentos"))
-        .max(dir_size_quick(&home_p.join("Documents")));
-    snap.photos_bytes = dir_size_quick(&home_p.join("Imágenes"))
-        .max(dir_size_quick(&home_p.join("Pictures")));
-    snap.downloads_bytes = dir_size_quick(&home_p.join("Descargas"))
-        .max(dir_size_quick(&home_p.join("Downloads")));
+    snap.docs_bytes =
+        dir_size_quick(&home_p.join("Documentos")).max(dir_size_quick(&home_p.join("Documents")));
+    snap.photos_bytes =
+        dir_size_quick(&home_p.join("Imágenes")).max(dir_size_quick(&home_p.join("Pictures")));
+    snap.downloads_bytes =
+        dir_size_quick(&home_p.join("Descargas")).max(dir_size_quick(&home_p.join("Downloads")));
     let cache_bytes = dir_size_quick(&home_p.join(".cache"));
     let flatpak_bytes = dir_size_quick(&home_p.join(".local/share/flatpak"));
 
@@ -2992,9 +3898,15 @@ fn dir_size_quick(path: &Path) -> u64 {
     if !path.exists() {
         return 0;
     }
-    if let Ok(out) = Command::new("du").args(["-sb", &path.to_string_lossy()]).output() {
+    if let Ok(out) = Command::new("du")
+        .args(["-sb", &path.to_string_lossy()])
+        .output()
+    {
         if out.status.success() {
-            if let Some(first) = String::from_utf8_lossy(&out.stdout).split_whitespace().next() {
+            if let Some(first) = String::from_utf8_lossy(&out.stdout)
+                .split_whitespace()
+                .next()
+            {
                 if let Ok(b) = first.parse::<u64>() {
                     return b;
                 }
@@ -3160,7 +4072,13 @@ fn create_autostart_entry(name: &str, exec: &str) {
     let _ = fs::create_dir_all(&dir);
     let slug: String = name
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
         .collect();
     let path = dir.join(format!("malus-{slug}.desktop"));
     let content = format!(
@@ -3200,7 +4118,8 @@ mod tests {
 
     #[test]
     fn parses_autostart_desktop_and_formats_regional_preview() {
-        let desktop = "[Desktop Entry]\nType=Application\nName=Nextcloud\nExec=nextcloud --background\n";
+        let desktop =
+            "[Desktop Entry]\nType=Application\nName=Nextcloud\nExec=nextcloud --background\n";
         let entry = parse_autostart_desktop(Path::new("/tmp/nextcloud.desktop"), desktop).unwrap();
         assert_eq!(entry.name, "Nextcloud");
         assert_eq!(entry.kind_label, "Aplicación");
@@ -3213,4 +4132,3 @@ mod tests {
         assert!(preview.contains("72 °F"));
     }
 }
-

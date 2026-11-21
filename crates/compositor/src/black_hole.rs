@@ -264,7 +264,8 @@ impl BlackHoleTimelineSample {
         let flash_down = 1.0 - smoothstep(0.30, 0.78, collapse_u);
         let pinch_flash = flash_up * flash_down;
 
-        let fade = (smoothstep(0.0, 0.04, t) * (1.0 - smoothstep(0.55, 1.0, collapse_u))).clamp(0.0, 1.0);
+        let fade =
+            (smoothstep(0.0, 0.04, t) * (1.0 - smoothstep(0.55, 1.0, collapse_u))).clamp(0.0, 1.0);
 
         // Giro acelerado al comprimirse (conservación de momento angular).
         let spin_phase = t * 5.2 + t * t * 3.8 + collapse * collapse * 3.2;
@@ -372,18 +373,21 @@ pub fn capture_closing_window_texture(
         base_win_rect
     };
 
-    let (final_screen_rect, tb_screen_loc, tb_phys_h) = if pending.uses_ssd && !pending.is_fullscreen
-    {
-        let tb_h = (crate::ssd::SSD_TITLEBAR_HEIGHT as f64 * scale).round() as i32;
-        let tb_loc = Point::from((screen_content_rect.loc.x, screen_content_rect.loc.y - tb_h));
-        let full_rect = Rectangle::new(
-            tb_loc,
-            Size::from((screen_content_rect.size.w, screen_content_rect.size.h + tb_h)),
-        );
-        (full_rect, Some(tb_loc), tb_h)
-    } else {
-        (screen_content_rect, None, 0)
-    };
+    let (final_screen_rect, tb_screen_loc, tb_phys_h) =
+        if pending.uses_ssd && !pending.is_fullscreen {
+            let tb_h = (crate::ssd::SSD_TITLEBAR_HEIGHT as f64 * scale).round() as i32;
+            let tb_loc = Point::from((screen_content_rect.loc.x, screen_content_rect.loc.y - tb_h));
+            let full_rect = Rectangle::new(
+                tb_loc,
+                Size::from((
+                    screen_content_rect.size.w,
+                    screen_content_rect.size.h + tb_h,
+                )),
+            );
+            (full_rect, Some(tb_loc), tb_h)
+        } else {
+            (screen_content_rect, None, 0)
+        };
 
     if final_screen_rect.size.w <= 4 || final_screen_rect.size.h <= 4 {
         return None;
@@ -422,7 +426,10 @@ pub fn capture_closing_window_texture(
     let mut texture = match renderer.create_buffer(Fourcc::Abgr8888, buf_size) {
         Ok(tex) => tex,
         Err(err) => {
-            warn!("⚠️ [BlackHole] No se pudo crear textura offscreen: {:?}", err);
+            warn!(
+                "⚠️ [BlackHole] No se pudo crear textura offscreen: {:?}",
+                err
+            );
             return None;
         }
     };
@@ -438,14 +445,14 @@ pub fn capture_closing_window_texture(
                 return None;
             }
         };
-        let mut frame = match renderer.render(&mut target, final_screen_rect.size, Transform::Normal)
-        {
-            Ok(f) => f,
-            Err(err) => {
-                warn!("⚠️ [BlackHole] Fallo al iniciar frame offscreen: {:?}", err);
-                return None;
-            }
-        };
+        let mut frame =
+            match renderer.render(&mut target, final_screen_rect.size, Transform::Normal) {
+                Ok(f) => f,
+                Err(err) => {
+                    warn!("⚠️ [BlackHole] Fallo al iniciar frame offscreen: {:?}", err);
+                    return None;
+                }
+            };
 
         let _ = frame.clear(Color32F::new(0.0, 0.0, 0.0, 0.0), &[offscreen_rect]);
         if pending.is_translucent {
@@ -521,12 +528,14 @@ pub fn capture_closing_window_texture(
                                     y_inverted: texture.is_y_inverted(),
                                 };
                                 let sub_offset = Point::from((-dst_rect.loc.x, -dst_rect.loc.y));
-                                let border_strength =
-                                    if unified_clip || layer.is_root || dst_rect == offscreen_rect {
-                                        1.0
-                                    } else {
-                                        0.0
-                                    };
+                                let border_strength = if unified_clip
+                                    || layer.is_root
+                                    || dst_rect == offscreen_rect
+                                {
+                                    1.0
+                                } else {
+                                    0.0
+                                };
                                 sh.apply_surface_to_frame(
                                     &mut frame,
                                     Some(tex_params),
@@ -590,7 +599,10 @@ pub fn capture_closing_window_texture(
             }
         }
         if let Err(err) = frame.finish() {
-            warn!("⚠️ [BlackHole] Fallo al finalizar frame offscreen: {:?}", err);
+            warn!(
+                "⚠️ [BlackHole] Fallo al finalizar frame offscreen: {:?}",
+                err
+            );
             return None;
         }
     }
@@ -933,8 +945,8 @@ impl BlackHolePipeline {
             (win_x, win_y + win_h),
             (win_x + win_w, win_y + win_h),
         ] {
-            let d = ((cx - active.origin_phys.0).powi(2) + (cy - active.origin_phys.1).powi(2))
-                .sqrt();
+            let d =
+                ((cx - active.origin_phys.0).powi(2) + (cy - active.origin_phys.1).powi(2)).sqrt();
             if d > max_dist {
                 max_dist = d;
             }
@@ -1018,11 +1030,7 @@ impl BlackHolePipeline {
                 let quad_half = sample.horizon_radius_px * 2.5;
                 gl.UseProgram(self.bh_program);
                 gl.UniformMatrix3fv(self.u_bh_matrix, 1, ffi::FALSE, projection.as_ptr());
-                gl.Uniform2f(
-                    self.u_bh_center,
-                    active.origin_phys.0,
-                    active.origin_phys.1,
-                );
+                gl.Uniform2f(self.u_bh_center, active.origin_phys.0, active.origin_phys.1);
                 gl.Uniform1f(self.u_bh_radius, sample.horizon_radius_px);
                 gl.Uniform1f(self.u_bh_quad_half, quad_half);
                 gl.Uniform1f(self.u_bh_spin_time, sample.spin_phase);
@@ -1089,7 +1097,9 @@ unsafe fn compile_shader(
         error!(
             "❌ [BlackHolePipeline:{}] Error compilando shader: {}",
             label,
-            String::from_utf8_lossy(&buffer).trim_end_matches('\0').trim()
+            String::from_utf8_lossy(&buffer)
+                .trim_end_matches('\0')
+                .trim()
         );
         gl.DeleteShader(shader);
         return None;
@@ -1135,7 +1145,9 @@ pub(crate) unsafe fn link_program(
         error!(
             "❌ [BlackHolePipeline:{}] Error enlazando programa GL: {}",
             label,
-            String::from_utf8_lossy(&buffer).trim_end_matches('\0').trim()
+            String::from_utf8_lossy(&buffer)
+                .trim_end_matches('\0')
+                .trim()
         );
         gl.DeleteProgram(program);
         return None;
@@ -1159,7 +1171,11 @@ mod tests {
         // Ignición: botón se abre en agujero negro con disco antes de succionar por completo
         let s_ignite = BlackHoleTimelineSample::sample(0.14, peak_r, 1.0);
         assert!(s_ignite.ignite > 0.9, "ignite={}", s_ignite.ignite);
-        assert!(s_ignite.disk_intensity > 0.9, "disk={}", s_ignite.disk_intensity);
+        assert!(
+            s_ignite.disk_intensity > 0.9,
+            "disk={}",
+            s_ignite.disk_intensity
+        );
         assert!(s_ignite.suction < 0.05, "suction={}", s_ignite.suction);
         assert!(s_ignite.horizon_radius_px > 6.3 && s_ignite.horizon_radius_px <= 7.1);
 

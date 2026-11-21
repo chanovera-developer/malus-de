@@ -74,7 +74,10 @@ impl WorkspaceManager {
     }
 
     pub fn remove_workspace(&mut self, index: usize) -> Option<Vec<WorkspaceWindow>> {
-        if self.workspaces.len() <= 1 || index >= self.workspaces.len() || index == self.active_index {
+        if self.workspaces.len() <= 1
+            || index >= self.workspaces.len()
+            || index == self.active_index
+        {
             return None;
         }
         let removed = self.workspaces.remove(index);
@@ -158,4 +161,3 @@ mod tests {
         assert!(mgr.remove_workspace(0).is_none());
     }
 }
-

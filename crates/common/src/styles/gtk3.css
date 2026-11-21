@@ -4,8 +4,8 @@
 @define-color headerbar_bg_color __BG_COLOR__;
 @define-color headerbar_fg_color __FG_COLOR__;
 @define-color sidebar_bg_color __SIDEBAR_BG__;
-@define-color accent_bg_color @theme_selected_bg_color;
-@define-color accent_fg_color @theme_selected_fg_color;
+@define-color accent_bg_color __ACCENT_BG_COLOR__;
+@define-color accent_fg_color __ACCENT_FG_COLOR__;
 
 popover,
 popover.menu,
@@ -76,16 +76,16 @@ menu menuitem:hover:not(:disabled),
 menu menuitem:selected:not(:disabled),
 .menu menuitem:hover:not(:disabled),
 .menu menuitem:selected:not(:disabled) {
-    background-color: rgba(0, 122, 255, 0.70);
+    background-color: alpha(@accent_bg_color, 0.70);
     background-image: none;
     border-radius: 6px;
-    color: #ffffff;
+    color: @accent_fg_color;
 }
 
 popover modelbutton:hover:not(:disabled) label,
 menu menuitem:hover:not(:disabled) label,
 .menu menuitem:hover:not(:disabled) label {
-    color: #ffffff;
+    color: @accent_fg_color;
 }
 
 menu separator,
@@ -283,4 +283,3 @@ placessidebar.view {
     background-color: __SIDEBAR_BG__;
     box-shadow: inset -1px 0 __BORDER_COLOR__;
 }
-

@@ -213,7 +213,11 @@ impl DbusMenuService {
     }
 
     /// Busca un menú D-Bus registrado asociado a la ventana o al app_id.
-    pub fn find_menu(&self, window_id: Option<u64>, app_id: Option<&str>) -> Option<(String, String)> {
+    pub fn find_menu(
+        &self,
+        window_id: Option<u64>,
+        app_id: Option<&str>,
+    ) -> Option<(String, String)> {
         if let Some(wid) = window_id {
             let by_win = self.registrations_by_window.lock().unwrap();
             if let Some(reg) = by_win.get(&(wid as u32)) {
@@ -254,7 +258,10 @@ impl DbusMenuService {
 
         info!(
             "📋 [DbusMenu] Menú obtenido de {}:{} (root_id={}, categorías={})",
-            service, path, root_id, raw_categories.len()
+            service,
+            path,
+            root_id,
+            raw_categories.len()
         );
 
         let mut categories = Vec::new();

@@ -11,9 +11,7 @@ use smithay::{
         },
         renderer::{
             element::{
-                surface::{
-                    render_elements_from_surface_tree, WaylandSurfaceRenderElement,
-                },
+                surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement},
                 Element, Kind,
             },
             gles::GlesRenderer,
@@ -111,10 +109,7 @@ fn find_layer_popup_under(
             if let Some((surf, sub_loc)) =
                 layer.surface_under(local_point, smithay::desktop::WindowSurfaceType::POPUP)
             {
-                return Some((
-                    surf,
-                    (geo.loc + sub_loc).to_f64(),
-                ));
+                return Some((surf, (geo.loc + sub_loc).to_f64()));
             }
         }
     }
@@ -1226,7 +1221,10 @@ pub fn run_winit() -> Result<()> {
                 if state.pending_displays_reload {
                     state.pending_displays_reload = false;
                     current_displays_cfg = malus_de_common::config::DisplaysConfig::load();
-                    state.relocate_primary_shell_layers_for_config(&current_displays_cfg, Vec::new());
+                    state.relocate_primary_shell_layers_for_config(
+                        &current_displays_cfg,
+                        Vec::new(),
+                    );
                     squircle_corner_cache.clear();
                 }
 
@@ -1304,13 +1302,8 @@ pub fn run_winit() -> Result<()> {
                         }
                     }
                     if dnd_elems.is_empty() && state.dnd_drop_hold.is_some() {
-                        dnd_fallback_elem = super::build_cached_dnd_fallback(
-                            renderer,
-                            &state,
-                            loc.x,
-                            loc.y,
-                            1.0,
-                        );
+                        dnd_fallback_elem =
+                            super::build_cached_dnd_fallback(renderer, &state, loc.x, loc.y, 1.0);
                     }
                 }
                 let spotlight_active = layer_map
@@ -1462,19 +1455,27 @@ pub fn run_winit() -> Result<()> {
 
                         let win_global_rect = Rectangle::new(effective_loc, effective_size);
                         if output_geo.overlaps(win_global_rect) {
-                            let (phys_loc, transition_clip, content_offset, content_size, win_screen_rect) =
-                                if let Some((_, _, pl, clip_rect, c_off, c_sz, w_rect)) = transition_layout {
-                                    (pl, clip_rect, c_off, c_sz, w_rect)
-                                } else {
-                                    let pl = (loc - geo.loc - output_geo.loc).to_physical_precise_round(1.0);
-                                    let c_off = geo.loc.to_physical_precise_round(1.0);
-                                    let c_sz = geo.size.to_physical_precise_round(1.0);
-                                    let w_rect = Rectangle::new(
-                                        (loc - output_geo.loc).to_physical_precise_round(1.0),
-                                        geo.size.to_physical_precise_round(1.0),
-                                    );
-                                    (pl, None, c_off, c_sz, w_rect)
-                                };
+                            let (
+                                phys_loc,
+                                transition_clip,
+                                content_offset,
+                                content_size,
+                                win_screen_rect,
+                            ) = if let Some((_, _, pl, clip_rect, c_off, c_sz, w_rect)) =
+                                transition_layout
+                            {
+                                (pl, clip_rect, c_off, c_sz, w_rect)
+                            } else {
+                                let pl =
+                                    (loc - geo.loc - output_geo.loc).to_physical_precise_round(1.0);
+                                let c_off = geo.loc.to_physical_precise_round(1.0);
+                                let c_sz = geo.size.to_physical_precise_round(1.0);
+                                let w_rect = Rectangle::new(
+                                    (loc - output_geo.loc).to_physical_precise_round(1.0),
+                                    geo.size.to_physical_precise_round(1.0),
+                                );
+                                (pl, None, c_off, c_sz, w_rect)
+                            };
 
                             let win_surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
                                 render_elements_from_surface_tree(
@@ -1695,8 +1696,9 @@ pub fn run_winit() -> Result<()> {
                     now,
                 );
                 let spotlight_frame = if state.spotlight.is_open() {
-                    if let Some((spot_rect, mask_opt, mask_sz, spot_alpha)) =
-                        state.spotlight.prepare_frame(output_geo, 1.0, is_dark_theme)
+                    if let Some((spot_rect, mask_opt, mask_sz, spot_alpha)) = state
+                        .spotlight
+                        .prepare_frame(output_geo, 1.0, is_dark_theme)
                     {
                         let mask_vec = mask_opt.map(|s| s.to_vec());
                         state
@@ -1721,8 +1723,9 @@ pub fn run_winit() -> Result<()> {
                 };
 
                 let screenshot_ui_frame = if state.screenshot_ui.is_open() {
-                    if let Some((ui_rect, mask_opt, mask_sz, ui_alpha)) =
-                        state.screenshot_ui.prepare_frame(output_geo, 1.0, is_dark_theme)
+                    if let Some((ui_rect, mask_opt, mask_sz, ui_alpha)) = state
+                        .screenshot_ui
+                        .prepare_frame(output_geo, 1.0, is_dark_theme)
                     {
                         let mask_vec = mask_opt.map(|s| s.to_vec());
                         state
@@ -1736,23 +1739,26 @@ pub fn run_winit() -> Result<()> {
                     None
                 };
 
-                let snap_layouts_frame = if state.snap_layouts.should_render_on_output(&output.name()) {
-                    if let Some((card_rect, mask_opt, mask_sz, snap_alpha)) =
-                        state.snap_layouts.prepare_frame(&output.name(), output_geo, 1.0, is_dark_theme)
-                    {
-                        let mask_vec = mask_opt.map(|s| s.to_vec());
-                        state
+                let snap_layouts_frame =
+                    if state.snap_layouts.should_render_on_output(&output.name()) {
+                        if let Some((card_rect, mask_opt, mask_sz, snap_alpha)) = state
                             .snap_layouts
-                            .create_render_element(renderer, card_rect.loc, snap_alpha)
-                            .map(|elem| (card_rect, mask_vec, mask_sz, snap_alpha, elem))
+                            .prepare_frame(&output.name(), output_geo, 1.0, is_dark_theme)
+                        {
+                            let mask_vec = mask_opt.map(|s| s.to_vec());
+                            state
+                                .snap_layouts
+                                .create_render_element(renderer, card_rect.loc, snap_alpha)
+                                .map(|elem| (card_rect, mask_vec, mask_sz, snap_alpha, elem))
+                        } else {
+                            None
+                        }
                     } else {
                         None
-                    }
-                } else {
-                    None
-                };
+                    };
                 let snap_layouts_preview = state.snap_layouts.hovered_preview_rect(&output.name());
-                let app_switcher_deck_frame = if state.deck_should_render_on_output(&output.name()) {
+                let app_switcher_deck_frame = if state.deck_should_render_on_output(&output.name())
+                {
                     let deck_windows = state.deck_windows_for_render();
                     let app_switcher = &mut state.app_switcher;
                     let ssd = &mut state.ssd;
@@ -1808,9 +1814,14 @@ pub fn run_winit() -> Result<()> {
 
                         let raw_shadow_rect = Rectangle::new(
                             (win_rect.loc.x - shadow_pad, win_rect.loc.y - shadow_pad).into(),
-                            (win_rect.size.w + shadow_pad * 2, win_rect.size.h + shadow_pad * 2).into(),
+                            (
+                                win_rect.size.w + shadow_pad * 2,
+                                win_rect.size.h + shadow_pad * 2,
+                            )
+                                .into(),
                         );
-                        let shadow_rect = super::clamp_rect_to_bounds(raw_shadow_rect, screen_bounds);
+                        let shadow_rect =
+                            super::clamp_rect_to_bounds(raw_shadow_rect, screen_bounds);
 
                         for occluder in &occluders {
                             if occluder.contains_rounded_rect(win_rect, target_r) {
@@ -1860,443 +1871,496 @@ pub fn run_winit() -> Result<()> {
                     let _ = frame.clear(clear_color, &[damage]);
                     if session_locked {
                         if !lock_elements.is_empty() {
-                            let _ = draw_render_elements(
-                                &mut frame,
-                                1.0,
-                                &lock_elements,
-                                &[damage],
-                            );
+                            let _ =
+                                draw_render_elements(&mut frame, 1.0, &lock_elements, &[damage]);
                         }
                     } else {
-                    // 1. Renderizar fondo (wallpaper y capas inferiores) solo si no está 100% ocluido por una ventana pantalla completa
-                    if !wallpaper_occluded && !lower_elements.is_empty() {
-                        let _ = draw_render_elements(&mut frame, 1.0, &lower_elements, &[damage]);
-                    }
-
-                    // Inicializar pipeline de sombras squircle si aún no se intentó
-                    if !shadow_init_attempted {
-                        shadow_init_attempted = true;
-                        shadow_pipeline = frame
-                            .with_context(|gl| crate::shadow::WindowShadowPipeline::new(gl))
-                            .ok()
-                            .flatten();
-                    }
-
-                    // Inicializar pipeline de desenfoque Dual Kawase si aún no se intentó
-                    if !blur_init_attempted {
-                        blur_init_attempted = true;
-                        blur_pipeline = frame
-                            .with_context(|gl| crate::blur::GaussianBlur::new(gl))
-                            .ok()
-                            .flatten();
-                    }
-
-                    let projection = *frame.projection();
-                    if !wallpaper_occluded {
-                        if let Some(ref mut blur) = blur_pipeline {
-                            let _ = frame.with_context(|gl| {
-                                blur.capture_background(gl, &projection, size);
-                            });
-                        }
-                    }
-
-                    let is_pointer_grabbed = state
-                        .seat
-                        .get_pointer()
-                        .map(|p| p.is_grabbed())
-                        .unwrap_or(false);
-                    if !is_pointer_grabbed {
-                        state.snap_preview = None;
-                        state.moving_window_surface = None;
-                    }
-                    let mut snap_preview_drawn = false;
-
-                    // 2. Renderizar superficies de cada ventana con sus sombras proyectadas, desenfoque de fondo y esquinas squircle
-                    for (
-                        idx,
-                        (
-                            root_id,
-                            win_elems,
-                            _popups,
-                            _popup_shadow_rects,
-                            should_round,
-                            is_active,
-                            win_rect,
-                            _content_offset,
-                            _content_size,
-                            is_firefox,
-                            is_translucent,
-                            transition_clip,
-                            ssd_elem,
-                            _is_maximized,
-                            is_branches,
-                        ),
-                    ) in window_render_data.iter().enumerate()
-                    {
-                        if app_switcher_deck_frame.is_some() || win_elems.is_empty() {
-                            continue;
+                        // 1. Renderizar fondo (wallpaper y capas inferiores) solo si no está 100% ocluido por una ventana pantalla completa
+                        if !wallpaper_occluded && !lower_elements.is_empty() {
+                            let _ =
+                                draw_render_elements(&mut frame, 1.0, &lower_elements, &[damage]);
                         }
 
-                        // Dibujar la previsualización de ajuste (Snap Preview) INMEDIATAMENTE ANTES
-                        // de la ventana activa que se está arrastrando, de modo que la ventana quede POR ENCIMA
-                        if !snap_preview_drawn && is_pointer_grabbed {
-                            let is_target_window = state.moving_window_surface.as_ref().map_or(
+                        // Inicializar pipeline de sombras squircle si aún no se intentó
+                        if !shadow_init_attempted {
+                            shadow_init_attempted = true;
+                            shadow_pipeline = frame
+                                .with_context(|gl| crate::shadow::WindowShadowPipeline::new(gl))
+                                .ok()
+                                .flatten();
+                        }
+
+                        // Inicializar pipeline de desenfoque Dual Kawase si aún no se intentó
+                        if !blur_init_attempted {
+                            blur_init_attempted = true;
+                            blur_pipeline = frame
+                                .with_context(|gl| crate::blur::GaussianBlur::new(gl))
+                                .ok()
+                                .flatten();
+                        }
+
+                        let projection = *frame.projection();
+                        if !wallpaper_occluded {
+                            if let Some(ref mut blur) = blur_pipeline {
+                                let _ = frame.with_context(|gl| {
+                                    blur.capture_background(gl, &projection, size);
+                                });
+                            }
+                        }
+
+                        let is_pointer_grabbed = state
+                            .seat
+                            .get_pointer()
+                            .map(|p| p.is_grabbed())
+                            .unwrap_or(false);
+                        if !is_pointer_grabbed {
+                            state.snap_preview = None;
+                            state.moving_window_surface = None;
+                        }
+                        let mut snap_preview_drawn = false;
+
+                        // 2. Renderizar superficies de cada ventana con sus sombras proyectadas, desenfoque de fondo y esquinas squircle
+                        for (
+                            idx,
+                            (
+                                root_id,
+                                win_elems,
+                                _popups,
+                                _popup_shadow_rects,
+                                should_round,
+                                is_active,
+                                win_rect,
+                                _content_offset,
+                                _content_size,
+                                is_firefox,
+                                is_translucent,
+                                transition_clip,
+                                ssd_elem,
+                                _is_maximized,
+                                is_branches,
+                            ),
+                        ) in window_render_data.iter().enumerate()
+                        {
+                            if app_switcher_deck_frame.is_some() || win_elems.is_empty() {
+                                continue;
+                            }
+
+                            // Dibujar la previsualización de ajuste (Snap Preview) INMEDIATAMENTE ANTES
+                            // de la ventana activa que se está arrastrando, de modo que la ventana quede POR ENCIMA
+                            if !snap_preview_drawn && is_pointer_grabbed {
+                                let is_target_window = state.moving_window_surface.as_ref().map_or(
                                 idx == window_render_data.len() - 1,
                                 |moving_surf| {
                                     let moving_id = smithay::backend::renderer::element::Id::from_wayland_resource(moving_surf);
                                     *root_id == moving_id
                                 },
                             );
-                            if is_target_window {
-                                if let Some(preview) = state.snap_preview {
-                                    crate::blur::render_snap_preview_overlay(
-                                        &mut frame,
-                                        blur_pipeline.as_mut(),
-                                        &projection,
-                                        size,
-                                        preview,
-                                        output_geo.loc,
-                                        1.0,
-                                        win_phys_r,
-                                    );
-                                }
-                                snap_preview_drawn = true;
-                            }
-                        }
-
-                        let is_body_occluded = body_occluded[idx];
-                        let is_shadow_occluded = shadow_occluded[idx];
-
-                        if !is_body_occluded {
-                            visible_surface_ids.insert(root_id.clone());
-                        }
-
-                        // 2.1. SOMBRA PROYECTADA (Window Drop Shadow con Squircle SDF n=4.2)
-                        // Se dibuja para ventanas no en pantalla completa inmediatamente antes de su superficie
-                        if *should_round && !is_shadow_occluded {
-                            if let (Some(r), Some(ref shadow)) =
-                                (win_phys_r, shadow_pipeline.as_ref())
-                            {
-                                let _ = frame.with_context(|gl| {
-                                    shadow.render_shadow(
-                                        gl,
-                                        &projection,
-                                        *win_rect,
-                                        r as f32,
-                                        *is_active,
-                                        1.0,
-                                    );
-                                });
-                            }
-                        }
-
-                        // 2.1.5. DESENFOQUE DE FONDO DUAL KAWASE (Branches y Ajustes del Sistema)
-                        if *is_translucent && !is_body_occluded {
-                            if let Some(ref mut blur) = blur_pipeline {
-                                let corner_radius = if *should_round {
-                                    win_phys_r.unwrap_or(0) as f32
-                                } else {
-                                    0.0
-                                };
-                                let blur_rect = if *is_branches {
-                                    let sidebar_blur_w =
-                                        (212 + corner_radius as i32 + 4).min(win_rect.size.w);
-                                    Rectangle::new(
-                                        win_rect.loc,
-                                        (sidebar_blur_w, win_rect.size.h).into(),
-                                    )
-                                } else {
-                                    *win_rect
-                                };
-                                let screen_size = size;
-                                let _ = frame.with_context(|gl| {
-                                    if idx > 0 {
-                                        blur.capture_background_region(
-                                            gl,
-                                            &projection,
-                                            screen_size,
-                                            blur_rect,
-                                        );
-                                    }
-                                    blur.render_blur(
-                                        gl,
-                                        &projection,
-                                        screen_size,
-                                        blur_rect,
-                                        corner_radius,
-                                    );
-                                });
-                            }
-                        }
-
-                        // 2.2. SUPERFICIES DE LA VENTANA (con respaldo 1:1 durante SnapTransition y recorte Squircle)
-                        let needs_transition_backdrop = transition_clip.is_some_and(|c| {
-                            c.size.w < win_rect.size.w
-                                || (c.loc.y + c.size.h) < (win_rect.loc.y + win_rect.size.h)
-                        });
-                        if needs_transition_backdrop && !is_body_occluded {
-                            let corner_radius = if *should_round {
-                                win_phys_r.unwrap_or(0) as f32
-                            } else {
-                                0.0
-                            };
-                            crate::blur::render_snap_transition_backdrop(
-                                &mut frame,
-                                blur_pipeline.as_mut(),
-                                &projection,
-                                size,
-                                *win_rect,
-                                corner_radius,
-                                idx > 0,
-                                *is_translucent,
-                                *is_branches,
-                                is_dark_theme,
-                            );
-                        }
-                        if !is_body_occluded {
-                            crate::window_corners::render_window_elements(
-                                &mut frame,
-                                1.0,
-                                &[damage],
-                                window_squircle_shader.as_ref(),
-                                root_id,
-                                win_elems,
-                                ssd_elem.as_ref(),
-                                *win_rect,
-                                win_phys_r,
-                                *should_round,
-                                *is_firefox,
-                                *transition_clip,
-                            );
-                        }
-                    }
-
-                    // Si no se dibujó antes (por ejemplo, si no hay ventanas en este monitor), dibujarlo sobre el fondo
-                    if !snap_preview_drawn && is_pointer_grabbed {
-                        if let Some(preview) = state.snap_preview {
-                            crate::blur::render_snap_preview_overlay(
-                                &mut frame,
-                                blur_pipeline.as_mut(),
-                                &projection,
-                                size,
-                                preview,
-                                output_geo.loc,
-                                1.0,
-                                win_phys_r,
-                            );
-                        }
-                    }
-
-                    // 2. Aplicar desenfoque de fondo Dual Kawase por GPU a las capas y popups translúcidos
-                    if !blur_init_attempted {
-                        blur_init_attempted = true;
-                        blur_pipeline = frame
-                            .with_context(|gl| crate::blur::GaussianBlur::new(gl))
-                            .ok()
-                            .flatten();
-                    }
-
-                    if let Some(ref mut blur) = blur_pipeline {
-                        let screen_size = size;
-                        let mut layer_blur_items: Vec<(Rectangle<i32, Physical>, f32, bool)> =
-                            Vec::new();
-                        for (_, rect) in &spotlight_backdrop_elements {
-                            layer_blur_items.push((*rect, 26.0, false));
-                        }
-                        for surface in layer_map.layers() {
-                            if matches!(surface.layer(), Layer::Top | Layer::Overlay) {
-                                if has_fullscreen_window && surface.layer() == Layer::Top {
-                                    continue;
-                                }
-                                let ns = surface.namespace();
-                                if ns == "malus-app-switcher" && !state.app_switcher.is_active {
-                                    continue;
-                                }
-                                if ns == "malus-top-bar" {
-                                    continue;
-                                }
-                                if let Some(geo) = layer_map.layer_geometry(surface) {
-                                    let radius = match ns.as_ref() {
-                                        "malus-dock" => 32.0,
-                                        "malus-app-switcher" => 32.0,
-                                        "malus-lock" => 0.0,
-                                        "malus-spotlight-controls"
-                                        | "malus-spotlight-input"
-                                        | "malus-spotlight-apps"
-                                        | "malus-spotlight-files" => 27.0,
-                                        "malus-notifications" => 16.0,
-                                        _ => 0.0,
-                                    };
-                                    if radius > 0.0 {
-                                        let is_spotlight_comp = matches!(
-                                            ns.as_ref(),
-                                            "malus-spotlight-controls"
-                                                | "malus-spotlight-input"
-                                                | "malus-spotlight-apps"
-                                                | "malus-spotlight-files"
-                                        );
-                                        let phys_rect = if ns == "malus-dock" {
-                                            let root_id =
-                                                smithay::backend::renderer::element::Id::from_wayland_resource(
-                                                    surface.wl_surface(),
-                                                );
-                                            let Some(rect) = dock_clip_roots
-                                                .iter()
-                                                .find(|(id, _)| *id == root_id)
-                                                .map(|(_, rect)| *rect)
-                                            else {
-                                                continue;
-                                            };
-                                            rect
-                                        } else {
-                                            let rect = geo.to_physical_precise_round(1.0);
-                                            if is_spotlight_comp {
-                                                super::spotlight_component_blur_rect(rect, 1.0)
-                                            } else {
-                                                rect
-                                            }
-                                        };
-                                        if phys_rect.size.w > 0 && phys_rect.size.h > 0 {
-                                            layer_blur_items.push((
-                                                phys_rect,
-                                                radius,
-                                                is_spotlight_comp,
-                                            ));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        if !layer_blur_items.is_empty() {
-                            let mut min_x = i32::MAX;
-                            let mut min_y = i32::MAX;
-                            let mut max_x = i32::MIN;
-                            let mut max_y = i32::MIN;
-                            for (rect, _, _) in &layer_blur_items {
-                                min_x = min_x.min(rect.loc.x);
-                                min_y = min_y.min(rect.loc.y);
-                                max_x = max_x.max(rect.loc.x + rect.size.w);
-                                max_y = max_y.max(rect.loc.y + rect.size.h);
-                            }
-                            let capture_region = Rectangle::new(
-                                (min_x, min_y).into(),
-                                ((max_x - min_x).max(0), (max_y - min_y).max(0)).into(),
-                            );
-                            let _ = frame.with_context(|gl| {
-                                blur.capture_background_region(
-                                    gl,
-                                    &projection,
-                                    screen_size,
-                                    capture_region,
-                                );
-                                for (phys_rect, radius, is_round) in layer_blur_items {
-                                    if is_round {
-                                        blur.render_captured_blur_round(
-                                            gl,
-                                            &projection,
-                                            screen_size,
-                                            phys_rect,
-                                            radius,
-                                        );
-                                    } else {
-                                        blur.render_captured_blur(
-                                            gl,
-                                            &projection,
-                                            screen_size,
-                                            phys_rect,
-                                            radius,
-                                        );
-                                    }
-                                }
-                            });
-                        }
-                    }
-
-                    for (elements, rect) in &spotlight_backdrop_elements {
-                        for elem in elements {
-                            if let Some(shader) = window_squircle_shader.as_ref() {
-                                let elem_geo = elem.geometry(Scale::from(1.0));
-                                shader.apply_clip_to_frame(
-                                    &mut frame,
-                                    elem_geo.size,
-                                    rect.loc - elem_geo.loc,
-                                    rect.size,
-                                    26,
-                                );
-                            }
-                            let _ = draw_render_elements(
-                                &mut frame,
-                                1.0,
-                                std::slice::from_ref(elem),
-                                &[damage],
-                            );
-                            frame.clear_tex_program_override();
-                        }
-                    }
-
-                    if let Some(shadow) = shadow_pipeline.as_ref() {
-                        let _ = frame.with_context(|gl| {
-                            for rect in &spotlight_shadow_rects {
-                                shadow.render_shadow(gl, &projection, *rect, 26.0, true, 1.0);
-                            }
-                        });
-                    }
-
-                    // 3. Renderizar menús contextuales y popups de ventanas (siempre ENCIMA de las superficies de ventana)
-                    let menu_radius = super::POPUP_MENU_CORNER_RADIUS_LOGICAL.round() as i32;
-                    for (idx, (_, _, _, popup_shadow_rects, _, is_active, ..)) in
-                        window_render_data.iter().enumerate()
-                    {
-                        if app_switcher_deck_frame.is_some() || body_occluded[idx] {
-                            continue;
-                        }
-                        if let (Some(radius), Some(shadow)) = (win_phys_r, shadow_pipeline.as_ref())
-                        {
-                            for popup_rect in popup_shadow_rects {
-                                let _ = frame.with_context(|gl| {
-                                    shadow.render_shadow(
-                                        gl,
-                                        &projection,
-                                        *popup_rect,
-                                        radius as f32,
-                                        *is_active,
-                                        1.0,
-                                    );
-                                });
-                            }
-                        }
-                    }
-
-                    for (idx, (_, _, popups, ..)) in window_render_data.iter().enumerate() {
-                        if app_switcher_deck_frame.is_some() || body_occluded[idx] {
-                            continue;
-                        }
-                        for (popup_elems, popup_rect, popup_effects_enabled) in popups {
-                            if *popup_effects_enabled {
-                                if let Some(blur) = blur_pipeline.as_mut() {
-                                    let _ = frame.with_context(|gl| {
-                                        blur.render_blur(
-                                            gl,
+                                if is_target_window {
+                                    if let Some(preview) = state.snap_preview {
+                                        crate::blur::render_snap_preview_overlay(
+                                            &mut frame,
+                                            blur_pipeline.as_mut(),
                                             &projection,
                                             size,
-                                            *popup_rect,
-                                            menu_radius as f32,
+                                            preview,
+                                            output_geo.loc,
+                                            1.0,
+                                            win_phys_r,
+                                        );
+                                    }
+                                    snap_preview_drawn = true;
+                                }
+                            }
+
+                            let is_body_occluded = body_occluded[idx];
+                            let is_shadow_occluded = shadow_occluded[idx];
+
+                            if !is_body_occluded {
+                                visible_surface_ids.insert(root_id.clone());
+                            }
+
+                            // 2.1. SOMBRA PROYECTADA (Window Drop Shadow con Squircle SDF n=4.2)
+                            // Se dibuja para ventanas no en pantalla completa inmediatamente antes de su superficie
+                            if *should_round && !is_shadow_occluded {
+                                if let (Some(r), Some(ref shadow)) =
+                                    (win_phys_r, shadow_pipeline.as_ref())
+                                {
+                                    let _ = frame.with_context(|gl| {
+                                        shadow.render_shadow(
+                                            gl,
+                                            &projection,
+                                            *win_rect,
+                                            r as f32,
+                                            *is_active,
+                                            1.0,
                                         );
                                     });
                                 }
                             }
 
-                            for elem in popup_elems.iter().rev() {
+                            // 2.1.5. DESENFOQUE DE FONDO DUAL KAWASE (Branches y Ajustes del Sistema)
+                            if *is_translucent && !is_body_occluded {
+                                if let Some(ref mut blur) = blur_pipeline {
+                                    let corner_radius = if *should_round {
+                                        win_phys_r.unwrap_or(0) as f32
+                                    } else {
+                                        0.0
+                                    };
+                                    let blur_rect = if *is_branches {
+                                        let sidebar_blur_w =
+                                            (212 + corner_radius as i32 + 4).min(win_rect.size.w);
+                                        Rectangle::new(
+                                            win_rect.loc,
+                                            (sidebar_blur_w, win_rect.size.h).into(),
+                                        )
+                                    } else {
+                                        *win_rect
+                                    };
+                                    let screen_size = size;
+                                    let _ = frame.with_context(|gl| {
+                                        if idx > 0 {
+                                            blur.capture_background_region(
+                                                gl,
+                                                &projection,
+                                                screen_size,
+                                                blur_rect,
+                                            );
+                                        }
+                                        blur.render_blur(
+                                            gl,
+                                            &projection,
+                                            screen_size,
+                                            blur_rect,
+                                            corner_radius,
+                                        );
+                                    });
+                                }
+                            }
+
+                            // 2.2. SUPERFICIES DE LA VENTANA (con respaldo 1:1 durante SnapTransition y recorte Squircle)
+                            let needs_transition_backdrop = transition_clip.is_some_and(|c| {
+                                c.size.w < win_rect.size.w
+                                    || (c.loc.y + c.size.h) < (win_rect.loc.y + win_rect.size.h)
+                            });
+                            if needs_transition_backdrop && !is_body_occluded {
+                                let corner_radius = if *should_round {
+                                    win_phys_r.unwrap_or(0) as f32
+                                } else {
+                                    0.0
+                                };
+                                crate::blur::render_snap_transition_backdrop(
+                                    &mut frame,
+                                    blur_pipeline.as_mut(),
+                                    &projection,
+                                    size,
+                                    *win_rect,
+                                    corner_radius,
+                                    idx > 0,
+                                    *is_translucent,
+                                    *is_branches,
+                                    is_dark_theme,
+                                );
+                            }
+                            if !is_body_occluded {
+                                crate::window_corners::render_window_elements(
+                                    &mut frame,
+                                    1.0,
+                                    &[damage],
+                                    window_squircle_shader.as_ref(),
+                                    root_id,
+                                    win_elems,
+                                    ssd_elem.as_ref(),
+                                    *win_rect,
+                                    win_phys_r,
+                                    *should_round,
+                                    *is_firefox,
+                                    *transition_clip,
+                                );
+                            }
+                        }
+
+                        // Si no se dibujó antes (por ejemplo, si no hay ventanas en este monitor), dibujarlo sobre el fondo
+                        if !snap_preview_drawn && is_pointer_grabbed {
+                            if let Some(preview) = state.snap_preview {
+                                crate::blur::render_snap_preview_overlay(
+                                    &mut frame,
+                                    blur_pipeline.as_mut(),
+                                    &projection,
+                                    size,
+                                    preview,
+                                    output_geo.loc,
+                                    1.0,
+                                    win_phys_r,
+                                );
+                            }
+                        }
+
+                        // 2. Aplicar desenfoque de fondo Dual Kawase por GPU a las capas y popups translúcidos
+                        if !blur_init_attempted {
+                            blur_init_attempted = true;
+                            blur_pipeline = frame
+                                .with_context(|gl| crate::blur::GaussianBlur::new(gl))
+                                .ok()
+                                .flatten();
+                        }
+
+                        if let Some(ref mut blur) = blur_pipeline {
+                            let screen_size = size;
+                            let mut layer_blur_items: Vec<(Rectangle<i32, Physical>, f32, bool)> =
+                                Vec::new();
+                            for (_, rect) in &spotlight_backdrop_elements {
+                                layer_blur_items.push((*rect, 26.0, false));
+                            }
+                            for surface in layer_map.layers() {
+                                if matches!(surface.layer(), Layer::Top | Layer::Overlay) {
+                                    if has_fullscreen_window && surface.layer() == Layer::Top {
+                                        continue;
+                                    }
+                                    let ns = surface.namespace();
+                                    if ns == "malus-app-switcher" && !state.app_switcher.is_active {
+                                        continue;
+                                    }
+                                    if ns == "malus-top-bar" {
+                                        continue;
+                                    }
+                                    if let Some(geo) = layer_map.layer_geometry(surface) {
+                                        let radius = match ns.as_ref() {
+                                            "malus-dock" => 32.0,
+                                            "malus-app-switcher" => 32.0,
+                                            "malus-lock" => 0.0,
+                                            "malus-spotlight-controls"
+                                            | "malus-spotlight-input"
+                                            | "malus-spotlight-apps"
+                                            | "malus-spotlight-files" => 27.0,
+                                            "malus-notifications" => 16.0,
+                                            _ => 0.0,
+                                        };
+                                        if radius > 0.0 {
+                                            let is_spotlight_comp = matches!(
+                                                ns.as_ref(),
+                                                "malus-spotlight-controls"
+                                                    | "malus-spotlight-input"
+                                                    | "malus-spotlight-apps"
+                                                    | "malus-spotlight-files"
+                                            );
+                                            let phys_rect = if ns == "malus-dock" {
+                                                let root_id =
+                                                smithay::backend::renderer::element::Id::from_wayland_resource(
+                                                    surface.wl_surface(),
+                                                );
+                                                let Some(rect) = dock_clip_roots
+                                                    .iter()
+                                                    .find(|(id, _)| *id == root_id)
+                                                    .map(|(_, rect)| *rect)
+                                                else {
+                                                    continue;
+                                                };
+                                                rect
+                                            } else {
+                                                let rect = geo.to_physical_precise_round(1.0);
+                                                if is_spotlight_comp {
+                                                    super::spotlight_component_blur_rect(rect, 1.0)
+                                                } else {
+                                                    rect
+                                                }
+                                            };
+                                            if phys_rect.size.w > 0 && phys_rect.size.h > 0 {
+                                                layer_blur_items.push((
+                                                    phys_rect,
+                                                    radius,
+                                                    is_spotlight_comp,
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if !layer_blur_items.is_empty() {
+                                let mut min_x = i32::MAX;
+                                let mut min_y = i32::MAX;
+                                let mut max_x = i32::MIN;
+                                let mut max_y = i32::MIN;
+                                for (rect, _, _) in &layer_blur_items {
+                                    min_x = min_x.min(rect.loc.x);
+                                    min_y = min_y.min(rect.loc.y);
+                                    max_x = max_x.max(rect.loc.x + rect.size.w);
+                                    max_y = max_y.max(rect.loc.y + rect.size.h);
+                                }
+                                let capture_region = Rectangle::new(
+                                    (min_x, min_y).into(),
+                                    ((max_x - min_x).max(0), (max_y - min_y).max(0)).into(),
+                                );
+                                let _ = frame.with_context(|gl| {
+                                    blur.capture_background_region(
+                                        gl,
+                                        &projection,
+                                        screen_size,
+                                        capture_region,
+                                    );
+                                    for (phys_rect, radius, is_round) in layer_blur_items {
+                                        if is_round {
+                                            blur.render_captured_blur_round(
+                                                gl,
+                                                &projection,
+                                                screen_size,
+                                                phys_rect,
+                                                radius,
+                                            );
+                                        } else {
+                                            blur.render_captured_blur(
+                                                gl,
+                                                &projection,
+                                                screen_size,
+                                                phys_rect,
+                                                radius,
+                                            );
+                                        }
+                                    }
+                                });
+                            }
+                        }
+
+                        for (elements, rect) in &spotlight_backdrop_elements {
+                            for elem in elements {
+                                if let Some(shader) = window_squircle_shader.as_ref() {
+                                    let elem_geo = elem.geometry(Scale::from(1.0));
+                                    shader.apply_clip_to_frame(
+                                        &mut frame,
+                                        elem_geo.size,
+                                        rect.loc - elem_geo.loc,
+                                        rect.size,
+                                        26,
+                                    );
+                                }
+                                let _ = draw_render_elements(
+                                    &mut frame,
+                                    1.0,
+                                    std::slice::from_ref(elem),
+                                    &[damage],
+                                );
+                                frame.clear_tex_program_override();
+                            }
+                        }
+
+                        if let Some(shadow) = shadow_pipeline.as_ref() {
+                            let _ = frame.with_context(|gl| {
+                                for rect in &spotlight_shadow_rects {
+                                    shadow.render_shadow(gl, &projection, *rect, 26.0, true, 1.0);
+                                }
+                            });
+                        }
+
+                        // 3. Renderizar menús contextuales y popups de ventanas (siempre ENCIMA de las superficies de ventana)
+                        let menu_radius = super::POPUP_MENU_CORNER_RADIUS_LOGICAL.round() as i32;
+                        for (idx, (_, _, _, popup_shadow_rects, _, is_active, ..)) in
+                            window_render_data.iter().enumerate()
+                        {
+                            if app_switcher_deck_frame.is_some() || body_occluded[idx] {
+                                continue;
+                            }
+                            if let (Some(radius), Some(shadow)) =
+                                (win_phys_r, shadow_pipeline.as_ref())
+                            {
+                                for popup_rect in popup_shadow_rects {
+                                    let _ = frame.with_context(|gl| {
+                                        shadow.render_shadow(
+                                            gl,
+                                            &projection,
+                                            *popup_rect,
+                                            radius as f32,
+                                            *is_active,
+                                            1.0,
+                                        );
+                                    });
+                                }
+                            }
+                        }
+
+                        for (idx, (_, _, popups, ..)) in window_render_data.iter().enumerate() {
+                            if app_switcher_deck_frame.is_some() || body_occluded[idx] {
+                                continue;
+                            }
+                            for (popup_elems, popup_rect, popup_effects_enabled) in popups {
                                 if *popup_effects_enabled {
+                                    if let Some(blur) = blur_pipeline.as_mut() {
+                                        let _ = frame.with_context(|gl| {
+                                            blur.render_blur(
+                                                gl,
+                                                &projection,
+                                                size,
+                                                *popup_rect,
+                                                menu_radius as f32,
+                                            );
+                                        });
+                                    }
+                                }
+
+                                for elem in popup_elems.iter().rev() {
+                                    if *popup_effects_enabled {
+                                        if let Some(shader) = window_squircle_shader.as_ref() {
+                                            let elem_geo = elem.geometry(Scale::from(1.0));
+                                            shader.apply_to_frame(
+                                                &mut frame,
+                                                elem_geo.size,
+                                                popup_rect.loc - elem_geo.loc,
+                                                popup_rect.size,
+                                                menu_radius,
+                                            );
+                                        }
+                                    }
+                                    let _ = draw_render_elements(
+                                        &mut frame,
+                                        1.0,
+                                        std::slice::from_ref(elem),
+                                        &[damage],
+                                    );
+                                    if *popup_effects_enabled {
+                                        frame.clear_tex_program_override();
+                                    }
+                                }
+                            }
+                        }
+
+                        // Previsualización de destino al pasar el cursor por las plantillas de Snap Layouts
+                        if !is_pointer_grabbed {
+                            if let Some(preview) = snap_layouts_preview {
+                                crate::blur::render_snap_preview_overlay(
+                                    &mut frame,
+                                    blur_pipeline.as_mut(),
+                                    &projection,
+                                    size,
+                                    preview,
+                                    output_geo.loc,
+                                    1.0,
+                                    win_phys_r,
+                                );
+                            }
+                        }
+
+                        // 4. Renderizar capas superiores translúcidas (Dock, Top Bar, Popovers)
+                        if !upper_elements.is_empty() {
+                            for elem in &upper_elements {
+                                let dock_rect = dock_clip_roots
+                                    .iter()
+                                    .find(|(root_id, _)| *elem.id() == *root_id)
+                                    .map(|(_, rect)| *rect);
+                                if let (Some(rect), Some(shadow)) =
+                                    (dock_rect, shadow_pipeline.as_ref())
+                                {
+                                    let _ = frame.with_context(|gl| {
+                                        shadow.render_dock_shadow(gl, &projection, rect, 32.0, 1.0);
+                                    });
+                                }
+                                if let Some(rect) = dock_rect {
+                                    let elem_geo = elem.geometry(Scale::from(1.0));
                                     if let Some(shader) = window_squircle_shader.as_ref() {
-                                        let elem_geo = elem.geometry(Scale::from(1.0));
-                                        shader.apply_to_frame(
+                                        shader.apply_dock_clip_to_frame(
                                             &mut frame,
                                             elem_geo.size,
-                                            popup_rect.loc - elem_geo.loc,
-                                            popup_rect.size,
-                                            menu_radius,
+                                            rect.loc - elem_geo.loc,
+                                            rect.size,
+                                            32,
                                         );
                                     }
                                 }
@@ -2306,351 +2370,281 @@ pub fn run_winit() -> Result<()> {
                                     std::slice::from_ref(elem),
                                     &[damage],
                                 );
-                                if *popup_effects_enabled {
+                                if dock_rect.is_some() {
                                     frame.clear_tex_program_override();
                                 }
                             }
                         }
-                    }
 
-                    // Previsualización de destino al pasar el cursor por las plantillas de Snap Layouts
-                    if !is_pointer_grabbed {
-                        if let Some(preview) = snap_layouts_preview {
-                            crate::blur::render_snap_preview_overlay(
-                                &mut frame,
-                                blur_pipeline.as_mut(),
-                                &projection,
-                                size,
-                                preview,
-                                output_geo.loc,
-                                1.0,
-                                win_phys_r,
-                            );
-                        }
-                    }
-
-                    // 4. Renderizar capas superiores translúcidas (Dock, Top Bar, Popovers)
-                    if !upper_elements.is_empty() {
-                        for elem in &upper_elements {
-                            let dock_rect = dock_clip_roots
-                                .iter()
-                                .find(|(root_id, _)| *elem.id() == *root_id)
-                                .map(|(_, rect)| *rect);
-                            if let (Some(rect), Some(shadow)) =
-                                (dock_rect, shadow_pipeline.as_ref())
-                            {
+                        for (popup_elems, popup_rect) in &dock_popups {
+                            if let Some(blur) = blur_pipeline.as_mut() {
+                                let blur_rect = super::dock_popover_blur_rect(*popup_rect, 1.0);
                                 let _ = frame.with_context(|gl| {
-                                    shadow.render_dock_shadow(
+                                    blur.render_blur(
                                         gl,
                                         &projection,
-                                        rect,
-                                        32.0,
+                                        size,
+                                        blur_rect,
+                                        menu_radius as f32,
+                                    );
+                                });
+                            }
+
+                            for elem in popup_elems.iter().rev() {
+                                if let Some(shader) = window_squircle_shader.as_ref() {
+                                    let elem_geo = elem.geometry(Scale::from(1.0));
+                                    shader.apply_clip_to_frame(
+                                        &mut frame,
+                                        elem_geo.size,
+                                        popup_rect.loc - elem_geo.loc,
+                                        popup_rect.size,
+                                        8,
+                                    );
+                                }
+                                let _ = draw_render_elements(
+                                    &mut frame,
+                                    1.0,
+                                    std::slice::from_ref(elem),
+                                    &[damage],
+                                );
+                                frame.clear_tex_program_override();
+                            }
+                        }
+
+                        for (popup_elems, popup_rect) in &topbar_popups {
+                            if let Some(blur) = blur_pipeline.as_mut() {
+                                let _ = frame.with_context(|gl| {
+                                    blur.render_blur(
+                                        gl,
+                                        &projection,
+                                        size,
+                                        *popup_rect,
+                                        menu_radius as f32,
+                                    );
+                                });
+                            }
+
+                            if let Some(shadow) = shadow_pipeline.as_ref() {
+                                let _ = frame.with_context(|gl| {
+                                    shadow.render_menu_shadow(
+                                        gl,
+                                        &projection,
+                                        *popup_rect,
+                                        menu_radius as f32,
                                         1.0,
                                     );
                                 });
                             }
-                            if let Some(rect) = dock_rect {
-                                let elem_geo = elem.geometry(Scale::from(1.0));
+
+                            for elem in popup_elems.iter().rev() {
                                 if let Some(shader) = window_squircle_shader.as_ref() {
-                                    shader.apply_dock_clip_to_frame(
+                                    let elem_geo = elem.geometry(Scale::from(1.0));
+                                    shader.apply_to_frame(
                                         &mut frame,
                                         elem_geo.size,
-                                        rect.loc - elem_geo.loc,
-                                        rect.size,
-                                        32,
+                                        popup_rect.loc - elem_geo.loc,
+                                        popup_rect.size,
+                                        menu_radius,
                                     );
                                 }
-                            }
-                            let _ = draw_render_elements(
-                                &mut frame,
-                                1.0,
-                                std::slice::from_ref(elem),
-                                &[damage],
-                            );
-                            if dock_rect.is_some() {
+                                let _ = draw_render_elements(
+                                    &mut frame,
+                                    1.0,
+                                    std::slice::from_ref(elem),
+                                    &[damage],
+                                );
                                 frame.clear_tex_program_override();
                             }
                         }
-                    }
 
-                    for (popup_elems, popup_rect) in &dock_popups {
-                        if let Some(blur) = blur_pipeline.as_mut() {
-                            let blur_rect = super::dock_popover_blur_rect(*popup_rect, 1.0);
-                            let _ = frame.with_context(|gl| {
-                                blur.render_blur(
-                                    gl,
-                                    &projection,
-                                    size,
-                                    blur_rect,
-                                    menu_radius as f32,
+                        for (popup_elems, popup_rect) in &wallpaper_popups {
+                            if let Some(blur) = blur_pipeline.as_mut() {
+                                let _ = frame.with_context(|gl| {
+                                    blur.render_blur(
+                                        gl,
+                                        &projection,
+                                        size,
+                                        *popup_rect,
+                                        menu_radius as f32,
+                                    );
+                                });
+                            }
+
+                            if let Some(shadow) = shadow_pipeline.as_ref() {
+                                let _ = frame.with_context(|gl| {
+                                    shadow.render_menu_shadow(
+                                        gl,
+                                        &projection,
+                                        *popup_rect,
+                                        menu_radius as f32,
+                                        1.0,
+                                    );
+                                });
+                            }
+
+                            for elem in popup_elems.iter().rev() {
+                                if let Some(shader) = window_squircle_shader.as_ref() {
+                                    let elem_geo = elem.geometry(Scale::from(1.0));
+                                    shader.apply_to_frame(
+                                        &mut frame,
+                                        elem_geo.size,
+                                        popup_rect.loc - elem_geo.loc,
+                                        popup_rect.size,
+                                        menu_radius,
+                                    );
+                                }
+                                let _ = draw_render_elements(
+                                    &mut frame,
+                                    1.0,
+                                    std::slice::from_ref(elem),
+                                    &[damage],
                                 );
-                            });
+                                frame.clear_tex_program_override();
+                            }
                         }
 
-                        for elem in popup_elems.iter().rev() {
-                            if let Some(shader) = window_squircle_shader.as_ref() {
-                                let elem_geo = elem.geometry(Scale::from(1.0));
-                                shader.apply_clip_to_frame(
-                                    &mut frame,
-                                    elem_geo.size,
-                                    popup_rect.loc - elem_geo.loc,
-                                    popup_rect.size,
-                                    8,
-                                );
+                        // 5. Renderizar Spotlight nativo del compositor (blur enmascarado por silueta exacta + capa Liquid Glass)
+                        if let Some((
+                            spot_rect,
+                            ref mask_vec,
+                            (mask_w, mask_h),
+                            spot_alpha,
+                            ref spot_elem,
+                        )) = spotlight_frame
+                        {
+                            if let Some(blur) = blur_pipeline.as_mut() {
+                                let _ = frame.with_context(|gl| {
+                                    blur.render_blur_masked(
+                                        gl,
+                                        &projection,
+                                        size,
+                                        spot_rect,
+                                        mask_vec.as_deref(),
+                                        mask_w,
+                                        mask_h,
+                                        spot_alpha,
+                                    );
+                                });
                             }
                             let _ = draw_render_elements(
                                 &mut frame,
                                 1.0,
-                                std::slice::from_ref(elem),
+                                std::slice::from_ref(spot_elem),
                                 &[damage],
                             );
-                            frame.clear_tex_program_override();
                         }
-                    }
-
-                    for (popup_elems, popup_rect) in &topbar_popups {
-                        if let Some(blur) = blur_pipeline.as_mut() {
-                            let _ = frame.with_context(|gl| {
-                                blur.render_blur(
-                                    gl,
-                                    &projection,
-                                    size,
-                                    *popup_rect,
-                                    menu_radius as f32,
-                                );
-                            });
+                        if let Some(ref drag_elem) = spotlight_drag_elem {
+                            let _ = draw_render_elements(
+                                &mut frame,
+                                1.0,
+                                std::slice::from_ref(drag_elem),
+                                &[damage],
+                            );
                         }
 
-                        if let Some(shadow) = shadow_pipeline.as_ref() {
-                            let _ = frame.with_context(|gl| {
-                                shadow.render_menu_shadow(
-                                    gl,
-                                    &projection,
-                                    *popup_rect,
-                                    menu_radius as f32,
-                                    1.0,
-                                );
-                            });
-                        }
-
-                        for elem in popup_elems.iter().rev() {
-                            if let Some(shader) = window_squircle_shader.as_ref() {
-                                let elem_geo = elem.geometry(Scale::from(1.0));
-                                shader.apply_to_frame(
-                                    &mut frame,
-                                    elem_geo.size,
-                                    popup_rect.loc - elem_geo.loc,
-                                    popup_rect.size,
-                                    menu_radius,
-                                );
+                        // Renderizar Screenshot UI nativa con curvas squircle y Dual-Kawase blur
+                        if let Some((
+                            ui_rect,
+                            ref mask_vec,
+                            (mask_w, mask_h),
+                            ui_alpha,
+                            ref ui_elem,
+                        )) = screenshot_ui_frame
+                        {
+                            if let Some(blur) = blur_pipeline.as_mut() {
+                                let _ = frame.with_context(|gl| {
+                                    blur.render_blur_masked(
+                                        gl,
+                                        &projection,
+                                        size,
+                                        ui_rect,
+                                        mask_vec.as_deref(),
+                                        mask_w,
+                                        mask_h,
+                                        ui_alpha,
+                                    );
+                                });
                             }
                             let _ = draw_render_elements(
                                 &mut frame,
                                 1.0,
-                                std::slice::from_ref(elem),
+                                std::slice::from_ref(ui_elem),
                                 &[damage],
                             );
-                            frame.clear_tex_program_override();
-                        }
-                    }
-
-                    for (popup_elems, popup_rect) in &wallpaper_popups {
-                        if let Some(blur) = blur_pipeline.as_mut() {
-                            let _ = frame.with_context(|gl| {
-                                blur.render_blur(
-                                    gl,
-                                    &projection,
-                                    size,
-                                    *popup_rect,
-                                    menu_radius as f32,
-                                );
-                            });
                         }
 
-                        if let Some(shadow) = shadow_pipeline.as_ref() {
-                            let _ = frame.with_context(|gl| {
-                                shadow.render_menu_shadow(
-                                    gl,
-                                    &projection,
-                                    *popup_rect,
-                                    menu_radius as f32,
-                                    1.0,
-                                );
-                            });
-                        }
-
-                        for elem in popup_elems.iter().rev() {
-                            if let Some(shader) = window_squircle_shader.as_ref() {
-                                let elem_geo = elem.geometry(Scale::from(1.0));
-                                shader.apply_to_frame(
-                                    &mut frame,
-                                    elem_geo.size,
-                                    popup_rect.loc - elem_geo.loc,
-                                    popup_rect.size,
-                                    menu_radius,
-                                );
+                        // Renderizar menú flotante Snap Layouts (hover sobre maximizar estilo Windows 11)
+                        if let Some((
+                            snap_rect,
+                            ref mask_vec,
+                            (mask_w, mask_h),
+                            snap_alpha,
+                            ref snap_elem,
+                        )) = snap_layouts_frame
+                        {
+                            if let Some(shadow) = shadow_pipeline.as_ref() {
+                                let _ = frame.with_context(|gl| {
+                                    shadow.render_menu_shadow_alpha(
+                                        gl,
+                                        &projection,
+                                        snap_rect,
+                                        crate::snap_layouts::POPUP_CORNER_RADIUS as f32,
+                                        1.0,
+                                        snap_alpha,
+                                    );
+                                });
+                            }
+                            if let Some(blur) = blur_pipeline.as_mut() {
+                                let _ = frame.with_context(|gl| {
+                                    blur.render_blur_masked(
+                                        gl,
+                                        &projection,
+                                        size,
+                                        snap_rect,
+                                        mask_vec.as_deref(),
+                                        mask_w,
+                                        mask_h,
+                                        snap_alpha,
+                                    );
+                                });
                             }
                             let _ = draw_render_elements(
                                 &mut frame,
                                 1.0,
-                                std::slice::from_ref(elem),
+                                std::slice::from_ref(snap_elem),
                                 &[damage],
                             );
-                            frame.clear_tex_program_override();
                         }
-                    }
 
-                    // 5. Renderizar Spotlight nativo del compositor (blur enmascarado por silueta exacta + capa Liquid Glass)
-                    if let Some((
-                        spot_rect,
-                        ref mask_vec,
-                        (mask_w, mask_h),
-                        spot_alpha,
-                        ref spot_elem,
-                    )) = spotlight_frame
-                    {
-                        if let Some(blur) = blur_pipeline.as_mut() {
-                            let _ = frame.with_context(|gl| {
-                                blur.render_blur_masked(
-                                    gl,
-                                    &projection,
-                                    size,
-                                    spot_rect,
-                                    mask_vec.as_deref(),
-                                    mask_w,
-                                    mask_h,
-                                    spot_alpha,
-                                );
-                            });
+                        // Renderizar Selector Visual App Switcher estilo Deck (sin blur global en el fondo)
+                        if let Some((deck_eased, ref deck_cards)) = app_switcher_deck_frame {
+                            crate::app_switcher::render_deck_frame(
+                                &mut frame,
+                                &projection,
+                                size,
+                                1.0,
+                                &[damage],
+                                blur_pipeline.as_mut(),
+                                shadow_pipeline.as_ref(),
+                                window_squircle_shader.as_ref(),
+                                deck_eased,
+                                deck_cards,
+                            );
                         }
-                        let _ = draw_render_elements(
-                            &mut frame,
-                            1.0,
-                            std::slice::from_ref(spot_elem),
-                            &[damage],
-                        );
-                    }
-                    if let Some(ref drag_elem) = spotlight_drag_elem {
-                        let _ = draw_render_elements(
-                            &mut frame,
-                            1.0,
-                            std::slice::from_ref(drag_elem),
-                            &[damage],
-                        );
-                    }
 
-                    // Renderizar Screenshot UI nativa con curvas squircle y Dual-Kawase blur
-                    if let Some((
-                        ui_rect,
-                        ref mask_vec,
-                        (mask_w, mask_h),
-                        ui_alpha,
-                        ref ui_elem,
-                    )) = screenshot_ui_frame
-                    {
-                        if let Some(blur) = blur_pipeline.as_mut() {
-                            let _ = frame.with_context(|gl| {
-                                blur.render_blur_masked(
-                                    gl,
-                                    &projection,
-                                    size,
-                                    ui_rect,
-                                    mask_vec.as_deref(),
-                                    mask_w,
-                                    mask_h,
-                                    ui_alpha,
-                                );
-                            });
+                        // Dibujar el icono de Drag and Drop (dnd_icon) si hay una operación activa
+                        if !dnd_elems.is_empty() {
+                            let _ = draw_render_elements(&mut frame, 1.0, &dnd_elems, &[damage]);
+                        } else if let Some(ref fallback_elem) = dnd_fallback_elem {
+                            let fallback_slice = std::slice::from_ref(fallback_elem);
+                            let _ =
+                                draw_render_elements(&mut frame, 1.0, fallback_slice, &[damage]);
                         }
-                        let _ = draw_render_elements(
-                            &mut frame,
-                            1.0,
-                            std::slice::from_ref(ui_elem),
-                            &[damage],
-                        );
-                    }
 
-                    // Renderizar menú flotante Snap Layouts (hover sobre maximizar estilo Windows 11)
-                    if let Some((
-                        snap_rect,
-                        ref mask_vec,
-                        (mask_w, mask_h),
-                        snap_alpha,
-                        ref snap_elem,
-                    )) = snap_layouts_frame
-                    {
-                        if let Some(shadow) = shadow_pipeline.as_ref() {
-                            let _ = frame.with_context(|gl| {
-                                shadow.render_menu_shadow_alpha(
-                                    gl,
-                                    &projection,
-                                    snap_rect,
-                                    crate::snap_layouts::POPUP_CORNER_RADIUS as f32,
-                                    1.0,
-                                    snap_alpha,
-                                );
-                            });
-                        }
-                        if let Some(blur) = blur_pipeline.as_mut() {
-                            let _ = frame.with_context(|gl| {
-                                blur.render_blur_masked(
-                                    gl,
-                                    &projection,
-                                    size,
-                                    snap_rect,
-                                    mask_vec.as_deref(),
-                                    mask_w,
-                                    mask_h,
-                                    snap_alpha,
-                                );
-                            });
-                        }
-                        let _ = draw_render_elements(
-                            &mut frame,
-                            1.0,
-                            std::slice::from_ref(snap_elem),
-                            &[damage],
-                        );
-                    }
-
-                    // Renderizar Selector Visual App Switcher estilo Deck (sin blur global en el fondo)
-                    if let Some((deck_eased, ref deck_cards)) = app_switcher_deck_frame {
-                        crate::app_switcher::render_deck_frame(
-                            &mut frame,
-                            &projection,
-                            size,
-                            1.0,
-                            &[damage],
-                            blur_pipeline.as_mut(),
-                            shadow_pipeline.as_ref(),
-                            window_squircle_shader.as_ref(),
-                            deck_eased,
-                            deck_cards,
-                        );
-                    }
-
-                    // Dibujar el icono de Drag and Drop (dnd_icon) si hay una operación activa
-                    if !dnd_elems.is_empty() {
-                        let _ = draw_render_elements(
-                            &mut frame,
-                            1.0,
-                            &dnd_elems,
-                            &[damage],
-                        );
-                    } else if let Some(ref fallback_elem) = dnd_fallback_elem {
-                        let fallback_slice = std::slice::from_ref(fallback_elem);
-                        let _ = draw_render_elements(
-                            &mut frame,
-                            1.0,
-                            fallback_slice,
-                            &[damage],
-                        );
-                    }
-
-                    // Efecto Genie: malla GPU única sobre snapshot offscreen (incluyendo SSD y squircle).
-                    if !active_genies.is_empty() {
-                        if let Some(ref gp) = genie_pipeline {
-                            let _ = frame.with_context(|gl| {
+                        // Efecto Genie: malla GPU única sobre snapshot offscreen (incluyendo SSD y squircle).
+                        if !active_genies.is_empty() {
+                            if let Some(ref gp) = genie_pipeline {
+                                let _ = frame.with_context(|gl| {
                                 for anim in &active_genies {
                                     let Some(snap) = genie_snapshots.get(&anim.window_id) else {
                                         continue;
@@ -2716,20 +2710,20 @@ pub fn run_winit() -> Result<()> {
                                     );
                                 }
                             });
+                            }
                         }
-                    }
 
-                    // 🕳️ EFECTO AGUJERO NEGRO AL CERRAR VENTANAS
-                    if !active_black_holes.is_empty() {
-                        if let Some(ref bh_pipeline) = black_hole_pipeline {
-                            let bh_now = Instant::now();
-                            let _ = frame.with_context(|gl| {
-                                for bh in &active_black_holes {
-                                    bh_pipeline.render_effect(gl, &projection, bh, bh_now);
-                                }
-                            });
+                        // 🕳️ EFECTO AGUJERO NEGRO AL CERRAR VENTANAS
+                        if !active_black_holes.is_empty() {
+                            if let Some(ref bh_pipeline) = black_hole_pipeline {
+                                let bh_now = Instant::now();
+                                let _ = frame.with_context(|gl| {
+                                    for bh in &active_black_holes {
+                                        bh_pipeline.render_effect(gl, &projection, bh, bh_now);
+                                    }
+                                });
+                            }
                         }
-                    }
                     }
 
                     // 🖥 ESQUINAS SQUIRCLE SUPERELÍPTICAS (n=4.2) DEL ESCRITORIO
@@ -2792,7 +2786,10 @@ pub fn run_winit() -> Result<()> {
                             if let Some(started_at) = state.theme_transition_started_at {
                                 let now = Instant::now();
                                 let drawn = pipeline.draw(gl, &output_name, size, started_at, now);
-                                if !drawn && now.duration_since(started_at) >= crate::theme_transition::DURATION {
+                                if !drawn
+                                    && now.duration_since(started_at)
+                                        >= crate::theme_transition::DURATION
+                                {
                                     state.theme_transition_started_at = None;
                                 }
                             }
@@ -2941,37 +2938,41 @@ pub fn run_winit() -> Result<()> {
                 }
 
                 if !session_locked {
-                if let Some(ref mut session) = state.active_screen_recording {
-                    let interval = std::time::Duration::from_millis(
-                        (1000 / session.target_fps.max(1)) as u64,
-                    );
-                    if now.duration_since(session.last_frame) >= interval {
-                        session.last_frame = now;
-                        let crop = session.rect.unwrap_or_else(|| {
-                            Rectangle::from_size(size)
-                        });
-                        let cl_x = crop.loc.x.clamp(0, size.w);
-                        let cl_y = crop.loc.y.clamp(0, size.h);
-                        let cl_w = (crop.size.w.min(size.w - cl_x) & !1).max(2);
-                        let cl_h = (crop.size.h.min(size.h - cl_y) & !1).max(2);
-                        let region = Rectangle::new((cl_x, cl_y).into(), (cl_w, cl_h).into());
+                    if let Some(ref mut session) = state.active_screen_recording {
+                        let interval = std::time::Duration::from_millis(
+                            (1000 / session.target_fps.max(1)) as u64,
+                        );
+                        if now.duration_since(session.last_frame) >= interval {
+                            session.last_frame = now;
+                            let crop = session.rect.unwrap_or_else(|| Rectangle::from_size(size));
+                            let cl_x = crop.loc.x.clamp(0, size.w);
+                            let cl_y = crop.loc.y.clamp(0, size.h);
+                            let cl_w = (crop.size.w.min(size.w - cl_x) & !1).max(2);
+                            let cl_h = (crop.size.h.min(size.h - cl_y) & !1).max(2);
+                            let region = Rectangle::new((cl_x, cl_y).into(), (cl_w, cl_h).into());
 
-                        if let Ok(mapping) = renderer.copy_framebuffer(&framebuffer, region, smithay::backend::allocator::Fourcc::Abgr8888) {
-                            if let Ok(pixels) = renderer.map_texture(&mapping) {
-                                if pixels.len() == (cl_w as usize * cl_h as usize * 4) {
-                                    session.push_frame(pixels.to_vec());
+                            if let Ok(mapping) = renderer.copy_framebuffer(
+                                &framebuffer,
+                                region,
+                                smithay::backend::allocator::Fourcc::Abgr8888,
+                            ) {
+                                if let Ok(pixels) = renderer.map_texture(&mapping) {
+                                    if pixels.len() == (cl_w as usize * cl_h as usize * 4) {
+                                        session.push_frame(pixels.to_vec());
+                                    }
                                 }
                             }
                         }
                     }
-                }
                 }
             }
         }
 
         // Limpiar transiciones de maximizado/restauración finalizadas
         let now = Instant::now();
-        state.snap_transitions.retain(|_, trans| !trans.is_finished(now));
+        state
+            .snap_transitions
+            .retain(|_, trans| !trans.is_finished(now));
 
         // Notificar fotogramas a los clientes de ventanas activas (evita despertar apps minimizadas u ocluidas a 60 Hz)
         let now_ms = start_time.elapsed().as_millis() as u32;

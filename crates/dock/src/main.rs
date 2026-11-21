@@ -1,5 +1,5 @@
-use gio::prelude::*;
 use gdk_pixbuf::prelude::*;
+use gio::prelude::*;
 use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4::{
@@ -64,6 +64,18 @@ fn main() {
 
 thread_local! {
     static DOCK_GLASS_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
+    static DOCK_ACCENT_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
+    static DOCK_APPEARANCE_MONITOR: RefCell<Option<gtk4::gio::FileMonitor>> =
+        const { RefCell::new(None) };
+}
+
+fn apply_dock_accent_color(index: usize) {
+    let css = malus_de_common::config::accent_color_css(index);
+    DOCK_ACCENT_PROVIDER.with(|cell| {
+        if let Some(provider) = cell.borrow().as_ref() {
+            provider.load_from_string(&css);
+        }
+    });
 }
 
 fn apply_dock_liquid_glass_opacity(opacity: f64) {
@@ -74,9 +86,7 @@ fn apply_dock_liquid_glass_opacity(opacity: f64) {
     {
         ".dock-container { background-color: rgb(224, 224, 228); }".to_string()
     } else {
-        format!(
-            ".dock-container {{ background-color: alpha(@window_bg_color, {dock_a:.3}); }}"
-        )
+        format!(".dock-container {{ background-color: alpha(@window_bg_color, {dock_a:.3}); }}")
     };
     DOCK_GLASS_PROVIDER.with(|cell| {
         if let Some(provider) = cell.borrow().as_ref() {
@@ -89,6 +99,7 @@ fn load_css() {
     let provider = CssProvider::new();
     provider.load_from_string(DOCK_CSS);
     let glass_provider = CssProvider::new();
+    let accent_provider = CssProvider::new();
 
     if let Some(display) = gtk4::gdk::Display::default() {
         gtk4::style_context_add_provider_for_display(
@@ -110,12 +121,36 @@ fn load_css() {
             &glass_provider,
             gtk4::STYLE_PROVIDER_PRIORITY_USER + 2,
         );
+        gtk4::style_context_add_provider_for_display(
+            &display,
+            &accent_provider,
+            gtk4::STYLE_PROVIDER_PRIORITY_USER + 3,
+        );
     }
 
     DOCK_GLASS_PROVIDER.with(|cell| {
         *cell.borrow_mut() = Some(glass_provider);
     });
+    DOCK_ACCENT_PROVIDER.with(|cell| {
+        *cell.borrow_mut() = Some(accent_provider);
+    });
+    apply_dock_accent_color(malus_de_common::config::load_accent_color_index());
     apply_dock_liquid_glass_opacity(malus_de_common::config::load_liquid_glass_opacity());
+
+    let config_file =
+        gtk4::gio::File::for_path(malus_de_common::config::appearance_settings_path());
+    if let Ok(monitor) = config_file.monitor_file(
+        gtk4::gio::FileMonitorFlags::NONE,
+        gtk4::gio::Cancellable::NONE,
+    ) {
+        monitor.connect_changed(|_, _, _, _| {
+            apply_dock_accent_color(malus_de_common::config::load_accent_color_index());
+            apply_dock_liquid_glass_opacity(malus_de_common::config::load_liquid_glass_opacity());
+        });
+        DOCK_APPEARANCE_MONITOR.with(|cell| {
+            *cell.borrow_mut() = Some(monitor);
+        });
+    }
 }
 
 fn create_popover_surface(menu_box: &GtkBox) -> Overlay {
@@ -521,16 +556,31 @@ fn check_trash_full() -> bool {
 fn should_ignore_app(identifier: &str) -> bool {
     let lower = identifier.to_lowercase();
     let ignored = [
-        "top-bar", "layer-shell", "desktop", "gdm", "compositor",
-        "xwayland", "malus-session", "xsettings", "pipewire", "wireplumber",
-        "gnome-shell", "unknown", "malus-de-top-bar", "malus-de-dock",
-        "malus-de-wallpaper", "malus-de-link", "malus-de-spotlight",
-        "malus-de-notifications"
+        "top-bar",
+        "layer-shell",
+        "desktop",
+        "gdm",
+        "compositor",
+        "xwayland",
+        "malus-session",
+        "xsettings",
+        "pipewire",
+        "wireplumber",
+        "gnome-shell",
+        "unknown",
+        "malus-de-top-bar",
+        "malus-de-dock",
+        "malus-de-wallpaper",
+        "malus-de-link",
+        "malus-de-spotlight",
+        "malus-de-notifications",
     ];
     ignored.iter().any(|ign| lower.contains(ign))
 }
 
-fn safe_app_info_executable(app_info: &impl glib::object::IsA<gio::AppInfo>) -> Option<std::path::PathBuf> {
+fn safe_app_info_executable(
+    app_info: &impl glib::object::IsA<gio::AppInfo>,
+) -> Option<std::path::PathBuf> {
     use glib::translate::ToGlibPtr;
     unsafe {
         let ptr = gio::ffi::g_app_info_get_executable(app_info.as_ref().to_glib_none().0);
@@ -610,13 +660,17 @@ fn resolve_desktop_app_info(identifier: &str) -> (String, String, String, Vec<St
     }
 
     for app_info in gio::AppInfo::all() {
-        let id_matches = app_info
-            .id()
-            .is_some_and(|id| id.to_lowercase().trim_end_matches(".desktop").contains(&lower));
+        let id_matches = app_info.id().is_some_and(|id| {
+            id.to_lowercase()
+                .trim_end_matches(".desktop")
+                .contains(&lower)
+        });
         let name_matches = app_info.name().to_lowercase() == lower;
         let exec_matches = safe_app_info_executable(&app_info)
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-            .is_some_and(|exe| exe.eq_ignore_ascii_case(identifier) || exe.to_lowercase().contains(&lower));
+            .is_some_and(|exe| {
+                exe.eq_ignore_ascii_case(identifier) || exe.to_lowercase().contains(&lower)
+            });
         if id_matches || name_matches || exec_matches {
             let name = app_info.name().to_string();
             let icon = app_info
@@ -768,7 +822,9 @@ fn run_dock_bounce_cycle(
                 !matchers_down.is_empty()
                     && running.iter().any(|r| {
                         let r_lower = r.to_lowercase();
-                        matchers_down.iter().any(|m| r_lower.contains(&m.to_lowercase()))
+                        matchers_down
+                            .iter()
+                            .any(|m| r_lower.contains(&m.to_lowercase()))
                     })
             } else {
                 true
@@ -791,11 +847,7 @@ fn run_dock_bounce_cycle(
     });
 }
 
-fn run_dock_bounce_decay(
-    target: gtk4::Widget,
-    animation_id: Rc<Cell<u64>>,
-    current_id: u64,
-) {
+fn run_dock_bounce_decay(target: gtk4::Widget, animation_id: Rc<Cell<u64>>, current_id: u64) {
     if animation_id.get() != current_id {
         return;
     }
@@ -853,7 +905,11 @@ fn run_dock_bounce_decay(
     });
 }
 
-fn find_matching_running_app(running: &[String], matchers: &[String], app_name: &str) -> Option<String> {
+fn find_matching_running_app(
+    running: &[String],
+    matchers: &[String],
+    app_name: &str,
+) -> Option<String> {
     running
         .iter()
         .find(|identity| matches_dock_app(matchers, app_name, identity))
@@ -1021,7 +1077,15 @@ fn build_dock_ui(app: &Application) {
     switcher_background.add_css_class("switcher-container-background");
     switcher_background.set_can_target(false);
     switcher_background.set_draw_func(|area, context, width, height| {
-        draw_switcher_squircle(area, context, width as f64, height as f64, 32.0, false, true);
+        draw_switcher_squircle(
+            area,
+            context,
+            width as f64,
+            height as f64,
+            32.0,
+            false,
+            true,
+        );
     });
     let switcher_surface = Overlay::new();
     switcher_surface.add_css_class("switcher-surface");
@@ -1136,7 +1200,9 @@ fn build_dock_ui(app: &Application) {
         let win_mon = window.clone();
         let headroom_mon = magnification_headroom.clone();
         monitor.connect_changed(move |_, _, _, event_type| {
-            if event_type == gio::FileMonitorEvent::ChangesDoneHint || event_type == gio::FileMonitorEvent::Created {
+            if event_type == gio::FileMonitorEvent::ChangesDoneHint
+                || event_type == gio::FileMonitorEvent::Created
+            {
                 info!("🔄 dock.toml modificado externamente en disco. Recargando...");
                 let new_cfg = DockConfig::load_or_create_default();
                 if gtk4_layer_shell::is_supported() {
@@ -1482,9 +1548,7 @@ fn build_dock_ui(app: &Application) {
 
                     // Agregar o mantener miniaturas activas
                     for win_info in windows {
-                        let thumbnail_changed = min_paths
-                            .borrow()
-                            .get(&win_info.window_id)
+                        let thumbnail_changed = min_paths.borrow().get(&win_info.window_id)
                             != Some(&win_info.thumbnail_path);
                         if !current_map.contains_key(&win_info.window_id) || thumbnail_changed {
                             if let Some(widget) = current_map.remove(&win_info.window_id) {
@@ -1500,7 +1564,10 @@ fn build_dock_ui(app: &Application) {
                             min_paths
                                 .borrow_mut()
                                 .insert(id, win_info.thumbnail_path.clone());
-                            info!("🖼️ Miniatura agregada al Dock: window_id={} ('{}')", id, win_info.title);
+                            info!(
+                                "🖼️ Miniatura agregada al Dock: window_id={} ('{}')",
+                                id, win_info.title
+                            );
                         }
                         if let Some(widget) = current_map.get(&win_info.window_id) {
                             if let Ok(revealer) = widget.clone().downcast::<gtk4::Revealer>() {
@@ -1529,17 +1596,16 @@ fn build_dock_ui(app: &Application) {
                         glib::timeout_add_local_once(Duration::from_millis(delay), move || {
                             if let Some(dock_window) = dock_window_weak.upgrade() {
                                 for (window_id, card) in cards {
-                                    register_minimized_dock_slot(
-                                        &card,
-                                        &dock_window,
-                                        window_id,
-                                    );
+                                    register_minimized_dock_slot(&card, &dock_window, window_id);
                                 }
                             }
                         });
                     }
                 }
-                IpcMessage::ShowAppSwitcher { items, selected_index } => {
+                IpcMessage::ShowAppSwitcher {
+                    items,
+                    selected_index,
+                } => {
                     while let Some(c) = switcher_box_ipc.first_child() {
                         switcher_box_ipc.remove(&c);
                     }
@@ -1580,7 +1646,10 @@ fn build_dock_ui(app: &Application) {
                         card.add_overlay(&content);
                         card.set_measure_overlay(&content, true);
 
-                        let icon_name = item.icon_name.as_deref().unwrap_or("application-x-executable");
+                        let icon_name = item
+                            .icon_name
+                            .as_deref()
+                            .unwrap_or("application-x-executable");
                         let icon = Image::builder()
                             .icon_name(icon_name)
                             .pixel_size(64)
@@ -1601,7 +1670,9 @@ fn build_dock_ui(app: &Application) {
                         let target_wid = item.window_id;
                         let card_click = GestureClick::new();
                         card_click.connect_released(move |_, _, _, _| {
-                            let _ = send_ipc_message(&IpcMessage::SwitchToWindow { window_id: target_wid });
+                            let _ = send_ipc_message(&IpcMessage::SwitchToWindow {
+                                window_id: target_wid,
+                            });
                         });
                         card.add_controller(card_click);
 
@@ -1665,8 +1736,18 @@ fn build_dock_ui(app: &Application) {
                     dock_root_ref.queue_draw();
                     win_ref.queue_draw();
                 }
+                IpcMessage::AccentColorChanged { index } => {
+                    info!("🎨 [Dock] IPC AccentColorChanged recibido: index={}", index);
+                    apply_dock_accent_color(index);
+                    queue_dock_icon_backgrounds(apps_box_ipc.upcast_ref());
+                    dock_root_ref.queue_draw();
+                    win_ref.queue_draw();
+                }
                 IpcMessage::LiquidGlassOpacityChanged { opacity } => {
-                    info!("✨ [Dock] IPC LiquidGlassOpacityChanged recibido: opacity={:.2}", opacity);
+                    info!(
+                        "✨ [Dock] IPC LiquidGlassOpacityChanged recibido: opacity={:.2}",
+                        opacity
+                    );
                     apply_dock_liquid_glass_opacity(opacity);
                     switcher_bg_ipc.queue_draw();
                     dock_root_ref.queue_draw();
@@ -1827,7 +1908,11 @@ fn drop_has_desktop_file(target: &gtk4::DropTarget) -> Option<bool> {
     let file_list = value.get::<gdk::FileList>().ok()?;
     let has_desktop = file_list.files().into_iter().any(|f| {
         f.path()
-            .and_then(|p| p.extension().and_then(|e| e.to_str()).map(|s| s == "desktop"))
+            .and_then(|p| {
+                p.extension()
+                    .and_then(|e| e.to_str())
+                    .map(|s| s == "desktop")
+            })
             .unwrap_or(false)
     });
     Some(has_desktop)
@@ -2012,21 +2097,24 @@ fn attach_dock_drop_target(
         }
 
         let apps = extract_dropped_desktop_apps(&file_list);
-        info!("📥 [Dock DnD] Drop recibido en ({:.1}, {:.1}) con {} apps .desktop", x, y, apps.len());
+        info!(
+            "📥 [Dock DnD] Drop recibido en ({:.1}, {:.1}) con {} apps .desktop",
+            x,
+            y,
+            apps.len()
+        );
         if apps.is_empty() {
             return false;
         }
 
         let mut cfg = cfg_drop.borrow_mut();
         let target_idx = dock_root_drop
-            .compute_point(&apps_box_drop, &gtk4::graphene::Point::new(x as f32, y as f32))
+            .compute_point(
+                &apps_box_drop,
+                &gtk4::graphene::Point::new(x as f32, y as f32),
+            )
             .map(|pt| {
-                compute_pinned_insert_index(
-                    &apps_box_drop,
-                    None,
-                    cfg.apps.len(),
-                    pt.x() as f64,
-                )
+                compute_pinned_insert_index(&apps_box_drop, None, cfg.apps.len(), pt.x() as f64)
             })
             .unwrap_or(cfg.apps.len());
 
@@ -2365,7 +2453,9 @@ fn render_dock_apps(
                 on_refresh.clone(),
             );
             apps_box.append(&widget);
-            dock_indicators.borrow_mut().push((app.matchers.clone(), ind));
+            dock_indicators
+                .borrow_mut()
+                .push((app.matchers.clone(), ind));
         }
     }
 
@@ -2379,7 +2469,10 @@ fn render_dock_apps(
             continue;
         }
         let r_lower = r.to_lowercase();
-        if !unpinned_candidates.iter().any(|c| c.to_lowercase() == r_lower) {
+        if !unpinned_candidates
+            .iter()
+            .any(|c| c.to_lowercase() == r_lower)
+        {
             unpinned_candidates.push(r.clone());
         }
     }
@@ -2406,7 +2499,9 @@ fn render_dock_apps(
             on_refresh.clone(),
         );
         apps_box.append(&widget);
-        dock_indicators.borrow_mut().push((app_cfg.matchers.clone(), ind));
+        dock_indicators
+            .borrow_mut()
+            .push((app_cfg.matchers.clone(), ind));
     }
 }
 
@@ -3045,12 +3140,14 @@ fn draw_switcher_squircle(
     );
     let _ = context.fill_preserve();
 
-    let border_color = if selected {
-        accent_color
+    let border_color = if selected { accent_color } else { foreground };
+    let border_alpha = if container {
+        0.18
+    } else if selected {
+        0.95
     } else {
-        foreground
+        0.14
     };
-    let border_alpha = if container { 0.18 } else if selected { 0.95 } else { 0.14 };
     context.set_source_rgba(
         border_color.red() as f64,
         border_color.green() as f64,
@@ -3116,7 +3213,11 @@ fn squircle_path(context: &gtk4::cairo::Context, width: f64, height: f64, radius
 
 fn make_dock_menu_button(label: &str, danger: bool) -> Button {
     let classes: &[&str] = if danger {
-        &["popover-menu-item", "popover-menu-item-danger", "malus-squircle-menu-item"]
+        &[
+            "popover-menu-item",
+            "popover-menu-item-danger",
+            "malus-squircle-menu-item",
+        ]
     } else {
         &["popover-menu-item", "malus-squircle-menu-item"]
     };
@@ -3161,10 +3262,11 @@ fn make_dock_menu_button(label: &str, danger: bool) -> Button {
             }
             let _ = cr.save();
             squircle_path(cr, width, height, 14.0);
+            let (red, green, blue) = malus_de_common::config::load_accent_color();
             if active {
-                cr.set_source_rgba(0.0, 0.39, 0.85, 0.86);
+                cr.set_source_rgba(red * 0.78, green * 0.78, blue * 0.78, 0.86);
             } else {
-                cr.set_source_rgba(0.0, 0.48, 1.0, 0.74);
+                cr.set_source_rgba(red, green, blue, 0.74);
             }
             let _ = cr.fill();
             let _ = cr.restore();
@@ -3230,9 +3332,18 @@ fn create_minimized_window_item(info: &MinimizedWindowInfo, icon_size: i32) -> (
             .spacing(2)
             .build();
 
-        let dot_red = Label::builder().label("●").css_classes(["dock-mini-dot", "dot-red"]).build();
-        let dot_yellow = Label::builder().label("●").css_classes(["dock-mini-dot", "dot-yellow"]).build();
-        let dot_green = Label::builder().label("●").css_classes(["dock-mini-dot", "dot-green"]).build();
+        let dot_red = Label::builder()
+            .label("●")
+            .css_classes(["dock-mini-dot", "dot-red"])
+            .build();
+        let dot_yellow = Label::builder()
+            .label("●")
+            .css_classes(["dock-mini-dot", "dot-yellow"])
+            .build();
+        let dot_green = Label::builder()
+            .label("●")
+            .css_classes(["dock-mini-dot", "dot-green"])
+            .build();
 
         titlebar.append(&dot_red);
         titlebar.append(&dot_yellow);
@@ -3245,19 +3356,23 @@ fn create_minimized_window_item(info: &MinimizedWindowInfo, icon_size: i32) -> (
             .valign(gtk4::Align::Center)
             .build();
 
-        let line1 = GtkBox::builder().css_classes(["dock-mini-content-line"]).build();
-        let line2 = GtkBox::builder().css_classes(["dock-mini-content-line-short"]).build();
+        let line1 = GtkBox::builder()
+            .css_classes(["dock-mini-content-line"])
+            .build();
+        let line2 = GtkBox::builder()
+            .css_classes(["dock-mini-content-line-short"])
+            .build();
         body.append(&line1);
         body.append(&line2);
         mini_win.append(&body);
     }
 
     // 3. Insignia circular de la app en la esquina inferior derecha (macOS style)
-    let icon_name = info.icon_name.as_deref().unwrap_or("application-x-executable");
-    let badge_img = Image::builder()
-        .icon_name(icon_name)
-        .pixel_size(18)
-        .build();
+    let icon_name = info
+        .icon_name
+        .as_deref()
+        .unwrap_or("application-x-executable");
+    let badge_img = Image::builder().icon_name(icon_name).pixel_size(18).build();
 
     let badge_box = GtkBox::builder()
         .css_classes(["dock-mini-badge"])
@@ -3283,9 +3398,15 @@ fn create_minimized_window_item(info: &MinimizedWindowInfo, icon_size: i32) -> (
     let gesture = GestureClick::new();
     let id = window_id;
     gesture.connect_pressed(move |_, _, _, _| {
-        info!("✨ Clic en miniatura de Dock: restaurando ventana id={}", id);
+        info!(
+            "✨ Clic en miniatura de Dock: restaurando ventana id={}",
+            id
+        );
         if let Err(err) = send_ipc_message(&IpcMessage::AnimateRestore { window_id: id }) {
-            warn!("No se pudo enviar AnimateRestore (id={}) por IPC: {}", id, err);
+            warn!(
+                "No se pudo enviar AnimateRestore (id={}) por IPC: {}",
+                id, err
+            );
         }
     });
     overlay.add_controller(gesture);
@@ -3323,7 +3444,10 @@ fn register_minimized_dock_slot(
             width,
             height,
         }) {
-            warn!("No se pudo enviar RegisterDockSlot (id={}) por IPC: {}", window_id, err);
+            warn!(
+                "No se pudo enviar RegisterDockSlot (id={}) por IPC: {}",
+                window_id, err
+            );
         }
     }
 }
@@ -3356,11 +3480,8 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
         .css_classes(["dock-trash-icon"])
         .valign(gtk4::Align::End)
         .build();
-    let trash_overlay = create_magnifiable_icon(
-        &trash_img,
-        icon_size,
-        DockIconRenderMode::RawNative,
-    );
+    let trash_overlay =
+        create_magnifiable_icon(&trash_img, icon_size, DockIconRenderMode::RawNative);
     btn.set_child(Some(&trash_overlay));
 
     btn.connect_clicked(|_| {
@@ -3439,10 +3560,7 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
     (item_container, trash_img)
 }
 
-fn is_dock_item_running(
-    running_cache: &Rc<RefCell<Vec<String>>>,
-    app_cfg: &DockAppConfig,
-) -> bool {
+fn is_dock_item_running(running_cache: &Rc<RefCell<Vec<String>>>, app_cfg: &DockAppConfig) -> bool {
     find_matching_running_app(&running_cache.borrow(), &app_cfg.matchers, &app_cfg.name).is_some()
 }
 
@@ -3476,7 +3594,14 @@ fn populate_dock_app_menu_box(
     menu_box.append(&sep1);
 
     // 2. Acción Abrir / Traer al frente
-    let btn_open = make_dock_menu_button(if is_running { "Traer al frente" } else { "Abrir" }, false);
+    let btn_open = make_dock_menu_button(
+        if is_running {
+            "Traer al frente"
+        } else {
+            "Abrir"
+        },
+        false,
+    );
     let p_open = popover.clone();
     let act_open = activate_or_spawn.clone();
     btn_open.connect_clicked(move |_| {
@@ -3642,22 +3767,14 @@ fn create_dock_item(
             .valign(gtk4::Align::End)
             .build()
     };
-    let render_mode = resolve_dock_icon_render_mode(
-        app_cfg.icon_appearance,
-        icon_name,
-        &icon,
-        icon_size,
-    );
+    let render_mode =
+        resolve_dock_icon_render_mode(app_cfg.icon_appearance, icon_name, &icon, icon_size);
     if matches!(render_mode, DockIconRenderMode::ContainerBackdrop) {
         icon.add_css_class("dock-icon-inset");
         icon.set_pixel_size((icon_size - 10).max(1));
         icon.set_margin_bottom(5);
     }
-    let icon_container = create_magnifiable_icon(
-        &icon,
-        icon_size,
-        render_mode,
-    );
+    let icon_container = create_magnifiable_icon(&icon, icon_size, render_mode);
     btn.set_child(Some(&icon_container));
     icon_container.add_css_class("dock-bounce-target");
     let animation_id = Rc::new(Cell::new(0_u64));
@@ -3689,10 +3806,11 @@ fn create_dock_item(
             drop(running);
 
             if let Some(running_id) = matched_running {
-                info!("App ya en ejecución, enviando IPC ActivateApp para {}", name);
-                let _ = send_ipc_message(&IpcMessage::ActivateApp {
-                    app_id: running_id,
-                });
+                info!(
+                    "App ya en ejecución, enviando IPC ActivateApp para {}",
+                    name
+                );
+                let _ = send_ipc_message(&IpcMessage::ActivateApp { app_id: running_id });
                 return;
             }
 
@@ -3830,7 +3948,10 @@ fn spawn_dock_app(name: &str, cmd: &str, extra_args: &[&str]) {
                 });
             }
             Err(err) => {
-                error!("❌ Error al lanzar aplicación {} desde Dock: {:?}", name, err);
+                error!(
+                    "❌ Error al lanzar aplicación {} desde Dock: {:?}",
+                    name, err
+                );
             }
         }
     }
@@ -3901,7 +4022,11 @@ mod tests {
         let running_cache = Rc::new(RefCell::new(Vec::new()));
 
         assert!(!is_dock_item_running(&running_cache, &branches));
-        assert!(dock_app_context_actions(&branches, is_dock_item_running(&running_cache, &branches)).is_empty());
+        assert!(dock_app_context_actions(
+            &branches,
+            is_dock_item_running(&running_cache, &branches)
+        )
+        .is_empty());
 
         running_cache
             .borrow_mut()
@@ -4043,9 +4168,13 @@ mod tests {
         // Verificamos que las 4 esquinas del bounding box hayan sido rellenadas con alfa 255
         for (cx, cy) in [(0usize, 0usize), (55, 0), (0, 55), (55, 55)] {
             let idx = cy * dst_stride + cx * 4;
-            let pixel = u32::from_ne_bytes([data[idx], data[idx + 1], data[idx + 2], data[idx + 3]]);
+            let pixel =
+                u32::from_ne_bytes([data[idx], data[idx + 1], data[idx + 2], data[idx + 3]]);
             let alpha = (pixel >> 24) & 0xff;
-            assert_eq!(alpha, 255, "La esquina ({cx}, {cy}) debe quedar rellena para el recorte squircle");
+            assert_eq!(
+                alpha, 255,
+                "La esquina ({cx}, {cy}) debe quedar rellena para el recorte squircle"
+            );
         }
     }
 
@@ -4129,7 +4258,9 @@ mod tests {
         std::fs::create_dir_all(&folder_path).unwrap();
 
         assert!(!is_trashable_path(Path::new("/")));
-        assert!(!is_trashable_path(Path::new("/home/user/.local/share/Trash/files/a")));
+        assert!(!is_trashable_path(Path::new(
+            "/home/user/.local/share/Trash/files/a"
+        )));
         assert!(is_trashable_path(&file_path));
         assert!(is_trashable_path(&folder_path));
 

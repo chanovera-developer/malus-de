@@ -323,8 +323,16 @@ unsafe fn ensure_snapshot_textures(
         );
         gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MIN_FILTER, ffi::LINEAR as i32);
         gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_MAG_FILTER, ffi::LINEAR as i32);
-        gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_WRAP_S, ffi::CLAMP_TO_EDGE as i32);
-        gl.TexParameteri(ffi::TEXTURE_2D, ffi::TEXTURE_WRAP_T, ffi::CLAMP_TO_EDGE as i32);
+        gl.TexParameteri(
+            ffi::TEXTURE_2D,
+            ffi::TEXTURE_WRAP_S,
+            ffi::CLAMP_TO_EDGE as i32,
+        );
+        gl.TexParameteri(
+            ffi::TEXTURE_2D,
+            ffi::TEXTURE_WRAP_T,
+            ffi::CLAMP_TO_EDGE as i32,
+        );
     }
     entry.size = (size.w, size.h);
 }
@@ -350,4 +358,3 @@ mod tests {
         assert_eq!(eased_progress(DURATION + Duration::from_millis(50)), 1.0);
     }
 }
-

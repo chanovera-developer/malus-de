@@ -5,8 +5,8 @@ use gtk4::gdk::{self, Key, Texture};
 use gtk4::pango;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Box as GtkBox, Button, EventControllerKey, GestureClick, Image, Label,
-    Orientation, PolicyType, ScrolledWindow, Separator,
+    Align, Box as GtkBox, Button, EventControllerKey, GestureClick, Image, Label, Orientation,
+    PolicyType, ScrolledWindow, Separator,
 };
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -101,8 +101,9 @@ impl GalleryView {
                 y,
                 dir,
                 Rc::new(move |created_path| {
-                    if let Some(new_name) =
-                        created_path.file_name().map(|n| n.to_string_lossy().into_owned())
+                    if let Some(new_name) = created_path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
                     {
                         g_create.queue_select_name(&new_name);
                     }
@@ -428,12 +429,15 @@ impl GalleryView {
                 main_box.append(&img);
             } else {
                 let icon = Image::from_gicon(&item.gicon);
+                crate::views::apply_folder_icon_tint(&icon, item);
                 icon.set_pixel_size(128);
                 main_box.append(&icon);
             }
-        } else if ["rs", "toml", "json", "md", "txt", "sh", "py", "c", "cpp", "js", "html", "css"]
-            .iter()
-            .any(|e| *e == ext)
+        } else if [
+            "rs", "toml", "json", "md", "txt", "sh", "py", "c", "cpp", "js", "html", "css",
+        ]
+        .iter()
+        .any(|e| *e == ext)
         {
             let text_card = GtkBox::new(Orientation::Vertical, 6);
             text_card.add_css_class("branches-gallery-text-card");
@@ -459,6 +463,7 @@ impl GalleryView {
             main_box.append(&text_card);
         } else {
             let icon = Image::from_gicon(&item.gicon);
+            crate::views::apply_folder_icon_tint(&icon, item);
             icon.set_pixel_size(128);
             main_box.append(&icon);
         }
@@ -610,14 +615,11 @@ impl GalleryView {
                                 let on_renamed = parent_dir.map(|dir| {
                                     Rc::new(move |_new_path: PathBuf| {
                                         on_nav_ren(dir.clone());
-                                    }) as crate::views::RenameCallback
+                                    })
+                                        as crate::views::RenameCallback
                                 });
                                 crate::views::show_rename_popover(
-                                    &card_ren,
-                                    path_ren,
-                                    is_dir,
-                                    None,
-                                    on_renamed,
+                                    &card_ren, path_ren, is_dir, None, on_renamed,
                                 );
                             },
                         );
@@ -649,7 +651,9 @@ impl GalleryView {
                 .map(|it| it.path)
                 .collect();
             if paths.is_empty() {
-                Some(crate::views::build_file_drag_content_provider(&path_drag_fallback))
+                Some(crate::views::build_file_drag_content_provider(
+                    &path_drag_fallback,
+                ))
             } else {
                 Some(crate::views::build_files_drag_content_provider(&paths))
             }

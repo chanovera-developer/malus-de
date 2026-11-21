@@ -55,4 +55,3 @@ fn main() {
 
     app.run_with_args::<&str>(&[]);
 }
-

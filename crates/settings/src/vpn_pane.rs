@@ -241,12 +241,7 @@ fn populate_vpn_profiles_card(
             .css_classes(["bt-device-row"])
             .build();
 
-        let badge = make_squircle_badge(
-            30,
-            "network-vpn-symbolic",
-            16,
-            WIFI_BADGE_SQUIRCLE_RADIUS,
-        );
+        let badge = make_squircle_badge(30, "network-vpn-symbolic", 16, WIFI_BADGE_SQUIRCLE_RADIUS);
         badge.set_valign(Align::Center);
 
         let text_col = GtkBox::builder()
@@ -409,7 +404,14 @@ fn build_add_vpn_popover(
     let rel_o = trigger_reload.clone();
     ovpn_btn.connect_clicked(move |_| {
         pop_o.popdown();
-        prompt_import_vpn_file(&win_o, "openvpn", "Archivos OpenVPN (*.ovpn, *.conf)", &["ovpn", "conf"], &ban_o, &rel_o);
+        prompt_import_vpn_file(
+            &win_o,
+            "openvpn",
+            "Archivos OpenVPN (*.ovpn, *.conf)",
+            &["ovpn", "conf"],
+            &ban_o,
+            &rel_o,
+        );
     });
 
     let pop_w = pop.clone();
@@ -418,7 +420,14 @@ fn build_add_vpn_popover(
     let rel_w = trigger_reload.clone();
     wg_btn.connect_clicked(move |_| {
         pop_w.popdown();
-        prompt_import_vpn_file(&win_w, "wireguard", "Configuración WireGuard (*.conf)", &["conf"], &ban_w, &rel_w);
+        prompt_import_vpn_file(
+            &win_w,
+            "wireguard",
+            "Configuración WireGuard (*.conf)",
+            &["conf"],
+            &ban_w,
+            &rel_w,
+        );
     });
 
     menu_box.append(&ovpn_wrap);
@@ -855,9 +864,15 @@ fn prompt_import_vpn_file(
                 let path_str = path.to_string_lossy().to_string();
                 let (tx, rx) = async_channel::bounded::<Result<(), String>>(1);
                 std::thread::spawn(move || {
-                    let res =
-                        run_nmcli(&["connection", "import", "type", nm_import_type, "file", &path_str])
-                            .map(|_| ());
+                    let res = run_nmcli(&[
+                        "connection",
+                        "import",
+                        "type",
+                        nm_import_type,
+                        "file",
+                        &path_str,
+                    ])
+                    .map(|_| ());
                     let _ = tx.send_blocking(res);
                 });
                 let b_d = b.clone();
@@ -994,14 +1009,28 @@ fn collect_vpn_snapshot() -> VpnSnapshot {
         return snap;
     };
     snap.nm_available = true;
-    let active_raw =
-        run_nmcli(&["-t", "-f", "UUID,TYPE,STATE,DEVICE", "connection", "show", "--active"])
-            .unwrap_or_default();
+    let active_raw = run_nmcli(&[
+        "-t",
+        "-f",
+        "UUID,TYPE,STATE,DEVICE",
+        "connection",
+        "show",
+        "--active",
+    ])
+    .unwrap_or_default();
 
     let mut profiles = parse_nmcli_vpn_connections(&conns_raw, &active_raw);
     for p in &mut profiles {
         if p.conn_type == "vpn" {
-            if let Ok(det) = run_nmcli(&["-t", "-f", "vpn.service-type,vpn.data", "connection", "show", "uuid", &p.uuid]) {
+            if let Ok(det) = run_nmcli(&[
+                "-t",
+                "-f",
+                "vpn.service-type,vpn.data",
+                "connection",
+                "show",
+                "uuid",
+                &p.uuid,
+            ]) {
                 enrich_vpn_profile_metadata(p, &det);
             }
         }
@@ -1030,9 +1059,7 @@ pub(crate) fn detect_installed_vpn_plugins() -> BTreeSet<String> {
 
 pub(crate) fn parse_nm_vpn_plugin_filename(path: &Path) -> Option<String> {
     let fname = path.file_name()?.to_str()?;
-    let trimmed = fname
-        .strip_prefix("nm-")?
-        .strip_suffix("-service.name")?;
+    let trimmed = fname.strip_prefix("nm-")?.strip_suffix("-service.name")?;
     Some(trimmed.to_lowercase())
 }
 
@@ -1191,8 +1218,10 @@ mod tests {
     #[test]
     fn parses_nm_vpn_plugin_descriptors_and_labels() {
         assert_eq!(
-            parse_nm_vpn_plugin_filename(Path::new("/usr/lib/NetworkManager/VPN/nm-libreswan-service.name"))
-                .as_deref(),
+            parse_nm_vpn_plugin_filename(Path::new(
+                "/usr/lib/NetworkManager/VPN/nm-libreswan-service.name"
+            ))
+            .as_deref(),
             Some("libreswan")
         );
         assert_eq!(

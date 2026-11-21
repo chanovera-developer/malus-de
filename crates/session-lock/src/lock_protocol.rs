@@ -41,12 +41,8 @@ impl Dispatch<WlRegistry, ()> for LockClientState {
         } = event
         {
             if interface == "ext_session_lock_manager_v1" {
-                let mgr = registry.bind::<ExtSessionLockManagerV1, _, _>(
-                    name,
-                    version.min(1),
-                    qh,
-                    (),
-                );
+                let mgr =
+                    registry.bind::<ExtSessionLockManagerV1, _, _>(name, version.min(1), qh, ());
                 state.manager = Some(mgr);
             }
         }
@@ -138,4 +134,3 @@ impl SessionLockGuard {
         }
     }
 }
-

@@ -1,7 +1,7 @@
 use gtk4::prelude::*;
 use gtk4::{
-    Adjustment, Align, Box as GtkBox, Button, CheckButton, DrawingArea, GestureClick, Image,
-    Label, MenuButton, Orientation, PolicyType, Popover, Scale, ScrolledWindow, Stack, Switch,
+    Adjustment, Align, Box as GtkBox, Button, CheckButton, DrawingArea, GestureClick, Image, Label,
+    MenuButton, Orientation, PolicyType, Popover, Scale, ScrolledWindow, Stack, Switch,
 };
 use malus_de_common::config::DesktopIconsConfig;
 use serde::{Deserialize, Serialize};
@@ -109,10 +109,7 @@ pub fn appearance_subpanel_title(id: &str) -> Option<&'static str> {
 /// Registra el panel principal `Aspecto` (`"appearance"`, fiel a `assets/screenshots/Aspecto.png`)
 /// y su subsección `Temas` (`"appearance-themes"`, con Tema de aplicaciones, Tema y estilo del puntero
 /// y Superficie de escritorio en diseño Apple-like).
-pub fn register_appearance_panes(
-    stack: &Stack,
-    navigate: Rc<dyn Fn(&str)>,
-) -> Rc<dyn Fn()> {
+pub fn register_appearance_panes(stack: &Stack, navigate: Rc<dyn Fn(&str)>) -> Rc<dyn Fn()> {
     let prefs = Rc::new(RefCell::new(AppearancePreferences::load()));
 
     let (main_pane, refresh_main) = build_appearance_main_pane(&prefs, &navigate);
@@ -182,7 +179,11 @@ fn build_appearance_main_pane(
         .build();
 
     let selected_mode = Rc::new(Cell::new(if crate::is_dark_mode_active() {
-        if prefs.borrow().mode_idx == 2 { 2 } else { 1 }
+        if prefs.borrow().mode_idx == 2 {
+            2
+        } else {
+            1
+        }
     } else if prefs.borrow().mode_idx == 2 {
         2
     } else {
@@ -199,6 +200,7 @@ fn build_appearance_main_pane(
         let area = DrawingArea::new();
         area.set_content_width(68);
         area.set_content_height(44);
+        crate::register_accent_draw_area(&area);
         let sel_c = selected_mode.clone();
         area.set_draw_func(move |_, cr, w, h| {
             draw_mode_thumbnail(cr, w as f64, h as f64, idx, sel_c.get() == idx);
@@ -428,6 +430,7 @@ fn build_appearance_main_pane(
         let sw_area = DrawingArea::new();
         sw_area.set_content_width(22);
         sw_area.set_content_height(22);
+        crate::register_accent_draw_area(&sw_area);
         let acc_c = active_accent.clone();
         sw_area.set_draw_func(move |_, cr, w, h| {
             draw_accent_swatch(cr, w as f64, h as f64, idx, acc_c.get() == idx);
@@ -498,6 +501,7 @@ fn build_appearance_main_pane(
         let area = DrawingArea::new();
         area.set_content_width(44);
         area.set_content_height(44);
+        crate::register_accent_draw_area(&area);
         let st_c = active_icon_style.clone();
         let acc_c = active_accent.clone();
         area.set_draw_func(move |_, cr, w, h| {
@@ -554,6 +558,11 @@ fn build_appearance_main_pane(
             cap_c.set_label(ACCENT_COLORS[idx].0);
             p_c.borrow_mut().accent_color_idx = idx;
             p_c.borrow().save();
+            crate::apply_accent_color_css(idx);
+            malus_de_common::config::sync_system_appearance(crate::is_dark_mode_active());
+            let _ = malus_de_common::ipc::IpcClient::send_command(
+                malus_de_common::ipc::IpcMessage::AccentColorChanged { index: idx },
+            );
             for a in sw_all.iter() {
                 a.queue_draw();
             }
@@ -815,9 +824,7 @@ fn build_appearance_main_pane(
 //    - Superficie de escritorio
 // ============================================================================
 
-fn build_appearance_themes_subpane(
-    navigate: &Rc<dyn Fn(&str)>,
-) -> (ScrolledWindow, Rc<dyn Fn()>) {
+fn build_appearance_themes_subpane(navigate: &Rc<dyn Fn(&str)>) -> (ScrolledWindow, Rc<dyn Fn()>) {
     let (scrolled, pane) = make_scrolled_pane();
 
     // ------------------------------------------------------------------------
@@ -844,6 +851,7 @@ fn build_appearance_themes_subpane(
         let thumb = DrawingArea::new();
         thumb.set_content_width(48);
         thumb.set_content_height(32);
+        crate::register_accent_draw_area(&thumb);
         let t_id_draw = theme_id.clone();
         thumb.set_draw_func(move |_, cr, w, h| {
             let active = crate::get_current_gtk_theme() == t_id_draw;
@@ -934,6 +942,7 @@ fn build_appearance_themes_subpane(
         let badge = DrawingArea::new();
         badge.set_content_width(34);
         badge.set_content_height(34);
+        crate::register_accent_draw_area(&badge);
         let t_id_draw = theme_id.clone();
         let st_t_draw = state_cursor_theme.clone();
         badge.set_draw_func(move |_, cr, w, h| {
@@ -1017,7 +1026,11 @@ fn build_appearance_themes_subpane(
         .css_classes(["bat-segmented-track"])
         .build();
     let size_btns: Rc<RefCell<Vec<(u32, Button)>>> = Rc::new(RefCell::new(Vec::new()));
-    for (sz, txt) in [(24u32, "Estándar (24 px)"), (32, "Mediano (32 px)"), (48, "Grande (48 px)")] {
+    for (sz, txt) in [
+        (24u32, "Estándar (24 px)"),
+        (32, "Mediano (32 px)"),
+        (48, "Grande (48 px)"),
+    ] {
         let b = Button::builder()
             .label(txt)
             .has_frame(false)
@@ -1166,8 +1179,7 @@ fn build_appearance_themes_subpane(
             .xalign(0.0)
             .build(),
     );
-    let (wp_btn_wrap, wp_btn) =
-        make_squircle_button("Fondo de pantalla...", false, None);
+    let (wp_btn_wrap, wp_btn) = make_squircle_button("Fondo de pantalla...", false, None);
     let nav_wp = navigate.clone();
     wp_btn.connect_clicked(move |_| nav_wp("wallpaper"));
     wp_row.append(&wp_col);
@@ -1260,7 +1272,8 @@ fn build_appearance_themes_subpane(
 // ============================================================================
 
 const ASPECTO_CLARO_PNG: &[u8] = include_bytes!("../../../assets/screenshots/aspecto-claro.png");
-const ASPECTO_OBSCURO_PNG: &[u8] = include_bytes!("../../../assets/screenshots/aspecto-obscuro.png");
+const ASPECTO_OBSCURO_PNG: &[u8] =
+    include_bytes!("../../../assets/screenshots/aspecto-obscuro.png");
 const ASPECTO_AUTOMATICO_PNG: &[u8] =
     include_bytes!("../../../assets/screenshots/aspecto-automatico.png");
 const ASPECTO_LIQUID_GLASS_WEBP: &[u8] =
@@ -1316,13 +1329,7 @@ fn with_mode_thumbnail_pixbuf<F: FnOnce(&gdk_pixbuf::Pixbuf)>(mode_idx: usize, f
     })
 }
 
-fn draw_mode_thumbnail(
-    cr: &gtk4::cairo::Context,
-    w: f64,
-    h: f64,
-    mode_idx: usize,
-    selected: bool,
-) {
+fn draw_mode_thumbnail(cr: &gtk4::cairo::Context, w: f64, h: f64, mode_idx: usize, selected: bool) {
     let _ = cr.save();
     cr.translate(2.0, 2.0);
     let iw = (w - 4.0).max(10.0);
@@ -1365,7 +1372,8 @@ fn draw_mode_thumbnail(
     // Anillo de selección azul macOS
     crate::squircle_path(cr, iw, ih, 8.0);
     if selected {
-        cr.set_source_rgb(0.0, 0.48, 1.0);
+        let (r, g, b) = crate::accent_color();
+        cr.set_source_rgb(r, g, b);
         cr.set_line_width(2.2);
     } else {
         cr.set_source_rgba(0.5, 0.5, 0.54, 0.35);
@@ -1375,12 +1383,7 @@ fn draw_mode_thumbnail(
     let _ = cr.restore();
 }
 
-fn draw_liquid_glass_preview(
-    cr: &gtk4::cairo::Context,
-    w: f64,
-    h: f64,
-    glass_opacity: f64,
-) {
+fn draw_liquid_glass_preview(cr: &gtk4::cairo::Context, w: f64, h: f64, glass_opacity: f64) {
     let _ = cr.save();
     crate::squircle_path(cr, w, h, 14.0);
     cr.clip();
@@ -1447,7 +1450,11 @@ fn draw_liquid_glass_preview(
     cr.rectangle(0.0, h - 26.0, w, 26.0);
     let _ = cr.fill();
     cr.set_source_rgba(0.10, 0.11, 0.13, 0.92);
-    cr.select_font_face("Sans", gtk4::cairo::FontSlant::Normal, gtk4::cairo::FontWeight::Bold);
+    cr.select_font_face(
+        "Sans",
+        gtk4::cairo::FontSlant::Normal,
+        gtk4::cairo::FontWeight::Bold,
+    );
     cr.set_font_size(11.0);
     cr.move_to(14.0, h - 9.0);
     let _ = cr.show_text("Bienvenido a Malus DE");
@@ -1455,13 +1462,7 @@ fn draw_liquid_glass_preview(
     let _ = cr.restore();
 }
 
-fn draw_accent_swatch(
-    cr: &gtk4::cairo::Context,
-    w: f64,
-    h: f64,
-    idx: usize,
-    selected: bool,
-) {
+fn draw_accent_swatch(cr: &gtk4::cairo::Context, w: f64, h: f64, idx: usize, selected: bool) {
     let cx = w * 0.5;
     let cy = h * 0.5;
     let r = (w.min(h) * 0.5) - 2.0;
@@ -1499,7 +1500,8 @@ fn draw_accent_swatch(
         cr.arc(cx, cy, r - 2.2, 0.0, std::f64::consts::TAU);
         let _ = cr.stroke();
 
-        cr.set_source_rgb(0.0, 0.48, 1.0);
+        let (r, g, b) = crate::accent_color();
+        cr.set_source_rgb(r, g, b);
         cr.set_line_width(1.5);
         cr.arc(cx, cy, r + 1.0, 0.0, std::f64::consts::TAU);
         let _ = cr.stroke();
@@ -1529,7 +1531,8 @@ fn draw_widget_style_tile(
     let _ = cr.fill_preserve();
 
     if selected {
-        cr.set_source_rgb(0.0, 0.48, 1.0);
+        let (r, g, b) = crate::accent_color();
+        cr.set_source_rgb(r, g, b);
         cr.set_line_width(2.2);
     } else {
         cr.set_source_rgba(0.5, 0.5, 0.54, 0.28);
@@ -1565,13 +1568,15 @@ fn draw_cursor_preview_badge(
     cr.translate(1.0, 1.0);
     crate::squircle_path(cr, w - 2.0, h - 2.0, 10.0);
     if active {
-        cr.set_source_rgba(0.0, 0.48, 1.0, 0.16);
+        let (r, g, b) = crate::accent_color();
+        cr.set_source_rgba(r, g, b, 0.16);
     } else {
         cr.set_source_rgba(0.5, 0.5, 0.55, 0.12);
     }
     let _ = cr.fill_preserve();
     if active {
-        cr.set_source_rgb(0.0, 0.48, 1.0);
+        let (r, g, b) = crate::accent_color();
+        cr.set_source_rgb(r, g, b);
         cr.set_line_width(1.6);
     } else {
         cr.set_source_rgba(0.5, 0.5, 0.55, 0.25);
@@ -1705,7 +1710,12 @@ fn build_simple_selector_row<F: Fn(usize) + 'static>(
         .build();
     inner.append(&dot);
     inner.append(&cur_lbl);
-    inner.append(&Image::builder().icon_name("pan-down-symbolic").pixel_size(12).build());
+    inner.append(
+        &Image::builder()
+            .icon_name("pan-down-symbolic")
+            .pixel_size(12)
+            .build(),
+    );
 
     let btn = MenuButton::builder()
         .child(&inner)
@@ -1777,7 +1787,10 @@ mod tests {
         assert!(is_appearance_subpanel("appearance-themes"));
         assert!(!is_appearance_subpanel("wifi"));
         assert_eq!(appearance_subpanel_title("appearance"), Some("Aspecto"));
-        assert_eq!(appearance_subpanel_title("appearance-themes"), Some("Temas"));
+        assert_eq!(
+            appearance_subpanel_title("appearance-themes"),
+            Some("Temas")
+        );
         assert_eq!(ACCENT_COLORS.len(), 9);
     }
 }

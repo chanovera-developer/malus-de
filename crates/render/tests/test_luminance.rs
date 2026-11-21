@@ -3,11 +3,11 @@
 // ==============================================================================
 
 use anyhow::Result;
+use malus_de_render::layout::UiTree;
 use malus_de_render::luminance::{calculate_luminance_rgba, AdaptivePalette};
 use malus_de_render::renderer::SquircleRenderer;
 use malus_de_render::text::TextSystem;
 use malus_de_render::top_bar::{build_top_bar, TopBarConfig, TopBarModel};
-use malus_de_render::layout::UiTree;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
@@ -22,17 +22,26 @@ fn test_calculate_luminance_black_white_and_shades() {
     // 2. Blanco puro
     let white = [255u8, 255, 255, 255];
     let lum_white = calculate_luminance_rgba(&white);
-    assert!((lum_white - 1.0).abs() < 0.001, "Luminancia de blanco debe ser 1.0");
+    assert!(
+        (lum_white - 1.0).abs() < 0.001,
+        "Luminancia de blanco debe ser 1.0"
+    );
 
     // 3. Verde puro (debe tener mayor peso según ITU-R BT.709: 0.7152)
     let green = [0u8, 255, 0, 255];
     let lum_green = calculate_luminance_rgba(&green);
-    assert!((lum_green - 0.7152).abs() < 0.01, "Luminancia de verde ≈ 0.7152");
+    assert!(
+        (lum_green - 0.7152).abs() < 0.01,
+        "Luminancia de verde ≈ 0.7152"
+    );
 
     // 4. Azul puro (debe tener menor peso: 0.0722)
     let blue = [0u8, 0, 255, 255];
     let lum_blue = calculate_luminance_rgba(&blue);
-    assert!((lum_blue - 0.0722).abs() < 0.01, "Luminancia de azul ≈ 0.0722");
+    assert!(
+        (lum_blue - 0.0722).abs() < 0.01,
+        "Luminancia de azul ≈ 0.0722"
+    );
 }
 
 #[test]
@@ -64,7 +73,8 @@ fn test_transparent_topbar_rendering_and_text_adaptation() -> Result<()> {
     let screen_h = 40u32;
 
     let mut renderer = SquircleRenderer::new_headless(wgpu::TextureFormat::Rgba8Unorm)?;
-    let mut text_system = TextSystem::new(&renderer.device, &renderer.queue, renderer.target_format);
+    let mut text_system =
+        TextSystem::new(&renderer.device, &renderer.queue, renderer.target_format);
 
     // Configuración de barra 100% transparente sin bordes ni píldora opaca
     let config = TopBarConfig {
@@ -116,7 +126,8 @@ fn test_transparent_topbar_rendering_and_text_adaptation() -> Result<()> {
         &labels_dark,
     )?;
 
-    let out_dark = Path::new("/home/cristian/Proyectos/malus-de/target/malus_topbar_transparent_dark.png");
+    let out_dark =
+        Path::new("/home/cristian/Proyectos/malus-de/target/malus_topbar_transparent_dark.png");
     let file_d = File::create(out_dark)?;
     let ref mut w_d = BufWriter::new(file_d);
     let mut enc_d = png::Encoder::new(w_d, screen_w, screen_h);
@@ -153,8 +164,14 @@ fn test_transparent_topbar_rendering_and_text_adaptation() -> Result<()> {
     let labels_light = ui_light.generate_text_labels();
 
     // Validar que las etiquetas cambiaron a color oscuro
-    let safari_label = labels_light.iter().find(|(l, _, _)| l.text == "Safari").unwrap();
-    assert!(safari_label.0.color[0] < 0.20, "El texto en fondo claro debe ser oscuro");
+    let safari_label = labels_light
+        .iter()
+        .find(|(l, _, _)| l.text == "Safari")
+        .unwrap();
+    assert!(
+        safari_label.0.color[0] < 0.20,
+        "El texto en fondo claro debe ser oscuro"
+    );
 
     let rgba_light = renderer.render_scene_to_rgba_image(
         &mut text_system,
@@ -165,7 +182,8 @@ fn test_transparent_topbar_rendering_and_text_adaptation() -> Result<()> {
         &labels_light,
     )?;
 
-    let out_light = Path::new("/home/cristian/Proyectos/malus-de/target/malus_topbar_transparent_light.png");
+    let out_light =
+        Path::new("/home/cristian/Proyectos/malus-de/target/malus_topbar_transparent_light.png");
     let file_l = File::create(out_light)?;
     let ref mut w_l = BufWriter::new(file_l);
     let mut enc_l = png::Encoder::new(w_l, screen_w, screen_h);

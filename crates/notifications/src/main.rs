@@ -25,9 +25,8 @@ thread_local! {
 fn apply_notification_liquid_glass_opacity(opacity: f64) {
     let scale = malus_de_common::config::liquid_glass_scale_for(opacity);
     let banner_a = malus_de_common::config::scaled_liquid_glass_alpha(0.85, scale, 0.16, 0.96);
-    let css = format!(
-        ".notification-banner {{ background-color: rgba(28, 28, 32, {banner_a:.3}); }}"
-    );
+    let css =
+        format!(".notification-banner {{ background-color: rgba(28, 28, 32, {banner_a:.3}); }}");
     NOTIF_GLASS_PROVIDER.with(|cell| {
         if let Some(provider) = cell.borrow().as_ref() {
             provider.load_from_string(&css);
@@ -94,7 +93,9 @@ impl NotificationServer {
         vec!["body", "actions", "icon-static", "persistence", "sound"]
     }
 
-    async fn get_server_information(&self) -> (&'static str, &'static str, &'static str, &'static str) {
+    async fn get_server_information(
+        &self,
+    ) -> (&'static str, &'static str, &'static str, &'static str) {
         ("Malus Notification Daemon", "Malus DE", "0.1.0", "1.2")
     }
 }
@@ -118,7 +119,10 @@ fn main() -> Result<()> {
         let rt = zbus::block_on(async {
             let _connection = zbus::connection::Builder::session()?
                 .name("org.freedesktop.Notifications")?
-                .serve_at("/org/freedesktop/Notifications", NotificationServer { sender: s_clone })?
+                .serve_at(
+                    "/org/freedesktop/Notifications",
+                    NotificationServer { sender: s_clone },
+                )?
                 .build()
                 .await?;
 
@@ -157,7 +161,8 @@ fn main() -> Result<()> {
         apply_notification_liquid_glass_opacity(
             malus_de_common::config::load_liquid_glass_opacity(),
         );
-        let cfg_file = gtk4::gio::File::for_path(malus_de_common::config::appearance_settings_path());
+        let cfg_file =
+            gtk4::gio::File::for_path(malus_de_common::config::appearance_settings_path());
         if let Ok(monitor) = cfg_file.monitor_file(
             gtk4::gio::FileMonitorFlags::NONE,
             gtk4::gio::Cancellable::NONE,
@@ -243,7 +248,10 @@ fn display_banner(app: &Application, msg: NotificationMsg) {
         .build();
     header.append(&app_name);
 
-    let spacer = GtkBox::builder().orientation(Orientation::Horizontal).hexpand(true).build();
+    let spacer = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .hexpand(true)
+        .build();
     header.append(&spacer);
 
     let time_label = Label::builder()

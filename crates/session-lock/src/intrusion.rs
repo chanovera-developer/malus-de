@@ -33,9 +33,7 @@ pub fn cooldown_seconds_for_attempts(failed_attempts: u32) -> u64 {
 pub fn intrusion_state_path() -> PathBuf {
     let base = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share"))
-        })
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share")))
         .unwrap_or_else(|| PathBuf::from("/tmp"));
     base.join("malus-de").join("lock-intrusion.json")
 }
@@ -100,15 +98,15 @@ pub fn dispatch_intrusion_alert(attempts: u32, last_failed: Option<&str>, spanis
         "Lock screen security alert"
     };
     let body = match (spanish, last_failed) {
-        (true, Some(ts)) => format!(
-            "Se registraron {attempts} intento(s) fallido(s) de desbloqueo (último: {ts})."
-        ),
+        (true, Some(ts)) => {
+            format!("Se registraron {attempts} intento(s) fallido(s) de desbloqueo (último: {ts}).")
+        }
         (true, None) => {
             format!("Se registraron {attempts} intento(s) fallido(s) de desbloqueo.")
         }
-        (false, Some(ts)) => format!(
-            "{attempts} failed unlock attempt(s) detected while locked (last: {ts})."
-        ),
+        (false, Some(ts)) => {
+            format!("{attempts} failed unlock attempt(s) detected while locked (last: {ts}).")
+        }
         (false, None) => {
             format!("{attempts} failed unlock attempt(s) detected while locked.")
         }
@@ -166,9 +164,18 @@ mod tests {
         let mut state = load_state_from(&path);
         assert_eq!(state.failed_attempts, 0);
 
-        assert_eq!(record_failed_attempt_at(&path, &mut state, 1000, "15:20:01"), 0);
-        assert_eq!(record_failed_attempt_at(&path, &mut state, 1002, "15:20:02"), 0);
-        assert_eq!(record_failed_attempt_at(&path, &mut state, 1005, "15:20:05"), 5);
+        assert_eq!(
+            record_failed_attempt_at(&path, &mut state, 1000, "15:20:01"),
+            0
+        );
+        assert_eq!(
+            record_failed_attempt_at(&path, &mut state, 1002, "15:20:02"),
+            0
+        );
+        assert_eq!(
+            record_failed_attempt_at(&path, &mut state, 1005, "15:20:05"),
+            5
+        );
         assert_eq!(remaining_cooldown_secs(&state, 1007), 3);
 
         let reloaded = load_state_from(&path);
@@ -182,4 +189,3 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-

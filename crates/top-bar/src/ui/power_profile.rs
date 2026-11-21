@@ -67,7 +67,10 @@ pub fn create_power_profile_widget() -> Button {
 
         let new_icon = Image::from_icon_name(next_mode.icon_name());
         btn_clone.set_child(Some(&new_icon));
-        btn_clone.set_tooltip_text(Some(&format!("Modo: {} (Click para alternar)", next_mode.label())));
+        btn_clone.set_tooltip_text(Some(&format!(
+            "Modo: {} (Click para alternar)",
+            next_mode.label()
+        )));
 
         info!("Cambiando Modo de Rendimiento a: {:?}", next_mode);
 
@@ -117,7 +120,8 @@ pub fn create_power_profile_widget() -> Button {
                         state_init.set(detected_mode);
                         let img = Image::from_icon_name(detected_mode.icon_name());
                         btn_init.set_child(Some(&img));
-                        btn_init.set_tooltip_text(Some(&format!("Modo: {}", detected_mode.label())));
+                        btn_init
+                            .set_tooltip_text(Some(&format!("Modo: {}", detected_mode.label())));
                     }
                 }
             }

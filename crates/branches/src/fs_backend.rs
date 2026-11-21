@@ -26,10 +26,10 @@ impl FileItem {
     pub fn from_path(path: &Path) -> Option<Self> {
         let name = path.file_name()?.to_string_lossy().to_string();
         let is_hidden = name.starts_with('.');
-        
+
         let metadata = fs::symlink_metadata(path).ok()?;
         let is_symlink = metadata.file_type().is_symlink();
-        
+
         // Si es symlink, intentar resolver el metadata final para saber si apunta a dir
         let target_metadata = if is_symlink {
             fs::metadata(path).ok().unwrap_or_else(|| metadata.clone())
@@ -46,7 +46,9 @@ impl FileItem {
         };
 
         let modified = target_metadata.modified().ok();
-        let modified_str = modified.map(format_modified).unwrap_or_else(|| "--".to_string());
+        let modified_str = modified
+            .map(format_modified)
+            .unwrap_or_else(|| "--".to_string());
 
         let (kind_str, gicon) = resolve_kind_and_icon(path, is_dir, &name);
 
@@ -83,7 +85,10 @@ pub fn load_directory(
                 continue;
             }
             if !filter_query.is_empty()
-                && !item.name.to_lowercase().contains(&filter_query.to_lowercase())
+                && !item
+                    .name
+                    .to_lowercase()
+                    .contains(&filter_query.to_lowercase())
             {
                 continue;
             }
@@ -186,16 +191,11 @@ pub fn search_directory_recursive(
     max_results: usize,
     cancel: &AtomicBool,
 ) -> Vec<FileItem> {
-    let mut results: Vec<FileItem> = search_paths_recursive(
-        root,
-        filter_query,
-        show_hidden,
-        max_results,
-        cancel,
-    )
-    .into_iter()
-    .filter_map(|p| FileItem::from_path(&p))
-    .collect();
+    let mut results: Vec<FileItem> =
+        search_paths_recursive(root, filter_query, show_hidden, max_results, cancel)
+            .into_iter()
+            .filter_map(|p| FileItem::from_path(&p))
+            .collect();
     sort_file_items(&mut results, sort_by, sort_order);
     results
 }
@@ -225,22 +225,23 @@ fn date_to_days(year: i32, month: i32, day: i32) -> i64 {
     let adjusted_year = year + 4800 - leap_month_adjustment;
     let adjusted_month = month + 12 * leap_month_adjustment - 3;
 
-    day as i64 
-        + (153 * adjusted_month as i64 + 2) / 5 
-        + 365 * adjusted_year as i64 
-        + adjusted_year as i64 / 4 
-        - adjusted_year as i64 / 100 
-        + adjusted_year as i64 / 400 
+    day as i64
+        + (153 * adjusted_month as i64 + 2) / 5
+        + 365 * adjusted_year as i64
+        + adjusted_year as i64 / 4
+        - adjusted_year as i64 / 100
+        + adjusted_year as i64 / 400
         - 32045
 }
 
 /// Lógica interna que permite inyectar el tiempo actual (`now`) para pruebas deterministas.
 fn format_modified_with_now(time: SystemTime, now: &glib::DateTime) -> String {
-    let duration = time.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default();
+    let duration = time
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
     let secs = duration.as_secs() as i64;
 
-    let dt = glib::DateTime::from_unix_local(secs)
-        .unwrap_or_else(|_| now.clone());
+    let dt = glib::DateTime::from_unix_local(secs).unwrap_or_else(|_| now.clone());
 
     if dt > *now {
         return dt.format("%d/%m/%Y %H:%M").unwrap_or_default().to_string();
@@ -379,7 +380,14 @@ pub fn open_in_terminal(path: &Path) {
         path.parent().unwrap_or(path)
     };
 
-    let terminals = ["ghostty", "ptyxis", "gnome-terminal", "alacritty", "kitty", "xterm"];
+    let terminals = [
+        "ghostty",
+        "ptyxis",
+        "gnome-terminal",
+        "alacritty",
+        "kitty",
+        "xterm",
+    ];
     for term in terminals {
         let mut cmd = std::process::Command::new(term);
         cmd.current_dir(target);
@@ -437,7 +445,11 @@ fn resolve_kind_and_icon(path: &Path, is_dir: bool, name: &str) -> (String, gio:
     }
 
     // Fallback según extensión
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
     let (desc, icon_name) = match ext.as_str() {
         "rs" | "c" | "cpp" | "py" | "js" | "ts" | "html" | "css" | "sh" => {
             ("Código Fuente", "text-x-script")
@@ -544,7 +556,9 @@ pub fn load_recent_files(home: &Path, search_dirs: &[PathBuf], limit: usize) -> 
     items.sort_by(|a, b| {
         let a_time = a.modified.unwrap_or(SystemTime::UNIX_EPOCH);
         let b_time = b.modified.unwrap_or(SystemTime::UNIX_EPOCH);
-        b_time.cmp(&a_time).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        b_time
+            .cmp(&a_time)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
     items.truncate(limit);
     items
@@ -552,10 +566,10 @@ pub fn load_recent_files(home: &Path, search_dirs: &[PathBuf], limit: usize) -> 
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use super::{load_recent_files, percent_decode_file_uri, resolve_kind_and_icon, FileItem};
     use gio::prelude::{Cast, FileExt};
     use std::path::{Path, PathBuf};
-    use super::*;
 
     #[test]
     fn test_percent_decode_file_uri_and_load_recent_files() {
@@ -630,7 +644,10 @@ mod tests {
             let themed = gicon
                 .downcast_ref::<gio::ThemedIcon>()
                 .expect("las carpetas deben resolver a ThemedIcon");
-            assert_eq!(themed.names().first().map(|s| s.as_str()), Some(expected_icon));
+            assert_eq!(
+                themed.names().first().map(|s| s.as_str()),
+                Some(expected_icon)
+            );
         }
     }
 
@@ -658,12 +675,24 @@ mod tests {
             );
 
             for folder_icon in folder_icons {
-                let p = theme_dir.join("places/scalable").join(format!("{folder_icon}.svg"));
-                assert!(p.is_file(), "{theme_name} debe resolver {} en places/scalable", p.display());
+                let p = theme_dir
+                    .join("places/scalable")
+                    .join(format!("{folder_icon}.svg"));
+                assert!(
+                    p.is_file(),
+                    "{theme_name} debe resolver {} en places/scalable",
+                    p.display()
+                );
             }
             for doc_icon in ["text-plain", "text-x-generic", "application-pdf"] {
-                let p = theme_dir.join("mimetypes/scalable").join(format!("{doc_icon}.svg"));
-                assert!(p.is_file(), "{theme_name} debe resolver {} en mimetypes/scalable", p.display());
+                let p = theme_dir
+                    .join("mimetypes/scalable")
+                    .join(format!("{doc_icon}.svg"));
+                assert!(
+                    p.is_file(),
+                    "{theme_name} debe resolver {} en mimetypes/scalable",
+                    p.display()
+                );
             }
             for sym_rel in [
                 "places/symbolic/folder-documents-symbolic.svg",
@@ -767,12 +796,14 @@ mod tests {
     #[test]
     fn test_format_modified_today() {
         let now = glib::DateTime::now_local().unwrap();
-        let elapsed_secs_today = now.hour() as i64 * 3600 + now.minute() as i64 * 60 + now.second() as i64;
-        
+        let elapsed_secs_today =
+            now.hour() as i64 * 3600 + now.minute() as i64 * 60 + now.second() as i64;
+
         // Si estamos muy cerca de medianoche, usamos un desfase seguro de 1 minuto, sino 1 hora
         let offset = if elapsed_secs_today > 120 { 60 } else { 1 };
         let time_secs = now.to_unix() - offset;
-        let time = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(time_secs as u64);
+        let time =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(time_secs as u64);
 
         let result = super::format_modified_with_now(time, &now);
         assert!(result.starts_with("Hoy a las"));
@@ -781,11 +812,13 @@ mod tests {
     #[test]
     fn test_format_modified_yesterday() {
         let now = glib::DateTime::now_local().unwrap();
-        let elapsed_secs_today = now.hour() as i64 * 3600 + now.minute() as i64 * 60 + now.second() as i64;
-        
+        let elapsed_secs_today =
+            now.hour() as i64 * 3600 + now.minute() as i64 * 60 + now.second() as i64;
+
         // Restamos los segundos transcurridos hoy más 6 horas para caer siempre en la tarde de ayer
         let time_secs = now.to_unix() - elapsed_secs_today - 6 * 3600;
-        let time = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(time_secs as u64);
+        let time =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(time_secs as u64);
 
         let result = super::format_modified_with_now(time, &now);
         assert!(result.starts_with("Ayer a las"));
@@ -796,10 +829,11 @@ mod tests {
         let now = glib::DateTime::now_local().unwrap();
         // 10 días en el futuro
         let time_secs = now.to_unix() + 864000;
-        let time = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(time_secs as u64);
+        let time =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(time_secs as u64);
 
         let result = super::format_modified_with_now(time, &now);
-        
+
         assert!(result.contains('/'));
         assert!(!result.contains("Hoy"));
         assert!(!result.contains("Ayer"));

@@ -972,7 +972,12 @@ fn create_volume_tray_button() -> MenuButton {
             let sink_name = AudioService::get_active_sink_name().await;
             dn.set_label(&sink_name);
             let s_lower = sink_name.to_lowercase();
-            if s_lower.contains("space one") || s_lower.contains("auricular") || s_lower.contains("headphone") || s_lower.contains("headset") || s_lower.contains("buds") {
+            if s_lower.contains("space one")
+                || s_lower.contains("auricular")
+                || s_lower.contains("headphone")
+                || s_lower.contains("headset")
+                || s_lower.contains("buds")
+            {
                 di.set_icon_name(Some("audio-headset-symbolic"));
             } else {
                 di.set_icon_name(Some("audio-speakers-symbolic"));
@@ -1068,7 +1073,9 @@ fn create_link_tray_button() -> MenuButton {
     popover_box.append(&title_lbl);
 
     let desc_lbl = Label::builder()
-        .label("Comparte archivos vía AirDrop nativo (AWDL/owly) con MacBook, iPhone o iPad cercanos.")
+        .label(
+            "Comparte archivos vía AirDrop nativo (AWDL/owly) con MacBook, iPhone o iPad cercanos.",
+        )
         .css_classes(["cc-airdrop-desc"])
         .wrap(true)
         .xalign(0.0)
@@ -1084,9 +1091,12 @@ fn create_link_tray_button() -> MenuButton {
     popover_box.append(&status_lbl);
 
     // Opciones
-    let (row_off, check_off) = create_link_option_row("No recibir", "Desactiva AWDL y mantiene tu Wi-Fi normal");
-    let (row_contacts, check_contacts) = create_link_option_row("Solo contactos", "Requiere Apple ID (inactivo en Linux)");
-    let (row_everyone, check_everyone) = create_link_option_row("Todos durante 10 min", "Activa awdl0 y recibe en Descargas");
+    let (row_off, check_off) =
+        create_link_option_row("No recibir", "Desactiva AWDL y mantiene tu Wi-Fi normal");
+    let (row_contacts, check_contacts) =
+        create_link_option_row("Solo contactos", "Requiere Apple ID (inactivo en Linux)");
+    let (row_everyone, check_everyone) =
+        create_link_option_row("Todos durante 10 min", "Activa awdl0 y recibe en Descargas");
 
     popover_box.append(&row_off);
     popover_box.append(&row_contacts);
@@ -1111,7 +1121,9 @@ fn create_link_tray_button() -> MenuButton {
         .css_classes(["cc-airdrop-sim-btn"])
         .label("🔍 Buscar")
         .has_frame(false)
-        .tooltip_text("Buscar dispositivos Apple cercanos en awdl0 (requiere activar 'Todos durante 10 min')")
+        .tooltip_text(
+            "Buscar dispositivos Apple cercanos en awdl0 (requiere activar 'Todos durante 10 min')",
+        )
         .build();
 
     let send_btn = Button::builder()
@@ -1269,7 +1281,9 @@ fn create_link_tray_button() -> MenuButton {
     let st_every = status_lbl.clone();
     row_everyone.connect_clicked(move |_| {
         u_every("everyone");
-        st_every.set_label("Levantando radio AWDL (awdl0)... En Intel AX210 el Wi-Fi se pausa temporalmente.");
+        st_every.set_label(
+            "Levantando radio AWDL (awdl0)... En Intel AX210 el Wi-Fi se pausa temporalmente.",
+        );
         set_link_mode_dbus_and_refresh("everyone", ref_every.clone());
     });
 
@@ -1320,7 +1334,10 @@ fn format_airdrop_status_text(v: &serde_json::Value) -> String {
         _ => {
             if hw_ready {
                 if rmode == "exclusive" {
-                    format!("Listo ({} · modo exclusivo: pausa Wi-Fi al activar)", station)
+                    format!(
+                        "Listo ({} · modo exclusivo: pausa Wi-Fi al activar)",
+                        station
+                    )
                 } else {
                     format!("Listo ({} · modo compartido)", station)
                 }
@@ -1372,27 +1389,31 @@ fn pick_and_send_airdrop_file(target: String) {
     let dialog = gtk4::FileDialog::builder()
         .title("Enviar archivo por AirDrop")
         .build();
-    dialog.open(None::<&gtk4::Window>, None::<&gtk4::gio::Cancellable>, move |res| {
-        if let Ok(file) = res {
-            if let Some(path) = file.path() {
-                let path_str = path.to_string_lossy().into_owned();
-                let target_c = target.clone();
-                glib::MainContext::default().spawn_local(async move {
-                    if let Ok(conn) = zbus::Connection::session().await {
-                        let _ = conn
-                            .call_method(
-                                Some("org.malus_de.Link"),
-                                "/org/malus_de/Link",
-                                Some("org.malus_de.Link"),
-                                "SendAirDropFile",
-                                &(target_c, path_str),
-                            )
-                            .await;
-                    }
-                });
+    dialog.open(
+        None::<&gtk4::Window>,
+        None::<&gtk4::gio::Cancellable>,
+        move |res| {
+            if let Ok(file) = res {
+                if let Some(path) = file.path() {
+                    let path_str = path.to_string_lossy().into_owned();
+                    let target_c = target.clone();
+                    glib::MainContext::default().spawn_local(async move {
+                        if let Ok(conn) = zbus::Connection::session().await {
+                            let _ = conn
+                                .call_method(
+                                    Some("org.malus_de.Link"),
+                                    "/org/malus_de/Link",
+                                    Some("org.malus_de.Link"),
+                                    "SendAirDropFile",
+                                    &(target_c, path_str),
+                                )
+                                .await;
+                        }
+                    });
+                }
             }
-        }
-    });
+        },
+    );
 }
 
 fn create_link_option_row(title: &str, subtitle: &str) -> (Button, Image) {

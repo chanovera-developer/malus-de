@@ -1,5 +1,5 @@
-use std::process::Command;
 use malus_de_common::config::DisplaysConfig;
+use std::process::Command;
 
 /// Servicio para controlar el brillo de la pantalla y el Modo Noche (Night Shift)
 pub struct BrightnessService;
@@ -20,10 +20,9 @@ impl BrightnessService {
                             std::fs::read_to_string(&cur_path),
                             std::fs::read_to_string(&max_path),
                         ) {
-                            if let (Ok(cur), Ok(max)) = (
-                                cur_str.trim().parse::<f64>(),
-                                max_str.trim().parse::<f64>(),
-                            ) {
+                            if let (Ok(cur), Ok(max)) =
+                                (cur_str.trim().parse::<f64>(), max_str.trim().parse::<f64>())
+                            {
                                 if max > 0.0 {
                                     let pct = (cur / max * 100.0).clamp(5.0, 100.0);
                                     let _ = sender.send_blocking(pct);
@@ -82,7 +81,11 @@ impl BrightnessService {
         std::thread::spawn(move || {
             let mut enabled = false;
             if let Ok(out) = Command::new("gsettings")
-                .args(["get", "org.gnome.settings-daemon.plugins.color", "night-light-enabled"])
+                .args([
+                    "get",
+                    "org.gnome.settings-daemon.plugins.color",
+                    "night-light-enabled",
+                ])
                 .output()
             {
                 let s = String::from_utf8_lossy(&out.stdout).trim().to_lowercase();
@@ -97,7 +100,12 @@ impl BrightnessService {
     pub fn set_night_shift(enabled: bool) {
         let val_str = if enabled { "true" } else { "false" };
         let _ = Command::new("gsettings")
-            .args(["set", "org.gnome.settings-daemon.plugins.color", "night-light-enabled", val_str])
+            .args([
+                "set",
+                "org.gnome.settings-daemon.plugins.color",
+                "night-light-enabled",
+                val_str,
+            ])
             .spawn();
     }
 }

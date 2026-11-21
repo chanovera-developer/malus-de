@@ -117,7 +117,9 @@ pub fn get_db_path() -> PathBuf {
     let data_dir = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/tmp"));
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/tmp"));
             home.join(".local/share")
         });
     let malus_dir = data_dir.join("malus-de");
@@ -156,7 +158,10 @@ pub fn open_db() -> Result<Connection, rusqlite::Error> {
     )?;
 
     // Migración no destructiva para bases existentes sin columna icon_size
-    let _ = conn.execute("ALTER TABLE folder_settings ADD COLUMN icon_size INTEGER", []);
+    let _ = conn.execute(
+        "ALTER TABLE folder_settings ADD COLUMN icon_size INTEGER",
+        [],
+    );
 
     // Migración v1: carpetas con snap_to_grid implícito de versiones previas pasan a freeform
     // para que los iconos permanezcan exactamente donde se sueltan (el usuario puede elegir SnapToGrid si lo desea).
@@ -182,7 +187,8 @@ pub fn open_db() -> Result<Connection, rusqlite::Error> {
 
 fn migrate_legacy_tags(conn: &Connection) {
     let rows: Vec<(String, String, String)> = {
-        let Ok(mut stmt) = conn.prepare("SELECT file_path, tag_name, tag_color FROM file_tags") else {
+        let Ok(mut stmt) = conn.prepare("SELECT file_path, tag_name, tag_color FROM file_tags")
+        else {
             return;
         };
         let mapped = stmt.query_map([], |row| {
@@ -219,9 +225,9 @@ pub fn get_positions(conn: &Connection, folder: &Path) -> HashMap<String, (i32, 
     let folder_str = folder.to_string_lossy();
     let mut map = HashMap::new();
 
-    let mut stmt = match conn.prepare(
-        "SELECT file_name, pos_x, pos_y FROM folder_positions WHERE folder_path = ?1",
-    ) {
+    let mut stmt = match conn
+        .prepare("SELECT file_name, pos_x, pos_y FROM folder_positions WHERE folder_path = ?1")
+    {
         Ok(s) => s,
         Err(_) => return map,
     };
@@ -293,10 +299,11 @@ pub fn clear_positions(conn: &Connection, folder: &Path) -> Result<(), rusqlite:
 
 pub fn get_layout_mode(conn: &Connection, folder: &Path) -> LayoutMode {
     let folder_str = folder.to_string_lossy();
-    let mut stmt = match conn.prepare("SELECT layout_mode FROM folder_settings WHERE folder_path = ?1") {
-        Ok(s) => s,
-        Err(_) => return LayoutMode::Auto,
-    };
+    let mut stmt =
+        match conn.prepare("SELECT layout_mode FROM folder_settings WHERE folder_path = ?1") {
+            Ok(s) => s,
+            Err(_) => return LayoutMode::Auto,
+        };
 
     let mode_str: Result<String, _> = stmt.query_row(params![folder_str], |row| row.get(0));
     match mode_str {
@@ -305,7 +312,11 @@ pub fn get_layout_mode(conn: &Connection, folder: &Path) -> LayoutMode {
     }
 }
 
-pub fn set_layout_mode(conn: &Connection, folder: &Path, mode: LayoutMode) -> Result<(), rusqlite::Error> {
+pub fn set_layout_mode(
+    conn: &Connection,
+    folder: &Path,
+    mode: LayoutMode,
+) -> Result<(), rusqlite::Error> {
     let folder_str = folder.to_string_lossy();
     conn.execute(
         "INSERT INTO folder_settings (folder_path, layout_mode)
@@ -452,14 +463,16 @@ pub fn clear_file_tags(conn: &Connection, file_path: &Path) -> Result<(), rusqli
 
 pub fn get_file_tags(conn: &Connection, file_path: &Path) -> Vec<(String, String)> {
     let p_str = file_path.to_string_lossy();
-    let mut stmt = match conn.prepare("SELECT tag_name, tag_color FROM file_tags WHERE file_path = ?1") {
-        Ok(s) => s,
-        Err(_) => return Vec::new(),
-    };
+    let mut stmt =
+        match conn.prepare("SELECT tag_name, tag_color FROM file_tags WHERE file_path = ?1") {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
     let rows = stmt.query_map(params![p_str], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     });
-    rows.map(|iter| iter.flatten().collect()).unwrap_or_default()
+    rows.map(|iter| iter.flatten().collect())
+        .unwrap_or_default()
 }
 
 pub fn get_all_file_tags_map(conn: &Connection) -> HashMap<PathBuf, Vec<(String, String)>> {
@@ -497,7 +510,8 @@ pub fn get_files_by_tag(conn: &Connection, tag_name: &str) -> Vec<PathBuf> {
         let p: String = row.get(0)?;
         Ok(PathBuf::from(p))
     });
-    rows.map(|iter| iter.flatten().collect()).unwrap_or_default()
+    rows.map(|iter| iter.flatten().collect())
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -533,7 +547,8 @@ pub fn get_bookmarks(conn: &Connection) -> Vec<BookmarkEntry> {
             title,
         })
     });
-    rows.map(|iter| iter.flatten().collect()).unwrap_or_default()
+    rows.map(|iter| iter.flatten().collect())
+        .unwrap_or_default()
 }
 
 pub fn is_bookmark(conn: &Connection, folder: &Path) -> bool {
@@ -610,8 +625,12 @@ pub fn rename_item_metadata(
 
     if let (Some(parent), Some(old_name), Some(new_name)) = (
         old_path.parent(),
-        old_path.file_name().map(|n| n.to_string_lossy().to_string()),
-        new_path.file_name().map(|n| n.to_string_lossy().to_string()),
+        old_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string()),
+        new_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string()),
     ) {
         let parent_str = parent.to_string_lossy().to_string();
         tx.execute(
@@ -761,7 +780,10 @@ mod tests {
         assert_eq!(parent_positions.get("Antes"), None);
         assert_eq!(parent_positions.get("Después"), Some(&(120, 240)));
         assert_eq!(get_layout_mode(&conn, &new_dir), LayoutMode::Freeform);
-        assert_eq!(get_positions(&conn, &new_dir).get("nota.txt"), Some(&(40, 60)));
+        assert_eq!(
+            get_positions(&conn, &new_dir).get("nota.txt"),
+            Some(&(40, 60))
+        );
     }
 
     #[test]
@@ -861,4 +883,3 @@ mod tests {
         let _ = fs::remove_dir_all(&temp_dir);
     }
 }
-

@@ -64,6 +64,21 @@ popover.malus-popover-menu button {
     color: #1d1d1f;
 }
 
+popover modelbutton:hover:not(:disabled),
+popover modelbutton:selected:not(:disabled),
+popover.menu modelbutton:hover:not(:disabled),
+popover.menu modelbutton:selected:not(:disabled),
+window.view popover modelbutton:hover:not(:disabled),
+window.view popover modelbutton:selected:not(:disabled),
+window.view popover.menu modelbutton:hover:not(:disabled),
+window.view popover.menu modelbutton:selected:not(:disabled),
+popover .popover-menu-item:hover:not(:disabled),
+popover.malus-popover-menu button:hover:not(:disabled) {
+    background-color: alpha(@accent_bg_color, 0.70);
+    background-image: none;
+    color: @accent_fg_color;
+}
+
 popover modelbutton accelerator,
 popover.menu modelbutton accelerator,
 window.view popover modelbutton accelerator {
@@ -73,7 +88,7 @@ window.view popover modelbutton accelerator {
 popover modelbutton:hover:not(:disabled) accelerator,
 popover.menu modelbutton:hover:not(:disabled) accelerator,
 window.view popover modelbutton:hover:not(:disabled) accelerator {
-    color: rgba(255, 255, 255, 0.90);
+    color: @accent_fg_color;
 }
 
 popover separator,
@@ -121,7 +136,7 @@ menu separator,
     popover modelbutton:hover:not(:disabled) accelerator,
     popover.menu modelbutton:hover:not(:disabled) accelerator,
     window.view popover modelbutton:hover:not(:disabled) accelerator {
-        color: rgba(255, 255, 255, 0.85);
+        color: @accent_fg_color;
     }
 
     popover separator,

@@ -102,8 +102,12 @@ impl Default for TopBarModel {
                 "Ayuda".to_string(),
             ],
             status_items: vec![
-                StatusItem::new("status:tray", "> +4").with_size(11.0).bold(),
-                StatusItem::new("status:keyboard", "ES").with_size(11.0).bold(),
+                StatusItem::new("status:tray", "> +4")
+                    .with_size(11.0)
+                    .bold(),
+                StatusItem::new("status:keyboard", "ES")
+                    .with_size(11.0)
+                    .bold(),
                 StatusItem::new("status:wifi", "\u{F1EB}").with_size(13.0),
                 StatusItem::new("status:volume", "\u{F028}").with_size(13.0),
                 StatusItem::new("status:battery", "\u{F240}").with_size(13.0),
@@ -175,7 +179,8 @@ pub fn build_top_bar(
     left_children.push(apple_btn);
 
     // Botón Nombre de Aplicación Activa (Acento azul macOS / píldora activa)
-    let is_app_active = active_menu_id == format!("app:{}", model.app_name) || active_menu_id == format!("menu:{}", model.app_name);
+    let is_app_active = active_menu_id == format!("app:{}", model.app_name)
+        || active_menu_id == format!("menu:{}", model.app_name);
     let app_style = if is_app_active {
         SquircleStyle::card(14.0, palette.topbar_active_bg).with_power(2.0)
     } else {
@@ -238,7 +243,11 @@ pub fn build_top_bar(
         ui.set_text(
             menu_node,
             TextLabel::new(menu)
-                .with_weight(if is_menu_active { Weight::MEDIUM } else { Weight::NORMAL })
+                .with_weight(if is_menu_active {
+                    Weight::MEDIUM
+                } else {
+                    Weight::NORMAL
+                })
                 .with_color(palette.text_primary)
                 .with_size(13.0),
         );
@@ -279,7 +288,11 @@ pub fn build_top_bar(
     let mut right_children = Vec::new();
 
     for item in &model.status_items {
-        let weight = if item.is_bold { Weight::BOLD } else { Weight::NORMAL };
+        let weight = if item.is_bold {
+            Weight::BOLD
+        } else {
+            Weight::NORMAL
+        };
         let status_w = (estimate_label_width(&item.text, item.font_size, weight) + 16.0).max(28.0);
         let is_active = active_menu_id == item.tag;
         let item_style = if is_active {
@@ -343,7 +356,8 @@ pub fn build_top_bar(
     } else {
         SquircleStyle::button(palette.button_idle_bg)
     };
-    let clock_w = (estimate_label_width(&model.clock_text, 12.5, Weight::SEMIBOLD) + 16.0).max(48.0);
+    let clock_w =
+        (estimate_label_width(&model.clock_text, 12.5, Weight::SEMIBOLD) + 16.0).max(48.0);
     let clock_btn = ui.add_leaf(
         Style {
             size: Size {
@@ -385,7 +399,8 @@ pub fn build_top_bar(
     let pill_style = if config.is_floating_pill {
         SquircleStyle::pill(config.bg_color).with_border(config.border_width, config.border_color)
     } else {
-        SquircleStyle::card(0.0, config.bg_color).with_border(config.border_width, config.border_color)
+        SquircleStyle::card(0.0, config.bg_color)
+            .with_border(config.border_width, config.border_color)
     };
 
     let pill = ui.add_container(
@@ -397,9 +412,21 @@ pub fn build_top_bar(
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::CENTER,
             margin: Rect {
-                left: LengthPercentageAuto::length(if config.is_floating_pill { config.margin_x } else { 0.0 }),
-                right: LengthPercentageAuto::length(if config.is_floating_pill { config.margin_x } else { 0.0 }),
-                top: LengthPercentageAuto::length(if config.is_floating_pill { config.margin_top } else { 0.0 }),
+                left: LengthPercentageAuto::length(if config.is_floating_pill {
+                    config.margin_x
+                } else {
+                    0.0
+                }),
+                right: LengthPercentageAuto::length(if config.is_floating_pill {
+                    config.margin_x
+                } else {
+                    0.0
+                }),
+                top: LengthPercentageAuto::length(if config.is_floating_pill {
+                    config.margin_top
+                } else {
+                    0.0
+                }),
                 bottom: LengthPercentageAuto::length(0.0),
             },
             padding: Rect {

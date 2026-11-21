@@ -86,7 +86,11 @@ pub fn build_app_matchers(name: &str, command: &str, desktop_file: &Path) -> Vec
     let mut matchers = Vec::new();
     let mut push_unique = |val: String| {
         let trimmed = val.trim().to_string();
-        if !trimmed.is_empty() && !matchers.iter().any(|m: &String| m.eq_ignore_ascii_case(&trimmed)) {
+        if !trimmed.is_empty()
+            && !matchers
+                .iter()
+                .any(|m: &String| m.eq_ignore_ascii_case(&trimmed))
+        {
             matchers.push(trimmed);
         }
     };
@@ -205,7 +209,10 @@ fn parse_desktop_file_inner(path: &Path, include_hidden: bool) -> Option<Desktop
         .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "application-x-executable".to_string());
-    let comment = comment_full.or(comment_lang).or(comment_default).unwrap_or_default();
+    let comment = comment_full
+        .or(comment_lang)
+        .or(comment_default)
+        .unwrap_or_default();
     let matchers = build_app_matchers(&name, &exec, path);
 
     Some(DesktopAppEntry {
@@ -353,7 +360,14 @@ pub fn spawn_terminal_desktop_command(
     if tokens.is_empty() {
         return Err("Comando de aplicación vacío".to_string());
     }
-    let terminals = ["ghostty", "ptyxis", "gnome-terminal", "alacritty", "kitty", "xterm"];
+    let terminals = [
+        "ghostty",
+        "ptyxis",
+        "gnome-terminal",
+        "alacritty",
+        "kitty",
+        "xterm",
+    ];
     for term in terminals {
         let mut cmd = std::process::Command::new(term);
         if let Some(wd) = working_dir {
@@ -443,7 +457,10 @@ pub fn spawn_desktop_command(command_line: &str, working_dir: Option<&Path>) -> 
 
 /// Ejecuta un archivo `.desktop` respetando wrappers de Malus DE, `Terminal=true` y `Path=`.
 pub fn spawn_desktop_entry_path(path: &Path) -> Result<(), String> {
-    if path.file_name().is_some_and(|name| name == "io.mpv.Mpv.desktop") {
+    if path
+        .file_name()
+        .is_some_and(|name| name == "io.mpv.Mpv.desktop")
+    {
         if spawn_desktop_command(
             "flatpak run io.mpv.Mpv --gpu-context=wayland --player-operation-mode=pseudo-gui",
             None,
@@ -501,8 +518,11 @@ pub fn extra_icon_search_paths() -> Vec<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let xdg_data_home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from);
     let xdg_data_dirs = std::env::var_os("XDG_DATA_DIRS");
-    let mut dirs =
-        icon_root_dirs_from(home.as_deref(), xdg_data_home.as_deref(), xdg_data_dirs.as_deref());
+    let mut dirs = icon_root_dirs_from(
+        home.as_deref(),
+        xdg_data_home.as_deref(),
+        xdg_data_dirs.as_deref(),
+    );
     if let Some(ref home) = home {
         push_unique_path(&mut dirs, home.join(".config/malus-de/icons"));
     }
@@ -596,11 +616,18 @@ pub fn resolve_icon_file_path_in_dirs(
     }
 
     let has_raster_or_svg_ext = matches!(
-        direct.extension().and_then(|e| e.to_str()).map(|s| s.to_lowercase()).as_deref(),
+        direct
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_lowercase())
+            .as_deref(),
         Some("svg" | "png")
     );
     let stem = if has_raster_or_svg_ext {
-        direct.file_stem().and_then(|s| s.to_str()).unwrap_or(trimmed)
+        direct
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(trimmed)
     } else {
         trimmed
     };
@@ -825,12 +852,7 @@ mod tests {
             Some(png_pixmap.clone())
         );
         assert_eq!(
-            resolve_icon_file_path_in_dirs(
-                "vscode.png",
-                &[flatpak_icons],
-                &[pixmaps],
-                None,
-            ),
+            resolve_icon_file_path_in_dirs("vscode.png", &[flatpak_icons], &[pixmaps], None,),
             Some(png_pixmap)
         );
 
@@ -857,12 +879,7 @@ mod tests {
         fs::write(&app_adwaita, b"<svg/>").unwrap();
 
         assert_eq!(
-            resolve_icon_file_path_in_dirs(
-                "go-previous-symbolic",
-                &[temp_dir.clone()],
-                &[],
-                None,
-            ),
+            resolve_icon_file_path_in_dirs("go-previous-symbolic", &[temp_dir.clone()], &[], None,),
             Some(sym_path)
         );
         assert_eq!(
@@ -873,4 +890,3 @@ mod tests {
         let _ = fs::remove_dir_all(&temp_dir);
     }
 }
-

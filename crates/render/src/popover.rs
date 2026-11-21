@@ -92,21 +92,21 @@ impl Default for PopoverConfig {
     fn default() -> Self {
         Self {
             width: 265.0,                         // Ancho generoso con mayor margen lateral (~265px)
-            corner_radius: 24.0,                 // Curvatura idéntica al dock de Malus DE (24px)
+            corner_radius: 24.0,                  // Curvatura idéntica al dock de Malus DE (24px)
             squircle_power: MACOS_SQUIRCLE_POWER, // n ≈ 4.2
             bg_color: [0.93, 0.95, 0.98, 0.35],   // Vidrio claro translúcido al 35% de opacidad
             border_color: [0.0, 0.0, 0.0, 0.22],  // Línea exterior oscura semitransparente
-            border_width: 2.0,                   // Ancho 2.0 activa el doble borde (1px oscuro + 1px claro)
-            text_color: [0.11, 0.11, 0.13, 1.0],  // Grafito oscuro nítido (#1D1D1F)
+            border_width: 2.0, // Ancho 2.0 activa el doble borde (1px oscuro + 1px claro)
+            text_color: [0.11, 0.11, 0.13, 1.0], // Grafito oscuro nítido (#1D1D1F)
             text_dimmed_color: [0.43, 0.43, 0.46, 0.80], // Atajos y subtítulos (#6E6E73)
             separator_color: [0.0, 0.0, 0.0, 0.08], // Línea divisoria fina sutil
-            item_height: 32.0,                   // Altura cómoda estilo macOS Sonoma/Tahoe
-            item_padding_x: 14.0,                // Mayor padding a la izquierda y derecha dentro del ítem
+            item_height: 32.0, // Altura cómoda estilo macOS Sonoma/Tahoe
+            item_padding_x: 14.0, // Mayor padding a la izquierda y derecha dentro del ítem
             padding_y: 6.0,
-            padding_x: 7.0,                      // Mayor padding horizontal de la tarjeta del menú
+            padding_x: 7.0, // Mayor padding horizontal de la tarjeta del menú
             active_bg_color: [0.0, 0.48, 1.0, 0.70], // Acento azul macOS activo semitransparente (#007AFF al 70%)
-            active_corner_radius: 5.5,           // Border-radius suave exacto para el hover (menu-bar.jpg)
-            shadow: true,                        // Sombra exterior difuminada suave y sutil
+            active_corner_radius: 5.5, // Border-radius suave exacto para el hover (menu-bar.jpg)
+            shadow: true,              // Sombra exterior difuminada suave y sutil
         }
     }
 }
@@ -190,8 +190,7 @@ impl PopoverMenuModel {
                 PopoverItem::new(2, "Ajustes del Sistema...")
                     .with_shortcut("⌘,")
                     .with_icon("\u{F013}"),
-                PopoverItem::new(10, "Software...")
-                    .with_icon("\u{F290}"),
+                PopoverItem::new(10, "Software...").with_icon("\u{F290}"),
                 PopoverItem::new(11, "Ítems recientes")
                     .with_shortcut(">")
                     .with_icon("\u{F017}"),
@@ -200,12 +199,9 @@ impl PopoverMenuModel {
                     .with_shortcut("⌥⌘⎋")
                     .with_icon("\u{F05E}"),
                 PopoverItem::separator(),
-                PopoverItem::new(12, "Reposo")
-                    .with_icon("\u{F186}"),
-                PopoverItem::new(6, "Reiniciar...")
-                    .with_icon("\u{F01E}"),
-                PopoverItem::new(7, "Apagar el Equipo...")
-                    .with_icon("\u{F011}"),
+                PopoverItem::new(12, "Reposo").with_icon("\u{F186}"),
+                PopoverItem::new(6, "Reiniciar...").with_icon("\u{F01E}"),
+                PopoverItem::new(7, "Apagar el Equipo...").with_icon("\u{F011}"),
                 PopoverItem::separator(),
                 PopoverItem::new(5, "Bloquear Pantalla")
                     .with_shortcut("⌃⌘Q")
@@ -222,8 +218,7 @@ impl PopoverMenuModel {
     /// Popover de la Bandeja del Sistema flotante (estilo Bartender / Hidden by the notch).
     pub fn tray_popover(anchor_x: f32, anchor_y: f32, apps: &[(&str, &str)]) -> Self {
         let mut items = vec![
-            PopoverItem::new(-10, "Bandeja del sistema")
-                .with_enabled(false),
+            PopoverItem::new(-10, "Bandeja del sistema").with_enabled(false),
             PopoverItem::separator(),
         ];
         if apps.is_empty() {
@@ -263,15 +258,24 @@ impl PopoverMenuModel {
             anchor_x,
             anchor_y,
             items: vec![
-                PopoverItem::new(101, "Nueva Ventana").with_shortcut("⌘N").with_icon("\u{F044}"),
+                PopoverItem::new(101, "Nueva Ventana")
+                    .with_shortcut("⌘N")
+                    .with_icon("\u{F044}"),
                 PopoverItem::separator(),
-                PopoverItem::new(102, "Cerrar Ventana").with_shortcut("⌘W").with_icon("\u{F00D}"),
+                PopoverItem::new(102, "Cerrar Ventana")
+                    .with_shortcut("⌘W")
+                    .with_icon("\u{F00D}"),
                 PopoverItem::new(103, "Abrir en Nueva Ventana").with_icon("\u{F2D0}"),
                 PopoverItem::separator(),
-                PopoverItem::new(104, "Guardar").with_shortcut("⌘S").with_icon("\u{F0C7}"),
+                PopoverItem::new(104, "Guardar")
+                    .with_shortcut("⌘S")
+                    .with_icon("\u{F0C7}"),
                 PopoverItem::new(105, "Guardar como...").with_shortcut("⇧⌘S"),
                 PopoverItem::separator(),
-                PopoverItem::new(106, "Imprimir...").with_shortcut("⌘P").with_icon("\u{F02F}").with_enabled(false),
+                PopoverItem::new(106, "Imprimir...")
+                    .with_shortcut("⌘P")
+                    .with_icon("\u{F02F}")
+                    .with_enabled(false),
             ],
             hovered_index: None,
             control_center: None,
@@ -295,7 +299,11 @@ impl PopoverMenuModel {
             items: vec![
                 PopoverItem::new(200, status_text)
                     .with_icon("\u{F1EB}")
-                    .with_shortcut(if is_connected { format!("{}%", signal) } else { "".to_string() }),
+                    .with_shortcut(if is_connected {
+                        format!("{}%", signal)
+                    } else {
+                        "".to_string()
+                    }),
                 PopoverItem::separator(),
                 PopoverItem::new(201, "Activar / Desactivar Wi-Fi").with_icon("\u{F011}"),
                 PopoverItem::separator(),
@@ -310,7 +318,11 @@ impl PopoverMenuModel {
 
     /// Popover de ajuste de Sonido / Salida de Audio.
     pub fn volume_popover(anchor_x: f32, anchor_y: f32, volume: u32, muted: bool) -> Self {
-        let status = if muted { "Silenciado" } else { "Altavoces integrados" };
+        let status = if muted {
+            "Silenciado"
+        } else {
+            "Altavoces integrados"
+        };
         Self {
             menu_id: "status:volume".to_string(),
             title: Some("Sonido".to_string()),
@@ -320,8 +332,15 @@ impl PopoverMenuModel {
                 PopoverItem::new(210, format!("Salida: {}", status)).with_icon("\u{F028}"),
                 PopoverItem::separator(),
                 PopoverItem::new(211, format!("Volumen: {}%", volume)).with_icon("\u{F027}"),
-                PopoverItem::new(212, if muted { "Reactivar Sonido" } else { "Silenciar Volumen" })
-                    .with_icon("\u{F6A9}"),
+                PopoverItem::new(
+                    212,
+                    if muted {
+                        "Reactivar Sonido"
+                    } else {
+                        "Silenciar Volumen"
+                    },
+                )
+                .with_icon("\u{F6A9}"),
                 PopoverItem::separator(),
                 PopoverItem::new(213, "Preferencias de Sonido...").with_icon("\u{F013}"),
             ],
@@ -332,7 +351,11 @@ impl PopoverMenuModel {
 
     /// Popover de información de Batería y Periféricos.
     pub fn battery_popover(anchor_x: f32, anchor_y: f32, pct: u32, is_charging: bool) -> Self {
-        let pwr = if is_charging { "Cargando (Adaptador)" } else { "Alimentación por Batería" };
+        let pwr = if is_charging {
+            "Cargando (Adaptador)"
+        } else {
+            "Alimentación por Batería"
+        };
         Self {
             menu_id: "status:battery".to_string(),
             title: Some("Batería".to_string()),
@@ -461,7 +484,11 @@ pub fn build_popover_menu(
         return build_control_center_panel(ui, config, model, cc);
     }
 
-    let popover_w = if model.menu_id == "status:tray" { 240.0 } else { config.width };
+    let popover_w = if model.menu_id == "status:tray" {
+        240.0
+    } else {
+        config.width
+    };
     let total_height = model.total_height(config);
 
     // --------------------------------------------------------------------------
@@ -850,11 +877,22 @@ pub fn build_control_center_panel(
     {
         let circle = ui.add_leaf(
             Style {
-                size: Size { width: Dimension::length(28.0), height: Dimension::length(28.0) },
+                size: Size {
+                    width: Dimension::length(28.0),
+                    height: Dimension::length(28.0),
+                },
                 margin: margin_right(8.0),
                 ..Default::default()
             },
-            SquircleStyle::card(14.0, if cc.wifi_enabled { active_blue } else { inactive_circle }).with_z(85.0),
+            SquircleStyle::card(
+                14.0,
+                if cc.wifi_enabled {
+                    active_blue
+                } else {
+                    inactive_circle
+                },
+            )
+            .with_z(85.0),
             Some("cc:wifi_icon"),
         )?;
         ui.set_text(
@@ -862,26 +900,63 @@ pub fn build_control_center_panel(
             TextLabel::new("\u{F1EB}")
                 .centered()
                 .with_size(12.0)
-                .with_color(if cc.wifi_enabled { [1.0, 1.0, 1.0, 1.0] } else { config.text_color }),
+                .with_color(if cc.wifi_enabled {
+                    [1.0, 1.0, 1.0, 1.0]
+                } else {
+                    config.text_color
+                }),
         );
 
         let title = ui.add_leaf(
-            Style { size: Size { width: Dimension::auto(), height: Dimension::length(14.0) }, ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::auto(),
+                    height: Dimension::length(14.0),
+                },
+                ..Default::default()
+            },
             SquircleStyle::transparent(),
             Some("cc:wifi_title"),
         )?;
-        ui.set_text(title, TextLabel::new("Wi-Fi").left_aligned().with_size(11.5).with_weight(Weight::BOLD).with_color(config.text_color));
+        ui.set_text(
+            title,
+            TextLabel::new("Wi-Fi")
+                .left_aligned()
+                .with_size(11.5)
+                .with_weight(Weight::BOLD)
+                .with_color(config.text_color),
+        );
 
         let sub = ui.add_leaf(
-            Style { size: Size { width: Dimension::auto(), height: Dimension::length(12.0) }, ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::auto(),
+                    height: Dimension::length(12.0),
+                },
+                ..Default::default()
+            },
             SquircleStyle::transparent(),
             Some("cc:wifi_sub"),
         )?;
-        let ssid_text = if cc.wifi_enabled { &cc.wifi_ssid } else { "Desactivado" };
-        ui.set_text(sub, TextLabel::new(ssid_text).left_aligned().with_size(9.5).with_color(config.text_dimmed_color));
+        let ssid_text = if cc.wifi_enabled {
+            &cc.wifi_ssid
+        } else {
+            "Desactivado"
+        };
+        ui.set_text(
+            sub,
+            TextLabel::new(ssid_text)
+                .left_aligned()
+                .with_size(9.5)
+                .with_color(config.text_dimmed_color),
+        );
 
         let label_col = ui.add_container(
-            Style { flex_direction: FlexDirection::Column, flex_grow: 1.0, ..Default::default() },
+            Style {
+                flex_direction: FlexDirection::Column,
+                flex_grow: 1.0,
+                ..Default::default()
+            },
             SquircleStyle::transparent(),
             &[title, sub],
             Some("cc:wifi_text_col"),
@@ -889,7 +964,10 @@ pub fn build_control_center_panel(
 
         let wifi_row = ui.add_container(
             Style {
-                size: Size { width: Dimension::percent(1.0), height: Dimension::length(34.0) },
+                size: Size {
+                    width: Dimension::percent(1.0),
+                    height: Dimension::length(34.0),
+                },
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::CENTER,
                 ..Default::default()
@@ -905,11 +983,22 @@ pub fn build_control_center_panel(
     {
         let circle = ui.add_leaf(
             Style {
-                size: Size { width: Dimension::length(28.0), height: Dimension::length(28.0) },
+                size: Size {
+                    width: Dimension::length(28.0),
+                    height: Dimension::length(28.0),
+                },
                 margin: margin_right(8.0),
                 ..Default::default()
             },
-            SquircleStyle::card(14.0, if cc.bluetooth_enabled { [1.0, 1.0, 1.0, 0.95] } else { inactive_circle }).with_z(85.0),
+            SquircleStyle::card(
+                14.0,
+                if cc.bluetooth_enabled {
+                    [1.0, 1.0, 1.0, 0.95]
+                } else {
+                    inactive_circle
+                },
+            )
+            .with_z(85.0),
             Some("cc:bluetooth_icon"),
         )?;
         ui.set_text(
@@ -917,26 +1006,63 @@ pub fn build_control_center_panel(
             TextLabel::new("\u{F293}")
                 .centered()
                 .with_size(12.0)
-                .with_color(if cc.bluetooth_enabled { active_blue } else { config.text_color }),
+                .with_color(if cc.bluetooth_enabled {
+                    active_blue
+                } else {
+                    config.text_color
+                }),
         );
 
         let title = ui.add_leaf(
-            Style { size: Size { width: Dimension::auto(), height: Dimension::length(14.0) }, ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::auto(),
+                    height: Dimension::length(14.0),
+                },
+                ..Default::default()
+            },
             SquircleStyle::transparent(),
             Some("cc:bt_title"),
         )?;
-        ui.set_text(title, TextLabel::new("Bluetooth").left_aligned().with_size(11.5).with_weight(Weight::BOLD).with_color(config.text_color));
+        ui.set_text(
+            title,
+            TextLabel::new("Bluetooth")
+                .left_aligned()
+                .with_size(11.5)
+                .with_weight(Weight::BOLD)
+                .with_color(config.text_color),
+        );
 
         let sub = ui.add_leaf(
-            Style { size: Size { width: Dimension::auto(), height: Dimension::length(12.0) }, ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::auto(),
+                    height: Dimension::length(12.0),
+                },
+                ..Default::default()
+            },
             SquircleStyle::transparent(),
             Some("cc:bt_sub"),
         )?;
-        let bt_text = if cc.bluetooth_enabled { "Activado" } else { "Desactivado" };
-        ui.set_text(sub, TextLabel::new(bt_text).left_aligned().with_size(9.5).with_color(config.text_dimmed_color));
+        let bt_text = if cc.bluetooth_enabled {
+            "Activado"
+        } else {
+            "Desactivado"
+        };
+        ui.set_text(
+            sub,
+            TextLabel::new(bt_text)
+                .left_aligned()
+                .with_size(9.5)
+                .with_color(config.text_dimmed_color),
+        );
 
         let label_col = ui.add_container(
-            Style { flex_direction: FlexDirection::Column, flex_grow: 1.0, ..Default::default() },
+            Style {
+                flex_direction: FlexDirection::Column,
+                flex_grow: 1.0,
+                ..Default::default()
+            },
             SquircleStyle::transparent(),
             &[title, sub],
             Some("cc:bt_text_col"),
@@ -944,7 +1070,10 @@ pub fn build_control_center_panel(
 
         let bt_row = ui.add_container(
             Style {
-                size: Size { width: Dimension::percent(1.0), height: Dimension::length(34.0) },
+                size: Size {
+                    width: Dimension::percent(1.0),
+                    height: Dimension::length(34.0),
+                },
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::CENTER,
                 ..Default::default()
@@ -960,11 +1089,22 @@ pub fn build_control_center_panel(
     {
         let circle = ui.add_leaf(
             Style {
-                size: Size { width: Dimension::length(28.0), height: Dimension::length(28.0) },
+                size: Size {
+                    width: Dimension::length(28.0),
+                    height: Dimension::length(28.0),
+                },
                 margin: margin_right(8.0),
                 ..Default::default()
             },
-            SquircleStyle::card(14.0, if cc.airdrop_enabled { [1.0, 1.0, 1.0, 0.95] } else { inactive_circle }).with_z(85.0),
+            SquircleStyle::card(
+                14.0,
+                if cc.airdrop_enabled {
+                    [1.0, 1.0, 1.0, 0.95]
+                } else {
+                    inactive_circle
+                },
+            )
+            .with_z(85.0),
             Some("cc:airdrop_icon"),
         )?;
         ui.set_text(
@@ -972,26 +1112,63 @@ pub fn build_control_center_panel(
             TextLabel::new("\u{F0C1}")
                 .centered()
                 .with_size(11.0)
-                .with_color(if cc.airdrop_enabled { active_blue } else { config.text_color }),
+                .with_color(if cc.airdrop_enabled {
+                    active_blue
+                } else {
+                    config.text_color
+                }),
         );
 
         let title = ui.add_leaf(
-            Style { size: Size { width: Dimension::auto(), height: Dimension::length(14.0) }, ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::auto(),
+                    height: Dimension::length(14.0),
+                },
+                ..Default::default()
+            },
             SquircleStyle::transparent(),
             Some("cc:airdrop_title"),
         )?;
-        ui.set_text(title, TextLabel::new("Malus Link").left_aligned().with_size(11.5).with_weight(Weight::BOLD).with_color(config.text_color));
+        ui.set_text(
+            title,
+            TextLabel::new("Malus Link")
+                .left_aligned()
+                .with_size(11.5)
+                .with_weight(Weight::BOLD)
+                .with_color(config.text_color),
+        );
 
         let sub = ui.add_leaf(
-            Style { size: Size { width: Dimension::auto(), height: Dimension::length(12.0) }, ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::auto(),
+                    height: Dimension::length(12.0),
+                },
+                ..Default::default()
+            },
             SquircleStyle::transparent(),
             Some("cc:airdrop_sub"),
         )?;
-        let ad_text = if cc.airdrop_enabled { "Todos" } else { "Inactivo" };
-        ui.set_text(sub, TextLabel::new(ad_text).left_aligned().with_size(9.5).with_color(config.text_dimmed_color));
+        let ad_text = if cc.airdrop_enabled {
+            "Todos"
+        } else {
+            "Inactivo"
+        };
+        ui.set_text(
+            sub,
+            TextLabel::new(ad_text)
+                .left_aligned()
+                .with_size(9.5)
+                .with_color(config.text_dimmed_color),
+        );
 
         let label_col = ui.add_container(
-            Style { flex_direction: FlexDirection::Column, flex_grow: 1.0, ..Default::default() },
+            Style {
+                flex_direction: FlexDirection::Column,
+                flex_grow: 1.0,
+                ..Default::default()
+            },
             SquircleStyle::transparent(),
             &[title, sub],
             Some("cc:airdrop_text_col"),
@@ -999,7 +1176,10 @@ pub fn build_control_center_panel(
 
         let airdrop_row = ui.add_container(
             Style {
-                size: Size { width: Dimension::percent(1.0), height: Dimension::length(34.0) },
+                size: Size {
+                    width: Dimension::percent(1.0),
+                    height: Dimension::length(34.0),
+                },
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::CENTER,
                 ..Default::default()
@@ -1013,13 +1193,24 @@ pub fn build_control_center_panel(
 
     let conn_card = ui.add_container(
         Style {
-            size: Size { width: Dimension::length(143.0), height: Dimension::length(130.0) },
+            size: Size {
+                width: Dimension::length(143.0),
+                height: Dimension::length(130.0),
+            },
             flex_direction: FlexDirection::Column,
             justify_content: JustifyContent::SPACE_AROUND,
-            padding: Rect { top: LengthPercentage::length(6.0), bottom: LengthPercentage::length(6.0), left: LengthPercentage::length(8.0), right: LengthPercentage::length(8.0) },
+            padding: Rect {
+                top: LengthPercentage::length(6.0),
+                bottom: LengthPercentage::length(6.0),
+                left: LengthPercentage::length(8.0),
+                right: LengthPercentage::length(8.0),
+            },
             ..Default::default()
         },
-        SquircleStyle::card(14.0, tile_bg).with_border(0.5, tile_border).with_power(config.squircle_power).with_z(82.0),
+        SquircleStyle::card(14.0, tile_bg)
+            .with_border(0.5, tile_border)
+            .with_power(config.squircle_power)
+            .with_z(82.0),
         &conn_items,
         Some("cc_card:connectivity"),
     )?;
@@ -1029,31 +1220,69 @@ pub fn build_control_center_panel(
     {
         let cover = ui.add_leaf(
             Style {
-                size: Size { width: Dimension::length(36.0), height: Dimension::length(36.0) },
+                size: Size {
+                    width: Dimension::length(36.0),
+                    height: Dimension::length(36.0),
+                },
                 margin: margin_right(8.0),
                 ..Default::default()
             },
             SquircleStyle::card(8.0, [0.85, 0.45, 0.35, 0.90]).with_z(84.0),
             Some("cc:media_cover"),
         )?;
-        ui.set_text(cover, TextLabel::new("\u{F001}").centered().with_size(14.0).with_color([1.0, 1.0, 1.0, 0.95]));
+        ui.set_text(
+            cover,
+            TextLabel::new("\u{F001}")
+                .centered()
+                .with_size(14.0)
+                .with_color([1.0, 1.0, 1.0, 0.95]),
+        );
 
         let m_title = ui.add_leaf(
-            Style { size: Size { width: Dimension::length(80.0), height: Dimension::length(14.0) }, ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::length(80.0),
+                    height: Dimension::length(14.0),
+                },
+                ..Default::default()
+            },
             SquircleStyle::transparent(),
             Some("cc:media_title"),
         )?;
-        ui.set_text(m_title, TextLabel::new(&cc.media_title).left_aligned().with_size(11.0).with_weight(Weight::BOLD).with_color(config.text_color));
+        ui.set_text(
+            m_title,
+            TextLabel::new(&cc.media_title)
+                .left_aligned()
+                .with_size(11.0)
+                .with_weight(Weight::BOLD)
+                .with_color(config.text_color),
+        );
 
         let m_artist = ui.add_leaf(
-            Style { size: Size { width: Dimension::length(80.0), height: Dimension::length(12.0) }, ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::length(80.0),
+                    height: Dimension::length(12.0),
+                },
+                ..Default::default()
+            },
             SquircleStyle::transparent(),
             Some("cc:media_artist"),
         )?;
-        ui.set_text(m_artist, TextLabel::new(&cc.media_artist).left_aligned().with_size(9.5).with_color(config.text_dimmed_color));
+        ui.set_text(
+            m_artist,
+            TextLabel::new(&cc.media_artist)
+                .left_aligned()
+                .with_size(9.5)
+                .with_color(config.text_dimmed_color),
+        );
 
         let m_text_col = ui.add_container(
-            Style { flex_direction: FlexDirection::Column, flex_grow: 1.0, ..Default::default() },
+            Style {
+                flex_direction: FlexDirection::Column,
+                flex_grow: 1.0,
+                ..Default::default()
+            },
             SquircleStyle::transparent(),
             &[m_title, m_artist],
             Some("cc:media_text_col"),
@@ -1061,7 +1290,10 @@ pub fn build_control_center_panel(
 
         let m_info_row = ui.add_container(
             Style {
-                size: Size { width: Dimension::percent(1.0), height: Dimension::length(44.0) },
+                size: Size {
+                    width: Dimension::percent(1.0),
+                    height: Dimension::length(44.0),
+                },
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::CENTER,
                 ..Default::default()
@@ -1074,30 +1306,73 @@ pub fn build_control_center_panel(
 
         // Botones de reproducción (Prev, Play/Pause, Next)
         let btn_prev = ui.add_leaf(
-            Style { size: Size { width: Dimension::length(30.0), height: Dimension::length(28.0) }, ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::length(30.0),
+                    height: Dimension::length(28.0),
+                },
+                ..Default::default()
+            },
             SquircleStyle::card(6.0, [0.0, 0.0, 0.0, 0.002]).with_z(84.0),
             Some("cc:media_prev"),
         )?;
-        ui.set_text(btn_prev, TextLabel::new("\u{F048}").centered().with_size(12.0).with_color(config.text_color));
+        ui.set_text(
+            btn_prev,
+            TextLabel::new("\u{F048}")
+                .centered()
+                .with_size(12.0)
+                .with_color(config.text_color),
+        );
 
         let btn_play = ui.add_leaf(
-            Style { size: Size { width: Dimension::length(34.0), height: Dimension::length(28.0) }, ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::length(34.0),
+                    height: Dimension::length(28.0),
+                },
+                ..Default::default()
+            },
             SquircleStyle::card(6.0, [0.0, 0.0, 0.0, 0.002]).with_z(84.0),
             Some("cc:media_play"),
         )?;
-        let play_icon = if cc.media_playing { "\u{F04C}" } else { "\u{F04B}" };
-        ui.set_text(btn_play, TextLabel::new(play_icon).centered().with_size(14.0).with_color(config.text_color));
+        let play_icon = if cc.media_playing {
+            "\u{F04C}"
+        } else {
+            "\u{F04B}"
+        };
+        ui.set_text(
+            btn_play,
+            TextLabel::new(play_icon)
+                .centered()
+                .with_size(14.0)
+                .with_color(config.text_color),
+        );
 
         let btn_next = ui.add_leaf(
-            Style { size: Size { width: Dimension::length(30.0), height: Dimension::length(28.0) }, ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::length(30.0),
+                    height: Dimension::length(28.0),
+                },
+                ..Default::default()
+            },
             SquircleStyle::card(6.0, [0.0, 0.0, 0.0, 0.002]).with_z(84.0),
             Some("cc:media_next"),
         )?;
-        ui.set_text(btn_next, TextLabel::new("\u{F051}").centered().with_size(12.0).with_color(config.text_color));
+        ui.set_text(
+            btn_next,
+            TextLabel::new("\u{F051}")
+                .centered()
+                .with_size(12.0)
+                .with_color(config.text_color),
+        );
 
         let m_ctrl_row = ui.add_container(
             Style {
-                size: Size { width: Dimension::percent(1.0), height: Dimension::length(32.0) },
+                size: Size {
+                    width: Dimension::percent(1.0),
+                    height: Dimension::length(32.0),
+                },
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::CENTER,
                 justify_content: JustifyContent::SPACE_AROUND,
@@ -1112,20 +1387,34 @@ pub fn build_control_center_panel(
 
     let media_card = ui.add_container(
         Style {
-            size: Size { width: Dimension::length(143.0), height: Dimension::length(130.0) },
+            size: Size {
+                width: Dimension::length(143.0),
+                height: Dimension::length(130.0),
+            },
             flex_direction: FlexDirection::Column,
             justify_content: JustifyContent::SPACE_BETWEEN,
-            padding: Rect { top: LengthPercentage::length(10.0), bottom: LengthPercentage::length(10.0), left: LengthPercentage::length(8.0), right: LengthPercentage::length(8.0) },
+            padding: Rect {
+                top: LengthPercentage::length(10.0),
+                bottom: LengthPercentage::length(10.0),
+                left: LengthPercentage::length(8.0),
+                right: LengthPercentage::length(8.0),
+            },
             ..Default::default()
         },
-        SquircleStyle::card(14.0, tile_bg).with_border(0.5, tile_border).with_power(config.squircle_power).with_z(82.0),
+        SquircleStyle::card(14.0, tile_bg)
+            .with_border(0.5, tile_border)
+            .with_power(config.squircle_power)
+            .with_z(82.0),
         &media_children,
         Some("cc_card:media"),
     )?;
 
     let row1 = ui.add_container(
         Style {
-            size: Size { width: Dimension::percent(1.0), height: Dimension::length(130.0) },
+            size: Size {
+                width: Dimension::percent(1.0),
+                height: Dimension::length(130.0),
+            },
             flex_direction: FlexDirection::Row,
             justify_content: JustifyContent::SPACE_BETWEEN,
             ..Default::default()
@@ -1140,62 +1429,144 @@ pub fn build_control_center_panel(
     // FILA 2: [Concentración / Focus] + [Stage Manager / Duplicar] (44px)
     // --------------------------------------------------------------------------
     let focus_icon = ui.add_leaf(
-        Style { size: Size { width: Dimension::length(24.0), height: Dimension::length(24.0) }, margin: margin_right(6.0), ..Default::default() },
-        SquircleStyle::card(12.0, if cc.focus_enabled { active_blue } else { inactive_circle }).with_z(85.0),
+        Style {
+            size: Size {
+                width: Dimension::length(24.0),
+                height: Dimension::length(24.0),
+            },
+            margin: margin_right(6.0),
+            ..Default::default()
+        },
+        SquircleStyle::card(
+            12.0,
+            if cc.focus_enabled {
+                active_blue
+            } else {
+                inactive_circle
+            },
+        )
+        .with_z(85.0),
         Some("cc:focus_icon"),
     )?;
-    ui.set_text(focus_icon, TextLabel::new("\u{F186}").centered().with_size(11.0).with_color(if cc.focus_enabled { [1.0, 1.0, 1.0, 1.0] } else { config.text_color }));
+    ui.set_text(
+        focus_icon,
+        TextLabel::new("\u{F186}")
+            .centered()
+            .with_size(11.0)
+            .with_color(if cc.focus_enabled {
+                [1.0, 1.0, 1.0, 1.0]
+            } else {
+                config.text_color
+            }),
+    );
 
     let focus_label = ui.add_leaf(
-        Style { size: Size { width: Dimension::auto(), height: Dimension::length(16.0) }, ..Default::default() },
+        Style {
+            size: Size {
+                width: Dimension::auto(),
+                height: Dimension::length(16.0),
+            },
+            ..Default::default()
+        },
         SquircleStyle::transparent(),
         Some("cc:focus_label"),
     )?;
-    ui.set_text(focus_label, TextLabel::new("Concentración").left_aligned().with_size(11.5).with_weight(Weight::BOLD).with_color(config.text_color));
+    ui.set_text(
+        focus_label,
+        TextLabel::new("Concentración")
+            .left_aligned()
+            .with_size(11.5)
+            .with_weight(Weight::BOLD)
+            .with_color(config.text_color),
+    );
 
     let focus_card = ui.add_container(
         Style {
-            size: Size { width: Dimension::length(143.0), height: Dimension::length(44.0) },
+            size: Size {
+                width: Dimension::length(143.0),
+                height: Dimension::length(44.0),
+            },
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::CENTER,
-            padding: Rect { left: LengthPercentage::length(10.0), right: LengthPercentage::length(10.0), top: LengthPercentage::length(0.0), bottom: LengthPercentage::length(0.0) },
+            padding: Rect {
+                left: LengthPercentage::length(10.0),
+                right: LengthPercentage::length(10.0),
+                top: LengthPercentage::length(0.0),
+                bottom: LengthPercentage::length(0.0),
+            },
             ..Default::default()
         },
-        SquircleStyle::card(14.0, tile_bg).with_border(0.5, tile_border).with_power(config.squircle_power).with_z(82.0),
+        SquircleStyle::card(14.0, tile_bg)
+            .with_border(0.5, tile_border)
+            .with_power(config.squircle_power)
+            .with_z(82.0),
         &[focus_icon, focus_label],
         Some("cc:focus"),
     )?;
 
     let sm_btn = ui.add_leaf(
-        Style { size: Size { width: Dimension::length(40.0), height: Dimension::length(30.0) }, ..Default::default() },
+        Style {
+            size: Size {
+                width: Dimension::length(40.0),
+                height: Dimension::length(30.0),
+            },
+            ..Default::default()
+        },
         SquircleStyle::card(8.0, inactive_circle).with_z(84.0),
         Some("cc:stage_manager"),
     )?;
-    ui.set_text(sm_btn, TextLabel::new("\u{F009}").centered().with_size(12.0).with_color(config.text_color));
+    ui.set_text(
+        sm_btn,
+        TextLabel::new("\u{F009}")
+            .centered()
+            .with_size(12.0)
+            .with_color(config.text_color),
+    );
 
     let mirror_btn = ui.add_leaf(
-        Style { size: Size { width: Dimension::length(40.0), height: Dimension::length(30.0) }, ..Default::default() },
+        Style {
+            size: Size {
+                width: Dimension::length(40.0),
+                height: Dimension::length(30.0),
+            },
+            ..Default::default()
+        },
         SquircleStyle::card(8.0, inactive_circle).with_z(84.0),
         Some("cc:mirror"),
     )?;
-    ui.set_text(mirror_btn, TextLabel::new("\u{F26C}").centered().with_size(12.0).with_color(config.text_color));
+    ui.set_text(
+        mirror_btn,
+        TextLabel::new("\u{F26C}")
+            .centered()
+            .with_size(12.0)
+            .with_color(config.text_color),
+    );
 
     let modes_card = ui.add_container(
         Style {
-            size: Size { width: Dimension::length(143.0), height: Dimension::length(44.0) },
+            size: Size {
+                width: Dimension::length(143.0),
+                height: Dimension::length(44.0),
+            },
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::CENTER,
             justify_content: JustifyContent::SPACE_AROUND,
             ..Default::default()
         },
-        SquircleStyle::card(14.0, tile_bg).with_border(0.5, tile_border).with_power(config.squircle_power).with_z(82.0),
+        SquircleStyle::card(14.0, tile_bg)
+            .with_border(0.5, tile_border)
+            .with_power(config.squircle_power)
+            .with_z(82.0),
         &[sm_btn, mirror_btn],
         Some("cc:modes_card"),
     )?;
 
     let row2 = ui.add_container(
         Style {
-            size: Size { width: Dimension::percent(1.0), height: Dimension::length(44.0) },
+            size: Size {
+                width: Dimension::percent(1.0),
+                height: Dimension::length(44.0),
+            },
             flex_direction: FlexDirection::Row,
             justify_content: JustifyContent::SPACE_BETWEEN,
             ..Default::default()
@@ -1211,29 +1582,65 @@ pub fn build_control_center_panel(
     // --------------------------------------------------------------------------
     {
         let disp_label = ui.add_leaf(
-            Style { size: Size { width: Dimension::auto(), height: Dimension::length(14.0) }, margin: margin_bottom(4.0), ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::auto(),
+                    height: Dimension::length(14.0),
+                },
+                margin: margin_bottom(4.0),
+                ..Default::default()
+            },
             SquircleStyle::transparent(),
             Some("cc:disp_label"),
         )?;
-        ui.set_text(disp_label, TextLabel::new("Pantalla").left_aligned().with_size(11.5).with_weight(Weight::BOLD).with_color(config.text_color));
+        ui.set_text(
+            disp_label,
+            TextLabel::new("Pantalla")
+                .left_aligned()
+                .with_size(11.5)
+                .with_weight(Weight::BOLD)
+                .with_color(config.text_color),
+        );
 
         let sun_low = ui.add_leaf(
-            Style { size: Size { width: Dimension::length(18.0), height: Dimension::length(18.0) }, margin: margin_right(4.0), ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::length(18.0),
+                    height: Dimension::length(18.0),
+                },
+                margin: margin_right(4.0),
+                ..Default::default()
+            },
             SquircleStyle::transparent(),
             Some("cc:sun_low"),
         )?;
-        ui.set_text(sun_low, TextLabel::new("\u{F185}").centered().with_size(11.0).with_color(config.text_dimmed_color));
+        ui.set_text(
+            sun_low,
+            TextLabel::new("\u{F185}")
+                .centered()
+                .with_size(11.0)
+                .with_color(config.text_dimmed_color),
+        );
 
         let pct = (cc.display_brightness as f32 / 100.0).clamp(0.05, 1.0);
         let slider_fill = ui.add_leaf(
-            Style { size: Size { width: Dimension::percent(pct), height: Dimension::percent(1.0) }, ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::percent(pct),
+                    height: Dimension::percent(1.0),
+                },
+                ..Default::default()
+            },
             SquircleStyle::card(10.0, slider_fill_bg).with_z(85.0),
             Some("slider_fill:display"),
         )?;
 
         let slider_track = ui.add_container(
             Style {
-                size: Size { width: Dimension::auto(), height: Dimension::length(20.0) },
+                size: Size {
+                    width: Dimension::auto(),
+                    height: Dimension::length(20.0),
+                },
                 flex_grow: 1.0,
                 flex_direction: FlexDirection::Row,
                 ..Default::default()
@@ -1244,15 +1651,31 @@ pub fn build_control_center_panel(
         )?;
 
         let sun_high = ui.add_leaf(
-            Style { size: Size { width: Dimension::length(18.0), height: Dimension::length(18.0) }, margin: margin_left(4.0), ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::length(18.0),
+                    height: Dimension::length(18.0),
+                },
+                margin: margin_left(4.0),
+                ..Default::default()
+            },
             SquircleStyle::transparent(),
             Some("cc:sun_high"),
         )?;
-        ui.set_text(sun_high, TextLabel::new("\u{F185}").centered().with_size(13.0).with_color(config.text_color));
+        ui.set_text(
+            sun_high,
+            TextLabel::new("\u{F185}")
+                .centered()
+                .with_size(13.0)
+                .with_color(config.text_color),
+        );
 
         let slider_row = ui.add_container(
             Style {
-                size: Size { width: Dimension::percent(1.0), height: Dimension::length(24.0) },
+                size: Size {
+                    width: Dimension::percent(1.0),
+                    height: Dimension::length(24.0),
+                },
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::CENTER,
                 ..Default::default()
@@ -1264,13 +1687,24 @@ pub fn build_control_center_panel(
 
         let disp_card = ui.add_container(
             Style {
-                size: Size { width: Dimension::percent(1.0), height: Dimension::length(60.0) },
+                size: Size {
+                    width: Dimension::percent(1.0),
+                    height: Dimension::length(60.0),
+                },
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::CENTER,
-                padding: Rect { left: LengthPercentage::length(12.0), right: LengthPercentage::length(12.0), top: LengthPercentage::length(6.0), bottom: LengthPercentage::length(6.0) },
+                padding: Rect {
+                    left: LengthPercentage::length(12.0),
+                    right: LengthPercentage::length(12.0),
+                    top: LengthPercentage::length(6.0),
+                    bottom: LengthPercentage::length(6.0),
+                },
                 ..Default::default()
             },
-            SquircleStyle::card(16.0, tile_bg).with_border(0.5, tile_border).with_power(config.squircle_power).with_z(82.0),
+            SquircleStyle::card(16.0, tile_bg)
+                .with_border(0.5, tile_border)
+                .with_power(config.squircle_power)
+                .with_z(82.0),
             &[disp_label, slider_row],
             Some("slider_box:display"),
         )?;
@@ -1282,30 +1716,74 @@ pub fn build_control_center_panel(
     // --------------------------------------------------------------------------
     {
         let sound_label = ui.add_leaf(
-            Style { size: Size { width: Dimension::auto(), height: Dimension::length(14.0) }, margin: margin_bottom(4.0), ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::auto(),
+                    height: Dimension::length(14.0),
+                },
+                margin: margin_bottom(4.0),
+                ..Default::default()
+            },
             SquircleStyle::transparent(),
             Some("cc:sound_label"),
         )?;
-        let sound_text = if cc.sound_muted { "Sonido (Silenciado)" } else { "Sonido" };
-        ui.set_text(sound_label, TextLabel::new(sound_text).left_aligned().with_size(11.5).with_weight(Weight::BOLD).with_color(config.text_color));
+        let sound_text = if cc.sound_muted {
+            "Sonido (Silenciado)"
+        } else {
+            "Sonido"
+        };
+        ui.set_text(
+            sound_label,
+            TextLabel::new(sound_text)
+                .left_aligned()
+                .with_size(11.5)
+                .with_weight(Weight::BOLD)
+                .with_color(config.text_color),
+        );
 
         let vol_low = ui.add_leaf(
-            Style { size: Size { width: Dimension::length(18.0), height: Dimension::length(18.0) }, margin: margin_right(4.0), ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::length(18.0),
+                    height: Dimension::length(18.0),
+                },
+                margin: margin_right(4.0),
+                ..Default::default()
+            },
             SquircleStyle::transparent(),
             Some("cc:vol_low"),
         )?;
-        ui.set_text(vol_low, TextLabel::new("\u{F027}").centered().with_size(11.0).with_color(config.text_dimmed_color));
+        ui.set_text(
+            vol_low,
+            TextLabel::new("\u{F027}")
+                .centered()
+                .with_size(11.0)
+                .with_color(config.text_dimmed_color),
+        );
 
-        let vol_pct = if cc.sound_muted { 0.05 } else { (cc.sound_volume as f32 / 100.0).clamp(0.05, 1.0) };
+        let vol_pct = if cc.sound_muted {
+            0.05
+        } else {
+            (cc.sound_volume as f32 / 100.0).clamp(0.05, 1.0)
+        };
         let vol_fill = ui.add_leaf(
-            Style { size: Size { width: Dimension::percent(vol_pct), height: Dimension::percent(1.0) }, ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::percent(vol_pct),
+                    height: Dimension::percent(1.0),
+                },
+                ..Default::default()
+            },
             SquircleStyle::card(10.0, slider_fill_bg).with_z(85.0),
             Some("slider_fill:sound"),
         )?;
 
         let vol_track = ui.add_container(
             Style {
-                size: Size { width: Dimension::auto(), height: Dimension::length(20.0) },
+                size: Size {
+                    width: Dimension::auto(),
+                    height: Dimension::length(20.0),
+                },
                 flex_grow: 1.0,
                 flex_direction: FlexDirection::Row,
                 ..Default::default()
@@ -1316,22 +1794,51 @@ pub fn build_control_center_panel(
         )?;
 
         let vol_high = ui.add_leaf(
-            Style { size: Size { width: Dimension::length(18.0), height: Dimension::length(18.0) }, margin: margin_left(4.0), ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::length(18.0),
+                    height: Dimension::length(18.0),
+                },
+                margin: margin_left(4.0),
+                ..Default::default()
+            },
             SquircleStyle::transparent(),
             Some("cc:vol_high"),
         )?;
-        ui.set_text(vol_high, TextLabel::new("\u{F028}").centered().with_size(13.0).with_color(config.text_color));
+        ui.set_text(
+            vol_high,
+            TextLabel::new("\u{F028}")
+                .centered()
+                .with_size(13.0)
+                .with_color(config.text_color),
+        );
 
         let output_btn = ui.add_leaf(
-            Style { size: Size { width: Dimension::length(22.0), height: Dimension::length(20.0) }, margin: margin_left(6.0), ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::length(22.0),
+                    height: Dimension::length(20.0),
+                },
+                margin: margin_left(6.0),
+                ..Default::default()
+            },
             SquircleStyle::card(6.0, inactive_circle).with_z(84.0),
             Some("cc:sound_output"),
         )?;
-        ui.set_text(output_btn, TextLabel::new("\u{F025}").centered().with_size(11.0).with_color(config.text_color));
+        ui.set_text(
+            output_btn,
+            TextLabel::new("\u{F025}")
+                .centered()
+                .with_size(11.0)
+                .with_color(config.text_color),
+        );
 
         let vol_row = ui.add_container(
             Style {
-                size: Size { width: Dimension::percent(1.0), height: Dimension::length(24.0) },
+                size: Size {
+                    width: Dimension::percent(1.0),
+                    height: Dimension::length(24.0),
+                },
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::CENTER,
                 ..Default::default()
@@ -1343,13 +1850,24 @@ pub fn build_control_center_panel(
 
         let sound_card = ui.add_container(
             Style {
-                size: Size { width: Dimension::percent(1.0), height: Dimension::length(60.0) },
+                size: Size {
+                    width: Dimension::percent(1.0),
+                    height: Dimension::length(60.0),
+                },
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::CENTER,
-                padding: Rect { left: LengthPercentage::length(12.0), right: LengthPercentage::length(12.0), top: LengthPercentage::length(6.0), bottom: LengthPercentage::length(6.0) },
+                padding: Rect {
+                    left: LengthPercentage::length(12.0),
+                    right: LengthPercentage::length(12.0),
+                    top: LengthPercentage::length(6.0),
+                    bottom: LengthPercentage::length(6.0),
+                },
                 ..Default::default()
             },
-            SquircleStyle::card(16.0, tile_bg).with_border(0.5, tile_border).with_power(config.squircle_power).with_z(82.0),
+            SquircleStyle::card(16.0, tile_bg)
+                .with_border(0.5, tile_border)
+                .with_power(config.squircle_power)
+                .with_z(82.0),
             &[sound_label, vol_row],
             Some("slider_box:sound"),
         )?;
@@ -1361,36 +1879,99 @@ pub fn build_control_center_panel(
     // --------------------------------------------------------------------------
     {
         let t_dark = ui.add_leaf(
-            Style { size: Size { width: Dimension::length(38.0), height: Dimension::length(38.0) }, ..Default::default() },
-            SquircleStyle::card(19.0, if cc.dark_mode { active_blue } else { tile_bg }).with_border(0.5, tile_border).with_z(84.0),
+            Style {
+                size: Size {
+                    width: Dimension::length(38.0),
+                    height: Dimension::length(38.0),
+                },
+                ..Default::default()
+            },
+            SquircleStyle::card(19.0, if cc.dark_mode { active_blue } else { tile_bg })
+                .with_border(0.5, tile_border)
+                .with_z(84.0),
             Some("cc:dark_mode"),
         )?;
-        ui.set_text(t_dark, TextLabel::new("\u{F186}").centered().with_size(13.0).with_color(if cc.dark_mode { [1.0, 1.0, 1.0, 1.0] } else { config.text_color }));
+        ui.set_text(
+            t_dark,
+            TextLabel::new("\u{F186}")
+                .centered()
+                .with_size(13.0)
+                .with_color(if cc.dark_mode {
+                    [1.0, 1.0, 1.0, 1.0]
+                } else {
+                    config.text_color
+                }),
+        );
 
         let t_shot = ui.add_leaf(
-            Style { size: Size { width: Dimension::length(38.0), height: Dimension::length(38.0) }, ..Default::default() },
-            SquircleStyle::card(19.0, tile_bg).with_border(0.5, tile_border).with_z(84.0),
+            Style {
+                size: Size {
+                    width: Dimension::length(38.0),
+                    height: Dimension::length(38.0),
+                },
+                ..Default::default()
+            },
+            SquircleStyle::card(19.0, tile_bg)
+                .with_border(0.5, tile_border)
+                .with_z(84.0),
             Some("cc:screenshot"),
         )?;
-        ui.set_text(t_shot, TextLabel::new("\u{F030}").centered().with_size(13.0).with_color(config.text_color));
+        ui.set_text(
+            t_shot,
+            TextLabel::new("\u{F030}")
+                .centered()
+                .with_size(13.0)
+                .with_color(config.text_color),
+        );
 
         let t_kb = ui.add_leaf(
-            Style { size: Size { width: Dimension::length(38.0), height: Dimension::length(38.0) }, ..Default::default() },
-            SquircleStyle::card(19.0, tile_bg).with_border(0.5, tile_border).with_z(84.0),
+            Style {
+                size: Size {
+                    width: Dimension::length(38.0),
+                    height: Dimension::length(38.0),
+                },
+                ..Default::default()
+            },
+            SquircleStyle::card(19.0, tile_bg)
+                .with_border(0.5, tile_border)
+                .with_z(84.0),
             Some("cc:keyboard"),
         )?;
-        ui.set_text(t_kb, TextLabel::new("\u{F11C}").centered().with_size(13.0).with_color(config.text_color));
+        ui.set_text(
+            t_kb,
+            TextLabel::new("\u{F11C}")
+                .centered()
+                .with_size(13.0)
+                .with_color(config.text_color),
+        );
 
         let t_lock = ui.add_leaf(
-            Style { size: Size { width: Dimension::length(38.0), height: Dimension::length(38.0) }, ..Default::default() },
-            SquircleStyle::card(19.0, tile_bg).with_border(0.5, tile_border).with_z(84.0),
+            Style {
+                size: Size {
+                    width: Dimension::length(38.0),
+                    height: Dimension::length(38.0),
+                },
+                ..Default::default()
+            },
+            SquircleStyle::card(19.0, tile_bg)
+                .with_border(0.5, tile_border)
+                .with_z(84.0),
             Some("cc:lock"),
         )?;
-        ui.set_text(t_lock, TextLabel::new("\u{F023}").centered().with_size(13.0).with_color(config.text_color));
+        ui.set_text(
+            t_lock,
+            TextLabel::new("\u{F023}")
+                .centered()
+                .with_size(13.0)
+                .with_color(config.text_color),
+        );
 
         let toggles_row = ui.add_container(
             Style {
-                size: Size { width: Dimension::percent(1.0), height: Dimension::length(38.0) },
+                size: Size {
+                    width: Dimension::percent(1.0),
+                    height: Dimension::length(38.0),
+                },
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::CENTER,
                 justify_content: JustifyContent::SPACE_BETWEEN,
@@ -1408,28 +1989,48 @@ pub fn build_control_center_panel(
     // --------------------------------------------------------------------------
     {
         let edit_label = ui.add_leaf(
-            Style { size: Size { width: Dimension::auto(), height: Dimension::length(14.0) }, ..Default::default() },
+            Style {
+                size: Size {
+                    width: Dimension::auto(),
+                    height: Dimension::length(14.0),
+                },
+                ..Default::default()
+            },
             SquircleStyle::transparent(),
             Some("cc:edit_label"),
         )?;
-        ui.set_text(edit_label, TextLabel::new("Editar controles").centered().with_size(11.0).with_color(config.text_dimmed_color));
+        ui.set_text(
+            edit_label,
+            TextLabel::new("Editar controles")
+                .centered()
+                .with_size(11.0)
+                .with_color(config.text_dimmed_color),
+        );
 
         let edit_btn = ui.add_container(
             Style {
-                size: Size { width: Dimension::length(120.0), height: Dimension::length(24.0) },
+                size: Size {
+                    width: Dimension::length(120.0),
+                    height: Dimension::length(24.0),
+                },
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::CENTER,
                 justify_content: JustifyContent::CENTER,
                 ..Default::default()
             },
-            SquircleStyle::card(12.0, tile_bg).with_border(0.5, tile_border).with_z(84.0),
+            SquircleStyle::card(12.0, tile_bg)
+                .with_border(0.5, tile_border)
+                .with_z(84.0),
             &[edit_label],
             Some("cc:edit_controls"),
         )?;
 
         let edit_row = ui.add_container(
             Style {
-                size: Size { width: Dimension::percent(1.0), height: Dimension::length(24.0) },
+                size: Size {
+                    width: Dimension::percent(1.0),
+                    height: Dimension::length(24.0),
+                },
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::CENTER,
                 justify_content: JustifyContent::CENTER,

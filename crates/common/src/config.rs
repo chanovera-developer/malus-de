@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 /// Configuración global de Malus DE
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,7 +51,8 @@ pub const MALUS_GTK_CSS_WINDOWCONTROLS_COMMON: &str =
     include_str!("styles/windowcontrols-common.css");
 
 /// Reglas CSS de controles de ventana macOS (Traffic Lights) para tema Claro
-pub const MALUS_GTK_CSS_WINDOWCONTROLS_LIGHT: &str = include_str!("styles/windowcontrols-light.css");
+pub const MALUS_GTK_CSS_WINDOWCONTROLS_LIGHT: &str =
+    include_str!("styles/windowcontrols-light.css");
 
 /// Reglas CSS de controles de ventana macOS (Traffic Lights) para tema Oscuro
 pub const MALUS_GTK_CSS_WINDOWCONTROLS_DARK: &str = include_str!("styles/windowcontrols-dark.css");
@@ -92,6 +93,89 @@ pub fn appearance_settings_path() -> PathBuf {
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     PathBuf::from(home).join(".config/malus-de/appearance-settings.toml")
+}
+
+pub const ACCENT_COLORS: [(&str, (f64, f64, f64)); 9] = [
+    ("Multicolor", (0.04, 0.52, 1.0)),
+    ("Azul", (0.0, 0.48, 1.0)),
+    ("Morado", (0.58, 0.30, 0.86)),
+    ("Rosa", (0.96, 0.31, 0.62)),
+    ("Rojo", (0.88, 0.24, 0.24)),
+    ("Naranja", (0.96, 0.52, 0.14)),
+    ("Amarillo", (0.96, 0.78, 0.12)),
+    ("Verde", (0.38, 0.73, 0.28)),
+    ("Grafito", (0.55, 0.55, 0.58)),
+];
+
+pub fn accent_color_css(index: usize) -> String {
+    let (_, (red, green, blue)) = ACCENT_COLORS[index.min(ACCENT_COLORS.len() - 1)];
+    let channels = [
+        (red * 255.0).round() as u8,
+        (green * 255.0).round() as u8,
+        (blue * 255.0).round() as u8,
+    ];
+    let luminance = [red, green, blue].map(|channel| {
+        if channel <= 0.04045 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    });
+    let luminance = 0.2126 * luminance[0] + 0.7152 * luminance[1] + 0.0722 * luminance[2];
+    let foreground = if luminance > 0.179 {
+        "#1d1d1f"
+    } else {
+        "#ffffff"
+    };
+    format!(
+        "@define-color accent_bg_color #{:02x}{:02x}{:02x};\n@define-color accent_fg_color {};\n",
+        channels[0], channels[1], channels[2], foreground
+    )
+}
+
+pub fn load_accent_color_index() -> usize {
+    let Ok(raw) = std::fs::read_to_string(appearance_settings_path()) else {
+        return 0;
+    };
+    toml::from_str::<toml::Value>(&raw)
+        .ok()
+        .and_then(|settings| settings.get("accent_color_idx")?.as_integer())
+        .and_then(|index| usize::try_from(index).ok())
+        .filter(|index| *index < ACCENT_COLORS.len())
+        .unwrap_or(0)
+}
+
+pub fn load_accent_color() -> (f64, f64, f64) {
+    ACCENT_COLORS[load_accent_color_index()].1
+}
+
+/// Indice del color de carpetas configurado en Ajustes de Aspecto.
+/// 0 = Automatico, 1 = Azul clasico, 2 = Color de enfasis, 3 = Grafito.
+pub fn load_folder_color_index() -> usize {
+    let Ok(raw) = std::fs::read_to_string(appearance_settings_path()) else {
+        return 0;
+    };
+    toml::from_str::<toml::Value>(&raw)
+        .ok()
+        .and_then(|settings| settings.get("folder_color_idx")?.as_integer())
+        .and_then(|index| usize::try_from(index).ok())
+        .filter(|index| *index < 4)
+        .unwrap_or(0)
+}
+
+pub fn folder_color_css(index: usize) -> String {
+    let (red, green, blue) = match index.min(3) {
+        1 => (0.15, 0.45, 0.82),
+        2 => ACCENT_COLORS[load_accent_color_index()].1,
+        3 => (0.55, 0.55, 0.58),
+        _ => (0.15, 0.45, 0.82),
+    };
+    format!(
+        "image.branches-folder-icon {{ color: rgb({:.0}%, {:.0}%, {:.0}%); }}",
+        red * 100.0,
+        green * 100.0,
+        blue * 100.0,
+    )
 }
 
 /// Lee el nivel de opacidad de Liquid Glass configurado en `appearance-settings.toml` (`[0.15, 0.95]`).
@@ -177,7 +261,8 @@ pub fn get_malus_gtk_css(dark: bool) -> String {
         )
     };
     format!(
-        "{}\n{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        accent_color_css(load_accent_color_index()),
         MALUS_GTK_CSS_SQUIRCLE_RULES,
         MALUS_GTK_CSS_SIDEBAR_COMMON,
         malus_gtk_css_popup(dark),
@@ -233,10 +318,28 @@ pub fn get_malus_gtk3_css(dark: bool) -> String {
         )
     };
 
+    let accent_colors = accent_color_css(load_accent_color_index());
+    let accent_bg = accent_colors
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("@define-color accent_bg_color "))
+        .unwrap_or("#0a85ff;")
+        .trim_end_matches(';')
+        .to_string();
+    let accent_fg = accent_colors
+        .lines()
+        .nth(1)
+        .and_then(|line| line.strip_prefix("@define-color accent_fg_color "))
+        .unwrap_or("#ffffff;")
+        .trim_end_matches(';')
+        .to_string();
+
     include_str!("styles/gtk3.css")
         .replace("__BG_COLOR__", bg_color)
         .replace("__FG_COLOR__", fg_color)
         .replace("__SIDEBAR_BG__", sidebar_bg)
+        .replace("__ACCENT_BG_COLOR__", &accent_bg)
+        .replace("__ACCENT_FG_COLOR__", &accent_fg)
         .replace("__BORDER_COLOR__", border_color)
         .replace("__POPUP_BG__", popup_bg)
         .replace("__POPUP_FG__", popup_fg)
@@ -275,7 +378,9 @@ fn set_gtk_decoration_layout(config_dir: &Path) -> std::io::Result<()> {
             .map(|offset| start + offset)
             .unwrap_or(lines.len());
         if let Some(index) = (start..end).find(|&index| {
-            lines[index].trim_start().starts_with("gtk-decoration-layout=")
+            lines[index]
+                .trim_start()
+                .starts_with("gtk-decoration-layout=")
         }) {
             lines[index] = LAYOUT.to_string();
         } else {
@@ -303,10 +408,7 @@ pub fn write_file_atomic_if_changed(path: &Path, content: &str) -> std::io::Resu
     }
 
     let seq = ATOMIC_TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let file_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("malus");
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("malus");
     let tmp_path = path.with_file_name(format!(".{file_name}.tmp.{}.{seq}", std::process::id()));
 
     if let Err(err) = std::fs::write(&tmp_path, content) {
@@ -540,11 +642,15 @@ pub fn ensure_default_font_settings(
 ) -> std::io::Result<()> {
     if keyfile_path.exists() {
         let mut updates: Vec<(&str, &str)> = Vec::new();
-        let needs_font = read_section_key_value(keyfile_path, "org/gnome/desktop/interface", "font-name")
-            .is_none_or(|v| is_unset_or_legacy_default_font(&v));
-        let needs_doc_font =
-            read_section_key_value(keyfile_path, "org/gnome/desktop/interface", "document-font-name")
+        let needs_font =
+            read_section_key_value(keyfile_path, "org/gnome/desktop/interface", "font-name")
                 .is_none_or(|v| is_unset_or_legacy_default_font(&v));
+        let needs_doc_font = read_section_key_value(
+            keyfile_path,
+            "org/gnome/desktop/interface",
+            "document-font-name",
+        )
+        .is_none_or(|v| is_unset_or_legacy_default_font(&v));
         if needs_font {
             updates.push(("font-name", DEFAULT_KEYFILE_FONT_NAME));
         }
@@ -568,10 +674,8 @@ pub fn ensure_default_font_settings(
             }
         }
         if !updates.is_empty() {
-            let _ = upsert_keyfile_entries(
-                keyfile_path,
-                &[("org/gnome/desktop/interface", &updates)],
-            )?;
+            let _ =
+                upsert_keyfile_entries(keyfile_path, &[("org/gnome/desktop/interface", &updates)])?;
         }
     }
 
@@ -593,7 +697,9 @@ pub fn ensure_default_font_settings(
                     gtk_updates.push((key, default_val));
                 }
             }
-            if is_gtk4 && read_section_key_value(ini_path, "Settings", "gtk-hint-font-metrics").is_none() {
+            if is_gtk4
+                && read_section_key_value(ini_path, "Settings", "gtk-hint-font-metrics").is_none()
+            {
                 gtk_updates.push(("gtk-hint-font-metrics", "1"));
             }
             if !gtk_updates.is_empty() {
@@ -944,9 +1050,11 @@ pub fn ensure_default_wallpaper(malus_config_dir: &Path) {
     if malus_config_dir.join(".wallpaper-gradient").exists() {
         return;
     }
-    let has_custom = ["png", "jpg", "jpeg", "webp", "svg"]
-        .iter()
-        .any(|ext| malus_config_dir.join(format!("wallpaper.{}", ext)).is_file());
+    let has_custom = ["png", "jpg", "jpeg", "webp", "svg"].iter().any(|ext| {
+        malus_config_dir
+            .join(format!("wallpaper.{}", ext))
+            .is_file()
+    });
     if has_custom {
         return;
     }
@@ -960,7 +1068,13 @@ pub fn ensure_default_wallpaper(malus_config_dir: &Path) {
 /// la barra personalizada pero con controles custom (`"window.controlsStyle": "custom"`), permitiendo
 /// que los controles de ventana respeten la posición y estética de macOS en Malus DE.
 pub fn setup_electron_ide_configurations(malus_config_dir: &Path) {
-    let ide_names = ["Antigravity", "Antigravity IDE", "Code", "Code - OSS", "VSCodium"];
+    let ide_names = [
+        "Antigravity",
+        "Antigravity IDE",
+        "Code",
+        "Code - OSS",
+        "VSCodium",
+    ];
     for ide_name in ide_names {
         let user_dir = malus_config_dir.join(ide_name).join("User");
         let settings_path = user_dir.join("settings.json");
@@ -1144,7 +1258,10 @@ Default=1
 Default=default-release
 Locked=1
 "#;
-        let _ = std::fs::write(isolated_firefox_dir.join("profiles.ini"), initial_profiles_ini);
+        let _ = std::fs::write(
+            isolated_firefox_dir.join("profiles.ini"),
+            initial_profiles_ini,
+        );
     }
 }
 
@@ -1161,7 +1278,10 @@ pub fn apply_firefox_profile_styles(profile_dir: &Path) {
 
     if should_write_css {
         let _ = std::fs::write(&user_chrome_path, MALUS_FIREFOX_USER_CHROME_CSS);
-        tracing::info!("🎨 [Firefox] userChrome.css actualizado en: {:?}", user_chrome_path);
+        tracing::info!(
+            "🎨 [Firefox] userChrome.css actualizado en: {:?}",
+            user_chrome_path
+        );
     }
 
     let user_js_path = profile_dir.join("user.js");
@@ -1175,7 +1295,10 @@ pub fn apply_firefox_profile_styles(profile_dir: &Path) {
             }
         }
     } else {
-        let content = format!("// Malus DE - Configuración de interfaz de ventana\n{}\n", pref_line);
+        let content = format!(
+            "// Malus DE - Configuración de interfaz de ventana\n{}\n",
+            pref_line
+        );
         let _ = std::fs::write(&user_js_path, content);
     }
 }
@@ -1187,13 +1310,34 @@ pub fn setup_default_mime_applications(malus_config_dir: &Path) {
     let default_package_associations: &[(&str, &str)] = &[
         ("inode/directory", "dev.malus.Branches.desktop"),
         ("x-scheme-handler/trash", "dev.malus.Branches.desktop"),
-        ("application/x-rpm", "gnome-software-local-file-packagekit.desktop"),
-        ("application/x-redhat-package-manager", "gnome-software-local-file-packagekit.desktop"),
-        ("application/vnd.flatpak", "gnome-software-local-file-flatpak.desktop"),
-        ("application/vnd.flatpak.ref", "gnome-software-local-file-flatpak.desktop"),
-        ("application/vnd.flatpak.repo", "gnome-software-local-file-flatpak.desktop"),
-        ("application/x-deb", "gnome-software-local-file-packagekit.desktop"),
-        ("application/x-app-package", "gnome-software-local-file-packagekit.desktop"),
+        (
+            "application/x-rpm",
+            "gnome-software-local-file-packagekit.desktop",
+        ),
+        (
+            "application/x-redhat-package-manager",
+            "gnome-software-local-file-packagekit.desktop",
+        ),
+        (
+            "application/vnd.flatpak",
+            "gnome-software-local-file-flatpak.desktop",
+        ),
+        (
+            "application/vnd.flatpak.ref",
+            "gnome-software-local-file-flatpak.desktop",
+        ),
+        (
+            "application/vnd.flatpak.repo",
+            "gnome-software-local-file-flatpak.desktop",
+        ),
+        (
+            "application/x-deb",
+            "gnome-software-local-file-packagekit.desktop",
+        ),
+        (
+            "application/x-app-package",
+            "gnome-software-local-file-packagekit.desktop",
+        ),
     ];
 
     let content = std::fs::read_to_string(&mime_path).unwrap_or_default();
@@ -1206,7 +1350,9 @@ pub fn setup_default_mime_applications(malus_config_dir: &Path) {
         let trimmed = line.trim();
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             current_section = trimmed;
-            if current_section != "[Default Applications]" && current_section != "[Added Associations]" {
+            if current_section != "[Default Applications]"
+                && current_section != "[Added Associations]"
+            {
                 other_sections.push((current_section.to_string(), Vec::new()));
             }
             continue;
@@ -1225,15 +1371,23 @@ pub fn setup_default_mime_applications(malus_config_dir: &Path) {
 
     for (mime, app) in default_package_associations {
         let prefix = format!("{}=", mime);
-        if let Some(existing) = default_apps.iter_mut().find(|entry| entry.starts_with(&prefix)) {
-            if *app == "dev.malus.Branches.desktop" && existing.contains("org.gnome.Nautilus.desktop") {
+        if let Some(existing) = default_apps
+            .iter_mut()
+            .find(|entry| entry.starts_with(&prefix))
+        {
+            if *app == "dev.malus.Branches.desktop"
+                && existing.contains("org.gnome.Nautilus.desktop")
+            {
                 *existing = format!("{}={}", mime, app);
             }
         } else {
             default_apps.push(format!("{}={}", mime, app));
         }
         let added_entry = format!("{}={};", mime, app);
-        if !added_associations.iter().any(|entry| entry.starts_with(&prefix)) {
+        if !added_associations
+            .iter()
+            .any(|entry| entry.starts_with(&prefix))
+        {
             added_associations.push(added_entry);
         }
     }
@@ -1378,7 +1532,11 @@ pub fn is_dark_mode_active() -> bool {
 /// (~/.config/malus-de). NUNCA modifica dconf del host, ni GSettings global, ni ~/.config/gtk-*.0
 /// del sistema anfitrión, garantizando independencia bidireccional absoluta frente a GNOME.
 pub fn sync_system_appearance(to_dark: bool) {
-    let target = if to_dark { "prefer-dark" } else { "prefer-light" };
+    let target = if to_dark {
+        "prefer-dark"
+    } else {
+        "prefer-light"
+    };
     let color_scheme_val = format!("'{}'", target);
     let dark_val = if to_dark { "1" } else { "0" };
     let gtk_theme_target = "Adwaita";
@@ -1427,14 +1585,8 @@ pub fn sync_system_appearance(to_dark: bool) {
     let active_gtk3 = get_malus_gtk3_css(to_dark);
     let active_gtk4 = get_malus_gtk_css(to_dark);
 
-    let _ = write_file_atomic_if_changed(
-        &malus_config_dir.join("gtk-3.0/gtk.css"),
-        &active_gtk3,
-    );
-    let _ = write_file_atomic_if_changed(
-        &malus_config_dir.join("gtk-4.0/gtk.css"),
-        &active_gtk4,
-    );
+    let _ = write_file_atomic_if_changed(&malus_config_dir.join("gtk-3.0/gtk.css"), &active_gtk3);
+    let _ = write_file_atomic_if_changed(&malus_config_dir.join("gtk-4.0/gtk.css"), &active_gtk4);
     let gtk4_dark_path = malus_config_dir.join("gtk-4.0/gtk-dark.css");
     if to_dark {
         let _ = write_file_atomic_if_changed(&gtk4_dark_path, &active_gtk4);
@@ -1554,35 +1706,59 @@ impl Default for DockConfig {
                     name: "Archivos".to_string(),
                     icon: "org.gnome.Nautilus".to_string(),
                     command: "nautilus --new-window".to_string(),
-                    matchers: vec!["nautilus".into(), "archivos".into(), "org.gnome.nautilus".into()],
+                    matchers: vec![
+                        "nautilus".into(),
+                        "archivos".into(),
+                        "org.gnome.nautilus".into(),
+                    ],
                     icon_appearance: DockIconAppearance::Auto,
                 },
                 DockAppConfig {
                     name: "Terminal".to_string(),
                     icon: "org.gnome.Ptyxis".to_string(),
                     command: "ptyxis -s".to_string(),
-                    matchers: vec!["ptyxis".into(), "terminal".into(), "org.gnome.ptyxis".into()],
+                    matchers: vec![
+                        "ptyxis".into(),
+                        "terminal".into(),
+                        "org.gnome.ptyxis".into(),
+                    ],
                     icon_appearance: DockIconAppearance::Auto,
                 },
                 DockAppConfig {
                     name: "Editor de Texto".to_string(),
                     icon: "org.gnome.TextEditor".to_string(),
                     command: "gnome-text-editor -s".to_string(),
-                    matchers: vec!["texteditor".into(), "text-editor".into(), "gedit".into(), "org.gnome.texteditor".into()],
+                    matchers: vec![
+                        "texteditor".into(),
+                        "text-editor".into(),
+                        "gedit".into(),
+                        "org.gnome.texteditor".into(),
+                    ],
                     icon_appearance: DockIconAppearance::Auto,
                 },
                 DockAppConfig {
                     name: "Calculadora".to_string(),
                     icon: "org.gnome.Calculator".to_string(),
                     command: "gnome-calculator".to_string(),
-                    matchers: vec!["calculator".into(), "calculadora".into(), "org.gnome.calculator".into()],
+                    matchers: vec![
+                        "calculator".into(),
+                        "calculadora".into(),
+                        "org.gnome.calculator".into(),
+                    ],
                     icon_appearance: DockIconAppearance::Auto,
                 },
                 DockAppConfig {
                     name: "Ajustes del Sistema".to_string(),
                     icon: "preferences-system".to_string(),
                     command: "malus-de-settings".to_string(),
-                    matchers: vec!["malus-de-settings".into(), "dev.malus.settings".into(), "ajustes".into(), "settings".into(), "configuración".into(), "configuracion".into()],
+                    matchers: vec![
+                        "malus-de-settings".into(),
+                        "dev.malus.settings".into(),
+                        "ajustes".into(),
+                        "settings".into(),
+                        "configuración".into(),
+                        "configuracion".into(),
+                    ],
                     icon_appearance: DockIconAppearance::Auto,
                 },
             ],
@@ -1616,7 +1792,10 @@ impl DockConfig {
             }
         }
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home).join(".config").join("malus-de").join("dock.toml")
+        PathBuf::from(home)
+            .join(".config")
+            .join("malus-de")
+            .join("dock.toml")
     }
 
     /// Carga la configuración desde `dock.toml`, o crea el archivo con la configuración predeterminada si no existe
@@ -2363,7 +2542,11 @@ impl DisplaysConfig {
         if self.outputs.is_empty() {
             return;
         }
-        let primary_idx = self.outputs.iter().position(|output| output.primary).unwrap_or(0);
+        let primary_idx = self
+            .outputs
+            .iter()
+            .position(|output| output.primary)
+            .unwrap_or(0);
         self.outputs[primary_idx].scale = scale;
         self.sync_linked_scales_from(primary_idx);
         self.recalculate_layout();
@@ -2550,15 +2733,30 @@ impl DisplaysConfig {
         let mut master_scale = 1.666667;
 
         for part in &parts[1..] {
-            let x = extract_tag_value(part, "x").and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
-            let y = extract_tag_value(part, "y").and_then(|v| v.parse::<i32>().ok()).unwrap_or(0);
-            let scale = extract_tag_value(part, "scale").and_then(|v| v.parse::<f64>().ok()).unwrap_or(1.0);
-            let primary = extract_tag_value(part, "primary").map(|v| v == "yes").unwrap_or(false);
-            let connector = extract_tag_value(part, "connector").unwrap_or_else(|| "default".to_string());
+            let x = extract_tag_value(part, "x")
+                .and_then(|v| v.parse::<i32>().ok())
+                .unwrap_or(0);
+            let y = extract_tag_value(part, "y")
+                .and_then(|v| v.parse::<i32>().ok())
+                .unwrap_or(0);
+            let scale = extract_tag_value(part, "scale")
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(1.0);
+            let primary = extract_tag_value(part, "primary")
+                .map(|v| v == "yes")
+                .unwrap_or(false);
+            let connector =
+                extract_tag_value(part, "connector").unwrap_or_else(|| "default".to_string());
             let product = extract_tag_value(part, "product").unwrap_or_else(|| connector.clone());
-            let width = extract_tag_value(part, "width").and_then(|v| v.parse::<u32>().ok()).unwrap_or(3840);
-            let height = extract_tag_value(part, "height").and_then(|v| v.parse::<u32>().ok()).unwrap_or(2160);
-            let rate = extract_tag_value(part, "rate").and_then(|v| v.parse::<f64>().ok()).unwrap_or(60.0);
+            let width = extract_tag_value(part, "width")
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(3840);
+            let height = extract_tag_value(part, "height")
+                .and_then(|v| v.parse::<u32>().ok())
+                .unwrap_or(2160);
+            let rate = extract_tag_value(part, "rate")
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(60.0);
 
             // No inferir pulgadas por marca/modelo (evita tratar portátiles o paneles desconocidos como 27").
             // DRM/EDID rellenará `diagonal_inches` al inicializar la salida física.
@@ -2605,9 +2803,14 @@ impl DisplaysConfig {
 
     /// Busca la configuración de un monitor por nombre de conector (p. ej. "DP-1" o "HDMI-A-1")
     pub fn find_for_connector(&self, connector: &str) -> Option<&DisplayOutputConfig> {
-        let norm = connector.trim_start_matches("card1-").trim_start_matches("card0-");
+        let norm = connector
+            .trim_start_matches("card1-")
+            .trim_start_matches("card0-");
         self.outputs.iter().find(|o| {
-            let o_norm = o.connector.trim_start_matches("card1-").trim_start_matches("card0-");
+            let o_norm = o
+                .connector
+                .trim_start_matches("card1-")
+                .trim_start_matches("card0-");
             o_norm.eq_ignore_ascii_case(norm)
         })
     }
@@ -2633,7 +2836,9 @@ impl DisplayOutputConfig {
         y: i32,
     ) -> bool {
         if let Some(conn) = connector.map(str::trim).filter(|c| !c.is_empty()) {
-            let norm = conn.trim_start_matches("card1-").trim_start_matches("card0-");
+            let norm = conn
+                .trim_start_matches("card1-")
+                .trim_start_matches("card0-");
             let self_norm = self
                 .connector
                 .trim_start_matches("card1-")
@@ -2671,6 +2876,19 @@ fn extract_tag_value(xml_snippet: &str, tag: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accent_color_css_tracks_palette_and_selects_contrasting_foreground() {
+        assert_eq!(
+            accent_color_css(1),
+            "@define-color accent_bg_color #007aff;\n@define-color accent_fg_color #1d1d1f;\n"
+        );
+        assert_eq!(
+            accent_color_css(6),
+            "@define-color accent_bg_color #f5c71f;\n@define-color accent_fg_color #1d1d1f;\n"
+        );
+        assert_eq!(accent_color_css(usize::MAX), accent_color_css(8));
+    }
 
     #[test]
     fn dock_headroom_includes_magnification_and_bounce_space() {
@@ -2739,10 +2957,8 @@ mod tests {
 
     #[test]
     fn test_gtk_decoration_layout_is_set_left_without_dropping_settings() {
-        let config_dir = std::env::temp_dir().join(format!(
-            "malus-de-gtk-settings-test-{}",
-            std::process::id()
-        ));
+        let config_dir =
+            std::env::temp_dir().join(format!("malus-de-gtk-settings-test-{}", std::process::id()));
         let gtk3_dir = config_dir.join("gtk-3.0");
         let gtk4_dir = config_dir.join("gtk-4.0");
         std::fs::create_dir_all(&gtk3_dir).unwrap();
@@ -2752,12 +2968,17 @@ mod tests {
             "[Settings]\ngtk-decoration-layout=:close\ncustom-option=true\n",
         )
         .unwrap();
-        std::fs::write(gtk4_dir.join("settings.ini"), "[Settings]\ncustom-option=true\n").unwrap();
+        std::fs::write(
+            gtk4_dir.join("settings.ini"),
+            "[Settings]\ncustom-option=true\n",
+        )
+        .unwrap();
 
         set_gtk_decoration_layout(&config_dir).unwrap();
 
         for version in ["gtk-3.0", "gtk-4.0"] {
-            let settings = std::fs::read_to_string(config_dir.join(version).join("settings.ini")).unwrap();
+            let settings =
+                std::fs::read_to_string(config_dir.join(version).join("settings.ini")).unwrap();
             assert!(settings.contains("gtk-decoration-layout=close,minimize,maximize:"));
             assert!(settings.contains("custom-option=true"));
         }
@@ -2843,7 +3064,20 @@ mod tests {
             assert!(media_idx > squircle_rule);
             assert!(css[squircle_rule..media_idx].contains(background));
             assert!(css[media_idx..].contains(opposite_bg));
-            assert!(css.contains("background-color: rgba(0, 122, 255, 0.70);"));
+            assert!(css.contains("@define-color accent_bg_color #0a85ff;"));
+            assert!(css.contains("background-color: alpha(@accent_bg_color, 0.70);"));
+        }
+    }
+
+    #[test]
+    fn gtk4_popup_menu_states_use_the_active_accent_in_both_themes() {
+        for dark in [true, false] {
+            let css = get_malus_gtk_css(dark);
+
+            assert!(css.contains("popover modelbutton:hover:not(:disabled)"));
+            assert!(css.contains("popover modelbutton:selected:not(:disabled)"));
+            assert!(css.contains("background-color: alpha(@accent_bg_color, 0.70);"));
+            assert!(css.contains("color: @accent_fg_color;"));
         }
     }
 
@@ -2871,7 +3105,8 @@ mod tests {
             assert!(css.contains("border: none;"));
             assert!(css.contains("box-shadow: none;"));
             assert!(css.contains("padding: 4px;"));
-            assert!(css.contains("background-color: rgba(0, 122, 255, 0.70);"));
+            assert!(css.contains("@define-color accent_bg_color #0a85ff;"));
+            assert!(css.contains("background-color: alpha(@accent_bg_color, 0.70);"));
         }
     }
 
@@ -2921,7 +3156,8 @@ mod tests {
             command = "test-cmd"
             matchers = ["testapp"]
         "#;
-        let parsed: DockConfig = toml::from_str(partial_toml).expect("Deserialización parcial falló");
+        let parsed: DockConfig =
+            toml::from_str(partial_toml).expect("Deserialización parcial falló");
         assert_eq!(parsed.icon_size, 56);
         assert!(!parsed.magnification_enabled);
         assert_eq!(parsed.floating_gap, 14);
@@ -2984,7 +3220,11 @@ mod tests {
             name: "Terminal".to_string(),
             icon: "utilities-terminal".to_string(),
             command: "ptyxis -s".to_string(),
-            matchers: vec!["ptyxis".into(), "terminal".into(), "org.gnome.ptyxis".into()],
+            matchers: vec![
+                "ptyxis".into(),
+                "terminal".into(),
+                "org.gnome.ptyxis".into(),
+            ],
             icon_appearance: DockIconAppearance::Auto,
         };
 
@@ -3144,12 +3384,30 @@ mod tests {
 
     #[test]
     fn test_recommended_scale_from_detected_ppi() {
-        assert_eq!(DisplayOutputConfig::recommended_scale(3840, 2160, Some(27.0)), 1.5);
-        assert_eq!(DisplayOutputConfig::recommended_scale(1920, 1080, Some(15.6)), 1.25);
-        assert_eq!(DisplayOutputConfig::recommended_scale(1920, 1080, Some(24.0)), 1.0);
-        assert_eq!(DisplayOutputConfig::recommended_scale(5120, 2880, Some(27.0)), 2.0);
-        assert_eq!(DisplayOutputConfig::recommended_scale(1920, 1080, None), 1.0);
-        assert_eq!(DisplayOutputConfig::recommended_scale(3840, 2160, None), 2.0);
+        assert_eq!(
+            DisplayOutputConfig::recommended_scale(3840, 2160, Some(27.0)),
+            1.5
+        );
+        assert_eq!(
+            DisplayOutputConfig::recommended_scale(1920, 1080, Some(15.6)),
+            1.25
+        );
+        assert_eq!(
+            DisplayOutputConfig::recommended_scale(1920, 1080, Some(24.0)),
+            1.0
+        );
+        assert_eq!(
+            DisplayOutputConfig::recommended_scale(5120, 2880, Some(27.0)),
+            2.0
+        );
+        assert_eq!(
+            DisplayOutputConfig::recommended_scale(1920, 1080, None),
+            1.0
+        );
+        assert_eq!(
+            DisplayOutputConfig::recommended_scale(3840, 2160, None),
+            2.0
+        );
     }
 
     #[test]
@@ -3302,10 +3560,16 @@ image/png=org.gnome.Loupe.desktop;
         assert!(content.contains("x-scheme-handler/trash=dev.malus.Branches.desktop"));
         // Verificar que agrega las asociaciones de paquetes hacia GNOME Software
         assert!(content.contains("application/x-rpm=gnome-software-local-file-packagekit.desktop"));
-        assert!(content.contains("application/x-redhat-package-manager=gnome-software-local-file-packagekit.desktop"));
-        assert!(content.contains("application/vnd.flatpak=gnome-software-local-file-flatpak.desktop"));
-        assert!(content.contains("application/vnd.flatpak.ref=gnome-software-local-file-flatpak.desktop"));
-        assert!(content.contains("application/vnd.flatpak.repo=gnome-software-local-file-flatpak.desktop"));
+        assert!(content.contains(
+            "application/x-redhat-package-manager=gnome-software-local-file-packagekit.desktop"
+        ));
+        assert!(
+            content.contains("application/vnd.flatpak=gnome-software-local-file-flatpak.desktop")
+        );
+        assert!(content
+            .contains("application/vnd.flatpak.ref=gnome-software-local-file-flatpak.desktop"));
+        assert!(content
+            .contains("application/vnd.flatpak.repo=gnome-software-local-file-flatpak.desktop"));
         assert!(content.contains("application/x-deb=gnome-software-local-file-packagekit.desktop"));
 
         let _ = std::fs::remove_dir_all(&config_dir);
@@ -3407,7 +3671,10 @@ overrides={'Gtk/ShellShowsAppMenu': <1>}
             &keyfile_path,
             &[(
                 "org/gnome/desktop/interface",
-                &[("color-scheme", "'prefer-dark'"), ("gtk-theme", "'Adwaita'")],
+                &[
+                    ("color-scheme", "'prefer-dark'"),
+                    ("gtk-theme", "'Adwaita'"),
+                ],
             )],
         )
         .unwrap();
@@ -3425,7 +3692,10 @@ overrides={'Gtk/ShellShowsAppMenu': <1>}
             &keyfile_path,
             &[(
                 "org/gnome/desktop/interface",
-                &[("color-scheme", "'prefer-dark'"), ("gtk-theme", "'Adwaita'")],
+                &[
+                    ("color-scheme", "'prefer-dark'"),
+                    ("gtk-theme", "'Adwaita'"),
+                ],
             )],
         )
         .unwrap();
@@ -3517,11 +3787,7 @@ apps = []
             "[org/gnome/desktop/interface]\ncolor-scheme='prefer-dark'\n",
         )
         .unwrap();
-        std::fs::write(
-            &gtk3_ini,
-            "[Settings]\ngtk-font-name=Adwaita Sans 11\n",
-        )
-        .unwrap();
+        std::fs::write(&gtk3_ini, "[Settings]\ngtk-font-name=Adwaita Sans 11\n").unwrap();
         // Caso 2: gtk4 ya tiene una fuente personalizada del usuario, debe preservarse
         std::fs::write(&gtk4_ini, "[Settings]\ngtk-font-name=IBM Plex Sans 10\n").unwrap();
 
@@ -3574,10 +3840,22 @@ apps = []
             list_icon_size: 8,
             show_hidden: true,
         };
-        assert_eq!(custom.clamped_icon_size(), BranchesConfig::MAX_ICON_SIZE as i32);
-        assert_eq!(custom.clamped_grid_spacing(), BranchesConfig::MAX_GRID_SPACING as i32);
-        assert_eq!(custom.clamped_text_size(), BranchesConfig::MAX_TEXT_SIZE as i32);
-        assert_eq!(custom.clamped_list_icon_size(), BranchesConfig::MIN_LIST_ICON_SIZE as i32);
+        assert_eq!(
+            custom.clamped_icon_size(),
+            BranchesConfig::MAX_ICON_SIZE as i32
+        );
+        assert_eq!(
+            custom.clamped_grid_spacing(),
+            BranchesConfig::MAX_GRID_SPACING as i32
+        );
+        assert_eq!(
+            custom.clamped_text_size(),
+            BranchesConfig::MAX_TEXT_SIZE as i32
+        );
+        assert_eq!(
+            custom.clamped_list_icon_size(),
+            BranchesConfig::MIN_LIST_ICON_SIZE as i32
+        );
     }
 
     #[test]

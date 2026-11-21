@@ -155,8 +155,8 @@ image.menu-item-icon,
 }
 
 .active-pill {
-    background-color: rgba(59, 130, 246, 0.35);
-    border: 1px solid rgba(96, 165, 250, 0.5);
+    background-color: alpha(@accent_bg_color, 0.35);
+    border: 1px solid alpha(@accent_bg_color, 0.5);
     border-radius: 10px;
 }
 
@@ -270,15 +270,15 @@ popover.light-popover modelbutton:hover,
 .light-mode button.popover-menu-item:hover,
 .light-mode button.flat:hover,
 .light-mode modelbutton:hover {
-    background-color: rgba(0, 122, 255, 0.70);
+    background-color: alpha(@accent_bg_color, 0.70);
     border-radius: 6px;
-    color: #ffffff;
+    color: @accent_fg_color;
 }
 
 popover.light-popover .popover-menu-item:hover .menu-row-label,
 popover.light-popover button.popover-menu-item:hover .menu-row-label,
 .light-mode .popover-menu-item:hover .menu-row-label {
-    color: #ffffff;
+    color: @accent_fg_color;
 }
 
 popover.light-popover .menu-shortcut-hint,
@@ -390,9 +390,9 @@ popover.light-popover .cc-circle-quick-btn,
 
 popover.light-popover .cc-circle-btn-active,
 .light-mode .cc-circle-btn-active {
-    background-color: #007aff;
-    border-color: #007aff;
-    color: #ffffff;
+    background-color: @accent_bg_color;
+    border-color: @accent_bg_color;
+    color: @accent_fg_color;
 }
 
 popover.light-popover .cc-edit-controls-btn,
@@ -432,13 +432,13 @@ popover.light-popover .cc-list-row:hover,
 
 popover.light-popover .cc-list-row-active,
 .light-mode .cc-list-row-active {
-    background-color: rgba(0, 122, 255, 0.15);
-    border: 1px solid rgba(0, 122, 255, 0.35);
+    background-color: alpha(@accent_bg_color, 0.15);
+    border: 1px solid alpha(@accent_bg_color, 0.35);
 }
 
 popover.light-popover .cc-list-row-active:hover,
 .light-mode .cc-list-row-active:hover {
-    background-color: rgba(0, 122, 255, 0.22);
+    background-color: alpha(@accent_bg_color, 0.22);
 }
 
 popover.light-popover .cc-item-title,
@@ -541,9 +541,9 @@ button.popover-menu-item:hover,
 popover.malus-popover-menu button:hover,
 popover.malus-popover-menu button.flat:hover,
 popover modelbutton:hover {
-    background-color: rgba(0, 122, 255, 0.70);
+    background-color: alpha(@accent_bg_color, 0.70);
     border-radius: 6px;
-    color: #ffffff;
+    color: @accent_fg_color;
     box-shadow: none;
 }
 
@@ -560,7 +560,7 @@ link:visited,
 button.link,
 button.link:hover,
 .link-btn {
-    color: #007aff;
+    color: @accent_bg_color;
     text-decoration: none;
     border-radius: 6px;
     padding: 3px 6px;
@@ -570,9 +570,9 @@ button.link:hover,
 link:hover,
 button.link:hover,
 .link-btn:hover {
-    background-color: rgba(0, 122, 255, 0.15);
+    background-color: alpha(@accent_bg_color, 0.15);
     border-radius: 6px;
-    color: #ffffff;
+    color: @accent_fg_color;
 }
 
 .menu-item-bold {
@@ -611,7 +611,7 @@ button.link:hover,
 
 .cc-tile-active {
     background-color: rgba(255, 255, 255, 0.12);
-    border-color: rgba(59, 130, 246, 0.40);
+    border-color: alpha(@accent_bg_color, 0.40);
 }
 
 .cc-icon-circle {
@@ -622,8 +622,8 @@ button.link:hover,
 }
 
 .cc-icon-circle-active {
-    background-color: #007aff;
-    color: #ffffff;
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
 }
 
 .cc-tile-title {
@@ -731,12 +731,12 @@ scale.horizontal slider {
 .cc-circle-btn-active {
     background-color: #ffffff;
     border-color: rgba(255, 255, 255, 0.4);
-    color: #007aff;
+    color: @accent_bg_color;
 }
 
 .cc-circle-btn-active:hover {
     background-color: #f0f0f5;
-    color: #0062cc;
+    color: @accent_bg_color;
 }
 
 .cc-circle-btn-sm {
@@ -880,9 +880,9 @@ scale.horizontal slider {
 }
 
 .cc-pill-btn-active {
-    background-color: #007aff;
-    border-color: #007aff;
-    color: #ffffff;
+    background-color: @accent_bg_color;
+    border-color: @accent_bg_color;
+    color: @accent_fg_color;
 }
 
 /* ======================================================== */
@@ -989,12 +989,12 @@ scale.horizontal slider {
 }
 
 .cc-list-row-active {
-    background-color: rgba(0, 122, 255, 0.20);
-    border: 1px solid rgba(0, 122, 255, 0.40);
+    background-color: alpha(@accent_bg_color, 0.20);
+    border: 1px solid alpha(@accent_bg_color, 0.40);
 }
 
 .cc-list-row-active:hover {
-    background-color: rgba(0, 122, 255, 0.28);
+    background-color: alpha(@accent_bg_color, 0.28);
 }
 
 .cc-item-title {
@@ -1010,7 +1010,7 @@ scale.horizontal slider {
 }
 
 .cc-item-check {
-    color: #007aff;
+    color: @accent_bg_color;
     margin-left: 6px;
 }
 
@@ -1051,20 +1051,20 @@ scale.horizontal slider {
 }
 
 .cc-airdrop-sim-btn {
-    background-color: rgba(0, 122, 255, 0.15);
-    border: 1px solid rgba(0, 122, 255, 0.35);
+    background-color: alpha(@accent_bg_color, 0.15);
+    border: 1px solid alpha(@accent_bg_color, 0.35);
     border-radius: 10px;
     padding: 6px 10px;
     font-size: 11px;
     font-weight: 600;
-    color: #60a5fa;
+    color: @accent_bg_color;
     transition: all 120ms ease;
     margin-top: 4px;
 }
 
 .cc-airdrop-sim-btn:hover {
-    background-color: rgba(0, 122, 255, 0.28);
-    color: #93c5fd;
+    background-color: alpha(@accent_bg_color, 0.28);
+    color: @accent_bg_color;
 }
 
 .cc-media-card {

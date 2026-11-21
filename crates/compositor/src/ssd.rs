@@ -439,7 +439,10 @@ mod tests {
             hit_test_titlebar(60.0, 19.0, 800.0),
             Some(SsdHit::Button(SsdButton::Maximize))
         );
-        assert_eq!(hit_test_titlebar(200.0, 19.0, 800.0), Some(SsdHit::Titlebar));
+        assert_eq!(
+            hit_test_titlebar(200.0, 19.0, 800.0),
+            Some(SsdHit::Titlebar)
+        );
         assert_eq!(hit_test_titlebar(200.0, 45.0, 800.0), None);
     }
 

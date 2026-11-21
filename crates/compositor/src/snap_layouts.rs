@@ -238,7 +238,10 @@ pub fn active_card_indices(usable_width: i32) -> &'static [usize] {
 pub fn mode_for_zone(usable_width: i32, slot_idx: usize, zone_idx: usize) -> Option<SnapMode> {
     let cards = active_card_indices(usable_width);
     let &card_id = cards.get(slot_idx)?;
-    WINDOWS_LAYOUT_CARDS[card_id].zones.get(zone_idx).map(|z| z.mode)
+    WINDOWS_LAYOUT_CARDS[card_id]
+        .zones
+        .get(zone_idx)
+        .map(|z| z.mode)
 }
 
 /// Calcula el rectángulo de previsualización en escritorio para una sección del menú.
@@ -416,11 +419,8 @@ impl SnapLayoutsState {
             let in_keepalive = is_pointer_in_keepalive(active.anchor_rect, active.card_rect, point);
             if in_keepalive {
                 active.pointer_outside_since = None;
-                active.hovered_zone = hit_test_popup_zone(
-                    active.card_rect,
-                    active.usable_zone.size.w,
-                    point,
-                );
+                active.hovered_zone =
+                    hit_test_popup_zone(active.card_rect, active.usable_zone.size.w, point);
             } else {
                 active.hovered_zone = None;
                 if active.pointer_outside_since.is_none() {
@@ -497,12 +497,13 @@ impl SnapLayoutsState {
                     cand.anchor_rect.loc.x + cand.anchor_rect.size.w / 2,
                     cand.anchor_rect.loc.y + cand.anchor_rect.size.h / 2,
                 ));
-                if let Some((output_name, usable_zone)) = resolve_output(&cand.window, anchor_center)
+                if let Some((output_name, usable_zone)) =
+                    resolve_output(&cand.window, anchor_center)
                 {
                     let card_rect = compute_popup_rect(cand.anchor_rect, usable_zone);
-                    let hovered_zone = self.last_pointer.and_then(|pt| {
-                        hit_test_popup_zone(card_rect, usable_zone.size.w, pt)
-                    });
+                    let hovered_zone = self
+                        .last_pointer
+                        .and_then(|pt| hit_test_popup_zone(card_rect, usable_zone.size.w, pt));
                     self.active = Some(ActiveSnapPopup {
                         window: cand.window,
                         surface: cand.surface,
@@ -676,7 +677,15 @@ impl SnapLayoutsState {
                 malus_de_common::config::scaled_liquid_glass_alpha(0.78, glass_scale, 0.16, 0.95);
             let a_bot =
                 malus_de_common::config::scaled_liquid_glass_alpha(0.84, glass_scale, 0.20, 0.96);
-            append_squircle_path(&ctx, 0.0, 0.0, cw, ch, POPUP_CORNER_RADIUS, SQUIRCLE_EXPONENT);
+            append_squircle_path(
+                &ctx,
+                0.0,
+                0.0,
+                cw,
+                ch,
+                POPUP_CORNER_RADIUS,
+                SQUIRCLE_EXPONENT,
+            );
             let bg_grad = LinearGradient::new(0.0, 0.0, 0.0, ch);
             if is_dark {
                 bg_grad.add_color_stop_rgba(0.0, 0.17, 0.17, 0.19, a_top);
@@ -903,7 +912,10 @@ fn is_pointer_in_keepalive(
     }
 
     let anchor_expanded = Rectangle::new(
-        Point::from((anchor_rect.loc.x as f64 - pad, anchor_rect.loc.y as f64 - pad)),
+        Point::from((
+            anchor_rect.loc.x as f64 - pad,
+            anchor_rect.loc.y as f64 - pad,
+        )),
         Size::from((
             anchor_rect.size.w as f64 + pad * 2.0,
             anchor_rect.size.h as f64 + pad * 2.0,
@@ -916,12 +928,9 @@ fn is_pointer_in_keepalive(
     // Puente continuo entre el botón de maximizar y el menú para evitar cierres
     // al deslizar el cursor en diagonal hacia alguna de las tarjetas.
     let bridge_left = (card_rect.loc.x as f64).min(anchor_rect.loc.x as f64 - 16.0);
-    let bridge_right =
-        (card_rect.loc.x as f64 + card_rect.size.w as f64).max(anchor_rect.loc.x as f64 + anchor_rect.size.w as f64 + 16.0);
-    let bridge_top = anchor_rect
-        .loc
-        .y
-        .min(card_rect.loc.y + card_rect.size.h) as f64;
+    let bridge_right = (card_rect.loc.x as f64 + card_rect.size.w as f64)
+        .max(anchor_rect.loc.x as f64 + anchor_rect.size.w as f64 + 16.0);
+    let bridge_top = anchor_rect.loc.y.min(card_rect.loc.y + card_rect.size.h) as f64;
     let bridge_bottom = (anchor_rect.loc.y + anchor_rect.size.h).max(card_rect.loc.y) as f64;
 
     point.x >= bridge_left
@@ -961,7 +970,10 @@ fn detect_maximize_button_under(
             let tb_y = (loc.y - crate::ssd::SSD_TITLEBAR_HEIGHT) as f64;
             let tb_w = geo.size.w as f64;
             let tb_h = crate::ssd::SSD_TITLEBAR_HEIGHT as f64;
-            if point.x >= tb_x && point.x <= tb_x + tb_w && point.y >= tb_y && point.y <= tb_y + tb_h
+            if point.x >= tb_x
+                && point.x <= tb_x + tb_w
+                && point.y >= tb_y
+                && point.y <= tb_y + tb_h
             {
                 if is_top_level_app {
                     let cx = tb_x + crate::ssd::BTN_MAX_X;
@@ -973,7 +985,10 @@ fn detect_maximize_button_under(
                             window: window.clone(),
                             surface: surf.into_owned(),
                             anchor_rect: Rectangle::new(
-                                Point::from((loc.x + 53, loc.y - crate::ssd::SSD_TITLEBAR_HEIGHT + 12)),
+                                Point::from((
+                                    loc.x + 53,
+                                    loc.y - crate::ssd::SSD_TITLEBAR_HEIGHT + 12,
+                                )),
                                 Size::from((14, 14)),
                             ),
                         });
@@ -1019,15 +1034,7 @@ fn append_rounded_rect_path(ctx: &Context, x: f64, y: f64, w: f64, h: f64, radiu
     ctx.close_path();
 }
 
-fn append_squircle_path(
-    ctx: &Context,
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
-    radius: f64,
-    exponent: f64,
-) {
+fn append_squircle_path(ctx: &Context, x: f64, y: f64, w: f64, h: f64, radius: f64, exponent: f64) {
     let r = radius.min(w * 0.5).min(h * 0.5).max(0.0);
     if r <= 0.5 {
         ctx.rectangle(x, y, w, h);
@@ -1101,19 +1108,28 @@ mod tests {
         let rect = compute_popup_rect(anchor, usable);
 
         // Tarjeta 0 (Mitad izq / der)
-        let card0_left = Point::from((rect.loc.x as f64 + POPUP_PADDING + 10.0, rect.loc.y as f64 + POPUP_PADDING + 20.0));
-        assert_eq!(hit_test_popup_zone(rect, usable.size.w, card0_left), Some((0, 0)));
+        let card0_left = Point::from((
+            rect.loc.x as f64 + POPUP_PADDING + 10.0,
+            rect.loc.y as f64 + POPUP_PADDING + 20.0,
+        ));
+        assert_eq!(
+            hit_test_popup_zone(rect, usable.size.w, card0_left),
+            Some((0, 0))
+        );
 
         // Tarjeta 4 (Cuadrícula 2×2 -> cuarto inferior derecho)
-        let col1_x = rect.loc.x as f64 + POPUP_PADDING + (CARD_WIDTH + CARD_GAP) + CARD_WIDTH * 0.75;
-        let row1_y = rect.loc.y as f64 + POPUP_PADDING + (CARD_HEIGHT + CARD_GAP) + CARD_HEIGHT * 0.75;
+        let col1_x =
+            rect.loc.x as f64 + POPUP_PADDING + (CARD_WIDTH + CARD_GAP) + CARD_WIDTH * 0.75;
+        let row1_y =
+            rect.loc.y as f64 + POPUP_PADDING + (CARD_HEIGHT + CARD_GAP) + CARD_HEIGHT * 0.75;
         assert_eq!(
             hit_test_popup_zone(rect, usable.size.w, Point::from((col1_x, row1_y))),
             Some((4, 3))
         );
 
         // Tarjeta 5 (25 / 50 / 25 -> centro ancho)
-        let col2_x = rect.loc.x as f64 + POPUP_PADDING + 2.0 * (CARD_WIDTH + CARD_GAP) + CARD_WIDTH * 0.5;
+        let col2_x =
+            rect.loc.x as f64 + POPUP_PADDING + 2.0 * (CARD_WIDTH + CARD_GAP) + CARD_WIDTH * 0.5;
         assert_eq!(
             hit_test_popup_zone(rect, usable.size.w, Point::from((col2_x, row1_y))),
             Some((5, 1))
@@ -1137,7 +1153,10 @@ mod tests {
         let anchor = Rectangle::new((340, 740).into(), (14, 14).into());
         let card_rect = compute_popup_rect(anchor, usable);
 
-        assert_eq!(card_rect.loc.x + card_rect.size.w / 2, anchor.loc.x + anchor.size.w / 2);
+        assert_eq!(
+            card_rect.loc.x + card_rect.size.w / 2,
+            anchor.loc.x + anchor.size.w / 2
+        );
         assert_eq!(card_rect.loc.y, anchor.loc.y + anchor.size.h + 8);
 
         let local_card = localize_popup_rect(card_rect, output_geo);
@@ -1149,7 +1168,10 @@ mod tests {
         let usable = Rectangle::new((0, 32).into(), (1920, 1000).into());
 
         let left_half = preview_rect_for_zone(usable, 0, 0);
-        assert_eq!(left_half, crate::grabs::preview_for_snap(SnapMode::LeftHalf, usable));
+        assert_eq!(
+            left_half,
+            crate::grabs::preview_for_snap(SnapMode::LeftHalf, usable)
+        );
 
         let bottom_right = preview_rect_for_zone(usable, 4, 3);
         assert_eq!(

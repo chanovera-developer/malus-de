@@ -167,8 +167,8 @@ pub fn show_crash_report_dialog(
 ) {
     ensure_dialog_css_loaded();
 
-    let component = extract_report_field(&report_text, "Componente:")
-        .unwrap_or_else(|| "Malus DE".to_string());
+    let component =
+        extract_report_field(&report_text, "Componente:").unwrap_or_else(|| "Malus DE".to_string());
     let summary = extract_report_summary(&report_text);
 
     let dialog = ApplicationWindow::builder()
@@ -288,13 +288,10 @@ pub fn show_crash_report_dialog(
                 if let Some(dest_path) = file.path() {
                     status_done.set_visible(true);
                     match std::fs::write(&dest_path, text_to_write.as_bytes()) {
-                        Ok(()) => status_done.set_text(&format!(
-                            "✓ Guardado en {}",
-                            dest_path.display()
-                        )),
-                        Err(err) => status_done.set_text(&format!(
-                            "No se pudo guardar: {err}"
-                        )),
+                        Ok(()) => {
+                            status_done.set_text(&format!("✓ Guardado en {}", dest_path.display()))
+                        }
+                        Err(err) => status_done.set_text(&format!("No se pudo guardar: {err}")),
                     }
                 }
             }

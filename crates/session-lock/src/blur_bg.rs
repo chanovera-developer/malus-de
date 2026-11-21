@@ -66,18 +66,41 @@ pub fn compute_cover_crop_geometry(
 fn build_gradient_pixbuf(target_w: i32, target_h: i32) -> Option<gdk_pixbuf::Pixbuf> {
     let w = target_w.max(1);
     let h = target_h.max(1);
-    let surface =
-        gtk4::cairo::ImageSurface::create(gtk4::cairo::Format::ARgb32, w, h).ok()?;
+    let surface = gtk4::cairo::ImageSurface::create(gtk4::cairo::Format::ARgb32, w, h).ok()?;
     {
         let cr = gtk4::cairo::Context::new(&surface).ok()?;
         let cx = w as f64 * 0.35;
         let cy = h as f64 * 0.25;
         let radius = (w as f64 - cx).hypot(h as f64 - cy);
         let grad = gtk4::cairo::RadialGradient::new(cx, cy, 0.0, cx, cy, radius);
-        grad.add_color_stop_rgba(0.0, 0x2e as f64 / 255.0, 0x10 as f64 / 255.0, 0x65 as f64 / 255.0, 1.0);
-        grad.add_color_stop_rgba(0.35, 0x17 as f64 / 255.0, 0x25 as f64 / 255.0, 0x54 as f64 / 255.0, 1.0);
-        grad.add_color_stop_rgba(0.70, 0x0f as f64 / 255.0, 0x17 as f64 / 255.0, 0x2a as f64 / 255.0, 1.0);
-        grad.add_color_stop_rgba(1.0, 0x0d as f64 / 255.0, 0x15 as f64 / 255.0, 0x26 as f64 / 255.0, 1.0);
+        grad.add_color_stop_rgba(
+            0.0,
+            0x2e as f64 / 255.0,
+            0x10 as f64 / 255.0,
+            0x65 as f64 / 255.0,
+            1.0,
+        );
+        grad.add_color_stop_rgba(
+            0.35,
+            0x17 as f64 / 255.0,
+            0x25 as f64 / 255.0,
+            0x54 as f64 / 255.0,
+            1.0,
+        );
+        grad.add_color_stop_rgba(
+            0.70,
+            0x0f as f64 / 255.0,
+            0x17 as f64 / 255.0,
+            0x2a as f64 / 255.0,
+            1.0,
+        );
+        grad.add_color_stop_rgba(
+            1.0,
+            0x0d as f64 / 255.0,
+            0x15 as f64 / 255.0,
+            0x26 as f64 / 255.0,
+            1.0,
+        );
         let _ = cr.set_source(&grad);
         let _ = cr.paint();
     }

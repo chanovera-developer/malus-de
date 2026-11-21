@@ -265,7 +265,8 @@ impl GaussianBlur {
                 gl.DeleteShader(quad_vert);
                 return None;
             };
-            let Some(gaussian_frag) = compile_shader(gl, ffi::FRAGMENT_SHADER, GAUSSIAN_BLUR_SRC) else {
+            let Some(gaussian_frag) = compile_shader(gl, ffi::FRAGMENT_SHADER, GAUSSIAN_BLUR_SRC)
+            else {
                 gl.DeleteShader(quad_vert);
                 gl.DeleteShader(down_frag);
                 return None;
@@ -336,8 +337,10 @@ impl GaussianBlur {
                 gl.GetUniformLocation(blit_program, c"u_corner_exponent".as_ptr());
             let blit_u_solid_mode = gl.GetUniformLocation(blit_program, c"u_solid_mode".as_ptr());
             let blit_u_solid_color = gl.GetUniformLocation(blit_program, c"u_solid_color".as_ptr());
-            let blit_u_border_width = gl.GetUniformLocation(blit_program, c"u_border_width".as_ptr());
-            let blit_u_border_color = gl.GetUniformLocation(blit_program, c"u_border_color".as_ptr());
+            let blit_u_border_width =
+                gl.GetUniformLocation(blit_program, c"u_border_width".as_ptr());
+            let blit_u_border_color =
+                gl.GetUniformLocation(blit_program, c"u_border_color".as_ptr());
 
             let mut snapshot_tex = 0;
             gl.GenTextures(1, &mut snapshot_tex);
@@ -406,11 +409,7 @@ impl GaussianBlur {
             slot.fbo_size == (w0, h0) && (from_capture || slot.source_tex_size == (w, h))
         });
         let idx = exact_idx
-            .or_else(|| {
-                self.slots
-                    .iter()
-                    .position(|slot| slot.fbo_size == (w0, h0))
-            })
+            .or_else(|| self.slots.iter().position(|slot| slot.fbo_size == (w0, h0)))
             .unwrap_or_else(|| {
                 self.slots
                     .iter()
@@ -1560,9 +1559,7 @@ pub fn translucent_window_blur_rect(
     scale: f64,
     win_phys_r: Option<i32>,
 ) -> Rectangle<i32, Physical> {
-    let sidebar_blur_w = ((212.0 * scale).round() as i32
-        + win_phys_r.unwrap_or(0) as i32
-        + 4)
+    let sidebar_blur_w = ((212.0 * scale).round() as i32 + win_phys_r.unwrap_or(0) as i32 + 4)
         .min(win_rect.size.w.max(0));
     Rectangle::new(win_rect.loc, (sidebar_blur_w, win_rect.size.h).into())
 }
@@ -1632,13 +1629,7 @@ pub fn render_snap_transition_backdrop(
                 if capture_below {
                     blur.capture_background_region(gl, projection, screen_size, win_rect);
                 }
-                blur.render_captured_blur(
-                    gl,
-                    projection,
-                    screen_size,
-                    win_rect,
-                    corner_radius,
-                );
+                blur.render_captured_blur(gl, projection, screen_size, win_rect, corner_radius);
             }
             blur.render_squircle_tint(
                 gl,
@@ -1816,7 +1807,9 @@ unsafe fn compile_shader(
         );
         error!(
             "❌ [GaussianBlur] Error al compilar shader GLSL: {}",
-            String::from_utf8_lossy(&buffer).trim_end_matches('\0').trim()
+            String::from_utf8_lossy(&buffer)
+                .trim_end_matches('\0')
+                .trim()
         );
         gl.DeleteShader(shader);
         return None;
@@ -1848,7 +1841,9 @@ unsafe fn link_program(
         );
         error!(
             "❌ [GaussianBlur] Error al enlazar programa GLSL: {}",
-            String::from_utf8_lossy(&buffer).trim_end_matches('\0').trim()
+            String::from_utf8_lossy(&buffer)
+                .trim_end_matches('\0')
+                .trim()
         );
         gl.DeleteProgram(program);
         return None;
@@ -1966,7 +1961,11 @@ impl Element for BlurRenderElement {
         Kind::Unspecified
     }
 
-    fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
+    fn damage_since(
+        &self,
+        scale: Scale<f64>,
+        commit: Option<CommitCounter>,
+    ) -> DamageSet<i32, Physical> {
         if commit != Some(self.current_commit()) {
             DamageSet::from_slice(&[Rectangle::from_size(self.geometry(scale).size)])
         } else {
@@ -1987,12 +1986,7 @@ impl RenderElement<GlesRenderer> for BlurRenderElement {
         let projection = *frame.projection();
         frame.with_context(|gl| {
             if let Ok(mut blur) = self.pipeline.lock() {
-                blur.capture_background_region(
-                    gl,
-                    &projection,
-                    self.screen_size,
-                    self.rect,
-                );
+                blur.capture_background_region(gl, &projection, self.screen_size, self.rect);
                 blur.render_blur_with_exponent(
                     gl,
                     &projection,
@@ -2010,15 +2004,18 @@ impl RenderElement<GlesRenderer> for BlurRenderElement {
 #[cfg(test)]
 mod tests {
     use super::{
-        BLUR_DOWNSAMPLE_DIVISOR, BLUR_GAUSSIAN_PASSES, CAPTURE_PAD_PX,
-        GAUSSIAN_BLUR_SRC, LOCKSCREEN_BLUR_GAUSSIAN_PASSES, downsampled_size,
+        downsampled_size, BLUR_DOWNSAMPLE_DIVISOR, BLUR_GAUSSIAN_PASSES, CAPTURE_PAD_PX,
+        GAUSSIAN_BLUR_SRC, LOCKSCREEN_BLUR_GAUSSIAN_PASSES,
     };
 
     #[test]
     fn downsampled_size_clamps_minimum_to_two() {
         assert_eq!(downsampled_size(4, 4), (2, 2));
         assert_eq!(downsampled_size(5, 8), (2, 2));
-        assert_eq!(downsampled_size(1920, 32), (1920 / BLUR_DOWNSAMPLE_DIVISOR, 10));
+        assert_eq!(
+            downsampled_size(1920, 32),
+            (1920 / BLUR_DOWNSAMPLE_DIVISOR, 10)
+        );
         assert_eq!(downsampled_size(900, 600), (300, 200));
     }
 

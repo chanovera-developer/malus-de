@@ -143,14 +143,17 @@ fn session_locale_codes() -> (String, String) {
                 .and_then(|v| v.split(':').next().map(str::to_string))
                 .filter(|v| !v.trim().is_empty() && v != "C" && v != "POSIX")
         })
-        .or_else(|| {
-            std::env::var("LANG")
-                .ok()
-                .filter(|v| !v.trim().is_empty())
-        })
+        .or_else(|| std::env::var("LANG").ok().filter(|v| !v.trim().is_empty()))
         .unwrap_or_else(|| "en_US.UTF-8".to_string());
 
-    let without_encoding = raw.split('.').next().unwrap_or(&raw).split('@').next().unwrap_or(&raw).trim();
+    let without_encoding = raw
+        .split('.')
+        .next()
+        .unwrap_or(&raw)
+        .split('@')
+        .next()
+        .unwrap_or(&raw)
+        .trim();
     let lang = without_encoding
         .split(['_', '-'])
         .next()
@@ -196,22 +199,82 @@ impl SpotlightMode {
     pub fn title(self) -> &'static str {
         let es = is_spanish_session();
         match self {
-            Self::Search => if es { "Búsqueda de Spotlight" } else { "Spotlight Search" },
-            Self::Applications => if es { "Aplicaciones" } else { "Applications" },
-            Self::Files => if es { "Archivos" } else { "Files" },
-            Self::Actions => if es { "Acciones" } else { "Actions" },
-            Self::Clipboard => if es { "Portapapeles" } else { "Clipboard" },
+            Self::Search => {
+                if es {
+                    "Búsqueda de Spotlight"
+                } else {
+                    "Spotlight Search"
+                }
+            }
+            Self::Applications => {
+                if es {
+                    "Aplicaciones"
+                } else {
+                    "Applications"
+                }
+            }
+            Self::Files => {
+                if es {
+                    "Archivos"
+                } else {
+                    "Files"
+                }
+            }
+            Self::Actions => {
+                if es {
+                    "Acciones"
+                } else {
+                    "Actions"
+                }
+            }
+            Self::Clipboard => {
+                if es {
+                    "Portapapeles"
+                } else {
+                    "Clipboard"
+                }
+            }
         }
     }
 
     pub fn placeholder(self) -> &'static str {
         let es = is_spanish_session();
         match self {
-            Self::Search => if es { "Búsqueda de Spotlight" } else { "Spotlight Search" },
-            Self::Applications => if es { "Buscar aplicaciones" } else { "Search Applications" },
-            Self::Files => if es { "Buscar archivos" } else { "Search Files" },
-            Self::Actions => if es { "Buscar acciones" } else { "Search Actions" },
-            Self::Clipboard => if es { "Buscar en portapapeles" } else { "Search Clipboard" },
+            Self::Search => {
+                if es {
+                    "Búsqueda de Spotlight"
+                } else {
+                    "Spotlight Search"
+                }
+            }
+            Self::Applications => {
+                if es {
+                    "Buscar aplicaciones"
+                } else {
+                    "Search Applications"
+                }
+            }
+            Self::Files => {
+                if es {
+                    "Buscar archivos"
+                } else {
+                    "Search Files"
+                }
+            }
+            Self::Actions => {
+                if es {
+                    "Buscar acciones"
+                } else {
+                    "Search Actions"
+                }
+            }
+            Self::Clipboard => {
+                if es {
+                    "Buscar en portapapeles"
+                } else {
+                    "Search Clipboard"
+                }
+            }
         }
     }
 
@@ -237,7 +300,13 @@ impl SpotlightMode {
             }
             Self::Applications => {
                 if es {
-                    &["Todo", "Productividad", "Desarrollo", "Multimedia", "Sistema"]
+                    &[
+                        "Todo",
+                        "Productividad",
+                        "Desarrollo",
+                        "Multimedia",
+                        "Sistema",
+                    ]
                 } else {
                     &["All", "Productivity", "Development", "Media", "System"]
                 }
@@ -375,15 +444,16 @@ impl SpotlightDragApp {
         let mut matchers = Vec::new();
         let mut push_unique = |val: String| {
             let trimmed = val.trim().to_string();
-            if !trimmed.is_empty() && !matchers.iter().any(|m: &String| m.eq_ignore_ascii_case(&trimmed)) {
+            if !trimmed.is_empty()
+                && !matchers
+                    .iter()
+                    .any(|m: &String| m.eq_ignore_ascii_case(&trimmed))
+            {
                 matchers.push(trimmed);
             }
         };
 
-        if let Some(stem) = Path::new(desktop_file)
-            .file_stem()
-            .and_then(|s| s.to_str())
-        {
+        if let Some(stem) = Path::new(desktop_file).file_stem().and_then(|s| s.to_str()) {
             push_unique(stem.to_string());
             push_unique(stem.to_lowercase());
         }
@@ -726,13 +796,21 @@ impl SpotlightState {
             || self.active_template.is_some()
     }
 
-    pub fn canvas_logical_rect(&self, output_geo: Rectangle<i32, Logical>) -> Rectangle<i32, Logical> {
+    pub fn canvas_logical_rect(
+        &self,
+        output_geo: Rectangle<i32, Logical>,
+    ) -> Rectangle<i32, Logical> {
         let x = output_geo.loc.x + ((output_geo.size.w - CANVAS_LOGICAL_W) / 2).max(0);
         let y = output_geo.loc.y + SPOTLIGHT_TOP_MARGIN.min((output_geo.size.h / 5).max(80));
         Rectangle::new((x, y).into(), (CANVAS_LOGICAL_W, CANVAS_LOGICAL_H).into())
     }
 
-    fn capsule_rect_at(&self, hover_t: f64, expand_t: f64, card_h: f64) -> (f64, f64, f64, f64, f64) {
+    fn capsule_rect_at(
+        &self,
+        hover_t: f64,
+        expand_t: f64,
+        card_h: f64,
+    ) -> (f64, f64, f64, f64, f64) {
         let x = GUTTER;
         let y = GUTTER;
         let split_t = (hover_t * (1.0 - expand_t)).clamp(0.0, 1.0);
@@ -883,7 +961,11 @@ impl SpotlightState {
 
             let content_top = GUTTER + 104.0;
             let content_bottom = cap_y + cap_h - 12.0;
-            if lx >= GUTTER + 14.0 && lx <= GUTTER + CONTENT_W - 14.0 && ly >= content_top && ly <= content_bottom {
+            if lx >= GUTTER + 14.0
+                && lx <= GUTTER + CONTENT_W - 14.0
+                && ly >= content_top
+                && ly <= content_bottom
+            {
                 let rel_y = ly - content_top + self.scroll_offset;
                 if self.mode == SpotlightMode::Applications {
                     let col_w = (CONTENT_W - 36.0) / 5.0;
@@ -976,8 +1058,7 @@ impl SpotlightState {
         }
 
         // Modo expandido: comprobar si el clic cayó dentro de la tarjeta squircle
-        let inside_card =
-            lx >= cap_x && lx <= cap_x + cap_w && ly >= cap_y && ly <= cap_y + cap_h;
+        let inside_card = lx >= cap_x && lx <= cap_x + cap_w && ly >= cap_y && ly <= cap_y + cap_h;
         if !inside_card {
             self.close();
             return false;
@@ -1074,7 +1155,7 @@ impl SpotlightState {
     ) -> Option<SpotlightPointerReleaseOutcome> {
         if !self.is_open || button_code != 0x110 {
             self.pending_drag = None;
-        self.last_dock_gap_preview = None;
+            self.last_dock_gap_preview = None;
             return None;
         }
         let pending = self.pending_drag.take()?;
@@ -1126,8 +1207,7 @@ impl SpotlightState {
             .value_at(now)
             .max(self.height_transition.target());
         let (cap_x, cap_y, cap_w, cap_h, _) = self.capsule_rect_at(hover_t, expand_t, card_h);
-        let inside_card =
-            lx >= cap_x && lx <= cap_x + cap_w && ly >= cap_y && ly <= cap_y + cap_h;
+        let inside_card = lx >= cap_x && lx <= cap_x + cap_w && ly >= cap_y && ly <= cap_y + cap_h;
         if !inside_card {
             self.close();
             return Some(SpotlightPointerReleaseOutcome::CreateDesktopShortcut {
@@ -1349,7 +1429,11 @@ impl SpotlightState {
                 self.selected_index = 0;
                 return;
             }
-            let step = if delta > 0 && delta == 1 && false { 1 } else { delta };
+            let step = if delta > 0 && delta == 1 && false {
+                1
+            } else {
+                delta
+            };
             let next = (self.selected_index as isize + step).clamp(0, count as isize - 1) as usize;
             self.selected_index = next;
             let row = next / 5;
@@ -1513,10 +1597,7 @@ impl SpotlightState {
                             || app.categories.contains("Graphics")
                             || app.categories.contains("Video")
                     }
-                    4 => {
-                        app.categories.contains("System")
-                            || app.categories.contains("Settings")
-                    }
+                    4 => app.categories.contains("System") || app.categories.contains("Settings"),
                     _ => true,
                 }
             })
@@ -1584,9 +1665,27 @@ impl SpotlightState {
                 })
                 .map(|(title, subtitle, category_id, _, action)| {
                     let badge = match category_id {
-                        "system" => if es { "Sistema" } else { "System" },
-                        "quick_note" => if es { "Nota rápida" } else { "Quick Note" },
-                        "desktop" => if es { "Escritorio" } else { "Desktop" },
+                        "system" => {
+                            if es {
+                                "Sistema"
+                            } else {
+                                "System"
+                            }
+                        }
+                        "quick_note" => {
+                            if es {
+                                "Nota rápida"
+                            } else {
+                                "Quick Note"
+                            }
+                        }
+                        "desktop" => {
+                            if es {
+                                "Escritorio"
+                            } else {
+                                "Desktop"
+                            }
+                        }
                         _ => category_id,
                     };
                     SpotlightRowItem {
@@ -1812,7 +1911,15 @@ impl SpotlightState {
             || self.visual_buffer.is_none()
             || self.visual_buffer_size != (phys_w, phys_h)
         {
-            self.render_surfaces(phys_w, phys_h, scale, hover_t, expand_t, card_h, is_dark_theme);
+            self.render_surfaces(
+                phys_w,
+                phys_h,
+                scale,
+                hover_t,
+                expand_t,
+                card_h,
+                is_dark_theme,
+            );
             self.last_render_signature = sig;
             self.mask_dirty = true;
         }
@@ -2096,7 +2203,9 @@ impl SpotlightState {
         let centers = self.mode_button_centers_at(hover_t, expand_t);
 
         // 2.1. Sombra exterior suave alrededor de cada forma activa, luego recortada dentro de la silueta
-        draw_soft_drop_shadow(&vis_ctx, cap_x, cap_y, cap_w, cap_h, cap_r, expand_t, is_dark);
+        draw_soft_drop_shadow(
+            &vis_ctx, cap_x, cap_y, cap_w, cap_h, cap_r, expand_t, is_dark,
+        );
         if btn_vis > 0.02 {
             for (cx, cy, r) in &centers {
                 draw_soft_circle_shadow(&vis_ctx, *cx, *cy, *r, btn_vis, is_dark);
@@ -2104,7 +2213,7 @@ impl SpotlightState {
         }
         // Recortar el interior de la silueta para que la sombra jamás oscurezca el cristal translúcido
         vis_ctx.save().ok();
-        vis_ctx.set_operator(Operator:: destination_out_operator());
+        vis_ctx.set_operator(Operator::destination_out_operator());
         let _ = vis_ctx.set_source_surface(&mask_surface, 0.0, 0.0);
         // Como mask_surface está en píxeles físicos, reescalamos la matriz de origen
         vis_ctx.identity_matrix();
@@ -2143,13 +2252,7 @@ impl SpotlightState {
 
         vis_ctx.save().ok();
         let glass_grad = LinearGradient::new(0.0, cap_y, 0.0, cap_y + cap_h);
-        glass_grad.add_color_stop_rgba(
-            0.0,
-            glass_top[0],
-            glass_top[1],
-            glass_top[2],
-            glass_top[3],
-        );
+        glass_grad.add_color_stop_rgba(0.0, glass_top[0], glass_top[1], glass_top[2], glass_top[3]);
         glass_grad.add_color_stop_rgba(
             1.0,
             glass_bottom[0],
@@ -2222,29 +2325,12 @@ impl SpotlightState {
         }
 
         // 2.5. Dibujar el contenido de la barra de búsqueda superior (lupa, texto/placeholder/plantilla, autocompletado, badge)
-        self.draw_search_bar_contents(
-            &vis_ctx,
-            cap_x,
-            cap_y,
-            cap_w,
-            fg_main,
-            fg_muted,
-            is_dark,
-        );
+        self.draw_search_bar_contents(&vis_ctx, cap_x, cap_y, cap_w, fg_main, fg_muted, is_dark);
 
         // 2.6. Si está expandido (expand_t > 0.05), dibujar chips de filtro y el cuerpo de resultados / cuadrícula de apps
         if expand_t > 0.05 {
             self.draw_expanded_contents(
-                &vis_ctx,
-                cap_x,
-                cap_y,
-                cap_w,
-                cap_h,
-                cap_r,
-                expand_t,
-                fg_main,
-                fg_muted,
-                is_dark,
+                &vis_ctx, cap_x, cap_y, cap_w, cap_h, cap_r, expand_t, fg_main, fg_muted, is_dark,
             );
         }
 
@@ -2351,11 +2437,7 @@ impl SpotlightState {
         let icon_cx = cap_x + 27.0;
         draw_magnifying_glass(ctx, icon_cx, center_y, fg_muted, 0.92);
 
-        ctx.select_font_face(
-            "Inter",
-            cairo::FontSlant::Normal,
-            cairo::FontWeight::Normal,
-        );
+        ctx.select_font_face("Inter", cairo::FontSlant::Normal, cairo::FontWeight::Normal);
         ctx.set_font_size(17.5);
 
         let text_x = cap_x + 48.0;
@@ -2458,7 +2540,8 @@ impl SpotlightState {
 
             // Cursor de texto parpadeante
             let caret_x = text_x + query_adv + 1.5;
-            ctx.set_source_rgba(0.28, 0.58, 1.0, 0.92);
+            let (red, green, blue) = malus_de_common::config::load_accent_color();
+            ctx.set_source_rgba(red, green, blue, 0.92);
             ctx.set_line_width(2.0);
             ctx.move_to(caret_x, center_y - 10.0);
             ctx.line_to(caret_x, center_y + 10.0);
@@ -2654,17 +2737,18 @@ impl SpotlightState {
                     match &row.icon_kind {
                         RowIconKind::App(icon_name) => {
                             self.draw_app_icon(
-                                ctx,
-                                icon_name,
-                                &row.title,
-                                icon_cx,
-                                icon_cy,
-                                34.0,
-                                alpha,
+                                ctx, icon_name, &row.title, icon_cx, icon_cy, 34.0, alpha,
                             );
                         }
                         RowIconKind::Calculator => {
-                            draw_badge_circle(ctx, icon_cx, icon_cy, 17.0, [0.95, 0.58, 0.16], alpha);
+                            draw_badge_circle(
+                                ctx,
+                                icon_cx,
+                                icon_cy,
+                                17.0,
+                                [0.95, 0.58, 0.16],
+                                alpha,
+                            );
                             ctx.set_font_size(15.0);
                             ctx.set_source_rgba(1.0, 1.0, 1.0, 0.96 * alpha);
                             ctx.move_to(icon_cx - 5.0, icon_cy + 5.0);
@@ -2681,11 +2765,25 @@ impl SpotlightState {
                             draw_mode_button_icon(ctx, 1, icon_cx, icon_cy, [1.0, 1.0, 1.0], alpha);
                         }
                         RowIconKind::Action(_) => {
-                            draw_badge_circle(ctx, icon_cx, icon_cy, 17.0, [0.88, 0.32, 0.54], alpha);
+                            draw_badge_circle(
+                                ctx,
+                                icon_cx,
+                                icon_cy,
+                                17.0,
+                                [0.88, 0.32, 0.54],
+                                alpha,
+                            );
                             draw_mode_button_icon(ctx, 2, icon_cx, icon_cy, [1.0, 1.0, 1.0], alpha);
                         }
                         RowIconKind::Clipboard => {
-                            draw_badge_circle(ctx, icon_cx, icon_cy, 17.0, [0.35, 0.62, 0.85], alpha);
+                            draw_badge_circle(
+                                ctx,
+                                icon_cx,
+                                icon_cy,
+                                17.0,
+                                [0.35, 0.62, 0.85],
+                                alpha,
+                            );
                             draw_mode_button_icon(ctx, 3, icon_cx, icon_cy, [1.0, 1.0, 1.0], alpha);
                         }
                     }
@@ -2763,9 +2861,9 @@ impl SpotlightState {
         }
 
         // Icono vectorial de respaldo con las iniciales de la aplicación
-        let hash = app_name
-            .bytes()
-            .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(u32::from(b)));
+        let hash = app_name.bytes().fold(0u32, |acc, b| {
+            acc.wrapping_mul(31).wrapping_add(u32::from(b))
+        });
         let palette = [
             [0.22, 0.52, 0.96],
             [0.54, 0.34, 0.92],
@@ -2814,14 +2912,7 @@ fn draw_poof_smoke_cloud(ctx: &Context, center: f64, t: f64) {
         let core_t = (t / 0.62).clamp(0.0, 1.0);
         let core_r = 12.0 + 22.0 * (1.0 - (1.0 - core_t).powi(2));
         let core_alpha = (1.0 - core_t.powf(1.4)) * 0.88;
-        let grad = RadialGradient::new(
-            center - 3.0,
-            center - 3.0,
-            2.0,
-            center,
-            center,
-            core_r,
-        );
+        let grad = RadialGradient::new(center - 3.0, center - 3.0, 2.0, center, center, core_r);
         grad.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, core_alpha);
         grad.add_color_stop_rgba(0.62, 0.93, 0.95, 0.98, core_alpha * 0.78);
         grad.add_color_stop_rgba(1.0, 0.78, 0.82, 0.88, 0.0);
@@ -2879,14 +2970,7 @@ fn draw_poof_smoke_cloud(ctx: &Context, center: f64, t: f64) {
 
         let px = center + angle.cos() * d;
         let py = center + angle.sin() * d;
-        let grad = RadialGradient::new(
-            px - r * 0.24,
-            py - r * 0.24,
-            r * 0.08,
-            px,
-            py,
-            r,
-        );
+        let grad = RadialGradient::new(px - r * 0.24, py - r * 0.24, r * 0.08, px, py, r);
         grad.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, puff_alpha);
         grad.add_color_stop_rgba(0.54, 0.94, 0.96, 0.99, puff_alpha * 0.88);
         grad.add_color_stop_rgba(0.82, 0.78, 0.82, 0.89, puff_alpha * 0.46);
@@ -2919,15 +3003,7 @@ fn path_rounded_rect(ctx: &Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
 
 /// Traza un rectángulo con esquinas superelípticas (squircle macOS continuo).
 /// Cuando `exponent == 2.0` equivale a arcos circulares; cuando `exponent == 4.2` produce un squircle puro.
-fn path_superellipse_rect(
-    ctx: &Context,
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
-    r: f64,
-    exponent: f64,
-) {
+fn path_superellipse_rect(ctx: &Context, x: f64, y: f64, w: f64, h: f64, r: f64, exponent: f64) {
     let r = r.min(w * 0.5).min(h * 0.5).max(0.0);
     if r <= 0.0 {
         ctx.rectangle(x, y, w.max(0.0), h.max(0.0));
@@ -3141,7 +3217,8 @@ fn draw_template_pill(
     }
     let _ = ctx.fill_preserve();
     ctx.set_line_width(1.2);
-    ctx.set_source_rgba(0.28, 0.58, 1.0, if is_focused { 0.85 } else { 0.25 });
+    let (red, green, blue) = malus_de_common::config::load_accent_color();
+    ctx.set_source_rgba(red, green, blue, if is_focused { 0.85 } else { 0.25 });
     let _ = ctx.stroke();
 
     ctx.set_source_rgba(
@@ -3195,7 +3272,8 @@ pub(crate) fn load_icon_surface(icon_name: &str, target_size: i32) -> Option<Ima
         return None;
     }
     let path = resolve_icon_path(icon_name)?;
-    let pixbuf = gdk_pixbuf::Pixbuf::from_file_at_scale(&path, target_size, target_size, true).ok()?;
+    let pixbuf =
+        gdk_pixbuf::Pixbuf::from_file_at_scale(&path, target_size, target_size, true).ok()?;
     let w = pixbuf.width();
     let h = pixbuf.height();
     let stride = pixbuf.rowstride() as usize;
@@ -3322,7 +3400,14 @@ fn builtin_actions() -> Vec<(
                 "Ajustes del Sistema",
                 "Abrir Ajustes del Sistema de Malus DE",
                 "system",
-                &["settings", "ajustes", "configuracion", "configuración", "preferencias", "system"],
+                &[
+                    "settings",
+                    "ajustes",
+                    "configuracion",
+                    "configuración",
+                    "preferencias",
+                    "system",
+                ],
                 ResultExecuteAction::RunCommand("malus-de-settings".to_string()),
             ),
             (
@@ -3336,7 +3421,9 @@ fn builtin_actions() -> Vec<(
                 "Alternar modo oscuro / claro",
                 "Cambiar la apariencia del escritorio entre Liquid Glass oscuro y claro",
                 "desktop",
-                &["dark", "light", "theme", "tema", "oscuro", "claro", "aspecto"],
+                &[
+                    "dark", "light", "theme", "tema", "oscuro", "claro", "aspecto",
+                ],
                 ResultExecuteAction::ToggleTheme,
             ),
             (
@@ -3350,7 +3437,13 @@ fn builtin_actions() -> Vec<(
                 "Cerrar sesión",
                 "Cerrar la sesión actual de Malus DE",
                 "system",
-                &["logout", "log out", "cerrar sesion", "cerrar sesión", "salir"],
+                &[
+                    "logout",
+                    "log out",
+                    "cerrar sesion",
+                    "cerrar sesión",
+                    "salir",
+                ],
                 ResultExecuteAction::SystemLogout,
             ),
             (
@@ -3402,7 +3495,13 @@ fn builtin_actions() -> Vec<(
                 "System Settings",
                 "Open Malus DE System Settings",
                 "system",
-                &["settings", "ajustes", "configuracion", "preferencias", "system"],
+                &[
+                    "settings",
+                    "ajustes",
+                    "configuracion",
+                    "preferencias",
+                    "system",
+                ],
                 ResultExecuteAction::RunCommand("malus-de-settings".to_string()),
             ),
             (
@@ -3416,7 +3515,9 @@ fn builtin_actions() -> Vec<(
                 "Toggle Dark / Light Mode",
                 "Switch desktop appearance between Dark and Light Liquid Glass",
                 "desktop",
-                &["dark", "light", "theme", "tema", "oscuro", "claro", "aspecto"],
+                &[
+                    "dark", "light", "theme", "tema", "oscuro", "claro", "aspecto",
+                ],
                 ResultExecuteAction::ToggleTheme,
             ),
             (
@@ -3430,7 +3531,13 @@ fn builtin_actions() -> Vec<(
                 "Log Out",
                 "Close current Malus DE session",
                 "system",
-                &["logout", "log out", "cerrar sesion", "cerrar sesión", "salir"],
+                &[
+                    "logout",
+                    "log out",
+                    "cerrar sesion",
+                    "cerrar sesión",
+                    "salir",
+                ],
                 ResultExecuteAction::SystemLogout,
             ),
             (
@@ -3490,7 +3597,11 @@ fn toggle_desktop_theme() {
     malus_de_common::config::sync_system_appearance(to_dark);
     let _ = malus_de_common::ipc::IpcClient::send_command(
         malus_de_common::ipc::IpcMessage::ThemeChanged {
-            theme_name: if to_dark { "Adwaita-dark".to_string() } else { "Adwaita".to_string() },
+            theme_name: if to_dark {
+                "Adwaita-dark".to_string()
+            } else {
+                "Adwaita".to_string()
+            },
             is_dark: to_dark,
         },
     );
@@ -3747,7 +3858,10 @@ fn parse_desktop_file(path: &Path) -> Option<AppEntry> {
     }
 
     let name = name_full.or(name_lang).or(name_default)?;
-    let comment = comment_full.or(comment_lang).or(comment_default).unwrap_or_default();
+    let comment = comment_full
+        .or(comment_lang)
+        .or(comment_default)
+        .unwrap_or_default();
 
     Some(AppEntry {
         name,
@@ -4351,10 +4465,7 @@ mod tests {
                     icon: "antigravity".to_string(),
                     command: "/usr/share/antigravity/antigravity".to_string(),
                     desktop_file: "/usr/share/applications/antigravity-ide.desktop".to_string(),
-                    matchers: vec![
-                        "antigravity-ide".to_string(),
-                        "antigravity".to_string(),
-                    ],
+                    matchers: vec!["antigravity-ide".to_string(), "antigravity".to_string(),],
                 },
                 insert_at_dock_x: Some(180),
             }
@@ -4389,10 +4500,7 @@ mod tests {
                     icon: "antigravity".to_string(),
                     command: "/usr/share/antigravity/antigravity".to_string(),
                     desktop_file: "/usr/share/applications/antigravity-ide.desktop".to_string(),
-                    matchers: vec![
-                        "antigravity-ide".to_string(),
-                        "antigravity".to_string(),
-                    ],
+                    matchers: vec!["antigravity-ide".to_string(), "antigravity".to_string(),],
                 },
                 drop_loc: desktop_pt,
             }

@@ -52,19 +52,10 @@ pub struct TrashedUndoRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UndoEntry {
-    Rename {
-        from: PathBuf,
-        to: PathBuf,
-    },
-    Moves {
-        pairs: Vec<(PathBuf, PathBuf)>,
-    },
-    CreatedPaths {
-        paths: Vec<PathBuf>,
-    },
-    Trashed {
-        records: Vec<TrashedUndoRecord>,
-    },
+    Rename { from: PathBuf, to: PathBuf },
+    Moves { pairs: Vec<(PathBuf, PathBuf)> },
+    CreatedPaths { paths: Vec<PathBuf> },
+    Trashed { records: Vec<TrashedUndoRecord> },
 }
 
 impl UndoEntry {
@@ -160,7 +151,9 @@ impl JobRequest {
                     format!("Moving {} to Trash", sources.len())
                 }
             }
-            JobRequest::Compress { sources, format, .. } => {
+            JobRequest::Compress {
+                sources, format, ..
+            } => {
                 if es {
                     format!(
                         "Comprimiendo {} elemento(s) (.{})",
@@ -384,9 +377,10 @@ fn resolve_target_with_conflict(
 
     match ctx.ask_conflict(src, &target, is_dir) {
         ConflictChoice::Skip => Ok(None),
-        ConflictChoice::KeepBoth => {
-            Ok(Some(crate::operations::unique_destination_for_copy(src, dest_folder)?))
-        }
+        ConflictChoice::KeepBoth => Ok(Some(crate::operations::unique_destination_for_copy(
+            src,
+            dest_folder,
+        )?)),
         ConflictChoice::Replace => {
             if target != src {
                 remove_existing_path(&target)?;
@@ -495,9 +489,7 @@ fn execute_job(ctx: &mut JobContext<'_>, request: JobRequest) -> Result<JobOutco
             dest_dir,
             format,
         } => execute_compress_job(ctx, &sources, &dest_dir, format),
-        JobRequest::Extract { archive, dest_dir } => {
-            execute_extract_job(ctx, &archive, &dest_dir)
-        }
+        JobRequest::Extract { archive, dest_dir } => execute_extract_job(ctx, &archive, &dest_dir),
     }
 }
 
@@ -529,9 +521,7 @@ fn execute_copy_job(
             continue;
         };
         copy_tree_chunked(ctx, src, &target)?;
-        last_name = target
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string());
+        last_name = target.file_name().map(|n| n.to_string_lossy().to_string());
         created.push(target);
     }
 
@@ -558,7 +548,10 @@ fn execute_move_job(
         if ctx.is_cancelled() {
             break;
         }
-        if src == dest_dir || src.parent() == Some(dest_dir) || (src.is_dir() && dest_dir.starts_with(src)) {
+        if src == dest_dir
+            || src.parent() == Some(dest_dir)
+            || (src.is_dir() && dest_dir.starts_with(src))
+        {
             ctx.done_items += 1;
             continue;
         }
@@ -592,9 +585,7 @@ fn execute_move_job(
             let _ = crate::db::rename_item_metadata(&mut conn, src, &target, is_dir);
         }
 
-        last_name = target
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string());
+        last_name = target.file_name().map(|n| n.to_string_lossy().to_string());
         moved_pairs.push((src.clone(), target));
         ctx.emit_progress(&name);
     }
@@ -844,9 +835,11 @@ pub fn is_supported_archive(path: &Path) -> bool {
         return false;
     }
     let lower = path.to_string_lossy().to_lowercase();
-    [".zip", ".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar.bz2", ".tar", ".7z"]
-        .iter()
-        .any(|ext| lower.ends_with(ext))
+    [
+        ".zip", ".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar.bz2", ".tar", ".7z",
+    ]
+    .iter()
+    .any(|ext| lower.ends_with(ext))
 }
 
 fn execute_extract_job(
@@ -990,7 +983,8 @@ pub fn apply_undo_entry(entry: UndoEntry) -> Result<Vec<PathBuf>, String> {
         }
         UndoEntry::Trashed { records } => {
             for rec in records {
-                if !rec.trash_files_path.exists() && rec.trash_files_path.symlink_metadata().is_err()
+                if !rec.trash_files_path.exists()
+                    && rec.trash_files_path.symlink_metadata().is_err()
                 {
                     continue;
                 }

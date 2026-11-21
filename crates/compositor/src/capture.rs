@@ -3,12 +3,12 @@ use smithay::{
     backend::{
         allocator::Fourcc,
         renderer::{
-            Bind, Color32F, ExportMem, Frame, Offscreen, Renderer,
             element::{
+                surface::{render_elements_from_surface_tree, WaylandSurfaceRenderElement},
                 Id, Kind,
-                surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
             },
             gles::{GlesRenderer, GlesTexture},
+            Bind, Color32F, ExportMem, Frame, Offscreen, Renderer,
         },
     },
     desktop::Window,
@@ -128,7 +128,9 @@ pub fn capture_pending_genie_snapshots(
     for anim in &state.active_animations {
         let needs_snapshot = !snapshots.contains_key(&anim.window_id);
         let needs_png = anim.is_minimizing
-            && !state.minimized_window_thumbnails.contains_key(&anim.window_id);
+            && !state
+                .minimized_window_thumbnails
+                .contains_key(&anim.window_id);
         if (!needs_snapshot && !needs_png)
             || now.duration_since(anim.start_time) > Duration::from_millis(250)
         {
@@ -246,8 +248,10 @@ fn capture_window_offscreen(
     let is_translucent = crate::state::is_translucent_window(window);
 
     let phys_loc = Point::from((-geo.loc.x, -geo.loc.y)).to_physical_precise_round(scale);
-    let base_win_rect =
-        Rectangle::new(Point::from((0, 0)), geo.size.to_physical_precise_round(scale));
+    let base_win_rect = Rectangle::new(
+        Point::from((0, 0)),
+        geo.size.to_physical_precise_round(scale),
+    );
 
     let probe_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
         render_elements_from_surface_tree(
@@ -335,7 +339,9 @@ fn capture_window_offscreen(
         {
             let mut frame = renderer
                 .render(&mut target, final_rect.size, Transform::Normal)
-                .map_err(|error| anyhow::anyhow!("No se pudo iniciar frame offscreen: {error:?}"))?;
+                .map_err(|error| {
+                    anyhow::anyhow!("No se pudo iniciar frame offscreen: {error:?}")
+                })?;
             let _ = frame.clear(Color32F::new(0.0, 0.0, 0.0, 0.0), &[offscreen_rect]);
             if is_translucent {
                 if let Some(blur) = blur_pipeline {
@@ -368,9 +374,9 @@ fn capture_window_offscreen(
                 is_firefox,
                 None,
             );
-            let _ = frame
-                .finish()
-                .map_err(|error| anyhow::anyhow!("No se pudo finalizar frame offscreen: {error:?}"))?;
+            let _ = frame.finish().map_err(|error| {
+                anyhow::anyhow!("No se pudo finalizar frame offscreen: {error:?}")
+            })?;
         }
 
         if png_destination.is_some() {
@@ -424,7 +430,10 @@ fn capture_window_offscreen(
         if let Err(error) = fs::rename(&temporary, destination) {
             let _ = fs::remove_file(&temporary);
             return Err(error).with_context(|| {
-                format!("No se pudo finalizar la miniatura {}", destination.display())
+                format!(
+                    "No se pudo finalizar la miniatura {}",
+                    destination.display()
+                )
             });
         }
     }

@@ -89,10 +89,8 @@ impl BluetoothService {
             Err(_) => return Vec::new(),
         };
 
-        type ManagedObjects = HashMap<
-            OwnedObjectPath,
-            HashMap<String, HashMap<String, OwnedValue>>,
-        >;
+        type ManagedObjects =
+            HashMap<OwnedObjectPath, HashMap<String, HashMap<String, OwnedValue>>>;
 
         let objects: ManagedObjects = match reply.body().deserialize() {
             Ok(o) => o,
@@ -135,9 +133,9 @@ impl BluetoothService {
 
                 let icon_name = Self::resolve_icon(&raw_icon, &name);
 
-                let battery = ifaces.get("org.bluez.Battery1").and_then(|bat_props| {
-                    bat_props.get("Percentage").and_then(extract_u8)
-                });
+                let battery = ifaces
+                    .get("org.bluez.Battery1")
+                    .and_then(|bat_props| bat_props.get("Percentage").and_then(extract_u8));
 
                 devices.push(BtDeviceInfo {
                     path: path.as_str().to_string(),
@@ -199,7 +197,12 @@ impl BluetoothService {
             "phone-symbolic".to_string()
         } else {
             let n = name.to_lowercase();
-            if n.contains("buds") || n.contains("headset") || n.contains("space one") || n.contains("airpods") || n.contains("soundcore") {
+            if n.contains("buds")
+                || n.contains("headset")
+                || n.contains("space one")
+                || n.contains("airpods")
+                || n.contains("soundcore")
+            {
                 "audio-headset-symbolic".to_string()
             } else if n.contains("keyboard") || n.contains("teclado") {
                 "input-keyboard-symbolic".to_string()
@@ -212,10 +215,8 @@ impl BluetoothService {
     }
 
     async fn find_adapter(conn: &Connection) -> String {
-        type ManagedObjects = HashMap<
-            OwnedObjectPath,
-            HashMap<String, HashMap<String, OwnedValue>>,
-        >;
+        type ManagedObjects =
+            HashMap<OwnedObjectPath, HashMap<String, HashMap<String, OwnedValue>>>;
 
         if let Ok(reply) = conn
             .call_method(

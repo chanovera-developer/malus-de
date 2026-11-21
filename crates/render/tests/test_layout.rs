@@ -1,7 +1,5 @@
 use anyhow::Result;
-use malus_de_render::{
-    build_top_bar, SquircleRenderer, TopBarConfig, TopBarModel, UiTree,
-};
+use malus_de_render::{build_top_bar, SquircleRenderer, TopBarConfig, TopBarModel, UiTree};
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
@@ -37,21 +35,34 @@ fn test_taffy_flexbox_topbar_layout_and_render() -> Result<()> {
     assert_eq!(pill_layout.location.x, 20.0);
 
     let apple_layout = ui.taffy.layout(nodes.apple_btn).unwrap();
-    assert!(apple_layout.size.width >= 28.0, "Ancho del botón Apple debe acomodar su contenido");
+    assert!(
+        apple_layout.size.width >= 28.0,
+        "Ancho del botón Apple debe acomodar su contenido"
+    );
     assert_eq!(apple_layout.size.height, 24.0);
 
     let clock_layout = ui.taffy.layout(nodes.clock_btn).unwrap();
-    assert!(clock_layout.size.width >= 100.0, "Ancho del reloj dinámico debe acomodar su texto");
+    assert!(
+        clock_layout.size.width >= 100.0,
+        "Ancho del reloj dinámico debe acomodar su texto"
+    );
     assert_eq!(clock_layout.size.height, 24.0);
 
     // 4. Hit-Testing matemático
     // Margen pill X=20 + padding=8 + dentro del botón Apple -> (35, 18)
     let hit_apple = ui.hit_test([35.0, 18.0]);
-    assert_eq!(hit_apple, Some(nodes.apple_btn), "El clic debe acertar el botón Apple");
+    assert_eq!(
+        hit_apple,
+        Some(nodes.apple_btn),
+        "El clic debe acertar el botón Apple"
+    );
 
     // Clic en la esquina vacía superior izquierda de la pantalla (fuera de la píldora)
     let hit_corner = ui.hit_test([2.0, 2.0]);
-    assert_eq!(hit_corner, None, "Un clic fuera de la píldora no debe colisionar con ningún botón");
+    assert_eq!(
+        hit_corner, None,
+        "Un clic fuera de la píldora no debe colisionar con ningún botón"
+    );
 
     // 5. Generar instancias para la GPU
     let instances = ui.generate_instances();
@@ -59,7 +70,8 @@ fn test_taffy_flexbox_topbar_layout_and_render() -> Result<()> {
 
     // 6. Renderizar a imagen PNG con WGPU
     let mut renderer = SquircleRenderer::new_headless(wgpu::TextureFormat::Rgba8Unorm)?;
-    let rgba_pixels = renderer.render_to_rgba_image(screen_w as u32, screen_h as u32, 1.0, &instances)?;
+    let rgba_pixels =
+        renderer.render_to_rgba_image(screen_w as u32, screen_h as u32, 1.0, &instances)?;
 
     let output_path = Path::new("/home/cristian/Proyectos/malus-de/target/malus_topbar_taffy.png");
     {
@@ -74,7 +86,10 @@ fn test_taffy_flexbox_topbar_layout_and_render() -> Result<()> {
         writer.finish()?;
     }
 
-    println!("✅ Top-Bar con Flexbox Taffy generada con éxito en: {:?}", output_path);
+    println!(
+        "✅ Top-Bar con Flexbox Taffy generada con éxito en: {:?}",
+        output_path
+    );
     assert!(output_path.exists());
     assert!(std::fs::metadata(output_path)?.len() > 0);
 

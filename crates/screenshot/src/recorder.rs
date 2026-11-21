@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
 use gtk4::prelude::*;
-use gtk4::{
-    Align, ApplicationWindow, Box as GtkBox, Button, Label, Orientation,
-};
+use gtk4::{Align, ApplicationWindow, Box as GtkBox, Button, Label, Orientation};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use malus_de_common::ipc::{send_ipc_message, IpcMessage};
 use std::cell::Cell;
@@ -119,7 +117,10 @@ pub fn start_screen_recording(
 
     send_ipc_message(&msg)
         .context("No se pudo enviar solicitud de inicio de grabación al compositor Malus")?;
-    info!("Grabación de pantalla iniciada en {}", destination.display());
+    info!(
+        "Grabación de pantalla iniciada en {}",
+        destination.display()
+    );
 
     show_recording_indicator(destination.clone())?;
     Ok(destination)

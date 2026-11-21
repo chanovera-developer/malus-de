@@ -22,19 +22,28 @@ pub fn wait_for_wayland(timeout_secs: u64) -> bool {
     let start = Instant::now();
     let max_dur = Duration::from_secs(timeout_secs);
 
-    tracing::info!("⏳ Esperando a que el compositor Wayland esté listo en {:?}...", socket_path);
+    tracing::info!(
+        "⏳ Esperando a que el compositor Wayland esté listo en {:?}...",
+        socket_path
+    );
 
     while start.elapsed() < max_dur {
         if let Ok(_stream) = UnixStream::connect(&socket_path) {
             // El compositor está escuchando y ha aceptado la conexión de prueba.
             std::thread::sleep(Duration::from_millis(50));
-            tracing::info!("✅ Compositor Wayland activo y aceptando conexiones en {:?}", socket_path);
+            tracing::info!(
+                "✅ Compositor Wayland activo y aceptando conexiones en {:?}",
+                socket_path
+            );
             return true;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    tracing::warn!("⚠️ Tiempo de espera agotado esperando socket Wayland {:?}", socket_path);
+    tracing::warn!(
+        "⚠️ Tiempo de espera agotado esperando socket Wayland {:?}",
+        socket_path
+    );
     false
 }
 
@@ -52,7 +61,10 @@ pub fn cleanup_stale_wayland_sockets() {
                         let socket_path = entry.path();
                         // Si no se puede conectar al socket, es un socket huérfano muerto
                         if UnixStream::connect(&socket_path).is_err() {
-                            tracing::info!("🧹 Eliminando socket Wayland huérfano: {:?}", socket_path);
+                            tracing::info!(
+                                "🧹 Eliminando socket Wayland huérfano: {:?}",
+                                socket_path
+                            );
                             let _ = std::fs::remove_file(&socket_path);
                             let lock_path = socket_path.with_extension("lock");
                             if lock_path.exists() {

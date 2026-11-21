@@ -94,7 +94,10 @@ pub(super) fn prepare_list_row_drag(
 ) -> gtk4::gdk::ContentProvider {
     use gtk4::prelude::*;
 
-    if let Some(lb) = row.parent().and_then(|p| p.downcast::<gtk4::ListBox>().ok()) {
+    if let Some(lb) = row
+        .parent()
+        .and_then(|p| p.downcast::<gtk4::ListBox>().ok())
+    {
         if !row.is_selected() {
             lb.unselect_all();
             lb.select_row(Some(row));
@@ -143,7 +146,9 @@ pub(super) fn make_context_menu_button(label: &str) -> gtk4::Button {
 
 /// Construye el `ContentProvider` de arrastre exponiendo tanto `GdkFileList` como `text/uri-list`
 /// para garantizar interoperabilidad Wayland con otras ventanas (como el Dock).
-pub(super) fn build_file_drag_content_provider(path: &std::path::Path) -> gtk4::gdk::ContentProvider {
+pub(super) fn build_file_drag_content_provider(
+    path: &std::path::Path,
+) -> gtk4::gdk::ContentProvider {
     build_files_drag_content_provider(&[path.to_path_buf()])
 }
 
@@ -203,8 +208,16 @@ pub(super) fn build_multi_widget_drag_paintable(
     let snapshot = gtk4::Snapshot::new();
     for (w, (ix, iy)) in items {
         let wp = gtk4::WidgetPaintable::new(Some(w));
-        let ww = wp.intrinsic_width().max(w.width()).max(w.width_request()).max(72) as f64;
-        let wh = wp.intrinsic_height().max(w.height()).max(w.height_request()).max(76) as f64;
+        let ww = wp
+            .intrinsic_width()
+            .max(w.width())
+            .max(w.width_request())
+            .max(72) as f64;
+        let wh = wp
+            .intrinsic_height()
+            .max(w.height())
+            .max(w.height_request())
+            .max(76) as f64;
         snapshot.save();
         snapshot.translate(&gtk4::graphene::Point::new(
             (*ix - min_x) as f32,
@@ -552,7 +565,10 @@ pub(crate) fn show_rename_popover(
         .valign(gtk4::Align::Center)
         .hexpand(!is_icon_label)
         .css_classes(if is_icon_label {
-            vec!["branches-inline-rename-entry", "branches-inline-rename-icon"]
+            vec![
+                "branches-inline-rename-entry",
+                "branches-inline-rename-icon",
+            ]
         } else {
             vec!["branches-inline-rename-entry", "branches-inline-rename-row"]
         })
@@ -737,9 +753,17 @@ pub(super) fn show_item_context_menu(
 
     // 1. Acción principal: Abrir carpeta / Abrir aplicación / Abrir archivo
     let open_label = if is_dir {
-        if es { "Abrir carpeta" } else { "Open Folder" }
+        if es {
+            "Abrir carpeta"
+        } else {
+            "Open Folder"
+        }
     } else if desktop_app.is_some() {
-        if es { "Abrir aplicación" } else { "Open Application" }
+        if es {
+            "Abrir aplicación"
+        } else {
+            "Open Application"
+        }
     } else if es {
         "Abrir"
     } else {
@@ -774,7 +798,8 @@ pub(super) fn show_item_context_menu(
         let pop = popover.clone();
         new_tab_btn.connect_clicked(move |_| {
             pop.popdown();
-            let _ = anchor_widget.activate_action("win.open_in_new_tab", Some(&target_str.to_variant()));
+            let _ = anchor_widget
+                .activate_action("win.open_in_new_tab", Some(&target_str.to_variant()));
         });
         vbox.append(&new_tab_btn);
     }
@@ -784,7 +809,11 @@ pub(super) fn show_item_context_menu(
         let dock_cfg = malus_de_common::config::DockConfig::load_or_create_default();
         let currently_pinned = is_dock_app_pinned(&dock_cfg, &app_cfg);
         let dock_label = if currently_pinned {
-            if es { "Quitar del Dock" } else { "Remove from Dock" }
+            if es {
+                "Quitar del Dock"
+            } else {
+                "Remove from Dock"
+            }
         } else if es {
             "Fijar en el Dock"
         } else {
@@ -944,10 +973,7 @@ pub(super) fn show_item_context_menu(
             vbox.append(&cut_item_btn);
         }
 
-        if is_dir
-            && can_create_in_folder(path)
-            && crate::operations::has_clipboard_files()
-        {
+        if is_dir && can_create_in_folder(path) && crate::operations::has_clipboard_files() {
             let paste_into_btn = make_context_menu_button(if es {
                 "Pegar en carpeta"
             } else {
@@ -991,8 +1017,8 @@ pub(super) fn show_item_context_menu(
         let pop = popover.clone();
         info_menu_btn.connect_clicked(move |_| {
             pop.popdown();
-            let _ = anchor_widget
-                .activate_action("win.get_info_item", Some(&target_str.to_variant()));
+            let _ =
+                anchor_widget.activate_action("win.get_info_item", Some(&target_str.to_variant()));
         });
     }
     vbox.append(&info_menu_btn);
@@ -1029,11 +1055,8 @@ pub(super) fn show_item_context_menu(
         vbox.append(&compress_btn);
 
         if crate::jobs::is_supported_archive(path) {
-            let extract_btn = make_context_menu_button(if es {
-                "Extraer aquí"
-            } else {
-                "Extract Here"
-            });
+            let extract_btn =
+                make_context_menu_button(if es { "Extraer aquí" } else { "Extract Here" });
             {
                 let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
                 let target_str = path.to_string_lossy().to_string();
@@ -1058,8 +1081,8 @@ pub(super) fn show_item_context_menu(
             let pop = popover.clone();
             trash_btn.connect_clicked(move |_| {
                 pop.popdown();
-                let _ = anchor_widget
-                    .activate_action("win.trash_item", Some(&target_str.to_variant()));
+                let _ =
+                    anchor_widget.activate_action("win.trash_item", Some(&target_str.to_variant()));
             });
         }
         vbox.append(&trash_btn);
@@ -1114,11 +1137,7 @@ pub(super) fn show_item_context_menu(
             .icon_name("edit-clear-symbolic")
             .has_frame(false)
             .valign(gtk4::Align::Center)
-            .tooltip_text(if es {
-                "Quitar etiquetas"
-            } else {
-                "Clear Tags"
-            })
+            .tooltip_text(if es { "Quitar etiquetas" } else { "Clear Tags" })
             .css_classes(["flat", "branches-context-tag-clear-btn"])
             .build();
         {
@@ -1209,7 +1228,11 @@ pub(super) fn is_image_thumbnail_candidate(item: &crate::fs_backend::FileItem) -
     item.path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|ext| IMAGE_THUMB_EXTENSIONS.iter().any(|cand| ext.eq_ignore_ascii_case(cand)))
+        .map(|ext| {
+            IMAGE_THUMB_EXTENSIONS
+                .iter()
+                .any(|cand| ext.eq_ignore_ascii_case(cand))
+        })
         .unwrap_or(false)
 }
 
@@ -1226,8 +1249,7 @@ fn squircle_sdf(px: f32, py: f32, half_w: f32, half_h: f32, radius: f32) -> f32 
     if dx <= 0.0 || dy <= 0.0 {
         dx.max(dy) - r
     } else {
-        (dx.powf(SQUIRCLE_EXPONENT) + dy.powf(SQUIRCLE_EXPONENT)).powf(1.0 / SQUIRCLE_EXPONENT)
-            - r
+        (dx.powf(SQUIRCLE_EXPONENT) + dy.powf(SQUIRCLE_EXPONENT)).powf(1.0 / SQUIRCLE_EXPONENT) - r
     }
 }
 
@@ -1344,6 +1366,7 @@ pub(super) fn update_item_image_thumbnail(
 ) {
     use gtk4::prelude::*;
 
+    apply_folder_icon_tint(img, item);
     img.set_pixel_size(pixel_size);
     if !is_image_thumbnail_candidate(item) {
         if let Some(css) = thumb_css_class {
@@ -1422,11 +1445,21 @@ pub(super) fn create_item_image(
     thumb_css_class: Option<&str>,
 ) -> gtk4::Image {
     let img = gtk4::Image::from_gicon(&item.gicon);
+    apply_folder_icon_tint(&img, item);
     img.set_pixel_size(pixel_size);
     if is_image_thumbnail_candidate(item) {
         update_item_image_thumbnail(&img, item, pixel_size, thumb_css_class);
     }
     img
+}
+
+pub(crate) fn apply_folder_icon_tint(img: &gtk4::Image, item: &crate::fs_backend::FileItem) {
+    use gtk4::prelude::WidgetExt;
+    if item.is_dir {
+        img.add_css_class("branches-folder-icon");
+    } else {
+        img.remove_css_class("branches-folder-icon");
+    }
 }
 
 #[cfg(test)]
@@ -1474,10 +1507,24 @@ mod tests {
             gicon: gio::ThemedIcon::new("image-x-generic").upcast(),
         };
 
-        assert!(is_image_thumbnail_candidate(&make_item("foto.PNG", false, 1024)));
-        assert!(is_image_thumbnail_candidate(&make_item("fondo.webp", false, 2048)));
-        assert!(!is_image_thumbnail_candidate(&make_item("carpeta.png", true, 0)));
-        assert!(!is_image_thumbnail_candidate(&make_item("notas.txt", false, 128)));
+        assert!(is_image_thumbnail_candidate(&make_item(
+            "foto.PNG", false, 1024
+        )));
+        assert!(is_image_thumbnail_candidate(&make_item(
+            "fondo.webp",
+            false,
+            2048
+        )));
+        assert!(!is_image_thumbnail_candidate(&make_item(
+            "carpeta.png",
+            true,
+            0
+        )));
+        assert!(!is_image_thumbnail_candidate(&make_item(
+            "notas.txt",
+            false,
+            128
+        )));
         assert_eq!(thumbnail_decode_target_px(64), 128);
         assert_eq!(thumbnail_decode_target_px(512), 512);
     }
@@ -1489,7 +1536,8 @@ mod tests {
         std::fs::create_dir_all(&temp_dir).unwrap();
         let img_path = temp_dir.join("sample.png");
 
-        let pixbuf = gdk_pixbuf::Pixbuf::new(gdk_pixbuf::Colorspace::Rgb, true, 8, 240, 120).unwrap();
+        let pixbuf =
+            gdk_pixbuf::Pixbuf::new(gdk_pixbuf::Colorspace::Rgb, true, 8, 240, 120).unwrap();
         pixbuf.fill(0xff44_88ff);
         pixbuf.savev(&img_path, "png", &[]).unwrap();
 
@@ -1509,12 +1557,26 @@ mod tests {
 
     #[test]
     fn multi_selection_helpers_and_views_work_across_list_columns_and_gallery() {
-        assert_eq!(super::inclusive_range(2, 5).collect::<Vec<_>>(), vec![2, 3, 4, 5]);
-        assert_eq!(super::inclusive_range(5, 2).collect::<Vec<_>>(), vec![2, 3, 4, 5]);
-        assert!(super::is_multi_select_modifier(gtk4::gdk::ModifierType::CONTROL_MASK));
-        assert!(super::is_multi_select_modifier(gtk4::gdk::ModifierType::SHIFT_MASK));
-        assert!(super::is_multi_select_modifier(gtk4::gdk::ModifierType::SUPER_MASK));
-        assert!(!super::is_multi_select_modifier(gtk4::gdk::ModifierType::empty()));
+        assert_eq!(
+            super::inclusive_range(2, 5).collect::<Vec<_>>(),
+            vec![2, 3, 4, 5]
+        );
+        assert_eq!(
+            super::inclusive_range(5, 2).collect::<Vec<_>>(),
+            vec![2, 3, 4, 5]
+        );
+        assert!(super::is_multi_select_modifier(
+            gtk4::gdk::ModifierType::CONTROL_MASK
+        ));
+        assert!(super::is_multi_select_modifier(
+            gtk4::gdk::ModifierType::SHIFT_MASK
+        ));
+        assert!(super::is_multi_select_modifier(
+            gtk4::gdk::ModifierType::SUPER_MASK
+        ));
+        assert!(!super::is_multi_select_modifier(
+            gtk4::gdk::ModifierType::empty()
+        ));
 
         if gtk4::init().is_err() {
             return;
@@ -1586,7 +1648,12 @@ mod tests {
             assert!(r.is_finite() && r > 0.0);
         }
         let mut thin = vec![255u8; 512 * 3 * 4];
-        super::apply_squircle_clip_rgba(&mut thin, 512, 3, super::thumbnail_squircle_radius(512, 3));
+        super::apply_squircle_clip_rgba(
+            &mut thin,
+            512,
+            3,
+            super::thumbnail_squircle_radius(512, 3),
+        );
         assert!(thin.iter().all(|&b| b == 255));
     }
 }

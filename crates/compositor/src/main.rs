@@ -40,7 +40,10 @@ impl Drop for ClipboardManagerProcess {
 pub fn start_clipboard_manager(socket_name: &str) -> Option<ClipboardManagerProcess> {
     let local_binary = std::env::current_exe()
         .ok()
-        .and_then(|path| path.parent().map(|parent| parent.join("malus-de-clipboard")))
+        .and_then(|path| {
+            path.parent()
+                .map(|parent| parent.join("malus-de-clipboard"))
+        })
         .filter(|path| path.is_file());
     let mut command = local_binary
         .map(Command::new)
@@ -66,17 +69,23 @@ fn main() -> anyhow::Result<()> {
     malus_de_common::wayland::cleanup_stale_wayland_sockets();
 
     if let Err(e) = malus_de_common::config::setup_isolated_session_environment() {
-        tracing::warn!("Aviso al inicializar entorno aislado de configuración: {:?}", e);
+        tracing::warn!(
+            "Aviso al inicializar entorno aislado de configuración: {:?}",
+            e
+        );
     }
 
     let args: Vec<String> = std::env::args().collect();
-    let default_backend = if std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok() {
-        "winit"
-    } else {
-        "drm"
-    };
+    let default_backend =
+        if std::env::var("WAYLAND_DISPLAY").is_ok() || std::env::var("DISPLAY").is_ok() {
+            "winit"
+        } else {
+            "drm"
+        };
 
-    let backend = args.iter().position(|r| r == "--backend")
+    let backend = args
+        .iter()
+        .position(|r| r == "--backend")
         .and_then(|i| args.get(i + 1))
         .map(|s| s.as_str())
         .unwrap_or(default_backend);

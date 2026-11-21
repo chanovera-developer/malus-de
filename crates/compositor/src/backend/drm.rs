@@ -40,7 +40,9 @@ use smithay::{
         wayland_protocols::xdg::shell::server::xdg_toplevel::{ResizeEdge, State as XdgState},
         wayland_server::{backend::GlobalId, Display, ListeningSocket},
     },
-    utils::{DeviceFd, IsAlive, Logical, Physical, Point, Rectangle, Size, Transform, SERIAL_COUNTER},
+    utils::{
+        DeviceFd, IsAlive, Logical, Physical, Point, Rectangle, Size, Transform, SERIAL_COUNTER,
+    },
     wayland::{seat::WaylandFocus, shell::wlr_layer::Layer},
 };
 use std::{
@@ -107,7 +109,10 @@ fn send_presentation_feedback_surface_tree(
 }
 
 fn trigger_emergency_compositor_exit(reason: &str) {
-    warn!("🛑 [ZAP] Cierre de emergencia del compositor activado: {}", reason);
+    warn!(
+        "🛑 [ZAP] Cierre de emergencia del compositor activado: {}",
+        reason
+    );
     std::thread::spawn(|| {
         std::thread::sleep(Duration::from_millis(600));
         std::process::exit(0);
@@ -217,10 +222,7 @@ fn open_readable_evdev_keyboards() -> Vec<std::fs::File> {
 /// Hilo independiente de emergencia: si el usuario tiene permiso de lectura en `/dev/input/event*`
 /// (p. ej. grupo `input`), permite cerrar el entorno con `Ctrl+Alt+BackSpace` aunque el hilo
 /// principal del compositor esté completamente bloqueado.
-fn spawn_emergency_zap_watchdog(
-    session_active: Arc<AtomicBool>,
-    session_locked: Arc<AtomicBool>,
-) {
+fn spawn_emergency_zap_watchdog(session_active: Arc<AtomicBool>, session_locked: Arc<AtomicBool>) {
     std::thread::Builder::new()
         .name("malus-zap-watchdog".to_string())
         .spawn(move || {
@@ -350,11 +352,7 @@ fn prioritize_drm_gpu_candidates(
 ) -> Vec<std::path::PathBuf> {
     let mut ordered = Vec::new();
     let mut seen_canonical = HashSet::new();
-    for path in primary
-        .into_iter()
-        .chain(udev_gpus)
-        .chain(dev_dri_cards)
-    {
+    for path in primary.into_iter().chain(udev_gpus).chain(dev_dri_cards) {
         let key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
         if seen_canonical.insert(key) {
             ordered.push(path);
@@ -392,7 +390,10 @@ fn open_first_working_drm_gpu(
         ) {
             Ok(fd) => fd,
             Err(err) => {
-                warn!("⚠️ No se pudo abrir nodo DRM {:?} mediante libseat: {:?}", path, err);
+                warn!(
+                    "⚠️ No se pudo abrir nodo DRM {:?} mediante libseat: {:?}",
+                    path, err
+                );
                 errors.push(format!("{}: libseat open ({err:?})", path.display()));
                 continue;
             }
@@ -468,10 +469,8 @@ struct DrmOutputSurface {
         smithay::backend::renderer::element::Id,
         (Rectangle<i32, Physical>, bool),
     >,
-    window_redraw_shadow_blur: std::collections::HashMap<
-        smithay::backend::renderer::element::Id,
-        usize,
-    >,
+    window_redraw_shadow_blur:
+        std::collections::HashMap<smithay::backend::renderer::element::Id, usize>,
     dock_redraw_buffers: usize,
     full_damage_buffers: usize,
     last_commit_counter: usize,
@@ -490,8 +489,9 @@ struct DrmOutputSurface {
 
 impl DrmOutputSurface {
     fn is_flip_pending(&self) -> bool {
-        self.flip_pending
-            .map_or(false, |submitted_at| submitted_at.elapsed() < Duration::from_millis(250))
+        self.flip_pending.map_or(false, |submitted_at| {
+            submitted_at.elapsed() < Duration::from_millis(250)
+        })
     }
 
     fn recover_expired_flip(&mut self) {
@@ -746,9 +746,16 @@ fn sync_displays_config_from_connectors(
         } else {
             None
         };
-        let scale = previous.as_ref().map(|output| output.scale).unwrap_or_else(|| {
-            DisplayOutputConfig::recommended_scale(width as u32, height as u32, detected_diagonal)
-        });
+        let scale = previous
+            .as_ref()
+            .map(|output| output.scale)
+            .unwrap_or_else(|| {
+                DisplayOutputConfig::recommended_scale(
+                    width as u32,
+                    height as u32,
+                    detected_diagonal,
+                )
+            });
         let logical_width = (width as f64 / scale.max(0.5)).round() as i32;
         detected_outputs.push(DisplayOutputConfig {
             connector: conn_name.clone(),
@@ -910,13 +917,7 @@ fn create_drm_output_surface_for_connector(
                 .map(|(w_mm, h_mm)| (w_mm.round() as i32, h_mm.round() as i32))
                 .unwrap_or((0, 0))
         };
-        (
-            cfg.x,
-            cfg.y,
-            cfg.scale.max(0.5),
-            phys_mm,
-            cfg.name.clone(),
-        )
+        (cfg.x, cfg.y, cfg.scale.max(0.5), phys_mm, cfg.name.clone())
     } else {
         let fallback_scale = displays_cfg.master_scale.max(1.0);
         (
@@ -1008,21 +1009,22 @@ fn apply_output_config_to_surface(
     auto_x: &mut i32,
 ) -> (Point<i32, Logical>, f64) {
     let out_name = s.output.name();
-    let (loc_x, loc_y, scale, requested_mode) = if let Some(cfg) = new_cfg.find_for_connector(&out_name) {
-        let requested_mode = s
-            .modes
-            .iter()
-            .find(|mode| {
-                let (width, height) = mode.size();
-                width as u32 == cfg.width
-                    && height as u32 == cfg.height
-                    && (mode.vrefresh() as f64 - cfg.refresh_rate).abs() < 1.0
-            })
-            .copied();
-        (cfg.x, cfg.y, cfg.scale.clamp(0.5, 4.0), requested_mode)
-    } else {
-        (*auto_x, 0, new_cfg.master_scale.clamp(0.5, 4.0), None)
-    };
+    let (loc_x, loc_y, scale, requested_mode) =
+        if let Some(cfg) = new_cfg.find_for_connector(&out_name) {
+            let requested_mode = s
+                .modes
+                .iter()
+                .find(|mode| {
+                    let (width, height) = mode.size();
+                    width as u32 == cfg.width
+                        && height as u32 == cfg.height
+                        && (mode.vrefresh() as f64 - cfg.refresh_rate).abs() < 1.0
+                })
+                .copied();
+            (cfg.x, cfg.y, cfg.scale.clamp(0.5, 4.0), requested_mode)
+        } else {
+            (*auto_x, 0, new_cfg.master_scale.clamp(0.5, 4.0), None)
+        };
     let mut mode_update = None;
     if let Some(mode) = requested_mode {
         let current_mode = s.surface.current_mode();
@@ -1143,7 +1145,9 @@ fn reconcile_drm_outputs(
         let any_added = connected_handles
             .iter()
             .any(|h| !existing_handles.contains(h));
-        let any_removed = surfs.iter().any(|s| !connected_handles.contains(&s.connector));
+        let any_removed = surfs
+            .iter()
+            .any(|s| !connected_handles.contains(&s.connector));
         if !any_added && !any_removed {
             return None;
         }
@@ -1188,7 +1192,9 @@ fn reconcile_drm_outputs(
             }
         }
         state.space.unmap_output(&removed.output);
-        let DrmOutputSurface { global, surface, .. } = removed;
+        let DrmOutputSurface {
+            global, surface, ..
+        } = removed;
         drop(surface);
         removed_globals.push(global);
     }
@@ -1389,7 +1395,13 @@ fn load_cursor_texture_by_names(
         theme
     };
     let mut theme_candidates = vec![primary_theme];
-    for fallback in ["macOS", "macOS-White", "Adwaita", "default", "AdwaitaLegacy"] {
+    for fallback in [
+        "macOS",
+        "macOS-White",
+        "Adwaita",
+        "default",
+        "AdwaitaLegacy",
+    ] {
         if !theme_candidates.contains(&fallback) {
             theme_candidates.push(fallback);
         }
@@ -1443,7 +1455,8 @@ fn create_cursor_texture(
         return Some(cur);
     }
 
-    if let Some(cur) = parse_xcursor_bytes_to_texture(renderer, EMBEDDED_MACOS_LEFT_PTR, cursor_size)
+    if let Some(cur) =
+        parse_xcursor_bytes_to_texture(renderer, EMBEDDED_MACOS_LEFT_PTR, cursor_size)
     {
         return Some(cur);
     }
@@ -1586,7 +1599,9 @@ fn find_layer_under_layer(
         let layer_map = smithay::desktop::layer_map_for_output(output);
         let under_layer = layer_map
             .layer_under(target_layer, output_local_point)
-            .filter(|l| !(l.namespace() == "malus-app-switcher" && !state.app_switcher_classic_active()));
+            .filter(|l| {
+                !(l.namespace() == "malus-app-switcher" && !state.app_switcher_classic_active())
+            });
 
         if let Some(layer) = under_layer {
             if let Some(geo) = layer_map.layer_geometry(layer) {
@@ -1731,10 +1746,7 @@ fn find_layer_popup_under(
                 if let Some((surf, sub_loc)) =
                     layer.surface_under(local_point, smithay::desktop::WindowSurfaceType::POPUP)
                 {
-                    return Some((
-                        surf,
-                        (output_geo.loc + geo.loc + sub_loc).to_f64(),
-                    ));
+                    return Some((surf, (output_geo.loc + geo.loc + sub_loc).to_f64()));
                 }
             }
         }
@@ -1847,19 +1859,9 @@ fn resolve_target_under(
             false,
         )
     } else if let Some((surf, focus_loc)) = find_layer_popup_under(state, point) {
-        (
-            Some((surf, focus_loc)),
-            None,
-            None,
-            true,
-        )
+        (Some((surf, focus_loc)), None, None, true)
     } else if let Some((_window, loc, surf, sub_loc)) = state.popup_under(point) {
-        (
-            Some((surf, (loc + sub_loc).to_f64())),
-            None,
-            None,
-            true,
-        )
+        (Some((surf, (loc + sub_loc).to_f64())), None, None, true)
     } else if let Some((win, _edge, loc)) =
         crate::grabs::find_window_resize_edge_under(&state.space, point, 8.0)
     {
@@ -1928,7 +1930,10 @@ pub fn run_drm() -> Result<()> {
         dev_dri_candidates,
         sysfs_drm_card_score,
     );
-    info!("🎮 Candidatos DRM detectados (orden de prioridad): {:?}", gpu_candidates);
+    info!(
+        "🎮 Candidatos DRM detectados (orden de prioridad): {:?}",
+        gpu_candidates
+    );
 
     let (mut drm_device, drm_notifier, gbm_device, mut renderer, chosen_gpu) =
         open_first_working_drm_gpu(&mut session, &gpu_candidates)
@@ -1938,23 +1943,21 @@ pub fn run_drm() -> Result<()> {
     info!("🎨 Renderer OpenGL ES acelerado por hardware listo");
 
     // Obtener el dev_id del nodo DRM primario (/dev/dri/cardX) para filtrar eventos udev hotplug
-    let primary_drm_dev_id = smithay::backend::drm::DrmNode::from_file(
-        std::os::fd::AsFd::as_fd(&drm_device),
-    )
-    .ok()
-    .map(|node| node.dev_id());
+    let primary_drm_dev_id =
+        smithay::backend::drm::DrmNode::from_file(std::os::fd::AsFd::as_fd(&drm_device))
+            .ok()
+            .map(|node| node.dev_id());
 
     // Exponer protocolo Wayland zwp_linux_dmabuf_v1 para compartición zero-copy en GPU (Chrome, Firefox, Electron)
     let dmabuf_formats = renderer.dmabuf_formats();
-    let drm_render_node = smithay::backend::drm::DrmNode::from_file(
-        std::os::fd::AsFd::as_fd(&drm_device),
-    )
-    .ok()
-    .and_then(|node| {
-        node.node_with_type(smithay::backend::drm::NodeType::Render)
-            .and_then(Result::ok)
-            .or(Some(node))
-    });
+    let drm_render_node =
+        smithay::backend::drm::DrmNode::from_file(std::os::fd::AsFd::as_fd(&drm_device))
+            .ok()
+            .and_then(|node| {
+                node.node_with_type(smithay::backend::drm::NodeType::Render)
+                    .and_then(Result::ok)
+                    .or(Some(node))
+            });
     if let Some(render_node) = drm_render_node {
         match smithay::wayland::dmabuf::DmabufFeedbackBuilder::new(
             render_node.dev_id(),
@@ -1980,10 +1983,9 @@ pub fn run_drm() -> Result<()> {
                     "⚠️ No se pudo construir DmabufFeedback ({:?}); usando linux-dmabuf v3",
                     err
                 );
-                let global = state.dmabuf_state.create_global::<MalusState>(
-                    &state.display_handle,
-                    dmabuf_formats,
-                );
+                let global = state
+                    .dmabuf_state
+                    .create_global::<MalusState>(&state.display_handle, dmabuf_formats);
                 state.dmabuf_global = Some(global);
             }
         }
@@ -2058,7 +2060,8 @@ pub fn run_drm() -> Result<()> {
     let mut surfaces = Vec::new();
 
     // Recopilar conectores conectados y ordenarlos de modo que el monitor primario sea el primero
-    let mut connected_list = scan_connected_drm_connectors(&mut drm_device, &res_handles, &displays_cfg);
+    let mut connected_list =
+        scan_connected_drm_connectors(&mut drm_device, &res_handles, &displays_cfg);
     sync_displays_config_from_connectors(&connected_list, &mut displays_cfg);
 
     // Monitor primario siempre en el índice 0 de state.space.outputs()
@@ -2253,9 +2256,7 @@ pub fn run_drm() -> Result<()> {
                 smithay::reexports::calloop::Interest::READ,
                 smithay::reexports::calloop::Mode::Level,
             ),
-            |_readiness, _fd, _state| {
-                Ok(smithay::reexports::calloop::PostAction::Continue)
-            },
+            |_readiness, _fd, _state| Ok(smithay::reexports::calloop::PostAction::Continue),
         )
         .map_err(|e| anyhow::anyhow!("Error al registrar Wayland Display en calloop: {e:?}"))?;
 
@@ -3139,8 +3140,7 @@ pub fn run_drm() -> Result<()> {
     let keyfile_path = std::env::var_os("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| {
-            std::env::var_os("HOME")
-                .map(|home| std::path::PathBuf::from(home).join(".config"))
+            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config"))
         })
         .unwrap_or_else(|| std::path::PathBuf::from(".config"))
         .join("glib-2.0/settings/keyfile");
@@ -3155,9 +3155,12 @@ pub fn run_drm() -> Result<()> {
         smithay::input::pointer::CursorIcon,
         Option<ThemedCursor>,
     > = std::collections::HashMap::new();
-    let mut blur_pipeline: Option<std::sync::Arc<std::sync::Mutex<crate::blur::GaussianBlur>>> = None;
+    let mut blur_pipeline: Option<std::sync::Arc<std::sync::Mutex<crate::blur::GaussianBlur>>> =
+        None;
     let mut blur_init_attempted = false;
-    let mut window_squircle_shader: Option<std::sync::Arc<crate::window_corners::WindowSquircleShader>> = None;
+    let mut window_squircle_shader: Option<
+        std::sync::Arc<crate::window_corners::WindowSquircleShader>,
+    > = None;
     let mut window_squircle_init_attempted = false;
     let mut shadow_pipeline: Option<std::sync::Arc<crate::shadow::WindowShadowPipeline>> = None;
     let mut shadow_init_attempted = false;
@@ -3286,12 +3289,8 @@ pub fn run_drm() -> Result<()> {
                     let mut auto_x = 0;
                     for s in surfs.iter_mut() {
                         let out_name = s.output.name();
-                        let (loc, scale) = apply_output_config_to_surface(
-                            s,
-                            new_cfg,
-                            &mut state,
-                            &mut auto_x,
-                        );
+                        let (loc, scale) =
+                            apply_output_config_to_surface(s, new_cfg, &mut state, &mut auto_x);
                         new_output_locs.insert(out_name.clone(), (loc, scale));
                         info!(
                             "   ✅ Monitor {} actualizado en vivo: pos=({}, {}), escala={:.4}x ({:.1}%)",
@@ -3536,9 +3535,8 @@ pub fn run_drm() -> Result<()> {
                 }
 
                 let mut dnd_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = Vec::new();
-                let mut dnd_fallback_elem: Option<
-                    MemoryRenderBufferRenderElement<GlesRenderer>,
-                > = None;
+                let mut dnd_fallback_elem: Option<MemoryRenderBufferRenderElement<GlesRenderer>> =
+                    None;
                 if let Some(loc) = state.active_dnd_icon_draw_location() {
                     if output_geo.to_f64().contains(loc) {
                         if let Some(dnd_surf) = state.dnd_icon.clone() {
@@ -3616,7 +3614,8 @@ pub fn run_drm() -> Result<()> {
 
                 let session_locked = state.is_session_locked();
                 let layer_map = smithay::desktop::layer_map_for_output(&out_surface.output);
-                let has_fullscreen_window = state.has_fullscreen_window_on_output(&out_surface.output);
+                let has_fullscreen_window =
+                    state.has_fullscreen_window_on_output(&out_surface.output);
                 let mut lower_elements = Vec::new();
                 let mut upper_elements = Vec::new();
                 let mut lock_elements = Vec::new();
@@ -3781,19 +3780,27 @@ pub fn run_drm() -> Result<()> {
                             Size::from((effective_size.w, effective_size.h + ssd_top)),
                         );
                         if output_geo.overlaps(win_global_rect) {
-                            let (phys_loc, transition_clip, content_offset, content_size, win_screen_rect) =
-                                if let Some((_, _, pl, clip_rect, c_off, c_sz, w_rect)) = transition_layout {
-                                    (pl, clip_rect, c_off, c_sz, w_rect)
-                                } else {
-                                    let pl = (loc - geo.loc - output_geo.loc).to_physical_precise_round(scale);
-                                    let c_off = geo.loc.to_physical_precise_round(scale);
-                                    let c_sz = geo.size.to_physical_precise_round(scale);
-                                    let w_rect = Rectangle::new(
-                                        (loc - output_geo.loc).to_physical_precise_round(scale),
-                                        geo.size.to_physical_precise_round(scale),
-                                    );
-                                    (pl, None, c_off, c_sz, w_rect)
-                                };
+                            let (
+                                phys_loc,
+                                transition_clip,
+                                content_offset,
+                                content_size,
+                                win_screen_rect,
+                            ) = if let Some((_, _, pl, clip_rect, c_off, c_sz, w_rect)) =
+                                transition_layout
+                            {
+                                (pl, clip_rect, c_off, c_sz, w_rect)
+                            } else {
+                                let pl = (loc - geo.loc - output_geo.loc)
+                                    .to_physical_precise_round(scale);
+                                let c_off = geo.loc.to_physical_precise_round(scale);
+                                let c_sz = geo.size.to_physical_precise_round(scale);
+                                let w_rect = Rectangle::new(
+                                    (loc - output_geo.loc).to_physical_precise_round(scale),
+                                    geo.size.to_physical_precise_round(scale),
+                                );
+                                (pl, None, c_off, c_sz, w_rect)
+                            };
 
                             let win_surfaces: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
                                 render_elements_from_surface_tree(
@@ -4039,13 +4046,18 @@ pub fn run_drm() -> Result<()> {
                     .spotlight
                     .should_render_on_output(&out_surface.output.name())
                 {
-                    if let Some((spot_rect, mask_opt, mask_sz, spot_alpha)) =
-                        state.spotlight.prepare_frame(output_geo, scale, is_dark_theme)
+                    if let Some((spot_rect, mask_opt, mask_sz, spot_alpha)) = state
+                        .spotlight
+                        .prepare_frame(output_geo, scale, is_dark_theme)
                     {
                         let mask_vec = mask_opt.map(|s| s.to_vec());
                         state
                             .spotlight
-                            .create_render_element(&mut renderer, spot_rect.loc.to_f64(), spot_alpha)
+                            .create_render_element(
+                                &mut renderer,
+                                spot_rect.loc.to_f64(),
+                                spot_alpha,
+                            )
                             .map(|elem| (spot_rect, mask_vec, mask_sz, spot_alpha, elem))
                     } else {
                         None
@@ -4068,8 +4080,9 @@ pub fn run_drm() -> Result<()> {
                     .screenshot_ui
                     .should_render_on_output(&out_surface.output.name())
                 {
-                    if let Some((ui_rect, mask_opt, mask_sz, ui_alpha)) =
-                        state.screenshot_ui.prepare_frame(output_geo, scale, is_dark_theme)
+                    if let Some((ui_rect, mask_opt, mask_sz, ui_alpha)) = state
+                        .screenshot_ui
+                        .prepare_frame(output_geo, scale, is_dark_theme)
                     {
                         let mask_vec = mask_opt.map(|s| s.to_vec());
                         state
@@ -4146,190 +4159,45 @@ pub fn run_drm() -> Result<()> {
                 let workspace_rev_changed =
                     out_surface.last_workspace_revision != state.workspace_revision;
                 if expose_just_closed || expose_rev_changed || workspace_rev_changed {
-                    out_surface.full_damage_buffers =
-                        out_surface.full_damage_buffers.max(damage_buffers_per_event);
-                    out_surface.pending_damage_buffers =
-                        out_surface.pending_damage_buffers.max(damage_buffers_per_event);
+                    out_surface.full_damage_buffers = out_surface
+                        .full_damage_buffers
+                        .max(damage_buffers_per_event);
+                    out_surface.pending_damage_buffers = out_surface
+                        .pending_damage_buffers
+                        .max(damage_buffers_per_event);
                 }
 
                 // ─── CÁLCULO DE DAMAGE TRACKING POR PANTALLA CON SMITHAY ───
                 let tracker_elements: Vec<MalusDrmElement> = if ENABLE_DAMAGE_TRACKING {
                     let mut tracker_elements: Vec<MalusDrmElement> = Vec::new();
 
-                for elem in &cursor_elems {
-                    tracker_elements.push(MalusDrmElement::Wayland(elem));
-                }
-                for elem in &dnd_elems {
-                    tracker_elements.push(MalusDrmElement::Wayland(elem));
-                }
-                if let Some(ref fallback_elem) = dnd_fallback_elem {
-                    tracker_elements.push(MalusDrmElement::Memory(fallback_elem));
-                }
-                let popup_corner_radius = (super::POPUP_MENU_CORNER_RADIUS_LOGICAL * scale) as f32;
-                for (popups, popup_rect) in &topbar_popups {
-                    for elem in popups {
+                    for elem in &cursor_elems {
                         tracker_elements.push(MalusDrmElement::Wayland(elem));
                     }
-                    if let Some(blur) = blur_pipeline.as_ref() {
-                        let menu_blur = crate::blur::BlurRenderElement::for_popup(
-                            smithay::backend::renderer::element::Id::new(),
-                            smithay::backend::renderer::utils::CommitCounter::default(),
-                            blur.clone(),
-                            *popup_rect,
-                            popup_corner_radius.round(),
-                            out_surface.size,
-                        );
-                        tracker_elements.push(MalusDrmElement::Blur(menu_blur));
-                    }
-                    if let Some(pipeline) = shadow_pipeline.as_ref() {
-                        let menu_shadow = crate::shadow::MenuShadowRenderElement::new(
-                            smithay::backend::renderer::element::Id::new(),
-                            smithay::backend::renderer::utils::CommitCounter::default(),
-                            pipeline.clone(),
-                            *popup_rect,
-                            popup_corner_radius,
-                            scale,
-                        );
-                        tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
-                    }
-                }
-                for (popups, popup_rect) in &dock_popups {
-                    let blur_rect = super::dock_popover_blur_rect(*popup_rect, scale);
-                    for elem in popups {
+                    for elem in &dnd_elems {
                         tracker_elements.push(MalusDrmElement::Wayland(elem));
                     }
-                    if let Some(blur) = blur_pipeline.as_ref() {
-                        let menu_blur = crate::blur::BlurRenderElement::for_popup(
-                            smithay::backend::renderer::element::Id::new(),
-                            smithay::backend::renderer::utils::CommitCounter::default(),
-                            blur.clone(),
-                            blur_rect,
-                            popup_corner_radius.round(),
-                            out_surface.size,
-                        );
-                        tracker_elements.push(MalusDrmElement::Blur(menu_blur));
+                    if let Some(ref fallback_elem) = dnd_fallback_elem {
+                        tracker_elements.push(MalusDrmElement::Memory(fallback_elem));
                     }
-                    if let Some(pipeline) = shadow_pipeline.as_ref() {
-                        let menu_shadow = crate::shadow::MenuShadowRenderElement::new(
-                            smithay::backend::renderer::element::Id::new(),
-                            smithay::backend::renderer::utils::CommitCounter::default(),
-                            pipeline.clone(),
-                            *popup_rect,
-                            popup_corner_radius,
-                            scale,
-                        );
-                        tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
-                    }
-                }
-                for (popups, popup_rect) in &wallpaper_popups {
-                    for elem in popups {
-                        tracker_elements.push(MalusDrmElement::Wayland(elem));
-                    }
-                    if let Some(blur) = blur_pipeline.as_ref() {
-                        let menu_blur = crate::blur::BlurRenderElement::for_popup(
-                            smithay::backend::renderer::element::Id::new(),
-                            smithay::backend::renderer::utils::CommitCounter::default(),
-                            blur.clone(),
-                            *popup_rect,
-                            popup_corner_radius.round(),
-                            out_surface.size,
-                        );
-                        tracker_elements.push(MalusDrmElement::Blur(menu_blur));
-                    }
-                    if let Some(pipeline) = shadow_pipeline.as_ref() {
-                        let menu_shadow = crate::shadow::MenuShadowRenderElement::new(
-                            smithay::backend::renderer::element::Id::new(),
-                            smithay::backend::renderer::utils::CommitCounter::default(),
-                            pipeline.clone(),
-                            *popup_rect,
-                            popup_corner_radius,
-                            scale,
-                        );
-                        tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
-                    }
-                }
-                for elem in &upper_elements {
-                    let dock_rect = dock_clip_roots
-                        .iter()
-                        .find(|(root_id, _)| *elem.id() == *root_id)
-                        .map(|(_, rect)| *rect);
-                    if let Some(rect) = dock_rect {
-                        let squircle_dock = crate::window_corners::SquircleSurfaceRenderElement::with_dock_clip(
-                            elem,
-                            window_squircle_shader.clone(),
-                            elem.geometry(smithay::utils::Scale::from(scale)).size,
-                            smithay::utils::Point::from((0, 0)),
-                            rect.size,
-                            (32.0 * scale).round() as i32,
-                        );
-                        tracker_elements.push(MalusDrmElement::WaylandSquircle(squircle_dock));
-
+                    let popup_corner_radius =
+                        (super::POPUP_MENU_CORNER_RADIUS_LOGICAL * scale) as f32;
+                    for (popups, popup_rect) in &topbar_popups {
+                        for elem in popups {
+                            tracker_elements.push(MalusDrmElement::Wayland(elem));
+                        }
                         if let Some(blur) = blur_pipeline.as_ref() {
-                            let dock_blur = crate::blur::BlurRenderElement::for_dock(
+                            let menu_blur = crate::blur::BlurRenderElement::for_popup(
                                 smithay::backend::renderer::element::Id::new(),
                                 smithay::backend::renderer::utils::CommitCounter::default(),
                                 blur.clone(),
-                                rect,
-                                32.0 * scale as f32,
+                                *popup_rect,
+                                popup_corner_radius.round(),
                                 out_surface.size,
                             );
-                            tracker_elements.push(MalusDrmElement::Blur(dock_blur));
+                            tracker_elements.push(MalusDrmElement::Blur(menu_blur));
                         }
-
                         if let Some(pipeline) = shadow_pipeline.as_ref() {
-                            let dock_shadow = crate::shadow::DockShadowRenderElement::new(
-                                smithay::backend::renderer::element::Id::new(),
-                                smithay::backend::renderer::utils::CommitCounter::default(),
-                                pipeline.clone(),
-                                rect,
-                                32.0 * scale as f32,
-                                scale,
-                            );
-                            tracker_elements.push(MalusDrmElement::DockShadow(dock_shadow));
-                        }
-                    } else {
-                        tracker_elements.push(MalusDrmElement::Wayland(elem));
-                    }
-                }
-                if app_switcher_deck_frame.is_none() {
-                for (
-                    root_id,
-                    win_elems,
-                    popups,
-                    popup_shadow_rects,
-                    should_round,
-                    is_active,
-                    win_screen_rect,
-                    content_offset,
-                    content_size,
-                    is_firefox,
-                    is_translucent,
-                    _,
-                    ssd_elem,
-                    _,
-                    is_branches,
-                ) in window_render_data.iter().rev()
-                {
-                    for (popup_elems, popup_rect, popup_effects) in popups {
-                        for elem in popup_elems {
-                            tracker_elements.push(MalusDrmElement::Wayland(elem));
-                        }
-                        if *popup_effects {
-                            if let Some(blur) = blur_pipeline.as_ref() {
-                                let menu_blur = crate::blur::BlurRenderElement::for_popup(
-                                    smithay::backend::renderer::element::Id::new(),
-                                    smithay::backend::renderer::utils::CommitCounter::default(),
-                                    blur.clone(),
-                                    *popup_rect,
-                                    popup_corner_radius.round(),
-                                    out_surface.size,
-                                );
-                                tracker_elements.push(MalusDrmElement::Blur(menu_blur));
-                            }
-                        }
-                    }
-                    if let Some(pipeline) = shadow_pipeline.as_ref() {
-                        for popup_rect in popup_shadow_rects {
                             let menu_shadow = crate::shadow::MenuShadowRenderElement::new(
                                 smithay::backend::renderer::element::Id::new(),
                                 smithay::backend::renderer::utils::CommitCounter::default(),
@@ -4341,37 +4209,189 @@ pub fn run_drm() -> Result<()> {
                             tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
                         }
                     }
-
-                    if let Some(ssd) = ssd_elem {
-                        if *should_round && (*is_firefox || ssd_elem.is_some()) {
-                            let tb_geo = ssd.geometry(smithay::utils::Scale::from(1.0));
-                            let sub_offset = smithay::utils::Point::from((
-                                win_screen_rect.loc.x - tb_geo.loc.x,
-                                win_screen_rect.loc.y - tb_geo.loc.y,
-                            ));
-                            let ssd_squircle = crate::window_corners::SquircleMemoryRenderElement::new(
-                                ssd,
-                                window_squircle_shader.clone(),
-                                tb_geo.size,
-                                sub_offset,
-                                win_screen_rect.size,
-                                win_phys_r.unwrap_or(0),
+                    for (popups, popup_rect) in &dock_popups {
+                        let blur_rect = super::dock_popover_blur_rect(*popup_rect, scale);
+                        for elem in popups {
+                            tracker_elements.push(MalusDrmElement::Wayland(elem));
+                        }
+                        if let Some(blur) = blur_pipeline.as_ref() {
+                            let menu_blur = crate::blur::BlurRenderElement::for_popup(
+                                smithay::backend::renderer::element::Id::new(),
+                                smithay::backend::renderer::utils::CommitCounter::default(),
+                                blur.clone(),
+                                blur_rect,
+                                popup_corner_radius.round(),
+                                out_surface.size,
                             );
-                            tracker_elements.push(MalusDrmElement::MemorySquircle(ssd_squircle));
-                        } else {
-                            tracker_elements.push(MalusDrmElement::Memory(ssd));
+                            tracker_elements.push(MalusDrmElement::Blur(menu_blur));
+                        }
+                        if let Some(pipeline) = shadow_pipeline.as_ref() {
+                            let menu_shadow = crate::shadow::MenuShadowRenderElement::new(
+                                smithay::backend::renderer::element::Id::new(),
+                                smithay::backend::renderer::utils::CommitCounter::default(),
+                                pipeline.clone(),
+                                *popup_rect,
+                                popup_corner_radius,
+                                scale,
+                            );
+                            tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
                         }
                     }
+                    for (popups, popup_rect) in &wallpaper_popups {
+                        for elem in popups {
+                            tracker_elements.push(MalusDrmElement::Wayland(elem));
+                        }
+                        if let Some(blur) = blur_pipeline.as_ref() {
+                            let menu_blur = crate::blur::BlurRenderElement::for_popup(
+                                smithay::backend::renderer::element::Id::new(),
+                                smithay::backend::renderer::utils::CommitCounter::default(),
+                                blur.clone(),
+                                *popup_rect,
+                                popup_corner_radius.round(),
+                                out_surface.size,
+                            );
+                            tracker_elements.push(MalusDrmElement::Blur(menu_blur));
+                        }
+                        if let Some(pipeline) = shadow_pipeline.as_ref() {
+                            let menu_shadow = crate::shadow::MenuShadowRenderElement::new(
+                                smithay::backend::renderer::element::Id::new(),
+                                smithay::backend::renderer::utils::CommitCounter::default(),
+                                pipeline.clone(),
+                                *popup_rect,
+                                popup_corner_radius,
+                                scale,
+                            );
+                            tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
+                        }
+                    }
+                    for elem in &upper_elements {
+                        let dock_rect = dock_clip_roots
+                            .iter()
+                            .find(|(root_id, _)| *elem.id() == *root_id)
+                            .map(|(_, rect)| *rect);
+                        if let Some(rect) = dock_rect {
+                            let squircle_dock =
+                                crate::window_corners::SquircleSurfaceRenderElement::with_dock_clip(
+                                    elem,
+                                    window_squircle_shader.clone(),
+                                    elem.geometry(smithay::utils::Scale::from(scale)).size,
+                                    smithay::utils::Point::from((0, 0)),
+                                    rect.size,
+                                    (32.0 * scale).round() as i32,
+                                );
+                            tracker_elements.push(MalusDrmElement::WaylandSquircle(squircle_dock));
 
-                    for elem in win_elems {
-                        if *should_round {
-                            if *is_firefox || ssd_elem.is_some() {
-                                let elem_geo = elem.geometry(smithay::utils::Scale::from(scale));
-                                let sub_offset = smithay::utils::Point::from((
-                                    win_screen_rect.loc.x - elem_geo.loc.x,
-                                    win_screen_rect.loc.y - elem_geo.loc.y,
-                                ));
-                                let win_squircle = crate::window_corners::SquircleSurfaceRenderElement::new(
+                            if let Some(blur) = blur_pipeline.as_ref() {
+                                let dock_blur = crate::blur::BlurRenderElement::for_dock(
+                                    smithay::backend::renderer::element::Id::new(),
+                                    smithay::backend::renderer::utils::CommitCounter::default(),
+                                    blur.clone(),
+                                    rect,
+                                    32.0 * scale as f32,
+                                    out_surface.size,
+                                );
+                                tracker_elements.push(MalusDrmElement::Blur(dock_blur));
+                            }
+
+                            if let Some(pipeline) = shadow_pipeline.as_ref() {
+                                let dock_shadow = crate::shadow::DockShadowRenderElement::new(
+                                    smithay::backend::renderer::element::Id::new(),
+                                    smithay::backend::renderer::utils::CommitCounter::default(),
+                                    pipeline.clone(),
+                                    rect,
+                                    32.0 * scale as f32,
+                                    scale,
+                                );
+                                tracker_elements.push(MalusDrmElement::DockShadow(dock_shadow));
+                            }
+                        } else {
+                            tracker_elements.push(MalusDrmElement::Wayland(elem));
+                        }
+                    }
+                    if app_switcher_deck_frame.is_none() {
+                        for (
+                            root_id,
+                            win_elems,
+                            popups,
+                            popup_shadow_rects,
+                            should_round,
+                            is_active,
+                            win_screen_rect,
+                            content_offset,
+                            content_size,
+                            is_firefox,
+                            is_translucent,
+                            _,
+                            ssd_elem,
+                            _,
+                            is_branches,
+                        ) in window_render_data.iter().rev()
+                        {
+                            for (popup_elems, popup_rect, popup_effects) in popups {
+                                for elem in popup_elems {
+                                    tracker_elements.push(MalusDrmElement::Wayland(elem));
+                                }
+                                if *popup_effects {
+                                    if let Some(blur) = blur_pipeline.as_ref() {
+                                        let menu_blur = crate::blur::BlurRenderElement::for_popup(
+                                    smithay::backend::renderer::element::Id::new(),
+                                    smithay::backend::renderer::utils::CommitCounter::default(),
+                                    blur.clone(),
+                                    *popup_rect,
+                                    popup_corner_radius.round(),
+                                    out_surface.size,
+                                );
+                                        tracker_elements.push(MalusDrmElement::Blur(menu_blur));
+                                    }
+                                }
+                            }
+                            if let Some(pipeline) = shadow_pipeline.as_ref() {
+                                for popup_rect in popup_shadow_rects {
+                                    let menu_shadow = crate::shadow::MenuShadowRenderElement::new(
+                                        smithay::backend::renderer::element::Id::new(),
+                                        smithay::backend::renderer::utils::CommitCounter::default(),
+                                        pipeline.clone(),
+                                        *popup_rect,
+                                        popup_corner_radius,
+                                        scale,
+                                    );
+                                    tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
+                                }
+                            }
+
+                            if let Some(ssd) = ssd_elem {
+                                if *should_round && (*is_firefox || ssd_elem.is_some()) {
+                                    let tb_geo = ssd.geometry(smithay::utils::Scale::from(1.0));
+                                    let sub_offset = smithay::utils::Point::from((
+                                        win_screen_rect.loc.x - tb_geo.loc.x,
+                                        win_screen_rect.loc.y - tb_geo.loc.y,
+                                    ));
+                                    let ssd_squircle =
+                                        crate::window_corners::SquircleMemoryRenderElement::new(
+                                            ssd,
+                                            window_squircle_shader.clone(),
+                                            tb_geo.size,
+                                            sub_offset,
+                                            win_screen_rect.size,
+                                            win_phys_r.unwrap_or(0),
+                                        );
+                                    tracker_elements
+                                        .push(MalusDrmElement::MemorySquircle(ssd_squircle));
+                                } else {
+                                    tracker_elements.push(MalusDrmElement::Memory(ssd));
+                                }
+                            }
+
+                            for elem in win_elems {
+                                if *should_round {
+                                    if *is_firefox || ssd_elem.is_some() {
+                                        let elem_geo =
+                                            elem.geometry(smithay::utils::Scale::from(scale));
+                                        let sub_offset = smithay::utils::Point::from((
+                                            win_screen_rect.loc.x - elem_geo.loc.x,
+                                            win_screen_rect.loc.y - elem_geo.loc.y,
+                                        ));
+                                        let win_squircle = crate::window_corners::SquircleSurfaceRenderElement::new(
                                     elem,
                                     window_squircle_shader.clone(),
                                     elem_geo.size,
@@ -4379,10 +4399,12 @@ pub fn run_drm() -> Result<()> {
                                     win_screen_rect.size,
                                     win_phys_r.unwrap_or(0),
                                 );
-                                tracker_elements.push(MalusDrmElement::WaylandSquircle(win_squircle));
-                            } else if elem.id() == root_id {
-                                let elem_geo = elem.geometry(smithay::utils::Scale::from(scale));
-                                let win_squircle = crate::window_corners::SquircleSurfaceRenderElement::new(
+                                        tracker_elements
+                                            .push(MalusDrmElement::WaylandSquircle(win_squircle));
+                                    } else if elem.id() == root_id {
+                                        let elem_geo =
+                                            elem.geometry(smithay::utils::Scale::from(scale));
+                                        let win_squircle = crate::window_corners::SquircleSurfaceRenderElement::new(
                                     elem,
                                     window_squircle_shader.clone(),
                                     elem_geo.size,
@@ -4390,66 +4412,69 @@ pub fn run_drm() -> Result<()> {
                                     *content_size,
                                     win_phys_r.unwrap_or(0),
                                 );
-                                tracker_elements.push(MalusDrmElement::WaylandSquircle(win_squircle));
-                            } else {
-                                tracker_elements.push(MalusDrmElement::Wayland(elem));
+                                        tracker_elements
+                                            .push(MalusDrmElement::WaylandSquircle(win_squircle));
+                                    } else {
+                                        tracker_elements.push(MalusDrmElement::Wayland(elem));
+                                    }
+                                } else {
+                                    tracker_elements.push(MalusDrmElement::Wayland(elem));
+                                }
                             }
-                        } else {
-                            tracker_elements.push(MalusDrmElement::Wayland(elem));
-                        }
-                    }
 
-                    if *is_translucent {
-                        let blur_rect = if *is_branches {
-                            let sidebar_blur_w = ((212.0 * scale).round() as i32
-                                + win_phys_r.unwrap_or(0) as i32
-                                + 4)
-                                .min(win_screen_rect.size.w);
-                            Rectangle::new(
-                                win_screen_rect.loc,
-                                (sidebar_blur_w, win_screen_rect.size.h).into(),
-                            )
-                        } else {
-                            *win_screen_rect
-                        };
-                        let corner_radius = if *should_round {
-                            win_phys_r.unwrap_or(0) as f32
-                        } else {
-                            0.0
-                        };
-                        if let Some(blur) = blur_pipeline.as_ref() {
-                            let win_blur = crate::blur::BlurRenderElement::for_window(
-                                root_id.clone(),
-                                smithay::backend::renderer::utils::CommitCounter::default(),
-                                blur.clone(),
-                                blur_rect,
-                                corner_radius,
-                                out_surface.size,
-                            );
-                            tracker_elements.push(MalusDrmElement::Blur(win_blur));
-                        }
-                    }
+                            if *is_translucent {
+                                let blur_rect = if *is_branches {
+                                    let sidebar_blur_w = ((212.0 * scale).round() as i32
+                                        + win_phys_r.unwrap_or(0) as i32
+                                        + 4)
+                                    .min(win_screen_rect.size.w);
+                                    Rectangle::new(
+                                        win_screen_rect.loc,
+                                        (sidebar_blur_w, win_screen_rect.size.h).into(),
+                                    )
+                                } else {
+                                    *win_screen_rect
+                                };
+                                let corner_radius = if *should_round {
+                                    win_phys_r.unwrap_or(0) as f32
+                                } else {
+                                    0.0
+                                };
+                                if let Some(blur) = blur_pipeline.as_ref() {
+                                    let win_blur = crate::blur::BlurRenderElement::for_window(
+                                        root_id.clone(),
+                                        smithay::backend::renderer::utils::CommitCounter::default(),
+                                        blur.clone(),
+                                        blur_rect,
+                                        corner_radius,
+                                        out_surface.size,
+                                    );
+                                    tracker_elements.push(MalusDrmElement::Blur(win_blur));
+                                }
+                            }
 
-                    // Sombra proyectada como RenderElement declarativo en el tracker de daño
-                    if *should_round {
-                        if let (Some(r), Some(pipeline)) = (win_phys_r, shadow_pipeline.as_ref()) {
-                            let shadow_elem = crate::shadow::WindowShadowRenderElement::new(
-                                root_id.clone(),
-                                smithay::backend::renderer::utils::CommitCounter::default(),
-                                pipeline.clone(),
-                                *win_screen_rect,
-                                r as f32,
-                                *is_active,
-                                scale,
-                            );
-                            tracker_elements.push(MalusDrmElement::Shadow(shadow_elem));
+                            // Sombra proyectada como RenderElement declarativo en el tracker de daño
+                            if *should_round {
+                                if let (Some(r), Some(pipeline)) =
+                                    (win_phys_r, shadow_pipeline.as_ref())
+                                {
+                                    let shadow_elem = crate::shadow::WindowShadowRenderElement::new(
+                                        root_id.clone(),
+                                        smithay::backend::renderer::utils::CommitCounter::default(),
+                                        pipeline.clone(),
+                                        *win_screen_rect,
+                                        r as f32,
+                                        *is_active,
+                                        scale,
+                                    );
+                                    tracker_elements.push(MalusDrmElement::Shadow(shadow_elem));
+                                }
+                            }
                         }
                     }
-                }
-                }
-                for elem in &lower_elements {
-                    tracker_elements.push(MalusDrmElement::Wayland(elem));
-                }
+                    for elem in &lower_elements {
+                        tracker_elements.push(MalusDrmElement::Wayland(elem));
+                    }
                     tracker_elements
                 } else {
                     Vec::new()
@@ -4482,7 +4507,11 @@ pub fn run_drm() -> Result<()> {
 
                     let raw_shadow_rect = Rectangle::new(
                         (win_rect.loc.x - shadow_pad, win_rect.loc.y - shadow_pad).into(),
-                        (win_rect.size.w + shadow_pad * 2, win_rect.size.h + shadow_pad * 2).into(),
+                        (
+                            win_rect.size.w + shadow_pad * 2,
+                            win_rect.size.h + shadow_pad * 2,
+                        )
+                            .into(),
                     );
                     let shadow_rect = super::clamp_rect_to_bounds(raw_shadow_rect, screen_bounds);
 
@@ -4528,8 +4557,9 @@ pub fn run_drm() -> Result<()> {
                 let has_commits = state.surface_commit_counter != out_surface.last_commit_counter
                     || current_output_commit_counter != out_surface.last_output_commit_counter;
                 if has_commits {
-                    out_surface.pending_damage_buffers =
-                        out_surface.pending_damage_buffers.max(damage_buffers_per_event);
+                    out_surface.pending_damage_buffers = out_surface
+                        .pending_damage_buffers
+                        .max(damage_buffers_per_event);
                 }
 
                 let cursor_changed = cursor_draw_point != out_surface.last_cursor_draw_point
@@ -4538,11 +4568,13 @@ pub fn run_drm() -> Result<()> {
                     out_surface.pending_damage_buffers = out_surface.pending_damage_buffers.max(1);
                 }
                 if state.dnd_drop_hold.is_some() {
-                    out_surface.pending_damage_buffers =
-                        out_surface.pending_damage_buffers.max(damage_buffers_per_event);
+                    out_surface.pending_damage_buffers = out_surface
+                        .pending_damage_buffers
+                        .max(damage_buffers_per_event);
                 }
 
-                let mut window_geoms_changed = window_render_data.len() != out_surface.last_window_geometries.len();
+                let mut window_geoms_changed =
+                    window_render_data.len() != out_surface.last_window_geometries.len();
                 if !window_geoms_changed {
                     for (root_id, _, _, _, _, is_active, win_rect, ..) in &window_render_data {
                         match out_surface.last_window_geometries.get(root_id) {
@@ -4560,18 +4592,20 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
                 if window_geoms_changed {
-                    out_surface.pending_damage_buffers =
-                        out_surface.pending_damage_buffers.max(damage_buffers_per_event);
+                    out_surface.pending_damage_buffers = out_surface
+                        .pending_damage_buffers
+                        .max(damage_buffers_per_event);
                 }
 
-                let screenshot_active = state
-                    .pending_screenshot_requests
-                    .iter()
-                    .any(|(_, output_name)| {
-                        output_name
-                            .as_deref()
-                            .map_or(true, |name| name == out_surface.output.name())
-                    });
+                let screenshot_active =
+                    state
+                        .pending_screenshot_requests
+                        .iter()
+                        .any(|(_, output_name)| {
+                            output_name
+                                .as_deref()
+                                .map_or(true, |name| name == out_surface.output.name())
+                        });
 
                 let black_hole_active_on_output = active_black_holes
                     .iter()
@@ -4659,8 +4693,7 @@ pub fn run_drm() -> Result<()> {
 
                 let expose_render_bundle = if state.expose.active {
                     let eased = state.expose.eased_progress();
-                    let usable =
-                        state.usable_zone_from_layer_map(&out_surface.output, &layer_map);
+                    let usable = state.usable_zone_from_layer_map(&out_surface.output, &layer_map);
                     let usable_cards = crate::expose::expose_usable_zone_with_spaces_bar(usable);
                     let out_name = out_surface.output.name();
                     let hovered_idx = state.expose.hovered_index;
@@ -4675,8 +4708,7 @@ pub fn run_drm() -> Result<()> {
                         .map(|d| (d.slot_index, crate::expose::drag_card_rect(d)));
                     let spaces_info = state.space_thumbnails_for_output(&out_surface.output);
                     let active_ws = state.workspaces.active_index;
-                    let can_add_ws =
-                        state.workspaces.count() < crate::workspaces::MAX_WORKSPACES;
+                    let can_add_ws = state.workspaces.count() < crate::workspaces::MAX_WORKSPACES;
                     let ws_rev = state.workspace_revision;
 
                     let slots_snapshot: Vec<_> = state
@@ -4714,11 +4746,13 @@ pub fn run_drm() -> Result<()> {
                                         (s.original_rect.size.w as f64
                                             + (target.size.w - s.original_rect.size.w) as f64 * t)
                                             .round()
-                                            .max(1.0) as i32,
+                                            .max(1.0)
+                                            as i32,
                                         (s.original_rect.size.h as f64
                                             + (target.size.h - s.original_rect.size.h) as f64 * t)
                                             .round()
-                                            .max(1.0) as i32,
+                                            .max(1.0)
+                                            as i32,
                                     )
                                         .into(),
                                 )
@@ -4759,15 +4793,8 @@ pub fn run_drm() -> Result<()> {
                     };
 
                     let mut cards = Vec::with_capacity(slots_snapshot.len());
-                    for (
-                        idx,
-                        is_dragged,
-                        win,
-                        orig_rect,
-                        slot_rect,
-                        title,
-                        matches_filter,
-                    ) in slots_snapshot
+                    for (idx, is_dragged, win, orig_rect, slot_rect, title, matches_filter) in
+                        slots_snapshot
                     {
                         let win_geo_loc = win.geometry().loc;
                         let orig_phys_loc = (orig_rect.loc - output_geo.loc)
@@ -4782,11 +4809,8 @@ pub fn run_drm() -> Result<()> {
                             .to_f64()
                             .to_physical(scale)
                             .to_i32_round();
-                        let card_phys_size = slot_rect
-                            .size
-                            .to_f64()
-                            .to_physical(scale)
-                            .to_i32_round();
+                        let card_phys_size =
+                            slot_rect.size.to_f64().to_physical(scale).to_i32_round();
                         let card_phys = Rectangle::new(card_phys_loc, card_phys_size);
                         let k = ((slot_rect.size.w as f64 / orig_rect.size.w.max(1) as f64)
                             .min(slot_rect.size.h as f64 / orig_rect.size.h.max(1) as f64))
@@ -4881,11 +4905,14 @@ pub fn run_drm() -> Result<()> {
                         let view_dst = elem.view().dst;
                         if view_dst.w > 0 && view_dst.h > 0 {
                             let target_logical_w = cursor_size as f64;
-                            let target_logical_h = target_logical_w * (view_dst.h as f64 / view_dst.w as f64);
+                            let target_logical_h =
+                                target_logical_w * (view_dst.h as f64 / view_dst.w as f64);
                             let ratio_x = target_logical_w / view_dst.w as f64;
                             let ratio_y = target_logical_h / view_dst.h as f64;
-                            let hot_phys_x = (cursor_hotspot.x as f64 * ratio_x * scale).round() as i32;
-                            let hot_phys_y = (cursor_hotspot.y as f64 * ratio_y * scale).round() as i32;
+                            let hot_phys_x =
+                                (cursor_hotspot.x as f64 * ratio_x * scale).round() as i32;
+                            let hot_phys_y =
+                                (cursor_hotspot.y as f64 * ratio_y * scale).round() as i32;
                             let cursor_phys_w = (target_logical_w * scale).round() as i32;
                             let cursor_phys_h = (target_logical_h * scale).round() as i32;
                             Some(Rectangle::new(
@@ -4990,16 +5017,26 @@ pub fn run_drm() -> Result<()> {
                         None => true,
                     };
                     if geom_changed || age_to_use == 0 {
-                        out_surface.window_redraw_shadow_blur.insert(root_id.clone(), 3);
+                        out_surface
+                            .window_redraw_shadow_blur
+                            .insert(root_id.clone(), 3);
                         let raw_shadow_rect = Rectangle::new(
                             (win_rect.loc.x - shadow_pad, win_rect.loc.y - shadow_pad).into(),
-                            (win_rect.size.w + shadow_pad * 2, win_rect.size.h + shadow_pad * 2).into(),
+                            (
+                                win_rect.size.w + shadow_pad * 2,
+                                win_rect.size.h + shadow_pad * 2,
+                            )
+                                .into(),
                         );
                         this_frame_extra_damage.push(raw_shadow_rect);
                         if let Some((prev_rect, _)) = last {
                             let prev_shadow = Rectangle::new(
                                 (prev_rect.loc.x - shadow_pad, prev_rect.loc.y - shadow_pad).into(),
-                                (prev_rect.size.w + shadow_pad * 2, prev_rect.size.h + shadow_pad * 2).into(),
+                                (
+                                    prev_rect.size.w + shadow_pad * 2,
+                                    prev_rect.size.h + shadow_pad * 2,
+                                )
+                                    .into(),
                             );
                             this_frame_extra_damage.push(prev_shadow);
                         }
@@ -5015,7 +5052,11 @@ pub fn run_drm() -> Result<()> {
                         window_needs_shadow_blur[idx] = true;
                         let raw_shadow_rect = Rectangle::new(
                             (win_rect.loc.x - shadow_pad, win_rect.loc.y - shadow_pad).into(),
-                            (win_rect.size.w + shadow_pad * 2, win_rect.size.h + shadow_pad * 2).into(),
+                            (
+                                win_rect.size.w + shadow_pad * 2,
+                                win_rect.size.h + shadow_pad * 2,
+                            )
+                                .into(),
                         );
                         this_frame_extra_damage.push(raw_shadow_rect);
                     }
@@ -5035,7 +5076,9 @@ pub fn run_drm() -> Result<()> {
                         true
                     }
                 });
-                out_surface.window_redraw_shadow_blur.retain(|id, _| current_ids.contains(id));
+                out_surface
+                    .window_redraw_shadow_blur
+                    .retain(|id, _| current_ids.contains(id));
 
                 // Sincronización robusta del Dock con el ciclo de triple-buffering de DRM
                 for surface in layer_map.layers() {
@@ -5044,11 +5087,22 @@ pub fn run_drm() -> Result<()> {
                             let dock_phys = geo.to_physical_precise_round(scale);
                             let dock_shadow_pad = (80.0 * scale).round() as i32;
                             let dock_shadow_rect = Rectangle::new(
-                                (dock_phys.loc.x - dock_shadow_pad, dock_phys.loc.y - dock_shadow_pad).into(),
-                                (dock_phys.size.w + dock_shadow_pad * 2, dock_phys.size.h + dock_shadow_pad * 2).into(),
+                                (
+                                    dock_phys.loc.x - dock_shadow_pad,
+                                    dock_phys.loc.y - dock_shadow_pad,
+                                )
+                                    .into(),
+                                (
+                                    dock_phys.size.w + dock_shadow_pad * 2,
+                                    dock_phys.size.h + dock_shadow_pad * 2,
+                                )
+                                    .into(),
                             );
-                            let dock_touched = this_frame_extra_damage.iter().any(|d| d.overlaps(dock_phys))
-                                || current_cursor_rect.map_or(false, |c| c.overlaps(dock_shadow_rect));
+                            let dock_touched = this_frame_extra_damage
+                                .iter()
+                                .any(|d| d.overlaps(dock_phys))
+                                || current_cursor_rect
+                                    .map_or(false, |c| c.overlaps(dock_shadow_rect));
                             if dock_touched {
                                 out_surface.dock_redraw_buffers = 3;
                             }
@@ -5088,7 +5142,9 @@ pub fn run_drm() -> Result<()> {
                             Err(_) => vec![Rectangle::from_size(out_surface.size)],
                         };
                         dmg.extend_from_slice(&this_frame_extra_damage);
-                        for old_extra in out_surface.extra_damage_history.iter().take(age_to_use - 1) {
+                        for old_extra in
+                            out_surface.extra_damage_history.iter().take(age_to_use - 1)
+                        {
                             dmg.extend_from_slice(old_extra);
                         }
                         dmg
@@ -5108,18 +5164,19 @@ pub fn run_drm() -> Result<()> {
 
                 // Consolidación y fusión de rectángulos superpuestos en regiones disjuntas
                 // para evitar sobre-dibujo o doble blending en quads translúcidos
-                render_damage = render_damage
-                    .into_iter()
-                    .fold(Vec::new(), |new_damage, mut rect| {
-                        let (overlapping, mut new_damage): (Vec<_>, Vec<_>) = new_damage
-                            .into_iter()
-                            .partition(|other| other.overlaps_or_touches(rect));
-                        for overlap in overlapping {
-                            rect = rect.merge(overlap);
-                        }
-                        new_damage.push(rect);
-                        new_damage
-                    });
+                render_damage =
+                    render_damage
+                        .into_iter()
+                        .fold(Vec::new(), |new_damage, mut rect| {
+                            let (overlapping, mut new_damage): (Vec<_>, Vec<_>) = new_damage
+                                .into_iter()
+                                .partition(|other| other.overlaps_or_touches(rect));
+                            for overlap in overlapping {
+                                rect = rect.merge(overlap);
+                            }
+                            new_damage.push(rect);
+                            new_damage
+                        });
 
                 // Si no hay cambios en esta pantalla física, ¡evitar por completo el sobre-dibujo GPU!
                 if render_damage.is_empty() {
@@ -5153,145 +5210,161 @@ pub fn run_drm() -> Result<()> {
                         let _ = frame.clear(clear_color, damage);
                         if session_locked {
                             if !lock_elements.is_empty() {
+                                let _ =
+                                    draw_render_elements(&mut frame, scale, &lock_elements, damage);
+                            }
+                        } else {
+                            // 1. Renderizar fondo (wallpaper y capas inferiores) solo si no está 100% ocluido por una ventana pantalla completa
+                            if !wallpaper_occluded && !lower_elements.is_empty() {
                                 let _ = draw_render_elements(
                                     &mut frame,
                                     scale,
-                                    &lock_elements,
+                                    &lower_elements,
                                     damage,
                                 );
                             }
-                        } else {
-                        // 1. Renderizar fondo (wallpaper y capas inferiores) solo si no está 100% ocluido por una ventana pantalla completa
-                        if !wallpaper_occluded && !lower_elements.is_empty() {
-                            let _ =
-                                draw_render_elements(&mut frame, scale, &lower_elements, damage);
-                        }
 
-                        // Inicializar pipeline de sombras squircle si aún no se intentó
-                        if !shadow_init_attempted {
-                            shadow_init_attempted = true;
-                            shadow_pipeline = frame
-                                .with_context(|gl| crate::shadow::WindowShadowPipeline::new(gl))
-                                .ok()
-                                .flatten()
-                                .map(std::sync::Arc::new);
-                        }
+                            // Inicializar pipeline de sombras squircle si aún no se intentó
+                            if !shadow_init_attempted {
+                                shadow_init_attempted = true;
+                                shadow_pipeline = frame
+                                    .with_context(|gl| crate::shadow::WindowShadowPipeline::new(gl))
+                                    .ok()
+                                    .flatten()
+                                    .map(std::sync::Arc::new);
+                            }
 
-                        // Inicializar pipeline de desenfoque Dual Kawase si aún no se intentó
-                        if !blur_init_attempted {
-                            blur_init_attempted = true;
-                            blur_pipeline = frame
-                                .with_context(|gl| crate::blur::GaussianBlur::new(gl))
-                                .ok()
-                                .flatten()
-                                .map(|b| std::sync::Arc::new(std::sync::Mutex::new(b)));
-                        }
+                            // Inicializar pipeline de desenfoque Dual Kawase si aún no se intentó
+                            if !blur_init_attempted {
+                                blur_init_attempted = true;
+                                blur_pipeline = frame
+                                    .with_context(|gl| crate::blur::GaussianBlur::new(gl))
+                                    .ok()
+                                    .flatten()
+                                    .map(|b| std::sync::Arc::new(std::sync::Mutex::new(b)));
+                            }
 
-                        let projection = *frame.projection();
+                            let projection = *frame.projection();
 
-                        // 1.1. Capturar el fondo limpio DESPUÉS de dibujar el wallpaper y ANTES de dibujar ventanas o sombras.
-                        // Esto garantiza que el desenfoque Dual-Kawase nunca lea fragmentos de ventanas ni sombras.
-                        // Cuando solo cambian iconos del escritorio (`malus-wallpaper`), omitimos la copia completa de pantalla
-                        // salvo en el área dañada de la ventana translúcida inferior (si existe), evitando stalls de GPU por cuadro.
-                        let force_full_bg_capture = out_surface.background_dirty
-                            || out_surface.last_background_size != (out_surface.size.w, out_surface.size.h)
-                            || expose_render_bundle.is_some()
-                            || app_switcher_deck_frame.is_some()
-                            || state.theme_transition_started_at.is_some()
-                            || theme_capture_request.is_some()
-                            || state.workspace_transition.is_some()
-                            || workspace_switch_pending;
-                        let bg_committed =
-                            out_surface.last_background_commit_counter != state.background_commit_counter;
+                            // 1.1. Capturar el fondo limpio DESPUÉS de dibujar el wallpaper y ANTES de dibujar ventanas o sombras.
+                            // Esto garantiza que el desenfoque Dual-Kawase nunca lea fragmentos de ventanas ni sombras.
+                            // Cuando solo cambian iconos del escritorio (`malus-wallpaper`), omitimos la copia completa de pantalla
+                            // salvo en el área dañada de la ventana translúcida inferior (si existe), evitando stalls de GPU por cuadro.
+                            let force_full_bg_capture = out_surface.background_dirty
+                                || out_surface.last_background_size
+                                    != (out_surface.size.w, out_surface.size.h)
+                                || expose_render_bundle.is_some()
+                                || app_switcher_deck_frame.is_some()
+                                || state.theme_transition_started_at.is_some()
+                                || theme_capture_request.is_some()
+                                || state.workspace_transition.is_some()
+                                || workspace_switch_pending;
+                            let bg_committed = out_surface.last_background_commit_counter
+                                != state.background_commit_counter;
 
-                        let (bottom_translucent_rect, bottom_needs_shadow_blur) =
-                            if app_switcher_deck_frame.is_none() {
-                                if let Some((
-                                    _,
-                                    win_elems,
-                                    _,
-                                    _,
-                                    _,
-                                    _,
-                                    win_rect,
-                                    _,
-                                    _,
-                                    _,
-                                    is_translucent,
-                                    transition_clip,
-                                    _,
-                                    _,
-                                    is_branches,
-                                )) = window_render_data.first()
-                                {
-                                    let needs_transition_backdrop =
-                                        transition_clip.is_some_and(|c| {
-                                            c.size.w < win_rect.size.w
-                                                || (c.loc.y + c.size.h)
-                                                    < (win_rect.loc.y + win_rect.size.h)
-                                        });
-                                    let is_visible = !win_elems.is_empty() && !body_occluded[0];
-                                    if is_visible && (*is_translucent || needs_transition_backdrop) {
-                                        let rect = if needs_transition_backdrop && !*is_translucent {
-                                            *win_rect
+                            let (bottom_translucent_rect, bottom_needs_shadow_blur) =
+                                if app_switcher_deck_frame.is_none() {
+                                    if let Some((
+                                        _,
+                                        win_elems,
+                                        _,
+                                        _,
+                                        _,
+                                        _,
+                                        win_rect,
+                                        _,
+                                        _,
+                                        _,
+                                        is_translucent,
+                                        transition_clip,
+                                        _,
+                                        _,
+                                        is_branches,
+                                    )) = window_render_data.first()
+                                    {
+                                        let needs_transition_backdrop = transition_clip
+                                            .is_some_and(|c| {
+                                                c.size.w < win_rect.size.w
+                                                    || (c.loc.y + c.size.h)
+                                                        < (win_rect.loc.y + win_rect.size.h)
+                                            });
+                                        let is_visible = !win_elems.is_empty() && !body_occluded[0];
+                                        if is_visible
+                                            && (*is_translucent || needs_transition_backdrop)
+                                        {
+                                            let rect =
+                                                if needs_transition_backdrop && !*is_translucent {
+                                                    *win_rect
+                                                } else {
+                                                    super::translucent_window_blur_rect(
+                                                        *win_rect,
+                                                        *is_branches,
+                                                        *is_translucent,
+                                                        win_phys_r,
+                                                        scale,
+                                                    )
+                                                };
+                                            (Some(rect), window_needs_shadow_blur[0])
                                         } else {
-                                            super::translucent_window_blur_rect(
-                                                *win_rect,
-                                                *is_branches,
-                                                *is_translucent,
-                                                win_phys_r,
-                                                scale,
-                                            )
-                                        };
-                                        (Some(rect), window_needs_shadow_blur[0])
+                                            (None, false)
+                                        }
                                     } else {
                                         (None, false)
                                     }
                                 } else {
                                     (None, false)
-                                }
-                            } else {
-                                (None, false)
-                            };
+                                };
 
-                        let capture_plan = super::plan_background_blur_capture(
-                            force_full_bg_capture,
-                            bg_committed,
-                            out_surface.background_snapshot_stale,
-                            bottom_translucent_rect,
-                            bottom_needs_shadow_blur,
-                            damage,
-                        );
+                            let capture_plan = super::plan_background_blur_capture(
+                                force_full_bg_capture,
+                                bg_committed,
+                                out_surface.background_snapshot_stale,
+                                bottom_translucent_rect,
+                                bottom_needs_shadow_blur,
+                                damage,
+                            );
 
-                        if !wallpaper_occluded {
-                            match capture_plan {
-                                super::BackgroundBlurCapturePlan::FullScreen => {
-                                    if let Some(mut blur) =
-                                        blur_pipeline.as_ref().and_then(|b| b.lock().ok())
-                                    {
-                                        let _ = frame.with_context(|gl| {
-                                            blur.capture_background(gl, &projection, out_surface.size);
-                                        });
-                                        out_surface.background_dirty = false;
-                                        out_surface.background_snapshot_stale = false;
-                                        out_surface.last_background_commit_counter =
-                                            state.background_commit_counter;
-                                        out_surface.last_background_size =
-                                            (out_surface.size.w, out_surface.size.h);
+                            if !wallpaper_occluded {
+                                match capture_plan {
+                                    super::BackgroundBlurCapturePlan::FullScreen => {
+                                        if let Some(mut blur) =
+                                            blur_pipeline.as_ref().and_then(|b| b.lock().ok())
+                                        {
+                                            let _ = frame.with_context(|gl| {
+                                                blur.capture_background(
+                                                    gl,
+                                                    &projection,
+                                                    out_surface.size,
+                                                );
+                                            });
+                                            out_surface.background_dirty = false;
+                                            out_surface.background_snapshot_stale = false;
+                                            out_surface.last_background_commit_counter =
+                                                state.background_commit_counter;
+                                            out_surface.last_background_size =
+                                                (out_surface.size.w, out_surface.size.h);
+                                        }
                                     }
-                                }
-                                super::BackgroundBlurCapturePlan::Region(capture_rect) => {
-                                    if let Some(mut blur) =
-                                        blur_pipeline.as_ref().and_then(|b| b.lock().ok())
-                                    {
-                                        let _ = frame.with_context(|gl| {
-                                            blur.capture_background_region(
-                                                gl,
-                                                &projection,
-                                                out_surface.size,
-                                                capture_rect,
-                                            );
-                                        });
+                                    super::BackgroundBlurCapturePlan::Region(capture_rect) => {
+                                        if let Some(mut blur) =
+                                            blur_pipeline.as_ref().and_then(|b| b.lock().ok())
+                                        {
+                                            let _ = frame.with_context(|gl| {
+                                                blur.capture_background_region(
+                                                    gl,
+                                                    &projection,
+                                                    out_surface.size,
+                                                    capture_rect,
+                                                );
+                                            });
+                                            if bg_committed {
+                                                out_surface.background_snapshot_stale = true;
+                                                out_surface.last_background_commit_counter =
+                                                    state.background_commit_counter;
+                                            }
+                                        }
+                                    }
+                                    super::BackgroundBlurCapturePlan::None => {
                                         if bg_committed {
                                             out_surface.background_snapshot_stale = true;
                                             out_surface.last_background_commit_counter =
@@ -5299,168 +5372,327 @@ pub fn run_drm() -> Result<()> {
                                         }
                                     }
                                 }
-                                super::BackgroundBlurCapturePlan::None => {
-                                    if bg_committed {
-                                        out_surface.background_snapshot_stale = true;
-                                        out_surface.last_background_commit_counter =
-                                            state.background_commit_counter;
-                                    }
-                                }
                             }
-                        }
 
-                        let is_pointer_grabbed = state
-                            .seat
-                            .get_pointer()
-                            .map(|p| p.is_grabbed())
-                            .unwrap_or(false);
-                        if !is_pointer_grabbed {
-                            state.snap_preview = None;
-                            state.moving_window_surface = None;
-                        }
-                        let mut snap_preview_drawn = false;
+                            let is_pointer_grabbed = state
+                                .seat
+                                .get_pointer()
+                                .map(|p| p.is_grabbed())
+                                .unwrap_or(false);
+                            if !is_pointer_grabbed {
+                                state.snap_preview = None;
+                                state.moving_window_surface = None;
+                            }
+                            let mut snap_preview_drawn = false;
 
-                        let menu_radius =
-                            (super::POPUP_MENU_CORNER_RADIUS_LOGICAL * scale).round() as i32;
-                        if let Some((eased, ref expose_cards, ref filter_elem, ref spaces_bar_elem)) =
-                            expose_render_bundle
-                        {
-                            if let Some(mut blur) =
-                                blur_pipeline.as_ref().and_then(|b| b.lock().ok())
+                            let menu_radius =
+                                (super::POPUP_MENU_CORNER_RADIUS_LOGICAL * scale).round() as i32;
+                            if let Some((
+                                eased,
+                                ref expose_cards,
+                                ref filter_elem,
+                                ref spaces_bar_elem,
+                            )) = expose_render_bundle
                             {
-                                let _ = frame.with_context(|gl| {
-                                    blur.render_captured_blur_round(
-                                        gl,
-                                        &projection,
-                                        out_surface.size,
-                                        Rectangle::from_size(out_surface.size),
-                                        0.0,
-                                    );
-                                });
-                            }
-                            let _ = frame.draw_solid(
-                                screen_bounds,
-                                damage,
-                                Color32F::new(0.04, 0.05, 0.08, 0.44 * eased),
-                            );
-                            let card_radius = crate::expose::card_corner_radius_phys(scale);
-                            for draw_dragged in [false, true] {
-                                if draw_dragged {
-                                    if let Some(ref sb) = spaces_bar_elem {
-                                        let _ = draw_render_elements(
-                                            &mut frame,
-                                            1.0,
-                                            std::slice::from_ref(sb),
-                                            damage,
-                                        );
-                                    }
-                                }
-                                for (_, _, card_phys, scaled_elems, highlight_elem, label_elem) in
-                                    expose_cards.iter().filter(|(_, d, ..)| *d == draw_dragged)
+                                if let Some(mut blur) =
+                                    blur_pipeline.as_ref().and_then(|b| b.lock().ok())
                                 {
-                                    if let Some(ref hl) = highlight_elem {
-                                        let _ = draw_render_elements(
-                                            &mut frame,
-                                            1.0,
-                                            std::slice::from_ref(hl),
-                                            damage,
+                                    let _ = frame.with_context(|gl| {
+                                        blur.render_captured_blur_round(
+                                            gl,
+                                            &projection,
+                                            out_surface.size,
+                                            Rectangle::from_size(out_surface.size),
+                                            0.0,
                                         );
-                                    }
-                                    if let Some(ref shader) = window_squircle_shader.as_ref() {
-                                        for (elem, tex_params) in scaled_elems.iter().rev() {
-                                            let elem_geo = elem
-                                                .geometry(smithay::utils::Scale::from(scale));
-                                            let sub_offset = Point::from((
-                                                card_phys.loc.x - elem_geo.loc.x,
-                                                card_phys.loc.y - elem_geo.loc.y,
-                                            ));
-                                            shader.apply_surface_to_frame(
+                                    });
+                                }
+                                let _ = frame.draw_solid(
+                                    screen_bounds,
+                                    damage,
+                                    Color32F::new(0.04, 0.05, 0.08, 0.44 * eased),
+                                );
+                                let card_radius = crate::expose::card_corner_radius_phys(scale);
+                                for draw_dragged in [false, true] {
+                                    if draw_dragged {
+                                        if let Some(ref sb) = spaces_bar_elem {
+                                            let _ = draw_render_elements(
                                                 &mut frame,
-                                                *tex_params,
-                                                elem_geo.size,
-                                                sub_offset,
-                                                card_phys.size,
-                                                card_radius,
                                                 1.0,
-                                                false,
-                                            );
-                                            let _ = draw_render_elements(
-                                                &mut frame,
-                                                scale,
-                                                std::slice::from_ref(elem),
-                                                damage,
-                                            );
-                                            frame.clear_tex_program_override();
-                                        }
-                                    } else {
-                                        for (elem, _) in scaled_elems.iter().rev() {
-                                            let _ = draw_render_elements(
-                                                &mut frame,
-                                                scale,
-                                                std::slice::from_ref(elem),
+                                                std::slice::from_ref(sb),
                                                 damage,
                                             );
                                         }
                                     }
-                                    if let Some(ref lbl) = label_elem {
-                                        let _ = draw_render_elements(
-                                            &mut frame,
-                                            1.0,
-                                            std::slice::from_ref(lbl),
-                                            damage,
-                                        );
+                                    for (
+                                        _,
+                                        _,
+                                        card_phys,
+                                        scaled_elems,
+                                        highlight_elem,
+                                        label_elem,
+                                    ) in
+                                        expose_cards.iter().filter(|(_, d, ..)| *d == draw_dragged)
+                                    {
+                                        if let Some(ref hl) = highlight_elem {
+                                            let _ = draw_render_elements(
+                                                &mut frame,
+                                                1.0,
+                                                std::slice::from_ref(hl),
+                                                damage,
+                                            );
+                                        }
+                                        if let Some(ref shader) = window_squircle_shader.as_ref() {
+                                            for (elem, tex_params) in scaled_elems.iter().rev() {
+                                                let elem_geo = elem
+                                                    .geometry(smithay::utils::Scale::from(scale));
+                                                let sub_offset = Point::from((
+                                                    card_phys.loc.x - elem_geo.loc.x,
+                                                    card_phys.loc.y - elem_geo.loc.y,
+                                                ));
+                                                shader.apply_surface_to_frame(
+                                                    &mut frame,
+                                                    *tex_params,
+                                                    elem_geo.size,
+                                                    sub_offset,
+                                                    card_phys.size,
+                                                    card_radius,
+                                                    1.0,
+                                                    false,
+                                                );
+                                                let _ = draw_render_elements(
+                                                    &mut frame,
+                                                    scale,
+                                                    std::slice::from_ref(elem),
+                                                    damage,
+                                                );
+                                                frame.clear_tex_program_override();
+                                            }
+                                        } else {
+                                            for (elem, _) in scaled_elems.iter().rev() {
+                                                let _ = draw_render_elements(
+                                                    &mut frame,
+                                                    scale,
+                                                    std::slice::from_ref(elem),
+                                                    damage,
+                                                );
+                                            }
+                                        }
+                                        if let Some(ref lbl) = label_elem {
+                                            let _ = draw_render_elements(
+                                                &mut frame,
+                                                1.0,
+                                                std::slice::from_ref(lbl),
+                                                damage,
+                                            );
+                                        }
                                     }
                                 }
-                            }
-                            if let Some(ref fp) = filter_elem {
-                                let _ = draw_render_elements(
-                                    &mut frame,
-                                    1.0,
-                                    std::slice::from_ref(fp),
-                                    damage,
-                                );
-                            }
-                        } else {
-                        // 2. Renderizar superficies de cada ventana con sus sombras proyectadas, desenfoque de fondo y esquinas squircle
-                        for (
-                            idx,
-                            (
-                                root_id,
-                                win_elems,
-                                _popups,
-                                _popup_shadow_rects,
-                                should_round,
-                                is_active,
-                                win_rect,
-                                _content_offset,
-                                _content_size,
-                                is_firefox,
-                                is_translucent,
-                                transition_clip,
-                                ssd_elem,
-                                _is_maximized,
-                                is_branches,
-                            ),
-                        ) in window_render_data.iter().enumerate()
-                        {
-                            if app_switcher_deck_frame.is_some() || win_elems.is_empty() {
-                                continue;
-                            }
+                                if let Some(ref fp) = filter_elem {
+                                    let _ = draw_render_elements(
+                                        &mut frame,
+                                        1.0,
+                                        std::slice::from_ref(fp),
+                                        damage,
+                                    );
+                                }
+                            } else {
+                                // 2. Renderizar superficies de cada ventana con sus sombras proyectadas, desenfoque de fondo y esquinas squircle
+                                for (
+                                    idx,
+                                    (
+                                        root_id,
+                                        win_elems,
+                                        _popups,
+                                        _popup_shadow_rects,
+                                        should_round,
+                                        is_active,
+                                        win_rect,
+                                        _content_offset,
+                                        _content_size,
+                                        is_firefox,
+                                        is_translucent,
+                                        transition_clip,
+                                        ssd_elem,
+                                        _is_maximized,
+                                        is_branches,
+                                    ),
+                                ) in window_render_data.iter().enumerate()
+                                {
+                                    if app_switcher_deck_frame.is_some() || win_elems.is_empty() {
+                                        continue;
+                                    }
 
-                            // Dibujar la previsualización de ajuste (Snap Preview) INMEDIATAMENTE ANTES
-                            // de la ventana activa que se está arrastrando, de modo que la ventana quede POR ENCIMA
-                            if !snap_preview_drawn && is_pointer_grabbed {
-                                let is_target_window = state.moving_window_surface.as_ref().map_or(
+                                    // Dibujar la previsualización de ajuste (Snap Preview) INMEDIATAMENTE ANTES
+                                    // de la ventana activa que se está arrastrando, de modo que la ventana quede POR ENCIMA
+                                    if !snap_preview_drawn && is_pointer_grabbed {
+                                        let is_target_window = state.moving_window_surface.as_ref().map_or(
                                     idx == window_render_data.len() - 1,
                                     |moving_surf| {
                                         let moving_id = smithay::backend::renderer::element::Id::from_wayland_resource(moving_surf);
                                         *root_id == moving_id
                                     },
                                 );
-                                if is_target_window {
+                                        if is_target_window {
+                                            if let Some(preview) = state.snap_preview {
+                                                if output_geo.overlaps(preview) {
+                                                    let mut blur_guard = blur_pipeline
+                                                        .as_ref()
+                                                        .and_then(|b| b.lock().ok());
+                                                    crate::blur::render_snap_preview_overlay(
+                                                        &mut frame,
+                                                        blur_guard.as_deref_mut(),
+                                                        &projection,
+                                                        out_surface.size,
+                                                        preview,
+                                                        output_geo.loc,
+                                                        scale,
+                                                        win_phys_r,
+                                                    );
+                                                }
+                                            }
+                                            snap_preview_drawn = true;
+                                        }
+                                    }
+
+                                    let is_body_occluded = body_occluded[idx];
+                                    let is_shadow_occluded = shadow_occluded[idx];
+
+                                    if !is_body_occluded {
+                                        visible_surface_ids.insert(root_id.clone());
+                                    }
+
+                                    // 2.1. SOMBRA PROYECTADA (Window Drop Shadow con Squircle SDF n=4.2)
+                                    // Se dibuja para ventanas no en pantalla completa inmediatamente antes de su superficie
+                                    let raw_shadow_rect = Rectangle::new(
+                                        (win_rect.loc.x - shadow_pad, win_rect.loc.y - shadow_pad)
+                                            .into(),
+                                        (
+                                            win_rect.size.w + shadow_pad * 2,
+                                            win_rect.size.h + shadow_pad * 2,
+                                        )
+                                            .into(),
+                                    );
+                                    let shadow_is_damaged = window_needs_shadow_blur[idx]
+                                        || damage.iter().any(|d| d.overlaps(raw_shadow_rect));
+                                    if *should_round && !is_shadow_occluded && shadow_is_damaged {
+                                        if let (Some(r), Some(ref shadow)) =
+                                            (win_phys_r, shadow_pipeline.as_ref())
+                                        {
+                                            let _ = frame.with_context(|gl| {
+                                                shadow.render_shadow(
+                                                    gl,
+                                                    &projection,
+                                                    *win_rect,
+                                                    r as f32,
+                                                    *is_active,
+                                                    scale,
+                                                );
+                                            });
+                                        }
+                                    }
+
+                                    let win_is_damaged =
+                                        damage.iter().any(|d| d.overlaps(*win_rect));
+
+                                    // 2.1.5. DESENFOQUE DE FONDO DUAL KAWASE (Branches y Ajustes del Sistema)
+                                    let blur_rect = super::translucent_window_blur_rect(
+                                        *win_rect,
+                                        *is_branches,
+                                        *is_translucent,
+                                        win_phys_r,
+                                        scale,
+                                    );
+                                    let blur_is_damaged = window_needs_shadow_blur[idx]
+                                        || damage.iter().any(|d| d.overlaps(blur_rect));
+                                    if *is_translucent && !is_body_occluded && blur_is_damaged {
+                                        if let Some(mut blur) =
+                                            blur_pipeline.as_ref().and_then(|b| b.lock().ok())
+                                        {
+                                            let corner_radius = if *should_round {
+                                                win_phys_r.unwrap_or(0) as f32
+                                            } else {
+                                                0.0
+                                            };
+                                            let screen_size = out_surface.size;
+                                            let _ = frame.with_context(|gl| {
+                                                // Si hay ventanas dibujadas debajo de esta ventana translúcida (idx > 0),
+                                                // actualizar la región de snapshot con el contenido de las ventanas inferiores
+                                                // para que el desenfoque refleje tanto el wallpaper como las ventanas subyacentes.
+                                                if idx > 0 {
+                                                    blur.capture_background_region(
+                                                        gl,
+                                                        &projection,
+                                                        screen_size,
+                                                        blur_rect,
+                                                    );
+                                                }
+                                                blur.render_captured_blur(
+                                                    gl,
+                                                    &projection,
+                                                    screen_size,
+                                                    blur_rect,
+                                                    corner_radius,
+                                                );
+                                            });
+                                        }
+                                    }
+
+                                    // 2.2. SUPERFICIES DE LA VENTANA (con respaldo 1:1 durante SnapTransition y recorte Squircle)
+                                    let needs_transition_backdrop =
+                                        transition_clip.is_some_and(|c| {
+                                            c.size.w < win_rect.size.w
+                                                || (c.loc.y + c.size.h)
+                                                    < (win_rect.loc.y + win_rect.size.h)
+                                        });
+                                    if needs_transition_backdrop
+                                        && !is_body_occluded
+                                        && (win_is_damaged || window_needs_shadow_blur[idx])
+                                    {
+                                        let corner_radius = if *should_round {
+                                            win_phys_r.unwrap_or(0) as f32
+                                        } else {
+                                            0.0
+                                        };
+                                        let mut blur_guard =
+                                            blur_pipeline.as_ref().and_then(|b| b.lock().ok());
+                                        crate::blur::render_snap_transition_backdrop(
+                                            &mut frame,
+                                            blur_guard.as_deref_mut(),
+                                            &projection,
+                                            out_surface.size,
+                                            *win_rect,
+                                            corner_radius,
+                                            idx > 0,
+                                            *is_translucent,
+                                            *is_branches,
+                                            is_dark_theme,
+                                        );
+                                    }
+                                    if !is_body_occluded && win_is_damaged {
+                                        crate::window_corners::render_window_elements(
+                                            &mut frame,
+                                            scale,
+                                            damage,
+                                            window_squircle_shader.as_deref(),
+                                            root_id,
+                                            win_elems,
+                                            ssd_elem.as_ref(),
+                                            *win_rect,
+                                            win_phys_r,
+                                            *should_round,
+                                            *is_firefox,
+                                            *transition_clip,
+                                        );
+                                    }
+                                }
+
+                                // Si no se dibujó antes (por ejemplo, si no hay ventanas en este monitor), dibujarlo sobre el fondo
+                                if !snap_preview_drawn && is_pointer_grabbed {
                                     if let Some(preview) = state.snap_preview {
                                         if output_geo.overlaps(preview) {
-                                            let mut blur_guard = blur_pipeline.as_ref().and_then(|b| b.lock().ok());
+                                            let mut blur_guard =
+                                                blur_pipeline.as_ref().and_then(|b| b.lock().ok());
                                             crate::blur::render_snap_preview_overlay(
                                                 &mut frame,
                                                 blur_guard.as_deref_mut(),
@@ -5473,134 +5705,288 @@ pub fn run_drm() -> Result<()> {
                                             );
                                         }
                                     }
-                                    snap_preview_drawn = true;
                                 }
-                            }
 
-                            let is_body_occluded = body_occluded[idx];
-                            let is_shadow_occluded = shadow_occluded[idx];
+                                // 2. Aplicar desenfoque de fondo Dual Kawase por GPU a las capas y popups translúcidos
+                                if !blur_init_attempted {
+                                    blur_init_attempted = true;
+                                    blur_pipeline = frame
+                                        .with_context(|gl| crate::blur::GaussianBlur::new(gl))
+                                        .ok()
+                                        .flatten()
+                                        .map(|b| std::sync::Arc::new(std::sync::Mutex::new(b)));
+                                }
 
-                            if !is_body_occluded {
-                                visible_surface_ids.insert(root_id.clone());
-                            }
-
-                            // 2.1. SOMBRA PROYECTADA (Window Drop Shadow con Squircle SDF n=4.2)
-                            // Se dibuja para ventanas no en pantalla completa inmediatamente antes de su superficie
-                            let raw_shadow_rect = Rectangle::new(
-                                (win_rect.loc.x - shadow_pad, win_rect.loc.y - shadow_pad).into(),
-                                (win_rect.size.w + shadow_pad * 2, win_rect.size.h + shadow_pad * 2).into(),
-                            );
-                            let shadow_is_damaged = window_needs_shadow_blur[idx] || damage.iter().any(|d| d.overlaps(raw_shadow_rect));
-                            if *should_round && !is_shadow_occluded && shadow_is_damaged {
-                                if let (Some(r), Some(ref shadow)) =
-                                    (win_phys_r, shadow_pipeline.as_ref())
+                                if let Some(mut blur) =
+                                    blur_pipeline.as_ref().and_then(|b| b.lock().ok())
                                 {
-                                    let _ = frame.with_context(|gl| {
-                                        shadow.render_shadow(
-                                            gl,
-                                            &projection,
-                                            *win_rect,
-                                            r as f32,
-                                            *is_active,
-                                            scale,
-                                        );
-                                    });
-                                }
-                            }
-
-                            let win_is_damaged = damage.iter().any(|d| d.overlaps(*win_rect));
-
-                            // 2.1.5. DESENFOQUE DE FONDO DUAL KAWASE (Branches y Ajustes del Sistema)
-                            let blur_rect = super::translucent_window_blur_rect(
-                                *win_rect,
-                                *is_branches,
-                                *is_translucent,
-                                win_phys_r,
-                                scale,
-                            );
-                            let blur_is_damaged = window_needs_shadow_blur[idx] || damage.iter().any(|d| d.overlaps(blur_rect));
-                            if *is_translucent && !is_body_occluded && blur_is_damaged {
-                                if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
-                                    let corner_radius = if *should_round {
-                                        win_phys_r.unwrap_or(0) as f32
-                                    } else {
-                                        0.0
-                                    };
                                     let screen_size = out_surface.size;
-                                    let _ = frame.with_context(|gl| {
-                                        // Si hay ventanas dibujadas debajo de esta ventana translúcida (idx > 0),
-                                        // actualizar la región de snapshot con el contenido de las ventanas inferiores
-                                        // para que el desenfoque refleje tanto el wallpaper como las ventanas subyacentes.
-                                        if idx > 0 {
+                                    let mut layer_blur_items: Vec<(
+                                        Rectangle<i32, Physical>,
+                                        f32,
+                                        bool,
+                                    )> = Vec::new();
+                                    for (_, rect) in &spotlight_backdrop_elements {
+                                        if damage.iter().any(|d| d.overlaps(*rect)) {
+                                            layer_blur_items.push((
+                                                *rect,
+                                                26.0 * scale as f32,
+                                                false,
+                                            ));
+                                        }
+                                    }
+                                    for surface in layer_map.layers() {
+                                        if matches!(surface.layer(), Layer::Top | Layer::Overlay) {
+                                            if has_fullscreen_window
+                                                && surface.layer() == Layer::Top
+                                            {
+                                                continue;
+                                            }
+                                            let ns = surface.namespace();
+                                            if ns == "malus-app-switcher"
+                                                && !state.app_switcher_classic_active()
+                                            {
+                                                continue;
+                                            }
+                                            if ns == "malus-top-bar" {
+                                                continue;
+                                            }
+                                            if let Some(geo) = layer_map.layer_geometry(surface) {
+                                                let radius = match ns.as_ref() {
+                                                    "malus-dock" => 32.0 * scale as f32,
+                                                    "malus-app-switcher" => 32.0 * scale as f32,
+                                                    "malus-spotlight-controls"
+                                                    | "malus-spotlight-input"
+                                                    | "malus-spotlight-apps"
+                                                    | "malus-spotlight-files" => {
+                                                        27.0 * scale as f32
+                                                    }
+                                                    "malus-notifications" => 16.0 * scale as f32,
+                                                    _ => 0.0,
+                                                };
+                                                if radius > 0.0 {
+                                                    let is_spotlight_comp = matches!(
+                                                        ns.as_ref(),
+                                                        "malus-spotlight-controls"
+                                                            | "malus-spotlight-input"
+                                                            | "malus-spotlight-apps"
+                                                            | "malus-spotlight-files"
+                                                    );
+                                                    let phys_rect = if ns == "malus-dock" {
+                                                        let root_id =
+                                                    smithay::backend::renderer::element::Id::from_wayland_resource(
+                                                        surface.wl_surface(),
+                                                    );
+                                                        let Some(rect) = dock_clip_roots
+                                                            .iter()
+                                                            .find(|(id, _)| *id == root_id)
+                                                            .map(|(_, rect)| *rect)
+                                                        else {
+                                                            continue;
+                                                        };
+                                                        rect
+                                                    } else {
+                                                        let rect =
+                                                            geo.to_physical_precise_round(scale);
+                                                        if is_spotlight_comp {
+                                                            super::spotlight_component_blur_rect(
+                                                                rect, scale,
+                                                            )
+                                                        } else {
+                                                            rect
+                                                        }
+                                                    };
+                                                    if phys_rect.size.w > 0 && phys_rect.size.h > 0
+                                                    {
+                                                        if damage
+                                                            .iter()
+                                                            .any(|d| d.overlaps(phys_rect))
+                                                        {
+                                                            layer_blur_items.push((
+                                                                phys_rect,
+                                                                radius,
+                                                                is_spotlight_comp,
+                                                            ));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if !layer_blur_items.is_empty() {
+                                        let mut min_x = i32::MAX;
+                                        let mut min_y = i32::MAX;
+                                        let mut max_x = i32::MIN;
+                                        let mut max_y = i32::MIN;
+                                        for (rect, _, _) in &layer_blur_items {
+                                            min_x = min_x.min(rect.loc.x);
+                                            min_y = min_y.min(rect.loc.y);
+                                            max_x = max_x.max(rect.loc.x + rect.size.w);
+                                            max_y = max_y.max(rect.loc.y + rect.size.h);
+                                        }
+                                        let capture_region = Rectangle::new(
+                                            (min_x, min_y).into(),
+                                            ((max_x - min_x).max(0), (max_y - min_y).max(0)).into(),
+                                        );
+                                        let _ = frame.with_context(|gl| {
                                             blur.capture_background_region(
                                                 gl,
                                                 &projection,
                                                 screen_size,
-                                                blur_rect,
+                                                capture_region,
+                                            );
+                                            for (phys_rect, radius, is_round) in layer_blur_items {
+                                                if is_round {
+                                                    blur.render_captured_blur_round(
+                                                        gl,
+                                                        &projection,
+                                                        screen_size,
+                                                        phys_rect,
+                                                        radius,
+                                                    );
+                                                } else {
+                                                    blur.render_captured_blur(
+                                                        gl,
+                                                        &projection,
+                                                        screen_size,
+                                                        phys_rect,
+                                                        radius,
+                                                    );
+                                                }
+                                            }
+                                        });
+                                    }
+                                }
+
+                                for (elements, rect) in &spotlight_backdrop_elements {
+                                    for elem in elements.iter().rev() {
+                                        if let Some(shader) = window_squircle_shader.as_ref() {
+                                            let elem_geo =
+                                                elem.geometry(smithay::utils::Scale::from(scale));
+                                            shader.apply_clip_to_frame(
+                                                &mut frame,
+                                                elem_geo.size,
+                                                rect.loc - elem_geo.loc,
+                                                rect.size,
+                                                (26.0 * scale).round() as i32,
                                             );
                                         }
-                                        blur.render_captured_blur(
-                                            gl,
-                                            &projection,
-                                            screen_size,
-                                            blur_rect,
-                                            corner_radius,
+                                        let _ = draw_render_elements(
+                                            &mut frame,
+                                            scale,
+                                            std::slice::from_ref(elem),
+                                            damage,
                                         );
+                                        frame.clear_tex_program_override();
+                                    }
+                                }
+
+                                if let Some(shadow) = shadow_pipeline.as_ref() {
+                                    let _ = frame.with_context(|gl| {
+                                        for rect in &spotlight_shadow_rects {
+                                            shadow.render_shadow(
+                                                gl,
+                                                &projection,
+                                                *rect,
+                                                26.0 * scale as f32,
+                                                true,
+                                                scale,
+                                            );
+                                        }
                                     });
+                                }
+
+                                // 3. Renderizar menús contextuales y popups de ventanas (siempre ENCIMA de las superficies de ventana)
+                                for (idx, (_, _, _, popup_shadow_rects, ..)) in
+                                    window_render_data.iter().enumerate()
+                                {
+                                    if app_switcher_deck_frame.is_some() || body_occluded[idx] {
+                                        continue;
+                                    }
+                                    if let Some(shadow) = shadow_pipeline.as_ref() {
+                                        for popup_rect in popup_shadow_rects {
+                                            let _ = frame.with_context(|gl| {
+                                                shadow.render_menu_shadow(
+                                                    gl,
+                                                    &projection,
+                                                    *popup_rect,
+                                                    menu_radius as f32,
+                                                    scale,
+                                                );
+                                            });
+                                        }
+                                    }
+                                }
+
+                                for (idx, (_, _, popups, ..)) in
+                                    window_render_data.iter().enumerate()
+                                {
+                                    if app_switcher_deck_frame.is_some() || body_occluded[idx] {
+                                        continue;
+                                    }
+                                    for (popup_elems, popup_rect, popup_effects_enabled) in popups {
+                                        if !damage.iter().any(|d| d.overlaps(*popup_rect)) {
+                                            continue;
+                                        }
+                                        if *popup_effects_enabled {
+                                            if let Some(mut blur) =
+                                                blur_pipeline.as_ref().and_then(|b| b.lock().ok())
+                                            {
+                                                let _ = frame.with_context(|gl| {
+                                                    blur.capture_background_region(
+                                                        gl,
+                                                        &projection,
+                                                        out_surface.size,
+                                                        *popup_rect,
+                                                    );
+                                                    blur.render_captured_blur_strong(
+                                                        gl,
+                                                        &projection,
+                                                        out_surface.size,
+                                                        *popup_rect,
+                                                        menu_radius as f32,
+                                                    );
+                                                });
+                                            }
+                                        }
+
+                                        for elem in popup_elems.iter().rev() {
+                                            if *popup_effects_enabled {
+                                                if let Some(shader) =
+                                                    window_squircle_shader.as_ref()
+                                                {
+                                                    let elem_geo = elem.geometry(
+                                                        smithay::utils::Scale::from(scale),
+                                                    );
+                                                    shader.apply_to_frame(
+                                                        &mut frame,
+                                                        elem_geo.size,
+                                                        popup_rect.loc - elem_geo.loc,
+                                                        popup_rect.size,
+                                                        menu_radius,
+                                                    );
+                                                }
+                                            }
+                                            let _ = draw_render_elements(
+                                                &mut frame,
+                                                scale,
+                                                std::slice::from_ref(elem),
+                                                damage,
+                                            );
+                                            if *popup_effects_enabled {
+                                                frame.clear_tex_program_override();
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
-                            // 2.2. SUPERFICIES DE LA VENTANA (con respaldo 1:1 durante SnapTransition y recorte Squircle)
-                            let needs_transition_backdrop = transition_clip.is_some_and(|c| {
-                                c.size.w < win_rect.size.w
-                                    || (c.loc.y + c.size.h) < (win_rect.loc.y + win_rect.size.h)
-                            });
-                            if needs_transition_backdrop
-                                && !is_body_occluded
-                                && (win_is_damaged || window_needs_shadow_blur[idx])
-                            {
-                                let corner_radius = if *should_round {
-                                    win_phys_r.unwrap_or(0) as f32
-                                } else {
-                                    0.0
-                                };
-                                let mut blur_guard = blur_pipeline.as_ref().and_then(|b| b.lock().ok());
-                                crate::blur::render_snap_transition_backdrop(
-                                    &mut frame,
-                                    blur_guard.as_deref_mut(),
-                                    &projection,
-                                    out_surface.size,
-                                    *win_rect,
-                                    corner_radius,
-                                    idx > 0,
-                                    *is_translucent,
-                                    *is_branches,
-                                    is_dark_theme,
-                                );
-                            }
-                            if !is_body_occluded && win_is_damaged {
-                                crate::window_corners::render_window_elements(
-                                    &mut frame,
-                                    scale,
-                                    damage,
-                                    window_squircle_shader.as_deref(),
-                                    root_id,
-                                    win_elems,
-                                    ssd_elem.as_ref(),
-                                    *win_rect,
-                                    win_phys_r,
-                                    *should_round,
-                                    *is_firefox,
-                                    *transition_clip,
-                                );
-                            }
-                        }
-
-                        // Si no se dibujó antes (por ejemplo, si no hay ventanas en este monitor), dibujarlo sobre el fondo
-                        if !snap_preview_drawn && is_pointer_grabbed {
-                            if let Some(preview) = state.snap_preview {
-                                if output_geo.overlaps(preview) {
-                                    let mut blur_guard = blur_pipeline.as_ref().and_then(|b| b.lock().ok());
+                            // Previsualización de destino al pasar el cursor por las plantillas de Snap Layouts
+                            if !is_pointer_grabbed {
+                                if let Some(preview) = snap_layouts_preview {
+                                    let mut blur_guard =
+                                        blur_pipeline.as_ref().and_then(|b| b.lock().ok());
                                     crate::blur::render_snap_preview_overlay(
                                         &mut frame,
                                         blur_guard.as_deref_mut(),
@@ -5613,189 +5999,143 @@ pub fn run_drm() -> Result<()> {
                                     );
                                 }
                             }
-                        }
 
-                        // 2. Aplicar desenfoque de fondo Dual Kawase por GPU a las capas y popups translúcidos
-                        if !blur_init_attempted {
-                            blur_init_attempted = true;
-                            blur_pipeline = frame
-                                .with_context(|gl| crate::blur::GaussianBlur::new(gl))
-                                .ok()
-                                .flatten()
-                                .map(|b| std::sync::Arc::new(std::sync::Mutex::new(b)));
-                        }
-
-                        if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
-                            let screen_size = out_surface.size;
-                            let mut layer_blur_items: Vec<(Rectangle<i32, Physical>, f32, bool)> =
-                                Vec::new();
-                            for (_, rect) in &spotlight_backdrop_elements {
-                                if damage.iter().any(|d| d.overlaps(*rect)) {
-                                    layer_blur_items.push((*rect, 26.0 * scale as f32, false));
-                                }
-                            }
-                            for surface in layer_map.layers() {
-                                if matches!(surface.layer(), Layer::Top | Layer::Overlay) {
-                                    if has_fullscreen_window && surface.layer() == Layer::Top {
-                                        continue;
-                                    }
-                                    let ns = surface.namespace();
-                                    if ns == "malus-app-switcher"
-                                        && !state.app_switcher_classic_active()
+                            // 4. Renderizar capas superiores translúcidas (Dock, Top Bar, Popovers)
+                            if !upper_elements.is_empty() {
+                                for elem in &upper_elements {
+                                    let dock_rect = dock_clip_roots
+                                        .iter()
+                                        .find(|(root_id, _)| *elem.id() == *root_id)
+                                        .map(|(_, rect)| *rect);
+                                    if let (Some(rect), Some(shadow)) =
+                                        (dock_rect, shadow_pipeline.as_ref())
                                     {
-                                        continue;
-                                    }
-                                    if ns == "malus-top-bar" {
-                                        continue;
-                                    }
-                                    if let Some(geo) = layer_map.layer_geometry(surface) {
-                                        let radius = match ns.as_ref() {
-                                            "malus-dock" => 32.0 * scale as f32,
-                                            "malus-app-switcher" => 32.0 * scale as f32,
-                                            "malus-spotlight-controls"
-                                            | "malus-spotlight-input"
-                                            | "malus-spotlight-apps"
-                                            | "malus-spotlight-files" => 27.0 * scale as f32,
-                                            "malus-notifications" => 16.0 * scale as f32,
-                                            _ => 0.0,
-                                        };
-                                        if radius > 0.0 {
-                                            let is_spotlight_comp = matches!(
-                                                ns.as_ref(),
-                                                "malus-spotlight-controls"
-                                                    | "malus-spotlight-input"
-                                                    | "malus-spotlight-apps"
-                                                    | "malus-spotlight-files"
-                                            );
-                                            let phys_rect = if ns == "malus-dock" {
-                                                let root_id =
-                                                    smithay::backend::renderer::element::Id::from_wayland_resource(
-                                                        surface.wl_surface(),
-                                                    );
-                                                let Some(rect) = dock_clip_roots
-                                                    .iter()
-                                                    .find(|(id, _)| *id == root_id)
-                                                    .map(|(_, rect)| *rect)
-                                                else {
-                                                    continue;
-                                                };
-                                                rect
-                                            } else {
-                                                let rect = geo.to_physical_precise_round(scale);
-                                                if is_spotlight_comp {
-                                                    super::spotlight_component_blur_rect(
-                                                        rect, scale,
-                                                    )
-                                                } else {
-                                                    rect
-                                                }
-                                            };
-                                            if phys_rect.size.w > 0 && phys_rect.size.h > 0 {
-                                                if damage.iter().any(|d| d.overlaps(phys_rect)) {
-                                                    layer_blur_items.push((
-                                                        phys_rect,
-                                                        radius,
-                                                        is_spotlight_comp,
-                                                    ));
-                                                }
-                                            }
+                                        let dock_shadow_pad = (80.0 * scale).round() as i32;
+                                        let dock_shadow_rect = Rectangle::new(
+                                            (
+                                                rect.loc.x - dock_shadow_pad,
+                                                rect.loc.y - dock_shadow_pad,
+                                            )
+                                                .into(),
+                                            (
+                                                rect.size.w + dock_shadow_pad * 2,
+                                                rect.size.h + dock_shadow_pad * 2,
+                                            )
+                                                .into(),
+                                        );
+                                        if damage.iter().any(|d| d.overlaps(dock_shadow_rect)) {
+                                            let _ = frame.with_context(|gl| {
+                                                shadow.render_dock_shadow(
+                                                    gl,
+                                                    &projection,
+                                                    rect,
+                                                    32.0 * scale as f32,
+                                                    scale,
+                                                );
+                                            });
                                         }
                                     }
-                                }
-                            }
-
-                            if !layer_blur_items.is_empty() {
-                                let mut min_x = i32::MAX;
-                                let mut min_y = i32::MAX;
-                                let mut max_x = i32::MIN;
-                                let mut max_y = i32::MIN;
-                                for (rect, _, _) in &layer_blur_items {
-                                    min_x = min_x.min(rect.loc.x);
-                                    min_y = min_y.min(rect.loc.y);
-                                    max_x = max_x.max(rect.loc.x + rect.size.w);
-                                    max_y = max_y.max(rect.loc.y + rect.size.h);
-                                }
-                                let capture_region = Rectangle::new(
-                                    (min_x, min_y).into(),
-                                    ((max_x - min_x).max(0), (max_y - min_y).max(0)).into(),
-                                );
-                                let _ = frame.with_context(|gl| {
-                                    blur.capture_background_region(
-                                        gl,
-                                        &projection,
-                                        screen_size,
-                                        capture_region,
-                                    );
-                                    for (phys_rect, radius, is_round) in layer_blur_items {
-                                        if is_round {
-                                            blur.render_captured_blur_round(
-                                                gl,
-                                                &projection,
-                                                screen_size,
-                                                phys_rect,
-                                                radius,
-                                            );
-                                        } else {
-                                            blur.render_captured_blur(
-                                                gl,
-                                                &projection,
-                                                screen_size,
-                                                phys_rect,
-                                                radius,
+                                    if let Some(rect) = dock_rect {
+                                        let elem_geo =
+                                            elem.geometry(smithay::utils::Scale::from(scale));
+                                        if let Some(shader) = window_squircle_shader.as_ref() {
+                                            shader.apply_wayland_element_to_frame(
+                                                &mut frame,
+                                                elem,
+                                                elem_geo.size,
+                                                rect.loc - elem_geo.loc,
+                                                rect.size,
+                                                (32.0 * scale).round() as i32,
+                                                0.0,
+                                                true,
                                             );
                                         }
                                     }
-                                });
-                            }
-                        }
-
-                        for (elements, rect) in &spotlight_backdrop_elements {
-                            for elem in elements.iter().rev() {
-                                if let Some(shader) = window_squircle_shader.as_ref() {
-                                    let elem_geo =
-                                        elem.geometry(smithay::utils::Scale::from(scale));
-                                    shader.apply_clip_to_frame(
+                                    let _ = draw_render_elements(
                                         &mut frame,
-                                        elem_geo.size,
-                                        rect.loc - elem_geo.loc,
-                                        rect.size,
-                                        (26.0 * scale).round() as i32,
-                                    );
-                                }
-                                let _ = draw_render_elements(
-                                    &mut frame,
-                                    scale,
-                                    std::slice::from_ref(elem),
-                                    damage,
-                                );
-                                frame.clear_tex_program_override();
-                            }
-                        }
-
-                        if let Some(shadow) = shadow_pipeline.as_ref() {
-                            let _ = frame.with_context(|gl| {
-                                for rect in &spotlight_shadow_rects {
-                                    shadow.render_shadow(
-                                        gl,
-                                        &projection,
-                                        *rect,
-                                        26.0 * scale as f32,
-                                        true,
                                         scale,
+                                        std::slice::from_ref(elem),
+                                        damage,
                                     );
+                                    if dock_rect.is_some() {
+                                        frame.clear_tex_program_override();
+                                    }
                                 }
-                            });
-                        }
-
-                        // 3. Renderizar menús contextuales y popups de ventanas (siempre ENCIMA de las superficies de ventana)
-                        for (idx, (_, _, _, popup_shadow_rects, ..)) in
-                            window_render_data.iter().enumerate()
-                        {
-                            if app_switcher_deck_frame.is_some() || body_occluded[idx] {
-                                continue;
                             }
-                            if let Some(shadow) = shadow_pipeline.as_ref() {
-                                for popup_rect in popup_shadow_rects {
+
+                            for (popup_elems, popup_rect) in &dock_popups {
+                                if !damage.iter().any(|d| d.overlaps(*popup_rect)) {
+                                    continue;
+                                }
+                                if let Some(mut blur) =
+                                    blur_pipeline.as_ref().and_then(|b| b.lock().ok())
+                                {
+                                    let blur_rect =
+                                        super::dock_popover_blur_rect(*popup_rect, scale);
+                                    let _ = frame.with_context(|gl| {
+                                        blur.capture_background_region(
+                                            gl,
+                                            &projection,
+                                            out_surface.size,
+                                            blur_rect,
+                                        );
+                                        blur.render_captured_blur(
+                                            gl,
+                                            &projection,
+                                            out_surface.size,
+                                            blur_rect,
+                                            menu_radius as f32,
+                                        );
+                                    });
+                                }
+
+                                for elem in popup_elems.iter().rev() {
+                                    if let Some(shader) = window_squircle_shader.as_ref() {
+                                        let elem_geo =
+                                            elem.geometry(smithay::utils::Scale::from(scale));
+                                        shader.apply_clip_to_frame(
+                                            &mut frame,
+                                            elem_geo.size,
+                                            popup_rect.loc - elem_geo.loc,
+                                            popup_rect.size,
+                                            (8.0 * scale).round() as i32,
+                                        );
+                                    }
+                                    let _ = draw_render_elements(
+                                        &mut frame,
+                                        scale,
+                                        std::slice::from_ref(elem),
+                                        damage,
+                                    );
+                                    frame.clear_tex_program_override();
+                                }
+                            }
+
+                            for (popup_elems, popup_rect) in &topbar_popups {
+                                if !damage.iter().any(|d| d.overlaps(*popup_rect)) {
+                                    continue;
+                                }
+                                if let Some(mut blur) =
+                                    blur_pipeline.as_ref().and_then(|b| b.lock().ok())
+                                {
+                                    let _ = frame.with_context(|gl| {
+                                        blur.capture_background_region(
+                                            gl,
+                                            &projection,
+                                            out_surface.size,
+                                            *popup_rect,
+                                        );
+                                        blur.render_captured_blur(
+                                            gl,
+                                            &projection,
+                                            out_surface.size,
+                                            *popup_rect,
+                                            menu_radius as f32,
+                                        );
+                                    });
+                                }
+
+                                if let Some(shadow) = shadow_pipeline.as_ref() {
                                     let _ = frame.with_context(|gl| {
                                         shadow.render_menu_shadow(
                                             gl,
@@ -5806,50 +6146,18 @@ pub fn run_drm() -> Result<()> {
                                         );
                                     });
                                 }
-                            }
-                        }
-
-                        for (idx, (_, _, popups, ..)) in window_render_data.iter().enumerate() {
-                            if app_switcher_deck_frame.is_some() || body_occluded[idx] {
-                                continue;
-                            }
-                            for (popup_elems, popup_rect, popup_effects_enabled) in popups {
-                                if !damage.iter().any(|d| d.overlaps(*popup_rect)) {
-                                    continue;
-                                }
-                                if *popup_effects_enabled {
-                                    if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
-                                        let _ = frame.with_context(|gl| {
-                                            blur.capture_background_region(
-                                                gl,
-                                                &projection,
-                                                out_surface.size,
-                                                *popup_rect,
-                                            );
-                                            blur.render_captured_blur_strong(
-                                                gl,
-                                                &projection,
-                                                out_surface.size,
-                                                *popup_rect,
-                                                menu_radius as f32,
-                                            );
-                                        });
-                                    }
-                                }
 
                                 for elem in popup_elems.iter().rev() {
-                                    if *popup_effects_enabled {
-                                        if let Some(shader) = window_squircle_shader.as_ref() {
-                                            let elem_geo =
-                                                elem.geometry(smithay::utils::Scale::from(scale));
-                                            shader.apply_to_frame(
-                                                &mut frame,
-                                                elem_geo.size,
-                                                popup_rect.loc - elem_geo.loc,
-                                                popup_rect.size,
-                                                menu_radius,
-                                            );
-                                        }
+                                    if let Some(shader) = window_squircle_shader.as_ref() {
+                                        let elem_geo =
+                                            elem.geometry(smithay::utils::Scale::from(scale));
+                                        shader.apply_to_frame(
+                                            &mut frame,
+                                            elem_geo.size,
+                                            popup_rect.loc - elem_geo.loc,
+                                            popup_rect.size,
+                                            menu_radius,
+                                        );
                                     }
                                     let _ = draw_render_elements(
                                         &mut frame,
@@ -5857,379 +6165,211 @@ pub fn run_drm() -> Result<()> {
                                         std::slice::from_ref(elem),
                                         damage,
                                     );
-                                    if *popup_effects_enabled {
-                                        frame.clear_tex_program_override();
-                                    }
-                                }
-                            }
-                        }
-                        }
-
-                        // Previsualización de destino al pasar el cursor por las plantillas de Snap Layouts
-                        if !is_pointer_grabbed {
-                            if let Some(preview) = snap_layouts_preview {
-                                let mut blur_guard = blur_pipeline.as_ref().and_then(|b| b.lock().ok());
-                                crate::blur::render_snap_preview_overlay(
-                                    &mut frame,
-                                    blur_guard.as_deref_mut(),
-                                    &projection,
-                                    out_surface.size,
-                                    preview,
-                                    output_geo.loc,
-                                    scale,
-                                    win_phys_r,
-                                );
-                            }
-                        }
-
-                        // 4. Renderizar capas superiores translúcidas (Dock, Top Bar, Popovers)
-                        if !upper_elements.is_empty() {
-                            for elem in &upper_elements {
-                                let dock_rect = dock_clip_roots
-                                    .iter()
-                                    .find(|(root_id, _)| *elem.id() == *root_id)
-                                    .map(|(_, rect)| *rect);
-                                if let (Some(rect), Some(shadow)) =
-                                    (dock_rect, shadow_pipeline.as_ref())
-                                {
-                                    let dock_shadow_pad = (80.0 * scale).round() as i32;
-                                    let dock_shadow_rect = Rectangle::new(
-                                        (rect.loc.x - dock_shadow_pad, rect.loc.y - dock_shadow_pad).into(),
-                                        (rect.size.w + dock_shadow_pad * 2, rect.size.h + dock_shadow_pad * 2).into(),
-                                    );
-                                    if damage.iter().any(|d| d.overlaps(dock_shadow_rect)) {
-                                        let _ = frame.with_context(|gl| {
-                                            shadow.render_dock_shadow(
-                                                gl,
-                                                &projection,
-                                                rect,
-                                                32.0 * scale as f32,
-                                                scale,
-                                            );
-                                        });
-                                    }
-                                }
-                                if let Some(rect) = dock_rect {
-                                    let elem_geo =
-                                        elem.geometry(smithay::utils::Scale::from(scale));
-                                    if let Some(shader) = window_squircle_shader.as_ref() {
-                                        shader.apply_wayland_element_to_frame(
-                                            &mut frame,
-                                            elem,
-                                            elem_geo.size,
-                                            rect.loc - elem_geo.loc,
-                                            rect.size,
-                                            (32.0 * scale).round() as i32,
-                                            0.0,
-                                            true,
-                                        );
-                                    }
-                                }
-                                let _ = draw_render_elements(
-                                    &mut frame,
-                                    scale,
-                                    std::slice::from_ref(elem),
-                                    damage,
-                                );
-                                if dock_rect.is_some() {
                                     frame.clear_tex_program_override();
                                 }
                             }
-                        }
 
-                        for (popup_elems, popup_rect) in &dock_popups {
-                            if !damage.iter().any(|d| d.overlaps(*popup_rect)) {
-                                continue;
-                            }
-                            if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
-                                let blur_rect = super::dock_popover_blur_rect(*popup_rect, scale);
-                                let _ = frame.with_context(|gl| {
-                                    blur.capture_background_region(
-                                        gl,
-                                        &projection,
-                                        out_surface.size,
-                                        blur_rect,
-                                    );
-                                    blur.render_captured_blur(
-                                        gl,
-                                        &projection,
-                                        out_surface.size,
-                                        blur_rect,
-                                        menu_radius as f32,
-                                    );
-                                });
-                            }
+                            for (popup_elems, popup_rect) in &wallpaper_popups {
+                                if !damage.iter().any(|d| d.overlaps(*popup_rect)) {
+                                    continue;
+                                }
+                                if let Some(mut blur) =
+                                    blur_pipeline.as_ref().and_then(|b| b.lock().ok())
+                                {
+                                    let _ = frame.with_context(|gl| {
+                                        blur.capture_background_region(
+                                            gl,
+                                            &projection,
+                                            out_surface.size,
+                                            *popup_rect,
+                                        );
+                                        blur.render_captured_blur(
+                                            gl,
+                                            &projection,
+                                            out_surface.size,
+                                            *popup_rect,
+                                            menu_radius as f32,
+                                        );
+                                    });
+                                }
 
-                            for elem in popup_elems.iter().rev() {
-                                if let Some(shader) = window_squircle_shader.as_ref() {
-                                    let elem_geo =
-                                        elem.geometry(smithay::utils::Scale::from(scale));
-                                    shader.apply_clip_to_frame(
+                                if let Some(shadow) = shadow_pipeline.as_ref() {
+                                    let _ = frame.with_context(|gl| {
+                                        shadow.render_menu_shadow(
+                                            gl,
+                                            &projection,
+                                            *popup_rect,
+                                            menu_radius as f32,
+                                            scale,
+                                        );
+                                    });
+                                }
+
+                                for elem in popup_elems.iter().rev() {
+                                    if let Some(shader) = window_squircle_shader.as_ref() {
+                                        let elem_geo =
+                                            elem.geometry(smithay::utils::Scale::from(scale));
+                                        shader.apply_to_frame(
+                                            &mut frame,
+                                            elem_geo.size,
+                                            popup_rect.loc - elem_geo.loc,
+                                            popup_rect.size,
+                                            menu_radius,
+                                        );
+                                    }
+                                    let _ = draw_render_elements(
                                         &mut frame,
-                                        elem_geo.size,
-                                        popup_rect.loc - elem_geo.loc,
-                                        popup_rect.size,
-                                        (8.0 * scale).round() as i32,
+                                        scale,
+                                        std::slice::from_ref(elem),
+                                        damage,
                                     );
+                                    frame.clear_tex_program_override();
+                                }
+                            }
+
+                            // 5. Renderizar Spotlight nativo del compositor (blur enmascarado por silueta exacta + capa Liquid Glass)
+                            if let Some((
+                                spot_rect,
+                                ref mask_vec,
+                                (mask_w, mask_h),
+                                spot_alpha,
+                                ref spot_elem,
+                            )) = spotlight_frame
+                            {
+                                if let Some(mut blur) =
+                                    blur_pipeline.as_ref().and_then(|b| b.lock().ok())
+                                {
+                                    let _ = frame.with_context(|gl| {
+                                        blur.render_blur_masked(
+                                            gl,
+                                            &projection,
+                                            out_surface.size,
+                                            spot_rect,
+                                            mask_vec.as_deref(),
+                                            mask_w,
+                                            mask_h,
+                                            spot_alpha,
+                                        );
+                                    });
                                 }
                                 let _ = draw_render_elements(
                                     &mut frame,
-                                    scale,
-                                    std::slice::from_ref(elem),
+                                    1.0,
+                                    std::slice::from_ref(spot_elem),
                                     damage,
                                 );
-                                frame.clear_tex_program_override();
                             }
-                        }
-
-                        for (popup_elems, popup_rect) in &topbar_popups {
-                            if !damage.iter().any(|d| d.overlaps(*popup_rect)) {
-                                continue;
-                            }
-                            if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
-                                let _ = frame.with_context(|gl| {
-                                    blur.capture_background_region(
-                                        gl,
-                                        &projection,
-                                        out_surface.size,
-                                        *popup_rect,
-                                    );
-                                    blur.render_captured_blur(
-                                        gl,
-                                        &projection,
-                                        out_surface.size,
-                                        *popup_rect,
-                                        menu_radius as f32,
-                                    );
-                                });
+                            if let Some(ref drag_elem) = spotlight_drag_elem {
+                                let _ = draw_render_elements(
+                                    &mut frame,
+                                    1.0,
+                                    std::slice::from_ref(drag_elem),
+                                    damage,
+                                );
                             }
 
-                            if let Some(shadow) = shadow_pipeline.as_ref() {
-                                let _ = frame.with_context(|gl| {
-                                    shadow.render_menu_shadow(
-                                        gl,
-                                        &projection,
-                                        *popup_rect,
-                                        menu_radius as f32,
-                                        scale,
-                                    );
-                                });
-                            }
-
-                            for elem in popup_elems.iter().rev() {
-                                if let Some(shader) = window_squircle_shader.as_ref() {
-                                    let elem_geo =
-                                        elem.geometry(smithay::utils::Scale::from(scale));
-                                    shader.apply_to_frame(
-                                        &mut frame,
-                                        elem_geo.size,
-                                        popup_rect.loc - elem_geo.loc,
-                                        popup_rect.size,
-                                        menu_radius,
-                                    );
+                            // Renderizar Screenshot UI nativa con curvas squircle y Dual-Kawase blur
+                            if let Some((
+                                ui_rect,
+                                ref mask_vec,
+                                (mask_w, mask_h),
+                                ui_alpha,
+                                ref ui_elem,
+                            )) = screenshot_ui_frame
+                            {
+                                if let Some(mut blur) =
+                                    blur_pipeline.as_ref().and_then(|b| b.lock().ok())
+                                {
+                                    let _ = frame.with_context(|gl| {
+                                        blur.render_blur_masked(
+                                            gl,
+                                            &projection,
+                                            out_surface.size,
+                                            ui_rect,
+                                            mask_vec.as_deref(),
+                                            mask_w,
+                                            mask_h,
+                                            ui_alpha,
+                                        );
+                                    });
                                 }
                                 let _ = draw_render_elements(
                                     &mut frame,
-                                    scale,
-                                    std::slice::from_ref(elem),
+                                    1.0,
+                                    std::slice::from_ref(ui_elem),
                                     damage,
                                 );
-                                frame.clear_tex_program_override();
-                            }
-                        }
-
-                        for (popup_elems, popup_rect) in &wallpaper_popups {
-                            if !damage.iter().any(|d| d.overlaps(*popup_rect)) {
-                                continue;
-                            }
-                            if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
-                                let _ = frame.with_context(|gl| {
-                                    blur.capture_background_region(
-                                        gl,
-                                        &projection,
-                                        out_surface.size,
-                                        *popup_rect,
-                                    );
-                                    blur.render_captured_blur(
-                                        gl,
-                                        &projection,
-                                        out_surface.size,
-                                        *popup_rect,
-                                        menu_radius as f32,
-                                    );
-                                });
                             }
 
-                            if let Some(shadow) = shadow_pipeline.as_ref() {
-                                let _ = frame.with_context(|gl| {
-                                    shadow.render_menu_shadow(
-                                        gl,
-                                        &projection,
-                                        *popup_rect,
-                                        menu_radius as f32,
-                                        scale,
-                                    );
-                                });
-                            }
-
-                            for elem in popup_elems.iter().rev() {
-                                if let Some(shader) = window_squircle_shader.as_ref() {
-                                    let elem_geo =
-                                        elem.geometry(smithay::utils::Scale::from(scale));
-                                    shader.apply_to_frame(
-                                        &mut frame,
-                                        elem_geo.size,
-                                        popup_rect.loc - elem_geo.loc,
-                                        popup_rect.size,
-                                        menu_radius,
-                                    );
+                            // Renderizar menú flotante Snap Layouts (hover sobre maximizar estilo Windows 11)
+                            if let Some((
+                                snap_rect,
+                                ref mask_vec,
+                                (mask_w, mask_h),
+                                snap_alpha,
+                                ref snap_elem,
+                            )) = snap_layouts_frame
+                            {
+                                if let Some(shadow) = shadow_pipeline.as_ref() {
+                                    let _ = frame.with_context(|gl| {
+                                        shadow.render_menu_shadow_alpha(
+                                            gl,
+                                            &projection,
+                                            snap_rect,
+                                            (crate::snap_layouts::POPUP_CORNER_RADIUS * scale)
+                                                as f32,
+                                            scale,
+                                            snap_alpha,
+                                        );
+                                    });
+                                }
+                                if let Some(mut blur) =
+                                    blur_pipeline.as_ref().and_then(|b| b.lock().ok())
+                                {
+                                    let _ = frame.with_context(|gl| {
+                                        blur.render_blur_masked(
+                                            gl,
+                                            &projection,
+                                            out_surface.size,
+                                            snap_rect,
+                                            mask_vec.as_deref(),
+                                            mask_w,
+                                            mask_h,
+                                            snap_alpha,
+                                        );
+                                    });
                                 }
                                 let _ = draw_render_elements(
                                     &mut frame,
-                                    scale,
-                                    std::slice::from_ref(elem),
+                                    1.0,
+                                    std::slice::from_ref(snap_elem),
                                     damage,
                                 );
-                                frame.clear_tex_program_override();
                             }
-                        }
 
-                        // 5. Renderizar Spotlight nativo del compositor (blur enmascarado por silueta exacta + capa Liquid Glass)
-                        if let Some((
-                            spot_rect,
-                            ref mask_vec,
-                            (mask_w, mask_h),
-                            spot_alpha,
-                            ref spot_elem,
-                        )) = spotlight_frame
-                        {
-                            if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
-                                let _ = frame.with_context(|gl| {
-                                    blur.render_blur_masked(
-                                        gl,
-                                        &projection,
-                                        out_surface.size,
-                                        spot_rect,
-                                        mask_vec.as_deref(),
-                                        mask_w,
-                                        mask_h,
-                                        spot_alpha,
-                                    );
-                                });
+                            // Selector Visual App Switcher estilo Deck (sin blur global en el fondo)
+                            if let Some((deck_eased, ref deck_cards)) = app_switcher_deck_frame {
+                                let mut blur_guard =
+                                    blur_pipeline.as_ref().and_then(|b| b.lock().ok());
+                                crate::app_switcher::render_deck_frame(
+                                    &mut frame,
+                                    &projection,
+                                    out_surface.size,
+                                    scale,
+                                    damage,
+                                    blur_guard.as_deref_mut(),
+                                    shadow_pipeline.as_deref(),
+                                    window_squircle_shader.as_deref(),
+                                    deck_eased,
+                                    deck_cards,
+                                );
                             }
-                            let _ = draw_render_elements(
-                                &mut frame,
-                                1.0,
-                                std::slice::from_ref(spot_elem),
-                                damage,
-                            );
-                        }
-                        if let Some(ref drag_elem) = spotlight_drag_elem {
-                            let _ = draw_render_elements(
-                                &mut frame,
-                                1.0,
-                                std::slice::from_ref(drag_elem),
-                                damage,
-                            );
-                        }
 
-                        // Renderizar Screenshot UI nativa con curvas squircle y Dual-Kawase blur
-                        if let Some((
-                            ui_rect,
-                            ref mask_vec,
-                            (mask_w, mask_h),
-                            ui_alpha,
-                            ref ui_elem,
-                        )) = screenshot_ui_frame
-                        {
-                            if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
-                                let _ = frame.with_context(|gl| {
-                                    blur.render_blur_masked(
-                                        gl,
-                                        &projection,
-                                        out_surface.size,
-                                        ui_rect,
-                                        mask_vec.as_deref(),
-                                        mask_w,
-                                        mask_h,
-                                        ui_alpha,
-                                    );
-                                });
-                            }
-                            let _ = draw_render_elements(
-                                &mut frame,
-                                1.0,
-                                std::slice::from_ref(ui_elem),
-                                damage,
-                            );
-                        }
-
-                        // Renderizar menú flotante Snap Layouts (hover sobre maximizar estilo Windows 11)
-                        if let Some((
-                            snap_rect,
-                            ref mask_vec,
-                            (mask_w, mask_h),
-                            snap_alpha,
-                            ref snap_elem,
-                        )) = snap_layouts_frame
-                        {
-                            if let Some(shadow) = shadow_pipeline.as_ref() {
-                                let _ = frame.with_context(|gl| {
-                                    shadow.render_menu_shadow_alpha(
-                                        gl,
-                                        &projection,
-                                        snap_rect,
-                                        (crate::snap_layouts::POPUP_CORNER_RADIUS * scale) as f32,
-                                        scale,
-                                        snap_alpha,
-                                    );
-                                });
-                            }
-                            if let Some(mut blur) = blur_pipeline.as_ref().and_then(|b| b.lock().ok()) {
-                                let _ = frame.with_context(|gl| {
-                                    blur.render_blur_masked(
-                                        gl,
-                                        &projection,
-                                        out_surface.size,
-                                        snap_rect,
-                                        mask_vec.as_deref(),
-                                        mask_w,
-                                        mask_h,
-                                        snap_alpha,
-                                    );
-                                });
-                            }
-                            let _ = draw_render_elements(
-                                &mut frame,
-                                1.0,
-                                std::slice::from_ref(snap_elem),
-                                damage,
-                            );
-                        }
-
-                        // Selector Visual App Switcher estilo Deck (sin blur global en el fondo)
-                        if let Some((deck_eased, ref deck_cards)) = app_switcher_deck_frame {
-                            let mut blur_guard =
-                                blur_pipeline.as_ref().and_then(|b| b.lock().ok());
-                            crate::app_switcher::render_deck_frame(
-                                &mut frame,
-                                &projection,
-                                out_surface.size,
-                                scale,
-                                damage,
-                                blur_guard.as_deref_mut(),
-                                shadow_pipeline.as_deref(),
-                                window_squircle_shader.as_deref(),
-                                deck_eased,
-                                deck_cards,
-                            );
-                        }
-
-                        // 🧞 EFECTO LÁMPARA DE ALADINO (GENIE EFFECT / MAGIC LAMP)
-                        // Efecto Genie: malla GPU única sobre snapshot offscreen (incluyendo SSD y squircle).
-                        if !active_genies.is_empty() {
-                            if let Some(ref gp) = genie_pipeline {
-                                let _ = frame.with_context(|gl| {
+                            // 🧞 EFECTO LÁMPARA DE ALADINO (GENIE EFFECT / MAGIC LAMP)
+                            // Efecto Genie: malla GPU única sobre snapshot offscreen (incluyendo SSD y squircle).
+                            if !active_genies.is_empty() {
+                                if let Some(ref gp) = genie_pipeline {
+                                    let _ = frame.with_context(|gl| {
                                     for anim in &active_genies {
                                         let Some(snap) = genie_snapshots.get(&anim.window_id)
                                         else {
@@ -6315,31 +6455,37 @@ pub fn run_drm() -> Result<()> {
                                         );
                                     }
                                 });
+                                }
                             }
-                        }
 
-                        // 🕳️ EFECTO AGUJERO NEGRO AL CERRAR VENTANAS
-                        if black_hole_active_on_output {
-                            if let Some(ref bh_pipeline) = black_hole_pipeline {
-                                let out_name = out_surface.output.name();
-                                let bh_now = Instant::now();
-                                let _ = frame.with_context(|gl| {
-                                    for bh in &active_black_holes {
-                                        if bh.output_name == out_name {
-                                            bh_pipeline.render_effect(gl, &projection, bh, bh_now);
+                            // 🕳️ EFECTO AGUJERO NEGRO AL CERRAR VENTANAS
+                            if black_hole_active_on_output {
+                                if let Some(ref bh_pipeline) = black_hole_pipeline {
+                                    let out_name = out_surface.output.name();
+                                    let bh_now = Instant::now();
+                                    let _ = frame.with_context(|gl| {
+                                        for bh in &active_black_holes {
+                                            if bh.output_name == out_name {
+                                                bh_pipeline.render_effect(
+                                                    gl,
+                                                    &projection,
+                                                    bh,
+                                                    bh_now,
+                                                );
+                                            }
                                         }
-                                    }
-                                });
+                                    });
+                                }
                             }
-                        }
 
-                        // Dibujar el icono de Drag and Drop (dnd_icon) si hay una operación activa
-                        if !dnd_elems.is_empty() {
-                            let _ = draw_render_elements(&mut frame, scale, &dnd_elems, damage);
-                        } else if let Some(ref fallback_elem) = dnd_fallback_elem {
-                            let fallback_slice = std::slice::from_ref(fallback_elem);
-                            let _ = draw_render_elements(&mut frame, 1.0, fallback_slice, damage);
-                        }
+                            // Dibujar el icono de Drag and Drop (dnd_icon) si hay una operación activa
+                            if !dnd_elems.is_empty() {
+                                let _ = draw_render_elements(&mut frame, scale, &dnd_elems, damage);
+                            } else if let Some(ref fallback_elem) = dnd_fallback_elem {
+                                let fallback_slice = std::slice::from_ref(fallback_elem);
+                                let _ =
+                                    draw_render_elements(&mut frame, 1.0, fallback_slice, damage);
+                            }
                         }
 
                         // Dibujar el puntero con el tamaño lógico configurado y el hotspot exacto
@@ -6505,7 +6651,10 @@ pub fn run_drm() -> Result<()> {
                                         started_at,
                                         now,
                                     );
-                                    if !drawn && now.duration_since(started_at) >= crate::theme_transition::DURATION {
+                                    if !drawn
+                                        && now.duration_since(started_at)
+                                            >= crate::theme_transition::DURATION
+                                    {
                                         state.theme_transition_started_at = None;
                                     }
                                 }
@@ -6590,30 +6739,35 @@ pub fn run_drm() -> Result<()> {
                     }
 
                     if !session_locked {
-                    if let Some(ref mut session) = state.active_screen_recording {
-                        let interval = std::time::Duration::from_millis(
-                            (1000 / session.target_fps.max(1)) as u64,
-                        );
-                        if now.duration_since(session.last_frame) >= interval {
-                            session.last_frame = now;
-                            let crop = session.rect.unwrap_or_else(|| {
-                                Rectangle::from_size(out_surface.size)
-                            });
-                            let cl_x = crop.loc.x.clamp(0, out_surface.size.w);
-                            let cl_y = crop.loc.y.clamp(0, out_surface.size.h);
-                            let cl_w = (crop.size.w.min(out_surface.size.w - cl_x) & !1).max(2);
-                            let cl_h = (crop.size.h.min(out_surface.size.h - cl_y) & !1).max(2);
-                            let region = Rectangle::new((cl_x, cl_y).into(), (cl_w, cl_h).into());
+                        if let Some(ref mut session) = state.active_screen_recording {
+                            let interval = std::time::Duration::from_millis(
+                                (1000 / session.target_fps.max(1)) as u64,
+                            );
+                            if now.duration_since(session.last_frame) >= interval {
+                                session.last_frame = now;
+                                let crop = session
+                                    .rect
+                                    .unwrap_or_else(|| Rectangle::from_size(out_surface.size));
+                                let cl_x = crop.loc.x.clamp(0, out_surface.size.w);
+                                let cl_y = crop.loc.y.clamp(0, out_surface.size.h);
+                                let cl_w = (crop.size.w.min(out_surface.size.w - cl_x) & !1).max(2);
+                                let cl_h = (crop.size.h.min(out_surface.size.h - cl_y) & !1).max(2);
+                                let region =
+                                    Rectangle::new((cl_x, cl_y).into(), (cl_w, cl_h).into());
 
-                            if let Ok(mapping) = renderer.copy_framebuffer(&target, region, smithay::backend::allocator::Fourcc::Abgr8888) {
-                                if let Ok(pixels) = renderer.map_texture(&mapping) {
-                                    if pixels.len() == (cl_w as usize * cl_h as usize * 4) {
-                                        session.push_frame(pixels.to_vec());
+                                if let Ok(mapping) = renderer.copy_framebuffer(
+                                    &target,
+                                    region,
+                                    smithay::backend::allocator::Fourcc::Abgr8888,
+                                ) {
+                                    if let Ok(pixels) = renderer.map_texture(&mapping) {
+                                        if pixels.len() == (cl_w as usize * cl_h as usize * 4) {
+                                            session.push_frame(pixels.to_vec());
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
                     }
                 }
 
@@ -6646,7 +6800,9 @@ pub fn run_drm() -> Result<()> {
                         out_surface.cursor_history.truncate(4);
                     }
 
-                    out_surface.extra_damage_history.push_front(this_frame_extra_damage);
+                    out_surface
+                        .extra_damage_history
+                        .push_front(this_frame_extra_damage);
                     if out_surface.extra_damage_history.len() > 4 {
                         out_surface.extra_damage_history.truncate(4);
                     }
@@ -6660,7 +6816,9 @@ pub fn run_drm() -> Result<()> {
                             *count -= 1;
                         }
                     }
-                    out_surface.window_redraw_shadow_blur.retain(|_, count| *count > 0);
+                    out_surface
+                        .window_redraw_shadow_blur
+                        .retain(|_, count| *count > 0);
 
                     rendered_outputs.insert(out_surface.output.clone());
 
@@ -6746,12 +6904,15 @@ pub fn run_drm() -> Result<()> {
         }
 
         // Limpiar transiciones de maximizado/restauración finalizadas
-        state.snap_transitions.retain(|_, trans| !trans.is_finished(now));
+        state
+            .snap_transitions
+            .retain(|_, trans| !trans.is_finished(now));
 
         // Notificar fotogramas a los clientes de ventanas activas (evita despertar apps minimizadas u ocluidas a 60 Hz)
         let ts = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
         let now_ms = (ts.tv_sec as u64 * 1000 + (ts.tv_nsec as u64 / 1_000_000)) as u32;
-        let pres_time = std::time::Duration::from_nanos(ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64);
+        let pres_time =
+            std::time::Duration::from_nanos(ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64);
 
         for window in state.space.elements() {
             if let Some(surface) = window.wl_surface() {
@@ -6813,7 +6974,10 @@ pub fn run_drm() -> Result<()> {
             let layer_map = smithay::desktop::layer_map_for_output(output);
             for layer in layer_map.layers() {
                 if has_fullscreen
-                    && !matches!(layer.layer(), smithay::wayland::shell::wlr_layer::Layer::Overlay)
+                    && !matches!(
+                        layer.layer(),
+                        smithay::wayland::shell::wlr_layer::Layer::Overlay
+                    )
                 {
                     continue;
                 }
@@ -6904,8 +7068,14 @@ mod drm_emergency_tests {
         use std::path::PathBuf;
         let ordered = super::prioritize_drm_gpu_candidates(
             Some(PathBuf::from("/dev/dri/card0")),
-            vec![PathBuf::from("/dev/dri/card0"), PathBuf::from("/dev/dri/card1")],
-            vec![PathBuf::from("/dev/dri/card0"), PathBuf::from("/dev/dri/card1")],
+            vec![
+                PathBuf::from("/dev/dri/card0"),
+                PathBuf::from("/dev/dri/card1"),
+            ],
+            vec![
+                PathBuf::from("/dev/dri/card0"),
+                PathBuf::from("/dev/dri/card1"),
+            ],
             |p| match p.to_str() {
                 // Caso laptop con panel interno roto/desconectado en card0 y monitor externo en card1
                 Some("/dev/dri/card0") => (false, true),
@@ -6915,7 +7085,10 @@ mod drm_emergency_tests {
         );
         assert_eq!(
             ordered,
-            vec![PathBuf::from("/dev/dri/card1"), PathBuf::from("/dev/dri/card0")]
+            vec![
+                PathBuf::from("/dev/dri/card1"),
+                PathBuf::from("/dev/dri/card0")
+            ]
         );
     }
 }

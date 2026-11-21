@@ -104,17 +104,47 @@ pub fn create_system_menu() -> MenuButton {
 
     let es = is_spanish_locale();
 
-    let label_about = if es { "Acerca de este equipo" } else { "About This Computer" };
-    let label_settings = if es { "Configuración del Sistema..." } else { "System Settings..." };
+    let label_about = if es {
+        "Acerca de este equipo"
+    } else {
+        "About This Computer"
+    };
+    let label_settings = if es {
+        "Configuración del Sistema..."
+    } else {
+        "System Settings..."
+    };
     let label_appstore = if es { "Software" } else { "Software" };
-    let label_recent = if es { "Elementos recientes" } else { "Recent Items" };
-    let label_forcequit = if es { "Forzar salida..." } else { "Force Quit..." };
+    let label_recent = if es {
+        "Elementos recientes"
+    } else {
+        "Recent Items"
+    };
+    let label_forcequit = if es {
+        "Forzar salida..."
+    } else {
+        "Force Quit..."
+    };
     let label_sleep = if es { "Reposo" } else { "Sleep" };
     let label_restart = if es { "Reiniciar..." } else { "Restart..." };
-    let label_shutdown = if es { "Apagar equipo..." } else { "Shut Down..." };
-    let label_lock = if es { "Bloquear pantalla" } else { "Lock Screen" };
+    let label_shutdown = if es {
+        "Apagar equipo..."
+    } else {
+        "Shut Down..."
+    };
+    let label_lock = if es {
+        "Bloquear pantalla"
+    } else {
+        "Lock Screen"
+    };
 
-    let user_name = std::env::var("USER").unwrap_or_else(|_| if es { "Usuario".to_string() } else { "User".to_string() });
+    let user_name = std::env::var("USER").unwrap_or_else(|_| {
+        if es {
+            "Usuario".to_string()
+        } else {
+            "User".to_string()
+        }
+    });
     let label_logout = if es {
         format!("Cerrar sesión de {}...", user_name)
     } else {
@@ -157,12 +187,21 @@ pub fn create_system_menu() -> MenuButton {
     content_box.append(&item_settings);
 
     // 3. Software
-    let item_appstore = create_menu_item("system-software-install-symbolic", label_appstore, None, false);
+    let item_appstore = create_menu_item(
+        "system-software-install-symbolic",
+        label_appstore,
+        None,
+        false,
+    );
     let popover_clone = popover.clone();
     item_appstore.connect_clicked(move |_| {
         popover_clone.popdown();
         info!("Abriendo tienda de aplicaciones...");
-        let stores = ["gnome-software", "io.elementary.appcenter", "plasma-discover"];
+        let stores = [
+            "gnome-software",
+            "io.elementary.appcenter",
+            "plasma-discover",
+        ];
         for store in stores {
             if std::process::Command::new("which")
                 .arg(store)
@@ -174,7 +213,9 @@ pub fn create_system_menu() -> MenuButton {
                 return;
             }
         }
-        let _ = std::process::Command::new("xdg-open").arg("https://flathub.org").spawn();
+        let _ = std::process::Command::new("xdg-open")
+            .arg("https://flathub.org")
+            .spawn();
     });
     content_box.append(&item_appstore);
 
@@ -186,14 +227,21 @@ pub fn create_system_menu() -> MenuButton {
     item_recent.connect_clicked(move |_| {
         popover_clone.popdown();
         info!("Abriendo elementos recientes...");
-        let _ = std::process::Command::new("nautilus").arg("recent:///").spawn();
+        let _ = std::process::Command::new("nautilus")
+            .arg("recent:///")
+            .spawn();
     });
     content_box.append(&item_recent);
 
     content_box.append(&create_divider());
 
     // 5. Force Quit... / Forzar salida...
-    let item_monitor = create_menu_item("apple-forcequit-symbolic", label_forcequit, Some("⌥⌘⎋"), false);
+    let item_monitor = create_menu_item(
+        "apple-forcequit-symbolic",
+        label_forcequit,
+        Some("⌥⌘⎋"),
+        false,
+    );
     let popover_clone = popover.clone();
     item_monitor.connect_clicked(move |_| {
         popover_clone.popdown();
@@ -212,7 +260,9 @@ pub fn create_system_menu() -> MenuButton {
     item_sleep.connect_clicked(move |_| {
         popover_clone.popdown();
         info!("Suspendiendo el equipo...");
-        let _ = std::process::Command::new("systemctl").arg("suspend").spawn();
+        let _ = std::process::Command::new("systemctl")
+            .arg("suspend")
+            .spawn();
     });
     content_box.append(&item_sleep);
 
@@ -255,9 +305,19 @@ pub fn create_system_menu() -> MenuButton {
             .root()
             .and_then(|root| root.downcast::<ApplicationWindow>().ok());
         let (dlg_title, dlg_body, dlg_confirm, dlg_cancel) = if is_spanish_locale() {
-            ("¿Apagar el equipo?", "El sistema cerrará todas las aplicaciones y apagará el equipo de forma segura.", "Apagar", "Cancelar")
+            (
+                "¿Apagar el equipo?",
+                "El sistema cerrará todas las aplicaciones y apagará el equipo de forma segura.",
+                "Apagar",
+                "Cancelar",
+            )
         } else {
-            ("Shut down the computer?", "The system will close all applications and safely power off the computer.", "Shut Down", "Cancel")
+            (
+                "Shut down the computer?",
+                "The system will close all applications and safely power off the computer.",
+                "Shut Down",
+                "Cancel",
+            )
         };
         show_confirm_dialog(
             dlg_title,
@@ -268,7 +328,9 @@ pub fn create_system_menu() -> MenuButton {
             || {
                 info!("Apagando el sistema...");
                 malus_de_common::crash::mark_clean_session_exit();
-                let _ = std::process::Command::new("systemctl").arg("poweroff").spawn();
+                let _ = std::process::Command::new("systemctl")
+                    .arg("poweroff")
+                    .spawn();
             },
         );
     });
@@ -282,7 +344,8 @@ pub fn create_system_menu() -> MenuButton {
     item_lock.connect_clicked(move |_| {
         popover_clone.popdown();
         info!("Bloqueando pantalla con malus-de-session-lock...");
-        let wayland_display = std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-1".to_string());
+        let wayland_display =
+            std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-1".to_string());
         let exe = std::env::current_exe()
             .ok()
             .and_then(|p| p.parent().map(|dir| dir.join("malus-de-session-lock")))
@@ -435,7 +498,7 @@ fn squircle_path(context: &gtk4::cairo::Context, width: f64, height: f64, radius
     context.close_path();
 }
 
-/// Envuelve el contenido de un botón de menú en un Overlay con DrawingArea Cairo Squircle azul semitransparente.
+/// Envuelve el contenido de un botón de menú en un Overlay con un squircle Cairo del color de acento.
 pub fn attach_squircle_menu_hover(btn: &Button) {
     let Some(inner) = btn.child() else {
         return;
@@ -473,10 +536,11 @@ pub fn attach_squircle_menu_hover(btn: &Button) {
         }
         let _ = cr.save();
         squircle_path(cr, width, height, 14.0);
+        let (red, green, blue) = malus_de_common::config::load_accent_color();
         if active {
-            cr.set_source_rgba(0.0, 0.39, 0.85, 0.86);
+            cr.set_source_rgba(red * 0.78, green * 0.78, blue * 0.78, 0.86);
         } else {
-            cr.set_source_rgba(0.0, 0.48, 1.0, 0.74);
+            cr.set_source_rgba(red, green, blue, 0.74);
         }
         let _ = cr.fill();
         let _ = cr.restore();
@@ -516,7 +580,11 @@ fn show_about_dialog() {
     } else {
         "Autonomous, ultra-lightweight Wayland Desktop Environment written in Rust and Smithay. Blending macOS design with advanced window management."
     };
-    let dev = if es { "Equipo Malus DE" } else { "Malus DE Team" };
+    let dev = if es {
+        "Equipo Malus DE"
+    } else {
+        "Malus DE Team"
+    };
 
     let about_window = adw::AboutDialog::builder()
         .application_name("Malus Desktop Environment")
@@ -555,7 +623,11 @@ fn show_confirm_dialog(
     }
 
     let dialog = adw::MessageDialog::builder()
-        .title(if is_spanish_locale() { "Confirmación de acción del sistema" } else { "System Action Confirmation" })
+        .title(if is_spanish_locale() {
+            "Confirmación de acción del sistema"
+        } else {
+            "System Action Confirmation"
+        })
         .heading(title)
         .body(body)
         .build();

@@ -44,8 +44,7 @@ pub fn normalize_network_uri(raw: &str) -> Result<String, String> {
         return Err(if is_spanish_locale() {
             "La dirección debe incluir el protocolo (smb://, sftp://, nfs://, dav://).".to_string()
         } else {
-            "Address must include a protocol scheme (smb://, sftp://, nfs://, dav://)."
-                .to_string()
+            "Address must include a protocol scheme (smb://, sftp://, nfs://, dav://).".to_string()
         });
     };
 
@@ -123,10 +122,7 @@ pub fn is_network_gio_mount(mount: &gio::Mount) -> bool {
     if is_network_uri(default_uri.as_str()) {
         return true;
     }
-    mount
-        .root()
-        .path()
-        .is_some_and(|p| is_gvfs_mount_path(&p))
+    mount.root().path().is_some_and(|p| is_gvfs_mount_path(&p))
 }
 
 /// Lista los montajes de red GVfs actualmente activos en la sesión.
@@ -151,7 +147,11 @@ pub fn list_active_network_mounts() -> Vec<NetworkMountInfo> {
 }
 
 fn recent_servers_file_path() -> Option<PathBuf> {
-    Some(glib::user_config_dir().join("malus-de").join("branches-servers.txt"))
+    Some(
+        glib::user_config_dir()
+            .join("malus-de")
+            .join("branches-servers.txt"),
+    )
 }
 
 pub fn load_recent_servers_from_file(path: &Path) -> Vec<String> {
@@ -584,10 +584,8 @@ mod tests {
 
     #[test]
     fn recent_servers_roundtrip_deduplicates_and_orders_latest_first() {
-        let base = std::env::temp_dir().join(format!(
-            "malus_branches_net_test_{}",
-            std::process::id()
-        ));
+        let base =
+            std::env::temp_dir().join(format!("malus_branches_net_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let cfg = base.join("servers.txt");
@@ -595,10 +593,7 @@ mod tests {
         save_recent_server_to_file(&cfg, "ssh://alice@host/two");
         save_recent_server_to_file(&cfg, "SMB://nas/one");
         let loaded = load_recent_servers_from_file(&cfg);
-        assert_eq!(
-            loaded,
-            vec!["smb://nas/one", "sftp://alice@host/two"]
-        );
+        assert_eq!(loaded, vec!["smb://nas/one", "sftp://alice@host/two"]);
         let _ = std::fs::remove_dir_all(&base);
     }
 }

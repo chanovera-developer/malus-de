@@ -611,7 +611,19 @@ pub fn is_image_extension(ext: &str) -> bool {
 pub fn is_video_extension(ext: &str) -> bool {
     matches!(
         ext,
-        "mp4" | "mkv" | "webm" | "mov" | "avi" | "m4v" | "wmv" | "flv" | "ts" | "mpg" | "mpeg" | "3gp" | "ogv"
+        "mp4"
+            | "mkv"
+            | "webm"
+            | "mov"
+            | "avi"
+            | "m4v"
+            | "wmv"
+            | "flv"
+            | "ts"
+            | "mpg"
+            | "mpeg"
+            | "3gp"
+            | "ogv"
     )
 }
 
@@ -777,6 +789,7 @@ fn create_loading_placeholder(item: &FileItem) -> gtk4::Widget {
     vbox.set_hexpand(true);
 
     let icon = Image::from_gicon(&item.gicon);
+    crate::views::apply_folder_icon_tint(&icon, item);
     icon.set_pixel_size(72);
     vbox.append(&icon);
 
@@ -931,7 +944,9 @@ fn build_widget_from_payload(
     remaining_delay_ms: u64,
 ) -> gtk4::Widget {
     match payload {
-        PreparedPreview::Image { frame } => create_image_preview_from_frame(&item.path, item, frame),
+        PreparedPreview::Image { frame } => {
+            create_image_preview_from_frame(&item.path, item, frame)
+        }
         PreparedPreview::Pdf {
             total_pages,
             first_page,
@@ -1118,7 +1133,16 @@ fn render_pdf_page_rgba_offthread(path: &Path, page: u32) -> Option<DecodedRgbaF
     let prefix = unique_temp_path("pdf", "tmp").with_extension("");
     let page_str = page.to_string();
     let status = Command::new("pdftoppm")
-        .args(["-png", "-f", &page_str, "-l", &page_str, "-singlefile", "-scale-to", "1100"])
+        .args([
+            "-png",
+            "-f",
+            &page_str,
+            "-l",
+            &page_str,
+            "-singlefile",
+            "-scale-to",
+            "1100",
+        ])
         .arg(path)
         .arg(&prefix)
         .stdout(Stdio::null())
@@ -1502,8 +1526,7 @@ fn spawn_video_playback(
 
         if let Some(frame) = latest_frame {
             let bytes = glib::Bytes::from_owned(frame);
-            let tex =
-                MemoryTexture::new(w_i32, h_i32, MemoryFormat::R8g8b8a8, &bytes, stride);
+            let tex = MemoryTexture::new(w_i32, h_i32, MemoryFormat::R8g8b8a8, &bytes, stride);
             pic.set_paintable(Some(&tex));
         }
 
@@ -1699,7 +1722,6 @@ fn create_audio_preview_from_payload(
     expected_gen: u64,
     remaining_delay_ms: u64,
 ) -> gtk4::Widget {
-
     let vbox = GtkBox::new(Orientation::Vertical, 12);
     vbox.set_valign(Align::Center);
     vbox.set_halign(Align::Center);
@@ -1707,6 +1729,7 @@ fn create_audio_preview_from_payload(
     vbox.set_margin_bottom(24);
 
     let icon = Image::from_gicon(&item.gicon);
+    crate::views::apply_folder_icon_tint(&icon, item);
     icon.set_pixel_size(96);
     vbox.append(&icon);
 
@@ -1807,11 +1830,19 @@ fn create_audio_preview_from_payload(
 
 fn read_archive_listing_text(path: &Path, ext: &str) -> Option<String> {
     let out = match ext {
-        "zip" => Command::new("unzip").args(["-Z1"]).arg(path).output().ok()?,
+        "zip" => Command::new("unzip")
+            .args(["-Z1"])
+            .arg(path)
+            .output()
+            .ok()?,
         "tar" | "gz" | "tgz" | "bz2" | "xz" => {
             Command::new("tar").args(["-tf"]).arg(path).output().ok()?
         }
-        "7z" => Command::new("7z").args(["l", "-ba"]).arg(path).output().ok()?,
+        "7z" => Command::new("7z")
+            .args(["l", "-ba"])
+            .arg(path)
+            .output()
+            .ok()?,
         _ => return None,
     };
     if !out.status.success() {
@@ -1879,6 +1910,7 @@ fn create_generic_preview(item: &FileItem) -> gtk4::Widget {
     vbox.set_margin_end(32);
 
     let icon = Image::from_gicon(&item.gicon);
+    crate::views::apply_folder_icon_tint(&icon, item);
     icon.set_pixel_size(128);
     vbox.append(&icon);
 

@@ -41,7 +41,11 @@ impl AudioService {
     pub fn set_volume(pct: f64) {
         let normalized = (pct / 100.0).clamp(0.0, 1.5);
         let _ = Command::new("wpctl")
-            .args(["set-volume", "@DEFAULT_AUDIO_SINK@", &format!("{:.2}", normalized)])
+            .args([
+                "set-volume",
+                "@DEFAULT_AUDIO_SINK@",
+                &format!("{:.2}", normalized),
+            ])
             .spawn();
     }
 
@@ -57,7 +61,10 @@ impl AudioService {
         let (sender, receiver) = async_channel::bounded::<String>(1);
         std::thread::spawn(move || {
             let mut name = "Altavoces".to_string();
-            if let Ok(out) = Command::new("wpctl").args(["inspect", "@DEFAULT_AUDIO_SINK@"]).output() {
+            if let Ok(out) = Command::new("wpctl")
+                .args(["inspect", "@DEFAULT_AUDIO_SINK@"])
+                .output()
+            {
                 let s = String::from_utf8_lossy(&out.stdout);
                 for line in s.lines() {
                     let trimmed = line.trim();
@@ -74,7 +81,10 @@ impl AudioService {
             }
             let _ = sender.send_blocking(name);
         });
-        receiver.recv().await.unwrap_or_else(|_| "Altavoces".to_string())
+        receiver
+            .recv()
+            .await
+            .unwrap_or_else(|_| "Altavoces".to_string())
     }
 }
 

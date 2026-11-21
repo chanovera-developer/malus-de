@@ -74,10 +74,8 @@ impl LinkServer {
         let (tx, rx) = async_channel::bounded(1);
         std::thread::spawn(move || {
             let res = scan_airdrop_peers(&engine, seconds).unwrap_or_default();
-            let list: Vec<(String, String, String)> = res
-                .into_iter()
-                .map(|p| (p.id, p.name, p.address))
-                .collect();
+            let list: Vec<(String, String, String)> =
+                res.into_iter().map(|p| (p.id, p.name, p.address)).collect();
             let _ = tx.send_blocking(list);
         });
         rx.recv().await.unwrap_or_default()
@@ -158,7 +156,10 @@ impl LinkServer {
         let engine = Arc::clone(&self.airdrop);
         std::thread::spawn(move || {
             if let Err(err) = send_airdrop_file(&engine, &device_id, &path) {
-                warn!("⚠️ [AirDrop] Fallo en ShareFile('{}', '{}'): {}", device_id, path, err);
+                warn!(
+                    "⚠️ [AirDrop] Fallo en ShareFile('{}', '{}'): {}",
+                    device_id, path, err
+                );
             }
         });
     }
@@ -194,8 +195,8 @@ fn main() -> Result<()> {
 
     // Descubrimiento UDP en puerto 1716 (KDE Connect)
     let run_udp = is_running.clone();
-    std::thread::spawn(move || {
-        match UdpSocket::bind(("0.0.0.0", KDE_CONNECT_PORT)) {
+    std::thread::spawn(
+        move || match UdpSocket::bind(("0.0.0.0", KDE_CONNECT_PORT)) {
             Ok(socket) => {
                 info!(
                     "Socket UDP KDE Connect escuchando en 0.0.0.0:{}",
@@ -219,8 +220,8 @@ fn main() -> Result<()> {
                     KDE_CONNECT_PORT, err
                 );
             }
-        }
-    });
+        },
+    );
 
     // Publicar servicio D-Bus org.malus_de.Link
     let s_server = LinkServer {

@@ -6,8 +6,8 @@ use gtk4::gdk::Key;
 use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, Entry,
-    EventControllerKey, Fixed, GestureClick, GestureDrag, Image, Label, Orientation,
-    Overlay, Picture, Popover, Stack, StackTransitionType,
+    EventControllerKey, Fixed, GestureClick, GestureDrag, Image, Label, Orientation, Overlay,
+    Picture, Popover, Stack, StackTransitionType,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use malus_de_common::{
@@ -23,7 +23,9 @@ use tracing::{info, warn};
 
 #[derive(Parser, Debug)]
 #[command(name = "malus-de-wallpaper")]
-#[command(about = "Demonio de Fondo de Pantalla y Superficie de Escritorio de Malus DE (Layer Shell)")]
+#[command(
+    about = "Demonio de Fondo de Pantalla y Superficie de Escritorio de Malus DE (Layer Shell)"
+)]
 struct Args {
     /// Ruta a la imagen de fondo de pantalla
     #[arg(short, long)]
@@ -228,10 +230,34 @@ fn build_default_gradient_texture(target_w: i32, target_h: i32) -> Option<gtk4::
         let cy = target_h as f64 * 0.25;
         let radius = (target_w as f64 - cx).hypot(target_h as f64 - cy);
         let grad = gtk4::cairo::RadialGradient::new(cx, cy, 0.0, cx, cy, radius);
-        grad.add_color_stop_rgba(0.0, 0x2e as f64 / 255.0, 0x10 as f64 / 255.0, 0x65 as f64 / 255.0, 1.0);
-        grad.add_color_stop_rgba(0.35, 0x17 as f64 / 255.0, 0x25 as f64 / 255.0, 0x54 as f64 / 255.0, 1.0);
-        grad.add_color_stop_rgba(0.70, 0x0f as f64 / 255.0, 0x17 as f64 / 255.0, 0x2a as f64 / 255.0, 1.0);
-        grad.add_color_stop_rgba(1.0, 0x0d as f64 / 255.0, 0x15 as f64 / 255.0, 0x26 as f64 / 255.0, 1.0);
+        grad.add_color_stop_rgba(
+            0.0,
+            0x2e as f64 / 255.0,
+            0x10 as f64 / 255.0,
+            0x65 as f64 / 255.0,
+            1.0,
+        );
+        grad.add_color_stop_rgba(
+            0.35,
+            0x17 as f64 / 255.0,
+            0x25 as f64 / 255.0,
+            0x54 as f64 / 255.0,
+            1.0,
+        );
+        grad.add_color_stop_rgba(
+            0.70,
+            0x0f as f64 / 255.0,
+            0x17 as f64 / 255.0,
+            0x2a as f64 / 255.0,
+            1.0,
+        );
+        grad.add_color_stop_rgba(
+            1.0,
+            0x0d as f64 / 255.0,
+            0x15 as f64 / 255.0,
+            0x26 as f64 / 255.0,
+            1.0,
+        );
         let _ = cr.set_source(&grad);
         let _ = cr.paint();
     }
@@ -719,8 +745,14 @@ pub fn snap_position_to_grid(
     };
 
     (
-        snapped_x.clamp(16.0, (desktop_size.0 - metrics.box_width - 16).max(16) as f64),
-        snapped_y.clamp(top_margin, (desktop_size.1 - metrics.box_height - 20).max(top_margin as i32) as f64),
+        snapped_x.clamp(
+            16.0,
+            (desktop_size.0 - metrics.box_width - 16).max(16) as f64,
+        ),
+        snapped_y.clamp(
+            top_margin,
+            (desktop_size.1 - metrics.box_height - 20).max(top_margin as i32) as f64,
+        ),
     )
 }
 
@@ -739,11 +771,18 @@ pub fn calculate_grid_position(
     let x = if align_left {
         16.0 + (column as i32 * metrics.cell_width()) as f64
     } else {
-        (desktop_size.0 - metrics.box_width - 16 - column as i32 * metrics.cell_width()).max(16) as f64
+        (desktop_size.0 - metrics.box_width - 16 - column as i32 * metrics.cell_width()).max(16)
+            as f64
     };
     (
-        x.clamp(16.0, (desktop_size.0 - metrics.box_width - 16).max(16) as f64),
-        y.clamp(top_margin, (desktop_size.1 - metrics.box_height - 20).max(top_margin as i32) as f64),
+        x.clamp(
+            16.0,
+            (desktop_size.0 - metrics.box_width - 16).max(16) as f64,
+        ),
+        y.clamp(
+            top_margin,
+            (desktop_size.1 - metrics.box_height - 20).max(top_margin as i32) as f64,
+        ),
     )
 }
 
@@ -813,14 +852,14 @@ fn launch_file(file: &gio::File) {
                 return;
             }
             if let Some(app_info) = gio::DesktopAppInfo::from_filename(&path) {
-                if app_info
-                    .launch(&[], None::<&gio::AppLaunchContext>)
-                    .is_ok()
-                {
+                if app_info.launch(&[], None::<&gio::AppLaunchContext>).is_ok() {
                     return;
                 }
             }
-            warn!("No se pudo iniciar la aplicación {:?} en el escritorio", path);
+            warn!(
+                "No se pudo iniciar la aplicación {:?} en el escritorio",
+                path
+            );
             return;
         }
     }
@@ -1281,7 +1320,10 @@ fn trash_file(path: &Path) {
 
 fn duplicate_file(path: &Path) {
     if let Some(parent) = path.parent() {
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("archivo");
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("archivo");
         let ext = path.extension().and_then(|e| e.to_str());
         let new_name = match ext {
             Some(e) => format!("{} copia.{}", stem, e),
@@ -1325,10 +1367,7 @@ fn show_rename_dialog(parent_widget: &impl IsA<gtk4::Widget>, current_path: Path
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
 
-    let entry = Entry::builder()
-        .text(&initial_name)
-        .hexpand(true)
-        .build();
+    let entry = Entry::builder().text(&initial_name).hexpand(true).build();
     container.append(&entry);
 
     let btn_box = GtkBox::new(Orientation::Horizontal, 6);
@@ -1419,11 +1458,7 @@ fn find_desktop_icon_widget(fixed: &Fixed, path: &Path) -> Option<gtk4::Widget> 
         if item.has_css_class("desktop-rubberband") {
             continue;
         }
-        if item
-            .property::<Option<String>>("tooltip-text")
-            .as_deref()
-            == Some(expected.as_ref())
-        {
+        if item.property::<Option<String>>("tooltip-text").as_deref() == Some(expected.as_ref()) {
             return Some(item);
         }
     }
@@ -1448,7 +1483,10 @@ fn show_desktop_inline_rename(
     let Some(parent_box) = label.parent().and_then(|p| p.downcast::<GtkBox>().ok()) else {
         return;
     };
-    let Some(initial_name) = old_path.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+    let Some(initial_name) = old_path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+    else {
         return;
     };
     if initial_name.is_empty() {
@@ -1651,7 +1689,10 @@ fn create_desktop_item_and_edit(
     let mut pos = clamp_icon_position(
         click_pos.0,
         click_pos.1,
-        (f64::from(metrics.box_width) / 2.0, f64::from(metrics.box_height) / 2.0),
+        (
+            f64::from(metrics.box_width) / 2.0,
+            f64::from(metrics.box_height) / 2.0,
+        ),
         &metrics,
         desktop_size,
         top_margin,
@@ -1860,11 +1901,19 @@ pub fn calculate_organize_targets(
     }
 
     let metrics = IconLayoutMetrics::from_config(config);
-    let rows = ((desktop_size.1 - (top_margin as i32) - 80).max(1) / metrics.cell_height()).max(1) as usize;
+    let rows = ((desktop_size.1 - (top_margin as i32) - 80).max(1) / metrics.cell_height()).max(1)
+        as usize;
 
     let mut targets = HashMap::with_capacity(entries_list.len());
     for (index, entry) in entries_list.into_iter().enumerate() {
-        let pos = calculate_grid_position(index, rows, &metrics, config.align_left, desktop_size, top_margin);
+        let pos = calculate_grid_position(
+            index,
+            rows,
+            &metrics,
+            config.align_left,
+            desktop_size,
+            top_margin,
+        );
         targets.insert(entry.path, pos);
     }
     targets
@@ -2037,7 +2086,8 @@ pub fn animate_desktop_snap_to_grid(
     {
         let pos = icon_positions.borrow();
         for (p, pt) in pos.iter() {
-            let snapped = snap_position_to_grid(*pt, &metrics, align_left, desktop_size, top_margin);
+            let snapped =
+                snap_position_to_grid(*pt, &metrics, align_left, desktop_size, top_margin);
             targets.insert(p.clone(), snapped);
         }
     }
@@ -2096,7 +2146,14 @@ fn build_organize_submenu(
     by_name_btn.connect_clicked(move |_| {
         let cfg = cfg_c.borrow().clone();
         if cfg.use_stacks {
-            organize_desktop_icons(&dir_c, desktop_size, &cfg, &pos_c, DesktopOrganizeBy::Name, top_margin);
+            organize_desktop_icons(
+                &dir_c,
+                desktop_size,
+                &cfg,
+                &pos_c,
+                DesktopOrganizeBy::Name,
+                top_margin,
+            );
             trig_c();
         } else {
             animate_desktop_organization(
@@ -2124,7 +2181,14 @@ fn build_organize_submenu(
     by_kind_btn.connect_clicked(move |_| {
         let cfg = cfg_c.borrow().clone();
         if cfg.use_stacks {
-            organize_desktop_icons(&dir_c, desktop_size, &cfg, &pos_c, DesktopOrganizeBy::Kind, top_margin);
+            organize_desktop_icons(
+                &dir_c,
+                desktop_size,
+                &cfg,
+                &pos_c,
+                DesktopOrganizeBy::Kind,
+                top_margin,
+            );
             trig_c();
         } else {
             animate_desktop_organization(
@@ -2152,7 +2216,14 @@ fn build_organize_submenu(
     by_date_btn.connect_clicked(move |_| {
         let cfg = cfg_c.borrow().clone();
         if cfg.use_stacks {
-            organize_desktop_icons(&dir_c, desktop_size, &cfg, &pos_c, DesktopOrganizeBy::DateModified, top_margin);
+            organize_desktop_icons(
+                &dir_c,
+                desktop_size,
+                &cfg,
+                &pos_c,
+                DesktopOrganizeBy::DateModified,
+                top_margin,
+            );
             trig_c();
         } else {
             animate_desktop_organization(
@@ -2332,7 +2403,8 @@ fn refresh_desktop_icons(
     }
 
     let metrics = IconLayoutMetrics::from_config(config);
-    let rows = ((desktop_size.1 - (top_margin as i32) - 80).max(1) / metrics.cell_height()).max(1) as usize;
+    let rows = ((desktop_size.1 - (top_margin as i32) - 80).max(1) / metrics.cell_height()).max(1)
+        as usize;
 
     let mut positions = icon_positions.borrow_mut();
     let current_paths_set: HashSet<PathBuf> = items.iter().map(|it| it.path.clone()).collect();
@@ -2391,7 +2463,14 @@ fn refresh_desktop_icons(
             stack_box.append(&icon_overlay);
             stack_box.append(&label);
 
-            let (x, y) = calculate_grid_position(slot_index, rows, &metrics, config.align_left, desktop_size, top_margin);
+            let (x, y) = calculate_grid_position(
+                slot_index,
+                rows,
+                &metrics,
+                config.align_left,
+                desktop_size,
+                top_margin,
+            );
             fixed.put(&stack_box, x, y);
             slot_index += 1;
 
@@ -2562,10 +2641,11 @@ fn attach_squircle_menu_hover(btn: &Button) {
         }
         let _ = cr.save();
         squircle_path(cr, width, height, 14.0);
+        let (red, green, blue) = malus_de_common::config::load_accent_color();
         if active {
-            cr.set_source_rgba(0.0, 0.39, 0.85, 0.86);
+            cr.set_source_rgba(red * 0.78, green * 0.78, blue * 0.78, 0.86);
         } else {
-            cr.set_source_rgba(0.0, 0.48, 1.0, 0.74);
+            cr.set_source_rgba(red, green, blue, 0.74);
         }
         let _ = cr.fill();
         let _ = cr.restore();
@@ -2613,7 +2693,9 @@ fn resolve_desktop_icon_paintable(
 ) -> Option<gtk4::gdk::Paintable> {
     if let Some(ct) = content_type {
         if ct.starts_with("image/") {
-            if let Ok(pixbuf) = gdk_pixbuf::Pixbuf::from_file_at_scale(path, icon_size, icon_size, true) {
+            if let Ok(pixbuf) =
+                gdk_pixbuf::Pixbuf::from_file_at_scale(path, icon_size, icon_size, true)
+            {
                 let texture = gtk4::gdk::Texture::for_pixbuf(&pixbuf);
                 return Some(texture.upcast());
             }
@@ -2773,8 +2855,16 @@ fn build_multi_desktop_drag_paintable(
     let snapshot = gtk4::Snapshot::new();
     for (w, (ix, iy)) in items {
         let wp = gtk4::WidgetPaintable::new(Some(w));
-        let ww = wp.intrinsic_width().max(w.width()).max(w.width_request()).max(72) as f64;
-        let wh = wp.intrinsic_height().max(w.height()).max(w.height_request()).max(76) as f64;
+        let ww = wp
+            .intrinsic_width()
+            .max(w.width())
+            .max(w.width_request())
+            .max(72) as f64;
+        let wh = wp
+            .intrinsic_height()
+            .max(w.height())
+            .max(w.height_request())
+            .max(76) as f64;
         snapshot.save();
         snapshot.translate(&gtk4::graphene::Point::new(
             (*ix - min_x) as f32,
@@ -2794,8 +2884,16 @@ fn build_multi_desktop_drag_paintable(
 
 fn build_single_desktop_drag_paintable(widget: &GtkBox) -> gtk4::gdk::Paintable {
     let wp = gtk4::WidgetPaintable::new(Some(widget));
-    let w = wp.intrinsic_width().max(widget.width()).max(widget.width_request()).max(72) as f32;
-    let h = wp.intrinsic_height().max(widget.height()).max(widget.height_request()).max(76) as f32;
+    let w = wp
+        .intrinsic_width()
+        .max(widget.width())
+        .max(widget.width_request())
+        .max(72) as f32;
+    let h = wp
+        .intrinsic_height()
+        .max(widget.height())
+        .max(widget.height_request())
+        .max(76) as f32;
     let snapshot = gtk4::Snapshot::new();
     wp.snapshot(&snapshot, w as f64, h as f64);
     snapshot
@@ -2900,7 +2998,14 @@ fn render_single_icon(
     set_desktop_icon_selected(&item_box, is_selected);
 
     let (x, mut y) = *positions.entry(path.clone()).or_insert_with(|| {
-        calculate_grid_position(index, rows, metrics, config.align_left, desktop_size, top_margin)
+        calculate_grid_position(
+            index,
+            rows,
+            metrics,
+            config.align_left,
+            desktop_size,
+            top_margin,
+        )
     });
     if y < top_margin {
         y = top_margin;
@@ -2928,7 +3033,6 @@ fn render_single_icon(
     let drag_item_press = item_box.clone();
 
     click.connect_pressed(move |gesture, presses, _click_x, _click_y| {
-
         if presses == 2 {
             gesture.set_state(gtk4::EventSequenceState::Claimed);
             launch_file(&open_file);
@@ -3158,10 +3262,7 @@ fn render_single_icon(
                 .iter()
                 .map(|p| {
                     let (ix, iy) = pos_map.get(p).copied().unwrap_or((p0x, p0y));
-                    (
-                        p.clone(),
-                        (cursor_desktop_x - ix, cursor_desktop_y - iy),
-                    )
+                    (p.clone(), (cursor_desktop_x - ix, cursor_desktop_y - iy))
                 })
                 .collect();
             malus_de_common::write_drag_anchors(&anchors);
@@ -3181,13 +3282,19 @@ fn render_single_icon(
                     }
                 }
             }
-            if let Some((multi_paintable, hot_x, hot_y)) =
-                build_multi_desktop_drag_paintable(&drag_widgets, cursor_desktop_x, cursor_desktop_y)
-            {
+            if let Some((multi_paintable, hot_x, hot_y)) = build_multi_desktop_drag_paintable(
+                &drag_widgets,
+                cursor_desktop_x,
+                cursor_desktop_y,
+            ) {
                 source.set_icon(Some(&multi_paintable), hot_x, hot_y);
             } else {
                 let paintable = gtk4::WidgetPaintable::new(Some(&item_box_prep));
-                source.set_icon(Some(&paintable), rounded_click.0 as i32, rounded_click.1 as i32);
+                source.set_icon(
+                    Some(&paintable),
+                    rounded_click.0 as i32,
+                    rounded_click.1 as i32,
+                );
             }
 
             ordered_paths
@@ -3196,7 +3303,11 @@ fn render_single_icon(
                 .collect()
         } else {
             let paintable = build_single_desktop_drag_paintable(&item_box_prep);
-            source.set_icon(Some(&paintable), rounded_click.0 as i32, rounded_click.1 as i32);
+            source.set_icon(
+                Some(&paintable),
+                rounded_click.0 as i32,
+                rounded_click.1 as i32,
+            );
             malus_de_common::write_drag_anchor(&path_drag, rounded_click.0, rounded_click.1);
             vec![gio::File::for_path(&path_drag)]
         };
@@ -3226,11 +3337,8 @@ fn render_single_icon(
         } else {
             item_box_drag.add_css_class("desktop-icon-dragging");
         }
-        *act_drag_begin.borrow_mut() = Some((
-            path_drag_begin.clone(),
-            (0.0, 0.0),
-            (click_x, click_y),
-        ));
+        *act_drag_begin.borrow_mut() =
+            Some((path_drag_begin.clone(), (0.0, 0.0), (click_x, click_y)));
     });
 
     let fixed_drag_end = fixed.clone();
@@ -3297,11 +3405,8 @@ fn render_single_icon(
                         } else {
                             let (cx, cy) = fixed_check.child_position(&child);
                             if cx < 0.0 || cy < 0.0 {
-                                let target_pos = pos_check
-                                    .borrow()
-                                    .get(&p)
-                                    .cloned()
-                                    .unwrap_or(orig_pos);
+                                let target_pos =
+                                    pos_check.borrow().get(&p).cloned().unwrap_or(orig_pos);
                                 fixed_check.move_(&child, target_pos.0, target_pos.1);
                             }
                             child.remove_css_class("desktop-icon-dragging");
@@ -3347,12 +3452,15 @@ fn render_single_icon(
                             let dest_path = target_dir.join(fname);
                             if dest_path != src_path {
                                 let dest_file = gio::File::for_path(&dest_path);
-                                if src_file.move_(
-                                    &dest_file,
-                                    gio::FileCopyFlags::NONE,
-                                    gio::Cancellable::NONE,
-                                    None,
-                                ).is_ok() {
+                                if src_file
+                                    .move_(
+                                        &dest_file,
+                                        gio::FileCopyFlags::NONE,
+                                        gio::Cancellable::NONE,
+                                        None,
+                                    )
+                                    .is_ok()
+                                {
                                     pos_map_drop.borrow_mut().remove(&src_path);
                                     moved_any = true;
                                 }
@@ -3484,8 +3592,10 @@ fn create_wallpaper_window(
 
         let selected_paths: Rc<RefCell<HashSet<PathBuf>>> = Rc::new(RefCell::new(HashSet::new()));
         let focused_path: Rc<RefCell<Option<PathBuf>>> = Rc::new(RefCell::new(None));
-        let expanded_stacks: Rc<RefCell<HashSet<StackCategory>>> = Rc::new(RefCell::new(HashSet::new()));
-        let recently_dropped_paths: Rc<RefCell<HashSet<PathBuf>>> = Rc::new(RefCell::new(HashSet::new()));
+        let expanded_stacks: Rc<RefCell<HashSet<StackCategory>>> =
+            Rc::new(RefCell::new(HashSet::new()));
+        let recently_dropped_paths: Rc<RefCell<HashSet<PathBuf>>> =
+            Rc::new(RefCell::new(HashSet::new()));
 
         let current_config = Rc::new(RefCell::new(DesktopIconsConfig::load()));
 
@@ -4205,12 +4315,8 @@ fn create_wallpaper_window(
         // En Wayland el cursor lleva consigo la miniatura flotante (WidgetPaintable).
         // No movemos el widget del escritorio durante connect_motion para evitar cualquier
         // estela o duplicación semitransparente detrás del puntero.
-        drop_target.connect_enter(move |_, _x, _y| {
-            gtk4::gdk::DragAction::MOVE
-        });
-        drop_target.connect_motion(move |_, _x, _y| {
-            gtk4::gdk::DragAction::MOVE
-        });
+        drop_target.connect_enter(move |_, _x, _y| gtk4::gdk::DragAction::MOVE);
+        drop_target.connect_motion(move |_, _x, _y| gtk4::gdk::DragAction::MOVE);
 
         let active_drag_drop = active_icon_drag.clone();
         let drop_icons = icons.clone();
@@ -4235,7 +4341,8 @@ fn create_wallpaper_window(
             let metrics = IconLayoutMetrics::from_config(&cfg_snapshot);
             let snap = cfg_snapshot.snap_to_grid;
             let align_left = cfg_snapshot.align_left;
-            let rows = ((desktop_size.1 - (top_margin as i32) - 80).max(1) / metrics.cell_height()).max(1) as usize;
+            let rows = ((desktop_size.1 - (top_margin as i32) - 80).max(1) / metrics.cell_height())
+                .max(1) as usize;
 
             let mut moved_any = false;
             let mut cleared_selection_for_external = false;
@@ -4280,7 +4387,13 @@ fn create_wallpaper_window(
                             top_margin,
                         );
                         let final_pos = if snap {
-                            snap_position_to_grid(raw_pos, &metrics, align_left, desktop_size, top_margin)
+                            snap_position_to_grid(
+                                raw_pos,
+                                &metrics,
+                                align_left,
+                                desktop_size,
+                                top_margin,
+                            )
                         } else {
                             raw_pos
                         };
@@ -4314,7 +4427,13 @@ fn create_wallpaper_window(
                     top_margin,
                 );
                 if snap {
-                    position = snap_position_to_grid(position, &metrics, align_left, desktop_size, top_margin);
+                    position = snap_position_to_grid(
+                        position,
+                        &metrics,
+                        align_left,
+                        desktop_size,
+                        top_margin,
+                    );
                 }
 
                 let is_app_shortcut = source
@@ -4328,12 +4447,17 @@ fn create_wallpaper_window(
                             if has_desktop_icon_widget(&drop_icons, &dest_path)
                                 && move_desktop_icon(&drop_icons, &dest_path, position)
                             {
-                                drop_positions.borrow_mut().insert(dest_path.clone(), position);
+                                drop_positions
+                                    .borrow_mut()
+                                    .insert(dest_path.clone(), position);
                                 internal_paths_drop.borrow_mut().insert(dest_path);
                                 moved_any = true;
                                 continue;
                             }
-                            Err("Ya existe un acceso directo con ese nombre en el escritorio".to_string())
+                            Err(
+                                "Ya existe un acceso directo con ese nombre en el escritorio"
+                                    .to_string(),
+                            )
                         } else {
                             std::os::unix::fs::symlink(&src_path, &dest_path)
                                 .map_err(|e| e.to_string())
@@ -4475,7 +4599,9 @@ fn create_wallpaper_window(
                     if has_desktop_icon_widget(&sc_icons, &dest_path)
                         && move_desktop_icon(&sc_icons, &dest_path, position)
                     {
-                        sc_positions.borrow_mut().insert(dest_path.clone(), position);
+                        sc_positions
+                            .borrow_mut()
+                            .insert(dest_path.clone(), position);
                         sc_internal.borrow_mut().insert(dest_path);
                         save_icon_positions(&sc_positions.borrow());
                     }
@@ -4490,7 +4616,9 @@ fn create_wallpaper_window(
                     return;
                 }
 
-                sc_positions.borrow_mut().insert(dest_path.clone(), position);
+                sc_positions
+                    .borrow_mut()
+                    .insert(dest_path.clone(), position);
                 sc_internal.borrow_mut().insert(dest_path.clone());
                 sc_rec.borrow_mut().insert(dest_path.clone());
 
@@ -4594,7 +4722,9 @@ fn create_wallpaper_window(
 
         // Monitor reactivo para el archivo de configuración desktop.toml
         let config_file = gio::File::for_path(DesktopIconsConfig::config_path());
-        if let Ok(cfg_monitor) = config_file.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE) {
+        if let Ok(cfg_monitor) =
+            config_file.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
+        {
             let cfg_holder = current_config.clone();
             let trigger_c = trigger_refresh.clone();
             cfg_monitor.connect_changed(move |_, _, _, _| {
@@ -5002,15 +5132,36 @@ mod tests {
             spacing: 8,
         };
         assert_eq!(
-            clamp_icon_position(150.0, 100.0, (20.0, 30.0), &metrics, (800, 600), DESKTOP_TOP_MARGIN),
+            clamp_icon_position(
+                150.0,
+                100.0,
+                (20.0, 30.0),
+                &metrics,
+                (800, 600),
+                DESKTOP_TOP_MARGIN
+            ),
             (130.0, 70.0)
         );
         assert_eq!(
-            clamp_icon_position(-20.0, -30.0, (20.0, 30.0), &metrics, (800, 600), DESKTOP_TOP_MARGIN),
+            clamp_icon_position(
+                -20.0,
+                -30.0,
+                (20.0, 30.0),
+                &metrics,
+                (800, 600),
+                DESKTOP_TOP_MARGIN
+            ),
             (16.0, DESKTOP_TOP_MARGIN)
         );
         assert_eq!(
-            clamp_icon_position(150.7, 100.4, (20.0, 30.0), &metrics, (800, 600), DESKTOP_TOP_MARGIN),
+            clamp_icon_position(
+                150.7,
+                100.4,
+                (20.0, 30.0),
+                &metrics,
+                (800, 600),
+                DESKTOP_TOP_MARGIN
+            ),
             (131.0, 70.0)
         );
     }
@@ -5024,7 +5175,14 @@ mod tests {
             spacing: 8,
         };
         assert_eq!(
-            dragged_icon_position((130.0, 70.0), (20.0, 30.0), (15.0, -10.0), &metrics, (800, 600), DESKTOP_TOP_MARGIN),
+            dragged_icon_position(
+                (130.0, 70.0),
+                (20.0, 30.0),
+                (15.0, -10.0),
+                &metrics,
+                (800, 600),
+                DESKTOP_TOP_MARGIN
+            ),
             (145.0, 60.0)
         );
     }
@@ -5068,7 +5226,10 @@ mod tests {
         let d2 = super::get_unique_text_document_name(&temp_dir, "Nuevo documento");
         assert_eq!(d2, temp_dir.join("Nuevo documento 2.txt"));
 
-        assert_eq!(super::desktop_rename_selection_end("Nueva carpeta", true), -1);
+        assert_eq!(
+            super::desktop_rename_selection_end("Nueva carpeta", true),
+            -1
+        );
         assert_eq!(
             super::desktop_rename_selection_end("Nuevo documento.txt", false),
             "Nuevo documento".chars().count() as i32
@@ -5095,7 +5256,8 @@ mod tests {
         std::fs::write(&file_a, "test").unwrap();
 
         let config = DesktopIconsConfig::default();
-        let icon_positions = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+        let icon_positions =
+            std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
 
         super::organize_desktop_icons(
             &temp_dir,
@@ -5111,12 +5273,17 @@ mod tests {
 
         // Carpetas primero (Carpeta A en slot 0, Carpeta B en slot 1, archivo_a en slot 2, archivo_z en slot 3)
         let metrics = IconLayoutMetrics::from_config(&config);
-        let rows = ((1080 - (DESKTOP_TOP_MARGIN as i32) - 80).max(1) / metrics.cell_height()).max(1) as usize;
+        let rows = ((1080 - (DESKTOP_TOP_MARGIN as i32) - 80).max(1) / metrics.cell_height()).max(1)
+            as usize;
 
-        let slot_0 = calculate_grid_position(0, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
-        let slot_1 = calculate_grid_position(1, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
-        let slot_2 = calculate_grid_position(2, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
-        let slot_3 = calculate_grid_position(3, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
+        let slot_0 =
+            calculate_grid_position(0, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
+        let slot_1 =
+            calculate_grid_position(1, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
+        let slot_2 =
+            calculate_grid_position(2, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
+        let slot_3 =
+            calculate_grid_position(3, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
 
         assert_eq!(pos.get(&folder_a).copied(), Some(slot_0));
         assert_eq!(pos.get(&folder_b).copied(), Some(slot_1));
@@ -5139,7 +5306,8 @@ mod tests {
 
         // Snap a la izquierda
         let pos_left = (25.0, 45.0);
-        let snapped_left = snap_position_to_grid(pos_left, &metrics, true, (1920, 1080), DESKTOP_TOP_MARGIN);
+        let snapped_left =
+            snap_position_to_grid(pos_left, &metrics, true, (1920, 1080), DESKTOP_TOP_MARGIN);
         assert_eq!(snapped_left.0, 16.0);
         assert_eq!(snapped_left.1, DESKTOP_TOP_MARGIN);
     }
@@ -5151,12 +5319,24 @@ mod tests {
 
         // En pantalla secundaria no hay Top Bar, el margen superior es 16.0
         let pos = (1800.0, 5.0);
-        let snapped = snap_position_to_grid(pos, &metrics, false, (1920, 1080), DESKTOP_SECONDARY_TOP_MARGIN);
+        let snapped = snap_position_to_grid(
+            pos,
+            &metrics,
+            false,
+            (1920, 1080),
+            DESKTOP_SECONDARY_TOP_MARGIN,
+        );
         assert!(snapped.0 <= 1920.0 - metrics.box_width as f64);
         assert_eq!(snapped.1, DESKTOP_SECONDARY_TOP_MARGIN);
 
         let pos_left = (25.0, 5.0);
-        let snapped_left = snap_position_to_grid(pos_left, &metrics, true, (1920, 1080), DESKTOP_SECONDARY_TOP_MARGIN);
+        let snapped_left = snap_position_to_grid(
+            pos_left,
+            &metrics,
+            true,
+            (1920, 1080),
+            DESKTOP_SECONDARY_TOP_MARGIN,
+        );
         assert_eq!(snapped_left.0, 16.0);
         assert_eq!(snapped_left.1, DESKTOP_SECONDARY_TOP_MARGIN);
     }
@@ -5308,11 +5488,15 @@ mod tests {
 
         assert_eq!(targets.len(), 3);
         let metrics = IconLayoutMetrics::from_config(&config);
-        let rows = ((1080 - (DESKTOP_TOP_MARGIN as i32) - 80).max(1) / metrics.cell_height()).max(1) as usize;
+        let rows = ((1080 - (DESKTOP_TOP_MARGIN as i32) - 80).max(1) / metrics.cell_height()).max(1)
+            as usize;
 
-        let slot_0 = calculate_grid_position(0, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
-        let slot_1 = calculate_grid_position(1, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
-        let slot_2 = calculate_grid_position(2, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
+        let slot_0 =
+            calculate_grid_position(0, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
+        let slot_1 =
+            calculate_grid_position(1, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
+        let slot_2 =
+            calculate_grid_position(2, rows, &metrics, false, (1920, 1080), DESKTOP_TOP_MARGIN);
 
         // Subcarpeta primero (slot 0), luego jpg (slot 1 por orden alfabético de extensión), luego txt (slot 2)
         assert_eq!(targets.get(&folder).copied(), Some(slot_0));
@@ -5329,7 +5513,8 @@ mod tests {
         assert_eq!(short, "Notas.txt");
 
         // 2. Archivo largo con extensión: corta por el centro y preserva la extensión
-        let long_file = super::truncate_desktop_name("Documento_De_Investigacion_Final_2026.pdf", 24);
+        let long_file =
+            super::truncate_desktop_name("Documento_De_Investigacion_Final_2026.pdf", 24);
         assert!(long_file.contains('…'));
         assert!(long_file.ends_with(".pdf"));
         assert!(long_file.chars().count() <= 24);
@@ -5341,14 +5526,16 @@ mod tests {
         assert!(tar_file.chars().count() <= 24);
 
         // 4. Carpeta larga sin extensión: divide equitativamente por el centro
-        let long_folder = super::truncate_desktop_name("Carpeta con fotos de las vacaciones 2026", 24);
+        let long_folder =
+            super::truncate_desktop_name("Carpeta con fotos de las vacaciones 2026", 24);
         assert!(long_folder.contains('…'));
         assert!(long_folder.starts_with("Carpeta"));
         assert!(long_folder.ends_with("2026"));
         assert!(long_folder.chars().count() <= 24);
 
         // 5. Caracteres UTF-8 multibyte (español, acentos, eñe)
-        let utf8_file = super::truncate_desktop_name("Diseño_gráfico_año_2026_españa_final.png", 24);
+        let utf8_file =
+            super::truncate_desktop_name("Diseño_gráfico_año_2026_españa_final.png", 24);
         assert!(utf8_file.contains('…'));
         assert!(utf8_file.ends_with(".png"));
         assert!(utf8_file.chars().count() <= 24);

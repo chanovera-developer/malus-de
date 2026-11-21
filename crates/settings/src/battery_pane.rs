@@ -219,9 +219,7 @@ pub fn create_battery_pane(
     // =========================================================================
     // Tarjeta 1: "Ahorrar batería" + selector transparente estilo macOS (Bateria01)
     // =========================================================================
-    let low_power_card = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .build();
+    let low_power_card = GtkBox::builder().orientation(Orientation::Vertical).build();
     let low_power_row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(12)
@@ -294,7 +292,8 @@ pub fn create_battery_pane(
         .css_classes(["card-section-sub"])
         .valign(Align::Center)
         .build();
-    let (cond_info_wrap, cond_info_btn) = make_circle_info_button("Detalles de condición de batería");
+    let (cond_info_wrap, cond_info_btn) =
+        make_circle_info_button("Detalles de condición de batería");
     cond_row.append(&cond_status_lbl);
     cond_row.append(&cond_info_wrap);
     info_card.append(&cond_row);
@@ -314,7 +313,8 @@ pub fn create_battery_pane(
             .hexpand(true)
             .build(),
     );
-    let (charge_info_wrap, charge_info_btn) = make_circle_info_button("Límite de recarga y recarga optimizada");
+    let (charge_info_wrap, charge_info_btn) =
+        make_circle_info_button("Límite de recarga y recarga optimizada");
     charge_row.append(&charge_info_wrap);
     info_card.append(&charge_row);
 
@@ -852,7 +852,9 @@ fn show_battery_condition_dialog(parent: &ApplicationWindow, snap: &BatteryHardw
     if !snap.manufacturer.is_empty() || !snap.model_name.is_empty() {
         extra_box.append(&detail_kv_row(
             "Fabricante / Modelo",
-            &format!("{} {}", snap.manufacturer, snap.model_name).trim().to_string(),
+            &format!("{} {}", snap.manufacturer, snap.model_name)
+                .trim()
+                .to_string(),
         ));
     }
     if let Some(cycles) = snap.cycle_count {
@@ -966,7 +968,11 @@ fn show_battery_charging_dialog(
         .valign(Align::Center)
         .build();
     for pct in [80, 85, 90, 95, 100] {
-        slider.add_mark(pct as f64, gtk4::PositionType::Bottom, Some(&format!("{pct}%")));
+        slider.add_mark(
+            pct as f64,
+            gtk4::PositionType::Bottom,
+            Some(&format!("{pct}%")),
+        );
     }
 
     let lim_sub_c = lim_sub.clone();
@@ -1338,20 +1344,19 @@ fn draw_chart_grid(
     (pad_l, pad_t, gw, gh)
 }
 
-fn draw_rounded_bar(
-    cr: &gtk4::cairo::Context,
-    x: f64,
-    y: f64,
-    w: f64,
-    h: f64,
-    radius: f64,
-) {
+fn draw_rounded_bar(cr: &gtk4::cairo::Context, x: f64, y: f64, w: f64, h: f64, radius: f64) {
     if w <= 0.5 || h <= 0.5 {
         return;
     }
     let r = radius.min(w * 0.5).min(h * 0.5);
     cr.new_sub_path();
-    cr.arc(x + r, y + r, r, std::f64::consts::PI, 1.5 * std::f64::consts::PI);
+    cr.arc(
+        x + r,
+        y + r,
+        r,
+        std::f64::consts::PI,
+        1.5 * std::f64::consts::PI,
+    );
     cr.arc(x + w - r, y + r, r, 1.5 * std::f64::consts::PI, 0.0);
     cr.line_to(x + w, y + h);
     cr.line_to(x, y + h);
@@ -1437,12 +1442,7 @@ fn draw_battery_level_24h(
     );
 }
 
-fn draw_screen_on_24h(
-    cr: &gtk4::cairo::Context,
-    w: f64,
-    h: f64,
-    samples: &[BatteryHistorySample],
-) {
+fn draw_screen_on_24h(cr: &gtk4::cairo::Context, w: f64, h: f64, samples: &[BatteryHistorySample]) {
     let (pad_l, pad_t, gw, gh) = draw_chart_grid(cr, w, h, &["60 min", "30 min", "0 min"], 8);
     let now_ts = now_unix_secs();
     let mins_by_hour = aggregate_24h_screen_mins(samples, now_ts);
@@ -1516,12 +1516,7 @@ fn draw_energy_usage_10d(
     draw_x_axis_labels(cr, pad_l, pad_t + gh, gw, &x_labels, 10, &date_notes);
 }
 
-fn draw_screen_on_10d(
-    cr: &gtk4::cairo::Context,
-    w: f64,
-    h: f64,
-    samples: &[BatteryHistorySample],
-) {
+fn draw_screen_on_10d(cr: &gtk4::cairo::Context, w: f64, h: f64, samples: &[BatteryHistorySample]) {
     let (pad_l, pad_t, gw, gh) =
         draw_chart_grid(cr, w, h, &["4 h", "3 h", "2 h", "1 h", "0 min"], 10);
     let now_ts = now_unix_secs();
@@ -1623,8 +1618,8 @@ pub(crate) fn format_battery_header_status(snap: &BatteryHardwareSnapshot) -> (S
         );
     }
     let rounded = (snap.level_pct / 10).min(10) * 10;
-    let charging = snap.status.eq_ignore_ascii_case("Charging")
-        || snap.status.eq_ignore_ascii_case("Full");
+    let charging =
+        snap.status.eq_ignore_ascii_case("Charging") || snap.status.eq_ignore_ascii_case("Full");
     let icon = if snap.status.eq_ignore_ascii_case("Charging") {
         format!("battery-level-{rounded}-charging-symbolic")
     } else if charging && snap.ac_online {
@@ -1695,7 +1690,12 @@ fn collect_battery_snapshot() -> BatteryHardwareSnapshot {
         dirs.sort();
         for dir in dirs {
             let ptype = read_sysfs_string(&dir, "type").unwrap_or_default();
-            if ptype == "Mains" || dir.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("AC")) {
+            if ptype == "Mains"
+                || dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("AC"))
+            {
                 if read_sysfs_string(&dir, "online").as_deref() == Some("1") {
                     ac_online = true;
                 }
@@ -1708,7 +1708,8 @@ fn collect_battery_snapshot() -> BatteryHardwareSnapshot {
                 snap.status = read_sysfs_string(&dir, "status").unwrap_or_else(|| "Unknown".into());
                 snap.manufacturer = read_sysfs_string(&dir, "manufacturer").unwrap_or_default();
                 snap.model_name = read_sysfs_string(&dir, "model_name").unwrap_or_default();
-                snap.cycle_count = read_sysfs_string(&dir, "cycle_count").and_then(|s| s.parse().ok());
+                snap.cycle_count =
+                    read_sysfs_string(&dir, "cycle_count").and_then(|s| s.parse().ok());
 
                 let (full_val, design_val) = if let (Some(ef), Some(ed)) = (
                     read_sysfs_f64(&dir, "energy_full"),
@@ -1724,20 +1725,21 @@ fn collect_battery_snapshot() -> BatteryHardwareSnapshot {
                     )
                 };
 
-                snap.max_capacity_pct = compute_battery_max_capacity(full_val, design_val).unwrap_or(100);
+                snap.max_capacity_pct =
+                    compute_battery_max_capacity(full_val, design_val).unwrap_or(100);
                 let health_raw = read_sysfs_string(&dir, "health").unwrap_or_else(|| "Good".into());
-                snap.condition_label = if health_raw.eq_ignore_ascii_case("Dead")
-                    || snap.max_capacity_pct < 75
-                {
-                    "Se recomienda revisión".to_string()
-                } else {
-                    "Normal".to_string()
-                };
+                snap.condition_label =
+                    if health_raw.eq_ignore_ascii_case("Dead") || snap.max_capacity_pct < 75 {
+                        "Se recomienda revisión".to_string()
+                    } else {
+                        "Normal".to_string()
+                    };
 
                 let lim_path = dir.join("charge_control_end_threshold");
                 if lim_path.exists() {
                     snap.sysfs_charge_limit =
-                        read_sysfs_string(&dir, "charge_control_end_threshold").and_then(|s| s.parse().ok());
+                        read_sysfs_string(&dir, "charge_control_end_threshold")
+                            .and_then(|s| s.parse().ok());
                     snap.charge_limit_writable = true;
                 }
             }
@@ -1746,7 +1748,10 @@ fn collect_battery_snapshot() -> BatteryHardwareSnapshot {
     snap.ac_online = ac_online;
 
     if !snap.has_battery {
-        if let Ok(out) = Command::new("upower").args(["-i", "/org/freedesktop/UPower/devices/DisplayDevice"]).output() {
+        if let Ok(out) = Command::new("upower")
+            .args(["-i", "/org/freedesktop/UPower/devices/DisplayDevice"])
+            .output()
+        {
             if out.status.success() {
                 let txt = String::from_utf8_lossy(&out.stdout);
                 parse_upower_fallback(&txt, &mut snap);
@@ -2017,8 +2022,14 @@ mod tests {
 
     #[test]
     fn computes_battery_health_and_charge_stops_cleanly() {
-        assert_eq!(compute_battery_max_capacity(Some(48_500_000.0), Some(50_000_000.0)), Some(97));
-        assert_eq!(compute_battery_max_capacity(Some(50.0), Some(50.0)), Some(100));
+        assert_eq!(
+            compute_battery_max_capacity(Some(48_500_000.0), Some(50_000_000.0)),
+            Some(97)
+        );
+        assert_eq!(
+            compute_battery_max_capacity(Some(50.0), Some(50.0)),
+            Some(100)
+        );
         assert_eq!(compute_battery_max_capacity(None, Some(50.0)), None);
 
         assert_eq!(snap_charge_limit_stop(79), 80);
@@ -2047,7 +2058,9 @@ mod tests {
 
         let slots_24 = aggregate_24h_battery_slots(&samples, now);
         assert_eq!(slots_24.len(), 48);
-        assert!(slots_24.iter().any(|s| s.level_pct == Some(64) && s.charging));
+        assert!(slots_24
+            .iter()
+            .any(|s| s.level_pct == Some(64) && s.charging));
         assert!(slots_24.iter().any(|s| s.level_pct == Some(53)));
 
         let mins = aggregate_24h_screen_mins(&samples, now);

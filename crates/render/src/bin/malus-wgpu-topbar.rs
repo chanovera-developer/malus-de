@@ -48,8 +48,8 @@ fn main() -> Result<()> {
     let qh = event_queue.handle();
 
     // 2. EventLoop de Calloop
-    let mut event_loop: EventLoop<WaylandTopBarApp> = EventLoop::try_new()
-        .context("Error al inicializar el bucle de eventos Calloop")?;
+    let mut event_loop: EventLoop<WaylandTopBarApp> =
+        EventLoop::try_new().context("Error al inicializar el bucle de eventos Calloop")?;
     let loop_handle = event_loop.handle();
 
     // Insertar origen de eventos de Wayland en Calloop
@@ -62,7 +62,10 @@ fn main() -> Result<()> {
     loop_handle
         .insert_source(menu_channel, |event, _, app| {
             if let Event::Msg(update) = event {
-                info!("🔄 [TopBar] Aplicando actualización de menú: {} ({:?})", update.app_name, update.menus);
+                info!(
+                    "🔄 [TopBar] Aplicando actualización de menú: {} ({:?})",
+                    update.app_name, update.menus
+                );
                 let _ = app.update_active_app(update.app_name, update.menus);
                 app.update_dbus_categories(update.categories);
                 let _ = app.render();
@@ -85,7 +88,10 @@ fn main() -> Result<()> {
                     changed = true;
                 }
                 if app.model.is_dark_background != update.is_dark {
-                    info!("🎨 [TopBar] Paleta adaptativa actualizada por tema/fondo: is_dark={}", update.is_dark);
+                    info!(
+                        "🎨 [TopBar] Paleta adaptativa actualizada por tema/fondo: is_dark={}",
+                        update.is_dark
+                    );
                     app.model.is_dark_background = update.is_dark;
                     changed = true;
                 }
@@ -108,14 +114,16 @@ fn main() -> Result<()> {
     // 4b. Hilo de sondeo periódico para reloj e indicadores de estado del sistema (1 Hz)
     {
         let status_tx = status_tx.clone();
-        std::thread::spawn(move || {
-            loop {
-                let clock = current_clock_string();
-                let status_items = fetch_current_status_items();
-                let is_dark = malus_de_render::luminance::detect_system_is_dark();
-                let _ = status_tx.send(StatusUpdate { clock, status_items, is_dark });
-                std::thread::sleep(Duration::from_secs(1));
-            }
+        std::thread::spawn(move || loop {
+            let clock = current_clock_string();
+            let status_items = fetch_current_status_items();
+            let is_dark = malus_de_render::luminance::detect_system_is_dark();
+            let _ = status_tx.send(StatusUpdate {
+                clock,
+                status_items,
+                is_dark,
+            });
+            std::thread::sleep(Duration::from_secs(1));
         });
     }
 
@@ -151,8 +159,11 @@ fn main() -> Result<()> {
 
                     let tx = menu_tx.clone();
                     std::thread::spawn(move || {
-                        if let Ok(categories) = futures_lite::future::block_on(DbusMenuService::fetch_layout(&srv, &pth)) {
-                            let titles: Vec<String> = categories.iter().map(|c| c.title.clone()).collect();
+                        if let Ok(categories) = futures_lite::future::block_on(
+                            DbusMenuService::fetch_layout(&srv, &pth),
+                        ) {
+                            let titles: Vec<String> =
+                                categories.iter().map(|c| c.title.clone()).collect();
                             let _ = tx.send(MenuUpdate {
                                 app_name: display_name,
                                 menus: titles,
@@ -177,27 +188,42 @@ fn main() -> Result<()> {
             // Reintentar conexión al socket IPC del compositor
             loop {
                 if let Ok(stream) = UnixStream::connect(&sock_path) {
-                    info!("🔌 [TopBar] Conectado al socket IPC del compositor: {:?}", sock_path);
+                    info!(
+                        "🔌 [TopBar] Conectado al socket IPC del compositor: {:?}",
+                        sock_path
+                    );
                     let reader = BufReader::new(stream);
                     for line in reader.lines() {
                         let Ok(line) = line else { break };
                         if let Ok(msg) = serde_json::from_str::<IpcMessage>(&line) {
                             match msg {
-                                IpcMessage::ActiveAppChanged { app_id, title, window_id } => {
+                                IpcMessage::ActiveAppChanged {
+                                    app_id,
+                                    title,
+                                    window_id,
+                                } => {
                                     {
                                         let mut g = active_state.lock().unwrap();
                                         *g = (app_id.clone(), title.clone(), window_id);
                                     }
 
-                                    let display_name = format_app_name(app_id.as_deref(), title.as_deref());
+                                    let display_name =
+                                        format_app_name(app_id.as_deref(), title.as_deref());
 
                                     // Buscar si hay menú D-Bus para esta ventana
-                                    if let Some((srv, pth)) = dbus_service.find_menu(window_id, app_id.as_deref()) {
+                                    if let Some((srv, pth)) =
+                                        dbus_service.find_menu(window_id, app_id.as_deref())
+                                    {
                                         let tx = menu_tx.clone();
                                         let d_name = display_name.clone();
                                         std::thread::spawn(move || {
-                                            if let Ok(categories) = futures_lite::future::block_on(DbusMenuService::fetch_layout(&srv, &pth)) {
-                                                let titles: Vec<String> = categories.iter().map(|c| c.title.clone()).collect();
+                                            if let Ok(categories) = futures_lite::future::block_on(
+                                                DbusMenuService::fetch_layout(&srv, &pth),
+                                            ) {
+                                                let titles: Vec<String> = categories
+                                                    .iter()
+                                                    .map(|c| c.title.clone())
+                                                    .collect();
                                                 let _ = tx.send(MenuUpdate {
                                                     app_name: d_name,
                                                     menus: titles,
@@ -220,17 +246,29 @@ fn main() -> Result<()> {
                                     }
                                 }
                                 IpcMessage::ThemeChanged { is_dark, .. } => {
-                                    info!("🎨 [TopBar] IPC ThemeChanged recibido: is_dark={}", is_dark);
+                                    info!(
+                                        "🎨 [TopBar] IPC ThemeChanged recibido: is_dark={}",
+                                        is_dark
+                                    );
                                     let clock = current_clock_string();
                                     let status_items = fetch_current_status_items();
-                                    let _ = status_tx.send(StatusUpdate { clock, status_items, is_dark });
+                                    let _ = status_tx.send(StatusUpdate {
+                                        clock,
+                                        status_items,
+                                        is_dark,
+                                    });
                                 }
                                 IpcMessage::LiquidGlassOpacityChanged { opacity } => {
                                     info!("✨ [TopBar] IPC LiquidGlassOpacityChanged recibido: opacity={:.2}", opacity);
                                     let clock = current_clock_string();
                                     let status_items = fetch_current_status_items();
-                                    let is_dark = malus_de_render::luminance::detect_system_is_dark();
-                                    let _ = status_tx.send(StatusUpdate { clock, status_items, is_dark });
+                                    let is_dark =
+                                        malus_de_render::luminance::detect_system_is_dark();
+                                    let _ = status_tx.send(StatusUpdate {
+                                        clock,
+                                        status_items,
+                                        is_dark,
+                                    });
                                 }
                                 _ => {}
                             }
@@ -370,11 +408,19 @@ fn fetch_current_status_items() -> Vec<StatusItem> {
     let mut items = Vec::new();
 
     // 0. Bandeja del sistema (expansor estilo Bartender)
-    items.push(StatusItem::new("status:tray", "> +4").with_size(11.5).bold());
+    items.push(
+        StatusItem::new("status:tray", "> +4")
+            .with_size(11.5)
+            .bold(),
+    );
 
     // 1. Selector rápido de distribución de teclado (ES, LAT, US)
     let kb = malus_de_common::config::InputConfig::load().layout_short_badge();
-    items.push(StatusItem::new("status:keyboard", kb).with_size(11.0).bold());
+    items.push(
+        StatusItem::new("status:keyboard", kb)
+            .with_size(11.0)
+            .bold(),
+    );
 
     // 2. Wi-Fi (Vectorial Font Awesome 6 Free Solid)
     let _wifi_up = std::fs::read_dir("/sys/class/net")
