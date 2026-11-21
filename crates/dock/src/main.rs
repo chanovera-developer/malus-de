@@ -381,6 +381,187 @@ fn sync_dock_indicators(
     }
 }
 
+fn find_matching_app_index_for_window(
+    matcher_groups: &[Vec<String>],
+    app_id: &str,
+    title: &str,
+) -> Option<usize> {
+    if !app_id.trim().is_empty() {
+        if let Some(idx) = matcher_groups
+            .iter()
+            .position(|matchers| !matchers.is_empty() && matches_dock_app(matchers, "", app_id))
+        {
+            return Some(idx);
+        }
+    }
+    if !title.trim().is_empty() {
+        if let Some(idx) = matcher_groups
+            .iter()
+            .position(|matchers| !matchers.is_empty() && matches_dock_app(matchers, "", title))
+        {
+            return Some(idx);
+        }
+    }
+    None
+}
+
+fn find_app_icon_widget_for_window(
+    indicators: &[(Vec<String>, Label)],
+    app_id: &str,
+    title: &str,
+) -> Option<gtk4::Widget> {
+    let groups: Vec<Vec<String>> = indicators.iter().map(|(m, _)| m.clone()).collect();
+    let idx = find_matching_app_index_for_window(&groups, app_id, title)?;
+    indicators.get(idx).and_then(|(_, label)| label.parent())
+}
+
+fn window_matches_app(
+    matchers: &[String],
+    app_name: &str,
+    win_info: &malus_de_common::ipc::MinimizedWindowInfo,
+) -> bool {
+    matches_dock_app(matchers, app_name, &win_info.app_id)
+        || matches_dock_app(matchers, app_name, &win_info.title)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sync_minimized_windows_ui(
+    windows: &[malus_de_common::ipc::MinimizedWindowInfo],
+    minimize_to_app_icon: bool,
+    icon_size: i32,
+    min_box: &GtkBox,
+    min_map: &Rc<RefCell<HashMap<u64, gtk4::Widget>>>,
+    min_paths: &Rc<RefCell<HashMap<u64, Option<String>>>>,
+    indicators: &Rc<RefCell<Vec<(Vec<String>, Label)>>>,
+    win_ref: &ApplicationWindow,
+    dock_root_ref: &GtkBox,
+    dock_bar_ref: &Overlay,
+) {
+    let mut current_map = min_map.borrow_mut();
+    let mut card_windows: Vec<&malus_de_common::ipc::MinimizedWindowInfo> = Vec::new();
+    let mut app_icon_targets: Vec<(u64, gtk4::Widget)> = Vec::new();
+
+    if minimize_to_app_icon {
+        let ind_guard = indicators.borrow();
+        for win_info in windows {
+            if let Some(app_widget) =
+                find_app_icon_widget_for_window(&ind_guard, &win_info.app_id, &win_info.title)
+            {
+                app_icon_targets.push((win_info.window_id, app_widget));
+            } else {
+                card_windows.push(win_info);
+            }
+        }
+    } else {
+        card_windows.extend(windows.iter());
+    }
+
+    let desired_card_ids: HashSet<u64> = card_windows.iter().map(|w| w.window_id).collect();
+    let to_remove: Vec<u64> = current_map
+        .keys()
+        .filter(|id| !desired_card_ids.contains(id))
+        .copied()
+        .collect();
+
+    if minimize_to_app_icon {
+        for id in to_remove {
+            if let Some(widget) = current_map.remove(&id) {
+                min_box.remove(&widget);
+                min_paths.borrow_mut().remove(&id);
+            }
+        }
+    } else {
+        for id in to_remove {
+            if let Some(widget) = current_map.get(&id) {
+                if let Ok(revealer) = widget.clone().downcast::<gtk4::Revealer>() {
+                    widget.set_opacity(0.0);
+                    widget.set_sensitive(false);
+                    if revealer.reveals_child() {
+                        revealer.set_reveal_child(false);
+                        let widget = widget.clone();
+                        let min_box = min_box.clone();
+                        let min_map = min_map.clone();
+                        let min_paths = min_paths.clone();
+                        let win_ref = win_ref.clone();
+                        let dock_root_ref = dock_root_ref.clone();
+                        let dock_bar_ref = dock_bar_ref.clone();
+                        glib::timeout_add_local_once(Duration::from_millis(240), move || {
+                            let still_current = min_map
+                                .borrow()
+                                .get(&id)
+                                .is_some_and(|current| *current == widget);
+                            if !still_current || revealer.reveals_child() {
+                                return;
+                            }
+                            min_box.remove(&widget);
+                            min_map.borrow_mut().remove(&id);
+                            min_paths.borrow_mut().remove(&id);
+                            if min_box.first_child().is_none() {
+                                min_box.set_visible(false);
+                            }
+                            queue_dock_resize(&win_ref, &dock_root_ref, &dock_bar_ref);
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    for win_info in &card_windows {
+        let thumbnail_changed =
+            min_paths.borrow().get(&win_info.window_id) != Some(&win_info.thumbnail_path);
+        if !current_map.contains_key(&win_info.window_id) || thumbnail_changed {
+            if let Some(widget) = current_map.remove(&win_info.window_id) {
+                min_box.remove(&widget);
+            }
+            let (card, id) = create_minimized_window_item(win_info, icon_size);
+            let revealer = create_dock_item_revealer(&card);
+            let widget = revealer.clone().upcast::<gtk4::Widget>();
+            min_box.append(&revealer);
+            revealer.set_reveal_child(true);
+            current_map.insert(id, widget);
+            min_paths
+                .borrow_mut()
+                .insert(id, win_info.thumbnail_path.clone());
+        }
+        if let Some(widget) = current_map.get(&win_info.window_id) {
+            if let Ok(revealer) = widget.clone().downcast::<gtk4::Revealer>() {
+                revealer.set_reveal_child(true);
+            }
+            widget.set_opacity(if win_info.is_animating { 0.0 } else { 1.0 });
+            widget.set_sensitive(!win_info.is_animating);
+        }
+    }
+
+    min_box.set_visible(!current_map.is_empty());
+    let mut slot_targets: Vec<(u64, gtk4::Widget)> = current_map
+        .iter()
+        .filter(|(id, _)| desired_card_ids.contains(id))
+        .map(|(id, widget)| (*id, widget.clone()))
+        .collect();
+    slot_targets.extend(app_icon_targets.iter().cloned());
+    drop(current_map);
+
+    queue_dock_resize(win_ref, dock_root_ref, dock_bar_ref);
+
+    // Registrar de inmediato los iconos visibles en el Dock y reforzar tras el reajuste de layout.
+    for (window_id, target_widget) in &app_icon_targets {
+        register_minimized_dock_slot(target_widget, win_ref, *window_id);
+    }
+    let dock_window_weak = win_ref.downgrade();
+    for delay in [16, 60, 180, 320] {
+        let targets = slot_targets.clone();
+        let dock_window_weak = dock_window_weak.clone();
+        glib::timeout_add_local_once(Duration::from_millis(delay), move || {
+            if let Some(dock_window) = dock_window_weak.upgrade() {
+                for (window_id, widget) in targets {
+                    register_minimized_dock_slot(&widget, &dock_window, window_id);
+                }
+            }
+        });
+    }
+}
+
 const DOCK_CSS: &str = include_str!("styles/dock.css");
 
 const DOCK_POPOVER_CSS: &str = include_str!("styles/dock-popover.css");
@@ -1591,6 +1772,8 @@ fn build_dock_ui(app: &Application) {
     // Canales y estado compartido
     let running_cache = Rc::new(RefCell::new(Vec::<String>::new()));
     let active_app_cache = Rc::new(RefCell::new(Vec::<String>::new()));
+    let minimized_cache: Rc<RefCell<Vec<malus_de_common::ipc::MinimizedWindowInfo>>> =
+        Rc::new(RefCell::new(Vec::new()));
     let dock_indicators: Rc<RefCell<Vec<(Vec<String>, Label)>>> = Rc::new(RefCell::new(Vec::new()));
 
     // Canal de actualización del layout de aplicaciones del Dock
@@ -1610,6 +1793,7 @@ fn build_dock_ui(app: &Application) {
         &dock_config,
         &running_cache,
         &active_app_cache,
+        &minimized_cache,
         &dock_indicators,
         &on_refresh,
         true,
@@ -1635,6 +1819,7 @@ fn build_dock_ui(app: &Application) {
     let dock_cfg_rf = dock_config.clone();
     let run_cache_rf = running_cache.clone();
     let active_app_rf = active_app_cache.clone();
+    let minimized_rf = minimized_cache.clone();
     let indicators_rf = dock_indicators.clone();
     let on_rf_loop = on_refresh.clone();
     let dock_bar_resize = dock_bar.clone();
@@ -1668,6 +1853,7 @@ fn build_dock_ui(app: &Application) {
                 &dock_cfg_rf,
                 &run_cache_rf,
                 &active_app_rf,
+                &minimized_rf,
                 &indicators_rf,
                 &on_rf_loop,
                 refresh_pinned,
@@ -1682,6 +1868,18 @@ fn build_dock_ui(app: &Application) {
                 &apps_placeholder_resize,
             );
             queue_dock_resize(&win_resize, &dock_root_resize, &dock_bar_resize);
+            if dock_cfg_rf.borrow().minimize_to_app_icon {
+                let ind_guard = indicators_rf.borrow();
+                for win_info in minimized_rf.borrow().iter() {
+                    if let Some(app_widget) = find_app_icon_widget_for_window(
+                        &ind_guard,
+                        &win_info.app_id,
+                        &win_info.title,
+                    ) {
+                        register_minimized_dock_slot(&app_widget, &win_resize, win_info.window_id);
+                    }
+                }
+            }
         }
     });
 
@@ -1689,6 +1887,8 @@ fn build_dock_ui(app: &Application) {
     let config_path = DockConfig::config_path();
     let gfile = gio::File::for_path(&config_path);
     let min_map: Rc<RefCell<HashMap<u64, gtk4::Widget>>> = Rc::new(RefCell::new(HashMap::new()));
+    let min_paths: Rc<RefCell<HashMap<u64, Option<String>>>> =
+        Rc::new(RefCell::new(HashMap::new()));
     if let Ok(monitor) = gfile.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE) {
         let cfg_clone = dock_config.clone();
         let on_rf_mon = on_refresh.clone();
@@ -1697,7 +1897,13 @@ fn build_dock_ui(app: &Application) {
         let hovered_mon = dock_hovered.clone();
         let indicators_mon = dock_indicators.clone();
         let running_mon = running_cache.clone();
+        let min_cache_mon = minimized_cache.clone();
         let min_map_mon = min_map.clone();
+        let min_paths_mon = min_paths.clone();
+        let min_box_mon = minimized_box.clone();
+        let win_mon = window.clone();
+        let root_mon = dock_root.clone();
+        let bar_mon = dock_bar.clone();
         let anims_mon = icon_size_animations.clone();
         monitor.connect_changed(move |_, _, _, event_type| {
             if event_type == gio::FileMonitorEvent::ChangesDoneHint
@@ -1718,11 +1924,12 @@ fn build_dock_ui(app: &Application) {
                 } else {
                     auto_hide_mon.set(hovered_mon.get());
                 }
+                let min_to_icon = new_cfg.minimize_to_app_icon;
                 apply_dock_layout_config(
                     &layout_mon,
                     &new_cfg,
                     auto_hide_mon.get(),
-                    !min_map_mon.borrow().is_empty(),
+                    !min_cache_mon.borrow().is_empty(),
                 );
                 if old_cfg.position != new_cfg.position {
                     anims_mon.borrow_mut().clear();
@@ -1743,6 +1950,18 @@ fn build_dock_ui(app: &Application) {
                         hovered_mon.get(),
                     );
                 }
+                sync_minimized_windows_ui(
+                    &min_cache_mon.borrow(),
+                    min_to_icon,
+                    base_size,
+                    &min_box_mon,
+                    &min_map_mon,
+                    &min_paths_mon,
+                    &indicators_mon,
+                    &win_mon,
+                    &root_mon,
+                    &bar_mon,
+                );
             }
         });
     }
@@ -1918,11 +2137,10 @@ fn build_dock_ui(app: &Application) {
     let min_box = minimized_box.clone();
     let dock_bar_ref = dock_bar.clone();
     let dock_root_ref = dock_root.clone();
-    let min_paths: Rc<RefCell<HashMap<u64, Option<String>>>> =
-        Rc::new(RefCell::new(HashMap::new()));
     let win_ref = window.clone();
     let indicators_ipc = dock_indicators.clone();
     let active_app_ipc = active_app_cache.clone();
+    let minimized_ipc = minimized_cache.clone();
     let cfg_ipc = dock_config.clone();
     let on_rf_ipc = on_refresh.clone();
     let on_rf_running_ipc = on_running_refresh.clone();
@@ -2058,9 +2276,10 @@ fn build_dock_ui(app: &Application) {
                     } else {
                         auto_hide_ipc.set(hovered_ipc.get());
                     }
-                    let has_min = !min_map.borrow().is_empty();
+                    let has_min = !minimized_ipc.borrow().is_empty();
                     let position_changed = old_cfg.position != new_cfg.position;
                     let new_pos = new_cfg.position;
+                    let min_to_icon = new_cfg.minimize_to_app_icon;
                     apply_dock_layout_config(&layout_ipc, &new_cfg, auto_hide_ipc.get(), has_min);
                     if position_changed {
                         anims_ipc.borrow_mut().clear();
@@ -2071,13 +2290,8 @@ fn build_dock_ui(app: &Application) {
                         new_cfg.show_indicators,
                     );
                     *cfg_ipc.borrow_mut() = new_cfg;
-                    let cards: Vec<(u64, gtk4::Widget)> = min_map
-                        .borrow()
-                        .iter()
-                        .map(|(id, widget)| (*id, widget.clone()))
-                        .collect();
-                    for (_, card) in &cards {
-                        update_icon_size_recursive(card, base_size, base_size, new_pos);
+                    for widget in min_map.borrow().values() {
+                        update_icon_size_recursive(widget, base_size, base_size, new_pos);
                     }
                     if rebuild_needed {
                         update_icon_size_recursive(
@@ -2096,137 +2310,37 @@ fn build_dock_ui(app: &Application) {
                             hovered_ipc.get(),
                         );
                     }
-                    let dock_window_weak = win_ref.downgrade();
-                    for delay in [60, 180] {
-                        let cards = cards.clone();
-                        let dock_window_weak = dock_window_weak.clone();
-                        glib::timeout_add_local_once(Duration::from_millis(delay), move || {
-                            if let Some(dock_window) = dock_window_weak.upgrade() {
-                                for (window_id, card) in cards {
-                                    register_minimized_dock_slot(&card, &dock_window, window_id);
-                                }
-                            }
-                        });
-                    }
+                    sync_minimized_windows_ui(
+                        &minimized_ipc.borrow(),
+                        min_to_icon,
+                        base_size,
+                        &min_box,
+                        &min_map,
+                        &min_paths,
+                        &indicators_ipc,
+                        &win_ref,
+                        &dock_root_ref,
+                        &dock_bar_ref,
+                    );
                 }
                 IpcMessage::MinimizedWindowsChanged { windows } => {
-                    let mut current_map = min_map.borrow_mut();
-                    let new_ids: HashSet<u64> = windows.iter().map(|w| w.window_id).collect();
-                    let show_minimized_cards = !cfg_ipc.borrow().minimize_to_app_icon;
-                    if !new_ids.is_empty() && show_minimized_cards {
-                        min_box.set_visible(true);
-                    }
-
-                    // Contraer las miniaturas salientes antes de liberar su espacio.
-                    let to_remove: Vec<u64> = current_map
-                        .keys()
-                        .filter(|id| !new_ids.contains(id))
-                        .copied()
-                        .collect();
-                    for id in to_remove {
-                        if let Some(widget) = current_map.get(&id) {
-                            if let Ok(revealer) = widget.clone().downcast::<gtk4::Revealer>() {
-                                // Ocultar de inmediato la tarjeta antes de colapsar su espacio en el Dock
-                                // para evitar que la miniatura se vea aplastándose o parpadeando al restaurar.
-                                widget.set_opacity(0.0);
-                                widget.set_sensitive(false);
-                                if revealer.reveals_child() {
-                                    revealer.set_reveal_child(false);
-                                    let widget = widget.clone();
-                                    let min_box = min_box.clone();
-                                    let min_map = min_map.clone();
-                                    let min_paths = min_paths.clone();
-                                    let win_ref = win_ref.clone();
-                                    let dock_root_ref = dock_root_ref.clone();
-                                    let dock_bar_ref = dock_bar_ref.clone();
-                                    glib::timeout_add_local_once(
-                                        Duration::from_millis(240),
-                                        move || {
-                                            let still_current = min_map
-                                                .borrow()
-                                                .get(&id)
-                                                .is_some_and(|current| *current == widget);
-                                            if !still_current || revealer.reveals_child() {
-                                                return;
-                                            }
-                                            min_box.remove(&widget);
-                                            min_map.borrow_mut().remove(&id);
-                                            min_paths.borrow_mut().remove(&id);
-                                            info!(
-                                                "🗑️ Miniatura removida del Dock: window_id={}",
-                                                id
-                                            );
-                                            if min_box.first_child().is_none() {
-                                                min_box.set_visible(false);
-                                            }
-                                            queue_dock_resize(
-                                                &win_ref,
-                                                &dock_root_ref,
-                                                &dock_bar_ref,
-                                            );
-                                        },
-                                    );
-                                }
-                            }
-                        }
-                    }
-
-                    // Agregar o mantener miniaturas activas
-                    for win_info in windows {
-                        let thumbnail_changed = min_paths.borrow().get(&win_info.window_id)
-                            != Some(&win_info.thumbnail_path);
-                        if !current_map.contains_key(&win_info.window_id) || thumbnail_changed {
-                            if let Some(widget) = current_map.remove(&win_info.window_id) {
-                                min_box.remove(&widget);
-                            }
-                            let icon_size = cfg_ipc.borrow().icon_size as i32;
-                            let (card, id) = create_minimized_window_item(&win_info, icon_size);
-                            let revealer = create_dock_item_revealer(&card);
-                            let widget = revealer.clone().upcast::<gtk4::Widget>();
-                            min_box.append(&revealer);
-                            revealer.set_reveal_child(true);
-                            current_map.insert(id, widget);
-                            min_paths
-                                .borrow_mut()
-                                .insert(id, win_info.thumbnail_path.clone());
-                            info!(
-                                "🖼️ Miniatura agregada al Dock: window_id={} ('{}')",
-                                id, win_info.title
-                            );
-                        }
-                        if let Some(widget) = current_map.get(&win_info.window_id) {
-                            if let Ok(revealer) = widget.clone().downcast::<gtk4::Revealer>() {
-                                revealer.set_reveal_child(true);
-                            }
-                            widget.set_opacity(if win_info.is_animating { 0.0 } else { 1.0 });
-                            widget.set_sensitive(!win_info.is_animating);
-                        }
-                    }
-
-                    // Actualizar visibilidad del contenedor para colapsar espacio si está vacío
-                    let has_minimized =
-                        !current_map.is_empty() && !cfg_ipc.borrow().minimize_to_app_icon;
-                    min_box.set_visible(has_minimized);
-                    let cards: Vec<(u64, gtk4::Widget)> = current_map
-                        .iter()
-                        .filter(|(id, _)| new_ids.contains(id))
-                        .map(|(id, widget)| (*id, widget.clone()))
-                        .collect();
-                    drop(current_map);
-
-                    queue_dock_resize(&win_ref, &dock_root_ref, &dock_bar_ref);
-                    let dock_window_weak = win_ref.downgrade();
-                    for delay in [16, 60, 180, 320] {
-                        let cards = cards.clone();
-                        let dock_window_weak = dock_window_weak.clone();
-                        glib::timeout_add_local_once(Duration::from_millis(delay), move || {
-                            if let Some(dock_window) = dock_window_weak.upgrade() {
-                                for (window_id, card) in cards {
-                                    register_minimized_dock_slot(&card, &dock_window, window_id);
-                                }
-                            }
-                        });
-                    }
+                    *minimized_ipc.borrow_mut() = windows.clone();
+                    let cfg_now = cfg_ipc.borrow();
+                    let min_to_icon = cfg_now.minimize_to_app_icon;
+                    let base_size = cfg_now.icon_size as i32;
+                    drop(cfg_now);
+                    sync_minimized_windows_ui(
+                        &windows,
+                        min_to_icon,
+                        base_size,
+                        &min_box,
+                        &min_map,
+                        &min_paths,
+                        &indicators_ipc,
+                        &win_ref,
+                        &dock_root_ref,
+                        &dock_bar_ref,
+                    );
                 }
                 IpcMessage::ShowAppSwitcher {
                     items,
@@ -3053,6 +3167,7 @@ fn render_dock_apps(
     dock_config: &Rc<RefCell<DockConfig>>,
     running_cache: &Rc<RefCell<Vec<String>>>,
     active_app_cache: &Rc<RefCell<Vec<String>>>,
+    minimized_cache: &Rc<RefCell<Vec<malus_de_common::ipc::MinimizedWindowInfo>>>,
     dock_indicators: &Rc<RefCell<Vec<(Vec<String>, Label)>>>,
     on_refresh: &Rc<dyn Fn()>,
     refresh_pinned: bool,
@@ -3093,13 +3208,17 @@ fn render_dock_apps(
                 is_running,
                 running_cache.clone(),
                 active_app_cache.clone(),
+                minimized_cache.clone(),
                 dock_config.clone(),
                 on_refresh.clone(),
             );
             apps_box.append(&widget);
-            dock_indicators
-                .borrow_mut()
-                .push((app.matchers.clone(), ind));
+            let ind_matchers = if app.matchers.is_empty() {
+                vec![app.name.clone()]
+            } else {
+                app.matchers.clone()
+            };
+            dock_indicators.borrow_mut().push((ind_matchers, ind));
         }
     }
 
@@ -3140,13 +3259,17 @@ fn render_dock_apps(
                 true,
                 running_cache.clone(),
                 active_app_cache.clone(),
+                minimized_cache.clone(),
                 dock_config.clone(),
                 on_refresh.clone(),
             );
             apps_box.append(&widget);
-            dock_indicators
-                .borrow_mut()
-                .push((app_cfg.matchers.clone(), ind));
+            let ind_matchers = if app_cfg.matchers.is_empty() {
+                vec![app_cfg.name.clone()]
+            } else {
+                app_cfg.matchers.clone()
+            };
+            dock_indicators.borrow_mut().push((ind_matchers, ind));
         }
     }
 }
@@ -4259,8 +4382,9 @@ fn register_minimized_dock_slot(
     dock_window: &ApplicationWindow,
     window_id: u64,
 ) {
-    let target =
-        find_dock_widget_with_class(card, "dock-window-card").unwrap_or_else(|| card.clone());
+    let target = find_dock_widget_with_class(card, "dock-window-card")
+        .or_else(|| find_dock_widget_with_class(card, "dock-bounce-target"))
+        .unwrap_or_else(|| card.clone());
     if let Some(point) = target.compute_point(dock_window, &gtk4::graphene::Point::zero()) {
         let x = point.x().round() as i32;
         let y = point.y().round() as i32;
@@ -4410,6 +4534,7 @@ fn populate_dock_app_menu_box(
     total_pinned: usize,
     is_running: bool,
     activate_or_spawn: &Rc<dyn Fn()>,
+    minimized_cache: &Rc<RefCell<Vec<malus_de_common::ipc::MinimizedWindowInfo>>>,
     dock_config: &Rc<RefCell<DockConfig>>,
     on_refresh: &Rc<dyn Fn()>,
 ) {
@@ -4456,6 +4581,31 @@ fn populate_dock_app_menu_box(
             spawn_dock_app(&action_name, &action_command, args);
         });
         menu_box.append(&btn_action);
+    }
+
+    // 2b. Ventanas minimizadas en el icono de la app
+    let app_minimized: Vec<malus_de_common::ipc::MinimizedWindowInfo> = minimized_cache
+        .borrow()
+        .iter()
+        .filter(|w| window_matches_app(&app_cfg.matchers, &app_cfg.name, w))
+        .cloned()
+        .collect();
+    if !app_minimized.is_empty() && dock_config.borrow().minimize_to_app_icon {
+        let sep_min = Separator::new(Orientation::Horizontal);
+        sep_min.add_css_class("popover-separator");
+        menu_box.append(&sep_min);
+
+        for win in app_minimized {
+            let label_txt = format!("Mostrar: {}", win.title);
+            let btn_win = make_dock_menu_button(&label_txt, false);
+            let p_win = popover.clone();
+            let win_id = win.window_id;
+            btn_win.connect_clicked(move |_| {
+                p_win.popdown();
+                let _ = send_ipc_message(&IpcMessage::AnimateRestore { window_id: win_id });
+            });
+            menu_box.append(&btn_win);
+        }
     }
 
     // 3. Opciones de anclado / organización estilo macOS
@@ -4566,6 +4716,7 @@ fn create_dock_item(
     is_running: bool,
     running_cache: Rc<RefCell<Vec<String>>>,
     active_app_cache: Rc<RefCell<Vec<String>>>,
+    minimized_cache: Rc<RefCell<Vec<malus_de_common::ipc::MinimizedWindowInfo>>>,
     dock_config: Rc<RefCell<DockConfig>>,
     on_refresh: Rc<dyn Fn()>,
 ) -> (GtkBox, Label) {
@@ -4627,15 +4778,21 @@ fn create_dock_item(
         let matchers = matchers.clone();
         let cache = cache.clone();
         let active_app_cache = active_app_cache.clone();
+        let minimized_cache = minimized_cache.clone();
         let icon_container = icon_container.clone().upcast::<gtk4::Widget>();
         let animation_id = animation_id.clone();
         let dock_config_click = dock_config.clone();
         Rc::new(move || {
+            let has_minimized_for_app = minimized_cache
+                .borrow()
+                .iter()
+                .any(|w| window_matches_app(&matchers, &name, w));
+
             let active_app_matches = active_app_cache
                 .borrow()
                 .iter()
                 .any(|identity| matches_dock_app(&matchers, &name, identity));
-            if active_app_matches {
+            if active_app_matches && !has_minimized_for_app {
                 info!("{} ya tiene el foco; no se envía acción de dock", name);
                 return;
             }
@@ -4644,7 +4801,7 @@ fn create_dock_item(
             let matched_running = find_matching_running_app(&running, &matchers, &name);
             drop(running);
 
-            if let Some(running_id) = matched_running {
+            if let Some(running_id) = matched_running.or_else(|| has_minimized_for_app.then(|| name.clone())) {
                 info!(
                     "App ya en ejecución, enviando IPC ActivateApp para {}",
                     name
@@ -4694,6 +4851,7 @@ fn create_dock_item(
         total_pinned,
         is_running,
         &activate_or_spawn,
+        &minimized_cache,
         &dock_config,
         &on_refresh,
     );
@@ -4711,6 +4869,7 @@ fn create_dock_item(
     let p_rc = popover.clone();
     let menu_box_rc = menu_box.clone();
     let cache_rc = cache.clone();
+    let min_rc = minimized_cache.clone();
     let cfg_rc = dock_config.clone();
     let on_rf_rc = on_refresh.clone();
     let act_rc = activate_or_spawn.clone();
@@ -4725,6 +4884,7 @@ fn create_dock_item(
             total_pinned,
             live_running,
             &act_rc,
+            &min_rc,
             &cfg_rc,
             &on_rf_rc,
         );
@@ -5117,5 +5277,27 @@ mod tests {
         assert_eq!(extracted, vec![file_path, folder_path]);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn finds_app_icon_matcher_for_minimized_window_preferring_app_id() {
+        let groups = vec![
+            vec!["malus-de-branches".to_string(), "branches".to_string()],
+            vec!["ptyxis".to_string(), "org.gnome.ptyxis".to_string()],
+            vec!["antigravity".to_string()],
+        ];
+        // Aunque el título mencione otra app ("Antigravity"), debe coincidir primero por app_id.
+        assert_eq!(
+            find_matching_app_index_for_window(&groups, "org.gnome.Ptyxis", "nvim Antigravity"),
+            Some(1)
+        );
+        assert_eq!(
+            find_matching_app_index_for_window(&groups, "", "Branches"),
+            Some(0)
+        );
+        assert_eq!(
+            find_matching_app_index_for_window(&groups, "org.gnome.Calculator", "Calculadora"),
+            None
+        );
     }
 }
