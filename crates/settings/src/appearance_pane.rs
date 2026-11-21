@@ -178,6 +178,8 @@ fn build_appearance_main_pane(
     let thumbs_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(10)
+        .homogeneous(true)
+        .halign(Align::End)
         .build();
 
     let selected_mode = Rc::new(Cell::new(if crate::is_dark_mode_active() {
@@ -198,6 +200,7 @@ fn build_appearance_main_pane(
             .orientation(Orientation::Vertical)
             .spacing(4)
             .halign(Align::Center)
+            .width_request(74)
             .build();
         let area = DrawingArea::new();
         area.set_content_width(68);
@@ -523,7 +526,7 @@ fn build_appearance_main_pane(
 
     let icon_tiles_box = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(6)
+        .spacing(2)
         .homogeneous(true)
         .halign(Align::End)
         .build();
@@ -539,6 +542,7 @@ fn build_appearance_main_pane(
             .orientation(Orientation::Vertical)
             .spacing(4)
             .halign(Align::Center)
+            .width_request(96)
             .build();
         let area = DrawingArea::new();
         area.set_content_width(44);
