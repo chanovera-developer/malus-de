@@ -174,17 +174,32 @@ fn apply_dock_layout_config(
         refs.window.set_anchor(Edge::Top, false);
 
         let gap = cfg.floating_gap as i32;
+        // En modo auto-hide el margen de ventana se mantiene en 0 y `edge_sensor` absorbe el gap
+        // exterior cuando el Dock está revelado para no dejar una franja muerta en el borde de pantalla.
+        let layer_gap = if cfg.auto_hide { 0 } else { gap };
         refs.window.set_margin(
             Edge::Bottom,
-            if cfg.position == DockPosition::Bottom { gap } else { 0 },
+            if cfg.position == DockPosition::Bottom {
+                layer_gap
+            } else {
+                0
+            },
         );
         refs.window.set_margin(
             Edge::Left,
-            if cfg.position == DockPosition::Left { gap } else { 0 },
+            if cfg.position == DockPosition::Left {
+                layer_gap
+            } else {
+                0
+            },
         );
         refs.window.set_margin(
             Edge::Right,
-            if cfg.position == DockPosition::Right { gap } else { 0 },
+            if cfg.position == DockPosition::Right {
+                layer_gap
+            } else {
+                0
+            },
         );
         refs.window.set_margin(Edge::Top, 0);
 
@@ -312,11 +327,22 @@ fn apply_dock_layout_config(
     sync_all_dock_items_geometry(refs, cfg.position);
 
     refs.dock_bar.set_visible(is_revealed);
+    refs.edge_sensor.set_can_target(true);
+    let gap = cfg.floating_gap as i32;
     if cfg.auto_hide && !auto_hide_revealed {
         if is_horizontal {
-            refs.edge_sensor.set_size_request(260, 4);
+            refs.edge_sensor.set_size_request(560, 6);
         } else {
-            refs.edge_sensor.set_size_request(4, 260);
+            refs.edge_sensor.set_size_request(6, 560);
+        }
+        refs.edge_sensor.set_visible(true);
+    } else if cfg.auto_hide {
+        // Mantener un colchón interactivo transparente igual al gap flotante entre el borde y dock_bar
+        // para que el puntero no pierda foco al apoyarse en el borde de la pantalla.
+        if is_horizontal {
+            refs.edge_sensor.set_size_request(1, gap.max(1));
+        } else {
+            refs.edge_sensor.set_size_request(gap.max(1), 1);
         }
         refs.edge_sensor.set_visible(true);
     } else {
@@ -324,7 +350,7 @@ fn apply_dock_layout_config(
         refs.edge_sensor.set_visible(false);
     }
 
-    queue_dock_resize(&refs.window, &refs.dock_root, &refs.dock_bar);
+    queue_dock_resize_mode(&refs.window, &refs.dock_root, &refs.dock_bar, true);
 }
 
 fn apply_dock_icons_size_in_place(
@@ -1054,7 +1080,12 @@ fn resize_switcher_window(
     background.queue_draw();
 }
 
-fn queue_dock_resize(window: &ApplicationWindow, dock_root: &GtkBox, dock_bar: &Overlay) {
+fn queue_dock_resize_mode(
+    window: &ApplicationWindow,
+    dock_root: &GtkBox,
+    dock_bar: &Overlay,
+    allow_grow: bool,
+) {
     dock_bar.queue_resize();
     dock_root.queue_resize();
 
@@ -1063,12 +1094,74 @@ fn queue_dock_resize(window: &ApplicationWindow, dock_root: &GtkBox, dock_bar: &
     if (1..=16384).contains(&width) {
         let (min_h, nat_h, _, _) = dock_root.measure(Orientation::Vertical, width);
         let height = nat_h.max(min_h);
-        if (1..=16384).contains(&height) && (width < window.width() || height < window.height()) {
+        let should_update = if allow_grow {
+            width != window.width() || height != window.height()
+        } else {
+            width < window.width() || height < window.height()
+        };
+        if (1..=16384).contains(&height) && should_update {
             window.set_default_size(width, height);
         }
     }
 
     window.queue_resize();
+}
+
+fn queue_dock_resize(window: &ApplicationWindow, dock_root: &GtkBox, dock_bar: &Overlay) {
+    queue_dock_resize_mode(window, dock_root, dock_bar, false);
+}
+
+fn has_visible_dock_popover(widget: &gtk4::Widget) -> bool {
+    if let Ok(popover) = widget.clone().downcast::<Popover>() {
+        if popover.is_visible() {
+            return true;
+        }
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        if has_visible_dock_popover(&c) {
+            return true;
+        }
+        child = c.next_sibling();
+    }
+    false
+}
+
+fn schedule_auto_hide_check(
+    delay_ms: u64,
+    hovered_check: Rc<Cell<bool>>,
+    auto_hide_check: Rc<Cell<bool>>,
+    cfg_check: Rc<RefCell<DockConfig>>,
+    layout_check: Rc<DockLayoutRefs>,
+    min_cache_check: Rc<RefCell<Vec<malus_de_common::ipc::MinimizedWindowInfo>>>,
+    dock_content_check: GtkBox,
+) {
+    glib::timeout_add_local_once(Duration::from_millis(delay_ms), move || {
+        let cfg = cfg_check.borrow();
+        if !cfg.auto_hide || hovered_check.get() || !auto_hide_check.get() {
+            return;
+        }
+        if has_visible_dock_popover(dock_content_check.upcast_ref()) {
+            drop(cfg);
+            schedule_auto_hide_check(
+                150,
+                hovered_check,
+                auto_hide_check,
+                cfg_check,
+                layout_check,
+                min_cache_check,
+                dock_content_check,
+            );
+            return;
+        }
+        auto_hide_check.set(false);
+        apply_dock_layout_config(
+            &layout_check,
+            &cfg,
+            false,
+            !min_cache_check.borrow().is_empty(),
+        );
+    });
 }
 
 fn sync_dock_apps_placeholder(apps_box: &GtkBox, placeholder: &GtkBox) {
@@ -1983,7 +2076,7 @@ fn build_dock_ui(app: &Application) {
     let auto_hide_enter = auto_hide_revealed.clone();
     let cfg_enter = dock_config.clone();
     let layout_enter = layout_refs.clone();
-    let min_map_enter = min_map.clone();
+    let min_cache_enter = minimized_cache.clone();
     motion_controller.connect_enter(move |_, _, _| {
         hovered_enter.set(true);
         let cfg = cfg_enter.borrow();
@@ -1993,12 +2086,26 @@ fn build_dock_ui(app: &Application) {
                 &layout_enter,
                 &cfg,
                 true,
-                !min_map_enter.borrow().is_empty(),
+                !min_cache_enter.borrow().is_empty(),
             );
         }
     });
+    let hovered_motion = dock_hovered.clone();
+    let auto_hide_motion = auto_hide_revealed.clone();
+    let layout_motion = layout_refs.clone();
+    let min_cache_motion = minimized_cache.clone();
     motion_controller.connect_motion(move |_, x, y| {
+        hovered_motion.set(true);
         let cfg = cfg_motion.borrow();
+        if cfg.auto_hide && !auto_hide_motion.get() {
+            auto_hide_motion.set(true);
+            apply_dock_layout_config(
+                &layout_motion,
+                &cfg,
+                true,
+                !min_cache_motion.borrow().is_empty(),
+            );
+        }
         if !cfg.magnification_enabled {
             return;
         }
@@ -2089,7 +2196,8 @@ fn build_dock_ui(app: &Application) {
     let auto_hide_leave = auto_hide_revealed.clone();
     let cfg_leave_ah = dock_config.clone();
     let layout_leave = layout_refs.clone();
-    let min_map_leave = min_map.clone();
+    let min_cache_leave = minimized_cache.clone();
+    let dock_content_leave = dock_content.clone();
     motion_controller.connect_leave(move |_| {
         hovered_leave.set(false);
         let base_size = cfg_leave.borrow().icon_size as i32;
@@ -2109,23 +2217,15 @@ fn build_dock_ui(app: &Application) {
             &apps_placeholder_leave,
         );
 
-        let hovered_check = hovered_leave.clone();
-        let auto_hide_check = auto_hide_leave.clone();
-        let cfg_check = cfg_leave_ah.clone();
-        let layout_check = layout_leave.clone();
-        let min_map_check = min_map_leave.clone();
-        glib::timeout_add_local_once(Duration::from_millis(320), move || {
-            let cfg = cfg_check.borrow();
-            if cfg.auto_hide && !hovered_check.get() && auto_hide_check.get() {
-                auto_hide_check.set(false);
-                apply_dock_layout_config(
-                    &layout_check,
-                    &cfg,
-                    false,
-                    !min_map_check.borrow().is_empty(),
-                );
-            }
-        });
+        schedule_auto_hide_check(
+            320,
+            hovered_leave.clone(),
+            auto_hide_leave.clone(),
+            cfg_leave_ah.clone(),
+            layout_leave.clone(),
+            min_cache_leave.clone(),
+            dock_content_leave.clone(),
+        );
     });
     dock_root.add_controller(motion_controller);
     setup_dock_apps_drag_controller(&apps_box, &dock_config, &on_refresh);

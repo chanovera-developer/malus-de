@@ -1344,15 +1344,29 @@ pub fn run_winit() -> Result<()> {
                             if let Some(root_elem) =
                                 s_elems.iter().find(|elem| *elem.id() == root_id)
                             {
-                                dock_clip_roots.push((
-                                    root_id,
-                                    super::dock_clip_rect(
-                                        root_elem.geometry(smithay::utils::Scale::from(1.0)),
-                                        state.dock_blur_headroom,
-                                        1.0,
-                                        state.dock_cfg.position,
-                                    ),
-                                ));
+                                let root_geo =
+                                    root_elem.geometry(smithay::utils::Scale::from(1.0));
+                                if !super::dock_is_collapsed(
+                                    root_geo,
+                                    1.0,
+                                    state.dock_cfg.position,
+                                ) {
+                                    let outer_gap = if state.dock_cfg.auto_hide {
+                                        state.dock_cfg.floating_gap as i32
+                                    } else {
+                                        0
+                                    };
+                                    dock_clip_roots.push((
+                                        root_id,
+                                        super::dock_clip_rect(
+                                            root_geo,
+                                            state.dock_blur_headroom,
+                                            outer_gap,
+                                            1.0,
+                                            state.dock_cfg.position,
+                                        ),
+                                    ));
+                                }
                             }
                         }
                         let mut p_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =

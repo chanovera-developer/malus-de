@@ -17,27 +17,44 @@ pub fn frame_interval(refresh_millihz: i32) -> Duration {
     }
 }
 
+pub fn dock_is_collapsed(
+    geometry: Rectangle<i32, Physical>,
+    scale: f64,
+    position: malus_de_common::config::DockPosition,
+) -> bool {
+    let min_bar_px = (12.0 * scale.max(1.0)).round() as i32;
+    match position {
+        malus_de_common::config::DockPosition::Bottom => geometry.size.h <= min_bar_px,
+        malus_de_common::config::DockPosition::Left
+        | malus_de_common::config::DockPosition::Right => geometry.size.w <= min_bar_px,
+    }
+}
+
 pub fn dock_clip_rect(
     geometry: Rectangle<i32, Physical>,
     headroom: i32,
+    outer_gap: i32,
     scale: f64,
     position: malus_de_common::config::DockPosition,
 ) -> Rectangle<i32, Physical> {
     let mut clipped = geometry;
+    let inner_inset = (headroom.max(0) as f64 * scale).round() as i32;
+    let edge_inset = (outer_gap.max(0) as f64 * scale).round() as i32;
     match position {
         malus_de_common::config::DockPosition::Bottom => {
-            let inset = ((headroom.max(0) as f64 * scale).round() as i32).min(geometry.size.h.max(0));
-            clipped.loc.y += inset;
-            clipped.size.h -= inset;
+            let applied_top = inner_inset.min(clipped.size.h.max(0));
+            clipped.loc.y += applied_top;
+            clipped.size.h = (clipped.size.h - applied_top - edge_inset).max(1);
         }
         malus_de_common::config::DockPosition::Left => {
-            let inset = ((headroom.max(0) as f64 * scale).round() as i32).min(geometry.size.w.max(0));
-            clipped.size.w -= inset;
+            let applied_left = edge_inset.min(clipped.size.w.max(0));
+            clipped.loc.x += applied_left;
+            clipped.size.w = (clipped.size.w - applied_left - inner_inset).max(1);
         }
         malus_de_common::config::DockPosition::Right => {
-            let inset = ((headroom.max(0) as f64 * scale).round() as i32).min(geometry.size.w.max(0));
-            clipped.loc.x += inset;
-            clipped.size.w -= inset;
+            let applied_left = inner_inset.min(clipped.size.w.max(0));
+            clipped.loc.x += applied_left;
+            clipped.size.w = (clipped.size.w - applied_left - edge_inset).max(1);
         }
     }
     clipped
@@ -482,5 +499,60 @@ mod tests {
             plan_background_blur_capture(true, false, false, None, false, &damage),
             BackgroundBlurCapturePlan::FullScreen
         );
+    }
+
+    #[test]
+    fn dock_auto_hide_collapse_detection_and_outer_gap_clip_work_across_edges() {
+        use malus_de_common::config::DockPosition;
+        assert!(dock_is_collapsed(
+            Rectangle::new((0, 0).into(), (560, 6).into()),
+            1.0,
+            DockPosition::Bottom
+        ));
+        assert!(!dock_is_collapsed(
+            Rectangle::new((0, 0).into(), (560, 82).into()),
+            1.0,
+            DockPosition::Bottom
+        ));
+        assert!(dock_is_collapsed(
+            Rectangle::new((0, 0).into(), (12, 1120).into()),
+            2.0,
+            DockPosition::Left
+        ));
+        assert!(!dock_is_collapsed(
+            Rectangle::new((0, 0).into(), (160, 1120).into()),
+            2.0,
+            DockPosition::Right
+        ));
+
+        let bottom = dock_clip_rect(
+            Rectangle::new((100, 900).into(), (500, 130).into()),
+            46,
+            4,
+            1.0,
+            DockPosition::Bottom,
+        );
+        assert_eq!(bottom.loc, (100, 946).into());
+        assert_eq!(bottom.size, (500, 80).into());
+
+        let left = dock_clip_rect(
+            Rectangle::new((0, 200).into(), (130, 500).into()),
+            46,
+            4,
+            1.0,
+            DockPosition::Left,
+        );
+        assert_eq!(left.loc, (4, 200).into());
+        assert_eq!(left.size, (80, 500).into());
+
+        let right = dock_clip_rect(
+            Rectangle::new((1790, 200).into(), (130, 500).into()),
+            46,
+            4,
+            1.0,
+            DockPosition::Right,
+        );
+        assert_eq!(right.loc, (1836, 200).into());
+        assert_eq!(right.size, (80, 500).into());
     }
 }

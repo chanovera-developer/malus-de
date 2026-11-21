@@ -471,6 +471,7 @@ struct DrmOutputSurface {
     >,
     window_redraw_shadow_blur:
         std::collections::HashMap<smithay::backend::renderer::element::Id, usize>,
+    last_dock_rect: Option<Rectangle<i32, Physical>>,
     dock_redraw_buffers: usize,
     full_damage_buffers: usize,
     last_commit_counter: usize,
@@ -985,6 +986,7 @@ fn create_drm_output_surface_for_connector(
         extra_damage_history: std::collections::VecDeque::with_capacity(4),
         last_window_geometries: std::collections::HashMap::new(),
         window_redraw_shadow_blur: std::collections::HashMap::new(),
+        last_dock_rect: None,
         dock_redraw_buffers: if ENABLE_DAMAGE_TRACKING { 3 } else { 0 },
         full_damage_buffers: if ENABLE_DAMAGE_TRACKING { 3 } else { 1 },
         last_commit_counter: 0,
@@ -3664,15 +3666,29 @@ pub fn run_drm() -> Result<()> {
                             if let Some(root_elem) =
                                 s_elems.iter().find(|elem| *elem.id() == root_id)
                             {
-                                dock_clip_roots.push((
-                                    root_id,
-                                    super::dock_clip_rect(
-                                        root_elem.geometry(smithay::utils::Scale::from(scale)),
-                                        state.dock_blur_headroom,
-                                        scale,
-                                        state.dock_cfg.position,
-                                    ),
-                                ));
+                                let root_geo =
+                                    root_elem.geometry(smithay::utils::Scale::from(scale));
+                                if !super::dock_is_collapsed(
+                                    root_geo,
+                                    scale,
+                                    state.dock_cfg.position,
+                                ) {
+                                    let outer_gap = if state.dock_cfg.auto_hide {
+                                        state.dock_cfg.floating_gap as i32
+                                    } else {
+                                        0
+                                    };
+                                    dock_clip_roots.push((
+                                        root_id,
+                                        super::dock_clip_rect(
+                                            root_geo,
+                                            state.dock_blur_headroom,
+                                            outer_gap,
+                                            scale,
+                                            state.dock_cfg.position,
+                                        ),
+                                    ));
+                                }
                             }
                         }
                         let mut p_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
@@ -5089,11 +5105,13 @@ pub fn run_drm() -> Result<()> {
                     .retain(|id, _| current_ids.contains(id));
 
                 // Sincronización robusta del Dock con el ciclo de triple-buffering de DRM
+                let dock_shadow_pad = (80.0 * scale).round() as i32;
+                let mut current_dock_phys: Option<Rectangle<i32, Physical>> = None;
                 for surface in layer_map.layers() {
                     if surface.namespace() == "malus-dock" {
                         if let Some(geo) = layer_map.layer_geometry(surface) {
                             let dock_phys = geo.to_physical_precise_round(scale);
-                            let dock_shadow_pad = (80.0 * scale).round() as i32;
+                            current_dock_phys = Some(dock_phys);
                             let dock_shadow_rect = Rectangle::new(
                                 (
                                     dock_phys.loc.x - dock_shadow_pad,
@@ -5119,6 +5137,24 @@ pub fn run_drm() -> Result<()> {
                             }
                         }
                     }
+                }
+                if out_surface.last_dock_rect != current_dock_phys {
+                    if let Some(old_dock) = out_surface.last_dock_rect {
+                        this_frame_extra_damage.push(Rectangle::new(
+                            (
+                                old_dock.loc.x - dock_shadow_pad,
+                                old_dock.loc.y - dock_shadow_pad,
+                            )
+                                .into(),
+                            (
+                                old_dock.size.w + dock_shadow_pad * 2,
+                                old_dock.size.h + dock_shadow_pad * 2,
+                            )
+                                .into(),
+                        ));
+                    }
+                    out_surface.dock_redraw_buffers = 3;
+                    out_surface.last_dock_rect = current_dock_phys;
                 }
 
                 // Expansión de daño de popups (Top Bar menus, Control Center, Calendario)
