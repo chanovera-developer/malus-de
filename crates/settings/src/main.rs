@@ -122,6 +122,9 @@ thread_local! {
     static SETTINGS_ACCENT_DRAW_AREAS: RefCell<Vec<glib::WeakRef<DrawingArea>>> = const { RefCell::new(Vec::new()) };
 }
 
+static SETTINGS_REDUCE_TRANSPARENCY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 pub(crate) fn register_accent_draw_area(area: &DrawingArea) {
     SETTINGS_ACCENT_DRAW_AREAS.with(|areas| {
         let mut areas = areas.borrow_mut();
@@ -135,6 +138,10 @@ pub(crate) fn accent_color() -> (f64, f64, f64) {
 }
 
 pub(crate) fn apply_liquid_glass_opacity_css(opacity: f64) {
+    SETTINGS_REDUCE_TRANSPARENCY.store(
+        malus_de_common::config::load_reduce_transparency(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let scale = malus_de_common::config::liquid_glass_scale_for(opacity);
     let pop_a = malus_de_common::config::scaled_liquid_glass_alpha(0.78, scale, 0.14, 0.96);
     let side_a = malus_de_common::config::scaled_liquid_glass_alpha(0.72, scale, 0.12, 0.96);
@@ -1023,22 +1030,16 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     // Seleccionar panel inicial sin animación de entrada
     select_panel(start_id, NavAction::Initial);
 
-    let split_overlay = Overlay::builder()
-        .hexpand(true)
-        .vexpand(true)
-        .build();
-    split_overlay.set_child(Some(&content_area));
+    sidebar.set_halign(Align::Start);
+    sidebar.set_valign(Align::Fill);
+    sidebar.set_hexpand(false);
+    sidebar.set_vexpand(true);
+    sidebar.set_width_request(SETTINGS_SIDEBAR_WIDTH);
 
-    let sidebar_host = frosted_sidebar::FrostedSidebarBox::new(&sidebar, &stack);
-    sidebar_host.set_halign(Align::Start);
-    sidebar_host.set_valign(Align::Fill);
-    sidebar_host.set_hexpand(false);
-    sidebar_host.set_vexpand(true);
-    sidebar_host.set_width_request(SETTINGS_SIDEBAR_WIDTH);
-    split_overlay.add_overlay(&sidebar_host);
+    let split_host = frosted_sidebar::SettingsSplitBox::new(&content_area, &sidebar, &stack);
 
     let root_overlay = Overlay::new();
-    root_overlay.set_child(Some(&split_overlay));
+    root_overlay.set_child(Some(&split_host));
     let modal_scrim = GtkBox::builder()
         .name("settings-modal-scrim")
         .css_classes(["settings-modal-scrim"])
@@ -1195,29 +1196,22 @@ mod frosted_sidebar {
     use gtk4::glib;
     use gtk4::prelude::*;
     use gtk4::subclass::prelude::*;
-    use std::cell::{Cell, RefCell};
+    use std::cell::RefCell;
 
     mod imp {
         use super::*;
 
-        pub struct FrostedSidebarBox {
-            pub backdrop: RefCell<Option<(gtk4::WidgetPaintable, glib::WeakRef<gtk4::Stack>)>>,
-            pub snapshotting: Cell<bool>,
-        }
-
-        impl Default for FrostedSidebarBox {
-            fn default() -> Self {
-                Self {
-                    backdrop: RefCell::new(None),
-                    snapshotting: Cell::new(false),
-                }
-            }
+        #[derive(Default)]
+        pub struct SettingsSplitBox {
+            pub content: RefCell<Option<glib::WeakRef<gtk4::Widget>>>,
+            pub sidebar: RefCell<Option<glib::WeakRef<gtk4::Widget>>>,
+            pub stack: RefCell<Option<glib::WeakRef<gtk4::Stack>>>,
         }
 
         #[glib::object_subclass]
-        impl ObjectSubclass for FrostedSidebarBox {
-            const NAME: &'static str = "MalusSettingsFrostedSidebarBox";
-            type Type = super::FrostedSidebarBox;
+        impl ObjectSubclass for SettingsSplitBox {
+            const NAME: &'static str = "MalusSettingsSplitBox";
+            type Type = super::SettingsSplitBox;
             type ParentType = gtk4::Widget;
 
             fn class_init(klass: &mut Self::Class) {
@@ -1225,7 +1219,7 @@ mod frosted_sidebar {
             }
         }
 
-        impl ObjectImpl for FrostedSidebarBox {
+        impl ObjectImpl for SettingsSplitBox {
             fn dispose(&self) {
                 while let Some(child) = self.obj().first_child() {
                     child.unparent();
@@ -1233,7 +1227,7 @@ mod frosted_sidebar {
             }
         }
 
-        impl WidgetImpl for FrostedSidebarBox {
+        impl WidgetImpl for SettingsSplitBox {
             fn snapshot(&self, snapshot: &gtk4::Snapshot) {
                 let obj = self.obj();
                 let w = obj.width() as f32;
@@ -1242,86 +1236,72 @@ mod frosted_sidebar {
                     return;
                 }
 
-                snapshot.push_clip(&gtk4::graphene::Rect::new(0.0, 0.0, w, h));
+                let sw = (super::super::SETTINGS_SIDEBAR_WIDTH as f32).min(w);
+                let content_w = self.content.borrow().as_ref().and_then(|r| r.upgrade());
+                let sidebar_w = self.sidebar.borrow().as_ref().and_then(|r| r.upgrade());
+                let is_bleed = self
+                    .stack
+                    .borrow()
+                    .as_ref()
+                    .and_then(|r| r.upgrade())
+                    .and_then(|st| st.visible_child())
+                    .map(|c| c.has_css_class("wp-bleed-pane"))
+                    .unwrap_or(false);
 
-                if !self.snapshotting.get() {
-                    let backdrop_ref = self.backdrop.borrow();
-                    if let Some((ref paintable, ref stack_weak)) = *backdrop_ref {
-                        if let Some(stack) = stack_weak.upgrade() {
-                            let is_bleed = stack
-                                .visible_child()
-                                .map(|c| c.has_css_class("wp-bleed-pane"))
-                                .unwrap_or(false);
-                            let src_w = stack.width() as f64;
-                            let src_h = stack.height() as f64;
-                            if is_bleed && src_w > 1.0 && src_h > 1.0 {
-                                self.snapshotting.set(true);
-                                let offset = stack
-                                    .compute_point(&*obj, &gtk4::graphene::Point::new(0.0, 0.0))
-                                    .unwrap_or_else(|| gtk4::graphene::Point::new(0.0, 0.0));
-                                let blur_enabled =
-                                    !malus_de_common::config::load_reduce_transparency();
-                                if blur_enabled {
-                                    snapshot.push_blur(24.0);
-                                }
-                                snapshot.save();
-                                snapshot.translate(&offset);
-                                paintable.snapshot(snapshot, src_w, src_h);
-                                snapshot.restore();
-                                if blur_enabled {
-                                    snapshot.pop();
-                                }
-                                self.snapshotting.set(false);
-                            }
+                if let Some(ref content) = content_w {
+                    let content_snap = gtk4::Snapshot::new();
+                    obj.snapshot_child(content, &content_snap);
+                    if let Some(content_node) = content_snap.to_node() {
+                        // 1. Mitad derecha [212..w]: nítida tal cual
+                        if w > sw {
+                            snapshot.push_clip(&gtk4::graphene::Rect::new(sw, 0.0, w - sw, h));
+                            snapshot.append_node(&content_node);
+                            snapshot.pop();
+                        }
+
+                        // 2. Mitad izquierda [0..212]: solo se dibuja desenfocada (nunca nítida)
+                        //    cuando el panel activo sangra bajo la sidebar (.wp-bleed-pane).
+                        let reduce = super::super::SETTINGS_REDUCE_TRANSPARENCY
+                            .load(std::sync::atomic::Ordering::Relaxed);
+                        if is_bleed && !reduce && sw > 0.0 {
+                            let left_rect = gtk4::graphene::Rect::new(0.0, 0.0, sw, h);
+                            snapshot.push_clip(&left_rect);
+                            snapshot.push_blur(32.0);
+                            snapshot.push_clip(&left_rect);
+                            snapshot.append_node(&content_node);
+                            snapshot.pop();
+                            snapshot.pop();
+                            snapshot.pop();
                         }
                     }
                 }
 
-                if let Some(child) = obj.first_child() {
-                    obj.snapshot_child(&child, snapshot);
+                if let Some(ref sidebar) = sidebar_w {
+                    obj.snapshot_child(sidebar, snapshot);
                 }
-
-                snapshot.pop();
             }
         }
     }
 
     glib::wrapper! {
-        pub struct FrostedSidebarBox(ObjectSubclass<imp::FrostedSidebarBox>)
+        pub struct SettingsSplitBox(ObjectSubclass<imp::SettingsSplitBox>)
             @extends gtk4::Widget;
     }
 
-    impl FrostedSidebarBox {
+    impl SettingsSplitBox {
         pub fn new(
-            sidebar_child: &impl IsA<gtk4::Widget>,
-            backdrop_stack: &gtk4::Stack,
+            content_area: &impl IsA<gtk4::Widget>,
+            sidebar: &impl IsA<gtk4::Widget>,
+            stack: &gtk4::Stack,
         ) -> Self {
             let obj: Self = glib::Object::new();
-            sidebar_child.set_parent(&obj);
-
-            let paintable = gtk4::WidgetPaintable::new(Some(backdrop_stack));
-            let obj_weak = obj.downgrade();
-            let stack_weak = backdrop_stack.downgrade();
-            paintable.connect_invalidate_contents(move |_| {
-                if let (Some(host), Some(st)) = (obj_weak.upgrade(), stack_weak.upgrade()) {
-                    let is_bleed = st
-                        .visible_child()
-                        .map(|c| c.has_css_class("wp-bleed-pane"))
-                        .unwrap_or(false);
-                    if is_bleed && !host.imp().snapshotting.get() && host.is_mapped() {
-                        host.queue_draw();
-                    }
-                }
-            });
-            let obj_weak_vis = obj.downgrade();
-            backdrop_stack.connect_visible_child_notify(move |_| {
-                if let Some(host) = obj_weak_vis.upgrade() {
-                    if host.is_mapped() {
-                        host.queue_draw();
-                    }
-                }
-            });
-            *obj.imp().backdrop.borrow_mut() = Some((paintable, backdrop_stack.downgrade()));
+            obj.set_hexpand(true);
+            obj.set_vexpand(true);
+            content_area.set_parent(&obj);
+            sidebar.set_parent(&obj);
+            *obj.imp().content.borrow_mut() = Some(content_area.as_ref().downgrade());
+            *obj.imp().sidebar.borrow_mut() = Some(sidebar.as_ref().downgrade());
+            *obj.imp().stack.borrow_mut() = Some(stack.downgrade());
             obj
         }
     }
