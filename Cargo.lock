@@ -1987,6 +1987,7 @@ dependencies = [
 name = "malus-de-common"
 version = "0.1.0"
 dependencies = [
+ "gtk4",
  "serde",
  "serde_json",
  "toml 0.8.23",
