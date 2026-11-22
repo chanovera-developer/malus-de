@@ -206,6 +206,83 @@ fn make_context_action_button(
     btn
 }
 
+fn attach_cascading_submenu(
+    parent_popover: &gtk4::Popover,
+    menu_vbox: &gtk4::Box,
+    trigger_btn: &gtk4::Button,
+    submenu_content: &gtk4::Box,
+    all_submenus: &std::rc::Rc<std::cell::RefCell<Vec<glib::WeakRef<gtk4::Popover>>>>,
+) {
+    use gtk4::gdk;
+    use gtk4::prelude::*;
+
+    submenu_content.set_vexpand(false);
+    submenu_content.set_valign(gtk4::Align::Start);
+
+    let sub_pop = gtk4::Popover::builder()
+        .has_arrow(false)
+        .autohide(false)
+        .position(gtk4::PositionType::Right)
+        .css_classes(["malus-popover-menu"])
+        .build();
+    sub_pop.set_vexpand(false);
+    sub_pop.set_valign(gtk4::Align::Start);
+    sub_pop.set_child(Some(submenu_content));
+    sub_pop.set_parent(menu_vbox);
+
+    all_submenus.borrow_mut().push(sub_pop.downgrade());
+
+    let open_sub = {
+        let sub_w = sub_pop.downgrade();
+        let btn_w = trigger_btn.downgrade();
+        let vbox_w = menu_vbox.downgrade();
+        let subs = all_submenus.clone();
+        std::rc::Rc::new(move || {
+            let (Some(sp), Some(b), Some(vb)) = (sub_w.upgrade(), btn_w.upgrade(), vbox_w.upgrade())
+            else {
+                return;
+            };
+            for other_w in subs.borrow().iter() {
+                if let Some(other) = other_w.upgrade() {
+                    if other != sp {
+                        other.popdown();
+                    }
+                }
+            }
+            if let Some(bounds) = b.compute_bounds(&vb) {
+                let rect = gdk::Rectangle::new(
+                    bounds.x().round() as i32,
+                    bounds.y().round() as i32,
+                    bounds.width().round().max(1.0) as i32,
+                    bounds.height().round().max(1.0) as i32,
+                );
+                sp.set_pointing_to(Some(&rect));
+            }
+            if !sp.is_visible() {
+                sp.popup();
+            }
+        })
+    };
+
+    let open_click = open_sub.clone();
+    trigger_btn.connect_clicked(move |_| open_click());
+
+    let motion = gtk4::EventControllerMotion::new();
+    let open_hover = open_sub;
+    motion.connect_enter(move |_, _, _| open_hover());
+    trigger_btn.add_controller(motion);
+
+    let sub_cleanup = sub_pop.downgrade();
+    parent_popover.connect_closed(move |_| {
+        if let Some(sp) = sub_cleanup.upgrade() {
+            sp.popdown();
+            if sp.parent().is_some() {
+                sp.unparent();
+            }
+        }
+    });
+}
+
 fn is_desktop_picture_candidate(path: &std::path::Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -917,23 +994,10 @@ pub(super) fn show_item_context_menu(
     }
     vbox.append(&open_btn);
 
-    let menu_stack = gtk4::Stack::builder()
-        .transition_type(gtk4::StackTransitionType::SlideLeftRight)
-        .transition_duration(120)
-        .vhomogeneous(false)
-        .hhomogeneous(false)
-        .build();
-
-    let make_back_button = |st: &gtk4::Stack| -> gtk4::Button {
-        let back_btn = make_context_menu_button(if es { "← Volver" } else { "← Back" });
-        let st_w = st.downgrade();
-        back_btn.connect_clicked(move |_| {
-            if let Some(s) = st_w.upgrade() {
-                s.set_visible_child_name("main");
-            }
-        });
-        back_btn
-    };
+    vbox.set_vexpand(false);
+    vbox.set_valign(gtk4::Align::Start);
+    let all_submenus: std::rc::Rc<std::cell::RefCell<Vec<glib::WeakRef<gtk4::Popover>>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
 
     if is_dir {
         vbox.append(&make_context_action_button(
@@ -956,8 +1020,6 @@ pub(super) fn show_item_context_menu(
             true,
         );
         let ow_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
-        ow_box.append(&make_back_button(&menu_stack));
-        ow_box.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
 
         let gfile = gio::File::for_path(path);
         let mime_type = gfile
@@ -998,16 +1060,8 @@ pub(super) fn show_item_context_menu(
                 ow_box.append(&app_btn);
             }
         }
-        menu_stack.add_named(&ow_box, Some("open_with"));
-        {
-            let st_w = menu_stack.downgrade();
-            open_with_btn.connect_clicked(move |_| {
-                if let Some(s) = st_w.upgrade() {
-                    s.set_visible_child_name("open_with");
-                }
-            });
-        }
         vbox.append(&open_with_btn);
+        attach_cascading_submenu(&popover, &vbox, &open_with_btn, &ow_box, &all_submenus);
     }
 
     // 3. Transferir al basurero
@@ -1224,8 +1278,6 @@ pub(super) fn show_item_context_menu(
             false,
         );
         let tags_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
-        tags_box.append(&make_back_button(&menu_stack));
-        tags_box.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
 
         let sidebar_tags = crate::db::open_db()
             .map(|c| crate::db::get_all_sidebar_tags(&c, es))
@@ -1312,16 +1364,8 @@ pub(super) fn show_item_context_menu(
             "win.clear_tags_item",
             &target_str,
         ));
-        menu_stack.add_named(&tags_box, Some("tags"));
-        {
-            let st_w = menu_stack.downgrade();
-            tags_btn.connect_clicked(move |_| {
-                if let Some(s) = st_w.upgrade() {
-                    s.set_visible_child_name("tags");
-                }
-            });
-        }
         vbox.append(&tags_btn);
+        attach_cascading_submenu(&popover, &vbox, &tags_btn, &tags_box, &all_submenus);
     }
 
     // 13. Menú de acciones rápidas >
@@ -1336,8 +1380,6 @@ pub(super) fn show_item_context_menu(
         true,
     );
     let qa_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
-    qa_box.append(&make_back_button(&menu_stack));
-    qa_box.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
 
     if is_dir || path.extension().and_then(|e| e.to_str()) != Some("desktop") {
         let term_btn = make_context_menu_button(if es {
@@ -1493,16 +1535,8 @@ pub(super) fn show_item_context_menu(
         ));
     }
 
-    menu_stack.add_named(&qa_box, Some("quick_actions"));
-    {
-        let st_w = menu_stack.downgrade();
-        quick_actions_btn.connect_clicked(move |_| {
-            if let Some(s) = st_w.upgrade() {
-                s.set_visible_child_name("quick_actions");
-            }
-        });
-    }
     vbox.append(&quick_actions_btn);
+    attach_cascading_submenu(&popover, &vbox, &quick_actions_btn, &qa_box, &all_submenus);
 
     // 14. Establecer como imagen del escritorio (para imágenes)
     if !is_dir && is_desktop_picture_candidate(path) {
@@ -1522,9 +1556,7 @@ pub(super) fn show_item_context_menu(
         vbox.append(&wp_btn);
     }
 
-    menu_stack.add_named(&vbox, Some("main"));
-    menu_stack.set_visible_child_name("main");
-    popover.set_child(Some(&menu_stack));
+    popover.set_child(Some(&vbox));
     popover.popup();
 }
 

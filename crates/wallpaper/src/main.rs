@@ -2760,7 +2760,6 @@ pub fn animate_desktop_snap_to_grid(
 
 fn build_organize_submenu(
     popover: &Popover,
-    stack: &Stack,
     fixed: &Fixed,
     desktop_dir: PathBuf,
     desktop_size: (i32, i32),
@@ -2772,22 +2771,10 @@ fn build_organize_submenu(
     let container = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(2)
+        .vexpand(false)
+        .valign(Align::Start)
         .css_classes(["desktop-context-menu"])
         .build();
-
-    let back_btn = create_menu_button("← Volver", false);
-    let stack_back = stack.downgrade();
-    back_btn.connect_clicked(move |_| {
-        if let Some(st) = stack_back.upgrade() {
-            st.set_transition_type(StackTransitionType::SlideLeftRight);
-            st.set_visible_child_name("main");
-        }
-    });
-    container.append(&back_btn);
-
-    let sep = GtkBox::new(Orientation::Horizontal, 0);
-    sep.add_css_class("desktop-context-separator");
-    container.append(&sep);
 
     let by_name_btn = create_menu_button("Por Nombre (Carpetas primero)", false);
     let p_c = popover.downgrade();
@@ -2906,7 +2893,6 @@ fn build_organize_submenu(
 #[allow(clippy::too_many_arguments)]
 fn build_align_by_submenu(
     popover: &Popover,
-    stack: &Stack,
     fixed: &Fixed,
     desktop_dir: PathBuf,
     desktop_size: (i32, i32),
@@ -2918,22 +2904,10 @@ fn build_align_by_submenu(
     let container = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(2)
+        .vexpand(false)
+        .valign(Align::Start)
         .css_classes(["desktop-context-menu"])
         .build();
-
-    let back_btn = create_menu_button("← Volver", false);
-    let stack_back = stack.downgrade();
-    back_btn.connect_clicked(move |_| {
-        if let Some(st) = stack_back.upgrade() {
-            st.set_transition_type(StackTransitionType::SlideLeftRight);
-            st.set_visible_child_name("main");
-        }
-    });
-    container.append(&back_btn);
-
-    let sep = GtkBox::new(Orientation::Horizontal, 0);
-    sep.add_css_class("desktop-context-separator");
-    container.append(&sep);
 
     let snap_btn = create_menu_button("Alineación automática", false);
     {
@@ -3067,29 +3041,16 @@ fn build_align_by_submenu(
 
 fn build_view_options_submenu(
     popover: &Popover,
-    stack: &Stack,
     config: Rc<RefCell<DesktopIconsConfig>>,
     trigger_refresh: Rc<dyn Fn()>,
 ) -> (GtkBox, gtk4::Scale) {
     let container = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(4)
+        .vexpand(false)
+        .valign(Align::Start)
         .css_classes(["desktop-context-menu"])
         .build();
-
-    let back_btn = create_menu_button("← Volver", false);
-    let stack_back = stack.downgrade();
-    back_btn.connect_clicked(move |_| {
-        if let Some(st) = stack_back.upgrade() {
-            st.set_transition_type(StackTransitionType::SlideLeftRight);
-            st.set_visible_child_name("main");
-        }
-    });
-    container.append(&back_btn);
-
-    let sep = GtkBox::new(Orientation::Horizontal, 0);
-    sep.add_css_class("desktop-context-separator");
-    container.append(&sep);
 
     let size_lbl = Label::builder()
         .label("Tamaño de los iconos")
@@ -3527,7 +3488,7 @@ fn attach_squircle_menu_hover(btn: &Button) {
     let bg = gtk4::DrawingArea::new();
     bg.set_can_target(false);
     bg.set_hexpand(true);
-    bg.set_vexpand(true);
+    bg.set_vexpand(false);
 
     let btn_weak = btn.downgrade();
     bg.set_draw_func(move |_, cr, w, h| {
@@ -3565,10 +3526,16 @@ fn attach_squircle_menu_hover(btn: &Button) {
         bg_state.queue_draw();
     });
 
-    let overlay = Overlay::builder().hexpand(true).build();
+    let overlay = Overlay::builder()
+        .hexpand(true)
+        .vexpand(false)
+        .valign(Align::Center)
+        .build();
     overlay.set_child(Some(&bg));
     overlay.add_overlay(&inner);
     overlay.set_measure_overlay(&inner, true);
+    btn.set_vexpand(false);
+    btn.set_valign(Align::Start);
     btn.set_child(Some(&overlay));
 }
 
@@ -4166,17 +4133,100 @@ fn apply_desktop_picture_from_menu(path: &Path) {
     );
 }
 
+fn attach_desktop_cascading_submenu(
+    parent_overlay: &Overlay,
+    parent_popover: &Popover,
+    menu_vbox: &GtkBox,
+    trigger_btn: &Button,
+    submenu_content: &GtkBox,
+    all_submenus: &Rc<RefCell<Vec<glib::WeakRef<Popover>>>>,
+) {
+    submenu_content.set_vexpand(false);
+    submenu_content.set_valign(Align::Start);
+
+    let sub_pop = Popover::builder()
+        .has_arrow(false)
+        .autohide(false)
+        .position(gtk4::PositionType::Right)
+        .css_classes(["desktop-popover-menu"])
+        .build();
+    sub_pop.set_vexpand(false);
+    sub_pop.set_valign(Align::Start);
+    sub_pop.set_child(Some(submenu_content));
+    sub_pop.set_parent(menu_vbox);
+    register_wallpaper_popover(&sub_pop);
+
+    all_submenus.borrow_mut().push(sub_pop.downgrade());
+
+    let open_sub = {
+        let sub_w = sub_pop.downgrade();
+        let btn_w = trigger_btn.downgrade();
+        let vbox_w = menu_vbox.downgrade();
+        let subs = all_submenus.clone();
+        Rc::new(move || {
+            let (Some(sp), Some(b), Some(vb)) = (sub_w.upgrade(), btn_w.upgrade(), vbox_w.upgrade())
+            else {
+                return;
+            };
+            for other_w in subs.borrow().iter() {
+                if let Some(other) = other_w.upgrade() {
+                    if other != sp {
+                        other.popdown();
+                    }
+                }
+            }
+            if let Some(bounds) = b.compute_bounds(&vb) {
+                let rect = gtk4::gdk::Rectangle::new(
+                    bounds.x().round() as i32,
+                    bounds.y().round() as i32,
+                    bounds.width().round().max(1.0) as i32,
+                    bounds.height().round().max(1.0) as i32,
+                );
+                sp.set_pointing_to(Some(&rect));
+            }
+            if !sp.is_visible() {
+                sp.popup();
+            }
+        })
+    };
+
+    let open_click = open_sub.clone();
+    trigger_btn.connect_clicked(move |_| open_click());
+
+    let motion = gtk4::EventControllerMotion::new();
+    let open_hover = open_sub;
+    motion.connect_enter(move |_, _, _| open_hover());
+    trigger_btn.add_controller(motion);
+
+    let sub_close = sub_pop.downgrade();
+    parent_popover.connect_closed(move |_| {
+        if let Some(sp) = sub_close.upgrade() {
+            sp.popdown();
+        }
+    });
+
+    let sub_unroot = sub_pop.downgrade();
+    parent_overlay.connect_unrealize(move |_| {
+        if let Some(sp) = sub_unroot.upgrade() {
+            sp.popdown();
+            if sp.parent().is_some() {
+                sp.unparent();
+            }
+        }
+    });
+}
+
 /// Menú contextual reutilizable compartido por todos los iconos del escritorio.
 /// Mantiene la misma estructura estilo Finder que el menú contextual de archivos en Branches.
 struct DesktopIconContextMenu {
     popover: Popover,
-    stack: Stack,
     open_new_tab_button: Button,
     open_with_button: Button,
     open_with_list_box: GtkBox,
     compress_button: Button,
     paste_into_button: Button,
     set_wallpaper_button: Button,
+    all_submenus: Rc<RefCell<Vec<glib::WeakRef<Popover>>>>,
     target: Rc<RefCell<Option<(PathBuf, glib::WeakRef<GtkBox>)>>>,
 }
 
@@ -4192,13 +4242,11 @@ impl DesktopIconContextMenu {
             .position(gtk4::PositionType::Bottom)
             .css_classes(["desktop-popover-menu"])
             .build();
+        popover.set_vexpand(false);
+        popover.set_valign(Align::Start);
 
-        let stack = Stack::builder()
-            .transition_type(StackTransitionType::SlideLeftRight)
-            .transition_duration(120)
-            .interpolate_size(false)
-            .css_classes(["desktop-context-menu"])
-            .build();
+        let all_submenus: Rc<RefCell<Vec<glib::WeakRef<Popover>>>> =
+            Rc::new(RefCell::new(Vec::new()));
 
         let target: Rc<RefCell<Option<(PathBuf, glib::WeakRef<GtkBox>)>>> =
             Rc::new(RefCell::new(None));
@@ -4206,6 +4254,8 @@ impl DesktopIconContextMenu {
         let menu = GtkBox::builder()
             .orientation(Orientation::Vertical)
             .spacing(2)
+            .vexpand(false)
+            .valign(Align::Start)
             .css_classes(["desktop-context-menu"])
             .build();
 
@@ -4246,15 +4296,6 @@ impl DesktopIconContextMenu {
 
         // 2. Abrir con > (solo archivos)
         let open_with_button = create_menu_submenu_button("Abrir con");
-        {
-            let st_w = stack.downgrade();
-            open_with_button.connect_clicked(move |_| {
-                if let Some(st) = st_w.upgrade() {
-                    st.set_transition_type(StackTransitionType::SlideLeftRight);
-                    st.set_visible_child_name("open_with");
-                }
-            });
-        }
         menu.append(&open_with_button);
 
         let sep_trash_top = GtkBox::new(Orientation::Horizontal, 0);
@@ -4468,15 +4509,6 @@ impl DesktopIconContextMenu {
         menu.append(&tag_dots_row);
 
         let tags_button = create_menu_icon_button("Etiquetas...", Some("tag-symbolic"), false);
-        {
-            let st_w = stack.downgrade();
-            tags_button.connect_clicked(move |_| {
-                if let Some(st) = st_w.upgrade() {
-                    st.set_transition_type(StackTransitionType::SlideLeftRight);
-                    st.set_visible_child_name("tags");
-                }
-            });
-        }
         menu.append(&tags_button);
 
         let sep_qa = GtkBox::new(Orientation::Horizontal, 0);
@@ -4489,15 +4521,6 @@ impl DesktopIconContextMenu {
             Some("emblem-system-symbolic"),
             true,
         );
-        {
-            let st_w = stack.downgrade();
-            qa_button.connect_clicked(move |_| {
-                if let Some(st) = st_w.upgrade() {
-                    st.set_transition_type(StackTransitionType::SlideLeftRight);
-                    st.set_visible_child_name("quick_actions");
-                }
-            });
-        }
         menu.append(&qa_button);
 
         // 14. Establecer como imagen del escritorio
@@ -4517,47 +4540,31 @@ impl DesktopIconContextMenu {
         }
         menu.append(&set_wallpaper_button);
 
-        // Subpágina: Abrir con
-        let open_with_page = GtkBox::builder()
+        // Submenú: Abrir con
+        let open_with_list_box = GtkBox::builder()
             .orientation(Orientation::Vertical)
             .spacing(2)
+            .vexpand(false)
+            .valign(Align::Start)
             .css_classes(["desktop-context-menu"])
             .build();
-        let ow_back = create_menu_button("← Volver", false);
-        {
-            let st_w = stack.downgrade();
-            ow_back.connect_clicked(move |_| {
-                if let Some(st) = st_w.upgrade() {
-                    st.set_visible_child_name("main");
-                }
-            });
-        }
-        open_with_page.append(&ow_back);
-        let ow_sep = GtkBox::new(Orientation::Horizontal, 0);
-        ow_sep.add_css_class("desktop-context-separator");
-        open_with_page.append(&ow_sep);
-        let open_with_list_box = GtkBox::new(Orientation::Vertical, 2);
-        open_with_page.append(&open_with_list_box);
+        attach_desktop_cascading_submenu(
+            parent_overlay,
+            &popover,
+            &menu,
+            &open_with_button,
+            &open_with_list_box,
+            &all_submenus,
+        );
 
-        // Subpágina: Etiquetas
+        // Submenú: Etiquetas
         let tags_page = GtkBox::builder()
             .orientation(Orientation::Vertical)
             .spacing(2)
+            .vexpand(false)
+            .valign(Align::Start)
             .css_classes(["desktop-context-menu"])
             .build();
-        let tags_back = create_menu_button("← Volver", false);
-        {
-            let st_w = stack.downgrade();
-            tags_back.connect_clicked(move |_| {
-                if let Some(st) = st_w.upgrade() {
-                    st.set_visible_child_name("main");
-                }
-            });
-        }
-        tags_page.append(&tags_back);
-        let tags_sep = GtkBox::new(Orientation::Horizontal, 0);
-        tags_sep.add_css_class("desktop-context-separator");
-        tags_page.append(&tags_sep);
         for (tag_id, tag_label, rgb) in DESKTOP_TAG_CATALOG {
             let hbox = GtkBox::new(Orientation::Horizontal, 8);
             hbox.append(&create_desktop_cairo_tag_dot(rgb, 12));
@@ -4607,26 +4614,23 @@ impl DesktopIconContextMenu {
             });
         }
         tags_page.append(&clear_tags_btn);
+        attach_desktop_cascading_submenu(
+            parent_overlay,
+            &popover,
+            &menu,
+            &tags_button,
+            &tags_page,
+            &all_submenus,
+        );
 
-        // Subpágina: Menú de acciones rápidas
+        // Submenú: Menú de acciones rápidas
         let qa_page = GtkBox::builder()
             .orientation(Orientation::Vertical)
             .spacing(2)
+            .vexpand(false)
+            .valign(Align::Start)
             .css_classes(["desktop-context-menu"])
             .build();
-        let qa_back = create_menu_button("← Volver", false);
-        {
-            let st_w = stack.downgrade();
-            qa_back.connect_clicked(move |_| {
-                if let Some(st) = st_w.upgrade() {
-                    st.set_visible_child_name("main");
-                }
-            });
-        }
-        qa_page.append(&qa_back);
-        let qa_sep = GtkBox::new(Orientation::Horizontal, 0);
-        qa_sep.add_css_class("desktop-context-separator");
-        qa_page.append(&qa_sep);
 
         let reveal_button = create_menu_button("Mostrar en la carpeta contenedora", false);
         {
@@ -4712,14 +4716,16 @@ impl DesktopIconContextMenu {
             });
         }
         qa_page.append(&copy_path_button);
+        attach_desktop_cascading_submenu(
+            parent_overlay,
+            &popover,
+            &menu,
+            &qa_button,
+            &qa_page,
+            &all_submenus,
+        );
 
-        stack.add_named(&menu, Some("main"));
-        stack.add_named(&open_with_page, Some("open_with"));
-        stack.add_named(&tags_page, Some("tags"));
-        stack.add_named(&qa_page, Some("quick_actions"));
-        stack.set_visible_child_name("main");
-
-        popover.set_child(Some(&stack));
+        popover.set_child(Some(&menu));
         popover.set_parent(parent_overlay);
         register_wallpaper_popover(&popover);
 
@@ -4735,13 +4741,13 @@ impl DesktopIconContextMenu {
 
         Rc::new(Self {
             popover,
-            stack,
             open_new_tab_button,
             open_with_button,
             open_with_list_box,
             compress_button,
             paste_into_button,
             set_wallpaper_button,
+            all_submenus,
             target,
         })
     }
@@ -4810,10 +4816,11 @@ impl DesktopIconContextMenu {
         self.set_wallpaper_button
             .set_visible(!is_dir && is_desktop_picture_file(path));
 
-        self.stack.set_transition_type(StackTransitionType::None);
-        self.stack.set_visible_child_name("main");
-        self.stack
-            .set_transition_type(StackTransitionType::SlideLeftRight);
+        for sub_w in self.all_submenus.borrow().iter() {
+            if let Some(sp) = sub_w.upgrade() {
+                sp.popdown();
+            }
+        }
 
         let (ix, iy) = fixed.child_position(item_box);
         let rect = gtk4::gdk::Rectangle::new((ix + local_x) as i32, (iy + local_y) as i32, 1, 1);
@@ -5842,16 +5849,14 @@ fn populate_wallpaper_role(
             });
         }
 
-        let bg_stack = Stack::builder()
-            .transition_type(StackTransitionType::SlideLeftRight)
-            .transition_duration(120)
-            .interpolate_size(false)
-            .css_classes(["desktop-context-menu"])
-            .build();
+        bg_popover.set_vexpand(false);
+        bg_popover.set_valign(Align::Start);
+
+        let bg_submenus: Rc<RefCell<Vec<glib::WeakRef<Popover>>>> =
+            Rc::new(RefCell::new(Vec::new()));
 
         let organize_box = build_organize_submenu(
             &bg_popover,
-            &bg_stack,
             &icons,
             desktop_dir.to_path_buf(),
             desktop_size,
@@ -5863,7 +5868,6 @@ fn populate_wallpaper_role(
 
         let (align_by_box, snap_btn, align_left_btn) = build_align_by_submenu(
             &bg_popover,
-            &bg_stack,
             &icons,
             desktop_dir.to_path_buf(),
             desktop_size,
@@ -5875,7 +5879,6 @@ fn populate_wallpaper_role(
 
         let (view_options_box, icon_size_scale) = build_view_options_submenu(
             &bg_popover,
-            &bg_stack,
             current_config.clone(),
             trigger_refresh.clone(),
         );
@@ -5883,6 +5886,8 @@ fn populate_wallpaper_role(
         let bg_menu = GtkBox::builder()
             .orientation(Orientation::Vertical)
             .spacing(2)
+            .vexpand(false)
+            .valign(Align::Start)
             .css_classes(["desktop-context-menu"])
             .build();
 
@@ -6040,16 +6045,15 @@ fn populate_wallpaper_role(
 
         // 6. Ordenar por >
         let organize_by_btn = create_menu_submenu_button("Ordenar por");
-        {
-            let stack_org = bg_stack.downgrade();
-            organize_by_btn.connect_clicked(move |_| {
-                if let Some(st) = stack_org.upgrade() {
-                    st.set_transition_type(StackTransitionType::SlideLeftRight);
-                    st.set_visible_child_name("organize");
-                }
-            });
-        }
         bg_menu.append(&organize_by_btn);
+        attach_desktop_cascading_submenu(
+            &overlay,
+            &bg_popover,
+            &bg_menu,
+            &organize_by_btn,
+            &organize_box,
+            &bg_submenus,
+        );
 
         // 7. Alinear
         let snap_all_btn = create_menu_button("Alinear", false);
@@ -6082,36 +6086,29 @@ fn populate_wallpaper_role(
 
         // 8. Alinear por >
         let align_by_btn = create_menu_submenu_button("Alinear por");
-        {
-            let stack_align = bg_stack.downgrade();
-            align_by_btn.connect_clicked(move |_| {
-                if let Some(st) = stack_align.upgrade() {
-                    st.set_transition_type(StackTransitionType::SlideLeftRight);
-                    st.set_visible_child_name("align_by");
-                }
-            });
-        }
         bg_menu.append(&align_by_btn);
+        attach_desktop_cascading_submenu(
+            &overlay,
+            &bg_popover,
+            &bg_menu,
+            &align_by_btn,
+            &align_by_box,
+            &bg_submenus,
+        );
 
         // 9. Mostrar opciones de visualización
         let view_opts_btn = create_menu_button("Mostrar opciones de visualización", false);
-        {
-            let stack_vo = bg_stack.downgrade();
-            view_opts_btn.connect_clicked(move |_| {
-                if let Some(st) = stack_vo.upgrade() {
-                    st.set_transition_type(StackTransitionType::SlideLeftRight);
-                    st.set_visible_child_name("view_options");
-                }
-            });
-        }
         bg_menu.append(&view_opts_btn);
+        attach_desktop_cascading_submenu(
+            &overlay,
+            &bg_popover,
+            &bg_menu,
+            &view_opts_btn,
+            &view_options_box,
+            &bg_submenus,
+        );
 
-        bg_stack.add_named(&bg_menu, Some("main"));
-        bg_stack.add_named(&organize_box, Some("organize"));
-        bg_stack.add_named(&align_by_box, Some("align_by"));
-        bg_stack.add_named(&view_options_box, Some("view_options"));
-        bg_stack.set_visible_child_name("main");
-        bg_popover.set_child(Some(&bg_stack));
+        bg_popover.set_child(Some(&bg_menu));
 
         let bg_context = GestureClick::new();
         bg_context.set_button(3);
@@ -6119,7 +6116,7 @@ fn populate_wallpaper_role(
         let cfg_menu = current_config.clone();
         let rb_check_ctx = rubberband.downgrade();
         let pop_ctx = bg_popover.downgrade();
-        let stack_ctx = bg_stack.downgrade();
+        let subs_ctx = bg_submenus.clone();
         let paste_btn_ctx = paste_btn.downgrade();
         let stacks_btn_ctx = stacks_btn.downgrade();
         let snap_btn_ctx = snap_btn.downgrade();
@@ -6172,10 +6169,10 @@ fn populate_wallpaper_role(
             if let Some(sc) = icon_scale_ctx.upgrade() {
                 sc.set_value(icon_sz as f64);
             }
-            if let Some(st) = stack_ctx.upgrade() {
-                st.set_transition_type(StackTransitionType::None);
-                st.set_visible_child_name("main");
-                st.set_transition_type(StackTransitionType::SlideLeftRight);
+            for sub_w in subs_ctx.borrow().iter() {
+                if let Some(sp) = sub_w.upgrade() {
+                    sp.popdown();
+                }
             }
             if let Some(pop) = pop_ctx.upgrade() {
                 let pointing_rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);

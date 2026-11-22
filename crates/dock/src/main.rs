@@ -783,7 +783,10 @@ fn load_css() {
 fn create_popover_surface(menu_box: &GtkBox) -> Overlay {
     let overlay = Overlay::new();
     overlay.add_css_class("popover-surface");
+    overlay.set_vexpand(false);
+    overlay.set_valign(gtk4::Align::Start);
     menu_box.add_css_class("popover-menu-content");
+    menu_box.set_vexpand(false);
     if let Some(last_item) = menu_box.last_child() {
         last_item.set_margin_bottom(10);
     }
@@ -792,7 +795,7 @@ fn create_popover_surface(menu_box: &GtkBox) -> Overlay {
     background.add_css_class("popover-surface");
     background.set_can_target(false);
     background.set_hexpand(true);
-    background.set_vexpand(true);
+    background.set_vexpand(false);
 
     match dock_popover_svg_path() {
         Some(path) => match std::fs::read_to_string(&path) {
@@ -832,7 +835,7 @@ fn create_popover_surface(menu_box: &GtkBox) -> Overlay {
     overlay.set_clip_overlay(menu_box, false);
 
     menu_box.set_halign(gtk4::Align::Fill);
-    menu_box.set_valign(gtk4::Align::Fill);
+    menu_box.set_valign(gtk4::Align::Start);
     menu_box.set_margin_start(8 + POPOVER_SHADOW_GUTTER);
     menu_box.set_margin_end(8 + POPOVER_SHADOW_GUTTER);
     menu_box.set_margin_top(6 + POPOVER_SHADOW_GUTTER);
@@ -4286,7 +4289,7 @@ fn make_dock_menu_button(label: &str, danger: bool) -> Button {
         let bg = DrawingArea::new();
         bg.set_can_target(false);
         bg.set_hexpand(true);
-        bg.set_vexpand(true);
+        bg.set_vexpand(false);
 
         let btn_weak = btn.downgrade();
         bg.set_draw_func(move |_, cr, w, h| {
@@ -4324,10 +4327,16 @@ fn make_dock_menu_button(label: &str, danger: bool) -> Button {
             bg_state.queue_draw();
         });
 
-        let overlay = Overlay::builder().hexpand(true).build();
+        let overlay = Overlay::builder()
+            .hexpand(true)
+            .vexpand(false)
+            .valign(gtk4::Align::Center)
+            .build();
         overlay.set_child(Some(&bg));
         overlay.add_overlay(&inner);
         overlay.set_measure_overlay(&inner, true);
+        btn.set_vexpand(false);
+        btn.set_valign(gtk4::Align::Start);
         btn.set_child(Some(&overlay));
     }
     btn

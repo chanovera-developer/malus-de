@@ -87,7 +87,7 @@ pub(crate) fn attach_squircle_menu_hover(btn: &Button) {
     let bg = gtk4::DrawingArea::new();
     bg.set_can_target(false);
     bg.set_hexpand(true);
-    bg.set_vexpand(true);
+    bg.set_vexpand(false);
 
     let btn_weak = btn.downgrade();
     bg.set_draw_func(move |_, cr, w, h| {
@@ -125,10 +125,16 @@ pub(crate) fn attach_squircle_menu_hover(btn: &Button) {
         bg_state.queue_draw();
     });
 
-    let overlay = Overlay::builder().hexpand(true).build();
+    let overlay = Overlay::builder()
+        .hexpand(true)
+        .vexpand(false)
+        .valign(Align::Center)
+        .build();
     overlay.set_child(Some(&bg));
     overlay.add_overlay(&inner);
     overlay.set_measure_overlay(&inner, true);
+    btn.set_vexpand(false);
+    btn.set_valign(Align::Start);
     btn.set_child(Some(&overlay));
 }
 
