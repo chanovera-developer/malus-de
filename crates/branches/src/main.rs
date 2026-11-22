@@ -252,22 +252,22 @@ fn load_custom_css() {
         gtk4::style_context_add_provider_for_display(
             &display,
             &provider,
-            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
-        gtk4::style_context_add_provider_for_display(
-            &display,
-            &glass_provider,
             gtk4::STYLE_PROVIDER_PRIORITY_USER + 1,
         );
         gtk4::style_context_add_provider_for_display(
             &display,
-            &accent_provider,
+            &glass_provider,
             gtk4::STYLE_PROVIDER_PRIORITY_USER + 2,
         );
         gtk4::style_context_add_provider_for_display(
             &display,
+            &accent_provider,
+            gtk4::STYLE_PROVIDER_PRIORITY_USER + 3,
+        );
+        gtk4::style_context_add_provider_for_display(
+            &display,
             &folder_provider,
-            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION + 1,
+            gtk4::STYLE_PROVIDER_PRIORITY_USER + 2,
         );
         malus_de_common::sidebar_style::install_sidebar_size_sync(&display);
     }

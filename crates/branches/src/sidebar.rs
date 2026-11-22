@@ -2179,16 +2179,54 @@ fn attach_trash_context_menu(row: &ListBoxRow, es: bool) {
     row.add_controller(click);
 }
 
+pub(crate) fn create_cairo_tag_dot(color_id: &str, size: i32) -> gtk4::DrawingArea {
+    let cid = color_id.to_string();
+    let area = gtk4::DrawingArea::new();
+    area.set_content_width(size);
+    area.set_content_height(size);
+    area.set_size_request(size, size);
+    area.set_valign(Align::Center);
+    area.set_halign(Align::Center);
+    area.set_can_target(false);
+    area.set_draw_func(move |_, cr, w, h| {
+        let cx = w as f64 / 2.0;
+        let cy = h as f64 / 2.0;
+        let r = (w.min(h) as f64 / 2.0) - 1.0;
+        if r <= 0.5 {
+            return;
+        }
+        cr.arc(cx, cy, r, 0.0, std::f64::consts::PI * 2.0);
+        let rgba: Option<(f64, f64, f64)> = match cid.as_str() {
+            "red" => Some((1.0, 0.231, 0.188)),
+            "orange" => Some((1.0, 0.584, 0.0)),
+            "yellow" => Some((1.0, 0.8, 0.0)),
+            "green" => Some((0.204, 0.78, 0.349)),
+            "blue" => Some((0.0, 0.478, 1.0)),
+            "purple" => Some((0.686, 0.322, 0.871)),
+            "gray" => Some((0.557, 0.557, 0.576)),
+            _ => None,
+        };
+        if let Some((red, green, blue)) = rgba {
+            cr.set_source_rgba(red, green, blue, 1.0);
+            let _ = cr.fill_preserve();
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.18);
+            cr.set_line_width(1.0);
+            let _ = cr.stroke();
+        } else {
+            cr.set_source_rgba(0.55, 0.55, 0.58, 0.75);
+            cr.set_line_width(1.3);
+            let _ = cr.stroke();
+        }
+    });
+    area
+}
+
 fn make_tag_color_menu_item(color_id: &str, label: &str) -> Button {
     let hbox = GtkBox::new(Orientation::Horizontal, 8);
     hbox.set_margin_start(2);
     hbox.set_margin_end(4);
 
-    let dot = GtkBox::new(Orientation::Horizontal, 0);
-    dot.set_size_request(12, 12);
-    dot.set_valign(Align::Center);
-    dot.add_css_class("branches-tag-dot");
-    dot.add_css_class(&format!("branches-tag-color-{}", color_id));
+    let dot = create_cairo_tag_dot(color_id, 12);
 
     let text = Label::builder()
         .label(label)
@@ -2550,11 +2588,7 @@ fn create_tag_row(tag_id: &str, color_id: &str, title: &str) -> ListBoxRow {
     hbox.set_margin_start(4);
     hbox.set_margin_end(4);
 
-    let dot = GtkBox::new(Orientation::Horizontal, 0);
-    dot.set_size_request(10, 10);
-    dot.set_valign(Align::Center);
-    dot.add_css_class("branches-tag-dot");
-    dot.add_css_class(&format!("branches-tag-color-{}", color_id));
+    let dot = create_cairo_tag_dot(color_id, 11);
 
     let label = Label::builder()
         .label(title)

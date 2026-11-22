@@ -12,11 +12,29 @@ window.branches-window popover .popover-menu-item:hover:not(:disabled),
 window.branches-window popover .popover-menu-item:active:not(:disabled),
 window.branches-window popover modelbutton:hover:not(:disabled),
 window.branches-window popover modelbutton:selected:not(:disabled),
-window.branches-window popover .popover-menu-item:hover:not(:disabled) *,
-window.branches-window popover .popover-menu-item:active:not(:disabled) *,
-window.branches-window popover modelbutton:hover:not(:disabled) *,
-window.branches-window popover modelbutton:selected:not(:disabled) * {
+window.branches-window popover .popover-menu-item:hover:not(:disabled) > label,
+window.branches-window popover .popover-menu-item:hover:not(:disabled) > image,
+window.branches-window popover .popover-menu-item:hover:not(:disabled) > box > label,
+window.branches-window popover .popover-menu-item:hover:not(:disabled) > box > image,
+window.branches-window popover .popover-menu-item:hover:not(:disabled) > overlay > label,
+window.branches-window popover .popover-menu-item:hover:not(:disabled) > overlay > image,
+window.branches-window popover .popover-menu-item:hover:not(:disabled) > overlay > box > label,
+window.branches-window popover .popover-menu-item:hover:not(:disabled) > overlay > box > image,
+window.branches-window popover .popover-menu-item:active:not(:disabled) > label,
+window.branches-window popover .popover-menu-item:active:not(:disabled) > image,
+window.branches-window popover .popover-menu-item:active:not(:disabled) > box > label,
+window.branches-window popover .popover-menu-item:active:not(:disabled) > box > image,
+window.branches-window popover .popover-menu-item:active:not(:disabled) > overlay > label,
+window.branches-window popover .popover-menu-item:active:not(:disabled) > overlay > image,
+window.branches-window popover .popover-menu-item:active:not(:disabled) > overlay > box > label,
+window.branches-window popover .popover-menu-item:active:not(:disabled) > overlay > box > image {
     color: #ffffff;
+}
+
+window.branches-window popover.malus-popover-menu button:not(:hover):not(:active),
+window.branches-window popover.malus-popover-menu button:not(:hover):not(:active) label,
+window.branches-window popover.malus-popover-menu button:not(:hover):not(:active) image {
+    color: @window_fg_color;
 }
 
 /* ========================================================= */

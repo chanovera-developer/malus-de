@@ -55,10 +55,7 @@ pub(super) fn create_item_tag_dots(
 
     for (raw_id, _) in tags.iter().take(3) {
         let cid = crate::db::canonical_tag_id(raw_id);
-        let dot = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
-        dot.add_css_class("branches-item-tag-dot");
-        dot.add_css_class(&format!("branches-tag-color-{}", cid));
-        dot.set_valign(gtk4::Align::Center);
+        let dot = crate::sidebar::create_cairo_tag_dot(&cid, 9);
         box_dots.append(&dot);
     }
 
@@ -920,6 +917,24 @@ pub(super) fn show_item_context_menu(
     }
     vbox.append(&open_btn);
 
+    let menu_stack = gtk4::Stack::builder()
+        .transition_type(gtk4::StackTransitionType::SlideLeftRight)
+        .transition_duration(120)
+        .vhomogeneous(false)
+        .hhomogeneous(false)
+        .build();
+
+    let make_back_button = |st: &gtk4::Stack| -> gtk4::Button {
+        let back_btn = make_context_menu_button(if es { "← Volver" } else { "← Back" });
+        let st_w = st.downgrade();
+        back_btn.connect_clicked(move |_| {
+            if let Some(s) = st_w.upgrade() {
+                s.set_visible_child_name("main");
+            }
+        });
+        back_btn
+    };
+
     if is_dir {
         vbox.append(&make_context_action_button(
             if es {
@@ -940,13 +955,10 @@ pub(super) fn show_item_context_menu(
             None,
             true,
         );
-        let open_with_pop = gtk4::Popover::builder()
-            .has_arrow(false)
-            .position(gtk4::PositionType::Right)
-            .css_classes(["malus-popover-menu"])
-            .build();
-        open_with_pop.set_parent(&open_with_btn);
         let ow_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
+        ow_box.append(&make_back_button(&menu_stack));
+        ow_box.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
+
         let gfile = gio::File::for_path(path);
         let mime_type = gfile
             .query_info(
@@ -976,12 +988,8 @@ pub(super) fn show_item_context_menu(
             for app in apps.into_iter().take(12) {
                 let app_btn = make_context_menu_button(&app.display_name());
                 let pop_main = popover.downgrade();
-                let pop_sub = open_with_pop.downgrade();
                 let gf = gfile.clone();
                 app_btn.connect_clicked(move |_| {
-                    if let Some(s) = pop_sub.upgrade() {
-                        s.popdown();
-                    }
                     if let Some(m) = pop_main.upgrade() {
                         m.popdown();
                     }
@@ -990,22 +998,15 @@ pub(super) fn show_item_context_menu(
                 ow_box.append(&app_btn);
             }
         }
-        open_with_pop.set_child(Some(&ow_box));
+        menu_stack.add_named(&ow_box, Some("open_with"));
         {
-            let pop_sub = open_with_pop.downgrade();
+            let st_w = menu_stack.downgrade();
             open_with_btn.connect_clicked(move |_| {
-                if let Some(s) = pop_sub.upgrade() {
-                    s.popup();
+                if let Some(s) = st_w.upgrade() {
+                    s.set_visible_child_name("open_with");
                 }
             });
         }
-        let ow_pop_cleanup = open_with_pop.downgrade();
-        popover.connect_closed(move |_| {
-            if let Some(s) = ow_pop_cleanup.upgrade() {
-                s.popdown();
-                s.unparent();
-            }
-        });
         vbox.append(&open_with_btn);
     }
 
@@ -1182,18 +1183,17 @@ pub(super) fn show_item_context_menu(
     // 12. Puntos de color + Etiquetas...
     if path != std::path::Path::new("/") && path.parent().is_some() {
         vbox.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
-        let tag_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 5);
+        let tag_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
         tag_row.add_css_class("branches-context-tag-row");
         tag_row.set_halign(gtk4::Align::Center);
         for def in crate::db::TAG_CATALOG.iter() {
+            let dot_area = crate::sidebar::create_cairo_tag_dot(def.id, 16);
             let dot_btn = gtk4::Button::builder()
+                .child(&dot_area)
                 .has_frame(false)
                 .valign(gtk4::Align::Center)
                 .tooltip_text(if es { def.label_es } else { def.label_en })
-                .css_classes([
-                    "branches-context-tag-btn",
-                    &format!("branches-tag-color-{}", def.id),
-                ])
+                .css_classes(["flat", "branches-context-tag-btn"])
                 .build();
             let aw = anchor_widget.downgrade();
             let t_str = target_str.clone();
@@ -1223,28 +1223,35 @@ pub(super) fn show_item_context_menu(
             Some("tag-symbolic"),
             false,
         );
-        let tags_pop = gtk4::Popover::builder()
-            .has_arrow(false)
-            .position(gtk4::PositionType::Right)
-            .css_classes(["malus-popover-menu"])
-            .build();
-        tags_pop.set_parent(&tags_btn);
         let tags_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
+        tags_box.append(&make_back_button(&menu_stack));
+        tags_box.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
+
         let sidebar_tags = crate::db::open_db()
             .map(|c| crate::db::get_all_sidebar_tags(&c, es))
             .unwrap_or_default();
         if sidebar_tags.is_empty() {
             for def in crate::db::TAG_CATALOG.iter() {
-                let item_btn = make_context_menu_button(if es { def.label_es } else { def.label_en });
+                let hbox = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+                hbox.append(&crate::sidebar::create_cairo_tag_dot(def.id, 12));
+                let lbl = gtk4::Label::builder()
+                    .label(if es { def.label_es } else { def.label_en })
+                    .halign(gtk4::Align::Start)
+                    .xalign(0.0)
+                    .hexpand(true)
+                    .build();
+                hbox.append(&lbl);
+                let item_btn = gtk4::Button::builder()
+                    .child(&hbox)
+                    .has_frame(false)
+                    .css_classes(["popover-menu-item"])
+                    .build();
+                crate::app_window::attach_squircle_menu_hover(&item_btn);
                 let pop_main = popover.downgrade();
-                let pop_sub = tags_pop.downgrade();
                 let aw = anchor_widget.downgrade();
                 let t_str = target_str.clone();
                 let tid = def.id.to_string();
                 item_btn.connect_clicked(move |_| {
-                    if let Some(s) = pop_sub.upgrade() {
-                        s.popdown();
-                    }
                     if let Some(m) = pop_main.upgrade() {
                         m.popdown();
                     }
@@ -1260,18 +1267,13 @@ pub(super) fn show_item_context_menu(
         } else {
             for meta in sidebar_tags {
                 let hbox = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
-                let dot = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
-                dot.set_size_request(10, 10);
-                dot.set_valign(gtk4::Align::Center);
-                dot.add_css_class("branches-tag-dot");
-                dot.add_css_class(&format!("branches-tag-color-{}", meta.color_id));
+                hbox.append(&crate::sidebar::create_cairo_tag_dot(&meta.color_id, 12));
                 let lbl = gtk4::Label::builder()
                     .label(&meta.label)
                     .halign(gtk4::Align::Start)
                     .xalign(0.0)
                     .hexpand(true)
                     .build();
-                hbox.append(&dot);
                 hbox.append(&lbl);
                 let item_btn = gtk4::Button::builder()
                     .child(&hbox)
@@ -1280,14 +1282,10 @@ pub(super) fn show_item_context_menu(
                     .build();
                 crate::app_window::attach_squircle_menu_hover(&item_btn);
                 let pop_main = popover.downgrade();
-                let pop_sub = tags_pop.downgrade();
                 let aw = anchor_widget.downgrade();
                 let t_str = target_str.clone();
                 let tid = meta.tag_id;
                 item_btn.connect_clicked(move |_| {
-                    if let Some(s) = pop_sub.upgrade() {
-                        s.popdown();
-                    }
                     if let Some(m) = pop_main.upgrade() {
                         m.popdown();
                     }
@@ -1314,22 +1312,15 @@ pub(super) fn show_item_context_menu(
             "win.clear_tags_item",
             &target_str,
         ));
-        tags_pop.set_child(Some(&tags_box));
+        menu_stack.add_named(&tags_box, Some("tags"));
         {
-            let pop_sub = tags_pop.downgrade();
+            let st_w = menu_stack.downgrade();
             tags_btn.connect_clicked(move |_| {
-                if let Some(s) = pop_sub.upgrade() {
-                    s.popup();
+                if let Some(s) = st_w.upgrade() {
+                    s.set_visible_child_name("tags");
                 }
             });
         }
-        let tags_pop_cleanup = tags_pop.downgrade();
-        popover.connect_closed(move |_| {
-            if let Some(s) = tags_pop_cleanup.upgrade() {
-                s.popdown();
-                s.unparent();
-            }
-        });
         vbox.append(&tags_btn);
     }
 
@@ -1344,13 +1335,9 @@ pub(super) fn show_item_context_menu(
         Some("emblem-system-symbolic"),
         true,
     );
-    let qa_pop = gtk4::Popover::builder()
-        .has_arrow(false)
-        .position(gtk4::PositionType::Right)
-        .css_classes(["malus-popover-menu"])
-        .build();
-    qa_pop.set_parent(&quick_actions_btn);
     let qa_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
+    qa_box.append(&make_back_button(&menu_stack));
+    qa_box.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
 
     if is_dir || path.extension().and_then(|e| e.to_str()) != Some("desktop") {
         let term_btn = make_context_menu_button(if es {
@@ -1360,11 +1347,7 @@ pub(super) fn show_item_context_menu(
         });
         let p_term = path.to_path_buf();
         let pop_main = popover.downgrade();
-        let pop_sub = qa_pop.downgrade();
         term_btn.connect_clicked(move |_| {
-            if let Some(s) = pop_sub.upgrade() {
-                s.popdown();
-            }
             if let Some(m) = pop_main.upgrade() {
                 m.popdown();
             }
@@ -1383,11 +1366,7 @@ pub(super) fn show_item_context_menu(
             let parent_path = parent.to_path_buf();
             let nav_cb = nav.clone();
             let pop_main = popover.downgrade();
-            let pop_sub = qa_pop.downgrade();
             enclosing_btn.connect_clicked(move |_| {
-                if let Some(s) = pop_sub.upgrade() {
-                    s.popdown();
-                }
                 if let Some(m) = pop_main.upgrade() {
                     m.popdown();
                 }
@@ -1430,11 +1409,7 @@ pub(super) fn show_item_context_menu(
         });
         let p_copy = path.to_path_buf();
         let pop_main = popover.downgrade();
-        let pop_sub = qa_pop.downgrade();
         copy_path_btn.connect_clicked(move |_| {
-            if let Some(s) = pop_sub.upgrade() {
-                s.popdown();
-            }
             if let Some(m) = pop_main.upgrade() {
                 m.popdown();
             }
@@ -1460,11 +1435,7 @@ pub(super) fn show_item_context_menu(
         });
         let p_bm = path.to_path_buf();
         let pop_main = popover.downgrade();
-        let pop_sub = qa_pop.downgrade();
         bm_btn.connect_clicked(move |_| {
-            if let Some(s) = pop_sub.upgrade() {
-                s.popdown();
-            }
             if let Some(m) = pop_main.upgrade() {
                 m.popdown();
             }
@@ -1497,11 +1468,7 @@ pub(super) fn show_item_context_menu(
             "Add to Dock"
         });
         let pop_main = popover.downgrade();
-        let pop_sub = qa_pop.downgrade();
         dock_btn.connect_clicked(move |_| {
-            if let Some(s) = pop_sub.upgrade() {
-                s.popdown();
-            }
             if let Some(m) = pop_main.upgrade() {
                 m.popdown();
             }
@@ -1526,22 +1493,15 @@ pub(super) fn show_item_context_menu(
         ));
     }
 
-    qa_pop.set_child(Some(&qa_box));
+    menu_stack.add_named(&qa_box, Some("quick_actions"));
     {
-        let pop_sub = qa_pop.downgrade();
+        let st_w = menu_stack.downgrade();
         quick_actions_btn.connect_clicked(move |_| {
-            if let Some(s) = pop_sub.upgrade() {
-                s.popup();
+            if let Some(s) = st_w.upgrade() {
+                s.set_visible_child_name("quick_actions");
             }
         });
     }
-    let qa_pop_cleanup = qa_pop.downgrade();
-    popover.connect_closed(move |_| {
-        if let Some(s) = qa_pop_cleanup.upgrade() {
-            s.popdown();
-            s.unparent();
-        }
-    });
     vbox.append(&quick_actions_btn);
 
     // 14. Establecer como imagen del escritorio (para imágenes)
@@ -1562,7 +1522,9 @@ pub(super) fn show_item_context_menu(
         vbox.append(&wp_btn);
     }
 
-    popover.set_child(Some(&vbox));
+    menu_stack.add_named(&vbox, Some("main"));
+    menu_stack.set_visible_child_name("main");
+    popover.set_child(Some(&menu_stack));
     popover.popup();
 }
 

@@ -3961,12 +3961,222 @@ fn build_single_desktop_drag_paintable(widget: &GtkBox) -> gtk4::gdk::Paintable 
         .unwrap_or_else(|| wp.upcast())
 }
 
+const DESKTOP_TAG_CATALOG: [(&str, &str, (f64, f64, f64)); 7] = [
+    ("red", "Rojo", (1.0, 0.231, 0.188)),
+    ("orange", "Naranja", (1.0, 0.584, 0.0)),
+    ("yellow", "Amarillo", (1.0, 0.8, 0.0)),
+    ("green", "Verde", (0.204, 0.78, 0.349)),
+    ("blue", "Azul", (0.0, 0.478, 1.0)),
+    ("purple", "Morado", (0.686, 0.322, 0.871)),
+    ("gray", "Gris", (0.557, 0.557, 0.576)),
+];
+
+fn create_desktop_cairo_tag_dot(rgb: (f64, f64, f64), size: i32) -> gtk4::DrawingArea {
+    let (red, green, blue) = rgb;
+    let area = gtk4::DrawingArea::new();
+    area.set_content_width(size);
+    area.set_content_height(size);
+    area.set_size_request(size, size);
+    area.set_valign(Align::Center);
+    area.set_halign(Align::Center);
+    area.set_can_target(false);
+    area.set_draw_func(move |_, cr, w, h| {
+        let cx = w as f64 / 2.0;
+        let cy = h as f64 / 2.0;
+        let r = (w.min(h) as f64 / 2.0) - 1.0;
+        if r <= 0.5 {
+            return;
+        }
+        cr.arc(cx, cy, r, 0.0, std::f64::consts::PI * 2.0);
+        cr.set_source_rgba(red, green, blue, 1.0);
+        let _ = cr.fill_preserve();
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.18);
+        cr.set_line_width(1.0);
+        let _ = cr.stroke();
+    });
+    area
+}
+
+fn create_menu_icon_button(label: &str, left_icon: Option<&str>, right_arrow: bool) -> Button {
+    let hbox = GtkBox::new(Orientation::Horizontal, 8);
+    let is_dark = is_dark_mode_active();
+    let text_cls = if is_dark {
+        "menu-dark-text"
+    } else {
+        "menu-light-text"
+    };
+    if let Some(icon_name) = left_icon {
+        let icon = gtk4::Image::from_icon_name(icon_name);
+        icon.set_pixel_size(14);
+        icon.add_css_class(text_cls);
+        hbox.append(&icon);
+    }
+    let lbl = Label::builder()
+        .label(label)
+        .halign(Align::Start)
+        .xalign(0.0)
+        .hexpand(true)
+        .build();
+    lbl.add_css_class(text_cls);
+    hbox.append(&lbl);
+    if right_arrow {
+        let arrow = gtk4::Image::from_icon_name("pan-end-symbolic");
+        arrow.set_pixel_size(12);
+        arrow.set_opacity(0.75);
+        arrow.add_css_class(text_cls);
+        hbox.append(&arrow);
+    }
+
+    let btn = Button::builder().child(&hbox).build();
+    btn.add_css_class("desktop-context-btn");
+    btn.set_halign(Align::Fill);
+    attach_squircle_menu_hover(&btn);
+    btn
+}
+
+fn toggle_desktop_file_tag(path: &Path, tag_id: &str) {
+    if path.symlink_metadata().is_err() {
+        return;
+    }
+    let gfile = gio::File::for_path(path);
+    let mut tags: Vec<String> = gfile
+        .query_info(
+            "xattr::user.malus.tags",
+            gio::FileQueryInfoFlags::NONE,
+            gio::Cancellable::NONE,
+        )
+        .ok()
+        .and_then(|info| info.attribute_string("xattr::user.malus.tags"))
+        .map(|s| {
+            s.split(',')
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(pos) = tags.iter().position(|t| t == tag_id) {
+        tags.remove(pos);
+    } else {
+        tags.push(tag_id.to_string());
+    }
+    tags.sort();
+    tags.dedup();
+    let val = tags.join(",");
+    let _ = gfile.set_attribute_string(
+        "xattr::user.malus.tags",
+        &val,
+        gio::FileQueryInfoFlags::NONE,
+        gio::Cancellable::NONE,
+    );
+}
+
+fn clear_desktop_file_tags(path: &Path) {
+    if path.symlink_metadata().is_err() {
+        return;
+    }
+    let gfile = gio::File::for_path(path);
+    let _ = gfile.set_attribute_string(
+        "xattr::user.malus.tags",
+        "",
+        gio::FileQueryInfoFlags::NONE,
+        gio::Cancellable::NONE,
+    );
+}
+
+fn make_desktop_alias(path: &Path) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    let is_dir = path.is_dir();
+    let file_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "elemento".to_string());
+    let (stem, ext) = if is_dir {
+        (file_name.clone(), String::new())
+    } else if let Some((s, e)) = file_name.rsplit_once('.') {
+        if s.is_empty() {
+            (file_name, String::new())
+        } else {
+            (s.to_string(), format!(".{}", e))
+        }
+    } else {
+        (file_name, String::new())
+    };
+    let mut candidate = parent.join(format!("{} alias{}", stem, ext));
+    let mut idx = 2usize;
+    while candidate.symlink_metadata().is_ok() {
+        candidate = parent.join(format!("{} alias {}{}", stem, idx, ext));
+        idx += 1;
+    }
+    let _ = std::os::unix::fs::symlink(path, &candidate);
+}
+
+fn compress_desktop_item(path: &Path) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    let Some(file_name) = path.file_name() else {
+        return;
+    };
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Archivo".to_string());
+    let mut archive = parent.join(format!("{}.zip", stem));
+    let mut idx = 2usize;
+    while archive.exists() {
+        archive = parent.join(format!("{} {}.zip", stem, idx));
+        idx += 1;
+    }
+    let parent_dir = parent.to_path_buf();
+    let fname = file_name.to_os_string();
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new("zip")
+            .arg("-rq")
+            .arg(&archive)
+            .arg(&fname)
+            .current_dir(&parent_dir)
+            .status();
+    });
+}
+
+fn is_desktop_picture_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "webp" | "bmp" | "gif" | "avif" | "tif" | "tiff"
+            )
+        })
+}
+
+fn apply_desktop_picture_from_menu(path: &Path) {
+    let mut cfg = WallpaperConfig::load();
+    cfg.mode = malus_de_common::config::WallpaperMode::Image;
+    cfg.image_path = Some(path.to_string_lossy().into_owned());
+    let malus_dir = malus_de_common::config::malus_wallpaper_config_dir();
+    let _ = std::fs::remove_file(malus_dir.join(".wallpaper-gradient"));
+    let _ = cfg.save_in(&malus_dir);
+    let _ = malus_de_common::ipc::IpcClient::send_command(
+        malus_de_common::ipc::IpcMessage::ReloadWallpaperConfig,
+    );
+}
+
 /// Menú contextual reutilizable compartido por todos los iconos del escritorio.
-/// Evita crear un `Popover` + 9 botones + 9 `DrawingArea` por cada archivo y rompe
-/// todos los ciclos de referencia mediante `WeakRef`.
+/// Mantiene la misma estructura estilo Finder que el menú contextual de archivos en Branches.
 struct DesktopIconContextMenu {
     popover: Popover,
+    stack: Stack,
+    open_new_tab_button: Button,
+    open_with_button: Button,
+    open_with_list_box: GtkBox,
+    compress_button: Button,
     paste_into_button: Button,
+    set_wallpaper_button: Button,
     target: Rc<RefCell<Option<(PathBuf, glib::WeakRef<GtkBox>)>>>,
 }
 
@@ -3981,6 +4191,13 @@ impl DesktopIconContextMenu {
             .autohide(true)
             .position(gtk4::PositionType::Bottom)
             .css_classes(["desktop-popover-menu"])
+            .build();
+
+        let stack = Stack::builder()
+            .transition_type(StackTransitionType::SlideLeftRight)
+            .transition_duration(120)
+            .interpolate_size(false)
+            .css_classes(["desktop-context-menu"])
             .build();
 
         let target: Rc<RefCell<Option<(PathBuf, glib::WeakRef<GtkBox>)>>> =
@@ -4008,46 +4225,81 @@ impl DesktopIconContextMenu {
         }
         menu.append(&open_button);
 
-        // 2. Vista rápida (Quick Look)
-        let ql_button = create_menu_button("Vista rápida (Espacio)", false);
+        // 1b. Abrir en una pestaña nueva (solo carpetas)
+        let open_new_tab_button = create_menu_button("Abrir en una pestaña nueva", false);
         {
             let target_c = target.clone();
             let pop_w = popover.downgrade();
-            ql_button.connect_clicked(move |_| {
+            open_new_tab_button.connect_clicked(move |_| {
                 if let Some((path, _)) = target_c.borrow().as_ref() {
-                    launch_quick_look(path);
+                    let mut cmd = std::process::Command::new("malus-de-branches");
+                    cmd.arg(path);
+                    malus_de_common::config::apply_isolated_environment(&mut cmd);
+                    let _ = cmd.spawn();
                 }
                 if let Some(pop) = pop_w.upgrade() {
                     pop.popdown();
                 }
             });
         }
-        menu.append(&ql_button);
+        menu.append(&open_new_tab_button);
 
-        // 3. Mostrar en gestor de archivos
-        let reveal_button = create_menu_button("Mostrar en el gestor de archivos", false);
+        // 2. Abrir con > (solo archivos)
+        let open_with_button = create_menu_submenu_button("Abrir con");
+        {
+            let st_w = stack.downgrade();
+            open_with_button.connect_clicked(move |_| {
+                if let Some(st) = st_w.upgrade() {
+                    st.set_transition_type(StackTransitionType::SlideLeftRight);
+                    st.set_visible_child_name("open_with");
+                }
+            });
+        }
+        menu.append(&open_with_button);
+
+        let sep_trash_top = GtkBox::new(Orientation::Horizontal, 0);
+        sep_trash_top.add_css_class("desktop-context-separator");
+        menu.append(&sep_trash_top);
+
+        // 3. Transferir al basurero
+        let trash_button =
+            create_menu_icon_button("Transferir al basurero", Some("user-trash-symbolic"), false);
         {
             let target_c = target.clone();
             let pop_w = popover.downgrade();
-            reveal_button.connect_clicked(move |_| {
+            trash_button.connect_clicked(move |_| {
                 if let Some((path, _)) = target_c.borrow().as_ref() {
-                    let file = gio::File::for_path(path);
-                    let parent = file.parent().unwrap_or(file);
-                    launch_file(&parent);
+                    trash_file(path);
                 }
                 if let Some(pop) = pop_w.upgrade() {
                     pop.popdown();
                 }
             });
         }
-        menu.append(&reveal_button);
+        menu.append(&trash_button);
 
-        let sep1 = GtkBox::new(Orientation::Horizontal, 0);
-        sep1.add_css_class("desktop-context-separator");
-        menu.append(&sep1);
+        let sep_info = GtkBox::new(Orientation::Horizontal, 0);
+        sep_info.add_css_class("desktop-context-separator");
+        menu.append(&sep_info);
 
-        // 4. Renombrar
-        let rename_button = create_menu_button("Renombrar...", false);
+        // 4. Obtener información
+        let info_button = create_menu_button("Obtener información", false);
+        {
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            info_button.connect_clicked(move |_| {
+                if let Some(pop) = pop_w.upgrade() {
+                    pop.popdown();
+                }
+                if let Some((path, _)) = target_c.borrow().as_ref() {
+                    show_desktop_folder_info_dialog(path);
+                }
+            });
+        }
+        menu.append(&info_button);
+
+        // 5. Renombrar
+        let rename_button = create_menu_button("Renombrar", false);
         {
             let target_c = target.clone();
             let pop_w = popover.downgrade();
@@ -4065,7 +4317,23 @@ impl DesktopIconContextMenu {
         }
         menu.append(&rename_button);
 
-        // 5. Duplicar
+        // 6. Comprimir “<Nombre>”
+        let compress_button = create_menu_button("Comprimir", false);
+        {
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            compress_button.connect_clicked(move |_| {
+                if let Some((path, _)) = target_c.borrow().as_ref() {
+                    compress_desktop_item(path);
+                }
+                if let Some(pop) = pop_w.upgrade() {
+                    pop.popdown();
+                }
+            });
+        }
+        menu.append(&compress_button);
+
+        // 7. Duplicar
         let dup_button = create_menu_button("Duplicar", false);
         {
             let target_c = target.clone();
@@ -4081,7 +4349,39 @@ impl DesktopIconContextMenu {
         }
         menu.append(&dup_button);
 
-        // 5b. Copiar / Cortar / Pegar en carpeta
+        // 8. Crear alias
+        let alias_button = create_menu_button("Crear alias", false);
+        {
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            alias_button.connect_clicked(move |_| {
+                if let Some((path, _)) = target_c.borrow().as_ref() {
+                    make_desktop_alias(path);
+                }
+                if let Some(pop) = pop_w.upgrade() {
+                    pop.popdown();
+                }
+            });
+        }
+        menu.append(&alias_button);
+
+        // 9. Vista rápida
+        let ql_button = create_menu_button("Vista rápida", false);
+        {
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            ql_button.connect_clicked(move |_| {
+                if let Some((path, _)) = target_c.borrow().as_ref() {
+                    launch_quick_look(path);
+                }
+                if let Some(pop) = pop_w.upgrade() {
+                    pop.popdown();
+                }
+            });
+        }
+        menu.append(&ql_button);
+
+        // 10. Copiar
         let copy_button = create_menu_button("Copiar", false);
         {
             let target_c = target.clone();
@@ -4109,6 +4409,242 @@ impl DesktopIconContextMenu {
         }
         menu.append(&copy_button);
 
+        let sep_share = GtkBox::new(Orientation::Horizontal, 0);
+        sep_share.add_css_class("desktop-context-separator");
+        menu.append(&sep_share);
+
+        // 11. Compartir...
+        let share_button =
+            create_menu_icon_button("Compartir...", Some("emblem-shared-symbolic"), false);
+        {
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            share_button.connect_clicked(move |_| {
+                if let Some((path, _)) = target_c.borrow().as_ref() {
+                    let _ = std::process::Command::new("kdeconnect-handler")
+                        .arg(path)
+                        .spawn();
+                    if let Some(display) = gtk4::gdk::Display::default() {
+                        display.clipboard().set_text(&path.to_string_lossy());
+                    }
+                }
+                if let Some(pop) = pop_w.upgrade() {
+                    pop.popdown();
+                }
+            });
+        }
+        menu.append(&share_button);
+
+        let sep_tags = GtkBox::new(Orientation::Horizontal, 0);
+        sep_tags.add_css_class("desktop-context-separator");
+        menu.append(&sep_tags);
+
+        // 12. 7 círculos de colores de etiquetas + Etiquetas...
+        let tag_dots_row = GtkBox::new(Orientation::Horizontal, 6);
+        tag_dots_row.set_halign(Align::Center);
+        tag_dots_row.set_margin_top(4);
+        tag_dots_row.set_margin_bottom(4);
+        for (tag_id, tag_label, rgb) in DESKTOP_TAG_CATALOG {
+            let dot_area = create_desktop_cairo_tag_dot(rgb, 16);
+            let dot_btn = Button::builder()
+                .child(&dot_area)
+                .has_frame(false)
+                .tooltip_text(tag_label)
+                .css_classes(["flat"])
+                .build();
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            let tid = tag_id.to_string();
+            dot_btn.connect_clicked(move |_| {
+                if let Some((path, _)) = target_c.borrow().as_ref() {
+                    toggle_desktop_file_tag(path, &tid);
+                }
+                if let Some(pop) = pop_w.upgrade() {
+                    pop.popdown();
+                }
+            });
+            tag_dots_row.append(&dot_btn);
+        }
+        menu.append(&tag_dots_row);
+
+        let tags_button = create_menu_icon_button("Etiquetas...", Some("tag-symbolic"), false);
+        {
+            let st_w = stack.downgrade();
+            tags_button.connect_clicked(move |_| {
+                if let Some(st) = st_w.upgrade() {
+                    st.set_transition_type(StackTransitionType::SlideLeftRight);
+                    st.set_visible_child_name("tags");
+                }
+            });
+        }
+        menu.append(&tags_button);
+
+        let sep_qa = GtkBox::new(Orientation::Horizontal, 0);
+        sep_qa.add_css_class("desktop-context-separator");
+        menu.append(&sep_qa);
+
+        // 13. Menú de acciones rápidas >
+        let qa_button = create_menu_icon_button(
+            "Menú de acciones rápidas",
+            Some("emblem-system-symbolic"),
+            true,
+        );
+        {
+            let st_w = stack.downgrade();
+            qa_button.connect_clicked(move |_| {
+                if let Some(st) = st_w.upgrade() {
+                    st.set_transition_type(StackTransitionType::SlideLeftRight);
+                    st.set_visible_child_name("quick_actions");
+                }
+            });
+        }
+        menu.append(&qa_button);
+
+        // 14. Establecer como imagen del escritorio
+        let set_wallpaper_button =
+            create_menu_button("Establecer como imagen del escritorio", false);
+        {
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            set_wallpaper_button.connect_clicked(move |_| {
+                if let Some((path, _)) = target_c.borrow().as_ref() {
+                    apply_desktop_picture_from_menu(path);
+                }
+                if let Some(pop) = pop_w.upgrade() {
+                    pop.popdown();
+                }
+            });
+        }
+        menu.append(&set_wallpaper_button);
+
+        // Subpágina: Abrir con
+        let open_with_page = GtkBox::builder()
+            .orientation(Orientation::Vertical)
+            .spacing(2)
+            .css_classes(["desktop-context-menu"])
+            .build();
+        let ow_back = create_menu_button("← Volver", false);
+        {
+            let st_w = stack.downgrade();
+            ow_back.connect_clicked(move |_| {
+                if let Some(st) = st_w.upgrade() {
+                    st.set_visible_child_name("main");
+                }
+            });
+        }
+        open_with_page.append(&ow_back);
+        let ow_sep = GtkBox::new(Orientation::Horizontal, 0);
+        ow_sep.add_css_class("desktop-context-separator");
+        open_with_page.append(&ow_sep);
+        let open_with_list_box = GtkBox::new(Orientation::Vertical, 2);
+        open_with_page.append(&open_with_list_box);
+
+        // Subpágina: Etiquetas
+        let tags_page = GtkBox::builder()
+            .orientation(Orientation::Vertical)
+            .spacing(2)
+            .css_classes(["desktop-context-menu"])
+            .build();
+        let tags_back = create_menu_button("← Volver", false);
+        {
+            let st_w = stack.downgrade();
+            tags_back.connect_clicked(move |_| {
+                if let Some(st) = st_w.upgrade() {
+                    st.set_visible_child_name("main");
+                }
+            });
+        }
+        tags_page.append(&tags_back);
+        let tags_sep = GtkBox::new(Orientation::Horizontal, 0);
+        tags_sep.add_css_class("desktop-context-separator");
+        tags_page.append(&tags_sep);
+        for (tag_id, tag_label, rgb) in DESKTOP_TAG_CATALOG {
+            let hbox = GtkBox::new(Orientation::Horizontal, 8);
+            hbox.append(&create_desktop_cairo_tag_dot(rgb, 12));
+            let lbl = Label::builder()
+                .label(tag_label)
+                .halign(Align::Start)
+                .xalign(0.0)
+                .hexpand(true)
+                .build();
+            lbl.add_css_class(if is_dark_mode_active() {
+                "menu-dark-text"
+            } else {
+                "menu-light-text"
+            });
+            hbox.append(&lbl);
+            let item_btn = Button::builder().child(&hbox).build();
+            item_btn.add_css_class("desktop-context-btn");
+            item_btn.set_halign(Align::Fill);
+            attach_squircle_menu_hover(&item_btn);
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            let tid = tag_id.to_string();
+            item_btn.connect_clicked(move |_| {
+                if let Some((path, _)) = target_c.borrow().as_ref() {
+                    toggle_desktop_file_tag(path, &tid);
+                }
+                if let Some(pop) = pop_w.upgrade() {
+                    pop.popdown();
+                }
+            });
+            tags_page.append(&item_btn);
+        }
+        let tags_sep2 = GtkBox::new(Orientation::Horizontal, 0);
+        tags_sep2.add_css_class("desktop-context-separator");
+        tags_page.append(&tags_sep2);
+        let clear_tags_btn = create_menu_button("Quitar etiquetas", false);
+        {
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            clear_tags_btn.connect_clicked(move |_| {
+                if let Some((path, _)) = target_c.borrow().as_ref() {
+                    clear_desktop_file_tags(path);
+                }
+                if let Some(pop) = pop_w.upgrade() {
+                    pop.popdown();
+                }
+            });
+        }
+        tags_page.append(&clear_tags_btn);
+
+        // Subpágina: Menú de acciones rápidas
+        let qa_page = GtkBox::builder()
+            .orientation(Orientation::Vertical)
+            .spacing(2)
+            .css_classes(["desktop-context-menu"])
+            .build();
+        let qa_back = create_menu_button("← Volver", false);
+        {
+            let st_w = stack.downgrade();
+            qa_back.connect_clicked(move |_| {
+                if let Some(st) = st_w.upgrade() {
+                    st.set_visible_child_name("main");
+                }
+            });
+        }
+        qa_page.append(&qa_back);
+        let qa_sep = GtkBox::new(Orientation::Horizontal, 0);
+        qa_sep.add_css_class("desktop-context-separator");
+        qa_page.append(&qa_sep);
+
+        let reveal_button = create_menu_button("Mostrar en la carpeta contenedora", false);
+        {
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            reveal_button.connect_clicked(move |_| {
+                if let Some((path, _)) = target_c.borrow().as_ref() {
+                    let file = gio::File::for_path(path);
+                    let parent = file.parent().unwrap_or(file);
+                    launch_file(&parent);
+                }
+                if let Some(pop) = pop_w.upgrade() {
+                    pop.popdown();
+                }
+            });
+        }
+        qa_page.append(&reveal_button);
+
         let cut_button = create_menu_button("Cortar", false);
         {
             let target_c = target.clone();
@@ -4134,7 +4670,7 @@ impl DesktopIconContextMenu {
                 }
             });
         }
-        menu.append(&cut_button);
+        qa_page.append(&cut_button);
 
         let paste_into_button = create_menu_button("Pegar en carpeta", false);
         paste_into_button.set_visible(false);
@@ -4158,29 +4694,32 @@ impl DesktopIconContextMenu {
                 }
             });
         }
-        menu.append(&paste_into_button);
+        qa_page.append(&paste_into_button);
 
-        let sep2 = GtkBox::new(Orientation::Horizontal, 0);
-        sep2.add_css_class("desktop-context-separator");
-        menu.append(&sep2);
-
-        // 6. Mover a la papelera
-        let trash_button = create_menu_button("Mover a la papelera", true);
+        let copy_path_button = create_menu_button("Copiar ruta", false);
         {
             let target_c = target.clone();
             let pop_w = popover.downgrade();
-            trash_button.connect_clicked(move |_| {
+            copy_path_button.connect_clicked(move |_| {
                 if let Some((path, _)) = target_c.borrow().as_ref() {
-                    trash_file(path);
+                    if let Some(display) = gtk4::gdk::Display::default() {
+                        display.clipboard().set_text(&path.to_string_lossy());
+                    }
                 }
                 if let Some(pop) = pop_w.upgrade() {
                     pop.popdown();
                 }
             });
         }
-        menu.append(&trash_button);
+        qa_page.append(&copy_path_button);
 
-        popover.set_child(Some(&menu));
+        stack.add_named(&menu, Some("main"));
+        stack.add_named(&open_with_page, Some("open_with"));
+        stack.add_named(&tags_page, Some("tags"));
+        stack.add_named(&qa_page, Some("quick_actions"));
+        stack.set_visible_child_name("main");
+
+        popover.set_child(Some(&stack));
         popover.set_parent(parent_overlay);
         register_wallpaper_popover(&popover);
 
@@ -4196,15 +4735,86 @@ impl DesktopIconContextMenu {
 
         Rc::new(Self {
             popover,
+            stack,
+            open_new_tab_button,
+            open_with_button,
+            open_with_list_box,
+            compress_button,
             paste_into_button,
+            set_wallpaper_button,
             target,
         })
     }
 
+    fn populate_open_with_list(&self, path: &Path) {
+        while let Some(child) = self.open_with_list_box.first_child() {
+            self.open_with_list_box.remove(&child);
+        }
+        let gfile = gio::File::for_path(path);
+        let mime_type = gfile
+            .query_info(
+                "standard::content-type",
+                gio::FileQueryInfoFlags::NONE,
+                gio::Cancellable::NONE,
+            )
+            .ok()
+            .and_then(|info| info.content_type())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        let apps = gio::AppInfo::all_for_type(&mime_type);
+        if apps.is_empty() {
+            let none_lbl = Label::builder()
+                .label("Sin aplicaciones compatibles")
+                .margin_start(8)
+                .margin_end(8)
+                .margin_top(4)
+                .margin_bottom(4)
+                .build();
+            none_lbl.add_css_class(if is_dark_mode_active() {
+                "menu-dark-text"
+            } else {
+                "menu-light-text"
+            });
+            self.open_with_list_box.append(&none_lbl);
+        } else {
+            for app in apps.into_iter().take(12) {
+                let app_btn = create_menu_button(&app.display_name(), false);
+                let pop_w = self.popover.downgrade();
+                let gf = gfile.clone();
+                app_btn.connect_clicked(move |_| {
+                    if let Some(pop) = pop_w.upgrade() {
+                        pop.popdown();
+                    }
+                    let _ = app.launch(&[gf.clone()], gio::AppLaunchContext::NONE);
+                });
+                self.open_with_list_box.append(&app_btn);
+            }
+        }
+    }
+
     fn show_for(&self, fixed: &Fixed, item_box: &GtkBox, path: &Path, local_x: f64, local_y: f64) {
         *self.target.borrow_mut() = Some((path.to_path_buf(), item_box.downgrade()));
+        let is_dir = path.is_dir();
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "elemento".to_string());
+        set_menu_button_label(&self.compress_button, &format!("Comprimir “{}”", file_name));
+        self.open_new_tab_button.set_visible(is_dir);
+        self.open_with_button.set_visible(!is_dir);
+        if !is_dir {
+            self.populate_open_with_list(path);
+        }
         self.paste_into_button
-            .set_visible(path.is_dir() && has_desktop_clipboard_files());
+            .set_visible(is_dir && has_desktop_clipboard_files());
+        self.set_wallpaper_button
+            .set_visible(!is_dir && is_desktop_picture_file(path));
+
+        self.stack.set_transition_type(StackTransitionType::None);
+        self.stack.set_visible_child_name("main");
+        self.stack
+            .set_transition_type(StackTransitionType::SlideLeftRight);
+
         let (ix, iy) = fixed.child_position(item_box);
         let rect = gtk4::gdk::Rectangle::new((ix + local_x) as i32, (iy + local_y) as i32, 1, 1);
         self.popover.set_pointing_to(Some(&rect));
