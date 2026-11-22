@@ -321,6 +321,7 @@ pub struct IconView {
     last_auto_cols: Rc<Cell<i32>>,
     anim_gen: Rc<Cell<u64>>,
     is_animating: Rc<Cell<bool>>,
+    animate_next_layout: Rc<Cell<bool>>,
     active_drag_offset: Rc<RefCell<Option<(PathBuf, (f64, f64))>>>,
     item_order: Rc<RefCell<Vec<String>>>,
     item_group_map: Rc<RefCell<HashMap<String, String>>>,
@@ -362,6 +363,7 @@ impl IconView {
         let last_auto_cols = Rc::new(Cell::new(0));
         let anim_gen = Rc::new(Cell::new(0));
         let is_animating = Rc::new(Cell::new(false));
+        let animate_next_layout = Rc::new(Cell::new(false));
         let active_drag_offset = Rc::new(RefCell::new(None));
         let item_order = Rc::new(RefCell::new(Vec::new()));
         let item_group_map = Rc::new(RefCell::new(HashMap::new()));
@@ -383,6 +385,7 @@ impl IconView {
             last_auto_cols,
             anim_gen,
             is_animating,
+            animate_next_layout,
             active_drag_offset,
             item_order,
             item_group_map,
@@ -837,7 +840,60 @@ impl IconView {
         self.set_items_grouped(items, None);
     }
 
+    pub fn request_animated_reorder(&self) {
+        self.animate_next_layout.set(true);
+    }
+
     pub fn set_items_grouped(&self, items: &[FileItem], groups: Option<&[String]>) {
+        let animate_reorder = self.animate_next_layout.replace(false);
+        let is_grouped = groups.is_some_and(|g| g.len() == items.len());
+        let can_animate_reorder = animate_reorder
+            && !items.is_empty()
+            && {
+                let widgets = self.item_widgets.borrow();
+                widgets.len() == items.len()
+                    && items.iter().all(|it| {
+                        widgets
+                            .get(&it.name)
+                            .is_some_and(|d| d.borrow().item.path == it.path)
+                    })
+            };
+
+        if can_animate_reorder {
+            let current_mode = *self.layout_mode.borrow();
+            if current_mode == LayoutMode::Auto || is_grouped {
+                *self.active_drag_offset.borrow_mut() = None;
+                {
+                    let mut gmap = self.item_group_map.borrow_mut();
+                    gmap.clear();
+                    if let Some(grp_list) = groups.filter(|g| g.len() == items.len()) {
+                        for (item, grp) in items.iter().zip(grp_list.iter()) {
+                            gmap.insert(item.name.clone(), grp.clone());
+                        }
+                    }
+                }
+                {
+                    let mut order = self.item_order.borrow_mut();
+                    order.clear();
+                    order.extend(items.iter().map(|it| it.name.clone()));
+                }
+                {
+                    let widgets = self.item_widgets.borrow();
+                    for it in items {
+                        if let Some(data_rc) = widgets.get(&it.name) {
+                            data_rc.borrow_mut().item = it.clone();
+                        }
+                    }
+                }
+                let vw = self.viewport_width();
+                let metrics = self.current_metrics();
+                self.last_auto_cols
+                    .set(if vw > 0 { columns_for_width(vw, metrics.cell_width()) } else { 0 });
+                self.make_weak().relayout_auto_grid_with_width(vw, true);
+                return;
+            }
+        }
+
         // Cancelar cualquier animación de cuadrícula previa al cambiar/recargar carpeta
         self.anim_gen.set(self.anim_gen.get().wrapping_add(1));
         self.is_animating.set(false);

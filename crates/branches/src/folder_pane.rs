@@ -351,6 +351,7 @@ impl FolderPane {
             self.icon_view
                 .set_layout_mode_in_db(crate::db::LayoutMode::Auto);
         }
+        self.icon_view.request_animated_reorder();
         self.list_view.clear_sort_state();
         self.reload();
     }
@@ -367,6 +368,7 @@ impl FolderPane {
                 let _ = crate::db::set_use_groups(&conn, &folder, enabled);
             }
         }
+        self.icon_view.request_animated_reorder();
         self.reload();
     }
 
