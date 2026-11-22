@@ -2,10 +2,11 @@ use gtk4::gdk::Key;
 use gtk4::gio;
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, CssProvider, DrawingArea,
-    EventControllerKey, Expander, FileDialog, Label, Orientation, PolicyType, ScrolledWindow,
-    TextView, Window, WrapMode,
+    Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea,
+    EventControllerKey, Expander, FileDialog, GestureClick, Label, Orientation, PolicyType,
+    ScrolledWindow, TextView, Window, WrapMode,
 };
+use malus_de_common::mac_switch::MacSwitch;
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -642,15 +643,46 @@ pub fn show_power_dialog(
         .css_classes(["malus-power-body"])
         .build();
 
-    let reopen_check = CheckButton::builder()
-        .label(reopen_text)
-        .active(load_reopen_windows_pref())
-        .halign(gtk4::Align::Start)
-        .css_classes(["malus-power-checkbox"])
+    let reopen_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .hexpand(true)
+        .valign(gtk4::Align::Center)
+        .css_classes(["malus-power-reopen-row"])
         .build();
-    reopen_check.connect_toggled(|cb| {
-        save_reopen_windows_pref(cb.is_active());
+
+    let reopen_label = Label::builder()
+        .label(reopen_text)
+        .xalign(0.0)
+        .hexpand(true)
+        .valign(gtk4::Align::Center)
+        .css_classes(["malus-power-reopen-label"])
+        .build();
+
+    let reopen_switch = MacSwitch::builder()
+        .active(load_reopen_windows_pref())
+        .valign(gtk4::Align::Center)
+        .halign(gtk4::Align::End)
+        .build();
+    reopen_switch.connect_state_set(|_, active| {
+        save_reopen_windows_pref(active);
+        glib::Propagation::Proceed
     });
+
+    {
+        let label_click = GestureClick::new();
+        label_click.set_button(1);
+        let sw_click = reopen_switch.clone();
+        label_click.connect_released(move |_, _, _, _| {
+            let next = !sw_click.is_active();
+            sw_click.set_active(next);
+            save_reopen_windows_pref(next);
+        });
+        reopen_label.add_controller(label_click);
+    }
+
+    reopen_row.append(&reopen_label);
+    reopen_row.append(reopen_switch.widget());
 
     let buttons = GtkBox::builder()
         .orientation(Orientation::Horizontal)
@@ -672,7 +704,7 @@ pub fn show_power_dialog(
     card.append(&icon_area);
     card.append(&heading);
     card.append(&body);
-    card.append(&reopen_check);
+    card.append(&reopen_row);
     card.append(&buttons);
     dialog.set_child(Some(&card));
 
@@ -684,14 +716,14 @@ pub fn show_power_dialog(
         let finished = finished.clone();
         let on_confirm = on_confirm.clone();
         let on_cancel = on_cancel.clone();
-        let reopen_check = reopen_check.clone();
+        let reopen_switch = reopen_switch.clone();
         let dialog_weak = dialog.downgrade();
         Rc::new(move || {
             if finished.replace(true) {
                 return;
             }
             on_cancel.borrow_mut().take();
-            let reopen = reopen_check.is_active();
+            let reopen = reopen_switch.is_active();
             save_reopen_windows_pref(reopen);
             if let Some(callback) = on_confirm.borrow_mut().take() {
                 callback(reopen);
@@ -738,6 +770,7 @@ pub fn show_power_dialog(
     }
 
     let key_controller = EventControllerKey::new();
+    key_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
     {
         let dialog_on_key = dialog.clone();
         let cancel_btn_key = cancel_button.clone();
@@ -785,7 +818,7 @@ pub fn show_power_dialog(
     });
 
     dialog.present();
-    reopen_check.grab_focus();
+    reopen_switch.widget().grab_focus();
 }
 
 /// Presenta un diálogo compacto estilo macOS tras un cierre inesperado, con botón directo

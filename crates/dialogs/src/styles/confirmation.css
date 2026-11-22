@@ -76,36 +76,63 @@ window.malus-power-window.background {
     line-height: 1.35;
 }
 
-checkbutton.malus-power-checkbox {
+.malus-power-reopen-row {
+    padding: 2px 0;
+}
+
+.malus-power-reopen-label {
     color: alpha(@window_fg_color, 0.92);
     font-size: 13px;
     font-weight: 400;
-    padding: 0;
-    outline: none;
 }
 
-checkbutton.malus-power-checkbox > check {
-    min-width: 16px;
-    min-height: 16px;
-    margin-right: 8px;
-    border-radius: 5px;
-    background-color: alpha(@window_fg_color, 0.10);
+/* Toggle personalizado estilo macOS Tahoe (mismo diseño que Ajustes: 40×19 px con perilla blanca de 26×15 px) */
+box.mac-switch {
+    min-width: 36px;
+    min-height: 15px;
+    padding: 2px;
+    margin: 0px;
+    border-radius: 999px;
+    border: none;
     background-image: none;
-    border: 1px solid alpha(@window_fg_color, 0.24);
-    box-shadow: none;
-    transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+    background-color: alpha(@window_fg_color, 0.15);
+    box-shadow: inset 0 1px 1.5px rgba(0, 0, 0, 0.08), inset 0 0 0 1px alpha(@window_fg_color, 0.05);
+    transition: background-color 140ms ease;
 }
 
-checkbutton.malus-power-checkbox > check:checked {
-    background-color: #007aff;
+box.mac-switch:hover:not(:checked):not(:disabled) {
+    background-color: alpha(@window_fg_color, 0.20);
+}
+
+box.mac-switch:checked {
+    background-color: @accent_bg_color;
     background-image: none;
-    border-color: #007aff;
-    color: #ffffff;
+    box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.10);
 }
 
-checkbutton.malus-power-checkbox:focus-visible > check,
-checkbutton.malus-power-checkbox:focus > check {
-    box-shadow: 0 0 0 3px alpha(#007aff, 0.42);
+box.mac-switch:disabled {
+    opacity: 0.45;
+}
+
+box.mac-switch:focus-visible {
+    outline: 2px solid alpha(@accent_bg_color, 0.55);
+    outline-offset: 2px;
+}
+
+box.mac-switch > box.mac-switch-knob {
+    min-width: 26px;
+    min-height: 15px;
+    margin: 0px;
+    padding: 0px;
+    border-radius: 999px;
+    border: none;
+    background-image: none;
+    background-color: #ffffff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22), 0 0 1px rgba(0, 0, 0, 0.10);
+}
+
+box.mac-switch:active:not(:disabled) > box.mac-switch-knob {
+    background-color: #f4f4f6;
 }
 
 .malus-power-actions {
