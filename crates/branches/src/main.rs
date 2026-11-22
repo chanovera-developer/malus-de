@@ -482,7 +482,7 @@ mod tests {
         assert!(app_window_src.contains("META_MASK"));
 
         let views_src = include_str!("views/mod.rs");
-        assert!(views_src.contains("Abrir en nueva pestaña"));
+        assert!(views_src.contains("Abrir en una pestaña nueva"));
         assert!(views_src.contains("win.open_in_new_tab"));
         assert!(views_src.contains("win.copy_item"));
         assert!(views_src.contains("win.cut_item"));

@@ -144,6 +144,94 @@ pub(super) fn make_context_menu_button(label: &str) -> gtk4::Button {
     btn
 }
 
+fn make_context_menu_icon_button(
+    label: &str,
+    left_icon: Option<&str>,
+    right_arrow: bool,
+) -> gtk4::Button {
+    use gtk4::prelude::*;
+
+    let hbox = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    if let Some(icon_name) = left_icon {
+        let icon = gtk4::Image::from_icon_name(icon_name);
+        icon.set_pixel_size(14);
+        hbox.append(&icon);
+    }
+    let lbl = gtk4::Label::builder()
+        .label(label)
+        .halign(gtk4::Align::Start)
+        .xalign(0.0)
+        .hexpand(true)
+        .build();
+    hbox.append(&lbl);
+    if right_arrow {
+        let arrow = gtk4::Image::from_icon_name("pan-end-symbolic");
+        arrow.set_pixel_size(12);
+        arrow.set_opacity(0.7);
+        hbox.append(&arrow);
+    }
+
+    let btn = gtk4::Button::builder()
+        .child(&hbox)
+        .has_frame(false)
+        .css_classes(["popover-menu-item"])
+        .build();
+    crate::app_window::attach_squircle_menu_hover(&btn);
+    btn
+}
+
+fn make_context_action_button(
+    label: &str,
+    left_icon: Option<&str>,
+    popover: &gtk4::Popover,
+    anchor: &gtk4::Widget,
+    action_name: &'static str,
+    target_str: &str,
+) -> gtk4::Button {
+    use gtk4::prelude::*;
+
+    let btn = if left_icon.is_some() {
+        make_context_menu_icon_button(label, left_icon, false)
+    } else {
+        make_context_menu_button(label)
+    };
+    let pop = popover.downgrade();
+    let aw = anchor.downgrade();
+    let param = target_str.to_string();
+    btn.connect_clicked(move |_| {
+        if let Some(p) = pop.upgrade() {
+            p.popdown();
+        }
+        if let Some(w) = aw.upgrade() {
+            let _ = w.activate_action(action_name, Some(&param.to_variant()));
+        }
+    });
+    btn
+}
+
+fn is_desktop_picture_candidate(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "webp" | "bmp" | "gif" | "avif" | "tif" | "tiff"
+            )
+        })
+}
+
+fn set_desktop_picture(path: &std::path::Path) {
+    let mut cfg = malus_de_common::config::WallpaperConfig::load();
+    cfg.mode = malus_de_common::config::WallpaperMode::Image;
+    cfg.image_path = Some(path.to_string_lossy().into_owned());
+    let malus_dir = malus_de_common::config::malus_wallpaper_config_dir();
+    let _ = std::fs::remove_file(malus_dir.join(".wallpaper-gradient"));
+    let _ = cfg.save_in(&malus_dir);
+    let _ = malus_de_common::ipc::IpcClient::send_command(
+        malus_de_common::ipc::IpcMessage::ReloadWallpaperConfig,
+    );
+}
+
 /// Construye el `ContentProvider` de arrastre exponiendo tanto `GdkFileList` como `text/uri-list`
 /// para garantizar interoperabilidad Wayland con otras ventanas (como el Dock).
 pub(super) fn build_file_drag_content_provider(
@@ -751,14 +839,57 @@ pub(super) fn show_item_context_menu(
         None
     };
 
-    // 1. Acción principal: Abrir carpeta / Abrir aplicación / Abrir archivo
-    let open_label = if is_dir {
-        if es {
-            "Abrir carpeta"
-        } else {
-            "Open Folder"
-        }
-    } else if desktop_app.is_some() {
+    let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
+    let target_str = path.to_string_lossy().to_string();
+    let item_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| target_str.clone());
+
+    if is_inside_trash(path) {
+        vbox.append(&make_context_action_button(
+            if es {
+                "Restaurar a ubicación original"
+            } else {
+                "Put Back"
+            },
+            None,
+            &popover,
+            &anchor_widget,
+            "win.restore_item",
+            &target_str,
+        ));
+        vbox.append(&make_context_action_button(
+            if es {
+                "Obtener información"
+            } else {
+                "Get Info"
+            },
+            None,
+            &popover,
+            &anchor_widget,
+            "win.get_info_item",
+            &target_str,
+        ));
+        vbox.append(&make_context_action_button(
+            if es {
+                "Eliminar inmediatamente…"
+            } else {
+                "Delete Immediately…"
+            },
+            None,
+            &popover,
+            &anchor_widget,
+            "win.delete_permanent_item",
+            &target_str,
+        ));
+        popover.set_child(Some(&vbox));
+        popover.popup();
+        return;
+    }
+
+    // 1. Abrir
+    let open_label = if desktop_app.is_some() {
         if es {
             "Abrir aplicación"
         } else {
@@ -773,9 +904,11 @@ pub(super) fn show_item_context_menu(
     {
         let p = path.to_path_buf();
         let nav_opt = on_navigate.cloned();
-        let pop = popover.clone();
+        let pop = popover.downgrade();
         open_btn.connect_clicked(move |_| {
-            pop.popdown();
+            if let Some(pop_w) = pop.upgrade() {
+                pop_w.popdown();
+            }
             if is_dir {
                 if let Some(ref nav) = nav_opt {
                     nav(p.clone());
@@ -788,104 +921,133 @@ pub(super) fn show_item_context_menu(
     vbox.append(&open_btn);
 
     if is_dir {
-        let new_tab_btn = make_context_menu_button(if es {
-            "Abrir en nueva pestaña"
-        } else {
-            "Open in New Tab"
-        });
-        let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
-        let target_str = path.to_string_lossy().to_string();
-        let pop = popover.clone();
-        new_tab_btn.connect_clicked(move |_| {
-            pop.popdown();
-            let _ = anchor_widget
-                .activate_action("win.open_in_new_tab", Some(&target_str.to_variant()));
-        });
-        vbox.append(&new_tab_btn);
-    }
-
-    // 2. Acciones exclusivas para lanzadores .desktop (Aplicaciones)
-    if let Some(app_cfg) = desktop_app {
-        let dock_cfg = malus_de_common::config::DockConfig::load_or_create_default();
-        let currently_pinned = is_dock_app_pinned(&dock_cfg, &app_cfg);
-        let dock_label = if currently_pinned {
+        vbox.append(&make_context_action_button(
             if es {
-                "Quitar del Dock"
+                "Abrir en una pestaña nueva"
             } else {
-                "Remove from Dock"
+                "Open in New Tab"
+            },
+            None,
+            &popover,
+            &anchor_widget,
+            "win.open_in_new_tab",
+            &target_str,
+        ));
+    } else {
+        // 2. Abrir con >
+        let open_with_btn = make_context_menu_icon_button(
+            if es { "Abrir con" } else { "Open With" },
+            None,
+            true,
+        );
+        let open_with_pop = gtk4::Popover::builder()
+            .has_arrow(false)
+            .position(gtk4::PositionType::Right)
+            .css_classes(["malus-popover-menu"])
+            .build();
+        open_with_pop.set_parent(&open_with_btn);
+        let ow_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
+        let gfile = gio::File::for_path(path);
+        let mime_type = gfile
+            .query_info(
+                "standard::content-type",
+                gio::FileQueryInfoFlags::NONE,
+                gio::Cancellable::NONE,
+            )
+            .ok()
+            .and_then(|info| info.content_type())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        let apps = gio::AppInfo::all_for_type(&mime_type);
+        if apps.is_empty() {
+            let none_lbl = gtk4::Label::builder()
+                .label(if es {
+                    "Sin aplicaciones compatibles"
+                } else {
+                    "No Compatible Applications"
+                })
+                .margin_start(8)
+                .margin_end(8)
+                .margin_top(4)
+                .margin_bottom(4)
+                .build();
+            ow_box.append(&none_lbl);
+        } else {
+            for app in apps.into_iter().take(12) {
+                let app_btn = make_context_menu_button(&app.display_name());
+                let pop_main = popover.downgrade();
+                let pop_sub = open_with_pop.downgrade();
+                let gf = gfile.clone();
+                app_btn.connect_clicked(move |_| {
+                    if let Some(s) = pop_sub.upgrade() {
+                        s.popdown();
+                    }
+                    if let Some(m) = pop_main.upgrade() {
+                        m.popdown();
+                    }
+                    let _ = app.launch(&[gf.clone()], gio::AppLaunchContext::NONE);
+                });
+                ow_box.append(&app_btn);
             }
-        } else if es {
-            "Fijar en el Dock"
-        } else {
-            "Keep in Dock"
-        };
-        let dock_btn = make_context_menu_button(dock_label);
+        }
+        open_with_pop.set_child(Some(&ow_box));
         {
-            let pop = popover.clone();
-            dock_btn.connect_clicked(move |_| {
-                pop.popdown();
-                set_app_pinned_in_dock(app_cfg.clone(), !currently_pinned);
+            let pop_sub = open_with_pop.downgrade();
+            open_with_btn.connect_clicked(move |_| {
+                if let Some(s) = pop_sub.upgrade() {
+                    s.popup();
+                }
             });
         }
-        vbox.append(&dock_btn);
+        let ow_pop_cleanup = open_with_pop.downgrade();
+        popover.connect_closed(move |_| {
+            if let Some(s) = ow_pop_cleanup.upgrade() {
+                s.popdown();
+                s.unparent();
+            }
+        });
+        vbox.append(&open_with_btn);
     }
 
-    // 3. Mostrar carpeta contenedora (útil en Aplicaciones y Recientes)
-    if let (Some(parent), Some(nav)) = (path.parent(), on_navigate) {
-        if !is_dir {
-            let enclosing_btn = make_context_menu_button(if es {
-                "Mostrar carpeta contenedora"
+    // 3. Transferir al basurero
+    if path != std::path::Path::new("/") && path.parent().is_some() {
+        vbox.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
+        vbox.append(&make_context_action_button(
+            if es {
+                "Transferir al basurero"
             } else {
-                "Show Enclosing Folder"
-            });
-            let parent_path = parent.to_path_buf();
-            let nav_cb = nav.clone();
-            let pop = popover.clone();
-            enclosing_btn.connect_clicked(move |_| {
-                pop.popdown();
-                nav_cb(parent_path.clone());
-            });
-            vbox.append(&enclosing_btn);
-
-            let enclosing_tab_btn = make_context_menu_button(if es {
-                "Abrir carpeta contenedora en nueva pestaña"
-            } else {
-                "Open Enclosing Folder in New Tab"
-            });
-            let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
-            let parent_str = parent.to_string_lossy().to_string();
-            let pop = popover.clone();
-            enclosing_tab_btn.connect_clicked(move |_| {
-                pop.popdown();
-                let _ = anchor_widget
-                    .activate_action("win.open_in_new_tab", Some(&parent_str.to_variant()));
-            });
-            vbox.append(&enclosing_tab_btn);
-        }
+                "Move to Trash"
+            },
+            Some("user-trash-symbolic"),
+            &popover,
+            &anchor_widget,
+            "win.trash_item",
+            &target_str,
+        ));
     }
 
-    // 4. Abrir en Terminal (para carpetas y archivos ordinarios)
-    if is_dir || path.extension().and_then(|e| e.to_str()) != Some("desktop") {
-        let term_btn = make_context_menu_button(if es {
-            "Abrir en Terminal"
+    vbox.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
+
+    // 4. Obtener información
+    vbox.append(&make_context_action_button(
+        if es {
+            "Obtener información"
         } else {
-            "Open in Terminal"
-        });
-        let p_term = path.to_path_buf();
-        let pop = popover.clone();
-        term_btn.connect_clicked(move |_| {
-            pop.popdown();
-            crate::fs_backend::open_in_terminal(&p_term);
-        });
-        vbox.append(&term_btn);
-    }
+            "Get Info"
+        },
+        None,
+        &popover,
+        &anchor_widget,
+        "win.get_info_item",
+        &target_str,
+    ));
 
-    // 5. Renombrar carpeta, archivo o icono
-    if !is_inside_trash(path) && path.parent().is_some() {
-        let rename_btn = make_context_menu_button(if es { "Renombrar…" } else { "Rename…" });
-        let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
+    // 5. Renombrar
+    if path.parent().is_some() {
+        let rename_btn = make_context_menu_button(if es { "Renombrar" } else { "Rename" });
+        let aw = anchor_widget.clone();
         let p_rename = path.to_path_buf();
-        let pop = popover.clone();
+        let pop = popover.downgrade();
         let nav_opt = on_navigate.cloned();
         let rename_cb = on_renamed.or_else(|| {
             let parent = p_rename.parent().map(|p| p.to_path_buf());
@@ -897,214 +1059,128 @@ pub(super) fn show_item_context_menu(
             }
         });
         rename_btn.connect_clicked(move |_| {
-            pop.popdown();
-            let aw = anchor_widget.clone();
+            if let Some(p) = pop.upgrade() {
+                p.popdown();
+            }
+            let aw_inner = aw.clone();
             let pr = p_rename.clone();
             let cb = rename_cb.clone();
             glib::idle_add_local_once(move || {
-                show_rename_popover(&aw, pr, is_dir, pointing_to, cb);
+                show_rename_popover(&aw_inner, pr, is_dir, pointing_to, cb);
             });
         });
         vbox.append(&rename_btn);
     }
 
-    // 6. Añadir / Quitar de marcadores (para carpetas y archivos)
-    if !is_inside_trash(path) && path != std::path::Path::new("/") {
-        let already_bookmarked = crate::db::open_db()
-            .map(|conn| crate::db::is_bookmark(&conn, path))
-            .unwrap_or(false);
-        let bm_label = if already_bookmarked {
-            if es {
-                "Quitar de marcadores"
-            } else {
-                "Remove Bookmark"
-            }
-        } else if es {
-            "Añadir a marcadores"
+    if path != std::path::Path::new("/") && path.parent().is_some() {
+        // 6. Comprimir “<Nombre>”
+        let compress_label = if es {
+            format!("Comprimir “{}”", item_name)
         } else {
-            "Add to Bookmarks"
+            format!("Compress “{}”", item_name)
         };
-        let bm_btn = make_context_menu_button(bm_label);
-        let p_bm = path.to_path_buf();
-        let pop = popover.clone();
-        bm_btn.connect_clicked(move |_| {
-            pop.popdown();
-            if let Ok(conn) = crate::db::open_db() {
-                let changed = if already_bookmarked {
-                    crate::db::remove_bookmark(&conn, &p_bm).unwrap_or(false)
-                } else {
-                    crate::db::add_bookmark(&conn, &p_bm, None).unwrap_or(false)
-                };
-                if changed {
-                    crate::sidebar::refresh_all_sidebars();
-                }
-            }
-        });
-        vbox.append(&bm_btn);
-    }
-
-    // 7. Copiar / Cortar / Pegar (y Copiar ruta)
-    if path != std::path::Path::new("/") {
-        let copy_item_btn = make_context_menu_button(if es { "Copiar" } else { "Copy" });
-        {
-            let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
-            let target_str = path.to_string_lossy().to_string();
-            let pop = popover.clone();
-            copy_item_btn.connect_clicked(move |_| {
-                pop.popdown();
-                let _ =
-                    anchor_widget.activate_action("win.copy_item", Some(&target_str.to_variant()));
-            });
-        }
-        vbox.append(&copy_item_btn);
-
-        if !is_inside_trash(path) && path.parent().is_some() {
-            let cut_item_btn = make_context_menu_button(if es { "Cortar" } else { "Cut" });
-            {
-                let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
-                let target_str = path.to_string_lossy().to_string();
-                let pop = popover.clone();
-                cut_item_btn.connect_clicked(move |_| {
-                    pop.popdown();
-                    let _ = anchor_widget
-                        .activate_action("win.cut_item", Some(&target_str.to_variant()));
-                });
-            }
-            vbox.append(&cut_item_btn);
-        }
-
-        if is_dir && can_create_in_folder(path) && crate::operations::has_clipboard_files() {
-            let paste_into_btn = make_context_menu_button(if es {
-                "Pegar en carpeta"
-            } else {
-                "Paste into Folder"
-            });
-            {
-                let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
-                let target_str = path.to_string_lossy().to_string();
-                let pop = popover.clone();
-                paste_into_btn.connect_clicked(move |_| {
-                    pop.popdown();
-                    let _ = anchor_widget
-                        .activate_action("win.paste_into", Some(&target_str.to_variant()));
-                });
-            }
-            vbox.append(&paste_into_btn);
-        }
-    }
-
-    let copy_btn = make_context_menu_button(if es { "Copiar ruta" } else { "Copy Path" });
-    {
-        let p_copy = path.to_path_buf();
-        let pop = popover.clone();
-        copy_btn.connect_clicked(move |_| {
-            pop.popdown();
-            if let Some(display) = gdk::Display::default() {
-                display.clipboard().set_text(&p_copy.to_string_lossy());
-            }
-        });
-    }
-    vbox.append(&copy_btn);
-
-    let info_menu_btn = make_context_menu_button(if es {
-        "Obtener información"
-    } else {
-        "Get Info"
-    });
-    {
-        let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
-        let target_str = path.to_string_lossy().to_string();
-        let pop = popover.clone();
-        info_menu_btn.connect_clicked(move |_| {
-            pop.popdown();
-            let _ =
-                anchor_widget.activate_action("win.get_info_item", Some(&target_str.to_variant()));
-        });
-    }
-    vbox.append(&info_menu_btn);
-
-    if !is_inside_trash(path) && path != std::path::Path::new("/") && path.parent().is_some() {
-        let dup_btn = make_context_menu_button(if es { "Duplicar" } else { "Duplicate" });
-        {
-            let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
-            let target_str = path.to_string_lossy().to_string();
-            let pop = popover.clone();
-            dup_btn.connect_clicked(move |_| {
-                pop.popdown();
-                let _ = anchor_widget
-                    .activate_action("win.duplicate_item", Some(&target_str.to_variant()));
-            });
-        }
-        vbox.append(&dup_btn);
-
-        let compress_btn = make_context_menu_button(if es {
-            "Comprimir (.zip)"
-        } else {
-            "Compress (.zip)"
-        });
-        {
-            let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
-            let target_str = path.to_string_lossy().to_string();
-            let pop = popover.clone();
-            compress_btn.connect_clicked(move |_| {
-                pop.popdown();
-                let _ = anchor_widget
-                    .activate_action("win.compress_item", Some(&target_str.to_variant()));
-            });
-        }
-        vbox.append(&compress_btn);
+        vbox.append(&make_context_action_button(
+            &compress_label,
+            None,
+            &popover,
+            &anchor_widget,
+            "win.compress_item",
+            &target_str,
+        ));
 
         if crate::jobs::is_supported_archive(path) {
-            let extract_btn =
-                make_context_menu_button(if es { "Extraer aquí" } else { "Extract Here" });
-            {
-                let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
-                let target_str = path.to_string_lossy().to_string();
-                let pop = popover.clone();
-                extract_btn.connect_clicked(move |_| {
-                    pop.popdown();
-                    let _ = anchor_widget
-                        .activate_action("win.extract_item", Some(&target_str.to_variant()));
-                });
+            vbox.append(&make_context_action_button(
+                if es {
+                    "Extraer aquí"
+                } else {
+                    "Extract Here"
+                },
+                None,
+                &popover,
+                &anchor_widget,
+                "win.extract_item",
+                &target_str,
+            ));
+        }
+
+        // 7. Duplicar
+        vbox.append(&make_context_action_button(
+            if es { "Duplicar" } else { "Duplicate" },
+            None,
+            &popover,
+            &anchor_widget,
+            "win.duplicate_item",
+            &target_str,
+        ));
+
+        // 8. Crear alias
+        vbox.append(&make_context_action_button(
+            if es {
+                "Crear alias"
+            } else {
+                "Make Alias"
+            },
+            None,
+            &popover,
+            &anchor_widget,
+            "win.make_alias_item",
+            &target_str,
+        ));
+    }
+
+    // 9. Vista rápida
+    vbox.append(&make_context_action_button(
+        if es {
+            "Vista rápida"
+        } else {
+            "Quick Look"
+        },
+        None,
+        &popover,
+        &anchor_widget,
+        "win.quick_look_item",
+        &target_str,
+    ));
+
+    // 10. Copiar
+    if path != std::path::Path::new("/") {
+        vbox.append(&make_context_action_button(
+            if es { "Copiar" } else { "Copy" },
+            None,
+            &popover,
+            &anchor_widget,
+            "win.copy_item",
+            &target_str,
+        ));
+    }
+
+    // 11. Compartir...
+    vbox.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
+    let share_btn = make_context_menu_icon_button(
+        if es {
+            "Compartir..."
+        } else {
+            "Share..."
+        },
+        Some("emblem-shared-symbolic"),
+        false,
+    );
+    {
+        let pop = popover.downgrade();
+        let aw = anchor_widget.downgrade();
+        share_btn.connect_clicked(move |_| {
+            if let Some(p) = pop.upgrade() {
+                p.popdown();
             }
-            vbox.append(&extract_btn);
-        }
-
-        let trash_btn = make_context_menu_button(if es {
-            "Mover a la Papelera"
-        } else {
-            "Move to Trash"
+            if let Some(w) = aw.upgrade() {
+                let _ = w.activate_action("win.share_malus_link", None);
+            }
         });
-        {
-            let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
-            let target_str = path.to_string_lossy().to_string();
-            let pop = popover.clone();
-            trash_btn.connect_clicked(move |_| {
-                pop.popdown();
-                let _ =
-                    anchor_widget.activate_action("win.trash_item", Some(&target_str.to_variant()));
-            });
-        }
-        vbox.append(&trash_btn);
+    }
+    vbox.append(&share_btn);
 
-        let del_perm_btn = make_context_menu_button(if es {
-            "Eliminar inmediatamente…"
-        } else {
-            "Delete Immediately…"
-        });
-        {
-            let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
-            let target_str = path.to_string_lossy().to_string();
-            let pop = popover.clone();
-            del_perm_btn.connect_clicked(move |_| {
-                pop.popdown();
-                let _ = anchor_widget
-                    .activate_action("win.delete_permanent_item", Some(&target_str.to_variant()));
-            });
-        }
-        vbox.append(&del_perm_btn);
-
-        // Selector visual rápido de las 7 etiquetas + limpiar etiquetas
+    // 12. Puntos de color + Etiquetas...
+    if path != std::path::Path::new("/") && path.parent().is_some() {
         vbox.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
         let tag_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 5);
         tag_row.add_css_class("branches-context-tag-row");
@@ -1119,73 +1195,371 @@ pub(super) fn show_item_context_menu(
                     &format!("branches-tag-color-{}", def.id),
                 ])
                 .build();
-            let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
-            let target_str = path.to_string_lossy().to_string();
+            let aw = anchor_widget.downgrade();
+            let t_str = target_str.clone();
             let tag_id = def.id.to_string();
-            let pop = popover.clone();
+            let pop = popover.downgrade();
             dot_btn.connect_clicked(move |_| {
-                pop.popdown();
-                let _ = anchor_widget.activate_action(
-                    "win.toggle_tag_item",
-                    Some(&(tag_id.clone(), target_str.clone()).to_variant()),
-                );
+                if let Some(p) = pop.upgrade() {
+                    p.popdown();
+                }
+                if let Some(w) = aw.upgrade() {
+                    let _ = w.activate_action(
+                        "win.toggle_tag_item",
+                        Some(&(tag_id.clone(), t_str.clone()).to_variant()),
+                    );
+                }
             });
             tag_row.append(&dot_btn);
         }
-
-        let clear_tags_btn = gtk4::Button::builder()
-            .icon_name("edit-clear-symbolic")
-            .has_frame(false)
-            .valign(gtk4::Align::Center)
-            .tooltip_text(if es { "Quitar etiquetas" } else { "Clear Tags" })
-            .css_classes(["flat", "branches-context-tag-clear-btn"])
-            .build();
-        {
-            let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
-            let target_str = path.to_string_lossy().to_string();
-            let pop = popover.clone();
-            clear_tags_btn.connect_clicked(move |_| {
-                pop.popdown();
-                let _ = anchor_widget
-                    .activate_action("win.clear_tags_item", Some(&target_str.to_variant()));
-            });
-        }
-        tag_row.append(&clear_tags_btn);
         vbox.append(&tag_row);
-    } else if is_inside_trash(path) {
-        let restore_btn = make_context_menu_button(if es {
-            "Restaurar a ubicación original"
-        } else {
-            "Put Back"
-        });
-        {
-            let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
-            let target_str = path.to_string_lossy().to_string();
-            let pop = popover.clone();
-            restore_btn.connect_clicked(move |_| {
-                pop.popdown();
-                let _ = anchor_widget
-                    .activate_action("win.restore_item", Some(&target_str.to_variant()));
-            });
-        }
-        vbox.append(&restore_btn);
 
-        let del_perm_btn = make_context_menu_button(if es {
-            "Eliminar inmediatamente…"
+        let tags_btn = make_context_menu_icon_button(
+            if es {
+                "Etiquetas..."
+            } else {
+                "Tags..."
+            },
+            Some("tag-symbolic"),
+            false,
+        );
+        let tags_pop = gtk4::Popover::builder()
+            .has_arrow(false)
+            .position(gtk4::PositionType::Right)
+            .css_classes(["malus-popover-menu"])
+            .build();
+        tags_pop.set_parent(&tags_btn);
+        let tags_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
+        let sidebar_tags = crate::db::open_db()
+            .map(|c| crate::db::get_all_sidebar_tags(&c, es))
+            .unwrap_or_default();
+        if sidebar_tags.is_empty() {
+            for def in crate::db::TAG_CATALOG.iter() {
+                let item_btn = make_context_menu_button(if es { def.label_es } else { def.label_en });
+                let pop_main = popover.downgrade();
+                let pop_sub = tags_pop.downgrade();
+                let aw = anchor_widget.downgrade();
+                let t_str = target_str.clone();
+                let tid = def.id.to_string();
+                item_btn.connect_clicked(move |_| {
+                    if let Some(s) = pop_sub.upgrade() {
+                        s.popdown();
+                    }
+                    if let Some(m) = pop_main.upgrade() {
+                        m.popdown();
+                    }
+                    if let Some(w) = aw.upgrade() {
+                        let _ = w.activate_action(
+                            "win.toggle_tag_item",
+                            Some(&(tid.clone(), t_str.clone()).to_variant()),
+                        );
+                    }
+                });
+                tags_box.append(&item_btn);
+            }
         } else {
-            "Delete Immediately…"
-        });
+            for meta in sidebar_tags {
+                let hbox = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+                let dot = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
+                dot.set_size_request(10, 10);
+                dot.set_valign(gtk4::Align::Center);
+                dot.add_css_class("branches-tag-dot");
+                dot.add_css_class(&format!("branches-tag-color-{}", meta.color_id));
+                let lbl = gtk4::Label::builder()
+                    .label(&meta.label)
+                    .halign(gtk4::Align::Start)
+                    .xalign(0.0)
+                    .hexpand(true)
+                    .build();
+                hbox.append(&dot);
+                hbox.append(&lbl);
+                let item_btn = gtk4::Button::builder()
+                    .child(&hbox)
+                    .has_frame(false)
+                    .css_classes(["popover-menu-item"])
+                    .build();
+                crate::app_window::attach_squircle_menu_hover(&item_btn);
+                let pop_main = popover.downgrade();
+                let pop_sub = tags_pop.downgrade();
+                let aw = anchor_widget.downgrade();
+                let t_str = target_str.clone();
+                let tid = meta.tag_id;
+                item_btn.connect_clicked(move |_| {
+                    if let Some(s) = pop_sub.upgrade() {
+                        s.popdown();
+                    }
+                    if let Some(m) = pop_main.upgrade() {
+                        m.popdown();
+                    }
+                    if let Some(w) = aw.upgrade() {
+                        let _ = w.activate_action(
+                            "win.toggle_tag_item",
+                            Some(&(tid.clone(), t_str.clone()).to_variant()),
+                        );
+                    }
+                });
+                tags_box.append(&item_btn);
+            }
+        }
+        tags_box.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
+        tags_box.append(&make_context_action_button(
+            if es {
+                "Quitar etiquetas"
+            } else {
+                "Clear Tags"
+            },
+            None,
+            &popover,
+            &anchor_widget,
+            "win.clear_tags_item",
+            &target_str,
+        ));
+        tags_pop.set_child(Some(&tags_box));
         {
-            let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
-            let target_str = path.to_string_lossy().to_string();
-            let pop = popover.clone();
-            del_perm_btn.connect_clicked(move |_| {
-                pop.popdown();
-                let _ = anchor_widget
-                    .activate_action("win.delete_permanent_item", Some(&target_str.to_variant()));
+            let pop_sub = tags_pop.downgrade();
+            tags_btn.connect_clicked(move |_| {
+                if let Some(s) = pop_sub.upgrade() {
+                    s.popup();
+                }
             });
         }
-        vbox.append(&del_perm_btn);
+        let tags_pop_cleanup = tags_pop.downgrade();
+        popover.connect_closed(move |_| {
+            if let Some(s) = tags_pop_cleanup.upgrade() {
+                s.popdown();
+                s.unparent();
+            }
+        });
+        vbox.append(&tags_btn);
+    }
+
+    // 13. Menú de acciones rápidas >
+    vbox.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
+    let quick_actions_btn = make_context_menu_icon_button(
+        if es {
+            "Menú de acciones rápidas"
+        } else {
+            "Quick Actions"
+        },
+        Some("emblem-system-symbolic"),
+        true,
+    );
+    let qa_pop = gtk4::Popover::builder()
+        .has_arrow(false)
+        .position(gtk4::PositionType::Right)
+        .css_classes(["malus-popover-menu"])
+        .build();
+    qa_pop.set_parent(&quick_actions_btn);
+    let qa_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
+
+    if is_dir || path.extension().and_then(|e| e.to_str()) != Some("desktop") {
+        let term_btn = make_context_menu_button(if es {
+            "Abrir en Terminal"
+        } else {
+            "Open in Terminal"
+        });
+        let p_term = path.to_path_buf();
+        let pop_main = popover.downgrade();
+        let pop_sub = qa_pop.downgrade();
+        term_btn.connect_clicked(move |_| {
+            if let Some(s) = pop_sub.upgrade() {
+                s.popdown();
+            }
+            if let Some(m) = pop_main.upgrade() {
+                m.popdown();
+            }
+            crate::fs_backend::open_in_terminal(&p_term);
+        });
+        qa_box.append(&term_btn);
+    }
+
+    if let (Some(parent), Some(nav)) = (path.parent(), on_navigate) {
+        if !is_dir {
+            let enclosing_btn = make_context_menu_button(if es {
+                "Mostrar en la carpeta contenedora"
+            } else {
+                "Show in Enclosing Folder"
+            });
+            let parent_path = parent.to_path_buf();
+            let nav_cb = nav.clone();
+            let pop_main = popover.downgrade();
+            let pop_sub = qa_pop.downgrade();
+            enclosing_btn.connect_clicked(move |_| {
+                if let Some(s) = pop_sub.upgrade() {
+                    s.popdown();
+                }
+                if let Some(m) = pop_main.upgrade() {
+                    m.popdown();
+                }
+                nav_cb(parent_path.clone());
+            });
+            qa_box.append(&enclosing_btn);
+        }
+    }
+
+    if path != std::path::Path::new("/") {
+        if path.parent().is_some() {
+            qa_box.append(&make_context_action_button(
+                if es { "Cortar" } else { "Cut" },
+                None,
+                &popover,
+                &anchor_widget,
+                "win.cut_item",
+                &target_str,
+            ));
+        }
+        if is_dir && can_create_in_folder(path) && crate::operations::has_clipboard_files() {
+            qa_box.append(&make_context_action_button(
+                if es {
+                    "Pegar en carpeta"
+                } else {
+                    "Paste into Folder"
+                },
+                None,
+                &popover,
+                &anchor_widget,
+                "win.paste_into",
+                &target_str,
+            ));
+        }
+
+        let copy_path_btn = make_context_menu_button(if es {
+            "Copiar ruta"
+        } else {
+            "Copy Path"
+        });
+        let p_copy = path.to_path_buf();
+        let pop_main = popover.downgrade();
+        let pop_sub = qa_pop.downgrade();
+        copy_path_btn.connect_clicked(move |_| {
+            if let Some(s) = pop_sub.upgrade() {
+                s.popdown();
+            }
+            if let Some(m) = pop_main.upgrade() {
+                m.popdown();
+            }
+            if let Some(display) = gdk::Display::default() {
+                display.clipboard().set_text(&p_copy.to_string_lossy());
+            }
+        });
+        qa_box.append(&copy_path_btn);
+
+        let already_bookmarked = crate::db::open_db()
+            .map(|conn| crate::db::is_bookmark(&conn, path))
+            .unwrap_or(false);
+        let bm_btn = make_context_menu_button(if already_bookmarked {
+            if es {
+                "Quitar de marcadores"
+            } else {
+                "Remove Bookmark"
+            }
+        } else if es {
+            "Añadir a marcadores"
+        } else {
+            "Add to Bookmarks"
+        });
+        let p_bm = path.to_path_buf();
+        let pop_main = popover.downgrade();
+        let pop_sub = qa_pop.downgrade();
+        bm_btn.connect_clicked(move |_| {
+            if let Some(s) = pop_sub.upgrade() {
+                s.popdown();
+            }
+            if let Some(m) = pop_main.upgrade() {
+                m.popdown();
+            }
+            if let Ok(conn) = crate::db::open_db() {
+                let changed = if already_bookmarked {
+                    crate::db::remove_bookmark(&conn, &p_bm).unwrap_or(false)
+                } else {
+                    crate::db::add_bookmark(&conn, &p_bm, None).unwrap_or(false)
+                };
+                if changed {
+                    crate::sidebar::refresh_all_sidebars();
+                }
+            }
+        });
+        qa_box.append(&bm_btn);
+    }
+
+    if let Some(app_cfg) = desktop_app {
+        let dock_cfg = malus_de_common::config::DockConfig::load_or_create_default();
+        let currently_pinned = is_dock_app_pinned(&dock_cfg, &app_cfg);
+        let dock_btn = make_context_menu_button(if currently_pinned {
+            if es {
+                "Quitar del Dock"
+            } else {
+                "Remove from Dock"
+            }
+        } else if es {
+            "Agregar al Dock"
+        } else {
+            "Add to Dock"
+        });
+        let pop_main = popover.downgrade();
+        let pop_sub = qa_pop.downgrade();
+        dock_btn.connect_clicked(move |_| {
+            if let Some(s) = pop_sub.upgrade() {
+                s.popdown();
+            }
+            if let Some(m) = pop_main.upgrade() {
+                m.popdown();
+            }
+            set_app_pinned_in_dock(app_cfg.clone(), !currently_pinned);
+        });
+        qa_box.append(&dock_btn);
+    }
+
+    if path != std::path::Path::new("/") && path.parent().is_some() {
+        qa_box.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
+        qa_box.append(&make_context_action_button(
+            if es {
+                "Eliminar inmediatamente…"
+            } else {
+                "Delete Immediately…"
+            },
+            None,
+            &popover,
+            &anchor_widget,
+            "win.delete_permanent_item",
+            &target_str,
+        ));
+    }
+
+    qa_pop.set_child(Some(&qa_box));
+    {
+        let pop_sub = qa_pop.downgrade();
+        quick_actions_btn.connect_clicked(move |_| {
+            if let Some(s) = pop_sub.upgrade() {
+                s.popup();
+            }
+        });
+    }
+    let qa_pop_cleanup = qa_pop.downgrade();
+    popover.connect_closed(move |_| {
+        if let Some(s) = qa_pop_cleanup.upgrade() {
+            s.popdown();
+            s.unparent();
+        }
+    });
+    vbox.append(&quick_actions_btn);
+
+    // 14. Establecer como imagen del escritorio (para imágenes)
+    if !is_dir && is_desktop_picture_candidate(path) {
+        let wp_btn = make_context_menu_button(if es {
+            "Establecer como imagen del escritorio"
+        } else {
+            "Set Desktop Picture"
+        });
+        let p_wp = path.to_path_buf();
+        let pop = popover.downgrade();
+        wp_btn.connect_clicked(move |_| {
+            if let Some(p) = pop.upgrade() {
+                p.popdown();
+            }
+            set_desktop_picture(&p_wp);
+        });
+        vbox.append(&wp_btn);
     }
 
     popover.set_child(Some(&vbox));

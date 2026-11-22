@@ -1695,6 +1695,67 @@ impl BranchesWindow {
             .toggle_in_overlay(&self.root_overlay, item, items);
     }
 
+    pub fn open_quick_look_for_path(&self, target: &std::path::Path) {
+        let pane = self.active_pane();
+        let items = pane.items_snapshot();
+        let item = items
+            .iter()
+            .find(|i| i.path == target)
+            .cloned()
+            .or_else(|| crate::fs_backend::FileItem::from_path(target));
+        self.quick_look
+            .toggle_in_overlay(&self.root_overlay, item, items);
+    }
+
+    pub fn make_alias_for_paths(&self, sources: Vec<PathBuf>) {
+        if sources.is_empty() {
+            return;
+        }
+        let mut created_any = false;
+        let mut last_err: Option<String> = None;
+        for src in sources {
+            let Some(parent) = src.parent() else {
+                continue;
+            };
+            let is_dir = src.is_dir();
+            let file_name = src
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "item".to_string());
+            let (stem, ext) = if is_dir {
+                (file_name.clone(), String::new())
+            } else if let Some((s, e)) = file_name.rsplit_once('.') {
+                if s.is_empty() {
+                    (file_name.clone(), String::new())
+                } else {
+                    (s.to_string(), format!(".{}", e))
+                }
+            } else {
+                (file_name.clone(), String::new())
+            };
+
+            let mut candidate = parent.join(format!("{} alias{}", stem, ext));
+            let mut idx = 2usize;
+            while candidate.symlink_metadata().is_ok() {
+                candidate = parent.join(format!("{} alias {}{}", stem, idx, ext));
+                idx += 1;
+            }
+            match std::os::unix::fs::symlink(&src, &candidate) {
+                Ok(()) => created_any = true,
+                Err(e) => last_err = Some(e.to_string()),
+            }
+        }
+        if created_any {
+            self.reload_all_panes();
+        }
+        if let Some(err) = last_err {
+            gtk4::AlertDialog::builder()
+                .message(err)
+                .build()
+                .show(Some(&self.window));
+        }
+    }
+
     fn share_via_malus_link(&self) {
         let es = malus_de_common::is_spanish_locale();
         let mut paths = self.selected_paths();
@@ -2427,6 +2488,27 @@ impl BranchesWindow {
             }
         });
         actions.add_action(&act_dup_item);
+
+        let bw_alias_item = self.clone_ref();
+        let act_alias_item =
+            gio::SimpleAction::new("make_alias_item", Some(glib::VariantTy::STRING));
+        act_alias_item.connect_activate(move |_, param| {
+            if let Some(target) = param.and_then(|v| v.str()) {
+                let paths = bw_alias_item.selected_paths_or(PathBuf::from(target));
+                bw_alias_item.make_alias_for_paths(paths);
+            }
+        });
+        actions.add_action(&act_alias_item);
+
+        let bw_ql_item = self.clone_ref();
+        let act_ql_item =
+            gio::SimpleAction::new("quick_look_item", Some(glib::VariantTy::STRING));
+        act_ql_item.connect_activate(move |_, param| {
+            if let Some(target) = param.and_then(|v| v.str()) {
+                bw_ql_item.open_quick_look_for_path(std::path::Path::new(target));
+            }
+        });
+        actions.add_action(&act_ql_item);
 
         let bw_undo = self.clone_ref();
         let act_undo = gio::SimpleAction::new("undo", None);
