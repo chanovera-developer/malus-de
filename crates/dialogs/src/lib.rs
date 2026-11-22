@@ -645,11 +645,22 @@ pub fn show_power_dialog(
 
     let reopen_row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(12)
+        .spacing(10)
         .hexpand(true)
+        .halign(gtk4::Align::Start)
         .valign(gtk4::Align::Center)
         .css_classes(["malus-power-reopen-row"])
         .build();
+
+    let reopen_switch = MacSwitch::builder()
+        .active(load_reopen_windows_pref())
+        .valign(gtk4::Align::Center)
+        .halign(gtk4::Align::Start)
+        .build();
+    reopen_switch.connect_state_set(|_, active| {
+        save_reopen_windows_pref(active);
+        glib::Propagation::Proceed
+    });
 
     let reopen_label = Label::builder()
         .label(reopen_text)
@@ -658,16 +669,6 @@ pub fn show_power_dialog(
         .valign(gtk4::Align::Center)
         .css_classes(["malus-power-reopen-label"])
         .build();
-
-    let reopen_switch = MacSwitch::builder()
-        .active(load_reopen_windows_pref())
-        .valign(gtk4::Align::Center)
-        .halign(gtk4::Align::End)
-        .build();
-    reopen_switch.connect_state_set(|_, active| {
-        save_reopen_windows_pref(active);
-        glib::Propagation::Proceed
-    });
 
     {
         let label_click = GestureClick::new();
@@ -681,8 +682,8 @@ pub fn show_power_dialog(
         reopen_label.add_controller(label_click);
     }
 
-    reopen_row.append(&reopen_label);
     reopen_row.append(reopen_switch.widget());
+    reopen_row.append(&reopen_label);
 
     let buttons = GtkBox::builder()
         .orientation(Orientation::Horizontal)

@@ -485,42 +485,70 @@ fn build_ui(app: &Application) {
         .build();
 
     let bar_hovered = std::rc::Rc::new(std::cell::Cell::new(false));
+    let last_applied_mode = std::rc::Rc::new(std::cell::Cell::new(None::<u8>));
+    let last_input_region = std::rc::Rc::new(std::cell::Cell::new(None::<(i32, i32)>));
+    let has_custom_input_region = std::rc::Rc::new(std::cell::Cell::new(false));
     let sync_bar_vis: std::rc::Rc<dyn Fn()> = {
         let win_c = window.clone();
         let rev_c = revealer.clone();
         let hov_c = bar_hovered.clone();
         let act_c = has_active_app;
+        let last_mode_c = last_applied_mode;
+        let last_reg_c = last_input_region;
+        let custom_reg_c = has_custom_input_region;
         std::rc::Rc::new(move || {
             let mode = malus_de_common::config::MenuBarConfig::load().auto_hide_mode;
-            if gtk4_layer_shell::is_supported() {
-                match mode {
-                    3 => {
-                        win_c.set_layer(Layer::Overlay);
-                        win_c.auto_exclusive_zone_enable();
-                    }
-                    1 | 2 => {
-                        win_c.set_layer(Layer::Top);
-                        win_c.set_exclusive_zone(0);
-                    }
-                    _ => {
-                        win_c.set_layer(Layer::Top);
-                        win_c.auto_exclusive_zone_enable();
+            if last_mode_c.get() != Some(mode) {
+                if gtk4_layer_shell::is_supported() {
+                    match mode {
+                        3 => {
+                            win_c.set_layer(Layer::Overlay);
+                            win_c.auto_exclusive_zone_enable();
+                        }
+                        1 | 2 => {
+                            win_c.set_layer(Layer::Top);
+                            win_c.set_exclusive_zone(0);
+                        }
+                        _ => {
+                            win_c.set_layer(Layer::Top);
+                            win_c.auto_exclusive_zone_enable();
+                        }
                     }
                 }
+                last_mode_c.set(Some(mode));
             }
             let should_show = match mode {
                 1 => hov_c.get(),
                 2 => !act_c.get() || hov_c.get(),
                 _ => true,
             };
-            rev_c.set_reveal_child(should_show);
-            if let Some(surface) = win_c.surface() {
-                let w = win_c.width().max(1);
-                let h = if should_show { 36 } else { 2 };
-                let region = gtk4::cairo::Region::create_rectangle(
-                    &gtk4::cairo::RectangleInt::new(0, 0, w, h),
-                );
-                surface.set_input_region(&region);
+            if rev_c.reveals_child() != should_show {
+                rev_c.set_reveal_child(should_show);
+            }
+            // Solo restringir input_region cuando auto-hide está activo o recuperándose de un recorte,
+            // y nunca aplicar una región de 1 px antes del layout inicial (width <= 1).
+            let needs_region_update = !should_show || custom_reg_c.get();
+            if needs_region_update {
+                let w = win_c.width();
+                if w > 1 {
+                    if let Some(surface) = win_c.surface() {
+                        let h = if should_show {
+                            win_c.height().max(36)
+                        } else {
+                            2
+                        };
+                        if last_reg_c.get() != Some((w, h)) {
+                            let region = gtk4::cairo::Region::create_rectangle(
+                                &gtk4::cairo::RectangleInt::new(0, 0, w, h),
+                            );
+                            surface.set_input_region(&region);
+                            last_reg_c.set(Some((w, h)));
+                            custom_reg_c.set(true);
+                            // Forzar commit Wayland para que el nuevo input_region surta efecto de inmediato.
+                            win_c.queue_draw();
+                        }
+                    }
+                }
             }
         })
     };
