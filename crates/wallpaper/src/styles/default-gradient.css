@@ -332,6 +332,40 @@ label.menu-light-text {
     margin: 4px 6px;
 }
 
+.desktop-context-tag-row {
+    padding: 4px 10px;
+}
+
+button.desktop-context-tag-btn,
+popover.desktop-popover-menu button.desktop-context-tag-btn,
+popover.desktop-popover-menu button.flat.desktop-context-tag-btn {
+    min-width: 16px;
+    min-height: 16px;
+    padding: 0;
+    margin: 0;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    box-shadow: none;
+    transition: transform 100ms ease;
+}
+
+button.desktop-context-tag-btn:hover,
+button.desktop-context-tag-btn:active,
+popover.desktop-popover-menu button.desktop-context-tag-btn:hover:not(:disabled),
+popover.desktop-popover-menu button.desktop-context-tag-btn:active:not(:disabled),
+popover.desktop-popover-menu button.flat.desktop-context-tag-btn:hover:not(:disabled),
+popover.desktop-popover-menu button.flat.desktop-context-tag-btn:active:not(:disabled) {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    transform: scale(1.18);
+}
+
 popover.desktop-popover-menu.light-popover .desktop-context-separator,
 popover.light-popover .desktop-context-separator,
 .light-popover .desktop-context-separator {

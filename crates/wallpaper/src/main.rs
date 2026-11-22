@@ -4861,16 +4861,16 @@ impl DesktopIconContextMenu {
 
         // 12. 7 círculos de colores de etiquetas + Etiquetas...
         let tag_dots_row = GtkBox::new(Orientation::Horizontal, 6);
-        tag_dots_row.set_halign(Align::Center);
-        tag_dots_row.set_margin_top(4);
-        tag_dots_row.set_margin_bottom(4);
+        tag_dots_row.add_css_class("desktop-context-tag-row");
+        tag_dots_row.set_halign(Align::Start);
         for (tag_id, tag_label, rgb) in DESKTOP_TAG_CATALOG {
             let dot_area = create_desktop_cairo_tag_dot(rgb, 16);
             let dot_btn = Button::builder()
                 .child(&dot_area)
                 .has_frame(false)
+                .valign(Align::Center)
                 .tooltip_text(tag_label)
-                .css_classes(["flat"])
+                .css_classes(["flat", "desktop-context-tag-btn"])
                 .build();
             let target_c = target.clone();
             let pop_w = popover.downgrade();

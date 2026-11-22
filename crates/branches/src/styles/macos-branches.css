@@ -1324,7 +1324,37 @@ window.branches-window popover.malus-popover-menu .branches-tag-color-none {
 }
 
 .branches-context-tag-row {
-    padding: 4px 6px;
+    padding: 4px 10px;
+}
+
+button.branches-context-tag-dot-btn,
+window.branches-window popover.malus-popover-menu button.branches-context-tag-dot-btn,
+window.branches-window popover.malus-popover-menu button.flat.branches-context-tag-dot-btn {
+    min-width: 16px;
+    min-height: 16px;
+    padding: 0;
+    margin: 0;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    box-shadow: none;
+    transition: transform 100ms ease;
+}
+
+button.branches-context-tag-dot-btn:hover,
+button.branches-context-tag-dot-btn:active,
+window.branches-window popover.malus-popover-menu button.branches-context-tag-dot-btn:hover:not(:disabled),
+window.branches-window popover.malus-popover-menu button.branches-context-tag-dot-btn:active:not(:disabled),
+window.branches-window popover.malus-popover-menu button.flat.branches-context-tag-dot-btn:hover:not(:disabled),
+window.branches-window popover.malus-popover-menu button.flat.branches-context-tag-dot-btn:active:not(:disabled) {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    box-shadow: none;
+    transform: scale(1.18);
 }
 
 window.branches-window popover.malus-popover-menu .branches-tag-dot {

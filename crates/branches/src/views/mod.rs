@@ -1324,7 +1324,7 @@ pub(super) fn show_item_context_menu(
         vbox.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
         let tag_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 6);
         tag_row.add_css_class("branches-context-tag-row");
-        tag_row.set_halign(gtk4::Align::Center);
+        tag_row.set_halign(gtk4::Align::Start);
         for def in crate::db::TAG_CATALOG.iter() {
             let dot_area = crate::sidebar::create_cairo_tag_dot(def.id, 16);
             let dot_btn = gtk4::Button::builder()
@@ -1332,7 +1332,7 @@ pub(super) fn show_item_context_menu(
                 .has_frame(false)
                 .valign(gtk4::Align::Center)
                 .tooltip_text(if es { def.label_es } else { def.label_en })
-                .css_classes(["flat", "branches-context-tag-btn"])
+                .css_classes(["flat", "branches-context-tag-dot-btn"])
                 .build();
             let aw = anchor_widget.downgrade();
             let t_str = target_str.clone();
