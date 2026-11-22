@@ -40,6 +40,7 @@ pub const OSD_WIDTH: i32 = 264;
 pub const OSD_HEIGHT: i32 = 56;
 pub const OSD_CORNER_RADIUS: f64 = 28.0;
 pub const OSD_SEGMENTS: usize = 16;
+const SQUIRCLE_EXPONENT: f64 = 4.2;
 
 /// Calcula la posición lógica del pill OSD en la esquina superior derecha, justo debajo del Top Bar.
 pub fn compute_osd_logical_rect(
@@ -863,13 +864,21 @@ impl MediaKeysState {
             let _ = ctx.paint();
             ctx.set_operator(Operator::Over);
 
-            // Fondo Liquid Glass translúcido en cápsula completa (stadium pill estilo macOS Tahoe)
+            // Fondo Liquid Glass translúcido con border-radius squircle (n = 4.2) idéntico a la capa de blur y sombra
             let glass_scale = malus_de_common::config::current_liquid_glass_scale();
             let a_top =
                 malus_de_common::config::scaled_liquid_glass_alpha(0.36, glass_scale, 0.16, 0.72);
             let a_bot =
                 malus_de_common::config::scaled_liquid_glass_alpha(0.44, glass_scale, 0.20, 0.78);
-            append_rounded_rect_path(&ctx, 0.0, 0.0, cw, ch, OSD_CORNER_RADIUS);
+            append_squircle_path(
+                &ctx,
+                0.0,
+                0.0,
+                cw,
+                ch,
+                OSD_CORNER_RADIUS,
+                SQUIRCLE_EXPONENT,
+            );
             let bg_grad = LinearGradient::new(0.0, 0.0, 0.0, ch);
             if is_dark {
                 bg_grad.add_color_stop_rgba(0.0, 0.18, 0.20, 0.24, a_top);
@@ -881,14 +890,15 @@ impl MediaKeysState {
             let _ = ctx.set_source(&bg_grad);
             let _ = ctx.fill();
 
-            // Halo interno de refracción Liquid Glass (efecto lente curva en los extremos de la cápsula)
-            append_rounded_rect_path(
+            // Halo interno de refracción Liquid Glass (squircle concéntrico)
+            append_squircle_path(
                 &ctx,
                 1.8,
                 1.8,
                 (cw - 3.6).max(2.0),
                 (ch - 3.6).max(2.0),
                 (OSD_CORNER_RADIUS - 1.8).max(1.0),
+                SQUIRCLE_EXPONENT,
             );
             ctx.set_line_width(2.2);
             let lens_grad = LinearGradient::new(0.0, 0.0, 0.0, ch);
@@ -898,14 +908,15 @@ impl MediaKeysState {
             let _ = ctx.set_source(&lens_grad);
             let _ = ctx.stroke();
 
-            // Bisel especular brillante en el perímetro de la cápsula
-            append_rounded_rect_path(
+            // Bisel especular brillante en el perímetro squircle
+            append_squircle_path(
                 &ctx,
                 0.85,
                 0.85,
                 (cw - 1.7).max(2.0),
                 (ch - 1.7).max(2.0),
                 (OSD_CORNER_RADIUS - 0.85).max(1.0),
+                SQUIRCLE_EXPONENT,
             );
             ctx.set_line_width(1.1);
             let rim_grad = LinearGradient::new(0.0, 0.0, 0.0, ch);
@@ -915,14 +926,15 @@ impl MediaKeysState {
             let _ = ctx.set_source(&rim_grad);
             let _ = ctx.stroke();
 
-            // Fino contorno exterior de definición
-            append_rounded_rect_path(
+            // Fino contorno exterior de definición squircle
+            append_squircle_path(
                 &ctx,
                 0.3,
                 0.3,
                 (cw - 0.6).max(2.0),
                 (ch - 0.6).max(2.0),
                 (OSD_CORNER_RADIUS - 0.3).max(1.0),
+                SQUIRCLE_EXPONENT,
             );
             ctx.set_line_width(0.6);
             ctx.set_source_rgba(0.0, 0.0, 0.0, 0.26);
@@ -1009,7 +1021,15 @@ impl MediaKeysState {
             let _ = mctx.paint();
             mctx.set_operator(Operator::Over);
 
-            append_rounded_rect_path(&mctx, 0.0, 0.0, cw, ch, OSD_CORNER_RADIUS);
+            append_squircle_path(
+                &mctx,
+                0.0,
+                0.0,
+                cw,
+                ch,
+                OSD_CORNER_RADIUS,
+                SQUIRCLE_EXPONENT,
+            );
             mctx.set_source_rgba(1.0, 1.0, 1.0, 1.0);
             let _ = mctx.fill();
         }
@@ -1347,6 +1367,51 @@ fn append_rounded_rect_path(ctx: &Context, x: f64, y: f64, w: f64, h: f64, radiu
     ctx.arc(x + w - r, y + h - r, r, 0.0, FRAC_PI_2);
     ctx.arc(x + r, y + h - r, r, FRAC_PI_2, std::f64::consts::PI);
     ctx.arc(x + r, y + r, r, std::f64::consts::PI, 3.0 * FRAC_PI_2);
+    ctx.close_path();
+}
+
+fn append_squircle_path(ctx: &Context, x: f64, y: f64, w: f64, h: f64, radius: f64, exponent: f64) {
+    let r = radius.min(w * 0.5).min(h * 0.5).max(0.0);
+    if r <= 0.5 {
+        ctx.rectangle(x, y, w, h);
+        return;
+    }
+
+    let steps = 18usize;
+    let inv_n = 1.0 / exponent;
+    ctx.new_sub_path();
+    ctx.move_to(x + r, y);
+    ctx.line_to(x + w - r, y);
+
+    let corner_point = |cx: f64, cy: f64, sx: f64, sy: f64, t: f64| -> (f64, f64) {
+        let angle = t * FRAC_PI_2;
+        let dx = angle.cos().abs().powf(2.0 * inv_n) * r * sx;
+        let dy = angle.sin().abs().powf(2.0 * inv_n) * r * sy;
+        (cx + dx, cy + dy)
+    };
+
+    for i in 0..=steps {
+        let (px, py) = corner_point(x + w - r, y + r, 1.0, -1.0, 1.0 - (i as f64 / steps as f64));
+        ctx.line_to(px, py);
+    }
+    ctx.line_to(x + w, y + h - r);
+
+    for i in 0..=steps {
+        let (px, py) = corner_point(x + w - r, y + h - r, 1.0, 1.0, i as f64 / steps as f64);
+        ctx.line_to(px, py);
+    }
+    ctx.line_to(x + r, y + h);
+
+    for i in 0..=steps {
+        let (px, py) = corner_point(x + r, y + h - r, -1.0, 1.0, 1.0 - (i as f64 / steps as f64));
+        ctx.line_to(px, py);
+    }
+    ctx.line_to(x, y + r);
+
+    for i in 0..=steps {
+        let (px, py) = corner_point(x + r, y + r, -1.0, -1.0, i as f64 / steps as f64);
+        ctx.line_to(px, py);
+    }
     ctx.close_path();
 }
 
