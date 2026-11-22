@@ -205,6 +205,53 @@ impl ColumnView {
             (self.inner.on_selection_changed)(count);
         }
     }
+
+    pub fn active_column_names(&self) -> Vec<String> {
+        let columns = self.inner.columns.borrow();
+        let Some(col_idx) = self.inner.target_column_index(&columns) else {
+            return Vec::new();
+        };
+        columns
+            .get(col_idx)
+            .map(|c| c.items.iter().map(|it| it.name.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    pub fn selected_item_name(&self) -> Option<String> {
+        self.get_selected_items().into_iter().next().map(|it| it.name)
+    }
+
+    pub fn select_item_by_name(&self, name: &str) -> bool {
+        let (target_idx, item_opt, row_opt) = {
+            let columns = self.inner.columns.borrow();
+            let Some(col_idx) = self.inner.target_column_index(&columns) else {
+                return false;
+            };
+            let Some(col) = columns.get(col_idx) else {
+                return false;
+            };
+            let Some(pos) = col.items.iter().position(|it| it.name == name) else {
+                return false;
+            };
+            let row = col.list_box.row_at_index(pos as i32);
+            if let Some(ref r) = row {
+                self.inner.active_col_idx.set(Some(col_idx));
+                self.inner.syncing_selection.set(true);
+                col.list_box.unselect_all();
+                col.list_box.select_row(Some(r));
+                self.inner.syncing_selection.set(false);
+            }
+            (col_idx, col.items.get(pos).cloned(), row)
+        };
+        if let Some(row) = row_opt {
+            row.grab_focus();
+            if let Some(item) = item_opt {
+                self.inner.on_item_selected(target_idx, &item);
+            }
+            return true;
+        }
+        false
+    }
 }
 
 impl ColumnViewInner {

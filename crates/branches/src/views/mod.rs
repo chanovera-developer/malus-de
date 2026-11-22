@@ -9,6 +9,106 @@ pub type NavigateCallback = std::rc::Rc<dyn Fn(PathBuf)>;
 pub type SelectionCallback = std::rc::Rc<dyn Fn(usize)>;
 pub type RenameCallback = std::rc::Rc<dyn Fn(PathBuf)>;
 
+const TYPEAHEAD_TIMEOUT_MS: u64 = 850;
+
+pub fn normalize_typeahead_str(s: &str) -> String {
+    s.chars()
+        .flat_map(|c| c.to_lowercase())
+        .map(|c| match c {
+            'á' | 'à' | 'â' | 'ä' | 'ã' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'í' | 'ì' | 'î' | 'ï' => 'i',
+            'ó' | 'ò' | 'ô' | 'ö' | 'õ' => 'o',
+            'ú' | 'ù' | 'û' | 'ü' => 'u',
+            other => other,
+        })
+        .collect()
+}
+
+pub struct TypeAheadState {
+    buffer: String,
+    last_key_at: Option<std::time::Instant>,
+}
+
+impl TypeAheadState {
+    pub fn new() -> Self {
+        Self {
+            buffer: String::new(),
+            last_key_at: None,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.buffer.clear();
+        self.last_key_at = None;
+    }
+
+    pub fn is_active(&self) -> bool {
+        !self.buffer.is_empty()
+            && self.last_key_at.is_some_and(|t| {
+                t.elapsed() <= std::time::Duration::from_millis(TYPEAHEAD_TIMEOUT_MS)
+            })
+    }
+
+    pub fn step(
+        &mut self,
+        ch: char,
+        candidates: &[String],
+        current_name: Option<&str>,
+    ) -> Option<usize> {
+        if candidates.is_empty() {
+            return None;
+        }
+        let now = std::time::Instant::now();
+        if self.last_key_at.is_none_or(|t| {
+            now.duration_since(t) > std::time::Duration::from_millis(TYPEAHEAD_TIMEOUT_MS)
+        }) {
+            self.buffer.clear();
+        }
+        self.last_key_at = Some(now);
+
+        let norm_ch = normalize_typeahead_str(&ch.to_string());
+        if norm_ch.is_empty() {
+            return None;
+        }
+        self.buffer.push_str(&norm_ch);
+
+        let normalized: Vec<String> = candidates
+            .iter()
+            .map(|c| normalize_typeahead_str(c))
+            .collect();
+
+        if let Some(idx) = normalized.iter().position(|n| n.starts_with(&self.buffer)) {
+            return Some(idx);
+        }
+
+        let single_char = norm_ch.chars().next()?;
+        if self.buffer.chars().count() >= 2 && self.buffer.chars().all(|c| c == single_char) {
+            self.buffer = norm_ch.clone();
+            let start = current_name
+                .and_then(|cur| candidates.iter().position(|c| c == cur))
+                .map(|i| (i + 1) % candidates.len())
+                .unwrap_or(0);
+            for offset in 0..candidates.len() {
+                let idx = (start + offset) % candidates.len();
+                if normalized[idx].starts_with(&norm_ch) {
+                    return Some(idx);
+                }
+            }
+            return None;
+        }
+
+        if self.buffer.chars().count() > 1 {
+            if let Some(idx) = normalized.iter().position(|n| n.starts_with(&norm_ch)) {
+                self.buffer = norm_ch;
+                return Some(idx);
+            }
+        }
+
+        None
+    }
+}
+
 /// Devuelve `true` si el evento tiene un modificador de selección múltiple o rango (`Ctrl`, `Super`, `Meta` o `Shift`).
 pub(super) fn is_multi_select_modifier(state: gtk4::gdk::ModifierType) -> bool {
     use gtk4::gdk::ModifierType;
@@ -2155,5 +2255,49 @@ mod tests {
             super::thumbnail_squircle_radius(512, 3),
         );
         assert!(thin.iter().all(|&b| b == 255));
+    }
+
+    #[test]
+    fn typeahead_matches_prefix_accents_and_cycles_single_letter() {
+        let items: Vec<String> = vec![
+            "Documentos",
+            "Finder1",
+            "Finder2",
+            "Finder3",
+            "Imágenes",
+            "Notas rápidas.txt",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+        let mut ta = super::TypeAheadState::new();
+        // Prefijo sin acentos coincide con "Imágenes"
+        assert_eq!(ta.step('i', &items, None), Some(4));
+        assert_eq!(ta.step('m', &items, Some("Imágenes")), Some(4));
+        assert_eq!(ta.step('a', &items, Some("Imágenes")), Some(4));
+        assert!(ta.is_active());
+
+        // Prefijo con espacio ("notas r")
+        ta.clear();
+        assert_eq!(ta.step('n', &items, None), Some(5));
+        assert_eq!(ta.step('o', &items, Some("Notas rápidas.txt")), Some(5));
+        assert_eq!(ta.step('t', &items, Some("Notas rápidas.txt")), Some(5));
+        assert_eq!(ta.step('a', &items, Some("Notas rápidas.txt")), Some(5));
+        assert_eq!(ta.step('s', &items, Some("Notas rápidas.txt")), Some(5));
+        assert_eq!(ta.step(' ', &items, Some("Notas rápidas.txt")), Some(5));
+        assert_eq!(ta.step('r', &items, Some("Notas rápidas.txt")), Some(5));
+
+        // Repetir la misma letra cicla entre coincidencias
+        ta.clear();
+        assert_eq!(ta.step('f', &items, None), Some(1));
+        assert_eq!(ta.step('f', &items, Some("Finder1")), Some(2));
+        assert_eq!(ta.step('f', &items, Some("Finder2")), Some(3));
+        assert_eq!(ta.step('f', &items, Some("Finder3")), Some(1));
+
+        // Si un prefijo combinado no coincide, reinicia con la nueva letra
+        ta.clear();
+        assert_eq!(ta.step('f', &items, None), Some(1));
+        assert_eq!(ta.step('d', &items, Some("Finder1")), Some(0));
     }
 }

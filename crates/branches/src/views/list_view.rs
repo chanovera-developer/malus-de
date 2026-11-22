@@ -282,6 +282,28 @@ impl ListView {
         self.list_box.select_all();
     }
 
+    pub fn item_names_ordered(&self) -> Vec<String> {
+        self.items.borrow().iter().map(|it| it.name.clone()).collect()
+    }
+
+    pub fn selected_item_name(&self) -> Option<String> {
+        self.get_selected_items().into_iter().next().map(|it| it.name)
+    }
+
+    pub fn select_item_by_name(&self, name: &str) -> bool {
+        let idx = self.items.borrow().iter().position(|it| it.name == name);
+        let Some(idx) = idx else {
+            return false;
+        };
+        let Some(row) = row_for_item_index(&self.list_box, idx) else {
+            return false;
+        };
+        self.list_box.unselect_all();
+        self.list_box.select_row(Some(&row));
+        row.grab_focus();
+        true
+    }
+
     pub fn queue_select_name(&self, name: &str) {
         *self.pending_select_name.borrow_mut() = Some(name.to_string());
     }

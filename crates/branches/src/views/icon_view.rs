@@ -553,6 +553,66 @@ impl IconView {
         true
     }
 
+    pub fn item_names_ordered(&self) -> Vec<String> {
+        self.item_order.borrow().clone()
+    }
+
+    pub fn selected_item_name(&self) -> Option<String> {
+        let sel = self.selected_items.borrow();
+        let order = self.item_order.borrow();
+        order
+            .iter()
+            .find(|name| sel.contains(*name))
+            .or_else(|| sel.iter().next())
+            .cloned()
+    }
+
+    pub fn select_item_by_name(&self, target_name: &str) -> bool {
+        let widgets = self.item_widgets.borrow();
+        if !widgets.contains_key(target_name) {
+            return false;
+        }
+        select_single_spatial_item(
+            &widgets,
+            &self.selected_items,
+            target_name,
+            &self.on_selection_changed,
+        );
+        if let Some(data_rc) = widgets.get(target_name) {
+            let d = data_rc.borrow();
+            let (px, py) = d.pos.get();
+            let metrics = self.current_metrics();
+            let cell_h = metrics.cell_height() as f64;
+            let cell_w = metrics.cell_width() as f64;
+            let vadj = self.container.vadjustment();
+            let top = vadj.value();
+            let page = vadj.page_size();
+            if page > 0.0 {
+                let item_top = (py - MARGIN_TOP).max(0) as f64;
+                let item_bottom = py as f64 + cell_h + 16.0;
+                if item_top < top {
+                    vadj.set_value(item_top);
+                } else if item_bottom > top + page {
+                    vadj.set_value((item_bottom - page).max(0.0));
+                }
+            }
+            let hadj = self.container.hadjustment();
+            let left = hadj.value();
+            let hpage = hadj.page_size();
+            if hpage > 0.0 {
+                let item_left = (px - MARGIN_LEFT).max(0) as f64;
+                let item_right = px as f64 + cell_w + 16.0;
+                if item_left < left {
+                    hadj.set_value(item_left);
+                } else if item_right > left + hpage {
+                    hadj.set_value((item_right - hpage).max(0.0));
+                }
+            }
+        }
+        self.fixed_canvas.grab_focus();
+        true
+    }
+
     pub fn get_selected_item_and_widget(
         &self,
         items: &[FileItem],

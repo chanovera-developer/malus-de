@@ -3320,6 +3320,7 @@ impl BranchesWindow {
         // un GtkListBox hijo lo consuma como row-activated.
         key_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
         let bw = self.clone_ref();
+        let typeahead = Rc::new(RefCell::new(crate::views::TypeAheadState::new()));
 
         key_controller.connect_key_pressed(move |_, keyval, _keycode, state| {
             let is_alt = state.contains(gdk::ModifierType::ALT_MASK);
@@ -3486,8 +3487,15 @@ impl BranchesWindow {
             if !focus_is_editable
                 && !is_ctrl
                 && !is_alt
+                && !is_command
                 && matches!(keyval, gdk::Key::space | gdk::Key::KP_Space)
             {
+                if !focus_in_sidebar && !focus_in_header && typeahead.borrow().is_active() {
+                    let _ = bw
+                        .active_pane()
+                        .typeahead_select(' ', &mut typeahead.borrow_mut());
+                    return glib::Propagation::Stop;
+                }
                 bw.toggle_quick_look();
                 return glib::Propagation::Stop;
             }
@@ -3586,6 +3594,30 @@ impl BranchesWindow {
                         return glib::Propagation::Stop;
                     }
                     _ => {}
+                }
+            }
+
+            if keyval == gdk::Key::Escape && typeahead.borrow().is_active() {
+                typeahead.borrow_mut().clear();
+                return glib::Propagation::Stop;
+            }
+
+            if !focus_is_editable
+                && !focus_in_sidebar
+                && !focus_in_header
+                && !is_ctrl
+                && !is_alt
+                && !is_command
+            {
+                if let Some(ch) = keyval.to_unicode() {
+                    if !ch.is_control() && ch != ' ' {
+                        if bw
+                            .active_pane()
+                            .typeahead_select(ch, &mut typeahead.borrow_mut())
+                        {
+                            return glib::Propagation::Stop;
+                        }
+                    }
                 }
             }
 

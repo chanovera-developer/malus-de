@@ -187,6 +187,25 @@ impl GalleryView {
         *self.pending_select_name.borrow_mut() = Some(name.to_string());
     }
 
+    pub fn item_names_ordered(&self) -> Vec<String> {
+        self.items.borrow().iter().map(|it| it.name.clone()).collect()
+    }
+
+    pub fn selected_item_name(&self) -> Option<String> {
+        let idx = (*self.current_index.borrow())?;
+        self.items.borrow().get(idx).map(|it| it.name.clone())
+    }
+
+    pub fn select_item_by_name(self: &Rc<Self>, name: &str) -> bool {
+        let idx = self.items.borrow().iter().position(|it| it.name == name);
+        if let Some(i) = idx {
+            self.select_index(i);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn refresh_cut_states(&self) {
         let items = self.items.borrow();
         let cards = self.carousel_widgets.borrow();

@@ -6008,6 +6008,164 @@ fn create_wallpaper_window(
     }
 }
 
+const DESKTOP_TYPEAHEAD_TIMEOUT_MS: u64 = 850;
+
+fn normalize_desktop_typeahead_str(s: &str) -> String {
+    s.chars()
+        .flat_map(|c| c.to_lowercase())
+        .map(|c| match c {
+            'á' | 'à' | 'â' | 'ä' | 'ã' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'í' | 'ì' | 'î' | 'ï' => 'i',
+            'ó' | 'ò' | 'ô' | 'ö' | 'õ' => 'o',
+            'ú' | 'ù' | 'û' | 'ü' => 'u',
+            other => other,
+        })
+        .collect()
+}
+
+struct DesktopTypeAhead {
+    buffer: String,
+    last_key_at: Option<std::time::Instant>,
+}
+
+impl DesktopTypeAhead {
+    fn new() -> Self {
+        Self {
+            buffer: String::new(),
+            last_key_at: None,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.buffer.clear();
+        self.last_key_at = None;
+    }
+
+    fn is_active(&self) -> bool {
+        !self.buffer.is_empty()
+            && self.last_key_at.is_some_and(|t| {
+                t.elapsed() <= std::time::Duration::from_millis(DESKTOP_TYPEAHEAD_TIMEOUT_MS)
+            })
+    }
+
+    fn step(
+        &mut self,
+        ch: char,
+        candidates: &[String],
+        current_name: Option<&str>,
+    ) -> Option<usize> {
+        if candidates.is_empty() {
+            return None;
+        }
+        let now = std::time::Instant::now();
+        if self.last_key_at.is_none_or(|t| {
+            now.duration_since(t) > std::time::Duration::from_millis(DESKTOP_TYPEAHEAD_TIMEOUT_MS)
+        }) {
+            self.buffer.clear();
+        }
+        self.last_key_at = Some(now);
+
+        let norm_ch = normalize_desktop_typeahead_str(&ch.to_string());
+        if norm_ch.is_empty() {
+            return None;
+        }
+        self.buffer.push_str(&norm_ch);
+
+        let normalized: Vec<String> = candidates
+            .iter()
+            .map(|c| normalize_desktop_typeahead_str(c))
+            .collect();
+
+        if let Some(idx) = normalized.iter().position(|n| n.starts_with(&self.buffer)) {
+            return Some(idx);
+        }
+
+        let single_char = norm_ch.chars().next()?;
+        if self.buffer.chars().count() >= 2 && self.buffer.chars().all(|c| c == single_char) {
+            self.buffer = norm_ch.clone();
+            let start = current_name
+                .and_then(|cur| candidates.iter().position(|c| c == cur))
+                .map(|i| (i + 1) % candidates.len())
+                .unwrap_or(0);
+            for offset in 0..candidates.len() {
+                let idx = (start + offset) % candidates.len();
+                if normalized[idx].starts_with(&norm_ch) {
+                    return Some(idx);
+                }
+            }
+            return None;
+        }
+
+        if self.buffer.chars().count() > 1 {
+            if let Some(idx) = normalized.iter().position(|n| n.starts_with(&norm_ch)) {
+                self.buffer = norm_ch;
+                return Some(idx);
+            }
+        }
+
+        None
+    }
+}
+
+fn select_desktop_icon_by_typeahead(
+    ch: char,
+    typeahead: &mut DesktopTypeAhead,
+    icons: &Fixed,
+    selected_paths: &Rc<RefCell<HashSet<PathBuf>>>,
+    focused_path: &Rc<RefCell<Option<PathBuf>>>,
+) -> bool {
+    let mut entries: Vec<(String, PathBuf, gtk4::Widget)> = Vec::new();
+    let mut sibling = icons.first_child();
+    while let Some(child) = sibling {
+        sibling = child.next_sibling();
+        if !child.has_css_class("desktop-icon") || !child.is_visible() {
+            continue;
+        }
+        if let Some(p_ptr) = unsafe { child.data::<PathBuf>("desktop_item_path") } {
+            let path = unsafe { p_ptr.as_ref() }.clone();
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if !name.is_empty() {
+                entries.push((name, path, child));
+            }
+        }
+    }
+    if entries.is_empty() {
+        return false;
+    }
+    entries.sort_by(|a, b| {
+        normalize_desktop_typeahead_str(&a.0)
+            .cmp(&normalize_desktop_typeahead_str(&b.0))
+            .then_with(|| a.0.cmp(&b.0))
+    });
+
+    let names: Vec<String> = entries.iter().map(|(n, _, _)| n.clone()).collect();
+    let current_name = focused_path
+        .borrow()
+        .as_ref()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned());
+
+    let Some(idx) = typeahead.step(ch, &names, current_name.as_deref()) else {
+        return false;
+    };
+    let (_, target_path, target_widget) = &entries[idx];
+
+    let mut sel = selected_paths.borrow_mut();
+    sel.clear();
+    for (_, _, w) in &entries {
+        set_desktop_icon_selected(w, false);
+    }
+    set_desktop_icon_selected(target_widget, true);
+    sel.insert(target_path.clone());
+    *focused_path.borrow_mut() = Some(target_path.clone());
+    target_widget.grab_focus();
+    true
+}
+
 #[allow(clippy::too_many_arguments)]
 fn populate_wallpaper_role(
     window: &ApplicationWindow,
@@ -6167,6 +6325,7 @@ fn populate_wallpaper_role(
         let icons_key = icons.clone();
         let dir_key = desktop_dir.to_path_buf();
         let trigger_key = trigger_refresh.clone();
+        let typeahead_key = Rc::new(RefCell::new(DesktopTypeAhead::new()));
         key_controller.connect_key_pressed(move |_, keyval, _, state| {
             if gtk4::prelude::GtkWindowExt::focus(&win_key)
                 .is_some_and(|w| w.is::<gtk4::Editable>() || w.is::<gtk4::Text>())
@@ -6266,7 +6425,23 @@ fn populate_wallpaper_role(
             }
 
             match keyval {
+                Key::Escape => {
+                    if typeahead_key.borrow().is_active() {
+                        typeahead_key.borrow_mut().clear();
+                        return glib::Propagation::Stop;
+                    }
+                }
                 Key::space => {
+                    if !is_ctrl && !is_alt && !is_command && typeahead_key.borrow().is_active() {
+                        let _ = select_desktop_icon_by_typeahead(
+                            ' ',
+                            &mut typeahead_key.borrow_mut(),
+                            &icons_key,
+                            &sel_paths_key,
+                            &foc_path_key,
+                        );
+                        return glib::Propagation::Stop;
+                    }
                     if let Some(path) = foc_path_key.borrow().as_ref() {
                         launch_quick_look(path);
                         return glib::Propagation::Stop;
@@ -6286,7 +6461,23 @@ fn populate_wallpaper_role(
                     }
                     return glib::Propagation::Stop;
                 }
-                _ => {}
+                _ => {
+                    if !is_ctrl && !is_alt && !is_command {
+                        if let Some(ch) = keyval.to_unicode() {
+                            if !ch.is_control() && ch != ' ' {
+                                if select_desktop_icon_by_typeahead(
+                                    ch,
+                                    &mut typeahead_key.borrow_mut(),
+                                    &icons_key,
+                                    &sel_paths_key,
+                                    &foc_path_key,
+                                ) {
+                                    return glib::Propagation::Stop;
+                                }
+                            }
+                        }
+                    }
+                }
             }
             glib::Propagation::Proceed
         });
@@ -8717,5 +8908,24 @@ mod squircle_thumb_tests {
             ),
             (1920, 1080)
         );
+    }
+
+    #[test]
+    fn desktop_typeahead_matches_prefix_accents_and_cycles() {
+        let items: Vec<String> = vec!["Árbol.png", "Captura1.png", "Captura2.png", "Notas.txt"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+
+        let mut ta = super::DesktopTypeAhead::new();
+        assert_eq!(ta.step('a', &items, None), Some(0));
+        assert_eq!(ta.step('r', &items, Some("Árbol.png")), Some(0));
+
+        ta.clear();
+        assert_eq!(ta.step('c', &items, None), Some(1));
+        assert_eq!(ta.step('c', &items, Some("Captura1.png")), Some(2));
+        assert_eq!(ta.step('c', &items, Some("Captura2.png")), Some(1));
+
+        assert_eq!(ta.step('n', &items, Some("Captura1.png")), Some(3));
     }
 }

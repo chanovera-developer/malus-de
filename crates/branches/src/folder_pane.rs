@@ -916,6 +916,46 @@ impl FolderPane {
         }
     }
 
+    pub fn typeahead_select(
+        &self,
+        ch: char,
+        state: &mut crate::views::TypeAheadState,
+    ) -> bool {
+        let mode = self.view_stack.visible_child_name().unwrap_or_default();
+        let (names, current) = match mode.as_str() {
+            "icons" => (
+                self.icon_view.item_names_ordered(),
+                self.icon_view.selected_item_name(),
+            ),
+            "list" => (
+                self.list_view.item_names_ordered(),
+                self.list_view.selected_item_name(),
+            ),
+            "columns" => (
+                self.column_view.active_column_names(),
+                self.column_view.selected_item_name(),
+            ),
+            "gallery" => (
+                self.gallery_view.item_names_ordered(),
+                self.gallery_view.selected_item_name(),
+            ),
+            _ => return false,
+        };
+        let Some(idx) = state.step(ch, &names, current.as_deref()) else {
+            return false;
+        };
+        let Some(target) = names.get(idx) else {
+            return false;
+        };
+        match mode.as_str() {
+            "icons" => self.icon_view.select_item_by_name(target),
+            "list" => self.list_view.select_item_by_name(target),
+            "columns" => self.column_view.select_item_by_name(target),
+            "gallery" => self.gallery_view.select_item_by_name(target),
+            _ => false,
+        }
+    }
+
     #[allow(dead_code)]
     pub fn duplicate_selected(&self) {
         let items = self.get_selected_items();
