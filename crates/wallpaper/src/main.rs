@@ -2903,6 +2903,250 @@ fn build_organize_submenu(
     container
 }
 
+#[allow(clippy::too_many_arguments)]
+fn build_align_by_submenu(
+    popover: &Popover,
+    stack: &Stack,
+    fixed: &Fixed,
+    desktop_dir: PathBuf,
+    desktop_size: (i32, i32),
+    config: Rc<RefCell<DesktopIconsConfig>>,
+    icon_positions: Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
+    trigger_refresh: Rc<dyn Fn()>,
+    top_margin: f64,
+) -> (GtkBox, Button, Button) {
+    let container = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .css_classes(["desktop-context-menu"])
+        .build();
+
+    let back_btn = create_menu_button("← Volver", false);
+    let stack_back = stack.downgrade();
+    back_btn.connect_clicked(move |_| {
+        if let Some(st) = stack_back.upgrade() {
+            st.set_transition_type(StackTransitionType::SlideLeftRight);
+            st.set_visible_child_name("main");
+        }
+    });
+    container.append(&back_btn);
+
+    let sep = GtkBox::new(Orientation::Horizontal, 0);
+    sep.add_css_class("desktop-context-separator");
+    container.append(&sep);
+
+    let snap_btn = create_menu_button("Alineación automática", false);
+    {
+        let p_c = popover.downgrade();
+        let cfg_c = config.clone();
+        let d_dir = desktop_dir.clone();
+        let pos_c = icon_positions.clone();
+        let trig_c = trigger_refresh.clone();
+        let fixed_c = fixed.downgrade();
+        snap_btn.connect_clicked(move |_| {
+            let mut c = cfg_c.borrow_mut();
+            let will_snap = !c.snap_to_grid;
+            c.snap_to_grid = will_snap;
+            let _ = c.save();
+            let cfg_clone = c.clone();
+            drop(c);
+            if will_snap {
+                if cfg_clone.use_stacks {
+                    organize_desktop_icons(
+                        &d_dir,
+                        desktop_size,
+                        &cfg_clone,
+                        &pos_c,
+                        DesktopOrganizeBy::Name,
+                        top_margin,
+                    );
+                    trig_c();
+                } else if let Some(f) = fixed_c.upgrade() {
+                    animate_desktop_organization(
+                        &f,
+                        &d_dir,
+                        desktop_size,
+                        &cfg_clone,
+                        &pos_c,
+                        DesktopOrganizeBy::Name,
+                        DESKTOP_ORGANIZE_ANIM_MS,
+                        top_margin,
+                    );
+                }
+            }
+            if let Some(pop) = p_c.upgrade() {
+                pop.popdown();
+            }
+        });
+    }
+    container.append(&snap_btn);
+
+    let align_left_btn = create_menu_button("Alinear a la izquierda", false);
+    {
+        let p_c = popover.downgrade();
+        let cfg_c = config.clone();
+        let d_dir = desktop_dir.clone();
+        let pos_c = icon_positions.clone();
+        let trig_c = trigger_refresh.clone();
+        let fixed_c = fixed.downgrade();
+        align_left_btn.connect_clicked(move |_| {
+            let mut c = cfg_c.borrow_mut();
+            c.align_left = !c.align_left;
+            let _ = c.save();
+            let cfg_clone = c.clone();
+            drop(c);
+            if cfg_clone.use_stacks {
+                organize_desktop_icons(
+                    &d_dir,
+                    desktop_size,
+                    &cfg_clone,
+                    &pos_c,
+                    DesktopOrganizeBy::Name,
+                    top_margin,
+                );
+                trig_c();
+            } else if let Some(f) = fixed_c.upgrade() {
+                animate_desktop_snap_to_grid(
+                    &f,
+                    desktop_size,
+                    &cfg_clone,
+                    &pos_c,
+                    DESKTOP_ORGANIZE_ANIM_MS,
+                    top_margin,
+                );
+            }
+            if let Some(pop) = p_c.upgrade() {
+                pop.popdown();
+            }
+        });
+    }
+    container.append(&align_left_btn);
+
+    let sep2 = GtkBox::new(Orientation::Horizontal, 0);
+    sep2.add_css_class("desktop-context-separator");
+    container.append(&sep2);
+
+    for (label, by) in [
+        ("Nombre", DesktopOrganizeBy::Name),
+        ("Clase", DesktopOrganizeBy::Kind),
+        ("Fecha de modificación", DesktopOrganizeBy::DateModified),
+    ] {
+        let btn = create_menu_button(label, false);
+        let p_c = popover.downgrade();
+        let d_dir = desktop_dir.clone();
+        let cfg_c = config.clone();
+        let pos_c = icon_positions.clone();
+        let trig_c = trigger_refresh.clone();
+        let fixed_c = fixed.downgrade();
+        btn.connect_clicked(move |_| {
+            let cfg = cfg_c.borrow().clone();
+            if cfg.use_stacks {
+                organize_desktop_icons(&d_dir, desktop_size, &cfg, &pos_c, by, top_margin);
+                trig_c();
+            } else if let Some(f) = fixed_c.upgrade() {
+                animate_desktop_organization(
+                    &f,
+                    &d_dir,
+                    desktop_size,
+                    &cfg,
+                    &pos_c,
+                    by,
+                    DESKTOP_ORGANIZE_ANIM_MS,
+                    top_margin,
+                );
+            }
+            if let Some(pop) = p_c.upgrade() {
+                pop.popdown();
+            }
+        });
+        container.append(&btn);
+    }
+
+    (container, snap_btn, align_left_btn)
+}
+
+fn build_view_options_submenu(
+    popover: &Popover,
+    stack: &Stack,
+    config: Rc<RefCell<DesktopIconsConfig>>,
+    trigger_refresh: Rc<dyn Fn()>,
+) -> (GtkBox, gtk4::Scale) {
+    let container = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(4)
+        .css_classes(["desktop-context-menu"])
+        .build();
+
+    let back_btn = create_menu_button("← Volver", false);
+    let stack_back = stack.downgrade();
+    back_btn.connect_clicked(move |_| {
+        if let Some(st) = stack_back.upgrade() {
+            st.set_transition_type(StackTransitionType::SlideLeftRight);
+            st.set_visible_child_name("main");
+        }
+    });
+    container.append(&back_btn);
+
+    let sep = GtkBox::new(Orientation::Horizontal, 0);
+    sep.add_css_class("desktop-context-separator");
+    container.append(&sep);
+
+    let size_lbl = Label::builder()
+        .label("Tamaño de los iconos")
+        .xalign(0.0)
+        .margin_start(8)
+        .margin_top(2)
+        .build();
+    size_lbl.add_css_class(if is_dark_mode_active() {
+        "menu-dark-text"
+    } else {
+        "menu-light-text"
+    });
+    container.append(&size_lbl);
+
+    let scale = gtk4::Scale::with_range(Orientation::Horizontal, 32.0, 96.0, 4.0);
+    scale.set_margin_start(8);
+    scale.set_margin_end(8);
+    scale.set_width_request(180);
+    scale.set_value(config.borrow().icon_size as f64);
+    {
+        let cfg_c = config.clone();
+        let trig_c = trigger_refresh.clone();
+        scale.connect_value_changed(move |s| {
+            let new_size = (s.value().round() as u32).clamp(32, 96);
+            let mut c = cfg_c.borrow_mut();
+            if c.icon_size != new_size {
+                c.icon_size = new_size;
+                let _ = c.save();
+                drop(c);
+                trig_c();
+            }
+        });
+    }
+    container.append(&scale);
+
+    let sep2 = GtkBox::new(Orientation::Horizontal, 0);
+    sep2.add_css_class("desktop-context-separator");
+    container.append(&sep2);
+
+    let more_btn = create_menu_button("Abrir ajustes de Escritorio...", false);
+    {
+        let p_c = popover.downgrade();
+        more_btn.connect_clicked(move |_| {
+            let mut cmd = std::process::Command::new("malus-de-settings");
+            cmd.arg("--panel").arg("dock");
+            malus_de_common::config::apply_isolated_environment(&mut cmd);
+            let _ = cmd.spawn();
+            if let Some(pop) = p_c.upgrade() {
+                pop.popdown();
+            }
+        });
+    }
+    container.append(&more_btn);
+
+    (container, scale)
+}
+
 struct DesktopItemData {
     path: PathBuf,
     display_name: String,
@@ -3370,6 +3614,134 @@ fn create_menu_button(label: &str, destructive: bool) -> Button {
     }
     attach_squircle_menu_hover(&btn);
     btn
+}
+
+fn create_menu_submenu_button(label: &str) -> Button {
+    let hbox = GtkBox::new(Orientation::Horizontal, 8);
+    let lbl = Label::builder()
+        .label(label)
+        .halign(Align::Start)
+        .xalign(0.0)
+        .hexpand(true)
+        .build();
+    let is_dark = is_dark_mode_active();
+    lbl.add_css_class(if is_dark {
+        "menu-dark-text"
+    } else {
+        "menu-light-text"
+    });
+    let arrow = gtk4::Image::from_icon_name("pan-end-symbolic");
+    arrow.set_pixel_size(12);
+    arrow.set_opacity(0.75);
+    hbox.append(&lbl);
+    hbox.append(&arrow);
+
+    let btn = Button::builder().child(&hbox).build();
+    btn.add_css_class("desktop-context-btn");
+    btn.set_halign(Align::Fill);
+    attach_squircle_menu_hover(&btn);
+    btn
+}
+
+fn show_desktop_folder_info_dialog(desktop_dir: &Path) {
+    let win = gtk4::Window::builder()
+        .title("Obtener información — Escritorio")
+        .default_width(340)
+        .resizable(false)
+        .build();
+
+    let vbox = GtkBox::new(Orientation::Vertical, 10);
+    vbox.set_margin_top(16);
+    vbox.set_margin_bottom(16);
+    vbox.set_margin_start(18);
+    vbox.set_margin_end(18);
+
+    let header = GtkBox::new(Orientation::Horizontal, 12);
+    let icon = gtk4::Image::from_icon_name("user-desktop");
+    icon.set_pixel_size(40);
+    let title_box = GtkBox::new(Orientation::Vertical, 2);
+    let title_lbl = Label::builder()
+        .label(
+            desktop_dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Escritorio".to_string()),
+        )
+        .xalign(0.0)
+        .css_classes(["title-3"])
+        .build();
+    let kind_lbl = Label::builder()
+        .label("Carpeta")
+        .xalign(0.0)
+        .css_classes(["dim-label"])
+        .build();
+    title_box.append(&title_lbl);
+    title_box.append(&kind_lbl);
+    header.append(&icon);
+    header.append(&title_box);
+    vbox.append(&header);
+
+    let item_count = std::fs::read_dir(desktop_dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+                .count()
+        })
+        .unwrap_or(0);
+
+    let info_grid = GtkBox::new(Orientation::Vertical, 6);
+    for (k, v) in [
+        ("Ubicación", desktop_dir.to_string_lossy().into_owned()),
+        ("Elementos", format!("{}", item_count)),
+    ] {
+        let row = GtkBox::new(Orientation::Horizontal, 8);
+        let kl = Label::builder()
+            .label(k)
+            .xalign(0.0)
+            .width_chars(11)
+            .css_classes(["dim-label"])
+            .build();
+        let vl = Label::builder()
+            .label(&v)
+            .xalign(0.0)
+            .hexpand(true)
+            .selectable(true)
+            .wrap(true)
+            .build();
+        row.append(&kl);
+        row.append(&vl);
+        info_grid.append(&row);
+    }
+    vbox.append(&info_grid);
+
+    let actions = GtkBox::new(Orientation::Horizontal, 8);
+    actions.set_halign(Align::End);
+    let open_btn = Button::with_label("Abrir en Branches");
+    let close_btn = Button::with_label("Cerrar");
+    actions.append(&open_btn);
+    actions.append(&close_btn);
+    vbox.append(&actions);
+
+    let dir_c = desktop_dir.to_path_buf();
+    let win_c = win.downgrade();
+    open_btn.connect_clicked(move |_| {
+        let mut cmd = std::process::Command::new("malus-de-branches");
+        cmd.arg(&dir_c);
+        malus_de_common::config::apply_isolated_environment(&mut cmd);
+        let _ = cmd.spawn();
+        if let Some(w) = win_c.upgrade() {
+            w.close();
+        }
+    });
+    let win_close = win.downgrade();
+    close_btn.connect_clicked(move |_| {
+        if let Some(w) = win_close.upgrade() {
+            w.close();
+        }
+    });
+
+    win.set_child(Some(&vbox));
+    win.present();
 }
 
 #[cfg(test)]
@@ -4867,23 +5239,6 @@ fn populate_wallpaper_role(
             .css_classes(["desktop-context-menu"])
             .build();
 
-        let create_new_box = build_create_new_submenu(
-            &bg_popover,
-            &bg_stack,
-            &icons,
-            desktop_dir.to_path_buf(),
-            desktop_size,
-            current_config.clone(),
-            icon_positions.clone(),
-            selected_paths.clone(),
-            focused_path.clone(),
-            recently_dropped_paths.clone(),
-            insert_single_icon.clone(),
-            trigger_refresh.clone(),
-            bg_click_pos.clone(),
-            top_margin,
-        );
-
         let organize_box = build_organize_submenu(
             &bg_popover,
             &bg_stack,
@@ -4896,24 +5251,69 @@ fn populate_wallpaper_role(
             top_margin,
         );
 
+        let (align_by_box, snap_btn, align_left_btn) = build_align_by_submenu(
+            &bg_popover,
+            &bg_stack,
+            &icons,
+            desktop_dir.to_path_buf(),
+            desktop_size,
+            current_config.clone(),
+            icon_positions.clone(),
+            trigger_refresh.clone(),
+            top_margin,
+        );
+
+        let (view_options_box, icon_size_scale) = build_view_options_submenu(
+            &bg_popover,
+            &bg_stack,
+            current_config.clone(),
+            trigger_refresh.clone(),
+        );
+
         let bg_menu = GtkBox::builder()
             .orientation(Orientation::Vertical)
             .spacing(2)
             .css_classes(["desktop-context-menu"])
             .build();
 
-        // 1. Crear nuevo ▸ (Carpeta / Documento de texto con edición inline inmediata)
-        let create_new_btn = create_menu_button("Crear nuevo ▸", false);
+        // 1. Nueva carpeta
+        let new_folder_btn = create_menu_button("Nueva carpeta", false);
         {
-            let stack_cn = bg_stack.downgrade();
-            create_new_btn.connect_clicked(move |_| {
-                if let Some(st) = stack_cn.upgrade() {
-                    st.set_transition_type(StackTransitionType::SlideLeftRight);
-                    st.set_visible_child_name("create_new");
+            let p_c = bg_popover.downgrade();
+            let f_c = icons.downgrade();
+            let d_c = desktop_dir.to_path_buf();
+            let cfg_c = current_config.clone();
+            let pos_c = icon_positions.clone();
+            let sel_c = selected_paths.clone();
+            let foc_c = focused_path.clone();
+            let rec_c = recently_dropped_paths.clone();
+            let ins_c = insert_single_icon.clone();
+            let trig_c = trigger_refresh.clone();
+            let click_c = bg_click_pos.clone();
+            new_folder_btn.connect_clicked(move |_| {
+                if let Some(pop) = p_c.upgrade() {
+                    pop.popdown();
+                }
+                if let Some(fixed_w) = f_c.upgrade() {
+                    create_desktop_item_and_edit(
+                        &fixed_w,
+                        &d_c,
+                        desktop_size,
+                        &cfg_c,
+                        &pos_c,
+                        &sel_c,
+                        &foc_c,
+                        &rec_c,
+                        &ins_c,
+                        &trig_c,
+                        click_c.get(),
+                        top_margin,
+                        true,
+                    );
                 }
             });
         }
-        bg_menu.append(&create_new_btn);
+        bg_menu.append(&new_folder_btn);
 
         let paste_btn = create_menu_button("Pegar", false);
         paste_btn.set_visible(false);
@@ -4959,8 +5359,58 @@ fn populate_wallpaper_role(
         sep1.add_css_class("desktop-context-separator");
         bg_menu.append(&sep1);
 
-        // 2. Usar Pilas (macOS Stacks Toggle)
-        let stacks_btn = create_menu_button("Usar Pilas", false);
+        // 2. Obtener información
+        let info_btn = create_menu_button("Obtener información", false);
+        {
+            let popover_c = bg_popover.downgrade();
+            let d_info = desktop_dir.to_path_buf();
+            info_btn.connect_clicked(move |_| {
+                if let Some(pop) = popover_c.upgrade() {
+                    pop.popdown();
+                }
+                show_desktop_folder_info_dialog(&d_info);
+            });
+        }
+        bg_menu.append(&info_btn);
+
+        // 3. Cambiar el fondo de pantalla...
+        let wp_btn = create_menu_button("Cambiar el fondo de pantalla...", false);
+        {
+            let popover_c = bg_popover.downgrade();
+            wp_btn.connect_clicked(move |_| {
+                let mut cmd = std::process::Command::new("malus-de-settings");
+                cmd.arg("--panel").arg("wallpaper");
+                malus_de_common::config::apply_isolated_environment(&mut cmd);
+                let _ = cmd.spawn();
+                if let Some(pop) = popover_c.upgrade() {
+                    pop.popdown();
+                }
+            });
+        }
+        bg_menu.append(&wp_btn);
+
+        // 4. Editar widgets...
+        let widgets_btn = create_menu_button("Editar widgets...", false);
+        {
+            let popover_c = bg_popover.downgrade();
+            widgets_btn.connect_clicked(move |_| {
+                let mut cmd = std::process::Command::new("malus-de-settings");
+                cmd.arg("--panel").arg("dock");
+                malus_de_common::config::apply_isolated_environment(&mut cmd);
+                let _ = cmd.spawn();
+                if let Some(pop) = popover_c.upgrade() {
+                    pop.popdown();
+                }
+            });
+        }
+        bg_menu.append(&widgets_btn);
+
+        let sep2 = GtkBox::new(Orientation::Horizontal, 0);
+        sep2.add_css_class("desktop-context-separator");
+        bg_menu.append(&sep2);
+
+        // 5. Apilar
+        let stacks_btn = create_menu_button("Apilar", false);
         {
             let popover_c = bg_popover.downgrade();
             let cfg_c2 = current_config.clone();
@@ -4978,48 +5428,8 @@ fn populate_wallpaper_role(
         }
         bg_menu.append(&stacks_btn);
 
-        // 3. Organizar escritorio
-        let organize_btn = create_menu_button("Organizar escritorio", false);
-        {
-            let popover_c = bg_popover.downgrade();
-            let d_dir_org = desktop_dir.to_path_buf();
-            let cfg_org = current_config.clone();
-            let pos_org = icon_positions.clone();
-            let trigger_org = trigger_refresh.clone();
-            let icons_org = icons.downgrade();
-            organize_btn.connect_clicked(move |_| {
-                let cfg = cfg_org.borrow().clone();
-                if cfg.use_stacks {
-                    organize_desktop_icons(
-                        &d_dir_org,
-                        desktop_size,
-                        &cfg,
-                        &pos_org,
-                        DesktopOrganizeBy::Name,
-                        top_margin,
-                    );
-                    trigger_org();
-                } else if let Some(icons_w) = icons_org.upgrade() {
-                    animate_desktop_organization(
-                        &icons_w,
-                        &d_dir_org,
-                        desktop_size,
-                        &cfg,
-                        &pos_org,
-                        DesktopOrganizeBy::Name,
-                        DESKTOP_ORGANIZE_ANIM_MS,
-                        top_margin,
-                    );
-                }
-                if let Some(pop) = popover_c.upgrade() {
-                    pop.popdown();
-                }
-            });
-        }
-        bg_menu.append(&organize_btn);
-
-        // 4. Organizar por ▸ (Submenú animado con criterios de orden)
-        let organize_by_btn = create_menu_button("Organizar por ▸", false);
+        // 6. Ordenar por >
+        let organize_by_btn = create_menu_submenu_button("Ordenar por");
         {
             let stack_org = bg_stack.downgrade();
             organize_by_btn.connect_clicked(move |_| {
@@ -5031,8 +5441,8 @@ fn populate_wallpaper_role(
         }
         bg_menu.append(&organize_by_btn);
 
-        // 5. Alinear a la cuadrícula
-        let snap_all_btn = create_menu_button("Alinear a la cuadrícula", false);
+        // 7. Alinear
+        let snap_all_btn = create_menu_button("Alinear", false);
         {
             let popover_c = bg_popover.downgrade();
             let cfg_c3 = current_config.clone();
@@ -5060,76 +5470,36 @@ fn populate_wallpaper_role(
         }
         bg_menu.append(&snap_all_btn);
 
-        // 6. Alineación automática
-        let snap_btn = create_menu_button("Alineación automática", false);
+        // 8. Alinear por >
+        let align_by_btn = create_menu_submenu_button("Alinear por");
         {
-            let popover_c = bg_popover.downgrade();
-            let cfg_c4 = current_config.clone();
-            let d_dir_snap = desktop_dir.to_path_buf();
-            let pos_snap_c = icon_positions.clone();
-            let trigger_c = trigger_refresh.clone();
-            let icons_snap = icons.downgrade();
-            snap_btn.connect_clicked(move |_| {
-                let mut c = cfg_c4.borrow_mut();
-                let will_snap = !c.snap_to_grid;
-                c.snap_to_grid = will_snap;
-                let _ = c.save();
-                let cfg_clone = c.clone();
-                drop(c);
-                if will_snap {
-                    if cfg_clone.use_stacks {
-                        organize_desktop_icons(
-                            &d_dir_snap,
-                            desktop_size,
-                            &cfg_clone,
-                            &pos_snap_c,
-                            DesktopOrganizeBy::Name,
-                            top_margin,
-                        );
-                        trigger_c();
-                    } else if let Some(f) = icons_snap.upgrade() {
-                        animate_desktop_organization(
-                            &f,
-                            &d_dir_snap,
-                            desktop_size,
-                            &cfg_clone,
-                            &pos_snap_c,
-                            DesktopOrganizeBy::Name,
-                            DESKTOP_ORGANIZE_ANIM_MS,
-                            top_margin,
-                        );
-                    }
-                }
-                if let Some(pop) = popover_c.upgrade() {
-                    pop.popdown();
+            let stack_align = bg_stack.downgrade();
+            align_by_btn.connect_clicked(move |_| {
+                if let Some(st) = stack_align.upgrade() {
+                    st.set_transition_type(StackTransitionType::SlideLeftRight);
+                    st.set_visible_child_name("align_by");
                 }
             });
         }
-        bg_menu.append(&snap_btn);
+        bg_menu.append(&align_by_btn);
 
-        let sep2 = GtkBox::new(Orientation::Horizontal, 0);
-        sep2.add_css_class("desktop-context-separator");
-        bg_menu.append(&sep2);
-
-        // 7. Cambiar fondo de pantalla...
-        let wp_btn = create_menu_button("Fondo de pantalla y Estilo...", false);
+        // 9. Mostrar opciones de visualización
+        let view_opts_btn = create_menu_button("Mostrar opciones de visualización", false);
         {
-            let popover_c = bg_popover.downgrade();
-            wp_btn.connect_clicked(move |_| {
-                let mut cmd = std::process::Command::new("malus-de-settings");
-                cmd.arg("--panel").arg("wallpaper");
-                malus_de_common::config::apply_isolated_environment(&mut cmd);
-                let _ = cmd.spawn();
-                if let Some(pop) = popover_c.upgrade() {
-                    pop.popdown();
+            let stack_vo = bg_stack.downgrade();
+            view_opts_btn.connect_clicked(move |_| {
+                if let Some(st) = stack_vo.upgrade() {
+                    st.set_transition_type(StackTransitionType::SlideLeftRight);
+                    st.set_visible_child_name("view_options");
                 }
             });
         }
-        bg_menu.append(&wp_btn);
+        bg_menu.append(&view_opts_btn);
 
         bg_stack.add_named(&bg_menu, Some("main"));
         bg_stack.add_named(&organize_box, Some("organize"));
-        bg_stack.add_named(&create_new_box, Some("create_new"));
+        bg_stack.add_named(&align_by_box, Some("align_by"));
+        bg_stack.add_named(&view_options_box, Some("view_options"));
         bg_stack.set_visible_child_name("main");
         bg_popover.set_child(Some(&bg_stack));
 
@@ -5143,6 +5513,8 @@ fn populate_wallpaper_role(
         let paste_btn_ctx = paste_btn.downgrade();
         let stacks_btn_ctx = stacks_btn.downgrade();
         let snap_btn_ctx = snap_btn.downgrade();
+        let align_left_btn_ctx = align_left_btn.downgrade();
+        let icon_scale_ctx = icon_size_scale.downgrade();
         let click_pos_ctx = bg_click_pos;
 
         bg_context.connect_pressed(move |gesture, _, x, y| {
@@ -5157,18 +5529,14 @@ fn populate_wallpaper_role(
             if let Some(pb) = paste_btn_ctx.upgrade() {
                 pb.set_visible(has_desktop_clipboard_files());
             }
-            let (is_stacks, is_snap) = {
+            let (is_stacks, is_snap, is_align_left, icon_sz) = {
                 let c = cfg_menu.borrow();
-                (c.use_stacks, c.snap_to_grid)
+                (c.use_stacks, c.snap_to_grid, c.align_left, c.icon_size)
             };
             if let Some(sb) = stacks_btn_ctx.upgrade() {
                 set_menu_button_label(
                     &sb,
-                    if is_stacks {
-                        "✓ Usar Pilas"
-                    } else {
-                        "Usar Pilas"
-                    },
+                    if is_stacks { "✓ Apilar" } else { "Apilar" },
                 );
             }
             if let Some(sn) = snap_btn_ctx.upgrade() {
@@ -5180,6 +5548,19 @@ fn populate_wallpaper_role(
                         "Alineación automática"
                     },
                 );
+            }
+            if let Some(al) = align_left_btn_ctx.upgrade() {
+                set_menu_button_label(
+                    &al,
+                    if is_align_left {
+                        "✓ Alinear a la izquierda"
+                    } else {
+                        "Alinear a la izquierda"
+                    },
+                );
+            }
+            if let Some(sc) = icon_scale_ctx.upgrade() {
+                sc.set_value(icon_sz as f64);
             }
             if let Some(st) = stack_ctx.upgrade() {
                 st.set_transition_type(StackTransitionType::None);
@@ -5936,7 +6317,7 @@ fn populate_wallpaper_role(
             .css_classes(["desktop-context-menu"])
             .build();
 
-        let wp_btn = create_menu_button("Fondo de pantalla y Estilo...", false);
+        let wp_btn = create_menu_button("Cambiar el fondo de pantalla...", false);
         {
             let popover_c = sec_popover.downgrade();
             wp_btn.connect_clicked(move |_| {
