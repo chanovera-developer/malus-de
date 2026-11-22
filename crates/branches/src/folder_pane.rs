@@ -345,6 +345,12 @@ impl FolderPane {
             s.sort_by = sort_by;
             s.sort_order = sort_order;
         }
+        // Al elegir un criterio de ordenación, salir de colocación libre/manual para que
+        // la vista de íconos refleje el nuevo orden inmediatamente (igual que Finder).
+        if self.icon_view.layout_mode() != crate::db::LayoutMode::Auto {
+            self.icon_view
+                .set_layout_mode_in_db(crate::db::LayoutMode::Auto);
+        }
         self.list_view.clear_sort_state();
         self.reload();
     }
@@ -380,6 +386,10 @@ impl FolderPane {
 
     pub fn set_icon_layout_mode(&self, mode: crate::db::LayoutMode) {
         self.icon_view.set_layout_mode(mode);
+    }
+
+    pub fn align_icon_grid(&self) {
+        self.icon_view.align_to_grid();
     }
 
     pub fn rearrange_icon_grid(&self) {

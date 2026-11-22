@@ -696,6 +696,22 @@ pub(super) fn show_background_context_menu(
     main_box.append(&sort_trigger);
     attach_cascading_submenu(&popover, &main_box, &sort_trigger, &sort_sub, &all_submenus);
 
+    // 4b. Alinear (en Vista de íconos)
+    if state.view_mode == "icons" {
+        let btn_align = make_context_menu_button(if es { "Alinear" } else { "Clean Up" });
+        let pop = popover.downgrade();
+        let aw = anchor_widget.downgrade();
+        btn_align.connect_clicked(move |_| {
+            if let Some(p) = pop.upgrade() {
+                popdown_popover_lifo(&p);
+            }
+            if let Some(w) = aw.upgrade() {
+                let _ = w.activate_action("win.align_icons", None);
+            }
+        });
+        main_box.append(&btn_align);
+    }
+
     // 5. Mostrar opciones de visualización
     let btn_options = make_context_menu_button(if es {
         "Mostrar opciones de visualización"

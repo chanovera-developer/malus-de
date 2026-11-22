@@ -678,8 +678,29 @@ impl IconView {
         }
     }
 
+    pub fn set_layout_mode_in_db(&self, mode: LayoutMode) {
+        *self.layout_mode.borrow_mut() = mode;
+        let folder = self.current_folder.borrow().clone();
+        if let Ok(conn) = db::open_db() {
+            let _ = db::set_layout_mode(&conn, &folder, mode);
+        }
+    }
+
+    pub fn align_to_grid(&self) {
+        let mode = *self.layout_mode.borrow();
+        if mode == LayoutMode::Auto {
+            let vw = self.viewport_width();
+            let metrics = self.current_metrics();
+            self.last_auto_cols
+                .set(columns_for_width(vw, metrics.cell_width()));
+            self.make_weak().relayout_auto_grid_with_width(vw, true);
+        } else {
+            self.make_weak().snap_existing_to_grid();
+        }
+    }
+
     pub fn rearrange_grid(&self) {
-        self.make_weak().rearrange(true);
+        self.make_weak().rearrange(false);
     }
 
     pub fn current_metrics(&self) -> IconGridMetrics {
@@ -2253,7 +2274,16 @@ impl IconViewWeak {
     }
 
     fn rearrange(&self, by_name: bool) {
-        let mut list: Vec<_> = self.item_widgets.borrow().values().cloned().collect();
+        let mut list: Vec<_> = if by_name {
+            self.item_widgets.borrow().values().cloned().collect()
+        } else {
+            let widgets = self.item_widgets.borrow();
+            let order = self.item_order.borrow();
+            order
+                .iter()
+                .filter_map(|name| widgets.get(name).cloned())
+                .collect()
+        };
         if by_name {
             // Igual que fs_backend::load_directory: carpetas primero, luego orden alfabético
             list.sort_by(|a, b| {

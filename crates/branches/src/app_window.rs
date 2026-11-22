@@ -2728,12 +2728,29 @@ impl BranchesWindow {
         {
             let bw_sort = self.clone_ref();
             let act_sb = self.sort_by_action.clone();
+            let act_so_for_sb = self.sort_order_action.clone();
             self.sort_by_action.connect_activate(move |_, param| {
                 if let Some(val) = param.and_then(|v| v.str()) {
-                    act_sb.set_state(&val.to_variant());
+                    let new_by = crate::state::SortBy::from_str(val);
+                    act_sb.set_state(&new_by.as_str().to_variant());
                     let pane = bw_sort.active_pane();
-                    let (_, order) = pane.sort_settings();
-                    pane.set_sort(crate::state::SortBy::from_str(val), order);
+                    let (prev_by, prev_order) = pane.sort_settings();
+                    let next_order = if new_by != prev_by {
+                        match new_by {
+                            crate::state::SortBy::DateLastOpened
+                            | crate::state::SortBy::DateAdded
+                            | crate::state::SortBy::DateModified
+                            | crate::state::SortBy::DateCreated
+                            | crate::state::SortBy::Size => crate::state::SortOrder::Descending,
+                            crate::state::SortBy::Name
+                            | crate::state::SortBy::Kind
+                            | crate::state::SortBy::Tags => crate::state::SortOrder::Ascending,
+                        }
+                    } else {
+                        prev_order
+                    };
+                    act_so_for_sb.set_state(&next_order.as_str().to_variant());
+                    pane.set_sort(new_by, next_order);
                 }
             });
             actions.add_action(&self.sort_by_action);
@@ -2952,6 +2969,13 @@ impl BranchesWindow {
             bw_crit.sync_active_tab_ui();
         });
         actions.add_action(&act_crit);
+
+        let bw_align = self.clone_ref();
+        let act_align = gio::SimpleAction::new("align_icons", None);
+        act_align.connect_activate(move |_, _| {
+            bw_align.active_pane().align_icon_grid();
+        });
+        actions.add_action(&act_align);
 
         let bw_vo = self.clone_ref();
         let act_vo = gio::SimpleAction::new("show_view_options", None);
