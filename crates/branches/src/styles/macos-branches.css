@@ -1358,3 +1358,79 @@ button.branches-context-tag-clear-btn {
     border-radius: 50%;
 }
 
+/* ========================================================= */
+/* BARRA DE CRITERIOS DE BÚSQUEDA, GRUPOS Y OPCIONES         */
+/* ========================================================= */
+
+.branches-search-criteria-bar {
+    background-color: alpha(@headerbar_bg_color, 0.72);
+    border-bottom: 1px solid alpha(@borders, 0.25);
+    padding: 6px 12px;
+}
+
+.branches-criteria-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: alpha(@window_fg_color, 0.72);
+    margin-right: 4px;
+}
+
+togglebutton.branches-criteria-chip {
+    min-height: 22px;
+    padding: 2px 9px;
+    border-radius: 11px;
+    font-size: 11.5px;
+    font-weight: 500;
+    background-color: alpha(@window_fg_color, 0.08);
+    color: @window_fg_color;
+    border: 1px solid transparent;
+    box-shadow: none;
+}
+
+togglebutton.branches-criteria-chip:hover {
+    background-color: alpha(@window_fg_color, 0.14);
+}
+
+togglebutton.branches-criteria-chip:checked {
+    background-color: #007aff;
+    color: #ffffff;
+}
+
+.branches-group-header {
+    font-size: 13px;
+    font-weight: 700;
+    color: alpha(@window_fg_color, 0.85);
+    padding-bottom: 4px;
+    border-bottom: 1px solid alpha(@borders, 0.24);
+}
+
+row.branches-list-group-row {
+    background: transparent;
+    padding: 8px 12px 4px 12px;
+}
+
+row.branches-list-group-row:hover {
+    background: transparent;
+}
+
+.branches-list-group-label {
+    font-size: 12.5px;
+    font-weight: 700;
+    color: alpha(@window_fg_color, 0.78);
+}
+
+window.branches-view-options-window {
+    background-color: @window_bg_color;
+    color: @window_fg_color;
+}
+
+.branches-view-options-box {
+    padding: 14px 16px;
+}
+
+.branches-view-options-section {
+    font-size: 12px;
+    font-weight: 600;
+    color: alpha(@window_fg_color, 0.78);
+}
+

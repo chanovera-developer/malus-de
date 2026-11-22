@@ -72,7 +72,10 @@ pub(super) fn list_box_selected_items(
     let mut indices: Vec<usize> = list_box
         .selected_rows()
         .into_iter()
-        .filter_map(|row| usize::try_from(row.index()).ok())
+        .filter_map(|row| {
+            unsafe { row.data::<usize>("list_item_idx").map(|p| *p.as_ref()) }
+                .or_else(|| usize::try_from(row.index()).ok())
+        })
         .collect();
     indices.sort_unstable();
     indices.dedup();
@@ -490,144 +493,63 @@ pub(super) fn can_create_in_folder(folder: &std::path::Path) -> bool {
     !folder.ends_with("Trash/files") && folder.is_dir()
 }
 
-fn make_submenu_trigger_button(label: &str) -> gtk4::Button {
+fn make_check_menu_button(label: &str, checked: bool, right_arrow: bool) -> gtk4::Button {
     use gtk4::prelude::*;
 
-    let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 12);
-    let title = gtk4::Label::builder()
+    let hbox = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    let check_lbl = gtk4::Label::builder()
+        .label(if checked { "✓" } else { "" })
+        .width_request(14)
+        .halign(gtk4::Align::Center)
+        .xalign(0.5)
+        .build();
+    hbox.append(&check_lbl);
+
+    let lbl = gtk4::Label::builder()
         .label(label)
         .halign(gtk4::Align::Start)
+        .xalign(0.0)
         .hexpand(true)
         .build();
-    let chevron = gtk4::Label::builder()
-        .label("›")
-        .css_classes(["dim-label"])
-        .build();
-    row.append(&title);
-    row.append(&chevron);
+    hbox.append(&lbl);
 
-    gtk4::Button::builder()
+    if right_arrow {
+        let arrow = gtk4::Image::from_icon_name("pan-end-symbolic");
+        arrow.set_pixel_size(12);
+        arrow.set_opacity(0.7);
+        hbox.append(&arrow);
+    }
+
+    let btn = gtk4::Button::builder()
+        .child(&hbox)
         .has_frame(false)
         .css_classes(["popover-menu-item"])
-        .child(&row)
-        .build()
+        .build();
+    crate::app_window::attach_squircle_menu_hover(&btn);
+    btn
 }
 
-/// Agrega la entrada «Crear nuevo ›» y su submenú (Carpeta / Documento de texto) al Stack del menú contextual.
-pub(super) fn append_create_new_submenu(
-    popover: &gtk4::Popover,
-    main_box: &gtk4::Box,
-    stack: &gtk4::Stack,
-    target_dir: PathBuf,
-    on_created: RenameCallback,
-) {
-    use gtk4::prelude::*;
-
-    let es = malus_de_common::is_spanish_locale();
-    let trigger_btn = make_submenu_trigger_button(if es { "Crear nuevo" } else { "Create New" });
-    {
-        let st = stack.clone();
-        trigger_btn.connect_clicked(move |_| {
-            st.set_visible_child_name("create_new");
-        });
-    }
-    main_box.append(&trigger_btn);
-
-    let sub_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
-
-    let back_btn = make_context_menu_button(if es { "← Volver" } else { "← Back" });
-    {
-        let st = stack.clone();
-        back_btn.connect_clicked(move |_| {
-            st.set_visible_child_name("main");
-        });
-    }
-    sub_box.append(&back_btn);
-    sub_box.append(&gtk4::Separator::new(gtk4::Orientation::Horizontal));
-
-    let folder_btn = make_context_menu_button(if es { "Carpeta" } else { "Folder" });
-    {
-        let pop = popover.clone();
-        let dir = target_dir.clone();
-        let cb = on_created.clone();
-        let default_name = if es { "Nueva carpeta" } else { "New Folder" };
-        folder_btn.connect_clicked(move |_| {
-            pop.popdown();
-            if let Ok(created) = crate::operations::create_new_folder(&dir, default_name) {
-                cb(created);
-            }
-        });
-    }
-    sub_box.append(&folder_btn);
-
-    let doc_btn = make_context_menu_button(if es {
-        "Documento de texto"
-    } else {
-        "Text Document"
-    });
-    {
-        let pop = popover.clone();
-        let dir = target_dir;
-        let cb = on_created;
-        let default_stem = if es {
-            "Nuevo documento"
-        } else {
-            "Untitled Document"
-        };
-        doc_btn.connect_clicked(move |_| {
-            pop.popdown();
-            if let Ok(created) = crate::operations::create_new_text_document(&dir, default_stem) {
-                cb(created);
-            }
-        });
-    }
-    sub_box.append(&doc_btn);
-
-    stack.add_named(&sub_box, Some("create_new"));
-}
-
-/// Agrega la acción «Pegar» al menú contextual cuando hay archivos/carpetas en el portapapeles.
-pub(super) fn append_paste_menu_item(
-    popover: &gtk4::Popover,
-    container: &gtk4::Box,
-    anchor: &impl gtk4::prelude::IsA<gtk4::Widget>,
-    target_dir: &std::path::Path,
-) {
-    use gtk4::prelude::*;
-
-    if !can_create_in_folder(target_dir) || !crate::operations::has_clipboard_files() {
-        return;
-    }
-
-    let es = malus_de_common::is_spanish_locale();
-    let paste_btn = make_context_menu_button(if es { "Pegar" } else { "Paste" });
-    let anchor_widget = anchor.clone().upcast::<gtk4::Widget>();
-    let target_str = target_dir.to_string_lossy().to_string();
-    let pop = popover.clone();
-    paste_btn.connect_clicked(move |_| {
-        pop.popdown();
-        let _ = anchor_widget.activate_action("win.paste_into", Some(&target_str.to_variant()));
-    });
-    container.append(&paste_btn);
-}
-
-/// Menú contextual genérico de fondo para vistas sin opciones espaciales (Lista, Columnas, Galería).
-pub(super) fn show_background_create_menu(
+/// Menú contextual de espacio vacío en Branches (Visualización, Usar grupos, Ordenar por, etc.).
+pub(super) fn show_background_context_menu(
     anchor: &impl gtk4::prelude::IsA<gtk4::Widget>,
     x: f64,
     y: f64,
-    target_dir: PathBuf,
-    on_created: RenameCallback,
 ) {
     use gtk4::gdk;
     use gtk4::prelude::*;
 
-    if anchor.root().is_none() || !can_create_in_folder(&target_dir) {
+    if anchor.root().is_none() {
         return;
     }
 
+    let Some(state) = crate::app_window::background_menu_state_for_widget(anchor) else {
+        return;
+    };
+    let es = malus_de_common::is_spanish_locale();
+
     let popover = gtk4::Popover::builder()
         .has_arrow(false)
+        .autohide(true)
         .css_classes(["malus-popover-menu"])
         .build();
     popover.set_parent(anchor);
@@ -635,19 +557,166 @@ pub(super) fn show_background_create_menu(
     popover.set_pointing_to(Some(&rect));
     popover.connect_closed(|p| p.unparent());
 
-    let stack = gtk4::Stack::builder()
-        .transition_type(gtk4::StackTransitionType::SlideLeftRight)
-        .transition_duration(160)
-        .vhomogeneous(false)
-        .build();
     let main_box = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
-    stack.add_named(&main_box, Some("main"));
+    let all_submenus: std::rc::Rc<std::cell::RefCell<Vec<glib::WeakRef<gtk4::Popover>>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let anchor_widget: gtk4::Widget = anchor.clone().upcast();
 
-    append_create_new_submenu(&popover, &main_box, &stack, target_dir.clone(), on_created);
-    append_paste_menu_item(&popover, &main_box, anchor, &target_dir);
+    // 1. Mostrar / Ocultar criterios de búsqueda
+    let search_lbl = if state.search_criteria_visible {
+        if es {
+            "Ocultar criterios de búsqueda"
+        } else {
+            "Hide Search Criteria"
+        }
+    } else if es {
+        "Mostrar criterios de búsqueda"
+    } else {
+        "Show Search Criteria"
+    };
+    let btn_search = make_context_menu_button(search_lbl);
+    {
+        let pop = popover.downgrade();
+        let aw = anchor_widget.downgrade();
+        btn_search.connect_clicked(move |_| {
+            if let Some(p) = pop.upgrade() {
+                popdown_popover_lifo(&p);
+            }
+            if let Some(w) = aw.upgrade() {
+                let _ = w.activate_action("win.toggle_search_criteria", None);
+            }
+        });
+    }
+    main_box.append(&btn_search);
 
-    stack.set_visible_child_name("main");
-    popover.set_child(Some(&stack));
+    let sep = gtk4::Separator::new(gtk4::Orientation::Horizontal);
+    sep.add_css_class("popover-menu-separator");
+    main_box.append(&sep);
+
+    // 2. Visualización >
+    let view_trigger = make_context_menu_icon_button(
+        if es { "Visualización" } else { "View" },
+        None,
+        true,
+    );
+    let view_sub = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
+    for (id, lbl_es, lbl_en) in [
+        ("icons", "Como íconos", "as Icons"),
+        ("list", "Como lista", "as List"),
+        ("columns", "Como columnas", "as Columns"),
+        ("gallery", "Como galería", "as Gallery"),
+    ] {
+        let lbl = if es { lbl_es } else { lbl_en };
+        let item_btn = make_check_menu_button(lbl, state.view_mode == id, false);
+        let pop = popover.downgrade();
+        let aw = anchor_widget.downgrade();
+        item_btn.connect_clicked(move |_| {
+            if let Some(p) = pop.upgrade() {
+                popdown_popover_lifo(&p);
+            }
+            if let Some(w) = aw.upgrade() {
+                let _ = w.activate_action("win.set_view_mode", Some(&id.to_variant()));
+            }
+        });
+        view_sub.append(&item_btn);
+    }
+    main_box.append(&view_trigger);
+    attach_cascading_submenu(&popover, &main_box, &view_trigger, &view_sub, &all_submenus);
+
+    // 3. Usar grupos
+    let groups_base = if es { "Usar grupos" } else { "Use Groups" };
+    let groups_lbl = if state.use_groups {
+        format!("✓ {groups_base}")
+    } else {
+        groups_base.to_string()
+    };
+    let btn_groups = make_context_menu_button(&groups_lbl);
+    {
+        let pop = popover.downgrade();
+        let aw = anchor_widget.downgrade();
+        btn_groups.connect_clicked(move |_| {
+            if let Some(p) = pop.upgrade() {
+                popdown_popover_lifo(&p);
+            }
+            if let Some(w) = aw.upgrade() {
+                let _ = w.activate_action("win.toggle_use_groups", None);
+            }
+        });
+    }
+    main_box.append(&btn_groups);
+
+    // 4. Ordenar por >
+    let sort_trigger = make_context_menu_icon_button(
+        if es { "Ordenar por" } else { "Sort By" },
+        None,
+        true,
+    );
+    let sort_sub = gtk4::Box::new(gtk4::Orientation::Vertical, 2);
+    for (sort_variant, lbl_es, lbl_en) in [
+        (crate::state::SortBy::Name, "Nombre", "Name"),
+        (crate::state::SortBy::Kind, "Clase", "Kind"),
+        (
+            crate::state::SortBy::DateLastOpened,
+            "Fecha de última apertura",
+            "Date Last Opened",
+        ),
+        (
+            crate::state::SortBy::DateAdded,
+            "Fecha en que se agregó",
+            "Date Added",
+        ),
+        (
+            crate::state::SortBy::DateModified,
+            "Fecha de modificación",
+            "Date Modified",
+        ),
+        (
+            crate::state::SortBy::DateCreated,
+            "Fecha de creación",
+            "Date Created",
+        ),
+        (crate::state::SortBy::Size, "Tamaño", "Size"),
+        (crate::state::SortBy::Tags, "Etiquetas", "Tags"),
+    ] {
+        let lbl = if es { lbl_es } else { lbl_en };
+        let item_btn = make_check_menu_button(lbl, state.sort_by == sort_variant, false);
+        let id = sort_variant.as_str();
+        let pop = popover.downgrade();
+        let aw = anchor_widget.downgrade();
+        item_btn.connect_clicked(move |_| {
+            if let Some(p) = pop.upgrade() {
+                popdown_popover_lifo(&p);
+            }
+            if let Some(w) = aw.upgrade() {
+                let _ = w.activate_action("win.sort_by", Some(&id.to_variant()));
+            }
+        });
+        sort_sub.append(&item_btn);
+    }
+    main_box.append(&sort_trigger);
+    attach_cascading_submenu(&popover, &main_box, &sort_trigger, &sort_sub, &all_submenus);
+
+    // 5. Mostrar opciones de visualización
+    let btn_options = make_context_menu_button(if es {
+        "Mostrar opciones de visualización"
+    } else {
+        "Show View Options"
+    });
+    {
+        let pop = popover.downgrade();
+        let aw = anchor_widget.downgrade();
+        btn_options.connect_clicked(move |_| {
+            if let Some(p) = pop.upgrade() {
+                popdown_popover_lifo(&p);
+            }
+            if let Some(w) = aw.upgrade() {
+                let _ = w.activate_action("win.show_view_options", None);
+            }
+        });
+    }
+    main_box.append(&btn_options);
+
+    popover.set_child(Some(&main_box));
     popover.popup();
 }
 
@@ -1911,6 +1980,9 @@ mod tests {
             size,
             size_str: "1 KB".to_string(),
             modified: None,
+            accessed: None,
+            added: None,
+            created: None,
             modified_str: "--".to_string(),
             kind_str: "Imagen".to_string(),
             gicon: gio::ThemedIcon::new("image-x-generic").upcast(),
@@ -2000,6 +2072,9 @@ mod tests {
             size: 128,
             size_str: "128 B".to_string(),
             modified: None,
+            accessed: None,
+            added: None,
+            created: None,
             modified_str: "--".to_string(),
             kind_str: "Texto".to_string(),
             gicon: gio::ThemedIcon::new("text-x-generic").upcast(),

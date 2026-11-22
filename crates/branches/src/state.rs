@@ -13,26 +13,38 @@ pub enum ViewMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortBy {
     Name,
-    DateModified,
-    Size,
     Kind,
+    DateLastOpened,
+    DateAdded,
+    DateModified,
+    DateCreated,
+    Size,
+    Tags,
 }
 
 impl SortBy {
     pub fn as_str(self) -> &'static str {
         match self {
             SortBy::Name => "name",
-            SortBy::DateModified => "date",
-            SortBy::Size => "size",
             SortBy::Kind => "kind",
+            SortBy::DateLastOpened => "date_last_opened",
+            SortBy::DateAdded => "date_added",
+            SortBy::DateModified => "date",
+            SortBy::DateCreated => "date_created",
+            SortBy::Size => "size",
+            SortBy::Tags => "tags",
         }
     }
 
     pub fn from_str(s: &str) -> Self {
         match s {
-            "date" => SortBy::DateModified,
-            "size" => SortBy::Size,
             "kind" => SortBy::Kind,
+            "date_last_opened" => SortBy::DateLastOpened,
+            "date_added" => SortBy::DateAdded,
+            "date" | "date_modified" => SortBy::DateModified,
+            "date_created" => SortBy::DateCreated,
+            "size" => SortBy::Size,
+            "tags" => SortBy::Tags,
             _ => SortBy::Name,
         }
     }
@@ -179,9 +191,25 @@ mod tests {
     #[test]
     fn history_steps_and_sort_conversions_work() {
         assert_eq!(SortBy::from_str("date"), SortBy::DateModified);
+        assert_eq!(SortBy::from_str("date_last_opened"), SortBy::DateLastOpened);
+        assert_eq!(SortBy::from_str("date_added"), SortBy::DateAdded);
+        assert_eq!(SortBy::from_str("date_created"), SortBy::DateCreated);
         assert_eq!(SortBy::from_str("size"), SortBy::Size);
         assert_eq!(SortBy::from_str("kind"), SortBy::Kind);
+        assert_eq!(SortBy::from_str("tags"), SortBy::Tags);
         assert_eq!(SortBy::from_str("other"), SortBy::Name);
+        for s in [
+            SortBy::Name,
+            SortBy::Kind,
+            SortBy::DateLastOpened,
+            SortBy::DateAdded,
+            SortBy::DateModified,
+            SortBy::DateCreated,
+            SortBy::Size,
+            SortBy::Tags,
+        ] {
+            assert_eq!(SortBy::from_str(s.as_str()), s);
+        }
         assert_eq!(SortOrder::from_str("desc"), SortOrder::Descending);
         assert_eq!(SortOrder::from_str("asc"), SortOrder::Ascending);
 

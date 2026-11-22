@@ -88,50 +88,8 @@ impl GalleryView {
         bg_click.set_button(gdk::BUTTON_SECONDARY);
         let g_bg = gallery.clone();
         bg_click.connect_pressed(move |g, _n, x, y| {
-            let Some(dir) = g_bg.current_folder.borrow().clone() else {
-                return;
-            };
             g.set_state(gtk4::EventSequenceState::Claimed);
-            let nav = g_bg.on_navigate.clone();
-            let dir_reload = dir.clone();
-            let g_create = g_bg.clone();
-            crate::views::show_background_create_menu(
-                &g_bg.canvas_holder,
-                x,
-                y,
-                dir,
-                Rc::new(move |created_path| {
-                    if let Some(new_name) = created_path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                    {
-                        g_create.queue_select_name(&new_name);
-                    }
-                    nav(dir_reload.clone());
-
-                    let g_lookup = g_create.clone();
-                    let target_path = created_path;
-                    let g_rename = g_create.clone();
-                    let nav_rename = nav.clone();
-                    let dir_rename = dir_reload.clone();
-                    let on_renamed: crate::views::RenameCallback = Rc::new(move |renamed_path| {
-                        if let Some(renamed_name) = renamed_path.file_name() {
-                            g_rename.queue_select_name(&renamed_name.to_string_lossy());
-                        }
-                        nav_rename(dir_rename.clone());
-                    });
-                    crate::views::schedule_inline_rename(
-                        move || {
-                            let (item, widget) = g_lookup.get_selected_item_and_widget()?;
-                            if item.path != target_path {
-                                return None;
-                            }
-                            Some((item.path, item.is_dir, widget))
-                        },
-                        Some(on_renamed),
-                    );
-                }),
-            );
+            crate::views::show_background_context_menu(&g_bg.canvas_holder, x, y);
         });
         gallery.canvas_holder.add_controller(bg_click);
 

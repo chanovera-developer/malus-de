@@ -38,6 +38,8 @@ pub struct FolderPane {
     pane_header: GtkBox,
     pane_title: Label,
     items_cache: Rc<RefCell<Vec<FileItem>>>,
+    use_groups: Rc<Cell<bool>>,
+    kind_filter: Rc<RefCell<Option<String>>>,
     self_weak_ref: RefCell<Weak<Self>>,
     dir_monitor: RefCell<Option<(PathBuf, gio::FileMonitor)>>,
     pending_sync: Rc<Cell<Option<glib::SourceId>>>,
@@ -169,6 +171,8 @@ impl FolderPane {
             pane_header,
             pane_title,
             items_cache,
+            use_groups: Rc::new(Cell::new(false)),
+            kind_filter: Rc::new(RefCell::new(None)),
             self_weak_ref: RefCell::new(Weak::new()),
             dir_monitor: RefCell::new(None),
             pending_sync: Rc::new(Cell::new(None)),
@@ -182,6 +186,11 @@ impl FolderPane {
 
         *folder_pane.self_weak_ref.borrow_mut() = Rc::downgrade(&folder_pane);
         *self_weak.borrow_mut() = Some(folder_pane.clone());
+        if let Ok(conn) = crate::db::open_db() {
+            folder_pane
+                .use_groups
+                .set(crate::db::get_use_groups(&conn, &initial_path));
+        }
         folder_pane.reload();
 
         folder_pane
@@ -258,6 +267,9 @@ impl FolderPane {
         }
         let was_virtual = self.virtual_folder.borrow_mut().take().is_some();
         let changed = self.state.borrow_mut().navigate_to(target.clone());
+        if let Ok(conn) = crate::db::open_db() {
+            self.use_groups.set(crate::db::get_use_groups(&conn, &target));
+        }
         if changed || was_virtual {
             (self.on_activated)(self.id);
             self.reload();
@@ -273,6 +285,9 @@ impl FolderPane {
             return false;
         };
         *self.virtual_folder.borrow_mut() = None;
+        if let Ok(conn) = crate::db::open_db() {
+            self.use_groups.set(crate::db::get_use_groups(&conn, &path));
+        }
         self.reload();
         (self.on_path_changed)(self.id, path);
         true
@@ -330,7 +345,91 @@ impl FolderPane {
             s.sort_by = sort_by;
             s.sort_order = sort_order;
         }
+        self.list_view.clear_sort_state();
         self.reload();
+    }
+
+    pub fn use_groups(&self) -> bool {
+        self.use_groups.get()
+    }
+
+    pub fn set_use_groups(&self, enabled: bool) {
+        self.use_groups.set(enabled);
+        if self.virtual_folder.borrow().is_none() {
+            let folder = self.current_path();
+            if let Ok(conn) = crate::db::open_db() {
+                let _ = crate::db::set_use_groups(&conn, &folder, enabled);
+            }
+        }
+        self.reload();
+    }
+
+    pub fn kind_filter(&self) -> Option<String> {
+        self.kind_filter.borrow().clone()
+    }
+
+    pub fn set_kind_filter(&self, filter: Option<String>) {
+        let normalized = filter.filter(|s| !s.is_empty() && s != "all");
+        *self.kind_filter.borrow_mut() = normalized;
+        self.reload();
+    }
+
+    pub fn icon_layout_mode(&self) -> crate::db::LayoutMode {
+        self.icon_view.layout_mode()
+    }
+
+    pub fn set_icon_layout_mode(&self, mode: crate::db::LayoutMode) {
+        self.icon_view.set_layout_mode(mode);
+    }
+
+    pub fn rearrange_icon_grid(&self) {
+        self.icon_view.rearrange_grid();
+    }
+
+    pub fn set_show_hidden(&self, show: bool) {
+        self.state.borrow_mut().show_hidden = show;
+        self.reload();
+    }
+
+    pub fn show_hidden(&self) -> bool {
+        self.state.borrow().show_hidden
+    }
+
+    fn prepare_items(
+        &self,
+        mut items: Vec<FileItem>,
+        sort_by: crate::state::SortBy,
+        sort_order: crate::state::SortOrder,
+    ) -> (Vec<FileItem>, Option<Vec<String>>) {
+        let filter = self.kind_filter.borrow().clone();
+        if let Some(ref f) = filter {
+            items.retain(|it| crate::fs_backend::item_matches_kind_filter(it, Some(f.as_str())));
+        }
+        let use_groups = self.use_groups.get();
+        let tags_map = if use_groups || sort_by == crate::state::SortBy::Tags {
+            crate::views::load_tags_map()
+        } else {
+            std::collections::HashMap::new()
+        };
+        crate::fs_backend::sort_file_items_with_tags(
+            &mut items,
+            sort_by,
+            sort_order,
+            &tags_map,
+            use_groups,
+        );
+        let groups = if use_groups {
+            let es = malus_de_common::is_spanish_locale();
+            Some(
+                items
+                    .iter()
+                    .map(|it| crate::fs_backend::item_group_label(it, sort_by, &tags_map, es))
+                    .collect(),
+            )
+        } else {
+            None
+        };
+        (items, groups)
     }
 
     pub fn go_up(&self) -> bool {
@@ -438,11 +537,10 @@ impl FolderPane {
                     Ok(paths) => {
                         if let Some(pane) = weak_self.upgrade() {
                             if pane.search_gen.get() == next_gen {
-                                let mut items: Vec<FileItem> = paths
+                                let items: Vec<FileItem> = paths
                                     .into_iter()
                                     .filter_map(|p| FileItem::from_path(&p))
                                     .collect();
-                                crate::fs_backend::sort_file_items(&mut items, sort_by, sort_order);
                                 pane.apply_items_snapshot(items);
                             }
                         }
@@ -463,13 +561,14 @@ impl FolderPane {
             &search_query,
         ) {
             Ok(items) => {
+                let (items, groups) = self.prepare_items(items, sort_by, sort_order);
                 let count = items.len();
                 self.icon_view.set_current_folder(Some(&current_path));
                 self.list_view.set_current_folder(Some(&current_path));
                 self.column_view.set_current_folder(Some(&current_path));
                 self.gallery_view.set_current_folder(Some(&current_path));
-                self.icon_view.set_items(&items);
-                self.list_view.set_items(&items);
+                self.icon_view.set_items_grouped(&items, groups.as_deref());
+                self.list_view.set_items_grouped(&items, groups.as_deref());
                 self.column_view
                     .set_root(&current_path, &items, show_hidden, sort_by, sort_order);
                 self.gallery_view.set_items(&items);
@@ -595,6 +694,8 @@ impl FolderPane {
             return;
         };
 
+        let (items, groups) = self.prepare_items(items, sort_by, sort_order);
+
         let same_snapshot = {
             let prev = self.items_cache.borrow();
             snapshots_equal(&prev, &items)
@@ -604,8 +705,12 @@ impl FolderPane {
         }
 
         let count = items.len();
-        self.icon_view.sync_items_incremental(&items);
-        self.list_view.set_items(&items);
+        if let Some(ref grp) = groups {
+            self.icon_view.set_items_grouped(&items, Some(grp.as_slice()));
+        } else {
+            self.icon_view.sync_items_incremental(&items);
+        }
+        self.list_view.set_items_grouped(&items, groups.as_deref());
         self.column_view
             .set_root(&current_path, &items, show_hidden, sort_by, sort_order);
         self.gallery_view.set_items(&items);
@@ -853,13 +958,14 @@ impl FolderPane {
                 s.sort_order,
             )
         };
+        let (items, groups) = self.prepare_items(items, sort_by, sort_order);
         let count = items.len();
         self.icon_view.set_current_folder(None);
         self.list_view.set_current_folder(None);
         self.column_view.set_current_folder(None);
         self.gallery_view.set_current_folder(None);
-        self.icon_view.set_items(&items);
-        self.list_view.set_items(&items);
+        self.icon_view.set_items_grouped(&items, groups.as_deref());
+        self.list_view.set_items_grouped(&items, groups.as_deref());
         self.column_view
             .set_root(&current_path, &items, show_hidden, sort_by, sort_order);
         self.gallery_view.set_items(&items);
@@ -1065,6 +1171,9 @@ mod tests {
             size,
             size_str: format!("{size} B"),
             modified: None,
+            accessed: None,
+            added: None,
+            created: None,
             modified_str: "--".to_string(),
             kind_str: "Archivo".to_string(),
             gicon: gio::ThemedIcon::new("text-x-generic").upcast(),

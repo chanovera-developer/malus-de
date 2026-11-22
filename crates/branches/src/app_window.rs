@@ -253,6 +253,41 @@ pub fn reload_all_open_windows() {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct BackgroundMenuState {
+    pub view_mode: &'static str,
+    pub sort_by: crate::state::SortBy,
+    pub use_groups: bool,
+    pub search_criteria_visible: bool,
+}
+
+pub fn background_menu_state_for_widget(
+    widget: &impl gtk4::prelude::IsA<gtk4::Widget>,
+) -> Option<BackgroundMenuState> {
+    let root_widget = widget.root()?.upcast::<gtk4::Widget>();
+    let bw = OPEN_BRANCHES_WINDOWS.with(|cell| {
+        let mut list = cell.borrow_mut();
+        list.retain(|w| w.strong_count() > 0);
+        list.iter()
+            .filter_map(Weak::upgrade)
+            .find(|w| w.window.upcast_ref::<gtk4::Widget>() == &root_widget)
+    })?;
+    let pane = bw.active_pane();
+    let view_mode = match pane.view_mode().as_str() {
+        "list" => "list",
+        "columns" => "columns",
+        "gallery" => "gallery",
+        _ => "icons",
+    };
+    let (sort_by, _) = pane.sort_settings();
+    Some(BackgroundMenuState {
+        view_mode,
+        sort_by,
+        use_groups: pane.use_groups(),
+        search_criteria_visible: bw.search_criteria_bar.is_visible(),
+    })
+}
+
 pub struct BranchesWindow {
     window: ApplicationWindow,
     root_overlay: Overlay,
@@ -266,6 +301,10 @@ pub struct BranchesWindow {
     tab_bar_box: GtkBox,
     tabs_strip: GtkBox,
     trash_banner_box: GtkBox,
+    search_criteria_bar: GtkBox,
+    criteria_kind_btns: Rc<Vec<(String, ToggleButton)>>,
+    criteria_recursive_btn: ToggleButton,
+    view_options_window: Rc<RefCell<Option<gtk4::Window>>>,
     tab_stack: Stack,
     split_btn: Button,
     back_btn: Button,
@@ -452,9 +491,13 @@ impl BranchesWindow {
         let sort_by_sec = gio::Menu::new();
         for (id, lbl_es, lbl_en) in [
             ("name", "Nombre", "Name"),
-            ("date", "Fecha de modificación", "Date Modified"),
-            ("size", "Tamaño", "Size"),
             ("kind", "Clase", "Kind"),
+            ("date_last_opened", "Fecha de última apertura", "Date Last Opened"),
+            ("date_added", "Fecha en que se agregó", "Date Added"),
+            ("date", "Fecha de modificación", "Date Modified"),
+            ("date_created", "Fecha de creación", "Date Created"),
+            ("size", "Tamaño", "Size"),
+            ("tags", "Etiquetas", "Tags"),
         ] {
             let item = gio::MenuItem::new(Some(if es_ui { lbl_es } else { lbl_en }), None);
             item.set_action_and_target_value(Some("win.sort_by"), Some(&id.to_variant()));
@@ -935,9 +978,113 @@ impl BranchesWindow {
             .child(&header_toolbar)
             .hexpand(true)
             .build();
+        let search_criteria_bar = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(6)
+            .visible(false)
+            .css_classes(["branches-search-criteria-bar"])
+            .build();
+        let criteria_lbl = Label::builder()
+            .label(if es_ui { "Criterios:" } else { "Criteria:" })
+            .css_classes(["branches-criteria-label"])
+            .build();
+        search_criteria_bar.append(&criteria_lbl);
+
+        let mut criteria_kind_btns: Vec<(String, ToggleButton)> = Vec::new();
+        for (id, lbl_es, lbl_en) in [
+            ("all", "Todo", "All"),
+            ("folders", "Carpetas", "Folders"),
+            ("images", "Imágenes", "Images"),
+            ("documents", "Documentos", "Documents"),
+            ("videos", "Vídeos", "Videos"),
+            ("audio", "Audio", "Audio"),
+            ("archives", "Archivos", "Archives"),
+        ] {
+            let chip = ToggleButton::builder()
+                .label(if es_ui { lbl_es } else { lbl_en })
+                .active(id == "all")
+                .css_classes(["branches-criteria-chip"])
+                .build();
+            search_criteria_bar.append(&chip);
+            criteria_kind_btns.push((id.to_string(), chip));
+        }
+        let criteria_kind_btns = Rc::new(criteria_kind_btns);
+        for (id, chip) in criteria_kind_btns.iter() {
+            let bw_chip = win_weak_holder.clone();
+            let chips_ref = criteria_kind_btns.clone();
+            let filter_id = id.clone();
+            chip.connect_toggled(move |btn| {
+                if !btn.is_active() {
+                    if !chips_ref.iter().any(|(_, b)| b.is_active()) {
+                        btn.set_active(true);
+                    }
+                    return;
+                }
+                for (other_id, other_btn) in chips_ref.iter() {
+                    if *other_id != filter_id && other_btn.is_active() {
+                        other_btn.set_active(false);
+                    }
+                }
+                if let Some(bw) = bw_chip.borrow().upgrade() {
+                    if !bw.syncing_ui.get() {
+                        let filter = if filter_id == "all" {
+                            None
+                        } else {
+                            Some(filter_id.clone())
+                        };
+                        bw.active_pane().set_kind_filter(filter);
+                        bw.sync_active_tab_ui();
+                    }
+                }
+            });
+        }
+
+        let criteria_spacer = GtkBox::new(Orientation::Horizontal, 0);
+        criteria_spacer.set_hexpand(true);
+        search_criteria_bar.append(&criteria_spacer);
+
+        let criteria_recursive_btn = ToggleButton::builder()
+            .label(if es_ui { "Subcarpetas" } else { "Subfolders" })
+            .css_classes(["branches-criteria-chip"])
+            .build();
+        {
+            let bw_rec = win_weak_holder.clone();
+            criteria_recursive_btn.connect_toggled(move |btn| {
+                if let Some(bw) = bw_rec.borrow().upgrade() {
+                    if !bw.syncing_ui.get() {
+                        bw.active_pane().set_search_recursive(btn.is_active());
+                    }
+                }
+            });
+        }
+        search_criteria_bar.append(&criteria_recursive_btn);
+
+        let criteria_close_btn = Button::builder()
+            .icon_name("window-close-symbolic")
+            .has_frame(false)
+            .tooltip_text(if es_ui {
+                "Ocultar criterios de búsqueda"
+            } else {
+                "Hide Search Criteria"
+            })
+            .build();
+        {
+            let bar_ref = search_criteria_bar.clone();
+            let bw_close = win_weak_holder.clone();
+            criteria_close_btn.connect_clicked(move |_| {
+                bar_ref.set_visible(false);
+                if let Some(bw) = bw_close.borrow().upgrade() {
+                    bw.active_pane().set_kind_filter(None);
+                    bw.sync_active_tab_ui();
+                }
+            });
+        }
+        search_criteria_bar.append(&criteria_close_btn);
+
         right_pane.append(&header_handle);
         right_pane.append(&tab_bar_box);
         right_pane.append(&trash_banner_box);
+        right_pane.append(&search_criteria_bar);
         right_pane.append(&tab_stack);
         right_pane.append(path_bar.widget());
         right_pane.append(status_bar.widget());
@@ -981,6 +1128,10 @@ impl BranchesWindow {
             tab_bar_box,
             tabs_strip,
             trash_banner_box,
+            search_criteria_bar,
+            criteria_kind_btns,
+            criteria_recursive_btn,
+            view_options_window: Rc::new(RefCell::new(None)),
             tab_stack,
             split_btn,
             back_btn,
@@ -1622,6 +1773,11 @@ impl BranchesWindow {
         self.search_entry.set_text(&query);
         self.search_recursive_action
             .set_state(&pane.search_recursive().to_variant());
+        let active_kind = pane.kind_filter().unwrap_or_else(|| "all".to_string());
+        for (id, btn) in self.criteria_kind_btns.iter() {
+            btn.set_active(*id == active_kind);
+        }
+        self.criteria_recursive_btn.set_active(pane.search_recursive());
         if query.is_empty() {
             self.search_toggle_btn.remove_css_class("has-query");
             if !self.search_entry.has_focus() && self.is_search_expanded() {
@@ -2760,7 +2916,357 @@ impl BranchesWindow {
         });
         actions.add_action(&act_conn);
 
+        let bw_vm = self.clone_ref();
+        let act_vm = gio::SimpleAction::new("set_view_mode", Some(glib::VariantTy::STRING));
+        act_vm.connect_activate(move |_, param| {
+            if let Some(mode) = param.and_then(|v| v.str()) {
+                bw_vm.active_pane().set_view_mode(mode);
+                bw_vm.sync_active_tab_ui();
+            }
+        });
+        actions.add_action(&act_vm);
+
+        let bw_grp = self.clone_ref();
+        let act_grp = gio::SimpleAction::new("toggle_use_groups", None);
+        act_grp.connect_activate(move |_, _| {
+            let pane = bw_grp.active_pane();
+            pane.set_use_groups(!pane.use_groups());
+            bw_grp.sync_active_tab_ui();
+        });
+        actions.add_action(&act_grp);
+
+        let bw_crit = self.clone_ref();
+        let act_crit = gio::SimpleAction::new("toggle_search_criteria", None);
+        act_crit.connect_activate(move |_, _| {
+            let next = !bw_crit.search_criteria_bar.is_visible();
+            bw_crit.search_criteria_bar.set_visible(next);
+            if next {
+                if !bw_crit.is_search_expanded() {
+                    bw_crit.expand_search();
+                } else {
+                    bw_crit.search_entry.grab_focus();
+                }
+            } else {
+                bw_crit.active_pane().set_kind_filter(None);
+            }
+            bw_crit.sync_active_tab_ui();
+        });
+        actions.add_action(&act_crit);
+
+        let bw_vo = self.clone_ref();
+        let act_vo = gio::SimpleAction::new("show_view_options", None);
+        act_vo.connect_activate(move |_, _| {
+            bw_vo.open_view_options_window();
+        });
+        actions.add_action(&act_vo);
+
         self.window.insert_action_group("win", Some(&actions));
+    }
+
+    fn open_view_options_window(&self) {
+        if let Some(existing) = self.view_options_window.borrow_mut().take() {
+            existing.close();
+        }
+
+        let es = malus_de_common::is_spanish_locale();
+        let pane = self.active_pane();
+        let folder_name = Self::pane_display_title(&pane);
+        let cfg = malus_de_common::config::BranchesConfig::load();
+
+        let win = gtk4::Window::builder()
+            .title(if es {
+                format!("Opciones de visualización — {folder_name}")
+            } else {
+                format!("View Options — {folder_name}")
+            })
+            .transient_for(&self.window)
+            .resizable(false)
+            .default_width(310)
+            .css_classes(["branches-view-options-window"])
+            .build();
+
+        let vbox = GtkBox::builder()
+            .orientation(Orientation::Vertical)
+            .spacing(10)
+            .css_classes(["branches-view-options-box"])
+            .build();
+
+        // 1. Usar grupos
+        let row_groups = GtkBox::new(Orientation::Horizontal, 8);
+        let lbl_groups = Label::builder()
+            .label(if es { "Usar grupos" } else { "Use Groups" })
+            .halign(Align::Start)
+            .hexpand(true)
+            .css_classes(["branches-view-options-section"])
+            .build();
+        let sw_groups = gtk4::Switch::builder()
+            .active(pane.use_groups())
+            .valign(Align::Center)
+            .build();
+        {
+            let bw = self.clone_ref();
+            sw_groups.connect_state_set(move |_, state| {
+                bw.active_pane().set_use_groups(state);
+                bw.sync_active_tab_ui();
+                glib::Propagation::Proceed
+            });
+        }
+        row_groups.append(&lbl_groups);
+        row_groups.append(&sw_groups);
+        vbox.append(&row_groups);
+
+        // 2. Ordenar por
+        let sort_options = [
+            (crate::state::SortBy::Name, "Nombre", "Name"),
+            (crate::state::SortBy::Kind, "Clase", "Kind"),
+            (
+                crate::state::SortBy::DateLastOpened,
+                "Fecha de última apertura",
+                "Date Last Opened",
+            ),
+            (
+                crate::state::SortBy::DateAdded,
+                "Fecha en que se agregó",
+                "Date Added",
+            ),
+            (
+                crate::state::SortBy::DateModified,
+                "Fecha de modificación",
+                "Date Modified",
+            ),
+            (
+                crate::state::SortBy::DateCreated,
+                "Fecha de creación",
+                "Date Created",
+            ),
+            (crate::state::SortBy::Size, "Tamaño", "Size"),
+            (crate::state::SortBy::Tags, "Etiquetas", "Tags"),
+        ];
+        let (curr_sort, _) = pane.sort_settings();
+        let sort_labels: Vec<&str> = sort_options
+            .iter()
+            .map(|(_, es_l, en_l)| if es { *es_l } else { *en_l })
+            .collect();
+        let sort_dd = gtk4::DropDown::from_strings(&sort_labels);
+        if let Some(pos) = sort_options.iter().position(|(s, _, _)| *s == curr_sort) {
+            sort_dd.set_selected(pos as u32);
+        }
+        {
+            let bw = self.clone_ref();
+            let sort_ids: Vec<crate::state::SortBy> =
+                sort_options.iter().map(|(s, _, _)| *s).collect();
+            sort_dd.connect_selected_notify(move |dd| {
+                let idx = dd.selected() as usize;
+                if let Some(&sb) = sort_ids.get(idx) {
+                    let p = bw.active_pane();
+                    let (_, order) = p.sort_settings();
+                    p.set_sort(sb, order);
+                    bw.sort_by_action.set_state(&sb.as_str().to_variant());
+                }
+            });
+        }
+        let row_sort = GtkBox::new(Orientation::Horizontal, 8);
+        row_sort.append(
+            &Label::builder()
+                .label(if es { "Ordenar por:" } else { "Sort By:" })
+                .halign(Align::Start)
+                .hexpand(true)
+                .css_classes(["branches-view-options-section"])
+                .build(),
+        );
+        row_sort.append(&sort_dd);
+        vbox.append(&row_sort);
+
+        // 3. Disposición de iconos (para vista de íconos)
+        let layout_modes = [
+            (crate::db::LayoutMode::Auto, "Cuadrícula automática", "Auto Grid"),
+            (
+                crate::db::LayoutMode::SnapToGrid,
+                "Alinear a la cuadrícula",
+                "Snap to Grid",
+            ),
+            (crate::db::LayoutMode::Freeform, "Colocación libre", "Freeform"),
+        ];
+        let layout_labels: Vec<&str> = layout_modes
+            .iter()
+            .map(|(_, es_l, en_l)| if es { *es_l } else { *en_l })
+            .collect();
+        let layout_dd = gtk4::DropDown::from_strings(&layout_labels);
+        let curr_layout = pane.icon_layout_mode();
+        if let Some(pos) = layout_modes.iter().position(|(m, _, _)| *m == curr_layout) {
+            layout_dd.set_selected(pos as u32);
+        }
+        {
+            let bw = self.clone_ref();
+            let modes: Vec<crate::db::LayoutMode> =
+                layout_modes.iter().map(|(m, _, _)| *m).collect();
+            layout_dd.connect_selected_notify(move |dd| {
+                let idx = dd.selected() as usize;
+                if let Some(&mode) = modes.get(idx) {
+                    bw.active_pane().set_icon_layout_mode(mode);
+                }
+            });
+        }
+        let row_layout = GtkBox::new(Orientation::Horizontal, 8);
+        row_layout.append(
+            &Label::builder()
+                .label(if es { "Disposición:" } else { "Arrange:" })
+                .halign(Align::Start)
+                .hexpand(true)
+                .css_classes(["branches-view-options-section"])
+                .build(),
+        );
+        row_layout.append(&layout_dd);
+        vbox.append(&row_layout);
+
+        let btn_rearrange = Button::builder()
+            .label(if es {
+                "Reordenar cuadrícula"
+            } else {
+                "Clean Up Grid"
+            })
+            .build();
+        {
+            let bw = self.clone_ref();
+            btn_rearrange.connect_clicked(move |_| {
+                bw.active_pane().rearrange_icon_grid();
+            });
+        }
+        vbox.append(&btn_rearrange);
+        vbox.append(&gtk4::Separator::new(Orientation::Horizontal));
+
+        // 4. Tamaño de los iconos
+        let add_slider_row = |parent: &GtkBox,
+                              title: &str,
+                              min: f64,
+                              max: f64,
+                              step: f64,
+                              initial: f64,
+                              on_change: Box<dyn Fn(u32)>| {
+            let section = GtkBox::new(Orientation::Vertical, 2);
+            let top = GtkBox::new(Orientation::Horizontal, 6);
+            let lbl = Label::builder()
+                .label(title)
+                .halign(Align::Start)
+                .hexpand(true)
+                .css_classes(["branches-view-options-section"])
+                .build();
+            let val_lbl = Label::builder()
+                .label(format!("{} px", initial.round() as u32))
+                .css_classes(["dim-label"])
+                .build();
+            top.append(&lbl);
+            top.append(&val_lbl);
+
+            let scale = gtk4::Scale::with_range(Orientation::Horizontal, min, max, step);
+            scale.set_value(initial);
+            scale.set_draw_value(false);
+            let val_lbl_c = val_lbl.clone();
+            scale.connect_value_changed(move |s| {
+                let v = s.value().round() as u32;
+                val_lbl_c.set_label(&format!("{v} px"));
+                on_change(v);
+            });
+            section.append(&top);
+            section.append(&scale);
+            parent.append(&section);
+        };
+
+        let bw_icon = self.clone_ref();
+        add_slider_row(
+            &vbox,
+            if es { "Tamaño de los íconos" } else { "Icon Size" },
+            malus_de_common::config::BranchesConfig::MIN_ICON_SIZE as f64,
+            malus_de_common::config::BranchesConfig::MAX_ICON_SIZE as f64,
+            4.0,
+            cfg.icon_size as f64,
+            Box::new(move |v| {
+                let mut c = malus_de_common::config::BranchesConfig::load();
+                c.icon_size = v;
+                let _ = c.save();
+                bw_icon.apply_branches_config(&c);
+            }),
+        );
+
+        let bw_sp = self.clone_ref();
+        add_slider_row(
+            &vbox,
+            if es {
+                "Espacio en la cuadrícula"
+            } else {
+                "Grid Spacing"
+            },
+            malus_de_common::config::BranchesConfig::MIN_GRID_SPACING as f64,
+            malus_de_common::config::BranchesConfig::MAX_GRID_SPACING as f64,
+            2.0,
+            cfg.grid_spacing as f64,
+            Box::new(move |v| {
+                let mut c = malus_de_common::config::BranchesConfig::load();
+                c.grid_spacing = v;
+                let _ = c.save();
+                bw_sp.apply_branches_config(&c);
+            }),
+        );
+
+        let bw_list_sz = self.clone_ref();
+        add_slider_row(
+            &vbox,
+            if es {
+                "Tamaño de lista"
+            } else {
+                "List Icon Size"
+            },
+            malus_de_common::config::BranchesConfig::MIN_LIST_ICON_SIZE as f64,
+            malus_de_common::config::BranchesConfig::MAX_LIST_ICON_SIZE as f64,
+            2.0,
+            cfg.list_icon_size as f64,
+            Box::new(move |v| {
+                let mut c = malus_de_common::config::BranchesConfig::load();
+                c.list_icon_size = v;
+                let _ = c.save();
+                bw_list_sz.apply_branches_config(&c);
+            }),
+        );
+
+        // 5. Mostrar archivos ocultos
+        let row_hidden = GtkBox::new(Orientation::Horizontal, 8);
+        row_hidden.append(
+            &Label::builder()
+                .label(if es {
+                    "Mostrar archivos ocultos"
+                } else {
+                    "Show Hidden Files"
+                })
+                .halign(Align::Start)
+                .hexpand(true)
+                .css_classes(["branches-view-options-section"])
+                .build(),
+        );
+        let sw_hidden = gtk4::Switch::builder()
+            .active(pane.show_hidden())
+            .valign(Align::Center)
+            .build();
+        {
+            let bw_hid = self.clone_ref();
+            sw_hidden.connect_state_set(move |_, state| {
+                let mut c = malus_de_common::config::BranchesConfig::load();
+                c.show_hidden = state;
+                let _ = c.save();
+                bw_hid.active_pane().set_show_hidden(state);
+                glib::Propagation::Proceed
+            });
+        }
+        row_hidden.append(&sw_hidden);
+        vbox.append(&row_hidden);
+
+        win.set_child(Some(&vbox));
+        let holder = self.view_options_window.clone();
+        win.connect_close_request(move |_| {
+            *holder.borrow_mut() = None;
+            glib::Propagation::Proceed
+        });
+        *self.view_options_window.borrow_mut() = Some(win.clone());
+        win.present();
     }
 
     fn prompt_new_folder(&self) {
@@ -3179,6 +3685,10 @@ impl BranchesWindow {
             tab_bar_box: self.tab_bar_box.clone(),
             tabs_strip: self.tabs_strip.clone(),
             trash_banner_box: self.trash_banner_box.clone(),
+            search_criteria_bar: self.search_criteria_bar.clone(),
+            criteria_kind_btns: self.criteria_kind_btns.clone(),
+            criteria_recursive_btn: self.criteria_recursive_btn.clone(),
+            view_options_window: self.view_options_window.clone(),
             tab_stack: self.tab_stack.clone(),
             split_btn: self.split_btn.clone(),
             back_btn: self.back_btn.clone(),

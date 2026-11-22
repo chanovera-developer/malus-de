@@ -271,7 +271,7 @@ impl ColumnViewInner {
     fn create_column_widget(
         self: &Rc<Self>,
         col_idx: usize,
-        path: PathBuf,
+        _path: PathBuf,
         items: Vec<FileItem>,
     ) -> (GtkBox, ListBox) {
         let col_box = GtkBox::new(Orientation::Vertical, 0);
@@ -301,60 +301,10 @@ impl ColumnViewInner {
 
         let bg_click = GestureClick::new();
         bg_click.set_button(gdk::BUTTON_SECONDARY);
-        let self_bg = self.clone();
         let scrolled_bg = scrolled.clone();
-        let col_dir = path.clone();
         bg_click.connect_pressed(move |g, _n, x, y| {
-            if !self_bg.can_create.get() {
-                return;
-            }
             g.set_state(gtk4::EventSequenceState::Claimed);
-            let nav = self_bg.on_navigate.clone();
-            let dir_reload = col_dir.clone();
-            let self_create = self_bg.clone();
-            crate::views::show_background_create_menu(
-                &scrolled_bg,
-                x,
-                y,
-                col_dir.clone(),
-                Rc::new(move |created_path| {
-                    if let Some(new_name) = created_path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                    {
-                        *self_create.pending_select_name.borrow_mut() = Some(new_name);
-                    }
-                    nav(dir_reload.clone());
-
-                    let inner_lookup = self_create.clone();
-                    let target_path = created_path;
-                    let inner_rename = self_create.clone();
-                    let nav_rename = nav.clone();
-                    let dir_rename = dir_reload.clone();
-                    let on_renamed: crate::views::RenameCallback = Rc::new(move |renamed_path| {
-                        if let Some(renamed_name) = renamed_path.file_name() {
-                            *inner_rename.pending_select_name.borrow_mut() =
-                                Some(renamed_name.to_string_lossy().into_owned());
-                        }
-                        nav_rename(dir_rename.clone());
-                    });
-                    crate::views::schedule_inline_rename(
-                        move || {
-                            let cols = inner_lookup.columns.borrow();
-                            cols.iter().rev().find_map(|col| {
-                                let (idx, item) = col
-                                    .items
-                                    .iter()
-                                    .enumerate()
-                                    .find(|(_, it)| it.path == target_path)?;
-                                let row = col.list_box.row_at_index(idx as i32)?;
-                                Some((item.path.clone(), item.is_dir, row.upcast()))
-                            })
-                        },
-                        Some(on_renamed),
-                    );
-                }),
-            );
+            crate::views::show_background_context_menu(&scrolled_bg, x, y);
         });
         scrolled.add_controller(bg_click);
 

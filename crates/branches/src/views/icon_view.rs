@@ -5,7 +5,7 @@ use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4::{
     Align, Box as GtkBox, Fixed, GestureClick, GestureDrag, Image, Label, Orientation, PolicyType,
-    Popover, ScrolledWindow,
+    ScrolledWindow,
 };
 use malus_de_common::config::{BranchesConfig, IconGridMetrics};
 use std::cell::{Cell, RefCell};
@@ -323,6 +323,8 @@ pub struct IconView {
     is_animating: Rc<Cell<bool>>,
     active_drag_offset: Rc<RefCell<Option<(PathBuf, (f64, f64))>>>,
     item_order: Rc<RefCell<Vec<String>>>,
+    item_group_map: Rc<RefCell<HashMap<String, String>>>,
+    group_headers: Rc<RefCell<Vec<gtk4::Widget>>>,
     item_widgets: Rc<RefCell<HashMap<String, Rc<RefCell<ItemWidgetData>>>>>,
     selected_items: Rc<RefCell<HashSet<String>>>,
     pending_select_names: Rc<RefCell<HashSet<String>>>,
@@ -362,6 +364,8 @@ impl IconView {
         let is_animating = Rc::new(Cell::new(false));
         let active_drag_offset = Rc::new(RefCell::new(None));
         let item_order = Rc::new(RefCell::new(Vec::new()));
+        let item_group_map = Rc::new(RefCell::new(HashMap::new()));
+        let group_headers = Rc::new(RefCell::new(Vec::new()));
         let item_widgets = Rc::new(RefCell::new(HashMap::new()));
         let selected_items = Rc::new(RefCell::new(HashSet::new()));
         let pending_select_names = Rc::new(RefCell::new(HashSet::new()));
@@ -381,6 +385,8 @@ impl IconView {
             is_animating,
             active_drag_offset,
             item_order,
+            item_group_map,
+            group_headers,
             item_widgets,
             selected_items,
             pending_select_names,
@@ -639,10 +645,41 @@ impl IconView {
             anim_gen: self.anim_gen.clone(),
             is_animating: self.is_animating.clone(),
             item_order: self.item_order.clone(),
+            item_group_map: self.item_group_map.clone(),
+            group_headers: self.group_headers.clone(),
             item_widgets: self.item_widgets.clone(),
             pending_select_names: self.pending_select_names.clone(),
             on_navigate: self.on_navigate.clone(),
         }
+    }
+
+    pub fn layout_mode(&self) -> LayoutMode {
+        *self.layout_mode.borrow()
+    }
+
+    pub fn set_layout_mode(&self, mode: LayoutMode) {
+        *self.layout_mode.borrow_mut() = mode;
+        let folder = self.current_folder.borrow().clone();
+        if let Ok(conn) = db::open_db() {
+            let _ = db::set_layout_mode(&conn, &folder, mode);
+        }
+        match mode {
+            LayoutMode::Auto => {
+                let vw = self.viewport_width();
+                let metrics = self.current_metrics();
+                self.last_auto_cols
+                    .set(columns_for_width(vw, metrics.cell_width()));
+                self.make_weak().relayout_auto_grid_with_width(vw, true);
+            }
+            LayoutMode::SnapToGrid => {
+                self.make_weak().snap_existing_to_grid();
+            }
+            LayoutMode::Freeform => {}
+        }
+    }
+
+    pub fn rearrange_grid(&self) {
+        self.make_weak().rearrange(true);
     }
 
     pub fn current_metrics(&self) -> IconGridMetrics {
@@ -774,7 +811,12 @@ impl IconView {
         &self.container
     }
 
+    #[allow(dead_code)]
     pub fn set_items(&self, items: &[FileItem]) {
+        self.set_items_grouped(items, None);
+    }
+
+    pub fn set_items_grouped(&self, items: &[FileItem], groups: Option<&[String]>) {
         // Cancelar cualquier animación de cuadrícula previa al cambiar/recargar carpeta
         self.anim_gen.set(self.anim_gen.get().wrapping_add(1));
         self.is_animating.set(false);
@@ -788,6 +830,16 @@ impl IconView {
                 self.fixed_canvas.remove(&c);
             }
             child = next;
+        }
+        self.group_headers.borrow_mut().clear();
+        {
+            let mut gmap = self.item_group_map.borrow_mut();
+            gmap.clear();
+            if let Some(grp_list) = groups.filter(|g| g.len() == items.len()) {
+                for (item, grp) in items.iter().zip(grp_list.iter()) {
+                    gmap.insert(item.name.clone(), grp.clone());
+                }
+            }
         }
         self.item_widgets.borrow_mut().clear();
         self.item_order.borrow_mut().clear();
@@ -846,44 +898,77 @@ impl IconView {
 
         let mut next_col = 0;
         let mut next_row = 0;
+        let mut cur_y = MARGIN_TOP;
+        let mut last_group: Option<&str> = None;
+        let is_grouped = groups.is_some_and(|g| g.len() == items.len());
         let mut max_x = 400;
         let mut max_y = 300;
 
         let mut new_positions_to_save: HashMap<String, (i32, i32)> = HashMap::new();
 
-        for item in items {
-            let (pos_x, pos_y) =
-                if current_mode != LayoutMode::Auto && db_positions.contains_key(&item.name) {
-                    let pos = db_positions[&item.name];
-                    if current_mode == LayoutMode::SnapToGrid {
-                        snap_to_grid_cell(pos.0, pos.1, cell_w, cell_h)
-                    } else {
-                        (pos.0, pos.1)
+        for (idx, item) in items.iter().enumerate() {
+            let (pos_x, pos_y) = if is_grouped {
+                let grp = groups.unwrap()[idx].as_str();
+                if last_group != Some(grp) {
+                    if last_group.is_some() && next_col > 0 {
+                        cur_y += cell_h;
+                        next_col = 0;
                     }
+                    if last_group.is_some() {
+                        cur_y += 10;
+                    }
+                    last_group = Some(grp);
+                    let hdr = Label::builder()
+                        .label(grp)
+                        .halign(Align::Start)
+                        .xalign(0.0)
+                        .can_target(false)
+                        .width_request((viewport_w - 2 * MARGIN_LEFT).max(200))
+                        .css_classes(["branches-group-header"])
+                        .build();
+                    self.fixed_canvas.put(&hdr, MARGIN_LEFT as f64, cur_y as f64);
+                    self.group_headers.borrow_mut().push(hdr.upcast());
+                    cur_y += 28;
+                }
+                let x = MARGIN_LEFT + next_col * cell_w;
+                let y = cur_y;
+                next_col += 1;
+                if next_col >= cols {
+                    next_col = 0;
+                    cur_y += cell_h;
+                }
+                (x, y)
+            } else if current_mode != LayoutMode::Auto && db_positions.contains_key(&item.name) {
+                let pos = db_positions[&item.name];
+                if current_mode == LayoutMode::SnapToGrid {
+                    snap_to_grid_cell(pos.0, pos.1, cell_w, cell_h)
                 } else {
-                    // Asignar siguiente celda libre según el ancho actual de la ventana
-                    while occupied_slots.contains(&(next_col, next_row)) {
-                        next_col += 1;
-                        if next_col >= cols {
-                            next_col = 0;
-                            row_advance(&mut next_row);
-                        }
-                    }
-                    let x = MARGIN_LEFT + next_col * cell_w;
-                    let y = MARGIN_TOP + next_row * cell_h;
-                    occupied_slots.insert((next_col, next_row));
-
+                    (pos.0, pos.1)
+                }
+            } else {
+                // Asignar siguiente celda libre según el ancho actual de la ventana
+                while occupied_slots.contains(&(next_col, next_row)) {
                     next_col += 1;
                     if next_col >= cols {
                         next_col = 0;
                         row_advance(&mut next_row);
                     }
+                }
+                let x = MARGIN_LEFT + next_col * cell_w;
+                let y = MARGIN_TOP + next_row * cell_h;
+                occupied_slots.insert((next_col, next_row));
 
-                    if current_mode != LayoutMode::Auto {
-                        new_positions_to_save.insert(item.name.clone(), (x, y));
-                    }
-                    (x, y)
-                };
+                next_col += 1;
+                if next_col >= cols {
+                    next_col = 0;
+                    row_advance(&mut next_row);
+                }
+
+                if current_mode != LayoutMode::Auto {
+                    new_positions_to_save.insert(item.name.clone(), (x, y));
+                }
+                (x, y)
+            };
 
             max_x = max_x.max(pos_x + cell_w);
             max_y = max_y.max(pos_y + cell_h);
@@ -1622,13 +1707,6 @@ impl IconView {
         let widgets = self.item_widgets.clone();
         let sel_cb = self.on_selection_changed.clone();
         let fixed = self.fixed_canvas.clone();
-        let folder_ref = self.current_folder.clone();
-        let layout_ref = self.layout_mode.clone();
-
-        let self_weak: Rc<RefCell<Option<IconViewWeak>>> = Rc::new(RefCell::new(None));
-        *self_weak.borrow_mut() = Some(self.make_weak());
-
-        let weak_for_click = self_weak.clone();
 
         click.connect_pressed(move |g, _n, x, y| {
             if is_point_over_spatial_icon(&fixed, &widgets.borrow(), x, y) {
@@ -1649,17 +1727,8 @@ impl IconView {
                     sel_cb(0);
                 }
             } else if button == gdk::BUTTON_SECONDARY {
-                // Menú contextual del lienzo de fondo
-                if let Some(ref w) = *weak_for_click.borrow() {
-                    show_canvas_context_menu(
-                        &fixed,
-                        x,
-                        y,
-                        folder_ref.clone(),
-                        layout_ref.clone(),
-                        w,
-                    );
-                }
+                g.set_state(gtk4::EventSequenceState::Claimed);
+                crate::views::show_background_context_menu(&fixed, x, y);
             }
         });
 
@@ -1999,6 +2068,7 @@ struct IconViewWeak {
     container: ScrolledWindow,
     fixed: Fixed,
     current_folder: Rc<RefCell<PathBuf>>,
+    #[allow(dead_code)]
     can_create_here: Rc<Cell<bool>>,
     layout_mode: Rc<RefCell<LayoutMode>>,
     active_icon_size: Rc<Cell<i32>>,
@@ -2007,8 +2077,12 @@ struct IconViewWeak {
     anim_gen: Rc<Cell<u64>>,
     is_animating: Rc<Cell<bool>>,
     item_order: Rc<RefCell<Vec<String>>>,
+    item_group_map: Rc<RefCell<HashMap<String, String>>>,
+    group_headers: Rc<RefCell<Vec<gtk4::Widget>>>,
     item_widgets: Rc<RefCell<HashMap<String, Rc<RefCell<ItemWidgetData>>>>>,
+    #[allow(dead_code)]
     pending_select_names: Rc<RefCell<HashSet<String>>>,
+    #[allow(dead_code)]
     on_navigate: NavigateCallback,
 }
 
@@ -2029,19 +2103,62 @@ impl IconViewWeak {
         let cell_h = metrics.cell_height();
         let cols = columns_for_width(available_width, cell_w);
 
+        for hdr in self.group_headers.borrow_mut().drain(..) {
+            if hdr.parent().is_some() {
+                self.fixed.remove(&hdr);
+            }
+        }
+
         let order = self.item_order.borrow();
+        let group_map = self.item_group_map.borrow();
         let widgets = self.item_widgets.borrow();
+        let is_grouped = !group_map.is_empty();
         let mut max_y = 300;
         let mut idx: i32 = 0;
+        let mut cur_col = 0;
+        let mut cur_y = MARGIN_TOP;
+        let mut last_group: Option<&str> = None;
         let mut moves = Vec::new();
         let animating = self.is_animating.get();
 
         for name in order.iter() {
             if let Some(data_rc) = widgets.get(name) {
-                let col = idx % cols;
-                let row = idx / cols;
-                let x = MARGIN_LEFT + col * cell_w;
-                let y = MARGIN_TOP + row * cell_h;
+                let (x, y) = if is_grouped {
+                    let grp = group_map.get(name).map(|s| s.as_str()).unwrap_or("");
+                    if last_group != Some(grp) {
+                        if last_group.is_some() && cur_col > 0 {
+                            cur_y += cell_h;
+                            cur_col = 0;
+                        }
+                        if last_group.is_some() {
+                            cur_y += 10;
+                        }
+                        last_group = Some(grp);
+                        let hdr = Label::builder()
+                            .label(grp)
+                            .halign(Align::Start)
+                            .xalign(0.0)
+                            .can_target(false)
+                            .width_request((available_width - 2 * MARGIN_LEFT).max(200))
+                            .css_classes(["branches-group-header"])
+                            .build();
+                        self.fixed.put(&hdr, MARGIN_LEFT as f64, cur_y as f64);
+                        self.group_headers.borrow_mut().push(hdr.upcast());
+                        cur_y += 28;
+                    }
+                    let px = MARGIN_LEFT + cur_col * cell_w;
+                    let py = cur_y;
+                    cur_col += 1;
+                    if cur_col >= cols {
+                        cur_col = 0;
+                        cur_y += cell_h;
+                    }
+                    (px, py)
+                } else {
+                    let col = idx % cols;
+                    let row = idx / cols;
+                    (MARGIN_LEFT + col * cell_w, MARGIN_TOP + row * cell_h)
+                };
 
                 let d = data_rc.borrow();
                 let start_pos = current_canvas_pos(&self.fixed, &d.widget, d.pos.get(), animating);
@@ -2207,213 +2324,6 @@ impl IconViewWeak {
             }
         }
     }
-}
-
-use super::make_context_menu_button;
-
-fn show_canvas_context_menu(
-    parent: &impl IsA<gtk4::Widget>,
-    x: f64,
-    y: f64,
-    folder_ref: Rc<RefCell<PathBuf>>,
-    layout_ref: Rc<RefCell<LayoutMode>>,
-    view_weak: &IconViewWeak,
-) {
-    let popover = Popover::builder()
-        .has_arrow(false)
-        .css_classes(["malus-popover-menu"])
-        .build();
-    popover.set_parent(parent);
-    popover.connect_closed(|p| p.unparent());
-
-    let rect = gdk::Rectangle::new(x as i32, y as i32, 1, 1);
-    popover.set_pointing_to(Some(&rect));
-
-    let stack = gtk4::Stack::builder()
-        .transition_type(gtk4::StackTransitionType::SlideLeftRight)
-        .transition_duration(160)
-        .vhomogeneous(false)
-        .build();
-
-    let vbox = GtkBox::new(Orientation::Vertical, 2);
-    stack.add_named(&vbox, Some("main"));
-
-    let target_dir = folder_ref.borrow().clone();
-    if view_weak.can_create_here.get() && crate::views::can_create_in_folder(&target_dir) {
-        let pending_create = view_weak.pending_select_names.clone();
-        let widgets_create = view_weak.item_widgets.clone();
-        let nav_create = view_weak.on_navigate.clone();
-        let layout_create = *layout_ref.borrow();
-        let metrics = IconGridMetrics::from_icon_size(
-            view_weak.active_icon_size.get(),
-            view_weak.grid_spacing.get(),
-        );
-        let dir_create = target_dir.clone();
-        let on_created: crate::views::RenameCallback = Rc::new(move |created_path| {
-            if let Some(new_name) = created_path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-            {
-                if layout_create != LayoutMode::Auto {
-                    let (px, py) = if layout_create == LayoutMode::SnapToGrid {
-                        snap_to_grid_cell(
-                            x.round() as i32,
-                            y.round() as i32,
-                            metrics.cell_width(),
-                            metrics.cell_height(),
-                        )
-                    } else {
-                        (
-                            (x.round() as i32).max(MARGIN_LEFT),
-                            (y.round() as i32).max(MARGIN_TOP),
-                        )
-                    };
-                    if let Ok(conn) = db::open_db() {
-                        let _ = db::save_position(&conn, &dir_create, &new_name, px, py);
-                    }
-                }
-                pending_create.borrow_mut().insert(new_name.clone());
-                nav_create(dir_create.clone());
-
-                let widgets_lookup = widgets_create.clone();
-                let target_name = new_name;
-                let target_path = created_path;
-                let pending_rename = pending_create.clone();
-                let nav_rename = nav_create.clone();
-                let dir_rename = dir_create.clone();
-                let on_renamed: crate::views::RenameCallback = Rc::new(move |renamed_path| {
-                    if let Some(renamed_name) = renamed_path.file_name() {
-                        pending_rename
-                            .borrow_mut()
-                            .insert(renamed_name.to_string_lossy().into_owned());
-                    }
-                    nav_rename(dir_rename.clone());
-                });
-                crate::views::schedule_inline_rename(
-                    move || {
-                        let widgets = widgets_lookup.borrow();
-                        let data = widgets.get(&target_name)?.borrow();
-                        if data.item.path != target_path {
-                            return None;
-                        }
-                        Some((
-                            data.item.path.clone(),
-                            data.item.is_dir,
-                            data.widget.clone().upcast(),
-                        ))
-                    },
-                    Some(on_renamed),
-                );
-            } else {
-                nav_create(dir_create.clone());
-            }
-        });
-        crate::views::append_create_new_submenu(
-            &popover,
-            &vbox,
-            &stack,
-            target_dir.clone(),
-            on_created,
-        );
-        crate::views::append_paste_menu_item(&popover, &vbox, parent, &target_dir);
-        vbox.append(&gtk4::Separator::new(Orientation::Horizontal));
-    }
-
-    let lbl_layout = Label::builder()
-        .label("Disposición de iconos")
-        .halign(Align::Start)
-        .css_classes(["dim-label", "bold"])
-        .build();
-    vbox.append(&lbl_layout);
-
-    let current_mode = *layout_ref.borrow();
-    let label_with_check = |active: bool, text: &str| -> String {
-        if active {
-            format!("✓ {}", text)
-        } else {
-            text.to_string()
-        }
-    };
-
-    // 1. Cuadrícula automática adaptada al ancho de ventana
-    let pop_auto = popover.clone();
-    let l_auto = layout_ref.clone();
-    let f_auto = folder_ref.clone();
-    let w_auto = view_weak.clone();
-    let btn_auto = make_context_menu_button(&label_with_check(
-        current_mode == LayoutMode::Auto,
-        "Cuadrícula automática",
-    ));
-    btn_auto.connect_clicked(move |_| {
-        pop_auto.popdown();
-        *l_auto.borrow_mut() = LayoutMode::Auto;
-        let vw = w_auto.viewport_width();
-        let metrics = IconGridMetrics::from_icon_size(
-            w_auto.active_icon_size.get(),
-            w_auto.grid_spacing.get(),
-        );
-        w_auto
-            .last_auto_cols
-            .set(columns_for_width(vw, metrics.cell_width()));
-        w_auto.relayout_auto_grid_with_width(vw, true);
-        if let Ok(conn) = db::open_db() {
-            let _ = db::set_layout_mode(&conn, &f_auto.borrow(), LayoutMode::Auto);
-        }
-    });
-    vbox.append(&btn_auto);
-
-    // 2. Alinear a la cuadrícula (Snap to Grid con movimiento libre)
-    let pop_clone = popover.clone();
-    let l_ref = layout_ref.clone();
-    let f_ref = folder_ref.clone();
-    let w_snap = view_weak.clone();
-    let btn_snap = make_context_menu_button(&label_with_check(
-        current_mode == LayoutMode::SnapToGrid,
-        "Alinear a la cuadrícula (Snap to Grid)",
-    ));
-    btn_snap.connect_clicked(move |_| {
-        pop_clone.popdown();
-        *l_ref.borrow_mut() = LayoutMode::SnapToGrid;
-        if let Ok(conn) = db::open_db() {
-            let _ = db::set_layout_mode(&conn, &f_ref.borrow(), LayoutMode::SnapToGrid);
-        }
-        w_snap.snap_existing_to_grid();
-    });
-    vbox.append(&btn_snap);
-
-    // 3. Colocación libre
-    let pop_clone2 = popover.clone();
-    let l_ref2 = layout_ref.clone();
-    let f_ref2 = folder_ref.clone();
-    let btn_free = make_context_menu_button(&label_with_check(
-        current_mode == LayoutMode::Freeform,
-        "Colocación libre (Freeform)",
-    ));
-    btn_free.connect_clicked(move |_| {
-        pop_clone2.popdown();
-        *l_ref2.borrow_mut() = LayoutMode::Freeform;
-        if let Ok(conn) = db::open_db() {
-            let _ = db::set_layout_mode(&conn, &f_ref2.borrow(), LayoutMode::Freeform);
-        }
-    });
-    vbox.append(&btn_free);
-
-    let sep = gtk4::Separator::new(Orientation::Horizontal);
-    vbox.append(&sep);
-
-    // Limpiar / Reorganizar automáticamente según ancho de ventana
-    let pop_clone3 = popover.clone();
-    let w_clean = view_weak.clone();
-    let btn_clean = make_context_menu_button("Reordenar cuadrícula");
-    btn_clean.connect_clicked(move |_| {
-        pop_clone3.popdown();
-        w_clean.rearrange(true);
-    });
-    vbox.append(&btn_clean);
-
-    stack.set_visible_child_name("main");
-    popover.set_child(Some(&stack));
-    popover.popup();
 }
 
 #[cfg(test)]

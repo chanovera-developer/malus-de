@@ -50,6 +50,7 @@ fn sort_items(items: &mut [FileItem], state: Option<(SortCol, bool)>) {
 fn populate_list(
     list_box: &ListBox,
     items: &[FileItem],
+    groups: Option<&[String]>,
     items_ref: &Rc<RefCell<Vec<FileItem>>>,
     icon_size: i32,
     widths: [i32; 3],
@@ -59,7 +60,25 @@ fn populate_list(
         list_box.remove(&child);
     }
     let tags_map = crate::views::load_tags_map();
-    for item in items {
+    let mut last_group: Option<&str> = None;
+    for (idx, item) in items.iter().enumerate() {
+        if let Some(grp) = groups.and_then(|g| g.get(idx)).map(|s| s.as_str()) {
+            if last_group != Some(grp) {
+                last_group = Some(grp);
+                let hdr_lbl = Label::builder()
+                    .label(grp)
+                    .halign(Align::Start)
+                    .css_classes(["branches-list-group-label"])
+                    .build();
+                let hdr_row = ListBoxRow::builder()
+                    .child(&hdr_lbl)
+                    .selectable(false)
+                    .activatable(false)
+                    .css_classes(["branches-list-group-row"])
+                    .build();
+                list_box.append(&hdr_row);
+            }
+        }
         let row = create_list_row(
             item,
             items_ref.clone(),
@@ -68,8 +87,25 @@ fn populate_list(
             &tags_map,
             on_navigate.clone(),
         );
+        unsafe {
+            row.set_data("list_item_idx", idx);
+        }
         list_box.append(&row);
     }
+}
+
+fn row_for_item_index(list_box: &ListBox, target_idx: usize) -> Option<ListBoxRow> {
+    let mut child = list_box.first_child();
+    while let Some(w) = child {
+        if let Some(row) = w.downcast_ref::<ListBoxRow>() {
+            let idx = unsafe { row.data::<usize>("list_item_idx").map(|p| *p.as_ref()) };
+            if idx == Some(target_idx) {
+                return Some(row.clone());
+            }
+        }
+        child = w.next_sibling();
+    }
+    None
 }
 
 const DEFAULT_COLUMN_WIDTHS: [i32; 3] = [170, 90, 150];
@@ -78,6 +114,7 @@ const MAX_COLUMN_WIDTH: i32 = 600;
 
 pub struct ListView {
     container: GtkBox,
+    header: GtkBox,
     list_box: ListBox,
     items: Rc<RefCell<Vec<FileItem>>>,
     current_folder: Rc<RefCell<Option<PathBuf>>>,
@@ -147,19 +184,16 @@ impl ListView {
             let state = sort_state.clone();
             let on_nav = on_navigate.clone();
             Rc::new(move || {
-                let selected: Vec<PathBuf> = {
-                    let items = items.borrow();
-                    list_box
-                        .selected_rows()
-                        .iter()
-                        .filter_map(|r| items.get(r.index() as usize).map(|i| i.path.clone()))
-                        .collect()
-                };
+                let selected = crate::views::list_box_selected_items(&list_box, &items.borrow())
+                    .into_iter()
+                    .map(|i| i.path)
+                    .collect::<Vec<_>>();
                 sort_items(&mut items.borrow_mut(), state.get());
                 let snapshot = items.borrow().clone();
                 populate_list(
                     &list_box,
                     &snapshot,
+                    None,
                     &items,
                     icon_size_sort.get(),
                     widths.get(),
@@ -167,7 +201,7 @@ impl ListView {
                 );
                 for (idx, item) in items.borrow().iter().enumerate() {
                     if selected.contains(&item.path) {
-                        if let Some(row) = list_box.row_at_index(idx as i32) {
+                        if let Some(row) = row_for_item_index(&list_box, idx) {
                             list_box.select_row(Some(&row));
                         }
                     }
@@ -190,62 +224,9 @@ impl ListView {
         let bg_click = GestureClick::new();
         bg_click.set_button(gdk::BUTTON_SECONDARY);
         let scrolled_menu = scrolled.clone();
-        let folder_bg = current_folder.clone();
-        let on_nav_bg = on_navigate.clone();
-        let items_bg = items.clone();
-        let list_box_bg = list_box.clone();
-        let pending_bg = pending_select_name.clone();
         bg_click.connect_pressed(move |g, _n, x, y| {
-            let Some(dir) = folder_bg.borrow().clone() else {
-                return;
-            };
             g.set_state(gtk4::EventSequenceState::Claimed);
-            let nav = on_nav_bg.clone();
-            let dir_reload = dir.clone();
-            let items_lookup = items_bg.clone();
-            let lb_lookup = list_box_bg.clone();
-            let pending_create = pending_bg.clone();
-            crate::views::show_background_create_menu(
-                &scrolled_menu,
-                x,
-                y,
-                dir,
-                Rc::new(move |created_path| {
-                    if let Some(new_name) = created_path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                    {
-                        *pending_create.borrow_mut() = Some(new_name);
-                    }
-                    nav(dir_reload.clone());
-
-                    let items_ref = items_lookup.clone();
-                    let lb_ref = lb_lookup.clone();
-                    let target_path = created_path;
-                    let pending_rename = pending_create.clone();
-                    let nav_rename = nav.clone();
-                    let dir_rename = dir_reload.clone();
-                    let on_renamed: crate::views::RenameCallback = Rc::new(move |renamed_path| {
-                        if let Some(renamed_name) = renamed_path.file_name() {
-                            *pending_rename.borrow_mut() =
-                                Some(renamed_name.to_string_lossy().into_owned());
-                        }
-                        nav_rename(dir_rename.clone());
-                    });
-                    crate::views::schedule_inline_rename(
-                        move || {
-                            let items_guard = items_ref.borrow();
-                            let (idx, item) = items_guard
-                                .iter()
-                                .enumerate()
-                                .find(|(_, it)| it.path == target_path)?;
-                            let row = lb_ref.row_at_index(idx as i32)?;
-                            Some((item.path.clone(), item.is_dir, row.upcast()))
-                        },
-                        Some(on_renamed),
-                    );
-                }),
-            );
+            crate::views::show_background_context_menu(&scrolled_menu, x, y);
         });
         scrolled.add_controller(bg_click);
 
@@ -257,6 +238,7 @@ impl ListView {
 
         Self {
             container,
+            header,
             list_box,
             items,
             current_folder,
@@ -304,9 +286,23 @@ impl ListView {
         *self.pending_select_name.borrow_mut() = Some(name.to_string());
     }
 
+    pub fn clear_sort_state(&self) {
+        self.sort_state.set(None);
+        update_header_titles(&self.header, None);
+    }
+
     pub fn set_items(&self, items: &[FileItem]) {
+        self.set_items_grouped(items, None);
+    }
+
+    pub fn set_items_grouped(&self, items: &[FileItem], groups: Option<&[String]>) {
         let mut sorted = items.to_vec();
-        sort_items(&mut sorted, self.sort_state.get());
+        let active_groups: Option<Vec<String>> = if self.sort_state.get().is_some() {
+            sort_items(&mut sorted, self.sort_state.get());
+            None
+        } else {
+            groups.map(|g| g.to_vec())
+        };
         *self.items.borrow_mut() = sorted;
         let items = self.items.borrow().clone();
         let items = &items[..];
@@ -314,6 +310,7 @@ impl ListView {
         populate_list(
             &self.list_box,
             items,
+            active_groups.as_deref(),
             &self.items,
             self.icon_size.get(),
             self.col_widths.get(),
@@ -322,7 +319,7 @@ impl ListView {
 
         if let Some(target_name) = self.pending_select_name.borrow_mut().take() {
             if let Some(idx) = items.iter().position(|it| it.name == target_name) {
-                if let Some(row) = self.list_box.row_at_index(idx as i32) {
+                if let Some(row) = row_for_item_index(&self.list_box, idx) {
                     self.list_box.select_row(Some(&row));
                     row.grab_focus();
                 }
@@ -333,7 +330,7 @@ impl ListView {
     pub fn refresh_cut_states(&self) {
         let items = self.items.borrow();
         for (idx, item) in items.iter().enumerate() {
-            if let Some(row) = self.list_box.row_at_index(idx as i32) {
+            if let Some(row) = row_for_item_index(&self.list_box, idx) {
                 if let Some(hbox) = row.child() {
                     crate::views::sync_cut_css_class(&hbox, &item.path);
                 }

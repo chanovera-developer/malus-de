@@ -171,6 +171,10 @@ pub fn open_db() -> Result<Connection, rusqlite::Error> {
         "ALTER TABLE folder_settings ADD COLUMN icon_size INTEGER",
         [],
     );
+    let _ = conn.execute(
+        "ALTER TABLE folder_settings ADD COLUMN use_groups INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
 
     // Migración v1: carpetas con snap_to_grid implícito de versiones previas pasan a freeform
     // para que los iconos permanezcan exactamente donde se sueltan (el usuario puede elegir SnapToGrid si lo desea).
@@ -360,6 +364,35 @@ pub fn set_folder_icon_size(
          VALUES (?1, ?2)
          ON CONFLICT(folder_path) DO UPDATE SET icon_size = excluded.icon_size",
         params![folder_str, icon_size],
+    )?;
+    Ok(())
+}
+
+/// Lee si la carpeta tiene activado `Usar grupos`.
+pub fn get_use_groups(conn: &Connection, folder: &Path) -> bool {
+    let folder_str = folder.to_string_lossy();
+    let mut stmt = match conn.prepare("SELECT use_groups FROM folder_settings WHERE folder_path = ?1") {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    stmt.query_row(params![folder_str], |row| row.get::<_, i64>(0))
+        .map(|v| v != 0)
+        .unwrap_or(false)
+}
+
+/// Guarda `Usar grupos` por carpeta en `folder_settings`.
+pub fn set_use_groups(
+    conn: &Connection,
+    folder: &Path,
+    use_groups: bool,
+) -> Result<(), rusqlite::Error> {
+    let folder_str = folder.to_string_lossy();
+    let val = if use_groups { 1i64 } else { 0i64 };
+    conn.execute(
+        "INSERT INTO folder_settings (folder_path, use_groups)
+         VALUES (?1, ?2)
+         ON CONFLICT(folder_path) DO UPDATE SET use_groups = excluded.use_groups",
+        params![folder_str, val],
     )?;
     Ok(())
 }
@@ -1145,5 +1178,25 @@ mod tests {
         assert_eq!(super::get_hidden_sidebar_tags(&conn), vec!["red".to_string()]);
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn folder_use_groups_persists_per_folder() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE folder_settings (
+                folder_path TEXT PRIMARY KEY,
+                layout_mode TEXT NOT NULL DEFAULT 'auto_grid',
+                icon_size INTEGER,
+                use_groups INTEGER NOT NULL DEFAULT 0
+            );",
+        )
+        .unwrap();
+        let dir = std::path::PathBuf::from("/tmp/malus_groups_test");
+        assert!(!super::get_use_groups(&conn, &dir));
+        super::set_use_groups(&conn, &dir, true).unwrap();
+        assert!(super::get_use_groups(&conn, &dir));
+        super::set_use_groups(&conn, &dir, false).unwrap();
+        assert!(!super::get_use_groups(&conn, &dir));
     }
 }

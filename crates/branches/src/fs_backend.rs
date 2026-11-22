@@ -17,6 +17,9 @@ pub struct FileItem {
     pub size: u64,
     pub size_str: String,
     pub modified: Option<SystemTime>,
+    pub accessed: Option<SystemTime>,
+    pub added: Option<SystemTime>,
+    pub created: Option<SystemTime>,
     pub modified_str: String,
     pub kind_str: String,
     pub gicon: gio::Icon,
@@ -46,6 +49,17 @@ impl FileItem {
         };
 
         let modified = target_metadata.modified().ok();
+        let accessed = target_metadata.accessed().ok();
+        let created = target_metadata.created().ok().or(modified);
+        let added = {
+            use std::os::unix::fs::MetadataExt;
+            let secs = target_metadata.ctime();
+            if secs >= 0 {
+                std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_secs(secs as u64))
+            } else {
+                modified
+            }
+        };
         let modified_str = modified
             .map(format_modified)
             .unwrap_or_else(|| "--".to_string());
@@ -61,6 +75,9 @@ impl FileItem {
             size,
             size_str,
             modified,
+            accessed,
+            added,
+            created,
             modified_str,
             kind_str,
             gicon,
@@ -101,22 +118,252 @@ pub fn load_directory(
     Ok(items)
 }
 
+fn ctime_from_meta(meta: &fs::Metadata) -> Option<SystemTime> {
+    use std::os::unix::fs::MetadataExt;
+    let secs = meta.ctime();
+    if secs >= 0 {
+        std::time::UNIX_EPOCH.checked_add(std::time::Duration::from_secs(secs as u64))
+    } else {
+        None
+    }
+}
+
+fn time_bucket_rank_label(time: Option<SystemTime>, now: SystemTime, es: bool) -> (u8, String) {
+    let Some(t) = time else {
+        return (
+            6,
+            if es { "Sin fecha" } else { "No Date" }.to_string(),
+        );
+    };
+    let secs = now.duration_since(t).map(|d| d.as_secs()).unwrap_or(0);
+    if secs < 86_400 {
+        (0, if es { "Hoy" } else { "Today" }.to_string())
+    } else if secs < 2 * 86_400 {
+        (1, if es { "Ayer" } else { "Yesterday" }.to_string())
+    } else if secs < 7 * 86_400 {
+        (
+            2,
+            if es { "Últimos 7 días" } else { "Previous 7 Days" }.to_string(),
+        )
+    } else if secs < 30 * 86_400 {
+        (
+            3,
+            if es { "Últimos 30 días" } else { "Previous 30 Days" }.to_string(),
+        )
+    } else if secs < 365 * 86_400 {
+        (
+            4,
+            if es { "Este año" } else { "This Year" }.to_string(),
+        )
+    } else {
+        (5, if es { "Anterior" } else { "Earlier" }.to_string())
+    }
+}
+
+fn item_group_key(
+    item: &FileItem,
+    sort_by: SortBy,
+    tags_map: &std::collections::HashMap<PathBuf, Vec<(String, String)>>,
+    now: SystemTime,
+    es: bool,
+) -> (u8, String) {
+    match sort_by {
+        SortBy::Name => {
+            if item.is_dir {
+                (0, if es { "Carpetas" } else { "Folders" }.to_string())
+            } else {
+                let first = item
+                    .name
+                    .chars()
+                    .find(|c| c.is_alphanumeric())
+                    .map(|c| c.to_uppercase().collect::<String>())
+                    .unwrap_or_else(|| "#".to_string());
+                let rank = if first.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                    1
+                } else {
+                    2
+                };
+                (rank, first)
+            }
+        }
+        SortBy::Kind => {
+            if item.is_dir {
+                (0, if es { "Carpetas" } else { "Folders" }.to_string())
+            } else {
+                (1, item.kind_str.clone())
+            }
+        }
+        SortBy::DateLastOpened => time_bucket_rank_label(item.accessed.or(item.modified), now, es),
+        SortBy::DateAdded => time_bucket_rank_label(item.added.or(item.modified), now, es),
+        SortBy::DateModified => time_bucket_rank_label(item.modified, now, es),
+        SortBy::DateCreated => time_bucket_rank_label(item.created.or(item.modified), now, es),
+        SortBy::Size => {
+            if item.is_dir {
+                (0, if es { "Carpetas" } else { "Folders" }.to_string())
+            } else if item.size >= 100 * 1024 * 1024 {
+                (
+                    1,
+                    if es {
+                        "Grande (> 100 MB)"
+                    } else {
+                        "Large (> 100 MB)"
+                    }
+                    .to_string(),
+                )
+            } else if item.size >= 1024 * 1024 {
+                (
+                    2,
+                    if es {
+                        "Mediano (1 - 100 MB)"
+                    } else {
+                        "Medium (1 - 100 MB)"
+                    }
+                    .to_string(),
+                )
+            } else {
+                (
+                    3,
+                    if es {
+                        "Pequeño (< 1 MB)"
+                    } else {
+                        "Small (< 1 MB)"
+                    }
+                    .to_string(),
+                )
+            }
+        }
+        SortBy::Tags => {
+            if let Some((first_tag, _)) = tags_map.get(&item.path).and_then(|t| t.first()) {
+                let label = crate::db::tag_definition(first_tag)
+                    .map(|d| if es { d.label_es } else { d.label_en }.to_string())
+                    .unwrap_or_else(|| first_tag.clone());
+                (0, label)
+            } else {
+                (
+                    1,
+                    if es { "Sin etiqueta" } else { "No Tags" }.to_string(),
+                )
+            }
+        }
+    }
+}
+
+pub fn item_group_label(
+    item: &FileItem,
+    sort_by: SortBy,
+    tags_map: &std::collections::HashMap<PathBuf, Vec<(String, String)>>,
+    es: bool,
+) -> String {
+    item_group_key(item, sort_by, tags_map, SystemTime::now(), es).1
+}
+
+pub fn item_matches_kind_filter(item: &FileItem, kind_filter: Option<&str>) -> bool {
+    let Some(filter) = kind_filter else {
+        return true;
+    };
+    if filter.is_empty() || filter == "all" {
+        return true;
+    }
+    if filter == "folders" {
+        return item.is_dir;
+    }
+    if item.is_dir {
+        return false;
+    }
+    let ext = item
+        .path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    match filter {
+        "images" => matches!(
+            ext.as_str(),
+            "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "svg" | "ico" | "tif" | "tiff" | "avif" | "heic"
+        ),
+        "documents" => matches!(
+            ext.as_str(),
+            "pdf" | "doc" | "docx" | "odt" | "txt" | "md" | "rtf" | "csv" | "xls" | "xlsx" | "ods" | "ppt" | "pptx" | "odp"
+        ),
+        "videos" => matches!(
+            ext.as_str(),
+            "mp4" | "mkv" | "webm" | "mov" | "avi" | "flv" | "wmv" | "m4v"
+        ),
+        "audio" => matches!(
+            ext.as_str(),
+            "mp3" | "flac" | "wav" | "ogg" | "m4a" | "aac" | "opus" | "wma"
+        ),
+        "archives" => matches!(
+            ext.as_str(),
+            "zip" | "tar" | "gz" | "xz" | "bz2" | "zst" | "7z" | "rar"
+        ),
+        _ => true,
+    }
+}
+
 pub fn sort_file_items(items: &mut [FileItem], sort_by: SortBy, sort_order: SortOrder) {
-    // Ordenar elementos: siempre carpetas primero salvo requerimiento especial
+    let empty_tags = std::collections::HashMap::new();
+    sort_file_items_with_tags(items, sort_by, sort_order, &empty_tags, false);
+}
+
+pub fn sort_file_items_with_tags(
+    items: &mut [FileItem],
+    sort_by: SortBy,
+    sort_order: SortOrder,
+    tags_map: &std::collections::HashMap<PathBuf, Vec<(String, String)>>,
+    use_groups: bool,
+) {
+    let now = SystemTime::now();
+    let es = malus_de_common::is_spanish_locale();
     items.sort_by(|a, b| {
+        if use_groups {
+            let ga = item_group_key(a, sort_by, tags_map, now, es);
+            let gb = item_group_key(b, sort_by, tags_map, now, es);
+            if ga != gb {
+                return ga.cmp(&gb);
+            }
+        }
+
         if a.is_dir != b.is_dir {
             return b.is_dir.cmp(&a.is_dir); // Carpetas primero
         }
 
+        let cmp_opt_time = |ta: Option<SystemTime>, tb: Option<SystemTime>| {
+            let ua = ta.unwrap_or(SystemTime::UNIX_EPOCH);
+            let ub = tb.unwrap_or(SystemTime::UNIX_EPOCH);
+            ua.cmp(&ub)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        };
+
         let ordering = match sort_by {
             SortBy::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-            SortBy::DateModified => {
-                let a_time = a.modified.unwrap_or(SystemTime::UNIX_EPOCH);
-                let b_time = b.modified.unwrap_or(SystemTime::UNIX_EPOCH);
-                a_time.cmp(&b_time)
+            SortBy::Kind => a
+                .kind_str
+                .to_lowercase()
+                .cmp(&b.kind_str.to_lowercase())
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+            SortBy::DateLastOpened => {
+                cmp_opt_time(a.accessed.or(a.modified), b.accessed.or(b.modified))
             }
-            SortBy::Size => a.size.cmp(&b.size),
-            SortBy::Kind => a.kind_str.cmp(&b.kind_str).then(a.name.cmp(&b.name)),
+            SortBy::DateAdded => cmp_opt_time(a.added.or(a.modified), b.added.or(b.modified)),
+            SortBy::DateModified => cmp_opt_time(a.modified, b.modified),
+            SortBy::DateCreated => cmp_opt_time(a.created.or(a.modified), b.created.or(b.modified)),
+            SortBy::Size => a
+                .size
+                .cmp(&b.size)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+            SortBy::Tags => {
+                let ta = tags_map.get(&a.path).and_then(|v| v.first()).map(|t| &t.0);
+                let tb = tags_map.get(&b.path).and_then(|v| v.first()).map(|t| &t.0);
+                match (ta, tb) {
+                    (Some(sa), Some(sb)) => sa
+                        .cmp(sb)
+                        .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                }
+            }
         };
 
         match sort_order {
@@ -330,6 +577,9 @@ pub fn file_item_from_desktop_entry(app: &malus_de_common::apps::DesktopAppEntry
     let target_meta = fs::metadata(&app.desktop_file).ok().or(metadata);
     let size = target_meta.as_ref().map(|m| m.len()).unwrap_or(0);
     let modified = target_meta.as_ref().and_then(|m| m.modified().ok());
+    let accessed = target_meta.as_ref().and_then(|m| m.accessed().ok());
+    let created = target_meta.as_ref().and_then(|m| m.created().ok()).or(modified);
+    let added = target_meta.as_ref().and_then(ctime_from_meta).or(modified);
     let modified_str = modified
         .map(format_modified)
         .unwrap_or_else(|| "--".to_string());
@@ -352,6 +602,9 @@ pub fn file_item_from_desktop_entry(app: &malus_de_common::apps::DesktopAppEntry
             "--".to_string()
         },
         modified,
+        accessed,
+        added,
+        created,
         modified_str,
         kind_str,
         gicon: resolve_desktop_gicon(&app.icon),
@@ -915,5 +1168,43 @@ mod tests {
         assert!(cancelled.is_empty());
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn grouping_sort_and_kind_filter_cover_finder_options() {
+        let mk = |name: &str, is_dir: bool, size: u64, kind: &str| FileItem {
+            name: name.to_string(),
+            path: PathBuf::from(format!("/tmp/g/{name}")),
+            is_dir,
+            is_hidden: false,
+            is_symlink: false,
+            size,
+            size_str: format!("{size} B"),
+            modified: Some(SystemTime::now()),
+            accessed: None,
+            added: None,
+            created: None,
+            modified_str: "Hoy".to_string(),
+            kind_str: kind.to_string(),
+            gicon: gio::ThemedIcon::new("text-x-generic").upcast(),
+        };
+
+        let img = mk("foto.png", false, 200, "Imagen PNG");
+        let doc = mk("informe.pdf", false, 1500, "Documento PDF");
+        let dir = mk("Proyectos", true, 0, "Carpeta");
+
+        assert!(item_matches_kind_filter(&img, Some("images")));
+        assert!(!item_matches_kind_filter(&doc, Some("images")));
+        assert!(item_matches_kind_filter(&doc, Some("documents")));
+        assert!(item_matches_kind_filter(&dir, Some("folders")));
+        assert!(!item_matches_kind_filter(&dir, Some("images")));
+
+        let mut tags = std::collections::HashMap::new();
+        tags.insert(doc.path.clone(), vec![("red".to_string(), "#ff3b30".to_string())]);
+
+        let mut items = vec![img.clone(), doc.clone(), dir.clone()];
+        sort_file_items_with_tags(&mut items, SortBy::Tags, SortOrder::Ascending, &tags, true);
+        assert_eq!(item_group_label(&doc, SortBy::Tags, &tags, true), "Rojo");
+        assert_eq!(item_group_label(&img, SortBy::Tags, &tags, true), "Sin etiqueta");
     }
 }
