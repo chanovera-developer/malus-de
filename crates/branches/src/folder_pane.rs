@@ -19,10 +19,11 @@ pub enum PaneId {
     Secondary,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum VirtualFolder {
     Recents,
     Applications,
+    Tag(String),
 }
 
 pub struct FolderPane {
@@ -240,11 +241,21 @@ impl FolderPane {
     }
 
     pub fn is_recents(&self) -> bool {
-        *self.virtual_folder.borrow() == Some(VirtualFolder::Recents)
+        matches!(&*self.virtual_folder.borrow(), Some(VirtualFolder::Recents))
     }
 
     pub fn is_applications(&self) -> bool {
-        *self.virtual_folder.borrow() == Some(VirtualFolder::Applications)
+        matches!(
+            &*self.virtual_folder.borrow(),
+            Some(VirtualFolder::Applications)
+        )
+    }
+
+    pub fn active_tag(&self) -> Option<String> {
+        match &*self.virtual_folder.borrow() {
+            Some(VirtualFolder::Tag(tag_id)) => Some(tag_id.clone()),
+            _ => None,
+        }
     }
 
     /// Aplica cambios de configuración de Branches en vivo (tamaño de carpetas/iconos y espaciado).
@@ -486,7 +497,8 @@ impl FolderPane {
         let next_gen = self.search_gen.get().wrapping_add(1);
         self.search_gen.set(next_gen);
 
-        match *self.virtual_folder.borrow() {
+        let active_virtual = self.virtual_folder.borrow().clone();
+        match active_virtual {
             Some(VirtualFolder::Applications) => {
                 self.clear_directory_monitor();
                 self.reload_applications();
@@ -495,6 +507,11 @@ impl FolderPane {
             Some(VirtualFolder::Recents) => {
                 self.clear_directory_monitor();
                 self.reload_recents();
+                return;
+            }
+            Some(VirtualFolder::Tag(tag_id)) => {
+                self.clear_directory_monitor();
+                self.reload_tag_filter(&tag_id);
                 return;
             }
             None => {}
@@ -991,25 +1008,33 @@ impl FolderPane {
     }
 
     pub fn show_tag_filter(&self, tag_name: &str) {
-        *self.virtual_folder.borrow_mut() = None;
+        let canonical = crate::db::canonical_tag_id(tag_name);
+        *self.virtual_folder.borrow_mut() = Some(VirtualFolder::Tag(canonical.clone()));
         self.clear_directory_monitor();
-        if let Ok(conn) = crate::db::open_db() {
+        self.set_view_mode("list");
+        self.reload_tag_filter(&canonical);
+    }
+
+    fn reload_tag_filter(&self, tag_name: &str) {
+        let query = self.state.borrow().search_query.trim().to_lowercase();
+        let es = malus_de_common::is_spanish_locale();
+        let (items, display) = if let Ok(conn) = crate::db::open_db() {
             let paths = crate::db::get_files_by_tag(&conn, tag_name);
             let mut items = Vec::new();
             for p in paths {
                 if let Some(item) = FileItem::from_path(&p) {
-                    items.push(item);
+                    if query.is_empty() || item.name.to_lowercase().contains(&query) {
+                        items.push(item);
+                    }
                 }
             }
-            let es = malus_de_common::is_spanish_locale();
             let display = crate::db::tag_effective_label(&conn, tag_name, es);
-            self.pane_title.set_label(&format!(
-                "{}: {}",
-                if es { "Etiqueta" } else { "Tag" },
-                display
-            ));
-            self.apply_items_snapshot(items);
-        }
+            (items, display)
+        } else {
+            (Vec::new(), crate::db::tag_display_label(tag_name, es))
+        };
+        self.pane_title.set_label(&display);
+        self.apply_items_snapshot(items);
     }
 
     pub fn show_recents(&self) {

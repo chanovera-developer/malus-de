@@ -814,7 +814,7 @@ impl BranchesWindow {
                 let w_clone = win_weak_for_nav.clone();
                 move |tag_name| {
                     if let Some(w) = w_clone.borrow().upgrade() {
-                        w.active_pane().show_tag_filter(&tag_name);
+                        w.show_tag(&tag_name);
                     }
                 }
             },
@@ -1355,6 +1355,10 @@ impl BranchesWindow {
             } else {
                 "Applications".to_string()
             }
+        } else if let Some(tag_id) = pane.active_tag() {
+            crate::db::open_db()
+                .map(|c| crate::db::tag_effective_label(&c, &tag_id, es))
+                .unwrap_or_else(|_| crate::db::tag_display_label(&tag_id, es))
         } else {
             Self::folder_display_title(&pane.current_path())
         }
@@ -1384,18 +1388,7 @@ impl BranchesWindow {
             self.show_applications();
         } else if let Some(tag_id) = spec.strip_prefix("@tag:") {
             self.open_new_tab(None);
-            self.active_pane().show_tag_filter(tag_id);
-            let es = malus_de_common::is_spanish_locale();
-            let display = crate::db::open_db()
-                .map(|c| crate::db::tag_effective_label(&c, tag_id, es))
-                .unwrap_or_else(|_| crate::db::tag_display_label(tag_id, es));
-            self.title_label.set_label(&format!(
-                "{}: {}",
-                if es { "Etiqueta" } else { "Tag" },
-                display
-            ));
-            let active_id = *self.active_tab_id.borrow();
-            self.update_tab_title(active_id);
+            self.show_tag(tag_id);
         } else {
             self.open_new_tab(Some(PathBuf::from(spec)));
         }
@@ -1415,6 +1408,8 @@ impl BranchesWindow {
             self.open_target_in_new_tab("@recents");
         } else if active.is_applications() {
             self.open_target_in_new_tab("@applications");
+        } else if let Some(tag_id) = active.active_tag() {
+            self.open_target_in_new_tab(&format!("@tag:{tag_id}"));
         } else {
             self.open_new_tab(Some(active.current_path()));
         }
@@ -1790,6 +1785,7 @@ impl BranchesWindow {
 
         if pane.is_recents() {
             self.trash_banner_box.set_visible(false);
+            self.path_bar.widget().set_visible(false);
             let title = Self::pane_display_title(&pane);
             self.title_label.set_label(&title);
             self.sidebar.highlight_virtual("target_recents");
@@ -1800,9 +1796,21 @@ impl BranchesWindow {
                 .update(pane.items_count(), pane.get_selected_items().len(), &free);
         } else if pane.is_applications() {
             self.trash_banner_box.set_visible(false);
+            self.path_bar.widget().set_visible(false);
             let title = Self::pane_display_title(&pane);
             self.title_label.set_label(&title);
             self.sidebar.highlight_virtual("target_applications");
+            self.back_btn.set_sensitive(pane.can_go_back());
+            self.forward_btn.set_sensitive(pane.can_go_forward());
+            let free = get_free_space(&pane.current_path());
+            self.status_bar
+                .update(pane.items_count(), pane.get_selected_items().len(), &free);
+        } else if let Some(tag_id) = pane.active_tag() {
+            self.trash_banner_box.set_visible(false);
+            self.path_bar.widget().set_visible(false);
+            let title = Self::pane_display_title(&pane);
+            self.title_label.set_label(&title);
+            self.sidebar.highlight_tag(&tag_id);
             self.back_btn.set_sensitive(pane.can_go_back());
             self.forward_btn.set_sensitive(pane.can_go_forward());
             let free = get_free_space(&pane.current_path());
@@ -2037,8 +2045,16 @@ impl BranchesWindow {
         } else {
             "Applications"
         };
+        self.path_bar.widget().set_visible(false);
         self.title_label.set_label(title);
         self.sidebar.highlight_virtual("target_applications");
+        let active_id = *self.active_tab_id.borrow();
+        self.update_tab_title(active_id);
+    }
+
+    pub fn show_tag(&self, tag_name: &str) {
+        self.active_pane().show_tag_filter(tag_name);
+        self.sync_active_tab_ui();
         let active_id = *self.active_tab_id.borrow();
         self.update_tab_title(active_id);
     }
@@ -2093,6 +2109,7 @@ impl BranchesWindow {
         let active_id = *self.active_tab_id.borrow();
         self.update_tab_title(active_id);
 
+        self.path_bar.widget().set_visible(true);
         self.path_bar.update_path(path);
         self.sidebar.highlight_path(path);
         self.trash_banner_box

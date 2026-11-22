@@ -312,6 +312,7 @@ pub struct IconView {
     container: ScrolledWindow,
     fixed_canvas: Fixed,
     current_folder: Rc<RefCell<PathBuf>>,
+    is_virtual: Rc<Cell<bool>>,
     can_create_here: Rc<Cell<bool>>,
     layout_mode: Rc<RefCell<LayoutMode>>,
     default_icon_size: Rc<Cell<i32>>,
@@ -354,6 +355,7 @@ impl IconView {
             .build();
 
         let current_folder = Rc::new(RefCell::new(PathBuf::from("/")));
+        let is_virtual = Rc::new(Cell::new(false));
         let can_create_here = Rc::new(Cell::new(false));
         let layout_mode = Rc::new(RefCell::new(LayoutMode::Auto));
         let default_icon_size = Rc::new(Cell::new(initial_icon_size));
@@ -376,6 +378,7 @@ impl IconView {
             container,
             fixed_canvas,
             current_folder,
+            is_virtual,
             can_create_here,
             layout_mode,
             default_icon_size,
@@ -406,10 +409,12 @@ impl IconView {
 
     pub fn set_current_folder(&self, folder: Option<&std::path::Path>) {
         if let Some(dir) = folder {
+            self.is_virtual.set(false);
             *self.current_folder.borrow_mut() = dir.to_path_buf();
             self.can_create_here
                 .set(crate::views::can_create_in_folder(dir));
         } else {
+            self.is_virtual.set(true);
             self.can_create_here.set(false);
         }
     }
@@ -939,14 +944,17 @@ impl IconView {
         *self.current_folder.borrow_mut() = folder.clone();
 
         // Cargar posiciones, modo de layout y tamaño personalizado de carpeta desde SQLite
+        // (en vistas virtuales como Etiquetas, Recientes o Aplicaciones siempre usamos AutoGrid limpio)
         let mut db_positions = HashMap::new();
         let mut current_mode = LayoutMode::Auto;
         let mut folder_override = None;
 
-        if let Ok(conn) = db::open_db() {
-            db_positions = db::get_positions(&conn, &folder);
-            current_mode = db::get_layout_mode(&conn, &folder);
-            folder_override = db::get_folder_icon_size(&conn, &folder);
+        if !self.is_virtual.get() {
+            if let Ok(conn) = db::open_db() {
+                db_positions = db::get_positions(&conn, &folder);
+                current_mode = db::get_layout_mode(&conn, &folder);
+                folder_override = db::get_folder_icon_size(&conn, &folder);
+            }
         }
         *self.layout_mode.borrow_mut() = current_mode;
         self.folder_icon_override.set(folder_override);

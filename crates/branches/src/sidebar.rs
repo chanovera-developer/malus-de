@@ -513,6 +513,23 @@ impl Sidebar {
         self.list_box.unselect_all();
     }
 
+    pub fn highlight_tag(&self, tag_id: &str) {
+        let canonical = crate::db::canonical_tag_id(tag_id);
+        let mut child = self.list_box.first_child();
+        while let Some(widget) = child {
+            if let Some(row) = widget.downcast_ref::<ListBoxRow>() {
+                if let Some(tag_obj) = unsafe { row.data::<String>("target_tag") } {
+                    if unsafe { tag_obj.as_ref() } == &canonical {
+                        self.list_box.select_row(Some(row));
+                        return;
+                    }
+                }
+            }
+            child = widget.next_sibling();
+        }
+        self.list_box.unselect_all();
+    }
+
     /// Si la fila seleccionada en el sidebar es un marcador, activa su edición inline y devuelve `true`.
     pub fn rename_selected_bookmark(&self) -> bool {
         let Some(row) = self.list_box.selected_row() else {
