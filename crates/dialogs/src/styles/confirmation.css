@@ -54,7 +54,7 @@ window.malus-power-window.background {
     border: none;
     border-radius: 0;
     box-shadow: none;
-    padding: 22px 20px 18px 20px;
+    padding: 22px 20px 20px 20px;
     min-width: 288px;
 }
 
@@ -114,43 +114,38 @@ checkbutton.malus-power-checkbox:focus > check {
 
 .malus-power-card button.malus-power-cancel,
 .malus-power-card button.malus-power-primary {
-    border-radius: 999px;
-    min-height: 34px;
-    padding: 6px 16px;
-    font-size: 14px;
+    border-radius: 0;
+    min-height: 28px;
+    min-width: 0;
+    padding: 0;
+    background-color: transparent;
     background-image: none;
     border: none;
-    transition: background-color 120ms ease;
+    box-shadow: none;
+    outline: none;
 }
 
-.malus-power-card button.malus-power-cancel {
-    color: @window_fg_color;
-    background-color: alpha(@window_fg_color, 0.12);
-    font-weight: 500;
+.malus-power-card button.malus-power-cancel:hover,
+.malus-power-card button.malus-power-cancel:active,
+.malus-power-card button.malus-power-primary:hover,
+.malus-power-card button.malus-power-primary:active {
+    background-color: transparent;
+    background-image: none;
     box-shadow: none;
 }
 
-.malus-power-card button.malus-power-cancel:hover {
-    background-color: alpha(@window_fg_color, 0.18);
+.malus-power-btn-label {
+    font-size: 13px;
 }
 
-.malus-power-card button.malus-power-cancel:active {
-    background-color: alpha(@window_fg_color, 0.24);
+.malus-power-btn-label-cancel {
+    color: @window_fg_color;
+    font-weight: 500;
 }
 
-.malus-power-card button.malus-power-primary {
+.malus-power-btn-label-primary {
     color: #ffffff;
-    background-color: #007aff;
     font-weight: 600;
-    box-shadow: 0 1px 3px rgba(0, 122, 255, 0.28);
-}
-
-.malus-power-card button.malus-power-primary:hover {
-    background-color: #1686ff;
-}
-
-.malus-power-card button.malus-power-primary:active {
-    background-color: #0066d6;
 }
 
 window.malus-crash-window,

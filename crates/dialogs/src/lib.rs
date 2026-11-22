@@ -19,6 +19,187 @@ thread_local! {
 
 const CONFIRMATION_CSS: &str = include_str!("styles/confirmation.css");
 pub const POWER_DIALOG_COUNTDOWN_SECS: u32 = 60;
+const POWER_CARD_BUTTON_INSET_PX: f64 = 20.0;
+const POWER_BUTTON_HEIGHT_PX: i32 = 28;
+const SQUIRCLE_EXPONENT: f64 = 4.2;
+
+pub fn concentric_power_button_radius(
+    window_corner_radius: f64,
+    inset: f64,
+    button_height: f64,
+) -> f64 {
+    let max_r = (button_height * 0.5).max(1.0);
+    let raw = (window_corner_radius - inset).max(6.0);
+    raw.min(max_r)
+}
+
+fn squircle_path(
+    cr: &gtk4::cairo::Context,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    radius: f64,
+) {
+    let radius = radius.min(width * 0.5).min(height * 0.5).max(1.0);
+    let power = 2.0 / SQUIRCLE_EXPONENT;
+    let quarter_turn = std::f64::consts::FRAC_PI_2;
+    const SEGMENTS: usize = 20;
+
+    cr.move_to(x + radius, y);
+    cr.line_to(x + width - radius, y);
+    for step in 1..=SEGMENTS {
+        let angle = quarter_turn * step as f64 / SEGMENTS as f64;
+        cr.line_to(
+            x + width - radius + radius * angle.sin().powf(power),
+            y + radius - radius * angle.cos().powf(power),
+        );
+    }
+    cr.line_to(x + width, y + height - radius);
+    for step in 1..=SEGMENTS {
+        let angle = quarter_turn * step as f64 / SEGMENTS as f64;
+        cr.line_to(
+            x + width - radius + radius * angle.cos().powf(power),
+            y + height - radius + radius * angle.sin().powf(power),
+        );
+    }
+    cr.line_to(x + radius, y + height);
+    for step in 1..=SEGMENTS {
+        let angle = quarter_turn * step as f64 / SEGMENTS as f64;
+        cr.line_to(
+            x + radius - radius * angle.sin().powf(power),
+            y + height - radius + radius * angle.cos().powf(power),
+        );
+    }
+    cr.line_to(x, y + radius);
+    for step in 1..=SEGMENTS {
+        let angle = quarter_turn * step as f64 / SEGMENTS as f64;
+        cr.line_to(
+            x + radius - radius * angle.cos().powf(power),
+            y + radius - radius * angle.sin().powf(power),
+        );
+    }
+    cr.close_path();
+}
+
+fn create_power_squircle_button(
+    label_text: &str,
+    is_primary: bool,
+    dark: bool,
+    window_corner_radius: f64,
+) -> Button {
+    let btn = Button::builder()
+        .has_frame(false)
+        .height_request(POWER_BUTTON_HEIGHT_PX)
+        .css_classes([if is_primary {
+            "malus-power-primary"
+        } else {
+            "malus-power-cancel"
+        }])
+        .build();
+
+    let label = Label::builder()
+        .label(label_text)
+        .halign(gtk4::Align::Center)
+        .valign(gtk4::Align::Center)
+        .margin_top(4)
+        .margin_bottom(4)
+        .margin_start(14)
+        .margin_end(14)
+        .css_classes([
+            "malus-power-btn-label",
+            if is_primary {
+                "malus-power-btn-label-primary"
+            } else {
+                "malus-power-btn-label-cancel"
+            },
+        ])
+        .build();
+
+    let bg = DrawingArea::new();
+    bg.set_can_target(false);
+    bg.set_hexpand(true);
+    bg.set_vexpand(true);
+
+    let btn_weak = btn.downgrade();
+    bg.set_draw_func(move |_, cr, w, h| {
+        let width = w as f64;
+        let height = h as f64;
+        if width <= 2.0 || height <= 2.0 {
+            return;
+        }
+        let Some(b) = btn_weak.upgrade() else {
+            return;
+        };
+        let flags = b.state_flags();
+        let hovered = flags.contains(gtk4::StateFlags::PRELIGHT);
+        let active = flags.contains(gtk4::StateFlags::ACTIVE);
+        let focused = flags.contains(gtk4::StateFlags::FOCUS_VISIBLE);
+
+        let r = concentric_power_button_radius(
+            window_corner_radius,
+            POWER_CARD_BUTTON_INSET_PX,
+            height,
+        );
+
+        let _ = cr.save();
+        squircle_path(cr, 0.0, 0.0, width, height, r);
+        if is_primary {
+            if active {
+                cr.set_source_rgba(0.0, 0.400, 0.839, 1.0);
+            } else if hovered {
+                cr.set_source_rgba(0.086, 0.525, 1.0, 1.0);
+            } else {
+                cr.set_source_rgba(0.0, 0.478, 1.0, 1.0);
+            }
+        } else if dark {
+            if active {
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.25);
+            } else if hovered {
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.19);
+            } else {
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.13);
+            }
+        } else if active {
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.19);
+        } else if hovered {
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.14);
+        } else {
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.09);
+        }
+        let _ = cr.fill();
+
+        // Fino bisel interior concéntrico para consistencia con Liquid Glass
+        squircle_path(cr, 0.5, 0.5, width - 1.0, height - 1.0, (r - 0.5).max(1.0));
+        cr.set_line_width(1.0);
+        if focused {
+            cr.set_source_rgba(0.0, 0.478, 1.0, 0.72);
+        } else if is_primary {
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.18);
+        } else if dark {
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.10);
+        } else {
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.24);
+        }
+        let _ = cr.stroke();
+        let _ = cr.restore();
+    });
+
+    let bg_state = bg.clone();
+    btn.connect_state_flags_changed(move |_, _| {
+        bg_state.queue_draw();
+    });
+
+    let overlay = gtk4::Overlay::builder()
+        .hexpand(true)
+        .height_request(POWER_BUTTON_HEIGHT_PX)
+        .build();
+    overlay.set_child(Some(&bg));
+    overlay.add_overlay(&label);
+    overlay.set_measure_overlay(&label, true);
+    btn.set_child(Some(&overlay));
+    btn
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PowerDialogKind {
@@ -479,10 +660,11 @@ pub fn show_power_dialog(
         .css_classes(["malus-power-actions"])
         .build();
 
-    let cancel_button = Button::with_label(cancel_text);
-    cancel_button.add_css_class("malus-power-cancel");
-    let confirm_button = Button::with_label(confirm_text);
-    confirm_button.add_css_class("malus-power-primary");
+    let window_corner_radius = malus_de_common::config::DisplaysConfig::load().window_corner_radius;
+    let cancel_button =
+        create_power_squircle_button(cancel_text, false, dark, window_corner_radius);
+    let confirm_button =
+        create_power_squircle_button(confirm_text, true, dark, window_corner_radius);
 
     buttons.append(&cancel_button);
     buttons.append(&confirm_button);
@@ -947,5 +1129,15 @@ assertion failed: something went wrong\n";
         let (_, b_en, _, _, confirm_en) = power_dialog_copy(PowerDialogKind::Restart, 1, false);
         assert!(b_en.ends_with("1 second."));
         assert_eq!(confirm_en, "Restart");
+    }
+
+    #[test]
+    fn concentric_power_button_radius_matches_window_squircle_and_clamps() {
+        // Ventana por defecto (32 px) con padding 20 px -> radio concéntrico exacto de 12 px
+        assert!((concentric_power_button_radius(32.0, 20.0, 28.0) - 12.0).abs() < 1e-6);
+        // Radio de ventana grande se acota a la mitad de la altura del botón (14 px)
+        assert!((concentric_power_button_radius(40.0, 20.0, 28.0) - 14.0).abs() < 1e-6);
+        // Radio de ventana pequeño mantiene mínimo legible de 6 px
+        assert!((concentric_power_button_radius(22.0, 20.0, 28.0) - 6.0).abs() < 1e-6);
     }
 }
