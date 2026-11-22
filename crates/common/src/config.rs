@@ -2327,6 +2327,7 @@ pub struct DesktopDockConfig {
     pub prefer_tabs_mode: u8,
     pub ask_to_keep_changes: bool,
     pub close_windows_on_quit: bool,
+    pub black_hole_close_effect: bool,
     pub drag_to_edges_tile: bool,
     pub drag_to_top_maximize: bool,
     pub option_drag_tile: bool,
@@ -2355,6 +2356,7 @@ impl Default for DesktopDockConfig {
             prefer_tabs_mode: 2,
             ask_to_keep_changes: false,
             close_windows_on_quit: true,
+            black_hole_close_effect: true,
             drag_to_edges_tile: true,
             drag_to_top_maximize: true,
             option_drag_tile: true,
@@ -4647,12 +4649,15 @@ apps = []
 
         let dd_def = DesktopDockConfig::default();
         assert!(dd_def.show_items_on_desktop);
+        assert!(dd_def.black_hole_close_effect);
         assert!(!dd_def.show_items_in_stage_manager);
         assert!(dd_def.drag_to_edges_tile && dd_def.drag_to_top_maximize);
         assert!(!dd_def.tiled_windows_have_margins);
         let serialized = toml::to_string_pretty(&dd_def).unwrap();
         let parsed: DesktopDockConfig = toml::from_str(&serialized).unwrap();
         assert_eq!(dd_def, parsed);
+        let legacy_parsed: DesktopDockConfig = toml::from_str("show_items_on_desktop = false\n").unwrap();
+        assert!(legacy_parsed.black_hole_close_effect);
     }
 
     #[test]

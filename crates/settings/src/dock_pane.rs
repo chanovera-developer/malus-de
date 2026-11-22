@@ -389,6 +389,30 @@ pub fn create_dock_pane(
     dock_card1.append(&switcher_row);
     dock_card1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 
+    // Efecto Hoyo negro para cerrar
+    let (black_hole_row, black_hole_sw) = build_switch_row(
+        "Efecto Hoyo negro para cerrar",
+        None,
+        dd_cfg.borrow().black_hole_close_effect,
+        {
+            let dd = dd_cfg.clone();
+            let sc = syncing.clone();
+            move |active| {
+                if sc.get() {
+                    return;
+                }
+                let mut b = dd.borrow_mut();
+                b.black_hole_close_effect = active;
+                save_desktop_dock_and_reload(&b);
+            }
+        },
+    );
+    dd_hooks.borrow_mut().push(Box::new(move |c| {
+        black_hole_sw.set_active(c.black_hole_close_effect);
+    }));
+    dock_card1.append(&black_hole_row);
+    dock_card1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
+
     // Minimizar en el icono de la aplicación
     let (min_icon_row, min_icon_sw) = build_switch_row(
         "Minimizar ventanas en el ícono de la aplicación",

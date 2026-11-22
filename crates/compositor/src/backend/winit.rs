@@ -1514,7 +1514,7 @@ pub fn run_winit() -> Result<()> {
                                     1.0,
                                     Kind::Unspecified,
                                 );
-                            if !is_transitioning {
+                            if !is_transitioning && state.desktop_dock_cfg.black_hole_close_effect {
                                 let snap_root_id =
                                     smithay::backend::renderer::element::Id::from_wayland_resource(
                                         main_surface.as_ref(),

@@ -2182,6 +2182,10 @@ impl MalusState {
                 IpcMessage::ReloadDesktopDockConfig => {
                     tracing::info!("📥 IPC ReloadDesktopDockConfig recibido");
                     self.desktop_dock_cfg = malus_de_common::config::DesktopDockConfig::load();
+                    if !self.desktop_dock_cfg.black_hole_close_effect {
+                        self.cached_close_snapshots.clear();
+                        self.pending_black_holes.clear();
+                    }
                     self.ipc_broadcaster
                         .broadcast(&IpcMessage::ReloadDesktopDockConfig);
                 }
@@ -6768,8 +6772,8 @@ impl XdgShellHandler for MalusState {
         }
 
         let hint_entry = self.close_button_hints.remove(surf);
-        let skip_black_hole =
-            should_skip_black_hole_for_app_id(app_id_for_surface(surf).as_deref());
+        let skip_black_hole = !self.desktop_dock_cfg.black_hole_close_effect
+            || should_skip_black_hole_for_app_id(app_id_for_surface(surf).as_deref());
         if let Some(ref win) = window {
             let geo = win.geometry();
             if !skip_black_hole
