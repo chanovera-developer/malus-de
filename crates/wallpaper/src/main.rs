@@ -1201,8 +1201,7 @@ fn find_icon_at(
         let iw = item.width().max(item.width_request()).max(64) as f64;
         let ih = item.height().max(item.height_request()).max(64) as f64;
         if x >= ix && x <= ix + iw && y >= iy && y <= iy + ih {
-            if let Some(path_str) = item.property::<Option<String>>("tooltip-text") {
-                let p = PathBuf::from(path_str);
+            if let Some(p) = widget_desktop_path(&item) {
                 if p.symlink_metadata().is_ok() {
                     let pointer_offset = (x - ix, y - iy);
                     return Some((p, item, pointer_offset));
@@ -5637,16 +5636,20 @@ fn render_single_icon(
                     sibling = child.next_sibling();
                     if let Some(p) = widget_desktop_path(&child) {
                         if sel.contains(&p) {
+                            child.queue_draw();
                             child.add_css_class("desktop-icon-dragging");
                             fixed_ref.move_(&child, -5000.0, -5000.0);
                         }
                     }
                 }
+                fixed_ref.queue_draw();
             }
         } else if let Some(item_ref) = item_box_drag.upgrade() {
+            item_ref.queue_draw();
             item_ref.add_css_class("desktop-icon-dragging");
             if let Some(fixed_ref) = fixed_drag.upgrade() {
                 fixed_ref.move_(&item_ref, -5000.0, -5000.0);
+                fixed_ref.queue_draw();
             }
         }
         *act_drag_begin.borrow_mut() =
@@ -6029,6 +6032,22 @@ fn populate_wallpaper_role(
         .halign(Align::Fill)
         .valign(Align::Fill)
         .build();
+    // Centinela de 1x1 px dentro del viewport para garantizar que `gtk_snapshot_free_to_node`
+    // nunca devuelva `NULL` cuando el 100% de los iconos del escritorio se están arrastrando
+    // (o cuando se elimina el último icono), forzando a `gsk_renderer_render` a limpiar y
+    // enviar el frame vacío a Wayland inmediatamente.
+    let render_sentinel = gtk4::DrawingArea::builder()
+        .content_width(1)
+        .content_height(1)
+        .halign(Align::Start)
+        .valign(Align::Start)
+        .can_target(false)
+        .build();
+    render_sentinel.set_draw_func(|_, cr, _, _| {
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.004);
+        let _ = cr.paint();
+    });
+    hit_target.append(&render_sentinel);
     overlay.set_child(Some(&hit_target));
     let mut attached_key_ctrl: Option<EventControllerKey> = None;
 
@@ -6720,8 +6739,7 @@ fn populate_wallpaper_role(
                     if c == rb_begin {
                         continue;
                     }
-                    if let Some(p_str) = c.property::<Option<String>>("tooltip-text") {
-                        let p = PathBuf::from(p_str);
+                    if let Some(p) = widget_desktop_path(&c) {
                         if sel.contains(&p) {
                             start_positions.insert(p, icons_begin.child_position(&c));
                         }
@@ -6808,10 +6826,8 @@ fn populate_wallpaper_role(
 
                             if intersects {
                                 set_desktop_icon_selected(&child, true);
-                                if let Some(path_str) =
-                                    child.property::<Option<String>>("tooltip-text")
-                                {
-                                    sel.insert(PathBuf::from(path_str));
+                                if let Some(p) = widget_desktop_path(&child) {
+                                    sel.insert(p);
                                 }
                             }
                         }
@@ -6884,10 +6900,8 @@ fn populate_wallpaper_role(
                                 if child == rb_end {
                                     continue;
                                 }
-                                if let Some(p_str) =
-                                    child.property::<Option<String>>("tooltip-text")
-                                {
-                                    if p_str == clicked_path.to_string_lossy() {
+                                if let Some(p) = widget_desktop_path(&child) {
+                                    if p == *clicked_path {
                                         set_desktop_icon_selected(&child, true);
                                     } else {
                                         set_desktop_icon_selected(&child, false);
