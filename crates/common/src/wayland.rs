@@ -29,15 +29,13 @@ pub fn wait_for_wayland(timeout_secs: u64) -> bool {
 
     while start.elapsed() < max_dur {
         if let Ok(_stream) = UnixStream::connect(&socket_path) {
-            // El compositor está escuchando y ha aceptado la conexión de prueba.
-            std::thread::sleep(Duration::from_millis(50));
             tracing::info!(
                 "✅ Compositor Wayland activo y aceptando conexiones en {:?}",
                 socket_path
             );
             return true;
         }
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(15));
     }
 
     tracing::warn!(

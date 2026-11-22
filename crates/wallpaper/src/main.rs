@@ -64,11 +64,160 @@ pub fn compute_cover_crop_geometry(
     (scaled_w, scaled_h, crop_x, crop_y)
 }
 
-fn build_scaled_wallpaper_texture(
+const WALLPAPER_CACHE_MAGIC: &[u8; 4] = b"MLWP";
+const WALLPAPER_CACHE_VERSION: u32 = 1;
+const WALLPAPER_CACHE_HEADER_LEN: usize = 16;
+const WALLPAPER_CACHE_MAX_ENTRIES: usize = 6;
+
+fn wallpaper_cache_dir() -> PathBuf {
+    if let Ok(xdg_cache) = std::env::var("XDG_CACHE_HOME") {
+        if !xdg_cache.trim().is_empty() {
+            return PathBuf::from(xdg_cache).join("malus-de/wallpaper-cache");
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".cache/malus-de/wallpaper-cache")
+}
+
+fn wallpaper_cache_filename(
+    path: &Path,
+    mtime_secs: u64,
+    mtime_nanos: u32,
+    file_len: u64,
+    target_w: i32,
+    target_h: i32,
+    fit_tag: &str,
+) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    let mut feed = |bytes: &[u8]| {
+        for &b in bytes {
+            hash ^= b as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    };
+    feed(path.to_string_lossy().as_bytes());
+    feed(b"|");
+    feed(fit_tag.as_bytes());
+    feed(&mtime_secs.to_le_bytes());
+    feed(&mtime_nanos.to_le_bytes());
+    feed(&file_len.to_le_bytes());
+    feed(&target_w.to_le_bytes());
+    feed(&target_h.to_le_bytes());
+    format!("{:016x}_{}x{}_{}.bin", hash, target_w, target_h, fit_tag)
+}
+
+fn wallpaper_cache_path_for(
+    cache_dir: &Path,
+    img_path: &Path,
+    target_w: i32,
+    target_h: i32,
+    fit_tag: &str,
+) -> Option<PathBuf> {
+    let meta = fs::metadata(img_path).ok()?;
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .unwrap_or_default();
+    let name = wallpaper_cache_filename(
+        img_path,
+        modified.as_secs(),
+        modified.subsec_nanos(),
+        meta.len(),
+        target_w,
+        target_h,
+        fit_tag,
+    );
+    Some(cache_dir.join(name))
+}
+
+fn load_cached_wallpaper_bytes(cache_path: &Path) -> Option<(i32, i32, Vec<u8>)> {
+    let data = fs::read(cache_path).ok()?;
+    if data.len() < WALLPAPER_CACHE_HEADER_LEN || &data[0..4] != WALLPAPER_CACHE_MAGIC {
+        return None;
+    }
+    let version = u32::from_le_bytes(data[4..8].try_into().ok()?);
+    if version != WALLPAPER_CACHE_VERSION {
+        return None;
+    }
+    let w = u32::from_le_bytes(data[8..12].try_into().ok()?) as usize;
+    let h = u32::from_le_bytes(data[12..16].try_into().ok()?) as usize;
+    let expected = w.checked_mul(h)?.checked_mul(4)?;
+    if w == 0 || h == 0 || data.len() != WALLPAPER_CACHE_HEADER_LEN + expected {
+        return None;
+    }
+    Some((w as i32, h as i32, data[WALLPAPER_CACHE_HEADER_LEN..].to_vec()))
+}
+
+fn save_cached_wallpaper_bytes(cache_path: &Path, w: i32, h: i32, bgra: &[u8]) {
+    if w <= 0 || h <= 0 || bgra.len() != (w as usize) * (h as usize) * 4 {
+        return;
+    }
+    let Some(parent) = cache_path.parent() else {
+        return;
+    };
+    if fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let mut out = Vec::with_capacity(WALLPAPER_CACHE_HEADER_LEN + bgra.len());
+    out.extend_from_slice(WALLPAPER_CACHE_MAGIC);
+    out.extend_from_slice(&WALLPAPER_CACHE_VERSION.to_le_bytes());
+    out.extend_from_slice(&(w as u32).to_le_bytes());
+    out.extend_from_slice(&(h as u32).to_le_bytes());
+    out.extend_from_slice(bgra);
+
+    let tmp_path = cache_path.with_extension(format!("tmp-{}", std::process::id()));
+    if fs::write(&tmp_path, &out).is_ok() {
+        if fs::rename(&tmp_path, cache_path).is_err() {
+            let _ = fs::remove_file(&tmp_path);
+        }
+    }
+
+    if let Ok(entries) = fs::read_dir(parent) {
+        let mut files: Vec<(std::time::SystemTime, PathBuf)> = entries
+            .flatten()
+            .filter_map(|entry| {
+                let p = entry.path();
+                if p.extension().and_then(|e| e.to_str()) != Some("bin") {
+                    return None;
+                }
+                let mtime = entry
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .unwrap_or(std::time::UNIX_EPOCH);
+                Some((mtime, p))
+            })
+            .collect();
+        if files.len() > WALLPAPER_CACHE_MAX_ENTRIES {
+            files.sort_by(|a, b| b.0.cmp(&a.0));
+            for (_, old_path) in files.into_iter().skip(WALLPAPER_CACHE_MAX_ENTRIES) {
+                let _ = fs::remove_file(old_path);
+            }
+        }
+    }
+}
+
+fn memory_texture_from_bgra(w: i32, h: i32, bgra: Vec<u8>) -> Option<gtk4::gdk::Texture> {
+    if w <= 0 || h <= 0 || bgra.len() != (w as usize) * (h as usize) * 4 {
+        return None;
+    }
+    let bytes = glib::Bytes::from_owned(bgra);
+    let tex = gtk4::gdk::MemoryTexture::new(
+        w,
+        h,
+        gtk4::gdk::MemoryFormat::B8g8r8a8Premultiplied,
+        &bytes,
+        (w as usize) * 4,
+    );
+    Some(tex.upcast())
+}
+
+fn build_scaled_wallpaper_bytes(
     path: &Path,
     target_w: i32,
     target_h: i32,
-) -> Option<gtk4::gdk::Texture> {
+) -> Option<(i32, i32, Vec<u8>)> {
     let target_w = target_w.max(1);
     let target_h = target_h.max(1);
     let loaded = gdk_pixbuf::Pixbuf::from_file(path).ok()?;
@@ -97,7 +246,7 @@ fn build_scaled_wallpaper_texture(
     let stride = final_pixbuf.rowstride() as usize;
     let channels = final_pixbuf.n_channels() as usize;
     if w == 0 || h == 0 || channels < 3 {
-        return Some(gtk4::gdk::Texture::for_pixbuf(&final_pixbuf));
+        return None;
     }
     let src_bytes = final_pixbuf.read_pixel_bytes();
     let src = src_bytes.as_ref();
@@ -109,7 +258,7 @@ fn build_scaled_wallpaper_texture(
             let s = row_src + x * channels;
             let d = row_dst + x * 4;
             if s + 3 > src.len() {
-                return Some(gtk4::gdk::Texture::for_pixbuf(&final_pixbuf));
+                return None;
             }
             // Formato nativo Cairo RGB24 / GDK B8g8r8x8 (little-endian: B, G, R, 0xFF)
             bgrx[d] = src[s + 2];
@@ -118,15 +267,7 @@ fn build_scaled_wallpaper_texture(
             bgrx[d + 3] = 255;
         }
     }
-    let bytes = glib::Bytes::from_owned(bgrx);
-    let tex = gtk4::gdk::MemoryTexture::new(
-        w as i32,
-        h as i32,
-        gtk4::gdk::MemoryFormat::B8g8r8a8Premultiplied,
-        &bytes,
-        w * 4,
-    );
-    Some(tex.upcast())
+    Some((w as i32, h as i32, bgrx))
 }
 
 const THUMB_SQUIRCLE_EXPONENT: f32 = 4.2;
@@ -286,11 +427,11 @@ fn build_solid_color_texture(color_hex: &str) -> Option<gtk4::gdk::Texture> {
     Some(tex.upcast())
 }
 
-fn build_centered_wallpaper_texture(
+fn build_centered_wallpaper_bytes(
     path: &Path,
     target_w: i32,
     target_h: i32,
-) -> Option<gtk4::gdk::Texture> {
+) -> Option<(i32, i32, Vec<u8>)> {
     let target_w = target_w.max(1);
     let target_h = target_h.max(1);
     let loaded = gdk_pixbuf::Pixbuf::from_file(path).ok()?;
@@ -307,15 +448,88 @@ fn build_centered_wallpaper_texture(
         let _ = cr.paint();
     }
     let data = surface.take_data().ok()?;
-    let bytes = glib::Bytes::from_owned(data.to_vec());
-    let tex = gtk4::gdk::MemoryTexture::new(
-        target_w,
-        target_h,
-        gtk4::gdk::MemoryFormat::B8g8r8a8Premultiplied,
-        &bytes,
-        (target_w as usize) * 4,
-    );
-    Some(tex.upcast())
+    Some((target_w, target_h, data.to_vec()))
+}
+
+fn next_picture_load_generation(picture: &Picture) -> u64 {
+    let next = unsafe { picture.data::<u64>("malus-wp-gen") }
+        .map(|p| unsafe { *p.as_ref() }.wrapping_add(1))
+        .unwrap_or(1);
+    unsafe {
+        picture.set_data("malus-wp-gen", next);
+    }
+    next
+}
+
+fn picture_load_generation(picture: &Picture) -> u64 {
+    unsafe { picture.data::<u64>("malus-wp-gen") }
+        .map(|p| unsafe { *p.as_ref() })
+        .unwrap_or(0)
+}
+
+fn apply_cached_or_async_wallpaper(
+    picture: &Picture,
+    img_path: &Path,
+    target_phys_w: i32,
+    target_phys_h: i32,
+    fit_tag: &'static str,
+    fallback_fit: gtk4::ContentFit,
+) {
+    let target_w = target_phys_w.max(1);
+    let target_h = target_phys_h.max(1);
+    let load_gen = next_picture_load_generation(picture);
+    let cache_dir = wallpaper_cache_dir();
+    let cache_path = wallpaper_cache_path_for(&cache_dir, img_path, target_w, target_h, fit_tag);
+
+    if let Some(ref cp) = cache_path {
+        if let Some((w, h, bgra)) = load_cached_wallpaper_bytes(cp) {
+            if let Some(tex) = memory_texture_from_bgra(w, h, bgra) {
+                picture.set_paintable(Some(&tex));
+                picture.set_content_fit(gtk4::ContentFit::Fill);
+                return;
+            }
+        }
+    }
+
+    // Cache miss: decodificar y reescalar 4K fuera del hilo principal de GTK para no bloquear el login.
+    let img_owned = img_path.to_path_buf();
+    let img_fallback = img_path.to_path_buf();
+    let cache_path_bg = cache_path;
+    let pic_weak = picture.downgrade();
+    let (tx, rx) = async_channel::bounded::<Option<(i32, i32, Vec<u8>)>>(1);
+
+    std::thread::spawn(move || {
+        let computed = if fit_tag == "center" {
+            build_centered_wallpaper_bytes(&img_owned, target_w, target_h)
+        } else {
+            build_scaled_wallpaper_bytes(&img_owned, target_w, target_h)
+        };
+        if let (Some((w, h, ref bgra)), Some(ref cp)) = (&computed, &cache_path_bg) {
+            save_cached_wallpaper_bytes(cp, *w, *h, bgra);
+        }
+        let _ = tx.send_blocking(computed);
+    });
+
+    glib::spawn_future_local(async move {
+        let Ok(result) = rx.recv().await else {
+            return;
+        };
+        let Some(pic) = pic_weak.upgrade() else {
+            return;
+        };
+        if picture_load_generation(&pic) != load_gen {
+            return;
+        }
+        if let Some((w, h, bgra)) = result {
+            if let Some(tex) = memory_texture_from_bgra(w, h, bgra) {
+                pic.set_paintable(Some(&tex));
+                pic.set_content_fit(gtk4::ContentFit::Fill);
+                return;
+            }
+        }
+        pic.set_filename(Some(&img_fallback));
+        pic.set_content_fit(fallback_fit);
+    });
 }
 
 fn apply_image_with_fit_mode(
@@ -327,16 +541,17 @@ fn apply_image_with_fit_mode(
 ) {
     match fit_mode {
         WallpaperFitMode::Fill => {
-            if let Some(tex) = build_scaled_wallpaper_texture(img_path, target_phys_w, target_phys_h)
-            {
-                picture.set_paintable(Some(&tex));
-                picture.set_content_fit(gtk4::ContentFit::Fill);
-            } else {
-                picture.set_filename(Some(img_path));
-                picture.set_content_fit(gtk4::ContentFit::Cover);
-            }
+            apply_cached_or_async_wallpaper(
+                picture,
+                img_path,
+                target_phys_w,
+                target_phys_h,
+                "fill",
+                gtk4::ContentFit::Cover,
+            );
         }
         WallpaperFitMode::Fit => {
+            let _ = next_picture_load_generation(picture);
             if let Ok(loaded) = gdk_pixbuf::Pixbuf::from_file(img_path) {
                 let pb = loaded.apply_embedded_orientation().unwrap_or(loaded);
                 let tex = gtk4::gdk::Texture::for_pixbuf(&pb);
@@ -347,6 +562,7 @@ fn apply_image_with_fit_mode(
             picture.set_content_fit(gtk4::ContentFit::Contain);
         }
         WallpaperFitMode::Stretch => {
+            let _ = next_picture_load_generation(picture);
             if let Ok(loaded) = gdk_pixbuf::Pixbuf::from_file(img_path) {
                 let pb = loaded.apply_embedded_orientation().unwrap_or(loaded);
                 let tex = gtk4::gdk::Texture::for_pixbuf(&pb);
@@ -357,15 +573,14 @@ fn apply_image_with_fit_mode(
             picture.set_content_fit(gtk4::ContentFit::Fill);
         }
         WallpaperFitMode::Center => {
-            if let Some(tex) =
-                build_centered_wallpaper_texture(img_path, target_phys_w, target_phys_h)
-            {
-                picture.set_paintable(Some(&tex));
-                picture.set_content_fit(gtk4::ContentFit::Fill);
-            } else {
-                picture.set_filename(Some(img_path));
-                picture.set_content_fit(gtk4::ContentFit::ScaleDown);
-            }
+            apply_cached_or_async_wallpaper(
+                picture,
+                img_path,
+                target_phys_w,
+                target_phys_h,
+                "center",
+                gtk4::ContentFit::ScaleDown,
+            );
         }
     }
 }
@@ -6291,5 +6506,39 @@ mod squircle_thumb_tests {
             true,
             (1920, 1080)
         ));
+    }
+
+    #[test]
+    fn wallpaper_binary_cache_roundtrip_and_key_uniqueness() {
+        let dir = std::env::temp_dir().join("malus_wallpaper_cache_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let cache_file = dir.join(super::wallpaper_cache_filename(
+            Path::new("/tmp/bg.jpg"),
+            1700000000,
+            12345,
+            9999,
+            4,
+            2,
+            "fill",
+        ));
+        let other_name = super::wallpaper_cache_filename(
+            Path::new("/tmp/bg.jpg"),
+            1700000001,
+            12345,
+            9999,
+            4,
+            2,
+            "fill",
+        );
+        assert_ne!(
+            cache_file.file_name().unwrap().to_string_lossy(),
+            other_name
+        );
+
+        let pixels: Vec<u8> = (0..(4 * 2 * 4)).map(|i| (i * 7) as u8).collect();
+        super::save_cached_wallpaper_bytes(&cache_file, 4, 2, &pixels);
+        let loaded = super::load_cached_wallpaper_bytes(&cache_file).unwrap();
+        assert_eq!(loaded, (4, 2, pixels));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

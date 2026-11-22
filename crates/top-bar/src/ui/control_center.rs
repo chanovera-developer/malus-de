@@ -38,6 +38,38 @@ pub fn create_control_center_widget() -> MenuButton {
         .build();
     popover.set_offset(0, 4);
     crate::ui::theme::register_popover(&popover);
+    menu_btn.set_popover(Some(&popover));
+
+    // Construcción diferida del contenido del Centro de Control:
+    // permite que la barra superior aparezca de inmediato al iniciar sesión y precalienta
+    // el popover tras 350ms (o al primer clic si el usuario lo abre antes).
+    let initialized = Rc::new(std::cell::Cell::new(false));
+    let ensure_populated: Rc<dyn Fn()> = {
+        let init_flag = initialized.clone();
+        let pop_c = popover.clone();
+        Rc::new(move || {
+            if init_flag.replace(true) {
+                return;
+            }
+            populate_control_center_popover(&pop_c);
+        })
+    };
+
+    let ensure_show = ensure_populated.clone();
+    popover.connect_show(move |_| {
+        ensure_show();
+    });
+
+    let ensure_warm = ensure_populated;
+    glib::timeout_add_local_once(std::time::Duration::from_millis(350), move || {
+        ensure_warm();
+    });
+
+    menu_btn
+}
+
+fn populate_control_center_popover(popover: &Popover) {
+    let popover = popover.clone();
 
     let stack = Stack::builder()
         .transition_type(StackTransitionType::SlideLeftRight)
@@ -412,7 +444,6 @@ pub fn create_control_center_widget() -> MenuButton {
     stack.add_named(&displays_subview, Some("displays"));
 
     popover.set_child(Some(&stack));
-    menu_btn.set_popover(Some(&popover));
 
     // ==========================================
     // Conexiones de Navegación e Interactividad
@@ -730,8 +761,6 @@ pub fn create_control_center_widget() -> MenuButton {
         let mode = get_airdrop_mode_dbus().await;
         update_airdrop_tahoe_ui(&ab_init, &mode);
     });
-
-    menu_btn
 }
 
 // ==========================================

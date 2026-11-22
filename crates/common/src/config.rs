@@ -1032,6 +1032,32 @@ pub fn setup_isolated_session_environment() -> std::io::Result<PathBuf> {
         std::env::set_var("FREETYPE_PROPERTIES", DEFAULT_FREETYPE_PROPERTIES);
     }
 
+    // Ruta rápida: si `malus-session` (o el compositor) ya dejó inicializado el entorno aislado,
+    // evitamos repetir escrituras de CSS, Electron, Firefox y MIME en cada daemon del shell.
+    if std::env::var_os("MALUS_ISOLATED_ENV_READY").is_some()
+        && malus_config_dir.join("glib-2.0/settings/keyfile").is_file()
+        && malus_config_dir.join("gtk-4.0/gtk.css").is_file()
+    {
+        if std::env::var_os("XCURSOR_THEME").is_none() || std::env::var_os("XCURSOR_SIZE").is_none()
+        {
+            let (cursor_theme, cursor_size) = load_cursor_config();
+            std::env::set_var("XCURSOR_THEME", &cursor_theme);
+            std::env::set_var("XCURSOR_SIZE", cursor_size.to_string());
+        }
+        if std::env::var_os("XCURSOR_PATH").is_none() {
+            let user_icons_dir = PathBuf::from(&home).join(".local/share/icons");
+            let dot_icons_dir = PathBuf::from(&home).join(".icons");
+            let xcursor_path = format!(
+                "{}:{}:/usr/local/share/malus-de/cursors:{}:/usr/share/icons",
+                user_icons_dir.display(),
+                dot_icons_dir.display(),
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/cursors")
+            );
+            std::env::set_var("XCURSOR_PATH", xcursor_path);
+        }
+        return Ok(malus_config_dir);
+    }
+
     // 1. Directorio glib-2.0/settings para el backend GSettings keyfile (preservar si ya existe)
     let keyfile_dir = malus_config_dir.join("glib-2.0").join("settings");
     std::fs::create_dir_all(&keyfile_dir)?;
@@ -1066,8 +1092,9 @@ overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
     let portal_dir = malus_config_dir.join("xdg-desktop-portal");
     let _ = std::fs::create_dir_all(&portal_dir);
     let portal_content = r#"[preferred]
-default=gtk;gnome;
-org.freedesktop.impl.portal.Settings=gtk;gnome;
+default=gtk;
+org.freedesktop.impl.portal.Settings=gtk;
+org.freedesktop.impl.portal.Secret=gnome-keyring;
 "#;
     let _ = write_file_atomic_if_changed(&portal_dir.join("portals.conf"), portal_content);
     let _ = write_file_atomic_if_changed(&portal_dir.join("malus-portals.conf"), portal_content);

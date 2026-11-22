@@ -131,8 +131,9 @@ mkdir -p "$XDG_CONFIG_HOME/glib-2.0/settings" "$XDG_CONFIG_HOME/gtk-3.0" "$XDG_C
 
 cat << 'EOF' > "$XDG_CONFIG_HOME/xdg-desktop-portal/portals.conf"
 [preferred]
-default=gtk;gnome;
-org.freedesktop.impl.portal.Settings=gtk;gnome;
+default=gtk;
+org.freedesktop.impl.portal.Settings=gtk;
+org.freedesktop.impl.portal.Secret=gnome-keyring;
 EOF
 cp -f "$XDG_CONFIG_HOME/xdg-desktop-portal/portals.conf" "$XDG_CONFIG_HOME/xdg-desktop-portal/malus-portals.conf"
 cp -f "$XDG_CONFIG_HOME/xdg-desktop-portal/portals.conf" "$XDG_CONFIG_HOME/xdg-desktop-portal/Malus-portals.conf"
@@ -184,6 +185,9 @@ ensure_user_dir XDG_VIDEOS_DIR Videos
 # TODO: Revisar por qué Nautilus no muestra sus ubicaciones nativas en la sidebar,
 # más allá de los marcadores importados o añadidos aquí.
 # Nautilus separa los marcadores de sus ubicaciones nativas; mantener las carpetas XDG visibles allí.
+if [ ! -f "$XDG_CONFIG_HOME/gtk-3.0/.gnome-bookmarks-imported" ] \
+    || [ ! -f "$XDG_CONFIG_HOME/gtk-3.0/bookmarks" ] \
+    || [ ! -f "$XDG_CONFIG_HOME/gtk-4.0/bookmarks" ]; then
 python3 - "$XDG_CONFIG_HOME/gtk-3.0/bookmarks" "$XDG_CONFIG_HOME/gtk-4.0/bookmarks" \
     "$HOST_XDG_CONFIG_HOME/gtk-3.0/bookmarks" "$XDG_CONFIG_HOME/gtk-3.0/.gnome-bookmarks-imported" \
     "${USER_DIR_PATHS[@]}" <<'PY'
@@ -245,9 +249,11 @@ for bookmark_file in bookmark_files:
 if import_host_bookmarks:
     import_marker.touch()
 PY
+fi
 
-if [ ! -f "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile" ]; then
-cat << 'EOF' > "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile"
+KEYFILE_PATH="$XDG_CONFIG_HOME/glib-2.0/settings/keyfile"
+if [ ! -f "$KEYFILE_PATH" ]; then
+cat << 'EOF' > "$KEYFILE_PATH"
 [org/gnome/desktop/wm/preferences]
 button-layout='close,minimize,maximize:'
 
@@ -264,65 +270,102 @@ font-rgba-order='rgb'
 gtk-theme='Adwaita'
 icon-theme='Malus'
 
+[org/gnome/desktop/media-handling]
+automount=true
+automount-open=false
+
 [org/gnome/settings-daemon/plugins/xsettings]
 overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
 EOF
 fi
 
-# Aplicar y asegurar el diseño macOS en el keyfile aislado de Malus DE
-gsettings set org.gnome.desktop.wm.preferences button-layout "close,minimize,maximize:" || true
+# Aplicar y asegurar el diseño macOS en el keyfile aislado de Malus DE solo si falta o difiere
+if ! grep -q "^button-layout='close,minimize,maximize:'" "$KEYFILE_PATH" 2>/dev/null; then
+    gsettings set org.gnome.desktop.wm.preferences button-layout "close,minimize,maximize:" || true
+fi
 
 # Nautilus usa esta configuración aislada para montar medios extraíbles.
-if ! gsettings set org.gnome.desktop.media-handling automount true; then
-    echo "No se pudo activar el automontaje de medios en la configuración de Malus DE." >&2
-    exit 1
+if ! grep -q "^automount=true$" "$KEYFILE_PATH" 2>/dev/null; then
+    if ! gsettings set org.gnome.desktop.media-handling automount true; then
+        echo "No se pudo activar el automontaje de medios en la configuración de Malus DE." >&2
+        exit 1
+    fi
 fi
-if ! gsettings set org.gnome.desktop.media-handling automount-open false; then
-    echo "No se pudo desactivar la apertura automática de ventanas para medios montados." >&2
-    exit 1
+if ! grep -q "^automount-open=false$" "$KEYFILE_PATH" 2>/dev/null; then
+    if ! gsettings set org.gnome.desktop.media-handling automount-open false; then
+        echo "No se pudo desactivar la apertura automática de ventanas para medios montados." >&2
+        exit 1
+    fi
 fi
 
-# Asegurar que los temas de iconos integrados (Malus + Phosphor + Colloid) estén disponibles en el entorno del usuario
-for icon_src_base in "${PROJECT_DIRS[@]/%//assets/icons}" "/usr/local/share/malus-de/icons"; do
+# Sincronizar temas de iconos en segundo plano solo si faltan o cambiaron (sin bloquear el login)
+sync_bundled_icons_bg() {
+    mkdir -p "$HOME/.local/share/icons"
+    local icon_src_base=""
+    for candidate in "${PROJECT_DIRS[@]/%//assets/icons}" "/usr/local/share/malus-de/icons"; do
+        if [ -f "$candidate/Malus/index.theme" ]; then
+            icon_src_base="$candidate"
+            break
+        fi
+    done
+    [ -z "$icon_src_base" ] && return 0
+
     for icon_theme in "Colloid-Light" "Colloid-Dark" "Malus" "Malus-Dark"; do
-        if [ -f "$icon_src_base/$icon_theme/index.theme" ]; then
-            if [ ! -f "$HOME/.local/share/icons/$icon_theme/index.theme" ]; then
-                cp -a "$icon_src_base/$icon_theme" "$HOME/.local/share/icons/" 2>/dev/null || true
-                if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-                    gtk-update-icon-cache -f -t "$HOME/.local/share/icons/$icon_theme" 2>/dev/null || true
-                fi
-            elif [ "$icon_theme" = "Malus" ] || [ "$icon_theme" = "Malus-Dark" ]; then
-                rm -rf "$HOME/.local/share/icons/$icon_theme"
-                cp -a "$icon_src_base/$icon_theme" "$HOME/.local/share/icons/" 2>/dev/null || true
-                if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-                    gtk-update-icon-cache -f -t "$HOME/.local/share/icons/$icon_theme" 2>/dev/null || true
-                fi
+        local src_dir="$icon_src_base/$icon_theme"
+        local dst_dir="$HOME/.local/share/icons/$icon_theme"
+        [ -f "$src_dir/index.theme" ] || continue
+
+        local stamp_file="$dst_dir/.malus-sync-stamp"
+        local src_stamp
+        src_stamp="$(stat -c '%Y:%n' "$src_dir" "$src_dir/index.theme" 2>/dev/null | tr '\n' '|')"
+        local needs_sync=0
+        if [ ! -f "$dst_dir/index.theme" ]; then
+            needs_sync=1
+        elif [ "$icon_theme" = "Malus" ] || [ "$icon_theme" = "Malus-Dark" ]; then
+            if [ ! -f "$stamp_file" ] || [ "$(cat "$stamp_file" 2>/dev/null || true)" != "$src_stamp" ]; then
+                needs_sync=1
+            fi
+        fi
+
+        if [ "$needs_sync" -eq 1 ]; then
+            rm -rf "$dst_dir"
+            cp -a "$src_dir" "$HOME/.local/share/icons/" 2>/dev/null || true
+            printf '%s\n' "$src_stamp" > "$stamp_file" 2>/dev/null || true
+            if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+                gtk-update-icon-cache -f -t "$dst_dir" 2>/dev/null || true
             fi
         fi
     done
-done
+}
+sync_bundled_icons_bg &
 
 # Asegurar que el tema de cursores macOS integrado en el proyecto esté instalado en el entorno del usuario
 mkdir -p "$HOME/.local/share/icons" "$HOME/.icons"
 for cursor_src_base in "${PROJECT_DIRS[@]/%//assets/cursors}" "/usr/local/share/malus-de/cursors"; do
-    for variant in "macOS" "macOS-White"; do
-        if [ -d "$cursor_src_base/$variant/cursors" ]; then
-            if [ ! -d "$HOME/.local/share/icons/$variant/cursors" ]; then
-                cp -Rf "$cursor_src_base/$variant" "$HOME/.local/share/icons/" 2>/dev/null || true
-            else
-                cp -f "$cursor_src_base/$variant/index.theme" "$cursor_src_base/$variant/cursor.theme" "$HOME/.local/share/icons/$variant/" 2>/dev/null || true
+    if [ -d "$cursor_src_base/macOS/cursors" ]; then
+        for variant in "macOS" "macOS-White"; do
+            if [ -d "$cursor_src_base/$variant/cursors" ]; then
+                for target_root in "$HOME/.local/share/icons" "$HOME/.icons"; do
+                    if [ ! -d "$target_root/$variant/cursors" ]; then
+                        cp -Rf "$cursor_src_base/$variant" "$target_root/" 2>/dev/null || true
+                    elif [ "$cursor_src_base/$variant/index.theme" -nt "$target_root/$variant/index.theme" ]; then
+                        cp -f "$cursor_src_base/$variant/index.theme" "$cursor_src_base/$variant/cursor.theme" "$target_root/$variant/" 2>/dev/null || true
+                    fi
+                done
             fi
-            if [ ! -d "$HOME/.icons/$variant/cursors" ]; then
-                cp -Rf "$cursor_src_base/$variant" "$HOME/.icons/" 2>/dev/null || true
-            else
-                cp -f "$cursor_src_base/$variant/index.theme" "$cursor_src_base/$variant/cursor.theme" "$HOME/.icons/$variant/" 2>/dev/null || true
-            fi
-        fi
-    done
+        done
+        break
+    fi
 done
 
-CURSOR_THEME="$(gsettings get org.gnome.desktop.interface cursor-theme 2>/dev/null | sed "s/^'//; s/'$//")" || CURSOR_THEME=""
-CURSOR_SIZE="$(gsettings get org.gnome.desktop.interface cursor-size 2>/dev/null)" || CURSOR_SIZE=""
+CURSOR_THEME="$(sed -n "s/^cursor-theme='\([^']*\)'$/\1/p" "$KEYFILE_PATH" 2>/dev/null | head -n 1)"
+CURSOR_SIZE="$(sed -n "s/^cursor-size=\([0-9][0-9]*\)$/\1/p" "$KEYFILE_PATH" 2>/dev/null | head -n 1)"
+if [ -z "$CURSOR_THEME" ]; then
+    CURSOR_THEME="$(gsettings get org.gnome.desktop.interface cursor-theme 2>/dev/null | sed "s/^'//; s/'$//")" || CURSOR_THEME=""
+fi
+if [ -z "$CURSOR_SIZE" ]; then
+    CURSOR_SIZE="$(gsettings get org.gnome.desktop.interface cursor-size 2>/dev/null)" || CURSOR_SIZE=""
+fi
 if [ -z "$CURSOR_THEME" ] || [ "$CURSOR_THEME" = "Adwaita" ] || [ "$CURSOR_THEME" = "default" ]; then
     CURSOR_THEME="macOS"
     gsettings set org.gnome.desktop.interface cursor-theme "macOS" 2>/dev/null || true
@@ -471,28 +514,9 @@ pkill -f malus-de-wallpaper 2>/dev/null || true
 pkill -f malus-de-notifications 2>/dev/null || true
 pkill -f malus-de-link 2>/dev/null || true
 
-# Limpiar sockets huérfanos previos para evitar que el bucle de espera detecte un socket muerto
-python3 -c "
-import os, glob, socket
-uid = os.getuid()
-for s in glob.glob(f'/run/user/{uid}/wayland-[0-9]*'):
-    if not s.endswith('.lock'):
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        try:
-            sock.connect(s)
-            sock.close()
-        except Exception:
-            try:
-                os.remove(s)
-                lock = s + '.lock'
-                if os.path.exists(lock):
-                    os.remove(lock)
-            except Exception:
-                pass
-" 2>/dev/null || true
-
 # ------------------------------------------------------------------------------
 # 1. Iniciar Compositor Wayland Smithay (DRM nativo o Winit anidado)
+#    (malus-de-compositor limpia automáticamente sockets Wayland huérfanos en Rust)
 # ------------------------------------------------------------------------------
 BACKEND_FLAG="--backend drm"
 if [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${DISPLAY:-}" ]; then
@@ -506,23 +530,36 @@ fi
 COMPOSITOR_PID=$!
 echo "🚀 Compositor iniciado con PID: $COMPOSITOR_PID"
 
-# Esperar a que el socket Wayland esté disponible y respondiendo activamente a conexiones
-SOCKET_FOUND=""
-for i in {1..60}; do
-    if [ ! -d "/proc/$COMPOSITOR_PID" ]; then
-        echo "❌ Error: El compositor terminó inesperadamente."
-        exit 1
-    fi
-    for s in /run/user/"$UID"/wayland-[0-9]*; do
-        if [ -S "$s" ]; then
-            if python3 -c "import socket; s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect('$s'); s.close()" 2>/dev/null; then
-                SOCKET_FOUND="$(basename "$s")"
-                break 2
-            fi
-        fi
-    done
-    sleep 0.1
-done
+# Esperar en un único proceso ligero (sondeo cada 15ms) a que el socket Wayland acepte conexiones
+SOCKET_FOUND="$(python3 - "$COMPOSITOR_PID" "$UID" <<'PY' 2>/dev/null || true
+import glob, os, socket, sys, time
+comp_pid = sys.argv[1]
+uid = sys.argv[2]
+deadline = time.monotonic() + 6.0
+while time.monotonic() < deadline:
+    if not os.path.isdir(f"/proc/{comp_pid}"):
+        sys.exit(2)
+    for s in sorted(glob.glob(f"/run/user/{uid}/wayland-[0-9]*")):
+        if s.endswith(".lock"):
+            continue
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.connect(s)
+            sock.close()
+            print(os.path.basename(s))
+            sys.exit(0)
+        except Exception:
+            try:
+                sock.close()
+            except Exception:
+                pass
+    time.sleep(0.015)
+PY
+)"
+if [ ! -d "/proc/$COMPOSITOR_PID" ]; then
+    echo "❌ Error: El compositor terminó inesperadamente."
+    exit 1
+fi
 
 if [ -n "$SOCKET_FOUND" ]; then
     export WAYLAND_DISPLAY="$SOCKET_FOUND"
@@ -532,59 +569,11 @@ else
     echo "⚠️ Socket Wayland no detectado a tiempo, asumiendo WAYLAND_DISPLAY=$WAYLAND_DISPLAY"
 fi
 
-# Iniciar servidor XWayland rootless para compatibilidad con aplicaciones heredadas de X11 / Qt (como VLC)
-XWAYLAND_PID=""
-if command -v Xwayland >/dev/null 2>&1; then
-    XWAYLAND_DISPLAY_FILE="$(mktemp -t malus-xwayland-XXXXXX)"
-    Xwayland -rootless -displayfd 3 3>"$XWAYLAND_DISPLAY_FILE" 2>/dev/null &
-    XWAYLAND_PID=$!
-    for i in {1..30}; do
-        if [ -s "$XWAYLAND_DISPLAY_FILE" ]; then
-            X11_NUM="$(cat "$XWAYLAND_DISPLAY_FILE" | tr -d '\n\r')"
-            export DISPLAY=":$X11_NUM"
-            echo "✅ Servidor XWayland activo en DISPLAY=$DISPLAY (PID: $XWAYLAND_PID)"
-            break
-        fi
-        sleep 0.1
-    done
-    rm -f "$XWAYLAND_DISPLAY_FILE"
-fi
-
-# Inicializar el llavero del sistema (FreeDesktop Secret Service: org.freedesktop.secrets)
-if command -v gnome-keyring-daemon >/dev/null 2>&1; then
-    echo "🔐 Inicializando llavero del sistema (gnome-keyring-daemon)..."
-    if [ ! -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/keyring/control" ]; then
-        systemctl --user start gnome-keyring-daemon.socket 2>/dev/null || true
-    fi
-    eval "$(gnome-keyring-daemon --start --daemonize --components=secrets,pkcs11,ssh 2>/dev/null)" || true
-    export SSH_AUTH_SOCK
-fi
-
-# Inicializar el agente de autenticación Polkit (para pedir contraseña gráfica al instalar software y paquetes)
-POLKIT_AGENT_PID=""
-for agent_bin in \
-    "/usr/libexec/polkit-mate-authentication-agent-1" \
-    "/usr/libexec/polkit-gnome-authentication-agent-1" \
-    "/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1" \
-    "/usr/libexec/xfce-polkit" \
-    "/usr/bin/lxpolkit"; do
-    if [ -x "$agent_bin" ]; then
-        echo "🛡️ Iniciando agente de autenticación Polkit ($agent_bin)..."
-        "$agent_bin" &
-        POLKIT_AGENT_PID=$!
-        break
-    fi
-done
-
-# Propagar el entorno Wayland y la configuración aislada de Malus DE a D-Bus y systemd --user,
-# asegurando que aplicaciones lanzadas vía activación D-Bus (Nautilus, Ptyxis, etc.) o portales
-# respeten los botones semáforo a la izquierda y el backend keyfile.
-dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER QT_QPA_PLATFORM XCURSOR_THEME XCURSOR_SIZE SSH_AUTH_SOCK XDG_CONFIG_HOME GSETTINGS_BACKEND 2>/dev/null || true
+# Propagar el entorno Wayland y la configuración aislada antes de levantar el Shell
+dbus-update-activation-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER QT_QPA_PLATFORM XCURSOR_THEME XCURSOR_SIZE XDG_CONFIG_HOME GSETTINGS_BACKEND 2>/dev/null || true
 if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user import-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER QT_QPA_PLATFORM XCURSOR_THEME XCURSOR_SIZE SSH_AUTH_SOCK XDG_CONFIG_HOME GSETTINGS_BACKEND || echo "⚠️ No se pudo importar el entorno de Malus a systemd --user."
-    systemctl --user unset-environment GTK_USE_PORTAL 2>/dev/null || true
+    systemctl --user import-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP XDG_SESSION_TYPE GDK_BACKEND GSK_RENDERER QT_QPA_PLATFORM XCURSOR_THEME XCURSOR_SIZE XDG_CONFIG_HOME GSETTINGS_BACKEND || echo "⚠️ No se pudo importar el entorno de Malus a systemd --user."
     systemctl --user start malus-session.target || echo "⚠️ No se pudo iniciar malus-session.target."
-    systemctl --user restart xdg-desktop-portal-gtk xdg-desktop-portal 2>/dev/null || true
 fi
 export MALUS_ISOLATED_ENV_READY=1
 if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
@@ -592,7 +581,7 @@ if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
 fi
 
 # ------------------------------------------------------------------------------
-# 2. Iniciar Servicios y Componentes del Shell de Malus DE
+# 2. Iniciar Servicios y Componentes del Shell de Malus DE inmediatamente
 # ------------------------------------------------------------------------------
 echo "🎨 [1/5] Iniciando Fondo de Pantalla (malus-de-wallpaper)..."
 "$BIN_DIR/malus-de-wallpaper" &
@@ -613,6 +602,60 @@ NOTIF_PID=$!
 echo "📡 [5/5] Iniciando Malus Link & AirDrop (malus-de-link)..."
 "$BIN_DIR/malus-de-link" &
 LINK_PID=$!
+
+# ------------------------------------------------------------------------------
+# 3. Servicios auxiliares en paralelo (XWayland, Keyring, Polkit y Portales XDG)
+#    para no retrasar la aparición visual del escritorio Wayland nativo.
+# ------------------------------------------------------------------------------
+XWAYLAND_PID_FILE="${XDG_RUNTIME_DIR:-/tmp}/malus-xwayland-$$.pid"
+POLKIT_PID_FILE="${XDG_RUNTIME_DIR:-/tmp}/malus-polkit-$$.pid"
+(
+    if command -v Xwayland >/dev/null 2>&1; then
+        XWAYLAND_DISPLAY_FILE="$(mktemp -t malus-xwayland-XXXXXX)"
+        Xwayland -rootless -displayfd 3 3>"$XWAYLAND_DISPLAY_FILE" 2>/dev/null &
+        XW_PID=$!
+        printf '%s\n' "$XW_PID" > "$XWAYLAND_PID_FILE" 2>/dev/null || true
+        for _ in $(seq 1 100); do
+            if [ -s "$XWAYLAND_DISPLAY_FILE" ]; then
+                X11_NUM="$(tr -d '\n\r' < "$XWAYLAND_DISPLAY_FILE")"
+                export DISPLAY=":$X11_NUM"
+                echo "✅ Servidor XWayland activo en DISPLAY=$DISPLAY (PID: $XW_PID)"
+                break
+            fi
+            sleep 0.03
+        done
+        rm -f "$XWAYLAND_DISPLAY_FILE"
+    fi
+
+    if command -v gnome-keyring-daemon >/dev/null 2>&1; then
+        echo "🔐 Inicializando llavero del sistema (gnome-keyring-daemon)..."
+        if [ ! -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/keyring/control" ]; then
+            systemctl --user start gnome-keyring-daemon.socket 2>/dev/null || true
+        fi
+        eval "$(gnome-keyring-daemon --start --daemonize --components=secrets,pkcs11,ssh 2>/dev/null)" || true
+        export SSH_AUTH_SOCK
+    fi
+
+    for agent_bin in \
+        "/usr/libexec/polkit-mate-authentication-agent-1" \
+        "/usr/libexec/polkit-gnome-authentication-agent-1" \
+        "/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1" \
+        "/usr/libexec/xfce-polkit" \
+        "/usr/bin/lxpolkit"; do
+        if [ -x "$agent_bin" ]; then
+            echo "🛡️ Iniciando agente de autenticación Polkit ($agent_bin)..."
+            "$agent_bin" &
+            printf '%s\n' "$!" > "$POLKIT_PID_FILE" 2>/dev/null || true
+            break
+        fi
+    done
+
+    dbus-update-activation-environment DISPLAY SSH_AUTH_SOCK 2>/dev/null || true
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl --user import-environment DISPLAY SSH_AUTH_SOCK 2>/dev/null || true
+        systemctl --user restart xdg-desktop-portal-gtk xdg-desktop-portal 2>/dev/null || true
+    fi
+) &
 
 echo "============================================================"
 echo "✨ SESIÓN DE MALUS DE ACTIVA Y OPERATIVA"
@@ -714,8 +757,14 @@ cleanup() {
     if command -v systemctl >/dev/null 2>&1; then
         systemctl --user unset-environment XDG_CONFIG_HOME GSETTINGS_BACKEND GTK_USE_PORTAL 2>/dev/null || true
     fi
-    [ -n "$POLKIT_AGENT_PID" ] && kill "$POLKIT_AGENT_PID" 2>/dev/null || true
-    [ -n "$XWAYLAND_PID" ] && kill "$XWAYLAND_PID" 2>/dev/null || true
+    if [ -n "${POLKIT_PID_FILE:-}" ] && [ -f "$POLKIT_PID_FILE" ]; then
+        kill "$(cat "$POLKIT_PID_FILE" 2>/dev/null || true)" 2>/dev/null || true
+        rm -f "$POLKIT_PID_FILE" 2>/dev/null || true
+    fi
+    if [ -n "${XWAYLAND_PID_FILE:-}" ] && [ -f "$XWAYLAND_PID_FILE" ]; then
+        kill "$(cat "$XWAYLAND_PID_FILE" 2>/dev/null || true)" 2>/dev/null || true
+        rm -f "$XWAYLAND_PID_FILE" 2>/dev/null || true
+    fi
     kill "$LINK_PID" 2>/dev/null || true
     kill "$NOTIF_PID" 2>/dev/null || true
     kill "$DOCK_PID" 2>/dev/null || true
