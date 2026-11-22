@@ -96,7 +96,9 @@ pub enum BackgroundBlurCapturePlan {
     Region(Rectangle<i32, Physical>),
 }
 
-/// Calcula el rectángulo de desenfoque de una ventana translúcida (p. ej. barra lateral de 212 px).
+/// Calcula el rectángulo de desenfoque de una ventana translúcida:
+/// - Branches y Ajustes del Sistema (> 480 px) desenfocan su barra lateral de 212 px.
+/// - Diálogos translúcidos compactos (p. ej. Apagar / Reiniciar / Cerrar sesión) desenfocan toda la tarjeta.
 pub fn translucent_window_blur_rect(
     win_rect: Rectangle<i32, Physical>,
     is_branches: bool,
@@ -104,10 +106,16 @@ pub fn translucent_window_blur_rect(
     win_phys_r: Option<i32>,
     scale: f64,
 ) -> Rectangle<i32, Physical> {
-    if is_branches || is_translucent {
-        let sidebar_blur_w = ((212.0 * scale).round() as i32 + win_phys_r.unwrap_or(0) as i32 + 4)
-            .min(win_rect.size.w);
+    let sidebar_blur_w = ((212.0 * scale).round() as i32 + win_phys_r.unwrap_or(0) as i32 + 4)
+        .min(win_rect.size.w);
+    if is_branches {
         Rectangle::new(win_rect.loc, (sidebar_blur_w, win_rect.size.h).into())
+    } else if is_translucent {
+        if win_rect.size.w <= (480.0 * scale.max(1.0)).round() as i32 {
+            win_rect
+        } else {
+            Rectangle::new(win_rect.loc, (sidebar_blur_w, win_rect.size.h).into())
+        }
     } else {
         win_rect
     }
@@ -548,5 +556,19 @@ mod tests {
         );
         assert_eq!(right.loc, (1836, 200).into());
         assert_eq!(right.size, (80, 500).into());
+    }
+
+    #[test]
+    fn compact_translucent_dialogs_blur_full_card_while_settings_blurs_sidebar() {
+        let dialog_rect = Rectangle::new((600, 360).into(), (332, 280).into());
+        assert_eq!(
+            translucent_window_blur_rect(dialog_rect, false, true, Some(28), 1.0),
+            dialog_rect
+        );
+
+        let settings_rect = Rectangle::new((200, 120).into(), (860, 620).into());
+        let settings_blur = translucent_window_blur_rect(settings_rect, false, true, Some(28), 1.0);
+        assert_eq!(settings_blur.loc, settings_rect.loc);
+        assert_eq!(settings_blur.size, (244, 620).into());
     }
 }

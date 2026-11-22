@@ -43,6 +43,116 @@ window.malus-confirmation-window {
     font-size: 14px;
 }
 
+window.malus-power-window,
+window.malus-power-window.background {
+    background-color: transparent;
+    background-image: none;
+}
+
+.malus-power-card {
+    background-color: alpha(@window_bg_color, 0.70);
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 22px 20px 18px 20px;
+    min-width: 288px;
+}
+
+.malus-power-icon {
+    margin-bottom: 4px;
+}
+
+.malus-power-heading {
+    color: @window_fg_color;
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1.25;
+}
+
+.malus-power-body {
+    color: alpha(@window_fg_color, 0.88);
+    font-size: 13.5px;
+    font-weight: 400;
+    line-height: 1.35;
+}
+
+checkbutton.malus-power-checkbox {
+    color: alpha(@window_fg_color, 0.92);
+    font-size: 13px;
+    font-weight: 400;
+    padding: 0;
+    outline: none;
+}
+
+checkbutton.malus-power-checkbox > check {
+    min-width: 16px;
+    min-height: 16px;
+    margin-right: 8px;
+    border-radius: 5px;
+    background-color: alpha(@window_fg_color, 0.10);
+    background-image: none;
+    border: 1px solid alpha(@window_fg_color, 0.24);
+    box-shadow: none;
+    transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+checkbutton.malus-power-checkbox > check:checked {
+    background-color: #007aff;
+    background-image: none;
+    border-color: #007aff;
+    color: #ffffff;
+}
+
+checkbutton.malus-power-checkbox:focus-visible > check,
+checkbutton.malus-power-checkbox:focus > check {
+    box-shadow: 0 0 0 3px alpha(#007aff, 0.42);
+}
+
+.malus-power-actions {
+    margin-top: 2px;
+}
+
+.malus-power-card button.malus-power-cancel,
+.malus-power-card button.malus-power-primary {
+    border-radius: 999px;
+    min-height: 34px;
+    padding: 6px 16px;
+    font-size: 14px;
+    background-image: none;
+    border: none;
+    transition: background-color 120ms ease;
+}
+
+.malus-power-card button.malus-power-cancel {
+    color: @window_fg_color;
+    background-color: alpha(@window_fg_color, 0.12);
+    font-weight: 500;
+    box-shadow: none;
+}
+
+.malus-power-card button.malus-power-cancel:hover {
+    background-color: alpha(@window_fg_color, 0.18);
+}
+
+.malus-power-card button.malus-power-cancel:active {
+    background-color: alpha(@window_fg_color, 0.24);
+}
+
+.malus-power-card button.malus-power-primary {
+    color: #ffffff;
+    background-color: #007aff;
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0, 122, 255, 0.28);
+}
+
+.malus-power-card button.malus-power-primary:hover {
+    background-color: #1686ff;
+}
+
+.malus-power-card button.malus-power-primary:active {
+    background-color: #0066d6;
+}
+
 window.malus-crash-window,
 window.malus-crash-window.background {
     background-color: @window_bg_color;

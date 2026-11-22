@@ -2,9 +2,9 @@ use gtk4::gdk::Key;
 use gtk4::gio;
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, EventControllerKey,
-    Expander, FileDialog, Label, Orientation, PolicyType, ScrolledWindow, TextView, Window,
-    WrapMode,
+    Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, CssProvider, DrawingArea,
+    EventControllerKey, Expander, FileDialog, Label, Orientation, PolicyType, ScrolledWindow,
+    TextView, Window, WrapMode,
 };
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
@@ -13,16 +13,247 @@ use std::rc::Rc;
 thread_local! {
     static CONFIRMATION_CSS_LOADED: Cell<bool> = const { Cell::new(false) };
     static DIALOG_GLASS_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
+    static ACTIVE_POWER_DIALOG: RefCell<Option<glib::WeakRef<ApplicationWindow>>> =
+        const { RefCell::new(None) };
 }
 
 const CONFIRMATION_CSS: &str = include_str!("styles/confirmation.css");
+pub const POWER_DIALOG_COUNTDOWN_SECS: u32 = 60;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PowerDialogKind {
+    Shutdown,
+    Logout,
+    Restart,
+}
+
+fn is_spanish_locale() -> bool {
+    std::env::var("LC_ALL")
+        .or_else(|_| std::env::var("LC_MESSAGES"))
+        .or_else(|_| std::env::var("LANG"))
+        .unwrap_or_default()
+        .to_lowercase()
+        .starts_with("es")
+}
+
+fn reopen_windows_pref_path() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    Some(home.join(".config/malus-de/session-reopen.conf"))
+}
+
+pub fn load_reopen_windows_pref() -> bool {
+    let Some(path) = reopen_windows_pref_path() else {
+        return true;
+    };
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return true;
+    };
+    for line in content.lines() {
+        if let Some(val) = line.trim().strip_prefix("reopen_windows=") {
+            return val.trim().eq_ignore_ascii_case("true") || val.trim() == "1";
+        }
+    }
+    true
+}
+
+pub fn save_reopen_windows_pref(reopen: bool) {
+    let Some(path) = reopen_windows_pref_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(path, format!("reopen_windows={}\n", reopen));
+}
+
+pub fn power_dialog_copy(
+    kind: PowerDialogKind,
+    remaining_secs: u32,
+    spanish: bool,
+) -> (&'static str, String, &'static str, &'static str, &'static str) {
+    if spanish {
+        let secs_word = if remaining_secs == 1 {
+            "segundo"
+        } else {
+            "segundos"
+        };
+        match kind {
+            PowerDialogKind::Shutdown => (
+                "¿Quieres apagar la computadora?",
+                format!(
+                    "Si no haces nada, la computadora se apagará automáticamente dentro de {remaining_secs} {secs_word}."
+                ),
+                "Volver a abrir ventanas al iniciar la sesión",
+                "Cancelar",
+                "Apagar",
+            ),
+            PowerDialogKind::Logout => (
+                "¿Quieres salir de todas las aplicaciones y cerrar la sesión?",
+                format!(
+                    "Si no haces nada, la sesión se cerrará automáticamente dentro de {remaining_secs} {secs_word}."
+                ),
+                "Volver a abrir ventanas al iniciar la sesión",
+                "Cancelar",
+                "Cerrar sesión",
+            ),
+            PowerDialogKind::Restart => (
+                "¿Quieres reiniciar la computadora?",
+                format!(
+                    "Si no haces nada, la computadora se reiniciará automáticamente dentro de {remaining_secs} {secs_word}."
+                ),
+                "Volver a abrir ventanas al iniciar la sesión",
+                "Cancelar",
+                "Reiniciar",
+            ),
+        }
+    } else {
+        let secs_word = if remaining_secs == 1 {
+            "second"
+        } else {
+            "seconds"
+        };
+        match kind {
+            PowerDialogKind::Shutdown => (
+                "Are you sure you want to shut down your computer now?",
+                format!(
+                    "If you do nothing, the computer will shut down automatically in {remaining_secs} {secs_word}."
+                ),
+                "Reopen windows when logging back in",
+                "Cancel",
+                "Shut Down",
+            ),
+            PowerDialogKind::Logout => (
+                "Are you sure you want to quit all applications and log out now?",
+                format!(
+                    "If you do nothing, you will be logged out automatically in {remaining_secs} {secs_word}."
+                ),
+                "Reopen windows when logging back in",
+                "Cancel",
+                "Log Out",
+            ),
+            PowerDialogKind::Restart => (
+                "Are you sure you want to restart your computer now?",
+                format!(
+                    "If you do nothing, the computer will restart automatically in {remaining_secs} {secs_word}."
+                ),
+                "Reopen windows when logging back in",
+                "Cancel",
+                "Restart",
+            ),
+        }
+    }
+}
+
+fn draw_power_dialog_icon(
+    cr: &gtk4::cairo::Context,
+    width: f64,
+    height: f64,
+    kind: PowerDialogKind,
+    dark: bool,
+) {
+    let size = width.min(height);
+    if size <= 4.0 {
+        return;
+    }
+    let cx = width * 0.5;
+    let cy = height * 0.5;
+    let r = size * 0.46875;
+
+    let _ = cr.save();
+    // Círculo gris neutro estilo macOS
+    cr.arc(cx, cy, r, 0.0, std::f64::consts::TAU);
+    if dark {
+        cr.set_source_rgba(0.580, 0.592, 0.616, 0.88);
+    } else {
+        cr.set_source_rgba(0.553, 0.561, 0.580, 0.92);
+    }
+    let _ = cr.fill();
+
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.98);
+    let stroke = (size * 0.038).max(1.8);
+
+    match kind {
+        PowerDialogKind::Shutdown => {
+            cr.set_line_width(stroke);
+            cr.set_line_cap(gtk4::cairo::LineCap::Round);
+            let arc_cy = cy + size * 0.022;
+            let arc_r = r * 0.485;
+            cr.new_sub_path();
+            cr.arc(
+                cx,
+                arc_cy,
+                arc_r,
+                (-50.0_f64).to_radians(),
+                (230.0_f64).to_radians(),
+            );
+            let _ = cr.stroke();
+
+            cr.move_to(cx, cy - r * 0.55);
+            cr.line_to(cx, cy + r * 0.01);
+            let _ = cr.stroke();
+        }
+        PowerDialogKind::Logout => {
+            // Silueta blanca de usuario recortada con margen circular gris interior
+            let inner_clip_r = r * 0.845;
+            cr.arc(cx, cy, inner_clip_r, 0.0, std::f64::consts::TAU);
+            cr.clip();
+
+            // Cabeza
+            cr.arc(cx, cy - r * 0.25, r * 0.34, 0.0, std::f64::consts::TAU);
+            let _ = cr.fill();
+
+            // Hombros / torso
+            let _ = cr.save();
+            cr.translate(cx, cy + r * 0.82);
+            cr.scale(1.0, 0.80);
+            cr.arc(0.0, 0.0, r * 0.74, 0.0, std::f64::consts::TAU);
+            let _ = cr.fill();
+            let _ = cr.restore();
+        }
+        PowerDialogKind::Restart => {
+            cr.set_line_width(stroke);
+            cr.set_line_cap(gtk4::cairo::LineCap::Round);
+            cr.set_line_join(gtk4::cairo::LineJoin::Round);
+            // Triángulo equilátero hueco apuntando a la izquierda, centrado ópticamente
+            let left_x = cx - r * 0.50;
+            let right_x = cx + r * 0.28;
+            let half_h = r * 0.45;
+            cr.move_to(left_x, cy);
+            cr.line_to(right_x, cy - half_h);
+            cr.line_to(right_x, cy + half_h);
+            cr.close_path();
+            let _ = cr.stroke();
+        }
+    }
+    let _ = cr.restore();
+}
 
 fn refresh_dialog_liquid_glass_opacity() {
+    let dark = malus_de_common::config::is_dark_mode_active();
+    libadwaita::StyleManager::default().set_color_scheme(if dark {
+        libadwaita::ColorScheme::ForceDark
+    } else {
+        libadwaita::ColorScheme::ForceLight
+    });
     let opacity = malus_de_common::config::load_liquid_glass_opacity();
     let scale = malus_de_common::config::liquid_glass_scale_for(opacity);
     let card_a = malus_de_common::config::scaled_liquid_glass_alpha(0.82, scale, 0.16, 0.96);
+    let power_bg = if dark {
+        let a = malus_de_common::config::scaled_liquid_glass_alpha(0.72, scale, 0.26, 0.94);
+        format!(
+            "background-color: rgba(38, 40, 44, {a:.3}); \
+             background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02));"
+        )
+    } else {
+        let a = malus_de_common::config::scaled_liquid_glass_alpha(0.68, scale, 0.22, 0.94);
+        format!(
+            "background-color: rgba(246, 246, 248, {a:.3}); \
+             background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.06));"
+        )
+    };
     let css = format!(
-        ".malus-confirmation-card {{ background-color: alpha(@window_bg_color, {card_a:.3}); }}"
+        ".malus-confirmation-card {{ background-color: alpha(@window_bg_color, {card_a:.3}); }}\n\
+         .malus-power-card {{ {power_bg} }}"
     );
     DIALOG_GLASS_PROVIDER.with(|cell| {
         if let Some(provider) = cell.borrow().as_ref() {
@@ -155,6 +386,224 @@ pub fn show_confirmation(
     dialog.add_controller(key_controller);
     dialog.present();
     cancel_button.grab_focus();
+}
+
+/// Presenta el cuadro de diálogo de sistema estilo macOS para Apagar, Reiniciar o Cerrar sesión,
+/// con icono circular vectorial, cuenta regresiva de 60 segundos, casilla para reabrir ventanas
+/// y botones redondeados en píldora.
+pub fn show_power_dialog(
+    app: &Application,
+    parent: Option<&Window>,
+    kind: PowerDialogKind,
+    on_confirm: impl FnOnce(bool) + 'static,
+    on_cancel: impl FnOnce() + 'static,
+) {
+    ensure_dialog_css_loaded();
+
+    // Reemplazar cualquier diálogo de energía/sesión previo abierto para evitar cuentas duplicadas.
+    ACTIVE_POWER_DIALOG.with(|slot| {
+        if let Some(existing) = slot.borrow_mut().take().and_then(|w| w.upgrade()) {
+            existing.close();
+        }
+    });
+
+    let spanish = is_spanish_locale();
+    let dark = malus_de_common::config::is_dark_mode_active();
+    let (heading_text, initial_body, reopen_text, cancel_text, confirm_text) =
+        power_dialog_copy(kind, POWER_DIALOG_COUNTDOWN_SECS, spanish);
+
+    let dialog = ApplicationWindow::builder()
+        .application(app)
+        .title("Confirmación de acción del sistema")
+        .css_classes(["malus-confirmation-window", "malus-power-window"])
+        .modal(true)
+        .decorated(false)
+        .resizable(false)
+        .build();
+    if let Some(parent) = parent {
+        dialog.set_transient_for(Some(parent));
+    }
+
+    ACTIVE_POWER_DIALOG.with(|slot| {
+        *slot.borrow_mut() = Some(dialog.downgrade());
+    });
+
+    let card = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(12)
+        .css_classes(["malus-power-card"])
+        .build();
+
+    let icon_area = DrawingArea::builder()
+        .content_width(64)
+        .content_height(64)
+        .halign(gtk4::Align::Start)
+        .valign(gtk4::Align::Start)
+        .css_classes(["malus-power-icon"])
+        .build();
+    icon_area.set_draw_func(move |_, cr, w, h| {
+        draw_power_dialog_icon(cr, w as f64, h as f64, kind, dark);
+    });
+
+    let heading = Label::builder()
+        .label(heading_text)
+        .xalign(0.0)
+        .wrap(true)
+        .max_width_chars(34)
+        .css_classes(["malus-power-heading"])
+        .build();
+
+    let body = Label::builder()
+        .label(&initial_body)
+        .xalign(0.0)
+        .wrap(true)
+        .max_width_chars(38)
+        .css_classes(["malus-power-body"])
+        .build();
+
+    let reopen_check = CheckButton::builder()
+        .label(reopen_text)
+        .active(load_reopen_windows_pref())
+        .halign(gtk4::Align::Start)
+        .css_classes(["malus-power-checkbox"])
+        .build();
+    reopen_check.connect_toggled(|cb| {
+        save_reopen_windows_pref(cb.is_active());
+    });
+
+    let buttons = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(10)
+        .homogeneous(true)
+        .hexpand(true)
+        .css_classes(["malus-power-actions"])
+        .build();
+
+    let cancel_button = Button::with_label(cancel_text);
+    cancel_button.add_css_class("malus-power-cancel");
+    let confirm_button = Button::with_label(confirm_text);
+    confirm_button.add_css_class("malus-power-primary");
+
+    buttons.append(&cancel_button);
+    buttons.append(&confirm_button);
+
+    card.append(&icon_area);
+    card.append(&heading);
+    card.append(&body);
+    card.append(&reopen_check);
+    card.append(&buttons);
+    dialog.set_child(Some(&card));
+
+    let finished = Rc::new(Cell::new(false));
+    let on_confirm = Rc::new(RefCell::new(Some(on_confirm)));
+    let on_cancel = Rc::new(RefCell::new(Some(on_cancel)));
+
+    let trigger_confirm: Rc<dyn Fn()> = {
+        let finished = finished.clone();
+        let on_confirm = on_confirm.clone();
+        let on_cancel = on_cancel.clone();
+        let reopen_check = reopen_check.clone();
+        let dialog_weak = dialog.downgrade();
+        Rc::new(move || {
+            if finished.replace(true) {
+                return;
+            }
+            on_cancel.borrow_mut().take();
+            let reopen = reopen_check.is_active();
+            save_reopen_windows_pref(reopen);
+            if let Some(callback) = on_confirm.borrow_mut().take() {
+                callback(reopen);
+            }
+            if let Some(win) = dialog_weak.upgrade() {
+                win.close();
+            }
+        })
+    };
+
+    dialog.connect_close_request({
+        let finished = finished.clone();
+        let on_confirm = on_confirm.clone();
+        let on_cancel = on_cancel.clone();
+        move |win| {
+            ACTIVE_POWER_DIALOG.with(|slot| {
+                let mut guard = slot.borrow_mut();
+                if guard
+                    .as_ref()
+                    .and_then(|w| w.upgrade())
+                    .is_some_and(|w| w == *win)
+                {
+                    *guard = None;
+                }
+            });
+            if !finished.replace(true) {
+                on_confirm.borrow_mut().take();
+                if let Some(callback) = on_cancel.borrow_mut().take() {
+                    callback();
+                }
+            }
+            glib::Propagation::Proceed
+        }
+    });
+
+    {
+        let dialog_on_cancel = dialog.clone();
+        cancel_button.connect_clicked(move |_| dialog_on_cancel.close());
+    }
+
+    {
+        let trigger = trigger_confirm.clone();
+        confirm_button.connect_clicked(move |_| trigger());
+    }
+
+    let key_controller = EventControllerKey::new();
+    {
+        let dialog_on_key = dialog.clone();
+        let cancel_btn_key = cancel_button.clone();
+        let trigger = trigger_confirm.clone();
+        key_controller.connect_key_pressed(move |_, keyval, _, _| match keyval {
+            Key::Escape => {
+                dialog_on_key.close();
+                glib::Propagation::Stop
+            }
+            Key::Return | Key::KP_Enter => {
+                if cancel_btn_key.has_focus() {
+                    dialog_on_key.close();
+                } else {
+                    trigger();
+                }
+                glib::Propagation::Stop
+            }
+            _ => glib::Propagation::Proceed,
+        });
+    }
+    dialog.add_controller(key_controller);
+
+    // Cuenta regresiva automática de 60 segundos (idéntica a macOS)
+    let remaining = Cell::new(POWER_DIALOG_COUNTDOWN_SECS);
+    let finished_timer = finished.clone();
+    let body_weak = body.downgrade();
+    let trigger_timer = trigger_confirm.clone();
+    glib::timeout_add_seconds_local(1, move || {
+        if finished_timer.get() {
+            return glib::ControlFlow::Break;
+        }
+        let next = remaining.get().saturating_sub(1);
+        remaining.set(next);
+        if next == 0 {
+            trigger_timer();
+            return glib::ControlFlow::Break;
+        }
+        if let Some(lbl) = body_weak.upgrade() {
+            let (_, updated_body, _, _, _) = power_dialog_copy(kind, next, spanish);
+            lbl.set_label(&updated_body);
+            glib::ControlFlow::Continue
+        } else {
+            glib::ControlFlow::Break
+        }
+    });
+
+    dialog.present();
+    reopen_check.grab_focus();
 }
 
 /// Presenta un diálogo compacto estilo macOS tras un cierre inesperado, con botón directo
@@ -459,5 +908,44 @@ assertion failed: something went wrong\n";
         assert!(card_block.contains("background-color: @window_bg_color;"));
         assert!(!card_block.contains("transparent"));
         assert!(!card_block.contains("alpha("));
+    }
+
+    #[test]
+    fn power_dialog_copy_matches_spanish_and_english_countdown_variants() {
+        let (h_off, b_off, reopen, cancel, confirm) =
+            power_dialog_copy(PowerDialogKind::Shutdown, 54, true);
+        assert_eq!(h_off, "¿Quieres apagar la computadora?");
+        assert_eq!(
+            b_off,
+            "Si no haces nada, la computadora se apagará automáticamente dentro de 54 segundos."
+        );
+        assert_eq!(reopen, "Volver a abrir ventanas al iniciar la sesión");
+        assert_eq!(cancel, "Cancelar");
+        assert_eq!(confirm, "Apagar");
+
+        let (h_out, b_out_1, _, _, confirm_out) =
+            power_dialog_copy(PowerDialogKind::Logout, 1, true);
+        assert_eq!(
+            h_out,
+            "¿Quieres salir de todas las aplicaciones y cerrar la sesión?"
+        );
+        assert_eq!(
+            b_out_1,
+            "Si no haces nada, la sesión se cerrará automáticamente dentro de 1 segundo."
+        );
+        assert_eq!(confirm_out, "Cerrar sesión");
+
+        let (h_res, b_res, _, _, confirm_res) =
+            power_dialog_copy(PowerDialogKind::Restart, 55, true);
+        assert_eq!(h_res, "¿Quieres reiniciar la computadora?");
+        assert_eq!(
+            b_res,
+            "Si no haces nada, la computadora se reiniciará automáticamente dentro de 55 segundos."
+        );
+        assert_eq!(confirm_res, "Reiniciar");
+
+        let (_, b_en, _, _, confirm_en) = power_dialog_copy(PowerDialogKind::Restart, 1, false);
+        assert!(b_en.ends_with("1 second."));
+        assert_eq!(confirm_en, "Restart");
     }
 }

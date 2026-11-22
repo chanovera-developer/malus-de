@@ -320,18 +320,10 @@ pub fn create_system_menu() -> MenuButton {
         let parent = menu_btn_clone
             .root()
             .and_then(|root| root.downcast::<ApplicationWindow>().ok());
-        let (dlg_title, dlg_body, dlg_confirm, dlg_cancel) = if is_spanish_locale() {
-            ("¿Reiniciar el equipo?", "El sistema cerrará todas las aplicaciones y reiniciará el equipo. Cualquier cambio no guardado se perderá.", "Reiniciar", "Cancelar")
-        } else {
-            ("Restart the computer?", "The system will close all applications and restart the computer. Any unsaved changes will be lost.", "Restart", "Cancel")
-        };
-        show_confirm_dialog(
-            dlg_title,
-            dlg_body,
-            dlg_confirm,
-            dlg_cancel,
+        show_power_action_dialog(
+            malus_de_dialogs::PowerDialogKind::Restart,
             parent.as_ref(),
-            || {
+            |_reopen_windows| {
                 info!("Reiniciando el sistema...");
                 malus_de_common::crash::mark_clean_session_exit();
                 let _ = std::process::Command::new("systemctl").arg("reboot").spawn();
@@ -349,28 +341,10 @@ pub fn create_system_menu() -> MenuButton {
         let parent = menu_btn_clone
             .root()
             .and_then(|root| root.downcast::<ApplicationWindow>().ok());
-        let (dlg_title, dlg_body, dlg_confirm, dlg_cancel) = if is_spanish_locale() {
-            (
-                "¿Apagar el equipo?",
-                "El sistema cerrará todas las aplicaciones y apagará el equipo de forma segura.",
-                "Apagar",
-                "Cancelar",
-            )
-        } else {
-            (
-                "Shut down the computer?",
-                "The system will close all applications and safely power off the computer.",
-                "Shut Down",
-                "Cancel",
-            )
-        };
-        show_confirm_dialog(
-            dlg_title,
-            dlg_body,
-            dlg_confirm,
-            dlg_cancel,
+        show_power_action_dialog(
+            malus_de_dialogs::PowerDialogKind::Shutdown,
             parent.as_ref(),
-            || {
+            |_reopen_windows| {
                 info!("Apagando el sistema...");
                 malus_de_common::crash::mark_clean_session_exit();
                 let _ = std::process::Command::new("systemctl")
@@ -414,18 +388,10 @@ pub fn create_system_menu() -> MenuButton {
         let parent = menu_btn_clone
             .root()
             .and_then(|root| root.downcast::<ApplicationWindow>().ok());
-        let (dlg_title, dlg_body, dlg_confirm, dlg_cancel) = if is_spanish_locale() {
-            ("¿Cerrar la sesión actual?", "Se cerrarán todas las aplicaciones abiertas en Malus DE y volverás a la pantalla de inicio de sesión.", "Cerrar Sesión", "Cancelar")
-        } else {
-            ("Log out of current session?", "All open applications in Malus DE will be closed and you will return to the login screen.", "Log Out", "Cancel")
-        };
-        show_confirm_dialog(
-            dlg_title,
-            dlg_body,
-            dlg_confirm,
-            dlg_cancel,
+        show_power_action_dialog(
+            malus_de_dialogs::PowerDialogKind::Logout,
             parent.as_ref(),
-            || {
+            |_reopen_windows| {
                 info!("Cerrando sesión de Malus DE...");
                 malus_de_common::crash::mark_clean_session_exit();
                 let _ = std::process::Command::new("pkill")
@@ -649,29 +615,22 @@ fn show_about_dialog() {
     about_window.present(None as Option<&gtk4::Window>);
 }
 
-fn show_confirm_dialog(
-    title: &str,
-    body: &str,
-    confirm_label: &str,
-    cancel_label: &str,
+fn show_power_action_dialog(
+    kind: malus_de_dialogs::PowerDialogKind,
     parent: Option<&ApplicationWindow>,
-    on_confirm: impl FnOnce() + 'static,
+    on_confirm: impl FnOnce(bool) + 'static,
 ) {
-    let app = parent.and_then(|parent| parent.application());
-    if let Some(app) = app {
+    if let Some(app) = parent.and_then(|parent| parent.application()) {
         let parent = parent.map(|parent| parent.upcast_ref());
-        malus_de_dialogs::show_confirmation(
-            &app,
-            parent,
-            title,
-            body,
-            confirm_label,
-            on_confirm,
-            || {},
-        );
+        malus_de_dialogs::show_power_dialog(&app, parent, kind, on_confirm, || {});
         return;
     }
 
+    let (title, body, _, cancel_label, confirm_label) = malus_de_dialogs::power_dialog_copy(
+        kind,
+        malus_de_dialogs::POWER_DIALOG_COUNTDOWN_SECS,
+        is_spanish_locale(),
+    );
     let dialog = adw::MessageDialog::builder()
         .title(if is_spanish_locale() {
             "Confirmación de acción del sistema"
@@ -679,22 +638,22 @@ fn show_confirm_dialog(
             "System Action Confirmation"
         })
         .heading(title)
-        .body(body)
+        .body(&body)
         .build();
     if let Some(parent) = parent {
         dialog.set_transient_for(Some(parent));
     }
     dialog.add_response("cancel", cancel_label);
     dialog.add_response("confirm", confirm_label);
-    dialog.set_response_appearance("confirm", adw::ResponseAppearance::Destructive);
-    dialog.set_default_response(Some("cancel"));
+    dialog.set_response_appearance("confirm", adw::ResponseAppearance::Suggested);
+    dialog.set_default_response(Some("confirm"));
     dialog.set_close_response("cancel");
 
     let on_confirm = std::cell::RefCell::new(Some(on_confirm));
     dialog.connect_response(None, move |d, resp| {
         if resp == "confirm" {
             if let Some(callback) = on_confirm.borrow_mut().take() {
-                callback();
+                callback(malus_de_dialogs::load_reopen_windows_pref());
             }
         }
         d.close();
