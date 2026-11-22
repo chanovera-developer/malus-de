@@ -1308,7 +1308,11 @@ fn reconcile_drm_outputs(
                 {
                     lmap.unmap_layer(&layer);
                     preserved_shell_layers.push(layer);
-                } else if layer.namespace() == "malus-wallpaper" && !connected_list.is_empty() {
+                } else if matches!(
+                    layer.namespace(),
+                    "malus-wallpaper" | "malus-desktop-icons"
+                ) && !connected_list.is_empty()
+                {
                     // Evita que gtk4-layer-shell cierre la ventana y GTK4 envíe commit tras destroy,
                     // lo que dispara Error::InvalidSize en Smithay 0.7.0 y mata a malus-de-wallpaper.
                     lmap.unmap_layer(&layer);
@@ -2010,7 +2014,8 @@ fn resolve_target_under(
             .map(|(surf, sub_loc)| (surf, (loc + sub_loc).to_f64()));
         (target, None, Some((window.clone(), loc)), false)
     } else if let Some((surf, focus_loc, ns, can_kb)) =
-        find_layer_under_layer(state, point, Layer::Background)
+        find_layer_under_layer(state, point, Layer::Bottom)
+            .or_else(|| find_layer_under_layer(state, point, Layer::Background))
     {
         (
             Some((surf.clone(), focus_loc)),
@@ -3885,7 +3890,10 @@ pub fn run_drm() -> Result<()> {
                                     );
                                     dock_popups.push((elems, popup_rect));
                                 }
-                            } else if surface.namespace() == "malus-wallpaper" {
+                            } else if matches!(
+                                surface.namespace(),
+                                "malus-wallpaper" | "malus-desktop-icons"
+                            ) {
                                 let popup_rect = Rectangle::new(
                                     layer_loc + popup_offset.to_physical_precise_round(scale),
                                     popup_geometry.size.to_physical_precise_round(scale),

@@ -68,7 +68,8 @@ fn find_background_layer_under(
 ) -> Option<(WlSurface, Point<f64, Logical>, String, bool)> {
     let layer_map = smithay::desktop::layer_map_for_output(output);
     let layer = layer_map
-        .layer_under(Layer::Background, point)
+        .layer_under(Layer::Bottom, point)
+        .or_else(|| layer_map.layer_under(Layer::Background, point))
         .filter(|layer| {
             !(layer.namespace() == "malus-app-switcher" && !state.app_switcher_classic_active())
         })?;
@@ -1405,7 +1406,10 @@ pub fn run_winit() -> Result<()> {
                                     );
                                     dock_popups.push((elems, popup_rect));
                                 }
-                            } else if surface.namespace() == "malus-wallpaper" {
+                            } else if matches!(
+                                surface.namespace(),
+                                "malus-wallpaper" | "malus-desktop-icons"
+                            ) {
                                 let popup_rect = Rectangle::new(
                                     layer_loc + popup_offset.to_physical_precise_round(1.0),
                                     popup_geometry.size.to_physical_precise_round(1.0),
