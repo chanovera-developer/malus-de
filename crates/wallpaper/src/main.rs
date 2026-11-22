@@ -2404,7 +2404,7 @@ fn build_create_new_submenu(
         let click_c = click_pos.clone();
         folder_btn.connect_clicked(move |_| {
             if let Some(pop) = p_c.upgrade() {
-                pop.popdown();
+                popdown_desktop_popover_lifo(&pop);
             }
             if let Some(fixed_w) = f_c.upgrade() {
                 create_desktop_item_and_edit(
@@ -2442,7 +2442,7 @@ fn build_create_new_submenu(
         let click_c = click_pos;
         doc_btn.connect_clicked(move |_| {
             if let Some(pop) = p_c.upgrade() {
-                pop.popdown();
+                popdown_desktop_popover_lifo(&pop);
             }
             if let Some(fixed_w) = f_c.upgrade() {
                 create_desktop_item_and_edit(
@@ -2808,7 +2808,7 @@ fn build_organize_submenu(
             );
         }
         if let Some(pop) = p_c.upgrade() {
-            pop.popdown();
+            popdown_desktop_popover_lifo(&pop);
         }
     });
     container.append(&by_name_btn);
@@ -2845,7 +2845,7 @@ fn build_organize_submenu(
             );
         }
         if let Some(pop) = p_c.upgrade() {
-            pop.popdown();
+            popdown_desktop_popover_lifo(&pop);
         }
     });
     container.append(&by_kind_btn);
@@ -2882,7 +2882,7 @@ fn build_organize_submenu(
             );
         }
         if let Some(pop) = p_c.upgrade() {
-            pop.popdown();
+            popdown_desktop_popover_lifo(&pop);
         }
     });
     container.append(&by_date_btn);
@@ -2949,7 +2949,7 @@ fn build_align_by_submenu(
                 }
             }
             if let Some(pop) = p_c.upgrade() {
-                pop.popdown();
+                popdown_desktop_popover_lifo(&pop);
             }
         });
     }
@@ -2990,7 +2990,7 @@ fn build_align_by_submenu(
                 );
             }
             if let Some(pop) = p_c.upgrade() {
-                pop.popdown();
+                popdown_desktop_popover_lifo(&pop);
             }
         });
     }
@@ -3030,7 +3030,7 @@ fn build_align_by_submenu(
                 );
             }
             if let Some(pop) = p_c.upgrade() {
-                pop.popdown();
+                popdown_desktop_popover_lifo(&pop);
             }
         });
         container.append(&btn);
@@ -3099,7 +3099,7 @@ fn build_view_options_submenu(
             malus_de_common::config::apply_isolated_environment(&mut cmd);
             let _ = cmd.spawn();
             if let Some(pop) = p_c.upgrade() {
-                pop.popdown();
+                popdown_desktop_popover_lifo(&pop);
             }
         });
     }
@@ -4133,6 +4133,24 @@ fn apply_desktop_picture_from_menu(path: &Path) {
     );
 }
 
+fn popdown_desktop_popover_lifo(popover: &Popover) {
+    if let Some(subs_ptr) = unsafe {
+        popover.data::<Rc<RefCell<Vec<glib::WeakRef<Popover>>>>>("cascading_submenus")
+    } {
+        let subs = unsafe { subs_ptr.as_ref() }.clone();
+        for sub_w in subs.borrow().iter() {
+            if let Some(sp) = sub_w.upgrade() {
+                if sp.is_visible() {
+                    sp.popdown();
+                }
+            }
+        }
+    }
+    if popover.is_visible() {
+        popover.popdown();
+    }
+}
+
 fn attach_desktop_cascading_submenu(
     parent_overlay: &Overlay,
     parent_popover: &Popover,
@@ -4141,12 +4159,15 @@ fn attach_desktop_cascading_submenu(
     submenu_content: &GtkBox,
     all_submenus: &Rc<RefCell<Vec<glib::WeakRef<Popover>>>>,
 ) {
+    unsafe {
+        parent_popover.set_data("cascading_submenus", all_submenus.clone());
+    }
     submenu_content.set_vexpand(false);
     submenu_content.set_valign(Align::Start);
 
     let sub_pop = Popover::builder()
         .has_arrow(false)
-        .autohide(false)
+        .autohide(true)
         .position(gtk4::PositionType::Right)
         .css_classes(["desktop-popover-menu"])
         .build();
@@ -4158,57 +4179,51 @@ fn attach_desktop_cascading_submenu(
 
     all_submenus.borrow_mut().push(sub_pop.downgrade());
 
-    let open_sub = {
-        let sub_w = sub_pop.downgrade();
-        let btn_w = trigger_btn.downgrade();
-        let vbox_w = menu_vbox.downgrade();
-        let subs = all_submenus.clone();
-        Rc::new(move || {
-            let (Some(sp), Some(b), Some(vb)) = (sub_w.upgrade(), btn_w.upgrade(), vbox_w.upgrade())
-            else {
-                return;
-            };
-            for other_w in subs.borrow().iter() {
-                if let Some(other) = other_w.upgrade() {
-                    if other != sp {
-                        other.popdown();
-                    }
+    let sub_w = sub_pop.downgrade();
+    let btn_w = trigger_btn.downgrade();
+    let vbox_w = menu_vbox.downgrade();
+    let subs = all_submenus.clone();
+    trigger_btn.connect_clicked(move |_| {
+        let (Some(sp), Some(b), Some(vb)) = (sub_w.upgrade(), btn_w.upgrade(), vbox_w.upgrade())
+        else {
+            return;
+        };
+        for other_w in subs.borrow().iter() {
+            if let Some(other) = other_w.upgrade() {
+                if other != sp && other.is_visible() {
+                    other.popdown();
                 }
             }
-            if let Some(bounds) = b.compute_bounds(&vb) {
-                let rect = gtk4::gdk::Rectangle::new(
-                    bounds.x().round() as i32,
-                    bounds.y().round() as i32,
-                    bounds.width().round().max(1.0) as i32,
-                    bounds.height().round().max(1.0) as i32,
-                );
-                sp.set_pointing_to(Some(&rect));
-            }
-            if !sp.is_visible() {
-                sp.popup();
-            }
-        })
-    };
-
-    let open_click = open_sub.clone();
-    trigger_btn.connect_clicked(move |_| open_click());
-
-    let motion = gtk4::EventControllerMotion::new();
-    let open_hover = open_sub;
-    motion.connect_enter(move |_, _, _| open_hover());
-    trigger_btn.add_controller(motion);
+        }
+        if let Some(bounds) = b.compute_bounds(&vb) {
+            let rect = gtk4::gdk::Rectangle::new(
+                bounds.x().round() as i32,
+                bounds.y().round() as i32,
+                bounds.width().round().max(1.0) as i32,
+                bounds.height().round().max(1.0) as i32,
+            );
+            sp.set_pointing_to(Some(&rect));
+        }
+        if !sp.is_visible() {
+            sp.popup();
+        }
+    });
 
     let sub_close = sub_pop.downgrade();
     parent_popover.connect_closed(move |_| {
         if let Some(sp) = sub_close.upgrade() {
-            sp.popdown();
+            if sp.is_visible() {
+                sp.popdown();
+            }
         }
     });
 
     let sub_unroot = sub_pop.downgrade();
     parent_overlay.connect_unrealize(move |_| {
         if let Some(sp) = sub_unroot.upgrade() {
-            sp.popdown();
+            if sp.is_visible() {
+                sp.popdown();
+            }
             if sp.parent().is_some() {
                 sp.unparent();
             }
@@ -4269,7 +4284,7 @@ impl DesktopIconContextMenu {
                     launch_file(&gio::File::for_path(path));
                 }
                 if let Some(pop) = pop_w.upgrade() {
-                    pop.popdown();
+                    popdown_desktop_popover_lifo(&pop);
                 }
             });
         }
@@ -4288,7 +4303,7 @@ impl DesktopIconContextMenu {
                     let _ = cmd.spawn();
                 }
                 if let Some(pop) = pop_w.upgrade() {
-                    pop.popdown();
+                    popdown_desktop_popover_lifo(&pop);
                 }
             });
         }
@@ -4313,7 +4328,7 @@ impl DesktopIconContextMenu {
                     trash_file(path);
                 }
                 if let Some(pop) = pop_w.upgrade() {
-                    pop.popdown();
+                    popdown_desktop_popover_lifo(&pop);
                 }
             });
         }
@@ -4330,7 +4345,7 @@ impl DesktopIconContextMenu {
             let pop_w = popover.downgrade();
             info_button.connect_clicked(move |_| {
                 if let Some(pop) = pop_w.upgrade() {
-                    pop.popdown();
+                    popdown_desktop_popover_lifo(&pop);
                 }
                 if let Some((path, _)) = target_c.borrow().as_ref() {
                     show_desktop_folder_info_dialog(path);
@@ -4346,7 +4361,7 @@ impl DesktopIconContextMenu {
             let pop_w = popover.downgrade();
             rename_button.connect_clicked(move |_| {
                 if let Some(pop) = pop_w.upgrade() {
-                    pop.popdown();
+                    popdown_desktop_popover_lifo(&pop);
                 }
                 let maybe_target = target_c.borrow().clone();
                 if let Some((path, item_w)) = maybe_target {
@@ -4368,7 +4383,7 @@ impl DesktopIconContextMenu {
                     compress_desktop_item(path);
                 }
                 if let Some(pop) = pop_w.upgrade() {
-                    pop.popdown();
+                    popdown_desktop_popover_lifo(&pop);
                 }
             });
         }
@@ -4384,7 +4399,7 @@ impl DesktopIconContextMenu {
                     duplicate_file(path);
                 }
                 if let Some(pop) = pop_w.upgrade() {
-                    pop.popdown();
+                    popdown_desktop_popover_lifo(&pop);
                 }
             });
         }
@@ -4400,7 +4415,7 @@ impl DesktopIconContextMenu {
                     make_desktop_alias(path);
                 }
                 if let Some(pop) = pop_w.upgrade() {
-                    pop.popdown();
+                    popdown_desktop_popover_lifo(&pop);
                 }
             });
         }
@@ -4416,7 +4431,7 @@ impl DesktopIconContextMenu {
                     launch_quick_look(path);
                 }
                 if let Some(pop) = pop_w.upgrade() {
-                    pop.popdown();
+                    popdown_desktop_popover_lifo(&pop);
                 }
             });
         }
@@ -4444,7 +4459,7 @@ impl DesktopIconContextMenu {
                     }
                 }
                 if let Some(pop) = pop_w.upgrade() {
-                    pop.popdown();
+                    popdown_desktop_popover_lifo(&pop);
                 }
             });
         }
@@ -4470,7 +4485,7 @@ impl DesktopIconContextMenu {
                     }
                 }
                 if let Some(pop) = pop_w.upgrade() {
-                    pop.popdown();
+                    popdown_desktop_popover_lifo(&pop);
                 }
             });
         }
@@ -4501,7 +4516,7 @@ impl DesktopIconContextMenu {
                     toggle_desktop_file_tag(path, &tid);
                 }
                 if let Some(pop) = pop_w.upgrade() {
-                    pop.popdown();
+                    popdown_desktop_popover_lifo(&pop);
                 }
             });
             tag_dots_row.append(&dot_btn);
@@ -4534,7 +4549,7 @@ impl DesktopIconContextMenu {
                     apply_desktop_picture_from_menu(path);
                 }
                 if let Some(pop) = pop_w.upgrade() {
-                    pop.popdown();
+                    popdown_desktop_popover_lifo(&pop);
                 }
             });
         }
@@ -4592,7 +4607,7 @@ impl DesktopIconContextMenu {
                     toggle_desktop_file_tag(path, &tid);
                 }
                 if let Some(pop) = pop_w.upgrade() {
-                    pop.popdown();
+                    popdown_desktop_popover_lifo(&pop);
                 }
             });
             tags_page.append(&item_btn);
@@ -4609,7 +4624,7 @@ impl DesktopIconContextMenu {
                     clear_desktop_file_tags(path);
                 }
                 if let Some(pop) = pop_w.upgrade() {
-                    pop.popdown();
+                    popdown_desktop_popover_lifo(&pop);
                 }
             });
         }
@@ -4643,7 +4658,7 @@ impl DesktopIconContextMenu {
                     launch_file(&parent);
                 }
                 if let Some(pop) = pop_w.upgrade() {
-                    pop.popdown();
+                    popdown_desktop_popover_lifo(&pop);
                 }
             });
         }
@@ -4670,7 +4685,7 @@ impl DesktopIconContextMenu {
                     }
                 }
                 if let Some(pop) = pop_w.upgrade() {
-                    pop.popdown();
+                    popdown_desktop_popover_lifo(&pop);
                 }
             });
         }
@@ -4684,7 +4699,7 @@ impl DesktopIconContextMenu {
             let pop_w = popover.downgrade();
             paste_into_button.connect_clicked(move |_| {
                 if let Some(pop) = pop_w.upgrade() {
-                    pop.popdown();
+                    popdown_desktop_popover_lifo(&pop);
                 }
                 if let Some((paste_dir, _)) = target_c.borrow().as_ref().cloned() {
                     if paste_dir.is_dir() {
@@ -4711,7 +4726,7 @@ impl DesktopIconContextMenu {
                     }
                 }
                 if let Some(pop) = pop_w.upgrade() {
-                    pop.popdown();
+                    popdown_desktop_popover_lifo(&pop);
                 }
             });
         }

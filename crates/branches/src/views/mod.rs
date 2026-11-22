@@ -197,13 +197,33 @@ fn make_context_action_button(
     let param = target_str.to_string();
     btn.connect_clicked(move |_| {
         if let Some(p) = pop.upgrade() {
-            p.popdown();
+            popdown_popover_lifo(&p);
         }
         if let Some(w) = aw.upgrade() {
             let _ = w.activate_action(action_name, Some(&param.to_variant()));
         }
     });
     btn
+}
+
+fn popdown_popover_lifo(popover: &gtk4::Popover) {
+    use gtk4::prelude::*;
+
+    if let Some(subs_ptr) =
+        unsafe { popover.data::<std::rc::Rc<std::cell::RefCell<Vec<glib::WeakRef<gtk4::Popover>>>>>("cascading_submenus") }
+    {
+        let subs = unsafe { subs_ptr.as_ref() }.clone();
+        for sub_w in subs.borrow().iter() {
+            if let Some(sp) = sub_w.upgrade() {
+                if sp.is_visible() {
+                    sp.popdown();
+                }
+            }
+        }
+    }
+    if popover.is_visible() {
+        popover.popdown();
+    }
 }
 
 fn attach_cascading_submenu(
@@ -216,12 +236,16 @@ fn attach_cascading_submenu(
     use gtk4::gdk;
     use gtk4::prelude::*;
 
+    unsafe {
+        parent_popover.set_data("cascading_submenus", all_submenus.clone());
+    }
+
     submenu_content.set_vexpand(false);
     submenu_content.set_valign(gtk4::Align::Start);
 
     let sub_pop = gtk4::Popover::builder()
         .has_arrow(false)
-        .autohide(false)
+        .autohide(true)
         .position(gtk4::PositionType::Right)
         .css_classes(["malus-popover-menu"])
         .build();
@@ -232,50 +256,42 @@ fn attach_cascading_submenu(
 
     all_submenus.borrow_mut().push(sub_pop.downgrade());
 
-    let open_sub = {
-        let sub_w = sub_pop.downgrade();
-        let btn_w = trigger_btn.downgrade();
-        let vbox_w = menu_vbox.downgrade();
-        let subs = all_submenus.clone();
-        std::rc::Rc::new(move || {
-            let (Some(sp), Some(b), Some(vb)) = (sub_w.upgrade(), btn_w.upgrade(), vbox_w.upgrade())
-            else {
-                return;
-            };
-            for other_w in subs.borrow().iter() {
-                if let Some(other) = other_w.upgrade() {
-                    if other != sp {
-                        other.popdown();
-                    }
+    let sub_w = sub_pop.downgrade();
+    let btn_w = trigger_btn.downgrade();
+    let vbox_w = menu_vbox.downgrade();
+    let subs = all_submenus.clone();
+    trigger_btn.connect_clicked(move |_| {
+        let (Some(sp), Some(b), Some(vb)) = (sub_w.upgrade(), btn_w.upgrade(), vbox_w.upgrade())
+        else {
+            return;
+        };
+        for other_w in subs.borrow().iter() {
+            if let Some(other) = other_w.upgrade() {
+                if other != sp && other.is_visible() {
+                    other.popdown();
                 }
             }
-            if let Some(bounds) = b.compute_bounds(&vb) {
-                let rect = gdk::Rectangle::new(
-                    bounds.x().round() as i32,
-                    bounds.y().round() as i32,
-                    bounds.width().round().max(1.0) as i32,
-                    bounds.height().round().max(1.0) as i32,
-                );
-                sp.set_pointing_to(Some(&rect));
-            }
-            if !sp.is_visible() {
-                sp.popup();
-            }
-        })
-    };
-
-    let open_click = open_sub.clone();
-    trigger_btn.connect_clicked(move |_| open_click());
-
-    let motion = gtk4::EventControllerMotion::new();
-    let open_hover = open_sub;
-    motion.connect_enter(move |_, _, _| open_hover());
-    trigger_btn.add_controller(motion);
+        }
+        if let Some(bounds) = b.compute_bounds(&vb) {
+            let rect = gdk::Rectangle::new(
+                bounds.x().round() as i32,
+                bounds.y().round() as i32,
+                bounds.width().round().max(1.0) as i32,
+                bounds.height().round().max(1.0) as i32,
+            );
+            sp.set_pointing_to(Some(&rect));
+        }
+        if !sp.is_visible() {
+            sp.popup();
+        }
+    });
 
     let sub_cleanup = sub_pop.downgrade();
     parent_popover.connect_closed(move |_| {
         if let Some(sp) = sub_cleanup.upgrade() {
-            sp.popdown();
+            if sp.is_visible() {
+                sp.popdown();
+            }
             if sp.parent().is_some() {
                 sp.unparent();
             }
@@ -1053,7 +1069,7 @@ pub(super) fn show_item_context_menu(
                 let gf = gfile.clone();
                 app_btn.connect_clicked(move |_| {
                     if let Some(m) = pop_main.upgrade() {
-                        m.popdown();
+                        popdown_popover_lifo(&m);
                     }
                     let _ = app.launch(&[gf.clone()], gio::AppLaunchContext::NONE);
                 });
@@ -1305,7 +1321,7 @@ pub(super) fn show_item_context_menu(
                 let tid = def.id.to_string();
                 item_btn.connect_clicked(move |_| {
                     if let Some(m) = pop_main.upgrade() {
-                        m.popdown();
+                        popdown_popover_lifo(&m);
                     }
                     if let Some(w) = aw.upgrade() {
                         let _ = w.activate_action(
@@ -1339,7 +1355,7 @@ pub(super) fn show_item_context_menu(
                 let tid = meta.tag_id;
                 item_btn.connect_clicked(move |_| {
                     if let Some(m) = pop_main.upgrade() {
-                        m.popdown();
+                        popdown_popover_lifo(&m);
                     }
                     if let Some(w) = aw.upgrade() {
                         let _ = w.activate_action(
@@ -1391,7 +1407,7 @@ pub(super) fn show_item_context_menu(
         let pop_main = popover.downgrade();
         term_btn.connect_clicked(move |_| {
             if let Some(m) = pop_main.upgrade() {
-                m.popdown();
+                popdown_popover_lifo(&m);
             }
             crate::fs_backend::open_in_terminal(&p_term);
         });
@@ -1453,7 +1469,7 @@ pub(super) fn show_item_context_menu(
         let pop_main = popover.downgrade();
         copy_path_btn.connect_clicked(move |_| {
             if let Some(m) = pop_main.upgrade() {
-                m.popdown();
+                popdown_popover_lifo(&m);
             }
             if let Some(display) = gdk::Display::default() {
                 display.clipboard().set_text(&p_copy.to_string_lossy());
@@ -1479,7 +1495,7 @@ pub(super) fn show_item_context_menu(
         let pop_main = popover.downgrade();
         bm_btn.connect_clicked(move |_| {
             if let Some(m) = pop_main.upgrade() {
-                m.popdown();
+                popdown_popover_lifo(&m);
             }
             if let Ok(conn) = crate::db::open_db() {
                 let changed = if already_bookmarked {
@@ -1512,7 +1528,7 @@ pub(super) fn show_item_context_menu(
         let pop_main = popover.downgrade();
         dock_btn.connect_clicked(move |_| {
             if let Some(m) = pop_main.upgrade() {
-                m.popdown();
+                popdown_popover_lifo(&m);
             }
             set_app_pinned_in_dock(app_cfg.clone(), !currently_pinned);
         });

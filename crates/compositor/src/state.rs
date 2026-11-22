@@ -2449,7 +2449,7 @@ impl MalusState {
             return;
         }
         tracing::info!("🧹 Descartando {} popups activos", self.active_popups.len());
-        for popup in self.active_popups.drain(..) {
+        for popup in self.active_popups.drain(..).rev() {
             let _ = popup.send_popup_done();
             if let Ok(root) = find_popup_root_surface(&PopupKind::Xdg(popup.clone())) {
                 let _ = PopupManager::dismiss_popup(&root, &PopupKind::Xdg(popup));
