@@ -109,21 +109,54 @@ pub fn appearance_subpanel_title(id: &str) -> Option<&'static str> {
     }
 }
 
-/// Registra el panel principal `Aspecto` (`"appearance"`, fiel a `assets/screenshots/Aspecto.png`)
-/// y su subsección `Temas` (`"appearance-themes"`, con Tema de aplicaciones, Tema y estilo del puntero
-/// y Superficie de escritorio en diseño Apple-like).
-pub fn register_appearance_panes(stack: &Stack, navigate: Rc<dyn Fn(&str)>) -> Rc<dyn Fn()> {
-    let prefs = Rc::new(RefCell::new(AppearancePreferences::load()));
+/// Devuelve un cargador bajo demanda para `Aspecto` (`"appearance"`) y su subsección
+/// `Temas` (`"appearance-themes"`). Cada vista se construye una sola vez al visitarla
+/// y queda conservada en el `Stack`.
+pub fn create_appearance_pane_loader(
+    stack: &Stack,
+    navigate: Rc<dyn Fn(&str)>,
+) -> Rc<dyn Fn(&str)> {
+    let stack_c = stack.clone();
+    let prefs_cell: Rc<RefCell<Option<Rc<RefCell<AppearancePreferences>>>>> =
+        Rc::new(RefCell::new(None));
+    let refresh_main: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let refresh_themes: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
 
-    let (main_pane, refresh_main) = build_appearance_main_pane(&prefs, &navigate);
-    stack.add_named(&main_pane, Some("appearance"));
-
-    let (themes_pane, refresh_themes) = build_appearance_themes_subpane(&navigate);
-    stack.add_named(&themes_pane, Some("appearance-themes"));
-
-    Rc::new(move || {
-        refresh_main();
-        refresh_themes();
+    Rc::new(move |target: &str| match target {
+        "appearance" => {
+            if stack_c.child_by_name("appearance").is_none() {
+                let prefs = {
+                    let mut slot = prefs_cell.borrow_mut();
+                    slot.get_or_insert_with(|| {
+                        Rc::new(RefCell::new(AppearancePreferences::load()))
+                    })
+                    .clone()
+                };
+                let (main_pane, rf) = build_appearance_main_pane(&prefs, &navigate);
+                crate::configure_right_pane_widget(main_pane.upcast_ref());
+                stack_c.add_named(&main_pane, Some("appearance"));
+                *refresh_main.borrow_mut() = Some(rf);
+            }
+            if let Some(rf) = refresh_main.borrow().as_ref() {
+                rf();
+            }
+        }
+        "appearance-themes" => {
+            let mut just_created = false;
+            if stack_c.child_by_name("appearance-themes").is_none() {
+                let (themes_pane, rf) = build_appearance_themes_subpane(&navigate);
+                crate::configure_right_pane_widget(themes_pane.upcast_ref());
+                stack_c.add_named(&themes_pane, Some("appearance-themes"));
+                *refresh_themes.borrow_mut() = Some(rf);
+                just_created = true;
+            }
+            if !just_created {
+                if let Some(rf) = refresh_themes.borrow().as_ref() {
+                    rf();
+                }
+            }
+        }
+        _ => {}
     })
 }
 

@@ -203,107 +203,122 @@ pub fn general_subpanel_title(id: &str) -> Option<&'static str> {
     }
 }
 
-/// Registra el panel principal `General` (`"about"`) y sus 14 subvistas en el `Stack` principal.
-/// Devuelve un callback `refresh_for(target_id)` para refrescar datos vivos al entrar.
-pub fn register_general_panes(
+/// Devuelve un cargador bajo demanda para `General` (`"about"`) y sus 14 subvistas.
+/// Cada subvista se construye una sola vez al visitarla, queda conservada en el `Stack`,
+/// y al volver a entrar únicamente refresca sus datos vivos.
+pub fn create_general_pane_loader(
     parent_window: &ApplicationWindow,
     stack: &Stack,
     navigate: Rc<dyn Fn(&str)>,
 ) -> Rc<dyn Fn(&str)> {
-    let prefs = Rc::new(RefCell::new(GeneralPreferences::load()));
-    let sys_snap = Rc::new(RefCell::new(collect_system_info_fast()));
+    let win = parent_window.clone();
+    let stack_c = stack.clone();
+    let prefs_cell: Rc<RefCell<Option<Rc<RefCell<GeneralPreferences>>>>> =
+        Rc::new(RefCell::new(None));
+    let sys_cell: Rc<RefCell<Option<Rc<RefCell<SystemInfoSnapshot>>>>> =
+        Rc::new(RefCell::new(None));
+    let refreshers: Rc<RefCell<std::collections::HashMap<String, Rc<dyn Fn()>>>> =
+        Rc::new(RefCell::new(std::collections::HashMap::new()));
 
-    // 1. Hub principal "General" (General01.png)
-    let hub_pane = build_general_hub_pane(&navigate);
-    stack.add_named(&hub_pane, Some("about"));
+    Rc::new(move |target: &str| {
+        if stack_c.child_by_name(target).is_none() {
+            let prefs = {
+                let mut slot = prefs_cell.borrow_mut();
+                slot.get_or_insert_with(|| Rc::new(RefCell::new(GeneralPreferences::load())))
+                    .clone()
+            };
+            let sys_snap = {
+                let mut slot = sys_cell.borrow_mut();
+                slot.get_or_insert_with(|| Rc::new(RefCell::new(collect_system_info_fast())))
+                    .clone()
+            };
 
-    // 2. "Información" (General02.png)
-    let (info_pane, refresh_info) = build_info_subpane(parent_window, &sys_snap, &navigate);
-    stack.add_named(&info_pane, Some("general-info"));
+            let built: Option<(ScrolledWindow, Option<Rc<dyn Fn()>>)> = match target {
+                "about" => Some((build_general_hub_pane(&navigate), None)),
+                "general-info" => {
+                    let (p, r) = build_info_subpane(&win, &sys_snap, &navigate);
+                    Some((p, Some(r)))
+                }
+                "general-update" => {
+                    let (p, r) = build_software_update_subpane(&win, &prefs, &sys_snap);
+                    Some((p, Some(r)))
+                }
+                "general-storage" => {
+                    let (p, r) = build_storage_subpane(&win, &prefs, &sys_snap);
+                    Some((p, Some(r)))
+                }
+                "general-warranty" => Some((
+                    build_pending_feature_subpane(
+                        "emblem-favorite-symbolic",
+                        RED_TOP,
+                        RED_BOT,
+                        "Garantía y soporte del equipo",
+                        "Consulta el estado de cobertura de hardware, diagnóstico de componentes OEM y soporte técnico.",
+                        "En Linux no existe un servicio unificado de garantía AppleCare. Futura integración prevista con metadatos SMBIOS/DMI y fwupd.",
+                    ),
+                    None,
+                )),
+                "general-airdrop" => Some((build_airdrop_subpane(&win, &prefs), None)),
+                "general-autofill" => Some((build_autofill_subpane(&win, &prefs), None)),
+                "general-sharing" => {
+                    let (p, r) = build_sharing_subpane(&win, &sys_snap);
+                    Some((p, Some(r)))
+                }
+                "general-startup-disk" => {
+                    let (p, r) = build_startup_disk_subpane(&win, &sys_snap);
+                    Some((p, Some(r)))
+                }
+                "general-login-items" => {
+                    let (p, r) = build_login_items_subpane(&win);
+                    Some((p, Some(r)))
+                }
+                "general-datetime" => {
+                    let (p, r) = build_datetime_subpane(&win, &prefs, &sys_snap);
+                    Some((p, Some(r)))
+                }
+                "general-locale" => {
+                    let (p, r) = build_locale_subpane(&win, &prefs);
+                    Some((p, Some(r)))
+                }
+                "general-timemachine" => Some((
+                    build_pending_feature_subpane(
+                        "document-open-recent-symbolic",
+                        GREEN_TOP,
+                        GREEN_BOT,
+                        "Time Machine (Copias de seguridad)",
+                        "Realiza respaldos incrementales automáticos de tus archivos personales y configuraciones del sistema.",
+                        "Pendiente de enlazar con instantáneas Btrfs / BorgBackup / rsync en Malus DE.",
+                    ),
+                    None,
+                )),
+                "general-mdm" => Some((
+                    build_pending_feature_subpane(
+                        "security-high-symbolic",
+                        GRAY_TOP,
+                        GRAY_BOT,
+                        "Administración de dispositivos (MDM)",
+                        "Perfiles de configuración empresarial, certificados corporativos y políticas de seguridad gestionadas.",
+                        "Pendiente de adaptación mediante políticas FreeIPA / Ansible / Fleet en entornos Linux.",
+                    ),
+                    None,
+                )),
+                "general-reset" => Some((build_reset_subpane(&win), None)),
+                _ => None,
+            };
 
-    // 3. "Actualización de software" (General03.png)
-    let (upd_pane, refresh_upd) = build_software_update_subpane(parent_window, &prefs, &sys_snap);
-    stack.add_named(&upd_pane, Some("general-update"));
+            if let Some((pane, refresher)) = built {
+                crate::configure_right_pane_widget(pane.upcast_ref());
+                stack_c.add_named(&pane, Some(target));
+                if let Some(ref_fn) = refresher {
+                    refreshers.borrow_mut().insert(target.to_string(), ref_fn);
+                }
+            }
+        }
 
-    // 4. "Almacenamiento" (General04.png)
-    let (stor_pane, refresh_stor) = build_storage_subpane(parent_window, &prefs, &sys_snap);
-    stack.add_named(&stor_pane, Some("general-storage"));
-
-    // 5. "AppleCare y garantía" (General01 row -> stub con etiqueta por implementar)
-    let warranty_pane = build_pending_feature_subpane(
-        "emblem-favorite-symbolic",
-        RED_TOP,
-        RED_BOT,
-        "Garantía y soporte del equipo",
-        "Consulta el estado de cobertura de hardware, diagnóstico de componentes OEM y soporte técnico.",
-        "En Linux no existe un servicio unificado de garantía AppleCare. Futura integración prevista con metadatos SMBIOS/DMI y fwupd.",
-    );
-    stack.add_named(&warranty_pane, Some("general-warranty"));
-
-    // 6. "AirDrop y continuidad" (General05.png)
-    let airdrop_pane = build_airdrop_subpane(parent_window, &prefs);
-    stack.add_named(&airdrop_pane, Some("general-airdrop"));
-
-    // 7. "Autorrelleno y contraseñas" (General06.png)
-    let autofill_pane = build_autofill_subpane(parent_window, &prefs);
-    stack.add_named(&autofill_pane, Some("general-autofill"));
-
-    // 8. "Compartir" (General07.png)
-    let (sharing_pane, refresh_sharing) = build_sharing_subpane(parent_window, &sys_snap);
-    stack.add_named(&sharing_pane, Some("general-sharing"));
-
-    // 9. "Disco de arranque" (General08.png)
-    let (boot_pane, refresh_boot) = build_startup_disk_subpane(parent_window, &sys_snap);
-    stack.add_named(&boot_pane, Some("general-startup-disk"));
-
-    // 10. "Elementos de inicio y extensiones" (General09.png & General10.png)
-    let (login_pane, refresh_login) = build_login_items_subpane(parent_window);
-    stack.add_named(&login_pane, Some("general-login-items"));
-
-    // 11. "Fecha y hora" (General11.png)
-    let (dt_pane, refresh_dt) = build_datetime_subpane(parent_window, &prefs, &sys_snap);
-    stack.add_named(&dt_pane, Some("general-datetime"));
-
-    // 12. "Idioma y región" (General12.png)
-    let (loc_pane, refresh_loc) = build_locale_subpane(parent_window, &prefs);
-    stack.add_named(&loc_pane, Some("general-locale"));
-
-    // 13. "Time Machine"
-    let tm_pane = build_pending_feature_subpane(
-        "document-open-recent-symbolic",
-        GREEN_TOP,
-        GREEN_BOT,
-        "Time Machine (Copias de seguridad)",
-        "Realiza respaldos incrementales automáticos de tus archivos personales y configuraciones del sistema.",
-        "Pendiente de enlazar con instantáneas Btrfs / BorgBackup / rsync en Malus DE.",
-    );
-    stack.add_named(&tm_pane, Some("general-timemachine"));
-
-    // 14. "Admón. de dispositivos"
-    let mdm_pane = build_pending_feature_subpane(
-        "security-high-symbolic",
-        GRAY_TOP,
-        GRAY_BOT,
-        "Administración de dispositivos (MDM)",
-        "Perfiles de configuración empresarial, certificados corporativos y políticas de seguridad gestionadas.",
-        "Pendiente de adaptación mediante políticas FreeIPA / Ansible / Fleet en entornos Linux.",
-    );
-    stack.add_named(&mdm_pane, Some("general-mdm"));
-
-    // 15. "Transferir o restablecer"
-    let reset_pane = build_reset_subpane(parent_window);
-    stack.add_named(&reset_pane, Some("general-reset"));
-
-    Rc::new(move |target: &str| match target {
-        "general-info" => refresh_info(),
-        "general-update" => refresh_upd(),
-        "general-storage" => refresh_stor(),
-        "general-sharing" => refresh_sharing(),
-        "general-startup-disk" => refresh_boot(),
-        "general-login-items" => refresh_login(),
-        "general-datetime" => refresh_dt(),
-        "general-locale" => refresh_loc(),
-        _ => {}
+        let refresher = refreshers.borrow().get(target).cloned();
+        if let Some(ref_fn) = refresher {
+            ref_fn();
+        }
     })
 }
 

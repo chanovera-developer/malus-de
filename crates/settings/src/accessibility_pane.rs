@@ -281,46 +281,54 @@ pub fn accessibility_subpanel_title(id: &str) -> Option<&'static str> {
     }
 }
 
-pub fn register_accessibility_panes(
+/// Devuelve un cargador bajo demanda para `Accesibilidad` (`"accessibility"`) y sus 20 subvistas.
+/// Cada página se construye solo la primera vez que se visita y queda conservada en el `Stack`.
+pub fn create_accessibility_pane_loader(
     parent_window: &ApplicationWindow,
     stack: &Stack,
     navigate: Rc<dyn Fn(&str)>,
-) {
-    let cfg = Rc::new(RefCell::new(AccessibilityConfig::load()));
+) -> Rc<dyn Fn(&str)> {
+    let win = parent_window.clone();
+    let stack_c = stack.clone();
+    let cfg_cell: Rc<RefCell<Option<Rc<RefCell<AccessibilityConfig>>>>> =
+        Rc::new(RefCell::new(None));
 
-    stack.add_named(
-        &build_a11y_hub_pane(parent_window, &navigate),
-        Some("accessibility"),
-    );
-    stack.add_named(&build_voiceover_pane(&cfg), Some("a11y-voiceover"));
-    stack.add_named(&build_zoom_pane(&cfg), Some("a11y-zoom"));
-    stack.add_named(&build_hover_text_pane(&cfg), Some("a11y-hover-text"));
-    stack.add_named(&build_display_pane(&cfg), Some("a11y-display"));
-    stack.add_named(&build_motion_pane(&cfg), Some("a11y-motion"));
-    stack.add_named(&build_spoken_content_pane(&cfg), Some("a11y-spoken"));
-    stack.add_named(
-        &build_audio_descriptions_pane(&cfg),
-        Some("a11y-audio-desc"),
-    );
-    stack.add_named(&build_voice_control_pane(&cfg), Some("a11y-voice-control"));
-    stack.add_named(
-        &build_keyboard_a11y_pane(&cfg, &navigate),
-        Some("a11y-keyboard"),
-    );
-    stack.add_named(&build_pointer_control_pane(&cfg), Some("a11y-pointer"));
-    stack.add_named(
-        &build_switch_control_pane(&cfg, &navigate),
-        Some("a11y-switch-control"),
-    );
-    stack.add_named(&build_audio_a11y_pane(&cfg, &navigate), Some("a11y-audio"));
-    stack.add_named(&build_captions_pane(&cfg), Some("a11y-captions"));
-    stack.add_named(&build_live_captions_pane(&cfg), Some("a11y-live-captions"));
-    stack.add_named(&build_name_recognition_pane(), Some("a11y-name-rec"));
-    stack.add_named(&build_live_speech_pane(&cfg), Some("a11y-live-speech"));
-    stack.add_named(&build_personal_voice_pane(), Some("a11y-personal-voice"));
-    stack.add_named(&build_vocal_shortcuts_pane(), Some("a11y-vocal-shortcuts"));
-    stack.add_named(&build_siri_a11y_pane(&cfg), Some("a11y-siri"));
-    stack.add_named(&build_shortcut_a11y_pane(&cfg), Some("a11y-shortcut"));
+    Rc::new(move |target: &str| {
+        if stack_c.child_by_name(target).is_some() {
+            return;
+        }
+        let cfg = {
+            let mut slot = cfg_cell.borrow_mut();
+            slot.get_or_insert_with(|| Rc::new(RefCell::new(AccessibilityConfig::load())))
+                .clone()
+        };
+        let pane: ScrolledWindow = match target {
+            "accessibility" => build_a11y_hub_pane(&win, &navigate),
+            "a11y-voiceover" => build_voiceover_pane(&cfg),
+            "a11y-zoom" => build_zoom_pane(&cfg),
+            "a11y-hover-text" => build_hover_text_pane(&cfg),
+            "a11y-display" => build_display_pane(&cfg),
+            "a11y-motion" => build_motion_pane(&cfg),
+            "a11y-spoken" => build_spoken_content_pane(&cfg),
+            "a11y-audio-desc" => build_audio_descriptions_pane(&cfg),
+            "a11y-voice-control" => build_voice_control_pane(&cfg),
+            "a11y-keyboard" => build_keyboard_a11y_pane(&cfg, &navigate),
+            "a11y-pointer" => build_pointer_control_pane(&cfg),
+            "a11y-switch-control" => build_switch_control_pane(&cfg, &navigate),
+            "a11y-audio" => build_audio_a11y_pane(&cfg, &navigate),
+            "a11y-captions" => build_captions_pane(&cfg),
+            "a11y-live-captions" => build_live_captions_pane(&cfg),
+            "a11y-name-rec" => build_name_recognition_pane(),
+            "a11y-live-speech" => build_live_speech_pane(&cfg),
+            "a11y-personal-voice" => build_personal_voice_pane(),
+            "a11y-vocal-shortcuts" => build_vocal_shortcuts_pane(),
+            "a11y-siri" => build_siri_a11y_pane(&cfg),
+            "a11y-shortcut" => build_shortcut_a11y_pane(&cfg),
+            _ => return,
+        };
+        crate::configure_right_pane_widget(pane.upcast_ref());
+        stack_c.add_named(&pane, Some(target));
+    })
 }
 
 fn make_scrolled_pane() -> (ScrolledWindow, GtkBox) {

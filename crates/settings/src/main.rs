@@ -655,14 +655,8 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     });
 
     // ==========================================
-    // 2. Construcción de los Paneles de Contenido
+    // 2. Contenedores de cabecera y cargador bajo demanda (lazy + caché en Stack)
     // ==========================================
-    let (wifi_pane, refresh_wifi_pane) = wifi_pane::create_wifi_pane(&window);
-    stack.add_named(&wifi_pane, Some("wifi"));
-
-    let (bluetooth_pane, refresh_bluetooth_pane) = bluetooth_pane::create_bluetooth_pane(&window);
-    stack.add_named(&bluetooth_pane, Some("bluetooth"));
-
     let nav_dispatch: Rc<RefCell<Option<Rc<dyn Fn(&str, bool)>>>> = Rc::new(RefCell::new(None));
     let nav_wifi = {
         let d = nav_dispatch.clone();
@@ -680,13 +674,14 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             }
         })
     };
-    let ((network_pane, refresh_network_pane), (firewall_pane, refresh_firewall_pane)) =
-        network_pane::create_network_panes(&window, nav_wifi, nav_fw);
-    stack.add_named(&network_pane, Some("network"));
-    stack.add_named(&firewall_pane, Some("network-firewall"));
-
-    let (vpn_pane, refresh_vpn_pane) = vpn_pane::create_vpn_pane(&window);
-    stack.add_named(&vpn_pane, Some("vpn"));
+    let nav_general: Rc<dyn Fn(&str)> = {
+        let d = nav_dispatch.clone();
+        Rc::new(move |target_id: &str| {
+            if let Some(f) = d.borrow().as_ref() {
+                f(target_id, true);
+            }
+        })
+    };
 
     let header_title_col = GtkBox::builder()
         .orientation(Orientation::Vertical)
@@ -727,39 +722,158 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             lbl_c.set_label(text);
         })
     };
-    let (battery_pane, refresh_battery_pane) =
-        battery_pane::create_battery_pane(&window, battery_header_cb);
-    stack.add_named(&battery_pane, Some("battery"));
 
-    let (displays_pane, refresh_displays_pane) = displays_pane::create_displays_pane(&window);
-    stack.add_named(&displays_pane, Some("displays"));
+    // Cargadores perezosos para grupos con subvistas (construyen cada página una sola vez)
+    let load_general_pane =
+        general_pane::create_general_pane_loader(&window, &stack, nav_general.clone());
+    let load_accessibility_pane =
+        accessibility_pane::create_accessibility_pane_loader(&window, &stack, nav_general.clone());
+    let load_appearance_pane =
+        appearance_pane::create_appearance_pane_loader(&stack, nav_general.clone());
 
-    let (wallpaper_pane, refresh_wallpaper_pane) = wallpaper_pane::create_wallpaper_pane(&window);
-    stack.add_named(&wallpaper_pane, Some("wallpaper"));
+    // Caché de callbacks de refresco por panel ya construido en el Stack
+    let cached_refreshers: Rc<RefCell<std::collections::HashMap<String, Rc<dyn Fn()>>>> =
+        Rc::new(RefCell::new(std::collections::HashMap::new()));
 
-    let (keyboard_pane, refresh_keyboard_pane) = create_keyboard_pane();
-    stack.add_named(&keyboard_pane, Some("keyboard"));
+    // Construye un panel solo si aún no existe en el Stack; si `refresh` es true,
+    // actualiza también sus datos vivos (evitando doble refresco en constructores que ya lo hacen).
+    let ensure_panel: Rc<dyn Fn(&str, bool)> = {
+        let win_c = window.clone();
+        let stack_c = stack.clone();
+        let nav_wifi_c = nav_wifi.clone();
+        let nav_fw_c = nav_fw.clone();
+        let nav_gen_c = nav_general.clone();
+        let bat_cb_c = battery_header_cb.clone();
+        let load_gen = load_general_pane.clone();
+        let load_a11y = load_accessibility_pane.clone();
+        let load_app = load_appearance_pane.clone();
+        let refreshers_c = cached_refreshers.clone();
 
-    let (spotlight_pane, refresh_spotlight_pane) = create_spotlight_pane();
-    stack.add_named(&spotlight_pane, Some("spotlight"));
+        Rc::new(move |target: &str, refresh: bool| {
+            if general_pane::is_general_subpanel(target) {
+                if refresh || stack_c.child_by_name(target).is_none() {
+                    load_gen(target);
+                }
+                return;
+            }
+            if accessibility_pane::is_accessibility_subpanel(target) {
+                load_a11y(target);
+                return;
+            }
+            if appearance_pane::is_appearance_subpanel(target) {
+                if refresh || stack_c.child_by_name(target).is_none() {
+                    load_app(target);
+                }
+                return;
+            }
 
-    let sound_pane = create_sound_pane();
-    stack.add_named(&sound_pane, Some("sound"));
+            let mut refreshed_on_construct = false;
+            if stack_c.child_by_name(target).is_none() {
+                match target {
+                    "wifi" => {
+                        let (pane, rf) = wifi_pane::create_wifi_pane(&win_c);
+                        configure_right_pane_widget(pane.upcast_ref());
+                        stack_c.add_named(&pane, Some("wifi"));
+                        refreshers_c.borrow_mut().insert("wifi".to_string(), rf);
+                    }
+                    "bluetooth" => {
+                        let (pane, rf) = bluetooth_pane::create_bluetooth_pane(&win_c);
+                        configure_right_pane_widget(pane.upcast_ref());
+                        stack_c.add_named(&pane, Some("bluetooth"));
+                        refreshers_c
+                            .borrow_mut()
+                            .insert("bluetooth".to_string(), rf);
+                    }
+                    "network" | "network-firewall" => {
+                        let ((net_pane, ref_net), (fw_pane, ref_fw)) =
+                            network_pane::create_network_panes(
+                                &win_c,
+                                nav_wifi_c.clone(),
+                                nav_fw_c.clone(),
+                            );
+                        configure_right_pane_widget(net_pane.upcast_ref());
+                        configure_right_pane_widget(fw_pane.upcast_ref());
+                        stack_c.add_named(&net_pane, Some("network"));
+                        stack_c.add_named(&fw_pane, Some("network-firewall"));
+                        let mut map = refreshers_c.borrow_mut();
+                        map.insert("network".to_string(), ref_net);
+                        map.insert("network-firewall".to_string(), ref_fw);
+                    }
+                    "vpn" => {
+                        let (pane, rf) = vpn_pane::create_vpn_pane(&win_c);
+                        configure_right_pane_widget(pane.upcast_ref());
+                        stack_c.add_named(&pane, Some("vpn"));
+                        refreshers_c.borrow_mut().insert("vpn".to_string(), rf);
+                        refreshed_on_construct = true;
+                    }
+                    "battery" => {
+                        let (pane, rf) = battery_pane::create_battery_pane(&win_c, bat_cb_c.clone());
+                        configure_right_pane_widget(pane.upcast_ref());
+                        stack_c.add_named(&pane, Some("battery"));
+                        refreshers_c.borrow_mut().insert("battery".to_string(), rf);
+                        refreshed_on_construct = true;
+                    }
+                    "displays" => {
+                        let (pane, rf) = displays_pane::create_displays_pane(&win_c);
+                        configure_right_pane_widget(pane.upcast_ref());
+                        stack_c.add_named(&pane, Some("displays"));
+                        refreshers_c.borrow_mut().insert("displays".to_string(), rf);
+                        refreshed_on_construct = true;
+                    }
+                    "wallpaper" => {
+                        let (pane, rf) = wallpaper_pane::create_wallpaper_pane(&win_c);
+                        configure_right_pane_widget(pane.upcast_ref());
+                        stack_c.add_named(&pane, Some("wallpaper"));
+                        refreshers_c
+                            .borrow_mut()
+                            .insert("wallpaper".to_string(), rf);
+                        refreshed_on_construct = true;
+                    }
+                    "keyboard" => {
+                        let (pane, rf) = create_keyboard_pane();
+                        configure_right_pane_widget(pane.upcast_ref());
+                        stack_c.add_named(&pane, Some("keyboard"));
+                        refreshers_c.borrow_mut().insert("keyboard".to_string(), rf);
+                        refreshed_on_construct = true;
+                    }
+                    "spotlight" => {
+                        let (pane, rf) = create_spotlight_pane();
+                        configure_right_pane_widget(pane.upcast_ref());
+                        stack_c.add_named(&pane, Some("spotlight"));
+                        refreshers_c
+                            .borrow_mut()
+                            .insert("spotlight".to_string(), rf);
+                    }
+                    "sound" => {
+                        let pane = create_sound_pane();
+                        configure_right_pane_widget(pane.upcast_ref());
+                        stack_c.add_named(&pane, Some("sound"));
+                    }
+                    "dock" => {
+                        let (pane, rf) = dock_pane::create_dock_pane(&win_c, nav_gen_c.clone());
+                        configure_right_pane_widget(pane.upcast_ref());
+                        stack_c.add_named(&pane, Some("dock"));
+                        refreshers_c.borrow_mut().insert("dock".to_string(), rf);
+                    }
+                    "menubar" => {
+                        let (pane, rf) =
+                            menubar_pane::create_menubar_pane(&win_c, nav_gen_c.clone());
+                        configure_right_pane_widget(pane.upcast_ref());
+                        stack_c.add_named(&pane, Some("menubar"));
+                        refreshers_c.borrow_mut().insert("menubar".to_string(), rf);
+                    }
+                    _ => {}
+                }
+            }
 
-    let nav_general: Rc<dyn Fn(&str)> = {
-        let d = nav_dispatch.clone();
-        Rc::new(move |target_id: &str| {
-            if let Some(f) = d.borrow().as_ref() {
-                f(target_id, true);
+            if refresh && !refreshed_on_construct {
+                let rf = refreshers_c.borrow().get(target).cloned();
+                if let Some(ref_fn) = rf {
+                    ref_fn();
+                }
             }
         })
     };
-    let (dock_pane, refresh_dock_pane) =
-        dock_pane::create_dock_pane(&window, nav_general.clone());
-    stack.add_named(&dock_pane, Some("dock"));
-    let refresh_general_pane =
-        general_pane::register_general_panes(&window, &stack, nav_general.clone());
-    accessibility_pane::register_accessibility_panes(&window, &stack, nav_general.clone());
 
     // Header Toolbar macOS (‹ › chevrons + título de la vista actual)
     let content_area = GtkBox::builder()
@@ -829,11 +943,6 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     content_area.append(&header_handle);
     content_area.append(&stack);
 
-    let refresh_appearance_pane =
-        appearance_pane::register_appearance_panes(&stack, nav_general.clone());
-    let (menubar_pane, refresh_menubar_pane) =
-        menubar_pane::create_menubar_pane(&window, nav_general.clone());
-    stack.add_named(&menubar_pane, Some("menubar"));
     configure_right_pane_stack(&stack);
 
     // Historial de navegación para botones atrás / adelante (estilo Branches)
@@ -866,20 +975,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         let header_tb_c = header_toolbar.clone();
         let title_lbl = active_pane_title.clone();
         let sub_row_c = header_sub_row.clone();
-        let ref_wifi = refresh_wifi_pane.clone();
-        let ref_bt = refresh_bluetooth_pane.clone();
-        let ref_net = refresh_network_pane.clone();
-        let ref_fw = refresh_firewall_pane.clone();
-        let ref_vpn = refresh_vpn_pane.clone();
-        let ref_bat = refresh_battery_pane.clone();
-        let ref_gen = refresh_general_pane.clone();
-        let ref_disp = refresh_displays_pane.clone();
-        let ref_wall = refresh_wallpaper_pane.clone();
-        let ref_kb = refresh_keyboard_pane.clone();
-        let ref_app = refresh_appearance_pane.clone();
-        let ref_mb = refresh_menubar_pane.clone();
-        let ref_dock = refresh_dock_pane.clone();
-        let ref_spot = refresh_spotlight_pane.clone();
+        let ensure_c = ensure_panel.clone();
         let history_c = nav_history.clone();
         let idx_c = nav_index.clone();
         let cur_panel_c = current_panel.clone();
@@ -918,35 +1014,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             } else {
                 header_tb_c.remove_css_class("disp-header-toolbar");
             }
-            if target == "wifi" {
-                ref_wifi();
-            } else if target == "bluetooth" {
-                ref_bt();
-            } else if target == "network" {
-                ref_net();
-            } else if target == "network-firewall" {
-                ref_fw();
-            } else if target == "vpn" {
-                ref_vpn();
-            } else if target == "battery" {
-                ref_bat();
-            } else if general_pane::is_general_subpanel(target) {
-                ref_gen(target);
-            } else if target == "displays" {
-                ref_disp();
-            } else if target == "wallpaper" {
-                ref_wall();
-            } else if target == "keyboard" {
-                ref_kb();
-            } else if appearance_pane::is_appearance_subpanel(target) {
-                ref_app();
-            } else if target == "menubar" {
-                ref_mb();
-            } else if target == "dock" {
-                ref_dock();
-            } else if target == "spotlight" {
-                ref_spot();
-            }
+            ensure_c(target, true);
             let display_title = general_pane::general_subpanel_title(target)
                 .or_else(|| accessibility_pane::accessibility_subpanel_title(target))
                 .or_else(|| appearance_pane::appearance_subpanel_title(target))
@@ -1059,6 +1127,42 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
 
     window.set_child(Some(&root_overlay));
     window.present();
+
+    // Precalentamiento suave en tiempo muerto (solo mientras la ventana siga abierta):
+    // construye de a una las secciones ligeras sin sondas de hardware/red para que
+    // navegar por la barra lateral sea instantáneo sin penalizar el arranque inicial.
+    let prewarm_queue: Rc<RefCell<std::collections::VecDeque<&'static str>>> = Rc::new(
+        RefCell::new(std::collections::VecDeque::from([
+            "about",
+            "appearance",
+            "menubar",
+            "dock",
+            "accessibility",
+            "keyboard",
+            "sound",
+            "spotlight",
+        ])),
+    );
+    let win_weak = window.downgrade();
+    let stack_prewarm = stack.clone();
+    let ensure_prewarm = ensure_panel.clone();
+    glib::timeout_add_local_once(std::time::Duration::from_millis(250), move || {
+        glib::timeout_add_local(std::time::Duration::from_millis(60), move || {
+            let Some(win) = win_weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if !win.is_visible() {
+                return glib::ControlFlow::Break;
+            }
+            while let Some(next_id) = prewarm_queue.borrow_mut().pop_front() {
+                if stack_prewarm.child_by_name(next_id).is_none() {
+                    ensure_prewarm(next_id, false);
+                    return glib::ControlFlow::Continue;
+                }
+            }
+            glib::ControlFlow::Break
+        });
+    });
 }
 
 pub(crate) fn set_modal_scrim_visible(window: &ApplicationWindow, visible: bool) {
@@ -1157,6 +1261,25 @@ fn choose_panel_transition(
     }
 }
 
+/// Configures a single page widget added to the right-hand `Stack` so narrow panels
+/// wrap cleanly and the right area can shrink to ~2/3 of its prior minimum width (~440 px).
+pub(crate) fn configure_right_pane_widget(child: &gtk4::Widget) {
+    let is_bleed = child.has_css_class("wp-bleed-pane");
+    if !is_bleed {
+        child.set_margin_start(SETTINGS_SIDEBAR_WIDTH);
+    }
+    if let Ok(sw) = child.clone().downcast::<ScrolledWindow>() {
+        if !is_bleed {
+            sw.set_hscrollbar_policy(PolicyType::Automatic);
+        }
+        sw.set_min_content_width(if is_bleed {
+            SETTINGS_SIDEBAR_WIDTH + SETTINGS_RIGHT_PANE_MIN_WIDTH
+        } else {
+            SETTINGS_RIGHT_PANE_MIN_WIDTH
+        });
+    }
+}
+
 /// Configures every page in the right-hand `Stack` so narrow panels wrap cleanly
 /// and the right area can shrink to ~2/3 of its prior minimum width (~440 px).
 fn configure_right_pane_stack(stack: &Stack) {
@@ -1167,21 +1290,7 @@ fn configure_right_pane_stack(stack: &Stack) {
             .item(i)
             .and_then(|obj| obj.downcast::<gtk4::StackPage>().ok())
         {
-            let child = page.child();
-            let is_bleed = child.has_css_class("wp-bleed-pane");
-            if !is_bleed {
-                child.set_margin_start(SETTINGS_SIDEBAR_WIDTH);
-            }
-            if let Ok(sw) = child.downcast::<ScrolledWindow>() {
-                if !is_bleed {
-                    sw.set_hscrollbar_policy(PolicyType::Automatic);
-                }
-                sw.set_min_content_width(if is_bleed {
-                    SETTINGS_SIDEBAR_WIDTH + SETTINGS_RIGHT_PANE_MIN_WIDTH
-                } else {
-                    SETTINGS_RIGHT_PANE_MIN_WIDTH
-                });
-            }
+            configure_right_pane_widget(&page.child());
         }
     }
 }
@@ -1608,23 +1717,22 @@ pub(crate) fn get_installed_cursor_themes() -> Vec<(String, String, &'static str
 }
 
 pub(crate) fn get_current_cursor_config() -> (String, u32) {
-    let out_theme = Command::new("gsettings")
-        .args(["get", "org.gnome.desktop.interface", "cursor-theme"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().trim_matches('\'').to_string())
-        .unwrap_or_else(|| "macOS".to_string());
-
-    let out_size = Command::new("gsettings")
-        .args(["get", "org.gnome.desktop.interface", "cursor-size"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .and_then(|s| s.trim().parse::<u32>().ok())
-        .unwrap_or(24);
-
-    (out_theme, out_size)
+    // Lectura directa vía gio::Settings (en proceso, sin lanzar subprocesos `gsettings get`)
+    if let Some(source) = gtk4::gio::SettingsSchemaSource::default() {
+        if source.lookup("org.gnome.desktop.interface", true).is_some() {
+            let gs = gtk4::gio::Settings::new("org.gnome.desktop.interface");
+            let theme = gs.string("cursor-theme").to_string();
+            let size = gs.int("cursor-size");
+            let theme = if theme.trim().is_empty() {
+                "macOS".to_string()
+            } else {
+                theme
+            };
+            let size = if size > 0 { size as u32 } else { 24 };
+            return (theme, size);
+        }
+    }
+    malus_de_common::config::load_cursor_config()
 }
 
 pub(crate) fn is_dark_mode_active() -> bool {
@@ -2143,6 +2251,37 @@ mod tests {
             stack_min_w <= SETTINGS_RIGHT_PANE_MIN_WIDTH + 16,
             "El ancho mínimo del Stack derecho ({stack_min_w}) supera el objetivo compacto"
         );
+
+        // 6. Verificar carga perezosa + caché por página en los cargadores con subvistas
+        let app = Application::builder()
+            .application_id("org.malus_de.SettingsTestLazyLoaders")
+            .build();
+        let win = ApplicationWindow::builder().application(&app).build();
+        let lazy_stack = Stack::new();
+        let noop_nav: Rc<dyn Fn(&str)> = Rc::new(|_| {});
+
+        let gen_loader = general_pane::create_general_pane_loader(&win, &lazy_stack, noop_nav.clone());
+        let a11y_loader =
+            accessibility_pane::create_accessibility_pane_loader(&win, &lazy_stack, noop_nav.clone());
+        let app_loader = appearance_pane::create_appearance_pane_loader(&lazy_stack, noop_nav);
+        assert_eq!(lazy_stack.pages().n_items(), 0);
+
+        gen_loader("about");
+        assert_eq!(lazy_stack.pages().n_items(), 1);
+        let first_about = lazy_stack.child_by_name("about").expect("about built");
+        assert_eq!(first_about.margin_start(), SETTINGS_SIDEBAR_WIDTH);
+        gen_loader("about");
+        assert_eq!(lazy_stack.pages().n_items(), 1);
+        assert_eq!(lazy_stack.child_by_name("about").as_ref(), Some(&first_about));
+
+        a11y_loader("accessibility");
+        assert_eq!(lazy_stack.pages().n_items(), 2);
+        app_loader("appearance");
+        assert_eq!(lazy_stack.pages().n_items(), 3);
+        // Subvistas no visitadas siguen sin construirse hasta que se abran
+        assert!(lazy_stack.child_by_name("a11y-voiceover").is_none());
+        assert!(lazy_stack.child_by_name("general-storage").is_none());
+        assert!(lazy_stack.child_by_name("appearance-themes").is_none());
     }
 
     #[test]
