@@ -154,6 +154,9 @@ pub fn open_db() -> Result<Connection, rusqlite::Error> {
             folder_path TEXT PRIMARY KEY,
             title TEXT NOT NULL,
             sort_order INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS sidebar_hidden_defaults (
+            folder_path TEXT PRIMARY KEY
         );",
     )?;
 
@@ -594,6 +597,41 @@ pub fn remove_bookmark(conn: &Connection, folder: &Path) -> Result<bool, rusqlit
         params![p_str],
     )?;
     Ok(removed > 0)
+}
+
+pub fn get_hidden_sidebar_paths(conn: &Connection) -> std::collections::HashSet<PathBuf> {
+    let mut set = std::collections::HashSet::new();
+    let Ok(mut stmt) = conn.prepare("SELECT folder_path FROM sidebar_hidden_defaults") else {
+        return set;
+    };
+    if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+        for p in rows.flatten() {
+            set.insert(PathBuf::from(p));
+        }
+    }
+    set
+}
+
+pub fn hide_sidebar_path(conn: &Connection, folder: &Path) -> Result<bool, rusqlite::Error> {
+    let p_str = folder.to_string_lossy();
+    let inserted = conn.execute(
+        "INSERT OR IGNORE INTO sidebar_hidden_defaults (folder_path) VALUES (?1)",
+        params![p_str],
+    )?;
+    Ok(inserted > 0)
+}
+
+pub fn unhide_sidebar_path(conn: &Connection, folder: &Path) -> Result<bool, rusqlite::Error> {
+    let p_str = folder.to_string_lossy();
+    let removed = conn.execute(
+        "DELETE FROM sidebar_hidden_defaults WHERE folder_path = ?1",
+        params![p_str],
+    )?;
+    Ok(removed > 0)
+}
+
+pub fn restore_all_hidden_sidebar_paths(conn: &Connection) -> Result<usize, rusqlite::Error> {
+    conn.execute("DELETE FROM sidebar_hidden_defaults", [])
 }
 
 /// Cambia únicamente el título visible de un marcador en el sidebar sin renombrar el elemento en disco.

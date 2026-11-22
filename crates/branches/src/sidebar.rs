@@ -18,6 +18,7 @@ pub fn refresh_all_sidebars() {
         let mut list = instances.borrow_mut();
         list.retain(|weak| {
             if let Some(inner) = weak.upgrade() {
+                inner.sync_default_rows_visibility();
                 inner.rebuild_bookmarks();
                 inner.rebuild_devices();
                 true
@@ -30,6 +31,7 @@ pub fn refresh_all_sidebars() {
 
 struct SidebarInner {
     list_box: ListBox,
+    default_removable_rows: Vec<(PathBuf, ListBoxRow)>,
     bookmarks_header: ListBoxRow,
     bookmark_rows: RefCell<Vec<ListBoxRow>>,
     devices_anchor: ListBoxRow,
@@ -132,15 +134,26 @@ impl Sidebar {
         attach_virtual_row_handlers(&recents_row, on_recents.clone(), "@recents");
         list_box.append(&recents_row);
 
+        let mut default_removable_rows: Vec<(PathBuf, ListBoxRow)> = Vec::new();
+
+        let shared_title = if es { "Compartidos" } else { "Shared" };
         let shared_row = create_sidebar_row(
-            if es { "Compartidos" } else { "Shared" },
+            shared_title,
             "folder-publicshare-symbolic",
             shared_path.clone(),
             true,
         );
-        attach_folder_navigation_handlers(&shared_row, &on_navigate, shared_path.clone());
-        attach_folder_drop_target(&shared_row, shared_path, &on_files_dropped);
+        attach_folder_navigation_handlers(
+            &shared_row,
+            &on_navigate,
+            shared_path.clone(),
+            shared_title.to_string(),
+            "folder-publicshare-symbolic",
+            SidebarRemovalKind::DefaultEntry,
+        );
+        attach_folder_drop_target(&shared_row, shared_path.clone(), &on_files_dropped);
         list_box.append(&shared_row);
+        default_removable_rows.push((shared_path, shared_row));
 
         // 1. Sección Favoritos
         let favorites_header =
@@ -231,9 +244,17 @@ impl Sidebar {
 
         for entry in favorites {
             let row = create_sidebar_row(&entry.title, entry.icon_name, entry.path.clone(), true);
-            attach_folder_navigation_handlers(&row, &on_navigate, entry.path.clone());
-            attach_folder_drop_target(&row, entry.path, &on_files_dropped);
+            attach_folder_navigation_handlers(
+                &row,
+                &on_navigate,
+                entry.path.clone(),
+                entry.title.clone(),
+                entry.icon_name,
+                SidebarRemovalKind::DefaultEntry,
+            );
+            attach_folder_drop_target(&row, entry.path.clone(), &on_files_dropped);
             list_box.append(&row);
+            default_removable_rows.push((entry.path, row));
         }
 
         // 2. Sección Marcadores (personalizados por el usuario)
@@ -314,14 +335,30 @@ impl Sidebar {
                 });
                 row.add_controller(click);
                 attach_network_context_menu(&row, es, &on_navigate);
-            } else {
-                attach_folder_navigation_handlers(&row, &on_navigate, entry.path.clone());
-                if entry.path != Path::new("/") {
-                    attach_folder_drop_target(&row, entry.path, &on_files_dropped);
-                }
-            }
-            if is_trash_entry {
+            } else if is_trash_entry {
+                attach_primary_and_middle_folder_nav(&row, &on_navigate, entry.path.clone());
+                attach_folder_drop_target(&row, entry.path, &on_files_dropped);
                 attach_trash_context_menu(&row, es);
+            } else {
+                let removable = if entry.path == home {
+                    SidebarRemovalKind::DefaultEntry
+                } else {
+                    SidebarRemovalKind::None
+                };
+                attach_folder_navigation_handlers(
+                    &row,
+                    &on_navigate,
+                    entry.path.clone(),
+                    entry.title.clone(),
+                    entry.icon_name,
+                    removable,
+                );
+                if entry.path != Path::new("/") {
+                    attach_folder_drop_target(&row, entry.path.clone(), &on_files_dropped);
+                }
+                if removable == SidebarRemovalKind::DefaultEntry {
+                    default_removable_rows.push((entry.path, row.clone()));
+                }
             }
             list_box.append(&row);
             devices_anchor = Some(row);
@@ -421,6 +458,7 @@ impl Sidebar {
 
         let inner = Rc::new(SidebarInner {
             list_box: list_box.clone(),
+            default_removable_rows,
             bookmarks_header,
             bookmark_rows: RefCell::new(Vec::new()),
             devices_anchor,
@@ -430,6 +468,7 @@ impl Sidebar {
             on_navigate,
             on_files_dropped,
         });
+        inner.sync_default_rows_visibility();
         inner.rebuild_bookmarks();
         inner.rebuild_devices();
         inner.connect_volume_signals();
@@ -609,6 +648,15 @@ fn add_eject_button(row: &ListBoxRow, on_click: impl Fn() + 'static) {
 }
 
 impl SidebarInner {
+    fn sync_default_rows_visibility(&self) {
+        let hidden = crate::db::open_db()
+            .map(|conn| crate::db::get_hidden_sidebar_paths(&conn))
+            .unwrap_or_default();
+        for (path, row) in &self.default_removable_rows {
+            row.set_visible(!hidden.contains(path));
+        }
+    }
+
     fn connect_volume_signals(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
         let rebuild: Rc<dyn Fn()> = Rc::new(move || {
@@ -686,8 +734,16 @@ impl SidebarInner {
             } else {
                 "drive-harddisk-symbolic"
             };
-            let row = create_sidebar_row(mount.name().as_str(), icon, root.clone(), false);
-            attach_folder_navigation_handlers(&row, &self.on_navigate, root.clone());
+            let mount_name = mount.name().to_string();
+            let row = create_sidebar_row(&mount_name, icon, root.clone(), false);
+            attach_folder_navigation_handlers(
+                &row,
+                &self.on_navigate,
+                root.clone(),
+                mount_name,
+                icon,
+                SidebarRemovalKind::None,
+            );
             attach_folder_drop_target(&row, root, &self.on_files_dropped);
             if mount.can_eject() || mount.can_unmount() {
                 let mount = mount.clone();
@@ -772,7 +828,14 @@ impl SidebarInner {
                 let name = entry.file_name().to_string_lossy().to_string();
                 let row =
                     create_sidebar_row(&name, "drive-removable-media-symbolic", p.clone(), false);
-                attach_folder_navigation_handlers(&row, &self.on_navigate, p.clone());
+                attach_folder_navigation_handlers(
+                    &row,
+                    &self.on_navigate,
+                    p.clone(),
+                    name,
+                    "drive-removable-media-symbolic",
+                    SidebarRemovalKind::None,
+                );
                 attach_folder_drop_target(&row, p, &self.on_files_dropped);
                 rows.push(row);
             }
@@ -893,12 +956,16 @@ fn show_add_bookmark_popover(
             format!("Bookmark Current Folder (“{}”)", folder_name)
         };
         let btn_cur = make_sidebar_menu_item(&cur_lbl);
-        let pop_c = pop.clone();
+        let pop_c = pop.downgrade();
         let cur_p = current;
         btn_cur.connect_clicked(move |_| {
-            pop_c.popdown();
+            if let Some(p) = pop_c.upgrade() {
+                p.popdown();
+            }
             if let Ok(conn) = crate::db::open_db() {
-                let _ = crate::db::add_bookmark(&conn, &cur_p, None);
+                if !crate::db::unhide_sidebar_path(&conn, &cur_p).unwrap_or(false) {
+                    let _ = crate::db::add_bookmark(&conn, &cur_p, None);
+                }
                 refresh_all_sidebars();
             }
         });
@@ -910,10 +977,12 @@ fn show_add_bookmark_popover(
     } else {
         "Choose Folder…"
     });
-    let pop_p = pop.clone();
+    let pop_p = pop.downgrade();
     let parent_for_dialog = anchor.clone().upcast::<gtk4::Widget>();
     btn_pick.connect_clicked(move |_| {
-        pop_p.popdown();
+        if let Some(p) = pop_p.upgrade() {
+            p.popdown();
+        }
         let dialog = gtk4::FileDialog::builder()
             .title(if es {
                 "Seleccionar carpeta para marcador"
@@ -930,7 +999,9 @@ fn show_add_bookmark_popover(
                 if let Some(path) = file.path() {
                     if can_bookmark_path(&path) {
                         if let Ok(conn) = crate::db::open_db() {
-                            let _ = crate::db::add_bookmark(&conn, &path, None);
+                            if !crate::db::unhide_sidebar_path(&conn, &path).unwrap_or(false) {
+                                let _ = crate::db::add_bookmark(&conn, &path, None);
+                            }
                             refresh_all_sidebars();
                         }
                     }
@@ -939,6 +1010,29 @@ fn show_add_bookmark_popover(
         });
     });
     vbox.append(&btn_pick);
+
+    let has_hidden = crate::db::open_db()
+        .map(|conn| !crate::db::get_hidden_sidebar_paths(&conn).is_empty())
+        .unwrap_or(false);
+    if has_hidden {
+        vbox.append(&make_sidebar_menu_separator());
+        let btn_restore = make_sidebar_menu_item(if es {
+            "Restaurar barra lateral predeterminada"
+        } else {
+            "Restore Default Sidebar"
+        });
+        let pop_r = pop.downgrade();
+        btn_restore.connect_clicked(move |_| {
+            if let Some(p) = pop_r.upgrade() {
+                p.popdown();
+            }
+            if let Ok(conn) = crate::db::open_db() {
+                let _ = crate::db::restore_all_hidden_sidebar_paths(&conn);
+                refresh_all_sidebars();
+            }
+        });
+        vbox.append(&btn_restore);
+    }
 
     pop.set_child(Some(&vbox));
     pop.popup();
@@ -1020,7 +1114,120 @@ fn attach_middle_click_new_tab(row: &ListBoxRow, target: String) {
     row.add_controller(mid_click);
 }
 
-fn attach_folder_navigation_handlers(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SidebarRemovalKind {
+    None,
+    DefaultEntry,
+    Bookmark,
+}
+
+fn make_sidebar_menu_separator() -> gtk4::Separator {
+    let sep = gtk4::Separator::new(Orientation::Horizontal);
+    sep.set_margin_top(3);
+    sep.set_margin_bottom(3);
+    sep.set_margin_start(6);
+    sep.set_margin_end(6);
+    sep
+}
+
+fn encode_file_uri_for_dock(path: &Path) -> String {
+    let raw = path.to_string_lossy();
+    let mut encoded = String::with_capacity(7 + raw.len());
+    encoded.push_str("file://");
+    for byte in raw.as_bytes() {
+        let b = *byte;
+        let is_unreserved = b.is_ascii_alphanumeric() || matches!(b, b'/' | b'-' | b'_' | b'.' | b'~');
+        if is_unreserved {
+            encoded.push(b as char);
+        } else {
+            encoded.push_str(&format!("%{:02X}", b));
+        }
+    }
+    encoded
+}
+
+fn dock_icon_for_sidebar_folder(sidebar_icon: &str) -> &'static str {
+    match sidebar_icon {
+        "user-desktop-symbolic" => "user-desktop",
+        "folder-documents-symbolic" => "folder-documents",
+        "folder-download-symbolic" => "folder-download",
+        "folder-pictures-symbolic" => "folder-pictures",
+        "folder-music-symbolic" => "folder-music",
+        "folder-videos-symbolic" => "folder-videos",
+        "folder-publicshare-symbolic" => "folder-publicshare",
+        "user-home-symbolic" => "user-home",
+        "drive-harddisk-symbolic" => "drive-harddisk",
+        "drive-removable-media-symbolic" => "drive-removable-media",
+        "folder-remote-symbolic" => "folder-remote",
+        _ => "folder",
+    }
+}
+
+fn folder_dock_app_config(
+    path: &Path,
+    title: &str,
+    sidebar_icon: &str,
+) -> malus_de_common::config::DockAppConfig {
+    let fallback_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned());
+    let name = if title.trim().is_empty() {
+        fallback_name
+    } else {
+        title.trim().to_string()
+    };
+    malus_de_common::config::DockAppConfig {
+        name,
+        icon: dock_icon_for_sidebar_folder(sidebar_icon).to_string(),
+        command: format!("malus-de-branches {}", encode_file_uri_for_dock(path)),
+        matchers: Vec::new(),
+        icon_appearance: malus_de_common::config::DockIconAppearance::Auto,
+    }
+}
+
+fn is_folder_pinned_in_dock(
+    cfg: &malus_de_common::config::DockConfig,
+    app: &malus_de_common::config::DockAppConfig,
+) -> bool {
+    cfg.apps
+        .iter()
+        .any(|existing| !existing.command.is_empty() && existing.command == app.command)
+}
+
+fn set_folder_pinned_in_dock(app: malus_de_common::config::DockAppConfig, pin: bool) {
+    use malus_de_common::config::DockConfig;
+    use malus_de_common::ipc::{send_ipc_message, IpcMessage};
+
+    let ipc_msg = if pin {
+        IpcMessage::PinAppToDock {
+            name: app.name.clone(),
+            icon: app.icon.clone(),
+            command: app.command.clone(),
+            matchers: app.matchers.clone(),
+            insert_at_dock_x: None,
+        }
+    } else {
+        IpcMessage::UnpinAppFromDock {
+            name: app.name.clone(),
+        }
+    };
+
+    if send_ipc_message(&ipc_msg).is_err() {
+        let mut cfg = DockConfig::load_or_create_default();
+        let changed = if pin {
+            cfg.pin_app(app)
+        } else {
+            cfg.unpin_app(&app.name)
+        };
+        if changed {
+            let _ = cfg.save();
+        }
+    }
+}
+
+fn attach_primary_and_middle_folder_nav(
     row: &ListBoxRow,
     on_navigate: &Rc<dyn Fn(PathBuf)>,
     path: PathBuf,
@@ -1037,61 +1244,179 @@ fn attach_folder_navigation_handlers(
 
     attach_middle_click_new_tab(row, path.to_string_lossy().to_string());
 
+    row.connect_activate(move |_| {
+        cb(path.clone());
+    });
+}
+
+fn attach_folder_context_menu(
+    row: &ListBoxRow,
+    on_navigate: &Rc<dyn Fn(PathBuf)>,
+    path: PathBuf,
+    title: String,
+    sidebar_icon: &'static str,
+    removal_kind: SidebarRemovalKind,
+) {
     let right_click = GestureClick::new();
     right_click.set_button(gdk::BUTTON_SECONDARY);
-    let row_ref = row.clone();
+    let row_ref = row.downgrade();
     let nav_menu = on_navigate.clone();
-    let p_menu = path.clone();
+    let p_menu = path;
     right_click.connect_pressed(move |g, _n, x, y| {
         g.set_state(gtk4::EventSequenceState::Claimed);
+        let Some(row_widget) = row_ref.upgrade() else {
+            return;
+        };
         let es = malus_de_common::is_spanish_locale();
         let pop = Popover::builder()
             .has_arrow(false)
             .css_classes(["malus-popover-menu"])
             .build();
-        pop.set_parent(&row_ref);
+        pop.set_parent(&row_widget);
         let rect = gdk::Rectangle::new(x.round() as i32, y.round() as i32, 1, 1);
         pop.set_pointing_to(Some(&rect));
         pop.connect_closed(|p| p.unparent());
 
         let vbox = GtkBox::new(Orientation::Vertical, 2);
 
-        let open_btn = make_sidebar_menu_item(if es { "Abrir" } else { "Open" });
-        {
-            let p_open = pop.clone();
-            let nav = nav_menu.clone();
-            let target = p_menu.clone();
-            open_btn.connect_clicked(move |_| {
-                p_open.popdown();
-                nav(target.clone());
-            });
-        }
-        vbox.append(&open_btn);
-
+        // 1. Abrir en una pestaña nueva
         let new_tab_btn = make_sidebar_menu_item(if es {
-            "Abrir en nueva pestaña"
+            "Abrir en una pestaña nueva"
         } else {
             "Open in New Tab"
         });
         {
-            let p_tab = pop.clone();
-            let r_anchor = row_ref.clone();
+            let p_tab = pop.downgrade();
+            let r_anchor = row_widget.downgrade();
             let target_str = p_menu.to_string_lossy().to_string();
             new_tab_btn.connect_clicked(move |_| {
-                p_tab.popdown();
-                open_target_in_new_tab(&r_anchor, &target_str);
+                if let Some(p) = p_tab.upgrade() {
+                    p.popdown();
+                }
+                if let Some(r) = r_anchor.upgrade() {
+                    open_target_in_new_tab(&r, &target_str);
+                }
             });
         }
         vbox.append(&new_tab_btn);
+
+        // 2. Mostrar en la carpeta contenedora
+        if let Some(parent) = p_menu.parent() {
+            let parent_path = parent.to_path_buf();
+            let enclosing_btn = make_sidebar_menu_item(if es {
+                "Mostrar en la carpeta contenedora"
+            } else {
+                "Show in Enclosing Folder"
+            });
+            let p_enc = pop.downgrade();
+            let nav = nav_menu.clone();
+            enclosing_btn.connect_clicked(move |_| {
+                if let Some(p) = p_enc.upgrade() {
+                    p.popdown();
+                }
+                nav(parent_path.clone());
+            });
+            vbox.append(&enclosing_btn);
+        }
+
+        // 3. Eliminar de la barra lateral (separado por divisores estilo Finder)
+        if removal_kind != SidebarRemovalKind::None {
+            vbox.append(&make_sidebar_menu_separator());
+            let remove_btn = make_sidebar_menu_item(if es {
+                "Eliminar de la barra lateral"
+            } else {
+                "Remove from Sidebar"
+            });
+            let p_rem = pop.downgrade();
+            let target = p_menu.clone();
+            remove_btn.connect_clicked(move |_| {
+                if let Some(p) = p_rem.upgrade() {
+                    p.popdown();
+                }
+                if let Ok(conn) = crate::db::open_db() {
+                    let changed = match removal_kind {
+                        SidebarRemovalKind::Bookmark => {
+                            crate::db::remove_bookmark(&conn, &target).unwrap_or(false)
+                        }
+                        SidebarRemovalKind::DefaultEntry => {
+                            crate::db::hide_sidebar_path(&conn, &target).unwrap_or(false)
+                        }
+                        SidebarRemovalKind::None => false,
+                    };
+                    if changed {
+                        refresh_all_sidebars();
+                    }
+                }
+            });
+            vbox.append(&remove_btn);
+        }
+
+        vbox.append(&make_sidebar_menu_separator());
+
+        // 4. Obtener información
+        let info_btn = make_sidebar_menu_item(if es {
+            "Obtener información"
+        } else {
+            "Get Info"
+        });
+        {
+            let p_info = pop.downgrade();
+            let r_anchor = row_widget.downgrade();
+            let target_str = p_menu.to_string_lossy().to_string();
+            info_btn.connect_clicked(move |_| {
+                if let Some(p) = p_info.upgrade() {
+                    p.popdown();
+                }
+                if let Some(r) = r_anchor.upgrade() {
+                    let _ = r.activate_action("win.get_info_item", Some(&target_str.to_variant()));
+                }
+            });
+        }
+        vbox.append(&info_btn);
+
+        // 5. Agregar al Dock / Quitar del Dock
+        let dock_app = folder_dock_app_config(&p_menu, &title, sidebar_icon);
+        let dock_cfg = malus_de_common::config::DockConfig::load_or_create_default();
+        let currently_pinned = is_folder_pinned_in_dock(&dock_cfg, &dock_app);
+        let dock_label = if currently_pinned {
+            if es {
+                "Quitar del Dock"
+            } else {
+                "Remove from Dock"
+            }
+        } else if es {
+            "Agregar al Dock"
+        } else {
+            "Add to Dock"
+        };
+        let dock_btn = make_sidebar_menu_item(dock_label);
+        {
+            let p_dock = pop.downgrade();
+            dock_btn.connect_clicked(move |_| {
+                if let Some(p) = p_dock.upgrade() {
+                    p.popdown();
+                }
+                set_folder_pinned_in_dock(dock_app.clone(), !currently_pinned);
+            });
+        }
+        vbox.append(&dock_btn);
 
         pop.set_child(Some(&vbox));
         pop.popup();
     });
     row.add_controller(right_click);
+}
 
-    row.connect_activate(move |_| {
-        cb(path.clone());
-    });
+fn attach_folder_navigation_handlers(
+    row: &ListBoxRow,
+    on_navigate: &Rc<dyn Fn(PathBuf)>,
+    path: PathBuf,
+    title: String,
+    sidebar_icon: &'static str,
+    removal_kind: SidebarRemovalKind,
+) {
+    attach_primary_and_middle_folder_nav(row, on_navigate, path.clone());
+    attach_folder_context_menu(row, on_navigate, path, title, sidebar_icon, removal_kind);
 }
 
 fn attach_bookmark_activation_handlers(
@@ -1230,7 +1555,8 @@ fn attach_bookmark_drop_target(widget: &impl IsA<gtk4::Widget>) {
                 for file in file_list.files() {
                     if let Some(path) = file.path() {
                         if can_bookmark_path(&path)
-                            && crate::db::add_bookmark(&conn, &path, None).unwrap_or(false)
+                            && (crate::db::unhide_sidebar_path(&conn, &path).unwrap_or(false)
+                                || crate::db::add_bookmark(&conn, &path, None).unwrap_or(false))
                         {
                             added_any = true;
                         }
@@ -1441,18 +1767,33 @@ fn attach_bookmark_context_menu(
     current_title: String,
     on_navigate: &Rc<dyn Fn(PathBuf)>,
 ) {
+    if folder_path.is_dir() {
+        attach_folder_context_menu(
+            row,
+            on_navigate,
+            folder_path,
+            current_title,
+            "folder-symbolic",
+            SidebarRemovalKind::Bookmark,
+        );
+        return;
+    }
+
     let right_click = GestureClick::new();
     right_click.set_button(gdk::BUTTON_SECONDARY);
-    let row_ref = row.clone();
+    let row_ref = row.downgrade();
     let nav_cb = on_navigate.clone();
     right_click.connect_pressed(move |g, _n, x, y| {
         g.set_state(gtk4::EventSequenceState::Claimed);
+        let Some(row_widget) = row_ref.upgrade() else {
+            return;
+        };
         let es = malus_de_common::is_spanish_locale();
         let pop = Popover::builder()
             .has_arrow(false)
             .css_classes(["malus-popover-menu"])
             .build();
-        pop.set_parent(&row_ref);
+        pop.set_parent(&row_widget);
         let rect = gdk::Rectangle::new(x.round() as i32, y.round() as i32, 1, 1);
         pop.set_pointing_to(Some(&rect));
         pop.connect_closed(|p| p.unparent());
@@ -1461,82 +1802,49 @@ fn attach_bookmark_context_menu(
 
         let open_btn = make_sidebar_menu_item(if es { "Abrir" } else { "Open" });
         {
-            let p_open = pop.clone();
-            let nav = nav_cb.clone();
+            let p_open = pop.downgrade();
             let target = folder_path.clone();
             open_btn.connect_clicked(move |_| {
-                p_open.popdown();
-                if target.is_dir() {
-                    nav(target.clone());
-                } else {
-                    let _ = crate::fs_backend::open_file(&target);
+                if let Some(p) = p_open.upgrade() {
+                    p.popdown();
                 }
+                let _ = crate::fs_backend::open_file(&target);
             });
         }
         vbox.append(&open_btn);
 
-        if folder_path.is_dir() {
-            let new_tab_btn = make_sidebar_menu_item(if es {
-                "Abrir en nueva pestaña"
+        if let Some(parent) = folder_path.parent() {
+            let parent_path = parent.to_path_buf();
+            let enclosing_btn = make_sidebar_menu_item(if es {
+                "Mostrar en la carpeta contenedora"
             } else {
-                "Open in New Tab"
+                "Show in Enclosing Folder"
             });
-            let p_tab = pop.clone();
-            let r_anchor = row_ref.clone();
-            let target_str = folder_path.to_string_lossy().to_string();
-            new_tab_btn.connect_clicked(move |_| {
-                p_tab.popdown();
-                open_target_in_new_tab(&r_anchor, &target_str);
+            let p_enc = pop.downgrade();
+            let nav = nav_cb.clone();
+            enclosing_btn.connect_clicked(move |_| {
+                if let Some(p) = p_enc.upgrade() {
+                    p.popdown();
+                }
+                nav(parent_path.clone());
             });
-            vbox.append(&new_tab_btn);
-        } else if let Some(parent) = folder_path.parent() {
-            let parent_tab_btn = make_sidebar_menu_item(if es {
-                "Abrir carpeta contenedora en nueva pestaña"
-            } else {
-                "Open Enclosing Folder in New Tab"
-            });
-            let p_tab = pop.clone();
-            let r_anchor = row_ref.clone();
-            let target_str = parent.to_string_lossy().to_string();
-            parent_tab_btn.connect_clicked(move |_| {
-                p_tab.popdown();
-                open_target_in_new_tab(&r_anchor, &target_str);
-            });
-            vbox.append(&parent_tab_btn);
+            vbox.append(&enclosing_btn);
         }
 
-        let rename_btn = make_sidebar_menu_item(if es {
-            "Renombrar marcador…"
-        } else {
-            "Rename Bookmark…"
-        });
-        {
-            let p_ren = pop.clone();
-            let r_anchor = row_ref.clone();
-            let target = folder_path.clone();
-            let title_init = current_title.clone();
-            rename_btn.connect_clicked(move |_| {
-                p_ren.popdown();
-                let aw = r_anchor.clone();
-                let tp = target.clone();
-                let ti = title_init.clone();
-                glib::idle_add_local_once(move || {
-                    show_rename_bookmark_popover(&aw, tp, ti, Some((x, y)));
-                });
-            });
-        }
-        vbox.append(&rename_btn);
+        vbox.append(&make_sidebar_menu_separator());
 
         let remove_btn = make_sidebar_menu_item(if es {
-            "Quitar de marcadores"
+            "Eliminar de la barra lateral"
         } else {
-            "Remove Bookmark"
+            "Remove from Sidebar"
         });
         {
-            let p_rem = pop.clone();
+            let p_rem = pop.downgrade();
             let target = folder_path.clone();
             remove_btn.connect_clicked(move |_| {
-                p_rem.popdown();
+                if let Some(p) = p_rem.upgrade() {
+                    p.popdown();
+                }
                 if let Ok(conn) = crate::db::open_db() {
                     if crate::db::remove_bookmark(&conn, &target).unwrap_or(false) {
                         refresh_all_sidebars();
@@ -1545,6 +1853,28 @@ fn attach_bookmark_context_menu(
             });
         }
         vbox.append(&remove_btn);
+
+        vbox.append(&make_sidebar_menu_separator());
+
+        let info_btn = make_sidebar_menu_item(if es {
+            "Obtener información"
+        } else {
+            "Get Info"
+        });
+        {
+            let p_info = pop.downgrade();
+            let r_anchor = row_widget.downgrade();
+            let target_str = folder_path.to_string_lossy().to_string();
+            info_btn.connect_clicked(move |_| {
+                if let Some(p) = p_info.upgrade() {
+                    p.popdown();
+                }
+                if let Some(r) = r_anchor.upgrade() {
+                    let _ = r.activate_action("win.get_info_item", Some(&target_str.to_variant()));
+                }
+            });
+        }
+        vbox.append(&info_btn);
 
         pop.set_child(Some(&vbox));
         pop.popup();
@@ -1838,5 +2168,42 @@ mod device_path_tests {
         assert!(is_external_mount_path(Path::new("/run/media/cristian/USB")));
         assert!(is_external_mount_path(Path::new("/media/disk")));
         assert!(!is_external_mount_path(Path::new("/media")));
+    }
+
+    #[test]
+    fn folder_dock_app_config_encodes_spaces_and_maps_icons() {
+        let cfg = folder_dock_app_config(
+            Path::new("/home/cristian/Mis Documentos/Imágenes"),
+            "Imágenes",
+            "folder-pictures-symbolic",
+        );
+        assert_eq!(cfg.name, "Imágenes");
+        assert_eq!(cfg.icon, "folder-pictures");
+        assert_eq!(
+            cfg.command,
+            "malus-de-branches file:///home/cristian/Mis%20Documentos/Im%C3%A1genes"
+        );
+        assert!(cfg.matchers.is_empty());
+        assert_eq!(dock_icon_for_sidebar_folder("user-desktop-symbolic"), "user-desktop");
+        assert_eq!(dock_icon_for_sidebar_folder("unknown-symbolic"), "folder");
+    }
+
+    #[test]
+    fn hidden_sidebar_defaults_roundtrip_in_sqlite() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE sidebar_hidden_defaults (folder_path TEXT PRIMARY KEY)",
+            [],
+        )
+        .unwrap();
+        let desktop = Path::new("/home/cristian/Escritorio");
+        assert!(crate::db::hide_sidebar_path(&conn, desktop).unwrap());
+        assert!(crate::db::get_hidden_sidebar_paths(&conn).contains(desktop));
+        assert!(crate::db::unhide_sidebar_path(&conn, desktop).unwrap());
+        assert!(!crate::db::get_hidden_sidebar_paths(&conn).contains(desktop));
+
+        assert!(crate::db::hide_sidebar_path(&conn, desktop).unwrap());
+        assert_eq!(crate::db::restore_all_hidden_sidebar_paths(&conn).unwrap(), 1);
+        assert!(crate::db::get_hidden_sidebar_paths(&conn).is_empty());
     }
 }
