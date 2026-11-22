@@ -682,7 +682,7 @@ fn create_list_row(
                 }
             }
             show_item_context_menu(
-                &hbox,
+                &row_for_menu,
                 &path,
                 is_dir,
                 Some((x, y)),

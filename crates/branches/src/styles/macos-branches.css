@@ -744,10 +744,15 @@ entry.branches-inline-rename-row {
 }
 
 /* Columnas pares (Fecha y Clase) con gris muy claro; sin gaps verticales */
-.branches-list-row > *,
-.branches-list-header > * {
+.branches-list-row > :not(popover),
+.branches-list-header > :not(popover) {
     padding-top: 4px;
     padding-bottom: 4px;
+}
+
+window.branches-window popover.malus-popover-menu {
+    padding: 0;
+    margin: 0;
 }
 
 .branches-list-cell {
