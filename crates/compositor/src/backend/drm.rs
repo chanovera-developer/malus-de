@@ -2486,6 +2486,21 @@ pub fn run_drm() -> Result<()> {
                                     }
                                 }
 
+                                // Teclas multimedia y de hardware (Volumen, Silencio, Micrófono, Brillo, Teclado, MPRIS, etc.)
+                                if let Some(media_action) = crate::media_keys::detect_media_key_action(
+                                    sym,
+                                    &keysym_handle.raw_syms(),
+                                    key,
+                                    modifiers,
+                                ) {
+                                    if !state.is_session_locked() || media_action.is_allowed_when_locked() {
+                                        let now = Instant::now();
+                                        state.media_keys.register_key_press(key, media_action, now);
+                                        state.execute_media_key_action(media_action, now);
+                                        return FilterResult::Intercept(());
+                                    }
+                                }
+
                                 // Mientras la sesión está bloqueada, ningún atajo del entorno debe abrir
                                 // Spotlight, AppSwitcher, Exposé ni capturas sobre el lockscreen.
                                 if state.is_session_locked() {
@@ -2684,6 +2699,7 @@ pub fn run_drm() -> Result<()> {
                                     }
                                 }
                             } else {
+                                state.media_keys.handle_key_release(key);
                                 // Liberación de modificadores (Super/Alt) -> Commit de App Switcher
                                 if state.app_switcher.is_active && ((!modifiers.logo && !modifiers.alt) || is_modifier_sym) {
                                     info!("🎯 AppSwitcher commit: soltado Super/Alt (is_mod={}), enfocando ventana", is_modifier_sym);
@@ -3342,8 +3358,12 @@ pub fn run_drm() -> Result<()> {
         }
         state.resume_timed_out_dock_animations(frame_start);
         state.tick_snap_layouts(frame_start);
+        state.tick_media_keys(frame_start);
         state.tick_app_switcher_deck(frame_start);
-        if state.snap_layouts.take_closed_dirty() || state.take_app_switcher_deck_closed_dirty() {
+        if state.snap_layouts.take_closed_dirty()
+            || state.media_keys.take_closed_dirty()
+            || state.take_app_switcher_deck_closed_dirty()
+        {
             let full_bufs = if ENABLE_DAMAGE_TRACKING { 3 } else { 1 };
             if let Ok(mut surfs) = shared_surfaces.lock() {
                 for s in surfs.iter_mut() {
@@ -3578,6 +3598,8 @@ pub fn run_drm() -> Result<()> {
             || !state.snap_transitions.is_empty()
             || state.expose.is_animating()
             || state.snap_layouts.is_open()
+            || state.media_keys.is_osd_open()
+            || state.media_keys.has_active_repeat()
             || state.app_switcher.deck.active
             || state.theme_transition_started_at.is_some()
             || state.pending_theme_transition_capture.is_some()
@@ -4311,6 +4333,34 @@ pub fn run_drm() -> Result<()> {
                     .snap_layouts
                     .hovered_preview_rect(&out_surface.output.name())
                     .filter(|preview| output_geo.overlaps(*preview));
+                let media_osd_frame = if state
+                    .media_keys
+                    .should_render_on_output(&out_surface.output.name())
+                {
+                    let usable_zone =
+                        state.usable_zone_from_layer_map(&out_surface.output, &layer_map);
+                    if let Some((osd_rect, mask_opt, mask_sz, osd_alpha)) = state
+                        .media_keys
+                        .prepare_frame(
+                            &out_surface.output.name(),
+                            output_geo,
+                            usable_zone,
+                            scale,
+                            is_dark_theme,
+                            now,
+                        )
+                    {
+                        let mask_vec = mask_opt.map(|s| s.to_vec());
+                        state
+                            .media_keys
+                            .create_render_element(&mut renderer, osd_rect.loc, osd_alpha)
+                            .map(|elem| (osd_rect, mask_vec, mask_sz, osd_alpha, elem))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 let app_switcher_deck_frame =
                     if state.deck_should_render_on_output(&out_surface.output.name()) {
                         let deck_windows = state.deck_windows_for_render();
@@ -4861,6 +4911,7 @@ pub fn run_drm() -> Result<()> {
                     || spotlight_frame.is_some()
                     || screenshot_ui_frame.is_some()
                     || snap_layouts_frame.is_some()
+                    || media_osd_frame.is_some()
                     || app_switcher_deck_frame.is_some()
                     || expose_animating
                     || expose_just_closed
@@ -5221,6 +5272,7 @@ pub fn run_drm() -> Result<()> {
                 if spotlight_frame.is_some()
                     || screenshot_ui_frame.is_some()
                     || snap_layouts_frame.is_some()
+                    || media_osd_frame.is_some()
                     || app_switcher_deck_frame.is_some()
                 {
                     this_frame_extra_damage.push(Rectangle::from_size(out_surface.size));
@@ -5470,6 +5522,50 @@ pub fn run_drm() -> Result<()> {
                             if !lock_elements.is_empty() {
                                 let _ =
                                     draw_render_elements(&mut frame, scale, &lock_elements, damage);
+                            }
+                            if let Some((
+                                osd_rect,
+                                ref mask_vec,
+                                (mask_w, mask_h),
+                                osd_alpha,
+                                ref osd_elem,
+                            )) = media_osd_frame
+                            {
+                                let projection = *frame.projection();
+                                if let Some(shadow) = shadow_pipeline.as_ref() {
+                                    let _ = frame.with_context(|gl| {
+                                        shadow.render_menu_shadow_alpha(
+                                            gl,
+                                            &projection,
+                                            osd_rect,
+                                            (crate::media_keys::OSD_CORNER_RADIUS * scale) as f32,
+                                            scale,
+                                            osd_alpha,
+                                        );
+                                    });
+                                }
+                                if let Some(mut blur) =
+                                    blur_pipeline.as_ref().and_then(|b| b.lock().ok())
+                                {
+                                    let _ = frame.with_context(|gl| {
+                                        blur.render_blur_masked(
+                                            gl,
+                                            &projection,
+                                            out_surface.size,
+                                            osd_rect,
+                                            mask_vec.as_deref(),
+                                            mask_w,
+                                            mask_h,
+                                            osd_alpha,
+                                        );
+                                    });
+                                }
+                                let _ = draw_render_elements(
+                                    &mut frame,
+                                    1.0,
+                                    std::slice::from_ref(osd_elem),
+                                    damage,
+                                );
                             }
                         } else {
                             // 1. Renderizar fondo (wallpaper y capas inferiores) solo si no está 100% ocluido por una ventana pantalla completa
@@ -6603,6 +6699,50 @@ pub fn run_drm() -> Result<()> {
                                     &mut frame,
                                     1.0,
                                     std::slice::from_ref(snap_elem),
+                                    damage,
+                                );
+                            }
+
+                            if let Some((
+                                osd_rect,
+                                ref mask_vec,
+                                (mask_w, mask_h),
+                                osd_alpha,
+                                ref osd_elem,
+                            )) = media_osd_frame
+                            {
+                                if let Some(shadow) = shadow_pipeline.as_ref() {
+                                    let _ = frame.with_context(|gl| {
+                                        shadow.render_menu_shadow_alpha(
+                                            gl,
+                                            &projection,
+                                            osd_rect,
+                                            (crate::media_keys::OSD_CORNER_RADIUS * scale) as f32,
+                                            scale,
+                                            osd_alpha,
+                                        );
+                                    });
+                                }
+                                if let Some(mut blur) =
+                                    blur_pipeline.as_ref().and_then(|b| b.lock().ok())
+                                {
+                                    let _ = frame.with_context(|gl| {
+                                        blur.render_blur_masked(
+                                            gl,
+                                            &projection,
+                                            out_surface.size,
+                                            osd_rect,
+                                            mask_vec.as_deref(),
+                                            mask_w,
+                                            mask_h,
+                                            osd_alpha,
+                                        );
+                                    });
+                                }
+                                let _ = draw_render_elements(
+                                    &mut frame,
+                                    1.0,
+                                    std::slice::from_ref(osd_elem),
                                     damage,
                                 );
                             }

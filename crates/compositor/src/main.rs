@@ -8,6 +8,7 @@ pub mod expose;
 pub mod genie;
 pub mod grabs;
 pub mod magic_lamp;
+pub mod media_keys;
 pub mod recording;
 pub mod screenshot_ui;
 pub mod shadow;

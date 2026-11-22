@@ -2751,6 +2751,8 @@ pub struct InputConfig {
     pub natural_scrolling: bool,
     pub shake_to_find_cursor: bool,
     pub show_desktop_gesture: bool,
+    #[serde(default = "default_true")]
+    pub touchpad_enabled: bool,
     pub hot_corners: HotCornersConfig,
 }
 
@@ -2797,6 +2799,7 @@ impl Default for InputConfig {
             natural_scrolling: true,
             shake_to_find_cursor: true,
             show_desktop_gesture: true,
+            touchpad_enabled: true,
             hot_corners: HotCornersConfig::default(),
         }
     }
@@ -3039,6 +3042,215 @@ pub fn system_has_sysfs_backlight() -> bool {
 /// Indica si el brillo de la salida se gestiona por backlight sysfs o por el compositor.
 pub fn connector_has_hardware_backlight(connector: &str) -> bool {
     is_builtin_connector_name(connector) && system_has_sysfs_backlight()
+}
+
+/// Lee el porcentaje actual de brillo desde `/sys/class/backlight` (`5.0..=100.0`), si existe.
+pub fn read_sysfs_backlight_pct() -> Option<f64> {
+    let entries = std::fs::read_dir("/sys/class/backlight").ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let cur_path = path.join("brightness");
+        let max_path = path.join("max_brightness");
+        if let (Ok(cur_str), Ok(max_str)) = (
+            std::fs::read_to_string(&cur_path),
+            std::fs::read_to_string(&max_path),
+        ) {
+            if let (Ok(cur), Ok(max)) = (
+                cur_str.trim().parse::<f64>(),
+                max_str.trim().parse::<f64>(),
+            ) {
+                if max > 0.0 {
+                    return Some((cur / max * 100.0).clamp(5.0, 100.0));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Lee el brillo actual desde `/sys/class/backlight` o, en su defecto, desde `monitors.toml`.
+pub fn read_hardware_or_config_brightness() -> f64 {
+    if let Some(hw) = read_sysfs_backlight_pct() {
+        return hw;
+    }
+    DisplaysConfig::load().brightness.clamp(5.0, 100.0)
+}
+
+/// Escribe un valor crudo de brillo en un dispositivo sysfs (`backlight` o `leds`),
+/// usando `org.freedesktop.login1.Session.SetBrightness` vía `gdbus` cuando el usuario
+/// no tiene permisos de escritura directa en `/sys/class/...`.
+pub fn write_sysfs_or_logind_brightness(
+    subsystem: &str,
+    dev_name: &str,
+    brightness_path: &std::path::Path,
+    raw_value: u64,
+) -> bool {
+    if std::fs::write(brightness_path, raw_value.to_string()).is_ok() {
+        return true;
+    }
+    for session_path in [
+        "/org/freedesktop/login1/session/auto",
+        "/org/freedesktop/login1/session/self",
+    ] {
+        if std::process::Command::new("gdbus")
+            .args([
+                "call",
+                "--system",
+                "--dest",
+                "org.freedesktop.login1",
+                "--object-path",
+                session_path,
+                "--method",
+                "org.freedesktop.login1.Session.SetBrightness",
+                subsystem,
+                dev_name,
+                &raw_value.to_string(),
+            ])
+            .output()
+            .is_ok_and(|out| out.status.success())
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Aplica el porcentaje de brillo (`5.0..=100.0`) a todos los controladores en `/sys/class/backlight`
+/// (vía escritura directa, `systemd-logind` SetBrightness o `brightnessctl`).
+pub fn apply_hardware_backlight_pct(pct: f64) {
+    let clamped = pct.clamp(5.0, 100.0);
+    let mut applied_any = false;
+    if let Ok(entries) = std::fs::read_dir("/sys/class/backlight") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let dev_name = entry.file_name().to_string_lossy().to_string();
+            let cur_path = path.join("brightness");
+            let max_path = path.join("max_brightness");
+            if let Ok(max_str) = std::fs::read_to_string(&max_path) {
+                if let Ok(max) = max_str.trim().parse::<f64>() {
+                    if max > 0.0 {
+                        let target = ((clamped / 100.0) * max).round().max(1.0) as u64;
+                        if write_sysfs_or_logind_brightness(
+                            "backlight",
+                            &dev_name,
+                            &cur_path,
+                            target,
+                        ) {
+                            applied_any = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !applied_any {
+        let _ = std::process::Command::new("brightnessctl")
+            .args(["set", &format!("{}%", clamped.round() as u32)])
+            .output();
+    }
+}
+
+/// Actualiza el brillo en `DisplaysConfig` (`monitors.toml`) para todas las salidas activas y
+/// dispara la actualización de hardware en un hilo en segundo plano.
+pub fn set_global_and_outputs_brightness(pct: f64) {
+    let clamped = pct.clamp(5.0, 100.0);
+    let mut cfg = DisplaysConfig::load();
+    cfg.brightness = clamped;
+    for out in &mut cfg.outputs {
+        out.brightness = clamped;
+    }
+    let _ = cfg.save();
+
+    std::thread::spawn(move || {
+        apply_hardware_backlight_pct(clamped);
+    });
+}
+
+fn find_kbd_backlight_sysfs() -> Option<(String, PathBuf)> {
+    let entries = std::fs::read_dir("/sys/class/leds").ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.contains("kbd_backlight") {
+            return Some((name, entry.path()));
+        }
+    }
+    None
+}
+
+/// Lee el porcentaje actual (`0.0..=100.0`) de la retroiluminación de teclado si el hardware existe.
+pub fn read_keyboard_backlight_pct() -> Option<f64> {
+    let (_, dir) = find_kbd_backlight_sysfs()?;
+    let cur = std::fs::read_to_string(dir.join("brightness"))
+        .ok()?
+        .trim()
+        .parse::<f64>()
+        .ok()?;
+    let max = std::fs::read_to_string(dir.join("max_brightness"))
+        .ok()?
+        .trim()
+        .parse::<f64>()
+        .ok()?;
+    if max <= 0.0 {
+        return None;
+    }
+    Some((cur / max * 100.0).clamp(0.0, 100.0))
+}
+
+/// Incrementa o reduce la retroiluminación de teclado en `delta_pct` y devuelve el nuevo porcentaje.
+pub fn step_keyboard_backlight_pct(delta_pct: f64) -> Option<f64> {
+    let (dev_name, dir) = find_kbd_backlight_sysfs()?;
+    let cur_path = dir.join("brightness");
+    let cur = std::fs::read_to_string(&cur_path)
+        .ok()?
+        .trim()
+        .parse::<f64>()
+        .ok()?;
+    let max = std::fs::read_to_string(dir.join("max_brightness"))
+        .ok()?
+        .trim()
+        .parse::<f64>()
+        .ok()?;
+    if max <= 0.0 {
+        return None;
+    }
+    let cur_pct = (cur / max * 100.0).clamp(0.0, 100.0);
+    let next_pct = (cur_pct + delta_pct).clamp(0.0, 100.0);
+    let mut target = ((next_pct / 100.0) * max).round() as u64;
+    if delta_pct > 0.0 && target == (cur.round() as u64) && (cur.round() as u64) < (max.round() as u64) {
+        target += 1;
+    } else if delta_pct < 0.0 && target == (cur.round() as u64) && target > 0 {
+        target -= 1;
+    }
+    let final_pct = (target as f64 / max * 100.0).clamp(0.0, 100.0);
+    std::thread::spawn(move || {
+        let _ = write_sysfs_or_logind_brightness("leds", &dev_name, &cur_path, target);
+    });
+    Some(final_pct)
+}
+
+/// Alterna el encendido/apagado de la retroiluminación de teclado y devuelve el nuevo porcentaje.
+pub fn toggle_keyboard_backlight_pct() -> Option<f64> {
+    let (dev_name, dir) = find_kbd_backlight_sysfs()?;
+    let cur_path = dir.join("brightness");
+    let cur = std::fs::read_to_string(&cur_path)
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    let max = std::fs::read_to_string(dir.join("max_brightness"))
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    if max == 0 {
+        return None;
+    }
+    let target = if cur > 0 { 0 } else { max };
+    let final_pct = (target as f64 / max as f64 * 100.0).clamp(0.0, 100.0);
+    std::thread::spawn(move || {
+        let _ = write_sysfs_or_logind_brightness("leds", &dev_name, &cur_path, target);
+    });
+    Some(final_pct)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

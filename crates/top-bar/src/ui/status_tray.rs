@@ -15,10 +15,20 @@ use crate::services::network::{NetworkService, WifiApInfo};
 
 thread_local! {
     static TRAY_VISIBILITY_REFRESH: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
+    static VOLUME_TRAY_REFRESH: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
 }
 
 pub fn refresh_tray_visibility() {
     TRAY_VISIBILITY_REFRESH.with(|cell| {
+        if let Some(ref f) = *cell.borrow() {
+            f();
+        }
+    });
+    refresh_volume_tray();
+}
+
+pub fn refresh_volume_tray() {
+    VOLUME_TRAY_REFRESH.with(|cell| {
         if let Some(ref f) = *cell.borrow() {
             f();
         }
@@ -1024,14 +1034,25 @@ fn create_volume_tray_button() -> MenuButton {
         });
     });
 
-    // Actualización inicial
+    // Actualización inicial y registro para refresco en vivo (teclas multimedia / IPC)
     let sc_init = volume_scale.clone();
     let pc_init = sound_pct.clone();
     let ii_init = vol_inner_icon.clone();
     let ti_init = icon.clone();
     let lk_init = is_updating_vol.clone();
-    glib::MainContext::default().spawn_local(async move {
-        refresh_volume_tray_ui(&sc_init, &pc_init, &ii_init, &ti_init, &lk_init).await;
+    let trigger_vol_refresh: Rc<dyn Fn()> = Rc::new(move || {
+        let sc = sc_init.clone();
+        let pc = pc_init.clone();
+        let ii = ii_init.clone();
+        let ti = ti_init.clone();
+        let lk = lk_init.clone();
+        glib::MainContext::default().spawn_local(async move {
+            refresh_volume_tray_ui(&sc, &pc, &ii, &ti, &lk).await;
+        });
+    });
+    trigger_vol_refresh();
+    VOLUME_TRAY_REFRESH.with(|cell| {
+        *cell.borrow_mut() = Some(trigger_vol_refresh);
     });
 
     menu_btn

@@ -2016,6 +2016,7 @@ dependencies = [
  "wayland-protocols-wlr",
  "wayland-server",
  "xcursor",
+ "zbus",
 ]
 
 [[package]]

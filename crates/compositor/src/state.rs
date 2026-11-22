@@ -331,6 +331,7 @@ pub struct MalusState {
     pub active_screen_recording: Option<crate::recording::ScreenRecordingSession>,
     pub screenshot_ui: crate::screenshot_ui::ScreenshotUiState,
     pub snap_layouts: crate::snap_layouts::SnapLayoutsState,
+    pub media_keys: crate::media_keys::MediaKeysState,
     pub ssd: crate::ssd::SsdManager,
     pub expose: crate::expose::ExposeState,
     pub workspaces: crate::workspaces::WorkspaceManager,
@@ -1372,6 +1373,7 @@ impl MalusState {
             active_screen_recording: None,
             screenshot_ui: crate::screenshot_ui::ScreenshotUiState::new(),
             snap_layouts: crate::snap_layouts::SnapLayoutsState::new(),
+            media_keys: crate::media_keys::MediaKeysState::new(),
             ssd: crate::ssd::SsdManager::new(),
             expose: crate::expose::ExposeState::default(),
             workspaces: crate::workspaces::WorkspaceManager::default(),
@@ -5014,6 +5016,238 @@ impl MalusState {
         });
     }
 
+    /// Determina el nombre del monitor donde debe mostrarse el HUD OSD (bajo el cursor o monitor primario).
+    pub fn preferred_osd_output_name(&self) -> String {
+        if let Some(pt) = self.last_pointer_location {
+            if let Some(out) = self.space.outputs().find(|o| {
+                self.space
+                    .output_geometry(o)
+                    .is_some_and(|geo| geo.to_f64().contains(pt))
+            }) {
+                return out.name();
+            }
+        }
+        if let Some(win) = self.get_active_window() {
+            if let Some(out) = self.space.outputs_for_element(&win).into_iter().next() {
+                return out.name();
+            }
+        }
+        self.primary_output()
+            .or_else(|| self.space.outputs().next().cloned())
+            .map(|o| o.name())
+            .unwrap_or_else(|| "winit".to_string())
+    }
+
+    /// Avanza los temporizadores del HUD OSD y la auto-repetición de teclas de volumen/brillo mantenidas.
+    pub fn tick_media_keys(&mut self, now: Instant) {
+        if let Some(repeated_action) = self.media_keys.tick(now) {
+            if !self.is_session_locked() || repeated_action.is_allowed_when_locked() {
+                self.execute_media_key_action(repeated_action, now);
+            }
+        }
+    }
+
+    /// Ejecuta una acción de tecla multimedia o de función de hardware y muestra el HUD OSD correspondiente.
+    pub fn execute_media_key_action(
+        &mut self,
+        action: crate::media_keys::MediaKeyAction,
+        now: Instant,
+    ) {
+        use crate::media_keys::{MediaKeyAction, OsdIconKind};
+
+        let output_name = self.preferred_osd_output_name();
+        match action {
+            MediaKeyAction::VolumeUp { fine } => {
+                let step = if fine { 2.0 } else { 5.0 };
+                tracing::info!("🔊 [MEDIA KEY] Subir volumen (+{:.0}%)", step);
+                self.media_keys.step_volume(
+                    step,
+                    output_name,
+                    now,
+                    self.ipc_broadcaster.clone(),
+                );
+            }
+            MediaKeyAction::VolumeDown { fine } => {
+                let step = if fine { -2.0 } else { -5.0 };
+                tracing::info!("🔉 [MEDIA KEY] Bajar volumen ({:.0}%)", step);
+                self.media_keys.step_volume(
+                    step,
+                    output_name,
+                    now,
+                    self.ipc_broadcaster.clone(),
+                );
+            }
+            MediaKeyAction::VolumeMute => {
+                tracing::info!("🔇 [MEDIA KEY] Alternar silencio de audio");
+                self.media_keys
+                    .toggle_volume_mute(output_name, now, self.ipc_broadcaster.clone());
+            }
+            MediaKeyAction::MicMute => {
+                tracing::info!("🎙️ [MEDIA KEY] Alternar silencio de micrófono");
+                self.media_keys.toggle_mic_mute(output_name, now);
+            }
+            MediaKeyAction::BrightnessUp { fine } => {
+                let step = if fine { 2.0 } else { 5.0 };
+                let next = self.media_keys.step_brightness(step, output_name, now);
+                tracing::info!("☀️ [MEDIA KEY] Subir brillo (+{:.0}% -> {:.0}%)", step, next);
+                self.pending_brightness_reload = true;
+                self.ipc_broadcaster
+                    .broadcast(&IpcMessage::ReloadDisplayBrightness);
+            }
+            MediaKeyAction::BrightnessDown { fine } => {
+                let step = if fine { -2.0 } else { -5.0 };
+                let next = self.media_keys.step_brightness(step, output_name, now);
+                tracing::info!("🔅 [MEDIA KEY] Bajar brillo ({:.0}% -> {:.0}%)", step, next);
+                self.pending_brightness_reload = true;
+                self.ipc_broadcaster
+                    .broadcast(&IpcMessage::ReloadDisplayBrightness);
+            }
+            MediaKeyAction::BrightnessCycle => {
+                let next = self.media_keys.cycle_brightness(output_name, now);
+                tracing::info!("☀️ [MEDIA KEY] Ciclar brillo (-> {:.0}%)", next);
+                self.pending_brightness_reload = true;
+                self.ipc_broadcaster
+                    .broadcast(&IpcMessage::ReloadDisplayBrightness);
+            }
+            MediaKeyAction::KbdBrightnessUp { fine } => {
+                let step = if fine { 10.0 } else { 25.0 };
+                tracing::info!("⌨️ [MEDIA KEY] Subir luz de teclado (+{:.0}%)", step);
+                self.media_keys.step_kbd_brightness(step, output_name, now);
+            }
+            MediaKeyAction::KbdBrightnessDown { fine } => {
+                let step = if fine { -10.0 } else { -25.0 };
+                tracing::info!("⌨️ [MEDIA KEY] Bajar luz de teclado ({:.0}%)", step);
+                self.media_keys.step_kbd_brightness(step, output_name, now);
+            }
+            MediaKeyAction::KbdBrightnessToggle => {
+                tracing::info!("⌨️ [MEDIA KEY] Alternar luz de teclado");
+                self.media_keys.toggle_kbd_brightness(output_name, now);
+            }
+            MediaKeyAction::MediaPlayPause => {
+                tracing::info!("⏯️ [MEDIA KEY] Reproducir / Pausar (MPRIS)");
+                self.media_keys.trigger_mpris_command(
+                    "PlayPause",
+                    OsdIconKind::MediaPlayPause,
+                    "Reproducir / Pausar",
+                    output_name,
+                    now,
+                );
+            }
+            MediaKeyAction::MediaPause => {
+                tracing::info!("⏸️ [MEDIA KEY] Pausar (MPRIS)");
+                self.media_keys.trigger_mpris_command(
+                    "Pause",
+                    OsdIconKind::MediaPlayPause,
+                    "Pausa",
+                    output_name,
+                    now,
+                );
+            }
+            MediaKeyAction::MediaStop => {
+                tracing::info!("⏹️ [MEDIA KEY] Detener (MPRIS)");
+                self.media_keys.trigger_mpris_command(
+                    "Stop",
+                    OsdIconKind::MediaStop,
+                    "Detenido",
+                    output_name,
+                    now,
+                );
+            }
+            MediaKeyAction::MediaNext => {
+                tracing::info!("⏭️ [MEDIA KEY] Siguiente pista (MPRIS)");
+                self.media_keys.trigger_mpris_command(
+                    "Next",
+                    OsdIconKind::MediaNext,
+                    "Siguiente",
+                    output_name,
+                    now,
+                );
+            }
+            MediaKeyAction::MediaPrev => {
+                tracing::info!("⏮️ [MEDIA KEY] Pista anterior (MPRIS)");
+                self.media_keys.trigger_mpris_command(
+                    "Previous",
+                    OsdIconKind::MediaPrev,
+                    "Anterior",
+                    output_name,
+                    now,
+                );
+            }
+            MediaKeyAction::Calculator => {
+                tracing::info!("🧮 [MEDIA KEY] Lanzando Calculadora / Spotlight");
+                let socket = self.socket_name.clone();
+                std::thread::spawn(move || {
+                    for bin in ["gnome-calculator", "qalculate-gtk", "kcalc", "galculator"] {
+                        let mut cmd = std::process::Command::new(bin);
+                        cmd.env("WAYLAND_DISPLAY", &socket);
+                        malus_de_common::config::set_cursor_environment(&mut cmd);
+                        if cmd.spawn().is_ok() {
+                            return;
+                        }
+                    }
+                });
+            }
+            MediaKeyAction::Explorer => {
+                tracing::info!("📁 [MEDIA KEY] Lanzando gestor de archivos Branches");
+                let socket = self.socket_name.clone();
+                std::thread::spawn(move || {
+                    let local_bin = std::env::current_exe()
+                        .ok()
+                        .and_then(|p| p.parent().map(|d| d.join("malus-de-branches")))
+                        .filter(|p| p.is_file());
+                    let mut cmd = local_bin
+                        .map(std::process::Command::new)
+                        .unwrap_or_else(|| std::process::Command::new("malus-de-branches"));
+                    cmd.env("WAYLAND_DISPLAY", &socket);
+                    malus_de_common::config::set_cursor_environment(&mut cmd);
+                    let _ = cmd.spawn();
+                });
+            }
+            MediaKeyAction::Search => {
+                tracing::info!("🔍 [MEDIA KEY] Tecla Search -> Alternando Spotlight");
+                self.toggle_spotlight();
+            }
+            MediaKeyAction::MissionControl => {
+                tracing::info!("🪟 [MEDIA KEY] Tecla Mission Control -> Alternando Exposé");
+                self.toggle_expose(crate::expose::ExposeMode::Global);
+            }
+            MediaKeyAction::ScreenSaver => {
+                tracing::info!("🔒 [MEDIA KEY] Tecla Bloqueo / Suspensión -> Bloqueando sesión");
+                self.lock_session();
+            }
+            MediaKeyAction::TouchpadToggle
+            | MediaKeyAction::TouchpadOn
+            | MediaKeyAction::TouchpadOff => {
+                let mut cfg = malus_de_common::config::InputConfig::load();
+                let next_enabled = match action {
+                    MediaKeyAction::TouchpadOn => true,
+                    MediaKeyAction::TouchpadOff => false,
+                    _ => !cfg.touchpad_enabled,
+                };
+                cfg.touchpad_enabled = next_enabled;
+                let _ = cfg.save();
+                self.input_cfg = cfg;
+                tracing::info!(
+                    "🖱️ [MEDIA KEY] Touchpad {}",
+                    if next_enabled { "activado" } else { "desactivado" }
+                );
+                self.media_keys.show_osd(
+                    output_name,
+                    if next_enabled {
+                        OsdIconKind::TouchpadOn
+                    } else {
+                        OsdIconKind::TouchpadOff
+                    },
+                    "Trackpad",
+                    if next_enabled { "Activado" } else { "Desactivado" },
+                    None,
+                    !next_enabled,
+                    now,
+                );
+            }
+        }
+    }
+
     /// Procesa clics del ratón sobre el menú flotante Snap Layouts.
     /// Devuelve `true` si el evento fue consumido por el menú.
     pub fn handle_snap_layouts_pointer_button(
@@ -8455,9 +8689,32 @@ mod tests {
         state.space.map_output(&output, (0, 0));
 
         // Simula el estado del bucle de renderizado DRM/Winit manteniendo bloqueado `LayerMap`
-        let _held_layer_map = smithay::desktop::layer_map_for_output(&output);
+        let held_layer_map = smithay::desktop::layer_map_for_output(&output);
         assert!(!state.is_session_locked());
         assert!(state.lock_focus_surface().is_none());
+
+        // Verificar que preparar el OSD de teclas multimedia con `LayerMap` bloqueado no cause deadlock
+        let now = std::time::Instant::now();
+        state.media_keys.show_osd(
+            "DP-1".to_string(),
+            crate::media_keys::OsdIconKind::VolumeMedium,
+            "Volumen",
+            "50%",
+            Some(50.0),
+            false,
+            now,
+        );
+        let output_geo = state.space.output_geometry(&output).unwrap_or_default();
+        let usable_zone = state.usable_zone_from_layer_map(&output, &held_layer_map);
+        let osd_prepared = state.media_keys.prepare_frame(
+            "DP-1",
+            output_geo,
+            usable_zone,
+            1.0,
+            false,
+            now,
+        );
+        assert!(osd_prepared.is_some());
 
         state.ext_session_locked = true;
         assert!(state.is_session_locked());

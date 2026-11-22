@@ -252,8 +252,10 @@ pub fn run_winit() -> Result<()> {
         state.check_session_lock_liveness();
         state.resume_timed_out_dock_animations(frame_start);
         state.tick_snap_layouts(frame_start);
+        state.tick_media_keys(frame_start);
         state.tick_app_switcher_deck(frame_start);
         let _ = state.snap_layouts.take_closed_dirty();
+        let _ = state.media_keys.take_closed_dirty();
         let _ = state.take_app_switcher_deck_closed_dirty();
 
         let status = winit_event_loop.dispatch_new_events(|event| match event {
@@ -317,6 +319,19 @@ pub fn run_winit() -> Result<()> {
                             let is_right = sym == keysyms::KEY_Right.into() || key == 106 || key == 114;
 
                             if is_pressed {
+                                if let Some(media_action) = crate::media_keys::detect_media_key_action(
+                                    sym,
+                                    &keysym_handle.raw_syms(),
+                                    key,
+                                    modifiers,
+                                ) {
+                                    if !state.is_session_locked() || media_action.is_allowed_when_locked() {
+                                        let now = Instant::now();
+                                        state.media_keys.register_key_press(key, media_action, now);
+                                        state.execute_media_key_action(media_action, now);
+                                        return FilterResult::Intercept(());
+                                    }
+                                }
                                 if state.is_session_locked() {
                                     return FilterResult::Forward;
                                 }
@@ -530,6 +545,7 @@ pub fn run_winit() -> Result<()> {
                                     }
                                 }
                             } else {
+                                state.media_keys.handle_key_release(key);
                                 // 7. Liberación de teclas (Key Release)
                                 // Cuando el usuario suelta Super o Alt, confirmar selección en App Switcher
                                 if state.app_switcher.is_active && ((!modifiers.logo && !modifiers.alt) || is_modifier_sym) {
@@ -1785,6 +1801,31 @@ pub fn run_winit() -> Result<()> {
                         None
                     };
                 let snap_layouts_preview = state.snap_layouts.hovered_preview_rect(&output.name());
+                let media_osd_frame =
+                    if state.media_keys.should_render_on_output(&output.name()) {
+                        let usable_zone = state.usable_zone_from_layer_map(&output, &layer_map);
+                        if let Some((osd_rect, mask_opt, mask_sz, osd_alpha)) = state
+                            .media_keys
+                            .prepare_frame(
+                                &output.name(),
+                                output_geo,
+                                usable_zone,
+                                1.0,
+                                is_dark_theme,
+                                now,
+                            )
+                        {
+                            let mask_vec = mask_opt.map(|s| s.to_vec());
+                            state
+                                .media_keys
+                                .create_render_element(renderer, osd_rect.loc, osd_alpha)
+                                .map(|elem| (osd_rect, mask_vec, mask_sz, osd_alpha, elem))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
                 let app_switcher_deck_frame = if state.deck_should_render_on_output(&output.name())
                 {
                     let deck_windows = state.deck_windows_for_render();
@@ -2648,6 +2689,48 @@ pub fn run_winit() -> Result<()> {
                                 &mut frame,
                                 1.0,
                                 std::slice::from_ref(snap_elem),
+                                &[damage],
+                            );
+                        }
+
+                        if let Some((
+                            osd_rect,
+                            ref mask_vec,
+                            (mask_w, mask_h),
+                            osd_alpha,
+                            ref osd_elem,
+                        )) = media_osd_frame
+                        {
+                            if let Some(shadow) = shadow_pipeline.as_ref() {
+                                let _ = frame.with_context(|gl| {
+                                    shadow.render_menu_shadow_alpha(
+                                        gl,
+                                        &projection,
+                                        osd_rect,
+                                        crate::media_keys::OSD_CORNER_RADIUS as f32,
+                                        1.0,
+                                        osd_alpha,
+                                    );
+                                });
+                            }
+                            if let Some(blur) = blur_pipeline.as_mut() {
+                                let _ = frame.with_context(|gl| {
+                                    blur.render_blur_masked(
+                                        gl,
+                                        &projection,
+                                        size,
+                                        osd_rect,
+                                        mask_vec.as_deref(),
+                                        mask_w,
+                                        mask_h,
+                                        osd_alpha,
+                                    );
+                                });
+                            }
+                            let _ = draw_render_elements(
+                                &mut frame,
+                                1.0,
+                                std::slice::from_ref(osd_elem),
                                 &[damage],
                             );
                         }

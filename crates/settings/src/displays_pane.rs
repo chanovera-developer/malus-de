@@ -92,22 +92,7 @@ fn apply_output_brightness(output_idx: usize, pct: f64) {
     let _ = IpcClient::send_command(IpcMessage::ReloadDisplayBrightness);
 
     if connector_has_hardware_backlight(&connector) {
-        if let Ok(entries) = std::fs::read_dir("/sys/class/backlight") {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let cur_path = path.join("brightness");
-                let max_path = path.join("max_brightness");
-                if let Ok(max_str) = std::fs::read_to_string(&max_path) {
-                    if let Ok(max) = max_str.trim().parse::<f64>() {
-                        let target = ((clamped / 100.0) * max).round() as u64;
-                        let _ = std::fs::write(&cur_path, target.to_string());
-                    }
-                }
-            }
-        }
-        let _ = Command::new("brightnessctl")
-            .args(["set", &format!("{}%", clamped.round() as u32)])
-            .output();
+        malus_de_common::config::apply_hardware_backlight_pct(clamped);
     }
 }
 

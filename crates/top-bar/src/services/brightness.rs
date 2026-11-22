@@ -49,37 +49,17 @@ impl BrightnessService {
         // 1. Guardar en DisplaysConfig y notificar al compositor (brillo hardware o software)
         let mut cfg = DisplaysConfig::load();
         cfg.brightness = clamped;
-        if let Some(prim) = cfg.outputs.iter_mut().find(|o| o.primary) {
-            prim.brightness = clamped;
-        } else if let Some(first) = cfg.outputs.first_mut() {
-            first.brightness = clamped;
+        for out in &mut cfg.outputs {
+            out.brightness = clamped;
         }
         let _ = cfg.save();
         let _ = malus_de_common::ipc::IpcClient::send_command(
             malus_de_common::ipc::IpcMessage::ReloadDisplayBrightness,
         );
 
-        // 2. Intentar escribir en /sys/class/backlight o invocar brightnessctl en un hilo secundario
+        // 2. Intentar escribir en /sys/class/backlight, systemd-logind SetBrightness o brightnessctl
         std::thread::spawn(move || {
-            if let Ok(entries) = std::fs::read_dir("/sys/class/backlight") {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    let cur_path = path.join("brightness");
-                    let max_path = path.join("max_brightness");
-                    if max_path.exists() {
-                        if let Ok(max_str) = std::fs::read_to_string(&max_path) {
-                            if let Ok(max) = max_str.trim().parse::<f64>() {
-                                let target = ((clamped / 100.0) * max).round() as u64;
-                                let _ = std::fs::write(&cur_path, target.to_string());
-                            }
-                        }
-                    }
-                }
-            }
-
-            let _ = Command::new("brightnessctl")
-                .args(["set", &format!("{}%", clamped.round() as u32)])
-                .output();
+            malus_de_common::config::apply_hardware_backlight_pct(clamped);
         });
     }
 
