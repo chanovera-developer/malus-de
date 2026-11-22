@@ -38,6 +38,14 @@ struct Args {
     #[arg(short = 'q', long = "quick-look", value_name = "ARCHIVO")]
     quick_look: Option<PathBuf>,
 
+    /// Abrir ventana Obtener información para un archivo o carpeta
+    #[arg(long = "info", value_name = "RUTA")]
+    info: Option<PathBuf>,
+
+    /// Abrir diálogo de compartir vía AirDrop / Malus Link para una ruta
+    #[arg(long = "share", value_name = "RUTA")]
+    share: Option<PathBuf>,
+
     /// Abrir una nueva ventana de Branches aunque ya exista una instancia abierta
     #[arg(long = "new-window")]
     new_window: bool,
@@ -106,6 +114,34 @@ fn main() {
             } else {
                 tracing::warn!("No se pudo crear vista Quick Look para {:?}", ql_path);
             }
+        });
+        app.run_with_args::<&str>(&[]);
+        return;
+    }
+
+    if let Some(info_path) = args.info {
+        let app = Application::builder()
+            .application_id("dev.malus.Branches.Info")
+            .build();
+        app.connect_startup(|_| {
+            load_custom_css();
+        });
+        app.connect_activate(move |app| {
+            info_window::show_get_info_standalone(app, info_path.clone());
+        });
+        app.run_with_args::<&str>(&[]);
+        return;
+    }
+
+    if let Some(share_path) = args.share {
+        let app = Application::builder()
+            .application_id("dev.malus.Branches.Share")
+            .build();
+        app.connect_startup(|_| {
+            load_custom_css();
+        });
+        app.connect_activate(move |app| {
+            app_window::share_paths_via_malus_link(None, Some(app), vec![share_path.clone()]);
         });
         app.run_with_args::<&str>(&[]);
         return;

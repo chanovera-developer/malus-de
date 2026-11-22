@@ -4001,6 +4001,94 @@ fn create_menu_icon_button(label: &str, left_icon: Option<&str>, right_arrow: bo
     btn
 }
 
+fn branches_sqlite_db_path() -> PathBuf {
+    let data_dir = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/tmp"));
+            home.join(".local/share")
+        });
+    let malus_dir = data_dir.join("malus-de");
+    let _ = std::fs::create_dir_all(&malus_dir);
+    malus_dir.join("branches_views.sqlite")
+}
+
+fn open_branches_db() -> Result<rusqlite::Connection, rusqlite::Error> {
+    let conn = rusqlite::Connection::open(branches_sqlite_db_path())?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS file_tags (
+            file_path TEXT NOT NULL,
+            tag_name TEXT NOT NULL,
+            tag_color TEXT NOT NULL,
+            PRIMARY KEY (file_path, tag_name)
+        );
+        CREATE TABLE IF NOT EXISTS sidebar_bookmarks (
+            folder_path TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS tag_settings (
+            tag_id TEXT PRIMARY KEY,
+            custom_label TEXT,
+            color_id TEXT,
+            hidden_in_sidebar INTEGER NOT NULL DEFAULT 0
+        );",
+    )?;
+    Ok(conn)
+}
+
+fn desktop_is_bookmark(path: &Path) -> bool {
+    let Ok(conn) = open_branches_db() else {
+        return false;
+    };
+    let p_str = path.to_string_lossy();
+    conn.query_row(
+        "SELECT 1 FROM sidebar_bookmarks WHERE folder_path = ?1 LIMIT 1",
+        rusqlite::params![p_str],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
+fn toggle_desktop_bookmark(path: &Path) {
+    let Ok(conn) = open_branches_db() else {
+        return;
+    };
+    let p_str = path.to_string_lossy();
+    let exists = conn
+        .query_row(
+            "SELECT 1 FROM sidebar_bookmarks WHERE folder_path = ?1 LIMIT 1",
+            rusqlite::params![p_str],
+            |_| Ok(()),
+        )
+        .is_ok();
+    if exists {
+        let _ = conn.execute(
+            "DELETE FROM sidebar_bookmarks WHERE folder_path = ?1",
+            rusqlite::params![p_str],
+        );
+    } else {
+        let title = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| p_str.to_string());
+        let next_order: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM sidebar_bookmarks",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        let _ = conn.execute(
+            "INSERT OR IGNORE INTO sidebar_bookmarks (folder_path, title, sort_order) VALUES (?1, ?2, ?3)",
+            rusqlite::params![p_str, title, next_order],
+        );
+    }
+}
+
 fn toggle_desktop_file_tag(path: &Path, tag_id: &str) {
     if path.symlink_metadata().is_err() {
         return;
@@ -4022,10 +4110,48 @@ fn toggle_desktop_file_tag(path: &Path, tag_id: &str) {
                 .collect()
         })
         .unwrap_or_default();
-    if let Some(pos) = tags.iter().position(|t| t == tag_id) {
-        tags.remove(pos);
+
+    let p_str = path.to_string_lossy().into_owned();
+    let db_has_tag = open_branches_db()
+        .ok()
+        .and_then(|c| {
+            c.query_row(
+                "SELECT 1 FROM file_tags WHERE file_path = ?1 AND tag_name = ?2 LIMIT 1",
+                rusqlite::params![p_str, tag_id],
+                |_| Ok(()),
+            )
+            .ok()
+        })
+        .is_some();
+
+    let removing = db_has_tag || tags.iter().any(|t| t == tag_id);
+    if removing {
+        tags.retain(|t| t != tag_id);
+        if let Ok(conn) = open_branches_db() {
+            let _ = conn.execute(
+                "DELETE FROM file_tags WHERE file_path = ?1 AND tag_name = ?2",
+                rusqlite::params![p_str, tag_id],
+            );
+        }
     } else {
         tags.push(tag_id.to_string());
+        let color_hex = match tag_id {
+            "red" => "#ff3b30",
+            "orange" => "#ff9500",
+            "yellow" => "#ffcc00",
+            "green" => "#34c759",
+            "blue" => "#007aff",
+            "purple" => "#af52de",
+            _ => "#8e8e93",
+        };
+        if let Ok(conn) = open_branches_db() {
+            let _ = conn.execute(
+                "INSERT INTO file_tags (file_path, tag_name, tag_color)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(file_path, tag_name) DO UPDATE SET tag_color = excluded.tag_color",
+                rusqlite::params![p_str, tag_id, color_hex],
+            );
+        }
     }
     tags.sort();
     tags.dedup();
@@ -4042,6 +4168,13 @@ fn clear_desktop_file_tags(path: &Path) {
     if path.symlink_metadata().is_err() {
         return;
     }
+    if let Ok(conn) = open_branches_db() {
+        let p_str = path.to_string_lossy();
+        let _ = conn.execute(
+            "DELETE FROM file_tags WHERE file_path = ?1",
+            rusqlite::params![p_str],
+        );
+    }
     let gfile = gio::File::for_path(path);
     let _ = gfile.set_attribute_string(
         "xattr::user.malus.tags",
@@ -4049,6 +4182,163 @@ fn clear_desktop_file_tags(path: &Path) {
         gio::FileQueryInfoFlags::NONE,
         gio::Cancellable::NONE,
     );
+}
+
+fn desktop_is_supported_archive(path: &Path) -> bool {
+    let lower = path.to_string_lossy().to_ascii_lowercase();
+    lower.ends_with(".zip")
+        || lower.ends_with(".tar.gz")
+        || lower.ends_with(".tgz")
+        || lower.ends_with(".tar.xz")
+        || lower.ends_with(".tar.bz2")
+        || lower.ends_with(".tar")
+}
+
+fn extract_desktop_archive(path: &Path) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    let src = path.to_path_buf();
+    let dest = parent.to_path_buf();
+    let lower = src.to_string_lossy().to_ascii_lowercase();
+    std::thread::spawn(move || {
+        if lower.ends_with(".zip") {
+            let _ = std::process::Command::new("unzip")
+                .arg("-oq")
+                .arg(&src)
+                .arg("-d")
+                .arg(&dest)
+                .status();
+        } else {
+            let _ = std::process::Command::new("tar")
+                .arg("-xf")
+                .arg(&src)
+                .arg("-C")
+                .arg(&dest)
+                .status();
+        }
+    });
+}
+
+fn open_desktop_in_terminal(path: &Path) {
+    let target = if path.is_dir() {
+        path
+    } else {
+        path.parent().unwrap_or(path)
+    };
+    for term in [
+        "ghostty",
+        "ptyxis",
+        "gnome-terminal",
+        "alacritty",
+        "kitty",
+        "xterm",
+    ] {
+        let mut cmd = std::process::Command::new(term);
+        cmd.current_dir(target);
+        malus_de_common::config::apply_isolated_environment(&mut cmd);
+        if cmd.spawn().is_ok() {
+            return;
+        }
+    }
+}
+
+fn is_desktop_dock_app_pinned(
+    dock_cfg: &malus_de_common::config::DockConfig,
+    app_cfg: &malus_de_common::config::DockAppConfig,
+) -> bool {
+    let cmd_trimmed = app_cfg.command.trim();
+    dock_cfg.apps.iter().any(|existing| {
+        existing.name.eq_ignore_ascii_case(&app_cfg.name)
+            || (!cmd_trimmed.is_empty() && existing.command == cmd_trimmed)
+    })
+}
+
+fn set_desktop_app_pinned_in_dock(
+    app_cfg: malus_de_common::config::DockAppConfig,
+    pin: bool,
+) {
+    let ipc_msg = if pin {
+        malus_de_common::ipc::IpcMessage::PinAppToDock {
+            name: app_cfg.name.clone(),
+            command: app_cfg.command.clone(),
+            icon: app_cfg.icon.clone(),
+            matchers: app_cfg.matchers.clone(),
+            insert_at_dock_x: None,
+        }
+    } else {
+        malus_de_common::ipc::IpcMessage::UnpinAppFromDock {
+            name: app_cfg.name.clone(),
+        }
+    };
+    if malus_de_common::ipc::send_ipc_message(&ipc_msg).is_err() {
+        let mut cfg = malus_de_common::config::DockConfig::load_or_create_default();
+        let changed = if pin {
+            cfg.pin_app(app_cfg)
+        } else {
+            cfg.unpin_app(&app_cfg.name)
+        };
+        if changed {
+            let _ = cfg.save();
+        }
+    }
+}
+
+fn confirm_delete_desktop_permanent(path: PathBuf) {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned());
+    let win = gtk4::Window::builder()
+        .title("Eliminar permanentemente")
+        .modal(true)
+        .resizable(false)
+        .default_width(360)
+        .build();
+    let vbox = GtkBox::new(Orientation::Vertical, 12);
+    vbox.set_margin_top(16);
+    vbox.set_margin_bottom(16);
+    vbox.set_margin_start(18);
+    vbox.set_margin_end(18);
+    let lbl = Label::builder()
+        .label(format!(
+            "¿Seguro que quieres eliminar «{}» permanentemente? Esta acción no se puede deshacer.",
+            name
+        ))
+        .wrap(true)
+        .xalign(0.0)
+        .build();
+    vbox.append(&lbl);
+    let btns = GtkBox::new(Orientation::Horizontal, 8);
+    btns.set_halign(Align::End);
+    let cancel_btn = Button::with_label("Cancelar");
+    let delete_btn = Button::builder()
+        .label("Eliminar")
+        .css_classes(["destructive-action"])
+        .build();
+    btns.append(&cancel_btn);
+    btns.append(&delete_btn);
+    vbox.append(&btns);
+    win.set_child(Some(&vbox));
+
+    let w_cancel = win.downgrade();
+    cancel_btn.connect_clicked(move |_| {
+        if let Some(w) = w_cancel.upgrade() {
+            w.close();
+        }
+    });
+    let w_ok = win.downgrade();
+    delete_btn.connect_clicked(move |_| {
+        if let Some(w) = w_ok.upgrade() {
+            w.close();
+        }
+        if path.is_dir() {
+            let _ = std::fs::remove_dir_all(&path);
+        } else {
+            let _ = std::fs::remove_file(&path);
+        }
+    });
+    win.present();
 }
 
 fn make_desktop_alias(path: &Path) {
@@ -4235,11 +4525,17 @@ fn attach_desktop_cascading_submenu(
 /// Mantiene la misma estructura estilo Finder que el menú contextual de archivos en Branches.
 struct DesktopIconContextMenu {
     popover: Popover,
+    open_button: Button,
     open_new_tab_button: Button,
     open_with_button: Button,
     open_with_list_box: GtkBox,
     compress_button: Button,
-    paste_into_button: Button,
+    extract_button: Button,
+    qa_terminal_button: Button,
+    qa_reveal_button: Button,
+    qa_paste_into_button: Button,
+    qa_bookmark_button: Button,
+    qa_dock_button: Button,
     set_wallpaper_button: Button,
     all_submenus: Rc<RefCell<Vec<glib::WeakRef<Popover>>>>,
     target: Rc<RefCell<Option<(PathBuf, glib::WeakRef<GtkBox>)>>>,
@@ -4338,7 +4634,7 @@ impl DesktopIconContextMenu {
         sep_info.add_css_class("desktop-context-separator");
         menu.append(&sep_info);
 
-        // 4. Obtener información
+        // 4. Obtener información (abre la ventana Obtener información de Branches)
         let info_button = create_menu_button("Obtener información", false);
         {
             let target_c = target.clone();
@@ -4348,7 +4644,12 @@ impl DesktopIconContextMenu {
                     popdown_desktop_popover_lifo(&pop);
                 }
                 if let Some((path, _)) = target_c.borrow().as_ref() {
-                    show_desktop_folder_info_dialog(path);
+                    let mut cmd = std::process::Command::new("malus-de-branches");
+                    cmd.arg("--info").arg(path);
+                    malus_de_common::config::apply_isolated_environment(&mut cmd);
+                    if cmd.spawn().is_err() {
+                        show_desktop_folder_info_dialog(path);
+                    }
                 }
             });
         }
@@ -4373,7 +4674,7 @@ impl DesktopIconContextMenu {
         }
         menu.append(&rename_button);
 
-        // 6. Comprimir “<Nombre>”
+        // 6. Comprimir “<Nombre>” + Extraer aquí
         let compress_button = create_menu_button("Comprimir", false);
         {
             let target_c = target.clone();
@@ -4388,6 +4689,22 @@ impl DesktopIconContextMenu {
             });
         }
         menu.append(&compress_button);
+
+        let extract_button = create_menu_button("Extraer aquí", false);
+        extract_button.set_visible(false);
+        {
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            extract_button.connect_clicked(move |_| {
+                if let Some((path, _)) = target_c.borrow().as_ref() {
+                    extract_desktop_archive(path);
+                }
+                if let Some(pop) = pop_w.upgrade() {
+                    popdown_desktop_popover_lifo(&pop);
+                }
+            });
+        }
+        menu.append(&extract_button);
 
         // 7. Duplicar
         let dup_button = create_menu_button("Duplicar", false);
@@ -4476,16 +4793,21 @@ impl DesktopIconContextMenu {
             let target_c = target.clone();
             let pop_w = popover.downgrade();
             share_button.connect_clicked(move |_| {
-                if let Some((path, _)) = target_c.borrow().as_ref() {
-                    let _ = std::process::Command::new("kdeconnect-handler")
-                        .arg(path)
-                        .spawn();
-                    if let Some(display) = gtk4::gdk::Display::default() {
-                        display.clipboard().set_text(&path.to_string_lossy());
-                    }
-                }
                 if let Some(pop) = pop_w.upgrade() {
                     popdown_desktop_popover_lifo(&pop);
+                }
+                if let Some((path, _)) = target_c.borrow().as_ref() {
+                    let mut cmd = std::process::Command::new("malus-de-branches");
+                    cmd.arg("--share").arg(path);
+                    malus_de_common::config::apply_isolated_environment(&mut cmd);
+                    if cmd.spawn().is_err() {
+                        let _ = std::process::Command::new("kdeconnect-handler")
+                            .arg(path)
+                            .spawn();
+                        if let Some(display) = gtk4::gdk::Display::default() {
+                            display.clipboard().set_text(&path.to_string_lossy());
+                        }
+                    }
                 }
             });
         }
@@ -4638,7 +4960,7 @@ impl DesktopIconContextMenu {
             &all_submenus,
         );
 
-        // Submenú: Menú de acciones rápidas
+        // Submenú: Menú de acciones rápidas (idéntico a Branches)
         let qa_page = GtkBox::builder()
             .orientation(Orientation::Vertical)
             .spacing(2)
@@ -4647,11 +4969,26 @@ impl DesktopIconContextMenu {
             .css_classes(["desktop-context-menu"])
             .build();
 
-        let reveal_button = create_menu_button("Mostrar en la carpeta contenedora", false);
+        let qa_terminal_button = create_menu_button("Abrir en Terminal", false);
         {
             let target_c = target.clone();
             let pop_w = popover.downgrade();
-            reveal_button.connect_clicked(move |_| {
+            qa_terminal_button.connect_clicked(move |_| {
+                if let Some(pop) = pop_w.upgrade() {
+                    popdown_desktop_popover_lifo(&pop);
+                }
+                if let Some((path, _)) = target_c.borrow().as_ref() {
+                    open_desktop_in_terminal(path);
+                }
+            });
+        }
+        qa_page.append(&qa_terminal_button);
+
+        let qa_reveal_button = create_menu_button("Mostrar en la carpeta contenedora", false);
+        {
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            qa_reveal_button.connect_clicked(move |_| {
                 if let Some((path, _)) = target_c.borrow().as_ref() {
                     let file = gio::File::for_path(path);
                     let parent = file.parent().unwrap_or(file);
@@ -4662,7 +4999,7 @@ impl DesktopIconContextMenu {
                 }
             });
         }
-        qa_page.append(&reveal_button);
+        qa_page.append(&qa_reveal_button);
 
         let cut_button = create_menu_button("Cortar", false);
         {
@@ -4691,13 +5028,13 @@ impl DesktopIconContextMenu {
         }
         qa_page.append(&cut_button);
 
-        let paste_into_button = create_menu_button("Pegar en carpeta", false);
-        paste_into_button.set_visible(false);
+        let qa_paste_into_button = create_menu_button("Pegar en carpeta", false);
+        qa_paste_into_button.set_visible(false);
         {
             let target_c = target.clone();
             let fixed_w = fixed.downgrade();
             let pop_w = popover.downgrade();
-            paste_into_button.connect_clicked(move |_| {
+            qa_paste_into_button.connect_clicked(move |_| {
                 if let Some(pop) = pop_w.upgrade() {
                     popdown_desktop_popover_lifo(&pop);
                 }
@@ -4713,7 +5050,7 @@ impl DesktopIconContextMenu {
                 }
             });
         }
-        qa_page.append(&paste_into_button);
+        qa_page.append(&qa_paste_into_button);
 
         let copy_path_button = create_menu_button("Copiar ruta", false);
         {
@@ -4731,6 +5068,62 @@ impl DesktopIconContextMenu {
             });
         }
         qa_page.append(&copy_path_button);
+
+        let qa_bookmark_button = create_menu_button("Añadir a marcadores", false);
+        {
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            qa_bookmark_button.connect_clicked(move |_| {
+                if let Some(pop) = pop_w.upgrade() {
+                    popdown_desktop_popover_lifo(&pop);
+                }
+                if let Some((path, _)) = target_c.borrow().as_ref() {
+                    toggle_desktop_bookmark(path);
+                }
+            });
+        }
+        qa_page.append(&qa_bookmark_button);
+
+        let qa_dock_button = create_menu_button("Agregar al Dock", false);
+        qa_dock_button.set_visible(false);
+        {
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            qa_dock_button.connect_clicked(move |_| {
+                if let Some(pop) = pop_w.upgrade() {
+                    popdown_desktop_popover_lifo(&pop);
+                }
+                if let Some((path, _)) = target_c.borrow().as_ref() {
+                    if let Some(app_cfg) = malus_de_common::apps::desktop_file_to_dock_app(path) {
+                        let dock_cfg =
+                            malus_de_common::config::DockConfig::load_or_create_default();
+                        let pinned = is_desktop_dock_app_pinned(&dock_cfg, &app_cfg);
+                        set_desktop_app_pinned_in_dock(app_cfg, !pinned);
+                    }
+                }
+            });
+        }
+        qa_page.append(&qa_dock_button);
+
+        let qa_sep = GtkBox::new(Orientation::Horizontal, 0);
+        qa_sep.add_css_class("desktop-context-separator");
+        qa_page.append(&qa_sep);
+
+        let qa_delete_perm_button = create_menu_button("Eliminar inmediatamente…", false);
+        {
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            qa_delete_perm_button.connect_clicked(move |_| {
+                if let Some(pop) = pop_w.upgrade() {
+                    popdown_desktop_popover_lifo(&pop);
+                }
+                if let Some((path, _)) = target_c.borrow().as_ref().cloned() {
+                    confirm_delete_desktop_permanent(path);
+                }
+            });
+        }
+        qa_page.append(&qa_delete_perm_button);
+
         attach_desktop_cascading_submenu(
             parent_overlay,
             &popover,
@@ -4756,11 +5149,17 @@ impl DesktopIconContextMenu {
 
         Rc::new(Self {
             popover,
+            open_button,
             open_new_tab_button,
             open_with_button,
             open_with_list_box,
             compress_button,
-            paste_into_button,
+            extract_button,
+            qa_terminal_button,
+            qa_reveal_button,
+            qa_paste_into_button,
+            qa_bookmark_button,
+            qa_dock_button,
             set_wallpaper_button,
             all_submenus,
             target,
@@ -4804,7 +5203,7 @@ impl DesktopIconContextMenu {
                 let gf = gfile.clone();
                 app_btn.connect_clicked(move |_| {
                     if let Some(pop) = pop_w.upgrade() {
-                        pop.popdown();
+                        popdown_desktop_popover_lifo(&pop);
                     }
                     let _ = app.launch(&[gf.clone()], gio::AppLaunchContext::NONE);
                 });
@@ -4816,18 +5215,59 @@ impl DesktopIconContextMenu {
     fn show_for(&self, fixed: &Fixed, item_box: &GtkBox, path: &Path, local_x: f64, local_y: f64) {
         *self.target.borrow_mut() = Some((path.to_path_buf(), item_box.downgrade()));
         let is_dir = path.is_dir();
+        let desktop_app = if !is_dir {
+            malus_de_common::apps::desktop_file_to_dock_app(path)
+        } else {
+            None
+        };
         let file_name = path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "elemento".to_string());
+        set_menu_button_label(
+            &self.open_button,
+            if desktop_app.is_some() {
+                "Abrir aplicación"
+            } else {
+                "Abrir"
+            },
+        );
         set_menu_button_label(&self.compress_button, &format!("Comprimir “{}”", file_name));
+        self.extract_button
+            .set_visible(!is_dir && desktop_is_supported_archive(path));
         self.open_new_tab_button.set_visible(is_dir);
         self.open_with_button.set_visible(!is_dir);
         if !is_dir {
             self.populate_open_with_list(path);
         }
-        self.paste_into_button
+        self.qa_terminal_button
+            .set_visible(is_dir || path.extension().and_then(|e| e.to_str()) != Some("desktop"));
+        self.qa_reveal_button.set_visible(!is_dir);
+        self.qa_paste_into_button
             .set_visible(is_dir && has_desktop_clipboard_files());
+        set_menu_button_label(
+            &self.qa_bookmark_button,
+            if desktop_is_bookmark(path) {
+                "Quitar de marcadores"
+            } else {
+                "Añadir a marcadores"
+            },
+        );
+        if let Some(app_cfg) = desktop_app {
+            let dock_cfg = malus_de_common::config::DockConfig::load_or_create_default();
+            let pinned = is_desktop_dock_app_pinned(&dock_cfg, &app_cfg);
+            set_menu_button_label(
+                &self.qa_dock_button,
+                if pinned {
+                    "Quitar del Dock"
+                } else {
+                    "Agregar al Dock"
+                },
+            );
+            self.qa_dock_button.set_visible(true);
+        } else {
+            self.qa_dock_button.set_visible(false);
+        }
         self.set_wallpaper_button
             .set_visible(!is_dir && is_desktop_picture_file(path));
 

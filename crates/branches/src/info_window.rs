@@ -63,14 +63,25 @@ pub fn show_get_info_window(
     path: PathBuf,
     on_tags_changed: Rc<dyn Fn()>,
 ) {
+    show_get_info_impl(Some(parent), None, path, on_tags_changed);
+}
+
+pub fn show_get_info_standalone(app: &gtk4::Application, path: PathBuf) {
+    show_get_info_impl(None, Some(app), path, Rc::new(|| {}));
+}
+
+fn show_get_info_impl(
+    parent: Option<&ApplicationWindow>,
+    app: Option<&gtk4::Application>,
+    path: PathBuf,
+    on_tags_changed: Rc<dyn Fn()>,
+) {
     let es = malus_de_common::is_spanish_locale();
     let Some(item) = FileItem::from_path(&path) else {
         return;
     };
 
-    let win = Window::builder()
-        .transient_for(parent)
-        .destroy_with_parent(true)
+    let mut builder = Window::builder()
         .default_width(360)
         .default_height(520)
         .title(if es {
@@ -78,8 +89,14 @@ pub fn show_get_info_window(
         } else {
             format!("{} Info", item.name)
         })
-        .css_classes(["branches-info-window"])
-        .build();
+        .css_classes(["branches-info-window"]);
+    if let Some(p) = parent {
+        builder = builder.transient_for(p).destroy_with_parent(true);
+    }
+    if let Some(a) = app {
+        builder = builder.application(a);
+    }
+    let win = builder.build();
 
     let outer = GtkBox::new(Orientation::Vertical, 12);
     outer.set_margin_top(16);
