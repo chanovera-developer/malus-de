@@ -283,24 +283,45 @@ popover.desktop-popover-menu .desktop-context-btn.malus-squircle-menu-item:activ
     transition: none;
 }
 
-popover.desktop-popover-menu.light-popover .desktop-context-btn,
-popover.light-popover .desktop-context-btn,
-.light-popover .desktop-context-btn {
+popover.desktop-popover-menu.light-popover .desktop-context-btn:not(:hover):not(:active),
+popover.light-popover .desktop-context-btn:not(:hover):not(:active),
+.light-popover .desktop-context-btn:not(:hover):not(:active) {
     color: #1d1d1f;
 }
 
-/* Clases directas de texto en Label para máxima reactividad */
-label.menu-dark-text {
+/* Clases directas de texto e iconos simbólicos para máxima reactividad */
+label.menu-dark-text,
+image.menu-dark-text {
     color: #f4f4f5;
 }
 
-label.menu-light-text {
+label.menu-light-text,
+image.menu-light-text {
     color: #1d1d1f;
 }
 
+popover.desktop-popover-menu .desktop-context-btn:hover,
+popover.desktop-popover-menu .desktop-context-btn:active,
+popover.desktop-popover-menu.light-popover .desktop-context-btn:hover,
+popover.desktop-popover-menu.light-popover .desktop-context-btn:active,
+.desktop-context-btn:hover,
+.desktop-context-btn:active,
 .desktop-context-btn:hover label,
+.desktop-context-btn:hover image,
 .desktop-context-btn:hover label.menu-dark-text,
-.desktop-context-btn:hover label.menu-light-text {
+.desktop-context-btn:hover label.menu-light-text,
+.desktop-context-btn:hover image.menu-dark-text,
+.desktop-context-btn:hover image.menu-light-text,
+.desktop-context-btn:active label,
+.desktop-context-btn:active image,
+.desktop-context-btn:active label.menu-dark-text,
+.desktop-context-btn:active label.menu-light-text,
+.desktop-context-btn:active image.menu-dark-text,
+.desktop-context-btn:active image.menu-light-text,
+popover.desktop-popover-menu .desktop-context-btn:hover image,
+popover.desktop-popover-menu .desktop-context-btn:active image,
+popover.desktop-popover-menu.light-popover .desktop-context-btn:hover image,
+popover.desktop-popover-menu.light-popover .desktop-context-btn:active image {
     color: #ffffff;
 }
 
@@ -311,8 +332,11 @@ label.menu-light-text {
 }
 
 .desktop-context-btn.destructive:hover label,
+.desktop-context-btn.destructive:hover image,
 .desktop-context-btn.destructive:hover label.menu-dark-text,
-.desktop-context-btn.destructive:hover label.menu-light-text {
+.desktop-context-btn.destructive:hover label.menu-light-text,
+.desktop-context-btn.destructive:hover image.menu-dark-text,
+.desktop-context-btn.destructive:hover image.menu-light-text {
     color: #ffffff;
 }
 

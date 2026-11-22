@@ -926,17 +926,17 @@ pub fn apply_theme_to_popover(popover: &Popover, is_dark: bool) {
 }
 
 fn update_menu_text_theme(widget: &gtk4::Widget, is_dark: bool) {
-    if let Some(label) = widget.downcast_ref::<Label>() {
+    if widget.is::<Label>() || widget.is::<gtk4::Image>() {
         let (target, stale) = if is_dark {
             ("menu-dark-text", "menu-light-text")
         } else {
             ("menu-light-text", "menu-dark-text")
         };
-        if label.has_css_class(stale) {
-            label.remove_css_class(stale);
+        if widget.has_css_class(stale) {
+            widget.remove_css_class(stale);
         }
-        if !label.has_css_class(target) {
-            label.add_css_class(target);
+        if !widget.has_css_class(target) {
+            widget.add_css_class(target);
         }
     }
     let mut child = widget.first_child();
