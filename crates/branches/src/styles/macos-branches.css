@@ -1257,14 +1257,50 @@ button.branches-job-cancel-btn {
     border: 1px solid rgba(0, 0, 0, 0.14);
 }
 
-.branches-tag-color-red { background-color: #ff3b30; }
-.branches-tag-color-orange { background-color: #ff9500; }
-.branches-tag-color-yellow { background-color: #ffcc00; }
-.branches-tag-color-green { background-color: #34c759; }
-.branches-tag-color-blue { background-color: #007aff; }
-.branches-tag-color-purple { background-color: #af52de; }
-.branches-tag-color-gray { background-color: #8e8e93; }
-.branches-tag-color-none {
+.branches-tag-color-red,
+window.branches-window popover.malus-popover-menu .branches-tag-color-red,
+window.branches-window popover.malus-popover-menu button.branches-context-tag-btn.branches-tag-color-red,
+window.branches-window popover.malus-popover-menu button.branches-context-tag-btn.branches-tag-color-red:hover:not(:disabled) {
+    background-color: #ff3b30;
+}
+.branches-tag-color-orange,
+window.branches-window popover.malus-popover-menu .branches-tag-color-orange,
+window.branches-window popover.malus-popover-menu button.branches-context-tag-btn.branches-tag-color-orange,
+window.branches-window popover.malus-popover-menu button.branches-context-tag-btn.branches-tag-color-orange:hover:not(:disabled) {
+    background-color: #ff9500;
+}
+.branches-tag-color-yellow,
+window.branches-window popover.malus-popover-menu .branches-tag-color-yellow,
+window.branches-window popover.malus-popover-menu button.branches-context-tag-btn.branches-tag-color-yellow,
+window.branches-window popover.malus-popover-menu button.branches-context-tag-btn.branches-tag-color-yellow:hover:not(:disabled) {
+    background-color: #ffcc00;
+}
+.branches-tag-color-green,
+window.branches-window popover.malus-popover-menu .branches-tag-color-green,
+window.branches-window popover.malus-popover-menu button.branches-context-tag-btn.branches-tag-color-green,
+window.branches-window popover.malus-popover-menu button.branches-context-tag-btn.branches-tag-color-green:hover:not(:disabled) {
+    background-color: #34c759;
+}
+.branches-tag-color-blue,
+window.branches-window popover.malus-popover-menu .branches-tag-color-blue,
+window.branches-window popover.malus-popover-menu button.branches-context-tag-btn.branches-tag-color-blue,
+window.branches-window popover.malus-popover-menu button.branches-context-tag-btn.branches-tag-color-blue:hover:not(:disabled) {
+    background-color: #007aff;
+}
+.branches-tag-color-purple,
+window.branches-window popover.malus-popover-menu .branches-tag-color-purple,
+window.branches-window popover.malus-popover-menu button.branches-context-tag-btn.branches-tag-color-purple,
+window.branches-window popover.malus-popover-menu button.branches-context-tag-btn.branches-tag-color-purple:hover:not(:disabled) {
+    background-color: #af52de;
+}
+.branches-tag-color-gray,
+window.branches-window popover.malus-popover-menu .branches-tag-color-gray,
+window.branches-window popover.malus-popover-menu button.branches-context-tag-btn.branches-tag-color-gray,
+window.branches-window popover.malus-popover-menu button.branches-context-tag-btn.branches-tag-color-gray:hover:not(:disabled) {
+    background-color: #8e8e93;
+}
+.branches-tag-color-none,
+window.branches-window popover.malus-popover-menu .branches-tag-color-none {
     background-color: transparent;
     border: 1.25px solid alpha(@window_fg_color, 0.55);
 }
@@ -1273,7 +1309,15 @@ button.branches-job-cancel-btn {
     padding: 4px 6px;
 }
 
-button.branches-context-tag-btn {
+window.branches-window popover.malus-popover-menu .branches-tag-dot {
+    min-width: 10px;
+    min-height: 10px;
+    margin-right: 0;
+    border-radius: 50%;
+}
+
+button.branches-context-tag-btn,
+window.branches-window popover.malus-popover-menu button.branches-context-tag-btn {
     min-width: 16px;
     min-height: 16px;
     padding: 0;
@@ -1283,7 +1327,8 @@ button.branches-context-tag-btn {
     transition: transform 100ms ease;
 }
 
-button.branches-context-tag-btn:hover {
+button.branches-context-tag-btn:hover,
+window.branches-window popover.malus-popover-menu button.branches-context-tag-btn:hover:not(:disabled) {
     transform: scale(1.16);
 }
 
