@@ -689,6 +689,26 @@ thread_local! {
     static REGISTERED_POPOVERS: RefCell<Vec<glib::WeakRef<Popover>>> = RefCell::new(Vec::new());
     static DESKTOP_LAYOUT_ANIM_GEN: Cell<u64> = const { Cell::new(0) };
     static WALLPAPER_GLASS_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
+    static CACHED_ACCENT_COLOR: Cell<(f64, f64, f64)> = const { Cell::new((0.04, 0.52, 1.0)) };
+    static CACHED_CLICK_WALLPAPER_SHOWS_DESKTOP: Cell<u8> = const { Cell::new(0) };
+}
+
+fn cached_accent_color() -> (f64, f64, f64) {
+    CACHED_ACCENT_COLOR.with(Cell::get)
+}
+
+fn refresh_cached_accent_color() {
+    let color = malus_de_common::config::load_accent_color();
+    CACHED_ACCENT_COLOR.with(|cell| cell.set(color));
+}
+
+fn cached_click_wallpaper_shows_desktop() -> u8 {
+    CACHED_CLICK_WALLPAPER_SHOWS_DESKTOP.with(Cell::get)
+}
+
+fn refresh_cached_desktop_dock_config() {
+    let mode = malus_de_common::config::DesktopDockConfig::load().click_wallpaper_shows_desktop;
+    CACHED_CLICK_WALLPAPER_SHOWS_DESKTOP.with(|cell| cell.set(mode));
 }
 
 fn apply_wallpaper_liquid_glass_opacity(opacity: f64) {
@@ -1899,9 +1919,11 @@ fn show_rename_dialog(parent_widget: &impl IsA<gtk4::Widget>, current_path: Path
 
     let cancel_btn = Button::with_label("Cancelar");
     cancel_btn.add_css_class("desktop-context-btn");
-    let popover_close = popover.clone();
+    let popover_close = popover.downgrade();
     cancel_btn.connect_clicked(move |_| {
-        popover_close.popdown();
+        if let Some(pop) = popover_close.upgrade() {
+            pop.popdown();
+        }
     });
     btn_box.append(&cancel_btn);
 
@@ -1909,20 +1931,24 @@ fn show_rename_dialog(parent_widget: &impl IsA<gtk4::Widget>, current_path: Path
     save_btn.add_css_class("desktop-context-btn");
     save_btn.add_css_class("suggested-action");
 
-    let popover_save = popover.clone();
-    let entry_save = entry.clone();
+    let popover_save = popover.downgrade();
+    let entry_save = entry.downgrade();
     let path_save = current_path;
     save_btn.connect_clicked(move |_| {
-        let new_name = entry_save.text().trim().to_string();
-        if !new_name.is_empty() && new_name != initial_name {
-            if let Some(parent) = path_save.parent() {
-                let dest = parent.join(&new_name);
-                if let Err(err) = fs::rename(&path_save, &dest) {
-                    warn!("No se pudo renombrar {:?} a {:?}: {}", path_save, dest, err);
+        if let Some(entry_w) = entry_save.upgrade() {
+            let new_name = entry_w.text().trim().to_string();
+            if !new_name.is_empty() && new_name != initial_name {
+                if let Some(parent) = path_save.parent() {
+                    let dest = parent.join(&new_name);
+                    if let Err(err) = fs::rename(&path_save, &dest) {
+                        warn!("No se pudo renombrar {:?} a {:?}: {}", path_save, dest, err);
+                    }
                 }
             }
         }
-        popover_save.popdown();
+        if let Some(pop) = popover_save.upgrade() {
+            pop.popdown();
+        }
     });
     btn_box.append(&save_btn);
     container.append(&btn_box);
@@ -1989,13 +2015,18 @@ fn find_desktop_icon_widget(fixed: &Fixed, path: &Path) -> Option<gtk4::Widget> 
     None
 }
 
+#[allow(clippy::too_many_arguments)]
 fn show_desktop_inline_rename(
+    fixed: &Fixed,
     item_widget: &gtk4::Widget,
     old_path: PathBuf,
     is_dir: bool,
+    config: Rc<RefCell<DesktopIconsConfig>>,
     icon_positions: Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
     selected_paths: Rc<RefCell<HashSet<PathBuf>>>,
     focused_path: Rc<RefCell<Option<PathBuf>>>,
+    recently_dropped_paths: Rc<RefCell<HashSet<PathBuf>>>,
+    insert_single_icon: Rc<dyn Fn(&Path)>,
     trigger_refresh: Rc<dyn Fn()>,
 ) {
     let Some(label) = get_icon_label(item_widget) else {
@@ -2036,28 +2067,39 @@ fn show_desktop_inline_rename(
     let finished = Rc::new(Cell::new(false));
     let finish_edit: Rc<dyn Fn(bool)> = {
         let finished = finished.clone();
-        let entry_ref = entry.clone();
-        let label_ref = label.clone();
-        let parent_ref = parent_box.clone();
+        let fixed_ref = fixed.downgrade();
+        let entry_ref = entry.downgrade();
+        let label_ref = label.downgrade();
+        let parent_ref = parent_box.downgrade();
         let old_p = old_path.clone();
         let initial = initial_name.clone();
+        let cfg_ref = config;
         let positions_ref = icon_positions;
         let sel_ref = selected_paths;
         let foc_ref = focused_path;
+        let rec_ref = recently_dropped_paths;
+        let insert_ref = insert_single_icon;
         let trig_ref = trigger_refresh;
         Rc::new(move |commit: bool| {
             if finished.replace(true) {
                 return;
             }
-            let candidate = entry_ref.text().to_string();
+            let candidate = entry_ref
+                .upgrade()
+                .map(|e| e.text().to_string())
+                .unwrap_or_default();
             let trimmed = candidate.trim().to_string();
 
-            if entry_ref.parent().is_some() {
-                parent_ref.remove(&entry_ref);
+            if let (Some(e), Some(p)) = (entry_ref.upgrade(), parent_ref.upgrade()) {
+                if e.parent().is_some() {
+                    p.remove(&e);
+                }
             }
-            label_ref.set_visible(true);
-            if let Some(icon_root) = label_ref.ancestor(GtkBox::static_type()) {
-                icon_root.grab_focus();
+            if let Some(l) = label_ref.upgrade() {
+                l.set_visible(true);
+                if let Some(icon_root) = l.ancestor(GtkBox::static_type()) {
+                    icon_root.grab_focus();
+                }
             }
 
             if !commit || trimmed.is_empty() || trimmed == initial || trimmed.contains('/') {
@@ -2089,8 +2131,17 @@ fn show_desktop_inline_rename(
                     sel.insert(dest.clone());
                 }
             }
-            *foc_ref.borrow_mut() = Some(dest);
-            trig_ref();
+            *foc_ref.borrow_mut() = Some(dest.clone());
+            rec_ref.borrow_mut().insert(dest.clone());
+
+            if !cfg_ref.borrow().use_stacks {
+                if let Some(f) = fixed_ref.upgrade() {
+                    let _ = remove_desktop_icon_widget(&f, &old_p);
+                }
+                insert_ref(&dest);
+            } else {
+                trig_ref();
+            }
         })
     };
 
@@ -2138,13 +2189,17 @@ fn show_desktop_inline_rename(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn schedule_desktop_inline_rename(
     fixed: Fixed,
     target_path: PathBuf,
     is_dir: bool,
+    config: Rc<RefCell<DesktopIconsConfig>>,
     icon_positions: Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
     selected_paths: Rc<RefCell<HashSet<PathBuf>>>,
     focused_path: Rc<RefCell<Option<PathBuf>>>,
+    recently_dropped_paths: Rc<RefCell<HashSet<PathBuf>>>,
+    insert_single_icon: Rc<dyn Fn(&Path)>,
     trigger_refresh: Rc<dyn Fn()>,
 ) {
     let mut attempts = 0u8;
@@ -2156,12 +2211,16 @@ fn schedule_desktop_inline_rename(
                     .is_some_and(|lbl| lbl.is_visible() && lbl.width() > 0 && lbl.height() > 0);
             if ready || attempts >= 12 {
                 show_desktop_inline_rename(
+                    &fixed,
                     &widget,
                     target_path.clone(),
                     is_dir,
+                    config.clone(),
                     icon_positions.clone(),
                     selected_paths.clone(),
                     focused_path.clone(),
+                    recently_dropped_paths.clone(),
+                    insert_single_icon.clone(),
                     trigger_refresh.clone(),
                 );
                 return glib::ControlFlow::Break;
@@ -2182,6 +2241,8 @@ fn create_desktop_item_and_edit(
     icon_positions: &Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
     selected_paths: &Rc<RefCell<HashSet<PathBuf>>>,
     focused_path: &Rc<RefCell<Option<PathBuf>>>,
+    recently_dropped_paths: &Rc<RefCell<HashSet<PathBuf>>>,
+    insert_single_icon: &Rc<dyn Fn(&Path)>,
     trigger_refresh: &Rc<dyn Fn()>,
     click_pos: (f64, f64),
     top_margin: f64,
@@ -2208,7 +2269,17 @@ fn create_desktop_item_and_edit(
         return;
     }
 
-    let cfg = config.borrow().clone();
+    let mut turned_icons_on = false;
+    let cfg = {
+        let mut cfg_mut = config.borrow_mut();
+        if !cfg_mut.show_icons {
+            cfg_mut.show_icons = true;
+            let _ = cfg_mut.save();
+            turned_icons_on = true;
+        }
+        cfg_mut.clone()
+    };
+
     let metrics = IconLayoutMetrics::from_config(&cfg);
     let mut pos = clamp_icon_position(
         click_pos.0,
@@ -2236,15 +2307,31 @@ fn create_desktop_item_and_edit(
         sel.insert(target_path.clone());
     }
     *focused_path.borrow_mut() = Some(target_path.clone());
-    trigger_refresh();
+    recently_dropped_paths
+        .borrow_mut()
+        .insert(target_path.clone());
+
+    if turned_icons_on || cfg.use_stacks {
+        trigger_refresh();
+    } else {
+        let mut sibling = fixed.first_child();
+        while let Some(child) = sibling {
+            sibling = child.next_sibling();
+            set_desktop_icon_selected(&child, false);
+        }
+        insert_single_icon(&target_path);
+    }
 
     schedule_desktop_inline_rename(
         fixed.clone(),
         target_path,
         is_dir,
+        config.clone(),
         icon_positions.clone(),
         selected_paths.clone(),
         focused_path.clone(),
+        recently_dropped_paths.clone(),
+        insert_single_icon.clone(),
         trigger_refresh.clone(),
     );
 }
@@ -2260,8 +2347,10 @@ fn build_create_new_submenu(
     icon_positions: Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
     selected_paths: Rc<RefCell<HashSet<PathBuf>>>,
     focused_path: Rc<RefCell<Option<PathBuf>>>,
+    recently_dropped_paths: Rc<RefCell<HashSet<PathBuf>>>,
+    insert_single_icon: Rc<dyn Fn(&Path)>,
     trigger_refresh: Rc<dyn Fn()>,
-    click_pos: (f64, f64),
+    click_pos: Rc<Cell<(f64, f64)>>,
     top_margin: f64,
 ) -> GtkBox {
     let container = GtkBox::builder()
@@ -2271,9 +2360,12 @@ fn build_create_new_submenu(
         .build();
 
     let back_btn = create_menu_button("← Volver", false);
-    let stack_back = stack.clone();
+    let stack_back = stack.downgrade();
     back_btn.connect_clicked(move |_| {
-        stack_back.set_visible_child_name("main");
+        if let Some(st) = stack_back.upgrade() {
+            st.set_transition_type(StackTransitionType::SlideLeftRight);
+            st.set_visible_child_name("main");
+        }
     });
     container.append(&back_btn);
 
@@ -2283,58 +2375,76 @@ fn build_create_new_submenu(
 
     let folder_btn = create_menu_button("Carpeta", false);
     {
-        let p_c = popover.clone();
-        let f_c = fixed.clone();
+        let p_c = popover.downgrade();
+        let f_c = fixed.downgrade();
         let d_c = desktop_dir.clone();
         let cfg_c = config.clone();
         let pos_c = icon_positions.clone();
         let sel_c = selected_paths.clone();
         let foc_c = focused_path.clone();
+        let rec_c = recently_dropped_paths.clone();
+        let ins_c = insert_single_icon.clone();
         let trig_c = trigger_refresh.clone();
+        let click_c = click_pos.clone();
         folder_btn.connect_clicked(move |_| {
-            p_c.popdown();
-            create_desktop_item_and_edit(
-                &f_c,
-                &d_c,
-                desktop_size,
-                &cfg_c,
-                &pos_c,
-                &sel_c,
-                &foc_c,
-                &trig_c,
-                click_pos,
-                top_margin,
-                true,
-            );
+            if let Some(pop) = p_c.upgrade() {
+                pop.popdown();
+            }
+            if let Some(fixed_w) = f_c.upgrade() {
+                create_desktop_item_and_edit(
+                    &fixed_w,
+                    &d_c,
+                    desktop_size,
+                    &cfg_c,
+                    &pos_c,
+                    &sel_c,
+                    &foc_c,
+                    &rec_c,
+                    &ins_c,
+                    &trig_c,
+                    click_c.get(),
+                    top_margin,
+                    true,
+                );
+            }
         });
     }
     container.append(&folder_btn);
 
     let doc_btn = create_menu_button("Documento de texto", false);
     {
-        let p_c = popover.clone();
-        let f_c = fixed.clone();
+        let p_c = popover.downgrade();
+        let f_c = fixed.downgrade();
         let d_c = desktop_dir;
         let cfg_c = config;
         let pos_c = icon_positions;
         let sel_c = selected_paths;
         let foc_c = focused_path;
+        let rec_c = recently_dropped_paths;
+        let ins_c = insert_single_icon;
         let trig_c = trigger_refresh;
+        let click_c = click_pos;
         doc_btn.connect_clicked(move |_| {
-            p_c.popdown();
-            create_desktop_item_and_edit(
-                &f_c,
-                &d_c,
-                desktop_size,
-                &cfg_c,
-                &pos_c,
-                &sel_c,
-                &foc_c,
-                &trig_c,
-                click_pos,
-                top_margin,
-                false,
-            );
+            if let Some(pop) = p_c.upgrade() {
+                pop.popdown();
+            }
+            if let Some(fixed_w) = f_c.upgrade() {
+                create_desktop_item_and_edit(
+                    &fixed_w,
+                    &d_c,
+                    desktop_size,
+                    &cfg_c,
+                    &pos_c,
+                    &sel_c,
+                    &foc_c,
+                    &rec_c,
+                    &ins_c,
+                    &trig_c,
+                    click_c.get(),
+                    top_margin,
+                    false,
+                );
+            }
         });
     }
     container.append(&doc_btn);
@@ -2650,9 +2760,12 @@ fn build_organize_submenu(
         .build();
 
     let back_btn = create_menu_button("← Volver", false);
-    let stack_back = stack.clone();
+    let stack_back = stack.downgrade();
     back_btn.connect_clicked(move |_| {
-        stack_back.set_visible_child_name("main");
+        if let Some(st) = stack_back.upgrade() {
+            st.set_transition_type(StackTransitionType::SlideLeftRight);
+            st.set_visible_child_name("main");
+        }
     });
     container.append(&back_btn);
 
@@ -2661,12 +2774,12 @@ fn build_organize_submenu(
     container.append(&sep);
 
     let by_name_btn = create_menu_button("Por Nombre (Carpetas primero)", false);
-    let p_c = popover.clone();
+    let p_c = popover.downgrade();
     let dir_c = desktop_dir.clone();
     let cfg_c = config.clone();
     let pos_c = icon_positions.clone();
     let trig_c = trigger_refresh.clone();
-    let fixed_c = fixed.clone();
+    let fixed_c = fixed.downgrade();
     by_name_btn.connect_clicked(move |_| {
         let cfg = cfg_c.borrow().clone();
         if cfg.use_stacks {
@@ -2679,9 +2792,9 @@ fn build_organize_submenu(
                 top_margin,
             );
             trig_c();
-        } else {
+        } else if let Some(fixed_w) = fixed_c.upgrade() {
             animate_desktop_organization(
-                &fixed_c,
+                &fixed_w,
                 &dir_c,
                 desktop_size,
                 &cfg,
@@ -2691,17 +2804,19 @@ fn build_organize_submenu(
                 top_margin,
             );
         }
-        p_c.popdown();
+        if let Some(pop) = p_c.upgrade() {
+            pop.popdown();
+        }
     });
     container.append(&by_name_btn);
 
     let by_kind_btn = create_menu_button("Por Tipo / Clase", false);
-    let p_c = popover.clone();
+    let p_c = popover.downgrade();
     let dir_c = desktop_dir.clone();
     let cfg_c = config.clone();
     let pos_c = icon_positions.clone();
     let trig_c = trigger_refresh.clone();
-    let fixed_c = fixed.clone();
+    let fixed_c = fixed.downgrade();
     by_kind_btn.connect_clicked(move |_| {
         let cfg = cfg_c.borrow().clone();
         if cfg.use_stacks {
@@ -2714,9 +2829,9 @@ fn build_organize_submenu(
                 top_margin,
             );
             trig_c();
-        } else {
+        } else if let Some(fixed_w) = fixed_c.upgrade() {
             animate_desktop_organization(
-                &fixed_c,
+                &fixed_w,
                 &dir_c,
                 desktop_size,
                 &cfg,
@@ -2726,17 +2841,19 @@ fn build_organize_submenu(
                 top_margin,
             );
         }
-        p_c.popdown();
+        if let Some(pop) = p_c.upgrade() {
+            pop.popdown();
+        }
     });
     container.append(&by_kind_btn);
 
     let by_date_btn = create_menu_button("Por Fecha de modificación", false);
-    let p_c = popover.clone();
+    let p_c = popover.downgrade();
     let dir_c = desktop_dir;
     let cfg_c = config;
     let pos_c = icon_positions;
     let trig_c = trigger_refresh;
-    let fixed_c = fixed.clone();
+    let fixed_c = fixed.downgrade();
     by_date_btn.connect_clicked(move |_| {
         let cfg = cfg_c.borrow().clone();
         if cfg.use_stacks {
@@ -2749,9 +2866,9 @@ fn build_organize_submenu(
                 top_margin,
             );
             trig_c();
-        } else {
+        } else if let Some(fixed_w) = fixed_c.upgrade() {
             animate_desktop_organization(
-                &fixed_c,
+                &fixed_w,
                 &dir_c,
                 desktop_size,
                 &cfg,
@@ -2761,7 +2878,9 @@ fn build_organize_submenu(
                 top_margin,
             );
         }
-        p_c.popdown();
+        if let Some(pop) = p_c.upgrade() {
+            pop.popdown();
+        }
     });
     container.append(&by_date_btn);
 
@@ -2865,6 +2984,7 @@ fn build_desktop_item_data(path: &Path) -> Option<DesktopItemData> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn refresh_desktop_icons(
     fixed: &Fixed,
     desktop_dir: &Path,
@@ -2877,6 +2997,7 @@ fn refresh_desktop_icons(
     focused_path: &Rc<RefCell<Option<PathBuf>>>,
     expanded_stacks: &Rc<RefCell<HashSet<StackCategory>>>,
     recently_dropped_paths: &Rc<RefCell<HashSet<PathBuf>>>,
+    icon_context_menu: &Rc<DesktopIconContextMenu>,
     top_margin: f64,
 ) {
     let mut child = fixed.first_child();
@@ -3011,6 +3132,7 @@ fn refresh_desktop_icons(
             let foc_path_refresh = focused_path.clone();
 
             let rec_refresh = recently_dropped_paths.clone();
+            let menu_refresh = icon_context_menu.clone();
 
             click.connect_pressed(move |_, _, _, _| {
                 let mut exp = expanded_ref.borrow_mut();
@@ -3033,6 +3155,7 @@ fn refresh_desktop_icons(
                     &foc_path_refresh,
                     &expanded_ref,
                     &rec_refresh,
+                    &menu_refresh,
                     top_margin,
                 );
             });
@@ -3056,6 +3179,7 @@ fn refresh_desktop_icons(
                         selected_paths,
                         focused_path,
                         recently_dropped_paths,
+                        icon_context_menu,
                         top_margin,
                     );
                     slot_index += 1;
@@ -3080,6 +3204,7 @@ fn refresh_desktop_icons(
                 selected_paths,
                 focused_path,
                 recently_dropped_paths,
+                icon_context_menu,
                 top_margin,
             );
         }
@@ -3165,7 +3290,7 @@ fn attach_squircle_menu_hover(btn: &Button) {
         }
         let _ = cr.save();
         squircle_path(cr, width, height, 14.0);
-        let (red, green, blue) = malus_de_common::config::load_accent_color();
+        let (red, green, blue) = cached_accent_color();
         if active {
             cr.set_source_rgba(red * 0.78, green * 0.78, blue * 0.78, 0.86);
         } else {
@@ -3185,6 +3310,28 @@ fn attach_squircle_menu_hover(btn: &Button) {
     overlay.add_overlay(&inner);
     overlay.set_measure_overlay(&inner, true);
     btn.set_child(Some(&overlay));
+}
+
+fn set_menu_button_label(btn: &Button, text: &str) {
+    fn update_label_recursive(widget: &gtk4::Widget, text: &str) -> bool {
+        if let Some(lbl) = widget.downcast_ref::<Label>() {
+            lbl.set_label(text);
+            return true;
+        }
+        let mut child = widget.first_child();
+        while let Some(c) = child {
+            child = c.next_sibling();
+            if update_label_recursive(&c, text) {
+                return true;
+            }
+        }
+        false
+    }
+    if let Some(child) = btn.child() {
+        let _ = update_label_recursive(&child, text);
+    } else {
+        btn.set_label(text);
+    }
 }
 
 fn create_menu_button(label: &str, destructive: bool) -> Button {
@@ -3209,6 +3356,7 @@ fn create_menu_button(label: &str, destructive: bool) -> Button {
     btn
 }
 
+#[cfg(test)]
 fn resolve_desktop_icon_paintable(
     path: &Path,
     content_type: Option<&str>,
@@ -3425,7 +3573,258 @@ fn build_single_desktop_drag_paintable(widget: &GtkBox) -> gtk4::gdk::Paintable 
         .unwrap_or_else(|| wp.upcast())
 }
 
-#[allow(unused_variables)]
+/// Menú contextual reutilizable compartido por todos los iconos del escritorio.
+/// Evita crear un `Popover` + 9 botones + 9 `DrawingArea` por cada archivo y rompe
+/// todos los ciclos de referencia mediante `WeakRef`.
+struct DesktopIconContextMenu {
+    popover: Popover,
+    paste_into_button: Button,
+    target: Rc<RefCell<Option<(PathBuf, glib::WeakRef<GtkBox>)>>>,
+}
+
+impl DesktopIconContextMenu {
+    fn new(
+        parent_overlay: &Overlay,
+        fixed: &Fixed,
+        selected_paths: &Rc<RefCell<HashSet<PathBuf>>>,
+    ) -> Rc<Self> {
+        let popover = Popover::builder()
+            .has_arrow(false)
+            .autohide(true)
+            .position(gtk4::PositionType::Bottom)
+            .css_classes(["desktop-popover-menu"])
+            .build();
+
+        let target: Rc<RefCell<Option<(PathBuf, glib::WeakRef<GtkBox>)>>> =
+            Rc::new(RefCell::new(None));
+
+        let menu = GtkBox::builder()
+            .orientation(Orientation::Vertical)
+            .spacing(2)
+            .css_classes(["desktop-context-menu"])
+            .build();
+
+        // 1. Abrir
+        let open_button = create_menu_button("Abrir", false);
+        {
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            open_button.connect_clicked(move |_| {
+                if let Some((path, _)) = target_c.borrow().as_ref() {
+                    launch_file(&gio::File::for_path(path));
+                }
+                if let Some(pop) = pop_w.upgrade() {
+                    pop.popdown();
+                }
+            });
+        }
+        menu.append(&open_button);
+
+        // 2. Vista rápida (Quick Look)
+        let ql_button = create_menu_button("Vista rápida (Espacio)", false);
+        {
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            ql_button.connect_clicked(move |_| {
+                if let Some((path, _)) = target_c.borrow().as_ref() {
+                    launch_quick_look(path);
+                }
+                if let Some(pop) = pop_w.upgrade() {
+                    pop.popdown();
+                }
+            });
+        }
+        menu.append(&ql_button);
+
+        // 3. Mostrar en gestor de archivos
+        let reveal_button = create_menu_button("Mostrar en el gestor de archivos", false);
+        {
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            reveal_button.connect_clicked(move |_| {
+                if let Some((path, _)) = target_c.borrow().as_ref() {
+                    let file = gio::File::for_path(path);
+                    let parent = file.parent().unwrap_or(file);
+                    launch_file(&parent);
+                }
+                if let Some(pop) = pop_w.upgrade() {
+                    pop.popdown();
+                }
+            });
+        }
+        menu.append(&reveal_button);
+
+        let sep1 = GtkBox::new(Orientation::Horizontal, 0);
+        sep1.add_css_class("desktop-context-separator");
+        menu.append(&sep1);
+
+        // 4. Renombrar
+        let rename_button = create_menu_button("Renombrar...", false);
+        {
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            rename_button.connect_clicked(move |_| {
+                if let Some(pop) = pop_w.upgrade() {
+                    pop.popdown();
+                }
+                let maybe_target = target_c.borrow().clone();
+                if let Some((path, item_w)) = maybe_target {
+                    if let Some(item_box) = item_w.upgrade() {
+                        show_rename_dialog(&item_box, path);
+                    }
+                }
+            });
+        }
+        menu.append(&rename_button);
+
+        // 5. Duplicar
+        let dup_button = create_menu_button("Duplicar", false);
+        {
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            dup_button.connect_clicked(move |_| {
+                if let Some((path, _)) = target_c.borrow().as_ref() {
+                    duplicate_file(path);
+                }
+                if let Some(pop) = pop_w.upgrade() {
+                    pop.popdown();
+                }
+            });
+        }
+        menu.append(&dup_button);
+
+        // 5b. Copiar / Cortar / Pegar en carpeta
+        let copy_button = create_menu_button("Copiar", false);
+        {
+            let target_c = target.clone();
+            let sel_copy = selected_paths.clone();
+            let fixed_w = fixed.downgrade();
+            let pop_w = popover.downgrade();
+            copy_button.connect_clicked(move |_| {
+                if let Some((copy_path, _)) = target_c.borrow().as_ref().cloned() {
+                    let sel = sel_copy.borrow();
+                    let paths = if sel.contains(&copy_path) && !sel.is_empty() {
+                        sel.iter().cloned().collect()
+                    } else {
+                        vec![copy_path]
+                    };
+                    drop(sel);
+                    set_desktop_clipboard(DesktopClipboardAction::Copy, paths);
+                    if let Some(f) = fixed_w.upgrade() {
+                        sync_desktop_cut_states(&f);
+                    }
+                }
+                if let Some(pop) = pop_w.upgrade() {
+                    pop.popdown();
+                }
+            });
+        }
+        menu.append(&copy_button);
+
+        let cut_button = create_menu_button("Cortar", false);
+        {
+            let target_c = target.clone();
+            let sel_cut = selected_paths.clone();
+            let fixed_w = fixed.downgrade();
+            let pop_w = popover.downgrade();
+            cut_button.connect_clicked(move |_| {
+                if let Some((cut_path, _)) = target_c.borrow().as_ref().cloned() {
+                    let sel = sel_cut.borrow();
+                    let paths = if sel.contains(&cut_path) && !sel.is_empty() {
+                        sel.iter().cloned().collect()
+                    } else {
+                        vec![cut_path]
+                    };
+                    drop(sel);
+                    set_desktop_clipboard(DesktopClipboardAction::Cut, paths);
+                    if let Some(f) = fixed_w.upgrade() {
+                        sync_desktop_cut_states(&f);
+                    }
+                }
+                if let Some(pop) = pop_w.upgrade() {
+                    pop.popdown();
+                }
+            });
+        }
+        menu.append(&cut_button);
+
+        let paste_into_button = create_menu_button("Pegar en carpeta", false);
+        paste_into_button.set_visible(false);
+        {
+            let target_c = target.clone();
+            let fixed_w = fixed.downgrade();
+            let pop_w = popover.downgrade();
+            paste_into_button.connect_clicked(move |_| {
+                if let Some(pop) = pop_w.upgrade() {
+                    pop.popdown();
+                }
+                if let Some((paste_dir, _)) = target_c.borrow().as_ref().cloned() {
+                    if paste_dir.is_dir() {
+                        let f_done = fixed_w.clone();
+                        paste_from_desktop_clipboard_async(paste_dir, move |_pasted| {
+                            if let Some(f) = f_done.upgrade() {
+                                sync_desktop_cut_states(&f);
+                            }
+                        });
+                    }
+                }
+            });
+        }
+        menu.append(&paste_into_button);
+
+        let sep2 = GtkBox::new(Orientation::Horizontal, 0);
+        sep2.add_css_class("desktop-context-separator");
+        menu.append(&sep2);
+
+        // 6. Mover a la papelera
+        let trash_button = create_menu_button("Mover a la papelera", true);
+        {
+            let target_c = target.clone();
+            let pop_w = popover.downgrade();
+            trash_button.connect_clicked(move |_| {
+                if let Some((path, _)) = target_c.borrow().as_ref() {
+                    trash_file(path);
+                }
+                if let Some(pop) = pop_w.upgrade() {
+                    pop.popdown();
+                }
+            });
+        }
+        menu.append(&trash_button);
+
+        popover.set_child(Some(&menu));
+        popover.set_parent(parent_overlay);
+        register_wallpaper_popover(&popover);
+
+        let pop_unroot = popover.downgrade();
+        parent_overlay.connect_unrealize(move |_| {
+            if let Some(pop) = pop_unroot.upgrade() {
+                pop.popdown();
+                if pop.parent().is_some() {
+                    pop.unparent();
+                }
+            }
+        });
+
+        Rc::new(Self {
+            popover,
+            paste_into_button,
+            target,
+        })
+    }
+
+    fn show_for(&self, fixed: &Fixed, item_box: &GtkBox, path: &Path, local_x: f64, local_y: f64) {
+        *self.target.borrow_mut() = Some((path.to_path_buf(), item_box.downgrade()));
+        self.paste_into_button
+            .set_visible(path.is_dir() && has_desktop_clipboard_files());
+        let (ix, iy) = fixed.child_position(item_box);
+        let rect = gtk4::gdk::Rectangle::new((ix + local_x) as i32, (iy + local_y) as i32, 1, 1);
+        self.popover.set_pointing_to(Some(&rect));
+        self.popover.popup();
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn render_single_icon(
     fixed: &Fixed,
     index: usize,
@@ -3441,6 +3840,7 @@ fn render_single_icon(
     selected_paths: &Rc<RefCell<HashSet<PathBuf>>>,
     focused_path: &Rc<RefCell<Option<PathBuf>>>,
     recently_dropped_paths: &Rc<RefCell<HashSet<PathBuf>>>,
+    icon_context_menu: &Rc<DesktopIconContextMenu>,
     top_margin: f64,
 ) {
     let path = item.path;
@@ -3448,13 +3848,6 @@ fn render_single_icon(
     let display_name = item.display_name;
     let icon = item.icon;
     let content_type = item.content_type;
-
-    let icon_paintable = resolve_desktop_icon_paintable(
-        &path,
-        content_type.as_deref(),
-        icon.as_ref(),
-        metrics.icon_size,
-    );
 
     let thumbnail = content_type
         .as_deref()
@@ -3565,8 +3958,8 @@ fn render_single_icon(
     let path_click = path.clone();
     let sel_paths_click = selected_paths.clone();
     let foc_path_click = focused_path.clone();
-    let drag_fixed_press = fixed.clone();
-    let drag_item_press = item_box.clone();
+    let drag_fixed_press = fixed.downgrade();
+    let drag_item_press = item_box.downgrade();
 
     click.connect_pressed(move |gesture, presses, _click_x, _click_y| {
         if presses == 2 {
@@ -3574,6 +3967,9 @@ fn render_single_icon(
             launch_file(&open_file);
             return;
         }
+        let Some(item_w) = drag_item_press.upgrade() else {
+            return;
+        };
 
         let is_ctrl = gesture
             .current_event_state()
@@ -3583,210 +3979,83 @@ fn render_single_icon(
         if is_ctrl {
             if sel.contains(&path_click) {
                 sel.remove(&path_click);
-                set_desktop_icon_selected(&drag_item_press, false);
+                set_desktop_icon_selected(&item_w, false);
             } else {
                 sel.insert(path_click.clone());
-                set_desktop_icon_selected(&drag_item_press, true);
+                set_desktop_icon_selected(&item_w, true);
             }
         } else if !sel.contains(&path_click) {
             // Deseleccionar hermanos si este elemento no estaba seleccionado
-            let mut sibling = drag_fixed_press.first_child();
-            while let Some(child) = sibling {
-                sibling = child.next_sibling();
-                set_desktop_icon_selected(&child, false);
+            if let Some(fixed_w) = drag_fixed_press.upgrade() {
+                let mut sibling = fixed_w.first_child();
+                while let Some(child) = sibling {
+                    sibling = child.next_sibling();
+                    set_desktop_icon_selected(&child, false);
+                }
             }
             sel.clear();
             sel.insert(path_click.clone());
-            set_desktop_icon_selected(&drag_item_press, true);
+            set_desktop_icon_selected(&item_w, true);
         }
         *foc_path_click.borrow_mut() = Some(path_click.clone());
     });
     item_box.add_controller(click);
 
-    // Menú contextual de archivo estilo macOS (Popover dedicado)
-    let popover = Popover::builder()
-        .has_arrow(false)
-        .autohide(true)
-        .position(gtk4::PositionType::Bottom)
-        .css_classes(["desktop-popover-menu"])
-        .build();
-
-    let menu = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .spacing(2)
-        .css_classes(["desktop-context-menu"])
-        .build();
-
-    // 1. Abrir
-    let open_button = create_menu_button("Abrir", false);
-    let open_file_btn = file.clone();
-    let popover_c = popover.clone();
-    open_button.connect_clicked(move |_| {
-        launch_file(&open_file_btn);
-        popover_c.popdown();
-    });
-    menu.append(&open_button);
-
-    // 2. Vista rápida (Quick Look)
-    let ql_button = create_menu_button("Vista rápida (Espacio)", false);
-    let ql_path = path.clone();
-    let popover_c = popover.clone();
-    ql_button.connect_clicked(move |_| {
-        launch_quick_look(&ql_path);
-        popover_c.popdown();
-    });
-    menu.append(&ql_button);
-
-    // 3. Mostrar en gestor de archivos
-    let reveal_button = create_menu_button("Mostrar en el gestor de archivos", false);
-    let reveal_file = file.clone();
-    let popover_c = popover.clone();
-    reveal_button.connect_clicked(move |_| {
-        let parent = reveal_file.parent().unwrap_or_else(|| reveal_file.clone());
-        launch_file(&parent);
-        popover_c.popdown();
-    });
-    menu.append(&reveal_button);
-
-    let sep1 = GtkBox::new(Orientation::Horizontal, 0);
-    sep1.add_css_class("desktop-context-separator");
-    menu.append(&sep1);
-
-    // 4. Renombrar
-    let rename_button = create_menu_button("Renombrar...", false);
-    let rename_path = path.clone();
-    let rename_item = item_box.clone();
-    let popover_c = popover.clone();
-    rename_button.connect_clicked(move |_| {
-        popover_c.popdown();
-        show_rename_dialog(&rename_item, rename_path.clone());
-    });
-    menu.append(&rename_button);
-
-    // 5. Duplicar
-    let dup_button = create_menu_button("Duplicar", false);
-    let dup_path = path.clone();
-    let popover_c = popover.clone();
-    dup_button.connect_clicked(move |_| {
-        duplicate_file(&dup_path);
-        popover_c.popdown();
-    });
-    menu.append(&dup_button);
-
-    // 5b. Copiar / Cortar / Pegar en carpeta
-    let copy_button = create_menu_button("Copiar", false);
-    {
-        let copy_path = path.clone();
-        let sel_copy = selected_paths.clone();
-        let fixed_copy = fixed.clone();
-        let popover_c = popover.clone();
-        copy_button.connect_clicked(move |_| {
-            let sel = sel_copy.borrow();
-            let paths = if sel.contains(&copy_path) && !sel.is_empty() {
-                sel.iter().cloned().collect()
-            } else {
-                vec![copy_path.clone()]
-            };
-            drop(sel);
-            set_desktop_clipboard(DesktopClipboardAction::Copy, paths);
-            sync_desktop_cut_states(&fixed_copy);
-            popover_c.popdown();
-        });
-    }
-    menu.append(&copy_button);
-
-    let cut_button = create_menu_button("Cortar", false);
-    {
-        let cut_path = path.clone();
-        let sel_cut = selected_paths.clone();
-        let fixed_cut = fixed.clone();
-        let popover_c = popover.clone();
-        cut_button.connect_clicked(move |_| {
-            let sel = sel_cut.borrow();
-            let paths = if sel.contains(&cut_path) && !sel.is_empty() {
-                sel.iter().cloned().collect()
-            } else {
-                vec![cut_path.clone()]
-            };
-            drop(sel);
-            set_desktop_clipboard(DesktopClipboardAction::Cut, paths);
-            sync_desktop_cut_states(&fixed_cut);
-            popover_c.popdown();
-        });
-    }
-    menu.append(&cut_button);
-
-    let is_dir_item = path.is_dir();
-    let paste_into_button = create_menu_button("Pegar en carpeta", false);
-    paste_into_button.set_visible(false);
-    if is_dir_item {
-        let paste_dir = path.clone();
-        let fixed_paste = fixed.clone();
-        let popover_c = popover.clone();
-        paste_into_button.connect_clicked(move |_| {
-            let fixed_done = fixed_paste.clone();
-            popover_c.popdown();
-            paste_from_desktop_clipboard_async(paste_dir.clone(), move |_pasted| {
-                sync_desktop_cut_states(&fixed_done);
-            });
-        });
-        menu.append(&paste_into_button);
-    }
-
-    let sep2 = GtkBox::new(Orientation::Horizontal, 0);
-    sep2.add_css_class("desktop-context-separator");
-    menu.append(&sep2);
-
-    // 6. Mover a la papelera
-    let trash_button = create_menu_button("Mover a la papelera", true);
-    let trash_path = path.clone();
-    let popover_c = popover.clone();
-    trash_button.connect_clicked(move |_| {
-        trash_file(&trash_path);
-        popover_c.popdown();
-    });
-    menu.append(&trash_button);
-
-    popover.set_child(Some(&menu));
-    popover.set_parent(&item_box);
-    register_wallpaper_popover(&popover);
-    let p_unroot = popover.clone();
-    item_box.connect_unrealize(move |_| {
-        p_unroot.unparent();
-    });
-
+    // Menú contextual de archivo compartido (sin asignar Popover por cada icono)
     let context_click = GestureClick::new();
     context_click.set_button(3);
-    let p_click = popover.clone();
-    let paste_btn_vis = paste_into_button.clone();
-    context_click.connect_pressed(move |gesture, _, x, y| {
-        gesture.set_state(gtk4::EventSequenceState::Claimed);
-        if is_dir_item {
-            paste_btn_vis.set_visible(has_desktop_clipboard_files());
-        }
-        let rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
-        p_click.set_pointing_to(Some(&rect));
-        p_click.popup();
-    });
+    {
+        let menu_c = icon_context_menu.clone();
+        let fixed_w = fixed.downgrade();
+        let item_w = item_box.downgrade();
+        let path_ctx = path.clone();
+        let sel_ctx = selected_paths.clone();
+        let foc_ctx = focused_path.clone();
+        context_click.connect_pressed(move |gesture, _, x, y| {
+            gesture.set_state(gtk4::EventSequenceState::Claimed);
+            let (Some(fixed_ref), Some(item_ref)) = (fixed_w.upgrade(), item_w.upgrade()) else {
+                return;
+            };
+            {
+                let mut sel = sel_ctx.borrow_mut();
+                if !sel.contains(&path_ctx) {
+                    let mut sibling = fixed_ref.first_child();
+                    while let Some(child) = sibling {
+                        sibling = child.next_sibling();
+                        set_desktop_icon_selected(&child, false);
+                    }
+                    sel.clear();
+                    sel.insert(path_ctx.clone());
+                    set_desktop_icon_selected(&item_ref, true);
+                }
+            }
+            *foc_ctx.borrow_mut() = Some(path_ctx.clone());
+            menu_c.show_for(&fixed_ref, &item_ref, &path_ctx, x, y);
+        });
+    }
     item_box.add_controller(context_click);
 
     let path_drag = path.clone();
     let sel_drag = selected_paths.clone();
     let pos_drag = icon_positions.clone();
-    let fixed_prep = fixed.clone();
-    let item_box_prep = item_box.clone();
+    let fixed_prep = fixed.downgrade();
+    let item_box_prep = item_box.downgrade();
     let stored_click_prep = stored_click.clone();
     drag_source.connect_prepare(move |source, click_x, click_y| {
+        let (Some(fixed_ref), Some(item_ref)) = (fixed_prep.upgrade(), item_box_prep.upgrade())
+        else {
+            return None;
+        };
         let rounded_click = (click_x.round(), click_y.round());
         stored_click_prep.set(rounded_click);
-        set_desktop_icon_selected(&item_box_prep, true);
+        set_desktop_icon_selected(&item_ref, true);
 
         let sel = sel_drag.borrow();
         let pos_map = pos_drag.borrow();
         let (p0x, p0y) = pos_map
             .get(&path_drag)
             .copied()
-            .unwrap_or_else(|| fixed_prep.child_position(&item_box_prep));
+            .unwrap_or_else(|| fixed_ref.child_position(&item_ref));
         let cursor_desktop_x = p0x + rounded_click.0;
         let cursor_desktop_y = p0y + rounded_click.1;
 
@@ -3804,7 +4073,7 @@ fn render_single_icon(
             malus_de_common::write_drag_anchors(&anchors);
 
             let mut drag_widgets = Vec::new();
-            let mut sibling = fixed_prep.first_child();
+            let mut sibling = fixed_ref.first_child();
             while let Some(child) = sibling {
                 sibling = child.next_sibling();
                 if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
@@ -3813,7 +4082,7 @@ fn render_single_icon(
                         let pos = pos_map
                             .get(&p)
                             .copied()
-                            .unwrap_or_else(|| fixed_prep.child_position(&child));
+                            .unwrap_or_else(|| fixed_ref.child_position(&child));
                         drag_widgets.push((child, pos));
                     }
                 }
@@ -3825,7 +4094,7 @@ fn render_single_icon(
             ) {
                 source.set_icon(Some(&multi_paintable), hot_x, hot_y);
             } else {
-                let paintable = gtk4::WidgetPaintable::new(Some(&item_box_prep));
+                let paintable = gtk4::WidgetPaintable::new(Some(&item_ref));
                 source.set_icon(
                     Some(&paintable),
                     rounded_click.0 as i32,
@@ -3838,7 +4107,7 @@ fn render_single_icon(
                 .map(|p| gio::File::for_path(p))
                 .collect()
         } else {
-            let paintable = build_single_desktop_drag_paintable(&item_box_prep);
+            let paintable = build_single_desktop_drag_paintable(&item_ref);
             source.set_icon(
                 Some(&paintable),
                 rounded_click.0 as i32,
@@ -3851,8 +4120,8 @@ fn render_single_icon(
         Some(gtk4::gdk::ContentProvider::for_value(&file_list.to_value()))
     });
 
-    let item_box_drag = item_box.clone();
-    let fixed_drag = fixed.clone();
+    let item_box_drag = item_box.downgrade();
+    let fixed_drag = fixed.downgrade();
     let path_drag_begin = path.clone();
     let sel_drag_begin = selected_paths.clone();
     let act_drag_begin = active_icon_drag.clone();
@@ -3861,23 +4130,25 @@ fn render_single_icon(
         let (click_x, click_y) = stored_click_begin.get();
         let sel = sel_drag_begin.borrow();
         if sel.contains(&path_drag_begin) && sel.len() > 1 {
-            let mut sibling = fixed_drag.first_child();
-            while let Some(child) = sibling {
-                sibling = child.next_sibling();
-                if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
-                    if sel.contains(&PathBuf::from(p_str)) {
-                        child.add_css_class("desktop-icon-dragging");
+            if let Some(fixed_ref) = fixed_drag.upgrade() {
+                let mut sibling = fixed_ref.first_child();
+                while let Some(child) = sibling {
+                    sibling = child.next_sibling();
+                    if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
+                        if sel.contains(&PathBuf::from(p_str)) {
+                            child.add_css_class("desktop-icon-dragging");
+                        }
                     }
                 }
             }
-        } else {
-            item_box_drag.add_css_class("desktop-icon-dragging");
+        } else if let Some(item_ref) = item_box_drag.upgrade() {
+            item_ref.add_css_class("desktop-icon-dragging");
         }
         *act_drag_begin.borrow_mut() =
             Some((path_drag_begin.clone(), (0.0, 0.0), (click_x, click_y)));
     });
 
-    let fixed_drag_end = fixed.clone();
+    let fixed_drag_end = fixed.downgrade();
     let act_drag_end = active_icon_drag.clone();
     let icon_pos_drag_end = icon_positions.clone();
     let sel_drag_end = selected_paths.clone();
@@ -3885,18 +4156,21 @@ fn render_single_icon(
     let orig_pos = (x, y);
     drag_source.connect_drag_end(move |_, drag, _| {
         *act_drag_end.borrow_mut() = None;
+        let Some(fixed_ref) = fixed_drag_end.upgrade() else {
+            return;
+        };
         let is_move = drag.selected_action().contains(gtk4::gdk::DragAction::MOVE);
         let mut removed_moved_out = false;
-        let mut sibling = fixed_drag_end.first_child();
+        let mut sibling = fixed_ref.first_child();
         while let Some(child) = sibling {
             sibling = child.next_sibling();
-            let (cx, cy) = fixed_drag_end.child_position(&child);
+            let (cx, cy) = fixed_ref.child_position(&child);
             let is_dragging = child.has_css_class("desktop-icon-dragging") || cx < 0.0 || cy < 0.0;
             if is_dragging {
                 if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
                     let p = PathBuf::from(p_str);
                     if p.symlink_metadata().is_err() {
-                        fixed_drag_end.remove(&child);
+                        fixed_ref.remove(&child);
                         icon_pos_drag_end.borrow_mut().remove(&p);
                         sel_drag_end.borrow_mut().remove(&p);
                         removed_moved_out = true;
@@ -3910,7 +4184,7 @@ fn render_single_icon(
                             .cloned()
                             .unwrap_or(orig_pos);
                         if cx < 0.0 || cy < 0.0 {
-                            fixed_drag_end.move_(&child, target_pos.0, target_pos.1);
+                            fixed_ref.move_(&child, target_pos.0, target_pos.1);
                         }
                         child.remove_css_class("desktop-icon-dragging");
                     }
@@ -3924,8 +4198,11 @@ fn render_single_icon(
             let pos_check = icon_pos_drag_end.clone();
             let sel_check = sel_drag_end.clone();
             glib::timeout_add_local_once(std::time::Duration::from_millis(80), move || {
+                let Some(fixed_ref) = fixed_check.upgrade() else {
+                    return;
+                };
                 let mut changed = false;
-                let mut child_opt = fixed_check.first_child();
+                let mut child_opt = fixed_ref.first_child();
                 while let Some(child) = child_opt {
                     child_opt = child.next_sibling();
                     if child.has_css_class("desktop-rubberband") {
@@ -3934,16 +4211,16 @@ fn render_single_icon(
                     if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
                         let p = PathBuf::from(p_str);
                         if p.symlink_metadata().is_err() {
-                            fixed_check.remove(&child);
+                            fixed_ref.remove(&child);
                             pos_check.borrow_mut().remove(&p);
                             sel_check.borrow_mut().remove(&p);
                             changed = true;
                         } else {
-                            let (cx, cy) = fixed_check.child_position(&child);
+                            let (cx, cy) = fixed_ref.child_position(&child);
                             if cx < 0.0 || cy < 0.0 {
                                 let target_pos =
                                     pos_check.borrow().get(&p).cloned().unwrap_or(orig_pos);
-                                fixed_check.move_(&child, target_pos.0, target_pos.1);
+                                fixed_ref.move_(&child, target_pos.0, target_pos.1);
                             }
                             child.remove_css_class("desktop-icon-dragging");
                         }
@@ -3964,22 +4241,28 @@ fn render_single_icon(
             gtk4::gdk::FileList::static_type(),
             gtk4::gdk::DragAction::MOVE | gtk4::gdk::DragAction::COPY,
         );
-        let item_box_hover = item_box.clone();
+        let item_box_hover = item_box.downgrade();
         folder_drop.connect_enter(move |_, _, _| {
-            item_box_hover.add_css_class("folder-drop-hover");
+            if let Some(w) = item_box_hover.upgrade() {
+                w.add_css_class("folder-drop-hover");
+            }
             gtk4::gdk::DragAction::MOVE
         });
 
-        let item_box_leave = item_box.clone();
+        let item_box_leave = item_box.downgrade();
         folder_drop.connect_leave(move |_| {
-            item_box_leave.remove_css_class("folder-drop-hover");
+            if let Some(w) = item_box_leave.upgrade() {
+                w.remove_css_class("folder-drop-hover");
+            }
         });
 
-        let item_box_drop = item_box.clone();
+        let item_box_drop = item_box.downgrade();
         let target_dir = path.clone();
         let pos_map_drop = icon_positions.clone();
         folder_drop.connect_drop(move |_, value, _, _| {
-            item_box_drop.remove_css_class("folder-drop-hover");
+            if let Some(w) = item_box_drop.upgrade() {
+                w.remove_css_class("folder-drop-hover");
+            }
             if let Ok(file_list) = value.get::<gtk4::gdk::FileList>() {
                 let mut moved_any = false;
                 for src_file in file_list.files() {
@@ -4182,6 +4465,7 @@ fn populate_wallpaper_role(
             Rc::new(RefCell::new(HashSet::new()));
 
         let current_config = Rc::new(RefCell::new(DesktopIconsConfig::load()));
+        let icon_context_menu = DesktopIconContextMenu::new(&overlay, &icons, &selected_paths);
 
         let icons_c = icons.clone();
         let dir_c = desktop_dir.to_path_buf();
@@ -4193,6 +4477,7 @@ fn populate_wallpaper_role(
         let exp_stacks_c = expanded_stacks.clone();
         let rec_c = recently_dropped_paths.clone();
         let cfg_c = current_config.clone();
+        let menu_c = icon_context_menu.clone();
 
         let trigger_refresh: Rc<dyn Fn()> = Rc::new(move || {
             let cfg = cfg_c.borrow().clone();
@@ -4208,9 +4493,58 @@ fn populate_wallpaper_role(
                 &foc_path_c,
                 &exp_stacks_c,
                 &rec_c,
+                &menu_c,
                 top_margin,
             );
         });
+
+        let insert_single_icon: Rc<dyn Fn(&Path)> = {
+            let icons_ins = icons.clone();
+            let cfg_ins = current_config.clone();
+            let pos_ins = icon_positions.clone();
+            let int_ins = internal_drag_paths.clone();
+            let act_ins = active_icon_drag.clone();
+            let sel_ins = selected_paths.clone();
+            let foc_ins = focused_path.clone();
+            let rec_ins = recently_dropped_paths.clone();
+            let menu_ins = icon_context_menu.clone();
+            Rc::new(move |path: &Path| {
+                let cfg_snap = cfg_ins.borrow().clone();
+                if !cfg_snap.show_icons || cfg_snap.use_stacks {
+                    return;
+                }
+                if has_desktop_icon_widget(&icons_ins, path) {
+                    return;
+                }
+                let Some(item_data) = build_desktop_item_data(path) else {
+                    return;
+                };
+                let metrics = IconLayoutMetrics::from_config(&cfg_snap);
+                let rows = ((desktop_size.1 - (top_margin as i32) - 80).max(1)
+                    / metrics.cell_height())
+                .max(1) as usize;
+                let existing_count = pos_ins.borrow().len();
+                let mut pos_map = pos_ins.borrow_mut();
+                render_single_icon(
+                    &icons_ins,
+                    existing_count,
+                    rows,
+                    item_data,
+                    &metrics,
+                    &cfg_snap,
+                    desktop_size,
+                    &mut pos_map,
+                    &pos_ins,
+                    &int_ins,
+                    &act_ins,
+                    &sel_ins,
+                    &foc_ins,
+                    &rec_ins,
+                    &menu_ins,
+                    top_margin,
+                );
+            })
+        };
 
         trigger_refresh();
         watch_clipboard_for_desktop(&icons);
@@ -4392,8 +4726,7 @@ fn populate_wallpaper_role(
             if is_point_over_icon(&icons_bg_rel, x, y, &rb_check_rel) {
                 return;
             }
-            let dd_cfg = malus_de_common::config::DesktopDockConfig::load();
-            if dd_cfg.click_wallpaper_shows_desktop == 0 {
+            if cached_click_wallpaper_shows_desktop() == 0 {
                 let _ = malus_de_common::ipc::IpcClient::send_command(
                     malus_de_common::ipc::IpcMessage::ToggleShowDesktop,
                 );
@@ -4401,149 +4734,154 @@ fn populate_wallpaper_role(
         });
         overlay.add_controller(bg_click);
 
-        // Botón 3 en fondo de pantalla vacío: Menú contextual del escritorio
-        let bg_context = GestureClick::new();
-        bg_context.set_button(3);
-        let overlay_context = overlay.clone();
-        let icons_context = icons.clone();
-        let desktop_dir_menu = desktop_dir.to_path_buf();
-        let cfg_menu = current_config.clone();
-        let trigger_refresh_menu = trigger_refresh.clone();
-        let icon_pos_snap = icon_positions.clone();
-        let sel_paths_ctx = selected_paths.clone();
-        let foc_path_ctx = focused_path.clone();
-        let rb_check_ctx = rubberband.clone();
-
-        bg_context.connect_pressed(move |gesture, _, x, y| {
-            if is_point_over_icon(&icons_context, x, y, &rb_check_ctx) {
-                return;
-            }
-            gesture.set_state(gtk4::EventSequenceState::Claimed);
-            let popover = Popover::builder()
-                .has_arrow(false)
-                .autohide(true)
-                .css_classes(["desktop-popover-menu"])
-                .build();
-            popover.set_parent(&overlay_context);
-            register_wallpaper_popover(&popover);
-
-            let pointing_rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
-            popover.set_pointing_to(Some(&pointing_rect));
-
-            let stack = Stack::builder()
-                .transition_type(StackTransitionType::SlideLeftRight)
-                .transition_duration(120)
-                .interpolate_size(false)
-                .css_classes(["desktop-context-menu"])
-                .build();
-
-            let create_new_box = build_create_new_submenu(
-                &popover,
-                &stack,
-                &icons_context,
-                desktop_dir_menu.clone(),
-                desktop_size,
-                cfg_menu.clone(),
-                icon_pos_snap.clone(),
-                sel_paths_ctx.clone(),
-                foc_path_ctx.clone(),
-                trigger_refresh_menu.clone(),
-                (x, y),
-                top_margin,
-            );
-
-            let organize_box = build_organize_submenu(
-                &popover,
-                &stack,
-                &icons_context,
-                desktop_dir_menu.clone(),
-                desktop_size,
-                cfg_menu.clone(),
-                icon_pos_snap.clone(),
-                trigger_refresh_menu.clone(),
-                top_margin,
-            );
-
-            let menu = GtkBox::builder()
-                .orientation(Orientation::Vertical)
-                .spacing(2)
-                .css_classes(["desktop-context-menu"])
-                .build();
-
-            // 1. Crear nuevo ▸ (Carpeta / Documento de texto con edición inline inmediata)
-            let create_new_btn = create_menu_button("Crear nuevo ▸", false);
-            let stack_cn = stack.clone();
-            create_new_btn.connect_clicked(move |_| {
-                stack_cn.set_visible_child_name("create_new");
+        // Botón 3 en fondo de pantalla vacío: Menú contextual reutilizable (0 asignaciones por clic, 0 fugas)
+        let bg_click_pos = Rc::new(Cell::new((0.0_f64, 0.0_f64)));
+        let bg_popover = Popover::builder()
+            .has_arrow(false)
+            .autohide(true)
+            .css_classes(["desktop-popover-menu"])
+            .build();
+        bg_popover.set_parent(&overlay);
+        register_wallpaper_popover(&bg_popover);
+        {
+            let pop_unroot = bg_popover.downgrade();
+            overlay.connect_unrealize(move |_| {
+                if let Some(pop) = pop_unroot.upgrade() {
+                    pop.popdown();
+                    if pop.parent().is_some() {
+                        pop.unparent();
+                    }
+                }
             });
-            menu.append(&create_new_btn);
+        }
 
-            if has_desktop_clipboard_files() {
-                let paste_btn = create_menu_button("Pegar", false);
-                let popover_c = popover.clone();
-                let paste_dir = desktop_dir_menu.clone();
-                let pos_paste = icon_pos_snap.clone();
-                let trig_paste = trigger_refresh_menu.clone();
-                let icons_paste = icons_context.clone();
-                paste_btn.connect_clicked(move |_| {
-                    popover_c.popdown();
-                    let pos_map_done = pos_paste.clone();
-                    let trig_done = trig_paste.clone();
-                    let icons_done = icons_paste.clone();
-                    paste_from_desktop_clipboard_async(paste_dir.clone(), move |pasted| {
-                        if !pasted.is_empty() {
-                            {
-                                let mut pos_map = pos_map_done.borrow_mut();
-                                let base_y = y.max(top_margin);
-                                for (idx, p) in pasted.iter().enumerate() {
-                                    pos_map.insert(
-                                        p.clone(),
-                                        (x + (idx as f64) * 24.0, base_y + (idx as f64) * 24.0),
-                                    );
-                                }
-                                save_icon_positions(&pos_map);
+        let bg_stack = Stack::builder()
+            .transition_type(StackTransitionType::SlideLeftRight)
+            .transition_duration(120)
+            .interpolate_size(false)
+            .css_classes(["desktop-context-menu"])
+            .build();
+
+        let create_new_box = build_create_new_submenu(
+            &bg_popover,
+            &bg_stack,
+            &icons,
+            desktop_dir.to_path_buf(),
+            desktop_size,
+            current_config.clone(),
+            icon_positions.clone(),
+            selected_paths.clone(),
+            focused_path.clone(),
+            recently_dropped_paths.clone(),
+            insert_single_icon.clone(),
+            trigger_refresh.clone(),
+            bg_click_pos.clone(),
+            top_margin,
+        );
+
+        let organize_box = build_organize_submenu(
+            &bg_popover,
+            &bg_stack,
+            &icons,
+            desktop_dir.to_path_buf(),
+            desktop_size,
+            current_config.clone(),
+            icon_positions.clone(),
+            trigger_refresh.clone(),
+            top_margin,
+        );
+
+        let bg_menu = GtkBox::builder()
+            .orientation(Orientation::Vertical)
+            .spacing(2)
+            .css_classes(["desktop-context-menu"])
+            .build();
+
+        // 1. Crear nuevo ▸ (Carpeta / Documento de texto con edición inline inmediata)
+        let create_new_btn = create_menu_button("Crear nuevo ▸", false);
+        {
+            let stack_cn = bg_stack.downgrade();
+            create_new_btn.connect_clicked(move |_| {
+                if let Some(st) = stack_cn.upgrade() {
+                    st.set_transition_type(StackTransitionType::SlideLeftRight);
+                    st.set_visible_child_name("create_new");
+                }
+            });
+        }
+        bg_menu.append(&create_new_btn);
+
+        let paste_btn = create_menu_button("Pegar", false);
+        paste_btn.set_visible(false);
+        {
+            let popover_c = bg_popover.downgrade();
+            let paste_dir = desktop_dir.to_path_buf();
+            let pos_paste = icon_positions.clone();
+            let trig_paste = trigger_refresh.clone();
+            let icons_paste = icons.downgrade();
+            let click_paste = bg_click_pos.clone();
+            paste_btn.connect_clicked(move |_| {
+                if let Some(pop) = popover_c.upgrade() {
+                    pop.popdown();
+                }
+                let (x, y) = click_paste.get();
+                let pos_map_done = pos_paste.clone();
+                let trig_done = trig_paste.clone();
+                let icons_done = icons_paste.clone();
+                paste_from_desktop_clipboard_async(paste_dir.clone(), move |pasted| {
+                    if !pasted.is_empty() {
+                        {
+                            let mut pos_map = pos_map_done.borrow_mut();
+                            let base_y = y.max(top_margin);
+                            for (idx, p) in pasted.iter().enumerate() {
+                                pos_map.insert(
+                                    p.clone(),
+                                    (x + (idx as f64) * 24.0, base_y + (idx as f64) * 24.0),
+                                );
                             }
-                            trig_done();
+                            save_icon_positions(&pos_map);
                         }
-                        sync_desktop_cut_states(&icons_done);
-                    });
+                        trig_done();
+                    }
+                    if let Some(f) = icons_done.upgrade() {
+                        sync_desktop_cut_states(&f);
+                    }
                 });
-                menu.append(&paste_btn);
-            }
+            });
+        }
+        bg_menu.append(&paste_btn);
 
-            let sep1 = GtkBox::new(Orientation::Horizontal, 0);
-            sep1.add_css_class("desktop-context-separator");
-            menu.append(&sep1);
+        let sep1 = GtkBox::new(Orientation::Horizontal, 0);
+        sep1.add_css_class("desktop-context-separator");
+        bg_menu.append(&sep1);
 
-            // 2. Usar Pilas (macOS Stacks Toggle)
-            let is_stacks = cfg_menu.borrow().use_stacks;
-            let stacks_label = if is_stacks {
-                "✓ Usar Pilas"
-            } else {
-                "Usar Pilas"
-            };
-            let stacks_btn = create_menu_button(stacks_label, false);
-            let popover_c = popover.clone();
-            let cfg_c2 = cfg_menu.clone();
-            let trigger_c = trigger_refresh_menu.clone();
+        // 2. Usar Pilas (macOS Stacks Toggle)
+        let stacks_btn = create_menu_button("Usar Pilas", false);
+        {
+            let popover_c = bg_popover.downgrade();
+            let cfg_c2 = current_config.clone();
+            let trigger_c = trigger_refresh.clone();
             stacks_btn.connect_clicked(move |_| {
                 let mut c = cfg_c2.borrow_mut();
                 c.use_stacks = !c.use_stacks;
                 let _ = c.save();
                 drop(c);
                 trigger_c();
-                popover_c.popdown();
+                if let Some(pop) = popover_c.upgrade() {
+                    pop.popdown();
+                }
             });
-            menu.append(&stacks_btn);
+        }
+        bg_menu.append(&stacks_btn);
 
-            // 3. Organizar escritorio (Acción directa: limpia y anima el orden de carpetas y archivos en la cuadrícula)
-            let organize_btn = create_menu_button("Organizar escritorio", false);
-            let popover_c = popover.clone();
-            let d_dir_org = desktop_dir_menu.clone();
-            let cfg_org = cfg_menu.clone();
-            let pos_org = icon_pos_snap.clone();
-            let trigger_org = trigger_refresh_menu.clone();
-            let icons_org = icons_context.clone();
+        // 3. Organizar escritorio
+        let organize_btn = create_menu_button("Organizar escritorio", false);
+        {
+            let popover_c = bg_popover.downgrade();
+            let d_dir_org = desktop_dir.to_path_buf();
+            let cfg_org = current_config.clone();
+            let pos_org = icon_positions.clone();
+            let trigger_org = trigger_refresh.clone();
+            let icons_org = icons.downgrade();
             organize_btn.connect_clicked(move |_| {
                 let cfg = cfg_org.borrow().clone();
                 if cfg.use_stacks {
@@ -4556,9 +4894,9 @@ fn populate_wallpaper_role(
                         top_margin,
                     );
                     trigger_org();
-                } else {
+                } else if let Some(icons_w) = icons_org.upgrade() {
                     animate_desktop_organization(
-                        &icons_org,
+                        &icons_w,
                         &d_dir_org,
                         desktop_size,
                         &cfg,
@@ -4568,32 +4906,41 @@ fn populate_wallpaper_role(
                         top_margin,
                     );
                 }
-                popover_c.popdown();
+                if let Some(pop) = popover_c.upgrade() {
+                    pop.popdown();
+                }
             });
-            menu.append(&organize_btn);
+        }
+        bg_menu.append(&organize_btn);
 
-            // 4. Organizar por ▸ (Submenú animado con criterios de orden)
-            let organize_by_btn = create_menu_button("Organizar por ▸", false);
-            let stack_org = stack.clone();
+        // 4. Organizar por ▸ (Submenú animado con criterios de orden)
+        let organize_by_btn = create_menu_button("Organizar por ▸", false);
+        {
+            let stack_org = bg_stack.downgrade();
             organize_by_btn.connect_clicked(move |_| {
-                stack_org.set_visible_child_name("organize");
+                if let Some(st) = stack_org.upgrade() {
+                    st.set_transition_type(StackTransitionType::SlideLeftRight);
+                    st.set_visible_child_name("organize");
+                }
             });
-            menu.append(&organize_by_btn);
+        }
+        bg_menu.append(&organize_by_btn);
 
-            // 5. Alinear a la cuadrícula (Snap animado individual de cada elemento a la celda más cercana)
-            let snap_all_btn = create_menu_button("Alinear a la cuadrícula", false);
-            let popover_c = popover.clone();
-            let cfg_c3 = cfg_menu.clone();
-            let trigger_c = trigger_refresh_menu.clone();
-            let icon_pos_c2 = icon_pos_snap.clone();
-            let icons_w = icons_context.clone();
+        // 5. Alinear a la cuadrícula
+        let snap_all_btn = create_menu_button("Alinear a la cuadrícula", false);
+        {
+            let popover_c = bg_popover.downgrade();
+            let cfg_c3 = current_config.clone();
+            let trigger_c = trigger_refresh.clone();
+            let icon_pos_c2 = icon_positions.clone();
+            let icons_w = icons.downgrade();
             snap_all_btn.connect_clicked(move |_| {
                 let cfg = cfg_c3.borrow().clone();
                 if cfg.use_stacks {
                     trigger_c();
-                } else {
+                } else if let Some(f) = icons_w.upgrade() {
                     animate_desktop_snap_to_grid(
-                        &icons_w,
+                        &f,
                         desktop_size,
                         &cfg,
                         &icon_pos_c2,
@@ -4601,24 +4948,22 @@ fn populate_wallpaper_role(
                         top_margin,
                     );
                 }
-                popover_c.popdown();
+                if let Some(pop) = popover_c.upgrade() {
+                    pop.popdown();
+                }
             });
-            menu.append(&snap_all_btn);
+        }
+        bg_menu.append(&snap_all_btn);
 
-            // 6. Alineación automática (Toggle snap_to_grid + auto-organiza en cuadrícula de forma animada al activarse)
-            let is_snap = cfg_menu.borrow().snap_to_grid;
-            let snap_label = if is_snap {
-                "✓ Alineación automática"
-            } else {
-                "Alineación automática"
-            };
-            let snap_btn = create_menu_button(snap_label, false);
-            let popover_c = popover.clone();
-            let cfg_c4 = cfg_menu.clone();
-            let d_dir_snap = desktop_dir_menu.clone();
-            let pos_snap_c = icon_pos_snap.clone();
-            let trigger_c = trigger_refresh_menu.clone();
-            let icons_snap = icons_context.clone();
+        // 6. Alineación automática
+        let snap_btn = create_menu_button("Alineación automática", false);
+        {
+            let popover_c = bg_popover.downgrade();
+            let cfg_c4 = current_config.clone();
+            let d_dir_snap = desktop_dir.to_path_buf();
+            let pos_snap_c = icon_positions.clone();
+            let trigger_c = trigger_refresh.clone();
+            let icons_snap = icons.downgrade();
             snap_btn.connect_clicked(move |_| {
                 let mut c = cfg_c4.borrow_mut();
                 let will_snap = !c.snap_to_grid;
@@ -4637,9 +4982,9 @@ fn populate_wallpaper_role(
                             top_margin,
                         );
                         trigger_c();
-                    } else {
+                    } else if let Some(f) = icons_snap.upgrade() {
                         animate_desktop_organization(
-                            &icons_snap,
+                            &f,
                             &d_dir_snap,
                             desktop_size,
                             &cfg_clone,
@@ -4650,34 +4995,97 @@ fn populate_wallpaper_role(
                         );
                     }
                 }
-                popover_c.popdown();
+                if let Some(pop) = popover_c.upgrade() {
+                    pop.popdown();
+                }
             });
-            menu.append(&snap_btn);
+        }
+        bg_menu.append(&snap_btn);
 
-            let sep2 = GtkBox::new(Orientation::Horizontal, 0);
-            sep2.add_css_class("desktop-context-separator");
-            menu.append(&sep2);
+        let sep2 = GtkBox::new(Orientation::Horizontal, 0);
+        sep2.add_css_class("desktop-context-separator");
+        bg_menu.append(&sep2);
 
-            // 7. Cambiar fondo de pantalla...
-            let wp_btn = create_menu_button("Fondo de pantalla y Estilo...", false);
-            let popover_c = popover.clone();
+        // 7. Cambiar fondo de pantalla...
+        let wp_btn = create_menu_button("Fondo de pantalla y Estilo...", false);
+        {
+            let popover_c = bg_popover.downgrade();
             wp_btn.connect_clicked(move |_| {
                 let mut cmd = std::process::Command::new("malus-de-settings");
                 cmd.arg("--panel").arg("wallpaper");
                 malus_de_common::config::apply_isolated_environment(&mut cmd);
                 let _ = cmd.spawn();
-                popover_c.popdown();
+                if let Some(pop) = popover_c.upgrade() {
+                    pop.popdown();
+                }
             });
-            menu.append(&wp_btn);
+        }
+        bg_menu.append(&wp_btn);
 
-            stack.add_named(&menu, Some("main"));
-            stack.add_named(&organize_box, Some("organize"));
-            stack.add_named(&create_new_box, Some("create_new"));
-            stack.set_visible_child_name("main");
+        bg_stack.add_named(&bg_menu, Some("main"));
+        bg_stack.add_named(&organize_box, Some("organize"));
+        bg_stack.add_named(&create_new_box, Some("create_new"));
+        bg_stack.set_visible_child_name("main");
+        bg_popover.set_child(Some(&bg_stack));
 
-            popover.set_child(Some(&stack));
-            popover.connect_closed(|p| p.unparent());
-            popover.popup();
+        let bg_context = GestureClick::new();
+        bg_context.set_button(3);
+        let icons_context = icons.downgrade();
+        let cfg_menu = current_config.clone();
+        let rb_check_ctx = rubberband.downgrade();
+        let pop_ctx = bg_popover.downgrade();
+        let stack_ctx = bg_stack.downgrade();
+        let paste_btn_ctx = paste_btn.downgrade();
+        let stacks_btn_ctx = stacks_btn.downgrade();
+        let snap_btn_ctx = snap_btn.downgrade();
+        let click_pos_ctx = bg_click_pos;
+
+        bg_context.connect_pressed(move |gesture, _, x, y| {
+            if let (Some(icons_w), Some(rb_w)) = (icons_context.upgrade(), rb_check_ctx.upgrade()) {
+                if is_point_over_icon(&icons_w, x, y, &rb_w) {
+                    return;
+                }
+            }
+            gesture.set_state(gtk4::EventSequenceState::Claimed);
+            click_pos_ctx.set((x, y));
+
+            if let Some(pb) = paste_btn_ctx.upgrade() {
+                pb.set_visible(has_desktop_clipboard_files());
+            }
+            let (is_stacks, is_snap) = {
+                let c = cfg_menu.borrow();
+                (c.use_stacks, c.snap_to_grid)
+            };
+            if let Some(sb) = stacks_btn_ctx.upgrade() {
+                set_menu_button_label(
+                    &sb,
+                    if is_stacks {
+                        "✓ Usar Pilas"
+                    } else {
+                        "Usar Pilas"
+                    },
+                );
+            }
+            if let Some(sn) = snap_btn_ctx.upgrade() {
+                set_menu_button_label(
+                    &sn,
+                    if is_snap {
+                        "✓ Alineación automática"
+                    } else {
+                        "Alineación automática"
+                    },
+                );
+            }
+            if let Some(st) = stack_ctx.upgrade() {
+                st.set_transition_type(StackTransitionType::None);
+                st.set_visible_child_name("main");
+                st.set_transition_type(StackTransitionType::SlideLeftRight);
+            }
+            if let Some(pop) = pop_ctx.upgrade() {
+                let pointing_rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
+                pop.set_pointing_to(Some(&pointing_rect));
+                pop.popup();
+            }
         });
         overlay.add_controller(bg_context);
 
@@ -4932,6 +5340,7 @@ fn populate_wallpaper_role(
         let rec_drop = recently_dropped_paths.clone();
         let sel_drop = selected_paths.clone();
         let foc_drop = focused_path.clone();
+        let menu_drop = icon_context_menu.clone();
 
         drop_target.connect_drop(move |_, value, x, y| {
             let files = match value.get::<gtk4::gdk::FileList>() {
@@ -5121,6 +5530,7 @@ fn populate_wallpaper_role(
                                             &sel_drop,
                                             &foc_drop,
                                             &rec_drop,
+                                            &menu_drop,
                                             top_margin,
                                         );
                                     }
@@ -5170,6 +5580,7 @@ fn populate_wallpaper_role(
             let sc_rec = recently_dropped_paths.clone();
             let sc_sel = selected_paths.clone();
             let sc_foc = focused_path.clone();
+            let sc_menu = icon_context_menu.clone();
             *shortcut_handler.borrow_mut() = Some(Rc::new(move |desktop_file, drop_x, drop_y| {
                 let src_path = PathBuf::from(&desktop_file);
                 let Some(name) = src_path.file_name() else {
@@ -5257,6 +5668,7 @@ fn populate_wallpaper_role(
                                 &sc_sel,
                                 &sc_foc,
                                 &sc_rec,
+                                &sc_menu,
                                 top_margin,
                             );
                         }
@@ -5271,6 +5683,8 @@ fn populate_wallpaper_role(
         match desktop_file.monitor_directory(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE) {
             Ok(monitor) => {
                 let trigger_c = trigger_refresh.clone();
+                let insert_c = insert_single_icon.clone();
+                let cfg_mon = current_config.clone();
                 let icons_mon = icons.clone();
                 let rec_mon = recently_dropped_paths.clone();
                 let pos_mon = icon_positions.clone();
@@ -5310,6 +5724,14 @@ fn populate_wallpaper_role(
                                 if rec_mon.borrow_mut().remove(p)
                                     || has_desktop_icon_widget(&icons_mon, p)
                                 {
+                                    return;
+                                }
+                                let cfg_snap = cfg_mon.borrow().clone();
+                                if !cfg_snap.show_icons {
+                                    return;
+                                }
+                                if !cfg_snap.use_stacks && p.parent() == Some(desktop_dir_mon.as_path()) {
+                                    insert_c(p);
                                     return;
                                 }
                             }
@@ -5360,6 +5782,7 @@ fn populate_wallpaper_role(
                 Rc::new(RefCell::new(malus_de_common::config::load_folder_tint_hex()));
             let trigger_c = trigger_refresh.clone();
             app_monitor.connect_changed(move |_, _, _, _| {
+                refresh_cached_accent_color();
                 let next_hex = malus_de_common::config::load_folder_tint_hex();
                 if *last_hex.borrow() != next_hex {
                     *last_hex.borrow_mut() = next_hex;
@@ -5368,49 +5791,74 @@ fn populate_wallpaper_role(
             });
             desktop_monitors.borrow_mut().push(app_monitor);
         }
+
+        let dd_cfg_file = gio::File::for_path(malus_de_common::config::DesktopDockConfig::config_path());
+        if let Ok(dd_monitor) =
+            dd_cfg_file.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
+        {
+            dd_monitor.connect_changed(move |_, _, _, _| {
+                refresh_cached_desktop_dock_config();
+            });
+            desktop_monitors.borrow_mut().push(dd_monitor);
+        }
     } else {
-        // Monitor secundario: menú contextual básico en fondo de pantalla
-        let bg_context = GestureClick::new();
-        bg_context.set_button(3);
-        let overlay_context = overlay.clone();
+        // Monitor secundario: menú contextual reutilizable en fondo de pantalla (0 fugas)
+        let sec_popover = Popover::builder()
+            .has_arrow(false)
+            .autohide(true)
+            .css_classes(["desktop-popover-menu"])
+            .build();
+        sec_popover.set_parent(&overlay);
+        register_wallpaper_popover(&sec_popover);
+        {
+            let pop_unroot = sec_popover.downgrade();
+            overlay.connect_unrealize(move |_| {
+                if let Some(pop) = pop_unroot.upgrade() {
+                    pop.popdown();
+                    if pop.parent().is_some() {
+                        pop.unparent();
+                    }
+                }
+            });
+        }
 
-        bg_context.connect_pressed(move |gesture, _, x, y| {
-            gesture.set_state(gtk4::EventSequenceState::Claimed);
-            let popover = Popover::builder()
-                .has_arrow(false)
-                .autohide(true)
-                .css_classes(["desktop-popover-menu"])
-                .build();
-            popover.set_parent(&overlay_context);
-            register_wallpaper_popover(&popover);
+        let sec_menu = GtkBox::builder()
+            .orientation(Orientation::Vertical)
+            .spacing(1)
+            .margin_top(0)
+            .margin_bottom(0)
+            .margin_start(0)
+            .margin_end(0)
+            .css_classes(["desktop-context-menu"])
+            .build();
 
-            let pointing_rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
-            popover.set_pointing_to(Some(&pointing_rect));
-
-            let menu = GtkBox::builder()
-                .orientation(Orientation::Vertical)
-                .spacing(1)
-                .margin_top(0)
-                .margin_bottom(0)
-                .margin_start(0)
-                .margin_end(0)
-                .css_classes(["desktop-context-menu"])
-                .build();
-
-            let wp_btn = create_menu_button("Fondo de pantalla y Estilo...", false);
-            let popover_c = popover.clone();
+        let wp_btn = create_menu_button("Fondo de pantalla y Estilo...", false);
+        {
+            let popover_c = sec_popover.downgrade();
             wp_btn.connect_clicked(move |_| {
                 let mut cmd = std::process::Command::new("malus-de-settings");
                 cmd.arg("--panel").arg("wallpaper");
                 malus_de_common::config::apply_isolated_environment(&mut cmd);
                 let _ = cmd.spawn();
-                popover_c.popdown();
+                if let Some(pop) = popover_c.upgrade() {
+                    pop.popdown();
+                }
             });
-            menu.append(&wp_btn);
+        }
+        sec_menu.append(&wp_btn);
+        sec_popover.set_child(Some(&sec_menu));
 
-            popover.set_child(Some(&menu));
-            popover.connect_closed(|p| p.unparent());
-            popover.popup();
+        let bg_context = GestureClick::new();
+        bg_context.set_button(3);
+        let pop_sec = sec_popover.downgrade();
+
+        bg_context.connect_pressed(move |gesture, _, x, y| {
+            gesture.set_state(gtk4::EventSequenceState::Claimed);
+            if let Some(pop) = pop_sec.upgrade() {
+                let pointing_rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
+                pop.set_pointing_to(Some(&pointing_rect));
+                pop.popup();
+            }
         });
         overlay.add_controller(bg_context);
     }
@@ -5502,6 +5950,8 @@ fn main() -> Result<()> {
     app.connect_startup(move |_| {
         let initial_dark = malus_de_common::config::is_dark_mode_active();
         set_is_dark_mode(initial_dark);
+        refresh_cached_accent_color();
+        refresh_cached_desktop_dock_config();
 
         // 1. Escuchar mensajes IPC del compositor (ThemeChanged, ReloadWallpaperConfig, ReloadDisplaysConfig y accesos de Spotlight)
         let (tx, rx) = async_channel::unbounded::<malus_de_common::ipc::IpcMessage>();
@@ -5513,6 +5963,7 @@ fn main() -> Result<()> {
                 match msg {
                     malus_de_common::ipc::IpcMessage::ThemeChanged { is_dark, .. } => {
                         info!("🎨 [Wallpaper] IPC ThemeChanged recibido: is_dark={}", is_dark);
+                        refresh_cached_accent_color();
                         set_is_dark_mode(is_dark);
                         if let Some(ref refresh_bg) = *bg_refresh_rx.borrow() {
                             refresh_bg();
@@ -5526,7 +5977,11 @@ fn main() -> Result<()> {
                     }
                     malus_de_common::ipc::IpcMessage::LiquidGlassOpacityChanged { opacity } => {
                         info!("✨ [Wallpaper] IPC LiquidGlassOpacityChanged recibido: opacity={:.2}", opacity);
+                        refresh_cached_accent_color();
                         apply_wallpaper_liquid_glass_opacity(opacity);
+                    }
+                    malus_de_common::ipc::IpcMessage::ReloadDesktopDockConfig => {
+                        refresh_cached_desktop_dock_config();
                     }
                     malus_de_common::ipc::IpcMessage::CreateDesktopAppShortcut {
                         desktop_file,
@@ -6540,5 +6995,41 @@ mod squircle_thumb_tests {
         let loaded = super::load_cached_wallpaper_bytes(&cache_file).unwrap();
         assert_eq!(loaded, (4, 2, pixels));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shared_icon_context_menu_updates_labels_and_has_no_popover_cycle() {
+        if gtk4::init().is_err() {
+            return;
+        }
+        let btn = super::create_menu_button("Usar Pilas", false);
+        super::set_menu_button_label(&btn, "✓ Usar Pilas");
+        let overlay = btn
+            .child()
+            .and_then(|w| w.downcast::<gtk4::Overlay>().ok())
+            .expect("squircle overlay child");
+        let mut found = false;
+        let mut c = overlay.first_child();
+        while let Some(w) = c {
+            c = w.next_sibling();
+            if let Some(lbl) = w.downcast_ref::<gtk4::Label>() {
+                assert_eq!(lbl.label().as_str(), "✓ Usar Pilas");
+                found = true;
+            }
+        }
+        assert!(found);
+
+        let host_overlay = gtk4::Overlay::new();
+        let fixed = gtk4::Fixed::new();
+        let selected = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashSet::new()));
+        let menu = super::DesktopIconContextMenu::new(&host_overlay, &fixed, &selected);
+        let pop_weak = menu.popover.downgrade();
+        assert!(pop_weak.upgrade().is_some());
+        menu.popover.unparent();
+        drop(menu);
+        assert!(
+            pop_weak.upgrade().is_none(),
+            "El Popover del menú contextual de iconos quedó retenido por un ciclo de referencias"
+        );
     }
 }

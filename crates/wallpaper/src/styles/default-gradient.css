@@ -33,7 +33,6 @@ window.malus-wallpaper-window picture {
     border: 1px solid transparent;
     box-shadow: none;
     border-radius: 10px;
-    transition: background 120ms ease, border-color 120ms ease;
 }
 
 .desktop-icon:hover {

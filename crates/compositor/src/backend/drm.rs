@@ -471,6 +471,16 @@ struct DrmOutputSurface {
     >,
     window_redraw_shadow_blur:
         std::collections::HashMap<smithay::backend::renderer::element::Id, usize>,
+    popup_effect_ids: std::collections::HashMap<
+        smithay::backend::renderer::element::Id,
+        (
+            smithay::backend::renderer::element::Id,
+            smithay::backend::renderer::element::Id,
+            Rectangle<i32, Physical>,
+            smithay::backend::renderer::utils::CommitCounter,
+        ),
+    >,
+    last_popup_count: usize,
     last_dock_rect: Option<Rectangle<i32, Physical>>,
     dock_redraw_buffers: usize,
     full_damage_buffers: usize,
@@ -487,6 +497,38 @@ struct DrmOutputSurface {
     last_expose_revision: u64,
     last_workspace_revision: u64,
     hw_gamma_brightness_applied: bool,
+}
+
+fn popup_effect_ids_for(
+    popup_effect_ids: &mut std::collections::HashMap<
+        smithay::backend::renderer::element::Id,
+        (
+            smithay::backend::renderer::element::Id,
+            smithay::backend::renderer::element::Id,
+            Rectangle<i32, Physical>,
+            smithay::backend::renderer::utils::CommitCounter,
+        ),
+    >,
+    key: smithay::backend::renderer::element::Id,
+    rect: Rectangle<i32, Physical>,
+) -> (
+    smithay::backend::renderer::element::Id,
+    smithay::backend::renderer::element::Id,
+    smithay::backend::renderer::utils::CommitCounter,
+) {
+    let entry = popup_effect_ids.entry(key).or_insert_with(|| {
+        (
+            smithay::backend::renderer::element::Id::new(),
+            smithay::backend::renderer::element::Id::new(),
+            rect,
+            smithay::backend::renderer::utils::CommitCounter::default(),
+        )
+    });
+    if entry.2 != rect {
+        entry.2 = rect;
+        entry.3.increment();
+    }
+    (entry.0.clone(), entry.1.clone(), entry.3)
 }
 
 impl DrmOutputSurface {
@@ -1012,6 +1054,8 @@ fn create_drm_output_surface_for_connector(
         extra_damage_history: std::collections::VecDeque::with_capacity(4),
         last_window_geometries: std::collections::HashMap::new(),
         window_redraw_shadow_blur: std::collections::HashMap::new(),
+        popup_effect_ids: std::collections::HashMap::new(),
+        last_popup_count: 0,
         last_dock_rect: None,
         dock_redraw_buffers: if ENABLE_DAMAGE_TRACKING { 3 } else { 0 },
         full_damage_buffers: if ENABLE_DAMAGE_TRACKING { 3 } else { 1 },
@@ -4322,14 +4366,25 @@ pub fn run_drm() -> Result<()> {
                     }
                     let popup_corner_radius =
                         (super::POPUP_MENU_CORNER_RADIUS_LOGICAL * scale) as f32;
+                    let mut live_popup_keys = std::collections::HashSet::new();
                     for (popups, popup_rect) in &topbar_popups {
+                        let popup_key = popups
+                            .first()
+                            .map(|elem| elem.id().clone())
+                            .unwrap_or_else(smithay::backend::renderer::element::Id::new);
+                        live_popup_keys.insert(popup_key.clone());
+                        let (blur_id, shadow_id, effect_commit) = popup_effect_ids_for(
+                            &mut out_surface.popup_effect_ids,
+                            popup_key,
+                            *popup_rect,
+                        );
                         for elem in popups {
                             tracker_elements.push(MalusDrmElement::Wayland(elem));
                         }
                         if let Some(blur) = blur_pipeline.as_ref() {
                             let menu_blur = crate::blur::BlurRenderElement::for_popup(
-                                smithay::backend::renderer::element::Id::new(),
-                                smithay::backend::renderer::utils::CommitCounter::default(),
+                                blur_id,
+                                effect_commit,
                                 blur.clone(),
                                 *popup_rect,
                                 popup_corner_radius.round(),
@@ -4339,8 +4394,8 @@ pub fn run_drm() -> Result<()> {
                         }
                         if let Some(pipeline) = shadow_pipeline.as_ref() {
                             let menu_shadow = crate::shadow::MenuShadowRenderElement::new(
-                                smithay::backend::renderer::element::Id::new(),
-                                smithay::backend::renderer::utils::CommitCounter::default(),
+                                shadow_id,
+                                effect_commit,
                                 pipeline.clone(),
                                 *popup_rect,
                                 popup_corner_radius,
@@ -4351,13 +4406,23 @@ pub fn run_drm() -> Result<()> {
                     }
                     for (popups, popup_rect) in &dock_popups {
                         let blur_rect = super::dock_popover_blur_rect(*popup_rect, scale);
+                        let popup_key = popups
+                            .first()
+                            .map(|elem| elem.id().clone())
+                            .unwrap_or_else(smithay::backend::renderer::element::Id::new);
+                        live_popup_keys.insert(popup_key.clone());
+                        let (blur_id, shadow_id, effect_commit) = popup_effect_ids_for(
+                            &mut out_surface.popup_effect_ids,
+                            popup_key,
+                            *popup_rect,
+                        );
                         for elem in popups {
                             tracker_elements.push(MalusDrmElement::Wayland(elem));
                         }
                         if let Some(blur) = blur_pipeline.as_ref() {
                             let menu_blur = crate::blur::BlurRenderElement::for_popup(
-                                smithay::backend::renderer::element::Id::new(),
-                                smithay::backend::renderer::utils::CommitCounter::default(),
+                                blur_id,
+                                effect_commit,
                                 blur.clone(),
                                 blur_rect,
                                 popup_corner_radius.round(),
@@ -4367,8 +4432,8 @@ pub fn run_drm() -> Result<()> {
                         }
                         if let Some(pipeline) = shadow_pipeline.as_ref() {
                             let menu_shadow = crate::shadow::MenuShadowRenderElement::new(
-                                smithay::backend::renderer::element::Id::new(),
-                                smithay::backend::renderer::utils::CommitCounter::default(),
+                                shadow_id,
+                                effect_commit,
                                 pipeline.clone(),
                                 *popup_rect,
                                 popup_corner_radius,
@@ -4378,13 +4443,23 @@ pub fn run_drm() -> Result<()> {
                         }
                     }
                     for (popups, popup_rect) in &wallpaper_popups {
+                        let popup_key = popups
+                            .first()
+                            .map(|elem| elem.id().clone())
+                            .unwrap_or_else(smithay::backend::renderer::element::Id::new);
+                        live_popup_keys.insert(popup_key.clone());
+                        let (blur_id, shadow_id, effect_commit) = popup_effect_ids_for(
+                            &mut out_surface.popup_effect_ids,
+                            popup_key,
+                            *popup_rect,
+                        );
                         for elem in popups {
                             tracker_elements.push(MalusDrmElement::Wayland(elem));
                         }
                         if let Some(blur) = blur_pipeline.as_ref() {
                             let menu_blur = crate::blur::BlurRenderElement::for_popup(
-                                smithay::backend::renderer::element::Id::new(),
-                                smithay::backend::renderer::utils::CommitCounter::default(),
+                                blur_id,
+                                effect_commit,
                                 blur.clone(),
                                 *popup_rect,
                                 popup_corner_radius.round(),
@@ -4394,8 +4469,8 @@ pub fn run_drm() -> Result<()> {
                         }
                         if let Some(pipeline) = shadow_pipeline.as_ref() {
                             let menu_shadow = crate::shadow::MenuShadowRenderElement::new(
-                                smithay::backend::renderer::element::Id::new(),
-                                smithay::backend::renderer::utils::CommitCounter::default(),
+                                shadow_id,
+                                effect_commit,
                                 pipeline.clone(),
                                 *popup_rect,
                                 popup_corner_radius,
@@ -4404,6 +4479,9 @@ pub fn run_drm() -> Result<()> {
                             tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
                         }
                     }
+                    out_surface
+                        .popup_effect_ids
+                        .retain(|k, _| live_popup_keys.contains(k));
                     for elem in &upper_elements {
                         let dock_rect = dock_clip_roots
                             .iter()
@@ -4751,6 +4829,18 @@ pub fn run_drm() -> Result<()> {
                     .iter()
                     .any(|bh| bh.output_name == out_surface.output.name());
 
+                let current_popup_count = topbar_popups.len()
+                    + dock_popups.len()
+                    + wallpaper_popups.len()
+                    + state.active_popups.len();
+                let popup_count_changed = current_popup_count != out_surface.last_popup_count;
+                if popup_count_changed {
+                    out_surface.last_popup_count = current_popup_count;
+                    out_surface.pending_damage_buffers = out_surface
+                        .pending_damage_buffers
+                        .max(damage_buffers_per_event);
+                }
+
                 let has_active_effects = !active_genies.is_empty()
                     || black_hole_active_on_output
                     || !state.snap_transitions.is_empty()
@@ -4768,10 +4858,7 @@ pub fn run_drm() -> Result<()> {
                     || expose_just_closed
                     || expose_rev_changed
                     || workspace_rev_changed
-                    || !topbar_popups.is_empty()
-                    || !dock_popups.is_empty()
-                    || !wallpaper_popups.is_empty()
-                    || !state.active_popups.is_empty()
+                    || popup_count_changed
                     || out_surface.dock_redraw_buffers > 0
                     || out_surface.full_damage_buffers > 0;
 
