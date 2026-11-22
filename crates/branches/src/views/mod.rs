@@ -245,7 +245,7 @@ fn attach_cascading_submenu(
 
     let sub_pop = gtk4::Popover::builder()
         .has_arrow(false)
-        .autohide(true)
+        .autohide(false)
         .position(gtk4::PositionType::Right)
         .css_classes(["malus-popover-menu"])
         .build();

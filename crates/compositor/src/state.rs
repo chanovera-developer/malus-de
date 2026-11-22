@@ -2448,8 +2448,10 @@ impl MalusState {
     }
 
     pub fn dismiss_all_popups(&mut self) {
+        if let Some(mut grab) = self.popup_grab.take() {
+            let _ = grab.ungrab(smithay::desktop::PopupUngrabStrategy::All);
+        }
         if self.active_popups.is_empty() {
-            self.popup_grab = None;
             return;
         }
         tracing::info!("🧹 Descartando {} popups activos", self.active_popups.len());
@@ -2460,9 +2462,6 @@ impl MalusState {
             }
         }
         self.popups.cleanup();
-        // Los popups con grab acaban de cerrarse: el grab termina con ellos.
-        // El llamador (manejador de clic) se encarga de soltar los grabs de puntero/teclado.
-        self.popup_grab = None;
     }
 
     /// Libera grabs de popup (cuando el clic ocurre fuera de ellos) o grabs residuales antes de
@@ -2681,7 +2680,9 @@ impl MalusState {
         if !grab.has_ended() {
             return;
         }
-        self.popup_grab = None;
+        if let Some(mut g) = self.popup_grab.take() {
+            let _ = g.ungrab(smithay::desktop::PopupUngrabStrategy::All);
+        }
         if let Some(keyboard) = self.seat.get_keyboard() {
             let previous = grab.previous_serial().unwrap_or(grab.serial());
             if keyboard.is_grabbed()
@@ -6432,6 +6433,25 @@ impl XdgShellHandler for MalusState {
             tracing::warn!("⚠️ No se pudo resolver Seat desde WlSeat para popup grab");
             return;
         };
+
+        let parent_surface = surface.get_parent_surface();
+        if let Some(mut existing_grab) = self.popup_grab.clone() {
+            if parent_surface.as_ref() == Some(&root) {
+                let _ = existing_grab.ungrab(smithay::desktop::PopupUngrabStrategy::All);
+                self.popup_grab = None;
+            } else {
+                while existing_grab.current_grab().as_ref() != parent_surface.as_ref() {
+                    let before = existing_grab.current_grab();
+                    let _ = existing_grab.ungrab(smithay::desktop::PopupUngrabStrategy::Topmost);
+                    if existing_grab.current_grab() == before {
+                        let _ = existing_grab.ungrab(smithay::desktop::PopupUngrabStrategy::All);
+                        self.popup_grab = None;
+                        break;
+                    }
+                }
+            }
+        }
+        self.popups.cleanup();
 
         match self.popups.grab_popup::<Self>(root, kind, &seat, serial) {
             Ok(popup_grab) => {

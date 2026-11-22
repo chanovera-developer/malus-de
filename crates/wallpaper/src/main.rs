@@ -4441,7 +4441,7 @@ fn popdown_desktop_popover_lifo(popover: &Popover) {
         popover.data::<Rc<RefCell<Vec<glib::WeakRef<Popover>>>>>("cascading_submenus")
     } {
         let subs = unsafe { subs_ptr.as_ref() }.clone();
-        for sub_w in subs.borrow().iter() {
+        for sub_w in subs.borrow().iter().rev() {
             if let Some(sp) = sub_w.upgrade() {
                 if sp.is_visible() {
                     sp.popdown();
@@ -4452,6 +4452,36 @@ fn popdown_desktop_popover_lifo(popover: &Popover) {
     if popover.is_visible() {
         popover.popdown();
     }
+}
+
+fn popdown_all_registered_popovers_lifo() {
+    let popovers: Vec<Popover> = REGISTERED_POPOVERS.with(|list| {
+        let mut l = list.borrow_mut();
+        let mut alive = Vec::new();
+        l.retain(|w| {
+            if let Some(p) = w.upgrade() {
+                alive.push(p);
+                true
+            } else {
+                false
+            }
+        });
+        alive
+    });
+    for pop in popovers.iter().rev() {
+        popdown_desktop_popover_lifo(pop);
+    }
+}
+
+fn popup_desktop_menu_safely(popover: &Popover, pointing_rect: gtk4::gdk::Rectangle) {
+    popdown_all_registered_popovers_lifo();
+    let pop_w = popover.downgrade();
+    glib::timeout_add_local_once(std::time::Duration::from_millis(25), move || {
+        if let Some(pop) = pop_w.upgrade() {
+            pop.set_pointing_to(Some(&pointing_rect));
+            pop.popup();
+        }
+    });
 }
 
 fn attach_desktop_cascading_submenu(
@@ -4470,7 +4500,7 @@ fn attach_desktop_cascading_submenu(
 
     let sub_pop = Popover::builder()
         .has_arrow(false)
-        .autohide(true)
+        .autohide(false)
         .position(gtk4::PositionType::Right)
         .css_classes(["desktop-popover-menu"])
         .build();
@@ -5292,8 +5322,7 @@ impl DesktopIconContextMenu {
 
         let (ix, iy) = fixed.child_position(item_box);
         let rect = gtk4::gdk::Rectangle::new((ix + local_x) as i32, (iy + local_y) as i32, 1, 1);
-        self.popover.set_pointing_to(Some(&rect));
-        self.popover.popup();
+        popup_desktop_menu_safely(&self.popover, rect);
     }
 }
 
@@ -6643,8 +6672,7 @@ fn populate_wallpaper_role(
             }
             if let Some(pop) = pop_ctx.upgrade() {
                 let pointing_rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
-                pop.set_pointing_to(Some(&pointing_rect));
-                pop.popup();
+                popup_desktop_menu_safely(&pop, pointing_rect);
             }
         });
         overlay.add_controller(bg_context);
@@ -7415,8 +7443,7 @@ fn populate_wallpaper_role(
             gesture.set_state(gtk4::EventSequenceState::Claimed);
             if let Some(pop) = pop_sec.upgrade() {
                 let pointing_rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
-                pop.set_pointing_to(Some(&pointing_rect));
-                pop.popup();
+                popup_desktop_menu_safely(&pop, pointing_rect);
             }
         });
         overlay.add_controller(bg_context);

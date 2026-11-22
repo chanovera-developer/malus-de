@@ -584,7 +584,17 @@ fi
 # 2. Iniciar Servicios y Componentes del Shell de Malus DE inmediatamente
 # ------------------------------------------------------------------------------
 echo "🎨 [1/5] Iniciando Fondo de Pantalla (malus-de-wallpaper)..."
-"$BIN_DIR/malus-de-wallpaper" &
+(
+    while kill -0 "$COMPOSITOR_PID" 2>/dev/null; do
+        "$BIN_DIR/malus-de-wallpaper"
+        EXIT_CODE=$?
+        if ! kill -0 "$COMPOSITOR_PID" 2>/dev/null; then
+            break
+        fi
+        echo "⚠️ malus-de-wallpaper terminó (código $EXIT_CODE); relanzando en 0.5s..."
+        sleep 0.5
+    done
+) &
 WALLPAPER_PID=$!
 
 echo "🍏 [2/5] Iniciando Menú Global & Control Center (malus-de-top-bar)..."
