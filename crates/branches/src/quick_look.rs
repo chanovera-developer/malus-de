@@ -7,8 +7,8 @@ use gtk4::pango;
 use gtk4::prelude::*;
 use gtk4::{
     Align, Application, Box as GtkBox, Button, ContentFit, EventControllerKey, GestureClick, Grid,
-    Image, Label, Orientation, Overlay, Picture, PolicyType, PropagationPhase, ScrolledWindow,
-    Separator, Spinner, TextView, Window,
+    Label, Orientation, Overlay, Overflow, Picture, PolicyType, PropagationPhase, ScrolledWindow,
+    Separator, Spinner, TextView, Window, WindowHandle,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::{HashSet, VecDeque};
@@ -75,19 +75,163 @@ impl Drop for MediaPlaybackHandle {
     }
 }
 
+const QL_HEADER_HEIGHT: i32 = 42;
+const QL_IMAGE_INSET: i32 = 8;
+const QL_MIN_CARD_W: i32 = 340;
+const QL_MIN_CARD_H: i32 = 240;
+
+pub fn fit_quicklook_card_size(
+    img_w: i32,
+    img_h: i32,
+    max_card_w: i32,
+    max_card_h: i32,
+) -> (i32, i32, i32, i32) {
+    let avail_w = (max_card_w - QL_IMAGE_INSET * 2).max(200) as f64;
+    let avail_h = (max_card_h - QL_HEADER_HEIGHT - QL_IMAGE_INSET).max(160) as f64;
+    let iw = img_w.max(1) as f64;
+    let ih = img_h.max(1) as f64;
+
+    let scale_down = (avail_w / iw).min(avail_h / ih).min(1.0);
+    let mut fit_w = (iw * scale_down).round().max(1.0) as i32;
+    let mut fit_h = (ih * scale_down).round().max(1.0) as i32;
+
+    let min_long_edge = 260.0;
+    let cur_long = (fit_w as f64).max(fit_h as f64);
+    if cur_long < min_long_edge {
+        let up = (min_long_edge / cur_long)
+            .min(avail_w / fit_w.max(1) as f64)
+            .min(avail_h / fit_h.max(1) as f64);
+        fit_w = (fit_w as f64 * up).round().max(1.0) as i32;
+        fit_h = (fit_h as f64 * up).round().max(1.0) as i32;
+    }
+
+    let card_w = (fit_w + QL_IMAGE_INSET * 2).clamp(QL_MIN_CARD_W.min(max_card_w), max_card_w);
+    let card_h = (fit_h + QL_HEADER_HEIGHT + QL_IMAGE_INSET)
+        .clamp(QL_MIN_CARD_H.min(max_card_h), max_card_h);
+    (card_w, card_h, fit_w, fit_h)
+}
+
+fn probe_image_dimensions(path: &Path) -> Option<(i32, i32)> {
+    let (_, w, h) = Pixbuf::file_info(path)?;
+    if w > 0 && h > 0 {
+        Some((w, h))
+    } else {
+        None
+    }
+}
+
+fn default_open_app_name(path: &Path) -> Option<String> {
+    let (ctype, _) = gio::content_type_guess(Some(path), &[]);
+    let info = gio::AppInfo::default_for_type(&ctype, false)?;
+    let name = info.display_name().to_string();
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn format_open_pill_label(path: &Path, compact: bool, es: bool) -> String {
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    let app_name = default_open_app_name(path).unwrap_or_else(|| {
+        if is_image_extension(&ext) || ext == "pdf" {
+            if es {
+                "Vista Previa".to_string()
+            } else {
+                "Preview".to_string()
+            }
+        } else if es {
+            "Abrir".to_string()
+        } else {
+            "Open".to_string()
+        }
+    });
+    if compact {
+        app_name
+    } else if es {
+        format!("Abrir con {app_name}")
+    } else {
+        format!("Open with {app_name}")
+    }
+}
+
+fn rotate_rgba_frame_ccw(frame: &DecodedRgbaFrame) -> DecodedRgbaFrame {
+    let w = frame.width.max(1) as usize;
+    let h = frame.height.max(1) as usize;
+    let src = frame.bytes.as_ref();
+    let new_w = h;
+    let new_h = w;
+    let new_stride = new_w * 4;
+    let mut dst = vec![0u8; new_stride * new_h];
+
+    for y in 0..h {
+        let src_row = y * frame.stride;
+        for x in 0..w {
+            let nx = y;
+            let ny = w - 1 - x;
+            let sp = src_row + x * 4;
+            let dp = ny * new_stride + nx * 4;
+            if sp + 4 <= src.len() && dp + 4 <= dst.len() {
+                dst[dp..dp + 4].copy_from_slice(&src[sp..sp + 4]);
+            }
+        }
+    }
+
+    DecodedRgbaFrame {
+        width: new_w as i32,
+        height: new_h as i32,
+        stride: new_stride,
+        bytes: glib::Bytes::from_owned(dst),
+    }
+}
+
+fn primary_monitor_work_bounds() -> (i32, i32) {
+    if let Some(display) = gtk4::gdk::Display::default() {
+        let monitors = display.monitors();
+        if let Some(obj) = monitors.item(0) {
+            if let Ok(mon) = obj.downcast::<gtk4::gdk::Monitor>() {
+                let geo = mon.geometry();
+                if geo.width() > 0 && geo.height() > 0 {
+                    let mw = ((geo.width() as f64) * 0.80).round() as i32;
+                    let mh = ((geo.height() as f64) * 0.84).round() as i32;
+                    return (mw.clamp(460, 1280), mh.clamp(360, 960));
+                }
+            }
+        }
+    }
+    (920, 720)
+}
+
+#[derive(Clone)]
+struct ImageViewSlot {
+    frame: Rc<RefCell<Option<DecodedRgbaFrame>>>,
+    picture: Picture,
+    img_frame: Overlay,
+    size_spacer: GtkBox,
+}
+
 pub struct QuickLook {
     window: RefCell<Option<Window>>,
     host_overlay: RefCell<Option<Overlay>>,
     backdrop: RefCell<Option<GtkBox>>,
     container: RefCell<Option<GtkBox>>,
     closing: Cell<bool>,
+    expanded: Cell<bool>,
     anim_gen: Cell<u64>,
     current_path: RefCell<Option<PathBuf>>,
+    current_image_dims: Cell<Option<(i32, i32)>>,
     items_list: RefCell<Vec<FileItem>>,
     current_index: Cell<usize>,
     content_holder: RefCell<Option<GtkBox>>,
     title_label: RefCell<Option<Label>>,
-    subtitle_label: RefCell<Option<Label>>,
+    open_btn: RefCell<Option<Button>>,
+    expand_btn: RefCell<Option<Button>>,
+    rotate_btn: RefCell<Option<Button>>,
+    image_slot: Rc<RefCell<Option<ImageViewSlot>>>,
     open_btn_path: Rc<RefCell<PathBuf>>,
     media_handles: Rc<RefCell<Vec<Rc<MediaPlaybackHandle>>>>,
     page_step_cb: Rc<RefCell<Option<PageStepCallback>>>,
@@ -103,13 +247,18 @@ impl QuickLook {
             backdrop: RefCell::new(None),
             container: RefCell::new(None),
             closing: Cell::new(false),
+            expanded: Cell::new(false),
             anim_gen: Cell::new(0),
             current_path: RefCell::new(None),
+            current_image_dims: Cell::new(None),
             items_list: RefCell::new(Vec::new()),
             current_index: Cell::new(0),
             content_holder: RefCell::new(None),
             title_label: RefCell::new(None),
-            subtitle_label: RefCell::new(None),
+            open_btn: RefCell::new(None),
+            expand_btn: RefCell::new(None),
+            rotate_btn: RefCell::new(None),
+            image_slot: Rc::new(RefCell::new(None)),
             open_btn_path: Rc::new(RefCell::new(PathBuf::new())),
             media_handles: Rc::new(RefCell::new(Vec::new())),
             page_step_cb: Rc::new(RefCell::new(None)),
@@ -263,19 +412,201 @@ impl QuickLook {
     fn clear_refs(&self) {
         self.stop_active_media();
         self.preview_gen.set(self.preview_gen.get().wrapping_add(1));
+        self.expanded.set(false);
+        self.current_image_dims.set(None);
+        *self.image_slot.borrow_mut() = None;
         *self.page_step_cb.borrow_mut() = None;
         *self.current_path.borrow_mut() = None;
         *self.content_holder.borrow_mut() = None;
         *self.title_label.borrow_mut() = None;
-        *self.subtitle_label.borrow_mut() = None;
+        *self.open_btn.borrow_mut() = None;
+        *self.expand_btn.borrow_mut() = None;
+        *self.rotate_btn.borrow_mut() = None;
         self.items_list.borrow_mut().clear();
     }
 
-    pub fn update_if_open(&self, item: &FileItem) {
+    fn apply_card_geometry(&self) {
+        let Some(card) = self.container.borrow().clone() else {
+            return;
+        };
+        let expanded = self.expanded.get();
+        let es = malus_de_common::is_spanish_locale();
+
+        let (max_w, max_h, is_standalone) = if let Some(overlay) = self.host_overlay.borrow().as_ref() {
+            let ow = overlay.width();
+            let oh = overlay.height();
+            if expanded {
+                let mw = if ow > 0 { (ow - 24).max(360) } else { 960 };
+                let mh = if oh > 0 { (oh - 24).max(260) } else { 700 };
+                (mw, mh, false)
+            } else {
+                let mw = if ow > 0 {
+                    ((ow as f64) * 0.88).round() as i32
+                } else {
+                    840
+                }
+                .clamp(360, 1120);
+                let mh = if oh > 0 {
+                    ((oh as f64) * 0.90).round() as i32
+                } else {
+                    620
+                }
+                .clamp(260, 820);
+                (mw, mh, false)
+            }
+        } else {
+            let (mw, mh) = primary_monitor_work_bounds();
+            (mw, mh, true)
+        };
+
+        let card_w = if let Some((iw, ih)) = self.current_image_dims.get() {
+            if expanded && is_standalone {
+                card.set_size_request(-1, -1);
+                if let Some(slot) = self.image_slot.borrow().as_ref() {
+                    slot.size_spacer.set_size_request(-1, -1);
+                    slot.img_frame.set_halign(Align::Fill);
+                    slot.img_frame.set_valign(Align::Fill);
+                }
+                max_w
+            } else {
+                let (cw, ch, fit_w, fit_h) = fit_quicklook_card_size(iw, ih, max_w, max_h);
+                card.set_size_request(cw, ch);
+                if let Some(slot) = self.image_slot.borrow().as_ref() {
+                    slot.img_frame.set_halign(Align::Center);
+                    slot.img_frame.set_valign(Align::Center);
+                    slot.size_spacer.set_size_request(fit_w, fit_h);
+                }
+                if is_standalone {
+                    if let Some(win) = self.window.borrow().as_ref() {
+                        win.set_default_size(cw + 32, ch + 32);
+                    }
+                }
+                cw
+            }
+        } else if expanded && is_standalone {
+            card.set_size_request(-1, -1);
+            max_w
+        } else {
+            let cw = if expanded {
+                max_w
+            } else {
+                max_w.clamp(460, 820)
+            };
+            let ch = if expanded {
+                max_h
+            } else {
+                max_h.clamp(360, 600)
+            };
+            card.set_size_request(cw, ch);
+            if is_standalone {
+                if let Some(win) = self.window.borrow().as_ref() {
+                    win.set_default_size(cw + 32, ch + 32);
+                }
+            }
+            cw
+        };
+
+        if let (Some(btn), Some(path)) = (
+            self.open_btn.borrow().as_ref(),
+            self.current_path.borrow().as_ref(),
+        ) {
+            let label = format_open_pill_label(path, card_w < 460, es);
+            btn.set_label(&label);
+        }
+    }
+
+    fn toggle_expanded(&self) {
+        let next = !self.expanded.get();
+        self.expanded.set(next);
+        if let Some(btn) = self.expand_btn.borrow().as_ref() {
+            if let Some(img) = btn.child().and_downcast::<gtk4::Image>() {
+                img.set_icon_name(Some(if next {
+                    "view-restore-symbolic"
+                } else {
+                    "view-fullscreen-symbolic"
+                }));
+            }
+        }
+        if let Some(win) = self.window.borrow().as_ref() {
+            if next {
+                if let Some(card) = self.container.borrow().as_ref() {
+                    card.set_margin_top(0);
+                    card.set_margin_bottom(0);
+                    card.set_margin_start(0);
+                    card.set_margin_end(0);
+                }
+                win.fullscreen();
+            } else {
+                win.unfullscreen();
+                if let Some(card) = self.container.borrow().as_ref() {
+                    card.set_margin_top(16);
+                    card.set_margin_bottom(16);
+                    card.set_margin_start(16);
+                    card.set_margin_end(16);
+                }
+            }
+        }
+        self.apply_card_geometry();
+    }
+
+    fn rotate_current_image_ccw(&self) {
+        let new_dims = {
+            let slot_opt = self.image_slot.borrow();
+            let Some(slot) = slot_opt.as_ref() else {
+                return;
+            };
+            let mut frame_guard = slot.frame.borrow_mut();
+            let Some(cur_frame) = frame_guard.as_ref() else {
+                return;
+            };
+            let rotated = rotate_rgba_frame_ccw(cur_frame);
+            let dims = (rotated.width, rotated.height);
+            let tex = rotated.to_texture();
+            slot.picture.set_paintable(Some(&tex));
+            *frame_guard = Some(rotated);
+            dims
+        };
+        self.current_image_dims.set(Some(new_dims));
+        self.apply_card_geometry();
+    }
+
+    pub fn update_if_open(self: &Rc<Self>, item: &FileItem) {
         if self.is_open() {
             self.stop_active_media();
             *self.page_step_cb.borrow_mut() = None;
+            *self.image_slot.borrow_mut() = None;
+
+            let ext = item
+                .path
+                .extension()
+                .map(|e| e.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            let is_img = is_image_extension(&ext);
+            self.current_image_dims
+                .set(if is_img { probe_image_dimensions(&item.path) } else { None });
+            if let Some(rb) = self.rotate_btn.borrow().as_ref() {
+                rb.set_visible(is_img);
+            }
+
+            if let Some(tl) = self.title_label.borrow().as_ref() {
+                tl.set_label(&item.name);
+            }
+            *self.open_btn_path.borrow_mut() = item.path.clone();
+            *self.current_path.borrow_mut() = Some(item.path.clone());
+            if let Some(win) = self.window.borrow().as_ref() {
+                win.set_title(Some(&item.name));
+            }
+
+            self.apply_card_geometry();
+
             if let Some(holder) = self.content_holder.borrow().as_ref() {
+                let ql_weak = Rc::downgrade(self);
+                let on_img_ready: Rc<dyn Fn(i32, i32)> = Rc::new(move |w, h| {
+                    if let Some(ql) = ql_weak.upgrade() {
+                        ql.current_image_dims.set(Some((w, h)));
+                        ql.apply_card_geometry();
+                    }
+                });
                 populate_preview_async(
                     item,
                     holder,
@@ -283,24 +614,15 @@ impl QuickLook {
                     &self.page_step_cb,
                     &self.preview_gen,
                     &self.cache,
+                    &self.image_slot,
+                    on_img_ready,
                     0,
                 );
-            }
-            if let Some(tl) = self.title_label.borrow().as_ref() {
-                tl.set_label(&item.name);
-            }
-            if let Some(sl) = self.subtitle_label.borrow().as_ref() {
-                sl.set_label(&format!("{} • {}", item.kind_str, item.size_str));
-            }
-            *self.open_btn_path.borrow_mut() = item.path.clone();
-            *self.current_path.borrow_mut() = Some(item.path.clone());
-            if let Some(win) = self.window.borrow().as_ref() {
-                win.set_title(Some(&item.name));
             }
         }
     }
 
-    pub fn step_item(&self, delta: isize) {
+    pub fn step_item(self: &Rc<Self>, delta: isize) {
         let len = self.items_list.borrow().len();
         if len <= 1 {
             return;
@@ -323,22 +645,43 @@ impl QuickLook {
     }
 
     pub fn show_standalone(self: &Rc<Self>, app: &Application, item: &FileItem) {
+        let ext = item
+            .path
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let img_dims = if is_image_extension(&ext) {
+            probe_image_dimensions(&item.path)
+        } else {
+            None
+        };
+        let (max_w, max_h) = primary_monitor_work_bounds();
+        let (init_w, init_h) = if let Some((iw, ih)) = img_dims {
+            let (cw, ch, _, _) = fit_quicklook_card_size(iw, ih, max_w, max_h);
+            (cw, ch)
+        } else {
+            (max_w.clamp(480, 820), max_h.clamp(380, 600))
+        };
+
         let win = Window::builder()
             .application(app)
             .title(&item.name)
-            .default_width(820)
-            .default_height(600)
+            .default_width(init_w + 32)
+            .default_height(init_h + 32)
             .decorated(false)
             .css_classes(["branches-quicklook-window"])
             .build();
         *self.items_list.borrow_mut() = vec![item.clone()];
         self.current_index.set(0);
+        self.expanded.set(false);
+        self.current_image_dims.set(img_dims);
 
-        let root_box = self.build_preview_card(item);
-        root_box.set_margin_top(18);
-        root_box.set_margin_bottom(18);
-        root_box.set_margin_start(18);
-        root_box.set_margin_end(18);
+        *self.window.borrow_mut() = Some(win.clone());
+        let root_box = self.build_preview_card(item, true);
+        root_box.set_margin_top(16);
+        root_box.set_margin_bottom(16);
+        root_box.set_margin_start(16);
+        root_box.set_margin_end(16);
         win.set_child(Some(&root_box));
 
         let key_controller = EventControllerKey::new();
@@ -379,7 +722,7 @@ impl QuickLook {
         });
 
         *self.container.borrow_mut() = Some(root_box.clone());
-        *self.window.borrow_mut() = Some(win.clone());
+        self.apply_card_geometry();
         win.present();
         Self::trigger_macos_enter_animation(&root_box, None);
     }
@@ -388,35 +731,34 @@ impl QuickLook {
         let next_gen = self.anim_gen.get().wrapping_add(1);
         self.anim_gen.set(next_gen);
         self.closing.set(false);
+        self.expanded.set(false);
+
+        let ext = item
+            .path
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let img_dims = if is_image_extension(&ext) {
+            probe_image_dimensions(&item.path)
+        } else {
+            None
+        };
+        self.current_image_dims.set(img_dims);
 
         let backdrop = GtkBox::new(Orientation::Vertical, 0);
         backdrop.add_css_class("branches-quicklook-backdrop");
         backdrop.set_hexpand(true);
         backdrop.set_vexpand(true);
 
-        let card = self.build_preview_card(item);
-        let ow = overlay.width();
-        let oh = overlay.height();
-        let target_w = if ow > 0 {
-            ((ow as f64) * 0.80).round() as i32
-        } else {
-            780
-        }
-        .clamp(460, 840);
-        let target_h = if oh > 0 {
-            ((oh as f64) * 0.84).round() as i32
-        } else {
-            540
-        }
-        .clamp(360, 620);
-        card.set_size_request(target_w, target_h);
+        *self.host_overlay.borrow_mut() = Some(overlay.clone());
+        let card = self.build_preview_card(item, false);
         card.set_halign(Align::Center);
         card.set_valign(Align::Center);
         card.set_vexpand(true);
-        card.set_margin_top(24);
-        card.set_margin_bottom(24);
-        card.set_margin_start(24);
-        card.set_margin_end(24);
+        card.set_margin_top(16);
+        card.set_margin_bottom(16);
+        card.set_margin_start(16);
+        card.set_margin_end(16);
 
         // Impedir que los clics dentro de la tarjeta cierren Quick Look
         let card_click = GestureClick::new();
@@ -426,7 +768,7 @@ impl QuickLook {
         });
         card.add_controller(card_click);
 
-        // Clic fuera de la tarjeta (en el fondo atenuado) cierra con efecto macOS
+        // Clic fuera de la tarjeta cierra Quick Look
         let bd_click = GestureClick::new();
         bd_click.set_button(gtk4::gdk::BUTTON_PRIMARY);
         let ql_bd = self.clone();
@@ -436,9 +778,9 @@ impl QuickLook {
         backdrop.add_controller(bd_click);
 
         backdrop.append(&card);
-        *self.host_overlay.borrow_mut() = Some(overlay.clone());
         *self.backdrop.borrow_mut() = Some(backdrop.clone());
         *self.container.borrow_mut() = Some(card.clone());
+        self.apply_card_geometry();
 
         overlay.add_overlay(&backdrop);
         Self::trigger_macos_enter_animation(&card, Some(&backdrop));
@@ -455,88 +797,146 @@ impl QuickLook {
         });
     }
 
-    fn build_preview_card(self: &Rc<Self>, item: &FileItem) -> GtkBox {
+    fn build_preview_card(self: &Rc<Self>, item: &FileItem, draggable: bool) -> GtkBox {
+        let es = malus_de_common::is_spanish_locale();
+        let ext = item
+            .path
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let is_img = is_image_extension(&ext);
+
         let root_box = GtkBox::new(Orientation::Vertical, 0);
         root_box.add_css_class("branches-quicklook-container");
+        root_box.set_overflow(Overflow::Hidden);
 
-        // Barra superior de Quick Look
-        let header_box = GtkBox::new(Orientation::Horizontal, 8);
+        // Barra superior compacta estilo macOS Tahoe Quick Look
+        let header_box = GtkBox::new(Orientation::Horizontal, 6);
         header_box.add_css_class("branches-quicklook-header");
 
+        let close_icon = gtk4::Image::from_icon_name("window-close-symbolic");
+        close_icon.set_pixel_size(10);
         let close_btn = Button::builder()
-            .icon_name("window-close-symbolic")
+            .child(&close_icon)
             .has_frame(false)
             .can_focus(false)
             .valign(Align::Center)
-            .css_classes(["branches-quicklook-close-btn"])
-            .tooltip_text("Cerrar Vista Rápida (Espacio / Esc)")
+            .css_classes(["branches-quicklook-close-btn", "branches-quicklook-hud-btn"])
+            .tooltip_text(if es {
+                "Cerrar Vista Rápida (Espacio / Esc)"
+            } else {
+                "Close Quick Look (Space / Esc)"
+            })
             .build();
         let ql_close = self.clone();
         close_btn.connect_clicked(move |_| ql_close.close());
         header_box.append(&close_btn);
 
-        let has_neighbors = self.items_list.borrow().len() > 1;
-        if has_neighbors {
-            let prev_btn = Button::builder()
-                .icon_name("go-previous-symbolic")
-                .has_frame(false)
-                .can_focus(false)
-                .valign(Align::Center)
-                .tooltip_text("Anterior (Flecha izquierda)")
-                .build();
-            let ql_prev = self.clone();
-            prev_btn.connect_clicked(move |_| ql_prev.step_item(-1));
-
-            let next_btn = Button::builder()
-                .icon_name("go-next-symbolic")
-                .has_frame(false)
-                .can_focus(false)
-                .valign(Align::Center)
-                .tooltip_text("Siguiente (Flecha derecha)")
-                .build();
-            let ql_next = self.clone();
-            next_btn.connect_clicked(move |_| ql_next.step_item(1));
-
-            header_box.append(&prev_btn);
-            header_box.append(&next_btn);
+        let expand_icon = gtk4::Image::from_icon_name("view-fullscreen-symbolic");
+        expand_icon.set_pixel_size(10);
+        let expand_btn = Button::builder()
+            .child(&expand_icon)
+            .has_frame(false)
+            .can_focus(false)
+            .valign(Align::Center)
+            .css_classes(["branches-quicklook-hud-btn"])
+            .tooltip_text(if es {
+                "Ampliar / restaurar"
+            } else {
+                "Expand / Restore"
+            })
+            .build();
+        {
+            let ql_exp = self.clone();
+            expand_btn.connect_clicked(move |_| ql_exp.toggle_expanded());
         }
-
-        let title_info = GtkBox::new(Orientation::Vertical, 2);
-        title_info.set_hexpand(true);
-        title_info.set_valign(Align::Center);
+        header_box.append(&expand_btn);
 
         let title_label = Label::builder()
             .label(&item.name)
             .halign(Align::Start)
-            .ellipsize(pango::EllipsizeMode::Middle)
+            .valign(Align::Center)
+            .hexpand(true)
+            .margin_start(4)
+            .ellipsize(pango::EllipsizeMode::End)
             .css_classes(["bold", "branches-quicklook-title"])
             .build();
+        header_box.append(&title_label);
 
-        let subtitle_label = Label::builder()
-            .label(&format!("{} • {}", item.kind_str, item.size_str))
-            .halign(Align::Start)
-            .css_classes(["dim-label", "caption"])
+        // Botón Girar a la izquierda (solo imágenes)
+        let rotate_icon = gtk4::Image::from_icon_name("object-rotate-left-symbolic");
+        rotate_icon.set_pixel_size(15);
+        let rotate_btn = Button::builder()
+            .child(&rotate_icon)
+            .has_frame(false)
+            .can_focus(false)
+            .valign(Align::Center)
+            .visible(is_img)
+            .css_classes(["branches-quicklook-icon-btn"])
+            .tooltip_text(if es {
+                "Girar a la izquierda"
+            } else {
+                "Rotate Left"
+            })
             .build();
+        {
+            let ql_rot = self.clone();
+            rotate_btn.connect_clicked(move |_| ql_rot.rotate_current_image_ccw());
+        }
+        header_box.append(&rotate_btn);
 
-        title_info.append(&title_label);
-        title_info.append(&subtitle_label);
-        header_box.append(&title_info);
+        // Botón Compartir
+        let share_icon = gtk4::Image::from_icon_name("send-to-symbolic");
+        share_icon.set_pixel_size(15);
+        let share_btn = Button::builder()
+            .child(&share_icon)
+            .has_frame(false)
+            .can_focus(false)
+            .valign(Align::Center)
+            .css_classes(["branches-quicklook-icon-btn"])
+            .tooltip_text(if es { "Compartir" } else { "Share" })
+            .build();
+        {
+            let p_share = self.open_btn_path.clone();
+            let root_ref = root_box.downgrade();
+            share_btn.connect_clicked(move |_| {
+                let path = p_share.borrow().clone();
+                let parent_win = root_ref
+                    .upgrade()
+                    .and_then(|w| w.root())
+                    .and_downcast::<Window>();
+                crate::app_window::share_paths_via_malus_link(
+                    parent_win.as_ref(),
+                    None,
+                    vec![path],
+                );
+            });
+        }
+        header_box.append(&share_btn);
 
         *self.open_btn_path.borrow_mut() = item.path.clone();
         let p_for_open = self.open_btn_path.clone();
+        let ql_open_close = self.clone();
         let open_btn = Button::builder()
-            .label("Abrir con...")
+            .label(format_open_pill_label(&item.path, false, es))
+            .has_frame(false)
             .can_focus(false)
-            .css_classes(["suggested-action", "branches-quicklook-btn"])
+            .css_classes(["branches-quicklook-open-pill"])
             .valign(Align::Center)
             .build();
         open_btn.connect_clicked(move |_| {
             let path = p_for_open.borrow().clone();
             let _ = open_file(&path);
+            ql_open_close.close();
         });
         header_box.append(&open_btn);
 
-        root_box.append(&header_box);
+        if draggable {
+            let handle = WindowHandle::builder().child(&header_box).build();
+            root_box.append(&handle);
+        } else {
+            root_box.append(&header_box);
+        }
 
         // Contenedor dinámico de previsualización (carga asíncrona sin bloquear la transición)
         let content_holder = GtkBox::new(Orientation::Vertical, 0);
@@ -544,6 +944,20 @@ impl QuickLook {
         content_holder.set_hexpand(true);
         content_holder.add_css_class("branches-quicklook-content");
 
+        *self.title_label.borrow_mut() = Some(title_label);
+        *self.open_btn.borrow_mut() = Some(open_btn);
+        *self.expand_btn.borrow_mut() = Some(expand_btn);
+        *self.rotate_btn.borrow_mut() = Some(rotate_btn);
+        *self.content_holder.borrow_mut() = Some(content_holder.clone());
+        *self.current_path.borrow_mut() = Some(item.path.clone());
+
+        let ql_weak = Rc::downgrade(self);
+        let on_img_ready: Rc<dyn Fn(i32, i32)> = Rc::new(move |w, h| {
+            if let Some(ql) = ql_weak.upgrade() {
+                ql.current_image_dims.set(Some((w, h)));
+                ql.apply_card_geometry();
+            }
+        });
         populate_preview_async(
             item,
             &content_holder,
@@ -551,14 +965,11 @@ impl QuickLook {
             &self.page_step_cb,
             &self.preview_gen,
             &self.cache,
+            &self.image_slot,
+            on_img_ready,
             185,
         );
         root_box.append(&content_holder);
-
-        *self.title_label.borrow_mut() = Some(title_label);
-        *self.subtitle_label.borrow_mut() = Some(subtitle_label);
-        *self.content_holder.borrow_mut() = Some(content_holder);
-        *self.current_path.borrow_mut() = Some(item.path.clone());
 
         root_box
     }
@@ -806,6 +1217,8 @@ fn populate_preview_async(
     page_step_cb: &Rc<RefCell<Option<PageStepCallback>>>,
     preview_gen: &Rc<Cell<u64>>,
     cache: &Arc<Mutex<PreviewCache>>,
+    image_slot: &Rc<RefCell<Option<ImageViewSlot>>>,
+    on_image_ready: Rc<dyn Fn(i32, i32)>,
     delay_playback_ms: u64,
 ) {
     let next_gen = preview_gen.get().wrapping_add(1);
@@ -838,6 +1251,8 @@ fn populate_preview_async(
                 page_step_cb,
                 preview_gen,
                 next_gen,
+                image_slot,
+                &on_image_ready,
                 delay_playback_ms,
             );
             holder.append(&widget);
@@ -855,6 +1270,7 @@ fn populate_preview_async(
     let psc = page_step_cb.clone();
     let gen_ref = preview_gen.clone();
     let cache_poll = cache.clone();
+    let slot_poll = image_slot.clone();
 
     glib::timeout_add_local(Duration::from_millis(8), move || {
         if gen_ref.get() != next_gen {
@@ -876,6 +1292,8 @@ fn populate_preview_async(
                         &psc,
                         &gen_ref,
                         next_gen,
+                        &slot_poll,
+                        &on_image_ready,
                         remaining_delay,
                     );
                     while let Some(child) = h.first_child() {
@@ -939,11 +1357,13 @@ fn build_widget_from_payload(
     page_step_cb: &Rc<RefCell<Option<PageStepCallback>>>,
     preview_gen: &Rc<Cell<u64>>,
     expected_gen: u64,
+    image_slot: &Rc<RefCell<Option<ImageViewSlot>>>,
+    on_image_ready: &Rc<dyn Fn(i32, i32)>,
     remaining_delay_ms: u64,
 ) -> gtk4::Widget {
     match payload {
         PreparedPreview::Image { frame } => {
-            create_image_preview_from_frame(&item.path, item, frame)
+            create_image_preview_from_frame(&item.path, item, frame, image_slot, on_image_ready)
         }
         PreparedPreview::Pdf {
             total_pages,
@@ -1078,22 +1498,41 @@ fn create_image_preview_from_frame(
     path: &Path,
     item: &FileItem,
     frame_opt: Option<DecodedRgbaFrame>,
+    image_slot: &Rc<RefCell<Option<ImageViewSlot>>>,
+    on_image_ready: &Rc<dyn Fn(i32, i32)>,
 ) -> gtk4::Widget {
-    let texture = frame_opt
-        .map(|f| f.to_texture())
-        .or_else(|| Texture::from_file(&gio::File::for_path(path)).ok());
+    let (texture, dims, stored_frame) = if let Some(frame) = frame_opt {
+        let dims = (frame.width, frame.height);
+        let tex = frame.to_texture();
+        (Some(tex), Some(dims), Some(frame))
+    } else if let Ok(tex) = Texture::from_file(&gio::File::for_path(path)) {
+        let dims = (tex.width(), tex.height());
+        (Some(tex), Some(dims), None)
+    } else {
+        (None, None, None)
+    };
 
     let Some(texture) = texture else {
         return create_generic_preview(item);
     };
 
-    let container = GtkBox::new(Orientation::Vertical, 0);
-    container.set_vexpand(true);
-    container.set_hexpand(true);
-    container.set_margin_top(14);
-    container.set_margin_bottom(14);
-    container.set_margin_start(14);
-    container.set_margin_end(14);
+    let stage = GtkBox::new(Orientation::Vertical, 0);
+    stage.set_vexpand(true);
+    stage.set_hexpand(true);
+    stage.add_css_class("branches-quicklook-image-stage");
+
+    let size_spacer = GtkBox::new(Orientation::Vertical, 0);
+    size_spacer.set_halign(Align::Fill);
+    size_spacer.set_valign(Align::Fill);
+
+    let img_frame = Overlay::new();
+    img_frame.set_halign(Align::Center);
+    img_frame.set_valign(Align::Center);
+    img_frame.set_vexpand(true);
+    img_frame.set_hexpand(true);
+    img_frame.set_overflow(Overflow::Hidden);
+    img_frame.add_css_class("branches-quicklook-image-frame");
+    img_frame.set_child(Some(&size_spacer));
 
     let picture = Picture::for_paintable(&texture);
     picture.set_content_fit(ContentFit::Contain);
@@ -1101,9 +1540,24 @@ fn create_image_preview_from_frame(
     picture.set_vexpand(true);
     picture.set_hexpand(true);
     picture.add_css_class("branches-quicklook-image");
-    container.append(&picture);
+    img_frame.add_overlay(&picture);
+    img_frame.set_measure_overlay(&picture, false);
+    stage.append(&img_frame);
 
-    container.upcast()
+    *image_slot.borrow_mut() = Some(ImageViewSlot {
+        frame: Rc::new(RefCell::new(stored_frame)),
+        picture,
+        img_frame,
+        size_spacer,
+    });
+
+    if let Some((w, h)) = dims {
+        if w > 0 && h > 0 {
+            on_image_ready(w, h);
+        }
+    }
+
+    stage.upcast()
 }
 
 pub fn parse_pdfinfo_page_count(stdout: &str) -> u32 {
@@ -2040,5 +2494,30 @@ mod tests {
         assert_eq!(frame.height, 3);
         assert_eq!(frame.stride, 20);
         assert_eq!(frame.bytes.len(), 60);
+
+        let rot = rotate_rgba_frame_ccw(&frame);
+        assert_eq!(rot.width, 3);
+        assert_eq!(rot.height, 5);
+        assert_eq!(rot.stride, 12);
+        assert_eq!(rot.bytes.len(), 60);
+    }
+
+    #[test]
+    fn fit_quicklook_card_size_adapts_to_landscape_square_and_portrait() {
+        // Landscape
+        let (cw, ch, fw, fh) = fit_quicklook_card_size(1200, 750, 900, 700);
+        assert!(cw > ch);
+        assert_eq!(cw, fw + QL_IMAGE_INSET * 2);
+        assert_eq!(ch, fh + QL_HEADER_HEIGHT + QL_IMAGE_INSET);
+
+        // Square compact
+        let (sq_w, sq_h, _, _) = fit_quicklook_card_size(420, 420, 900, 700);
+        assert_eq!(sq_w, 420 + QL_IMAGE_INSET * 2);
+        assert_eq!(sq_h, 420 + QL_HEADER_HEIGHT + QL_IMAGE_INSET);
+
+        // Tall portrait
+        let (pw, ph, _, _) = fit_quicklook_card_size(520, 900, 900, 720);
+        assert!(ph > pw);
+        assert!(ph <= 720);
     }
 }

@@ -899,7 +899,7 @@ row:selected .branches-list-col-even {
 /* ========================================================= */
 
 .branches-quicklook-backdrop {
-    background-color: rgba(0, 0, 0, 0.16);
+    background-color: transparent;
     opacity: 0.0;
     transition: opacity 150ms ease-out;
 }
@@ -921,9 +921,9 @@ window.branches-quicklook-window {
 
 .branches-quicklook-container {
     background-color: alpha(@window_bg_color, 0.96);
-    border-radius: 14px;
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.26);
-    border: 1px solid alpha(@borders, 0.60);
+    border-radius: 20px;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28), 0 2px 8px rgba(0, 0, 0, 0.12);
+    border: 1px solid alpha(@window_fg_color, 0.12);
     color: @window_fg_color;
     opacity: 0.0;
     transform: scale(0.90);
@@ -941,24 +941,86 @@ window.branches-quicklook-window {
     transition: transform 135ms cubic-bezier(0.4, 0, 1, 1), opacity 125ms ease-in;
 }
 
-.branches-quicklook-close-btn {
-    min-width: 24px;
-    min-height: 24px;
-    padding: 0;
-    border-radius: 9999px;
+.branches-quicklook-header {
+    min-height: 42px;
+    padding: 0 10px 0 12px;
+    background-color: transparent;
+    border-bottom: none;
+    border-top-left-radius: 20px;
+    border-top-right-radius: 20px;
 }
 
-.branches-quicklook-header {
-    padding: 12px 16px;
-    border-bottom: 1px solid alpha(@borders, 0.35);
-    background-color: alpha(@window_bg_color, 0.96);
-    border-top-left-radius: 14px;
-    border-top-right-radius: 14px;
+button.branches-quicklook-close-btn,
+button.branches-quicklook-hud-btn {
+    min-width: 18px;
+    min-height: 18px;
+    padding: 0;
+    margin: 0;
+    border-radius: 9999px;
+    border: none;
+    box-shadow: none;
+    background-image: none;
+    background-color: alpha(@window_fg_color, 0.44);
+    color: @window_bg_color;
+    transition: background-color 120ms ease;
+}
+
+button.branches-quicklook-close-btn:hover,
+button.branches-quicklook-hud-btn:hover {
+    background-color: alpha(@window_fg_color, 0.64);
+    color: @window_bg_color;
+}
+
+button.branches-quicklook-close-btn image,
+button.branches-quicklook-hud-btn image {
+    color: @window_bg_color;
+}
+
+button.branches-quicklook-icon-btn {
+    min-width: 26px;
+    min-height: 26px;
+    padding: 0;
+    margin: 0;
+    border-radius: 9999px;
+    border: none;
+    box-shadow: none;
+    background: transparent;
+    color: alpha(@window_fg_color, 0.78);
+    transition: background-color 120ms ease, color 120ms ease;
+}
+
+button.branches-quicklook-icon-btn:hover {
+    background-color: alpha(@window_fg_color, 0.09);
+    color: @window_fg_color;
 }
 
 .branches-quicklook-title {
-    font-size: 14px;
+    font-size: 13.5px;
+    font-weight: 700;
     color: @window_fg_color;
+}
+
+button.branches-quicklook-open-pill {
+    min-height: 26px;
+    padding: 0 12px;
+    margin: 0 0 0 4px;
+    border-radius: 9999px;
+    border: none;
+    box-shadow: none;
+    background-image: none;
+    background-color: alpha(@window_fg_color, 0.08);
+    color: @window_fg_color;
+    font-size: 12.5px;
+    font-weight: 500;
+    transition: background-color 120ms ease;
+}
+
+button.branches-quicklook-open-pill:hover {
+    background-color: alpha(@window_fg_color, 0.14);
+}
+
+button.branches-quicklook-open-pill:active {
+    background-color: alpha(@window_fg_color, 0.20);
 }
 
 .branches-quicklook-btn {
@@ -968,13 +1030,22 @@ window.branches-quicklook-window {
 }
 
 .branches-quicklook-content {
-    background-color: alpha(@view_bg_color, 0.60);
-    border-bottom-left-radius: 14px;
-    border-bottom-right-radius: 14px;
+    background-color: transparent;
+    border-bottom-left-radius: 20px;
+    border-bottom-right-radius: 20px;
+}
+
+.branches-quicklook-image-stage {
+    margin: 0 8px 8px 8px;
+}
+
+.branches-quicklook-image-frame {
+    border-radius: 12px;
+    background-color: transparent;
 }
 
 .branches-quicklook-image {
-    border-radius: 8px;
+    border-radius: 12px;
 }
 
 .branches-quicklook-video-stage {
