@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use gio::prelude::*;
-use gtk4::gdk::prelude::DisplayExt;
+use gtk4::gdk::prelude::{DisplayExt, MonitorExt};
 use gtk4::gdk::Key;
 use gtk4::prelude::*;
 use gtk4::{
@@ -548,6 +548,94 @@ pub fn update_all_registered_popovers(is_dark: bool) {
             }
         });
     });
+}
+
+fn close_all_registered_popovers() {
+    REGISTERED_POPOVERS.with(|list| {
+        let pops: Vec<Popover> = list
+            .borrow_mut()
+            .drain(..)
+            .filter_map(|w| w.upgrade())
+            .collect();
+        for pop in pops {
+            pop.popdown();
+            if pop.parent().is_some() {
+                pop.unparent();
+            }
+        }
+    });
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MonitorSurfaceSpec {
+    connector: Option<String>,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    scale: i32,
+    is_primary: bool,
+}
+
+impl MonitorSurfaceSpec {
+    fn from_monitor(monitor: &gtk4::gdk::Monitor, is_primary: bool) -> Self {
+        let geo = monitor.geometry();
+        Self {
+            connector: monitor.connector().map(|s| s.to_string()),
+            x: geo.x(),
+            y: geo.y(),
+            width: geo.width(),
+            height: geo.height(),
+            scale: monitor.scale_factor().max(1),
+            is_primary,
+        }
+    }
+
+    fn fallback_primary() -> Self {
+        Self {
+            connector: None,
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            scale: 1,
+            is_primary: true,
+        }
+    }
+}
+
+fn monitor_geometry_ready(monitor: &gtk4::gdk::Monitor) -> bool {
+    let geo = monitor.geometry();
+    geo.width() > 0 && geo.height() > 0
+}
+
+fn ensure_monitor_sync_hooks(
+    monitor: &gtk4::gdk::Monitor,
+    sync_handler: &Rc<RefCell<Option<Rc<dyn Fn()>>>>,
+) {
+    let already_hooked = unsafe { monitor.data::<bool>("malus-wp-mon-hooked") }.is_some();
+    if already_hooked {
+        return;
+    }
+    unsafe {
+        monitor.set_data("malus-wp-mon-hooked", true);
+    }
+    let trigger = {
+        let sync_c = sync_handler.clone();
+        Rc::new(move || {
+            if let Some(sched) = sync_c.borrow().as_ref() {
+                sched();
+            }
+        })
+    };
+    let t1 = trigger.clone();
+    monitor.connect_geometry_notify(move |_| t1());
+    let t2 = trigger.clone();
+    monitor.connect_scale_factor_notify(move |_| t2());
+    let t3 = trigger.clone();
+    monitor.connect_connector_notify(move |_| t3());
+    let t4 = trigger;
+    monitor.connect_invalidate(move |_| t4());
 }
 
 pub fn apply_theme_to_popover(popover: &Popover, is_dark: bool) {
@@ -3744,7 +3832,10 @@ fn create_wallpaper_window(
         .map(|m| {
             let geometry = m.geometry();
             let scale = m.scale_factor().max(1);
-            (geometry.width() * scale, geometry.height() * scale)
+            (
+                geometry.width().max(1) * scale,
+                geometry.height().max(1) * scale,
+            )
         })
         .unwrap_or((1920, 1080));
 
@@ -3760,7 +3851,7 @@ fn create_wallpaper_window(
         let desktop_size = monitor
             .map(|monitor| {
                 let geometry = monitor.geometry();
-                (geometry.width(), geometry.height())
+                (geometry.width().max(320), geometry.height().max(240))
             })
             .unwrap_or((1920, 1080));
 
@@ -5282,23 +5373,71 @@ fn main() -> Result<()> {
             }
         }
 
+        let active_specs: Rc<RefCell<Vec<MonitorSurfaceSpec>>> = Rc::new(RefCell::new(Vec::new()));
+        let geometry_retry_count: Rc<Cell<u8>> = Rc::new(Cell::new(0));
+        let sync_handler_mon = sync_handler.clone();
+
         let sync_windows: Rc<dyn Fn()> = Rc::new(move || {
+            let displays_cfg = DisplaysConfig::load();
+            let primary_cfg = displays_cfg.primary_output().cloned();
+            let monitor_list: Vec<gtk4::gdk::Monitor> = gtk4::gdk::Display::default()
+                .map(|display| {
+                    let monitors = display.monitors();
+                    (0..monitors.n_items())
+                        .filter_map(|i| monitors.item(i))
+                        .filter_map(|monitor| monitor.downcast::<gtk4::gdk::Monitor>().ok())
+                        .filter(|monitor| monitor.is_valid())
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            for monitor in &monitor_list {
+                ensure_monitor_sync_hooks(monitor, &sync_handler_mon);
+            }
+
+            let pending_geometry = monitor_list.iter().any(|m| !monitor_geometry_ready(m));
+            if pending_geometry && geometry_retry_count.get() < 10 {
+                geometry_retry_count.set(geometry_retry_count.get() + 1);
+                info!(
+                    "⏳ [Wallpaper] Esperando geometría inicial de monitor tras hotplug (intento {}/10)",
+                    geometry_retry_count.get()
+                );
+                if let Some(sched) = sync_handler_mon.borrow().as_ref() {
+                    sched();
+                }
+                return;
+            }
+            geometry_retry_count.set(0);
+
+            let primary_index = select_primary_monitor_index(&monitor_list, &displays_cfg);
+            let next_specs: Vec<MonitorSurfaceSpec> = if monitor_list.is_empty() {
+                vec![MonitorSurfaceSpec::fallback_primary()]
+            } else {
+                monitor_list
+                    .iter()
+                    .enumerate()
+                    .map(|(index, monitor)| {
+                        MonitorSurfaceSpec::from_monitor(monitor, index == primary_index)
+                    })
+                    .collect()
+            };
+
+            if !wallpaper_surfaces_sync.borrow().is_empty() && *active_specs.borrow() == next_specs
+            {
+                return;
+            }
+
+            close_all_registered_popovers();
             let prev_surfaces: Vec<(ApplicationWindow, Picture, i32, i32)> =
                 wallpaper_surfaces_sync.borrow_mut().drain(..).collect();
             desktop_monitors_sync.borrow_mut().clear();
             *shortcut_handler_sync.borrow_mut() = None;
+            for (old_win, _, _, _) in prev_surfaces {
+                old_win.close();
+            }
 
             let mut new_surfaces = Vec::new();
-            if let Some(display) = gtk4::gdk::Display::default() {
-                let monitors = display.monitors();
-                let displays_cfg = DisplaysConfig::load();
-                let primary_cfg = displays_cfg.primary_output().cloned();
-                let monitor_list: Vec<gtk4::gdk::Monitor> = (0..monitors.n_items())
-                    .filter_map(|i| monitors.item(i))
-                    .filter_map(|monitor| monitor.downcast().ok())
-                    .collect();
-                let primary_index = select_primary_monitor_index(&monitor_list, &displays_cfg);
-
+            if !monitor_list.is_empty() {
                 match (primary_cfg.as_ref(), monitor_list.get(primary_index)) {
                     (Some(cfg), Some(_)) => info!(
                         "Mostrando iconos del escritorio en la pantalla principal: {} ({})",
@@ -5352,10 +5491,8 @@ fn main() -> Result<()> {
                 new_surfaces.push(surface_tuple);
             }
 
+            *active_specs.borrow_mut() = next_specs;
             *wallpaper_surfaces_sync.borrow_mut() = new_surfaces;
-            for (old_win, _, _, _) in prev_surfaces {
-                old_win.close();
-            }
         });
 
         let pending_sync: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
@@ -5913,5 +6050,33 @@ mod squircle_thumb_tests {
         assert!(dest_dir.join("nota.txt").is_file());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn monitor_surface_spec_equality_tracks_layout_and_primary_changes() {
+        let s1 = super::MonitorSurfaceSpec {
+            connector: Some("eDP-1".to_string()),
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            scale: 1,
+            is_primary: true,
+        };
+        let s2 = super::MonitorSurfaceSpec {
+            connector: Some("DP-1".to_string()),
+            x: 1920,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            scale: 1,
+            is_primary: false,
+        };
+        assert_eq!(vec![s1.clone(), s2.clone()], vec![s1.clone(), s2.clone()]);
+        let s2_primary = super::MonitorSurfaceSpec {
+            is_primary: true,
+            ..s2.clone()
+        };
+        assert_ne!(vec![s1.clone(), s2], vec![s1, s2_primary]);
     }
 }

@@ -734,9 +734,26 @@ fn show_arrange_modal(
         rects: Vec::new(),
     }));
 
-    let sync_coords = {
+    let sel_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(6)
+        .halign(Align::Start)
+        .build();
+    let y_readout_lbl = Label::builder()
+        .label("y = 0 px")
+        .css_classes(["card-section-sub"])
+        .margin_start(4)
+        .margin_end(4)
+        .build();
+
+    let sync_slot: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let sync_coords: Rc<dyn Fn()> = {
         let lbl = coords_lbl.clone();
         let canvas_c = canvas.clone();
+        let st_sync = state.clone();
+        let sel_row_c = sel_row.clone();
+        let y_lbl_c = y_readout_lbl.clone();
+        let sync_slot_c = sync_slot.clone();
         Rc::new(move || {
             let cfg = DisplaysConfig::load();
             let mut sorted: Vec<_> = cfg.outputs.iter().collect();
@@ -745,13 +762,64 @@ fn show_arrange_modal(
                 .iter()
                 .map(|o| {
                     let (lw, lh) = o.logical_size();
-                    format!("{} [{}×{} @ ({}, {})]", o.connector, lw, lh, o.x, o.y)
+                    format!(
+                        "{} [{}×{} px · x={} px, y={} px]",
+                        o.connector, lw, lh, o.x, o.y
+                    )
                 })
                 .collect();
             lbl.set_label(&txt.join("   ·   "));
+
+            let sel_idx = if cfg.outputs.is_empty() {
+                0
+            } else {
+                let mut st = st_sync.borrow_mut();
+                if st.selected_idx >= cfg.outputs.len() {
+                    st.selected_idx = 0;
+                }
+                st.selected_idx
+            };
+
+            if let Some(sel_out) = cfg.outputs.get(sel_idx) {
+                y_lbl_c.set_label(&format!("y = {} px", sel_out.y));
+            } else {
+                y_lbl_c.set_label("y = 0 px");
+            }
+
+            while let Some(child) = sel_row_c.first_child() {
+                sel_row_c.remove(&child);
+            }
+            if !cfg.outputs.is_empty() {
+                sel_row_c.append(
+                    &Label::builder()
+                        .label("Pantalla:")
+                        .css_classes(["card-section-sub"])
+                        .margin_end(2)
+                        .build(),
+                );
+                for (idx, out) in cfg.outputs.iter().enumerate() {
+                    let pill_lbl = format!("{} (y={} px)", friendly_display_name(out), out.y);
+                    let (wrap, btn) = make_squircle_button(
+                        &pill_lbl,
+                        idx == sel_idx,
+                        Some(&format!("Seleccionar {} para ajustar su posición vertical", out.connector)),
+                    );
+                    let st_btn = st_sync.clone();
+                    let slot_btn = sync_slot_c.clone();
+                    btn.connect_clicked(move |_| {
+                        st_btn.borrow_mut().selected_idx = idx;
+                        if let Some(cb) = slot_btn.borrow().as_ref().cloned() {
+                            cb();
+                        }
+                    });
+                    sel_row_c.append(&wrap);
+                }
+            }
+
             canvas_c.queue_draw();
         })
     };
+    *sync_slot.borrow_mut() = Some(sync_coords.clone());
     sync_coords();
 
     {
@@ -845,6 +913,13 @@ fn show_arrange_modal(
                 cr.set_font_size(10.0);
                 cr.move_to(rx + 10.0, ry + 41.0);
                 let _ = cr.show_text(&format!("{} × {} ({:.0}%)", lw, lh, o.scale * 100.0));
+
+                if rh >= 72.0 {
+                    cr.set_source_rgba(0.84, 0.88, 0.96, 0.78);
+                    cr.set_font_size(9.5);
+                    cr.move_to(rx + 10.0, ry + 56.0);
+                    let _ = cr.show_text(&format!("x={} px · y={} px", o.x, o.y));
+                }
             }
         });
     }
@@ -890,6 +965,12 @@ fn show_arrange_modal(
             };
             st.drag_dx = 0.0;
             st.drag_dy = 0.0;
+
+            if dx.abs() < 4.0 && dy.abs() < 4.0 {
+                drop(st);
+                sync_c();
+                return;
+            }
 
             let mut cfg = DisplaysConfig::load();
             if cfg.outputs.len() >= 2 {
@@ -963,6 +1044,55 @@ fn show_arrange_modal(
         tools_row.append(&w_btn);
     }
     root.append(&tools_row);
+
+    // Selector de pantalla y botones de ajuste vertical en píxeles
+    root.append(&sel_row);
+
+    let vert_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(6)
+        .halign(Align::Start)
+        .build();
+    vert_row.append(
+        &Label::builder()
+            .label("Mover vertical:")
+            .css_classes(["card-section-sub"])
+            .margin_end(2)
+            .build(),
+    );
+
+    let append_step_buttons = |steps: &[(&str, i32, &str)]| {
+        for &(label, delta, tip) in steps {
+            let (w_btn, b) = make_squircle_button(label, false, Some(tip));
+            let st_c = state.clone();
+            let sync_c = sync_coords.clone();
+            let on_ch = on_changed.clone();
+            b.connect_clicked(move |_| {
+                let mut cfg = DisplaysConfig::load();
+                if cfg.outputs.is_empty() {
+                    return;
+                }
+                let sel = st_c.borrow().selected_idx.min(cfg.outputs.len() - 1);
+                cfg.adjust_vertical_offset(sel, delta);
+                save_displays_and_reload(&cfg);
+                sync_c();
+                on_ch();
+            });
+            vert_row.append(&w_btn);
+        }
+    };
+    append_step_buttons(&[
+        ("↑ 50 px", -50, "Subir pantalla seleccionada 50 píxeles"),
+        ("↑ 10 px", -10, "Subir pantalla seleccionada 10 píxeles"),
+        ("↑ 1 px", -1, "Subir pantalla seleccionada 1 píxel"),
+    ]);
+    vert_row.append(&y_readout_lbl);
+    append_step_buttons(&[
+        ("↓ 1 px", 1, "Bajar pantalla seleccionada 1 píxel"),
+        ("↓ 10 px", 10, "Bajar pantalla seleccionada 10 píxeles"),
+        ("↓ 50 px", 50, "Bajar pantalla seleccionada 50 píxeles"),
+    ]);
+    root.append(&vert_row);
 
     let footer = GtkBox::builder()
         .orientation(Orientation::Horizontal)
@@ -2776,5 +2906,51 @@ mod tests {
         let (scrolled, refresh) = create_displays_pane(&win);
         refresh();
         assert!(scrolled.child().is_some());
+    }
+
+    #[test]
+    fn adjust_vertical_offset_moves_display_by_exact_pixels() {
+        let out0 = DisplayOutputConfig {
+            connector: "eDP-1".to_string(),
+            name: "eDP-1".to_string(),
+            width: 1920,
+            height: 1080,
+            refresh_rate: 60.0,
+            modes: vec![],
+            x: 0,
+            y: 0,
+            scale: 1.0,
+            primary: true,
+            brightness: 100.0,
+            diagonal_inches: Some(14.0),
+        };
+        let out1 = DisplayOutputConfig {
+            connector: "HDMI-A-1".to_string(),
+            name: "HDMI-A-1".to_string(),
+            x: 1920,
+            primary: false,
+            ..out0.clone()
+        };
+        let mut cfg = DisplaysConfig {
+            outputs: vec![out0, out1],
+            master_scale: 1.0,
+            linked_physical_1to1: false,
+            ..Default::default()
+        };
+
+        // Bajar pantalla secundaria 50 px
+        cfg.adjust_vertical_offset(1, 50);
+        assert_eq!(cfg.outputs[0].y, 0);
+        assert_eq!(cfg.outputs[1].y, 50);
+
+        // Subir pantalla secundaria 10 px
+        cfg.adjust_vertical_offset(1, -10);
+        assert_eq!(cfg.outputs[0].y, 0);
+        assert_eq!(cfg.outputs[1].y, 40);
+
+        // Subir pantalla primaria cuando ya estaba en y=0 desplaza hacia abajo a la otra
+        cfg.adjust_vertical_offset(0, -10);
+        assert_eq!(cfg.outputs[0].y, 0);
+        assert_eq!(cfg.outputs[1].y, 50);
     }
 }

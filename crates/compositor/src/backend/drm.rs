@@ -701,9 +701,27 @@ fn scan_connected_drm_connectors(
     connected_list
 }
 
+fn select_hotplug_primary_index(
+    outputs: &[DisplayOutputConfig],
+    pinned_primary: Option<&str>,
+) -> usize {
+    pinned_primary
+        .and_then(|pin| outputs.iter().position(|output| output.connector == pin))
+        .or_else(|| outputs.iter().position(|output| output.primary))
+        .unwrap_or(0)
+}
+
 fn sync_displays_config_from_connectors(
     connected_list: &[(connector::Handle, connector::Info, String, bool)],
     displays_cfg: &mut DisplaysConfig,
+) {
+    sync_displays_config_from_connectors_with_pinned_primary(connected_list, displays_cfg, None);
+}
+
+fn sync_displays_config_from_connectors_with_pinned_primary(
+    connected_list: &[(connector::Handle, connector::Info, String, bool)],
+    displays_cfg: &mut DisplaysConfig,
+    pinned_primary: Option<&str>,
 ) {
     let mut detected_outputs = Vec::with_capacity(connected_list.len());
     let mut detected_x = 0;
@@ -772,7 +790,13 @@ fn sync_displays_config_from_connectors(
             x: previous
                 .as_ref()
                 .map(|output| output.x)
-                .unwrap_or(detected_x),
+                .unwrap_or_else(|| {
+                    if pinned_primary.is_some() {
+                        100_000 + detected_x
+                    } else {
+                        detected_x
+                    }
+                }),
             y: previous.as_ref().map(|output| output.y).unwrap_or(0),
             scale,
             primary: previous
@@ -790,10 +814,7 @@ fn sync_displays_config_from_connectors(
         });
         detected_x += logical_width.max(100);
     }
-    let primary_idx = detected_outputs
-        .iter()
-        .position(|output| output.primary)
-        .unwrap_or(0);
+    let primary_idx = select_hotplug_primary_index(&detected_outputs, pinned_primary);
     for (idx, output) in detected_outputs.iter_mut().enumerate() {
         output.primary = idx == primary_idx;
     }
@@ -1181,7 +1202,7 @@ fn reconcile_drm_outputs(
         connected_list.iter().map(|(h, ..)| *h).collect();
 
     let mut removed_outputs = Vec::new();
-    let has_added = {
+    let (has_added, surviving_primary_connector) = {
         let Ok(mut surfs) = shared_surfaces.lock() else {
             return None;
         };
@@ -1201,6 +1222,7 @@ fn reconcile_drm_outputs(
             return None;
         }
 
+        let active_primary_name = state.primary_output().map(|o| o.name());
         let mut remaining = Vec::with_capacity(surfs.len());
         for surf in surfs.drain(..) {
             if connected_handles.contains(&surf.connector) {
@@ -1209,8 +1231,15 @@ fn reconcile_drm_outputs(
                 removed_outputs.push(surf);
             }
         }
+        let pinned_primary = if any_added && !remaining.is_empty() {
+            active_primary_name
+                .filter(|name| remaining.iter().any(|s| s.output.name() == *name))
+                .or_else(|| remaining.first().map(|s| s.output.name()))
+        } else {
+            None
+        };
         *surfs = remaining;
-        any_added
+        (any_added, pinned_primary)
     };
 
     let mut preserved_shell_layers = Vec::new();
@@ -1248,7 +1277,11 @@ fn reconcile_drm_outputs(
         removed_globals.push(global);
     }
 
-    sync_displays_config_from_connectors(&connected_list, &mut displays_cfg);
+    sync_displays_config_from_connectors_with_pinned_primary(
+        &connected_list,
+        &mut displays_cfg,
+        surviving_primary_connector.as_deref(),
+    );
     connected_list.sort_by_key(|(_, _, name, _)| {
         !displays_cfg
             .find_for_connector(name)
@@ -7245,5 +7278,33 @@ mod drm_emergency_tests {
                 PathBuf::from("/dev/dri/card0")
             ]
         );
+    }
+
+    #[test]
+    fn select_hotplug_primary_index_keeps_surviving_primary_over_new_connector() {
+        use malus_de_common::config::DisplayOutputConfig;
+
+        let make_out = |connector: &str, primary: bool| DisplayOutputConfig {
+            connector: connector.to_string(),
+            name: connector.to_string(),
+            width: 1920,
+            height: 1080,
+            refresh_rate: 60.0,
+            modes: vec![],
+            x: 0,
+            y: 0,
+            scale: 1.0,
+            primary,
+            brightness: 100.0,
+            diagonal_inches: Some(24.0),
+        };
+        // Simula el caso en que el conector nuevo (`DP-1`) aparece antes que el activo (`eDP-1`)
+        // e incluso traía `primary = true` en un `monitors.toml` previo.
+        let outputs = vec![make_out("DP-1", true), make_out("eDP-1", true)];
+        assert_eq!(
+            super::select_hotplug_primary_index(&outputs, Some("eDP-1")),
+            1
+        );
+        assert_eq!(super::select_hotplug_primary_index(&outputs, None), 0);
     }
 }

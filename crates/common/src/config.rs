@@ -3333,7 +3333,7 @@ impl DisplaysConfig {
         self.outputs[output_idx].y += delta_y;
         if let Some(min_y) = self.outputs.iter().map(|o| o.y).min() {
             for o in &mut self.outputs {
-                o.y = (o.y - min_y).clamp(0, 1200);
+                o.y = (o.y - min_y).clamp(0, 4320);
             }
         }
     }
