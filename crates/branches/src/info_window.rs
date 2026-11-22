@@ -446,8 +446,22 @@ fn show_get_info_impl(
 
     // 4. Abrir con… (para archivos)
     if !item.is_dir {
-        let (ctype, _) = gio::content_type_guess(Some(&path), &[]);
-        let apps = gio::AppInfo::all_for_type(&ctype);
+        let gfile = gio::File::for_path(&path);
+        let ctype = gfile
+            .query_info(
+                "standard::content-type",
+                gio::FileQueryInfoFlags::NONE,
+                gio::Cancellable::NONE,
+            )
+            .ok()
+            .and_then(|fi| fi.content_type())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        let apps = if ctype.is_empty() {
+            Vec::new()
+        } else {
+            gio::AppInfo::all_for_type(&ctype)
+        };
         if !apps.is_empty() {
             outer.append(&Separator::new(Orientation::Horizontal));
             let open_with_title = Label::builder()

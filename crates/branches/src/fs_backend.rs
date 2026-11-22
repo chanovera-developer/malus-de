@@ -530,8 +530,24 @@ pub fn open_file(path: &Path) -> Result<(), String> {
     if path.extension().and_then(|s| s.to_str()) == Some("desktop") {
         return launch_desktop_file(path);
     }
-    let uri = format!("file://{}", path.display());
-    gio::AppInfo::launch_default_for_uri(&uri, None::<&gio::AppLaunchContext>)
+    let gfile = gio::File::for_path(path);
+    if let Ok(handler) = gfile.query_default_handler(gio::Cancellable::NONE) {
+        if handler
+            .launch(&[gfile.clone()], None::<&gio::AppLaunchContext>)
+            .is_ok()
+        {
+            return Ok(());
+        }
+    }
+    let uri = gfile.uri();
+    if gio::AppInfo::launch_default_for_uri(uri.as_str(), None::<&gio::AppLaunchContext>).is_ok() {
+        return Ok(());
+    }
+    let mut cmd = std::process::Command::new("xdg-open");
+    cmd.arg(path);
+    malus_de_common::config::apply_isolated_environment(&mut cmd);
+    cmd.spawn()
+        .map(|_| ())
         .map_err(|e| format!("Error al abrir archivo: {}", e))
 }
 

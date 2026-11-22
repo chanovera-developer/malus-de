@@ -121,8 +121,21 @@ fn probe_image_dimensions(path: &Path) -> Option<(i32, i32)> {
 }
 
 fn default_open_app_name(path: &Path) -> Option<String> {
-    let (ctype, _) = gio::content_type_guess(Some(path), &[]);
-    let info = gio::AppInfo::default_for_type(&ctype, false)?;
+    let gfile = gio::File::for_path(path);
+    let info = gfile
+        .query_default_handler(gio::Cancellable::NONE)
+        .ok()
+        .or_else(|| {
+            let ctype = gfile
+                .query_info(
+                    "standard::content-type",
+                    gio::FileQueryInfoFlags::NONE,
+                    gio::Cancellable::NONE,
+                )
+                .ok()
+                .and_then(|fi| fi.content_type())?;
+            gio::AppInfo::default_for_type(ctype.as_str(), false)
+        })?;
     let name = info.display_name().to_string();
     let trimmed = name.trim();
     if trimmed.is_empty() {
@@ -760,19 +773,21 @@ impl QuickLook {
         card.set_margin_start(16);
         card.set_margin_end(16);
 
-        // Impedir que los clics dentro de la tarjeta cierren Quick Look
-        let card_click = GestureClick::new();
-        card_click.set_button(0);
-        card_click.connect_pressed(|g, _, _, _| {
-            g.set_state(gtk4::EventSequenceState::Claimed);
-        });
-        card.add_controller(card_click);
-
-        // Clic fuera de la tarjeta cierra Quick Look
+        // Clic fuera de la tarjeta cierra Quick Look (sin interceptar los botones internos de la tarjeta)
         let bd_click = GestureClick::new();
         bd_click.set_button(gtk4::gdk::BUTTON_PRIMARY);
         let ql_bd = self.clone();
-        bd_click.connect_released(move |_, _, _, _| {
+        let card_for_bounds = card.downgrade();
+        let bd_for_bounds = backdrop.downgrade();
+        bd_click.connect_released(move |_, _, x, y| {
+            if let (Some(c), Some(bd)) = (card_for_bounds.upgrade(), bd_for_bounds.upgrade()) {
+                if let Some(bounds) = c.compute_bounds(&bd) {
+                    let pt = gtk4::graphene::Point::new(x as f32, y as f32);
+                    if bounds.contains_point(&pt) {
+                        return;
+                    }
+                }
+            }
             ql_bd.close();
         });
         backdrop.add_controller(bd_click);
