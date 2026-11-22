@@ -21,6 +21,7 @@ pub fn refresh_all_sidebars() {
                 inner.sync_default_rows_visibility();
                 inner.rebuild_bookmarks();
                 inner.rebuild_devices();
+                inner.rebuild_tags();
                 true
             } else {
                 false
@@ -36,9 +37,12 @@ struct SidebarInner {
     bookmark_rows: RefCell<Vec<ListBoxRow>>,
     devices_anchor: ListBoxRow,
     device_rows: RefCell<Vec<ListBoxRow>>,
+    tags_header: ListBoxRow,
+    tag_rows: RefCell<Vec<ListBoxRow>>,
     volume_monitor: gio::VolumeMonitor,
     signal_ids: RefCell<Vec<glib::SignalHandlerId>>,
     on_navigate: Rc<dyn Fn(PathBuf)>,
+    on_tag_selected: Rc<dyn Fn(String)>,
     on_files_dropped: Rc<dyn Fn()>,
 }
 
@@ -368,28 +372,7 @@ impl Sidebar {
         // 4. Sección Etiquetas (Tags)
         let tags_header = add_section_title(&list_box, if es { "Etiquetas" } else { "Tags" });
         attach_bookmark_drop_target(&tags_header);
-
-        for def in crate::db::TAG_CATALOG.iter() {
-            let display_title = if es { def.label_es } else { def.label_en };
-            let row = create_tag_row(def.id, display_title);
-            let tag_cb = on_tag_selected.clone();
-            let tag_id = def.id.to_string();
-
-            let click = GestureClick::new();
-            let cb_c = tag_cb.clone();
-            let t_c = tag_id.clone();
-            click.connect_released(move |_, _, _, _| {
-                cb_c(t_c.clone());
-            });
-            row.add_controller(click);
-
-            let t_a = tag_id.clone();
-            row.connect_activate(move |_| {
-                tag_cb(t_a.clone());
-            });
-            attach_tag_drop_target(&row, tag_id, def.color_hex.to_string(), &on_files_dropped);
-            list_box.append(&row);
-        }
+        list_box.append(&tags_header);
 
         // Manejador centralizado de activación de filas del ListBox
         let nav_for_lb = on_navigate.clone();
@@ -463,14 +446,18 @@ impl Sidebar {
             bookmark_rows: RefCell::new(Vec::new()),
             devices_anchor,
             device_rows: RefCell::new(Vec::new()),
+            tags_header,
+            tag_rows: RefCell::new(Vec::new()),
             volume_monitor: gio::VolumeMonitor::get(),
             signal_ids: RefCell::new(Vec::new()),
             on_navigate,
+            on_tag_selected,
             on_files_dropped,
         });
         inner.sync_default_rows_visibility();
         inner.rebuild_bookmarks();
         inner.rebuild_devices();
+        inner.rebuild_tags();
         inner.connect_volume_signals();
 
         SIDEBAR_INSTANCES.with(|instances| {
@@ -899,6 +886,79 @@ impl SidebarInner {
         }
         *self.bookmark_rows.borrow_mut() = rows;
     }
+
+    fn rebuild_tags(&self) {
+        for old_row in self.tag_rows.borrow_mut().drain(..) {
+            self.list_box.remove(&old_row);
+        }
+
+        let base_idx = self.tags_header.index();
+        if base_idx < 0 {
+            return;
+        }
+
+        let es = malus_de_common::is_spanish_locale();
+        let tags = crate::db::open_db()
+            .map(|conn| crate::db::get_all_sidebar_tags(&conn, es))
+            .unwrap_or_else(|_| {
+                crate::db::TAG_CATALOG
+                    .iter()
+                    .map(|def| crate::db::TagMetadata {
+                        tag_id: def.id.to_string(),
+                        label: if es { def.label_es } else { def.label_en }.to_string(),
+                        color_id: def.id.to_string(),
+                        hidden_in_sidebar: false,
+                    })
+                    .collect()
+            });
+
+        self.tags_header.set_visible(!tags.is_empty());
+
+        let mut rows = Vec::with_capacity(tags.len());
+        for (offset, meta) in tags.into_iter().enumerate() {
+            let row = create_tag_row(&meta.tag_id, &meta.color_id, &meta.label);
+            let tag_cb = self.on_tag_selected.clone();
+            let tag_id = meta.tag_id.clone();
+
+            let click = GestureClick::new();
+            let cb_c = tag_cb.clone();
+            let t_c = tag_id.clone();
+            click.connect_released(move |_, _, _, _| {
+                cb_c(t_c.clone());
+            });
+            row.add_controller(click);
+
+            let middle_click = GestureClick::new();
+            middle_click.set_button(gdk::BUTTON_MIDDLE);
+            let row_mid = row.downgrade();
+            let t_mid = tag_id.clone();
+            middle_click.connect_pressed(move |g, _n, _x, _y| {
+                g.set_state(gtk4::EventSequenceState::Claimed);
+                if let Some(r) = row_mid.upgrade() {
+                    open_target_in_new_tab(&r, &format!("@tag:{}", t_mid));
+                }
+            });
+            row.add_controller(middle_click);
+
+            let t_a = tag_id.clone();
+            row.connect_activate(move |_| {
+                tag_cb(t_a.clone());
+            });
+
+            let color_hex = crate::db::tag_color_hex(&meta.color_id).to_string();
+            attach_tag_drop_target(&row, tag_id, color_hex, &self.on_files_dropped);
+            attach_tag_context_menu(
+                &row,
+                meta.tag_id,
+                meta.label,
+                meta.color_id,
+                &self.on_files_dropped,
+            );
+            self.list_box.insert(&row, base_idx + 1 + offset as i32);
+            rows.push(row);
+        }
+        *self.tag_rows.borrow_mut() = rows;
+    }
 }
 
 fn can_bookmark_path(path: &Path) -> bool {
@@ -1012,7 +1072,10 @@ fn show_add_bookmark_popover(
     vbox.append(&btn_pick);
 
     let has_hidden = crate::db::open_db()
-        .map(|conn| !crate::db::get_hidden_sidebar_paths(&conn).is_empty())
+        .map(|conn| {
+            !crate::db::get_hidden_sidebar_paths(&conn).is_empty()
+                || !crate::db::get_hidden_sidebar_tags(&conn).is_empty()
+        })
         .unwrap_or(false);
     if has_hidden {
         vbox.append(&make_sidebar_menu_separator());
@@ -1028,6 +1091,7 @@ fn show_add_bookmark_popover(
             }
             if let Ok(conn) = crate::db::open_db() {
                 let _ = crate::db::restore_all_hidden_sidebar_paths(&conn);
+                let _ = crate::db::restore_all_hidden_sidebar_tags(&conn);
                 refresh_all_sidebars();
             }
         });
@@ -2115,7 +2179,373 @@ fn attach_trash_context_menu(row: &ListBoxRow, es: bool) {
     row.add_controller(click);
 }
 
-fn create_tag_row(tag_id: &str, title: &str) -> ListBoxRow {
+fn make_tag_color_menu_item(color_id: &str, label: &str) -> Button {
+    let hbox = GtkBox::new(Orientation::Horizontal, 8);
+    hbox.set_margin_start(2);
+    hbox.set_margin_end(4);
+
+    let dot = GtkBox::new(Orientation::Horizontal, 0);
+    dot.set_size_request(12, 12);
+    dot.set_valign(Align::Center);
+    dot.add_css_class("branches-tag-dot");
+    dot.add_css_class(&format!("branches-tag-color-{}", color_id));
+
+    let text = Label::builder()
+        .label(label)
+        .halign(Align::Start)
+        .hexpand(true)
+        .build();
+
+    hbox.append(&dot);
+    hbox.append(&text);
+
+    Button::builder()
+        .child(&hbox)
+        .has_frame(false)
+        .css_classes(["flat", "malus-menu-item"])
+        .build()
+}
+
+fn show_delete_tag_dialog(
+    parent_win: Option<&gtk4::Window>,
+    tag_id: &str,
+    tag_label: &str,
+    on_changed: &Rc<dyn Fn()>,
+) {
+    let es = malus_de_common::is_spanish_locale();
+    let mut builder = gtk4::Window::builder()
+        .modal(true)
+        .resizable(false)
+        .destroy_with_parent(true)
+        .default_width(360)
+        .title(if es {
+            format!("¿Eliminar la etiqueta “{}”?", tag_label)
+        } else {
+            format!("Delete Tag “{}”?", tag_label)
+        });
+    if let Some(w) = parent_win {
+        builder = builder.transient_for(w);
+    }
+    let dialog = builder.build();
+
+    let vbox = GtkBox::new(Orientation::Vertical, 12);
+    vbox.set_margin_top(16);
+    vbox.set_margin_bottom(16);
+    vbox.set_margin_start(18);
+    vbox.set_margin_end(18);
+
+    let body = Label::builder()
+        .label(if es {
+            format!(
+                "Esta acción quitará la etiqueta «{}» de todos los archivos y la eliminará de la barra lateral.",
+                tag_label
+            )
+        } else {
+            format!(
+                "This will remove the “{}” tag from all files and delete it from the sidebar.",
+                tag_label
+            )
+        })
+        .wrap(true)
+        .xalign(0.0)
+        .build();
+    vbox.append(&body);
+
+    let btns = GtkBox::new(Orientation::Horizontal, 8);
+    btns.set_halign(Align::End);
+    let cancel_btn = Button::with_label(if es { "Cancelar" } else { "Cancel" });
+    let delete_btn = Button::builder()
+        .label(if es { "Eliminar" } else { "Delete" })
+        .css_classes(["destructive-action"])
+        .build();
+    btns.append(&cancel_btn);
+    btns.append(&delete_btn);
+    vbox.append(&btns);
+    dialog.set_child(Some(&vbox));
+
+    let d_cancel = dialog.downgrade();
+    cancel_btn.connect_clicked(move |_| {
+        if let Some(d) = d_cancel.upgrade() {
+            d.close();
+        }
+    });
+
+    let d_ok = dialog.downgrade();
+    let tid = tag_id.to_string();
+    let cb = on_changed.clone();
+    delete_btn.connect_clicked(move |_| {
+        if let Some(d) = d_ok.upgrade() {
+            d.close();
+        }
+        if let Ok(conn) = crate::db::open_db() {
+            let _ = crate::db::delete_tag_globally(&conn, &tid);
+            refresh_all_sidebars();
+            cb();
+        }
+    });
+
+    dialog.present();
+}
+
+fn show_rename_tag_dialog(
+    parent_win: Option<&gtk4::Window>,
+    tag_id: &str,
+    current_label: &str,
+    on_changed: &Rc<dyn Fn()>,
+) {
+    let es = malus_de_common::is_spanish_locale();
+    let mut builder = gtk4::Window::builder()
+        .modal(true)
+        .resizable(false)
+        .destroy_with_parent(true)
+        .default_width(340)
+        .title(if es {
+            "Renombrar etiqueta"
+        } else {
+            "Rename Tag"
+        });
+    if let Some(w) = parent_win {
+        builder = builder.transient_for(w);
+    }
+    let dialog = builder.build();
+
+    let vbox = GtkBox::new(Orientation::Vertical, 12);
+    vbox.set_margin_top(16);
+    vbox.set_margin_bottom(16);
+    vbox.set_margin_start(18);
+    vbox.set_margin_end(18);
+
+    let entry = gtk4::Entry::builder().text(current_label).build();
+    entry.select_region(0, -1);
+    vbox.append(&entry);
+
+    let btns = GtkBox::new(Orientation::Horizontal, 8);
+    btns.set_halign(Align::End);
+    let cancel_btn = Button::with_label(if es { "Cancelar" } else { "Cancel" });
+    let save_btn = Button::builder()
+        .label(if es { "Renombrar" } else { "Rename" })
+        .css_classes(["suggested-action"])
+        .build();
+    btns.append(&cancel_btn);
+    btns.append(&save_btn);
+    vbox.append(&btns);
+    dialog.set_child(Some(&vbox));
+
+    let d_cancel = dialog.downgrade();
+    cancel_btn.connect_clicked(move |_| {
+        if let Some(d) = d_cancel.upgrade() {
+            d.close();
+        }
+    });
+
+    let apply_rename = {
+        let d_ok = dialog.downgrade();
+        let entry_c = entry.downgrade();
+        let tid = tag_id.to_string();
+        let cb = on_changed.clone();
+        Rc::new(move || {
+            let Some(e) = entry_c.upgrade() else {
+                return;
+            };
+            let new_name = e.text().to_string();
+            if new_name.trim().is_empty() {
+                return;
+            }
+            if let Some(d) = d_ok.upgrade() {
+                d.close();
+            }
+            if let Ok(conn) = crate::db::open_db() {
+                if crate::db::rename_tag(&conn, &tid, &new_name).unwrap_or(false) {
+                    refresh_all_sidebars();
+                    cb();
+                }
+            }
+        })
+    };
+
+    let apply_btn = apply_rename.clone();
+    save_btn.connect_clicked(move |_| apply_btn());
+    entry.connect_activate(move |_| apply_rename());
+
+    dialog.present();
+    entry.grab_focus();
+}
+
+fn attach_tag_context_menu(
+    row: &ListBoxRow,
+    tag_id: String,
+    tag_label: String,
+    _color_id: String,
+    on_changed: &Rc<dyn Fn()>,
+) {
+    let right_click = GestureClick::new();
+    right_click.set_button(gdk::BUTTON_SECONDARY);
+    let row_ref = row.downgrade();
+    let on_changed = on_changed.clone();
+
+    right_click.connect_pressed(move |g, _n, x, y| {
+        g.set_state(gtk4::EventSequenceState::Claimed);
+        let Some(row_widget) = row_ref.upgrade() else {
+            return;
+        };
+        let es = malus_de_common::is_spanish_locale();
+        let pop = Popover::builder()
+            .has_arrow(false)
+            .css_classes(["malus-popover-menu"])
+            .build();
+        pop.set_parent(&row_widget);
+        let rect = gdk::Rectangle::new(x.round() as i32, y.round() as i32, 1, 1);
+        pop.set_pointing_to(Some(&rect));
+        pop.connect_closed(|p| p.unparent());
+
+        let vbox = GtkBox::new(Orientation::Vertical, 2);
+
+        // 1. Abrir en una pestaña nueva
+        let new_tab_btn = make_sidebar_menu_item(if es {
+            "Abrir en una pestaña nueva"
+        } else {
+            "Open in New Tab"
+        });
+        {
+            let p_tab = pop.downgrade();
+            let r_anchor = row_widget.downgrade();
+            let spec = format!("@tag:{}", tag_id);
+            new_tab_btn.connect_clicked(move |_| {
+                if let Some(p) = p_tab.upgrade() {
+                    p.popdown();
+                }
+                if let Some(r) = r_anchor.upgrade() {
+                    open_target_in_new_tab(&r, &spec);
+                }
+            });
+        }
+        vbox.append(&new_tab_btn);
+
+        vbox.append(&make_sidebar_menu_separator());
+
+        // 2. Eliminar de la barra lateral
+        let remove_sidebar_btn = make_sidebar_menu_item(if es {
+            "Eliminar de la barra lateral"
+        } else {
+            "Remove from Sidebar"
+        });
+        {
+            let p_rem = pop.downgrade();
+            let tid = tag_id.clone();
+            remove_sidebar_btn.connect_clicked(move |_| {
+                if let Some(p) = p_rem.upgrade() {
+                    p.popdown();
+                }
+                if let Ok(conn) = crate::db::open_db() {
+                    let _ = crate::db::set_tag_hidden_in_sidebar(&conn, &tid, true);
+                    refresh_all_sidebars();
+                }
+            });
+        }
+        vbox.append(&remove_sidebar_btn);
+
+        // 3. Eliminar etiqueta “<Nombre>”...
+        let delete_tag_btn = make_sidebar_menu_item(&if es {
+            format!("Eliminar etiqueta “{}”...", tag_label)
+        } else {
+            format!("Delete Tag “{}”...", tag_label)
+        });
+        {
+            let p_del = pop.downgrade();
+            let r_anchor = row_widget.downgrade();
+            let tid = tag_id.clone();
+            let lbl = tag_label.clone();
+            let cb = on_changed.clone();
+            delete_tag_btn.connect_clicked(move |_| {
+                if let Some(p) = p_del.upgrade() {
+                    p.popdown();
+                }
+                let parent_win = r_anchor
+                    .upgrade()
+                    .and_then(|r| r.root())
+                    .and_downcast::<gtk4::Window>();
+                show_delete_tag_dialog(parent_win.as_ref(), &tid, &lbl, &cb);
+            });
+        }
+        vbox.append(&delete_tag_btn);
+
+        vbox.append(&make_sidebar_menu_separator());
+
+        // 4. Renombrar “<Nombre>”
+        let rename_btn = make_sidebar_menu_item(&if es {
+            format!("Renombrar “{}”", tag_label)
+        } else {
+            format!("Rename “{}”", tag_label)
+        });
+        {
+            let p_ren = pop.downgrade();
+            let r_anchor = row_widget.downgrade();
+            let tid = tag_id.clone();
+            let lbl = tag_label.clone();
+            let cb = on_changed.clone();
+            rename_btn.connect_clicked(move |_| {
+                if let Some(p) = p_ren.upgrade() {
+                    p.popdown();
+                }
+                let parent_win = r_anchor
+                    .upgrade()
+                    .and_then(|r| r.root())
+                    .and_downcast::<gtk4::Window>();
+                show_rename_tag_dialog(parent_win.as_ref(), &tid, &lbl, &cb);
+            });
+        }
+        vbox.append(&rename_btn);
+
+        vbox.append(&make_sidebar_menu_separator());
+
+        // 5. Selector de color de etiqueta (Sin color + 7 colores estándar)
+        let no_color_btn =
+            make_tag_color_menu_item("none", if es { "Sin color" } else { "No Color" });
+        {
+            let p_col = pop.downgrade();
+            let tid = tag_id.clone();
+            let cb = on_changed.clone();
+            no_color_btn.connect_clicked(move |_| {
+                if let Some(p) = p_col.upgrade() {
+                    p.popdown();
+                }
+                if let Ok(conn) = crate::db::open_db() {
+                    let _ = crate::db::set_tag_color(&conn, &tid, "none");
+                    refresh_all_sidebars();
+                    cb();
+                }
+            });
+        }
+        vbox.append(&no_color_btn);
+
+        for def in crate::db::TAG_CATALOG.iter() {
+            let color_btn =
+                make_tag_color_menu_item(def.id, if es { def.label_es } else { def.label_en });
+            let p_col = pop.downgrade();
+            let tid = tag_id.clone();
+            let cid = def.id.to_string();
+            let cb = on_changed.clone();
+            color_btn.connect_clicked(move |_| {
+                if let Some(p) = p_col.upgrade() {
+                    p.popdown();
+                }
+                if let Ok(conn) = crate::db::open_db() {
+                    let _ = crate::db::set_tag_color(&conn, &tid, &cid);
+                    refresh_all_sidebars();
+                    cb();
+                }
+            });
+            vbox.append(&color_btn);
+        }
+
+        pop.set_child(Some(&vbox));
+        pop.popup();
+    });
+
+    row.add_controller(right_click);
+}
+
+fn create_tag_row(tag_id: &str, color_id: &str, title: &str) -> ListBoxRow {
     let hbox = GtkBox::new(Orientation::Horizontal, 8);
     hbox.set_margin_start(4);
     hbox.set_margin_end(4);
@@ -2124,7 +2554,7 @@ fn create_tag_row(tag_id: &str, title: &str) -> ListBoxRow {
     dot.set_size_request(10, 10);
     dot.set_valign(Align::Center);
     dot.add_css_class("branches-tag-dot");
-    dot.add_css_class(&format!("branches-tag-color-{}", tag_id));
+    dot.add_css_class(&format!("branches-tag-color-{}", color_id));
 
     let label = Label::builder()
         .label(title)

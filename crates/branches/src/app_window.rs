@@ -1225,6 +1225,20 @@ impl BranchesWindow {
         } else if spec == "@applications" {
             self.open_new_tab(None);
             self.show_applications();
+        } else if let Some(tag_id) = spec.strip_prefix("@tag:") {
+            self.open_new_tab(None);
+            self.active_pane().show_tag_filter(tag_id);
+            let es = malus_de_common::is_spanish_locale();
+            let display = crate::db::open_db()
+                .map(|c| crate::db::tag_effective_label(&c, tag_id, es))
+                .unwrap_or_else(|_| crate::db::tag_display_label(tag_id, es));
+            self.title_label.set_label(&format!(
+                "{}: {}",
+                if es { "Etiqueta" } else { "Tag" },
+                display
+            ));
+            let active_id = *self.active_tab_id.borrow();
+            self.update_tab_title(active_id);
         } else {
             self.open_new_tab(Some(PathBuf::from(spec)));
         }

@@ -46,7 +46,7 @@ pub const TAG_CATALOG: [TagDefinition; 7] = [
     TagDefinition {
         id: "purple",
         color_hex: "#af52de",
-        label_es: "Púrpura",
+        label_es: "Morado",
         label_en: "Purple",
     },
     TagDefinition {
@@ -157,6 +157,12 @@ pub fn open_db() -> Result<Connection, rusqlite::Error> {
         );
         CREATE TABLE IF NOT EXISTS sidebar_hidden_defaults (
             folder_path TEXT PRIMARY KEY
+        );
+        CREATE TABLE IF NOT EXISTS tag_settings (
+            tag_id TEXT PRIMARY KEY,
+            custom_label TEXT,
+            color_id TEXT,
+            hidden_in_sidebar INTEGER NOT NULL DEFAULT 0
         );",
     )?;
 
@@ -634,6 +640,177 @@ pub fn restore_all_hidden_sidebar_paths(conn: &Connection) -> Result<usize, rusq
     conn.execute("DELETE FROM sidebar_hidden_defaults", [])
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagMetadata {
+    pub tag_id: String,
+    pub label: String,
+    pub color_id: String,
+    pub hidden_in_sidebar: bool,
+}
+
+pub fn tag_color_hex(color_id: &str) -> &'static str {
+    if color_id == "none" {
+        "transparent"
+    } else {
+        tag_definition(color_id)
+            .map(|d| d.color_hex)
+            .unwrap_or("#8e8e93")
+    }
+}
+
+pub fn get_tag_metadata(conn: &Connection, tag_id: &str, es: bool) -> TagMetadata {
+    let cid = canonical_tag_id(tag_id);
+    let default_label = tag_display_label(&cid, es);
+    let default_color = if tag_definition(&cid).is_some() {
+        cid.clone()
+    } else {
+        "gray".to_string()
+    };
+
+    let row = conn
+        .query_row(
+            "SELECT custom_label, color_id, hidden_in_sidebar FROM tag_settings WHERE tag_id = ?1",
+            params![cid],
+            |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, i64>(2)? != 0,
+                ))
+            },
+        )
+        .ok();
+
+    match row {
+        Some((custom_label, color_id, hidden)) => TagMetadata {
+            tag_id: cid,
+            label: custom_label
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(default_label),
+            color_id: color_id
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(default_color),
+            hidden_in_sidebar: hidden,
+        },
+        None => TagMetadata {
+            tag_id: cid,
+            label: default_label,
+            color_id: default_color,
+            hidden_in_sidebar: false,
+        },
+    }
+}
+
+pub fn tag_effective_label(conn: &Connection, tag_id: &str, es: bool) -> String {
+    get_tag_metadata(conn, tag_id, es).label
+}
+
+pub fn get_all_sidebar_tags(conn: &Connection, es: bool) -> Vec<TagMetadata> {
+    TAG_CATALOG
+        .iter()
+        .map(|def| get_tag_metadata(conn, def.id, es))
+        .filter(|meta| !meta.hidden_in_sidebar)
+        .collect()
+}
+
+pub fn get_hidden_sidebar_tags(conn: &Connection) -> Vec<String> {
+    let mut stmt = match conn
+        .prepare("SELECT tag_id FROM tag_settings WHERE hidden_in_sidebar != 0")
+    {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    stmt.query_map([], |row| row.get::<_, String>(0))
+        .map(|iter| iter.flatten().collect())
+        .unwrap_or_default()
+}
+
+pub fn set_tag_hidden_in_sidebar(
+    conn: &Connection,
+    tag_id: &str,
+    hidden: bool,
+) -> Result<(), rusqlite::Error> {
+    let cid = canonical_tag_id(tag_id);
+    conn.execute(
+        "INSERT INTO tag_settings (tag_id, hidden_in_sidebar)
+         VALUES (?1, ?2)
+         ON CONFLICT(tag_id) DO UPDATE SET hidden_in_sidebar = excluded.hidden_in_sidebar",
+        params![cid, if hidden { 1 } else { 0 }],
+    )?;
+    Ok(())
+}
+
+pub fn restore_all_hidden_sidebar_tags(conn: &Connection) -> Result<usize, rusqlite::Error> {
+    conn.execute(
+        "UPDATE tag_settings SET hidden_in_sidebar = 0 WHERE hidden_in_sidebar != 0",
+        [],
+    )
+}
+
+pub fn rename_tag(
+    conn: &Connection,
+    tag_id: &str,
+    new_label: &str,
+) -> Result<bool, rusqlite::Error> {
+    let clean = new_label.trim();
+    if clean.is_empty() {
+        return Ok(false);
+    }
+    let cid = canonical_tag_id(tag_id);
+    conn.execute(
+        "INSERT INTO tag_settings (tag_id, custom_label)
+         VALUES (?1, ?2)
+         ON CONFLICT(tag_id) DO UPDATE SET custom_label = excluded.custom_label",
+        params![cid, clean],
+    )?;
+    Ok(true)
+}
+
+pub fn set_tag_color(
+    conn: &Connection,
+    tag_id: &str,
+    color_id: &str,
+) -> Result<(), rusqlite::Error> {
+    let cid = canonical_tag_id(tag_id);
+    let clean_color = if color_id == "none" {
+        "none".to_string()
+    } else {
+        canonical_tag_id(color_id)
+    };
+    conn.execute(
+        "INSERT INTO tag_settings (tag_id, color_id)
+         VALUES (?1, ?2)
+         ON CONFLICT(tag_id) DO UPDATE SET color_id = excluded.color_id",
+        params![cid, clean_color],
+    )?;
+    Ok(())
+}
+
+/// Elimina por completo una etiqueta de todos los archivos y la oculta de la barra lateral.
+pub fn delete_tag_globally(conn: &Connection, tag_id: &str) -> Result<usize, rusqlite::Error> {
+    let cid = canonical_tag_id(tag_id);
+    let affected_paths: Vec<PathBuf> = get_files_by_tag(conn, &cid);
+    let deleted = conn.execute(
+        "DELETE FROM file_tags WHERE tag_name = ?1 OR lower(tag_name) = lower(?2)",
+        params![cid, tag_id],
+    )?;
+    for path in affected_paths {
+        sync_xattr_tags(conn, &path);
+    }
+    conn.execute(
+        "INSERT INTO tag_settings (tag_id, custom_label, color_id, hidden_in_sidebar)
+         VALUES (?1, NULL, NULL, 1)
+         ON CONFLICT(tag_id) DO UPDATE SET
+             custom_label = NULL,
+             color_id = NULL,
+             hidden_in_sidebar = 1",
+        params![cid],
+    )?;
+    Ok(deleted)
+}
+
 /// Cambia únicamente el título visible de un marcador en el sidebar sin renombrar el elemento en disco.
 pub fn rename_bookmark(
     conn: &Connection,
@@ -917,6 +1094,55 @@ mod tests {
 
         clear_file_tags(&conn, &sample).unwrap();
         assert!(get_file_tags(&conn, &sample).is_empty());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn tag_settings_rename_recolor_hide_restore_and_delete_globally() {
+        let temp_dir = std::env::temp_dir().join("malus_branches_tag_settings_test");
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+        let sample = temp_dir.join("nota.txt");
+        fs::write(&sample, b"hola").unwrap();
+
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE file_tags (
+                file_path TEXT NOT NULL,
+                tag_name TEXT NOT NULL,
+                tag_color TEXT NOT NULL,
+                PRIMARY KEY (file_path, tag_name)
+            );
+            CREATE TABLE tag_settings (
+                tag_id TEXT PRIMARY KEY,
+                custom_label TEXT,
+                color_id TEXT,
+                hidden_in_sidebar INTEGER NOT NULL DEFAULT 0
+            );",
+        )
+        .unwrap();
+
+        super::set_file_tag(&conn, &sample, "red", "#ff3b30").unwrap();
+        assert!(super::rename_tag(&conn, "red", "  Urgente  ").unwrap());
+        super::set_tag_color(&conn, "red", "none").unwrap();
+        let meta = super::get_tag_metadata(&conn, "red", true);
+        assert_eq!(meta.label, "Urgente");
+        assert_eq!(meta.color_id, "none");
+
+        super::set_tag_hidden_in_sidebar(&conn, "red", true).unwrap();
+        assert_eq!(super::get_hidden_sidebar_tags(&conn), vec!["red".to_string()]);
+        assert!(!super::get_all_sidebar_tags(&conn, true)
+            .iter()
+            .any(|t| t.tag_id == "red"));
+
+        super::restore_all_hidden_sidebar_tags(&conn).unwrap();
+        assert!(super::get_hidden_sidebar_tags(&conn).is_empty());
+
+        let deleted = super::delete_tag_globally(&conn, "red").unwrap();
+        assert_eq!(deleted, 1);
+        assert!(get_file_tags(&conn, &sample).is_empty());
+        assert_eq!(super::get_hidden_sidebar_tags(&conn), vec!["red".to_string()]);
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

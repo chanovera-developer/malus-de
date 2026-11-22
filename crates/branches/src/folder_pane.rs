@@ -884,7 +884,7 @@ impl FolderPane {
                 }
             }
             let es = malus_de_common::is_spanish_locale();
-            let display = crate::db::tag_display_label(tag_name, es);
+            let display = crate::db::tag_effective_label(&conn, tag_name, es);
             self.pane_title.set_label(&format!(
                 "{}: {}",
                 if es { "Etiqueta" } else { "Tag" },
