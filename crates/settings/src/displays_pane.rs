@@ -682,7 +682,7 @@ fn show_arrange_modal(
         .destroy_with_parent(true)
         .modal(true)
         .resizable(false)
-        .default_width(580)
+        .default_width(640)
         .title("Ordenar pantallas")
         .css_classes(["macos-modal-dialog"])
         .build();
@@ -714,10 +714,15 @@ fn show_arrange_modal(
     );
 
     let canvas = DrawingArea::builder()
-        .content_height(210)
+        .content_height(276)
         .hexpand(true)
         .build();
     crate::register_accent_draw_area(&canvas);
+
+    let canvas_overlay = Overlay::builder()
+        .hexpand(true)
+        .build();
+    canvas_overlay.set_child(Some(&canvas));
 
     let coords_lbl = Label::builder()
         .label("")
@@ -860,11 +865,13 @@ fn show_arrange_modal(
             }
             let total_w = (max_x - min_x).max(1000) as f64;
             let total_h = (max_y - min_y).max(760) as f64;
-            let pad = 28.0;
-            let zoom = ((w - pad * 2.0).max(180.0) / total_w)
-                .min((h - pad * 2.0).max(100.0) / total_h);
+            let pad_x = 28.0;
+            let top_pad = 42.0;
+            let bottom_pad = 46.0;
+            let avail_h = (h - top_pad - bottom_pad).max(100.0);
+            let zoom = ((w - pad_x * 2.0).max(180.0) / total_w).min(avail_h / total_h);
             let origin_x = (w - total_w * zoom) * 0.5;
-            let origin_y = (h - total_h * zoom) * 0.5;
+            let origin_y = top_pad + (avail_h - total_h * zoom) * 0.5;
             let accent = crate::accent_color();
 
             for (idx, o) in cfg.outputs.iter().enumerate() {
@@ -1000,7 +1007,58 @@ fn show_arrange_modal(
     }
     canvas.add_controller(drag);
 
-    root.append(&canvas);
+    // Selector de pantalla y botones de ajuste vertical en píxeles dentro del recuadro
+    sel_row.set_halign(Align::Start);
+    sel_row.set_valign(Align::Start);
+    sel_row.set_margin_top(8);
+    sel_row.set_margin_start(10);
+    sel_row.set_margin_end(10);
+    canvas_overlay.add_overlay(&sel_row);
+
+    let vert_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(5)
+        .halign(Align::Center)
+        .valign(Align::End)
+        .margin_bottom(8)
+        .margin_start(10)
+        .margin_end(10)
+        .build();
+
+    let append_step_buttons = |steps: &[(&str, i32, &str)]| {
+        for &(label, delta, tip) in steps {
+            let (w_btn, b) = make_squircle_button(label, false, Some(tip));
+            let st_c = state.clone();
+            let sync_c = sync_coords.clone();
+            let on_ch = on_changed.clone();
+            b.connect_clicked(move |_| {
+                let mut cfg = DisplaysConfig::load();
+                if cfg.outputs.is_empty() {
+                    return;
+                }
+                let sel = st_c.borrow().selected_idx.min(cfg.outputs.len() - 1);
+                cfg.adjust_vertical_offset(sel, delta);
+                save_displays_and_reload(&cfg);
+                sync_c();
+                on_ch();
+            });
+            vert_row.append(&w_btn);
+        }
+    };
+    append_step_buttons(&[
+        ("↑ 50 px", -50, "Subir pantalla seleccionada 50 píxeles"),
+        ("↑ 10 px", -10, "Subir pantalla seleccionada 10 píxeles"),
+        ("↑ 1 px", -1, "Subir pantalla seleccionada 1 píxel"),
+    ]);
+    vert_row.append(&y_readout_lbl);
+    append_step_buttons(&[
+        ("↓ 1 px", 1, "Bajar pantalla seleccionada 1 píxel"),
+        ("↓ 10 px", 10, "Bajar pantalla seleccionada 10 píxeles"),
+        ("↓ 50 px", 50, "Bajar pantalla seleccionada 50 píxeles"),
+    ]);
+    canvas_overlay.add_overlay(&vert_row);
+
+    root.append(&canvas_overlay);
     root.append(&coords_lbl);
 
     // Botones rápidos de disposición (Swap + alineaciones verticales)
@@ -1044,55 +1102,6 @@ fn show_arrange_modal(
         tools_row.append(&w_btn);
     }
     root.append(&tools_row);
-
-    // Selector de pantalla y botones de ajuste vertical en píxeles
-    root.append(&sel_row);
-
-    let vert_row = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(6)
-        .halign(Align::Start)
-        .build();
-    vert_row.append(
-        &Label::builder()
-            .label("Mover vertical:")
-            .css_classes(["card-section-sub"])
-            .margin_end(2)
-            .build(),
-    );
-
-    let append_step_buttons = |steps: &[(&str, i32, &str)]| {
-        for &(label, delta, tip) in steps {
-            let (w_btn, b) = make_squircle_button(label, false, Some(tip));
-            let st_c = state.clone();
-            let sync_c = sync_coords.clone();
-            let on_ch = on_changed.clone();
-            b.connect_clicked(move |_| {
-                let mut cfg = DisplaysConfig::load();
-                if cfg.outputs.is_empty() {
-                    return;
-                }
-                let sel = st_c.borrow().selected_idx.min(cfg.outputs.len() - 1);
-                cfg.adjust_vertical_offset(sel, delta);
-                save_displays_and_reload(&cfg);
-                sync_c();
-                on_ch();
-            });
-            vert_row.append(&w_btn);
-        }
-    };
-    append_step_buttons(&[
-        ("↑ 50 px", -50, "Subir pantalla seleccionada 50 píxeles"),
-        ("↑ 10 px", -10, "Subir pantalla seleccionada 10 píxeles"),
-        ("↑ 1 px", -1, "Subir pantalla seleccionada 1 píxel"),
-    ]);
-    vert_row.append(&y_readout_lbl);
-    append_step_buttons(&[
-        ("↓ 1 px", 1, "Bajar pantalla seleccionada 1 píxel"),
-        ("↓ 10 px", 10, "Bajar pantalla seleccionada 10 píxeles"),
-        ("↓ 50 px", 50, "Bajar pantalla seleccionada 50 píxeles"),
-    ]);
-    root.append(&vert_row);
 
     let footer = GtkBox::builder()
         .orientation(Orientation::Horizontal)
