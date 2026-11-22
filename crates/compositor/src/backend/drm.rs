@@ -1264,6 +1264,10 @@ fn reconcile_drm_outputs(
                 {
                     lmap.unmap_layer(&layer);
                     preserved_shell_layers.push(layer);
+                } else if layer.namespace() == "malus-wallpaper" && !connected_list.is_empty() {
+                    // Evita que gtk4-layer-shell cierre la ventana y GTK4 envíe commit tras destroy,
+                    // lo que dispara Error::InvalidSize en Smithay 0.7.0 y mata a malus-de-wallpaper.
+                    lmap.unmap_layer(&layer);
                 } else {
                     layer.layer_surface().send_close();
                 }

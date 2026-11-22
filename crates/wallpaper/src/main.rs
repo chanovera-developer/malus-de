@@ -566,47 +566,43 @@ fn close_all_registered_popovers() {
     });
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct MonitorSurfaceSpec {
-    connector: Option<String>,
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-    scale: i32,
-    is_primary: bool,
-}
-
-impl MonitorSurfaceSpec {
-    fn from_monitor(monitor: &gtk4::gdk::Monitor, is_primary: bool) -> Self {
-        let geo = monitor.geometry();
-        Self {
-            connector: monitor.connector().map(|s| s.to_string()),
-            x: geo.x(),
-            y: geo.y(),
-            width: geo.width(),
-            height: geo.height(),
-            scale: monitor.scale_factor().max(1),
-            is_primary,
-        }
-    }
-
-    fn fallback_primary() -> Self {
-        Self {
-            connector: None,
-            x: 0,
-            y: 0,
-            width: 1920,
-            height: 1080,
-            scale: 1,
-            is_primary: true,
-        }
-    }
+fn slot_needs_role_rebuild(
+    prev_is_primary: bool,
+    prev_desktop_size: (i32, i32),
+    next_is_primary: bool,
+    next_desktop_size: (i32, i32),
+) -> bool {
+    prev_is_primary != next_is_primary
+        || (next_is_primary && prev_desktop_size != next_desktop_size)
 }
 
 fn monitor_geometry_ready(monitor: &gtk4::gdk::Monitor) -> bool {
     let geo = monitor.geometry();
     geo.width() > 0 && geo.height() > 0
+}
+
+/// Desconecta el manejador interno `invalidate` de `gtk4-layer-shell` sobre este monitor.
+/// De lo contrario, al quitar un monitor físico (`wl_registry.global_remove`), `gtk4-layer-shell`
+/// llama a `gtk_layer_set_monitor(win, NULL)` y remapea/destruye `zwlr_layer_surface_v1`,
+/// provocando que GTK4 envíe `commit()` tras destruir y Smithay 0.7.0 cierre el proceso con `InvalidSize`.
+fn disconnect_layer_shell_monitor_invalidate(monitor: &gtk4::gdk::Monitor) {
+    use glib::translate::{IntoGlib, ToGlibPtr};
+    let mon_type = gtk4::gdk::Monitor::static_type().into_glib();
+    let mon_ptr: *mut gtk4::gdk::ffi::GdkMonitor = monitor.to_glib_none().0;
+    unsafe {
+        let sig_id = glib::gobject_ffi::g_signal_lookup(c"invalidate".as_ptr(), mon_type);
+        if sig_id != 0 {
+            glib::gobject_ffi::g_signal_handlers_disconnect_matched(
+                mon_ptr as *mut glib::gobject_ffi::GObject,
+                glib::gobject_ffi::G_SIGNAL_MATCH_ID,
+                sig_id,
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+        }
+    }
 }
 
 fn ensure_monitor_sync_hooks(
@@ -632,10 +628,40 @@ fn ensure_monitor_sync_hooks(
     monitor.connect_geometry_notify(move |_| t1());
     let t2 = trigger.clone();
     monitor.connect_scale_factor_notify(move |_| t2());
-    let t3 = trigger.clone();
+    let t3 = trigger;
     monitor.connect_connector_notify(move |_| t3());
-    let t4 = trigger;
-    monitor.connect_invalidate(move |_| t4());
+}
+
+struct WallpaperWindowSlot {
+    monitor: Option<gtk4::gdk::Monitor>,
+    window: ApplicationWindow,
+    root_overlay: Overlay,
+    picture: Picture,
+    role_host: Option<Overlay>,
+    key_controller: Option<EventControllerKey>,
+    phys_w: i32,
+    phys_h: i32,
+    desktop_w: i32,
+    desktop_h: i32,
+    is_primary: bool,
+}
+
+fn park_wallpaper_slot(mut slot: WallpaperWindowSlot) -> ApplicationWindow {
+    if let Some(host) = slot.role_host.take() {
+        slot.root_overlay.remove_overlay(&host);
+    }
+    if let Some(kc) = slot.key_controller.take() {
+        slot.window.remove_controller(&kc);
+    }
+    slot.picture.set_paintable(gtk4::gdk::Paintable::NONE);
+    slot.root_overlay.set_visible(false);
+    slot.window.set_opacity(0.0);
+    slot.window.set_can_target(false);
+    if gtk4_layer_shell::is_supported() {
+        slot.window.set_keyboard_mode(KeyboardMode::None);
+    }
+    slot.window.set_default_size(1, 1);
+    slot.window
 }
 
 pub fn apply_theme_to_popover(popover: &Popover, is_dark: bool) {
@@ -3790,6 +3816,27 @@ enum DesktopDragMode {
 
 type DesktopShortcutHandler = Rc<RefCell<Option<Rc<dyn Fn(String, f64, f64)>>>>;
 
+fn monitor_target_sizes(monitor: Option<&gtk4::gdk::Monitor>) -> ((i32, i32), (i32, i32)) {
+    let phys = monitor
+        .map(|m| {
+            let geometry = m.geometry();
+            let scale = m.scale_factor().max(1);
+            (
+                geometry.width().max(1) * scale,
+                geometry.height().max(1) * scale,
+            )
+        })
+        .unwrap_or((1920, 1080));
+    let desktop = monitor
+        .map(|m| {
+            let geometry = m.geometry();
+            (geometry.width().max(320), geometry.height().max(240))
+        })
+        .unwrap_or((1920, 1080));
+    (phys, desktop)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn create_wallpaper_window(
     application: &Application,
     monitor: Option<&gtk4::gdk::Monitor>,
@@ -3801,19 +3848,21 @@ fn create_wallpaper_window(
     active_icon_drag: &Rc<RefCell<Option<(PathBuf, (f64, f64), (f64, f64))>>>,
     shortcut_handler: &DesktopShortcutHandler,
     is_primary: bool,
-) -> (ApplicationWindow, Picture, i32, i32) {
+) -> WallpaperWindowSlot {
     let window = ApplicationWindow::builder()
         .application(application)
         .title("Fondo de Pantalla Malus DE")
         .decorated(false)
         .css_classes(["malus-wallpaper-window"])
         .build();
+    window.connect_close_request(|_| glib::Propagation::Stop);
 
     if gtk4_layer_shell::is_supported() {
         info!("Anclando Fondo de Pantalla en capa Background a pantalla completa...");
         window.init_layer_shell();
         if let Some(mon) = monitor {
             window.set_monitor(mon);
+            disconnect_layer_shell_monitor_invalidate(mon);
         }
         window.set_layer(Layer::Background);
         window.set_namespace("malus-wallpaper");
@@ -3827,17 +3876,8 @@ fn create_wallpaper_window(
         window.maximize();
     }
 
-    let overlay = Overlay::new();
-    let (target_phys_w, target_phys_h) = monitor
-        .map(|m| {
-            let geometry = m.geometry();
-            let scale = m.scale_factor().max(1);
-            (
-                geometry.width().max(1) * scale,
-                geometry.height().max(1) * scale,
-            )
-        })
-        .unwrap_or((1920, 1080));
+    let root_overlay = Overlay::new();
+    let ((target_phys_w, target_phys_h), (desktop_w, desktop_h)) = monitor_target_sizes(monitor);
 
     let picture = Picture::new();
     picture.set_hexpand(true);
@@ -3845,15 +3885,66 @@ fn create_wallpaper_window(
     picture.set_halign(Align::Fill);
     picture.set_valign(Align::Fill);
     apply_wallpaper_to_picture(&picture, &window, cli_image, target_phys_w, target_phys_h);
-    overlay.set_child(Some(&picture));
+    root_overlay.set_child(Some(&picture));
+
+    let (role_host, key_controller) = populate_wallpaper_role(
+        &window,
+        desktop_dir,
+        (desktop_w, desktop_h),
+        desktop_monitors,
+        icon_positions,
+        internal_drag_paths,
+        active_icon_drag,
+        shortcut_handler,
+        is_primary,
+    );
+    root_overlay.add_overlay(&role_host);
+
+    window.set_child(Some(&root_overlay));
+    window.present();
+    WallpaperWindowSlot {
+        monitor: monitor.cloned(),
+        window,
+        root_overlay,
+        picture,
+        role_host: Some(role_host),
+        key_controller,
+        phys_w: target_phys_w,
+        phys_h: target_phys_h,
+        desktop_w,
+        desktop_h,
+        is_primary,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn populate_wallpaper_role(
+    window: &ApplicationWindow,
+    desktop_dir: Option<&Path>,
+    desktop_size: (i32, i32),
+    desktop_monitors: &Rc<RefCell<Vec<gio::FileMonitor>>>,
+    icon_positions: &Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
+    internal_drag_paths: &Rc<RefCell<HashSet<PathBuf>>>,
+    active_icon_drag: &Rc<RefCell<Option<(PathBuf, (f64, f64), (f64, f64))>>>,
+    shortcut_handler: &DesktopShortcutHandler,
+    is_primary: bool,
+) -> (Overlay, Option<EventControllerKey>) {
+    let overlay = Overlay::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .halign(Align::Fill)
+        .valign(Align::Fill)
+        .build();
+    let hit_target = GtkBox::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .halign(Align::Fill)
+        .valign(Align::Fill)
+        .build();
+    overlay.set_child(Some(&hit_target));
+    let mut attached_key_ctrl: Option<EventControllerKey> = None;
 
     if let Some(desktop_dir) = desktop_dir {
-        let desktop_size = monitor
-            .map(|monitor| {
-                let geometry = monitor.geometry();
-                (geometry.width().max(320), geometry.height().max(240))
-            })
-            .unwrap_or((1920, 1080));
 
         let top_margin = if is_primary {
             DESKTOP_TOP_MARGIN
@@ -4041,7 +4132,8 @@ fn create_wallpaper_window(
             }
             glib::Propagation::Proceed
         });
-        window.add_controller(key_controller);
+        window.add_controller(key_controller.clone());
+        attached_key_ctrl = Some(key_controller);
 
         // Selección elástica rectangular (Marquee / Rubberband)
         let rubberband = GtkBox::new(Orientation::Horizontal, 0);
@@ -5108,9 +5200,7 @@ fn create_wallpaper_window(
         overlay.add_controller(bg_context);
     }
 
-    window.set_child(Some(&overlay));
-    window.present();
-    (window, picture, target_phys_w, target_phys_h)
+    (overlay, attached_key_ctrl)
 }
 
 fn resolve_wallpaper_image_path(image_path: &Option<PathBuf>) -> Option<PathBuf> {
@@ -5178,8 +5268,9 @@ fn main() -> Result<()> {
     let image_path = args.image;
     let desktop_dir = resolve_desktop_dir();
     let desktop_monitors = Rc::new(RefCell::new(Vec::new()));
-    let wallpaper_surfaces: Rc<RefCell<Vec<(ApplicationWindow, Picture, i32, i32)>>> =
+    let wallpaper_surfaces: Rc<RefCell<Vec<WallpaperWindowSlot>>> =
         Rc::new(RefCell::new(Vec::new()));
+    let parked_windows: Rc<RefCell<Vec<ApplicationWindow>>> = Rc::new(RefCell::new(Vec::new()));
     let wallpaper_cfg_monitors: Rc<RefCell<Vec<gio::FileMonitor>>> =
         Rc::new(RefCell::new(Vec::new()));
     let hold_guard: Rc<RefCell<Option<gio::ApplicationHoldGuard>>> = Rc::new(RefCell::new(None));
@@ -5328,14 +5419,21 @@ fn main() -> Result<()> {
         let desktop_monitors_sync = desktop_monitors.clone();
         let wallpaper_surfaces_sync = wallpaper_surfaces.clone();
         let wallpaper_surfaces_bg = wallpaper_surfaces.clone();
+        let parked_windows_sync = parked_windows.clone();
         let icon_positions_sync = icon_positions.clone();
         let internal_drag_sync = internal_drag_paths.clone();
         let active_drag_sync = active_icon_drag.clone();
         let shortcut_handler_sync = shortcut_handler.clone();
 
         let refresh_backgrounds: Rc<dyn Fn()> = Rc::new(move || {
-            for (win, pic, w, h) in wallpaper_surfaces_bg.borrow().iter() {
-                apply_wallpaper_to_picture(pic, win, &image_path_bg, *w, *h);
+            for slot in wallpaper_surfaces_bg.borrow().iter() {
+                apply_wallpaper_to_picture(
+                    &slot.picture,
+                    &slot.window,
+                    &image_path_bg,
+                    slot.phys_w,
+                    slot.phys_h,
+                );
             }
         });
         let pending_bg_refresh: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
@@ -5373,7 +5471,6 @@ fn main() -> Result<()> {
             }
         }
 
-        let active_specs: Rc<RefCell<Vec<MonitorSurfaceSpec>>> = Rc::new(RefCell::new(Vec::new()));
         let geometry_retry_count: Rc<Cell<u8>> = Rc::new(Cell::new(0));
         let sync_handler_mon = sync_handler.clone();
 
@@ -5410,34 +5507,125 @@ fn main() -> Result<()> {
             geometry_retry_count.set(0);
 
             let primary_index = select_primary_monitor_index(&monitor_list, &displays_cfg);
-            let next_specs: Vec<MonitorSurfaceSpec> = if monitor_list.is_empty() {
-                vec![MonitorSurfaceSpec::fallback_primary()]
-            } else {
-                monitor_list
-                    .iter()
-                    .enumerate()
-                    .map(|(index, monitor)| {
-                        MonitorSurfaceSpec::from_monitor(monitor, index == primary_index)
-                    })
-                    .collect()
-            };
+            let mut prev_slots: Vec<WallpaperWindowSlot> =
+                wallpaper_surfaces_sync.borrow_mut().drain(..).collect();
 
-            if !wallpaper_surfaces_sync.borrow().is_empty() && *active_specs.borrow() == next_specs
-            {
+            if monitor_list.is_empty() {
+                let mut kept_fallback: Option<WallpaperWindowSlot> = None;
+                for slot in prev_slots {
+                    if kept_fallback.is_none() && slot.monitor.is_none() {
+                        kept_fallback = Some(slot);
+                    } else {
+                        close_all_registered_popovers();
+                        parked_windows_sync
+                            .borrow_mut()
+                            .push(park_wallpaper_slot(slot));
+                    }
+                }
+                let fallback_slot = kept_fallback.unwrap_or_else(|| {
+                    create_wallpaper_window(
+                        &app_sync,
+                        None,
+                        &image_path_sync,
+                        desktop_dir_sync.as_deref(),
+                        &desktop_monitors_sync,
+                        &icon_positions_sync,
+                        &internal_drag_sync,
+                        &active_drag_sync,
+                        &shortcut_handler_sync,
+                        true,
+                    )
+                });
+                wallpaper_surfaces_sync.borrow_mut().push(fallback_slot);
                 return;
             }
 
-            close_all_registered_popovers();
-            let prev_surfaces: Vec<(ApplicationWindow, Picture, i32, i32)> =
-                wallpaper_surfaces_sync.borrow_mut().drain(..).collect();
-            desktop_monitors_sync.borrow_mut().clear();
-            *shortcut_handler_sync.borrow_mut() = None;
-            for (old_win, _, _, _) in prev_surfaces {
-                old_win.close();
+            let mut matched_indices: Vec<Option<usize>> = Vec::with_capacity(monitor_list.len());
+            let mut used_prev = vec![false; prev_slots.len()];
+            for monitor in &monitor_list {
+                let pos = prev_slots
+                    .iter()
+                    .enumerate()
+                    .position(|(i, slot)| !used_prev[i] && slot.monitor.as_ref() == Some(monitor));
+                if let Some(i) = pos {
+                    used_prev[i] = true;
+                }
+                matched_indices.push(pos);
             }
 
-            let mut new_surfaces = Vec::new();
-            if !monitor_list.is_empty() {
+            let primary_slot_changing = monitor_list
+                .iter()
+                .enumerate()
+                .any(|(index, monitor)| {
+                    let is_primary = index == primary_index;
+                    let ((_, _), (dw, dh)) = monitor_target_sizes(Some(monitor));
+                    match matched_indices[index].and_then(|pi| prev_slots.get(pi)) {
+                        Some(slot) => slot_needs_role_rebuild(
+                            slot.is_primary,
+                            (slot.desktop_w, slot.desktop_h),
+                            is_primary,
+                            (dw, dh),
+                        ),
+                        None => is_primary,
+                    }
+                });
+
+            let has_removed_slots = used_prev.iter().any(|&used| !used);
+            if has_removed_slots || primary_slot_changing {
+                close_all_registered_popovers();
+            }
+
+            // Aparcar ventanas de monitores desconectados sin llamar a `.close()` (evita Error::InvalidSize en Smithay).
+            let mut remaining_slots: Vec<Option<WallpaperWindowSlot>> =
+                prev_slots.drain(..).map(Some).collect();
+            for (i, used) in used_prev.iter().enumerate() {
+                if !used {
+                    if let Some(removed_slot) = remaining_slots[i].take() {
+                        if removed_slot.is_primary {
+                            desktop_monitors_sync.borrow_mut().clear();
+                            *shortcut_handler_sync.borrow_mut() = None;
+                        }
+                        parked_windows_sync
+                            .borrow_mut()
+                            .push(park_wallpaper_slot(removed_slot));
+                    }
+                }
+            }
+
+            if primary_slot_changing {
+                desktop_monitors_sync.borrow_mut().clear();
+                *shortcut_handler_sync.borrow_mut() = None;
+                for (index, _) in monitor_list.iter().enumerate() {
+                    if let Some(pi) = matched_indices[index] {
+                        if let Some(slot) = remaining_slots[pi].as_mut() {
+                            let is_primary = index == primary_index;
+                            let ((_, _), (dw, dh)) = monitor_target_sizes(slot.monitor.as_ref());
+                            if slot_needs_role_rebuild(
+                                slot.is_primary,
+                                (slot.desktop_w, slot.desktop_h),
+                                is_primary,
+                                (dw, dh),
+                            ) {
+                                if let Some(old_host) = slot.role_host.take() {
+                                    slot.root_overlay.remove_overlay(&old_host);
+                                }
+                                if let Some(old_kc) = slot.key_controller.take() {
+                                    slot.window.remove_controller(&old_kc);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let mut next_slots = Vec::with_capacity(monitor_list.len());
+            let had_primary_logged = primary_slot_changing
+                || matched_indices
+                    .get(primary_index)
+                    .copied()
+                    .flatten()
+                    .is_none();
+            if had_primary_logged {
                 match (primary_cfg.as_ref(), monitor_list.get(primary_index)) {
                     (Some(cfg), Some(_)) => info!(
                         "Mostrando iconos del escritorio en la pantalla principal: {} ({})",
@@ -5452,47 +5640,72 @@ fn main() -> Result<()> {
                     ),
                     (_, None) => {}
                 }
-
-                for (index, monitor) in monitor_list.iter().enumerate() {
-                    let is_primary = index == primary_index;
-                    let surface_tuple = create_wallpaper_window(
-                        &app_sync,
-                        Some(monitor),
-                        &image_path_sync,
-                        if is_primary {
-                            desktop_dir_sync.as_deref()
-                        } else {
-                            None
-                        },
-                        &desktop_monitors_sync,
-                        &icon_positions_sync,
-                        &internal_drag_sync,
-                        &active_drag_sync,
-                        &shortcut_handler_sync,
-                        is_primary,
-                    );
-                    new_surfaces.push(surface_tuple);
-                }
             }
 
-            if new_surfaces.is_empty() {
-                let surface_tuple = create_wallpaper_window(
+            for (index, monitor) in monitor_list.iter().enumerate() {
+                let is_primary = index == primary_index;
+                if let Some(pi) = matched_indices[index] {
+                    if let Some(mut slot) = remaining_slots[pi].take() {
+                        let ((phys_w, phys_h), (dw, dh)) = monitor_target_sizes(Some(monitor));
+                        if slot.phys_w != phys_w || slot.phys_h != phys_h {
+                            slot.phys_w = phys_w;
+                            slot.phys_h = phys_h;
+                            apply_wallpaper_to_picture(
+                                &slot.picture,
+                                &slot.window,
+                                &image_path_sync,
+                                phys_w,
+                                phys_h,
+                            );
+                        }
+                        if slot.role_host.is_none() {
+                            let (new_host, new_kc) = populate_wallpaper_role(
+                                &slot.window,
+                                if is_primary {
+                                    desktop_dir_sync.as_deref()
+                                } else {
+                                    None
+                                },
+                                (dw, dh),
+                                &desktop_monitors_sync,
+                                &icon_positions_sync,
+                                &internal_drag_sync,
+                                &active_drag_sync,
+                                &shortcut_handler_sync,
+                                is_primary,
+                            );
+                            slot.root_overlay.add_overlay(&new_host);
+                            slot.role_host = Some(new_host);
+                            slot.key_controller = new_kc;
+                            slot.desktop_w = dw;
+                            slot.desktop_h = dh;
+                            slot.is_primary = is_primary;
+                        }
+                        next_slots.push(slot);
+                        continue;
+                    }
+                }
+
+                let slot = create_wallpaper_window(
                     &app_sync,
-                    None,
+                    Some(monitor),
                     &image_path_sync,
-                    desktop_dir_sync.as_deref(),
+                    if is_primary {
+                        desktop_dir_sync.as_deref()
+                    } else {
+                        None
+                    },
                     &desktop_monitors_sync,
                     &icon_positions_sync,
                     &internal_drag_sync,
                     &active_drag_sync,
                     &shortcut_handler_sync,
-                    true,
+                    is_primary,
                 );
-                new_surfaces.push(surface_tuple);
+                next_slots.push(slot);
             }
 
-            *active_specs.borrow_mut() = next_specs;
-            *wallpaper_surfaces_sync.borrow_mut() = new_surfaces;
+            *wallpaper_surfaces_sync.borrow_mut() = next_slots;
         });
 
         let pending_sync: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
@@ -6053,30 +6266,30 @@ mod squircle_thumb_tests {
     }
 
     #[test]
-    fn monitor_surface_spec_equality_tracks_layout_and_primary_changes() {
-        let s1 = super::MonitorSurfaceSpec {
-            connector: Some("eDP-1".to_string()),
-            x: 0,
-            y: 0,
-            width: 1920,
-            height: 1080,
-            scale: 1,
-            is_primary: true,
-        };
-        let s2 = super::MonitorSurfaceSpec {
-            connector: Some("DP-1".to_string()),
-            x: 1920,
-            y: 0,
-            width: 1920,
-            height: 1080,
-            scale: 1,
-            is_primary: false,
-        };
-        assert_eq!(vec![s1.clone(), s2.clone()], vec![s1.clone(), s2.clone()]);
-        let s2_primary = super::MonitorSurfaceSpec {
-            is_primary: true,
-            ..s2.clone()
-        };
-        assert_ne!(vec![s1.clone(), s2], vec![s1, s2_primary]);
+    fn slot_role_rebuild_detects_primary_flip_and_desktop_resize() {
+        assert!(!super::slot_needs_role_rebuild(
+            true,
+            (2560, 1440),
+            true,
+            (2560, 1440)
+        ));
+        assert!(!super::slot_needs_role_rebuild(
+            false,
+            (1920, 1080),
+            false,
+            (2560, 1440)
+        ));
+        assert!(super::slot_needs_role_rebuild(
+            false,
+            (1920, 1080),
+            true,
+            (1920, 1080)
+        ));
+        assert!(super::slot_needs_role_rebuild(
+            true,
+            (2560, 1440),
+            true,
+            (1920, 1080)
+        ));
     }
 }
