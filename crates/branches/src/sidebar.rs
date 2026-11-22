@@ -163,13 +163,20 @@ impl Sidebar {
         let favorites_header =
             add_section_title(&list_box, if es { "Favoritos" } else { "Favorites" });
         attach_bookmark_drop_target(&favorites_header);
+        let apps_title = if es { "Aplicaciones" } else { "Applications" };
         let apps_row = create_virtual_row(
-            if es { "Aplicaciones" } else { "Applications" },
+            apps_title,
             "system-software-install-symbolic",
             "target_applications",
         );
-        attach_virtual_row_handlers(&apps_row, on_applications.clone(), "@applications");
+        attach_applications_row_handlers(
+            &apps_row,
+            on_applications.clone(),
+            &on_navigate,
+            apps_title.to_string(),
+        );
         list_box.append(&apps_row);
+        default_removable_rows.push((PathBuf::from("@applications"), apps_row));
 
         let desktop_path = resolve_user_dir(&home, "XDG_DESKTOP_DIR", "Escritorio", "Desktop");
         let docs_path = resolve_user_dir(&home, "XDG_DOCUMENTS_DIR", "Documentos", "Documents");
@@ -1223,7 +1230,27 @@ fn dock_icon_for_sidebar_folder(sidebar_icon: &str) -> &'static str {
         "drive-harddisk-symbolic" => "drive-harddisk",
         "drive-removable-media-symbolic" => "drive-removable-media",
         "folder-remote-symbolic" => "folder-remote",
+        "system-software-install-symbolic" => "system-software-install",
         _ => "folder",
+    }
+}
+
+fn applications_dock_app_config(title: &str) -> malus_de_common::config::DockAppConfig {
+    let name = if title.trim().is_empty() {
+        if malus_de_common::is_spanish_locale() {
+            "Aplicaciones".to_string()
+        } else {
+            "Applications".to_string()
+        }
+    } else {
+        title.trim().to_string()
+    };
+    malus_de_common::config::DockAppConfig {
+        name,
+        icon: dock_icon_for_sidebar_folder("system-software-install-symbolic").to_string(),
+        command: "malus-de-branches applications://".to_string(),
+        matchers: Vec::new(),
+        icon_appearance: malus_de_common::config::DockIconAppearance::Auto,
     }
 }
 
@@ -1946,6 +1973,169 @@ fn attach_bookmark_context_menu(
     row.add_controller(right_click);
 }
 
+fn attach_applications_row_handlers(
+    row: &ListBoxRow,
+    cb: Rc<dyn Fn()>,
+    on_navigate: &Rc<dyn Fn(PathBuf)>,
+    title: String,
+) {
+    let click = GestureClick::new();
+    click.set_button(gdk::BUTTON_PRIMARY);
+    let cb_c = cb.clone();
+    click.connect_released(move |_, _, _, _| {
+        cb_c();
+    });
+    row.add_controller(click);
+
+    attach_middle_click_new_tab(row, "@applications".to_string());
+
+    let right_click = GestureClick::new();
+    right_click.set_button(gdk::BUTTON_SECONDARY);
+    let row_ref = row.downgrade();
+    let nav_menu = on_navigate.clone();
+    right_click.connect_pressed(move |g, _n, x, y| {
+        g.set_state(gtk4::EventSequenceState::Claimed);
+        let Some(row_widget) = row_ref.upgrade() else {
+            return;
+        };
+        let es = malus_de_common::is_spanish_locale();
+        let pop = Popover::builder()
+            .has_arrow(false)
+            .css_classes(["malus-popover-menu"])
+            .build();
+        pop.set_parent(&row_widget);
+        let rect = gdk::Rectangle::new(x.round() as i32, y.round() as i32, 1, 1);
+        pop.set_pointing_to(Some(&rect));
+        pop.connect_closed(|p| p.unparent());
+
+        let vbox = GtkBox::new(Orientation::Vertical, 2);
+
+        // 1. Abrir en una pestaña nueva
+        let new_tab_btn = make_sidebar_menu_item(if es {
+            "Abrir en una pestaña nueva"
+        } else {
+            "Open in New Tab"
+        });
+        {
+            let p_tab = pop.downgrade();
+            let r_anchor = row_widget.downgrade();
+            new_tab_btn.connect_clicked(move |_| {
+                if let Some(p) = p_tab.upgrade() {
+                    p.popdown();
+                }
+                if let Some(r) = r_anchor.upgrade() {
+                    open_target_in_new_tab(&r, "@applications");
+                }
+            });
+        }
+        vbox.append(&new_tab_btn);
+
+        // 2. Mostrar en la carpeta contenedora
+        let enclosing_path = if Path::new("/usr/share/applications").is_dir() {
+            PathBuf::from("/usr/share/applications")
+        } else {
+            PathBuf::from("/")
+        };
+        let enclosing_btn = make_sidebar_menu_item(if es {
+            "Mostrar en la carpeta contenedora"
+        } else {
+            "Show in Enclosing Folder"
+        });
+        {
+            let p_enc = pop.downgrade();
+            let nav = nav_menu.clone();
+            enclosing_btn.connect_clicked(move |_| {
+                if let Some(p) = p_enc.upgrade() {
+                    p.popdown();
+                }
+                nav(enclosing_path.clone());
+            });
+        }
+        vbox.append(&enclosing_btn);
+
+        // 3. Eliminar de la barra lateral
+        vbox.append(&make_sidebar_menu_separator());
+        let remove_btn = make_sidebar_menu_item(if es {
+            "Eliminar de la barra lateral"
+        } else {
+            "Remove from Sidebar"
+        });
+        {
+            let p_rem = pop.downgrade();
+            remove_btn.connect_clicked(move |_| {
+                if let Some(p) = p_rem.upgrade() {
+                    p.popdown();
+                }
+                if let Ok(conn) = crate::db::open_db() {
+                    if crate::db::hide_sidebar_path(&conn, Path::new("@applications"))
+                        .unwrap_or(false)
+                    {
+                        refresh_all_sidebars();
+                    }
+                }
+            });
+        }
+        vbox.append(&remove_btn);
+
+        vbox.append(&make_sidebar_menu_separator());
+
+        // 4. Obtener información
+        let info_btn = make_sidebar_menu_item(if es {
+            "Obtener información"
+        } else {
+            "Get Info"
+        });
+        {
+            let p_info = pop.downgrade();
+            let r_anchor = row_widget.downgrade();
+            info_btn.connect_clicked(move |_| {
+                if let Some(p) = p_info.upgrade() {
+                    p.popdown();
+                }
+                if let Some(r) = r_anchor.upgrade() {
+                    let _ = r.activate_action("win.get_info_item", Some(&"@applications".to_variant()));
+                }
+            });
+        }
+        vbox.append(&info_btn);
+
+        // 5. Agregar al Dock / Quitar del Dock
+        let dock_app = applications_dock_app_config(&title);
+        let dock_cfg = malus_de_common::config::DockConfig::load_or_create_default();
+        let currently_pinned = is_folder_pinned_in_dock(&dock_cfg, &dock_app);
+        let dock_label = if currently_pinned {
+            if es {
+                "Quitar del Dock"
+            } else {
+                "Remove from Dock"
+            }
+        } else if es {
+            "Agregar al Dock"
+        } else {
+            "Add to Dock"
+        };
+        let dock_btn = make_sidebar_menu_item(dock_label);
+        {
+            let p_dock = pop.downgrade();
+            dock_btn.connect_clicked(move |_| {
+                if let Some(p) = p_dock.upgrade() {
+                    p.popdown();
+                }
+                set_folder_pinned_in_dock(dock_app.clone(), !currently_pinned);
+            });
+        }
+        vbox.append(&dock_btn);
+
+        pop.set_child(Some(&vbox));
+        pop.popup();
+    });
+    row.add_controller(right_click);
+
+    row.connect_activate(move |_| {
+        cb();
+    });
+}
+
 fn attach_virtual_row_handlers(row: &ListBoxRow, cb: Rc<dyn Fn()>, new_tab_target: &'static str) {
     let click = GestureClick::new();
     click.set_button(gdk::BUTTON_PRIMARY);
@@ -2649,7 +2839,16 @@ mod device_path_tests {
         );
         assert!(cfg.matchers.is_empty());
         assert_eq!(dock_icon_for_sidebar_folder("user-desktop-symbolic"), "user-desktop");
+        assert_eq!(
+            dock_icon_for_sidebar_folder("system-software-install-symbolic"),
+            "system-software-install"
+        );
         assert_eq!(dock_icon_for_sidebar_folder("unknown-symbolic"), "folder");
+
+        let apps_cfg = applications_dock_app_config("Aplicaciones");
+        assert_eq!(apps_cfg.name, "Aplicaciones");
+        assert_eq!(apps_cfg.icon, "system-software-install");
+        assert_eq!(apps_cfg.command, "malus-de-branches applications://");
     }
 
     #[test]

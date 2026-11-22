@@ -70,6 +70,14 @@ fn is_trash_uri(raw: &str) -> bool {
         || trimmed.to_ascii_lowercase().starts_with("trash:///")
 }
 
+fn is_applications_uri(raw: &str) -> bool {
+    let trimmed = raw.trim().to_ascii_lowercase();
+    trimmed == "@applications"
+        || trimmed == "applications:"
+        || trimmed == "applications://"
+        || trimmed.starts_with("applications:///")
+}
+
 fn resolve_cli_target_path(raw: &str, home: &Path, xdg_data_home: Option<&Path>) -> PathBuf {
     let trimmed = raw.trim();
     if is_trash_uri(trimmed) {
@@ -151,14 +159,18 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/"));
     let xdg_data_home = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from);
-    let requested_arg = if let Some(raw) = args.path.as_deref() {
-        let resolved = resolve_cli_target_path(raw, &home, xdg_data_home.as_deref());
-        if is_trash_uri(raw) {
-            let _ = std::fs::create_dir_all(&resolved);
+    let requested_arg: Option<String> = if let Some(raw) = args.path.as_deref() {
+        if is_applications_uri(raw) {
+            Some("applications://".to_string())
+        } else {
+            let resolved = resolve_cli_target_path(raw, &home, xdg_data_home.as_deref());
+            if is_trash_uri(raw) {
+                let _ = std::fs::create_dir_all(&resolved);
+            }
+            Some(resolved.to_string_lossy().to_string())
         }
-        Some(resolved)
     } else if args.new_window {
-        Some(home.clone())
+        Some(home.to_string_lossy().to_string())
     } else {
         None
     };
@@ -183,6 +195,12 @@ fn main() {
     app.connect_open(move |app, files, _hint| {
         for file in files {
             let uri = file.uri();
+            if is_applications_uri(uri.as_str()) {
+                let window = BranchesWindow::new(app, open_home.clone());
+                window.show_applications();
+                window.present();
+                continue;
+            }
             let resolved = if is_trash_uri(uri.as_str()) {
                 let trash = trash_files_dir(&open_home, open_data_home.as_deref());
                 let _ = std::fs::create_dir_all(&trash);
@@ -197,8 +215,7 @@ fn main() {
         }
     });
 
-    if let Some(target_path) = requested_arg {
-        let arg_str = target_path.to_string_lossy().to_string();
+    if let Some(arg_str) = requested_arg {
         app.run_with_args(&["malus-de-branches", arg_str.as_str()]);
     } else {
         app.run_with_args::<&str>(&[]);
@@ -481,6 +498,11 @@ mod tests {
             .expect("--new-window debe ser aceptado por clap");
         assert!(parsed.new_window);
         assert!(parsed.path.is_none());
+
+        assert!(super::is_applications_uri("applications://"));
+        assert!(super::is_applications_uri("applications:///"));
+        assert!(super::is_applications_uri("@applications"));
+        assert!(!super::is_applications_uri("file:///usr/share/applications"));
     }
 
     #[test]

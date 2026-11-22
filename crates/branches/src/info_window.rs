@@ -70,12 +70,133 @@ pub fn show_get_info_standalone(app: &gtk4::Application, path: PathBuf) {
     show_get_info_impl(None, Some(app), path, Rc::new(|| {}));
 }
 
+fn show_applications_info_window(
+    parent: Option<&ApplicationWindow>,
+    app: Option<&gtk4::Application>,
+) {
+    let es = malus_de_common::is_spanish_locale();
+    let title_name = if es { "Aplicaciones" } else { "Applications" };
+    let items = crate::fs_backend::load_applications_items("");
+    let total_bytes: u64 = items.iter().map(|i| i.size).sum();
+    let count = items.len();
+
+    let mut builder = Window::builder()
+        .default_width(360)
+        .default_height(250)
+        .title(if es {
+            format!("Información de {title_name}")
+        } else {
+            format!("{title_name} Info")
+        })
+        .css_classes(["branches-info-window"]);
+    if let Some(p) = parent {
+        builder = builder.transient_for(p).destroy_with_parent(true);
+    }
+    if let Some(a) = app {
+        builder = builder.application(a);
+    }
+    let win = builder.build();
+
+    let outer = GtkBox::new(Orientation::Vertical, 12);
+    outer.set_margin_top(16);
+    outer.set_margin_bottom(16);
+    outer.set_margin_start(16);
+    outer.set_margin_end(16);
+
+    let header = GtkBox::new(Orientation::Horizontal, 12);
+    let icon = gtk4::Image::from_icon_name("system-software-install");
+    icon.set_pixel_size(48);
+    icon.set_size_request(48, 48);
+    icon.set_valign(Align::Center);
+    header.append(&icon);
+
+    let title_col = GtkBox::new(Orientation::Vertical, 2);
+    title_col.set_hexpand(true);
+    title_col.set_valign(Align::Center);
+    let name_lbl = Label::builder()
+        .label(title_name)
+        .halign(Align::Start)
+        .css_classes(["title-3"])
+        .build();
+    let size_lbl = Label::builder()
+        .label(if es {
+            format!("{} ({count} aplicaciones)", format_size(total_bytes))
+        } else {
+            format!("{} ({count} applications)", format_size(total_bytes))
+        })
+        .halign(Align::Start)
+        .css_classes(["dim-label"])
+        .build();
+    title_col.append(&name_lbl);
+    title_col.append(&size_lbl);
+    header.append(&title_col);
+    outer.append(&header);
+
+    outer.append(&Separator::new(Orientation::Horizontal));
+
+    let general_title = Label::builder()
+        .label("General")
+        .halign(Align::Start)
+        .css_classes(["heading"])
+        .build();
+    outer.append(&general_title);
+
+    let grid = Grid::builder().row_spacing(6).column_spacing(12).build();
+    let mut row = 0;
+    let add_row = |g: &Grid, r: &mut i32, key: &str, val: &str| {
+        let k = Label::builder()
+            .label(key)
+            .halign(Align::End)
+            .css_classes(["dim-label"])
+            .build();
+        let v = Label::builder()
+            .label(val)
+            .halign(Align::Start)
+            .hexpand(true)
+            .selectable(true)
+            .wrap(true)
+            .build();
+        g.attach(&k, 0, *r, 1, 1);
+        g.attach(&v, 1, *r, 1, 1);
+        *r += 1;
+    };
+    add_row(
+        &grid,
+        &mut row,
+        if es { "Clase:" } else { "Kind:" },
+        if es {
+            "Carpeta de aplicaciones"
+        } else {
+            "Applications Folder"
+        },
+    );
+    add_row(
+        &grid,
+        &mut row,
+        if es { "Ubicación:" } else { "Where:" },
+        "/usr/share/applications",
+    );
+    outer.append(&grid);
+
+    let scroll = ScrolledWindow::builder()
+        .hscrollbar_policy(PolicyType::Never)
+        .vscrollbar_policy(PolicyType::Automatic)
+        .child(&outer)
+        .build();
+    win.set_child(Some(&scroll));
+    win.present();
+}
+
 fn show_get_info_impl(
     parent: Option<&ApplicationWindow>,
     app: Option<&gtk4::Application>,
     path: PathBuf,
     on_tags_changed: Rc<dyn Fn()>,
 ) {
+    if path == Path::new("@applications") {
+        show_applications_info_window(parent, app);
+        return;
+    }
     let es = malus_de_common::is_spanish_locale();
     let Some(item) = FileItem::from_path(&path) else {
         return;
