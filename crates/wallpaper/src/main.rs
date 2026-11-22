@@ -1231,13 +1231,26 @@ fn is_point_over_icon(fixed: &Fixed, x: f64, y: f64, rubberband: &impl IsA<gtk4:
     false
 }
 
+fn widget_desktop_path(widget: &gtk4::Widget) -> Option<PathBuf> {
+    if widget.has_css_class("desktop-rubberband") {
+        return None;
+    }
+    if let Some(p_ptr) = unsafe { widget.data::<PathBuf>("desktop_item_path") } {
+        return Some(unsafe { p_ptr.as_ref() }.clone());
+    }
+    if widget.has_css_class("desktop-icon") {
+        if let Some(p_str) = widget.property::<Option<String>>("tooltip-text") {
+            return Some(PathBuf::from(p_str));
+        }
+    }
+    None
+}
+
 fn move_desktop_icon(fixed: &Fixed, path: &Path, position: (f64, f64)) -> bool {
-    let expected_path = path.to_string_lossy();
     let mut child = fixed.first_child();
     while let Some(item) = child {
         child = item.next_sibling();
-        let item_path = item.property::<Option<String>>("tooltip-text");
-        if item_path.as_deref() == Some(expected_path.as_ref()) {
+        if widget_desktop_path(&item).as_deref() == Some(path) {
             fixed.move_(&item, position.0, position.1);
             item.remove_css_class("desktop-icon-dragging");
             return true;
@@ -5536,8 +5549,7 @@ fn render_single_icon(
             let mut sibling = fixed_ref.first_child();
             while let Some(child) = sibling {
                 sibling = child.next_sibling();
-                if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
-                    let p = PathBuf::from(p_str);
+                if let Some(p) = widget_desktop_path(&child) {
                     if sel.contains(&p) {
                         let pos = pos_map
                             .get(&p)
@@ -5594,15 +5606,19 @@ fn render_single_icon(
                 let mut sibling = fixed_ref.first_child();
                 while let Some(child) = sibling {
                     sibling = child.next_sibling();
-                    if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
-                        if sel.contains(&PathBuf::from(p_str)) {
+                    if let Some(p) = widget_desktop_path(&child) {
+                        if sel.contains(&p) {
                             child.add_css_class("desktop-icon-dragging");
+                            fixed_ref.move_(&child, -5000.0, -5000.0);
                         }
                     }
                 }
             }
         } else if let Some(item_ref) = item_box_drag.upgrade() {
             item_ref.add_css_class("desktop-icon-dragging");
+            if let Some(fixed_ref) = fixed_drag.upgrade() {
+                fixed_ref.move_(&item_ref, -5000.0, -5000.0);
+            }
         }
         *act_drag_begin.borrow_mut() =
             Some((path_drag_begin.clone(), (0.0, 0.0), (click_x, click_y)));
@@ -5627,8 +5643,7 @@ fn render_single_icon(
             let (cx, cy) = fixed_ref.child_position(&child);
             let is_dragging = child.has_css_class("desktop-icon-dragging") || cx < 0.0 || cy < 0.0;
             if is_dragging {
-                if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
-                    let p = PathBuf::from(p_str);
+                if let Some(p) = widget_desktop_path(&child) {
                     if p.symlink_metadata().is_err() {
                         fixed_ref.remove(&child);
                         icon_pos_drag_end.borrow_mut().remove(&p);
@@ -5651,6 +5666,7 @@ fn render_single_icon(
                 }
             }
         }
+        internal_drag_end.borrow_mut().clear();
         if removed_moved_out {
             save_icon_positions(&icon_pos_drag_end.borrow());
         } else if is_move {
@@ -5665,11 +5681,7 @@ fn render_single_icon(
                 let mut child_opt = fixed_ref.first_child();
                 while let Some(child) = child_opt {
                     child_opt = child.next_sibling();
-                    if child.has_css_class("desktop-rubberband") {
-                        continue;
-                    }
-                    if let Some(p_str) = child.property::<Option<String>>("tooltip-text") {
-                        let p = PathBuf::from(p_str);
+                    if let Some(p) = widget_desktop_path(&child) {
                         if p.symlink_metadata().is_err() {
                             fixed_ref.remove(&child);
                             pos_check.borrow_mut().remove(&p);

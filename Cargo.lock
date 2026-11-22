@@ -2208,6 +2208,7 @@ dependencies = [
  "gtk4",
  "gtk4-layer-shell",
  "malus-de-common",
+ "rusqlite",
  "serde_json",
  "tracing",
 ]
