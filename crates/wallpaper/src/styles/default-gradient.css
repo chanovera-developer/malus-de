@@ -30,6 +30,30 @@ window.malus-desktop-icons-window decoration {
     background-image: none;
 }
 
+window.malus-desktop-icons-window:drop(active),
+window.malus-desktop-icons-window overlay:drop(active),
+window.malus-desktop-icons-window overlay:drop(active):focus,
+window.malus-desktop-icons-window fixed:drop(active),
+window.malus-wallpaper-window:drop(active),
+window.malus-wallpaper-window overlay:drop(active),
+window.malus-wallpaper-window overlay:drop(active):focus,
+window.malus-wallpaper-window fixed:drop(active) {
+    border: none;
+    outline: none;
+    outline-width: 0;
+    outline-style: none;
+    outline-color: transparent;
+    box-shadow: none;
+}
+
+.desktop-icon:drop(active),
+.desktop-icon:drop(active):focus {
+    outline: none;
+    outline-width: 0;
+    outline-style: none;
+    outline-color: transparent;
+}
+
 window.malus-wallpaper-window picture {
     margin: 0;
     padding: 0;
