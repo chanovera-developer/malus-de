@@ -36,10 +36,22 @@ pub const REPEAT_INITIAL_DELAY: Duration = Duration::from_millis(280);
 /// Intervalo entre pasos sucesivos al mantener pulsada una tecla de volumen/brillo.
 pub const REPEAT_INTERVAL: Duration = Duration::from_millis(65);
 
-pub const OSD_WIDTH: i32 = 228;
-pub const OSD_HEIGHT: i32 = 60;
-pub const OSD_CORNER_RADIUS: f64 = 18.0;
-const SQUIRCLE_EXPONENT: f64 = 4.2;
+pub const OSD_WIDTH: i32 = 264;
+pub const OSD_HEIGHT: i32 = 56;
+pub const OSD_CORNER_RADIUS: f64 = 28.0;
+pub const OSD_SEGMENTS: usize = 16;
+
+/// Calcula la posición lógica del pill OSD en la esquina superior derecha, justo debajo del Top Bar.
+pub fn compute_osd_logical_rect(
+    output_geo: Rectangle<i32, Logical>,
+    usable_zone: Rectangle<i32, Logical>,
+) -> Rectangle<i32, Logical> {
+    let local_usable_x = usable_zone.loc.x - output_geo.loc.x;
+    let local_usable_y = usable_zone.loc.y - output_geo.loc.y;
+    let x = (local_usable_x + usable_zone.size.w - OSD_WIDTH - 48).max(local_usable_x + 12);
+    let y = local_usable_y.max(36) + 12;
+    Rectangle::new(Point::from((x, y)), Size::from((OSD_WIDTH, OSD_HEIGHT)))
+}
 
 /// Acción asociada a una tecla multimedia o de función de hardware.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -772,12 +784,8 @@ impl MediaKeysState {
         let raw_t = fade_in.min(fade_out);
         let alpha = 1.0 - (1.0 - raw_t).powi(3);
 
-        // Posicionar centrado horizontalmente en la parte inferior del área útil (encima del Dock)
-        let local_usable_x = usable_zone.loc.x - output_geo.loc.x;
-        let local_usable_y = usable_zone.loc.y - output_geo.loc.y;
-        let x = local_usable_x + (usable_zone.size.w - OSD_WIDTH) / 2;
-        let y = (local_usable_y + usable_zone.size.h - OSD_HEIGHT - 44).max(local_usable_y + 24);
-        let local_rect = Rectangle::new(Point::from((x, y)), Size::from((OSD_WIDTH, OSD_HEIGHT)));
+        // Posicionar en la esquina superior derecha debajo del Top Bar (estilo macOS Tahoe)
+        let local_rect = compute_osd_logical_rect(output_geo, usable_zone);
         let phys_rect: Rectangle<i32, Physical> = local_rect.to_physical_precise_round(scale);
         let phys_w = phys_rect.size.w.max(2);
         let phys_h = phys_rect.size.h.max(2);
@@ -855,108 +863,141 @@ impl MediaKeysState {
             let _ = ctx.paint();
             ctx.set_operator(Operator::Over);
 
-            // Fondo Liquid Glass del pill OSD
+            // Fondo Liquid Glass translúcido en cápsula completa (stadium pill estilo macOS Tahoe)
             let glass_scale = malus_de_common::config::current_liquid_glass_scale();
             let a_top =
-                malus_de_common::config::scaled_liquid_glass_alpha(0.80, glass_scale, 0.18, 0.95);
+                malus_de_common::config::scaled_liquid_glass_alpha(0.36, glass_scale, 0.16, 0.72);
             let a_bot =
-                malus_de_common::config::scaled_liquid_glass_alpha(0.86, glass_scale, 0.22, 0.96);
-            append_squircle_path(&ctx, 0.0, 0.0, cw, ch, OSD_CORNER_RADIUS, SQUIRCLE_EXPONENT);
+                malus_de_common::config::scaled_liquid_glass_alpha(0.44, glass_scale, 0.20, 0.78);
+            append_rounded_rect_path(&ctx, 0.0, 0.0, cw, ch, OSD_CORNER_RADIUS);
             let bg_grad = LinearGradient::new(0.0, 0.0, 0.0, ch);
             if is_dark {
-                bg_grad.add_color_stop_rgba(0.0, 0.16, 0.16, 0.19, a_top);
-                bg_grad.add_color_stop_rgba(1.0, 0.11, 0.11, 0.14, a_bot);
+                bg_grad.add_color_stop_rgba(0.0, 0.18, 0.20, 0.24, a_top);
+                bg_grad.add_color_stop_rgba(1.0, 0.12, 0.14, 0.18, a_bot);
             } else {
-                bg_grad.add_color_stop_rgba(0.0, 0.98, 0.98, 0.99, a_top);
-                bg_grad.add_color_stop_rgba(1.0, 0.93, 0.94, 0.96, a_bot);
+                bg_grad.add_color_stop_rgba(0.0, 0.28, 0.34, 0.42, a_top);
+                bg_grad.add_color_stop_rgba(1.0, 0.20, 0.25, 0.33, a_bot);
             }
             let _ = ctx.set_source(&bg_grad);
             let _ = ctx.fill();
 
-            // Borde especular interno
-            append_squircle_path(
+            // Halo interno de refracción Liquid Glass (efecto lente curva en los extremos de la cápsula)
+            append_rounded_rect_path(
                 &ctx,
-                0.5,
-                0.5,
-                (cw - 1.0).max(2.0),
-                (ch - 1.0).max(2.0),
-                (OSD_CORNER_RADIUS - 0.5).max(1.0),
-                SQUIRCLE_EXPONENT,
+                1.8,
+                1.8,
+                (cw - 3.6).max(2.0),
+                (ch - 3.6).max(2.0),
+                (OSD_CORNER_RADIUS - 1.8).max(1.0),
             );
-            ctx.set_line_width(1.0);
-            if is_dark {
-                ctx.set_source_rgba(1.0, 1.0, 1.0, 0.18);
-            } else {
-                ctx.set_source_rgba(1.0, 1.0, 1.0, 0.78);
-            }
+            ctx.set_line_width(2.2);
+            let lens_grad = LinearGradient::new(0.0, 0.0, 0.0, ch);
+            lens_grad.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 0.20);
+            lens_grad.add_color_stop_rgba(0.5, 1.0, 1.0, 1.0, 0.08);
+            lens_grad.add_color_stop_rgba(1.0, 1.0, 1.0, 1.0, 0.16);
+            let _ = ctx.set_source(&lens_grad);
             let _ = ctx.stroke();
 
-            let (fg_r, fg_g, fg_b) = if is_dark {
-                (0.96, 0.97, 0.99)
-            } else {
-                (0.10, 0.11, 0.14)
-            };
-
-            // Icono vectorial a la izquierda
-            draw_osd_vector_icon(&ctx, osd.icon, 26.0, ch * 0.5, fg_r, fg_g, fg_b, osd.muted_style);
-
-            // Título y porcentaje/subtítulo
-            ctx.select_font_face(
-                "Inter",
-                cairo::FontSlant::Normal,
-                cairo::FontWeight::Bold,
+            // Bisel especular brillante en el perímetro de la cápsula
+            append_rounded_rect_path(
+                &ctx,
+                0.85,
+                0.85,
+                (cw - 1.7).max(2.0),
+                (ch - 1.7).max(2.0),
+                (OSD_CORNER_RADIUS - 0.85).max(1.0),
             );
-            ctx.set_font_size(12.5);
-            ctx.set_source_rgba(fg_r, fg_g, fg_b, 0.94);
-            let text_y = if osd.level_pct.is_some() { 23.0 } else { 34.0 };
-            ctx.move_to(50.0, text_y);
-            let _ = ctx.show_text(&osd.title);
+            ctx.set_line_width(1.1);
+            let rim_grad = LinearGradient::new(0.0, 0.0, 0.0, ch);
+            rim_grad.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 0.76);
+            rim_grad.add_color_stop_rgba(0.5, 1.0, 1.0, 1.0, 0.32);
+            rim_grad.add_color_stop_rgba(1.0, 1.0, 1.0, 1.0, 0.62);
+            let _ = ctx.set_source(&rim_grad);
+            let _ = ctx.stroke();
 
-            ctx.select_font_face(
-                "Inter",
-                cairo::FontSlant::Normal,
-                cairo::FontWeight::Normal,
+            // Fino contorno exterior de definición
+            append_rounded_rect_path(
+                &ctx,
+                0.3,
+                0.3,
+                (cw - 0.6).max(2.0),
+                (ch - 0.6).max(2.0),
+                (OSD_CORNER_RADIUS - 0.3).max(1.0),
             );
-            ctx.set_font_size(12.0);
-            ctx.set_source_rgba(fg_r, fg_g, fg_b, 0.68);
-            if let Ok(ext) = ctx.text_extents(&osd.subtitle) {
-                let sub_x = (cw - 16.0 - ext.width()).max(125.0);
-                ctx.move_to(sub_x, text_y);
-                let _ = ctx.show_text(&osd.subtitle);
-            }
+            ctx.set_line_width(0.6);
+            ctx.set_source_rgba(0.0, 0.0, 0.0, 0.26);
+            let _ = ctx.stroke();
 
-            // Barra de nivel segmentada/continua estilo macOS Tahoe
+            // Icono vectorial blanco puro a la izquierda
+            draw_osd_vector_icon(
+                &ctx,
+                osd.icon,
+                36.0,
+                ch * 0.5,
+                1.0,
+                1.0,
+                1.0,
+                osd.muted_style,
+            );
+
+            // Barra horizontal de 16 segmentos estilo macOS (centrada verticalmente con el icono)
             if let Some(pct) = osd.level_pct {
-                let bar_x = 50.0;
-                let bar_y = 35.0;
-                let bar_w = cw - bar_x - 16.0;
-                let bar_h = 7.0;
-                let bar_r = 3.5;
+                let bar_x = 64.0;
+                let bar_right_pad = 24.0;
+                let bar_w = (cw - bar_x - bar_right_pad).max(32.0);
+                let bar_h = 3.8;
+                let bar_y = (ch - bar_h) * 0.5;
+                let seg_gap = 2.2;
+                let seg_w =
+                    (bar_w - seg_gap * ((OSD_SEGMENTS - 1) as f64)) / (OSD_SEGMENTS as f64);
+                let seg_r = 1.6;
 
-                // Track de fondo
-                append_rounded_rect_path(&ctx, bar_x, bar_y, bar_w, bar_h, bar_r);
-                if is_dark {
-                    ctx.set_source_rgba(1.0, 1.0, 1.0, 0.14);
+                let active_segments = if osd.muted_style {
+                    0.0
                 } else {
-                    ctx.set_source_rgba(0.08, 0.10, 0.14, 0.12);
-                }
-                let _ = ctx.fill();
+                    (pct.clamp(0.0, 100.0) / 100.0) * (OSD_SEGMENTS as f64)
+                };
 
-                // Relleno activo
-                let frac = (pct / 100.0).clamp(0.0, 1.0);
-                if frac > 0.005 {
-                    let fill_w = (bar_w * frac).max(bar_h);
-                    append_rounded_rect_path(&ctx, bar_x, bar_y, fill_w, bar_h, bar_r);
-                    if osd.muted_style {
-                        ctx.set_source_rgba(0.95, 0.36, 0.34, 0.92);
-                    } else {
-                        let fill_grad = LinearGradient::new(bar_x, bar_y, bar_x + fill_w, bar_y);
-                        fill_grad.add_color_stop_rgba(0.0, 0.18, 0.60, 1.0, 0.96);
-                        fill_grad.add_color_stop_rgba(1.0, 0.32, 0.74, 1.0, 0.98);
-                        let _ = ctx.set_source(&fill_grad);
-                    }
+                for i in 0..OSD_SEGMENTS {
+                    let sx = bar_x + (i as f64) * (seg_w + seg_gap);
+                    let seg_fill = (active_segments - (i as f64)).clamp(0.0, 1.0);
+
+                    // Pista inactiva del segmento
+                    append_rounded_rect_path(&ctx, sx, bar_y, seg_w, bar_h, seg_r);
+                    ctx.set_source_rgba(1.0, 1.0, 1.0, 0.22);
                     let _ = ctx.fill();
+
+                    // Relleno blanco activo (completo o fraccional para pasos finos con Shift/Alt)
+                    if seg_fill >= 0.99 {
+                        append_rounded_rect_path(&ctx, sx, bar_y, seg_w, bar_h, seg_r);
+                        ctx.set_source_rgba(1.0, 1.0, 1.0, 0.98);
+                        let _ = ctx.fill();
+                    } else if seg_fill > 0.04 {
+                        let _ = ctx.save();
+                        ctx.rectangle(sx, bar_y, seg_w * seg_fill, bar_h);
+                        ctx.clip();
+                        append_rounded_rect_path(&ctx, sx, bar_y, seg_w, bar_h, seg_r);
+                        ctx.set_source_rgba(1.0, 1.0, 1.0, 0.98);
+                        let _ = ctx.fill();
+                        let _ = ctx.restore();
+                    }
                 }
+            } else {
+                // OSD sin barra de nivel (MPRIS Play/Pause/Next, Touchpad, etc.): texto centrado verticalmente
+                ctx.select_font_face(
+                    "Inter",
+                    cairo::FontSlant::Normal,
+                    cairo::FontWeight::Bold,
+                );
+                ctx.set_font_size(13.5);
+                ctx.set_source_rgba(1.0, 1.0, 1.0, 0.96);
+                let label = if !osd.subtitle.is_empty() {
+                    &osd.subtitle
+                } else {
+                    &osd.title
+                };
+                ctx.move_to(64.0, ch * 0.5 + 4.5);
+                let _ = ctx.show_text(label);
             }
         }
 
@@ -968,15 +1009,7 @@ impl MediaKeysState {
             let _ = mctx.paint();
             mctx.set_operator(Operator::Over);
 
-            append_squircle_path(
-                &mctx,
-                0.0,
-                0.0,
-                cw,
-                ch,
-                OSD_CORNER_RADIUS,
-                SQUIRCLE_EXPONENT,
-            );
+            append_rounded_rect_path(&mctx, 0.0, 0.0, cw, ch, OSD_CORNER_RADIUS);
             mctx.set_source_rgba(1.0, 1.0, 1.0, 1.0);
             let _ = mctx.fill();
         }
@@ -1149,9 +1182,9 @@ fn draw_osd_vector_icon(
 ) {
     let _ = ctx.save();
     if muted_style {
-        ctx.set_source_rgba(0.95, 0.36, 0.34, 0.95);
+        ctx.set_source_rgba(r, g, b, 0.62);
     } else {
-        ctx.set_source_rgba(r, g, b, 0.92);
+        ctx.set_source_rgba(r, g, b, 0.98);
     }
     ctx.set_line_cap(cairo::LineCap::Round);
     ctx.set_line_join(cairo::LineJoin::Round);
@@ -1161,42 +1194,42 @@ fn draw_osd_vector_icon(
         | OsdIconKind::VolumeMedium
         | OsdIconKind::VolumeLow
         | OsdIconKind::VolumeMuted => {
-            // Cono de altavoz
+            // Cono de altavoz estilo SF Symbols (speaker.wave.3.fill)
             ctx.new_sub_path();
-            ctx.move_to(cx - 9.0, cy - 3.5);
-            ctx.line_to(cx - 5.0, cy - 3.5);
-            ctx.line_to(cx - 0.5, cy - 8.0);
-            ctx.line_to(cx - 0.5, cy + 8.0);
-            ctx.line_to(cx - 5.0, cy + 3.5);
-            ctx.line_to(cx - 9.0, cy + 3.5);
+            ctx.move_to(cx - 11.0, cy - 3.8);
+            ctx.line_to(cx - 6.4, cy - 3.8);
+            ctx.line_to(cx - 1.2, cy - 8.6);
+            ctx.line_to(cx - 1.2, cy + 8.6);
+            ctx.line_to(cx - 6.4, cy + 3.8);
+            ctx.line_to(cx - 11.0, cy + 3.8);
             ctx.close_path();
             let _ = ctx.fill();
 
-            ctx.set_line_width(1.8);
+            ctx.set_line_width(2.0);
             if matches!(
                 icon,
                 OsdIconKind::VolumeLow | OsdIconKind::VolumeMedium | OsdIconKind::VolumeHigh
             ) {
                 ctx.new_sub_path();
-                ctx.arc(cx + 1.0, cy, 4.0, -0.65, 0.65);
+                ctx.arc(cx - 0.5, cy, 4.6, -0.62, 0.62);
                 let _ = ctx.stroke();
             }
             if matches!(icon, OsdIconKind::VolumeMedium | OsdIconKind::VolumeHigh) {
                 ctx.new_sub_path();
-                ctx.arc(cx + 1.0, cy, 7.2, -0.70, 0.70);
+                ctx.arc(cx - 0.5, cy, 8.2, -0.68, 0.68);
                 let _ = ctx.stroke();
             }
             if matches!(icon, OsdIconKind::VolumeHigh) {
                 ctx.new_sub_path();
-                ctx.arc(cx + 1.0, cy, 10.4, -0.75, 0.75);
+                ctx.arc(cx - 0.5, cy, 11.8, -0.74, 0.74);
                 let _ = ctx.stroke();
             }
             if matches!(icon, OsdIconKind::VolumeMuted) {
                 ctx.set_line_width(2.0);
-                ctx.move_to(cx + 3.0, cy - 4.5);
+                ctx.move_to(cx + 2.5, cy - 4.5);
                 ctx.line_to(cx + 9.5, cy + 4.5);
                 ctx.move_to(cx + 9.5, cy - 4.5);
-                ctx.line_to(cx + 3.0, cy + 4.5);
+                ctx.line_to(cx + 2.5, cy + 4.5);
                 let _ = ctx.stroke();
             }
         }
@@ -1220,15 +1253,15 @@ fn draw_osd_vector_icon(
             }
         }
         OsdIconKind::Brightness => {
-            // Sol estilo macOS
+            // Sol estilo macOS (sun.max.fill)
             ctx.new_sub_path();
-            ctx.arc(cx, cy, 4.6, 0.0, std::f64::consts::TAU);
+            ctx.arc(cx, cy, 5.4, 0.0, std::f64::consts::TAU);
             let _ = ctx.fill();
-            ctx.set_line_width(1.9);
+            ctx.set_line_width(2.2);
             for i in 0..8 {
                 let angle = (i as f64) * std::f64::consts::TAU / 8.0;
-                let r0 = 7.2;
-                let r1 = 10.2;
+                let r0 = 8.4;
+                let r1 = 11.5;
                 ctx.move_to(cx + angle.cos() * r0, cy + angle.sin() * r0);
                 ctx.line_to(cx + angle.cos() * r1, cy + angle.sin() * r1);
             }
@@ -1317,54 +1350,22 @@ fn append_rounded_rect_path(ctx: &Context, x: f64, y: f64, w: f64, h: f64, radiu
     ctx.close_path();
 }
 
-fn append_squircle_path(ctx: &Context, x: f64, y: f64, w: f64, h: f64, radius: f64, exponent: f64) {
-    let r = radius.min(w * 0.5).min(h * 0.5).max(0.0);
-    if r <= 0.5 {
-        ctx.rectangle(x, y, w, h);
-        return;
-    }
-
-    let steps = 14usize;
-    let inv_n = 1.0 / exponent;
-    ctx.new_sub_path();
-    ctx.move_to(x + r, y);
-    ctx.line_to(x + w - r, y);
-
-    let corner_point = |cx: f64, cy: f64, sx: f64, sy: f64, t: f64| -> (f64, f64) {
-        let angle = t * FRAC_PI_2;
-        let dx = angle.cos().abs().powf(2.0 * inv_n) * r * sx;
-        let dy = angle.sin().abs().powf(2.0 * inv_n) * r * sy;
-        (cx + dx, cy + dy)
-    };
-
-    for i in 0..=steps {
-        let (px, py) = corner_point(x + w - r, y + r, 1.0, -1.0, 1.0 - (i as f64 / steps as f64));
-        ctx.line_to(px, py);
-    }
-    ctx.line_to(x + w, y + h - r);
-
-    for i in 0..=steps {
-        let (px, py) = corner_point(x + w - r, y + h - r, 1.0, 1.0, i as f64 / steps as f64);
-        ctx.line_to(px, py);
-    }
-    ctx.line_to(x + r, y + h);
-
-    for i in 0..=steps {
-        let (px, py) = corner_point(x + r, y + h - r, -1.0, 1.0, 1.0 - (i as f64 / steps as f64));
-        ctx.line_to(px, py);
-    }
-    ctx.line_to(x, y + r);
-
-    for i in 0..=steps {
-        let (px, py) = corner_point(x + r, y + r, -1.0, -1.0, i as f64 / steps as f64);
-        ctx.line_to(px, py);
-    }
-    ctx.close_path();
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn osd_pill_is_top_right_below_menubar_with_stadium_capsule_shape() {
+        let output_geo = Rectangle::new(Point::from((0, 0)), Size::from((1920, 1080)));
+        let usable_zone = Rectangle::new(Point::from((0, 36)), Size::from((1920, 1044)));
+        let rect = compute_osd_logical_rect(output_geo, usable_zone);
+
+        assert_eq!(rect.size, Size::from((264, 56)));
+        assert!((OSD_CORNER_RADIUS - (OSD_HEIGHT as f64 * 0.5)).abs() < 1e-6);
+        assert_eq!(OSD_SEGMENTS, 16);
+        // Esquina superior derecha debajo del Top Bar (x = 1920 - 264 - 48 = 1608, y = 36 + 12 = 48)
+        assert_eq!(rect.loc, Point::from((1608, 48)));
+    }
 
     #[test]
     fn detect_volume_and_brightness_keys_by_keysym_and_raw_keycode() {
