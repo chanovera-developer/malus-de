@@ -655,6 +655,7 @@ pub fn create_new_folder(folder: &Path, base_name: &str) -> Result<PathBuf, Stri
 }
 
 /// Crea un documento de texto plano vacío (`.txt`) con nombre único dentro de `folder`.
+#[cfg(test)]
 pub fn create_new_text_document(folder: &Path, base_stem: &str) -> Result<PathBuf, String> {
     let target = unique_target_path(folder, base_stem, Some("txt"));
     fs::OpenOptions::new()

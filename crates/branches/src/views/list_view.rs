@@ -313,10 +313,6 @@ impl ListView {
         update_header_titles(&self.header, None);
     }
 
-    pub fn set_items(&self, items: &[FileItem]) {
-        self.set_items_grouped(items, None);
-    }
-
     pub fn set_items_grouped(&self, items: &[FileItem], groups: Option<&[String]>) {
         let mut sorted = items.to_vec();
         let active_groups: Option<Vec<String>> = if self.sort_state.get().is_some() {

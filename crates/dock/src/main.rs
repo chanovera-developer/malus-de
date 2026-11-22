@@ -1,5 +1,4 @@
 use gdk_pixbuf::prelude::*;
-use gio::prelude::*;
 use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4::{

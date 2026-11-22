@@ -7,7 +7,7 @@ use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, Entry,
     EventControllerKey, Fixed, GestureClick, GestureDrag, Image, Label, Orientation, Overlay,
-    Picture, Popover, Stack, StackTransitionType,
+    Picture, Popover,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use malus_de_common::{
@@ -361,10 +361,6 @@ fn squircle_clip_pixbuf(pixbuf: &gdk_pixbuf::Pixbuf) -> Option<gdk_pixbuf::Pixbu
         height,
         width * 4,
     ))
-}
-
-fn build_default_gradient_texture(target_w: i32, target_h: i32) -> Option<gtk4::gdk::Texture> {
-    build_aurora_gradient_texture(target_w, target_h, true)
 }
 
 fn build_aurora_gradient_texture(
@@ -2362,122 +2358,6 @@ fn create_desktop_item_and_edit(
         insert_single_icon.clone(),
         trigger_refresh.clone(),
     );
-}
-
-#[allow(clippy::too_many_arguments)]
-fn build_create_new_submenu(
-    popover: &Popover,
-    stack: &Stack,
-    fixed: &Fixed,
-    desktop_dir: PathBuf,
-    desktop_size: (i32, i32),
-    config: Rc<RefCell<DesktopIconsConfig>>,
-    icon_positions: Rc<RefCell<HashMap<PathBuf, (f64, f64)>>>,
-    selected_paths: Rc<RefCell<HashSet<PathBuf>>>,
-    focused_path: Rc<RefCell<Option<PathBuf>>>,
-    recently_dropped_paths: Rc<RefCell<HashSet<PathBuf>>>,
-    insert_single_icon: Rc<dyn Fn(&Path)>,
-    trigger_refresh: Rc<dyn Fn()>,
-    click_pos: Rc<Cell<(f64, f64)>>,
-    top_margin: f64,
-) -> GtkBox {
-    let container = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .spacing(2)
-        .css_classes(["desktop-context-menu"])
-        .build();
-
-    let back_btn = create_menu_button("← Volver", false);
-    let stack_back = stack.downgrade();
-    back_btn.connect_clicked(move |_| {
-        if let Some(st) = stack_back.upgrade() {
-            st.set_transition_type(StackTransitionType::SlideLeftRight);
-            st.set_visible_child_name("main");
-        }
-    });
-    container.append(&back_btn);
-
-    let sep = GtkBox::new(Orientation::Horizontal, 0);
-    sep.add_css_class("desktop-context-separator");
-    container.append(&sep);
-
-    let folder_btn = create_menu_button("Carpeta", false);
-    {
-        let p_c = popover.downgrade();
-        let f_c = fixed.downgrade();
-        let d_c = desktop_dir.clone();
-        let cfg_c = config.clone();
-        let pos_c = icon_positions.clone();
-        let sel_c = selected_paths.clone();
-        let foc_c = focused_path.clone();
-        let rec_c = recently_dropped_paths.clone();
-        let ins_c = insert_single_icon.clone();
-        let trig_c = trigger_refresh.clone();
-        let click_c = click_pos.clone();
-        folder_btn.connect_clicked(move |_| {
-            if let Some(pop) = p_c.upgrade() {
-                popdown_desktop_popover_lifo(&pop);
-            }
-            if let Some(fixed_w) = f_c.upgrade() {
-                create_desktop_item_and_edit(
-                    &fixed_w,
-                    &d_c,
-                    desktop_size,
-                    &cfg_c,
-                    &pos_c,
-                    &sel_c,
-                    &foc_c,
-                    &rec_c,
-                    &ins_c,
-                    &trig_c,
-                    click_c.get(),
-                    top_margin,
-                    true,
-                );
-            }
-        });
-    }
-    container.append(&folder_btn);
-
-    let doc_btn = create_menu_button("Documento de texto", false);
-    {
-        let p_c = popover.downgrade();
-        let f_c = fixed.downgrade();
-        let d_c = desktop_dir;
-        let cfg_c = config;
-        let pos_c = icon_positions;
-        let sel_c = selected_paths;
-        let foc_c = focused_path;
-        let rec_c = recently_dropped_paths;
-        let ins_c = insert_single_icon;
-        let trig_c = trigger_refresh;
-        let click_c = click_pos;
-        doc_btn.connect_clicked(move |_| {
-            if let Some(pop) = p_c.upgrade() {
-                popdown_desktop_popover_lifo(&pop);
-            }
-            if let Some(fixed_w) = f_c.upgrade() {
-                create_desktop_item_and_edit(
-                    &fixed_w,
-                    &d_c,
-                    desktop_size,
-                    &cfg_c,
-                    &pos_c,
-                    &sel_c,
-                    &foc_c,
-                    &rec_c,
-                    &ins_c,
-                    &trig_c,
-                    click_c.get(),
-                    top_margin,
-                    false,
-                );
-            }
-        });
-    }
-    container.append(&doc_btn);
-
-    container
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -8706,7 +8586,7 @@ mod tests {
             super::compute_cover_crop_geometry(1000, 2000, 1920, 1080),
             (1920, 3840, 0, 1380)
         );
-        let tex = super::build_default_gradient_texture(64, 36)
+        let tex = super::build_aurora_gradient_texture(64, 36, true)
             .expect("Debe poder pre-rasterizar el fondo degradado");
         assert_eq!(tex.width(), 64);
         assert_eq!(tex.height(), 36);

@@ -2203,7 +2203,7 @@ mod tests {
 
         // 1. ListView: selección múltiple y select_all
         let list_view = super::list_view::ListView::new(nav.clone(), sel_cb.clone());
-        list_view.set_items(&items);
+        list_view.set_items_grouped(&items, None);
         list_view.select_all();
         let list_sel = list_view.get_selected_items();
         assert_eq!(list_sel.len(), 3);
