@@ -221,6 +221,21 @@ impl PointerGrab<MalusState> for ResizeSurfaceGrab {
                     top_state.states.unset(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Resizing);
                 });
                 toplevel.send_configure();
+                if toplevel.parent().is_none() {
+                    if let Some(surf) = self.window.wl_surface() {
+                        let win_loc = data.space.element_location(&self.window).unwrap_or_default();
+                        let win_geo = self.window.geometry();
+                        if win_geo.size.w >= 200 && win_geo.size.h >= 200 {
+                            if let Some(id) = crate::state::app_id_for_surface(&surf) {
+                                data.save_app_window_geometry(
+                                    &id,
+                                    win_geo.size,
+                                    Some(win_loc + win_geo.loc),
+                                );
+                            }
+                        }
+                    }
+                }
             }
 
             handle.unset_grab(self, data, event.serial, event.time, false);

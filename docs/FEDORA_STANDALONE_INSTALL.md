@@ -1,18 +1,19 @@
-# Guía de Instalación Standalone en Fedora Minimal (Modo Terminal)
+# Guía de Instalación en Fedora (Cualquier Escritorio o Modo Terminal Minimal)
 
-Esta guía documenta el procedimiento completo para desplegar **Malus DE como un entorno de escritorio 100% autónomo** sobre una instalación base de **Fedora en modo terminal puro**, eliminando cualquier dependencia de `gnome-shell` y `mutter`.
+Esta guía documenta el procedimiento completo para desplegar **Malus DE** tanto sobre **cualquier edición de Fedora con escritorio preinstalado** (Workstation/GNOME, KDE Plasma, Xfce, Cinnamon, MATE, Sway, etc.) como sobre una instalación base de **Fedora en modo terminal puro (Minimal / Everything)**, sin depender de `gnome-shell` ni `mutter`.
 
 ---
 
-## Instalación Rápida en Un Solo Comando (Estilo Brave)
+## Instalación Rápida en Un Solo Comando (Cualquier Fedora)
 
-Si ya estás en la terminal de **Fedora Minimal** con conexión a internet, puedes instalar todas las dependencias, clonar el repositorio, compilar Malus DE en perfil `Release` e instalar la sesión en un único comando:
+Tanto si estás en **Fedora con cualquier entorno de escritorio** (GNOME, KDE Plasma, Xfce, etc.) como en la terminal de **Fedora Minimal**, puedes instalar todas las dependencias, clonar el repositorio, compilar Malus DE en perfil `Release` y registrar la sesión Wayland en un único comando:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/scripts/install-fedora-minimal.sh | bash
 ```
 
-Si además quieres dejar configurado el arranque automático en `tty1` o instalar `greetd` + `tuigreet` directamente desde el mismo comando:
+* **En Fedora con escritorio (GDM, SDDM, LightDM, etc.):** El instalador respeta los paquetes de tu sistema (como `tuned-ppd` o `ffmpeg` de RPM Fusion), compila e instala Malus DE y registra automáticamente la sesión **Malus DE** en `/usr/share/wayland-sessions/malus.desktop`. Solo tienes que cerrar sesión (*Log Out*) y elegir **Malus DE** en tu pantalla de login.
+* **En Fedora Minimal (sin Display Manager):** Si además quieres dejar configurado el arranque automático en `tty1` o instalar `greetd` + `tuigreet` directamente desde el mismo comando:
 
 ```bash
 # Con arranque automático en TTY1 (~/.bash_profile)
@@ -23,7 +24,7 @@ curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/s
 ```
 
 > [!NOTE]
-> El script [install-fedora-minimal.sh](../scripts/install-fedora-minimal.sh) descarga el código en `~/malus-de` (configurable con `--dir`), ejecuta `cargo build --release --workspace` y despliega los binarios en `/usr/local/bin/`. Al terminar, inicia el entorno con `/usr/local/bin/malus-session` (o reinicia si activaste `--tty-autostart` / `--greetd`). Si prefieres ejecutar o revisar cada paso manualmente, sigue las secciones detalladas a continuación.
+> El script [install-fedora-minimal.sh](../scripts/install-fedora-minimal.sh) descarga el código en `~/malus-de` (configurable con `--dir`), ejecuta `cargo build --release --workspace`, despliega los binarios en `/usr/local/bin/` y registra la sesión Wayland para cualquier Display Manager. Si prefieres ejecutar o revisar cada paso manualmente en una instalación limpia, sigue las secciones detalladas a continuación.
 
 ---
 

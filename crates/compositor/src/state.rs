@@ -315,6 +315,7 @@ pub struct MalusState {
     pub pending_brightness_reload: bool,
     pub pending_drm_hotplug: bool,
     pub saved_app_window_sizes: HashMap<String, Size<i32, Logical>>,
+    pub saved_app_window_positions: HashMap<String, Point<i32, Logical>>,
     pub dock_blur_headroom: i32,
     pub pending_screenshot_requests:
         std::collections::VecDeque<(std::path::PathBuf, Option<String>)>,
@@ -510,6 +511,28 @@ pub fn centered_window_location(
     let x = usable.loc.x + (usable.size.w - win_geo.size.w).max(0) / 2 - win_geo.loc.x;
     let y = usable.loc.y + (usable.size.h - total_h).max(0) / 2 + ssd - win_geo.loc.y;
     Point::from((x, y))
+}
+
+/// Si existe una posición visible recordada (`saved_visible_loc = space_loc + win_geo.loc`),
+/// la acota dentro del área útil `usable` (respetando la Top Bar y barra SSD); si es la primera vez
+/// que se abre la aplicación (`None`), la centra en pantalla con `centered_window_location`.
+pub fn clamped_or_centered_window_location(
+    usable: Rectangle<i32, Logical>,
+    win_geo: Rectangle<i32, Logical>,
+    ssd_top: i32,
+    saved_visible_loc: Option<Point<i32, Logical>>,
+) -> Point<i32, Logical> {
+    let Some(saved) = saved_visible_loc else {
+        return centered_window_location(usable, win_geo, ssd_top);
+    };
+    let ssd = ssd_top.max(0);
+    let min_x = usable.loc.x;
+    let max_x = (usable.loc.x + usable.size.w - win_geo.size.w).max(min_x);
+    let min_y = usable.loc.y + ssd;
+    let max_y = (usable.loc.y + usable.size.h - win_geo.size.h).max(min_y);
+    let vis_x = saved.x.clamp(min_x, max_x);
+    let vis_y = saved.y.clamp(min_y, max_y);
+    Point::from((vis_x - win_geo.loc.x, vis_y - win_geo.loc.y))
 }
 
 pub fn app_id_for_surface(surface: &WlSurface) -> Option<String> {
@@ -1292,6 +1315,8 @@ impl MalusState {
         let dock_config = DockConfig::load_or_create_default();
         let desktop_dock_cfg = malus_de_common::config::DesktopDockConfig::load();
         let input_cfg = malus_de_common::config::InputConfig::load();
+        let (saved_app_window_sizes, saved_app_window_positions) =
+            Self::load_saved_window_geometries();
         let dock_blur_headroom = dock_config.headroom_height().min(i32::MAX as u32) as i32;
         let app_switcher_style = dock_config.app_switcher_style;
 
@@ -1357,7 +1382,8 @@ impl MalusState {
             pending_displays_reload: false,
             pending_brightness_reload: false,
             pending_drm_hotplug: false,
-            saved_app_window_sizes: Self::load_saved_window_sizes(),
+            saved_app_window_sizes,
+            saved_app_window_positions,
             dock_blur_headroom,
             pending_screenshot_requests: std::collections::VecDeque::new(),
             pending_theme_transition_capture: None,
@@ -1415,53 +1441,84 @@ impl MalusState {
         self.app_switcher_style = config.app_switcher_style;
     }
 
-    /// Carga los tamaños de ventana guardados por aplicación desde ~/.config/malus-de/window_sizes.json
-    pub fn load_saved_window_sizes() -> HashMap<String, Size<i32, Logical>> {
+    /// Carga los tamaños y posiciones de ventana guardados por aplicación desde ~/.config/malus-de/window_sizes.json,
+    /// manteniendo compatibilidad con entradas antiguas de 2 elementos `[w, h]` y nuevas de 4 elementos `[w, h, x, y]`.
+    pub fn load_saved_window_geometries() -> (
+        HashMap<String, Size<i32, Logical>>,
+        HashMap<String, Point<i32, Logical>>,
+    ) {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
         let path = std::path::PathBuf::from(home).join(".config/malus-de/window_sizes.json");
+        let mut sizes = HashMap::new();
+        let mut positions = HashMap::new();
         if path.exists() {
             if let Ok(data) = std::fs::read_to_string(&path) {
-                if let Ok(map) = serde_json::from_str::<HashMap<String, (i32, i32)>>(&data) {
+                if let Ok(raw) = serde_json::from_str::<HashMap<String, Vec<i32>>>(&data) {
+                    for (k, vals) in raw {
+                        if vals.len() >= 2 && vals[0] >= 200 && vals[1] >= 200 {
+                            sizes.insert(k.clone(), Size::from((vals[0], vals[1])));
+                        }
+                        if vals.len() >= 4 {
+                            positions.insert(k, Point::from((vals[2], vals[3])));
+                        }
+                    }
                     tracing::info!(
-                        "📂 Tamaños de ventana cargados desde disco: {} aplicaciones",
-                        map.len()
+                        "📂 Geometrías de ventana cargadas desde disco: {} tamaños, {} posiciones",
+                        sizes.len(),
+                        positions.len()
                     );
-                    return map
-                        .into_iter()
-                        .map(|(k, (w, h))| (k, Size::from((w, h))))
-                        .collect();
                 }
             }
         }
-        HashMap::new()
+        (sizes, positions)
     }
 
-    /// Guarda el último tamaño conocido de una aplicación y lo persiste en disco
-    pub fn save_app_window_size(&mut self, app_id: &str, size: Size<i32, Logical>) {
+    /// Guarda el último tamaño y posición visible conocidos de una aplicación y los persiste en disco.
+    pub fn save_app_window_geometry(
+        &mut self,
+        app_id: &str,
+        size: Size<i32, Logical>,
+        visible_loc: Option<Point<i32, Logical>>,
+    ) {
         if size.w < 200 || size.h < 200 {
             return;
         }
         let clean_id = normalize_app_id(app_id);
-        self.saved_app_window_sizes.insert(clean_id, size);
+        self.saved_app_window_sizes.insert(clean_id.clone(), size);
+        if let Some(loc) = visible_loc {
+            self.saved_app_window_positions.insert(clean_id, loc);
+        }
+        self.persist_saved_window_geometries();
+    }
 
+    fn persist_saved_window_geometries(&self) {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
         let config_dir = std::path::PathBuf::from(home).join(".config/malus-de");
         let _ = std::fs::create_dir_all(&config_dir);
         let path = config_dir.join("window_sizes.json");
-        let map: HashMap<String, (i32, i32)> = self
-            .saved_app_window_sizes
-            .iter()
-            .map(|(k, s)| (k.clone(), (s.w, s.h)))
-            .collect();
+        let mut map: HashMap<String, Vec<i32>> = HashMap::new();
+        for (k, s) in &self.saved_app_window_sizes {
+            if let Some(p) = self.saved_app_window_positions.get(k) {
+                map.insert(k.clone(), vec![s.w, s.h, p.x, p.y]);
+            } else {
+                map.insert(k.clone(), vec![s.w, s.h]);
+            }
+        }
         if let Ok(json) = serde_json::to_string_pretty(&map) {
             let _ = std::fs::write(path, json);
         }
     }
 
-    /// Obtiene el tamaño recordado de una aplicación si existe
+    /// Obtiene el tamaño recordado de una aplicación si existe.
     pub fn get_saved_window_size(&self, app_id: &str) -> Option<Size<i32, Logical>> {
         let clean_id = normalize_app_id(app_id);
         self.saved_app_window_sizes.get(&clean_id).copied()
+    }
+
+    /// Obtiene la posición visible recordada de una aplicación si existe.
+    pub fn get_saved_window_position(&self, app_id: &str) -> Option<Point<i32, Logical>> {
+        let clean_id = normalize_app_id(app_id);
+        self.saved_app_window_positions.get(&clean_id).copied()
     }
 
     pub fn get_or_assign_window_id(&mut self, surface: &WlSurface) -> u64 {
@@ -6224,42 +6281,68 @@ impl CompositorHandler for MalusState {
                             || self.minimized_windows.contains_key(surface)
                         {
                             self.initially_placed_windows.insert(surface.clone());
-                        } else if let Some(output) = self
-                            .origin_output_for_window(&window)
-                            .or_else(|| self.primary_output())
-                        {
-                            let usable = self.usable_zone_for_output(&output);
-                            let ssd_top = if window_uses_ssd(&window) {
-                                crate::ssd::SSD_TITLEBAR_HEIGHT
+                        } else {
+                            let saved_pos = if toplevel.parent().is_none() {
+                                app_id_for_surface(surface)
+                                    .and_then(|id| self.get_saved_window_position(&id))
                             } else {
-                                0
+                                None
                             };
-                            let max_bounds = max_window_size_in_usable_zone(usable, ssd_top);
-                            if (geometry.size.w > max_bounds.w || geometry.size.h > max_bounds.h)
-                                && !self.clamped_oversized_windows.contains(surface)
-                            {
-                                let clamped = clamp_size_to_bounds(geometry.size, max_bounds);
-                                tracing::info!(
-                                    "📐 [commit] Ventana excede el área útil ({:?} > {:?}); acotando a {:?}",
-                                    geometry.size,
-                                    max_bounds,
-                                    clamped
-                                );
-                                self.clamped_oversized_windows.insert(surface.clone());
-                                toplevel.with_pending_state(|s| {
-                                    s.bounds = Some(max_bounds);
-                                    s.size = Some(clamped);
-                                });
-                                toplevel.send_configure();
-                                let provisional_loc =
-                                    centered_window_location(usable, geometry, ssd_top);
-                                self.space
-                                    .map_element(window.clone(), provisional_loc, true);
-                            } else {
-                                let centered_loc =
-                                    centered_window_location(usable, geometry, ssd_top);
-                                self.space.map_element(window.clone(), centered_loc, true);
-                                self.initially_placed_windows.insert(surface.clone());
+                            let output = saved_pos
+                                .and_then(|pt| {
+                                    self.space
+                                        .outputs()
+                                        .find(|o| {
+                                            self.space
+                                                .output_geometry(o)
+                                                .is_some_and(|g| g.contains(pt))
+                                        })
+                                        .cloned()
+                                })
+                                .or_else(|| self.origin_output_for_window(&window))
+                                .or_else(|| self.primary_output());
+                            if let Some(output) = output {
+                                let usable = self.usable_zone_for_output(&output);
+                                let ssd_top = if window_uses_ssd(&window) {
+                                    crate::ssd::SSD_TITLEBAR_HEIGHT
+                                } else {
+                                    0
+                                };
+                                let max_bounds = max_window_size_in_usable_zone(usable, ssd_top);
+                                if (geometry.size.w > max_bounds.w || geometry.size.h > max_bounds.h)
+                                    && !self.clamped_oversized_windows.contains(surface)
+                                {
+                                    let clamped = clamp_size_to_bounds(geometry.size, max_bounds);
+                                    tracing::info!(
+                                        "📐 [commit] Ventana excede el área útil ({:?} > {:?}); acotando a {:?}",
+                                        geometry.size,
+                                        max_bounds,
+                                        clamped
+                                    );
+                                    self.clamped_oversized_windows.insert(surface.clone());
+                                    toplevel.with_pending_state(|s| {
+                                        s.bounds = Some(max_bounds);
+                                        s.size = Some(clamped);
+                                    });
+                                    toplevel.send_configure();
+                                    let provisional_loc = clamped_or_centered_window_location(
+                                        usable,
+                                        geometry,
+                                        ssd_top,
+                                        saved_pos,
+                                    );
+                                    self.space
+                                        .map_element(window.clone(), provisional_loc, true);
+                                } else {
+                                    let target_loc = clamped_or_centered_window_location(
+                                        usable,
+                                        geometry,
+                                        ssd_top,
+                                        saved_pos,
+                                    );
+                                    self.space.map_element(window.clone(), target_loc, true);
+                                    self.initially_placed_windows.insert(surface.clone());
+                                }
                             }
                         }
                     }
@@ -6575,22 +6658,36 @@ impl XdgShellHandler for MalusState {
 
         let max_bounds = max_window_size_in_usable_zone(usable_zone, 0);
 
-        // Si tenemos un tamaño recordado para esta aplicación, aplicarlo acotado al área útil;
-        // si no, dejar `size = None` para que la app elija su tamaño natural según contenido sin exceder `bounds`.
-        let initial_size = if surface.parent().is_none() {
+        // Si tenemos un tamaño y/o posición recordados para esta aplicación, aplicarlos acotados al área útil;
+        // si es la primera vez que se abre, se centra en pantalla y elige su tamaño natural sin exceder `bounds`.
+        let (initial_size, saved_pos) = if surface.parent().is_none() {
             let app_id = app_id_for_surface(surface.wl_surface());
-            app_id
+            let size = app_id
                 .as_deref()
                 .and_then(|id| self.get_saved_window_size(id))
-                .map(|saved| clamp_size_to_bounds(saved, max_bounds))
+                .map(|saved| clamp_size_to_bounds(saved, max_bounds));
+            let pos = app_id
+                .as_deref()
+                .and_then(|id| self.get_saved_window_position(id));
+            (size, pos)
         } else {
-            None
+            (None, None)
         };
 
-        let spawn_loc = centered_window_location(
-            usable_zone,
+        let spawn_usable = saved_pos
+            .and_then(|pt| {
+                self.space.outputs().find_map(|o| {
+                    let g = self.space.output_geometry(o)?;
+                    g.contains(pt).then(|| self.usable_zone_for_output(o))
+                })
+            })
+            .unwrap_or(usable_zone);
+
+        let spawn_loc = clamped_or_centered_window_location(
+            spawn_usable,
             Rectangle::from_size(initial_size.unwrap_or_else(|| Size::from((400, 300)))),
             0,
+            saved_pos,
         );
 
         surface.with_pending_state(|state| {
@@ -7002,24 +7099,31 @@ impl XdgShellHandler for MalusState {
                     if let Some(ref win) = window {
                         let geo = win.geometry();
                         if geo.size.w >= 200 && geo.size.h >= 200 {
+                            let vis_loc = self.space.element_location(win).map(|loc| loc + geo.loc);
                             tracing::info!(
-                                "💾 Recordando tamaño de ventana para {}: {:?}",
+                                "💾 Recordando geometría de ventana para {}: size={:?}, pos={:?}",
                                 id,
-                                geo.size
+                                geo.size,
+                                vis_loc
                             );
-                            self.save_app_window_size(&id, geo.size);
+                            self.save_app_window_geometry(&id, geo.size, vis_loc);
                         }
                     }
-                } else if let Some((_, saved_size)) =
+                } else if let Some((saved_loc, saved_size)) =
                     self.window_restore_geometries.get(surf).copied()
                 {
                     if saved_size.w >= 200 && saved_size.h >= 200 {
+                        let vis_loc = window
+                            .as_ref()
+                            .map(|w| saved_loc + w.geometry().loc)
+                            .or(Some(saved_loc));
                         tracing::info!(
-                            "💾 Recordando tamaño previo no maximizado para {}: {:?}",
+                            "💾 Recordando geometría previa no maximizada para {}: size={:?}, pos={:?}",
                             id,
-                            saved_size
+                            saved_size,
+                            vis_loc
                         );
-                        self.save_app_window_size(&id, saved_size);
+                        self.save_app_window_geometry(&id, saved_size, vis_loc);
                     }
                 }
             }
@@ -8603,6 +8707,34 @@ mod tests {
         let ssd_geo = Rectangle::new((0, 0).into(), (800, 900 - ssd_h).into());
         let loc = super::centered_window_location(usable, ssd_geo, ssd_h);
         assert_eq!(loc, Point::from((100 + 400, 36 + ssd_h)));
+
+        // Sin posición guardada (`None`), usa la posición centrada
+        assert_eq!(
+            super::clamped_or_centered_window_location(usable, csd_geo, 0, None),
+            Point::from((100 + 400 - 24, 36 + 200 - 24))
+        );
+
+        // Con posición visible guardada dentro del área útil, la restaura compensando sombra CSD
+        assert_eq!(
+            super::clamped_or_centered_window_location(
+                usable,
+                csd_geo,
+                0,
+                Some(Point::from((260, 120))),
+            ),
+            Point::from((260 - 24, 120 - 24))
+        );
+
+        // Si la posición guardada excede los bordes del escritorio o invade la Top Bar, se acota a `usable`
+        assert_eq!(
+            super::clamped_or_centered_window_location(
+                usable,
+                csd_geo,
+                0,
+                Some(Point::from((5000, -40))),
+            ),
+            Point::from((100 + 1600 - 800 - 24, 36 - 24))
+        );
     }
 
     #[test]

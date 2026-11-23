@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Malus DE - Instalador Todo-en-Uno para Fedora Minimal (Descarga, Compila e Instala)
+# Malus DE - Instalador Todo-en-Uno para Fedora (Cualquier Edición o Minimal)
 # Uso rápido (estilo Brave):
 #   curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/scripts/install-fedora-minimal.sh | bash
 # ==============================================================================
@@ -17,11 +17,14 @@ usage() {
     cat << 'EOF'
 Uso: install-fedora-minimal.sh [opciones]
 
+Instala Malus DE en cualquier edición de Fedora (Workstation/GNOME, KDE Plasma,
+Xfce, Cinnamon, Sway, etc.) o sobre Fedora Minimal / Server en modo terminal.
+
 Opciones:
   --dir RUTA         Carpeta donde clonar/compilar (por defecto: ~/malus-de)
   --branch RAMA      Rama de Git a compilar (por defecto: main)
-  --tty-autostart    Añadir inicio automático en TTY1 a ~/.bash_profile
-  --greetd           Instalar y habilitar greetd + tuigreet en VT1
+  --tty-autostart    Añadir inicio automático en TTY1 a ~/.bash_profile (solo si no hay Display Manager activo, o forzado)
+  --greetd           Instalar y habilitar greetd + tuigreet en VT1 (reemplaza el Display Manager activo si existe)
   --skip-build       Omitir `cargo build` si el workspace ya está compilado
   -h, --help         Mostrar esta ayuda
 EOF
@@ -62,7 +65,7 @@ while [ $# -gt 0 ]; do
 done
 
 echo "============================================================"
-echo "🍎 MALUS DE — INSTALADOR STANDALONE PARA FEDORA MINIMAL"
+echo "🍎 MALUS DE — INSTALADOR UNIVERSAL PARA FEDORA"
 echo "============================================================"
 
 if ! command -v dnf >/dev/null 2>&1; then
@@ -88,7 +91,7 @@ fi
 
 echo ""
 echo "📦 [1/5] Instalando dependencias runtime y de compilación con DNF..."
-$SUDO dnf install -y \
+$SUDO dnf install -y --skip-unavailable \
     mesa-dri-drivers \
     mesa-vulkan-drivers \
     xorg-x11-server-Xwayland \
@@ -102,16 +105,13 @@ $SUDO dnf install -y \
     rsms-inter-vf-fonts \
     pipewire \
     wireplumber \
-    pipewire-pulseaudio \
     pipewire-utils \
     NetworkManager \
     NetworkManager-wifi \
     bluez \
     bluez-tools \
-    power-profiles-daemon \
     gvfs \
     udisks2 \
-    ffmpeg-free \
     libcanberra-gtk3 \
     polkit \
     mate-polkit \
@@ -142,6 +142,18 @@ $SUDO dnf install -y \
     dbus-devel \
     libxkbcommon-devel \
     sqlite-devel
+
+# Instalar paquetes que pueden tener alternativas preinstaladas en otros escritorios de Fedora
+# (ej. pulseaudio vs pipewire-pulseaudio, tuned-ppd vs power-profiles-daemon, ffmpeg completo vs ffmpeg-free)
+if ! rpm -q pipewire-pulseaudio >/dev/null 2>&1 && ! rpm -q pulseaudio >/dev/null 2>&1; then
+    $SUDO dnf install -y pipewire-pulseaudio || true
+fi
+if ! rpm -q power-profiles-daemon >/dev/null 2>&1 && ! rpm -q tuned-ppd >/dev/null 2>&1; then
+    $SUDO dnf install -y power-profiles-daemon || $SUDO dnf install -y tuned-ppd || true
+fi
+if ! command -v ffmpeg >/dev/null 2>&1; then
+    $SUDO dnf install -y ffmpeg-free || true
+fi
 
 $SUDO systemctl enable NetworkManager >/dev/null 2>&1 || true
 $SUDO systemctl enable bluetooth >/dev/null 2>&1 || true
@@ -183,6 +195,16 @@ $SUDO bash "$INSTALL_DIR/scripts/install-session.sh" --skip-build
 
 echo ""
 echo "⚙️  [5/5] Configurando arranque de sesión..."
+
+# Detectar si ya existe un Display Manager gráfico activo o habilitado (GDM, SDDM, LightDM, LXDM, Greetd)
+ACTIVE_DM=""
+for dm in gdm sddm lightdm lxdm greetd; do
+    if systemctl is-enabled "${dm}.service" >/dev/null 2>&1 || systemctl is-active "${dm}.service" >/dev/null 2>&1; then
+        ACTIVE_DM="$dm"
+        break
+    fi
+done
+
 if [ "$TTY_AUTOSTART" = true ]; then
     BASH_PROFILE="$TARGET_HOME/.bash_profile"
     touch "$BASH_PROFILE"
@@ -190,10 +212,11 @@ if [ "$TTY_AUTOSTART" = true ]; then
         cat << 'EOF' >> "$BASH_PROFILE"
 
 # Iniciar Malus DE automáticamente en TTY1
-if [ -z "$WAYLAND_DISPLAY" ] && [ "${XDG_VTNR:-0}" -eq 1 ]; then
+if [ -z "$WAYLAND_DISPLAY" ] && [ -z "$DISPLAY" ] && [ "${XDG_VTNR:-0}" -eq 1 ]; then
     /usr/local/bin/malus-session
 fi
 EOF
+        chown "$TARGET_USER:$TARGET_USER" "$BASH_PROFILE" 2>/dev/null || true
         echo "   ✔ Autoinicio en TTY1 añadido a $BASH_PROFILE"
     else
         echo "   ✔ Autoinicio en TTY1 ya estaba configurado en $BASH_PROFILE"
@@ -211,20 +234,39 @@ vt = 1
 command = "tuigreet --time --remember --cmd /usr/local/bin/malus-session"
 user = "greeter"
 EOF
+    if [ -n "$ACTIVE_DM" ] && [ "$ACTIVE_DM" != "greetd" ]; then
+        echo "   ℹ️  Deshabilitando $ACTIVE_DM para activar greetd..."
+        $SUDO systemctl disable "${ACTIVE_DM}.service" >/dev/null 2>&1 || true
+    fi
+    $SUDO systemctl set-default graphical.target >/dev/null 2>&1 || true
     $SUDO systemctl enable greetd
+    ACTIVE_DM="greetd"
     echo "   ✔ greetd + tuigreet habilitados para el próximo arranque"
 fi
 
 echo ""
 echo "============================================================"
-echo "🎉 ¡MALUS DE INSTALADO Y COMPILADO EN FEDORA MINIMAL!"
+echo "🎉 ¡MALUS DE INSTALADO Y COMPILADO EN FEDORA!"
 echo "============================================================"
-echo "Para iniciar la sesión gráfica ahora mismo desde la TTY ejecuta:"
-echo "  /usr/local/bin/malus-session"
-if [ "$TTY_AUTOSTART" = false ] && [ "$ENABLE_GREETD" = false ]; then
+if [ -n "$ACTIVE_DM" ] && [ "$ACTIVE_DM" != "greetd" ]; then
+    echo "✅ Se detectó el gestor de inicio de sesión '${ACTIVE_DM^^}'."
+    echo "   La sesión 'Malus DE' ya quedó registrada en /usr/share/wayland-sessions/malus.desktop."
     echo ""
-    echo "Si deseas inicio automático en TTY1, vuelve a ejecutar con:"
-    echo "  $INSTALL_DIR/scripts/install-fedora-minimal.sh --skip-build --tty-autostart"
+    echo "Para entrar a Malus DE:"
+    echo "  1. Cierra tu sesión actual (Log Out)."
+    echo "  2. En la pantalla de login (${ACTIVE_DM^^}), elige la sesión 'Malus DE'."
+    echo "  3. Inicia sesión con tu contraseña."
+    echo ""
+    echo "También puedes probarlo en ventana dentro de tu escritorio actual o desde una TTY con:"
+    echo "  /usr/local/bin/malus-session"
+else
+    echo "Para iniciar la sesión gráfica ahora mismo desde la TTY ejecuta:"
+    echo "  /usr/local/bin/malus-session"
+    if [ "$TTY_AUTOSTART" = false ] && [ "$ENABLE_GREETD" = false ]; then
+        echo ""
+        echo "Si estás en Fedora Minimal sin gestor de login y deseas inicio automático en TTY1:"
+        echo "  $INSTALL_DIR/scripts/install-fedora-minimal.sh --skip-build --tty-autostart"
+    fi
 fi
 echo "============================================================"
 
