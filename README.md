@@ -34,30 +34,30 @@ El proyecto sigue una hoja de ruta incremental por hitos. La base del escritorio
 
 | Hito | Módulo | Estado | Nota |
 | :--- | :--- | :---: | :--- |
-| M1 | Compositor base | ✅ | Smithay, DRM/KMS, XWayland, sombras y popups. |
-| M2 | Dock flotante | ✅ | Dock, miniaturas y IPC funcionales. |
-| M3 | Menú global y Apple | ✅ | Menú completo y soporte de submenús. |
-| M4 | Centro de control | ✅ | D-Bus y controles del sistema integrados. |
-| M5 | Animación Genie | ✅ | Animaciones elásticas y efecto visual del sistema. |
+| M1 | Compositor base | ✅ | Smithay, DRM/KMS, XWayland, sombras, popups squircle (`32px` en bandeja y Dock) y efecto Black Hole. |
+| M2 | Dock flotante | ✅ | Estilo Tahoe: lupa estable, tooltips con cola curva, menús contextuales squircle `32px`, apps recientes animadas, globos push y progreso de descargas (Chromium/Brave pendiente, ver ADR 0013). |
+| M3 | Menú global y Apple | ✅ | Menú completo, submenús en cascada y diálogos de energía/cierre de sesión estilo Tahoe. |
+| M4 | Centro de control | ✅ | D-Bus, menús de bandeja Tahoe (Wi-Fi, Bluetooth, Sonido con mezclador por app) y controles del sistema. |
+| M5 | Animación Genie | ✅ | Animaciones Genie/escala, minimizado al ícono de app y efecto Black Hole al cerrar ventanas. |
 | M6 | Integración móvil / Link | 🟡 | Base de protocolo y backend en desarrollo. |
-| M7 | Sesión GDM nativa | ✅ | Launcher, aislamiento y instalación en release. |
-| M8 | Multi-monitor 4K y teclado | ✅ | Soporte dual 4K y XKB latam. |
+| M7 | Sesión GDM nativa | ✅ | Launcher, aislamiento, instalación en release y arranque optimizado sin bloqueos. |
+| M8 | Multi-monitor 4K y teclado | ✅ | Soporte dual 4K, hotplug sin desconexión, brillo por pantalla vía LUT gamma CRTC y XKB latam. |
 | M9 | Portapapeles | ✅ | Historial persistente con búsqueda y fijados. |
-| M10 | Captura y grabación | 🟡 | Captura activa, OCR y ventana individual pendientes. |
-| M11 | Explorador de archivos | 🟡 | MVP funcional y fases avanzadas en curso. |
-| M12 | Ajustes del sistema | ✅ | Implementación nativa y reemplaza la dependencia externa. |
+| M10 | Captura y grabación | 🟡 | Captura activa; OCR y ventana individual pendientes. |
+| M11 | Explorador de archivos | 🟡 | Branches con vistas, etiquetas de color, selección *type-ahead*, Quick Look flotante y paridad de menús contextuales con el escritorio. |
+| M12 | Ajustes del sistema | ✅ | App nativa con carga diferida; paneles de Apariencia, Pantallas, Fondo, Escritorio y Dock, Barra de menús, Sonido, Notificaciones, Pip/Canopy, Red, Wi-Fi, Bluetooth, VPN, Batería, Accesibilidad y General. |
 | M13 | Motor gráfico nativo | 🟡 | Infraestructura lista, migración progresiva en marcha. |
-| M14 | Optimización DRM | ✅ | Idle sleep y ajustes de rendimiento ya aplicados. |
+| M14 | Optimización DRM | ✅ | Idle sleep, caché de fondos/miniaturas y ajustes de rendimiento ya aplicados. |
 | M15 | Spotlight reactivo | 📋 | Pendiente de integración de monitorización de apps. |
-| M16 | Hotkeys (`XF86*`) y OSD | 📋 | Teclas de volumen, micrófono, brillo, retroiluminación de teclado, MPRIS y OSD flotante. |
+| M16 | Hotkeys (`XF86*`) y OSD | ✅ | Teclas de volumen, micrófono, brillo, luz de teclado, controles MPRIS2 y OSD flotante Liquid Glass squircle de 16 segmentos. |
 | M17 | Gestos, Trackpad y Hot Corners | 📋 | Pellizco (`pinch`), scroll natural/aceleración reales, *shake cursor*, táctil y esquinas activas. |
-| M18 | Energía, Batería e Inactividad | 📋 | Indicador de batería (`UPower`), `ext-idle-notify`, inhibición, cierre de tapa y suspensión. |
-| M19 | Night Shift real y Display | 📋 | LUT gamma DRM/shader para Modo Noche real, horario y VRR / gestión de color. |
+| M18 | Energía, Batería e Inactividad | 🟡 | Indicador y panel de Batería activos; pendientes `ext-idle-notify`, inhibición, cierre de tapa y suspensión automática. |
+| M19 | Night Shift real y Display | 🟡 | Brillo real vía LUT gamma CRTC y panel Pantallas estilo Apple; pendientes Night Shift por horario, VRR y gestión de color. |
 | M20 | ScreenCast PipeWire | 📋 | Compartición de pantalla/ventana vía `xdg-desktop-portal` para navegadores y OBS. |
 | M21 | IME, Emojis y Juegos | 📋 | `text-input-v3`/Fcitx5, selector de emojis y `pointer-constraints`/`relative-pointer`. |
-| M22 | Concentración (DND) y Avisos | 📋 | Modo No Molestar real conectado al daemon de notificaciones y agrupación por app. |
-| M23 | Ajustes completos y Polkit | 📋 | Paneles de Red, BT, Energía, Trackpad, Usuarios/Huella, Polkit nativo e indicadores cámara/mic. |
-| M24 | Accesibilidad y Mezclador | 📋 | Zoom de pantalla, reducir movimiento/transparencia, AT-SPI y volumen por aplicación. |
+| M22 | Concentración (DND) y Avisos | 🟡 | Burbujas Liquid Glass con animación, clic para enfocar/abrir la app, reglas por app en Ajustes y globos push en el Dock; pendientes DND real y agrupación por app. |
+| M23 | Ajustes completos y Polkit | 🟡 | Paneles de Red, Wi-Fi, Bluetooth, VPN, Batería, Sonido y Notificaciones operativos; pendientes Trackpad, Usuarios/Huella, Polkit nativo e indicadores de cámara/mic. |
+| M24 | Accesibilidad y Mezclador | 🟡 | Mezclador de volumen por app (PipeWire), enrutamiento, balance L/R, sonidos del sistema y reducir transparencia implementados; pendientes zoom de pantalla, reducir movimiento y AT-SPI. |
 
 En conjunto, el proyecto está en una fase de maduración técnica: la infraestructura principal ya está construida y la mayor parte del trabajo actual está centrado en estabilización, validación y completitud funcional de módulos específicos.
 
