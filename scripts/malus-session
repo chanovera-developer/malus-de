@@ -611,7 +611,17 @@ echo "🛳  [3/5] Iniciando Dock Flotante (malus-de-dock)..."
 DOCK_PID=$!
 
 echo "🔔 [4/5] Iniciando Servidor de Notificaciones D-Bus (malus-de-notifications)..."
-"$BIN_DIR/malus-de-notifications" &
+(
+    while kill -0 "$COMPOSITOR_PID" 2>/dev/null; do
+        "$BIN_DIR/malus-de-notifications"
+        EXIT_CODE=$?
+        if ! kill -0 "$COMPOSITOR_PID" 2>/dev/null; then
+            break
+        fi
+        echo "⚠️ malus-de-notifications terminó (código $EXIT_CODE); relanzando en 0.5s..."
+        sleep 0.5
+    done
+) &
 NOTIF_PID=$!
 
 echo "📡 [5/5] Iniciando Malus Link & AirDrop (malus-de-link)..."

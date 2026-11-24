@@ -70,9 +70,22 @@ pub struct ClientState {
     pub compositor_state: CompositorClientState,
 }
 
+/// Marcador en `SurfaceData::data_map` para evitar un error de protocolo falso (`InvalidSize`)
+/// en Smithay 0.7.0 cuando GTK4/gtk4-layer-shell realiza `wl_surface.attach(null) + commit()`
+/// inmediatamente después de destruir `zwlr_layer_surface_v1`.
+struct LayerRoleDestroyedMarker(AtomicBool);
+
 impl ClientData for ClientState {
     fn initialized(&self, _client_id: ClientId) {}
-    fn disconnected(&self, _client_id: ClientId, _reason: DisconnectReason) {}
+    fn disconnected(&self, client_id: ClientId, reason: DisconnectReason) {
+        if let DisconnectReason::ProtocolError(err) = reason {
+            tracing::warn!(
+                "⚠️ Cliente Wayland {:?} desconectado por error de protocolo: {}",
+                client_id,
+                err
+            );
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -6227,6 +6240,38 @@ impl CompositorHandler for MalusState {
         &client.get_data::<ClientState>().unwrap().compositor_state
     }
 
+    fn new_surface(&mut self, surface: &WlSurface) {
+        // Este hook se registra al crearse la `wl_surface`, antes que el `pre_commit_hook` de
+        // `WlrLayerShellState` en Smithay 0.7.0. Si el cliente ya destruyó su
+        // `zwlr_layer_surface_v1` (como hace GTK4 4.24 + gtk4-layer-shell al cerrar ventanas
+        // mediante `destroy` seguido de `attach(null) + commit`), Smithay reinicia el estado
+        // pendiente a tamaño `(0, 0)` sin anclajes y dispara un falso `Error::InvalidSize` que
+        // mata la conexión Wayland del cliente (p. ej. `malus-de-notifications`).
+        smithay::wayland::compositor::add_pre_commit_hook::<Self, _>(
+            surface,
+            |_state, _dh, surface| {
+                smithay::wayland::compositor::with_states(surface, |states| {
+                    let role_destroyed = states
+                        .data_map
+                        .get::<LayerRoleDestroyedMarker>()
+                        .is_some_and(|marker| marker.0.load(Ordering::Acquire));
+                    if role_destroyed {
+                        let mut cached = states
+                            .cached_state
+                            .get::<smithay::wayland::shell::wlr_layer::LayerSurfaceCachedState>();
+                        let pending = cached.pending();
+                        if pending.size.w == 0 {
+                            pending.size.w = 1;
+                        }
+                        if pending.size.h == 0 {
+                            pending.size.h = 1;
+                        }
+                    }
+                });
+            },
+        );
+    }
+
     fn commit(&mut self, surface: &WlSurface) {
         let mut matched_outputs: Vec<String> = Vec::new();
         let mut is_background = false;
@@ -7349,7 +7394,7 @@ impl XdgShellHandler for MalusState {
 
                     self.pending_black_holes
                         .push(crate::black_hole::PendingBlackHoleClose {
-                            window: win.clone(),
+                            surface: surf.clone(),
                             geometry: geo,
                             location: loc,
                             origin_logical,
@@ -7358,6 +7403,8 @@ impl XdgShellHandler for MalusState {
                             is_active,
                             is_firefox: is_firefox_window(win),
                             is_translucent: is_translucent_window(win),
+                            custom_corner_radius: None,
+                            blur_insets: (0, 0, 0, 0),
                             title: window_title_for_ssd(win),
                             cached_layers,
                         });
@@ -7502,6 +7549,15 @@ impl WlrLayerShellHandler for MalusState {
         namespace: String,
     ) {
         tracing::info!("✨ Nueva Layer Surface recibida: namespace={}", namespace);
+        smithay::wayland::compositor::with_states(surface.wl_surface(), |states| {
+            if let Some(marker) = states.data_map.get::<LayerRoleDestroyedMarker>() {
+                marker.0.store(false, Ordering::Release);
+            } else {
+                states
+                    .data_map
+                    .insert_if_missing_threadsafe(|| LayerRoleDestroyedMarker(AtomicBool::new(false)));
+            }
+        });
         if namespace == "malus-lock" {
             let layer_client_pid = self
                 .display_handle
@@ -7612,10 +7668,20 @@ impl WlrLayerShellHandler for MalusState {
         use smithay::utils::IsAlive;
         tracing::info!("🗑️ [LayerShell] Layer surface destruida");
         let destroyed_wl = surface.wl_surface().clone();
+        smithay::wayland::compositor::with_states(&destroyed_wl, |states| {
+            if let Some(marker) = states.data_map.get::<LayerRoleDestroyedMarker>() {
+                marker.0.store(true, Ordering::Release);
+            } else {
+                states
+                    .data_map
+                    .insert_if_missing_threadsafe(|| LayerRoleDestroyedMarker(AtomicBool::new(true)));
+            }
+        });
         self.malus_lock_layers
             .retain(|(_, layer)| layer.layer_surface() != &surface && layer.alive());
         self.session_locked_flag
             .store(self.is_session_locked(), Ordering::SeqCst);
+        let mut notif_black_hole_rect: Option<(Point<i32, Logical>, Size<i32, Logical>)> = None;
         for output in self.space.outputs() {
             let mut map = layer_map_for_output(output);
             let layer = map
@@ -7623,6 +7689,23 @@ impl WlrLayerShellHandler for MalusState {
                 .find(|&layer| layer.layer_surface() == &surface)
                 .cloned();
             if let Some(layer) = layer {
+                if layer.namespace() == "malus-notifications" {
+                    if let Some(geo) = map.layer_geometry(&layer) {
+                        let out_geo = self
+                            .space
+                            .output_geometry(output)
+                            .unwrap_or_else(|| Rectangle::from_size((1920, 1080).into()));
+                        // Solo activar Agujero Negro cuando el globo sigue visible en pantalla
+                        // (cierre manual con ✕), no tras deslizarse fuera del borde derecho.
+                        let visible_in_output = geo.loc.x < out_geo.size.w - 24
+                            && geo.loc.x + geo.size.w > 24
+                            && geo.loc.y < out_geo.size.h
+                            && geo.loc.y + geo.size.h > 0;
+                        if visible_in_output && geo.size.w >= 40 && geo.size.h >= 30 {
+                            notif_black_hole_rect = Some((out_geo.loc + geo.loc, geo.size));
+                        }
+                    }
+                }
                 map.unmap_layer(&layer);
                 tracing::info!(
                     "🧹 Layer surface desmapeada de LayerMap: namespace={}",
@@ -7631,6 +7714,46 @@ impl WlrLayerShellHandler for MalusState {
             }
             map.cleanup();
         }
+
+        if let Some((global_loc, size)) = notif_black_hole_rect {
+            if self.desktop_dock_cfg.black_hole_close_effect {
+                let cached_layers = self
+                    .cached_close_snapshots
+                    .remove(&destroyed_wl)
+                    .map(|(layers, _)| layers)
+                    .or_else(|| {
+                        self.renderer_context_id.clone().map(|ctx_id| {
+                            crate::black_hole::capture_surface_tree_snapshot(&destroyed_wl, ctx_id)
+                        })
+                    })
+                    .unwrap_or_default();
+                // Centro del botón circular ✕ en la esquina superior izquierda del globo de notificación.
+                let origin_logical =
+                    Point::from((global_loc.x as f64 + 11.0, global_loc.y as f64 + 11.0));
+                self.pending_black_holes
+                    .push(crate::black_hole::PendingBlackHoleClose {
+                        surface: destroyed_wl.clone(),
+                        geometry: Rectangle::from_size(size),
+                        location: global_loc,
+                        origin_logical,
+                        uses_ssd: false,
+                        is_fullscreen: false,
+                        is_active: true,
+                        is_firefox: false,
+                        // No hornear el blur opaco del fondo detrás de la tarjeta (arrastraría
+                        // un bloque blanco de ventanas claras): capturar únicamente la superficie
+                        // premultiplicada del globo con canal alfa limpio.
+                        is_translucent: false,
+                        custom_corner_radius: Some(
+                            crate::media_keys::NOTIFICATION_CORNER_RADIUS as f32,
+                        ),
+                        blur_insets: (8, 8, 0, 0),
+                        title: "Notificación".to_string(),
+                        cached_layers,
+                    });
+            }
+        }
+        self.cached_close_snapshots.remove(&destroyed_wl);
 
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
         let should_restore_focus = self
@@ -9193,5 +9316,16 @@ mod tests {
             36,
             None,
         ));
+    }
+
+    #[test]
+    fn layer_destroy_commit_guard_prevents_smithay_invalid_size_disconnect() {
+        let state_src = include_str!("state.rs");
+        assert!(state_src.contains("struct LayerRoleDestroyedMarker"));
+        assert!(state_src.contains("fn new_surface(&mut self, surface: &WlSurface)"));
+        assert!(state_src.contains("marker.0.store(true, Ordering::Release)"));
+        assert!(state_src.contains("marker.0.store(false, Ordering::Release)"));
+        assert!(state_src.contains("pending.size.w = 1"));
+        assert!(state_src.contains("pending.size.h = 1"));
     }
 }

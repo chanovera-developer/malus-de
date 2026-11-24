@@ -23,11 +23,9 @@ use smithay::backend::renderer::utils::{
     draw_render_elements, CommitCounter, RendererSurfaceStateUserData,
 };
 use smithay::backend::renderer::{Bind, Color32F, ContextId, Frame, Offscreen, Renderer, Texture};
-use smithay::desktop::Window;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Size, Transform};
 use smithay::wayland::compositor::{self, TraversalAction};
-use smithay::wayland::seat::WaylandFocus;
 use tracing::{error, info, warn};
 
 /// Duración total del efecto de cierre por agujero negro.
@@ -57,9 +55,9 @@ pub struct CachedSurfaceLayer {
     pub is_root: bool,
 }
 
-/// Ventana en cierre pendiente de capturar su textura offscreen antes de liberar el toplevel.
+/// Superficie (ventana o capa de notificación) en cierre pendiente de capturar su textura offscreen.
 pub struct PendingBlackHoleClose {
-    pub window: Window,
+    pub surface: WlSurface,
     pub geometry: Rectangle<i32, Logical>,
     pub location: Point<i32, Logical>,
     pub origin_logical: Point<f64, Logical>,
@@ -68,6 +66,10 @@ pub struct PendingBlackHoleClose {
     pub is_active: bool,
     pub is_firefox: bool,
     pub is_translucent: bool,
+    /// Radio de esquina lógico personalizado (p. ej. `Some(22.0)` para globos de notificación).
+    pub custom_corner_radius: Option<f32>,
+    /// Márgenes lógicos `(left, top, right, bottom)` excluidos del blur offscreen (sombra/botón ✕).
+    pub blur_insets: (i32, i32, i32, i32),
     pub title: String,
     pub cached_layers: Vec<CachedSurfaceLayer>,
 }
@@ -180,6 +182,15 @@ pub fn capture_surface_tree_snapshot(
     layers
 }
 
+/// Geometría de backdrop blur + sombra OSD en vivo durante la fase inicial del Agujero Negro
+/// (exclusivo de globos de notificación translúcidos para conservar el desenfoque al pulsar ✕
+/// sin hornear ni arrastrar un bloque opaco del fondo).
+#[derive(Debug, Clone, Copy)]
+pub struct LiveBackdropGlass {
+    pub rect: Rectangle<i32, Physical>,
+    pub radius: f32,
+}
+
 /// Estado visual de una animación de cierre en curso sobre un monitor específico.
 pub struct ActiveBlackHoleClose {
     pub output_name: String,
@@ -189,6 +200,7 @@ pub struct ActiveBlackHoleClose {
     pub scale: f32,
     pub started_at: Instant,
     pub duration: Duration,
+    pub live_backdrop: Option<LiveBackdropGlass>,
 }
 
 impl ActiveBlackHoleClose {
@@ -199,6 +211,21 @@ impl ActiveBlackHoleClose {
     pub fn raw_progress(&self, now: Instant) -> f32 {
         let dur = self.duration.as_secs_f32().max(0.001);
         (now.duration_since(self.started_at).as_secs_f32() / dur).clamp(0.0, 1.0)
+    }
+
+    /// Opacidad `[0.0, 1.0]` del blur y sombra en vivo bajo un globo de notificación:
+    /// permanece al 100 % durante la ignición (`0.00..0.12`) y se disuelve suavemente al
+    /// iniciar la succión (`0.12..0.34`).
+    pub fn live_backdrop_alpha(&self, now: Instant) -> f32 {
+        let t = self.raw_progress(now);
+        if t <= 0.12 {
+            1.0
+        } else if t >= 0.34 {
+            0.0
+        } else {
+            let u = (t - 0.12) / (0.34 - 0.12);
+            1.0 - (u * u * (3.0 - 2.0 * u))
+        }
     }
 }
 
@@ -333,8 +360,8 @@ pub fn capture_closing_window_texture(
         return None;
     }
 
-    let main_surface = pending.window.wl_surface()?;
-    let root_id = Id::from_wayland_resource(main_surface.as_ref());
+    let main_surface = &pending.surface;
+    let root_id = Id::from_wayland_resource(main_surface);
 
     let phys_loc = (pending.location - geo.loc - output_geo.loc).to_physical_precise_round(scale);
     let base_win_rect = Rectangle::new(
@@ -345,7 +372,7 @@ pub fn capture_closing_window_texture(
     let probe_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
         render_elements_from_surface_tree(
             renderer,
-            main_surface.as_ref(),
+            main_surface,
             phys_loc,
             smithay::utils::Scale::from(scale),
             1.0,
@@ -398,7 +425,7 @@ pub fn capture_closing_window_texture(
     let offscreen_win_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = if !use_cached {
         render_elements_from_surface_tree(
             renderer,
-            main_surface.as_ref(),
+            main_surface,
             phys_loc + shift,
             smithay::utils::Scale::from(scale),
             1.0,
@@ -411,7 +438,7 @@ pub fn capture_closing_window_texture(
     let ssd_elem = tb_screen_loc.and_then(|tb_loc| {
         ssd.render_element_for_window(
             renderer,
-            main_surface.as_ref(),
+            main_surface,
             tb_loc + shift,
             final_screen_rect.size.w,
             tb_phys_h,
@@ -435,7 +462,11 @@ pub fn capture_closing_window_texture(
     };
 
     let offscreen_rect = Rectangle::from_size(final_screen_rect.size);
-    let should_round = win_phys_r.is_some() && !pending.is_fullscreen;
+    let effective_phys_r = pending
+        .custom_corner_radius
+        .map(|r| (r as f64 * scale).round() as i32)
+        .or(win_phys_r);
+    let should_round = effective_phys_r.is_some() && !pending.is_fullscreen;
 
     {
         let mut target = match renderer.bind(&mut texture) {
@@ -457,17 +488,39 @@ pub fn capture_closing_window_texture(
         let _ = frame.clear(Color32F::new(0.0, 0.0, 0.0, 0.0), &[offscreen_rect]);
         if pending.is_translucent {
             if let Some(blur) = blur_pipeline {
+                let (il, it, ir, ib) = pending.blur_insets;
+                let pl = (il.max(0) as f64 * scale).round() as i32;
+                let pt = (it.max(0) as f64 * scale).round() as i32;
+                let pr = (ir.max(0) as f64 * scale).round() as i32;
+                let pb = (ib.max(0) as f64 * scale).round() as i32;
+                let blur_screen_rect = Rectangle::new(
+                    Point::from((
+                        final_screen_rect.loc.x + pl,
+                        final_screen_rect.loc.y + pt,
+                    )),
+                    Size::from((
+                        (final_screen_rect.size.w - pl - pr).max(1),
+                        (final_screen_rect.size.h - pt - pb).max(1),
+                    )),
+                );
+                let blur_offscreen_rect = Rectangle::new(
+                    Point::from((pl, pt)),
+                    blur_screen_rect.size,
+                );
                 blur.render_translucent_offscreen_blur(
                     &mut frame,
                     screen_size,
-                    final_screen_rect,
-                    offscreen_rect,
+                    blur_screen_rect,
+                    blur_offscreen_rect,
                     scale,
-                    win_phys_r,
+                    effective_phys_r,
                     should_round,
                 );
             }
         }
+        let has_insets = pending.blur_insets != (0, 0, 0, 0);
+        let clip_r_for_surface = if has_insets { None } else { effective_phys_r };
+        let should_round_surface = clip_r_for_surface.is_some() && !pending.is_fullscreen;
         if !offscreen_win_elems.is_empty() {
             crate::window_corners::render_window_elements(
                 &mut frame,
@@ -478,14 +531,14 @@ pub fn capture_closing_window_texture(
                 &offscreen_win_elems,
                 ssd_elem.as_ref(),
                 offscreen_rect,
-                win_phys_r,
-                should_round,
+                clip_r_for_surface,
+                should_round_surface,
                 pending.is_firefox,
                 None,
             );
         } else {
-            let clip_radius = if should_round && squircle_shader.is_some() {
-                win_phys_r
+            let clip_radius = if should_round_surface && squircle_shader.is_some() {
+                clip_r_for_surface
             } else {
                 None
             };
@@ -617,6 +670,37 @@ pub fn capture_closing_window_texture(
         pending.title, output_name, final_screen_rect.size.w, final_screen_rect.size.h, use_cached
     );
 
+    let live_backdrop = if !pending.is_translucent && pending.blur_insets != (0, 0, 0, 0) {
+        let (il, it, ir, ib) = pending.blur_insets;
+        let pl = (il.max(0) as f64 * scale).round() as i32;
+        let pt = (it.max(0) as f64 * scale).round() as i32;
+        let pr = (ir.max(0) as f64 * scale).round() as i32;
+        let pb = (ib.max(0) as f64 * scale).round() as i32;
+        let rect = Rectangle::new(
+            Point::from((final_screen_rect.loc.x + pl, final_screen_rect.loc.y + pt)),
+            Size::from((
+                (final_screen_rect.size.w - pl - pr).max(0),
+                (final_screen_rect.size.h - pt - pb).max(0),
+            )),
+        );
+        if rect.size.w > 0 && rect.size.h > 0 {
+            let radius = effective_phys_r
+                .unwrap_or(0)
+                .max(0) as f32;
+            let clamped_radius = radius
+                .min(rect.size.w as f32 * 0.5)
+                .min(rect.size.h as f32 * 0.5);
+            Some(LiveBackdropGlass {
+                rect,
+                radius: clamped_radius,
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     Some(ActiveBlackHoleClose {
         output_name: output_name.to_string(),
         texture,
@@ -625,6 +709,7 @@ pub fn capture_closing_window_texture(
         scale: scale as f32,
         started_at: Instant::now(),
         duration: BLACK_HOLE_DURATION,
+        live_backdrop,
     })
 }
 
