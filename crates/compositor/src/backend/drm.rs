@@ -4593,6 +4593,8 @@ pub fn run_drm() -> Result<()> {
                         (super::POPUP_MENU_CORNER_RADIUS_LOGICAL * scale) as f32;
                     let mut live_popup_keys = std::collections::HashSet::new();
                     for (popups, popup_rect) in &topbar_popups {
+                        let topbar_popup_r =
+                            super::topbar_popup_corner_radius(*popup_rect, out_surface.size, scale);
                         let popup_key = popups
                             .first()
                             .map(|elem| elem.id().clone())
@@ -4612,7 +4614,7 @@ pub fn run_drm() -> Result<()> {
                                 effect_commit,
                                 blur.clone(),
                                 *popup_rect,
-                                popup_corner_radius.round(),
+                                topbar_popup_r.round(),
                                 out_surface.size,
                             );
                             tracker_elements.push(MalusDrmElement::Blur(menu_blur));
@@ -4623,7 +4625,7 @@ pub fn run_drm() -> Result<()> {
                                 effect_commit,
                                 pipeline.clone(),
                                 *popup_rect,
-                                popup_corner_radius,
+                                topbar_popup_r,
                                 scale,
                             );
                             tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
@@ -6722,6 +6724,12 @@ pub fn run_drm() -> Result<()> {
                                 if !damage.iter().any(|d| d.overlaps(*popup_rect)) {
                                     continue;
                                 }
+                                let topbar_popup_r = super::topbar_popup_corner_radius(
+                                    *popup_rect,
+                                    out_surface.size,
+                                    scale,
+                                );
+                                let topbar_popup_r_i32 = topbar_popup_r.round() as i32;
                                 if let Some(mut blur) =
                                     blur_pipeline.as_ref().and_then(|b| b.lock().ok())
                                 {
@@ -6737,7 +6745,7 @@ pub fn run_drm() -> Result<()> {
                                             &projection,
                                             out_surface.size,
                                             *popup_rect,
-                                            menu_radius as f32,
+                                            topbar_popup_r,
                                         );
                                     });
                                 }
@@ -6748,7 +6756,7 @@ pub fn run_drm() -> Result<()> {
                                             gl,
                                             &projection,
                                             *popup_rect,
-                                            menu_radius as f32,
+                                            topbar_popup_r,
                                             scale,
                                         );
                                     });
@@ -6763,7 +6771,7 @@ pub fn run_drm() -> Result<()> {
                                             elem_geo.size,
                                             popup_rect.loc - elem_geo.loc,
                                             popup_rect.size,
-                                            menu_radius,
+                                            topbar_popup_r_i32,
                                         );
                                     }
                                     let _ = draw_render_elements(

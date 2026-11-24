@@ -1,13 +1,34 @@
 pub mod drm;
 pub mod winit;
 
-use smithay::utils::{Physical, Rectangle};
+use smithay::utils::{Physical, Rectangle, Size};
 use std::time::Duration;
 
 const DOCK_POPOVER_SHADOW_GUTTER: f64 = 32.0;
 /// Radio squircle lógico (en píxeles 1x, n=4.2) para menús emergentes y popups del compositor,
 /// calibrado para enmarcar el resaltado squircle interior (~14 px) sin recortes ni huecos excesivos.
 pub(super) const POPUP_MENU_CORNER_RADIUS_LOGICAL: f64 = 20.0;
+/// Radio squircle lógico (en píxeles 1x, n=4.2) para los paneles emergentes de la bandeja superior
+/// (Sonido, Wi-Fi, Bluetooth, Batería y Centro de Control) estilo macOS Tahoe.
+pub(super) const TOPBAR_TRAY_POPOVER_CORNER_RADIUS_LOGICAL: f64 = 32.0;
+
+pub(super) fn topbar_popup_corner_radius(
+    popup_rect: Rectangle<i32, Physical>,
+    output_size: Size<i32, Physical>,
+    scale: f64,
+) -> f32 {
+    let scale = scale.max(1.0);
+    let logical_w = popup_rect.size.w as f64 / scale;
+    let on_right_tray = popup_rect.loc.x + popup_rect.size.w / 2 >= output_size.w / 2;
+    let base = if on_right_tray && logical_w >= 260.0 {
+        TOPBAR_TRAY_POPOVER_CORNER_RADIUS_LOGICAL
+    } else {
+        POPUP_MENU_CORNER_RADIUS_LOGICAL
+    };
+    ((base * scale) as f32)
+        .min(popup_rect.size.w as f32 * 0.5)
+        .min(popup_rect.size.h as f32 * 0.5)
+}
 
 pub fn frame_interval(refresh_millihz: i32) -> Duration {
     if refresh_millihz > 0 {

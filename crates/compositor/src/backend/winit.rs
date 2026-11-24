@@ -2554,6 +2554,9 @@ pub fn run_winit() -> Result<()> {
                         }
 
                         for (popup_elems, popup_rect) in &topbar_popups {
+                            let topbar_popup_r =
+                                super::topbar_popup_corner_radius(*popup_rect, size, 1.0);
+                            let topbar_popup_r_i32 = topbar_popup_r.round() as i32;
                             if let Some(blur) = blur_pipeline.as_mut() {
                                 let _ = frame.with_context(|gl| {
                                     blur.render_blur(
@@ -2561,7 +2564,7 @@ pub fn run_winit() -> Result<()> {
                                         &projection,
                                         size,
                                         *popup_rect,
-                                        menu_radius as f32,
+                                        topbar_popup_r,
                                     );
                                 });
                             }
@@ -2572,7 +2575,7 @@ pub fn run_winit() -> Result<()> {
                                         gl,
                                         &projection,
                                         *popup_rect,
-                                        menu_radius as f32,
+                                        topbar_popup_r,
                                         1.0,
                                     );
                                 });
@@ -2586,7 +2589,7 @@ pub fn run_winit() -> Result<()> {
                                         elem_geo.size,
                                         popup_rect.loc - elem_geo.loc,
                                         popup_rect.size,
-                                        menu_radius,
+                                        topbar_popup_r_i32,
                                     );
                                 }
                                 let _ = draw_render_elements(
