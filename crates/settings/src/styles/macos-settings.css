@@ -1725,4 +1725,43 @@ scale.sound-balance-slider marks indicator {
     min-height: 11px;
     border-radius: 2px;
     background-color: alpha(@window_fg_color, 0.14);
+    transition: background-color 60ms linear;
+}
+
+.sound-level-seg-active {
+    background-color: @accent_bg_color;
+}
+
+.sound-level-seg-peak {
+    background-color: #ff9f0a;
+}
+
+.sound-mixer-app-icon {
+    color: alpha(@window_fg_color, 0.78);
+}
+
+.sound-mixer-pct-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: alpha(@window_fg_color, 0.62);
+    min-width: 44px;
+}
+
+button.sound-mixer-refresh-btn {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 6px;
+    padding: 3px 6px;
+    color: alpha(@window_fg_color, 0.62);
+}
+
+button.sound-mixer-refresh-btn:hover {
+    background-color: alpha(@window_fg_color, 0.08);
+    color: @window_fg_color;
+}
+
+.sound-mixer-channels-box {
+    padding-top: 2px;
+    padding-bottom: 2px;
 }

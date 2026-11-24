@@ -247,8 +247,19 @@ fn populate_control_center_popover(popover: &Popover) {
         .spacing(8)
         .build();
 
+    let vol_mute_btn = Button::builder()
+        .css_classes(["sound-menu-vol-btn"])
+        .has_frame(false)
+        .valign(Align::Center)
+        .tooltip_text(if is_es {
+            "Silenciar / Reactivar audio"
+        } else {
+            "Mute / Unmute"
+        })
+        .build();
     let vol_icon_low = Image::from_icon_name("audio-volume-low-symbolic");
     vol_icon_low.set_pixel_size(16);
+    vol_mute_btn.set_child(Some(&vol_icon_low));
 
     let volume_scale = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
     volume_scale.set_value(75.0);
@@ -262,16 +273,16 @@ fn populate_control_center_popover(popover: &Popover) {
         .css_classes(["cc-sound-output-btn"])
         .has_frame(false)
         .tooltip_text(if is_es {
-            "Salidas de audio / Dispositivos"
+            "Salidas de audio y mezclador por aplicación"
         } else {
-            "Sound Output Devices"
+            "Sound Outputs & Per-App Mixer"
         })
         .build();
     let sound_output_icon = Image::from_icon_name("audio-card-symbolic");
     sound_output_icon.set_pixel_size(16);
     sound_output_btn.set_child(Some(&sound_output_icon));
 
-    sound_slider_row.append(&vol_icon_low);
+    sound_slider_row.append(&vol_mute_btn);
     sound_slider_row.append(&volume_scale);
     sound_slider_row.append(&vol_icon);
     sound_slider_row.append(&sound_output_btn);
@@ -443,6 +454,17 @@ fn populate_control_center_popover(popover: &Popover) {
     );
     stack.add_named(&displays_subview, Some("displays"));
 
+    let is_updating_volume = Rc::new(RefCell::new(false));
+    let (sound_subview, refresh_sound_subview) = create_sound_subview(
+        &stack,
+        &popover,
+        &volume_scale,
+        &sound_pct,
+        &vol_icon,
+        &is_updating_volume,
+    );
+    stack.add_named(&sound_subview, Some("sound"));
+
     popover.set_child(Some(&stack));
 
     // ==========================================
@@ -522,11 +544,55 @@ fn populate_control_center_popover(popover: &Popover) {
         update_focus_tahoe_ui(&f_btn_c, &f_ico_c);
     });
 
-    // Botón de salida de audio (Sound Output)
-    sound_output_btn.connect_clicked(move |_| {
-        let mut cmd = Command::new("gnome-control-center");
-        let _ = cmd.arg("sound").spawn();
-    });
+    // Botón de salida de audio y mezclador por aplicación (Subvista Sonido nativa)
+    {
+        let stack_snd = stack.clone();
+        let ref_snd = refresh_sound_subview.clone();
+        sound_output_btn.connect_clicked(move |_| {
+            ref_snd();
+            stack_snd.set_visible_child_name("sound");
+        });
+    }
+
+    // Botón de silencio en la tarjeta de Sonido
+    {
+        let v_sc = volume_scale.clone();
+        let v_pc = sound_pct.clone();
+        let v_ic = vol_icon.clone();
+        let v_li = vol_icon_low.clone();
+        let v_lk = is_updating_volume.clone();
+        vol_mute_btn.connect_clicked(move |_| {
+            AudioService::toggle_mute();
+            let sc = v_sc.clone();
+            let pc = v_pc.clone();
+            let ic = v_ic.clone();
+            let li = v_li.clone();
+            let lk = v_lk.clone();
+            glib::MainContext::default().spawn_local(async move {
+                let (vol, muted) = AudioService::get_volume().await;
+                *lk.borrow_mut() = true;
+                sc.set_value(if muted { 0.0 } else { vol });
+                pc.set_label(&format!("{}%", if muted { 0 } else { vol.round() as i32 }));
+                let icon_name = if muted || vol < 1.0 {
+                    "audio-volume-muted-symbolic"
+                } else if vol < 40.0 {
+                    "audio-volume-low-symbolic"
+                } else if vol < 75.0 {
+                    "audio-volume-medium-symbolic"
+                } else {
+                    "audio-volume-high-symbolic"
+                };
+                ic.set_icon_name(Some(icon_name));
+                li.set_icon_name(Some(if muted || vol < 1.0 {
+                    "audio-volume-muted-symbolic"
+                } else {
+                    "audio-volume-low-symbolic"
+                }));
+                *lk.borrow_mut() = false;
+                super::status_tray::refresh_volume_tray();
+            });
+        });
+    }
 
     // Modo Oscuro Toggle
     let dark_sub_c = dark_sub.clone();
@@ -627,10 +693,11 @@ fn populate_control_center_popover(popover: &Popover) {
     });
 
     // Control de Volumen con debouncing y AudioService
-    let is_updating_volume = Rc::new(RefCell::new(false));
     let is_upd_clone = is_updating_volume.clone();
     let pct_clone = sound_pct.clone();
     let vol_icon_clone = vol_icon.clone();
+    let vol_low_clone = vol_icon_low.clone();
+    let last_cc_vol_feedback = Rc::new(RefCell::new(std::time::Instant::now() - std::time::Duration::from_secs(1)));
 
     volume_scale.connect_value_changed(move |scale| {
         if *is_upd_clone.borrow() {
@@ -641,15 +708,24 @@ fn populate_control_center_popover(popover: &Popover) {
 
         if val < 1.0 {
             vol_icon_clone.set_icon_name(Some("audio-volume-muted-symbolic"));
+            vol_low_clone.set_icon_name(Some("audio-volume-muted-symbolic"));
         } else if val < 40.0 {
             vol_icon_clone.set_icon_name(Some("audio-volume-low-symbolic"));
+            vol_low_clone.set_icon_name(Some("audio-volume-low-symbolic"));
         } else if val < 75.0 {
             vol_icon_clone.set_icon_name(Some("audio-volume-medium-symbolic"));
+            vol_low_clone.set_icon_name(Some("audio-volume-low-symbolic"));
         } else {
             vol_icon_clone.set_icon_name(Some("audio-volume-high-symbolic"));
+            vol_low_clone.set_icon_name(Some("audio-volume-low-symbolic"));
         }
 
         AudioService::set_volume(val);
+        let now = std::time::Instant::now();
+        if now.duration_since(*last_cc_vol_feedback.borrow()) >= std::time::Duration::from_millis(180) {
+            *last_cc_vol_feedback.borrow_mut() = now;
+            AudioService::play_volume_feedback_if_enabled();
+        }
     });
 
     // Actualización de estado al abrir el Popover (reseteando vista a "main")
@@ -2862,6 +2938,871 @@ fn get_wifi_signal_icon(signal: u8) -> &'static str {
     } else {
         "network-wireless-signal-none-symbolic"
     }
+}
+
+// ==========================================
+// Subvista Sonido (Salidas PipeWire + Mezclador por Aplicación)
+// ==========================================
+
+fn create_sound_subview(
+    stack: &Stack,
+    popover: &Popover,
+    main_vol_scale: &Scale,
+    main_vol_pct: &Label,
+    main_vol_icon: &Image,
+    main_vol_lock: &Rc<RefCell<bool>>,
+) -> (GtkBox, Rc<dyn Fn()>) {
+    let view_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .css_classes(["cc-subview"])
+        .spacing(8)
+        .build();
+
+    let header = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .css_classes(["cc-subview-header"])
+        .spacing(6)
+        .build();
+
+    let back_btn = Button::builder()
+        .css_classes(["cc-back-btn"])
+        .has_frame(false)
+        .tooltip_text("Volver")
+        .build();
+    back_btn.set_child(Some(&Image::from_icon_name("go-previous-symbolic")));
+    {
+        let st = stack.clone();
+        back_btn.connect_clicked(move |_| {
+            st.set_visible_child_name("main");
+        });
+    }
+
+    let title_lbl = Label::builder()
+        .label("Sonido")
+        .css_classes(["cc-subview-title"])
+        .hexpand(true)
+        .xalign(0.0)
+        .build();
+
+    let refresh_btn = Button::builder()
+        .css_classes(["cc-refresh-btn"])
+        .has_frame(false)
+        .tooltip_text("Actualizar dispositivos y aplicaciones")
+        .build();
+    refresh_btn.set_child(Some(&Image::from_icon_name("view-refresh-symbolic")));
+
+    header.append(&back_btn);
+    header.append(&title_lbl);
+    header.append(&refresh_btn);
+    view_box.append(&header);
+
+    let scrolled = ScrolledWindow::builder()
+        .hscrollbar_policy(PolicyType::Never)
+        .vscrollbar_policy(PolicyType::Automatic)
+        .max_content_height(300)
+        .propagate_natural_height(true)
+        .vexpand(false)
+        .build();
+
+    let content_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(6)
+        .vexpand(false)
+        .build();
+    scrolled.set_child(Some(&content_box));
+    view_box.append(&scrolled);
+
+    let footer_sep = Separator::new(Orientation::Horizontal);
+    let pref_btn = Button::builder()
+        .css_classes(["cc-footer-btn"])
+        .has_frame(false)
+        .halign(Align::Fill)
+        .hexpand(true)
+        .build();
+    pref_btn.set_child(Some(
+        &Label::builder()
+            .label("Configuración de Sonido...")
+            .xalign(0.0)
+            .halign(Align::Start)
+            .hexpand(true)
+            .build(),
+    ));
+    crate::ui::system_menu::attach_tray_squircle_button(&pref_btn, false, false, 4, 8);
+    {
+        let pop_c = popover.clone();
+        pref_btn.connect_clicked(move |_| {
+            pop_c.popdown();
+            let settings_bin = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|dir| dir.join("malus-de-settings")))
+                .filter(|p| p.exists())
+                .unwrap_or_else(|| std::path::PathBuf::from("malus-de-settings"));
+            let mut command = Command::new(settings_bin);
+            malus_de_common::config::set_cursor_environment(&mut command);
+            if let Err(err) = command.args(["--panel", "sound"]).spawn() {
+                tracing::error!("No se pudieron abrir los ajustes de Sonido de Malus DE: {err}");
+            }
+        });
+    }
+
+    view_box.append(&footer_sep);
+    view_box.append(&pref_btn);
+
+    let cb = content_box.clone();
+    let sc = main_vol_scale.clone();
+    let pc = main_vol_pct.clone();
+    let ic = main_vol_icon.clone();
+    let lk = main_vol_lock.clone();
+    let last_local_write = Rc::new(RefCell::new(
+        std::time::Instant::now() - std::time::Duration::from_secs(5),
+    ));
+    let refresh_holder: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let refresh_fn: Rc<dyn Fn()> = {
+        let lw = last_local_write.clone();
+        let rf_h = refresh_holder.clone();
+        Rc::new(move || {
+            let cb_i = cb.clone();
+            let sc_i = sc.clone();
+            let pc_i = pc.clone();
+            let ic_i = ic.clone();
+            let lk_i = lk.clone();
+            let lw_i = lw.clone();
+            let rf_i = rf_h.clone();
+            glib::MainContext::default().spawn_local(async move {
+                let devices = AudioService::list_output_devices().await;
+                let streams = AudioService::list_app_streams().await;
+                populate_sound_subview_content(
+                    &cb_i,
+                    &devices,
+                    &streams,
+                    &sc_i,
+                    &pc_i,
+                    &ic_i,
+                    &lk_i,
+                    &lw_i,
+                    &rf_i,
+                );
+            });
+        })
+    };
+    *refresh_holder.borrow_mut() = Some(refresh_fn.clone());
+
+    // Suscripción en tiempo real a PipeWire (`pactl subscribe`) solo mientras la subvista "sound" está abierta
+    let sound_watcher: Rc<RefCell<Option<crate::services::audio::PactlWatcher>>> =
+        Rc::new(RefCell::new(None));
+    {
+        let sw_c = sound_watcher.clone();
+        let rf_c = refresh_fn.clone();
+        let lw_c = last_local_write.clone();
+        let pop_weak = popover.downgrade();
+        let st_weak = stack.downgrade();
+        let start_live_watcher = Rc::new(move || {
+            if sw_c.borrow().is_some() {
+                return;
+            }
+            let (tx, rx) = async_channel::bounded::<crate::services::audio::PactlEventKind>(32);
+            let watcher = crate::services::audio::PactlWatcher::start(tx);
+            *sw_c.borrow_mut() = Some(watcher);
+            let rf_loop = rf_c.clone();
+            let lw_loop = lw_c.clone();
+            let pop_w = pop_weak.clone();
+            let st_w = st_weak.clone();
+            let pending_debounce = Rc::new(RefCell::new(false));
+            glib::MainContext::default().spawn_local(async move {
+                while let Ok(kind) = rx.recv().await {
+                    let still_on_sound = pop_w
+                        .upgrade()
+                        .is_some_and(|p| p.is_visible())
+                        && st_w
+                            .upgrade()
+                            .and_then(|s| s.visible_child_name())
+                            .as_deref()
+                            == Some("sound");
+                    if !still_on_sound {
+                        continue;
+                    }
+                    if matches!(kind, crate::services::audio::PactlEventKind::Change)
+                        && std::time::Instant::now().duration_since(*lw_loop.borrow())
+                            < std::time::Duration::from_millis(500)
+                    {
+                        continue;
+                    }
+                    if *pending_debounce.borrow() {
+                        continue;
+                    }
+                    *pending_debounce.borrow_mut() = true;
+                    let pd = pending_debounce.clone();
+                    let rf_fire = rf_loop.clone();
+                    glib::timeout_add_local_once(
+                        std::time::Duration::from_millis(180),
+                        move || {
+                            *pd.borrow_mut() = false;
+                            rf_fire();
+                        },
+                    );
+                }
+            });
+        });
+
+        let sw_stop = sound_watcher.clone();
+        let start_on_nav = start_live_watcher.clone();
+        stack.connect_visible_child_name_notify(move |st| {
+            if st.visible_child_name().as_deref() == Some("sound") {
+                start_on_nav();
+            } else {
+                *sw_stop.borrow_mut() = None;
+            }
+        });
+
+        let sw_close = sound_watcher.clone();
+        popover.connect_closed(move |_| {
+            *sw_close.borrow_mut() = None;
+        });
+    }
+
+    {
+        let rf = refresh_fn.clone();
+        refresh_btn.connect_clicked(move |_| {
+            rf();
+        });
+    }
+
+    (view_box, refresh_fn)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn populate_sound_subview_content(
+    content_box: &GtkBox,
+    devices: &[crate::services::audio::AudioOutputDevice],
+    streams: &[crate::services::audio::AppAudioStream],
+    main_vol_scale: &Scale,
+    main_vol_pct: &Label,
+    main_vol_icon: &Image,
+    main_vol_lock: &Rc<RefCell<bool>>,
+    last_local_write: &Rc<RefCell<std::time::Instant>>,
+    refresh_holder: &Rc<RefCell<Option<Rc<dyn Fn()>>>>,
+) {
+    while let Some(child) = content_box.first_child() {
+        content_box.remove(&child);
+    }
+
+    // 1. Salidas de audio PipeWire
+    content_box.append(
+        &Label::builder()
+            .label("SALIDA")
+            .css_classes(["cc-section-label"])
+            .xalign(0.0)
+            .halign(Align::Start)
+            .margin_start(4)
+            .build(),
+    );
+
+    let outputs_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .vexpand(false)
+        .build();
+
+    for dev in devices {
+        let row_btn = Button::builder()
+            .css_classes(["sound-menu-device-row"])
+            .has_frame(false)
+            .halign(Align::Fill)
+            .hexpand(true)
+            .build();
+
+        let row_content = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .halign(Align::Fill)
+            .valign(Align::Center)
+            .hexpand(true)
+            .vexpand(false)
+            .spacing(8)
+            .build();
+
+        let circle = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .width_request(24)
+            .height_request(24)
+            .halign(Align::Start)
+            .valign(Align::Center)
+            .hexpand(false)
+            .vexpand(false)
+            .css_classes(if dev.is_default {
+                ["sound-menu-device-circle", "sound-menu-device-circle-active"].as_slice()
+            } else {
+                ["sound-menu-device-circle"].as_slice()
+            })
+            .build();
+        let dev_icon = Image::builder()
+            .icon_name(dev.icon_name)
+            .pixel_size(13)
+            .width_request(24)
+            .height_request(24)
+            .halign(Align::Center)
+            .valign(Align::Center)
+            .hexpand(false)
+            .vexpand(false)
+            .build();
+        circle.append(&dev_icon);
+
+        let name_lbl = Label::builder()
+            .label(&dev.description)
+            .css_classes(["sound-menu-device-name"])
+            .xalign(0.0)
+            .halign(Align::Start)
+            .hexpand(true)
+            .ellipsize(gtk4::pango::EllipsizeMode::End)
+            .build();
+
+        row_content.append(&circle);
+        row_content.append(&name_lbl);
+        row_btn.set_child(Some(&row_content));
+        crate::ui::system_menu::attach_tray_squircle_button(&row_btn, false, false, 2, 6);
+
+        let sink_name = dev.name.clone();
+        let cb = content_box.clone();
+        let sc = main_vol_scale.clone();
+        let pc = main_vol_pct.clone();
+        let ic = main_vol_icon.clone();
+        let lk = main_vol_lock.clone();
+        let lw = last_local_write.clone();
+        let rf_h = refresh_holder.clone();
+        row_btn.connect_clicked(move |_| {
+            let target = sink_name.clone();
+            let cb_i = cb.clone();
+            let sc_i = sc.clone();
+            let pc_i = pc.clone();
+            let ic_i = ic.clone();
+            let lk_i = lk.clone();
+            let lw_i = lw.clone();
+            let rf_i = rf_h.clone();
+            glib::MainContext::default().spawn_local(async move {
+                AudioService::set_default_sink(target).await;
+                let (vol, muted) = AudioService::get_volume().await;
+                *lk_i.borrow_mut() = true;
+                sc_i.set_value(if muted { 0.0 } else { vol });
+                pc_i.set_label(&format!("{}%", if muted { 0 } else { vol.round() as i32 }));
+                ic_i.set_icon_name(Some(if muted || vol < 1.0 {
+                    "audio-volume-muted-symbolic"
+                } else if vol < 40.0 {
+                    "audio-volume-low-symbolic"
+                } else if vol < 75.0 {
+                    "audio-volume-medium-symbolic"
+                } else {
+                    "audio-volume-high-symbolic"
+                }));
+                *lk_i.borrow_mut() = false;
+                super::status_tray::refresh_volume_tray();
+                let updated_devs = AudioService::list_output_devices().await;
+                let updated_streams = AudioService::list_app_streams().await;
+                populate_sound_subview_content(
+                    &cb_i,
+                    &updated_devs,
+                    &updated_streams,
+                    &sc_i,
+                    &pc_i,
+                    &ic_i,
+                    &lk_i,
+                    &lw_i,
+                    &rf_i,
+                );
+            });
+        });
+
+        outputs_box.append(&row_btn);
+    }
+    content_box.append(&outputs_box);
+
+    // 2. Mezclador de Audio por Aplicación (PipeWire sink-inputs: volumen, canales L/R y salida por app)
+    content_box.append(
+        &Separator::builder()
+            .orientation(Orientation::Horizontal)
+            .css_classes(["sound-menu-sep"])
+            .margin_top(2)
+            .build(),
+    );
+    content_box.append(
+        &Label::builder()
+            .label("MEZCLADOR POR APLICACIÓN")
+            .css_classes(["cc-section-label"])
+            .xalign(0.0)
+            .halign(Align::Start)
+            .margin_start(4)
+            .build(),
+    );
+
+    if streams.is_empty() {
+        content_box.append(
+            &Label::builder()
+                .label("No hay aplicaciones reproduciendo audio")
+                .css_classes(["sound-menu-section"])
+                .xalign(0.0)
+                .halign(Align::Start)
+                .margin_start(6)
+                .margin_top(2)
+                .margin_bottom(2)
+                .build(),
+        );
+    } else {
+        let on_routed: Rc<dyn Fn()> = {
+            let rf_h = refresh_holder.clone();
+            Rc::new(move || {
+                if let Some(rf) = rf_h.borrow().as_ref() {
+                    rf();
+                }
+            })
+        };
+        for stream in streams {
+            content_box.append(&build_per_app_mixer_row(
+                stream,
+                devices,
+                last_local_write,
+                on_routed.clone(),
+            ));
+        }
+    }
+}
+
+pub(crate) fn build_per_app_mixer_row(
+    stream: &crate::services::audio::AppAudioStream,
+    devices: &[crate::services::audio::AudioOutputDevice],
+    last_local_write: &Rc<RefCell<std::time::Instant>>,
+    on_routed: Rc<dyn Fn()>,
+) -> GtkBox {
+    let container = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(3)
+        .css_classes(["sound-mixer-row"])
+        .vexpand(false)
+        .build();
+
+    let header = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(6)
+        .halign(Align::Fill)
+        .valign(Align::Center)
+        .hexpand(true)
+        .build();
+
+    let app_icon = Image::builder()
+        .icon_name(&stream.icon_name)
+        .pixel_size(14)
+        .hexpand(false)
+        .vexpand(false)
+        .build();
+
+    let title_text = if let Some(ref media) = stream.media_name {
+        if media.chars().count() <= 22 {
+            format!("{} — {}", stream.app_name, media)
+        } else {
+            stream.app_name.clone()
+        }
+    } else {
+        stream.app_name.clone()
+    };
+    let app_lbl = Label::builder()
+        .label(&title_text)
+        .css_classes(["sound-mixer-app-name"])
+        .xalign(0.0)
+        .halign(Align::Start)
+        .hexpand(true)
+        .ellipsize(gtk4::pango::EllipsizeMode::End)
+        .build();
+    if let Some(ref media) = stream.media_name {
+        app_lbl.set_tooltip_text(Some(&format!("{} — {}", stream.app_name, media)));
+    }
+
+    let pct_lbl = Label::builder()
+        .label(if stream.muted {
+            "Silencio".to_string()
+        } else {
+            format!("{}%", stream.volume_pct.round() as i32)
+        })
+        .css_classes(["sound-mixer-pct"])
+        .xalign(1.0)
+        .halign(Align::End)
+        .hexpand(false)
+        .build();
+
+    header.append(&app_icon);
+    header.append(&app_lbl);
+    header.append(&pct_lbl);
+
+    // Botón para desplegar canales individuales (Izquierdo / Derecho) estilo KDE
+    let has_multi_channels = stream.channels.len() >= 2;
+    let channels_unbalanced = has_multi_channels
+        && (stream
+            .channels
+            .iter()
+            .map(|(_, v)| *v)
+            .fold(f64::NEG_INFINITY, f64::max)
+            - stream
+                .channels
+                .iter()
+                .map(|(_, v)| *v)
+                .fold(f64::INFINITY, f64::min))
+            >= 2.0;
+
+    let channels_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .margin_start(18)
+        .visible(channels_unbalanced)
+        .css_classes(["sound-mixer-channels-box"])
+        .build();
+
+    if has_multi_channels {
+        let ch_toggle = Button::builder()
+            .css_classes(["sound-menu-vol-btn", "sound-mixer-sub-toggle"])
+            .has_frame(false)
+            .valign(Align::Center)
+            .tooltip_text("Separar canales (Izquierdo / Derecho)")
+            .build();
+        let ch_ico = Image::builder()
+            .icon_name(if channels_unbalanced {
+                "pan-up-symbolic"
+            } else {
+                "pan-down-symbolic"
+            })
+            .pixel_size(12)
+            .build();
+        ch_toggle.set_child(Some(&ch_ico));
+        let cb = channels_box.clone();
+        let ico = ch_ico.clone();
+        ch_toggle.connect_clicked(move |_| {
+            let next = !cb.is_visible();
+            cb.set_visible(next);
+            ico.set_icon_name(Some(if next {
+                "pan-up-symbolic"
+            } else {
+                "pan-down-symbolic"
+            }));
+        });
+        header.append(&ch_toggle);
+    }
+
+    container.append(&header);
+
+    let slider_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(6)
+        .valign(Align::Center)
+        .build();
+
+    let muted_state = Rc::new(RefCell::new(stream.muted));
+    let mute_btn = Button::builder()
+        .css_classes(["sound-menu-vol-btn", "sound-mixer-mute-btn"])
+        .has_frame(false)
+        .valign(Align::Center)
+        .tooltip_text("Silenciar / Reactivar aplicación")
+        .build();
+    let mute_icon = Image::builder()
+        .icon_name(if stream.muted {
+            "audio-volume-muted-symbolic"
+        } else {
+            "audio-volume-medium-symbolic"
+        })
+        .pixel_size(13)
+        .build();
+    mute_btn.set_child(Some(&mute_icon));
+
+    let slider = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
+    slider.set_value(stream.volume_pct.clamp(0.0, 100.0));
+    slider.set_draw_value(false);
+    slider.set_hexpand(true);
+    slider.set_valign(Align::Center);
+    slider.set_css_classes(&["sound-menu-scale"]);
+
+    slider_row.append(&mute_btn);
+    slider_row.append(&slider);
+    container.append(&slider_row);
+
+    let idx = stream.index;
+    let syncing_sliders = Rc::new(RefCell::new(false));
+    let channel_values: Rc<RefCell<Vec<f64>>> = Rc::new(RefCell::new(
+        stream
+            .channels
+            .iter()
+            .map(|(_, v)| v.clamp(0.0, 100.0))
+            .collect(),
+    ));
+    let channel_widgets: Rc<RefCell<Vec<(Scale, Label)>>> = Rc::new(RefCell::new(Vec::new()));
+
+    if has_multi_channels {
+        for (ch_idx, (ch_name, ch_val)) in stream.channels.iter().enumerate() {
+            let ch_row = GtkBox::builder()
+                .orientation(Orientation::Horizontal)
+                .spacing(6)
+                .valign(Align::Center)
+                .build();
+            let ch_lbl = Label::builder()
+                .label(&crate::services::audio::format_channel_label(ch_name))
+                .css_classes(["sound-mixer-ch-label"])
+                .xalign(0.0)
+                .width_request(58)
+                .build();
+            let ch_scale = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
+            ch_scale.set_value(ch_val.clamp(0.0, 100.0));
+            ch_scale.set_draw_value(false);
+            ch_scale.set_hexpand(true);
+            ch_scale.set_valign(Align::Center);
+            ch_scale.set_css_classes(&["sound-menu-scale"]);
+            let ch_pct = Label::builder()
+                .label(format!("{}%", ch_val.round() as i32))
+                .css_classes(["sound-mixer-pct"])
+                .xalign(1.0)
+                .width_request(32)
+                .build();
+
+            ch_row.append(&ch_lbl);
+            ch_row.append(&ch_scale);
+            ch_row.append(&ch_pct);
+            channels_box.append(&ch_row);
+
+            channel_widgets
+                .borrow_mut()
+                .push((ch_scale.clone(), ch_pct.clone()));
+
+            let vals_c = channel_values.clone();
+            let sync_c = syncing_sliders.clone();
+            let master_s = slider.clone();
+            let master_pct = pct_lbl.clone();
+            let master_ico = mute_icon.clone();
+            let m_state = muted_state.clone();
+            let lw = last_local_write.clone();
+            let ch_pct_c = ch_pct.clone();
+            ch_scale.connect_value_changed(move |s| {
+                if *sync_c.borrow() {
+                    return;
+                }
+                let val = s.value().clamp(0.0, 100.0);
+                *lw.borrow_mut() = std::time::Instant::now();
+                ch_pct_c.set_label(&format!("{}%", val.round() as i32));
+                let updated = {
+                    let mut guard = vals_c.borrow_mut();
+                    if let Some(slot) = guard.get_mut(ch_idx) {
+                        *slot = val;
+                    }
+                    guard.clone()
+                };
+                if *m_state.borrow() && val > 0.5 {
+                    *m_state.borrow_mut() = false;
+                    AudioService::set_app_stream_mute(idx, false);
+                }
+                let avg = if updated.is_empty() {
+                    val
+                } else {
+                    updated.iter().sum::<f64>() / updated.len() as f64
+                };
+                *sync_c.borrow_mut() = true;
+                master_s.set_value(avg.clamp(0.0, 100.0));
+                *sync_c.borrow_mut() = false;
+                master_pct.set_label(&format!("{}%", avg.round() as i32));
+                master_ico.set_icon_name(Some(if avg < 1.0 {
+                    "audio-volume-muted-symbolic"
+                } else if avg < 40.0 {
+                    "audio-volume-low-symbolic"
+                } else {
+                    "audio-volume-medium-symbolic"
+                }));
+                AudioService::set_app_stream_channel_volumes(idx, updated);
+            });
+        }
+        container.append(&channels_box);
+    }
+
+    // Selector inline de salida por aplicación (cuando hay 2+ salidas conectadas reales)
+    if devices.len() >= 2 {
+        let current_sink_desc = stream
+            .sink_index
+            .and_then(|s_idx| devices.iter().find(|d| d.index == Some(s_idx)))
+            .or_else(|| devices.iter().find(|d| d.is_default))
+            .map(|d| d.description.as_str())
+            .unwrap_or("Salida predeterminada");
+
+        let route_picker = GtkBox::builder()
+            .orientation(Orientation::Vertical)
+            .spacing(2)
+            .margin_start(14)
+            .visible(false)
+            .build();
+
+        let route_btn = Button::builder()
+            .css_classes(["sound-mixer-route-btn"])
+            .has_frame(false)
+            .halign(Align::Start)
+            .tooltip_text("Elegir salida de audio para esta aplicación")
+            .build();
+        let route_btn_box = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(5)
+            .valign(Align::Center)
+            .build();
+        route_btn_box.append(
+            &Image::builder()
+                .icon_name("audio-speakers-symbolic")
+                .pixel_size(11)
+                .build(),
+        );
+        route_btn_box.append(
+            &Label::builder()
+                .label(current_sink_desc)
+                .css_classes(["sound-mixer-route-label"])
+                .xalign(0.0)
+                .ellipsize(gtk4::pango::EllipsizeMode::End)
+                .max_width_chars(24)
+                .build(),
+        );
+        let route_chev = Image::builder()
+            .icon_name("pan-down-symbolic")
+            .pixel_size(10)
+            .build();
+        route_btn_box.append(&route_chev);
+        route_btn.set_child(Some(&route_btn_box));
+
+        {
+            let rp = route_picker.clone();
+            let rc = route_chev.clone();
+            route_btn.connect_clicked(move |_| {
+                let next = !rp.is_visible();
+                rp.set_visible(next);
+                rc.set_icon_name(Some(if next {
+                    "pan-up-symbolic"
+                } else {
+                    "pan-down-symbolic"
+                }));
+            });
+        }
+
+        for dev in devices {
+            let is_current = stream
+                .sink_index
+                .is_some_and(|s_idx| dev.index == Some(s_idx));
+            let opt_btn = Button::builder()
+                .css_classes(["sound-menu-device-row"])
+                .has_frame(false)
+                .halign(Align::Fill)
+                .hexpand(true)
+                .build();
+            let opt_box = GtkBox::builder()
+                .orientation(Orientation::Horizontal)
+                .spacing(6)
+                .halign(Align::Fill)
+                .valign(Align::Center)
+                .hexpand(true)
+                .build();
+            let opt_ico = Image::builder()
+                .icon_name(dev.icon_name)
+                .pixel_size(12)
+                .hexpand(false)
+                .build();
+            let opt_lbl = Label::builder()
+                .label(&dev.description)
+                .css_classes(["sound-mixer-ch-label"])
+                .xalign(0.0)
+                .halign(Align::Start)
+                .hexpand(true)
+                .ellipsize(gtk4::pango::EllipsizeMode::End)
+                .build();
+            opt_box.append(&opt_ico);
+            opt_box.append(&opt_lbl);
+            if is_current {
+                opt_box.append(
+                    &Image::builder()
+                        .icon_name("object-select-symbolic")
+                        .css_classes(["cc-item-check"])
+                        .pixel_size(11)
+                        .hexpand(false)
+                        .build(),
+                );
+            }
+            opt_btn.set_child(Some(&opt_box));
+            crate::ui::system_menu::attach_tray_squircle_button(&opt_btn, false, false, 2, 6);
+
+            let target_sink = dev.name.clone();
+            let on_r = on_routed.clone();
+            let lw = last_local_write.clone();
+            opt_btn.connect_clicked(move |_| {
+                *lw.borrow_mut() = std::time::Instant::now();
+                let sink_bg = target_sink.clone();
+                let on_r_c = on_r.clone();
+                glib::MainContext::default().spawn_local(async move {
+                    AudioService::move_app_stream_to_sink(idx, sink_bg).await;
+                    on_r_c();
+                });
+            });
+            route_picker.append(&opt_btn);
+        }
+
+        container.append(&route_btn);
+        container.append(&route_picker);
+    }
+
+    {
+        let pct_c = pct_lbl.clone();
+        let ico_c = mute_icon.clone();
+        let m_state = muted_state.clone();
+        let sync_c = syncing_sliders.clone();
+        let vals_c = channel_values.clone();
+        let ch_ws = channel_widgets.clone();
+        let lw = last_local_write.clone();
+        slider.connect_value_changed(move |s| {
+            if *sync_c.borrow() {
+                return;
+            }
+            let val = s.value().clamp(0.0, 100.0);
+            *lw.borrow_mut() = std::time::Instant::now();
+            if *m_state.borrow() && val > 0.5 {
+                *m_state.borrow_mut() = false;
+                AudioService::set_app_stream_mute(idx, false);
+            }
+            pct_c.set_label(&format!("{}%", val.round() as i32));
+            ico_c.set_icon_name(Some(if val < 1.0 {
+                "audio-volume-muted-symbolic"
+            } else if val < 40.0 {
+                "audio-volume-low-symbolic"
+            } else {
+                "audio-volume-medium-symbolic"
+            }));
+            *sync_c.borrow_mut() = true;
+            for slot in vals_c.borrow_mut().iter_mut() {
+                *slot = val;
+            }
+            for (ch_s, ch_p) in ch_ws.borrow().iter() {
+                ch_s.set_value(val);
+                ch_p.set_label(&format!("{}%", val.round() as i32));
+            }
+            *sync_c.borrow_mut() = false;
+            AudioService::set_app_stream_volume(idx, val);
+        });
+    }
+
+    {
+        let pct_c = pct_lbl.clone();
+        let ico_c = mute_icon.clone();
+        let m_state = muted_state.clone();
+        let s_c = slider.clone();
+        let lw = last_local_write.clone();
+        mute_btn.connect_clicked(move |_| {
+            *lw.borrow_mut() = std::time::Instant::now();
+            let next_muted = !*m_state.borrow();
+            *m_state.borrow_mut() = next_muted;
+            AudioService::set_app_stream_mute(idx, next_muted);
+            ico_c.set_icon_name(Some(if next_muted {
+                "audio-volume-muted-symbolic"
+            } else {
+                "audio-volume-medium-symbolic"
+            }));
+            pct_c.set_label(&if next_muted {
+                "Silencio".to_string()
+            } else {
+                format!("{}%", s_c.value().round() as i32)
+            });
+        });
+    }
+
+    container
 }
 
 async fn update_wifi_ui_async(btn: &Button, icon: &Image, sub: &Label) {

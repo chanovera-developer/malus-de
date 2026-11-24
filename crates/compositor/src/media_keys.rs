@@ -296,6 +296,7 @@ pub struct MediaKeysState {
     cached_kbd_brightness_pct: f64,
     active_repeat: Option<ActiveRepeat>,
     active_osd: Option<ActiveOsd>,
+    last_volume_feedback: Option<Instant>,
     closed_dirty: bool,
     cache_key: Option<OsdCacheKey>,
     render_buffer: Option<MemoryRenderBuffer>,
@@ -343,6 +344,7 @@ impl MediaKeysState {
             cached_kbd_brightness_pct: initial_kbd,
             active_repeat: None,
             active_osd: None,
+            last_volume_feedback: None,
             closed_dirty: false,
             cache_key: None,
             render_buffer: None,
@@ -512,6 +514,14 @@ impl MediaKeysState {
             now,
         );
 
+        let should_play_feedback = !next_muted
+            && self
+                .last_volume_feedback
+                .is_none_or(|prev| now.saturating_duration_since(prev) >= Duration::from_millis(140));
+        if should_play_feedback {
+            self.last_volume_feedback = Some(now);
+        }
+
         let shared = Arc::clone(&self.audio_state);
         let step_abs = delta_pct.abs();
         let is_up = delta_pct >= 0.0;
@@ -560,6 +570,25 @@ impl MediaKeysState {
                 }
             }
             ipc_broadcaster.broadcast(&malus_de_common::ipc::IpcMessage::ReloadMenuBarConfig);
+
+            if should_play_feedback {
+                let snd_cfg = malus_de_common::config::SoundConfig::load();
+                if snd_cfg.volume_change_feedback {
+                    let path = "/usr/share/sounds/freedesktop/stereo/audio-volume-change.oga";
+                    if std::path::Path::new(path).exists() {
+                        let alert_vol = (snd_cfg.alert_volume.clamp(0.0, 100.0) / 100.0).max(0.25);
+                        let pa_vol = (65536.0 * alert_vol).round() as u32;
+                        let st = Command::new("paplay")
+                            .args(["--volume", &pa_vol.to_string(), path])
+                            .status();
+                        if st.map(|s| !s.success()).unwrap_or(true) {
+                            let _ = Command::new("pw-play")
+                                .args(["--volume", &format!("{alert_vol:.2}"), path])
+                                .status();
+                        }
+                    }
+                }
+            }
         });
     }
 

@@ -6,9 +6,12 @@ use gtk4::{
 use malus_de_common::config::SoundConfig;
 use malus_de_common::mac_switch::MacSwitch as Switch;
 use std::cell::{Cell, RefCell};
+use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
 use crate::general_pane::make_pending_badge;
 use crate::wifi_pane::{
@@ -35,6 +38,7 @@ const DEFAULT_EFFECTS_DEVICE_LABEL: &str = "Dispositivo de salida de sonido eleg
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioDeviceInfo {
+    pub index: Option<u32>,
     pub name: String,
     pub description: String,
     pub device_type: String,
@@ -43,12 +47,157 @@ pub struct AudioDeviceInfo {
     pub muted: bool,
     /// Balance estéreo `[-1.0 ..= 1.0]` (`-1.0` izquierda, `0.0` centro, `+1.0` derecha).
     pub balance: f64,
+    pub card_index: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioCardProfile {
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioCardInfo {
+    pub index: u32,
+    pub name: String,
+    pub description: String,
+    pub active_profile: String,
+    pub profiles: Vec<AudioCardProfile>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AppAudioStreamInfo {
+    pub index: u32,
+    pub sink_index: Option<u32>,
+    pub app_name: String,
+    pub media_name: Option<String>,
+    pub icon_name: String,
+    pub volume_pct: f64,
+    pub muted: bool,
+    pub channels: Vec<(String, f64)>,
+}
+
+pub fn format_channel_label(raw: &str) -> String {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "front-left" | "left" => "Izquierdo".to_string(),
+        "front-right" | "right" => "Derecho".to_string(),
+        "front-center" | "center" => "Centro".to_string(),
+        "mono" => "Mono".to_string(),
+        "lfe" | "subwoofer" => "Subwoofer".to_string(),
+        "rear-left" => "Trasero izq.".to_string(),
+        "rear-right" => "Trasero der.".to_string(),
+        "rear-center" => "Trasero centro".to_string(),
+        "side-left" => "Lateral izq.".to_string(),
+        "side-right" => "Lateral der.".to_string(),
+        other => other.replace('-', " "),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PactlEventKind {
+    Structural,
+    Change,
+}
+
+fn classify_pactl_event(line: &str) -> Option<PactlEventKind> {
+    let low = line.to_ascii_lowercase();
+    let relevant = low.contains(" on sink-input ")
+        || low.contains(" on sink ")
+        || low.contains(" on source ")
+        || low.contains(" on card ")
+        || low.contains(" on server ");
+    if !relevant {
+        return None;
+    }
+    if low.contains("'new'") || low.contains("'remove'") || low.contains(" on server ") {
+        Some(PactlEventKind::Structural)
+    } else if low.contains("'change'") {
+        Some(PactlEventKind::Change)
+    } else {
+        None
+    }
+}
+
+struct SettingsPactlWatcher {
+    stop: Arc<AtomicBool>,
+    child_pid: Arc<Mutex<Option<u32>>>,
+}
+
+impl SettingsPactlWatcher {
+    fn start(on_event: async_channel::Sender<PactlEventKind>) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let child_pid: Arc<Mutex<Option<u32>>> = Arc::new(Mutex::new(None));
+        let stop_bg = stop.clone();
+        let pid_bg = child_pid.clone();
+
+        std::thread::spawn(move || {
+            let Ok(mut child) = Command::new("pactl")
+                .arg("subscribe")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+            else {
+                return;
+            };
+            let pid = child.id();
+            if let Ok(mut guard) = pid_bg.lock() {
+                *guard = Some(pid);
+            }
+            if stop_bg.load(Ordering::Relaxed) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
+            if let Some(stdout) = child.stdout.take() {
+                let reader = BufReader::new(stdout);
+                for line in reader.lines() {
+                    if stop_bg.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let Ok(text) = line else { break };
+                    if let Some(kind) = classify_pactl_event(&text) {
+                        if on_event.send_blocking(kind).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            if let Ok(mut guard) = pid_bg.lock() {
+                *guard = None;
+            }
+        });
+
+        Self { stop, child_pid }
+    }
+
+    fn stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Ok(mut guard) = self.child_pid.lock() {
+            if let Some(pid) = guard.take() {
+                let _ = Command::new("kill")
+                    .args(["-TERM", &pid.to_string()])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+            }
+        }
+    }
+}
+
+impl Drop for SettingsPactlWatcher {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 #[derive(Debug, Clone, Default)]
 struct SoundSystemSnapshot {
     outputs: Vec<AudioDeviceInfo>,
     inputs: Vec<AudioDeviceInfo>,
+    cards: Vec<AudioCardInfo>,
+    app_streams: Vec<AppAudioStreamInfo>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,6 +286,38 @@ fn parse_percent_str(raw: &str) -> Option<f64> {
     raw.trim().trim_end_matches('%').trim().parse::<f64>().ok()
 }
 
+fn is_null_placeholder(raw: &str) -> bool {
+    let low = raw.trim().to_ascii_lowercase();
+    low.is_empty()
+        || matches!(
+            low.as_str(),
+            "null" | "(null)" | "<null>" | "none" | "(none)" | "n/a"
+        )
+}
+
+fn is_null_audio_name(raw: &str) -> bool {
+    if is_null_placeholder(raw) {
+        return true;
+    }
+    let low = raw.trim().to_ascii_lowercase();
+    if low.contains("auto_null")
+        || low.contains("null-sink")
+        || low.contains("null_sink")
+        || low.contains("null-output")
+        || low.contains("null_output")
+        || low.contains("null output")
+        || low.contains("null sink")
+        || low.contains("null audio")
+        || low.contains("salida nula")
+        || low.contains("dummy")
+        || low.contains("salida ficticia")
+    {
+        return true;
+    }
+    low.split(|c: char| matches!(c, ' ' | '-' | '_' | '.' | '/' | ':' | '(' | ')'))
+        .any(|tok| tok == "null")
+}
+
 fn is_connected_real_device(
     item: &serde_json::Value,
     name: &str,
@@ -145,6 +326,10 @@ fn is_connected_real_device(
 ) -> bool {
     let name_low = name.to_ascii_lowercase();
     let desc_low = description.to_ascii_lowercase();
+    let driver = item
+        .get("driver")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
     let props = item.get("properties");
     let str_prop = |k: &str| {
         props
@@ -154,10 +339,9 @@ fn is_connected_real_device(
             .to_ascii_lowercase()
     };
 
-    if name_low.contains("auto_null")
-        || name_low.contains("null-sink")
-        || name_low.contains("null_sink")
-        || name_low.contains("dummy")
+    if is_null_audio_name(name)
+        || is_null_audio_name(description)
+        || (!driver.trim().is_empty() && is_null_audio_name(driver))
         || name_low.starts_with("easyeffects_")
         || name_low.starts_with("effect_input.")
         || name_low.starts_with("effect_output.")
@@ -166,6 +350,13 @@ fn is_connected_real_device(
         || name_low.contains(".raop.")
         || desc_low.contains("dummy output")
         || desc_low.contains("salida ficticia")
+    {
+        return false;
+    }
+    let node_name = str_prop("node.name");
+    let node_desc = str_prop("node.description");
+    if (!node_name.is_empty() && is_null_audio_name(&node_name))
+        || (!node_desc.is_empty() && is_null_audio_name(&node_desc))
     {
         return false;
     }
@@ -303,7 +494,11 @@ fn parse_pactl_devices_json(
             _ => (any_pct.unwrap_or(75.0).clamp(0.0, 100.0), 0.0),
         };
 
+        let dev_index = item.get("index").and_then(|v| v.as_u64()).map(|n| n as u32);
+        let card_index = item.get("card").and_then(|v| v.as_u64()).map(|n| n as u32);
+
         devices.push(AudioDeviceInfo {
+            index: dev_index,
             is_default: !default_name.is_empty() && name == default_name,
             device_type: infer_audio_device_type(&name, &description, bus, active_port, form_factor),
             name,
@@ -311,6 +506,7 @@ fn parse_pactl_devices_json(
             volume_pct,
             muted,
             balance,
+            card_index,
         });
     }
 
@@ -353,6 +549,7 @@ fn query_wpctl_fallback(target: &str, fallback_desc: &str) -> Option<AudioDevice
         }
     }
     Some(AudioDeviceInfo {
+        index: None,
         name: target.to_string(),
         device_type: infer_audio_device_type(target, &description, "", "", ""),
         description,
@@ -360,7 +557,266 @@ fn query_wpctl_fallback(target: &str, fallback_desc: &str) -> Option<AudioDevice
         volume_pct: vol,
         muted,
         balance: 0.0,
+        card_index: None,
     })
+}
+
+/// Parsea `pactl --format=json list cards` extrayendo los perfiles disponibles por tarjeta.
+pub fn parse_pactl_cards_json(raw_json: &str) -> Vec<AudioCardInfo> {
+    let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(raw_json)
+    else {
+        return Vec::new();
+    };
+    let mut cards = Vec::new();
+    for item in items {
+        let Some(index) = item.get("index").and_then(|v| v.as_u64()).map(|n| n as u32) else {
+            continue;
+        };
+        let name = item
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let description = item
+            .get("properties")
+            .and_then(|p| p.get("device.description"))
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(&name)
+            .to_string();
+        let active_profile = item
+            .get("active_profile")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+
+        let mut profiles = Vec::new();
+        if let Some(prof_map) = item.get("profiles").and_then(|v| v.as_object()) {
+            for (prof_name, prof_val) in prof_map {
+                let available = prof_val
+                    .get("available")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                if !available && prof_name != &active_profile {
+                    continue;
+                }
+                let prof_desc = prof_val
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or(prof_name)
+                    .to_string();
+                let priority = prof_val
+                    .get("priority")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                profiles.push((
+                    priority,
+                    AudioCardProfile {
+                        name: prof_name.clone(),
+                        description: prof_desc,
+                    },
+                ));
+            }
+        }
+        profiles.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.description.cmp(&b.1.description)));
+        let profiles: Vec<AudioCardProfile> = profiles.into_iter().map(|(_, p)| p).collect();
+        if profiles.is_empty() {
+            continue;
+        }
+
+        cards.push(AudioCardInfo {
+            index,
+            name,
+            description,
+            active_profile,
+            profiles,
+        });
+    }
+    cards
+}
+
+fn infer_app_stream_icon(raw_icon: &str, app_name: &str) -> String {
+    let trimmed = raw_icon.trim();
+    if !trimmed.is_empty() {
+        return trimmed.to_string();
+    }
+    let low = app_name.to_ascii_lowercase();
+    if low.contains("firefox")
+        || low.contains("chrome")
+        || low.contains("chromium")
+        || low.contains("brave")
+        || low.contains("zen")
+    {
+        "web-browser-symbolic".to_string()
+    } else if low.contains("spotify")
+        || low.contains("vlc")
+        || low.contains("mpv")
+        || low.contains("rhythmbox")
+    {
+        "audio-x-generic-symbolic".to_string()
+    } else if low.contains("discord")
+        || low.contains("telegram")
+        || low.contains("slack")
+        || low.contains("zoom")
+    {
+        "chat-symbolic".to_string()
+    } else if low.contains("steam") || low.contains("wine") || low.contains("proton") {
+        "input-gaming-symbolic".to_string()
+    } else {
+        "multimedia-volume-control-symbolic".to_string()
+    }
+}
+
+/// Parsea `pactl --format=json list sink-inputs` para el mezclador por aplicación.
+pub fn parse_pactl_sink_inputs_json(raw_json: &str) -> Vec<AppAudioStreamInfo> {
+    let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(raw_json)
+    else {
+        return Vec::new();
+    };
+    let mut streams = Vec::new();
+    for item in items {
+        let Some(index) = item.get("index").and_then(|v| v.as_u64()).map(|n| n as u32) else {
+            continue;
+        };
+        let props = item.get("properties");
+        let str_prop = |k: &str| {
+            props
+                .and_then(|p| p.get(k))
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !is_null_placeholder(s))
+        };
+        if str_prop("node.virtual").as_deref() == Some("true") {
+            continue;
+        }
+        let driver = item
+            .get("driver")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if !driver.trim().is_empty() && is_null_audio_name(driver) {
+            continue;
+        }
+        let role = str_prop("media.role")
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if role == "event" || role == "test" {
+            continue;
+        }
+        let binary = str_prop("application.process.binary")
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if matches!(binary.as_str(), "pw-play" | "paplay" | "pw-cat") {
+            continue;
+        }
+        if let Some(node_name) = str_prop("node.name") {
+            let nl = node_name.to_ascii_lowercase();
+            if is_null_audio_name(&nl)
+                || nl.starts_with("loopback")
+                || nl.starts_with("easyeffects_")
+            {
+                continue;
+            }
+        }
+
+        let Some(app_name) = str_prop("application.name")
+            .or_else(|| str_prop("node.name"))
+            .or_else(|| str_prop("media.name"))
+        else {
+            continue;
+        };
+        if is_null_audio_name(&app_name) {
+            continue;
+        }
+        let media_name = str_prop("media.name")
+            .filter(|m| !m.eq_ignore_ascii_case(&app_name) && !is_null_audio_name(m));
+        let raw_icon = str_prop("application.icon_name")
+            .or_else(|| str_prop("media.icon_name"))
+            .unwrap_or_default();
+        let icon_name = infer_app_stream_icon(&raw_icon, &app_name);
+        let muted = item.get("mute").and_then(|v| v.as_bool()).unwrap_or(false);
+        let sink_index = item.get("sink").and_then(|v| v.as_u64()).map(|n| n as u32);
+
+        let mut channels: Vec<(String, f64)> = Vec::new();
+        if let Some(vol_map) = item.get("volume").and_then(|v| v.as_object()) {
+            let ordered_keys: Vec<String> = item
+                .get("channel_map")
+                .and_then(|v| v.as_str())
+                .map(|cm| {
+                    cm.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>()
+                })
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| vol_map.keys().cloned().collect());
+
+            for key in ordered_keys {
+                if let Some(pct) = vol_map
+                    .get(&key)
+                    .and_then(|ch| ch.get("value_percent"))
+                    .and_then(|v| v.as_str())
+                    .and_then(parse_percent_str)
+                {
+                    channels.push((key, pct.clamp(0.0, 150.0)));
+                }
+            }
+            if channels.is_empty() {
+                for (key, ch) in vol_map {
+                    if let Some(pct) = ch
+                        .get("value_percent")
+                        .and_then(|v| v.as_str())
+                        .and_then(parse_percent_str)
+                    {
+                        channels.push((key.clone(), pct.clamp(0.0, 150.0)));
+                    }
+                }
+            }
+        }
+        let volume_pct = if channels.is_empty() {
+            100.0
+        } else {
+            (channels.iter().map(|(_, v)| *v).sum::<f64>() / channels.len() as f64)
+                .clamp(0.0, 150.0)
+        };
+
+        streams.push(AppAudioStreamInfo {
+            index,
+            sink_index,
+            app_name,
+            media_name,
+            icon_name,
+            volume_pct,
+            muted,
+            channels,
+        });
+    }
+    streams.sort_by(|a, b| {
+        a.app_name
+            .to_ascii_lowercase()
+            .cmp(&b.app_name.to_ascii_lowercase())
+            .then_with(|| a.index.cmp(&b.index))
+    });
+    streams
+}
+
+/// Calcula el nivel normalizado `[0.0 ..= 1.0]` desde muestras PCM `s16le` para el medidor de micrófono.
+pub fn rms_level_from_pcm_s16le(bytes: &[u8]) -> f64 {
+    let sample_count = bytes.len() / 2;
+    if sample_count == 0 {
+        return 0.0;
+    }
+    let mut sum_sq = 0.0_f64;
+    for chunk in bytes.chunks_exact(2) {
+        let s = i16::from_le_bytes([chunk[0], chunk[1]]) as f64 / 32768.0;
+        sum_sq += s * s;
+    }
+    let rms = (sum_sq / sample_count as f64).sqrt();
+    // Escala perceptual suave (ganancia visual de habla normal ~0.04..0.25 -> 0.25..1.0)
+    (rms * 4.2).powf(0.72).clamp(0.0, 1.0)
 }
 
 fn query_sound_system_snapshot() -> SoundSystemSnapshot {
@@ -414,7 +870,77 @@ fn query_sound_system_snapshot() -> SoundSystemSnapshot {
         }
     }
 
-    SoundSystemSnapshot { outputs, inputs }
+    let cards = Command::new("pactl")
+        .args(["--format=json", "list", "cards"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            let raw = String::from_utf8_lossy(&o.stdout);
+            parse_pactl_cards_json(&raw)
+        })
+        .unwrap_or_default();
+
+    let app_streams = Command::new("pactl")
+        .args(["--format=json", "list", "sink-inputs"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            let raw = String::from_utf8_lossy(&o.stdout);
+            parse_pactl_sink_inputs_json(&raw)
+        })
+        .unwrap_or_default();
+
+    SoundSystemSnapshot {
+        outputs,
+        inputs,
+        cards,
+        app_streams,
+    }
+}
+
+fn apply_app_stream_volume(index: u32, pct: f64) {
+    let clamped = pct.round().clamp(0.0, 150.0) as u32;
+    std::thread::spawn(move || {
+        let _ = Command::new("pactl")
+            .args([
+                "set-sink-input-volume",
+                &index.to_string(),
+                &format!("{clamped}%"),
+            ])
+            .status();
+    });
+}
+
+fn apply_app_stream_channel_volumes(index: u32, channel_pcts: Vec<f64>) {
+    if channel_pcts.is_empty() {
+        return;
+    }
+    let args_pct: Vec<String> = channel_pcts
+        .into_iter()
+        .map(|v| format!("{}%", v.round().clamp(0.0, 150.0) as u32))
+        .collect();
+    std::thread::spawn(move || {
+        let mut cmd = Command::new("pactl");
+        cmd.arg("set-sink-input-volume").arg(index.to_string());
+        for pct in &args_pct {
+            cmd.arg(pct);
+        }
+        let _ = cmd.status();
+    });
+}
+
+fn apply_app_stream_mute(index: u32, muted: bool) {
+    std::thread::spawn(move || {
+        let _ = Command::new("pactl")
+            .args([
+                "set-sink-input-mute",
+                &index.to_string(),
+                if muted { "1" } else { "0" },
+            ])
+            .status();
+    });
 }
 
 fn apply_sink_volume_and_balance(sink_name: String, master_pct: f64, balance: f64) {
@@ -728,8 +1254,8 @@ pub fn create_sound_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     effects_card.append(&alert_vol_row);
     effects_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 
-    // 1.4 Reproducir sonido durante el arranque (Por implementar)
-    effects_card.append(&make_sound_pending_switch_row(
+    // 1.4 Reproducir sonido durante el arranque (conectado a scripts/malus-session)
+    effects_card.append(&make_sound_switch_row(
         "Reproducir sonido durante el arranque",
         cfg.borrow().play_startup_sound,
         {
@@ -756,8 +1282,8 @@ pub fn create_sound_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     ));
     effects_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 
-    // 1.6 Emitir sonido al cambiar el volumen (Por implementar)
-    effects_card.append(&make_sound_pending_switch_row(
+    // 1.6 Emitir sonido al cambiar el volumen (conectado a compositor y top-bar)
+    effects_card.append(&make_sound_switch_row(
         "Emitir sonido al cambiar el volumen",
         cfg.borrow().volume_change_feedback,
         {
@@ -959,6 +1485,46 @@ pub fn create_sound_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     balance_row.append(&balance_right);
     output_controls_card.append(&balance_row);
 
+    // Fila Perfil de audio (PipeWire card profile)
+    let profile_sep = GtkBox::builder()
+        .css_classes(["wifi-hairline-sep"])
+        .visible(false)
+        .build();
+    let profile_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["wifi-pref-row"])
+        .visible(false)
+        .build();
+    profile_row.append(
+        &Label::builder()
+            .label("Perfil de audio")
+            .css_classes(["wifi-row-title"])
+            .xalign(0.0)
+            .hexpand(true)
+            .build(),
+    );
+    let profile_val_lbl = Label::builder()
+        .label("Estéreo analógico")
+        .css_classes(["wifi-inline-dropdown-val"])
+        .ellipsize(gtk4::pango::EllipsizeMode::End)
+        .max_width_chars(30)
+        .build();
+    let profile_pop_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .build();
+    let profile_popover = Popover::builder()
+        .has_arrow(false)
+        .autohide(true)
+        .css_classes(["wifi-menu-popover"])
+        .child(&profile_pop_box)
+        .build();
+    let profile_menu_btn = build_inline_menu_button(&profile_val_lbl, &profile_popover);
+    profile_row.append(&profile_menu_btn);
+    output_controls_card.append(&profile_sep);
+    output_controls_card.append(&profile_row);
+
     let output_controls_wrap =
         wrap_squircle_card(&output_controls_card, WIFI_CARD_SQUIRCLE_RADIUS);
     pane.append(&output_controls_wrap);
@@ -1023,42 +1589,73 @@ pub fn create_sound_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     input_controls_card.append(&in_vol_row);
     input_controls_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 
-    // Fila Nivel de entrada (Por implementar)
+    // Fila Nivel de entrada (medidor VU en tiempo real vía parec)
     let level_row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(10)
         .css_classes(["wifi-pref-row"])
         .build();
-    let level_title_box = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(8)
-        .hexpand(true)
-        .valign(Align::Center)
-        .build();
-    level_title_box.append(
+    level_row.append(
         &Label::builder()
             .label("Nivel de entrada")
             .css_classes(["wifi-row-title"])
             .xalign(0.0)
+            .hexpand(true)
             .build(),
     );
-    level_title_box.append(&make_pending_badge());
-    level_row.append(&level_title_box);
 
     let level_meter = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(5)
         .valign(Align::Center)
         .build();
+    let mut level_segments: Vec<GtkBox> = Vec::with_capacity(15);
     for _ in 0..15 {
-        level_meter.append(&GtkBox::builder().css_classes(["sound-level-seg"]).build());
+        let seg = GtkBox::builder().css_classes(["sound-level-seg"]).build();
+        level_meter.append(&seg);
+        level_segments.push(seg);
     }
+    let level_segments = Rc::new(level_segments);
     level_row.append(&level_meter);
     input_controls_card.append(&level_row);
 
     let input_controls_wrap = wrap_squircle_card(&input_controls_card, WIFI_CARD_SQUIRCLE_RADIUS);
     input_controls_wrap.set_visible(false);
     pane.append(&input_controls_wrap);
+
+    // =========================================================================
+    // SECCIÓN 3: Mezclador por aplicación (PipeWire sink-inputs)
+    // =========================================================================
+    let mixer_header_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(8)
+        .margin_top(6)
+        .margin_start(2)
+        .build();
+    mixer_header_row.append(
+        &Label::builder()
+            .label("Mezclador por aplicación")
+            .css_classes(["wifi-section-title"])
+            .xalign(0.0)
+            .hexpand(true)
+            .build(),
+    );
+    let mixer_refresh_btn = Button::builder()
+        .css_classes(["sound-mixer-refresh-btn"])
+        .has_frame(false)
+        .tooltip_text("Actualizar aplicaciones con audio activo")
+        .build();
+    mixer_refresh_btn.set_child(Some(
+        &Image::builder()
+            .icon_name("view-refresh-symbolic")
+            .pixel_size(14)
+            .build(),
+    ));
+    mixer_header_row.append(&mixer_refresh_btn);
+    pane.append(&mixer_header_row);
+
+    let mixer_card = GtkBox::builder().orientation(Orientation::Vertical).build();
+    pane.append(&wrap_squircle_card(&mixer_card, WIFI_CARD_SQUIRCLE_RADIUS));
 
     // Botón de ayuda `?` inferior derecho
     let help_row = GtkBox::builder()
@@ -1206,8 +1803,126 @@ pub fn create_sound_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         });
     }
 
-    // Reconstrucción reactiva de tabla de dispositivos + controles + menú de efectos
+    // Control del medidor VU en vivo del micrófono (solo activo en la pestaña Entrada y mientras el panel está visible)
+    let mic_meter_stop: Rc<RefCell<Option<Arc<AtomicBool>>>> = Rc::new(RefCell::new(None));
+    let stop_mic_meter: Rc<dyn Fn()> = {
+        let stop_slot = mic_meter_stop.clone();
+        let segs = level_segments.clone();
+        Rc::new(move || {
+            if let Some(flag) = stop_slot.borrow_mut().take() {
+                flag.store(true, Ordering::Relaxed);
+            }
+            for seg in segs.iter() {
+                seg.remove_css_class("sound-level-seg-active");
+                seg.remove_css_class("sound-level-seg-peak");
+            }
+        })
+    };
+    let start_mic_meter: Rc<dyn Fn()> = {
+        let stop_slot = mic_meter_stop.clone();
+        let stop_prev = stop_mic_meter.clone();
+        let segs = level_segments.clone();
+        let snap_c = snapshot.clone();
+        Rc::new(move || {
+            stop_prev();
+            let stop_flag = Arc::new(AtomicBool::new(false));
+            let level_atomic = Arc::new(AtomicU32::new(0));
+            *stop_slot.borrow_mut() = Some(stop_flag.clone());
+
+            let source_name = snap_c
+                .borrow()
+                .inputs
+                .iter()
+                .find(|d| d.is_default)
+                .map(|d| d.name.clone())
+                .filter(|n| !n.is_empty() && !n.starts_with('@'));
+
+            let stop_bg = stop_flag.clone();
+            let lvl_bg = level_atomic.clone();
+            std::thread::spawn(move || {
+                let mut cmd = Command::new("parec");
+                cmd.args([
+                    "--format=s16le",
+                    "--channels=1",
+                    "--rate=8000",
+                    "--latency-msec=50",
+                ]);
+                if let Some(ref src) = source_name {
+                    cmd.args(["-d", src]);
+                }
+                cmd.stdout(Stdio::piped()).stderr(Stdio::null());
+                let Ok(mut child) = cmd.spawn() else {
+                    return;
+                };
+                let Some(mut stdout) = child.stdout.take() else {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return;
+                };
+                let mut buf = [0u8; 800]; // 50ms a 8kHz mono s16le
+                let mut smoothed = 0.0_f64;
+                while !stop_bg.load(Ordering::Relaxed) {
+                    match stdout.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            let raw = rms_level_from_pcm_s16le(&buf[..n]);
+                            smoothed = if raw > smoothed {
+                                smoothed * 0.35 + raw * 0.65
+                            } else {
+                                smoothed * 0.72 + raw * 0.28
+                            };
+                            lvl_bg.store(
+                                (smoothed * 1000.0).round().clamp(0.0, 1000.0) as u32,
+                                Ordering::Relaxed,
+                            );
+                        }
+                    }
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+            });
+
+            let stop_ui = stop_flag;
+            let lvl_ui = level_atomic;
+            let segs_ui = segs.clone();
+            glib::timeout_add_local(std::time::Duration::from_millis(60), move || {
+                if stop_ui.load(Ordering::Relaxed) {
+                    return glib::ControlFlow::Break;
+                }
+                let level = lvl_ui.load(Ordering::Relaxed) as f64 / 1000.0;
+                let lit = (level * segs_ui.len() as f64).round() as usize;
+                for (i, seg) in segs_ui.iter().enumerate() {
+                    if i < lit {
+                        if i >= 12 {
+                            seg.remove_css_class("sound-level-seg-active");
+                            seg.add_css_class("sound-level-seg-peak");
+                        } else {
+                            seg.remove_css_class("sound-level-seg-peak");
+                            seg.add_css_class("sound-level-seg-active");
+                        }
+                    } else {
+                        seg.remove_css_class("sound-level-seg-active");
+                        seg.remove_css_class("sound-level-seg-peak");
+                    }
+                }
+                glib::ControlFlow::Continue
+            });
+        })
+    };
+
+    // Detener medidor del micrófono si el usuario abandona el panel o cierra Ajustes
+    {
+        let stop_c = stop_mic_meter.clone();
+        scrolled.connect_unmap(move |_| {
+            stop_c();
+        });
+    }
+
+    // Reconstrucción reactiva de tabla de dispositivos + controles + perfiles + mezclador
     let refresh_trigger: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
+    let last_local_mixer_write = Rc::new(RefCell::new(
+        std::time::Instant::now() - std::time::Duration::from_secs(5),
+    ));
 
     let render_ui: Rc<dyn Fn()> = {
         let snap_c = snapshot.clone();
@@ -1225,7 +1940,14 @@ pub fn create_sound_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         let eff_lbl_c = effects_dev_lbl.clone();
         let eff_pop_box_c = effects_dev_pop_box.clone();
         let eff_pop_c = effects_dev_popover.clone();
+        let prof_sep_c = profile_sep.clone();
+        let prof_row_c = profile_row.clone();
+        let prof_lbl_c = profile_val_lbl.clone();
+        let prof_pop_box_c = profile_pop_box.clone();
+        let prof_pop_c = profile_popover.clone();
+        let mixer_card_c = mixer_card.clone();
         let refresh_ref = refresh_trigger.clone();
+        let last_write_c = last_local_mixer_write.clone();
 
         Rc::new(move || {
             let tab = tab_c.get();
@@ -1356,18 +2078,464 @@ pub fn create_sound_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
                 }
             }
 
-            // 3. Sincronizar sliders y casillas con el dispositivo activo sin disparar señales
+            // 3. Sincronizar sliders, casillas y perfil de tarjeta de audio PipeWire
             sync_c.set(true);
-            if let Some(active_out) = snap.outputs.iter().find(|d| d.is_default) {
-                out_vol_c.set_value(active_out.volume_pct);
-                out_mute_c.set_active(active_out.muted);
-                bal_c.set_value(active_out.balance);
+            let active_out = snap.outputs.iter().find(|d| d.is_default);
+            if let Some(out_dev) = active_out {
+                out_vol_c.set_value(out_dev.volume_pct);
+                out_mute_c.set_active(out_dev.muted);
+                bal_c.set_value(out_dev.balance);
             }
             if let Some(active_in) = snap.inputs.iter().find(|d| d.is_default) {
                 in_vol_c.set_value(active_in.volume_pct);
                 in_mute_c.set_active(active_in.muted);
             }
             sync_c.set(false);
+
+            // Actualizar selector de Perfil de audio (PipeWire card profile)
+            while let Some(child) = prof_pop_box_c.first_child() {
+                prof_pop_box_c.remove(&child);
+            }
+            let target_card = active_out
+                .and_then(|d| d.card_index)
+                .and_then(|idx| snap.cards.iter().find(|c| c.index == idx))
+                .or_else(|| snap.cards.first());
+            if let Some(card) = target_card {
+                let active_desc = card
+                    .profiles
+                    .iter()
+                    .find(|p| p.name == card.active_profile)
+                    .map(|p| p.description.as_str())
+                    .unwrap_or(&card.active_profile);
+                prof_lbl_c.set_label(active_desc);
+                for prof in &card.profiles {
+                    let is_sel = prof.name == card.active_profile;
+                    let (item_wrap, item_btn) =
+                        make_popover_action_row(&prof.description, is_sel, None);
+                    let card_name = card.name.clone();
+                    let prof_name = prof.name.clone();
+                    let pop_i = prof_pop_c.clone();
+                    let rf_holder = refresh_ref.clone();
+                    item_btn.connect_clicked(move |_| {
+                        pop_i.popdown();
+                        let c_bg = card_name.clone();
+                        let p_bg = prof_name.clone();
+                        let (tx, rx) = async_channel::bounded::<()>(1);
+                        std::thread::spawn(move || {
+                            let _ = Command::new("pactl")
+                                .args(["set-card-profile", &c_bg, &p_bg])
+                                .status();
+                            let _ = tx.send_blocking(());
+                        });
+                        let rf_c = rf_holder.clone();
+                        glib::MainContext::default().spawn_local(async move {
+                            let _ = rx.recv().await;
+                            if let Some(rf) = rf_c.borrow().as_ref() {
+                                rf();
+                            }
+                        });
+                    });
+                    prof_pop_box_c.append(&item_wrap);
+                }
+                prof_sep_c.set_visible(true);
+                prof_row_c.set_visible(true);
+            } else {
+                prof_sep_c.set_visible(false);
+                prof_row_c.set_visible(false);
+            }
+
+            // 4. Reconstruir tarjeta de Mezclador por aplicación (PipeWire sink-inputs)
+            while let Some(child) = mixer_card_c.first_child() {
+                mixer_card_c.remove(&child);
+            }
+            if snap.app_streams.is_empty() {
+                let empty_row = GtkBox::builder()
+                    .orientation(Orientation::Horizontal)
+                    .css_classes(["wifi-pref-row"])
+                    .build();
+                empty_row.append(
+                    &Label::builder()
+                        .label("No hay aplicaciones reproduciendo audio en este momento.")
+                        .css_classes(["card-section-sub"])
+                        .xalign(0.0)
+                        .hexpand(true)
+                        .build(),
+                );
+                mixer_card_c.append(&empty_row);
+            } else {
+                for (idx_pos, stream) in snap.app_streams.iter().enumerate() {
+                    if idx_pos > 0 {
+                        mixer_card_c.append(
+                            &GtkBox::builder()
+                                .css_classes(["wifi-hairline-sep"])
+                                .build(),
+                        );
+                    }
+                    let app_container = GtkBox::builder()
+                        .orientation(Orientation::Vertical)
+                        .spacing(6)
+                        .css_classes(["wifi-pref-row"])
+                        .build();
+
+                    let row = GtkBox::builder()
+                        .orientation(Orientation::Horizontal)
+                        .spacing(10)
+                        .build();
+
+                    let icon = Image::builder()
+                        .icon_name(&stream.icon_name)
+                        .pixel_size(18)
+                        .css_classes(["sound-mixer-app-icon"])
+                        .valign(Align::Center)
+                        .build();
+                    row.append(&icon);
+
+                    let title_col = GtkBox::builder()
+                        .orientation(Orientation::Vertical)
+                        .spacing(1)
+                        .hexpand(true)
+                        .valign(Align::Center)
+                        .build();
+                    title_col.append(
+                        &Label::builder()
+                            .label(&stream.app_name)
+                            .css_classes(["wifi-row-title"])
+                            .xalign(0.0)
+                            .ellipsize(gtk4::pango::EllipsizeMode::End)
+                            .build(),
+                    );
+                    if let Some(ref media) = stream.media_name {
+                        title_col.append(
+                            &Label::builder()
+                                .label(media)
+                                .css_classes(["card-section-sub"])
+                                .xalign(0.0)
+                                .ellipsize(gtk4::pango::EllipsizeMode::End)
+                                .build(),
+                        );
+                    }
+                    row.append(&title_col);
+
+                    let muted_cell = Rc::new(Cell::new(stream.muted));
+                    let mute_btn = Button::builder()
+                        .css_classes(["sound-play-btn"])
+                        .has_frame(false)
+                        .valign(Align::Center)
+                        .tooltip_text("Silenciar / Reactivar aplicación")
+                        .build();
+                    let mute_ico = Image::builder()
+                        .icon_name(if stream.muted {
+                            "audio-volume-muted-symbolic"
+                        } else {
+                            "audio-volume-medium-symbolic"
+                        })
+                        .pixel_size(12)
+                        .build();
+                    mute_btn.set_child(Some(&mute_ico));
+
+                    let app_slider = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
+                    app_slider.set_draw_value(false);
+                    app_slider.set_width_request(156);
+                    app_slider.set_value(stream.volume_pct.clamp(0.0, 100.0));
+                    app_slider.set_css_classes(&["bat-limit-slider"]);
+
+                    let pct_lbl = Label::builder()
+                        .label(if stream.muted {
+                            "Silencio".to_string()
+                        } else {
+                            format!("{}%", stream.volume_pct.round() as i32)
+                        })
+                        .css_classes(["sound-mixer-pct-label"])
+                        .xalign(1.0)
+                        .valign(Align::Center)
+                        .build();
+
+                    row.append(&mute_btn);
+                    row.append(&app_slider);
+                    row.append(&pct_lbl);
+
+                    let has_multi_channels = stream.channels.len() >= 2;
+                    let channels_unbalanced = has_multi_channels
+                        && (stream
+                            .channels
+                            .iter()
+                            .map(|(_, v)| *v)
+                            .fold(f64::NEG_INFINITY, f64::max)
+                            - stream
+                                .channels
+                                .iter()
+                                .map(|(_, v)| *v)
+                                .fold(f64::INFINITY, f64::min))
+                            >= 2.0;
+
+                    let channels_box = GtkBox::builder()
+                        .orientation(Orientation::Vertical)
+                        .spacing(4)
+                        .margin_start(28)
+                        .visible(channels_unbalanced)
+                        .css_classes(["sound-mixer-channels-box"])
+                        .build();
+
+                    if has_multi_channels {
+                        let ch_btn = Button::builder()
+                            .css_classes(["sound-mixer-refresh-btn"])
+                            .has_frame(false)
+                            .valign(Align::Center)
+                            .tooltip_text("Separar canales (Izquierdo / Derecho)")
+                            .build();
+                        let ch_ico = Image::builder()
+                            .icon_name(if channels_unbalanced {
+                                "pan-up-symbolic"
+                            } else {
+                                "pan-down-symbolic"
+                            })
+                            .pixel_size(13)
+                            .build();
+                        ch_btn.set_child(Some(&ch_ico));
+                        let cb = channels_box.clone();
+                        let ico = ch_ico.clone();
+                        ch_btn.connect_clicked(move |_| {
+                            let next = !cb.is_visible();
+                            cb.set_visible(next);
+                            ico.set_icon_name(Some(if next {
+                                "pan-up-symbolic"
+                            } else {
+                                "pan-down-symbolic"
+                            }));
+                        });
+                        row.append(&ch_btn);
+                    }
+
+                    app_container.append(&row);
+
+                    let stream_id = stream.index;
+                    let syncing_ch = Rc::new(Cell::new(false));
+                    let ch_values: Rc<RefCell<Vec<f64>>> = Rc::new(RefCell::new(
+                        stream
+                            .channels
+                            .iter()
+                            .map(|(_, v)| v.clamp(0.0, 100.0))
+                            .collect(),
+                    ));
+                    let ch_widgets: Rc<RefCell<Vec<(Scale, Label)>>> =
+                        Rc::new(RefCell::new(Vec::new()));
+
+                    if has_multi_channels {
+                        for (ch_idx, (ch_name, ch_val)) in stream.channels.iter().enumerate() {
+                            let ch_row = GtkBox::builder()
+                                .orientation(Orientation::Horizontal)
+                                .spacing(8)
+                                .valign(Align::Center)
+                                .build();
+                            ch_row.append(
+                                &Label::builder()
+                                    .label(&format_channel_label(ch_name))
+                                    .css_classes(["card-section-sub"])
+                                    .xalign(0.0)
+                                    .hexpand(true)
+                                    .build(),
+                            );
+                            let ch_slider =
+                                Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
+                            ch_slider.set_draw_value(false);
+                            ch_slider.set_width_request(156);
+                            ch_slider.set_value(ch_val.clamp(0.0, 100.0));
+                            ch_slider.set_css_classes(&["bat-limit-slider"]);
+                            let ch_pct = Label::builder()
+                                .label(format!("{}%", ch_val.round() as i32))
+                                .css_classes(["sound-mixer-pct-label"])
+                                .xalign(1.0)
+                                .build();
+                            ch_row.append(&ch_slider);
+                            ch_row.append(&ch_pct);
+                            channels_box.append(&ch_row);
+                            ch_widgets
+                                .borrow_mut()
+                                .push((ch_slider.clone(), ch_pct.clone()));
+
+                            let vals_c = ch_values.clone();
+                            let sync_c = syncing_ch.clone();
+                            let master_sl = app_slider.clone();
+                            let master_pct = pct_lbl.clone();
+                            let master_ico = mute_ico.clone();
+                            let mc = muted_cell.clone();
+                            let lw = last_write_c.clone();
+                            let ch_pct_c = ch_pct.clone();
+                            ch_slider.connect_value_changed(move |s| {
+                                if sync_c.get() {
+                                    return;
+                                }
+                                let val = s.value().clamp(0.0, 100.0);
+                                *lw.borrow_mut() = std::time::Instant::now();
+                                ch_pct_c.set_label(&format!("{}%", val.round() as i32));
+                                let updated = {
+                                    let mut guard = vals_c.borrow_mut();
+                                    if let Some(slot) = guard.get_mut(ch_idx) {
+                                        *slot = val;
+                                    }
+                                    guard.clone()
+                                };
+                                if mc.get() && val > 0.5 {
+                                    mc.set(false);
+                                    apply_app_stream_mute(stream_id, false);
+                                }
+                                let avg = if updated.is_empty() {
+                                    val
+                                } else {
+                                    updated.iter().sum::<f64>() / updated.len() as f64
+                                };
+                                sync_c.set(true);
+                                master_sl.set_value(avg.clamp(0.0, 100.0));
+                                sync_c.set(false);
+                                master_pct.set_label(&format!("{}%", avg.round() as i32));
+                                master_ico.set_icon_name(Some(if avg < 1.0 {
+                                    "audio-volume-muted-symbolic"
+                                } else {
+                                    "audio-volume-medium-symbolic"
+                                }));
+                                apply_app_stream_channel_volumes(stream_id, updated);
+                            });
+                        }
+                        app_container.append(&channels_box);
+                    }
+
+                    // Selector de dispositivo de salida independiente por aplicación (cuando hay 2+ salidas)
+                    if snap.outputs.len() >= 2 {
+                        let route_row = GtkBox::builder()
+                            .orientation(Orientation::Horizontal)
+                            .spacing(8)
+                            .margin_start(28)
+                            .valign(Align::Center)
+                            .build();
+                        route_row.append(
+                            &Label::builder()
+                                .label("Salida")
+                                .css_classes(["card-section-sub"])
+                                .xalign(0.0)
+                                .hexpand(true)
+                                .build(),
+                        );
+                        let current_out_label = stream
+                            .sink_index
+                            .and_then(|s_idx| snap.outputs.iter().find(|d| d.index == Some(s_idx)))
+                            .or_else(|| snap.outputs.iter().find(|d| d.is_default))
+                            .map(|d| d.description.as_str())
+                            .unwrap_or("Predeterminada");
+                        let route_val_lbl = Label::builder()
+                            .label(current_out_label)
+                            .css_classes(["wifi-inline-dropdown-val"])
+                            .ellipsize(gtk4::pango::EllipsizeMode::End)
+                            .max_width_chars(28)
+                            .build();
+                        let route_pop_box = GtkBox::builder()
+                            .orientation(Orientation::Vertical)
+                            .spacing(2)
+                            .build();
+                        let route_popover = Popover::builder()
+                            .has_arrow(false)
+                            .autohide(true)
+                            .css_classes(["wifi-menu-popover"])
+                            .child(&route_pop_box)
+                            .build();
+                        for dev in &snap.outputs {
+                            let is_sel = stream
+                                .sink_index
+                                .is_some_and(|s_idx| dev.index == Some(s_idx));
+                            let (item_wrap, item_btn) =
+                                make_popover_action_row(&dev.description, is_sel, None);
+                            let sink_target = dev.name.clone();
+                            let pop_i = route_popover.clone();
+                            let rf_h = refresh_ref.clone();
+                            let lw = last_write_c.clone();
+                            item_btn.connect_clicked(move |_| {
+                                pop_i.popdown();
+                                *lw.borrow_mut() = std::time::Instant::now();
+                                let s_bg = sink_target.clone();
+                                let (tx, rx) = async_channel::bounded::<()>(1);
+                                std::thread::spawn(move || {
+                                    let _ = Command::new("pactl")
+                                        .args(["move-sink-input", &stream_id.to_string(), &s_bg])
+                                        .status();
+                                    let _ = tx.send_blocking(());
+                                });
+                                let rf_c = rf_h.clone();
+                                glib::MainContext::default().spawn_local(async move {
+                                    let _ = rx.recv().await;
+                                    if let Some(rf) = rf_c.borrow().as_ref() {
+                                        rf();
+                                    }
+                                });
+                            });
+                            route_pop_box.append(&item_wrap);
+                        }
+                        let route_btn = build_inline_menu_button(&route_val_lbl, &route_popover);
+                        route_row.append(&route_btn);
+                        app_container.append(&route_row);
+                    }
+
+                    {
+                        let pct_c = pct_lbl.clone();
+                        let ico_c = mute_ico.clone();
+                        let mc = muted_cell.clone();
+                        let sync_c = syncing_ch.clone();
+                        let vals_c = ch_values.clone();
+                        let ws_c = ch_widgets.clone();
+                        let lw = last_write_c.clone();
+                        app_slider.connect_value_changed(move |s| {
+                            if sync_c.get() {
+                                return;
+                            }
+                            let val = s.value().clamp(0.0, 100.0);
+                            *lw.borrow_mut() = std::time::Instant::now();
+                            if mc.get() && val > 0.5 {
+                                mc.set(false);
+                                apply_app_stream_mute(stream_id, false);
+                            }
+                            pct_c.set_label(&format!("{}%", val.round() as i32));
+                            ico_c.set_icon_name(Some(if val < 1.0 {
+                                "audio-volume-muted-symbolic"
+                            } else {
+                                "audio-volume-medium-symbolic"
+                            }));
+                            sync_c.set(true);
+                            for slot in vals_c.borrow_mut().iter_mut() {
+                                *slot = val;
+                            }
+                            for (ch_s, ch_p) in ws_c.borrow().iter() {
+                                ch_s.set_value(val);
+                                ch_p.set_label(&format!("{}%", val.round() as i32));
+                            }
+                            sync_c.set(false);
+                            apply_app_stream_volume(stream_id, val);
+                        });
+                    }
+                    {
+                        let pct_c = pct_lbl.clone();
+                        let ico_c = mute_ico.clone();
+                        let mc = muted_cell.clone();
+                        let sl_c = app_slider.clone();
+                        let lw = last_write_c.clone();
+                        mute_btn.connect_clicked(move |_| {
+                            *lw.borrow_mut() = std::time::Instant::now();
+                            let next = !mc.get();
+                            mc.set(next);
+                            apply_app_stream_mute(stream_id, next);
+                            ico_c.set_icon_name(Some(if next {
+                                "audio-volume-muted-symbolic"
+                            } else {
+                                "audio-volume-medium-symbolic"
+                            }));
+                            pct_c.set_label(&if next {
+                                "Silencio".to_string()
+                            } else {
+                                format!("{}%", sl_c.value().round() as i32)
+                            });
+                        });
+                    }
+
+                    mixer_card_c.append(&app_container);
+                }
+            }
         })
     };
 
@@ -1377,6 +2545,7 @@ pub fn create_sound_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         let btn_out = btn_output_tab.clone();
         let btn_in = btn_input_tab.clone();
         let render_c = render_ui.clone();
+        let stop_m = stop_mic_meter.clone();
         btn_output_tab.connect_clicked(move |_| {
             if tab_c.get() == IoTab::Output {
                 return;
@@ -1384,6 +2553,7 @@ pub fn create_sound_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
             tab_c.set(IoTab::Output);
             btn_out.add_css_class("bat-seg-tab-active");
             btn_in.remove_css_class("bat-seg-tab-active");
+            stop_m();
             render_c();
         });
     }
@@ -1392,6 +2562,7 @@ pub fn create_sound_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
         let btn_out = btn_output_tab.clone();
         let btn_in = btn_input_tab.clone();
         let render_c = render_ui.clone();
+        let start_m = start_mic_meter.clone();
         btn_input_tab.connect_clicked(move |_| {
             if tab_c.get() == IoTab::Input {
                 return;
@@ -1400,6 +2571,7 @@ pub fn create_sound_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
             btn_in.add_css_class("bat-seg-tab-active");
             btn_out.remove_css_class("bat-seg-tab-active");
             render_c();
+            start_m();
         });
     }
 
@@ -1407,6 +2579,9 @@ pub fn create_sound_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
     let refresher: Rc<dyn Fn()> = {
         let snap_c = snapshot.clone();
         let render_c = render_ui.clone();
+        let tab_c = active_tab.clone();
+        let start_m = start_mic_meter.clone();
+        let sc_ref = scrolled.clone();
         Rc::new(move || {
             let (tx, rx) = async_channel::bounded::<SoundSystemSnapshot>(1);
             std::thread::spawn(move || {
@@ -1415,15 +2590,81 @@ pub fn create_sound_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
             });
             let snap_ui = snap_c.clone();
             let render_ui = render_c.clone();
+            let tab_ui = tab_c.clone();
+            let start_ui = start_m.clone();
+            let sc_ui = sc_ref.clone();
             glib::MainContext::default().spawn_local(async move {
                 if let Ok(data) = rx.recv().await {
                     *snap_ui.borrow_mut() = data;
                     render_ui();
+                    if tab_ui.get() == IoTab::Input && sc_ui.is_mapped() {
+                        start_ui();
+                    }
                 }
             });
         })
     };
     *refresh_trigger.borrow_mut() = Some(refresher.clone());
+
+    {
+        let rf = refresher.clone();
+        mixer_refresh_btn.connect_clicked(move |_| {
+            rf();
+        });
+    }
+
+    // Suscripción reactiva en vivo (`pactl subscribe`) mientras el panel Sonido esté visible
+    let pactl_watcher: Rc<RefCell<Option<SettingsPactlWatcher>>> = Rc::new(RefCell::new(None));
+    {
+        let pw_c = pactl_watcher.clone();
+        let rf_c = refresher.clone();
+        let lw_c = last_local_mixer_write.clone();
+        let sc_weak = scrolled.downgrade();
+        scrolled.connect_map(move |_| {
+            if pw_c.borrow().is_some() {
+                return;
+            }
+            let (tx, rx) = async_channel::bounded::<PactlEventKind>(32);
+            let watcher = SettingsPactlWatcher::start(tx);
+            *pw_c.borrow_mut() = Some(watcher);
+            let rf_loop = rf_c.clone();
+            let lw_loop = lw_c.clone();
+            let sc_w = sc_weak.clone();
+            let pending_debounce = Rc::new(Cell::new(false));
+            glib::MainContext::default().spawn_local(async move {
+                while let Ok(kind) = rx.recv().await {
+                    if !sc_w.upgrade().is_some_and(|w| w.is_mapped()) {
+                        continue;
+                    }
+                    if matches!(kind, PactlEventKind::Change)
+                        && std::time::Instant::now().duration_since(*lw_loop.borrow())
+                            < std::time::Duration::from_millis(500)
+                    {
+                        continue;
+                    }
+                    if pending_debounce.get() {
+                        continue;
+                    }
+                    pending_debounce.set(true);
+                    let pd = pending_debounce.clone();
+                    let rf_fire = rf_loop.clone();
+                    glib::timeout_add_local_once(
+                        std::time::Duration::from_millis(200),
+                        move || {
+                            pd.set(false);
+                            rf_fire();
+                        },
+                    );
+                }
+            });
+        });
+    }
+    {
+        let pw_stop = pactl_watcher.clone();
+        scrolled.connect_unmap(move |_| {
+            *pw_stop.borrow_mut() = None;
+        });
+    }
 
     // Render inicial + sondeo asíncrono de dispositivos PipeWire
     render_ui();
@@ -1498,6 +2739,35 @@ fn build_alert_sound_popover(value_label: &Label, cfg: &Rc<RefCell<SoundConfig>>
     }
 
     build_inline_menu_button(value_label, &popover)
+}
+
+fn make_sound_switch_row(
+    title: &str,
+    initial: bool,
+    on_toggle: impl Fn(bool) + 'static,
+) -> GtkBox {
+    let row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(10)
+        .css_classes(["wifi-pref-row"])
+        .build();
+    row.append(
+        &Label::builder()
+            .label(title)
+            .css_classes(["wifi-row-title"])
+            .xalign(0.0)
+            .hexpand(true)
+            .build(),
+    );
+
+    let sw = Switch::new(initial);
+    sw.widget().set_valign(Align::Center);
+    sw.connect_state_set(move |_, active| {
+        on_toggle(active);
+        glib::Propagation::Proceed
+    });
+    row.append(sw.widget());
+    row
 }
 
 fn make_sound_pending_switch_row(
@@ -1608,5 +2878,97 @@ mod tests {
         let sources = parse_pactl_devices_json(sample, "", true);
         assert_eq!(sources.len(), 2);
         assert!(!sources.iter().any(|s| s.name.ends_with(".monitor")));
+    }
+
+    #[test]
+    fn parse_pactl_cards_extracts_available_profiles() {
+        let sample = r#"[
+            {
+                "index": 46,
+                "name": "alsa_card.pci-0000_00_1f.3",
+                "active_profile": "output:analog-stereo+input:analog-stereo",
+                "properties": { "device.description": "Audio integrado" },
+                "profiles": {
+                    "output:analog-stereo+input:analog-stereo": {
+                        "description": "Dúplex estéreo analógico",
+                        "priority": 6565,
+                        "available": true
+                    },
+                    "output:hdmi-stereo": {
+                        "description": "Salida HDMI",
+                        "priority": 5900,
+                        "available": false
+                    },
+                    "off": {
+                        "description": "Apagado",
+                        "priority": 0,
+                        "available": true
+                    }
+                }
+            }
+        ]"#;
+
+        let cards = parse_pactl_cards_json(sample);
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].index, 46);
+        assert_eq!(cards[0].profiles.len(), 2);
+        assert_eq!(
+            cards[0].profiles[0].name,
+            "output:analog-stereo+input:analog-stereo"
+        );
+        assert_eq!(cards[0].profiles[1].name, "off");
+    }
+
+    #[test]
+    fn parse_pactl_sink_inputs_and_pcm_rms_work() {
+        let sample = r#"[
+            {
+                "index": 99,
+                "sink": 52,
+                "mute": false,
+                "channel_map": "front-left,front-right",
+                "volume": {
+                    "front-left": { "value_percent": "60%" },
+                    "front-right": { "value_percent": "68%" }
+                },
+                "properties": {
+                    "application.name": "Discord",
+                    "media.name": "Voice"
+                }
+            },
+            {
+                "index": 100,
+                "mute": false,
+                "volume": { "mono": { "value_percent": "100%" } },
+                "properties": {
+                    "application.name": "(null)",
+                    "media.name": "null"
+                }
+            }
+        ]"#;
+        let streams = parse_pactl_sink_inputs_json(sample);
+        assert_eq!(streams.len(), 1);
+        assert_eq!(streams[0].app_name, "Discord");
+        assert_eq!(streams[0].sink_index, Some(52));
+        assert_eq!(streams[0].icon_name, "chat-symbolic");
+        assert!((streams[0].volume_pct - 64.0).abs() < 0.01);
+        assert_eq!(streams[0].channels.len(), 2);
+        assert_eq!(streams[0].channels[0].0, "front-left");
+        assert!((streams[0].channels[0].1 - 60.0).abs() < 0.01);
+        assert_eq!(streams[0].channels[1].0, "front-right");
+        assert!((streams[0].channels[1].1 - 68.0).abs() < 0.01);
+        assert_eq!(format_channel_label("front-left"), "Izquierdo");
+        assert_eq!(format_channel_label("front-right"), "Derecho");
+        assert_eq!(
+            classify_pactl_event("Event 'remove' on sink-input #99"),
+            Some(PactlEventKind::Structural)
+        );
+
+        assert_eq!(rms_level_from_pcm_s16le(&[0, 0, 0, 0]), 0.0);
+        let loud: Vec<u8> = [8000i16; 16]
+            .iter()
+            .flat_map(|s| s.to_le_bytes())
+            .collect();
+        assert!(rms_level_from_pcm_s16le(&loud) > 0.5);
     }
 }

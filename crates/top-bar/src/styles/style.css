@@ -1568,3 +1568,73 @@ popover.light-popover button.sound-menu-footer-btn:hover label,
 .light-mode button.sound-menu-footer-btn:hover label {
     color: #14161a;
 }
+
+.sound-mixer-row {
+    padding: 3px 2px;
+}
+
+.sound-mixer-app-name {
+    font-size: 12px;
+    font-weight: 500;
+    color: #f4f4f5;
+}
+
+popover.light-popover .sound-mixer-app-name,
+.light-mode .sound-mixer-app-name {
+    color: #14161a;
+}
+
+.sound-mixer-pct {
+    font-size: 11px;
+    font-weight: 500;
+    color: rgba(244, 244, 245, 0.56);
+}
+
+popover.light-popover .sound-mixer-pct,
+.light-mode .sound-mixer-pct {
+    color: rgba(20, 22, 26, 0.54);
+}
+
+.sound-mixer-ch-label {
+    font-size: 11px;
+    font-weight: 400;
+    color: rgba(244, 244, 245, 0.72);
+}
+
+popover.light-popover .sound-mixer-ch-label,
+.light-mode .sound-mixer-ch-label {
+    color: rgba(20, 22, 26, 0.72);
+}
+
+button.sound-mixer-route-btn {
+    background-color: rgba(255, 255, 255, 0.08);
+    border: none;
+    box-shadow: none;
+    border-radius: 7px;
+    padding: 2px 7px;
+    margin-top: 1px;
+    min-height: 20px;
+    color: rgba(244, 244, 245, 0.80);
+}
+
+button.sound-mixer-route-btn:hover {
+    background-color: rgba(255, 255, 255, 0.14);
+    color: rgba(244, 244, 245, 0.92);
+}
+
+popover.light-popover button.sound-mixer-route-btn,
+.light-mode button.sound-mixer-route-btn {
+    background-color: rgba(0, 0, 0, 0.06);
+    color: rgba(20, 22, 26, 0.78);
+}
+
+popover.light-popover button.sound-mixer-route-btn:hover,
+.light-mode button.sound-mixer-route-btn:hover {
+    background-color: rgba(0, 0, 0, 0.10);
+    color: #14161a;
+}
+
+.sound-mixer-route-label {
+    font-size: 11px;
+    font-weight: 500;
+}

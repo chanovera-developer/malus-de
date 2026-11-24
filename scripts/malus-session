@@ -705,6 +705,30 @@ launch_crash_reporter_pending() {
 # Si la sesión anterior dejó un reporte de fallo pendiente, abrir el diálogo ahora que el entorno está listo
 launch_crash_reporter_pending
 
+# Sonido de inicio de sesión si está habilitado en ~/.config/malus-de/sound.toml
+play_malus_startup_sound() {
+    local sound_cfg="$XDG_CONFIG_HOME/sound.toml"
+    local play_startup="true"
+    if [ -f "$sound_cfg" ] && grep -Eq '^[[:space:]]*play_startup_sound[[:space:]]*=[[:space:]]*false' "$sound_cfg"; then
+        play_startup="false"
+    fi
+    if [ "$play_startup" != "true" ]; then
+        return 0
+    fi
+    local chime="/usr/share/sounds/freedesktop/stereo/service-login.oga"
+    [ -f "$chime" ] || chime="/usr/share/sounds/freedesktop/stereo/complete.oga"
+    [ -f "$chime" ] || return 0
+    (
+        sleep 0.6
+        if command -v pw-play >/dev/null 2>&1; then
+            pw-play --volume 0.55 "$chime" >/dev/null 2>&1 || true
+        elif command -v paplay >/dev/null 2>&1; then
+            paplay --volume 36000 "$chime" >/dev/null 2>&1 || true
+        fi
+    ) &
+}
+play_malus_startup_sound
+
 write_native_crash_dump() {
     local exit_code="$1"
     # Si el hook de panics de Rust ya creó un reporte del compositor en los últimos 15s, no duplicar
