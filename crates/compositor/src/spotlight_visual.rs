@@ -201,9 +201,9 @@ impl SpotlightMode {
         match self {
             Self::Search => {
                 if es {
-                    "Búsqueda de Spotlight"
+                    "Búsqueda de Canopy"
                 } else {
-                    "Spotlight Search"
+                    "Canopy Search"
                 }
             }
             Self::Applications => {
@@ -242,9 +242,9 @@ impl SpotlightMode {
         match self {
             Self::Search => {
                 if es {
-                    "Búsqueda de Spotlight"
+                    "Búsqueda de Canopy"
                 } else {
-                    "Spotlight Search"
+                    "Canopy Search"
                 }
             }
             Self::Applications => {
@@ -541,6 +541,7 @@ pub struct SpotlightState {
     pub apps: Vec<AppEntry>,
     pub files: Vec<FileEntry>,
     pub clipboard_items: Vec<(String, String)>,
+    pub canopy_cfg: malus_de_common::config::CanopyConfig,
     icon_cache: HashMap<String, Option<ImageSurface>>,
     pending_drag: Option<PendingSpotlightDrag>,
     last_dock_gap_preview: Option<i32>,
@@ -566,9 +567,10 @@ impl Default for SpotlightState {
 
 impl SpotlightState {
     pub fn new() -> Self {
+        let canopy_cfg = malus_de_common::config::CanopyConfig::load();
         let apps = index_applications();
         let files = index_files();
-        let clipboard_items = load_clipboard_items();
+        let clipboard_items = load_clipboard_items(&canopy_cfg);
         Self {
             is_open: false,
             active_output_name: None,
@@ -589,6 +591,7 @@ impl SpotlightState {
             apps,
             files,
             clipboard_items,
+            canopy_cfg,
             icon_cache: HashMap::new(),
             pending_drag: None,
             last_dock_gap_preview: None,
@@ -737,7 +740,8 @@ impl SpotlightState {
         self.active_template = None;
         self.pending_drag = None;
         self.last_dock_gap_preview = None;
-        self.clipboard_items = load_clipboard_items();
+        self.canopy_cfg = malus_de_common::config::CanopyConfig::load();
+        self.clipboard_items = load_clipboard_items(&self.canopy_cfg);
         self.files = index_files();
         self.apps = index_applications();
         self.mask_dirty = true;
@@ -1242,7 +1246,8 @@ impl SpotlightState {
         self.hovered_button = None;
         self.active_template = None;
         if mode == SpotlightMode::Clipboard {
-            self.clipboard_items = load_clipboard_items();
+            self.canopy_cfg = malus_de_common::config::CanopyConfig::load();
+            self.clipboard_items = load_clipboard_items(&self.canopy_cfg);
         } else if mode == SpotlightMode::Files {
             self.files = index_files();
         }
@@ -1567,6 +1572,9 @@ impl SpotlightState {
     }
 
     pub fn filtered_apps(&self) -> Vec<AppEntry> {
+        if !self.canopy_cfg.show_apps {
+            return Vec::new();
+        }
         let q = self.query.trim().to_lowercase();
 
         self.apps
@@ -1615,6 +1623,13 @@ impl SpotlightState {
                 .files
                 .iter()
                 .filter(|f| {
+                    let is_dir = f.path.is_dir();
+                    if is_dir && !self.canopy_cfg.show_folders {
+                        return false;
+                    }
+                    if !is_dir && !self.canopy_cfg.show_files {
+                        return false;
+                    }
                     let matches_q = q.is_empty()
                         || f.name.to_lowercase().contains(&q)
                         || f.extension.to_lowercase().contains(&q)
@@ -1752,7 +1767,8 @@ impl SpotlightState {
                     }
                 }
 
-                if self.active_filter == 0 || self.active_filter == 1 {
+                if self.canopy_cfg.show_apps && (self.active_filter == 0 || self.active_filter == 1)
+                {
                     for app in self
                         .apps
                         .iter()
@@ -1811,6 +1827,13 @@ impl SpotlightState {
                         .files
                         .iter()
                         .filter(|f| {
+                            let is_dir = f.path.is_dir();
+                            if is_dir && !self.canopy_cfg.show_folders {
+                                return false;
+                            }
+                            if !is_dir && !self.canopy_cfg.show_files {
+                                return false;
+                            }
                             f.name.to_lowercase().contains(&q)
                                 || f.extension.eq_ignore_ascii_case(&q)
                         })
@@ -3944,7 +3967,10 @@ fn index_files() -> Vec<FileEntry> {
     files
 }
 
-fn load_clipboard_items() -> Vec<(String, String)> {
+fn load_clipboard_items(cfg: &malus_de_common::config::CanopyConfig) -> Vec<(String, String)> {
+    if !cfg.show_clipboard {
+        return Vec::new();
+    }
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
         return Vec::new();
     };
@@ -3959,12 +3985,22 @@ fn load_clipboard_items() -> Vec<(String, String)> {
     let Ok(mut parsed) = serde_json::from_str::<PersistedClipboardHistory>(&raw) else {
         return Vec::new();
     };
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let max_age_secs = cfg.clipboard_retention_minutes.saturating_mul(60);
     parsed
         .entries
         .sort_by_key(|e| std::cmp::Reverse(e.copied_at_unix));
     parsed
         .entries
         .into_iter()
+        .filter(|e| {
+            max_age_secs == 0
+                || e.copied_at_unix == 0
+                || now_unix.saturating_sub(e.copied_at_unix) <= max_age_secs
+        })
         .filter_map(|e| {
             let full = e.text.unwrap_or_else(|| e.preview.clone());
             let clean = e.preview.trim().replace('\n', " ");

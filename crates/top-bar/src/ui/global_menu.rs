@@ -545,7 +545,7 @@ const DEFAULT_MENUS: &[MenuCategoryDef] = &[
         title: "Archivo",
         items: &[
             MenuItemDef::item(
-                "Búsqueda Spotlight",
+                "Búsqueda de Canopy",
                 Some("⌘Espacio"),
                 MenuAction::Command(&["malus-de-spotlight"]),
             ),

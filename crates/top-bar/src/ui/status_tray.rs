@@ -1628,7 +1628,7 @@ async fn get_link_mode_dbus() -> String {
 fn create_spotlight_button() -> Button {
     let spotlight_btn = Button::builder()
         .css_classes(["spotlight-pill", "topbar-btn"])
-        .tooltip_text("Búsqueda Spotlight (Alt + Espacio / Super + K)")
+        .tooltip_text("Búsqueda de Canopy (Alt + Espacio / Super + K)")
         .has_frame(false)
         .build();
     let spotlight_icon = Image::from_icon_name("system-search-symbolic");

@@ -1363,7 +1363,7 @@ fn open_shortcuts_dialog(parent: &ApplicationWindow, navigate: &Rc<dyn Fn(&str)>
         ("Mission Control", "Ctrl + ↑"),
         ("Ventanas de aplicación", "Ctrl + ↓"),
         ("Cambiar de espacio", "Ctrl + ← / →"),
-        ("Spotlight", "⌘ + Espacio"),
+        ("Canopy", "⌘ + Espacio"),
         ("Ordenamiento en mosaico", "⌘ + Y"),
         ("Bloquear pantalla", "Ctrl + ⌘ + Q"),
     ];

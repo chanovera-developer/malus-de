@@ -1,10 +1,9 @@
 use clap::Parser;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, CssProvider,
-    DrawingArea, Entry, EventControllerFocus, FlowBox,
-    Image, Label, Orientation, Overlay, PackType, PolicyType, Scale, ScrolledWindow, SearchEntry,
-    Stack, StackTransitionType, WindowControls, WindowHandle,
+    Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea, Entry,
+    EventControllerFocus, FlowBox, Image, Label, Orientation, Overlay, PackType, PolicyType, Scale,
+    ScrolledWindow, SearchEntry, Stack, StackTransitionType, WindowControls, WindowHandle,
 };
 use malus_de_common::mac_switch::MacSwitch as Switch;
 use malus_de_common::config::InputConfig;
@@ -19,11 +18,14 @@ mod accessibility_pane;
 mod appearance_pane;
 mod battery_pane;
 mod bluetooth_pane;
+mod canopy_pane;
 mod displays_pane;
 mod dock_pane;
 mod general_pane;
 mod menubar_pane;
 mod network_pane;
+mod notifications_pane;
+mod siri_pane;
 mod vpn_pane;
 mod wallpaper_pane;
 mod wifi_pane;
@@ -295,34 +297,6 @@ fn build_sidebar_search_entry() -> SearchEntry {
         .build()
 }
 
-pub(crate) fn make_system_glyph_badge(
-    icon_name: &str,
-    css_classes: &[&str],
-    box_size: i32,
-    icon_px: i32,
-) -> GtkBox {
-    let badge = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .halign(Align::Center)
-        .valign(Align::Center)
-        .width_request(box_size)
-        .height_request(box_size)
-        .build();
-    for cls in css_classes {
-        badge.add_css_class(cls);
-    }
-    let glyph = Image::builder()
-        .icon_name(icon_name)
-        .pixel_size(icon_px)
-        .halign(Align::Center)
-        .valign(Align::Center)
-        .hexpand(false)
-        .vexpand(false)
-        .build();
-    badge.append(&glyph);
-    badge
-}
-
 fn build_sidebar_nav_button(icon_name: &str, label_txt: &str) -> Button {
     let btn = Button::builder()
         .css_classes(["sidebar-btn", "malus-sidebar-row"])
@@ -588,7 +562,21 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             "Fondo de pantalla",
         ),
         ("displays", "video-display-symbolic", "Pantallas"),
-        ("spotlight", "system-search-symbolic", "Spotlight"),
+        (
+            siri_pane::SIRI_PANEL_ID,
+            "audio-input-microphone-symbolic",
+            siri_pane::SIRI_PANEL_TITLE,
+        ),
+        (
+            canopy_pane::CANOPY_PANEL_ID,
+            "system-search-symbolic",
+            canopy_pane::CANOPY_PANEL_TITLE,
+        ),
+        (
+            notifications_pane::NOTIFICATIONS_PANEL_ID,
+            "preferences-system-notifications-symbolic",
+            notifications_pane::NOTIFICATIONS_PANEL_TITLE,
+        ),
         ("sound", "audio-volume-high-symbolic", "Sonido"),
         ("keyboard", "input-keyboard-symbolic", "Teclado"),
     ];
@@ -605,8 +593,8 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
 
     for (id, icon_name, label_txt) in nav_items {
         let btn = build_sidebar_nav_button(icon_name, label_txt);
-        // Espaciado visual de separación de grupo después de Batería antes de General
-        if id == "about" {
+        // Espaciado visual de separación de grupo antes de General y antes de Notificaciones
+        if id == "about" || id == notifications_pane::NOTIFICATIONS_PANEL_ID {
             btn.set_margin_top(14);
         }
         sidebar_body.append(&btn);
@@ -643,7 +631,9 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                     "appearance" => "aspecto tema oscuro claro cursor",
                     "menubar" => "barra de menus menubar centro de control reloj bateria spotlight bluetooth airdrop enfoque pantalla sonido clima",
                     "dock" => "escritorio dock organizador visual widgets navegador ventanas mosaico mission control esquinas activas atajos aladino",
-                    "spotlight" => "spotlight busqueda aplicaciones archivos",
+                    "siri" => "pip siri asistente voz inteligencia chatgpt extension consulta visual sugerencias idioma respuestas",
+                    "spotlight" => "canopy spotlight busqueda aplicaciones archivos carpetas portapapeles privacidad",
+                    "notifications" => "notificaciones avisos tiras alertas banners sonidos previsualizar centro apps",
                     "sound" => "sonido volumen audio",
                     "about" => "general acerca sistema procesador ram version informacion actualizacion almacenamiento airdrop compartir disco arranque inicio extensiones fecha hora idioma region time machine",
                     "accessibility" => "accesibilidad accessibility vision voiceover orca zoom pantalla contraste movimiento voz teclado puntero subtitulos audio",
@@ -690,7 +680,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         .valign(Align::Center)
         .build();
     let active_pane_title = Label::builder()
-        .label("Spotlight")
+        .label(canopy_pane::CANOPY_PANEL_TITLE)
         .css_classes(["content-header-title"])
         .xalign(0.0)
         .build();
@@ -730,6 +720,8 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         accessibility_pane::create_accessibility_pane_loader(&window, &stack, nav_general.clone());
     let load_appearance_pane =
         appearance_pane::create_appearance_pane_loader(&stack, nav_general.clone());
+    let (load_notifications_pane, notifications_title_fn) =
+        notifications_pane::create_notifications_pane_loader(&stack, nav_general.clone());
 
     // Caché de callbacks de refresco por panel ya construido en el Stack
     let cached_refreshers: Rc<RefCell<std::collections::HashMap<String, Rc<dyn Fn()>>>> =
@@ -747,6 +739,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         let load_gen = load_general_pane.clone();
         let load_a11y = load_accessibility_pane.clone();
         let load_app = load_appearance_pane.clone();
+        let load_notif = load_notifications_pane.clone();
         let refreshers_c = cached_refreshers.clone();
 
         Rc::new(move |target: &str, refresh: bool| {
@@ -763,6 +756,12 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             if appearance_pane::is_appearance_subpanel(target) {
                 if refresh || stack_c.child_by_name(target).is_none() {
                     load_app(target);
+                }
+                return;
+            }
+            if notifications_pane::is_notifications_subpanel(target) {
+                if refresh || stack_c.child_by_name(target).is_none() {
+                    load_notif(target);
                 }
                 return;
             }
@@ -837,12 +836,17 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                         refreshed_on_construct = true;
                     }
                     "spotlight" => {
-                        let (pane, rf) = create_spotlight_pane();
+                        let (pane, rf) = canopy_pane::create_canopy_pane();
                         configure_right_pane_widget(pane.upcast_ref());
                         stack_c.add_named(&pane, Some("spotlight"));
                         refreshers_c
                             .borrow_mut()
                             .insert("spotlight".to_string(), rf);
+                    }
+                    "siri" => {
+                        let pane = siri_pane::create_siri_pane(nav_gen_c.clone());
+                        configure_right_pane_widget(pane.upcast_ref());
+                        stack_c.add_named(&pane, Some("siri"));
                     }
                     "sound" => {
                         let pane = create_sound_pane();
@@ -958,13 +962,17 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         "accesibilidad" => "accessibility",
         "aspecto" => "appearance",
         "temas" => "appearance-themes",
+        "pip" => "siri",
+        "canopy" => "spotlight",
+        "notificaciones" => "notifications",
         "barra de menus" | "barra de menús" => "menubar",
         p if general_pane::is_general_subpanel(p) => p,
         p if accessibility_pane::is_accessibility_subpanel(p) => p,
         p if appearance_pane::is_appearance_subpanel(p) => p,
+        p if notifications_pane::is_notifications_subpanel(p) => p,
         "wifi" | "bluetooth" | "network" | "network-firewall" | "vpn" | "battery" | "wallpaper"
-        | "keyboard" | "appearance" | "menubar" | "sound" | "about" | "dock" | "spotlight"
-        | "displays" => initial_panel,
+        | "keyboard" | "appearance" | "menubar" | "sound" | "about" | "dock" | "siri"
+        | "spotlight" | "notifications" | "displays" => initial_panel,
         _ => "spotlight",
     };
 
@@ -985,6 +993,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         let cur_panel_c = current_panel.clone();
         let btn_b_c = btn_back.clone();
         let btn_f_c = btn_forward.clone();
+        let notif_title_c = notifications_title_fn.clone();
 
         Rc::new(move |target: &str, action: NavAction| {
             let prev_id = cur_panel_c.borrow().clone();
@@ -1002,6 +1011,8 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                 "accessibility"
             } else if appearance_pane::is_appearance_subpanel(target) {
                 "appearance"
+            } else if notifications_pane::is_notifications_subpanel(target) {
+                notifications_pane::NOTIFICATIONS_PANEL_ID
             } else {
                 target
             };
@@ -1020,26 +1031,32 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             }
             ensure_c(target, true);
             let display_title = general_pane::general_subpanel_title(target)
-                .or_else(|| accessibility_pane::accessibility_subpanel_title(target))
-                .or_else(|| appearance_pane::appearance_subpanel_title(target))
-                .unwrap_or(match target {
-                    "wifi" => "Wi-Fi",
-                    "bluetooth" => "Bluetooth",
-                    "network" => "Red",
-                    "network-firewall" => "Firewall",
-                    "vpn" => "VPN",
-                    "battery" => "Batería",
-                    "displays" => "Pantallas",
-                    "wallpaper" => "Fondo de pantalla",
-                    "keyboard" => "Teclado",
-                    "appearance" => "Aspecto",
-                    "menubar" => "Barra de menús",
-                    "dock" => "Escritorio y Dock",
-                    "spotlight" => "Spotlight",
-                    "sound" => "Sonido",
-                    _ => "Ajustes",
+                .map(str::to_string)
+                .or_else(|| accessibility_pane::accessibility_subpanel_title(target).map(str::to_string))
+                .or_else(|| appearance_pane::appearance_subpanel_title(target).map(str::to_string))
+                .or_else(|| notif_title_c(target))
+                .unwrap_or_else(|| {
+                    match target {
+                        "wifi" => "Wi-Fi",
+                        "bluetooth" => "Bluetooth",
+                        "network" => "Red",
+                        "network-firewall" => "Firewall",
+                        "vpn" => "VPN",
+                        "battery" => "Batería",
+                        "displays" => "Pantallas",
+                        "wallpaper" => "Fondo de pantalla",
+                        "keyboard" => "Teclado",
+                        "appearance" => "Aspecto",
+                        "menubar" => "Barra de menús",
+                        "dock" => "Escritorio y Dock",
+                        "siri" => siri_pane::SIRI_PANEL_TITLE,
+                        "spotlight" => canopy_pane::CANOPY_PANEL_TITLE,
+                        "sound" => "Sonido",
+                        _ => "Ajustes",
+                    }
+                    .to_string()
                 });
-            title_lbl.set_label(display_title);
+            title_lbl.set_label(&display_title);
             stack_c.set_visible_child_name(target);
 
             if matches!(action, NavAction::Push) {
@@ -1206,6 +1223,7 @@ enum NavAction {
 
 fn is_subsection_panel(id: &str) -> bool {
     id == "network-firewall"
+        || id == notifications_pane::NOTIFICATIONS_APP_SUBPANEL_ID
         || (id != "about" && general_pane::is_general_subpanel(id))
         || (id != "accessibility" && accessibility_pane::is_accessibility_subpanel(id))
         || (id != "appearance" && appearance_pane::is_appearance_subpanel(id))
@@ -1220,6 +1238,8 @@ fn section_group(id: &str) -> &str {
         "accessibility"
     } else if appearance_pane::is_appearance_subpanel(id) {
         "appearance"
+    } else if notifications_pane::is_notifications_subpanel(id) {
+        notifications_pane::NOTIFICATIONS_PANEL_ID
     } else {
         id
     }
@@ -1957,151 +1977,6 @@ fn create_sound_pane() -> ScrolledWindow {
 
     scrolled.set_child(Some(&pane));
     scrolled
-}
-
-// ============================================================================
-// PANEL 5: SPOTLIGHT
-// ============================================================================
-
-fn create_spotlight_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
-    let scrolled = ScrolledWindow::builder()
-        .hscrollbar_policy(PolicyType::Never)
-        .vscrollbar_policy(PolicyType::Automatic)
-        .hexpand(true)
-        .vexpand(true)
-        .build();
-
-    let pane = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .spacing(14)
-        .css_classes(["content-pane"])
-        .build();
-
-    // 1. Tarjeta Banner Superior (igual a la imagen de referencia Descargas/ajustes.webp)
-    let banner_card = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(14)
-        .css_classes(["macos-group-card"])
-        .build();
-
-    let icon_badge = make_system_glyph_badge(
-        "system-search-symbolic",
-        &["spotlight-banner-icon", "badge-blue"],
-        44,
-        22,
-    );
-    icon_badge.set_valign(Align::Start);
-
-    let banner_text = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .spacing(3)
-        .hexpand(true)
-        .build();
-
-    let title_lbl = Label::builder()
-        .label("Spotlight")
-        .css_classes(["card-section-title"])
-        .xalign(0.0)
-        .build();
-
-    let desc_lbl = Label::builder()
-        .label("Spotlight permite realizar búsquedas rápidas en el ordenador y muestra sugerencias de internet, Música, App Store, la cartelera de cine, ubicaciones cercanas y mucho más.")
-        .css_classes(["card-section-sub"])
-        .wrap(true)
-        .xalign(0.0)
-        .build();
-
-    banner_text.append(&title_lbl);
-    banner_text.append(&desc_lbl);
-    banner_card.append(&icon_badge);
-    banner_card.append(&banner_text);
-    pane.append(&banner_card);
-
-    // 2. Título de Sección: "Resultados de la búsqueda"
-    let sec_box = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .spacing(2)
-        .margin_top(4)
-        .build();
-
-    let sec_title = Label::builder()
-        .label("Resultados de la búsqueda")
-        .css_classes(["section-header-title"])
-        .xalign(0.0)
-        .build();
-
-    let sec_sub = Label::builder()
-        .label("En los resultados de la búsqueda de Spotlight, solo se incluirán las categorías seleccionadas.")
-        .css_classes(["card-section-sub"])
-        .wrap(true)
-        .xalign(0.0)
-        .build();
-
-    sec_box.append(&sec_title);
-    sec_box.append(&sec_sub);
-    pane.append(&sec_box);
-
-    // 3. Tarjeta de Lista con Casillas de Verificación (CheckButton estilo macOS)
-    let list_card = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .spacing(0)
-        .css_classes(["macos-group-card", "spotlight-list-card"])
-        .build();
-
-    let categories = [
-        "Ajustes del Sistema",
-        "Aplicaciones",
-        "Calculadora",
-        "Carpetas",
-        "Consejos",
-        "Contactos",
-        "Conversión",
-        "Correo y mensajes",
-        "Definición",
-        "Documentos",
-        "Documentos PDF",
-        "Eventos y recordatorios",
-        "Hojas de cálculo",
-        "Imágenes",
-        "Música",
-        "Otros",
-        "Presentaciones",
-        "Sitios web",
-        "Sugerencias de Siri",
-        "Tipos de letra",
-        "Vídeos",
-    ];
-
-    for (i, cat) in categories.iter().enumerate() {
-        if i > 0 {
-            let sep = GtkBox::builder()
-                .css_classes(["list-row-separator"])
-                .build();
-            list_card.append(&sep);
-        }
-
-        let row = GtkBox::builder()
-            .orientation(Orientation::Horizontal)
-            .spacing(12)
-            .css_classes(["list-option-row"])
-            .build();
-
-        let chk = CheckButton::builder()
-            .label(*cat)
-            .active(true)
-            .hexpand(true)
-            .css_classes(["macos-checkbox"])
-            .build();
-
-        row.append(&chk);
-        list_card.append(&row);
-    }
-
-    pane.append(&list_card);
-    scrolled.set_child(Some(&pane));
-
-    let refresh: Rc<dyn Fn()> = Rc::new(|| {});
-    (scrolled, refresh)
 }
 
 #[cfg(test)]

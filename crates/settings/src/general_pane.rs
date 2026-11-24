@@ -2836,7 +2836,7 @@ fn populate_extensions_list(card: &GtkBox, by_category: bool) {
                 "system-search-symbolic",
                 GRAY_TOP,
                 GRAY_BOT,
-                "Indexador de Spotlight",
+                "Indexador de Canopy",
                 "PDFImporter, AudioMetadataImporter",
             ),
             (

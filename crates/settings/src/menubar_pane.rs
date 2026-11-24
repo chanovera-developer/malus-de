@@ -80,7 +80,7 @@ fn control_specs() -> Vec<MenuBarControlSpec> {
             extra: ControlRowExtra::ClockOptions,
         },
         MenuBarControlSpec {
-            label: "Spotlight",
+            label: "Canopy",
             icon_name: "system-search-symbolic",
             top_rgb: (0.20, 0.56, 0.99),
             bot_rgb: (0.04, 0.42, 0.92),
@@ -1247,7 +1247,7 @@ mod tests {
             labels,
             vec![
                 "Reloj",
-                "Spotlight",
+                "Canopy",
                 "Wi-Fi",
                 "Bluetooth",
                 "Batería",

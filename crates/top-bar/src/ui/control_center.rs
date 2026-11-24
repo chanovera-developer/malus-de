@@ -324,7 +324,7 @@ fn populate_control_center_popover(popover: &Popover) {
     let spotlight_quick = Button::builder()
         .css_classes(["cc-circle-quick-btn"])
         .has_frame(false)
-        .tooltip_text("Spotlight (Cmd + Espacio)")
+        .tooltip_text("Canopy (Cmd + Espacio)")
         .build();
     let sp_icon = Image::from_icon_name("system-search-symbolic");
     sp_icon.set_pixel_size(20);

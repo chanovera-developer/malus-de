@@ -275,7 +275,7 @@ pub fn accessibility_subpanel_title(id: &str) -> Option<&'static str> {
         "a11y-live-speech" => Some("Lectura en vivo"),
         "a11y-personal-voice" => Some("Voz personal"),
         "a11y-vocal-shortcuts" => Some("Atajos de voz"),
-        "a11y-siri" => Some("Siri"),
+        "a11y-siri" => Some("Pip"),
         "a11y-shortcut" => Some("Atajo"),
         _ => None,
     }
@@ -718,7 +718,7 @@ fn build_a11y_hub_pane(
             "audio-input-microphone-symbolic",
             PURPLE_TOP,
             PURPLE_BOT,
-            "Siri",
+            "Pip",
             true,
             "a11y-siri",
         ),

@@ -4109,9 +4109,279 @@ fn extract_tag_value(xml_snippet: &str, tag: &str) -> Option<String> {
     Some(xml_snippet[start..end].trim().to_string())
 }
 
+fn default_canopy_clipboard_minutes() -> u64 {
+    480
+}
+
+/// Configuración del buscador rápido **Canopy** (`~/.config/malus-de/canopy.toml`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CanopyConfig {
+    #[serde(default = "default_true")]
+    pub show_apps: bool,
+    #[serde(default = "default_true")]
+    pub show_files: bool,
+    #[serde(default = "default_true")]
+    pub show_folders: bool,
+    #[serde(default = "default_true")]
+    pub show_clipboard: bool,
+    /// Tiempo que el historial del portapapeles permanece disponible en Canopy (minutos: 30, 480 o 10080).
+    #[serde(default = "default_canopy_clipboard_minutes")]
+    pub clipboard_retention_minutes: u64,
+}
+
+impl Default for CanopyConfig {
+    fn default() -> Self {
+        Self {
+            show_apps: true,
+            show_files: true,
+            show_folders: true,
+            show_clipboard: true,
+            clipboard_retention_minutes: default_canopy_clipboard_minutes(),
+        }
+    }
+}
+
+impl CanopyConfig {
+    pub fn config_path() -> PathBuf {
+        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+            let p = PathBuf::from(&xdg);
+            if p.file_name().is_some_and(|n| n == "malus-de") {
+                return p.join("canopy.toml");
+            }
+            return p.join("malus-de").join("canopy.toml");
+        }
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/malus-de/canopy.toml")
+    }
+
+    pub fn load() -> Self {
+        let path = Self::config_path();
+        if let Ok(raw) = std::fs::read_to_string(path) {
+            if let Ok(parsed) = toml::from_str::<Self>(&raw) {
+                return parsed;
+            }
+        }
+        Self::default()
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::config_path();
+        let raw = toml::to_string_pretty(self).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+        })?;
+        write_file_atomic_if_changed(&path, &raw)?;
+        Ok(())
+    }
+
+    /// Borra el archivo persistido del historial del portapapeles de Malus DE.
+    pub fn clear_clipboard_history() -> std::io::Result<()> {
+        let data_home = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                PathBuf::from(home).join(".local/share")
+            });
+        let history_path = data_home.join("malus-de/clipboard-history.dat");
+        match std::fs::remove_file(history_path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err),
+        }
+    }
+}
+
+/// Cuándo mostrar el texto de vista previa en las notificaciones.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationPreviewMode {
+    Always,
+    #[default]
+    WhenUnlocked,
+    Never,
+}
+
+/// Estilo de alerta de notificación por aplicación.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationAlertStyle {
+    None,
+    #[default]
+    Banners,
+    Alerts,
+}
+
+/// Preferencias de notificación por aplicación.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AppNotificationRule {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub style: NotificationAlertStyle,
+    #[serde(default = "default_true")]
+    pub sound: bool,
+    /// `None` hereda la opción global `preview_mode`.
+    #[serde(default)]
+    pub preview_override: Option<NotificationPreviewMode>,
+}
+
+impl Default for AppNotificationRule {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            style: NotificationAlertStyle::Banners,
+            sound: true,
+            preview_override: None,
+        }
+    }
+}
+
+impl AppNotificationRule {
+    /// Resumen compacto estilo macOS (ej. «Tiras, Sonidos» o «Desactivadas»).
+    pub fn summary_label(&self) -> String {
+        if !self.enabled {
+            return "Desactivadas".to_string();
+        }
+        let mut parts = Vec::new();
+        match self.style {
+            NotificationAlertStyle::None => {}
+            NotificationAlertStyle::Banners => parts.push("Tiras"),
+            NotificationAlertStyle::Alerts => parts.push("Alertas"),
+        }
+        if self.sound {
+            parts.push("Sonidos");
+        }
+        if parts.is_empty() {
+            "Silenciosas".to_string()
+        } else {
+            parts.join(", ")
+        }
+    }
+}
+
+/// Configuración de Notificaciones de Malus DE (`~/.config/malus-de/notifications.toml`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct NotificationsConfig {
+    #[serde(default)]
+    pub preview_mode: NotificationPreviewMode,
+    #[serde(default)]
+    pub app_rules: std::collections::BTreeMap<String, AppNotificationRule>,
+}
+
+impl NotificationsConfig {
+    pub fn config_path() -> PathBuf {
+        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+            let p = PathBuf::from(&xdg);
+            if p.file_name().is_some_and(|n| n == "malus-de") {
+                return p.join("notifications.toml");
+            }
+            return p.join("malus-de").join("notifications.toml");
+        }
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/malus-de/notifications.toml")
+    }
+
+    pub fn normalize_app_key(app_name: &str) -> String {
+        app_name.trim().to_ascii_lowercase()
+    }
+
+    pub fn load() -> Self {
+        let path = Self::config_path();
+        if let Ok(raw) = std::fs::read_to_string(path) {
+            if let Ok(parsed) = toml::from_str::<Self>(&raw) {
+                return parsed;
+            }
+        }
+        Self::default()
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::config_path();
+        let raw = toml::to_string_pretty(self).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+        })?;
+        write_file_atomic_if_changed(&path, &raw)?;
+        Ok(())
+    }
+
+    pub fn rule_for_app(&self, app_name: &str) -> AppNotificationRule {
+        let key = Self::normalize_app_key(app_name);
+        if let Some(rule) = self.app_rules.get(&key) {
+            return rule.clone();
+        }
+        self.app_rules
+            .iter()
+            .find(|(k, _)| !k.is_empty() && (key.contains(k.as_str()) || k.contains(key.as_str())))
+            .map(|(_, r)| r.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn set_rule_for_app(&mut self, app_name: &str, rule: AppNotificationRule) {
+        let key = Self::normalize_app_key(app_name);
+        if !key.is_empty() {
+            self.app_rules.insert(key, rule);
+        }
+    }
+
+    pub fn effective_preview_mode(&self, app_name: &str) -> NotificationPreviewMode {
+        self.rule_for_app(app_name)
+            .preview_override
+            .unwrap_or(self.preview_mode)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notifications_config_rules_and_summary_labels_work() {
+        let mut cfg = NotificationsConfig::default();
+        assert_eq!(cfg.preview_mode, NotificationPreviewMode::WhenUnlocked);
+        assert_eq!(cfg.rule_for_app("Branches").summary_label(), "Tiras, Sonidos");
+
+        cfg.set_rule_for_app(
+            "Firefox",
+            AppNotificationRule {
+                enabled: false,
+                style: NotificationAlertStyle::Alerts,
+                sound: false,
+                preview_override: Some(NotificationPreviewMode::Never),
+            },
+        );
+        assert!(!cfg.rule_for_app("firefox").enabled);
+        assert_eq!(cfg.rule_for_app("Firefox").summary_label(), "Desactivadas");
+        assert_eq!(
+            cfg.effective_preview_mode("firefox"),
+            NotificationPreviewMode::Never
+        );
+
+        let raw = toml::to_string_pretty(&cfg).unwrap();
+        let parsed: NotificationsConfig = toml::from_str(&raw).unwrap();
+        assert_eq!(parsed, cfg);
+    }
+
+    #[test]
+    fn canopy_config_defaults_and_toml_roundtrip() {
+        let cfg = CanopyConfig::default();
+        assert!(cfg.show_apps);
+        assert!(cfg.show_files);
+        assert!(cfg.show_folders);
+        assert!(cfg.show_clipboard);
+        assert_eq!(cfg.clipboard_retention_minutes, 480);
+
+        let serialized = toml::to_string_pretty(&CanopyConfig {
+            show_apps: true,
+            show_files: false,
+            show_folders: true,
+            show_clipboard: false,
+            clipboard_retention_minutes: 30,
+        })
+        .unwrap();
+        let parsed: CanopyConfig = toml::from_str(&serialized).unwrap();
+        assert!(!parsed.show_files);
+        assert!(!parsed.show_clipboard);
+        assert_eq!(parsed.clipboard_retention_minutes, 30);
+    }
 
     #[test]
     fn accent_color_css_tracks_palette_and_always_uses_white_foreground() {
