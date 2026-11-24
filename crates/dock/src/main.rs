@@ -2577,6 +2577,7 @@ fn build_dock_ui(app: &Application) {
                     let mut active_app = active_app_ipc.borrow_mut();
                     active_app.clear();
                     active_app.extend(app_id.into_iter().chain(title));
+                    progress::notify_active_app_changed(&active_app);
                 }
                 IpcMessage::RunningAppsChanged { running_apps } => {
                     let prev_apps = cache_ipc.borrow().clone();
@@ -4196,11 +4197,18 @@ fn update_icon_size_recursive(
             changed = true;
         }
     }
-    if (widget.has_css_class("dock-icon-shadow") || widget.has_css_class("dock-progress-overlay"))
+    if widget.has_css_class("dock-icon-shadow")
         && (widget.width_request() != size || widget.height_request() != size)
     {
         widget.set_size_request(size, size);
         changed = true;
+    }
+    if widget.has_css_class("dock-progress-overlay") {
+        let overlay_size = size + progress::OVERLAY_BLEED_PX * 2;
+        if widget.width_request() != overlay_size || widget.height_request() != overlay_size {
+            widget.set_size_request(overlay_size, overlay_size);
+            changed = true;
+        }
     }
     if let Ok(img) = widget.clone().downcast::<Image>() {
         // Solo ajustar iconos principales del dock, preservando insignias secundarias
@@ -5549,6 +5557,18 @@ fn populate_dock_app_menu_box(
         menu_box.append(&btn_pin);
     }
 
+    // 3.5. Limpiar globo de notificaciones push si la app tiene contador activo
+    if progress::badge_count_for_dock_app(app_cfg) > 0 {
+        let btn_clear_badge = make_dock_menu_button("Limpiar globo de notificaciones", false);
+        let p_cb = popover.clone();
+        let app_cb = app_cfg.clone();
+        btn_clear_badge.connect_clicked(move |_| {
+            p_cb.popdown();
+            progress::clear_push_badges_for_dock_app(&app_cb);
+        });
+        menu_box.append(&btn_clear_badge);
+    }
+
     // 4. Forzar salida si está en ejecución
     if is_running {
         let sep2 = Separator::new(Orientation::Horizontal);
@@ -5678,6 +5698,7 @@ fn create_dock_item(
         let cmd = cmd.clone();
         let name = name.clone();
         let matchers = matchers.clone();
+        let app_cfg_click = app_cfg.clone();
         let cache = cache.clone();
         let active_app_cache = active_app_cache.clone();
         let minimized_cache = minimized_cache.clone();
@@ -5685,6 +5706,7 @@ fn create_dock_item(
         let animation_id = animation_id.clone();
         let dock_config_click = dock_config.clone();
         Rc::new(move || {
+            progress::clear_push_badges_for_dock_app(&app_cfg_click);
             let has_minimized_for_app = minimized_cache
                 .borrow()
                 .iter()

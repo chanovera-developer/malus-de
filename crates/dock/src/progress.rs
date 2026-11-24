@@ -1,12 +1,12 @@
-use gtk4::cairo::{Context, LineCap, LineJoin};
+use gtk4::cairo::{Context, FontSlant, FontWeight, LineCap, LineJoin, LinearGradient};
 use gtk4::gio;
 use gtk4::prelude::*;
 use gtk4::{DrawingArea, Overlay};
 use libadwaita as adw;
-use malus_de_common::config::DockAppConfig;
+use malus_de_common::config::{DockAppConfig, NotificationsConfig};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::f64::consts::{FRAC_PI_2, TAU};
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -16,6 +16,10 @@ use tracing::debug;
 const COMPLETION_HOLD_MS: f64 = 240.0;
 const COMPLETION_FADE_MS: f64 = 420.0;
 const COMPLETION_TOTAL_MS: f64 = COMPLETION_HOLD_MS + COMPLETION_FADE_MS;
+const BADGE_POP_ANIM_MS: f64 = 240.0;
+/// Margen exterior transparente del `DrawingArea` de overlays para que el globo rojo push
+/// (y las sombras de los indicadores) sobresalgan limpiamente fuera del límite del icono sin recortarse.
+pub const OVERLAY_BLEED_PX: i32 = 18;
 const STALE_TEMP_FILE_SECS: u64 = 600;
 const IDLE_GROWTH_TIMEOUT_SECS: u64 = 90;
 const TOTAL_BYTES_FAST_RETRY_MS: u64 = 500;
@@ -30,6 +34,20 @@ pub struct LauncherEntryState {
     pub indeterminate: bool,
     pub progress_visible: bool,
     pub completed_at: Option<Instant>,
+    pub count: i64,
+    pub count_visible: bool,
+    pub urgent: bool,
+    pub badge_updated_at: Option<Instant>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PushBadgeState {
+    pub desktop_entry: String,
+    pub app_name: String,
+    pub app_icon: String,
+    pub count: u64,
+    pub urgent: bool,
+    pub updated_at: Instant,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -39,6 +57,23 @@ pub struct ProgressVisual {
     pub phase: f64,
     pub completed: bool,
     pub alpha: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BadgeVisual {
+    pub count: u64,
+    pub scale: f64,
+    pub urgent: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct UnityUpdatePayload {
+    app_uri: String,
+    progress: Option<f64>,
+    progress_visible: Option<bool>,
+    count: Option<i64>,
+    count_visible: Option<bool>,
+    urgent: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -65,6 +100,11 @@ struct TotalBytesLookupResult {
 struct ProgressStore {
     entries: HashMap<String, LauncherEntryState>,
     fs_entries: HashMap<String, LauncherEntryState>,
+    push_badges: HashMap<String, PushBadgeState>,
+    active_app_identities: Vec<String>,
+    notif_config: NotificationsConfig,
+    notif_config_loaded: bool,
+    notif_config_monitor: Option<gio::FileMonitor>,
     fs_downloads: HashMap<PathBuf, TrackedFsDownload>,
     fs_monitors: Vec<gio::FileMonitor>,
     download_dirs: Vec<PathBuf>,
@@ -162,7 +202,7 @@ fn command_candidates(command: &str) -> Vec<String> {
     out
 }
 
-/// Comprueba si una entrada `com.canonical.Unity.LauncherEntry` corresponde a un icono del Dock.
+/// Comprueba si una entrada `com.canonical.Unity.LauncherEntry` o notificación corresponde a un icono del Dock.
 pub fn entry_matches_dock_app(
     app_uri: &str,
     matchers: &[String],
@@ -215,10 +255,51 @@ pub fn entry_matches_dock_app(
     false
 }
 
-/// Extrae `(app_uri, progress, progress_visible)` de un parámetro D-Bus `(sa{sv})`.
-fn parse_unity_update_variant(
-    params: &glib::Variant,
-) -> Option<(String, Option<f64>, Option<bool>)> {
+fn push_badge_matches_dock_app(
+    badge: &PushBadgeState,
+    matchers: &[String],
+    app_name: &str,
+    command: &str,
+    icon_name: &str,
+) -> bool {
+    [
+        badge.desktop_entry.as_str(),
+        badge.app_name.as_str(),
+        badge.app_icon.as_str(),
+    ]
+    .into_iter()
+    .filter(|candidate| !candidate.trim().is_empty())
+    .any(|candidate| entry_matches_dock_app(candidate, matchers, app_name, command, icon_name))
+}
+
+fn identity_list_matches_push_source(
+    active_identities: &[String],
+    desktop_entry: &str,
+    app_name: &str,
+    app_icon: &str,
+) -> bool {
+    if active_identities.is_empty() {
+        return false;
+    }
+    let candidates = [desktop_entry, app_name, app_icon];
+    for active in active_identities {
+        if active.trim().is_empty() {
+            continue;
+        }
+        let active_slice = [active.clone()];
+        for cand in candidates {
+            if !cand.trim().is_empty()
+                && entry_matches_dock_app(cand, &active_slice, active, active, "")
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Extrae propiedades de un parámetro D-Bus `(sa{sv})` de `com.canonical.Unity.LauncherEntry.Update`.
+fn parse_unity_update_variant(params: &glib::Variant) -> Option<UnityUpdatePayload> {
     if params.n_children() < 2 {
         return None;
     }
@@ -235,43 +316,121 @@ fn parse_unity_update_variant(
         .flatten()
         .or_else(|| props.lookup::<i64>("progress").ok().flatten().map(|v| v as f64));
     let progress_visible = props.lookup::<bool>("progress-visible").ok().flatten();
-    if progress.is_none() && progress_visible.is_none() {
+    let count = props
+        .lookup::<i64>("count")
+        .ok()
+        .flatten()
+        .or_else(|| props.lookup::<i32>("count").ok().flatten().map(|v| v as i64))
+        .or_else(|| props.lookup::<u64>("count").ok().flatten().map(|v| v as i64))
+        .or_else(|| props.lookup::<u32>("count").ok().flatten().map(|v| v as i64));
+    let count_visible = props.lookup::<bool>("count-visible").ok().flatten();
+    let urgent = props.lookup::<bool>("urgent").ok().flatten();
+    if progress.is_none()
+        && progress_visible.is_none()
+        && count.is_none()
+        && count_visible.is_none()
+        && urgent.is_none()
+    {
         return None;
     }
-    Some((app_uri, progress, progress_visible))
+    Some(UnityUpdatePayload {
+        app_uri,
+        progress,
+        progress_visible,
+        count,
+        count_visible,
+        urgent,
+    })
+}
+
+/// Extrae `(desktop_entry, app_name, app_icon, is_replacement, urgency)` de la señal
+/// D-Bus `dev.malus.Notifications.AppNotificationReceived` (`(sssby)`).
+fn parse_push_notification_variant(
+    params: &glib::Variant,
+) -> Option<(String, String, String, bool, u8)> {
+    if params.n_children() < 5 {
+        return None;
+    }
+    let desktop_entry = params
+        .try_child_get::<String>(0)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let app_name = params
+        .try_child_get::<String>(1)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let app_icon = params
+        .try_child_get::<String>(2)
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let is_replacement = params
+        .try_child_get::<bool>(3)
+        .ok()
+        .flatten()
+        .unwrap_or(false);
+    let urgency = params.try_child_get::<u8>(4).ok().flatten().unwrap_or(1);
+    if desktop_entry.trim().is_empty() && app_name.trim().is_empty() && app_icon.trim().is_empty() {
+        return None;
+    }
+    Some((desktop_entry, app_name, app_icon, is_replacement, urgency))
 }
 
 /// Aplica una actualización `Update(app_uri, props)` sobre el mapa de estado.
+/// Devuelve `true` si se inició animación (fade-out de descarga o pop-in del globo push).
 fn apply_launcher_update(
     entries: &mut HashMap<String, LauncherEntryState>,
-    app_uri: &str,
+    payload: &UnityUpdatePayload,
     sender: Option<String>,
-    progress: Option<f64>,
-    progress_visible: Option<bool>,
     now: Instant,
 ) -> bool {
-    let key = normalize_launcher_uri(app_uri);
+    let key = normalize_launcher_uri(&payload.app_uri);
     if key.is_empty() {
         return false;
     }
     let prev = entries.get(&key).cloned();
-    let was_visible = prev.as_ref().is_some_and(|e| e.progress_visible);
+    let was_progress_visible = prev.as_ref().is_some_and(|e| e.progress_visible);
     let prev_progress = prev.as_ref().map(|e| e.progress).unwrap_or(0.0);
+    let prev_count = prev.as_ref().map(|e| e.count).unwrap_or(0);
+    let prev_count_visible = prev.as_ref().is_some_and(|e| e.count_visible);
+    let prev_urgent = prev.as_ref().is_some_and(|e| e.urgent);
 
-    let next_progress = progress
+    let next_progress = payload
+        .progress
         .map(|p| p.clamp(0.0, 1.0))
         .unwrap_or(prev_progress);
-    let next_visible = progress_visible.unwrap_or(was_visible);
+    let next_progress_visible = payload.progress_visible.unwrap_or(was_progress_visible);
 
-    let completed_at = if !next_visible && was_visible && next_progress >= 0.90 {
+    let completed_at = if !next_progress_visible && was_progress_visible && next_progress >= 0.90 {
         Some(now)
-    } else if next_visible {
+    } else if next_progress_visible {
         None
     } else {
-        prev.and_then(|e| e.completed_at)
+        prev.as_ref().and_then(|e| e.completed_at)
     };
 
-    if !next_visible && completed_at.is_none() {
+    let next_count = payload.count.unwrap_or(prev_count).max(0);
+    let next_count_visible = payload.count_visible.unwrap_or(prev_count_visible);
+    let next_urgent = payload.urgent.unwrap_or(prev_urgent);
+
+    let badge_changed =
+        next_count_visible && next_count > 0 && (!prev_count_visible || next_count != prev_count);
+    let badge_updated_at = if badge_changed {
+        Some(now)
+    } else if next_count_visible && next_count > 0 {
+        prev.as_ref().and_then(|e| e.badge_updated_at)
+    } else {
+        None
+    };
+
+    let has_any_visual = next_progress_visible
+        || completed_at.is_some()
+        || (next_count_visible && next_count > 0)
+        || next_urgent;
+
+    if !has_any_visual {
         entries.remove(&key);
         return false;
     }
@@ -279,15 +438,85 @@ fn apply_launcher_update(
     entries.insert(
         key,
         LauncherEntryState {
-            app_uri: app_uri.to_string(),
-            sender,
+            app_uri: payload.app_uri.clone(),
+            sender: sender.or_else(|| prev.and_then(|e| e.sender)),
             progress: next_progress,
             indeterminate: false,
-            progress_visible: next_visible,
+            progress_visible: next_progress_visible,
             completed_at,
+            count: next_count,
+            count_visible: next_count_visible,
+            urgent: next_urgent,
+            badge_updated_at,
         },
     );
-    completed_at.is_some()
+    completed_at.is_some() || badge_changed
+}
+
+fn push_badge_key(desktop_entry: &str, app_name: &str, app_icon: &str) -> String {
+    let primary = if !desktop_entry.trim().is_empty() {
+        desktop_entry
+    } else if !app_name.trim().is_empty() {
+        app_name
+    } else {
+        app_icon
+    };
+    normalize_launcher_uri(primary)
+}
+
+fn apply_push_notification(
+    push_badges: &mut HashMap<String, PushBadgeState>,
+    active_identities: &[String],
+    notif_config: &NotificationsConfig,
+    desktop_entry: &str,
+    app_name: &str,
+    app_icon: &str,
+    is_replacement: bool,
+    urgency: u8,
+    now: Instant,
+) -> bool {
+    let key = push_badge_key(desktop_entry, app_name, app_icon);
+    if key.is_empty() {
+        return false;
+    }
+    if identity_list_matches_push_source(active_identities, desktop_entry, app_name, app_icon) {
+        return false;
+    }
+    let rule_key = if !app_name.trim().is_empty() {
+        app_name
+    } else {
+        desktop_entry
+    };
+    let rule = notif_config.rule_for_app(rule_key);
+    if !rule.enabled || !rule.badge_icon {
+        return false;
+    }
+
+    let entry = push_badges.entry(key).or_insert_with(|| PushBadgeState {
+        desktop_entry: desktop_entry.to_string(),
+        app_name: app_name.to_string(),
+        app_icon: app_icon.to_string(),
+        count: 0,
+        urgent: false,
+        updated_at: now,
+    });
+    if !desktop_entry.trim().is_empty() {
+        entry.desktop_entry = desktop_entry.to_string();
+    }
+    if !app_name.trim().is_empty() {
+        entry.app_name = app_name.to_string();
+    }
+    if !app_icon.trim().is_empty() {
+        entry.app_icon = app_icon.to_string();
+    }
+    if entry.count == 0 || !is_replacement {
+        entry.count = entry.count.saturating_add(1);
+    }
+    if urgency >= 2 {
+        entry.urgent = true;
+    }
+    entry.updated_at = now;
+    true
 }
 
 fn clear_entries_for_sender(
@@ -297,6 +526,123 @@ fn clear_entries_for_sender(
     let before = entries.len();
     entries.retain(|_, state| state.sender.as_deref() != Some(sender));
     entries.len() != before
+}
+
+fn badge_pop_scale(elapsed_ms: f64) -> f64 {
+    if elapsed_ms < 0.0 || elapsed_ms >= BADGE_POP_ANIM_MS {
+        return 1.0;
+    }
+    let t = (elapsed_ms / BADGE_POP_ANIM_MS).clamp(0.0, 1.0);
+    if t < 0.58 {
+        // Rebote rápido de entrada: 0.35 -> 1.14
+        let u = t / 0.58;
+        let eased = (u * FRAC_PI_2).sin();
+        0.35 + (1.14 - 0.35) * eased
+    } else {
+        // Asentamiento suave: 1.14 -> 1.00
+        let u = (t - 0.58) / 0.42;
+        let eased = 0.5 - 0.5 * (u * PI).cos();
+        1.14 - 0.14 * eased
+    }
+}
+
+pub fn format_badge_count(count: u64) -> String {
+    if count > 99 {
+        "99+".to_string()
+    } else {
+        count.to_string()
+    }
+}
+
+fn app_allows_dock_badge(notif_config: &NotificationsConfig, app_name: &str, matchers: &[String]) -> bool {
+    let primary = notif_config.rule_for_app(app_name);
+    if !primary.enabled || !primary.badge_icon {
+        return false;
+    }
+    for m in matchers {
+        if m.trim().is_empty() {
+            continue;
+        }
+        let key = NotificationsConfig::normalize_app_key(m);
+        if let Some(rule) = notif_config.app_rules.get(&key) {
+            if !rule.enabled || !rule.badge_icon {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn compute_badge_visual_for_app(
+    entries: &HashMap<String, LauncherEntryState>,
+    push_badges: &HashMap<String, PushBadgeState>,
+    notif_config: &NotificationsConfig,
+    matchers: &[String],
+    app_name: &str,
+    command: &str,
+    icon_name: &str,
+    now: Instant,
+) -> Option<BadgeVisual> {
+    if !app_allows_dock_badge(notif_config, app_name, matchers) {
+        return None;
+    }
+
+    // 1. Prioridad: contador explícito reportado por la app vía `com.canonical.Unity.LauncherEntry`
+    let mut best_unity: Option<(u64, Option<Instant>, bool)> = None;
+    for state in entries.values() {
+        if !state.count_visible || state.count <= 0 {
+            continue;
+        }
+        if !entry_matches_dock_app(&state.app_uri, matchers, app_name, command, icon_name) {
+            continue;
+        }
+        let c = state.count as u64;
+        if best_unity.as_ref().is_none_or(|(prev_c, _, _)| c >= *prev_c) {
+            best_unity = Some((c, state.badge_updated_at, state.urgent));
+        }
+    }
+    if let Some((count, updated_at, urgent)) = best_unity {
+        let scale = updated_at
+            .map(|t| badge_pop_scale(now.saturating_duration_since(t).as_secs_f64() * 1000.0))
+            .unwrap_or(1.0);
+        return Some(BadgeVisual {
+            count,
+            scale,
+            urgent,
+        });
+    }
+
+    // 2. Contador acumulado desde `malus-de-notifications` (`dev.malus.Notifications`)
+    let mut total_push = 0u64;
+    let mut latest_update: Option<Instant> = None;
+    let mut any_urgent = false;
+    for badge in push_badges.values() {
+        if badge.count == 0 {
+            continue;
+        }
+        if !push_badge_matches_dock_app(badge, matchers, app_name, command, icon_name) {
+            continue;
+        }
+        total_push = total_push.saturating_add(badge.count);
+        any_urgent |= badge.urgent;
+        latest_update = match latest_update {
+            None => Some(badge.updated_at),
+            Some(prev) => Some(prev.max(badge.updated_at)),
+        };
+    }
+
+    if total_push > 0 {
+        let scale = latest_update
+            .map(|t| badge_pop_scale(now.saturating_duration_since(t).as_secs_f64() * 1000.0))
+            .unwrap_or(1.0);
+        return Some(BadgeVisual {
+            count: total_push,
+            scale,
+            urgent: any_urgent,
+        });
+    }
+
+    None
 }
 
 fn compute_visual_from_sources<'a>(
@@ -406,20 +752,22 @@ fn ensure_animation_timer() {
         let keep_running = PROGRESS_STORE.with(|cell| {
             let mut store = cell.borrow_mut();
             let retain_fn = |_: &String, state: &mut LauncherEntryState| {
-                if state.progress_visible {
-                    return true;
-                }
-                if let Some(done_at) = state.completed_at {
+                let keep_done = state.completed_at.is_some_and(|done_at| {
                     now.saturating_duration_since(done_at).as_secs_f64() * 1000.0
                         < COMPLETION_TOTAL_MS
-                } else {
-                    false
+                });
+                if !keep_done {
+                    state.completed_at = None;
                 }
+                state.progress_visible
+                    || state.completed_at.is_some()
+                    || (state.count_visible && state.count > 0)
+                    || state.urgent
             };
             store.entries.retain(retain_fn);
             store.fs_entries.retain(retain_fn);
 
-            let needs_anim = store
+            let progress_needs_anim = store
                 .entries
                 .values()
                 .chain(store.fs_entries.values())
@@ -427,6 +775,19 @@ fn ensure_animation_timer() {
                     (!s.progress_visible && s.completed_at.is_some())
                         || (s.progress_visible && s.indeterminate)
                 });
+            let unity_badge_anim = store.entries.values().any(|s| {
+                s.count_visible
+                    && s.count > 0
+                    && s.badge_updated_at.is_some_and(|t| {
+                        now.saturating_duration_since(t).as_secs_f64() * 1000.0 < BADGE_POP_ANIM_MS
+                    })
+            });
+            let push_badge_anim = store.push_badges.values().any(|b| {
+                b.count > 0
+                    && now.saturating_duration_since(b.updated_at).as_secs_f64() * 1000.0
+                        < BADGE_POP_ANIM_MS
+            });
+            let needs_anim = progress_needs_anim || unity_badge_anim || push_badge_anim;
             if !needs_anim {
                 store.anim_timer_active = false;
             }
@@ -437,6 +798,117 @@ fn ensure_animation_timer() {
             glib::ControlFlow::Continue
         } else {
             glib::ControlFlow::Break
+        }
+    });
+}
+
+/// Actualiza la ventana enfocada actualmente y limpia los globos push acumulados de esa app
+/// (comportamiento nativo macOS al cambiar o enfocar la aplicación).
+pub fn notify_active_app_changed(active_identities: &[String]) {
+    let changed = PROGRESS_STORE.with(|cell| {
+        let mut store = cell.borrow_mut();
+        store.active_app_identities = active_identities.to_vec();
+        let before = store.push_badges.len();
+        store.push_badges.retain(|_, badge| {
+            !identity_list_matches_push_source(
+                active_identities,
+                &badge.desktop_entry,
+                &badge.app_name,
+                &badge.app_icon,
+            )
+        });
+        store.push_badges.len() != before
+    });
+    if changed {
+        queue_redraw_all_overlays();
+    }
+}
+
+/// Limpia los globos de notificaciones push de una aplicación concreta del Dock (al hacer clic o desde el menú).
+pub fn clear_push_badges_for_dock_app(app_cfg: &DockAppConfig) {
+    let changed = PROGRESS_STORE.with(|cell| {
+        let mut store = cell.borrow_mut();
+        let before_push = store.push_badges.len();
+        store.push_badges.retain(|_, badge| {
+            !push_badge_matches_dock_app(
+                badge,
+                &app_cfg.matchers,
+                &app_cfg.name,
+                &app_cfg.command,
+                &app_cfg.icon,
+            )
+        });
+        let mut unity_cleared = false;
+        for state in store.entries.values_mut() {
+            if state.count_visible
+                && entry_matches_dock_app(
+                    &state.app_uri,
+                    &app_cfg.matchers,
+                    &app_cfg.name,
+                    &app_cfg.command,
+                    &app_cfg.icon,
+                )
+            {
+                state.count = 0;
+                state.count_visible = false;
+                state.urgent = false;
+                unity_cleared = true;
+            }
+        }
+        store.push_badges.len() != before_push || unity_cleared
+    });
+    if changed {
+        queue_redraw_all_overlays();
+    }
+}
+
+/// Devuelve el contador actual del globo de notificaciones visible para una app del Dock.
+pub fn badge_count_for_dock_app(app_cfg: &DockAppConfig) -> u64 {
+    PROGRESS_STORE.with(|cell| {
+        let mut store = cell.borrow_mut();
+        if !store.notif_config_loaded {
+            store.notif_config = NotificationsConfig::load();
+            store.notif_config_loaded = true;
+        }
+        compute_badge_visual_for_app(
+            &store.entries,
+            &store.push_badges,
+            &store.notif_config,
+            &app_cfg.matchers,
+            &app_cfg.name,
+            &app_cfg.command,
+            &app_cfg.icon,
+            Instant::now(),
+        )
+        .map(|b| b.count)
+        .unwrap_or(0)
+    })
+}
+
+fn ensure_notifications_config_monitor() {
+    PROGRESS_STORE.with(|cell| {
+        let mut store = cell.borrow_mut();
+        if !store.notif_config_loaded {
+            store.notif_config = NotificationsConfig::load();
+            store.notif_config_loaded = true;
+        }
+        if store.notif_config_monitor.is_some() {
+            return;
+        }
+        let path = NotificationsConfig::config_path();
+        let gfile = gio::File::for_path(&path);
+        if let Ok(monitor) =
+            gfile.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
+        {
+            monitor.connect_changed(|_, _, _, _| {
+                PROGRESS_STORE.with(|c| {
+                    let mut st = c.borrow_mut();
+                    st.notif_config = NotificationsConfig::load();
+                    st.notif_config_loaded = true;
+                });
+                queue_redraw_all_overlays();
+            });
+            store.notif_config_monitor = Some(monitor);
         }
     });
 }
@@ -1058,6 +1530,10 @@ fn rebuild_fs_entries_from_tracked(
                 indeterminate,
                 progress_visible: true,
                 completed_at: None,
+                count: 0,
+                count_visible: false,
+                urgent: false,
+                badge_updated_at: None,
             },
         );
     }
@@ -1077,6 +1553,10 @@ fn rebuild_fs_entries_from_tracked(
                 indeterminate: false,
                 progress_visible: false,
                 completed_at: Some(now),
+                count: 0,
+                count_visible: false,
+                urgent: false,
+                badge_updated_at: None,
             },
         );
         needs_anim = true;
@@ -1319,9 +1799,12 @@ fn start_browser_download_monitors() {
     }
 }
 
-/// Inicia la suscripción D-Bus de sesión a `com.canonical.Unity.LauncherEntry` (`Update`)
-/// y los monitores de descargas nativos de navegadores para mostrar el progreso en el Dock.
+/// Inicia la suscripción D-Bus de sesión a `com.canonical.Unity.LauncherEntry` (`Update`),
+/// `dev.malus.Notifications` (`AppNotificationReceived`) y los monitores de descargas
+/// para mostrar progreso y globos push en tiempo real sobre los iconos del Dock.
 pub fn ensure_launcher_entry_listener() {
+    ensure_notifications_config_monitor();
+
     PROGRESS_STORE.with(|cell| {
         let mut store = cell.borrow_mut();
         if store.dbus_conn.is_some() {
@@ -1339,30 +1822,67 @@ pub fn ensure_launcher_entry_listener() {
             None,
             gio::DBusSignalFlags::NONE,
             |_conn, sender, _path, _iface, _signal, params| {
-                let Some((app_uri, progress, progress_visible)) = parse_unity_update_variant(params)
-                else {
+                let Some(payload) = parse_unity_update_variant(params) else {
                     return;
                 };
                 let sender_name = (!sender.is_empty()).then(|| sender.to_string());
-                let started_fade = PROGRESS_STORE.with(|c| {
+                let needs_anim = PROGRESS_STORE.with(|c| {
                     let mut st = c.borrow_mut();
-                    apply_launcher_update(
-                        &mut st.entries,
-                        &app_uri,
-                        sender_name,
-                        progress,
-                        progress_visible,
-                        Instant::now(),
-                    )
+                    apply_launcher_update(&mut st.entries, &payload, sender_name, Instant::now())
                 });
                 queue_redraw_all_overlays();
-                if started_fade {
+                if needs_anim {
                     ensure_animation_timer();
                 }
             },
         );
 
-        // Limpiar progreso automáticamente si la app emisora cierra su conexión D-Bus
+        // Notificaciones push retransmitidas por `malus-de-notifications`
+        let push_sub = bus.signal_subscribe(
+            None,
+            Some("dev.malus.Notifications"),
+            Some("AppNotificationReceived"),
+            Some("/org/freedesktop/Notifications"),
+            None,
+            gio::DBusSignalFlags::NONE,
+            |_conn, _sender, _path, _iface, _signal, params| {
+                let Some((desktop_entry, app_name, app_icon, is_replacement, urgency)) =
+                    parse_push_notification_variant(params)
+                else {
+                    return;
+                };
+                let updated = PROGRESS_STORE.with(|c| {
+                    let mut st = c.borrow_mut();
+                    if !st.notif_config_loaded {
+                        st.notif_config = NotificationsConfig::load();
+                        st.notif_config_loaded = true;
+                    }
+                    let ProgressStore {
+                        push_badges,
+                        active_app_identities,
+                        notif_config,
+                        ..
+                    } = &mut *st;
+                    apply_push_notification(
+                        push_badges,
+                        active_app_identities,
+                        notif_config,
+                        &desktop_entry,
+                        &app_name,
+                        &app_icon,
+                        is_replacement,
+                        urgency,
+                        Instant::now(),
+                    )
+                });
+                if updated {
+                    queue_redraw_all_overlays();
+                    ensure_animation_timer();
+                }
+            },
+        );
+
+        // Limpiar progreso y contadores `LauncherEntry` automáticamente si la app emisora cierra D-Bus
         let owner_sub = bus.signal_subscribe(
             Some("org.freedesktop.DBus"),
             Some("org.freedesktop.DBus"),
@@ -1395,6 +1915,7 @@ pub fn ensure_launcher_entry_listener() {
         );
 
         store.dbus_subs.push(update_sub);
+        store.dbus_subs.push(push_sub);
         store.dbus_subs.push(owner_sub);
         store.dbus_conn = Some(bus);
     });
@@ -1403,7 +1924,8 @@ pub fn ensure_launcher_entry_listener() {
 }
 
 /// Adjunta una capa superior `DrawingArea` escalable con el icono del Dock para dibujar
-/// el indicador circular de descarga estilo macOS/Liquid Glass.
+/// tanto el globo rojo de notificaciones push (esquina superior derecha) como el indicador
+/// circular de descarga Liquid Glass (esquina inferior derecha).
 pub fn attach_download_progress_overlay(
     icon_container: &Overlay,
     app_cfg: &DockAppConfig,
@@ -1411,7 +1933,12 @@ pub fn attach_download_progress_overlay(
 ) {
     let area = DrawingArea::new();
     area.add_css_class("dock-progress-overlay");
-    area.set_size_request(icon_size, icon_size);
+    let overlay_size = icon_size + OVERLAY_BLEED_PX * 2;
+    area.set_size_request(overlay_size, overlay_size);
+    area.set_margin_top(-OVERLAY_BLEED_PX);
+    area.set_margin_bottom(-OVERLAY_BLEED_PX);
+    area.set_margin_start(-OVERLAY_BLEED_PX);
+    area.set_margin_end(-OVERLAY_BLEED_PX);
     area.set_halign(gtk4::Align::Center);
     area.set_valign(gtk4::Align::End);
     area.set_can_target(false);
@@ -1424,14 +1951,18 @@ pub fn attach_download_progress_overlay(
 
     area.set_draw_func(move |_, cr, w, h| {
         let now = Instant::now();
-        let visual = PROGRESS_STORE.with(|cell| {
-            let store = cell.borrow();
+        let (visual, badge) = PROGRESS_STORE.with(|cell| {
+            let mut store = cell.borrow_mut();
+            if !store.notif_config_loaded {
+                store.notif_config = NotificationsConfig::load();
+                store.notif_config_loaded = true;
+            }
             let elapsed = store
                 .started_at
                 .map(|t| now.saturating_duration_since(t).as_secs_f64())
                 .unwrap_or(0.0);
             let phase = (elapsed / 1.15).fract();
-            compute_visual_from_sources(
+            let prog = compute_visual_from_sources(
                 store.entries.values().chain(store.fs_entries.values()),
                 &matchers,
                 &app_name,
@@ -1439,15 +1970,27 @@ pub fn attach_download_progress_overlay(
                 &icon_name,
                 now,
                 phase,
-            )
+            );
+            let bdg = compute_badge_visual_for_app(
+                &store.entries,
+                &store.push_badges,
+                &store.notif_config,
+                &matchers,
+                &app_name,
+                &command,
+                &icon_name,
+                now,
+            );
+            (prog, bdg)
         });
-        let Some(vis) = visual else {
-            return;
-        };
-        if vis.alpha <= 0.01 {
-            return;
+        if let Some(vis) = visual {
+            if vis.alpha > 0.01 {
+                draw_download_progress_circle(cr, w as f64, h as f64, vis);
+            }
         }
-        draw_download_progress_circle(cr, w as f64, h as f64, vis);
+        if let Some(bdg) = badge {
+            draw_notification_badge_pill(cr, w as f64, h as f64, bdg);
+        }
     });
 
     PROGRESS_STORE.with(|cell| {
@@ -1460,8 +2003,100 @@ pub fn attach_download_progress_overlay(
     icon_container.set_measure_overlay(&area, false);
 }
 
+fn capsule_path(cr: &Context, x: f64, y: f64, w: f64, h: f64) {
+    let r = (h * 0.5).min(w * 0.5);
+    cr.new_sub_path();
+    cr.arc(x + w - r, y + r, r, -FRAC_PI_2, FRAC_PI_2);
+    cr.arc(x + r, y + r, r, FRAC_PI_2, FRAC_PI_2 * 3.0);
+    cr.close_path();
+}
+
+/// Dibuja el globo rojo de notificaciones push estilo macOS sobresaliendo fuera de la esquina
+/// superior derecha del icono (sin recortes gracias al margen transparente `OVERLAY_BLEED_PX`).
+fn draw_notification_badge_pill(cr: &Context, width: f64, height: f64, badge: BadgeVisual) {
+    let bleed = OVERLAY_BLEED_PX as f64;
+    let icon_w = (width - bleed * 2.0).max(0.0);
+    let icon_h = (height - bleed * 2.0).max(0.0);
+    let side = icon_w.min(icon_h);
+    if side < 16.0 || badge.count == 0 {
+        return;
+    }
+
+    let text = format_badge_count(badge.count);
+    let pill_h = (side * 0.43).clamp(20.0, 38.0);
+    let font_size = (pill_h * 0.66).clamp(12.5, 24.0);
+
+    let _ = cr.save();
+    cr.select_font_face("SF Pro Display", FontSlant::Normal, FontWeight::Bold);
+    cr.set_font_size(font_size);
+
+    let text_w = cr
+        .text_extents(&text)
+        .map(|ext| ext.width().max(ext.x_advance()))
+        .unwrap_or(font_size * 0.62 * text.len() as f64);
+    let h_pad = (pill_h * 0.32).max(5.5);
+    let pill_w = if text.len() <= 1 {
+        pill_h
+    } else {
+        (text_w + h_pad * 2.0).max(pill_h * 1.22)
+    };
+
+    // Esquina superior derecha sobresaliendo por fuera del borde del icono (estilo macOS)
+    let icon_right = bleed + icon_w;
+    let icon_top = bleed;
+    let max_out_x = (bleed - 2.0).max(0.0);
+    let max_out_y = (bleed - 2.0).max(0.0);
+    let out_x = (pill_h * 0.36).min(max_out_x);
+    let out_y = (pill_h * 0.36).min(max_out_y);
+    let cx = icon_right - pill_w * 0.5 + out_x;
+    let cy = icon_top + pill_h * 0.5 - out_y;
+
+    // Aplicar animación elástica pop-in centrada en el globo
+    cr.translate(cx, cy);
+    cr.scale(badge.scale, badge.scale);
+    let x = -pill_w * 0.5;
+    let y = -pill_h * 0.5;
+
+    // 1. Sombra suave inferior
+    capsule_path(cr, x, y + 1.25, pill_w, pill_h);
+    cr.set_source_rgba(0.0, 0.0, 0.0, 0.32);
+    let _ = cr.fill();
+
+    // 2. Relleno rojo macOS (degradado vertical SF Red)
+    capsule_path(cr, x, y, pill_w, pill_h);
+    let grad = LinearGradient::new(0.0, y, 0.0, y + pill_h);
+    if badge.urgent {
+        grad.add_color_stop_rgba(0.0, 1.0, 0.34, 0.28, 1.0);
+        grad.add_color_stop_rgba(1.0, 0.96, 0.14, 0.11, 1.0);
+    } else {
+        grad.add_color_stop_rgba(0.0, 1.0, 0.27, 0.23, 1.0);
+        grad.add_color_stop_rgba(1.0, 0.94, 0.18, 0.14, 1.0);
+    }
+    let _ = cr.set_source(&grad);
+    let _ = cr.fill_preserve();
+
+    // 3. Borde especular sutil para separación sobre iconos claros y oscuros
+    cr.set_line_width(0.8);
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.34);
+    let _ = cr.stroke();
+
+    // 4. Número centrado ópticamente en blanco puro
+    if let Ok(ext) = cr.text_extents(&text) {
+        let tx = -(ext.width() * 0.5 + ext.x_bearing());
+        let ty = -(ext.height() * 0.5 + ext.y_bearing());
+        cr.move_to(tx, ty);
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.98);
+        let _ = cr.show_text(&text);
+    }
+
+    let _ = cr.restore();
+}
+
 fn draw_download_progress_circle(cr: &Context, width: f64, height: f64, vis: ProgressVisual) {
-    let side = width.min(height);
+    let bleed = OVERLAY_BLEED_PX as f64;
+    let icon_w = (width - bleed * 2.0).max(0.0);
+    let icon_h = (height - bleed * 2.0).max(0.0);
+    let side = icon_w.min(icon_h);
     if side < 16.0 {
         return;
     }
@@ -1469,9 +2104,9 @@ fn draw_download_progress_circle(cr: &Context, width: f64, height: f64, vis: Pro
     let is_dark = adw::StyleManager::default().is_dark();
     let diameter = (side * 0.44).clamp(18.0, 44.0);
     let r = diameter * 0.5;
-    let margin = (side * 0.025).max(1.0);
-    let cx = width - r - margin;
-    let cy = height - r - margin;
+    let out = (r * 0.16).min((bleed - 2.0).max(0.0));
+    let cx = bleed + icon_w - r + out;
+    let cy = bleed + icon_h - r + out;
     let stroke = (diameter * 0.125).clamp(2.0, 4.2);
     let ring_r = (r - stroke * 1.15).max(3.5);
     let alpha = vis.alpha;
@@ -1579,6 +2214,7 @@ fn draw_download_progress_circle(cr: &Context, width: f64, height: f64, vis: Pro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use malus_de_common::config::AppNotificationRule;
 
     #[test]
     fn normalizes_unity_launcher_uris_and_matches_browsers_and_apps() {
@@ -1636,19 +2272,25 @@ mod tests {
     }
 
     #[test]
-    fn parses_dbus_unity_update_variant_tuple() {
+    fn parses_dbus_unity_update_variant_tuple_with_progress_and_count() {
         let dict = glib::VariantDict::new(None);
         dict.insert("progress", 0.42_f64);
         dict.insert("progress-visible", true);
+        dict.insert("count", 7_i64);
+        dict.insert("count-visible", true);
+        dict.insert("urgent", true);
         let tuple = glib::Variant::tuple_from_iter([
             "application://brave-origin.desktop".to_variant(),
             dict.end(),
         ]);
-        let (uri, progress, visible) =
+        let payload =
             parse_unity_update_variant(&tuple).expect("debe parsear la tupla D-Bus (sa{sv})");
-        assert_eq!(uri, "application://brave-origin.desktop");
-        assert!((progress.unwrap() - 0.42).abs() < 1e-6);
-        assert_eq!(visible, Some(true));
+        assert_eq!(payload.app_uri, "application://brave-origin.desktop");
+        assert!((payload.progress.unwrap() - 0.42).abs() < 1e-6);
+        assert_eq!(payload.progress_visible, Some(true));
+        assert_eq!(payload.count, Some(7));
+        assert_eq!(payload.count_visible, Some(true));
+        assert_eq!(payload.urgent, Some(true));
     }
 
     #[test]
@@ -1658,10 +2300,12 @@ mod tests {
 
         let fade = apply_launcher_update(
             &mut entries,
-            "application://firefox.desktop",
+            &UnityUpdatePayload {
+                app_uri: "application://firefox.desktop".to_string(),
+                progress_visible: Some(true),
+                ..Default::default()
+            },
             Some(":1.42".to_string()),
-            None,
-            Some(true),
             t0,
         );
         assert!(!fade);
@@ -1680,10 +2324,12 @@ mod tests {
 
         apply_launcher_update(
             &mut entries,
-            "application://firefox.desktop",
+            &UnityUpdatePayload {
+                app_uri: "application://firefox.desktop".to_string(),
+                progress: Some(0.65),
+                ..Default::default()
+            },
             Some(":1.42".to_string()),
-            Some(0.65),
-            None,
             t0,
         );
         let vis2 = compute_visual_from_sources(
@@ -1700,10 +2346,13 @@ mod tests {
 
         apply_launcher_update(
             &mut entries,
-            "application://firefox.desktop",
+            &UnityUpdatePayload {
+                app_uri: "application://firefox.desktop".to_string(),
+                progress: Some(1.0),
+                progress_visible: Some(false),
+                ..Default::default()
+            },
             Some(":1.42".to_string()),
-            Some(1.0),
-            Some(false),
             t0,
         );
         let vis_done = compute_visual_from_sources(
@@ -1721,6 +2370,130 @@ mod tests {
 
         assert!(clear_entries_for_sender(&mut entries, ":1.42"));
         assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn push_notification_badges_accumulate_respect_settings_and_clear_on_focus() {
+        let now = Instant::now();
+        let mut entries = HashMap::new();
+        let mut push_badges = HashMap::new();
+        let mut notif_cfg = NotificationsConfig::default();
+
+        // 1. Dos notificaciones para Telegram mientras otra app está enfocada -> contador = 2
+        let active = vec!["org.gnome.Ptyxis".to_string()];
+        assert!(apply_push_notification(
+            &mut push_badges,
+            &active,
+            &notif_cfg,
+            "org.telegram.desktop",
+            "Telegram",
+            "telegram",
+            false,
+            1,
+            now,
+        ));
+        assert!(apply_push_notification(
+            &mut push_badges,
+            &active,
+            &notif_cfg,
+            "org.telegram.desktop",
+            "Telegram",
+            "telegram",
+            false,
+            1,
+            now,
+        ));
+        // Una notificación que reemplaza a otra existente no duplica el contador
+        assert!(apply_push_notification(
+            &mut push_badges,
+            &active,
+            &notif_cfg,
+            "org.telegram.desktop",
+            "Telegram",
+            "telegram",
+            true,
+            1,
+            now,
+        ));
+
+        let bdg = compute_badge_visual_for_app(
+            &entries,
+            &push_badges,
+            &notif_cfg,
+            &["telegram".to_string()],
+            "Telegram",
+            "telegram-desktop",
+            "telegram",
+            now,
+        )
+        .expect("Telegram debe mostrar globo rojo con contador 2");
+        assert_eq!(bdg.count, 2);
+        assert_eq!(format_badge_count(bdg.count), "2");
+        assert_eq!(format_badge_count(120), "99+");
+
+        // 2. Si Telegram reporta su contador exacto vía Unity LauncherEntry, tiene prioridad
+        apply_launcher_update(
+            &mut entries,
+            &UnityUpdatePayload {
+                app_uri: "application://org.telegram.desktop.desktop".to_string(),
+                count: Some(5),
+                count_visible: Some(true),
+                ..Default::default()
+            },
+            Some(":1.99".to_string()),
+            now,
+        );
+        let bdg_unity = compute_badge_visual_for_app(
+            &entries,
+            &push_badges,
+            &notif_cfg,
+            &["telegram".to_string()],
+            "Telegram",
+            "telegram-desktop",
+            "telegram",
+            now,
+        )
+        .unwrap();
+        assert_eq!(bdg_unity.count, 5);
+
+        // 3. Desactivar "Contadores en el ícono de la app" en Ajustes oculta el globo
+        notif_cfg.set_rule_for_app(
+            "Telegram",
+            AppNotificationRule {
+                badge_icon: false,
+                ..AppNotificationRule::default()
+            },
+        );
+        assert!(compute_badge_visual_for_app(
+            &entries,
+            &push_badges,
+            &notif_cfg,
+            &["telegram".to_string()],
+            "Telegram",
+            "telegram-desktop",
+            "telegram",
+            now,
+        )
+        .is_none());
+
+        // 4. Si la app ya tiene el foco, no acumula globos nuevos
+        let notif_cfg_default = NotificationsConfig::default();
+        assert!(!apply_push_notification(
+            &mut push_badges,
+            &["org.mozilla.firefox".to_string()],
+            &notif_cfg_default,
+            "org.mozilla.firefox",
+            "Firefox",
+            "firefox",
+            false,
+            1,
+            now,
+        ));
+
+        // 5. Curva pop-in del globo push
+        assert!((badge_pop_scale(0.0) - 0.35).abs() < 1e-6);
+        assert!(badge_pop_scale(130.0) > 1.0);
+        assert!((badge_pop_scale(BADGE_POP_ANIM_MS) - 1.0).abs() < 1e-6);
     }
 
     #[test]

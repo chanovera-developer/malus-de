@@ -4219,6 +4219,9 @@ pub struct AppNotificationRule {
     pub style: NotificationAlertStyle,
     #[serde(default = "default_true")]
     pub sound: bool,
+    /// Muestra el contador rojo (globo push) en el ícono de la aplicación en el Dock.
+    #[serde(default = "default_true")]
+    pub badge_icon: bool,
     /// `None` hereda la opción global `preview_mode`.
     #[serde(default)]
     pub preview_override: Option<NotificationPreviewMode>,
@@ -4230,13 +4233,14 @@ impl Default for AppNotificationRule {
             enabled: true,
             style: NotificationAlertStyle::Banners,
             sound: true,
+            badge_icon: true,
             preview_override: None,
         }
     }
 }
 
 impl AppNotificationRule {
-    /// Resumen compacto estilo macOS (ej. «Tiras, Sonidos» o «Desactivadas»).
+    /// Resumen compacto estilo macOS (ej. «Tiras, Sonidos, Globos» o «Desactivadas»).
     pub fn summary_label(&self) -> String {
         if !self.enabled {
             return "Desactivadas".to_string();
@@ -4249,6 +4253,9 @@ impl AppNotificationRule {
         }
         if self.sound {
             parts.push("Sonidos");
+        }
+        if self.badge_icon {
+            parts.push("Globos");
         }
         if parts.is_empty() {
             "Silenciosas".to_string()
@@ -4418,7 +4425,10 @@ mod tests {
     fn notifications_config_rules_and_summary_labels_work() {
         let mut cfg = NotificationsConfig::default();
         assert_eq!(cfg.preview_mode, NotificationPreviewMode::WhenUnlocked);
-        assert_eq!(cfg.rule_for_app("Branches").summary_label(), "Tiras, Sonidos");
+        assert_eq!(
+            cfg.rule_for_app("Branches").summary_label(),
+            "Tiras, Sonidos, Globos"
+        );
 
         cfg.set_rule_for_app(
             "Firefox",
@@ -4426,10 +4436,12 @@ mod tests {
                 enabled: false,
                 style: NotificationAlertStyle::Alerts,
                 sound: false,
+                badge_icon: false,
                 preview_override: Some(NotificationPreviewMode::Never),
             },
         );
         assert!(!cfg.rule_for_app("firefox").enabled);
+        assert!(!cfg.rule_for_app("firefox").badge_icon);
         assert_eq!(cfg.rule_for_app("Firefox").summary_label(), "Desactivadas");
         assert_eq!(
             cfg.effective_preview_mode("firefox"),

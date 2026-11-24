@@ -433,17 +433,75 @@ pub struct NotificationMsg {
     pub sound: bool,
 }
 
+fn extract_hint_str(hints: &HashMap<String, Value<'_>>, key: &str) -> Option<String> {
+    hints
+        .get(key)
+        .and_then(|v| <&str>::try_from(v).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn extract_hint_bool(hints: &HashMap<String, Value<'_>>, key: &str) -> bool {
+    hints
+        .get(key)
+        .and_then(|v| bool::try_from(v).ok())
+        .unwrap_or(false)
+}
+
+fn extract_hint_urgency(hints: &HashMap<String, Value<'_>>) -> u8 {
+    hints
+        .get("urgency")
+        .and_then(|v| {
+            u8::try_from(v)
+                .ok()
+                .or_else(|| u32::try_from(v).ok().map(|n| n.min(2) as u8))
+                .or_else(|| i32::try_from(v).ok().map(|n| n.clamp(0, 2) as u8))
+        })
+        .unwrap_or(1)
+}
+
+fn should_skip_dock_push_badge(
+    app_name: &str,
+    desktop_entry: &str,
+    category: Option<&str>,
+    transient: bool,
+) -> bool {
+    if transient {
+        return true;
+    }
+    let name_low = app_name.trim().to_ascii_lowercase();
+    let entry_low = desktop_entry.trim().to_ascii_lowercase();
+    if name_low == "malus de"
+        || name_low == "malus-de"
+        || entry_low == "malus-de-dock"
+        || entry_low == "malus-de-top-bar"
+    {
+        return true;
+    }
+    if let Some(cat) = category {
+        let cat_low = cat.to_ascii_lowercase();
+        if cat_low.starts_with("device")
+            || cat_low.starts_with("x-malus-osd")
+            || cat_low == "transfer.complete"
+        {
+            return true;
+        }
+    }
+    false
+}
+
 #[zbus::interface(name = "org.freedesktop.Notifications")]
 impl NotificationServer {
     async fn notify(
         &mut self,
+        #[zbus(signal_context)] ctxt: zbus::SignalContext<'_>,
         app_name: String,
         replaces_id: u32,
         app_icon: String,
         summary: String,
         body: String,
         _actions: Vec<String>,
-        _hints: HashMap<String, Value<'_>>,
+        hints: HashMap<String, Value<'_>>,
         _expire_timeout: i32,
     ) -> u32 {
         let id = if replaces_id > 0 {
@@ -452,21 +510,72 @@ impl NotificationServer {
             NOTIFICATION_COUNTER.fetch_add(1, Ordering::SeqCst)
         };
 
+        let desktop_entry = extract_hint_str(&hints, "desktop-entry").unwrap_or_default();
+        let category = extract_hint_str(&hints, "category");
+        let transient = extract_hint_bool(&hints, "transient");
+        let urgency = extract_hint_urgency(&hints);
+
+        let notif_cfg = malus_de_common::config::NotificationsConfig::load();
+        let rule_key = if !app_name.trim().is_empty() {
+            app_name.as_str()
+        } else {
+            desktop_entry.as_str()
+        };
+        let rule = notif_cfg.rule_for_app(rule_key);
+
         info!(
-            "Notificación recibida [id={}] de '{}': '{}' - '{}'",
-            id, app_name, summary, body
+            "Notificación recibida [id={}] de '{}' (desktop_entry='{}'): '{}' - '{}'",
+            id, app_name, desktop_entry, summary, body
         );
 
-        let msg = NotificationMsg {
-            id,
-            app_name,
-            app_icon,
-            summary,
-            body,
-            sound: _hints.contains_key("sound-name") || !_hints.contains_key("suppress-sound"),
-        };
+        if !rule.enabled {
+            info!(
+                "Notificación silenciada por preferencia de usuario para '{}'",
+                rule_key
+            );
+            return id;
+        }
 
-        let _ = self.sender.send(NotificationEvent::Show(msg)).await;
+        if rule.badge_icon
+            && !should_skip_dock_push_badge(
+                &app_name,
+                &desktop_entry,
+                category.as_deref(),
+                transient,
+            )
+        {
+            let is_replacement = replaces_id > 0;
+            let _ = ctxt
+                .connection()
+                .emit_signal(
+                    None::<&str>,
+                    "/org/freedesktop/Notifications",
+                    "dev.malus.Notifications",
+                    "AppNotificationReceived",
+                    &(
+                        desktop_entry.as_str(),
+                        app_name.as_str(),
+                        app_icon.as_str(),
+                        is_replacement,
+                        urgency,
+                    ),
+                )
+                .await;
+        }
+
+        if rule.style != malus_de_common::config::NotificationAlertStyle::None {
+            let msg = NotificationMsg {
+                id,
+                app_name,
+                app_icon,
+                summary,
+                body,
+                sound: rule.sound
+                    && (hints.contains_key("sound-name") || !hints.contains_key("suppress-sound")),
+            };
+
+            let _ = self.sender.send(NotificationEvent::Show(msg)).await;
+        }
         id
     }
 

@@ -665,8 +665,40 @@ fn build_app_detail_pane(
             opts_card.append(&prev_row);
             opts_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 
-            // Contadores en el ícono de la app (por implementar)
-            opts_card.append(&make_pending_switch_row("Contadores en el ícono de la app"));
+            // Contadores en el ícono de la app (globo push en el Dock)
+            let badge_row = GtkBox::builder()
+                .orientation(Orientation::Horizontal)
+                .spacing(12)
+                .css_classes(["wifi-pref-row"])
+                .build();
+            badge_row.append(
+                &Label::builder()
+                    .label("Contadores en el ícono de la app")
+                    .css_classes(["wifi-row-title"])
+                    .xalign(0.0)
+                    .hexpand(true)
+                    .valign(Align::Center)
+                    .build(),
+            );
+            let badge_sw = Switch::builder()
+                .active(current_rule.badge_icon)
+                .css_classes(["macos-switch"])
+                .valign(Align::Center)
+                .build();
+            {
+                let c = cfg_c.clone();
+                let app_name = app.name.clone();
+                badge_sw.connect_state_set(move |_, active| {
+                    let mut guard = c.borrow_mut();
+                    let mut rule = guard.rule_for_app(&app_name);
+                    rule.badge_icon = active;
+                    guard.set_rule_for_app(&app_name, rule);
+                    let _ = guard.save();
+                    glib::Propagation::Proceed
+                });
+            }
+            badge_row.append(&*badge_sw);
+            opts_card.append(&badge_row);
             opts_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
 
             // Notificaciones urgentes / críticas (por implementar)
