@@ -186,7 +186,7 @@ popover.light-popover>arrow {
 
 /* El compositor aplica el recorte squircle (superelipse continua n=4.2) y el borde exterior continuo del contenedor igual que en las ventanas; CSS deja las esquinas a 0 y sin borde rectangular interior para que no se corte en las esquinas */
 popover.malus-popover-menu>contents {
-    background-color: rgba(30, 30, 36, 0.78);
+    background-color: rgba(30, 30, 36, 0.72);
     border: none;
     border-radius: 0;
     box-shadow: none;
@@ -198,7 +198,7 @@ popover.malus-popover-menu>contents {
 }
 
 popover.control-center-popover>contents {
-    background-color: rgba(30, 30, 36, 0.82);
+    background-color: rgba(30, 30, 36, 0.72);
     border: none;
     border-radius: 0;
     box-shadow: none;
@@ -209,11 +209,11 @@ popover.control-center-popover>contents {
     filter: none;
 }
 
-/* Modo Claro en Popovers (fondo al 76%, esquinas a 0 en CSS y borde continuo dibujado en el contenedor por el compositor) */
+/* Modo Claro en Popovers (misma transparencia 0.72 que las sidebars) */
 popover.light-popover.malus-popover-menu>contents,
 popover.light-popover>contents,
 .light-mode popover.malus-popover-menu>contents {
-    background-color: rgba(244, 246, 250, 0.76);
+    background-color: rgba(244, 246, 250, 0.72);
     border: none;
     border-radius: 0;
     box-shadow: none;
@@ -226,7 +226,7 @@ popover.light-popover>contents,
 
 popover.light-popover.control-center-popover>contents,
 .light-mode popover.control-center-popover>contents {
-    background-color: rgba(244, 246, 250, 0.78);
+    background-color: rgba(244, 246, 250, 0.72);
     border: none;
     border-radius: 0;
     box-shadow: none;
@@ -246,14 +246,14 @@ popover.light-popover .menu-row-label {
     color: #1d1d1f;
 }
 
-popover.light-popover .popover-menu-item,
-popover.light-popover button.popover-menu-item,
-popover.light-popover button.flat,
-popover.light-popover modelbutton,
-.light-mode .popover-menu-item,
-.light-mode button.popover-menu-item,
-.light-mode button.flat,
-.light-mode modelbutton,
+popover.light-popover.malus-popover-menu .popover-menu-item,
+popover.light-popover.malus-popover-menu button.popover-menu-item,
+popover.light-popover.malus-popover-menu button.flat,
+popover.light-popover.malus-popover-menu modelbutton,
+.light-mode .malus-popover-menu .popover-menu-item,
+.light-mode .malus-popover-menu button.popover-menu-item,
+.light-mode .malus-popover-menu button.flat,
+.light-mode .malus-popover-menu modelbutton,
 popover.light-popover .menu-row-label,
 .light-mode .menu-row-label {
     color: #1d1d1f;
@@ -262,14 +262,14 @@ popover.light-popover .menu-row-label,
     margin: 1px 2px;
 }
 
-popover.light-popover .popover-menu-item:hover,
-popover.light-popover button.popover-menu-item:hover,
-popover.light-popover button.flat:hover,
-popover.light-popover modelbutton:hover,
-.light-mode .popover-menu-item:hover,
-.light-mode button.popover-menu-item:hover,
-.light-mode button.flat:hover,
-.light-mode modelbutton:hover {
+popover.light-popover.malus-popover-menu .popover-menu-item:hover,
+popover.light-popover.malus-popover-menu button.popover-menu-item:hover,
+popover.light-popover.malus-popover-menu button.flat:hover,
+popover.light-popover.malus-popover-menu modelbutton:hover,
+.light-mode .malus-popover-menu .popover-menu-item:hover,
+.light-mode .malus-popover-menu button.popover-menu-item:hover,
+.light-mode .malus-popover-menu button.flat:hover,
+.light-mode .malus-popover-menu modelbutton:hover {
     background-color: alpha(@accent_bg_color, 0.70);
     border-radius: 6px;
     color: @accent_fg_color;
@@ -458,12 +458,19 @@ popover.light-popover .cc-item-lock,
 
 popover.light-popover .cc-footer-btn,
 .light-mode .cc-footer-btn {
-    color: #52525b;
+    color: #1d1d1f;
 }
 
 popover.light-popover .cc-footer-btn:hover,
 .light-mode .cc-footer-btn:hover {
-    background-color: rgba(0, 0, 0, 0.06);
+    background-color: rgba(0, 0, 0, 0.08);
+    color: #1d1d1f;
+}
+
+popover.light-popover .cc-footer-btn:hover label,
+.light-mode .cc-footer-btn:hover label,
+popover.light-popover .cc-list-row:hover label,
+.light-mode .cc-list-row:hover label {
     color: #1d1d1f;
 }
 
@@ -978,14 +985,20 @@ scale.horizontal slider {
 .cc-list-row {
     background-color: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 255, 255, 0.04);
-    border-radius: 10px;
-    padding: 6px 8px;
-    transition: all 120ms ease;
+    border-radius: 8px;
+    padding: 3px 8px;
+    min-height: 26px;
+    transition: background-color 120ms ease;
 }
 
 .cc-list-row:hover {
-    background-color: rgba(255, 255, 255, 0.12);
-    border-color: rgba(255, 255, 255, 0.15);
+    background-color: rgba(255, 255, 255, 0.10);
+    border-color: rgba(255, 255, 255, 0.06);
+    color: #f4f4f5;
+}
+
+.cc-list-row:hover label {
+    color: #f4f4f5;
 }
 
 .cc-list-row-active {
@@ -1022,17 +1035,23 @@ scale.horizontal slider {
 .cc-footer-btn {
     background: transparent;
     border: none;
-    padding: 6px 10px;
-    border-radius: 6px;
-    font-size: 11px;
-    font-weight: 500;
-    color: #a1a1aa;
-    transition: all 120ms ease;
+    box-shadow: none;
+    padding: 3px 8px;
+    min-height: 22px;
+    border-radius: 7px;
+    font-size: 12.5px;
+    font-weight: 400;
+    color: #f4f4f5;
+    transition: background-color 120ms ease;
 }
 
 .cc-footer-btn:hover {
-    background-color: rgba(255, 255, 255, 0.08);
-    color: #ffffff;
+    background-color: rgba(255, 255, 255, 0.10);
+    color: #f4f4f5;
+}
+
+.cc-footer-btn:hover label {
+    color: #f4f4f5;
 }
 
 .cc-empty-label {
@@ -1129,8 +1148,7 @@ popover.light-popover label {
 
 popover.malus-popover-menu.light-popover>contents button.popover-menu-item:hover label.menu-row-label,
 popover.malus-popover-menu.light-popover>contents button.popover-menu-item:hover label,
-popover.malus-popover-menu.light-popover>contents button:hover label,
-popover.light-popover button:hover label {
+popover.malus-popover-menu.light-popover>contents button:hover label {
     color: #ffffff;
 }
 
@@ -1302,4 +1320,251 @@ switch image {
     min-height: 0px;
     opacity: 0;
     color: transparent;
+}
+
+/* ==========================================================================
+   Menú emergente de Sonido en Top Bar estilo macOS Tahoe
+   ========================================================================== */
+popover.sound-menu-popover > contents,
+popover.light-popover.sound-menu-popover > contents,
+.light-mode popover.sound-menu-popover > contents {
+    padding: 10px 8px 8px 8px;
+}
+
+.sound-menu-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #f4f4f5;
+}
+
+popover.light-popover .sound-menu-title,
+.light-mode .sound-menu-title {
+    color: #14161a;
+}
+
+.sound-menu-section {
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(244, 244, 245, 0.56);
+}
+
+popover.light-popover .sound-menu-section,
+.light-mode .sound-menu-section {
+    color: rgba(20, 22, 26, 0.54);
+}
+
+separator.sound-menu-sep {
+    min-height: 1px;
+    background-color: rgba(255, 255, 255, 0.12);
+    margin: 2px 0;
+}
+
+popover.light-popover separator.sound-menu-sep,
+.light-mode separator.sound-menu-sep {
+    background-color: rgba(0, 0, 0, 0.10);
+}
+
+button.sound-menu-vol-btn {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 1px;
+    margin: 0;
+    min-width: 18px;
+    min-height: 18px;
+    border-radius: 999px;
+    color: rgba(244, 244, 245, 0.78);
+}
+
+button.sound-menu-vol-btn:hover {
+    background-color: rgba(255, 255, 255, 0.10);
+    color: rgba(244, 244, 245, 0.78);
+}
+
+popover.light-popover button.sound-menu-vol-btn,
+.light-mode button.sound-menu-vol-btn {
+    color: rgba(20, 22, 26, 0.76);
+}
+
+popover.light-popover button.sound-menu-vol-btn:hover,
+.light-mode button.sound-menu-vol-btn:hover {
+    background-color: rgba(0, 0, 0, 0.08);
+    color: rgba(20, 22, 26, 0.76);
+}
+
+scale.sound-menu-scale {
+    padding: 4px 2px;
+}
+
+scale.sound-menu-scale trough {
+    min-height: 4px;
+    border-radius: 999px;
+    background-color: rgba(255, 255, 255, 0.22);
+    border: none;
+}
+
+popover.light-popover scale.sound-menu-scale trough,
+.light-mode scale.sound-menu-scale trough {
+    background-color: rgba(0, 0, 0, 0.16);
+}
+
+scale.sound-menu-scale highlight {
+    min-height: 4px;
+    border-radius: 999px;
+    background-color: @accent_bg_color;
+}
+
+scale.sound-menu-scale slider {
+    min-width: 20px;
+    min-height: 14px;
+    margin: -5px 0;
+    border-radius: 999px;
+    background-color: #ffffff;
+    border: none;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.24), 0 0 1px rgba(0, 0, 0, 0.12);
+}
+
+button.malus-tray-squircle-row,
+button.malus-tray-squircle-row:hover,
+button.malus-tray-squircle-row:active,
+button.malus-tray-squircle-row:focus,
+button.malus-tray-squircle-row:focus-visible,
+popover.light-popover button.malus-tray-squircle-row,
+popover.light-popover button.malus-tray-squircle-row:hover,
+popover.light-popover button.malus-tray-squircle-row:active,
+.light-mode button.malus-tray-squircle-row,
+.light-mode button.malus-tray-squircle-row:hover,
+.light-mode button.malus-tray-squircle-row:active {
+    background: transparent;
+    background-color: transparent;
+    background-image: none;
+    border: none;
+    border-radius: 0px;
+    box-shadow: none;
+    padding: 0px;
+    margin: 0px;
+    min-height: 0px;
+    min-width: 0px;
+    outline: none;
+    outline-width: 0px;
+    transition: none;
+}
+
+button.sound-menu-device-row {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 0px;
+    padding: 0px;
+    margin: 0px;
+    min-height: 0px;
+    color: #f4f4f5;
+}
+
+button.sound-menu-device-row:hover {
+    background-color: transparent;
+    color: #f4f4f5;
+}
+
+button.sound-menu-device-row:hover label {
+    color: #f4f4f5;
+}
+
+popover.light-popover button.sound-menu-device-row,
+.light-mode button.sound-menu-device-row {
+    color: #14161a;
+}
+
+popover.light-popover button.sound-menu-device-row:hover,
+.light-mode button.sound-menu-device-row:hover {
+    background-color: transparent;
+    color: #14161a;
+}
+
+popover.light-popover button.sound-menu-device-row:hover label,
+.light-mode button.sound-menu-device-row:hover label {
+    color: #14161a;
+}
+
+.sound-menu-device-circle {
+    min-width: 24px;
+    min-height: 24px;
+    border-radius: 999px;
+    background-color: rgba(255, 255, 255, 0.14);
+    color: #f4f4f5;
+}
+
+.bt-menu-device-circle {
+    min-width: 20px;
+    min-height: 20px;
+    border-radius: 999px;
+    background-color: rgba(255, 255, 255, 0.14);
+    color: #f4f4f5;
+}
+
+popover.light-popover .sound-menu-device-circle,
+.light-mode .sound-menu-device-circle,
+popover.light-popover .bt-menu-device-circle,
+.light-mode .bt-menu-device-circle {
+    background-color: rgba(0, 0, 0, 0.08);
+    color: #1d1d1f;
+}
+
+.sound-menu-device-circle-active,
+popover.light-popover .sound-menu-device-circle-active,
+.light-mode .sound-menu-device-circle-active,
+.bt-menu-device-circle-active,
+popover.light-popover .bt-menu-device-circle-active,
+.light-mode .bt-menu-device-circle-active {
+    background-color: @accent_bg_color;
+    color: #ffffff;
+}
+
+.sound-menu-device-name {
+    font-size: 12.5px;
+    font-weight: 400;
+    color: #f4f4f5;
+}
+
+popover.light-popover .sound-menu-device-name,
+.light-mode .sound-menu-device-name {
+    color: #14161a;
+}
+
+button.sound-menu-footer-btn {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 0px;
+    padding: 0px;
+    margin: 0px;
+    min-height: 0px;
+    font-size: 12.5px;
+    font-weight: 400;
+    color: #f4f4f5;
+}
+
+button.sound-menu-footer-btn:hover {
+    background-color: transparent;
+    color: #f4f4f5;
+}
+
+button.sound-menu-footer-btn:hover label {
+    color: #f4f4f5;
+}
+
+popover.light-popover button.sound-menu-footer-btn,
+.light-mode button.sound-menu-footer-btn {
+    color: #14161a;
+}
+
+popover.light-popover button.sound-menu-footer-btn:hover,
+.light-mode button.sound-menu-footer-btn:hover {
+    background-color: transparent;
+    color: #14161a;
+}
+
+popover.light-popover button.sound-menu-footer-btn:hover label,
+.light-mode button.sound-menu-footer-btn:hover label {
+    color: #14161a;
 }

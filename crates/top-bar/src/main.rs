@@ -68,10 +68,11 @@ fn apply_topbar_accent_color(index: usize) {
 
 fn build_topbar_glass_css(opacity: f64, show_background: bool) -> String {
     let scale = malus_de_common::config::liquid_glass_scale_for(opacity);
-    let dark_pop = malus_de_common::config::scaled_liquid_glass_alpha(0.78, scale, 0.14, 0.96);
-    let dark_cc = malus_de_common::config::scaled_liquid_glass_alpha(0.82, scale, 0.16, 0.96);
-    let light_pop = malus_de_common::config::scaled_liquid_glass_alpha(0.76, scale, 0.14, 0.96);
-    let light_cc = malus_de_common::config::scaled_liquid_glass_alpha(0.78, scale, 0.14, 0.96);
+    // Misma transparencia Liquid Glass que las barras laterales de Ajustes y Branches (`0.72` base, `0.12..0.96`).
+    let menu_a = malus_de_common::config::scaled_liquid_glass_alpha(0.72, scale, 0.12, 0.96);
+    let side_tint = malus_de_common::config::sidebar_tint_background_image_css(
+        malus_de_common::config::load_tint_windows_with_wallpaper(),
+    );
     let bar_bg = if show_background {
         let bar_a = malus_de_common::config::scaled_liquid_glass_alpha(0.46, scale, 0.16, 0.86);
         format!(
@@ -130,13 +131,19 @@ fn build_topbar_glass_css(opacity: f64, show_background: bool) -> String {
     };
     format!(
         "{bar_bg} \
-         popover.malus-popover-menu>contents {{ background-color: rgba(30, 30, 36, {dark_pop:.3}); }} \
-         popover.control-center-popover>contents {{ background-color: rgba(30, 30, 36, {dark_cc:.3}); }} \
+         popover.malus-popover-menu>contents, \
+         popover.control-center-popover>contents {{ \
+             background-color: rgba(30, 30, 36, {menu_a:.3}); \
+             background-image: {side_tint}; \
+         }} \
          popover.light-popover.malus-popover-menu>contents, \
          popover.light-popover>contents, \
-         .light-mode popover.malus-popover-menu>contents {{ background-color: rgba(244, 246, 250, {light_pop:.3}); }} \
+         .light-mode popover.malus-popover-menu>contents, \
          popover.light-popover.control-center-popover>contents, \
-         .light-mode popover.control-center-popover>contents {{ background-color: rgba(244, 246, 250, {light_cc:.3}); }}"
+         .light-mode popover.control-center-popover>contents {{ \
+             background-color: rgba(244, 246, 250, {menu_a:.3}); \
+             background-image: {side_tint}; \
+         }}"
     )
 }
 

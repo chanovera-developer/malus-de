@@ -187,7 +187,7 @@ fn create_wifi_tray_button() -> MenuButton {
     menu_btn.set_child(Some(&icon));
 
     let popover = Popover::builder()
-        .css_classes(["control-center-popover"])
+        .css_classes(["control-center-popover", "sound-menu-popover"])
         .has_arrow(false)
         .position(gtk4::PositionType::Bottom)
         .halign(Align::End)
@@ -197,25 +197,25 @@ fn create_wifi_tray_button() -> MenuButton {
 
     let popover_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .width_request(270)
-        .spacing(8)
-        .margin_top(4)
-        .margin_bottom(4)
-        .margin_start(4)
-        .margin_end(4)
+        .width_request(292)
+        .spacing(7)
         .build();
 
     // Header: Título + Switch
     let header = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(6)
+        .valign(Align::Center)
+        .margin_start(6)
+        .margin_end(6)
         .build();
 
     let title_lbl = Label::builder()
         .label("Wi-Fi")
-        .css_classes(["cc-subview-title"])
+        .css_classes(["sound-menu-title"])
         .hexpand(true)
         .xalign(0.0)
+        .valign(Align::Center)
         .build();
 
     let wifi_switch = Switch::builder().valign(Align::Center).build();
@@ -224,29 +224,53 @@ fn create_wifi_tray_button() -> MenuButton {
     header.append(&*wifi_switch);
     popover_box.append(&header);
 
-    // Scrolled list de redes
+    let sep_top = Separator::builder()
+        .orientation(Orientation::Horizontal)
+        .css_classes(["sound-menu-sep"])
+        .margin_start(6)
+        .margin_end(6)
+        .build();
+    popover_box.append(&sep_top);
+
+    // Lista ajustada dinámicamente al contenido (sin altura mínima vacía ni padding extra)
     let scrolled = ScrolledWindow::builder()
         .hscrollbar_policy(PolicyType::Never)
         .vscrollbar_policy(PolicyType::Automatic)
-        .min_content_height(160)
-        .max_content_height(230)
+        .max_content_height(260)
         .propagate_natural_height(true)
+        .vexpand(false)
         .build();
 
     let content_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(4)
+        .vexpand(false)
         .build();
     scrolled.set_child(Some(&content_box));
     popover_box.append(&scrolled);
 
     // Footer: Separador y Preferencias de Wi-Fi
-    let sep = Separator::new(Orientation::Horizontal);
-    let pref_btn = Button::builder()
-        .css_classes(["cc-footer-btn"])
-        .label("Preferencias de Wi-Fi...")
-        .has_frame(false)
+    let sep = Separator::builder()
+        .orientation(Orientation::Horizontal)
+        .css_classes(["sound-menu-sep"])
+        .margin_start(6)
+        .margin_end(6)
         .build();
+    let pref_btn = Button::builder()
+        .css_classes(["sound-menu-footer-btn"])
+        .has_frame(false)
+        .halign(Align::Fill)
+        .hexpand(true)
+        .build();
+    pref_btn.set_child(Some(
+        &Label::builder()
+            .label("Preferencias de Wi-Fi...")
+            .xalign(0.0)
+            .halign(Align::Start)
+            .hexpand(true)
+            .build(),
+    ));
+    crate::ui::system_menu::attach_tray_squircle_button(&pref_btn, false, false, 4, 6);
 
     let pop_c = popover.clone();
     pref_btn.connect_clicked(move |_| {
@@ -344,11 +368,14 @@ async fn refresh_wifi_tray_list(
 
     if !enabled {
         let disabled_lbl = Label::builder()
-            .label("El Wi-Fi está desactivado")
-            .css_classes(["cc-empty-label"])
-            .halign(Align::Center)
-            .margin_top(30)
-            .margin_bottom(30)
+            .label("Wi-Fi desactivado")
+            .css_classes(["sound-menu-section"])
+            .xalign(0.0)
+            .halign(Align::Start)
+            .margin_start(6)
+            .margin_end(6)
+            .margin_top(2)
+            .margin_bottom(2)
             .build();
         content_box.append(&disabled_lbl);
         return;
@@ -357,29 +384,55 @@ async fn refresh_wifi_tray_list(
     // Red conectada actualmente
     if let Some(active) = networks.iter().find(|n| n.in_use) {
         let active_header = Label::builder()
-            .label("RED ACTUAL")
-            .css_classes(["cc-section-label"])
+            .label("Red actual")
+            .css_classes(["sound-menu-section"])
             .xalign(0.0)
-            .margin_start(4)
-            .margin_top(2)
+            .halign(Align::Start)
+            .margin_start(6)
+            .margin_end(6)
             .build();
         content_box.append(&active_header);
 
         let active_card = GtkBox::builder()
             .orientation(Orientation::Horizontal)
-            .css_classes(["cc-list-row", "cc-list-row-active"])
+            .halign(Align::Fill)
+            .valign(Align::Center)
+            .hexpand(true)
+            .vexpand(false)
             .spacing(8)
+            .margin_top(2)
+            .margin_bottom(2)
+            .margin_start(6)
+            .margin_end(6)
             .build();
 
+        let circle = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .width_request(24)
+            .height_request(24)
+            .halign(Align::Start)
+            .valign(Align::Center)
+            .hexpand(false)
+            .vexpand(false)
+            .css_classes(["sound-menu-device-circle", "sound-menu-device-circle-active"])
+            .build();
         let sig_icon = Image::builder()
             .icon_name(get_wifi_signal_icon(active.signal))
-            .pixel_size(16)
+            .pixel_size(13)
+            .width_request(24)
+            .height_request(24)
+            .halign(Align::Center)
+            .valign(Align::Center)
+            .hexpand(false)
+            .vexpand(false)
             .build();
+        circle.append(&sig_icon);
 
         let ssid_lbl = Label::builder()
             .label(&active.ssid)
-            .css_classes(["cc-item-title"])
+            .css_classes(["sound-menu-device-name"])
             .hexpand(true)
+            .halign(Align::Start)
             .xalign(0.0)
             .ellipsize(gtk4::pango::EllipsizeMode::End)
             .build();
@@ -387,10 +440,12 @@ async fn refresh_wifi_tray_list(
         let check_icon = Image::builder()
             .icon_name("object-select-symbolic")
             .css_classes(["cc-item-check"])
-            .pixel_size(14)
+            .pixel_size(13)
+            .hexpand(false)
+            .halign(Align::End)
             .build();
 
-        active_card.append(&sig_icon);
+        active_card.append(&circle);
         active_card.append(&ssid_lbl);
         active_card.append(&check_icon);
         content_box.append(&active_card);
@@ -401,45 +456,81 @@ async fn refresh_wifi_tray_list(
     if other_networks.is_empty() {
         let empty_lbl = Label::builder()
             .label("No se detectaron otras redes")
-            .css_classes(["cc-empty-label"])
-            .halign(Align::Center)
+            .css_classes(["sound-menu-section"])
+            .xalign(0.0)
+            .halign(Align::Start)
+            .margin_start(6)
+            .margin_end(6)
+            .margin_top(2)
             .build();
         content_box.append(&empty_lbl);
     } else {
         let others_lbl = Label::builder()
-            .label("OTRAS REDES")
-            .css_classes(["cc-section-label"])
+            .label("Otras redes")
+            .css_classes(["sound-menu-section"])
             .xalign(0.0)
-            .margin_start(4)
-            .margin_top(6)
+            .halign(Align::Start)
+            .margin_start(6)
+            .margin_end(6)
+            .margin_top(4)
             .build();
         content_box.append(&others_lbl);
 
+        let list_box = GtkBox::builder()
+            .orientation(Orientation::Vertical)
+            .spacing(2)
+            .vexpand(false)
+            .build();
+
         for net in other_networks {
             let row_btn = Button::builder()
-                .css_classes(["cc-list-row"])
+                .css_classes(["sound-menu-device-row"])
                 .has_frame(false)
+                .halign(Align::Fill)
+                .hexpand(true)
                 .build();
 
             let row_content = GtkBox::builder()
                 .orientation(Orientation::Horizontal)
+                .halign(Align::Fill)
+                .valign(Align::Center)
+                .hexpand(true)
+                .vexpand(false)
                 .spacing(8)
                 .build();
 
+            let circle = GtkBox::builder()
+                .orientation(Orientation::Horizontal)
+                .width_request(24)
+                .height_request(24)
+                .halign(Align::Start)
+                .valign(Align::Center)
+                .hexpand(false)
+                .vexpand(false)
+                .css_classes(["sound-menu-device-circle"])
+                .build();
             let sig_icon = Image::builder()
                 .icon_name(get_wifi_signal_icon(net.signal))
-                .pixel_size(16)
+                .pixel_size(13)
+                .width_request(24)
+                .height_request(24)
+                .halign(Align::Center)
+                .valign(Align::Center)
+                .hexpand(false)
+                .vexpand(false)
                 .build();
+            circle.append(&sig_icon);
 
             let ssid_lbl = Label::builder()
                 .label(&net.ssid)
-                .css_classes(["cc-item-title"])
+                .css_classes(["sound-menu-device-name"])
                 .hexpand(true)
+                .halign(Align::Start)
                 .xalign(0.0)
                 .ellipsize(gtk4::pango::EllipsizeMode::End)
                 .build();
 
-            row_content.append(&sig_icon);
+            row_content.append(&circle);
             row_content.append(&ssid_lbl);
 
             if net.is_encrypted {
@@ -447,11 +538,14 @@ async fn refresh_wifi_tray_list(
                     .icon_name("channel-secure-symbolic")
                     .css_classes(["cc-item-lock"])
                     .pixel_size(12)
+                    .hexpand(false)
+                    .halign(Align::End)
                     .build();
                 row_content.append(&lock_icon);
             }
 
             row_btn.set_child(Some(&row_content));
+            crate::ui::system_menu::attach_tray_squircle_button(&row_btn, false, false, 2, 6);
 
             let target = net.ssid.clone();
             let cb_c = content_box.clone();
@@ -476,8 +570,10 @@ async fn refresh_wifi_tray_list(
                 });
             });
 
-            content_box.append(&row_btn);
+            list_box.append(&row_btn);
         }
+
+        content_box.append(&list_box);
     }
 }
 
@@ -525,7 +621,7 @@ fn create_bluetooth_tray_button() -> MenuButton {
     menu_btn.set_child(Some(&icon));
 
     let popover = Popover::builder()
-        .css_classes(["control-center-popover"])
+        .css_classes(["control-center-popover", "sound-menu-popover"])
         .has_arrow(false)
         .position(gtk4::PositionType::Bottom)
         .halign(Align::End)
@@ -535,25 +631,25 @@ fn create_bluetooth_tray_button() -> MenuButton {
 
     let popover_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .width_request(270)
-        .spacing(8)
-        .margin_top(4)
-        .margin_bottom(4)
-        .margin_start(4)
-        .margin_end(4)
+        .width_request(292)
+        .spacing(7)
         .build();
 
     // Header: Título + Switch
     let header = GtkBox::builder()
         .orientation(Orientation::Horizontal)
         .spacing(6)
+        .valign(Align::Center)
+        .margin_start(6)
+        .margin_end(6)
         .build();
 
     let title_lbl = Label::builder()
         .label("Bluetooth")
-        .css_classes(["cc-subview-title"])
+        .css_classes(["sound-menu-title"])
         .hexpand(true)
         .xalign(0.0)
+        .valign(Align::Center)
         .build();
 
     let bt_switch = Switch::builder().valign(Align::Center).build();
@@ -562,29 +658,53 @@ fn create_bluetooth_tray_button() -> MenuButton {
     header.append(&*bt_switch);
     popover_box.append(&header);
 
-    // Scrolled list de dispositivos
+    let sep_top = Separator::builder()
+        .orientation(Orientation::Horizontal)
+        .css_classes(["sound-menu-sep"])
+        .margin_start(6)
+        .margin_end(6)
+        .build();
+    popover_box.append(&sep_top);
+
+    // Lista ajustada dinámicamente al contenido (sin altura mínima vacía)
     let scrolled = ScrolledWindow::builder()
         .hscrollbar_policy(PolicyType::Never)
         .vscrollbar_policy(PolicyType::Automatic)
-        .min_content_height(160)
-        .max_content_height(230)
+        .max_content_height(260)
         .propagate_natural_height(true)
+        .vexpand(false)
         .build();
 
     let content_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(4)
+        .vexpand(false)
         .build();
     scrolled.set_child(Some(&content_box));
     popover_box.append(&scrolled);
 
-    // Footer: Separador y Preferencias de Bluetooth
-    let sep = Separator::new(Orientation::Horizontal);
-    let pref_btn = Button::builder()
-        .css_classes(["cc-footer-btn"])
-        .label("Preferencias de Bluetooth...")
-        .has_frame(false)
+    // Footer: Separador y Configuración de Bluetooth...
+    let sep = Separator::builder()
+        .orientation(Orientation::Horizontal)
+        .css_classes(["sound-menu-sep"])
+        .margin_start(6)
+        .margin_end(6)
         .build();
+    let pref_btn = Button::builder()
+        .css_classes(["sound-menu-footer-btn"])
+        .has_frame(false)
+        .halign(Align::Fill)
+        .hexpand(true)
+        .build();
+    pref_btn.set_child(Some(
+        &Label::builder()
+            .label("Configuración de Bluetooth...")
+            .xalign(0.0)
+            .halign(Align::Start)
+            .hexpand(true)
+            .build(),
+    ));
+    crate::ui::system_menu::attach_tray_squircle_button(&pref_btn, false, false, 4, 6);
 
     let pop_c = popover.clone();
     pref_btn.connect_clicked(move |_| {
@@ -684,11 +804,14 @@ async fn refresh_bt_tray_list(
 
     if !powered {
         let disabled_lbl = Label::builder()
-            .label("El Bluetooth está desactivado")
-            .css_classes(["cc-empty-label"])
-            .halign(Align::Center)
-            .margin_top(30)
-            .margin_bottom(30)
+            .label("Bluetooth desactivado")
+            .css_classes(["sound-menu-section"])
+            .xalign(0.0)
+            .halign(Align::Start)
+            .margin_start(6)
+            .margin_end(6)
+            .margin_top(2)
+            .margin_bottom(2)
             .build();
         content_box.append(&disabled_lbl);
         return;
@@ -699,89 +822,105 @@ async fn refresh_bt_tray_list(
     if devices.is_empty() {
         let empty_lbl = Label::builder()
             .label("No hay dispositivos vinculados")
-            .css_classes(["cc-empty-label"])
-            .halign(Align::Center)
-            .margin_top(20)
-            .margin_bottom(20)
+            .css_classes(["sound-menu-section"])
+            .xalign(0.0)
+            .halign(Align::Start)
+            .margin_start(6)
+            .margin_end(6)
+            .margin_top(2)
+            .margin_bottom(2)
             .build();
         content_box.append(&empty_lbl);
         return;
     }
 
     let dev_lbl = Label::builder()
-        .label("DISPOSITIVOS")
-        .css_classes(["cc-section-label"])
+        .label("Dispositivos")
+        .css_classes(["sound-menu-section"])
         .xalign(0.0)
-        .margin_start(4)
-        .margin_top(2)
+        .halign(Align::Start)
+        .margin_start(6)
+        .margin_end(6)
         .build();
     content_box.append(&dev_lbl);
 
+    let list_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
+        .vexpand(false)
+        .build();
+
     for dev in devices {
         let row_btn = Button::builder()
-            .css_classes(["cc-list-row"])
+            .css_classes(["sound-menu-device-row"])
             .has_frame(false)
+            .halign(Align::Fill)
+            .hexpand(true)
             .build();
-
-        if dev.connected {
-            row_btn.add_css_class("cc-list-row-active");
-        }
 
         let row_content = GtkBox::builder()
             .orientation(Orientation::Horizontal)
             .spacing(8)
+            .halign(Align::Fill)
+            .valign(Align::Center)
+            .hexpand(true)
+            .vexpand(false)
             .build();
 
+        let circle = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .width_request(24)
+            .height_request(24)
+            .halign(Align::Start)
+            .valign(Align::Center)
+            .hexpand(false)
+            .vexpand(false)
+            .css_classes(if dev.connected {
+                ["sound-menu-device-circle", "sound-menu-device-circle-active"].as_slice()
+            } else {
+                ["sound-menu-device-circle"].as_slice()
+            })
+            .build();
         let dev_icon = Image::builder()
             .icon_name(&dev.icon_name)
-            .pixel_size(16)
+            .pixel_size(13)
+            .width_request(24)
+            .height_request(24)
+            .halign(Align::Center)
+            .valign(Align::Center)
+            .hexpand(false)
+            .vexpand(false)
             .build();
-
-        let text_box = GtkBox::builder()
-            .orientation(Orientation::Vertical)
-            .hexpand(true)
-            .spacing(1)
-            .build();
+        circle.append(&dev_icon);
 
         let name_lbl = Label::builder()
             .label(&dev.name)
-            .css_classes(["cc-item-title"])
+            .css_classes(["sound-menu-device-name"])
             .xalign(0.0)
+            .halign(Align::Start)
+            .hexpand(true)
             .ellipsize(gtk4::pango::EllipsizeMode::End)
             .build();
 
-        let sub_text = if dev.connected {
-            if let Some(bat) = dev.battery {
-                format!("Conectado • {}% batería", bat)
-            } else {
-                "Conectado".to_string()
-            }
-        } else {
-            "No conectado".to_string()
-        };
-
-        let status_lbl = Label::builder()
-            .label(&sub_text)
-            .css_classes(["cc-item-subtitle"])
-            .xalign(0.0)
-            .build();
-
-        text_box.append(&name_lbl);
-        text_box.append(&status_lbl);
-
-        row_content.append(&dev_icon);
-        row_content.append(&text_box);
+        row_content.append(&circle);
+        row_content.append(&name_lbl);
 
         if dev.connected {
-            let check_icon = Image::builder()
-                .icon_name("object-select-symbolic")
-                .css_classes(["cc-item-check"])
-                .pixel_size(14)
-                .build();
-            row_content.append(&check_icon);
+            if let Some(bat) = dev.battery {
+                let bat_lbl = Label::builder()
+                    .label(format!("{}%", bat))
+                    .css_classes(["sound-menu-section"])
+                    .xalign(1.0)
+                    .halign(Align::End)
+                    .hexpand(false)
+                    .valign(Align::Center)
+                    .build();
+                row_content.append(&bat_lbl);
+            }
         }
 
         row_btn.set_child(Some(&row_content));
+        crate::ui::system_menu::attach_tray_squircle_button(&row_btn, false, false, 2, 6);
 
         let path = dev.path.clone();
         let is_connected = dev.connected;
@@ -810,8 +949,10 @@ async fn refresh_bt_tray_list(
             });
         });
 
-        content_box.append(&row_btn);
+        list_box.append(&row_btn);
     }
+
+    content_box.append(&list_box);
 }
 
 async fn update_bluetooth_tray_icon(icon: &Image) {
@@ -839,7 +980,7 @@ fn create_volume_tray_button() -> MenuButton {
     menu_btn.set_child(Some(&icon));
 
     let popover = Popover::builder()
-        .css_classes(["control-center-popover"])
+        .css_classes(["control-center-popover", "sound-menu-popover"])
         .has_arrow(false)
         .position(gtk4::PositionType::Bottom)
         .halign(Align::End)
@@ -849,120 +990,137 @@ fn create_volume_tray_button() -> MenuButton {
 
     let popover_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .width_request(270)
-        .spacing(10)
-        .margin_top(4)
-        .margin_bottom(4)
-        .margin_start(4)
-        .margin_end(4)
+        .width_request(292)
+        .spacing(7)
         .build();
 
-    // Slider card idéntico al Centro de Control
-    let sound_card = GtkBox::builder()
+    // Cabecera "Sonido" + slider estilo macOS Tahoe (sin tarjeta anidada)
+    let sound_section = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .css_classes(["cc-slider-card"])
         .spacing(6)
+        .margin_start(6)
+        .margin_end(6)
         .build();
-
-    let sound_header = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(6)
-        .build();
-
-    let mute_btn = Button::builder()
-        .css_classes(["cc-mute-btn"])
-        .has_frame(false)
-        .tooltip_text("Silenciar / Reactivar Audio")
-        .build();
-    let vol_inner_icon = Image::from_icon_name("audio-volume-high-symbolic");
-    mute_btn.set_child(Some(&vol_inner_icon));
 
     let sound_title = Label::builder()
         .label("Sonido")
-        .css_classes(["cc-tile-title"])
-        .hexpand(true)
+        .css_classes(["sound-menu-title"])
         .xalign(0.0)
         .build();
+    sound_section.append(&sound_title);
 
-    let sound_pct = Label::builder()
-        .label("75%")
-        .css_classes(["cc-tile-subtitle"])
+    let slider_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(6)
+        .valign(Align::Center)
         .build();
 
-    sound_header.append(&mute_btn);
-    sound_header.append(&sound_title);
-    sound_header.append(&sound_pct);
+    let mute_btn = Button::builder()
+        .css_classes(["sound-menu-vol-btn"])
+        .has_frame(false)
+        .valign(Align::Center)
+        .tooltip_text("Silenciar / Reactivar audio")
+        .build();
+    let vol_low_icon = Image::builder()
+        .icon_name("audio-volume-low-symbolic")
+        .pixel_size(14)
+        .build();
+    mute_btn.set_child(Some(&vol_low_icon));
 
     let volume_scale = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
     volume_scale.set_value(75.0);
     volume_scale.set_draw_value(false);
+    volume_scale.set_hexpand(true);
+    volume_scale.set_valign(Align::Center);
+    volume_scale.set_css_classes(&["sound-menu-scale"]);
 
-    sound_card.append(&sound_header);
-    sound_card.append(&volume_scale);
-    popover_box.append(&sound_card);
+    let max_vol_btn = Button::builder()
+        .css_classes(["sound-menu-vol-btn"])
+        .has_frame(false)
+        .valign(Align::Center)
+        .tooltip_text("Subir volumen")
+        .build();
+    let vol_high_icon = Image::builder()
+        .icon_name("audio-volume-high-symbolic")
+        .pixel_size(15)
+        .build();
+    max_vol_btn.set_child(Some(&vol_high_icon));
 
-    // Sección Dispositivo de Salida
+    slider_row.append(&mute_btn);
+    slider_row.append(&volume_scale);
+    slider_row.append(&max_vol_btn);
+    sound_section.append(&slider_row);
+    popover_box.append(&sound_section);
+
+    let sep_top = Separator::builder()
+        .orientation(Orientation::Horizontal)
+        .css_classes(["sound-menu-sep"])
+        .margin_start(6)
+        .margin_end(6)
+        .build();
+    popover_box.append(&sep_top);
+
+    // Sección "Salida" con lista real de dispositivos PipeWire y círculo azul activo
     let output_section = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .spacing(4)
+        .spacing(5)
         .build();
 
     let output_lbl = Label::builder()
-        .label("SALIDA")
-        .css_classes(["cc-section-label"])
+        .label("Salida")
+        .css_classes(["sound-menu-section"])
         .xalign(0.0)
-        .margin_start(4)
+        .margin_start(6)
+        .margin_end(6)
         .build();
     output_section.append(&output_lbl);
 
-    let dev_card = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .css_classes(["cc-list-row", "cc-list-row-active"])
-        .spacing(8)
+    let devices_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(2)
         .build();
-
-    let dev_icon = Image::builder()
-        .icon_name("audio-speakers-symbolic")
-        .pixel_size(16)
-        .build();
-
-    let dev_name_lbl = Label::builder()
-        .label("Altavoces")
-        .css_classes(["cc-item-title"])
-        .hexpand(true)
-        .xalign(0.0)
-        .ellipsize(gtk4::pango::EllipsizeMode::End)
-        .build();
-
-    let dev_check = Image::builder()
-        .icon_name("object-select-symbolic")
-        .css_classes(["cc-item-check"])
-        .pixel_size(14)
-        .build();
-
-    dev_card.append(&dev_icon);
-    dev_card.append(&dev_name_lbl);
-    dev_card.append(&dev_check);
-    output_section.append(&dev_card);
+    output_section.append(&devices_box);
     popover_box.append(&output_section);
 
-    // Footer: Separador y Preferencias de Sonido
-    let sep = Separator::new(Orientation::Horizontal);
-    let pref_btn = Button::builder()
-        .css_classes(["cc-footer-btn"])
-        .label("Preferencias de Sonido...")
-        .has_frame(false)
+    let sep_bottom = Separator::builder()
+        .orientation(Orientation::Horizontal)
+        .css_classes(["sound-menu-sep"])
+        .margin_start(6)
+        .margin_end(6)
         .build();
+    popover_box.append(&sep_bottom);
+
+    // Footer: "Configuración de Sonido..." -> abre Malus DE Settings (--panel sound)
+    let pref_btn = Button::builder()
+        .css_classes(["sound-menu-footer-btn"])
+        .has_frame(false)
+        .halign(Align::Fill)
+        .hexpand(true)
+        .build();
+    pref_btn.set_child(Some(
+        &Label::builder()
+            .label("Configuración de Sonido...")
+            .xalign(0.0)
+            .halign(Align::Start)
+            .hexpand(true)
+            .build(),
+    ));
+    crate::ui::system_menu::attach_tray_squircle_button(&pref_btn, false, false, 4, 6);
 
     let pop_c = popover.clone();
     pref_btn.connect_clicked(move |_| {
         pop_c.popdown();
-        let mut command = Command::new("gnome-control-center");
+        let settings_bin = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|dir| dir.join("malus-de-settings")))
+            .filter(|p| p.exists())
+            .unwrap_or_else(|| std::path::PathBuf::from("malus-de-settings"));
+        let mut command = Command::new(settings_bin);
         malus_de_common::config::set_cursor_environment(&mut command);
-        let _ = command.arg("sound").spawn();
+        if let Err(err) = command.args(["--panel", "sound"]).spawn() {
+            tracing::error!("No se pudieron abrir los ajustes de Sonido de Malus DE: {err}");
+        }
     });
-
-    popover_box.append(&sep);
     popover_box.append(&pref_btn);
 
     popover.set_child(Some(&popover_box));
@@ -971,8 +1129,7 @@ fn create_volume_tray_button() -> MenuButton {
     // Lógica del Slider de volumen
     let is_updating_vol = Rc::new(RefCell::new(false));
     let is_upd_scale = is_updating_vol.clone();
-    let pct_scale = sound_pct.clone();
-    let inner_ico_scale = vol_inner_icon.clone();
+    let low_ico_scale = vol_low_icon.clone();
     let tray_ico_scale = icon.clone();
 
     volume_scale.connect_value_changed(move |scale| {
@@ -980,9 +1137,7 @@ fn create_volume_tray_button() -> MenuButton {
             return;
         }
         let val = scale.value();
-        pct_scale.set_label(&format!("{}%", val.round() as i32));
-
-        let icon_name = if val < 1.0 {
+        let tray_icon_name = if val < 1.0 {
             "audio-volume-muted-symbolic"
         } else if val < 35.0 {
             "audio-volume-low-symbolic"
@@ -991,83 +1146,83 @@ fn create_volume_tray_button() -> MenuButton {
         } else {
             "audio-volume-high-symbolic"
         };
-
-        inner_ico_scale.set_icon_name(Some(icon_name));
-        tray_ico_scale.set_icon_name(Some(icon_name));
+        low_ico_scale.set_icon_name(Some(if val < 1.0 {
+            "audio-volume-muted-symbolic"
+        } else {
+            "audio-volume-low-symbolic"
+        }));
+        tray_ico_scale.set_icon_name(Some(tray_icon_name));
 
         AudioService::set_volume(val);
     });
 
-    // Botón Silenciar
-    let is_upd_mute = is_updating_vol.clone();
-    let scale_mute = volume_scale.clone();
-    let pct_mute = sound_pct.clone();
-    let inner_ico_mute = vol_inner_icon.clone();
-    let tray_ico_mute = icon.clone();
-
-    mute_btn.connect_clicked(move |_| {
-        AudioService::toggle_mute();
-        let sc = scale_mute.clone();
-        let pc = pct_mute.clone();
-        let ii = inner_ico_mute.clone();
-        let ti = tray_ico_mute.clone();
-        let lk = is_upd_mute.clone();
-
-        glib::MainContext::default().spawn_local(async move {
-            refresh_volume_tray_ui(&sc, &pc, &ii, &ti, &lk).await;
+    // Botón izquierdo: silenciar / reactivar
+    {
+        let sc = volume_scale.clone();
+        let li = vol_low_icon.clone();
+        let ti = icon.clone();
+        let lk = is_updating_vol.clone();
+        mute_btn.connect_clicked(move |_| {
+            AudioService::toggle_mute();
+            let sc_c = sc.clone();
+            let li_c = li.clone();
+            let ti_c = ti.clone();
+            let lk_c = lk.clone();
+            glib::MainContext::default().spawn_local(async move {
+                refresh_volume_tray_ui(&sc_c, &li_c, &ti_c, &lk_c).await;
+            });
         });
-    });
+    }
+
+    // Botón derecho: subir volumen (+10%)
+    {
+        let sc = volume_scale.clone();
+        max_vol_btn.connect_clicked(move |_| {
+            let next = (sc.value() + 10.0).min(100.0);
+            sc.set_value(next);
+        });
+    }
+
+    let refresh_devices_and_vol: Rc<dyn Fn()> = {
+        let sc = volume_scale.clone();
+        let li = vol_low_icon.clone();
+        let ti = icon.clone();
+        let lk = is_updating_vol.clone();
+        let dev_box = devices_box.clone();
+        Rc::new(move || {
+            let sc_c = sc.clone();
+            let li_c = li.clone();
+            let ti_c = ti.clone();
+            let lk_c = lk.clone();
+            let dev_box_c = dev_box.clone();
+            glib::MainContext::default().spawn_local(async move {
+                refresh_volume_tray_ui(&sc_c, &li_c, &ti_c, &lk_c).await;
+                let devices = AudioService::list_output_devices().await;
+                populate_sound_output_rows(&dev_box_c, &devices, &sc_c, &li_c, &ti_c, &lk_c);
+            });
+        })
+    };
 
     // Actualizar al abrir Popover
-    let sc_pop = volume_scale.clone();
-    let pc_pop = sound_pct.clone();
-    let ii_pop = vol_inner_icon.clone();
-    let ti_pop = icon.clone();
-    let lk_pop = is_updating_vol.clone();
-    let dn_pop = dev_name_lbl.clone();
-    let di_pop = dev_icon.clone();
-
-    popover.connect_show(move |_| {
-        let sc = sc_pop.clone();
-        let pc = pc_pop.clone();
-        let ii = ii_pop.clone();
-        let ti = ti_pop.clone();
-        let lk = lk_pop.clone();
-        let dn = dn_pop.clone();
-        let di = di_pop.clone();
-
-        glib::MainContext::default().spawn_local(async move {
-            refresh_volume_tray_ui(&sc, &pc, &ii, &ti, &lk).await;
-            let sink_name = AudioService::get_active_sink_name().await;
-            dn.set_label(&sink_name);
-            let s_lower = sink_name.to_lowercase();
-            if s_lower.contains("space one")
-                || s_lower.contains("auricular")
-                || s_lower.contains("headphone")
-                || s_lower.contains("headset")
-                || s_lower.contains("buds")
-            {
-                di.set_icon_name(Some("audio-headset-symbolic"));
-            } else {
-                di.set_icon_name(Some("audio-speakers-symbolic"));
-            }
+    {
+        let rf = refresh_devices_and_vol.clone();
+        popover.connect_show(move |_| {
+            rf();
         });
-    });
+    }
 
     // Actualización inicial y registro para refresco en vivo (teclas multimedia / IPC)
     let sc_init = volume_scale.clone();
-    let pc_init = sound_pct.clone();
-    let ii_init = vol_inner_icon.clone();
+    let li_init = vol_low_icon.clone();
     let ti_init = icon.clone();
     let lk_init = is_updating_vol.clone();
     let trigger_vol_refresh: Rc<dyn Fn()> = Rc::new(move || {
         let sc = sc_init.clone();
-        let pc = pc_init.clone();
-        let ii = ii_init.clone();
+        let li = li_init.clone();
         let ti = ti_init.clone();
         let lk = lk_init.clone();
         glib::MainContext::default().spawn_local(async move {
-            refresh_volume_tray_ui(&sc, &pc, &ii, &ti, &lk).await;
+            refresh_volume_tray_ui(&sc, &li, &ti, &lk).await;
         });
     });
     trigger_vol_refresh();
@@ -1078,35 +1233,124 @@ fn create_volume_tray_button() -> MenuButton {
     menu_btn
 }
 
+fn populate_sound_output_rows(
+    devices_box: &GtkBox,
+    devices: &[crate::services::audio::AudioOutputDevice],
+    scale: &Scale,
+    low_icon: &Image,
+    tray_icon: &Image,
+    is_updating: &Rc<RefCell<bool>>,
+) {
+    while let Some(child) = devices_box.first_child() {
+        devices_box.remove(&child);
+    }
+
+    for dev in devices {
+        let row_btn = Button::builder()
+            .css_classes(["sound-menu-device-row"])
+            .has_frame(false)
+            .halign(Align::Fill)
+            .hexpand(true)
+            .build();
+
+        let row_box = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .spacing(8)
+            .halign(Align::Fill)
+            .valign(Align::Center)
+            .hexpand(true)
+            .vexpand(false)
+            .build();
+
+        let circle = GtkBox::builder()
+            .orientation(Orientation::Horizontal)
+            .width_request(24)
+            .height_request(24)
+            .halign(Align::Start)
+            .valign(Align::Center)
+            .hexpand(false)
+            .vexpand(false)
+            .css_classes(if dev.is_default {
+                ["sound-menu-device-circle", "sound-menu-device-circle-active"].as_slice()
+            } else {
+                ["sound-menu-device-circle"].as_slice()
+            })
+            .build();
+        let dev_img = Image::builder()
+            .icon_name(dev.icon_name)
+            .pixel_size(13)
+            .width_request(24)
+            .height_request(24)
+            .halign(Align::Center)
+            .valign(Align::Center)
+            .hexpand(false)
+            .vexpand(false)
+            .build();
+        circle.append(&dev_img);
+
+        let name_lbl = Label::builder()
+            .label(&dev.description)
+            .css_classes(["sound-menu-device-name"])
+            .xalign(0.0)
+            .halign(Align::Start)
+            .hexpand(true)
+            .ellipsize(gtk4::pango::EllipsizeMode::End)
+            .build();
+
+        row_box.append(&circle);
+        row_box.append(&name_lbl);
+        row_btn.set_child(Some(&row_box));
+        crate::ui::system_menu::attach_tray_squircle_button(&row_btn, false, false, 2, 6);
+
+        let sink_name = dev.name.clone();
+        let box_c = devices_box.clone();
+        let sc_c = scale.clone();
+        let li_c = low_icon.clone();
+        let ti_c = tray_icon.clone();
+        let lk_c = is_updating.clone();
+        row_btn.connect_clicked(move |_| {
+            let sink_target = sink_name.clone();
+            let box_r = box_c.clone();
+            let sc_r = sc_c.clone();
+            let li_r = li_c.clone();
+            let ti_r = ti_c.clone();
+            let lk_r = lk_c.clone();
+            glib::MainContext::default().spawn_local(async move {
+                AudioService::set_default_sink(sink_target).await;
+                refresh_volume_tray_ui(&sc_r, &li_r, &ti_r, &lk_r).await;
+                let updated = AudioService::list_output_devices().await;
+                populate_sound_output_rows(&box_r, &updated, &sc_r, &li_r, &ti_r, &lk_r);
+            });
+        });
+
+        devices_box.append(&row_btn);
+    }
+}
+
 async fn refresh_volume_tray_ui(
     scale: &Scale,
-    pct_lbl: &Label,
-    inner_icon: &Image,
+    low_icon: &Image,
     tray_icon: &Image,
     is_updating: &Rc<RefCell<bool>>,
 ) {
     let (vol, is_muted) = AudioService::get_volume().await;
 
     *is_updating.borrow_mut() = true;
-    scale.set_value(vol);
+    scale.set_value(if is_muted { 0.0 } else { vol });
     *is_updating.borrow_mut() = false;
 
-    if is_muted {
-        pct_lbl.set_label("Silenciado");
-        inner_icon.set_icon_name(Some("audio-volume-muted-symbolic"));
+    if is_muted || vol < 1.0 {
+        low_icon.set_icon_name(Some("audio-volume-muted-symbolic"));
         tray_icon.set_icon_name(Some("audio-volume-muted-symbolic"));
     } else {
-        pct_lbl.set_label(&format!("{}%", vol.round() as i32));
-        let icon_name = if vol < 1.0 {
-            "audio-volume-muted-symbolic"
-        } else if vol < 35.0 {
+        low_icon.set_icon_name(Some("audio-volume-low-symbolic"));
+        let icon_name = if vol < 35.0 {
             "audio-volume-low-symbolic"
         } else if vol < 70.0 {
             "audio-volume-medium-symbolic"
         } else {
             "audio-volume-high-symbolic"
         };
-        inner_icon.set_icon_name(Some(icon_name));
         tray_icon.set_icon_name(Some(icon_name));
     }
 }
@@ -1221,9 +1465,17 @@ fn create_link_tray_button() -> MenuButton {
     let sep = Separator::new(Orientation::Horizontal);
     let down_btn = Button::builder()
         .css_classes(["cc-footer-btn"])
-        .label("Abrir carpeta Descargas...")
         .has_frame(false)
+        .halign(Align::Fill)
+        .hexpand(true)
         .build();
+    down_btn.set_child(Some(
+        &Label::builder()
+            .label("Abrir carpeta Descargas...")
+            .xalign(0.0)
+            .hexpand(true)
+            .build(),
+    ));
 
     let pop_c = popover.clone();
     down_btn.connect_clicked(move |_| {

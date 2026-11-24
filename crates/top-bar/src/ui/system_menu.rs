@@ -472,7 +472,12 @@ fn create_menu_item(
     btn
 }
 
-fn squircle_path(context: &gtk4::cairo::Context, width: f64, height: f64, radius: f64) {
+pub(crate) fn squircle_path(
+    context: &gtk4::cairo::Context,
+    width: f64,
+    height: f64,
+    radius: f64,
+) {
     let radius = radius.min(width / 2.0).min(height / 2.0).max(1.0);
     let power = 2.0 / 4.2;
     let quarter_turn = std::f64::consts::FRAC_PI_2;
@@ -572,6 +577,208 @@ pub fn attach_squircle_menu_hover(btn: &Button) {
     overlay.add_overlay(&inner);
     overlay.set_measure_overlay(&inner, true);
     btn.set_child(Some(&overlay));
+}
+
+/// Radio squircle (n=4.2) para filas interactivas de los paneles de la bandeja y Centro de Control.
+const TRAY_ROW_SQUIRCLE_RADIUS: f64 = 12.0;
+
+/// Envuelve el contenido de un botón de la bandeja (Bluetooth, Wi-Fi, Sonido) en un Overlay
+/// con fondo squircle Cairo (n=4.2) sin alterar el color del texto en hover.
+pub(crate) fn attach_tray_squircle_button(
+    btn: &Button,
+    is_active_row: bool,
+    show_idle_tint: bool,
+    pad_v: i32,
+    pad_h: i32,
+) {
+    let Some(inner) = btn.child() else {
+        return;
+    };
+    btn.add_css_class("malus-tray-squircle-row");
+    btn.set_halign(gtk4::Align::Fill);
+    btn.set_valign(gtk4::Align::Start);
+    btn.set_hexpand(true);
+    btn.set_vexpand(false);
+    btn.set_child(gtk4::Widget::NONE);
+
+    inner.set_margin_top(pad_v);
+    inner.set_margin_bottom(pad_v);
+    inner.set_margin_start(pad_h);
+    inner.set_margin_end(pad_h);
+    inner.set_halign(gtk4::Align::Fill);
+    inner.set_hexpand(true);
+    inner.set_vexpand(false);
+
+    let bg = gtk4::DrawingArea::new();
+    bg.set_can_target(false);
+    bg.set_hexpand(true);
+    bg.set_vexpand(false);
+    bg.set_valign(gtk4::Align::Fill);
+
+    let btn_weak = btn.downgrade();
+    bg.set_draw_func(move |_, cr, w, h| {
+        let width = w as f64;
+        let height = h as f64;
+        if width <= 2.0 || height <= 2.0 {
+            return;
+        }
+        let Some(b) = btn_weak.upgrade() else {
+            return;
+        };
+        let flags = b.state_flags();
+        if flags.contains(gtk4::StateFlags::INSENSITIVE) {
+            return;
+        }
+        let hovered = flags.contains(gtk4::StateFlags::PRELIGHT);
+        let pressed = flags.contains(gtk4::StateFlags::ACTIVE);
+        let dark = libadwaita::StyleManager::default().is_dark();
+
+        if !is_active_row && !show_idle_tint && !hovered && !pressed {
+            return;
+        }
+
+        let _ = cr.save();
+        cr.translate(0.5, 0.5);
+        squircle_path(cr, width - 1.0, height - 1.0, TRAY_ROW_SQUIRCLE_RADIUS);
+
+        if is_active_row {
+            let (r, g, b_col) = malus_de_common::config::load_accent_color();
+            let fill_alpha = if pressed {
+                if dark { 0.32 } else { 0.25 }
+            } else if hovered {
+                if dark { 0.28 } else { 0.22 }
+            } else if dark {
+                0.20
+            } else {
+                0.15
+            };
+            cr.set_source_rgba(r, g, b_col, fill_alpha);
+            let _ = cr.fill_preserve();
+            cr.set_source_rgba(r, g, b_col, if dark { 0.40 } else { 0.35 });
+            cr.set_line_width(1.0);
+            let _ = cr.stroke();
+        } else {
+            let fill_rgba = if pressed {
+                if dark {
+                    (1.0, 1.0, 1.0, 0.16)
+                } else {
+                    (0.0, 0.0, 0.0, 0.13)
+                }
+            } else if hovered {
+                if dark {
+                    (1.0, 1.0, 1.0, 0.10)
+                } else {
+                    (0.0, 0.0, 0.0, 0.08)
+                }
+            } else if dark {
+                (1.0, 1.0, 1.0, 0.05)
+            } else {
+                (0.0, 0.0, 0.0, 0.04)
+            };
+            cr.set_source_rgba(fill_rgba.0, fill_rgba.1, fill_rgba.2, fill_rgba.3);
+            if show_idle_tint {
+                let _ = cr.fill_preserve();
+                let stroke_a = if hovered {
+                    if dark { 0.08 } else { 0.10 }
+                } else if dark {
+                    0.04
+                } else {
+                    0.05
+                };
+                if dark {
+                    cr.set_source_rgba(1.0, 1.0, 1.0, stroke_a);
+                } else {
+                    cr.set_source_rgba(0.0, 0.0, 0.0, stroke_a);
+                }
+                cr.set_line_width(1.0);
+                let _ = cr.stroke();
+            } else {
+                let _ = cr.fill();
+            }
+        }
+        let _ = cr.restore();
+    });
+
+    let bg_state = bg.clone();
+    btn.connect_state_flags_changed(move |_, _| {
+        bg_state.queue_draw();
+    });
+
+    let bg_weak = bg.downgrade();
+    libadwaita::StyleManager::default().connect_dark_notify(move |_| {
+        if let Some(area) = bg_weak.upgrade() {
+            area.queue_draw();
+        }
+    });
+
+    let overlay = gtk4::Overlay::builder()
+        .halign(gtk4::Align::Fill)
+        .valign(gtk4::Align::Start)
+        .hexpand(true)
+        .vexpand(false)
+        .build();
+    overlay.set_child(Some(&bg));
+    overlay.add_overlay(&inner);
+    overlay.set_measure_overlay(&inner, true);
+    btn.set_child(Some(&overlay));
+}
+
+/// Envuelve una fila activa no interactiva (como la red Wi-Fi actual) en un fondo squircle Cairo (n=4.2).
+pub(crate) fn wrap_tray_squircle_active_card(
+    inner: &GtkBox,
+    pad_v: i32,
+    pad_h: i32,
+) -> gtk4::Overlay {
+    inner.set_margin_top(pad_v);
+    inner.set_margin_bottom(pad_v);
+    inner.set_margin_start(pad_h);
+    inner.set_margin_end(pad_h);
+    inner.set_halign(gtk4::Align::Fill);
+    inner.set_hexpand(true);
+    inner.set_vexpand(false);
+
+    let bg = gtk4::DrawingArea::new();
+    bg.set_can_target(false);
+    bg.set_hexpand(true);
+    bg.set_vexpand(false);
+    bg.set_valign(gtk4::Align::Fill);
+
+    bg.set_draw_func(move |_, cr, w, h| {
+        let width = w as f64;
+        let height = h as f64;
+        if width <= 2.0 || height <= 2.0 {
+            return;
+        }
+        let dark = libadwaita::StyleManager::default().is_dark();
+        let (r, g, b_col) = malus_de_common::config::load_accent_color();
+        let _ = cr.save();
+        cr.translate(0.5, 0.5);
+        squircle_path(cr, width - 1.0, height - 1.0, TRAY_ROW_SQUIRCLE_RADIUS);
+        cr.set_source_rgba(r, g, b_col, if dark { 0.20 } else { 0.15 });
+        let _ = cr.fill_preserve();
+        cr.set_source_rgba(r, g, b_col, if dark { 0.40 } else { 0.35 });
+        cr.set_line_width(1.0);
+        let _ = cr.stroke();
+        let _ = cr.restore();
+    });
+
+    let bg_weak = bg.downgrade();
+    libadwaita::StyleManager::default().connect_dark_notify(move |_| {
+        if let Some(area) = bg_weak.upgrade() {
+            area.queue_draw();
+        }
+    });
+
+    let overlay = gtk4::Overlay::builder()
+        .halign(gtk4::Align::Fill)
+        .valign(gtk4::Align::Start)
+        .hexpand(true)
+        .vexpand(false)
+        .build();
+    overlay.set_child(Some(&bg));
+    overlay.add_overlay(inner);
+    overlay.set_measure_overlay(inner, true);
+    overlay
 }
 
 fn create_divider() -> Separator {

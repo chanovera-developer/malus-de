@@ -2255,7 +2255,9 @@ fn populate_wifi_list(
 
         let active_card = GtkBox::builder()
             .orientation(Orientation::Horizontal)
-            .css_classes(["cc-list-row", "cc-list-row-active"])
+            .halign(Align::Fill)
+            .valign(Align::Center)
+            .hexpand(true)
             .spacing(8)
             .build();
 
@@ -2268,6 +2270,7 @@ fn populate_wifi_list(
             .label(&active.ssid)
             .css_classes(["cc-item-title"])
             .hexpand(true)
+            .halign(Align::Start)
             .xalign(0.0)
             .ellipsize(gtk4::pango::EllipsizeMode::End)
             .build();
@@ -2281,7 +2284,9 @@ fn populate_wifi_list(
         active_card.append(&sig_icon);
         active_card.append(&ssid_lbl);
         active_card.append(&check_icon);
-        content_box.append(&active_card);
+        let active_wrap =
+            crate::ui::system_menu::wrap_tray_squircle_active_card(&active_card, 2, 8);
+        content_box.append(&active_wrap);
     }
 
     // Cabecera de Otras Redes con botón de refresco
@@ -2336,12 +2341,16 @@ fn populate_wifi_list(
     } else {
         for net in other_networks {
             let row_btn = Button::builder()
-                .css_classes(["cc-list-row"])
                 .has_frame(false)
+                .halign(Align::Fill)
+                .hexpand(true)
                 .build();
 
             let row_content = GtkBox::builder()
                 .orientation(Orientation::Horizontal)
+                .halign(Align::Fill)
+                .valign(Align::Center)
+                .hexpand(true)
                 .spacing(8)
                 .build();
 
@@ -2354,6 +2363,7 @@ fn populate_wifi_list(
                 .label(&net.ssid)
                 .css_classes(["cc-item-title"])
                 .hexpand(true)
+                .halign(Align::Start)
                 .xalign(0.0)
                 .ellipsize(gtk4::pango::EllipsizeMode::End)
                 .build();
@@ -2371,6 +2381,7 @@ fn populate_wifi_list(
             }
 
             row_btn.set_child(Some(&row_content));
+            crate::ui::system_menu::attach_tray_squircle_button(&row_btn, false, true, 2, 8);
 
             let target_ssid = net.ssid.clone();
             let cb_c = content_box.clone();
@@ -2459,11 +2470,10 @@ fn create_bt_subview(
     header.append(&*bt_switch);
     view_box.append(&header);
 
-    // Contenedor con Scroll para dispositivos
+    // Contenedor con Scroll ajustado al contenido para dispositivos
     let scrolled = ScrolledWindow::builder()
         .hscrollbar_policy(PolicyType::Never)
         .vscrollbar_policy(PolicyType::Automatic)
-        .min_content_height(180)
         .max_content_height(250)
         .propagate_natural_height(true)
         .build();
@@ -2479,9 +2489,19 @@ fn create_bt_subview(
     let footer_sep = Separator::new(Orientation::Horizontal);
     let pref_btn = Button::builder()
         .css_classes(["cc-footer-btn"])
-        .label("Preferencias de Bluetooth...")
         .has_frame(false)
+        .halign(Align::Fill)
+        .hexpand(true)
         .build();
+    pref_btn.set_child(Some(
+        &Label::builder()
+            .label("Preferencias de Bluetooth...")
+            .xalign(0.0)
+            .halign(Align::Start)
+            .hexpand(true)
+            .build(),
+    ));
+    crate::ui::system_menu::attach_tray_squircle_button(&pref_btn, false, false, 4, 8);
 
     let pop_c = popover.clone();
     pref_btn.connect_clicked(move |_| {
@@ -2708,69 +2728,83 @@ fn populate_bt_list(
     } else {
         for dev in devices {
             let row_btn = Button::builder()
-                .css_classes(["cc-list-row"])
+                .css_classes(["sound-menu-device-row"])
                 .has_frame(false)
+                .halign(Align::Fill)
+                .hexpand(true)
                 .build();
-
-            if dev.connected {
-                row_btn.add_css_class("cc-list-row-active");
-            }
 
             let row_content = GtkBox::builder()
                 .orientation(Orientation::Horizontal)
-                .spacing(10)
+                .halign(Align::Fill)
+                .valign(Align::Center)
+                .hexpand(true)
+                .vexpand(false)
+                .spacing(8)
                 .build();
 
+            let circle = GtkBox::builder()
+                .orientation(Orientation::Horizontal)
+                .width_request(24)
+                .height_request(24)
+                .halign(Align::Start)
+                .valign(Align::Center)
+                .hexpand(false)
+                .vexpand(false)
+                .css_classes(if dev.connected {
+                    ["sound-menu-device-circle", "sound-menu-device-circle-active"].as_slice()
+                } else {
+                    ["sound-menu-device-circle"].as_slice()
+                })
+                .build();
             let dev_icon = Image::builder()
                 .icon_name(&dev.icon_name)
-                .pixel_size(18)
+                .pixel_size(13)
+                .width_request(24)
+                .height_request(24)
+                .halign(Align::Center)
+                .valign(Align::Center)
+                .hexpand(false)
+                .vexpand(false)
                 .build();
-
-            let text_box = GtkBox::builder()
-                .orientation(Orientation::Vertical)
-                .hexpand(true)
-                .spacing(1)
-                .build();
+            circle.append(&dev_icon);
 
             let name_lbl = Label::builder()
                 .label(&dev.name)
                 .css_classes(["cc-item-title"])
                 .xalign(0.0)
+                .halign(Align::Start)
+                .hexpand(true)
                 .ellipsize(gtk4::pango::EllipsizeMode::End)
                 .build();
 
-            let sub_text = if dev.connected {
-                if let Some(bat) = dev.battery {
-                    format!("Conectado • {}% batería", bat)
-                } else {
-                    "Conectado".to_string()
-                }
-            } else {
-                "No conectado".to_string()
-            };
-
-            let status_lbl = Label::builder()
-                .label(&sub_text)
-                .css_classes(["cc-item-subtitle"])
-                .xalign(0.0)
-                .build();
-
-            text_box.append(&name_lbl);
-            text_box.append(&status_lbl);
-
-            row_content.append(&dev_icon);
-            row_content.append(&text_box);
+            row_content.append(&circle);
+            row_content.append(&name_lbl);
 
             if dev.connected {
+                if let Some(bat) = dev.battery {
+                    let bat_lbl = Label::builder()
+                        .label(format!("{}%", bat))
+                        .css_classes(["cc-item-subtitle"])
+                        .xalign(1.0)
+                        .halign(Align::End)
+                        .hexpand(false)
+                        .valign(Align::Center)
+                        .build();
+                    row_content.append(&bat_lbl);
+                }
                 let check_icon = Image::builder()
                     .icon_name("object-select-symbolic")
                     .css_classes(["cc-item-check"])
                     .pixel_size(14)
+                    .hexpand(false)
+                    .halign(Align::End)
                     .build();
                 row_content.append(&check_icon);
             }
 
             row_btn.set_child(Some(&row_content));
+            crate::ui::system_menu::attach_tray_squircle_button(&row_btn, false, false, 2, 6);
 
             let path = dev.path.clone();
             let is_connected = dev.connected;
