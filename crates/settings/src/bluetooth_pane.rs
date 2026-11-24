@@ -409,16 +409,74 @@ pub fn create_bluetooth_pane(parent_window: &ApplicationWindow) -> (ScrolledWind
 
     *refresh_slot.borrow_mut() = Some(run_refresh.clone());
 
-    // Descubrimiento activo mientras el panel esté mapeado; detenerlo limpiamente al salir
+    // Descubrimiento activo + sincronización instantánea vía D-Bus BlueZ mientras el panel esté visible
+    let dbus_sub: Rc<RefCell<Option<(gtk4::gio::DBusConnection, gtk4::gio::SignalSubscriptionId)>>> =
+        Rc::new(RefCell::new(None));
     let disc_map = discovery_active.clone();
     let ref_map = run_refresh.clone();
-    pane.connect_map(move |_| {
+    let dbus_map = dbus_sub.clone();
+    pane.connect_map(move |p| {
         disc_map.set(true);
         ref_map(true);
+
+        if dbus_map.borrow().is_none() {
+            if let Ok(bus) = gtk4::gio::bus_get_sync(
+                gtk4::gio::BusType::System,
+                gtk4::gio::Cancellable::NONE,
+            ) {
+                let ref_sig = ref_map.clone();
+                let p_weak = p.downgrade();
+                let pending = Rc::new(RefCell::new(false));
+                let sub_id = bus.signal_subscribe(
+                    Some("org.bluez"),
+                    Some("org.freedesktop.DBus.Properties"),
+                    Some("PropertiesChanged"),
+                    None,
+                    None,
+                    gtk4::gio::DBusSignalFlags::NONE,
+                    move |_conn, _sender, _path, _iface, _signal, params| {
+                        let Some(iface) = params.try_child_get::<String>(0).ok().flatten() else {
+                            return;
+                        };
+                        let Some(dict) =
+                            params.try_child_get::<glib::VariantDict>(1).ok().flatten()
+                        else {
+                            return;
+                        };
+                        let relevant = (iface == "org.bluez.Adapter1" && dict.contains("Powered"))
+                            || (iface == "org.bluez.Device1" && dict.contains("Connected"));
+                        if !relevant {
+                            return;
+                        }
+                        if *pending.borrow() {
+                            return;
+                        }
+                        *pending.borrow_mut() = true;
+                        let pend = pending.clone();
+                        let rf = ref_sig.clone();
+                        let pw = p_weak.clone();
+                        glib::timeout_add_local_once(
+                            std::time::Duration::from_millis(180),
+                            move || {
+                                *pend.borrow_mut() = false;
+                                if pw.upgrade().is_some_and(|w| w.is_mapped()) {
+                                    rf(false);
+                                }
+                            },
+                        );
+                    },
+                );
+                *dbus_map.borrow_mut() = Some((bus, sub_id));
+            }
+        }
     });
 
     let disc_unmap = discovery_active.clone();
+    let dbus_unmap = dbus_sub;
     pane.connect_unmap(move |_| {
+        if let Some((bus, sub_id)) = dbus_unmap.borrow_mut().take() {
+            bus.signal_unsubscribe(sub_id);
+        }
         if disc_unmap.replace(false) {
             glib::spawn_future_local(async move {
                 let _ = ensure_adapter_discovering(false).await;

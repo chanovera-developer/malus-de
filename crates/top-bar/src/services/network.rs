@@ -36,7 +36,7 @@ impl NetworkService {
         false
     }
 
-    /// Activa o desactiva el Wi-Fi en NetworkManager vía D-Bus
+    /// Activa o desactiva el Wi-Fi en NetworkManager vía D-Bus (con fallback `nmcli radio wifi`).
     pub async fn set_wifi_enabled(enabled: bool) -> bool {
         if let Ok(conn) = Connection::system().await {
             let res = conn
@@ -52,9 +52,20 @@ impl NetworkService {
                     ),
                 )
                 .await;
-            return res.is_ok();
+            if res.is_ok() {
+                return true;
+            }
         }
-        false
+        let (tx, rx) = async_channel::bounded::<bool>(1);
+        std::thread::spawn(move || {
+            let ok = std::process::Command::new("nmcli")
+                .args(["radio", "wifi", if enabled { "on" } else { "off" }])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            let _ = tx.send_blocking(ok);
+        });
+        rx.recv().await.unwrap_or(false)
     }
 
     /// Obtiene el SSID de la red Wi-Fi activa actualmente

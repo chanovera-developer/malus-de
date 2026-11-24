@@ -100,30 +100,116 @@ fn main() {
 
     let initial_panel = args.panel.clone();
 
-    let app = Application::builder().application_id(APP_ID).build();
+    let app = Application::builder()
+        .application_id(APP_ID)
+        .flags(gtk4::gio::ApplicationFlags::HANDLES_COMMAND_LINE)
+        .build();
 
     app.connect_startup(|_| {
         load_macos_settings_css();
     });
 
-    app.connect_activate(move |app| {
-        if let Some(win) = app
-            .active_window()
-            .or_else(|| app.windows().into_iter().next())
-        {
-            win.present();
-            return;
-        }
-        build_settings_window(app, &initial_panel);
-    });
+    {
+        let fallback_panel = initial_panel.clone();
+        app.connect_activate(move |app| {
+            if let Some(win) = app
+                .active_window()
+                .or_else(|| app.windows().into_iter().next())
+            {
+                win.present();
+                return;
+            }
+            build_settings_window(app, &fallback_panel);
+        });
+    }
 
-    app.run_with_args::<&str>(&[]);
+    {
+        let fallback_panel = initial_panel.clone();
+        app.connect_command_line(move |app, cmdline| {
+            let argv: Vec<String> = cmdline
+                .arguments()
+                .into_iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+            let requested_panel = parse_panel_from_argv(&argv);
+
+            if let Some(win) = app
+                .active_window()
+                .or_else(|| app.windows().into_iter().next())
+            {
+                if let Some(panel) = requested_panel.as_deref() {
+                    let resolved = resolve_panel_id(panel);
+                    SETTINGS_NAVIGATE_PANEL.with(|cell| {
+                        if let Some(nav) = cell.borrow().as_ref() {
+                            nav(resolved);
+                        }
+                    });
+                }
+                win.present();
+            } else {
+                let target = requested_panel.as_deref().unwrap_or(&fallback_panel);
+                build_settings_window(app, target);
+            }
+            glib::ExitCode::SUCCESS.into()
+        });
+    }
+
+    app.run();
+}
+
+fn parse_panel_from_argv(argv: &[String]) -> Option<String> {
+    let mut iter = argv.iter().skip(1);
+    while let Some(arg) = iter.next() {
+        if arg == "--panel" || arg == "-p" {
+            if let Some(val) = iter.next() {
+                let trimmed = val.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        } else if let Some(val) = arg
+            .strip_prefix("--panel=")
+            .or_else(|| arg.strip_prefix("-p="))
+        {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn resolve_panel_id(raw: &str) -> &str {
+    match raw {
+        "red" => "network",
+        "firewall" => "network-firewall",
+        "bateria" | "batería" => "battery",
+        "general" => "about",
+        "accesibilidad" => "accessibility",
+        "aspecto" => "appearance",
+        "temas" => "appearance-themes",
+        "pip" => "siri",
+        "canopy" => "spotlight",
+        "notificaciones" => "notifications",
+        "sonido" | "audio" => "sound",
+        "barra de menus" | "barra de menús" => "menubar",
+        p if general_pane::is_general_subpanel(p) => p,
+        p if accessibility_pane::is_accessibility_subpanel(p) => p,
+        p if appearance_pane::is_appearance_subpanel(p) => p,
+        p if notifications_pane::is_notifications_subpanel(p) => p,
+        "wifi" | "bluetooth" | "network" | "network-firewall" | "vpn" | "battery" | "wallpaper"
+        | "keyboard" | "appearance" | "menubar" | "sound" | "about" | "dock" | "siri"
+        | "spotlight" | "notifications" | "displays" => raw,
+        _ => "spotlight",
+    }
 }
 
 thread_local! {
     static SETTINGS_GLASS_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
     static SETTINGS_ACCENT_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
     static SETTINGS_ACCENT_DRAW_AREAS: RefCell<Vec<glib::WeakRef<DrawingArea>>> = const { RefCell::new(Vec::new()) };
+    static SETTINGS_NAVIGATE_PANEL: RefCell<Option<Rc<dyn Fn(&str)>>> = const { RefCell::new(None) };
 }
 
 static SETTINGS_REDUCE_TRANSPARENCY: std::sync::atomic::AtomicBool =
@@ -961,27 +1047,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
     configure_right_pane_stack(&stack);
 
     // Historial de navegación para botones atrás / adelante (estilo Branches)
-    let start_id = match initial_panel {
-        "red" => "network",
-        "firewall" => "network-firewall",
-        "bateria" | "batería" => "battery",
-        "general" => "about",
-        "accesibilidad" => "accessibility",
-        "aspecto" => "appearance",
-        "temas" => "appearance-themes",
-        "pip" => "siri",
-        "canopy" => "spotlight",
-        "notificaciones" => "notifications",
-        "barra de menus" | "barra de menús" => "menubar",
-        p if general_pane::is_general_subpanel(p) => p,
-        p if accessibility_pane::is_accessibility_subpanel(p) => p,
-        p if appearance_pane::is_appearance_subpanel(p) => p,
-        p if notifications_pane::is_notifications_subpanel(p) => p,
-        "wifi" | "bluetooth" | "network" | "network-firewall" | "vpn" | "battery" | "wallpaper"
-        | "keyboard" | "appearance" | "menubar" | "sound" | "about" | "dock" | "siri"
-        | "spotlight" | "notifications" | "displays" => initial_panel,
-        _ => "spotlight",
-    };
+    let start_id = resolve_panel_id(initial_panel);
 
     let all_btns = Rc::new(sidebar_buttons.clone());
     let nav_history: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(vec![start_id.to_string()]));
@@ -1132,6 +1198,19 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
 
     // Seleccionar panel inicial sin animación de entrada
     select_panel(start_id, NavAction::Initial);
+
+    // Registrar manejador para cambiar de panel cuando otra invocación pasa `--panel <id>`
+    let sel_remote = select_panel.clone();
+    SETTINGS_NAVIGATE_PANEL.with(|cell| {
+        *cell.borrow_mut() = Some(Rc::new(move |target: &str| {
+            sel_remote(target, NavAction::Push);
+        }));
+    });
+    window.connect_destroy(|_| {
+        SETTINGS_NAVIGATE_PANEL.with(|cell| {
+            *cell.borrow_mut() = None;
+        });
+    });
 
     sidebar.set_halign(Align::Start);
     sidebar.set_valign(Align::Fill);
@@ -2147,5 +2226,37 @@ mod tests {
             choose_panel_transition(Some("wifi"), "battery", NavAction::Push),
             (StackTransitionType::Crossfade, 140)
         );
+    }
+
+    #[test]
+    fn parses_remote_panel_cli_args_and_resolves_aliases() {
+        let argv1 = vec![
+            "malus-de-settings".to_string(),
+            "--panel".to_string(),
+            "bluetooth".to_string(),
+        ];
+        assert_eq!(parse_panel_from_argv(&argv1).as_deref(), Some("bluetooth"));
+
+        let argv2 = vec![
+            "malus-de-settings".to_string(),
+            "--panel=wifi".to_string(),
+        ];
+        assert_eq!(parse_panel_from_argv(&argv2).as_deref(), Some("wifi"));
+
+        let argv3 = vec![
+            "malus-de-settings".to_string(),
+            "-p".to_string(),
+            "sound".to_string(),
+        ];
+        assert_eq!(parse_panel_from_argv(&argv3).as_deref(), Some("sound"));
+
+        let argv_empty = vec!["malus-de-settings".to_string()];
+        assert_eq!(parse_panel_from_argv(&argv_empty), None);
+
+        assert_eq!(resolve_panel_id("wifi"), "wifi");
+        assert_eq!(resolve_panel_id("bluetooth"), "bluetooth");
+        assert_eq!(resolve_panel_id("sound"), "sound");
+        assert_eq!(resolve_panel_id("sonido"), "sound");
+        assert_eq!(resolve_panel_id("audio"), "sound");
     }
 }

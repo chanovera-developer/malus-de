@@ -1165,39 +1165,104 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
     help_popover.set_child(Some(&help_pop_box));
     help_btn.set_popover(Some(&help_popover));
 
-    // Refresco periódico únicamente mientras el panel esté mapeado (se detiene al cambiar de panel)
+    // Refresco periódico + sincronización instantánea vía D-Bus NetworkManager mientras el panel esté visible
     let timer_source: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
+    let dbus_sub: Rc<RefCell<Option<(gtk4::gio::DBusConnection, gtk4::gio::SignalSubscriptionId)>>> =
+        Rc::new(RefCell::new(None));
     {
         let timer_slot = timer_source.clone();
+        let dbus_slot = dbus_sub.clone();
         let ref_timer = run_refresh.clone();
         pane.connect_map(move |p| {
-            if timer_slot.borrow().is_some() {
-                return;
+            if timer_slot.borrow().is_none() {
+                let p_weak = p.downgrade();
+                let ref_cb = ref_timer.clone();
+                let slot_clear = timer_slot.clone();
+                let id = glib::timeout_add_local(std::time::Duration::from_secs(10), move || {
+                    let Some(w) = p_weak.upgrade() else {
+                        let _ = slot_clear.borrow_mut().take();
+                        return glib::ControlFlow::Break;
+                    };
+                    if w.is_mapped() {
+                        ref_cb(false);
+                        glib::ControlFlow::Continue
+                    } else {
+                        let _ = slot_clear.borrow_mut().take();
+                        glib::ControlFlow::Break
+                    }
+                });
+                *timer_slot.borrow_mut() = Some(id);
             }
-            let p_weak = p.downgrade();
-            let ref_cb = ref_timer.clone();
-            let slot_clear = timer_slot.clone();
-            let id = glib::timeout_add_local(std::time::Duration::from_secs(10), move || {
-                let Some(w) = p_weak.upgrade() else {
-                    let _ = slot_clear.borrow_mut().take();
-                    return glib::ControlFlow::Break;
-                };
-                if w.is_mapped() {
-                    ref_cb(false);
-                    glib::ControlFlow::Continue
-                } else {
-                    let _ = slot_clear.borrow_mut().take();
-                    glib::ControlFlow::Break
+
+            if dbus_slot.borrow().is_none() {
+                if let Ok(bus) = gtk4::gio::bus_get_sync(
+                    gtk4::gio::BusType::System,
+                    gtk4::gio::Cancellable::NONE,
+                ) {
+                    let ref_sig = ref_timer.clone();
+                    let p_weak = p.downgrade();
+                    let pending = Rc::new(RefCell::new(false));
+                    let sub_id = bus.signal_subscribe(
+                        Some("org.freedesktop.NetworkManager"),
+                        Some("org.freedesktop.DBus.Properties"),
+                        Some("PropertiesChanged"),
+                        Some("/org/freedesktop/NetworkManager"),
+                        None,
+                        gtk4::gio::DBusSignalFlags::NONE,
+                        move |_conn, _sender, _path, _iface, _signal, params| {
+                            let iface_ok = params
+                                .try_child_get::<String>(0)
+                                .ok()
+                                .flatten()
+                                .as_deref()
+                                == Some("org.freedesktop.NetworkManager");
+                            if !iface_ok {
+                                return;
+                            }
+                            let Some(dict) =
+                                params.try_child_get::<glib::VariantDict>(1).ok().flatten()
+                            else {
+                                return;
+                            };
+                            if !(dict.contains("WirelessEnabled")
+                                || dict.contains("PrimaryConnection")
+                                || dict.contains("ActiveConnections")
+                                || dict.contains("State"))
+                            {
+                                return;
+                            }
+                            if *pending.borrow() {
+                                return;
+                            }
+                            *pending.borrow_mut() = true;
+                            let pend = pending.clone();
+                            let rf = ref_sig.clone();
+                            let pw = p_weak.clone();
+                            glib::timeout_add_local_once(
+                                std::time::Duration::from_millis(180),
+                                move || {
+                                    *pend.borrow_mut() = false;
+                                    if pw.upgrade().is_some_and(|w| w.is_mapped()) {
+                                        rf(false);
+                                    }
+                                },
+                            );
+                        },
+                    );
+                    *dbus_slot.borrow_mut() = Some((bus, sub_id));
                 }
-            });
-            *timer_slot.borrow_mut() = Some(id);
+            }
         });
     }
     {
         let timer_slot = timer_source;
+        let dbus_slot = dbus_sub;
         pane.connect_unmap(move |_| {
             if let Some(id) = timer_slot.borrow_mut().take() {
                 id.remove();
+            }
+            if let Some((bus, sub_id)) = dbus_slot.borrow_mut().take() {
+                bus.signal_unsubscribe(sub_id);
             }
         });
     }

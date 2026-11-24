@@ -18,6 +18,37 @@ thread_local! {
     static VOLUME_TRAY_REFRESH: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
     static KEYBOARD_CONFIG_MONITOR: RefCell<Option<gtk4::gio::FileMonitor>> = const { RefCell::new(None) };
     static KEYBOARD_LABEL_REFRESH: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
+    static SYSTEM_DBUS_CONN: RefCell<Option<gtk4::gio::DBusConnection>> = const { RefCell::new(None) };
+    static SYSTEM_DBUS_SUBS: RefCell<Vec<gtk4::gio::SignalSubscriptionId>> = const { RefCell::new(Vec::new()) };
+}
+
+fn system_dbus_connection() -> Option<gtk4::gio::DBusConnection> {
+    SYSTEM_DBUS_CONN.with(|cell| {
+        if let Some(conn) = cell.borrow().as_ref() {
+            return Some(conn.clone());
+        }
+        let conn = gtk4::gio::bus_get_sync(gtk4::gio::BusType::System, gtk4::gio::Cancellable::NONE)
+            .ok()?;
+        *cell.borrow_mut() = Some(conn.clone());
+        Some(conn)
+    })
+}
+
+fn dbus_props_changed_matches(
+    params: &glib::Variant,
+    expected_iface: &str,
+    keys: &[&str],
+) -> bool {
+    let Some(iface) = params.try_child_get::<String>(0).ok().flatten() else {
+        return false;
+    };
+    if iface != expected_iface {
+        return false;
+    }
+    let Some(dict) = params.try_child_get::<glib::VariantDict>(1).ok().flatten() else {
+        return false;
+    };
+    keys.iter().any(|k| dict.contains(k))
 }
 
 pub fn refresh_keyboard_layout_badge() {
@@ -345,6 +376,53 @@ fn create_wifi_tray_button() -> MenuButton {
     glib::MainContext::default().spawn_local(async move {
         update_wifi_tray_icon(&ico_init).await;
     });
+
+    // Sincronización en tiempo real con NetworkManager (ej. si se alterna Wi-Fi desde Ajustes o Centro de Control)
+    if let Some(bus) = system_dbus_connection() {
+        let cb_sig = content_box.clone();
+        let sw_sig = wifi_switch.clone();
+        let upd_sig = is_updating_switch.clone();
+        let po_sig = popover.clone();
+        let ico_sig = icon.clone();
+        let pending = Rc::new(RefCell::new(false));
+        let sub_id = bus.signal_subscribe(
+            Some("org.freedesktop.NetworkManager"),
+            Some("org.freedesktop.DBus.Properties"),
+            Some("PropertiesChanged"),
+            Some("/org/freedesktop/NetworkManager"),
+            None,
+            gtk4::gio::DBusSignalFlags::NONE,
+            move |_conn, _sender, _path, _iface, _signal, params| {
+                if !dbus_props_changed_matches(
+                    params,
+                    "org.freedesktop.NetworkManager",
+                    &["WirelessEnabled", "PrimaryConnection", "State", "Connectivity"],
+                ) {
+                    return;
+                }
+                if *pending.borrow() {
+                    return;
+                }
+                *pending.borrow_mut() = true;
+                let pend = pending.clone();
+                let cb = cb_sig.clone();
+                let sw = sw_sig.clone();
+                let upd = upd_sig.clone();
+                let po = po_sig.clone();
+                let ico = ico_sig.clone();
+                glib::timeout_add_local_once(std::time::Duration::from_millis(160), move || {
+                    *pend.borrow_mut() = false;
+                    glib::MainContext::default().spawn_local(async move {
+                        update_wifi_tray_icon(&ico).await;
+                        if po.is_visible() {
+                            refresh_wifi_tray_list(&cb, &sw, &upd, &po, &ico).await;
+                        }
+                    });
+                });
+            },
+        );
+        SYSTEM_DBUS_SUBS.with(|subs| subs.borrow_mut().push(sub_id));
+    }
 
     menu_btn
 }
@@ -782,6 +860,53 @@ fn create_bluetooth_tray_button() -> MenuButton {
         update_bluetooth_tray_icon(&ico_init).await;
     });
 
+    // Sincronización en tiempo real con BlueZ (ej. si se alterna Bluetooth o un dispositivo desde Ajustes o Centro de Control)
+    if let Some(bus) = system_dbus_connection() {
+        let cb_sig = content_box.clone();
+        let sw_sig = bt_switch.clone();
+        let upd_sig = is_updating_switch.clone();
+        let po_sig = popover.clone();
+        let ico_sig = icon.clone();
+        let pending = Rc::new(RefCell::new(false));
+        let sub_id = bus.signal_subscribe(
+            Some("org.bluez"),
+            Some("org.freedesktop.DBus.Properties"),
+            Some("PropertiesChanged"),
+            None,
+            None,
+            gtk4::gio::DBusSignalFlags::NONE,
+            move |_conn, _sender, _path, _iface, _signal, params| {
+                let adapter_changed =
+                    dbus_props_changed_matches(params, "org.bluez.Adapter1", &["Powered"]);
+                let device_changed =
+                    dbus_props_changed_matches(params, "org.bluez.Device1", &["Connected"]);
+                if !adapter_changed && !device_changed {
+                    return;
+                }
+                if *pending.borrow() {
+                    return;
+                }
+                *pending.borrow_mut() = true;
+                let pend = pending.clone();
+                let cb = cb_sig.clone();
+                let sw = sw_sig.clone();
+                let upd = upd_sig.clone();
+                let po = po_sig.clone();
+                let ico = ico_sig.clone();
+                glib::timeout_add_local_once(std::time::Duration::from_millis(160), move || {
+                    *pend.borrow_mut() = false;
+                    glib::MainContext::default().spawn_local(async move {
+                        update_bluetooth_tray_icon(&ico).await;
+                        if po.is_visible() {
+                            refresh_bt_tray_list(&cb, &sw, &upd, &po, &ico).await;
+                        }
+                    });
+                });
+            },
+        );
+        SYSTEM_DBUS_SUBS.with(|subs| subs.borrow_mut().push(sub_id));
+    }
+
     menu_btn
 }
 
@@ -1082,6 +1207,36 @@ fn create_volume_tray_button() -> MenuButton {
     output_section.append(&devices_box);
     popover_box.append(&output_section);
 
+    // Sección "Aplicaciones" (Mezclador por aplicación PipeWire, visible solo cuando hay flujos activos)
+    let apps_section = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(5)
+        .visible(false)
+        .build();
+    let apps_sep = Separator::builder()
+        .orientation(Orientation::Horizontal)
+        .css_classes(["sound-menu-sep"])
+        .margin_start(6)
+        .margin_end(6)
+        .build();
+    let apps_lbl = Label::builder()
+        .label("Aplicaciones")
+        .css_classes(["sound-menu-section"])
+        .xalign(0.0)
+        .margin_start(6)
+        .margin_end(6)
+        .build();
+    let apps_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(4)
+        .margin_start(6)
+        .margin_end(6)
+        .build();
+    apps_section.append(&apps_sep);
+    apps_section.append(&apps_lbl);
+    apps_section.append(&apps_box);
+    popover_box.append(&apps_section);
+
     let sep_bottom = Separator::builder()
         .orientation(Orientation::Horizontal)
         .css_classes(["sound-menu-sep"])
@@ -1131,6 +1286,9 @@ fn create_volume_tray_button() -> MenuButton {
     let is_upd_scale = is_updating_vol.clone();
     let low_ico_scale = vol_low_icon.clone();
     let tray_ico_scale = icon.clone();
+    let last_tray_vol_feedback = Rc::new(RefCell::new(
+        std::time::Instant::now() - std::time::Duration::from_secs(1),
+    ));
 
     volume_scale.connect_value_changed(move |scale| {
         if *is_upd_scale.borrow() {
@@ -1154,6 +1312,13 @@ fn create_volume_tray_button() -> MenuButton {
         tray_ico_scale.set_icon_name(Some(tray_icon_name));
 
         AudioService::set_volume(val);
+        let now = std::time::Instant::now();
+        if now.duration_since(*last_tray_vol_feedback.borrow())
+            >= std::time::Duration::from_millis(180)
+        {
+            *last_tray_vol_feedback.borrow_mut() = now;
+            AudioService::play_volume_feedback_if_enabled();
+        }
     });
 
     // Botón izquierdo: silenciar / reactivar
@@ -1183,31 +1348,116 @@ fn create_volume_tray_button() -> MenuButton {
         });
     }
 
+    let last_tray_mixer_write = Rc::new(RefCell::new(
+        std::time::Instant::now() - std::time::Duration::from_secs(5),
+    ));
+    let refresh_holder: Rc<RefCell<Option<Rc<dyn Fn()>>>> = Rc::new(RefCell::new(None));
     let refresh_devices_and_vol: Rc<dyn Fn()> = {
         let sc = volume_scale.clone();
         let li = vol_low_icon.clone();
         let ti = icon.clone();
         let lk = is_updating_vol.clone();
         let dev_box = devices_box.clone();
+        let app_sec = apps_section.clone();
+        let app_box = apps_box.clone();
+        let lw = last_tray_mixer_write.clone();
+        let rf_h = refresh_holder.clone();
         Rc::new(move || {
             let sc_c = sc.clone();
             let li_c = li.clone();
             let ti_c = ti.clone();
             let lk_c = lk.clone();
             let dev_box_c = dev_box.clone();
+            let app_sec_c = app_sec.clone();
+            let app_box_c = app_box.clone();
+            let lw_c = lw.clone();
+            let rf_c = rf_h.clone();
             glib::MainContext::default().spawn_local(async move {
                 refresh_volume_tray_ui(&sc_c, &li_c, &ti_c, &lk_c).await;
                 let devices = AudioService::list_output_devices().await;
                 populate_sound_output_rows(&dev_box_c, &devices, &sc_c, &li_c, &ti_c, &lk_c);
+                let streams = AudioService::list_app_streams().await;
+                while let Some(child) = app_box_c.first_child() {
+                    app_box_c.remove(&child);
+                }
+                if streams.is_empty() {
+                    app_sec_c.set_visible(false);
+                } else {
+                    let on_routed: Rc<dyn Fn()> = {
+                        let rf_inner = rf_c.clone();
+                        Rc::new(move || {
+                            if let Some(rf) = rf_inner.borrow().as_ref() {
+                                rf();
+                            }
+                        })
+                    };
+                    for stream in &streams {
+                        app_box_c.append(&super::control_center::build_per_app_mixer_row(
+                            stream,
+                            &devices,
+                            &lw_c,
+                            on_routed.clone(),
+                        ));
+                    }
+                    app_sec_c.set_visible(true);
+                }
             });
         })
     };
+    *refresh_holder.borrow_mut() = Some(refresh_devices_and_vol.clone());
 
-    // Actualizar al abrir Popover
+    // Actualizar al abrir Popover + suscripción reactiva en vivo (`pactl subscribe`) mientras permanezca abierto
+    let tray_sound_watcher: Rc<RefCell<Option<crate::services::audio::PactlWatcher>>> =
+        Rc::new(RefCell::new(None));
     {
         let rf = refresh_devices_and_vol.clone();
+        let sw_c = tray_sound_watcher.clone();
+        let lw_c = last_tray_mixer_write.clone();
+        let pop_weak = popover.downgrade();
         popover.connect_show(move |_| {
             rf();
+            if sw_c.borrow().is_some() {
+                return;
+            }
+            let (tx, rx) = async_channel::bounded::<crate::services::audio::PactlEventKind>(32);
+            let watcher = crate::services::audio::PactlWatcher::start(tx);
+            *sw_c.borrow_mut() = Some(watcher);
+            let rf_loop = rf.clone();
+            let lw_loop = lw_c.clone();
+            let pop_w = pop_weak.clone();
+            let pending_debounce = Rc::new(RefCell::new(false));
+            glib::MainContext::default().spawn_local(async move {
+                while let Ok(kind) = rx.recv().await {
+                    if !pop_w.upgrade().is_some_and(|p| p.is_visible()) {
+                        continue;
+                    }
+                    if matches!(kind, crate::services::audio::PactlEventKind::Change)
+                        && std::time::Instant::now().duration_since(*lw_loop.borrow())
+                            < std::time::Duration::from_millis(500)
+                    {
+                        continue;
+                    }
+                    if *pending_debounce.borrow() {
+                        continue;
+                    }
+                    *pending_debounce.borrow_mut() = true;
+                    let pd = pending_debounce.clone();
+                    let rf_fire = rf_loop.clone();
+                    glib::timeout_add_local_once(
+                        std::time::Duration::from_millis(180),
+                        move || {
+                            *pd.borrow_mut() = false;
+                            rf_fire();
+                        },
+                    );
+                }
+            });
+        });
+    }
+    {
+        let sw_close = tray_sound_watcher.clone();
+        popover.connect_closed(move |_| {
+            *sw_close.borrow_mut() = None;
         });
     }
 
