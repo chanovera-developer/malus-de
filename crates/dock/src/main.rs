@@ -19,6 +19,8 @@ use std::rc::Rc;
 use std::time::Duration;
 use tracing::{error, info, warn};
 
+mod progress;
+
 fn dock_headroom_height(config: &DockConfig) -> i32 {
     config.headroom_height().min(i32::MAX as u32) as i32
 }
@@ -73,6 +75,7 @@ fn sync_dock_item_child_alignment(widget: &gtk4::Widget, position: DockPosition)
     if widget.is::<Button>()
         || widget.is::<Overlay>()
         || widget.has_css_class("dock-icon-shadow")
+        || widget.has_css_class("dock-progress-overlay")
         || widget.has_css_class("dock-window-card")
         || widget.has_css_class("dock-primary-icon")
     {
@@ -130,10 +133,23 @@ fn apply_dock_item_geometry(item: &GtkBox, position: DockPosition) {
 }
 
 fn sync_all_dock_items_geometry(refs: &DockLayoutRefs, position: DockPosition) {
+    let is_horizontal = position == DockPosition::Bottom;
     let mut child = refs.apps_box.first_child();
     while let Some(c) = child {
         if let Ok(item) = c.clone().downcast::<GtkBox>() {
             apply_dock_item_geometry(&item, position);
+        } else if let Ok(sep) = c.clone().downcast::<Separator>() {
+            sep.set_orientation(if is_horizontal {
+                Orientation::Vertical
+            } else {
+                Orientation::Horizontal
+            });
+            sep.set_halign(gtk4::Align::Fill);
+            sep.set_valign(if is_horizontal {
+                gtk4::Align::End
+            } else {
+                gtk4::Align::Center
+            });
         }
         child = c.next_sibling();
     }
@@ -1346,6 +1362,20 @@ fn should_ignore_app(identifier: &str) -> bool {
         "malus-de-link",
         "malus-de-spotlight",
         "malus-de-notifications",
+        "polkit",
+        "authentication-agent",
+        "auth-agent",
+        "autenticar",
+        "authenticate",
+        "pinentry",
+        "ssh-askpass",
+        "gcr-prompter",
+        "xdg-desktop-portal",
+        "nm-applet",
+        "blueman-applet",
+        "ibus-",
+        "fcitx",
+        "kwalletd",
     ];
     ignored.iter().any(|ign| lower.contains(ign))
 }
@@ -1365,7 +1395,195 @@ fn safe_app_info_executable(
     }
 }
 
-fn resolve_desktop_app_info(identifier: &str) -> (String, String, String, Vec<String>) {
+fn safe_app_info_commandline(app_info: &impl glib::object::IsA<gio::AppInfo>) -> Option<String> {
+    use glib::translate::ToGlibPtr;
+    unsafe {
+        let ptr = gio::ffi::g_app_info_get_commandline(app_info.as_ref().to_glib_none().0);
+        if ptr.is_null() {
+            None
+        } else {
+            let cstr = std::ffi::CStr::from_ptr(ptr);
+            cstr.to_str().ok().map(str::to_string)
+        }
+    }
+}
+
+fn split_command_args(cmd: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut escape = false;
+
+    for ch in cmd.chars() {
+        if escape {
+            current.push(ch);
+            escape = false;
+            continue;
+        }
+        if ch == '\\' && quote != Some('\'') {
+            escape = true;
+            continue;
+        }
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            } else {
+                current.push(ch);
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            c if c.is_whitespace() => {
+                if !current.is_empty() {
+                    args.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    args
+}
+
+fn clean_desktop_commandline(raw: &str) -> Option<String> {
+    let tokens = split_command_args(raw);
+    let mut cleaned: Vec<String> = Vec::new();
+    let mut skip_next = false;
+
+    for tok in tokens {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if matches!(
+            tok.as_str(),
+            "%f" | "%F"
+                | "%u"
+                | "%U"
+                | "%d"
+                | "%D"
+                | "%n"
+                | "%N"
+                | "%i"
+                | "%c"
+                | "%k"
+                | "%v"
+                | "%m"
+                | "@@u"
+                | "@@"
+        ) {
+            continue;
+        }
+        if tok == "--file-forwarding" {
+            continue;
+        }
+        if tok.contains('%') && tok.starts_with('%') && tok.len() == 2 {
+            continue;
+        }
+        if tok == "--icon" && cleaned.last().is_some() {
+            skip_next = true;
+            continue;
+        }
+        let formatted = if tok.chars().any(char::is_whitespace) {
+            format!("\"{}\"", tok.replace('"', "\\\""))
+        } else {
+            tok
+        };
+        cleaned.push(formatted);
+    }
+
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(cleaned.join(" "))
+    }
+}
+
+fn extract_gio_icon_name(icon: &gio::Icon) -> Option<String> {
+    if let Some(themed) = icon.downcast_ref::<gio::ThemedIcon>() {
+        if let Some(first) = themed.names().into_iter().next() {
+            let trimmed = first.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    if let Some(file_icon) = icon.downcast_ref::<gio::FileIcon>() {
+        if let Some(path) = file_icon.file().path() {
+            return Some(path.to_string_lossy().to_string());
+        }
+    }
+    let raw = IconExt::to_string(icon)?.to_string();
+    let trimmed = raw.trim();
+    if let Some(rest) = trimmed.strip_prefix(". GThemedIcon ") {
+        rest.split_whitespace().next().map(str::to_string)
+    } else if !trimmed.is_empty() {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
+fn build_dock_app_from_app_info(
+    identifier: &str,
+    app_info: &gio::AppInfo,
+) -> DockAppConfig {
+    let lower = identifier.to_lowercase();
+    let desktop_info = app_info.downcast_ref::<gio::DesktopAppInfo>();
+    let name = app_info.name().to_string();
+    let icon = app_info
+        .icon()
+        .as_ref()
+        .and_then(extract_gio_icon_name)
+        .unwrap_or_else(|| "application-x-executable".to_string());
+    let exec = safe_app_info_commandline(app_info)
+        .and_then(|raw| clean_desktop_commandline(&raw))
+        .or_else(|| {
+            safe_app_info_executable(app_info).map(|p| p.to_string_lossy().to_string())
+        })
+        .unwrap_or_else(|| identifier.to_string());
+
+    let mut matchers = Vec::new();
+    let mut push_unique = |val: String| {
+        let trimmed = val.trim().to_string();
+        if !trimmed.is_empty()
+            && !matchers
+                .iter()
+                .any(|m: &String| m.eq_ignore_ascii_case(&trimmed))
+        {
+            matchers.push(trimmed);
+        }
+    };
+    push_unique(identifier.to_string());
+    push_unique(lower);
+    push_unique(name.to_lowercase());
+    if let Some(id) = app_info.id() {
+        let stem = id.trim().trim_end_matches(".desktop").to_lowercase();
+        push_unique(stem);
+    }
+    if let Some(wm) = desktop_info.and_then(|d| d.startup_wm_class()) {
+        push_unique(wm.to_lowercase());
+    }
+    if let Some(exe_base) = normalized_command_basename(&exec) {
+        push_unique(exe_base);
+    }
+
+    DockAppConfig {
+        name,
+        icon,
+        command: exec,
+        matchers,
+        icon_appearance: DockIconAppearance::Auto,
+    }
+}
+
+fn resolve_launchable_desktop_app_config(identifier: &str) -> Option<DockAppConfig> {
+    if identifier.trim().is_empty() || should_ignore_app(identifier) {
+        return None;
+    }
     let lower = identifier.to_lowercase();
 
     // 1. Mapeo específico para Ajustes del Sistema de Malus DE
@@ -1373,18 +1591,19 @@ fn resolve_desktop_app_info(identifier: &str) -> (String, String, String, Vec<St
         || lower == "malus-de-settings"
         || (lower.contains("malus") && lower.contains("settings"))
     {
-        return (
-            "Ajustes del Sistema".to_string(),
-            "preferences-system".to_string(),
-            "malus-de-settings".to_string(),
-            vec![
+        return Some(DockAppConfig {
+            name: "Ajustes del Sistema".to_string(),
+            icon: "preferences-system".to_string(),
+            command: "malus-de-settings".to_string(),
+            matchers: vec![
                 "malus-de-settings".to_string(),
                 "dev.malus.settings".to_string(),
                 "dev.malus.Settings".to_string(),
                 "ajustes".to_string(),
                 "settings".to_string(),
             ],
-        );
+            icon_appearance: DockIconAppearance::Auto,
+        });
     }
 
     // 1.1. Mapeo específico para Branches de Malus DE
@@ -1392,18 +1611,19 @@ fn resolve_desktop_app_info(identifier: &str) -> (String, String, String, Vec<St
         || lower == "malus-de-branches"
         || (lower.contains("malus") && lower.contains("branches"))
     {
-        return (
-            "Branches".to_string(),
-            "system-file-manager".to_string(),
-            "malus-de-branches".to_string(),
-            vec![
+        return Some(DockAppConfig {
+            name: "Branches".to_string(),
+            icon: "system-file-manager".to_string(),
+            command: "malus-de-branches".to_string(),
+            matchers: vec![
                 "dev.malus.Branches".to_string(),
                 "dev.malus.branches".to_string(),
                 "malus-de-branches".to_string(),
                 "branches".to_string(),
                 "files".to_string(),
             ],
-        );
+            icon_appearance: DockIconAppearance::Auto,
+        });
     }
 
     let candidates = [
@@ -1417,47 +1637,61 @@ fn resolve_desktop_app_info(identifier: &str) -> (String, String, String, Vec<St
     ];
     for cand in &candidates {
         if let Some(info) = gio::DesktopAppInfo::new(cand) {
-            let name = info.name().to_string();
-            let icon = info
-                .icon()
-                .and_then(|i| IconExt::to_string(&i))
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| identifier.to_string());
-            let exec = safe_app_info_executable(&info)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| identifier.to_string());
-            let matchers = vec![identifier.to_string(), lower.clone(), name.to_lowercase()];
-            return (name, icon, exec, matchers);
+            if info.should_show() {
+                return Some(build_dock_app_from_app_info(identifier, info.upcast_ref()));
+            }
         }
     }
 
-    for app_info in gio::AppInfo::all() {
-        let id_matches = app_info.id().is_some_and(|id| {
-            id.to_lowercase()
-                .trim_end_matches(".desktop")
-                .contains(&lower)
+    let all_apps: Vec<gio::AppInfo> = gio::AppInfo::all()
+        .into_iter()
+        .filter(|app_info| app_info.should_show())
+        .collect();
+
+    // Primero coincidencias exactas (id, StartupWMClass, nombre, ejecutable)
+    for app_info in &all_apps {
+        let desktop_info = app_info.downcast_ref::<gio::DesktopAppInfo>();
+        let exact_id = app_info.id().is_some_and(|id| {
+            id.to_lowercase().trim_end_matches(".desktop") == lower
         });
-        let name_matches = app_info.name().to_lowercase() == lower;
-        let exec_matches = safe_app_info_executable(&app_info)
+        let exact_name = app_info.name().to_lowercase() == lower;
+        let exact_wm_class = desktop_info
+            .and_then(|d| d.startup_wm_class())
+            .is_some_and(|wm| wm.eq_ignore_ascii_case(identifier));
+        let exact_exec = safe_app_info_executable(app_info)
             .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-            .is_some_and(|exe| {
-                exe.eq_ignore_ascii_case(identifier) || exe.to_lowercase().contains(&lower)
-            });
-        if id_matches || name_matches || exec_matches {
-            let name = app_info.name().to_string();
-            let icon = app_info
-                .icon()
-                .and_then(|i| IconExt::to_string(&i))
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| identifier.to_string());
-            let exec = safe_app_info_executable(&app_info)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| identifier.to_string());
-            let matchers = vec![identifier.to_string(), lower.clone(), name.to_lowercase()];
-            return (name, icon, exec, matchers);
+            .is_some_and(|exe| exe.eq_ignore_ascii_case(identifier));
+        if exact_id || exact_name || exact_wm_class || exact_exec {
+            return Some(build_dock_app_from_app_info(identifier, app_info));
         }
     }
 
+    // Después coincidencias parciales por segmento/prefijo para IDs de longitud razonable
+    if lower.len() >= 3 {
+        for app_info in &all_apps {
+            let id_matches = app_info.id().is_some_and(|id| {
+                let stem = id.to_lowercase();
+                let stem = stem.trim_end_matches(".desktop");
+                identity_matches_token(stem, &lower)
+            });
+            let exec_matches = safe_app_info_executable(app_info)
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+                .is_some_and(|exe| identity_matches_token(&exe, &lower));
+            if id_matches || exec_matches {
+                return Some(build_dock_app_from_app_info(identifier, app_info));
+            }
+        }
+    }
+
+    None
+}
+
+fn resolve_desktop_app_info(identifier: &str) -> (String, String, String, Vec<String>) {
+    if let Some(cfg) = resolve_launchable_desktop_app_config(identifier) {
+        return (cfg.name, cfg.icon, cfg.command, cfg.matchers);
+    }
+
+    let lower = identifier.to_lowercase();
     let name = capitalize(identifier);
     let icon = identifier.to_string();
     let exec = identifier.to_string();
@@ -1698,6 +1932,8 @@ fn matches_dock_app(matchers: &[String], app_name: &str, identity: &str) -> bool
 }
 
 fn build_dock_ui(app: &Application) {
+    progress::ensure_launcher_entry_listener();
+
     let window = ApplicationWindow::builder()
         .application(app)
         .title("Malus DE Dock")
@@ -2192,10 +2428,12 @@ fn build_dock_ui(app: &Application) {
             }
         };
 
-        // Magnificar cada app en apps_box
+        // Magnificar cada app en apps_box (omitir separadores de apps recientes)
         let mut child = apps_box_motion.first_child();
         while let Some(c) = child {
-            update_item(&c);
+            if !c.is::<Separator>() {
+                update_item(&c);
+            }
             child = c.next_sibling();
         }
 
@@ -2343,16 +2581,20 @@ fn build_dock_ui(app: &Application) {
                 IpcMessage::RunningAppsChanged { running_apps } => {
                     let prev_apps = cache_ipc.borrow().clone();
                     *cache_ipc.borrow_mut() = running_apps.clone();
+                    record_recent_unpinned_apps_from_running(
+                        &running_apps,
+                        &cfg_ipc.borrow().apps,
+                    );
 
                     // 1. Actualizar indicadores de las apps visibles
                     let show_ind = cfg_ipc.borrow().show_indicators;
                     sync_dock_indicators(&indicators_ipc, &running_apps, show_ind);
 
-                    // 2. Si la lista de aplicaciones ejecutándose cambió, refrescar apps unpinned
+                    // 2. Si la lista de aplicaciones ejecutándose cambió, refrescar apps unpinned y recientes
                     if prev_apps != running_apps && !refresh_pending_ipc.replace(true) {
                         let on_refresh = on_rf_running_ipc.clone();
                         let refresh_pending = refresh_pending_ipc.clone();
-                        glib::timeout_add_local_once(Duration::from_millis(900), move || {
+                        glib::timeout_add_local_once(Duration::from_millis(150), move || {
                             refresh_pending.set(false);
                             on_refresh();
                         });
@@ -3401,7 +3643,7 @@ fn render_dock_apps(
         let mut index = 0;
         while let Some(current) = child {
             child = current.next_sibling();
-            if index >= total_pinned {
+            if index >= total_pinned || current.has_css_class("dock-dynamic-item") {
                 apps_box.remove(&current);
             }
             index += 1;
@@ -3436,56 +3678,464 @@ fn render_dock_apps(
         }
     }
 
-    // 2. Aplicaciones en ejecución no fijadas (Unpinned Running Apps)
-    if config.show_recent_apps {
-        let mut unpinned_candidates: Vec<String> = Vec::new();
-        for r in &running {
-            if should_ignore_app(r) {
-                continue;
-            }
-            if config.apps.iter().any(|a| a.matches(r)) {
-                continue;
-            }
-            let r_lower = r.to_lowercase();
-            if !unpinned_candidates
-                .iter()
-                .any(|c| c.to_lowercase() == r_lower)
-            {
-                unpinned_candidates.push(r.clone());
-            }
+    // 2. Aplicaciones en ejecución no fijadas (SIEMPRE visibles en el Dock mientras estén abiertas)
+    let mut running_unpinned_apps: Vec<DockAppConfig> = Vec::new();
+    for r in &running {
+        if should_ignore_app(r) {
+            continue;
         }
+        if config.apps.iter().any(|a| a.matches(r)) {
+            continue;
+        }
+        let app_cfg = resolve_dock_app_config(r);
+        if config
+            .apps
+            .iter()
+            .any(|a| dock_apps_represent_same_app(a, &app_cfg))
+        {
+            continue;
+        }
+        if running_unpinned_apps
+            .iter()
+            .any(|existing| dock_apps_represent_same_app(existing, &app_cfg))
+        {
+            continue;
+        }
+        running_unpinned_apps.push(app_cfg);
+    }
 
-        for cand in unpinned_candidates {
-            let (name, icon, command, matchers) = resolve_desktop_app_info(&cand);
-            let app_cfg = DockAppConfig {
-                name,
-                icon,
-                command,
-                matchers,
-                icon_appearance: DockIconAppearance::Auto,
-            };
-            let (widget, ind) = create_dock_item(
-                &app_cfg,
-                false,
-                0,
-                0,
-                icon_size,
-                true,
-                running_cache.clone(),
-                active_app_cache.clone(),
-                minimized_cache.clone(),
-                dock_config.clone(),
-                on_refresh.clone(),
-            );
-            apps_box.append(&widget);
-            let ind_matchers = if app_cfg.matchers.is_empty() {
-                vec![app_cfg.name.clone()]
+    for app_cfg in &running_unpinned_apps {
+        let (widget, ind) = create_dock_item(
+            app_cfg,
+            false,
+            0,
+            0,
+            icon_size,
+            true,
+            running_cache.clone(),
+            active_app_cache.clone(),
+            minimized_cache.clone(),
+            dock_config.clone(),
+            on_refresh.clone(),
+        );
+        widget.add_css_class("dock-dynamic-item");
+        apps_box.append(&widget);
+        let ind_matchers = if app_cfg.matchers.is_empty() {
+            vec![app_cfg.name.clone()]
+        } else {
+            app_cfg.matchers.clone()
+        };
+        dock_indicators.borrow_mut().push((ind_matchers, ind));
+    }
+
+    // 3. Aplicaciones recientes cerradas no fijadas (controladas por "Mostrar apps recientes y sugeridas en el Dock")
+    if config.show_recent_apps {
+        let recent_closed = RECENT_UNPINNED_APPS.with(|cell| {
+            let mut recent = cell.borrow_mut();
+            if recent.is_empty() {
+                *recent = load_recent_unpinned_apps_from_disk();
+                if update_recent_unpinned_history(
+                    &mut recent,
+                    &running,
+                    &config.apps,
+                    MAX_STORED_RECENT_APPS,
+                ) {
+                    save_recent_unpinned_apps_to_disk(&recent);
+                }
+            }
+            select_visible_recent_closed_apps_with(
+                &recent,
+                &running,
+                &running_unpinned_apps,
+                &config.apps,
+                MAX_VISIBLE_RECENT_APPS,
+                &resolve_launchable_desktop_app_config,
+            )
+        });
+        if !recent_closed.is_empty() {
+            let is_horizontal = config.position == DockPosition::Bottom;
+            let recent_sep = Separator::new(if is_horizontal {
+                Orientation::Vertical
             } else {
-                app_cfg.matchers.clone()
-            };
-            dock_indicators.borrow_mut().push((ind_matchers, ind));
+                Orientation::Horizontal
+            });
+            recent_sep.add_css_class("dock-separator");
+            recent_sep.add_css_class("dock-recent-separator");
+            recent_sep.add_css_class("dock-dynamic-item");
+            recent_sep.set_halign(gtk4::Align::Fill);
+            recent_sep.set_valign(if is_horizontal {
+                gtk4::Align::End
+            } else {
+                gtk4::Align::Center
+            });
+            apps_box.append(&recent_sep);
+
+            for app_cfg in recent_closed {
+                let (widget, ind) = create_dock_item(
+                    &app_cfg,
+                    false,
+                    0,
+                    0,
+                    icon_size,
+                    false,
+                    running_cache.clone(),
+                    active_app_cache.clone(),
+                    minimized_cache.clone(),
+                    dock_config.clone(),
+                    on_refresh.clone(),
+                );
+                widget.add_css_class("dock-dynamic-item");
+                apps_box.append(&widget);
+                let ind_matchers = if app_cfg.matchers.is_empty() {
+                    vec![app_cfg.name.clone()]
+                } else {
+                    app_cfg.matchers.clone()
+                };
+                dock_indicators.borrow_mut().push((ind_matchers, ind));
+            }
         }
     }
+}
+
+const MAX_STORED_RECENT_APPS: usize = 8;
+const MAX_VISIBLE_RECENT_APPS: usize = 3;
+
+thread_local! {
+    static RECENT_UNPINNED_APPS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+fn resolve_dock_app_config(identifier: &str) -> DockAppConfig {
+    let (name, icon, command, matchers) = resolve_desktop_app_info(identifier);
+    DockAppConfig {
+        name,
+        icon,
+        command,
+        matchers,
+        icon_appearance: DockIconAppearance::Auto,
+    }
+}
+
+fn normalized_command_basename(command: &str) -> Option<String> {
+    let first = command.split_whitespace().next()?;
+    let base = std::path::Path::new(first)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(first)
+        .trim()
+        .to_lowercase();
+    const GENERIC_WRAPPERS: &[&str] = &[
+        "",
+        "env",
+        "sh",
+        "bash",
+        "zsh",
+        "dash",
+        "flatpak",
+        "snap",
+        "python",
+        "python3",
+        "perl",
+        "ruby",
+        "node",
+        "electron",
+        "java",
+        "javaw",
+        "gtk-launch",
+        "gio",
+        "xdg-open",
+        "pkexec",
+        "sudo",
+        "wine",
+        "steam-runtime",
+    ];
+    if GENERIC_WRAPPERS.contains(&base.as_str()) {
+        None
+    } else {
+        Some(base)
+    }
+}
+
+fn is_generic_identity_token(token: &str) -> bool {
+    matches!(
+        token,
+        "" | "app"
+            | "bin"
+            | "usr"
+            | "org"
+            | "com"
+            | "net"
+            | "dev"
+            | "gtk"
+            | "kde"
+            | "gnome"
+            | "linux"
+            | "desktop"
+            | "client"
+            | "main"
+            | "gui"
+            | "malus"
+            | "system"
+    )
+}
+
+fn normalize_identity_str(raw: &str) -> String {
+    raw.trim()
+        .trim_end_matches(".desktop")
+        .trim()
+        .to_lowercase()
+}
+
+fn identity_matches_token(haystack_raw: &str, needle_raw: &str) -> bool {
+    let haystack = normalize_identity_str(haystack_raw);
+    let needle = normalize_identity_str(needle_raw);
+    if haystack.is_empty() || needle.is_empty() {
+        return false;
+    }
+    if haystack == needle {
+        return true;
+    }
+    if needle.len() < 3 || is_generic_identity_token(&needle) {
+        return false;
+    }
+    let bytes = haystack.as_bytes();
+    let mut start = 0;
+    while let Some(rel_idx) = haystack[start..].find(&needle) {
+        let idx = start + rel_idx;
+        let end = idx + needle.len();
+        let left_ok = idx == 0 || !bytes[idx - 1].is_ascii_alphanumeric();
+        let right_ok = end == bytes.len() || !bytes[end].is_ascii_alphanumeric();
+        if left_ok && right_ok {
+            return true;
+        }
+        start = idx + 1;
+    }
+    false
+}
+
+fn normalized_app_tokens(app: &DockAppConfig) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut push_unique = |val: String| {
+        let norm = normalize_identity_str(&val);
+        if !norm.is_empty() && !tokens.iter().any(|t: &String| t == &norm) {
+            tokens.push(norm);
+        }
+    };
+    push_unique(app.name.clone());
+    for m in &app.matchers {
+        push_unique(m.clone());
+    }
+    if let Some(exe) = normalized_command_basename(&app.command) {
+        push_unique(exe);
+    }
+    tokens
+}
+
+fn dock_apps_represent_same_app(a: &DockAppConfig, b: &DockAppConfig) -> bool {
+    let name_a = normalize_identity_str(&a.name);
+    let name_b = normalize_identity_str(&b.name);
+    if !name_a.is_empty() && name_a == name_b {
+        return true;
+    }
+    if let (Some(exe_a), Some(exe_b)) = (
+        normalized_command_basename(&a.command),
+        normalized_command_basename(&b.command),
+    ) {
+        if exe_a == exe_b {
+            return true;
+        }
+    }
+    let tokens_a = normalized_app_tokens(a);
+    let tokens_b = normalized_app_tokens(b);
+    for ta in &tokens_a {
+        for tb in &tokens_b {
+            if ta == tb && !is_generic_identity_token(ta) {
+                return true;
+            }
+            if identity_matches_token(ta, tb) || identity_matches_token(tb, ta) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn dock_app_matches_running(
+    app: &DockAppConfig,
+    raw_id: &str,
+    running: &[String],
+    running_resolved: &[DockAppConfig],
+) -> bool {
+    if running.iter().any(|r| {
+        r.eq_ignore_ascii_case(raw_id)
+            || app.matches(r)
+            || identity_matches_token(r, raw_id)
+            || identity_matches_token(raw_id, r)
+    }) {
+        return true;
+    }
+    running_resolved
+        .iter()
+        .any(|running_cfg| dock_apps_represent_same_app(app, running_cfg))
+}
+
+fn recent_apps_file_path() -> PathBuf {
+    DockConfig::config_path().with_file_name("dock_recent_apps.json")
+}
+
+fn load_recent_unpinned_apps_from_disk() -> Vec<String> {
+    let path = recent_apps_file_path();
+    if let Ok(raw) = std::fs::read_to_string(&path) {
+        if let Ok(parsed) = serde_json::from_str::<Vec<String>>(&raw) {
+            return parsed;
+        }
+    }
+    // Migración automática si se guardó en la ruta anidada anterior `malus-de/malus-de/dock_recent_apps.json`
+    if let Some(legacy_nested) = path
+        .parent()
+        .map(|p| p.join("malus-de").join("dock_recent_apps.json"))
+    {
+        if let Ok(raw) = std::fs::read_to_string(&legacy_nested) {
+            if let Ok(parsed) = serde_json::from_str::<Vec<String>>(&raw) {
+                let _ = std::fs::remove_file(&legacy_nested);
+                return parsed;
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn save_recent_unpinned_apps_to_disk(recent: &[String]) {
+    let path = recent_apps_file_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(recent) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+fn update_recent_unpinned_history_with(
+    recent: &mut Vec<String>,
+    running: &[String],
+    pinned: &[DockAppConfig],
+    max_stored: usize,
+    resolve: &impl Fn(&str) -> Option<DockAppConfig>,
+) -> bool {
+    let before = recent.clone();
+    let mut cleaned: Vec<(String, DockAppConfig)> = Vec::new();
+    for entry in recent.iter() {
+        if should_ignore_app(entry) || pinned.iter().any(|p| p.matches(entry)) {
+            continue;
+        }
+        let Some(entry_cfg) = resolve(entry) else {
+            continue;
+        };
+        if pinned
+            .iter()
+            .any(|p| dock_apps_represent_same_app(p, &entry_cfg))
+        {
+            continue;
+        }
+        if cleaned.iter().any(|(existing_id, existing_cfg)| {
+            existing_id.eq_ignore_ascii_case(entry)
+                || dock_apps_represent_same_app(existing_cfg, &entry_cfg)
+        }) {
+            continue;
+        }
+        cleaned.push((entry.clone(), entry_cfg));
+    }
+
+    for app_id in running {
+        if should_ignore_app(app_id) || pinned.iter().any(|p| p.matches(app_id)) {
+            continue;
+        }
+        let Some(running_cfg) = resolve(app_id) else {
+            continue;
+        };
+        if pinned
+            .iter()
+            .any(|p| dock_apps_represent_same_app(p, &running_cfg))
+        {
+            continue;
+        }
+        cleaned.retain(|(existing_id, existing_cfg)| {
+            !existing_id.eq_ignore_ascii_case(app_id)
+                && !dock_apps_represent_same_app(existing_cfg, &running_cfg)
+                && !running_cfg.matches(existing_id)
+                && !existing_cfg.matches(app_id)
+        });
+        cleaned.insert(0, (app_id.clone(), running_cfg));
+    }
+
+    cleaned.truncate(max_stored);
+    *recent = cleaned.into_iter().map(|(id, _)| id).collect();
+    *recent != before
+}
+
+fn update_recent_unpinned_history(
+    recent: &mut Vec<String>,
+    running: &[String],
+    pinned: &[DockAppConfig],
+    max_stored: usize,
+) -> bool {
+    update_recent_unpinned_history_with(
+        recent,
+        running,
+        pinned,
+        max_stored,
+        &resolve_launchable_desktop_app_config,
+    )
+}
+
+fn select_visible_recent_closed_apps_with(
+    recent: &[String],
+    running: &[String],
+    running_resolved: &[DockAppConfig],
+    pinned: &[DockAppConfig],
+    max_visible: usize,
+    resolve: &impl Fn(&str) -> Option<DockAppConfig>,
+) -> Vec<DockAppConfig> {
+    let mut out: Vec<DockAppConfig> = Vec::new();
+    for entry in recent {
+        if should_ignore_app(entry) || pinned.iter().any(|p| p.matches(entry)) {
+            continue;
+        }
+        let Some(entry_cfg) = resolve(entry) else {
+            continue;
+        };
+        if pinned
+            .iter()
+            .any(|p| dock_apps_represent_same_app(p, &entry_cfg))
+        {
+            continue;
+        }
+        if dock_app_matches_running(&entry_cfg, entry, running, running_resolved) {
+            continue;
+        }
+        if out
+            .iter()
+            .any(|existing| dock_apps_represent_same_app(existing, &entry_cfg))
+        {
+            continue;
+        }
+        out.push(entry_cfg);
+        if out.len() >= max_visible {
+            break;
+        }
+    }
+    out
+}
+
+fn record_recent_unpinned_apps_from_running(running: &[String], pinned: &[DockAppConfig]) {
+    RECENT_UNPINNED_APPS.with(|cell| {
+        let mut recent = cell.borrow_mut();
+        if recent.is_empty() {
+            *recent = load_recent_unpinned_apps_from_disk();
+        }
+        if update_recent_unpinned_history(&mut recent, running, pinned, MAX_STORED_RECENT_APPS) {
+            save_recent_unpinned_apps_to_disk(&recent);
+        }
+    });
 }
 
 fn update_icon_size_recursive(
@@ -3546,7 +4196,7 @@ fn update_icon_size_recursive(
             changed = true;
         }
     }
-    if widget.has_css_class("dock-icon-shadow")
+    if (widget.has_css_class("dock-icon-shadow") || widget.has_css_class("dock-progress-overlay"))
         && (widget.width_request() != size || widget.height_request() != size)
     {
         widget.set_size_request(size, size);
@@ -4069,7 +4719,7 @@ fn create_magnifiable_icon(
 
 fn queue_dock_icon_backgrounds(widget: &gtk4::Widget) {
     if let Ok(area) = widget.clone().downcast::<DrawingArea>() {
-        if area.has_css_class("dock-icon-shadow") {
+        if area.has_css_class("dock-icon-shadow") || area.has_css_class("dock-progress-overlay") {
             area.queue_draw();
         }
     }
@@ -4975,9 +5625,10 @@ fn create_dock_item(
         "system-file-manager" => "org.gnome.Nautilus",
         "utilities-terminal" => "org.gnome.Ptyxis",
         "accessories-text-editor" => "org.gnome.TextEditor",
+        "" => "application-x-executable",
         icon_name => icon_name,
     };
-    let icon = if icon_name.starts_with('/') {
+    let icon = if icon_name.starts_with('/') && std::path::Path::new(icon_name).is_file() {
         Image::builder()
             .file(icon_name)
             .pixel_size(icon_size)
@@ -4985,12 +5636,26 @@ fn create_dock_item(
             .valign(gtk4::Align::End)
             .build()
     } else {
-        Image::builder()
+        let probe = Image::builder()
             .icon_name(icon_name)
             .pixel_size(icon_size)
             .css_classes(["dock-primary-icon"])
             .valign(gtk4::Align::End)
-            .build()
+            .build();
+        let has_themed = gtk4::IconTheme::for_display(&probe.display()).has_icon(icon_name);
+        if has_themed {
+            probe
+        } else if let Some(path) = resolve_icon_file_path(icon_name, &probe, icon_size) {
+            Image::builder()
+                .file(path.to_string_lossy().as_ref())
+                .pixel_size(icon_size)
+                .css_classes(["dock-primary-icon"])
+                .valign(gtk4::Align::End)
+                .build()
+        } else {
+            probe.set_icon_name(Some("application-x-executable"));
+            probe
+        }
     };
     let render_mode =
         resolve_dock_icon_render_mode(app_cfg.icon_appearance, icon_name, &icon, icon_size);
@@ -5000,6 +5665,7 @@ fn create_dock_item(
         icon.set_margin_bottom(5);
     }
     let icon_container = create_magnifiable_icon(&icon, icon_size, render_mode);
+    progress::attach_download_progress_overlay(&icon_container, app_cfg, icon_size);
     btn.set_child(Some(&icon_container));
     icon_container.add_css_class("dock-bounce-target");
     let animation_id = Rc::new(Cell::new(0_u64));
@@ -5146,18 +5812,18 @@ fn create_dock_item(
 }
 
 fn spawn_dock_app(name: &str, cmd: &str, extra_args: &[&str]) {
-    let parts: Vec<&str> = cmd.split_whitespace().collect();
+    let parts = split_command_args(cmd);
     if let Some((exe, args)) = parts.split_first() {
         let target_path_buf;
         let mut wrapped_target_bin: Option<&str> = None;
-        let target_exe = if *exe == "gnome-control-center" {
+        let target_exe = if exe == "gnome-control-center" {
             "malus-de-settings"
         } else if let Some(wrapper) = malus_de_common::config::resolve_electron_ide_wrapper(exe) {
-            wrapped_target_bin = Some(*exe);
+            wrapped_target_bin = Some(exe.as_str());
             target_path_buf = wrapper.to_string_lossy().to_string();
             &target_path_buf
         } else {
-            *exe
+            exe.as_str()
         };
         let resolved_exe = std::env::current_exe()
             .ok()
@@ -5525,6 +6191,185 @@ mod tests {
         assert_eq!(
             find_matching_app_index_for_window(&groups, "org.gnome.Calculator", "Calculadora"),
             None
+        );
+    }
+
+    #[test]
+    fn recent_unpinned_apps_excludes_pinned_and_currently_running_and_caps_at_three() {
+        let pinned = vec![DockAppConfig {
+            name: "Firefox".to_string(),
+            icon: "firefox".to_string(),
+            command: "firefox".to_string(),
+            matchers: vec!["firefox".to_string()],
+            icon_appearance: DockIconAppearance::Auto,
+        }];
+        let mock_resolve = |id: &str| {
+            Some(DockAppConfig {
+                name: capitalize(id),
+                icon: id.to_string(),
+                command: id.to_string(),
+                matchers: vec![id.to_lowercase()],
+                icon_appearance: DockIconAppearance::Auto,
+            })
+        };
+        let mut recent = Vec::new();
+        update_recent_unpinned_history_with(
+            &mut recent,
+            &[
+                "firefox".to_string(),
+                "gimp".to_string(),
+                "vlc".to_string(),
+                "discord".to_string(),
+                "spotify".to_string(),
+            ],
+            &pinned,
+            MAX_STORED_RECENT_APPS,
+            &mock_resolve,
+        );
+        // Firefox está anclada, no entra al historial de recientes
+        assert!(!recent.iter().any(|r| r == "firefox"));
+
+        // Mientras "spotify" siga abierta, NO aparece duplicada en la sección de recientes cerradas
+        let running = vec!["spotify".to_string()];
+        let running_resolved: Vec<DockAppConfig> =
+            running.iter().filter_map(|r| mock_resolve(r)).collect();
+        let visible_recent = select_visible_recent_closed_apps_with(
+            &recent,
+            &running,
+            &running_resolved,
+            &pinned,
+            MAX_VISIBLE_RECENT_APPS,
+            &mock_resolve,
+        );
+        assert_eq!(visible_recent.len(), 3);
+        let names: Vec<String> = visible_recent
+            .iter()
+            .map(|a| a.name.to_lowercase())
+            .collect();
+        assert!(!names.contains(&"spotify".to_string()));
+        assert!(names.contains(&"discord".to_string()));
+        assert!(names.contains(&"vlc".to_string()));
+        assert!(names.contains(&"gimp".to_string()));
+    }
+
+    #[test]
+    fn recent_app_disappears_from_recents_when_opened_under_alternate_app_id_or_title() {
+        let pinned = Vec::new();
+        let mock_resolve = |id: &str| match id.to_lowercase().as_str() {
+            "org.gnome.calculator" | "gnome-calculator" | "calculadora" => Some(DockAppConfig {
+                name: "Calculadora".to_string(),
+                icon: "org.gnome.Calculator".to_string(),
+                command: "/usr/bin/gnome-calculator".to_string(),
+                matchers: vec![
+                    id.to_lowercase(),
+                    "org.gnome.calculator".to_string(),
+                    "gnome-calculator".to_string(),
+                    "calculadora".to_string(),
+                ],
+                icon_appearance: DockIconAppearance::Auto,
+            }),
+            "code" | "visual studio code" => Some(DockAppConfig {
+                name: "Visual Studio Code".to_string(),
+                icon: "vscode".to_string(),
+                command: "/usr/bin/code".to_string(),
+                matchers: vec![
+                    id.to_lowercase(),
+                    "code".to_string(),
+                    "visual studio code".to_string(),
+                ],
+                icon_appearance: DockIconAppearance::Auto,
+            }),
+            "antigravity" | "antigravity - sound_pane.rs" => Some(DockAppConfig {
+                name: "Antigravity".to_string(),
+                icon: "antigravity".to_string(),
+                command: "antigravity".to_string(),
+                matchers: vec!["antigravity".to_string()],
+                icon_appearance: DockIconAppearance::Auto,
+            }),
+            _ => None,
+        };
+
+        // Simula historial con alias duplicados + diálogos del sistema no lanzables
+        let mut recent = vec![
+            "Calculadora".to_string(),
+            "org.gnome.Calculator".to_string(),
+            "Visual Studio Code".to_string(),
+            "Antigravity - sound_pane.rs".to_string(),
+            "polkit-mate-authentication-agent-1".to_string(),
+            "Autenticar".to_string(),
+        ];
+
+        // Al abrir Calculadora como "gnome-calculator" y Antigravity como "antigravity":
+        let running = vec!["gnome-calculator".to_string(), "antigravity".to_string()];
+        update_recent_unpinned_history_with(
+            &mut recent,
+            &running,
+            &pinned,
+            MAX_STORED_RECENT_APPS,
+            &mock_resolve,
+        );
+        // No deben quedar alias viejos duplicados ni agentes polkit/diálogos en el historial
+        assert_eq!(recent.len(), 3);
+        assert!(!recent.iter().any(|r| r == "Calculadora"));
+        assert!(!recent.iter().any(|r| r == "org.gnome.Calculator"));
+        assert!(!recent.iter().any(|r| r == "Antigravity - sound_pane.rs"));
+        assert!(!recent.iter().any(|r| r.contains("polkit")));
+        assert!(!recent.iter().any(|r| r == "Autenticar"));
+
+        // Al seleccionar apps recientes cerradas mientras "gnome-calculator" y "antigravity" están abiertas,
+        // NINGUNA de las dos debe quedar en la sección de recientes; solo Visual Studio Code.
+        let running_resolved: Vec<DockAppConfig> =
+            running.iter().filter_map(|r| mock_resolve(r)).collect();
+        let visible_recent = select_visible_recent_closed_apps_with(
+            &recent,
+            &running,
+            &running_resolved,
+            &pinned,
+            MAX_VISIBLE_RECENT_APPS,
+            &mock_resolve,
+        );
+        assert_eq!(visible_recent.len(), 1);
+        assert_eq!(visible_recent[0].name, "Visual Studio Code");
+
+        // Incluso si el disco traía alias heredados antes de limpiar, select_visible_recent_closed_apps_with
+        // tampoco los muestra duplicados ni los deja visibles mientras la app está abierta.
+        let legacy_disk_recent = vec![
+            "Calculadora".to_string(),
+            "org.gnome.Calculator".to_string(),
+            "Visual Studio Code".to_string(),
+            "code".to_string(),
+            "polkit-mate-authentication-agent-1".to_string(),
+            "Autenticar".to_string(),
+        ];
+        let visible_from_legacy = select_visible_recent_closed_apps_with(
+            &legacy_disk_recent,
+            &["gnome-calculator".to_string()],
+            &[mock_resolve("gnome-calculator").unwrap()],
+            &pinned,
+            MAX_VISIBLE_RECENT_APPS,
+            &mock_resolve,
+        );
+        assert_eq!(visible_from_legacy.len(), 1);
+        assert_eq!(visible_from_legacy[0].name, "Visual Studio Code");
+    }
+
+    #[test]
+    fn desktop_icon_and_commandline_extraction_handles_themed_icons_and_flatpak() {
+        let themed = gio::ThemedIcon::with_default_fallbacks("org.gnome.Calculator");
+        assert_eq!(
+            extract_gio_icon_name(themed.upcast_ref()).as_deref(),
+            Some("org.gnome.Calculator")
+        );
+        assert_eq!(
+            clean_desktop_commandline(
+                "/usr/bin/flatpak run --branch=stable --file-forwarding com.spotify.Client @@u %U @@"
+            )
+            .as_deref(),
+            Some("/usr/bin/flatpak run --branch=stable com.spotify.Client")
+        );
+        assert_eq!(
+            clean_desktop_commandline("firefox %u").as_deref(),
+            Some("firefox")
         );
     }
 }
