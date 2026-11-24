@@ -33,11 +33,41 @@ struct DockLayoutRefs {
     magnification_headroom: GtkBox,
     dock_content: GtkBox,
     apps_box: GtkBox,
+    recent_apps_revealer: gtk4::Revealer,
+    recent_apps_box: GtkBox,
     separator: Separator,
     minimized_box: GtkBox,
     dock_highlights: DrawingArea,
     trash_widget: GtkBox,
     dock_corner_radius: Rc<Cell<f64>>,
+}
+
+struct RecentAppsUiState {
+    section_gen: u64,
+    items: Vec<(String, gtk4::Revealer, GtkBox)>,
+    separator: Option<Separator>,
+}
+
+impl RecentAppsUiState {
+    fn new() -> Self {
+        Self {
+            section_gen: 0,
+            items: Vec::new(),
+            separator: None,
+        }
+    }
+}
+
+fn recent_revealer_transition_for(position: DockPosition) -> gtk4::RevealerTransitionType {
+    match position {
+        DockPosition::Bottom => gtk4::RevealerTransitionType::SlideRight,
+        DockPosition::Left | DockPosition::Right => gtk4::RevealerTransitionType::SlideDown,
+    }
+}
+
+fn dock_app_recent_key(app_cfg: &DockAppConfig) -> String {
+    normalized_command_basename(&app_cfg.command)
+        .unwrap_or_else(|| app_cfg.name.trim().to_lowercase())
 }
 
 fn dock_bar_cross_size(cfg: &DockConfig) -> i32 {
@@ -46,19 +76,69 @@ fn dock_bar_cross_size(cfg: &DockConfig) -> i32 {
 }
 
 fn apply_popover_dock_placement(popover: &Popover, position: DockPosition) {
+    apply_popover_dock_placement_with_extra(popover, position, 0);
+}
+
+fn apply_popover_dock_placement_with_extra(
+    popover: &Popover,
+    position: DockPosition,
+    extra_px: i32,
+) {
+    let extra = extra_px.max(0);
     match position {
         DockPosition::Bottom => {
             popover.set_position(gtk4::PositionType::Top);
-            popover.set_offset(0, POPOVER_SHADOW_GUTTER);
+            popover.set_offset(0, POPOVER_SHADOW_GUTTER + 16 - extra);
         }
         DockPosition::Left => {
             popover.set_position(gtk4::PositionType::Right);
-            popover.set_offset(-POPOVER_SHADOW_GUTTER, 0);
+            popover.set_offset(-(POPOVER_SHADOW_GUTTER + 14) + extra, 0);
         }
         DockPosition::Right => {
             popover.set_position(gtk4::PositionType::Left);
-            popover.set_offset(POPOVER_SHADOW_GUTTER, 0);
+            popover.set_offset(POPOVER_SHADOW_GUTTER + 14 - extra, 0);
         }
+    }
+}
+
+fn apply_tooltip_dock_placement_with_extra(
+    popover: &Popover,
+    position: DockPosition,
+    extra_px: i32,
+) {
+    let extra = extra_px.max(0);
+    match position {
+        DockPosition::Bottom => {
+            popover.set_position(gtk4::PositionType::Top);
+            popover.set_offset(0, POPOVER_SHADOW_GUTTER + 10 - extra);
+        }
+        DockPosition::Left => {
+            popover.set_position(gtk4::PositionType::Right);
+            popover.set_offset(-(POPOVER_SHADOW_GUTTER + 10) + extra, 0);
+        }
+        DockPosition::Right => {
+            popover.set_position(gtk4::PositionType::Left);
+            popover.set_offset(POPOVER_SHADOW_GUTTER + 10 - extra, 0);
+        }
+    }
+}
+
+fn dock_button_zoom_extra_px(btn: &Button, position: DockPosition) -> i32 {
+    if let Some(placeholder) =
+        find_dock_widget_with_class(btn.upcast_ref(), "dock-icon-placeholder")
+    {
+        let w = placeholder.width_request();
+        let h = placeholder.height_request();
+        if w > 0 && h > 0 {
+            return match position {
+                DockPosition::Bottom => (w - h).max(0),
+                DockPosition::Left | DockPosition::Right => (h - w).max(0),
+            };
+        }
+    }
+    match position {
+        DockPosition::Bottom => (btn.width() - btn.height()).max(0),
+        DockPosition::Left | DockPosition::Right => (btn.height() - btn.width()).max(0),
     }
 }
 
@@ -71,6 +151,9 @@ fn dock_item_cross_alignment(position: DockPosition) -> (gtk4::Align, gtk4::Alig
 }
 
 fn sync_dock_item_child_alignment(widget: &gtk4::Widget, position: DockPosition) {
+    if widget.is::<Popover>() {
+        return;
+    }
     let (cross_h, cross_v) = dock_item_cross_alignment(position);
     if widget.is::<Button>()
         || widget.is::<Overlay>()
@@ -152,6 +235,30 @@ fn sync_all_dock_items_geometry(refs: &DockLayoutRefs, position: DockPosition) {
             });
         }
         child = c.next_sibling();
+    }
+    let mut recent_child = refs.recent_apps_box.first_child();
+    while let Some(c) = recent_child {
+        if let Ok(rev) = c.clone().downcast::<gtk4::Revealer>() {
+            rev.set_transition_type(recent_revealer_transition_for(position));
+            if let Some(inner) = rev.child().and_then(|w| w.downcast::<GtkBox>().ok()) {
+                apply_dock_item_geometry(&inner, position);
+            }
+        } else if let Ok(item) = c.clone().downcast::<GtkBox>() {
+            apply_dock_item_geometry(&item, position);
+        } else if let Ok(sep) = c.clone().downcast::<Separator>() {
+            sep.set_orientation(if is_horizontal {
+                Orientation::Vertical
+            } else {
+                Orientation::Horizontal
+            });
+            sep.set_halign(gtk4::Align::Fill);
+            sep.set_valign(if is_horizontal {
+                gtk4::Align::End
+            } else {
+                gtk4::Align::Center
+            });
+        }
+        recent_child = c.next_sibling();
     }
     let mut min_child = refs.minimized_box.first_child();
     while let Some(c) = min_child {
@@ -301,6 +408,35 @@ fn apply_dock_layout_config(
     }
     refs.apps_box.set_margin_bottom(0);
 
+    refs.recent_apps_revealer
+        .set_transition_type(recent_revealer_transition_for(cfg.position));
+    refs.recent_apps_box.set_orientation(if is_horizontal {
+        Orientation::Horizontal
+    } else {
+        Orientation::Vertical
+    });
+    refs.recent_apps_box.set_spacing(edge_pad);
+    match cfg.position {
+        DockPosition::Bottom => {
+            refs.recent_apps_revealer.set_halign(gtk4::Align::Start);
+            refs.recent_apps_revealer.set_valign(gtk4::Align::End);
+            refs.recent_apps_box.set_halign(gtk4::Align::Start);
+            refs.recent_apps_box.set_valign(gtk4::Align::End);
+        }
+        DockPosition::Left => {
+            refs.recent_apps_revealer.set_halign(gtk4::Align::Start);
+            refs.recent_apps_revealer.set_valign(gtk4::Align::Center);
+            refs.recent_apps_box.set_halign(gtk4::Align::Start);
+            refs.recent_apps_box.set_valign(gtk4::Align::Center);
+        }
+        DockPosition::Right => {
+            refs.recent_apps_revealer.set_halign(gtk4::Align::End);
+            refs.recent_apps_revealer.set_valign(gtk4::Align::Center);
+            refs.recent_apps_box.set_halign(gtk4::Align::End);
+            refs.recent_apps_box.set_valign(gtk4::Align::Center);
+        }
+    }
+
     refs.separator.set_orientation(if is_horizontal {
         Orientation::Vertical
     } else {
@@ -377,6 +513,11 @@ fn apply_dock_icons_size_in_place(
     while let Some(c) = child {
         update_icon_size_recursive(&c, base_size, base_size, pos);
         child = c.next_sibling();
+    }
+    let mut recent_child = refs.recent_apps_box.first_child();
+    while let Some(c) = recent_child {
+        update_icon_size_recursive(&c, base_size, base_size, pos);
+        recent_child = c.next_sibling();
     }
     let mut min_child = refs.minimized_box.first_child();
     while let Some(c) = min_child {
@@ -796,237 +937,227 @@ fn load_css() {
     }
 }
 
-fn create_popover_surface(menu_box: &GtkBox) -> Overlay {
-    let overlay = Overlay::new();
-    overlay.add_css_class("popover-surface");
-    overlay.set_vexpand(false);
-    overlay.set_valign(gtk4::Align::Start);
-    menu_box.add_css_class("popover-menu-content");
-    menu_box.set_vexpand(false);
-    if let Some(last_item) = menu_box.last_child() {
-        last_item.set_margin_bottom(10);
-    }
-
-    let background = DrawingArea::new();
-    background.add_css_class("popover-surface");
-    background.set_can_target(false);
-    background.set_hexpand(true);
-    background.set_vexpand(false);
-
-    static POPOVER_SVG_TEMPLATE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-    let svg_template_opt = POPOVER_SVG_TEMPLATE.get_or_init(|| {
-        let path = dock_popover_svg_path()?;
-        match std::fs::read_to_string(&path) {
-            Ok(s) => Some(s),
-            Err(error) => {
-                warn!("No se pudo leer el SVG del popover del dock: {error}");
-                None
-            }
-        }
-    });
-
-    if let Some(svg_template) = svg_template_opt.as_deref() {
-        let svg_template = svg_template.to_string();
-        let cached_pixbuf: RefCell<Option<((i32, i32, bool, i32), gtk4::gdk_pixbuf::Pixbuf)>> =
-            RefCell::new(None);
-        background.set_draw_func(move |area, context, width, height| {
-            if width <= 0 || height <= 0 {
-                return;
-            }
-            let is_dark = libadwaita::StyleManager::default().is_dark();
-            let glass_milli =
-                (malus_de_common::config::current_liquid_glass_scale() * 1000.0).round() as i32;
-            let cache_key = (width, height, is_dark, glass_milli);
-            let mut cache = cached_pixbuf.borrow_mut();
-            let pixbuf = if let Some((k, ref pb)) = *cache {
-                if k == cache_key {
-                    Some(pb.clone())
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            let pixbuf = match pixbuf {
-                Some(pb) => Ok(pb),
-                None => themed_popover_svg(&svg_template, area, width, height).map(|pb| {
-                    *cache = Some((cache_key, pb.clone()));
-                    pb
-                }),
-            };
-            match pixbuf {
-                Ok(svg) => {
-                    gtk4::gdk::prelude::GdkCairoContextExt::set_source_pixbuf(
-                        context, &svg, 0.0, 0.0,
-                    );
-                    if let Err(error) = context.paint() {
-                        warn!("No se pudo dibujar el fondo SVG del popover: {error}");
-                    }
-                }
-                Err(error) => {
-                    warn!("No se pudo adaptar el SVG del popover al tema: {error}");
-                }
-            }
-        });
-    } else {
-        warn!("No se encontró el SVG del popover del dock.");
-    }
-
-    overlay.set_child(Some(&background));
-    overlay.add_overlay(menu_box);
-    overlay.set_measure_overlay(menu_box, true);
-    overlay.set_clip_overlay(menu_box, false);
-
-    menu_box.set_halign(gtk4::Align::Fill);
-    menu_box.set_valign(gtk4::Align::Start);
-    menu_box.set_margin_start(8 + POPOVER_SHADOW_GUTTER);
-    menu_box.set_margin_end(8 + POPOVER_SHADOW_GUTTER);
-    menu_box.set_margin_top(6 + POPOVER_SHADOW_GUTTER);
-    menu_box.set_margin_bottom(35 + POPOVER_SHADOW_GUTTER);
-
-    overlay
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TahoeBubbleKind {
+    TooltipPill,
+    ContextMenu,
 }
 
-const POPOVER_TAIL_WIDTH: f64 = 44.0;
-const POPOVER_TAIL_HEIGHT: f64 = 18.0;
 const POPOVER_BODY_BOTTOM_INSET: f64 = 34.5;
 const POPOVER_SHADOW_GUTTER: i32 = 32;
 const SQUIRCLE_EXPONENT: f64 = 4.2;
 const SQUIRCLE_SEGMENTS: usize = 24;
 
-fn themed_popover_svg(
-    template: &str,
-    area: &DrawingArea,
-    width: i32,
-    height: i32,
-) -> Result<gdk_pixbuf::Pixbuf, String> {
-    let background = theme_color(area, "window_bg_color");
-    let foreground = theme_color(area, "window_fg_color");
-    let shadow_gutter = f64::from(POPOVER_SHADOW_GUTTER);
-    let content_width = (f64::from(width) - shadow_gutter * 2.0).max(1.0);
-    let content_height = (f64::from(height) - shadow_gutter * 2.0).max(1.0);
-    let radius = 18.0_f64.min(content_width.min(content_height) / 2.0);
-    let tail_width = POPOVER_TAIL_WIDTH.min((content_width - radius * 2.0).max(0.0));
-    let tail_height = POPOVER_TAIL_HEIGHT.min(content_height / 4.0);
-    let body_bottom = content_height - POPOVER_BODY_BOTTOM_INSET;
-    let center_x = content_width / 2.0;
-    let tail_half_width = tail_width / 2.0;
-    let left_tail = center_x - tail_half_width;
-    let right_tail = center_x + tail_half_width;
-    let right_edge = content_width - 0.5;
-    let corner_center_top = 0.5 + radius;
-    let corner_center_right = right_edge - radius;
-    let corner_center_left = 0.5 + radius;
-    let mut path = format!(
-        "M {left_top},{top_edge} H {top_right}",
-        left_top = corner_center_left,
-        top_edge = 0.5,
-        top_right = corner_center_right
-    );
-    append_squircle_corner(
-        &mut path,
-        corner_center_right,
-        corner_center_top,
-        radius,
-        -std::f64::consts::FRAC_PI_2,
-        0.0,
-    );
-    path.push_str(&format!(" V {}", body_bottom - radius));
-    append_squircle_corner(
-        &mut path,
-        corner_center_right,
-        body_bottom - radius,
-        radius,
-        0.0,
-        std::f64::consts::FRAC_PI_2,
-    );
-    path.push_str(&format!(
-        " H {tail_right} \
-         C {tail_right_curve},{body_bottom} {tail_right_inner},{tail_curve_y} {tail_slope_right},{tail_slope_y} \
-         L {tail_tip_right},{tail_tip_curve_y} \
-         Q {center_x},{tail_tip} {tail_tip_left},{tail_tip_curve_y} \
-         L {tail_slope_left},{tail_slope_y} \
-         C {tail_left_inner},{tail_curve_y} {tail_left_curve},{body_bottom} {tail_left},{body_bottom} \
-         H {bottom_left}",
-        tail_right = right_tail,
-        tail_right_curve = right_tail - 2.5,
-        tail_right_inner = right_tail - 3.5,
-        tail_curve_y = body_bottom + 0.5,
-        tail_slope_right = center_x + 2.0,
-        tail_slope_y = body_bottom + tail_height - 2.0,
-        tail_tip_right = center_x + 2.0,
-        tail_tip_curve_y = body_bottom + tail_height - 2.0,
-        tail_tip = body_bottom + tail_height,
-        tail_tip_left = center_x - 2.0,
-        tail_slope_left = center_x - 2.0,
-        tail_left_inner = left_tail + 3.5,
-        tail_left_curve = left_tail + 2.5,
-        tail_left = left_tail,
-        bottom_left = corner_center_left,
-    ));
-    append_squircle_corner(
-        &mut path,
-        corner_center_left,
-        body_bottom - radius,
-        radius,
-        std::f64::consts::FRAC_PI_2,
-        std::f64::consts::PI,
-    );
-    path.push_str(&format!(" V {corner_center_top}"));
-    append_squircle_corner(
-        &mut path,
-        corner_center_left,
-        corner_center_top,
-        radius,
-        std::f64::consts::PI,
-        3.0 * std::f64::consts::FRAC_PI_2,
-    );
-    path.push_str(" Z");
-    let glass_scale = malus_de_common::config::current_liquid_glass_scale();
-    let svg_opacity =
-        malus_de_common::config::scaled_liquid_glass_alpha(0.65, glass_scale, 0.14, 0.96);
-    let mut svg = template
-        .replace("#f5f0ff", &blend_color_hex(background, foreground, 0.08))
-        .replace("#e9e0f8", &blend_color_hex(background, foreground, 0.025))
-        .replace("#d9cdec", &blend_color_hex(background, foreground, 0.06))
-        .replace("#ffffff", &color_hex(foreground))
-        .replace("opacity=\"0.65\"", &format!("opacity=\"{svg_opacity:.3}\""))
-        .replace(
-            "width=\"320\" height=\"264\" viewBox=\"0 0 320 264\"",
-            &format!("width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\""),
-        );
-    let path_tag_start = svg
-        .find("<path")
-        .ok_or_else(|| "El SVG del popover no contiene trazado".to_string())?
-        + "<path".len();
-    svg.insert_str(
-        path_tag_start,
-        &format!(" transform=\"translate({shadow_gutter} {shadow_gutter})\""),
-    );
-    let path_start = svg
-        .find(" d=\"")
-        .ok_or_else(|| "El SVG del popover no contiene trazado".to_string())?
-        + 4;
-    let path_end = svg[path_start..]
-        .find('"')
-        .map(|offset| path_start + offset)
-        .ok_or_else(|| "El trazado SVG del popover está incompleto".to_string())?;
-    svg.replace_range(path_start..path_end, &path);
-
-    let loader = gdk_pixbuf::PixbufLoader::with_type("svg").map_err(|error| error.to_string())?;
-    loader
-        .write(svg.as_bytes())
-        .map_err(|error| error.to_string())?;
-    loader.close().map_err(|error| error.to_string())?;
-    loader
-        .pixbuf()
-        .ok_or_else(|| "El SVG no produjo una imagen".to_string())
+thread_local! {
+    static ACTIVE_HOVER_TOOLTIP: RefCell<Option<glib::WeakRef<Popover>>> =
+        const { RefCell::new(None) };
+    static DOCK_CONTEXT_MENU_OPEN: Cell<bool> = const { Cell::new(false) };
+    static DOCK_HOVER_TOOLTIPS: RefCell<Vec<(glib::WeakRef<Button>, glib::WeakRef<Popover>)>> =
+        const { RefCell::new(Vec::new()) };
+    static DOCK_CONTEXT_MENU_OPENERS: RefCell<Vec<(glib::WeakRef<Button>, Rc<dyn Fn()>)>> =
+        const { RefCell::new(Vec::new()) };
+    static DOCK_MENU_CLOSED_RESET_CALLBACK: RefCell<Option<Rc<dyn Fn()>>> =
+        const { RefCell::new(None) };
 }
 
-fn append_squircle_corner(
-    path: &mut String,
-    center_x: f64,
-    center_y: f64,
+fn hide_active_hover_tooltip() {
+    ACTIVE_HOVER_TOOLTIP.with(|cell| {
+        if let Some(weak) = cell.borrow_mut().take() {
+            if let Some(pop) = weak.upgrade() {
+                pop.popdown();
+            }
+        }
+    });
+}
+
+fn register_dock_hover_tooltip(btn: &Button, tooltip: &Popover) {
+    DOCK_HOVER_TOOLTIPS.with(|cell| {
+        let mut list = cell.borrow_mut();
+        list.retain(|(b, p)| b.upgrade().is_some() && p.upgrade().is_some());
+        list.push((btn.downgrade(), tooltip.downgrade()));
+    });
+}
+
+fn show_hover_tooltip_for_button(btn: &Button) {
+    if DOCK_CONTEXT_MENU_OPEN.get() {
+        return;
+    }
+    let tooltip = DOCK_HOVER_TOOLTIPS.with(|cell| {
+        let mut list = cell.borrow_mut();
+        list.retain(|(b, p)| b.upgrade().is_some() && p.upgrade().is_some());
+        list.iter().find_map(|(b, p)| {
+            if b.upgrade().is_some_and(|existing| existing == *btn) {
+                p.upgrade()
+            } else {
+                None
+            }
+        })
+    });
+    let Some(tooltip) = tooltip else {
+        return;
+    };
+    let already_active = ACTIVE_HOVER_TOOLTIP.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .and_then(|w| w.upgrade())
+            .is_some_and(|cur| cur == tooltip && cur.is_visible())
+    });
+    let pos = DOCK_CURRENT_POSITION.get();
+    let extra_px = dock_button_zoom_extra_px(btn, pos);
+    if already_active {
+        apply_tooltip_dock_placement_with_extra(&tooltip, pos, extra_px);
+        return;
+    }
+    hide_active_hover_tooltip();
+    apply_tooltip_dock_placement_with_extra(&tooltip, pos, extra_px);
+    ACTIVE_HOVER_TOOLTIP.with(|cell| {
+        *cell.borrow_mut() = Some(tooltip.downgrade());
+    });
+    tooltip.popup();
+}
+
+fn register_dock_context_menu_opener(btn: &Button, opener: Rc<dyn Fn()>) {
+    DOCK_CONTEXT_MENU_OPENERS.with(|cell| {
+        let mut list = cell.borrow_mut();
+        list.retain(|(b, _)| b.upgrade().is_some());
+        list.push((btn.downgrade(), opener));
+    });
+}
+
+fn open_context_menu_for_button(btn: &Button) -> bool {
+    let opener = DOCK_CONTEXT_MENU_OPENERS.with(|cell| {
+        let mut list = cell.borrow_mut();
+        list.retain(|(b, _)| b.upgrade().is_some());
+        list.iter().find_map(|(b, f)| {
+            if b.upgrade().is_some_and(|existing| existing == *btn) {
+                Some(f.clone())
+            } else {
+                None
+            }
+        })
+    });
+    if let Some(open) = opener {
+        open();
+        true
+    } else {
+        false
+    }
+}
+
+fn notify_dock_context_menu_closed() {
+    let cb = DOCK_MENU_CLOSED_RESET_CALLBACK.with(|cell| cell.borrow().clone());
+    if let Some(reset) = cb {
+        reset();
+    }
+}
+
+fn widget_is_inside_dock_button(widget: &gtk4::Widget) -> bool {
+    let mut current = Some(widget.clone());
+    while let Some(w) = current {
+        if w.is::<Button>() && w.has_css_class("dock-item-btn") {
+            return true;
+        }
+        current = w.parent();
+    }
+    false
+}
+
+fn find_dock_button_at_point(
+    dock_root: &GtkBox,
+    apps_box: &GtkBox,
+    recent_apps_revealer: &gtk4::Revealer,
+    recent_apps_box: &GtkBox,
+    trash_widget: &GtkBox,
+    x: f64,
+    y: f64,
+    position: DockPosition,
+    axis_slop: f64,
+) -> Option<Button> {
+    let mut best: Option<(f64, Button)> = None;
+    let mut check_item = |item: &gtk4::Widget| {
+        let Some(btn_widget) = find_dock_widget_with_class(item, "dock-item-btn") else {
+            return;
+        };
+        let Ok(btn) = btn_widget.downcast::<Button>() else {
+            return;
+        };
+        let Some(origin) = btn.compute_point(dock_root, &gtk4::graphene::Point::zero()) else {
+            return;
+        };
+        let bx = f64::from(origin.x());
+        let by = f64::from(origin.y());
+        let bw = f64::from(btn.width());
+        let bh = f64::from(btn.height());
+        if bw <= 1.0 || bh <= 1.0 {
+            return;
+        }
+        let extra = f64::from(dock_button_zoom_extra_px(&btn, position));
+        let (inside, dist) = match position {
+            DockPosition::Bottom => {
+                let x_min = bx - axis_slop;
+                let x_max = bx + bw + axis_slop;
+                let y_min = by - extra;
+                let y_max = by + bh + 20.0;
+                (
+                    x >= x_min && x <= x_max && y >= y_min && y <= y_max,
+                    (x - (bx + bw * 0.5)).abs(),
+                )
+            }
+            DockPosition::Left => {
+                let x_min = bx - 20.0;
+                let x_max = bx + bw + extra;
+                let y_min = by - axis_slop;
+                let y_max = by + bh + axis_slop;
+                (
+                    x >= x_min && x <= x_max && y >= y_min && y <= y_max,
+                    (y - (by + bh * 0.5)).abs(),
+                )
+            }
+            DockPosition::Right => {
+                let x_min = bx - extra;
+                let x_max = bx + bw + 20.0;
+                let y_min = by - axis_slop;
+                let y_max = by + bh + axis_slop;
+                (
+                    x >= x_min && x <= x_max && y >= y_min && y <= y_max,
+                    (y - (by + bh * 0.5)).abs(),
+                )
+            }
+        };
+        if inside && best.as_ref().is_none_or(|(best_d, _)| dist < *best_d) {
+            best = Some((dist, btn));
+        }
+    };
+
+    let mut child = apps_box.first_child();
+    while let Some(c) = child {
+        if !c.is::<Separator>() {
+            check_item(&c);
+        }
+        child = c.next_sibling();
+    }
+    if recent_apps_revealer.is_visible() && recent_apps_revealer.reveals_child() {
+        let mut recent_child = recent_apps_box.first_child();
+        while let Some(c) = recent_child {
+            let is_closing = c
+                .clone()
+                .downcast::<gtk4::Revealer>()
+                .is_ok_and(|r| !r.reveals_child());
+            if !c.is::<Separator>() && !is_closing {
+                check_item(&c);
+            }
+            recent_child = c.next_sibling();
+        }
+    }
+    check_item(trash_widget.upcast_ref());
+
+    best.map(|(_, btn)| btn)
+}
+
+fn append_cairo_squircle_arc(
+    cr: &gtk4::cairo::Context,
+    cx: f64,
+    cy: f64,
     radius: f64,
     start_angle: f64,
     end_angle: f64,
@@ -1037,61 +1168,410 @@ fn append_squircle_corner(
         let angle = start_angle + (end_angle - start_angle) * fraction;
         let x = angle.cos().signum() * angle.cos().abs().powf(power);
         let y = angle.sin().signum() * angle.sin().abs().powf(power);
-        path.push_str(&format!(
-            " L {:.3},{:.3}",
-            center_x + radius * x,
-            center_y + radius * y
-        ));
+        cr.line_to(cx + radius * x, cy + radius * y);
     }
 }
 
-fn blend_color_hex(
-    background: gtk4::gdk::RGBA,
-    foreground: gtk4::gdk::RGBA,
-    foreground_weight: f32,
-) -> String {
-    let channel = |bg: f32, fg: f32| {
-        ((bg * (1.0 - foreground_weight) + fg * foreground_weight) * 255.0).round() as u8
+fn build_tahoe_bubble_path(
+    cr: &gtk4::cairo::Context,
+    bx: f64,
+    by: f64,
+    bw: f64,
+    bh: f64,
+    radius: f64,
+    tail: Option<(DockPosition, f64, f64, f64)>,
+) {
+    let r = radius.min(bw * 0.5).min(bh * 0.5).max(1.0);
+    let right = bx + bw;
+    let bottom = by + bh;
+
+    cr.new_sub_path();
+    // Borde superior: izquierda -> derecha
+    cr.move_to(bx + r, by);
+    cr.line_to(right - r, by);
+    // Esquina superior derecha
+    append_cairo_squircle_arc(
+        cr,
+        right - r,
+        by + r,
+        r,
+        -std::f64::consts::FRAC_PI_2,
+        0.0,
+    );
+
+    // Borde derecho (con cola si el Dock está a la derecha)
+    if let Some((DockPosition::Right, center_y, tw, th)) = tail {
+        let half = (tw * 0.5).min((bh * 0.5 - r).max(0.0));
+        if half >= 4.0 && th >= 2.0 {
+            let cy = center_y.clamp(by + r + half + 2.0, bottom - r - half - 2.0);
+            cr.line_to(right, cy - half);
+            cr.curve_to(
+                right,
+                cy - half * 0.44,
+                right + th - 1.4,
+                cy - 3.0,
+                right + th - 0.5,
+                cy - 1.6,
+            );
+            cr.curve_to(
+                right + th + 0.3,
+                cy - 0.5,
+                right + th + 0.3,
+                cy + 0.5,
+                right + th - 0.5,
+                cy + 1.6,
+            );
+            cr.curve_to(
+                right + th - 1.4,
+                cy + 3.0,
+                right,
+                cy + half * 0.44,
+                right,
+                cy + half,
+            );
+        }
+    }
+    cr.line_to(right, bottom - r);
+
+    // Esquina inferior derecha
+    append_cairo_squircle_arc(
+        cr,
+        right - r,
+        bottom - r,
+        r,
+        0.0,
+        std::f64::consts::FRAC_PI_2,
+    );
+
+    // Borde inferior (con cola orgánica curva estilo macOS Tahoe si el Dock está abajo)
+    if let Some((DockPosition::Bottom, center_x, tw, th)) = tail {
+        let half = (tw * 0.5).min((bw * 0.5 - r + 4.0).max(0.0));
+        if half >= 4.0 && th >= 2.0 {
+            let min_cx = (bx + r + half).min(bx + bw * 0.5);
+            let max_cx = (right - r - half).max(bx + bw * 0.5);
+            let cx = center_x.clamp(min_cx, max_cx);
+            cr.line_to(cx + half, bottom);
+            cr.curve_to(
+                cx + half * 0.44,
+                bottom,
+                cx + 3.2,
+                bottom + th - 1.4,
+                cx + 1.6,
+                bottom + th - 0.5,
+            );
+            cr.curve_to(
+                cx + 0.5,
+                bottom + th + 0.3,
+                cx - 0.5,
+                bottom + th + 0.3,
+                cx - 1.6,
+                bottom + th - 0.5,
+            );
+            cr.curve_to(
+                cx - 3.2,
+                bottom + th - 1.4,
+                cx - half * 0.44,
+                bottom,
+                cx - half,
+                bottom,
+            );
+        }
+    }
+    cr.line_to(bx + r, bottom);
+
+    // Esquina inferior izquierda
+    append_cairo_squircle_arc(
+        cr,
+        bx + r,
+        bottom - r,
+        r,
+        std::f64::consts::FRAC_PI_2,
+        std::f64::consts::PI,
+    );
+
+    // Borde izquierdo (con cola si el Dock está a la izquierda)
+    if let Some((DockPosition::Left, center_y, tw, th)) = tail {
+        let half = (tw * 0.5).min((bh * 0.5 - r).max(0.0));
+        if half >= 4.0 && th >= 2.0 {
+            let cy = center_y.clamp(by + r + half + 2.0, bottom - r - half - 2.0);
+            cr.line_to(bx, cy + half);
+            cr.curve_to(
+                bx,
+                cy + half * 0.44,
+                bx - th + 1.4,
+                cy + 3.0,
+                bx - th + 0.5,
+                cy + 1.6,
+            );
+            cr.curve_to(
+                bx - th - 0.3,
+                cy + 0.5,
+                bx - th - 0.3,
+                cy - 0.5,
+                bx - th + 0.5,
+                cy - 1.6,
+            );
+            cr.curve_to(
+                bx - th + 1.4,
+                cy - 3.0,
+                bx,
+                cy - half * 0.44,
+                bx,
+                cy - half,
+            );
+        }
+    }
+    cr.line_to(bx, by + r);
+
+    // Esquina superior izquierda
+    append_cairo_squircle_arc(
+        cr,
+        bx + r,
+        by + r,
+        r,
+        std::f64::consts::PI,
+        3.0 * std::f64::consts::FRAC_PI_2,
+    );
+    cr.close_path();
+}
+
+fn draw_tahoe_bubble_surface(
+    area: &DrawingArea,
+    cr: &gtk4::cairo::Context,
+    width: i32,
+    height: i32,
+    kind: TahoeBubbleKind,
+    anchor: Option<&gtk4::Widget>,
+) {
+    if width <= 4 || height <= 4 {
+        return;
+    }
+    let w = f64::from(width);
+    let h = f64::from(height);
+    let is_dark = libadwaita::StyleManager::default().is_dark();
+    let glass_scale = malus_de_common::config::current_liquid_glass_scale();
+    let pos = DOCK_CURRENT_POSITION.get();
+
+    let g = f64::from(POPOVER_SHADOW_GUTTER);
+    let bw = (w - g * 2.0).max(24.0);
+    let bh = (h - g * 2.0 - POPOVER_BODY_BOTTOM_INSET).max(24.0);
+    let radius = match kind {
+        TahoeBubbleKind::TooltipPill => (bh * 0.5).min(bw * 0.5),
+        TahoeBubbleKind::ContextMenu => 32.0_f64.min(bw * 0.5).min(bh * 0.5),
     };
-    format!(
-        "#{:02x}{:02x}{:02x}",
-        channel(background.red(), foreground.red()),
-        channel(background.green(), foreground.green()),
-        channel(background.blue(), foreground.blue())
-    )
-}
+    let (tw, th) = match kind {
+        TahoeBubbleKind::TooltipPill => (22.0, 8.5),
+        TahoeBubbleKind::ContextMenu => (28.0, 10.5),
+    };
+    let default_center = match pos {
+        DockPosition::Bottom => bx_center(g, bw),
+        DockPosition::Left | DockPosition::Right => g + bh * 0.5,
+    };
+    let tail_center = if kind == TahoeBubbleKind::ContextMenu {
+        anchor
+            .and_then(|btn| {
+                btn.compute_point(
+                    area,
+                    &gtk4::graphene::Point::new(
+                        btn.width() as f32 * 0.5,
+                        btn.height() as f32 * 0.5,
+                    ),
+                )
+            })
+            .map(|pt| match pos {
+                DockPosition::Bottom => f64::from(pt.x()),
+                DockPosition::Left | DockPosition::Right => f64::from(pt.y()),
+            })
+            .unwrap_or(default_center)
+    } else {
+        default_center
+    };
+    let (bx, by, tail) = (g, g, Some((pos, tail_center, tw, th)));
 
-fn color_hex(color: gtk4::gdk::RGBA) -> String {
-    format!(
-        "#{:02x}{:02x}{:02x}",
-        (color.red() * 255.0).round() as u8,
-        (color.green() * 255.0).round() as u8,
-        (color.blue() * 255.0).round() as u8
-    )
-}
+    let _ = cr.save();
 
-fn dock_popover_svg_path() -> Option<std::path::PathBuf> {
-    let installed_paths = [
-        "/usr/local/share/malus-de/dock/macos-popover.svg",
-        "/usr/share/malus-de/dock/macos-popover.svg",
-    ];
-    if let Some(path) = installed_paths
-        .iter()
-        .map(std::path::PathBuf::from)
-        .find(|path| path.is_file())
-    {
-        return Some(path);
+    // 1. Sombra suave de elevación (sigue el contorno exacto incluida la cola)
+    for (dy, alpha_mul, expand) in [(5.0, 0.09, 2.0), (2.2, 0.14, 0.8)] {
+        let _ = cr.save();
+        cr.translate(0.0, dy);
+        build_tahoe_bubble_path(
+            cr,
+            bx - expand * 0.5,
+            by - expand * 0.5,
+            bw + expand,
+            bh + expand,
+            radius + expand * 0.35,
+            tail,
+        );
+        cr.set_source_rgba(0.0, 0.0, 0.0, if is_dark { alpha_mul * 1.45 } else { alpha_mul });
+        let _ = cr.fill();
+        let _ = cr.restore();
     }
 
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| {
-            exe.parent()?
-                .parent()?
-                .parent()
-                .map(|root| root.join("assets/dock/macos-popover.svg"))
-        })
-        .filter(|path| path.is_file())
+    // 2. Relleno translúcido Liquid Glass estilo macOS Tahoe
+    build_tahoe_bubble_path(cr, bx, by, bw, bh, radius, tail);
+    let fill_grad = gtk4::cairo::LinearGradient::new(0.0, by, 0.0, by + bh + 12.0);
+    if is_dark {
+        let top_a = malus_de_common::config::scaled_liquid_glass_alpha(0.76, glass_scale, 0.28, 0.94);
+        let bot_a = malus_de_common::config::scaled_liquid_glass_alpha(0.82, glass_scale, 0.34, 0.96);
+        fill_grad.add_color_stop_rgba(0.0, 0.19, 0.20, 0.24, top_a);
+        fill_grad.add_color_stop_rgba(1.0, 0.13, 0.14, 0.17, bot_a);
+    } else {
+        let top_a = malus_de_common::config::scaled_liquid_glass_alpha(0.80, glass_scale, 0.30, 0.95);
+        let bot_a = malus_de_common::config::scaled_liquid_glass_alpha(0.74, glass_scale, 0.26, 0.93);
+        fill_grad.add_color_stop_rgba(0.0, 0.97, 0.96, 0.98, top_a);
+        fill_grad.add_color_stop_rgba(1.0, 0.92, 0.91, 0.94, bot_a);
+    }
+    let _ = cr.set_source(&fill_grad);
+    let _ = cr.fill_preserve();
+
+    // 3. Borde exterior fino + brillo especular Tahoe
+    cr.set_line_width(1.0);
+    if is_dark {
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.22);
+    } else {
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.13);
+    }
+    let _ = cr.stroke();
+
+    // Sutil halo interior superior de cristal
+    build_tahoe_bubble_path(
+        cr,
+        bx + 0.75,
+        by + 0.75,
+        (bw - 1.5).max(1.0),
+        (bh - 1.5).max(1.0),
+        (radius - 0.75).max(1.0),
+        None,
+    );
+    cr.set_line_width(0.85);
+    if is_dark {
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.11);
+    } else {
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.62);
+    }
+    let _ = cr.stroke();
+
+    let _ = cr.restore();
+}
+
+#[inline]
+fn bx_center(bx: f64, bw: f64) -> f64 {
+    bx + bw * 0.5
+}
+
+fn create_popover_surface(menu_box: &GtkBox, anchor: Option<&gtk4::Widget>) -> Overlay {
+    let overlay = Overlay::new();
+    overlay.add_css_class("popover-surface");
+    overlay.set_vexpand(false);
+    overlay.set_valign(gtk4::Align::Start);
+    menu_box.add_css_class("popover-menu-content");
+    menu_box.set_vexpand(false);
+    menu_box.set_size_request(176, -1);
+
+    let background = DrawingArea::new();
+    background.add_css_class("popover-surface");
+    background.set_can_target(false);
+    background.set_hexpand(true);
+    background.set_vexpand(false);
+
+    let anchor_weak = anchor.map(glib::object::ObjectExt::downgrade);
+    background.set_draw_func(move |area, cr, width, height| {
+        let anchor_ref = anchor_weak.as_ref().and_then(|w| w.upgrade());
+        draw_tahoe_bubble_surface(
+            area,
+            cr,
+            width,
+            height,
+            TahoeBubbleKind::ContextMenu,
+            anchor_ref.as_ref(),
+        );
+    });
+
+    overlay.set_child(Some(&background));
+    overlay.add_overlay(menu_box);
+    overlay.set_measure_overlay(menu_box, true);
+    overlay.set_clip_overlay(menu_box, false);
+
+    menu_box.set_halign(gtk4::Align::Fill);
+    menu_box.set_valign(gtk4::Align::Start);
+    menu_box.set_margin_start(5 + POPOVER_SHADOW_GUTTER);
+    menu_box.set_margin_end(5 + POPOVER_SHADOW_GUTTER);
+    menu_box.set_margin_top(5 + POPOVER_SHADOW_GUTTER);
+    menu_box.set_margin_bottom(40 + POPOVER_SHADOW_GUTTER);
+
+    overlay
+}
+
+/// Crea y adjunta un popover píldora con cola curva estilo macOS Tahoe para el nombre de la app al pasar el cursor.
+fn attach_dock_hover_tooltip(anchor: &Button, label_text: &str) -> Popover {
+    let tooltip = Popover::builder()
+        .css_classes(["malus-popover-menu", "dock-hover-tooltip"])
+        .has_arrow(false)
+        .autohide(false)
+        .focusable(false)
+        .can_focus(false)
+        .can_target(false)
+        .position(gtk4::PositionType::Top)
+        .build();
+
+    let pill_box = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .halign(gtk4::Align::Center)
+        .valign(gtk4::Align::Center)
+        .height_request(32)
+        .build();
+    let label = Label::builder()
+        .label(label_text)
+        .css_classes(["dock-hover-tooltip-label"])
+        .halign(gtk4::Align::Center)
+        .valign(gtk4::Align::Center)
+        .single_line_mode(true)
+        .build();
+    pill_box.append(&label);
+
+    let overlay = Overlay::new();
+    overlay.add_css_class("popover-surface");
+    overlay.set_can_target(false);
+    let background = DrawingArea::new();
+    background.add_css_class("popover-surface");
+    background.set_can_target(false);
+    background.set_hexpand(true);
+    background.set_vexpand(false);
+    background.set_draw_func(|area, cr, width, height| {
+        draw_tahoe_bubble_surface(area, cr, width, height, TahoeBubbleKind::TooltipPill, None);
+    });
+
+    overlay.set_child(Some(&background));
+    overlay.add_overlay(&pill_box);
+    overlay.set_measure_overlay(&pill_box, true);
+    overlay.set_clip_overlay(&pill_box, false);
+
+    pill_box.set_margin_start(POPOVER_SHADOW_GUTTER);
+    pill_box.set_margin_end(POPOVER_SHADOW_GUTTER);
+    pill_box.set_margin_top(POPOVER_SHADOW_GUTTER);
+    pill_box.set_margin_bottom(35 + POPOVER_SHADOW_GUTTER);
+
+    tooltip.set_child(Some(&overlay));
+    tooltip.set_parent(anchor);
+    let clear_input_region = |pop: &Popover| {
+        if let Some(surface) = pop.surface() {
+            let empty = gtk4::cairo::Region::create();
+            surface.set_input_region(&empty);
+        }
+    };
+    tooltip.connect_realize(clear_input_region);
+    tooltip.connect_map(clear_input_region);
+
+    let tip_unroot = tooltip.clone();
+    anchor.connect_unrealize(move |_| {
+        tip_unroot.popdown();
+        tip_unroot.unparent();
+    });
+
+    register_dock_hover_tooltip(anchor, &tooltip);
+
+    tooltip
 }
 
 fn resize_switcher_window(
@@ -1162,6 +1642,50 @@ fn queue_dock_resize_mode(
     }
 
     window.queue_resize();
+}
+
+thread_local! {
+    static DOCK_TRANSITION_RESIZE_DEADLINE: RefCell<Option<std::time::Instant>> =
+        const { RefCell::new(None) };
+    static DOCK_TRANSITION_RESIZE_ACTIVE: Cell<bool> = const { Cell::new(false) };
+}
+
+fn drive_dock_transition_resize(
+    window: &ApplicationWindow,
+    dock_root: &GtkBox,
+    dock_bar: &Overlay,
+    duration_ms: u64,
+) {
+    let deadline = std::time::Instant::now() + Duration::from_millis(duration_ms);
+    DOCK_TRANSITION_RESIZE_DEADLINE.with(|cell| {
+        let mut cur = cell.borrow_mut();
+        if cur.is_none_or(|existing| deadline > existing) {
+            *cur = Some(deadline);
+        }
+    });
+    if DOCK_TRANSITION_RESIZE_ACTIVE.replace(true) {
+        return;
+    }
+    let window = window.clone();
+    let dock_root = dock_root.clone();
+    let dock_bar = dock_bar.clone();
+    glib::timeout_add_local(Duration::from_millis(16), move || {
+        queue_dock_resize_mode(&window, &dock_root, &dock_bar, true);
+        let done = DOCK_TRANSITION_RESIZE_DEADLINE.with(|cell| {
+            cell.borrow()
+                .is_none_or(|end| std::time::Instant::now() >= end)
+        });
+        if done {
+            DOCK_TRANSITION_RESIZE_ACTIVE.set(false);
+            DOCK_TRANSITION_RESIZE_DEADLINE.with(|cell| {
+                *cell.borrow_mut() = None;
+            });
+            queue_dock_resize_mode(&window, &dock_root, &dock_bar, true);
+            glib::ControlFlow::Break
+        } else {
+            glib::ControlFlow::Continue
+        }
+    });
 }
 
 fn queue_dock_resize(window: &ApplicationWindow, dock_root: &GtkBox, dock_bar: &Overlay) {
@@ -2034,6 +2558,27 @@ fn build_dock_ui(app: &Application) {
 
     dock_content.append(&apps_box);
 
+    // Sección dedicada y animada para aplicaciones recientes / sugeridas
+    let recent_apps_box = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(2)
+        .valign(gtk4::Align::End)
+        .halign(gtk4::Align::Start)
+        .build();
+    recent_apps_box.set_overflow(gtk4::Overflow::Visible);
+
+    let recent_apps_revealer = gtk4::Revealer::new();
+    recent_apps_revealer.set_transition_type(recent_revealer_transition_for(initial_cfg.position));
+    recent_apps_revealer.set_transition_duration(240);
+    recent_apps_revealer.set_reveal_child(false);
+    recent_apps_revealer.set_visible(false);
+    recent_apps_revealer.set_halign(gtk4::Align::Start);
+    recent_apps_revealer.set_valign(gtk4::Align::End);
+    recent_apps_revealer.set_child(Some(&recent_apps_box));
+    dock_content.append(&recent_apps_revealer);
+
+    let recent_apps_state = Rc::new(RefCell::new(RecentAppsUiState::new()));
+
     let apps_placeholder = GtkBox::new(Orientation::Horizontal, 0);
 
     // Separador de cristal translúcido
@@ -2079,6 +2624,8 @@ fn build_dock_ui(app: &Application) {
         magnification_headroom: magnification_headroom.clone(),
         dock_content: dock_content.clone(),
         apps_box: apps_box.clone(),
+        recent_apps_revealer: recent_apps_revealer.clone(),
+        recent_apps_box: recent_apps_box.clone(),
         separator: separator.clone(),
         minimized_box: minimized_box.clone(),
         dock_highlights: highlights.clone(),
@@ -2163,6 +2710,12 @@ fn build_dock_ui(app: &Application) {
     // Render inicial de aplicaciones desde dock.toml
     render_dock_apps(
         &apps_box,
+        &recent_apps_revealer,
+        &recent_apps_box,
+        &recent_apps_state,
+        &window,
+        &dock_root,
+        &dock_bar,
         &dock_config,
         &running_cache,
         &active_app_cache,
@@ -2170,6 +2723,7 @@ fn build_dock_ui(app: &Application) {
         &dock_indicators,
         &on_refresh,
         true,
+        false,
     );
     sync_dock_apps_placeholder(&apps_box, &apps_placeholder);
     let placeholder_width_animation = Rc::new(RefCell::new(DockPlaceholderWidthAnimation {
@@ -2178,17 +2732,20 @@ fn build_dock_ui(app: &Application) {
     }));
     let placeholder_width_animation_running = Rc::new(Cell::new(false));
 
-    let apps_box_theme = apps_box.clone();
+    let dock_content_theme = dock_content.clone();
     let dock_root_theme = dock_root.clone();
     let win_theme = window.clone();
     adw::StyleManager::default().connect_dark_notify(move |_| {
-        queue_dock_icon_backgrounds(apps_box_theme.upcast_ref());
+        queue_dock_icon_backgrounds(dock_content_theme.upcast_ref());
         dock_root_theme.queue_draw();
         win_theme.queue_draw();
     });
 
     // Loop de refresco reactivo de las aplicaciones
     let apps_box_rf = apps_box.clone();
+    let recent_rev_rf = recent_apps_revealer.clone();
+    let recent_box_rf = recent_apps_box.clone();
+    let recent_state_rf = recent_apps_state.clone();
     let dock_cfg_rf = dock_config.clone();
     let run_cache_rf = running_cache.clone();
     let active_app_rf = active_app_cache.clone();
@@ -2223,6 +2780,12 @@ fn build_dock_ui(app: &Application) {
             *drop_placeholder_rf.borrow_mut() = None;
             render_dock_apps(
                 &apps_box_rf,
+                &recent_rev_rf,
+                &recent_box_rf,
+                &recent_state_rf,
+                &win_resize,
+                &dock_root_resize,
+                &dock_bar_resize,
                 &dock_cfg_rf,
                 &run_cache_rf,
                 &active_app_rf,
@@ -2230,6 +2793,7 @@ fn build_dock_ui(app: &Application) {
                 &indicators_rf,
                 &on_rf_loop,
                 refresh_pinned,
+                true,
             );
             start_dock_placeholder_width_animation(
                 &placeholder_animation_rf,
@@ -2265,6 +2829,7 @@ fn build_dock_ui(app: &Application) {
     if let Ok(monitor) = gfile.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE) {
         let cfg_clone = dock_config.clone();
         let on_rf_mon = on_refresh.clone();
+        let on_running_mon = on_running_refresh.clone();
         let layout_mon = layout_refs.clone();
         let auto_hide_mon = auto_hide_revealed.clone();
         let hovered_mon = dock_hovered.clone();
@@ -2290,9 +2855,9 @@ fn build_dock_ui(app: &Application) {
                 }
                 info!("🔄 dock.toml modificado externamente en disco. Recargando...");
                 let base_size = new_cfg.icon_size as i32;
-                let rebuild_needed = old_cfg.apps != new_cfg.apps
-                    || old_cfg.show_recent_apps != new_cfg.show_recent_apps
+                let rebuild_pinned_needed = old_cfg.apps != new_cfg.apps
                     || old_cfg.indicator_style != new_cfg.indicator_style;
+                let recent_changed = old_cfg.show_recent_apps != new_cfg.show_recent_apps;
                 if !new_cfg.auto_hide {
                     auto_hide_mon.set(true);
                 } else {
@@ -2314,8 +2879,10 @@ fn build_dock_ui(app: &Application) {
                     new_cfg.show_indicators,
                 );
                 *cfg_clone.borrow_mut() = new_cfg;
-                if rebuild_needed {
+                if rebuild_pinned_needed {
                     on_rf_mon();
+                } else if recent_changed {
+                    on_running_mon();
                 } else {
                     apply_dock_icons_size_in_place(
                         &layout_mon,
@@ -2340,130 +2907,264 @@ fn build_dock_ui(app: &Application) {
         });
     }
 
-    // Magnificación Analítica macOS (Efecto zoom suave con curva gaussiana)
-    let apps_box_motion = apps_box.clone();
-    let min_box_motion = minimized_box.clone();
-    let trash_widget_motion = trash_widget.clone();
-    let dock_bar_motion = dock_bar.clone();
-    let apps_placeholder_motion = apps_placeholder.clone();
-    let dock_root_motion = dock_root.clone();
-    let window_motion = window.clone();
-    let cfg_motion = dock_config.clone();
-    let icon_size_animations_motion = icon_size_animations.clone();
-    let icon_size_animation_running_motion = icon_size_animation_running.clone();
+    // Magnificación Analítica macOS (Efecto zoom suave con curva gaussiana estable sobre todo el Dock)
+    let leave_gen = Rc::new(Cell::new(0u64));
 
-    let motion_controller = EventControllerMotion::new();
-    let hovered_enter = dock_hovered.clone();
-    let auto_hide_enter = auto_hide_revealed.clone();
-    let cfg_enter = dock_config.clone();
-    let layout_enter = layout_refs.clone();
-    let min_cache_enter = minimized_cache.clone();
-    motion_controller.connect_enter(move |_, _, _| {
-        hovered_enter.set(true);
-        let cfg = cfg_enter.borrow();
-        if cfg.auto_hide && !auto_hide_enter.get() {
-            auto_hide_enter.set(true);
-            apply_dock_layout_config(
-                &layout_enter,
-                &cfg,
-                true,
-                !min_cache_enter.borrow().is_empty(),
-            );
-        }
+    let reset_zoom_if_unhovered: Rc<dyn Fn()> = {
+        let hovered_chk = dock_hovered.clone();
+        let edge_chk = dock_edge_active.clone();
+        let auto_hide_chk = auto_hide_revealed.clone();
+        let cfg_chk = dock_config.clone();
+        let layout_chk = layout_refs.clone();
+        let min_cache_chk = minimized_cache.clone();
+        let dock_content_chk = dock_content.clone();
+        let anims_chk = icon_size_animations.clone();
+        let anim_run_chk = icon_size_animation_running.clone();
+        let win_chk = window.clone();
+        let root_chk = dock_root.clone();
+        let bar_chk = dock_bar.clone();
+        let apps_chk = apps_box.clone();
+        let ph_chk = apps_placeholder.clone();
+        Rc::new(move || {
+            let hovered_chk = hovered_chk.clone();
+            let edge_chk = edge_chk.clone();
+            let auto_hide_chk = auto_hide_chk.clone();
+            let cfg_chk = cfg_chk.clone();
+            let layout_chk = layout_chk.clone();
+            let min_cache_chk = min_cache_chk.clone();
+            let dock_content_chk = dock_content_chk.clone();
+            let anims_chk = anims_chk.clone();
+            let anim_run_chk = anim_run_chk.clone();
+            let win_chk = win_chk.clone();
+            let root_chk = root_chk.clone();
+            let bar_chk = bar_chk.clone();
+            let apps_chk = apps_chk.clone();
+            let ph_chk = ph_chk.clone();
+            glib::timeout_add_local_once(Duration::from_millis(90), move || {
+                if hovered_chk.get() || DOCK_CONTEXT_MENU_OPEN.get() {
+                    return;
+                }
+                hide_active_hover_tooltip();
+                let base_size = cfg_chk.borrow().icon_size as i32;
+                let mut animations = anims_chk.borrow_mut();
+                for animation in animations.iter_mut() {
+                    animation.target_size = base_size as f64;
+                    animation.base_size = base_size;
+                }
+                drop(animations);
+                start_icon_size_animation(
+                    &anims_chk,
+                    &anim_run_chk,
+                    &win_chk,
+                    &root_chk,
+                    &bar_chk,
+                    &apps_chk,
+                    &ph_chk,
+                );
+                schedule_auto_hide_check(
+                    260,
+                    hovered_chk,
+                    edge_chk,
+                    auto_hide_chk,
+                    cfg_chk,
+                    layout_chk,
+                    min_cache_chk,
+                    dock_content_chk,
+                );
+            });
+        })
+    };
+    DOCK_MENU_CLOSED_RESET_CALLBACK.with(|cell| {
+        *cell.borrow_mut() = Some(reset_zoom_if_unhovered.clone());
     });
-    let hovered_motion = dock_hovered.clone();
-    let auto_hide_motion = auto_hide_revealed.clone();
-    let layout_motion = layout_refs.clone();
-    let min_cache_motion = minimized_cache.clone();
-    motion_controller.connect_motion(move |_, x, y| {
-        hovered_motion.set(true);
-        let cfg = cfg_motion.borrow();
-        if cfg.auto_hide && !auto_hide_motion.get() {
-            auto_hide_motion.set(true);
-            apply_dock_layout_config(
-                &layout_motion,
-                &cfg,
-                true,
-                !min_cache_motion.borrow().is_empty(),
-            );
-        }
-        if !cfg.magnification_enabled {
-            return;
-        }
-        let Some(pointer_in_dock) = dock_root_motion.compute_point(
-            &dock_bar_motion,
-            &gtk4::graphene::Point::new(x as f32, y as f32),
-        ) else {
-            return;
-        };
-        let is_horizontal = cfg.position == DockPosition::Bottom;
-        let pointer_coord = if is_horizontal {
-            pointer_in_dock.x() as f64
-        } else {
-            pointer_in_dock.y() as f64
-        };
-        let base_size = cfg.icon_size as f64;
-        let max_size = cfg.magnification_max_size as f64;
-        let max_scale_diff = (max_size - base_size).max(0.0);
-        let max_zoom_dist = 110.0;
-        let mut targets = Vec::new();
 
-        let mut update_item = |widget: &gtk4::Widget| {
-            if let Some(p) = widget.compute_point(&dock_bar_motion, &gtk4::graphene::Point::zero())
-            {
-                let item_center = if is_horizontal {
-                    p.x() as f64 + widget.width() as f64 / 2.0
+    let update_dock_pointer_hover: Rc<dyn Fn(f64, f64)> = {
+        let hovered_ptr = dock_hovered.clone();
+        let leave_gen_ptr = leave_gen.clone();
+        let auto_hide_ptr = auto_hide_revealed.clone();
+        let layout_ptr = layout_refs.clone();
+        let min_cache_ptr = minimized_cache.clone();
+        let cfg_ptr = dock_config.clone();
+        let apps_box_ptr = apps_box.clone();
+        let recent_rev_ptr = recent_apps_revealer.clone();
+        let recent_box_ptr = recent_apps_box.clone();
+        let min_box_ptr = minimized_box.clone();
+        let trash_widget_ptr = trash_widget.clone();
+        let dock_bar_ptr = dock_bar.clone();
+        let apps_placeholder_ptr = apps_placeholder.clone();
+        let dock_root_ptr = dock_root.clone();
+        let window_ptr = window.clone();
+        let anims_ptr = icon_size_animations.clone();
+        let anim_run_ptr = icon_size_animation_running.clone();
+        Rc::new(move |x: f64, y: f64| {
+            hovered_ptr.set(true);
+            leave_gen_ptr.set(leave_gen_ptr.get().wrapping_add(1));
+
+            let cfg = cfg_ptr.borrow();
+            if cfg.auto_hide && !auto_hide_ptr.get() {
+                auto_hide_ptr.set(true);
+                apply_dock_layout_config(
+                    &layout_ptr,
+                    &cfg,
+                    true,
+                    !min_cache_ptr.borrow().is_empty(),
+                );
+            }
+            if DOCK_CONTEXT_MENU_OPEN.get() {
+                return;
+            }
+
+            let pos = cfg.position;
+            let is_horizontal = pos == DockPosition::Bottom;
+
+            // Actualizar tooltip del nombre desde el nivel del Dock (cubre huecos y mitad superior con zoom)
+            if let Some(hovered_btn) = find_dock_button_at_point(
+                &dock_root_ptr,
+                &apps_box_ptr,
+                &recent_rev_ptr,
+                &recent_box_ptr,
+                &trash_widget_ptr,
+                x,
+                y,
+                pos,
+                4.0,
+            ) {
+                show_hover_tooltip_for_button(&hovered_btn);
+            } else {
+                hide_active_hover_tooltip();
+            }
+
+            if !cfg.magnification_enabled {
+                return;
+            }
+
+            let Some(bar_origin) =
+                dock_bar_ptr.compute_point(&dock_root_ptr, &gtk4::graphene::Point::zero())
+            else {
+                return;
+            };
+            let bar_len = if is_horizontal {
+                f64::from(dock_bar_ptr.width())
+            } else {
+                f64::from(dock_bar_ptr.height())
+            };
+            if bar_len <= 1.0 {
+                return;
+            }
+            let bar_start = if is_horizontal {
+                f64::from(bar_origin.x())
+            } else {
+                f64::from(bar_origin.y())
+            };
+            let bar_mid = bar_start + bar_len * 0.5;
+            let pointer_axis = if is_horizontal { x } else { y };
+
+            let base_size = cfg.icon_size as f64;
+            let max_size = cfg.magnification_max_size as f64;
+            let max_scale_diff = (max_size - base_size).max(0.0);
+            let max_zoom_dist = (base_size * 2.5).max(120.0);
+            let edge_pad = (base_size * 0.308).round().clamp(10.0, 32.0);
+            let item_step = base_size + 6.0;
+            let sep_step = 10.0;
+
+            // Construir posiciones base inmutables (sin retroalimentación por el cambio de ancho durante la animación)
+            let mut cursor_pos = edge_pad;
+            let mut items: Vec<(gtk4::Widget, f64)> = Vec::new();
+
+            let mut child = apps_box_ptr.first_child();
+            while let Some(c) = child {
+                if c.is::<Separator>() {
+                    cursor_pos += sep_step;
                 } else {
-                    p.y() as f64 + widget.height() as f64 / 2.0
-                };
-                let dist = (pointer_coord - item_center).abs();
+                    let center = cursor_pos + base_size * 0.5;
+                    items.push((c.clone(), center));
+                    cursor_pos += item_step;
+                }
+                child = c.next_sibling();
+            }
+
+            if recent_rev_ptr.is_visible() && recent_rev_ptr.reveals_child() {
+                let mut recent_child = recent_box_ptr.first_child();
+                while let Some(c) = recent_child {
+                    if c.is::<Separator>() {
+                        cursor_pos += sep_step;
+                    } else {
+                        let is_closing = c
+                            .clone()
+                            .downcast::<gtk4::Revealer>()
+                            .is_ok_and(|r| !r.reveals_child());
+                        if !is_closing {
+                            let center = cursor_pos + base_size * 0.5;
+                            items.push((c.clone(), center));
+                            cursor_pos += item_step;
+                        }
+                    }
+                    recent_child = c.next_sibling();
+                }
+            }
+
+            // Separador principal entre apps y papelera/miniaturas
+            cursor_pos += sep_step;
+
+            if min_box_ptr.is_visible() {
+                let mut min_child = min_box_ptr.first_child();
+                while let Some(c) = min_child {
+                    let is_closing = c.opacity() <= 0.01
+                        || c.clone()
+                            .downcast::<gtk4::Revealer>()
+                            .is_ok_and(|r| !r.reveals_child());
+                    if !is_closing {
+                        let center = cursor_pos + base_size * 0.5;
+                        items.push((c.clone(), center));
+                        cursor_pos += item_step;
+                    }
+                    min_child = c.next_sibling();
+                }
+            }
+
+            // Papelera
+            let trash_center = cursor_pos + base_size * 0.5;
+            items.push((trash_widget_ptr.clone().upcast(), trash_center));
+            cursor_pos += base_size + edge_pad;
+
+            let unmag_total = cursor_pos.max(1.0);
+            let pointer_unmag =
+                unmag_total * 0.5 + (pointer_axis - bar_mid) * (unmag_total / bar_len);
+
+            let mut targets: Vec<(gtk4::Widget, f64, i32)> = Vec::with_capacity(items.len());
+            for (widget, center) in items {
+                let dist = (pointer_unmag - center).abs();
                 let factor = if dist < max_zoom_dist {
                     let norm = dist / max_zoom_dist;
-                    (-norm * norm * 2.2).exp()
+                    (-norm * norm * 2.0).exp()
                 } else {
                     0.0
                 };
-                let target_size = (base_size + factor * max_scale_diff) as i32;
-                targets.push((widget.clone(), target_size, base_size as i32));
+                let target_size = base_size + factor * max_scale_diff;
+                targets.push((widget, target_size, base_size as i32));
             }
-        };
 
-        // Magnificar cada app en apps_box (omitir separadores de apps recientes)
-        let mut child = apps_box_motion.first_child();
-        while let Some(c) = child {
-            if !c.is::<Separator>() {
-                update_item(&c);
-            }
-            child = c.next_sibling();
-        }
+            update_icon_size_animation_targets(&anims_ptr, targets);
+            start_icon_size_animation(
+                &anims_ptr,
+                &anim_run_ptr,
+                &window_ptr,
+                &dock_root_ptr,
+                &dock_bar_ptr,
+                &apps_box_ptr,
+                &apps_placeholder_ptr,
+            );
+        })
+    };
 
-        // Magnificar cada miniatura en minimized_box si está visible y activa
-        if min_box_motion.is_visible() {
-            let mut min_child = min_box_motion.first_child();
-            while let Some(c) = min_child {
-                let is_closing = c.opacity() <= 0.01
-                    || c.clone()
-                        .downcast::<gtk4::Revealer>()
-                        .is_ok_and(|r| !r.reveals_child());
-                if !is_closing {
-                    update_item(&c);
-                }
-                min_child = c.next_sibling();
-            }
-        }
-
-        // Magnificar papelera
-        update_item(trash_widget_motion.upcast_ref());
-        update_icon_size_animation_targets(&icon_size_animations_motion, targets);
-        start_icon_size_animation(
-            &icon_size_animations_motion,
-            &icon_size_animation_running_motion,
-            &window_motion,
-            &dock_root_motion,
-            &dock_bar_motion,
-            &apps_box_motion,
-            &apps_placeholder_motion,
-        );
+    let motion_controller = EventControllerMotion::new();
+    let ptr_enter = update_dock_pointer_hover.clone();
+    motion_controller.connect_enter(move |_, x, y| {
+        ptr_enter(x, y);
+    });
+    let ptr_motion = update_dock_pointer_hover.clone();
+    motion_controller.connect_motion(move |_, x, y| {
+        ptr_motion(x, y);
     });
 
     let cfg_leave = dock_config.clone();
@@ -2474,7 +3175,6 @@ fn build_dock_ui(app: &Application) {
     let window_leave = window.clone();
     let dock_root_leave = dock_root.clone();
     let dock_bar_leave = dock_bar.clone();
-
     let hovered_leave = dock_hovered.clone();
     let edge_leave = dock_edge_active.clone();
     let auto_hide_leave = auto_hide_revealed.clone();
@@ -2482,37 +3182,105 @@ fn build_dock_ui(app: &Application) {
     let layout_leave = layout_refs.clone();
     let min_cache_leave = minimized_cache.clone();
     let dock_content_leave = dock_content.clone();
+    let leave_gen_leave = leave_gen.clone();
     motion_controller.connect_leave(move |_| {
         hovered_leave.set(false);
-        let base_size = cfg_leave.borrow().icon_size as i32;
-        let mut animations = icon_size_animations_leave.borrow_mut();
-        for animation in animations.iter_mut() {
-            animation.target_size = base_size as f64;
-            animation.base_size = base_size;
+        if DOCK_CONTEXT_MENU_OPEN.get() {
+            // Mantener el zoom congelado mientras el menú contextual esté abierto.
+            return;
         }
-        drop(animations);
-        start_icon_size_animation(
-            &icon_size_animations_leave,
-            &icon_size_animation_running_leave,
-            &window_leave,
-            &dock_root_leave,
-            &dock_bar_leave,
-            &apps_box_leave,
-            &apps_placeholder_leave,
-        );
+        let expected_gen = leave_gen_leave.get().wrapping_add(1);
+        leave_gen_leave.set(expected_gen);
+        let hovered_chk = hovered_leave.clone();
+        let gen_chk = leave_gen_leave.clone();
+        let cfg_l = cfg_leave.clone();
+        let anims_l = icon_size_animations_leave.clone();
+        let anim_run_l = icon_size_animation_running_leave.clone();
+        let win_l = window_leave.clone();
+        let root_l = dock_root_leave.clone();
+        let bar_l = dock_bar_leave.clone();
+        let apps_l = apps_box_leave.clone();
+        let ph_l = apps_placeholder_leave.clone();
+        let edge_l = edge_leave.clone();
+        let ah_l = auto_hide_leave.clone();
+        let cfg_ah_l = cfg_leave_ah.clone();
+        let layout_l = layout_leave.clone();
+        let min_l = min_cache_leave.clone();
+        let content_l = dock_content_leave.clone();
+        glib::timeout_add_local_once(Duration::from_millis(65), move || {
+            if hovered_chk.get() || gen_chk.get() != expected_gen || DOCK_CONTEXT_MENU_OPEN.get() {
+                return;
+            }
+            hide_active_hover_tooltip();
+            let base_size = cfg_l.borrow().icon_size as i32;
+            let mut animations = anims_l.borrow_mut();
+            for animation in animations.iter_mut() {
+                animation.target_size = base_size as f64;
+                animation.base_size = base_size;
+            }
+            drop(animations);
+            start_icon_size_animation(
+                &anims_l,
+                &anim_run_l,
+                &win_l,
+                &root_l,
+                &bar_l,
+                &apps_l,
+                &ph_l,
+            );
 
-        schedule_auto_hide_check(
-            320,
-            hovered_leave.clone(),
-            edge_leave.clone(),
-            auto_hide_leave.clone(),
-            cfg_leave_ah.clone(),
-            layout_leave.clone(),
-            min_cache_leave.clone(),
-            dock_content_leave.clone(),
-        );
+            schedule_auto_hide_check(
+                260,
+                hovered_chk,
+                edge_l,
+                ah_l,
+                cfg_ah_l,
+                layout_l,
+                min_l,
+                content_l,
+            );
+        });
     });
     dock_root.add_controller(motion_controller);
+
+    // Reenvío de clic izquierdo y derecho desde la zona de headroom (mitad superior de iconos ampliados)
+    let dock_click_forward = GestureClick::new();
+    dock_click_forward.set_button(0);
+    let root_clk = dock_root.clone();
+    let apps_clk = apps_box.clone();
+    let recent_rev_clk = recent_apps_revealer.clone();
+    let recent_box_clk = recent_apps_box.clone();
+    let trash_clk = trash_widget.clone();
+    dock_click_forward.connect_pressed(move |gesture, _, x, y| {
+        let button = gesture.current_button();
+        if button != 1 && button != 3 {
+            return;
+        }
+        if let Some(picked) = root_clk.pick(x, y, gtk4::PickFlags::DEFAULT) {
+            if widget_is_inside_dock_button(&picked) {
+                return;
+            }
+        }
+        let pos = DOCK_CURRENT_POSITION.get();
+        if let Some(btn) = find_dock_button_at_point(
+            &root_clk,
+            &apps_clk,
+            &recent_rev_clk,
+            &recent_box_clk,
+            &trash_clk,
+            x,
+            y,
+            pos,
+            2.0,
+        ) {
+            if button == 3 {
+                open_context_menu_for_button(&btn);
+            } else if button == 1 {
+                btn.emit_clicked();
+            }
+        }
+    });
+    dock_root.add_controller(dock_click_forward);
     setup_dock_apps_drag_controller(&apps_box, &dock_config, &on_refresh);
 
     // Escucha de eventos IPC del compositor
@@ -2686,9 +3454,9 @@ fn build_dock_ui(app: &Application) {
                     let new_cfg = DockConfig::load_or_create_default();
                     let old_cfg = cfg_ipc.borrow().clone();
                     let base_size = new_cfg.icon_size as i32;
-                    let rebuild_needed = old_cfg.apps != new_cfg.apps
-                        || old_cfg.show_recent_apps != new_cfg.show_recent_apps
+                    let rebuild_pinned_needed = old_cfg.apps != new_cfg.apps
                         || old_cfg.indicator_style != new_cfg.indicator_style;
+                    let recent_changed = old_cfg.show_recent_apps != new_cfg.show_recent_apps;
                     if !new_cfg.auto_hide {
                         auto_hide_ipc.set(true);
                     } else {
@@ -2711,7 +3479,7 @@ fn build_dock_ui(app: &Application) {
                     for widget in min_map.borrow().values() {
                         update_icon_size_recursive(widget, base_size, base_size, new_pos);
                     }
-                    if rebuild_needed {
+                    if rebuild_pinned_needed {
                         update_icon_size_recursive(
                             layout_ipc.trash_widget.upcast_ref(),
                             base_size,
@@ -2720,6 +3488,8 @@ fn build_dock_ui(app: &Application) {
                         );
                         queue_dock_resize(&win_ref, &dock_root_ref, &dock_bar_ref);
                         on_rf_ipc();
+                    } else if recent_changed {
+                        on_rf_running_ipc();
                     } else {
                         apply_dock_icons_size_in_place(
                             &layout_ipc,
@@ -3619,8 +4389,344 @@ fn setup_dock_apps_drag_controller(
     apps_box.add_controller(drag);
 }
 
+#[allow(clippy::too_many_arguments)]
+fn sync_recent_apps_section(
+    recent_revealer: &gtk4::Revealer,
+    recent_box: &GtkBox,
+    recent_state: &Rc<RefCell<RecentAppsUiState>>,
+    window: &ApplicationWindow,
+    dock_root: &GtkBox,
+    dock_bar: &Overlay,
+    config: &DockConfig,
+    desired: Vec<DockAppConfig>,
+    running_cache: &Rc<RefCell<Vec<String>>>,
+    active_app_cache: &Rc<RefCell<Vec<String>>>,
+    minimized_cache: &Rc<RefCell<Vec<malus_de_common::ipc::MinimizedWindowInfo>>>,
+    dock_config: &Rc<RefCell<DockConfig>>,
+    on_refresh: &Rc<dyn Fn()>,
+    animate: bool,
+) {
+    let icon_size = config.icon_size as i32;
+    let is_horizontal = config.position == DockPosition::Bottom;
+    let transition = recent_revealer_transition_for(config.position);
+    recent_revealer.set_transition_type(transition);
+
+    let make_recent_separator = |hidden: bool| -> Separator {
+        let sep = Separator::new(if is_horizontal {
+            Orientation::Vertical
+        } else {
+            Orientation::Horizontal
+        });
+        sep.add_css_class("dock-separator");
+        sep.add_css_class("dock-recent-separator");
+        sep.add_css_class("dock-recent-anim-item");
+        if hidden {
+            sep.add_css_class("dock-recent-hidden");
+        }
+        sep.set_halign(gtk4::Align::Fill);
+        sep.set_valign(if is_horizontal {
+            gtk4::Align::End
+        } else {
+            gtk4::Align::Center
+        });
+        sep
+    };
+
+    let desired_keys: Vec<String> = desired.iter().map(dock_app_recent_key).collect();
+
+    if !animate {
+        let mut state = recent_state.borrow_mut();
+        state.section_gen = state.section_gen.wrapping_add(1);
+        while let Some(child) = recent_box.first_child() {
+            recent_box.remove(&child);
+        }
+        state.items.clear();
+        state.separator = None;
+
+        if desired.is_empty() {
+            recent_revealer.set_reveal_child(false);
+            recent_revealer.set_visible(false);
+            return;
+        }
+
+        let sep = make_recent_separator(false);
+        recent_box.append(&sep);
+        state.separator = Some(sep);
+
+        for (key, app_cfg) in desired_keys.into_iter().zip(desired.into_iter()) {
+            let (widget, _) = create_dock_item(
+                &app_cfg,
+                false,
+                0,
+                0,
+                icon_size,
+                false,
+                running_cache.clone(),
+                active_app_cache.clone(),
+                minimized_cache.clone(),
+                dock_config.clone(),
+                on_refresh.clone(),
+            );
+            widget.add_css_class("dock-recent-anim-item");
+            let item_rev = gtk4::Revealer::new();
+            item_rev.set_transition_type(transition);
+            item_rev.set_transition_duration(220);
+            item_rev.set_child(Some(&widget));
+            item_rev.set_reveal_child(true);
+            item_rev.set_overflow(gtk4::Overflow::Visible);
+            recent_box.append(&item_rev);
+            state.items.push((key, item_rev, widget));
+        }
+
+        recent_revealer.set_visible(true);
+        recent_revealer.set_sensitive(true);
+        recent_revealer.set_reveal_child(true);
+        recent_revealer.set_overflow(gtk4::Overflow::Visible);
+        return;
+    }
+
+    // Caso 1: ocultar toda la sección de apps recientes con animación de salida
+    if desired.is_empty() {
+        if !recent_revealer.is_visible() || !recent_revealer.reveals_child() {
+            return;
+        }
+        let gen = {
+            let mut state = recent_state.borrow_mut();
+            state.section_gen = state.section_gen.wrapping_add(1);
+            if let Some(ref sep) = state.separator {
+                sep.add_css_class("dock-recent-hidden");
+            }
+            for (_, _, item_widget) in &state.items {
+                item_widget.add_css_class("dock-recent-hidden");
+            }
+            state.section_gen
+        };
+        recent_revealer.set_sensitive(false);
+        recent_revealer.set_overflow(gtk4::Overflow::Hidden);
+        recent_revealer.set_transition_duration(220);
+        recent_revealer.set_reveal_child(false);
+        drive_dock_transition_resize(window, dock_root, dock_bar, 270);
+
+        let rev_cleanup = recent_revealer.clone();
+        let box_cleanup = recent_box.clone();
+        let state_cleanup = recent_state.clone();
+        let win_cleanup = window.clone();
+        let root_cleanup = dock_root.clone();
+        let bar_cleanup = dock_bar.clone();
+        glib::timeout_add_local_once(Duration::from_millis(245), move || {
+            let mut state = state_cleanup.borrow_mut();
+            if state.section_gen != gen || rev_cleanup.reveals_child() {
+                return;
+            }
+            while let Some(child) = box_cleanup.first_child() {
+                box_cleanup.remove(&child);
+            }
+            state.items.clear();
+            state.separator = None;
+            drop(state);
+            rev_cleanup.set_visible(false);
+            queue_dock_resize_mode(&win_cleanup, &root_cleanup, &bar_cleanup, true);
+        });
+        return;
+    }
+
+    // Caso 2: mostrar toda la sección de apps recientes (de oculta/cerrando a visible)
+    if !recent_revealer.is_visible() || !recent_revealer.reveals_child() {
+        let mut created_widgets: Vec<GtkBox> = Vec::with_capacity(desired.len());
+        let (gen, sep) = {
+            let mut state = recent_state.borrow_mut();
+            state.section_gen = state.section_gen.wrapping_add(1);
+            while let Some(child) = recent_box.first_child() {
+                recent_box.remove(&child);
+            }
+            state.items.clear();
+            state.separator = None;
+
+            let sep = make_recent_separator(true);
+            recent_box.append(&sep);
+            state.separator = Some(sep.clone());
+
+            for (key, app_cfg) in desired_keys.into_iter().zip(desired.into_iter()) {
+                let (widget, _) = create_dock_item(
+                    &app_cfg,
+                    false,
+                    0,
+                    0,
+                    icon_size,
+                    false,
+                    running_cache.clone(),
+                    active_app_cache.clone(),
+                    minimized_cache.clone(),
+                    dock_config.clone(),
+                    on_refresh.clone(),
+                );
+                widget.add_css_class("dock-recent-anim-item");
+                widget.add_css_class("dock-recent-hidden");
+                let item_rev = gtk4::Revealer::new();
+                item_rev.set_transition_type(transition);
+                item_rev.set_transition_duration(220);
+                item_rev.set_child(Some(&widget));
+                item_rev.set_reveal_child(true);
+                item_rev.set_overflow(gtk4::Overflow::Visible);
+                recent_box.append(&item_rev);
+                created_widgets.push(widget.clone());
+                state.items.push((key, item_rev, widget));
+            }
+            (state.section_gen, sep)
+        };
+
+        recent_revealer.set_visible(true);
+        recent_revealer.set_sensitive(true);
+        recent_revealer.set_overflow(gtk4::Overflow::Hidden);
+        recent_revealer.set_transition_duration(240);
+        recent_revealer.set_reveal_child(false);
+
+        let rev_enter = recent_revealer.clone();
+        let state_enter = recent_state.clone();
+        let win_enter = window.clone();
+        let root_enter = dock_root.clone();
+        let bar_enter = dock_bar.clone();
+        glib::idle_add_local_once(move || {
+            if state_enter.borrow().section_gen != gen {
+                return;
+            }
+            rev_enter.set_reveal_child(true);
+            sep.remove_css_class("dock-recent-hidden");
+            for (idx, w) in created_widgets.into_iter().enumerate() {
+                let delay = (idx as u64) * 28;
+                if delay == 0 {
+                    w.remove_css_class("dock-recent-hidden");
+                } else {
+                    let state_stagger = state_enter.clone();
+                    glib::timeout_add_local_once(Duration::from_millis(delay), move || {
+                        if state_stagger.borrow().section_gen == gen {
+                            w.remove_css_class("dock-recent-hidden");
+                        }
+                    });
+                }
+            }
+            drive_dock_transition_resize(&win_enter, &root_enter, &bar_enter, 300);
+
+            let rev_ov = rev_enter.clone();
+            let state_ov = state_enter.clone();
+            glib::timeout_add_local_once(Duration::from_millis(270), move || {
+                if state_ov.borrow().section_gen == gen && rev_ov.reveals_child() {
+                    rev_ov.set_overflow(gtk4::Overflow::Visible);
+                }
+            });
+        });
+        return;
+    }
+
+    // Caso 3: la sección ya está visible -> animar entrada/salida solo de las apps recientes que cambiaron
+    let mut state = recent_state.borrow_mut();
+    let current_keys: Vec<String> = state.items.iter().map(|(k, _, _)| k.clone()).collect();
+    if current_keys == desired_keys {
+        return;
+    }
+
+    let mut animated_any = false;
+
+    // 3a. Animar salida de las apps recientes que ya no están en la lista
+    let mut surviving: Vec<(String, gtk4::Revealer, GtkBox)> = Vec::new();
+    for (key, item_rev, item_widget) in state.items.drain(..) {
+        if desired_keys.contains(&key) {
+            surviving.push((key, item_rev, item_widget));
+        } else {
+            animated_any = true;
+            item_widget.add_css_class("dock-recent-hidden");
+            item_rev.set_sensitive(false);
+            item_rev.set_overflow(gtk4::Overflow::Hidden);
+            item_rev.set_transition_type(transition);
+            item_rev.set_transition_duration(210);
+            item_rev.set_reveal_child(false);
+            let box_rm = recent_box.clone();
+            let rev_rm = item_rev.clone();
+            let win_rm = window.clone();
+            let root_rm = dock_root.clone();
+            let bar_rm = dock_bar.clone();
+            glib::timeout_add_local_once(Duration::from_millis(235), move || {
+                if rev_rm.parent().as_ref() == Some(box_rm.upcast_ref::<gtk4::Widget>()) {
+                    box_rm.remove(&rev_rm);
+                }
+                queue_dock_resize_mode(&win_rm, &root_rm, &bar_rm, true);
+            });
+        }
+    }
+
+    // 3b. Reconstruir el orden final y animar entrada de las nuevas apps recientes
+    let mut next_items: Vec<(String, gtk4::Revealer, GtkBox)> = Vec::with_capacity(desired.len());
+    let mut prev_anchor: Option<gtk4::Widget> = state
+        .separator
+        .as_ref()
+        .map(|s| s.clone().upcast::<gtk4::Widget>());
+
+    for (key, app_cfg) in desired_keys.into_iter().zip(desired.into_iter()) {
+        if let Some(pos_idx) = surviving.iter().position(|(k, _, _)| *k == key) {
+            let (k, item_rev, item_widget) = surviving.remove(pos_idx);
+            recent_box.reorder_child_after(&item_rev, prev_anchor.as_ref());
+            prev_anchor = Some(item_rev.clone().upcast::<gtk4::Widget>());
+            next_items.push((k, item_rev, item_widget));
+        } else {
+            animated_any = true;
+            let (widget, _) = create_dock_item(
+                &app_cfg,
+                false,
+                0,
+                0,
+                icon_size,
+                false,
+                running_cache.clone(),
+                active_app_cache.clone(),
+                minimized_cache.clone(),
+                dock_config.clone(),
+                on_refresh.clone(),
+            );
+            widget.add_css_class("dock-recent-anim-item");
+            widget.add_css_class("dock-recent-hidden");
+            let item_rev = gtk4::Revealer::new();
+            item_rev.set_transition_type(transition);
+            item_rev.set_transition_duration(220);
+            item_rev.set_child(Some(&widget));
+            item_rev.set_reveal_child(false);
+            item_rev.set_overflow(gtk4::Overflow::Hidden);
+            recent_box.insert_child_after(&item_rev, prev_anchor.as_ref());
+            prev_anchor = Some(item_rev.clone().upcast::<gtk4::Widget>());
+
+            let rev_in = item_rev.clone();
+            let w_in = widget.clone();
+            glib::idle_add_local_once(move || {
+                rev_in.set_reveal_child(true);
+                w_in.remove_css_class("dock-recent-hidden");
+                let rev_ov = rev_in.clone();
+                glib::timeout_add_local_once(Duration::from_millis(250), move || {
+                    if rev_ov.reveals_child() {
+                        rev_ov.set_overflow(gtk4::Overflow::Visible);
+                    }
+                });
+            });
+
+            next_items.push((key, item_rev, widget));
+        }
+    }
+
+    state.items = next_items;
+    drop(state);
+
+    if animated_any {
+        drive_dock_transition_resize(window, dock_root, dock_bar, 280);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn render_dock_apps(
     apps_box: &GtkBox,
+    recent_apps_revealer: &gtk4::Revealer,
+    recent_apps_box: &GtkBox,
+    recent_apps_state: &Rc<RefCell<RecentAppsUiState>>,
+    window: &ApplicationWindow,
+    dock_root: &GtkBox,
+    dock_bar: &Overlay,
     dock_config: &Rc<RefCell<DockConfig>>,
     running_cache: &Rc<RefCell<Vec<String>>>,
     active_app_cache: &Rc<RefCell<Vec<String>>>,
@@ -3628,6 +4734,7 @@ fn render_dock_apps(
     dock_indicators: &Rc<RefCell<Vec<(Vec<String>, Label)>>>,
     on_refresh: &Rc<dyn Fn()>,
     refresh_pinned: bool,
+    animate_recent: bool,
 ) {
     let config = dock_config.borrow().clone();
     let running = running_cache.borrow().clone();
@@ -3729,9 +4836,9 @@ fn render_dock_apps(
         dock_indicators.borrow_mut().push((ind_matchers, ind));
     }
 
-    // 3. Aplicaciones recientes cerradas no fijadas (controladas por "Mostrar apps recientes y sugeridas en el Dock")
-    if config.show_recent_apps {
-        let recent_closed = RECENT_UNPINNED_APPS.with(|cell| {
+    // 3. Aplicaciones recientes cerradas no fijadas (con animación suave de entrada y salida)
+    let recent_closed = if config.show_recent_apps {
+        RECENT_UNPINNED_APPS.with(|cell| {
             let mut recent = cell.borrow_mut();
             if recent.is_empty() {
                 *recent = load_recent_unpinned_apps_from_disk();
@@ -3752,50 +4859,27 @@ fn render_dock_apps(
                 MAX_VISIBLE_RECENT_APPS,
                 &resolve_launchable_desktop_app_config,
             )
-        });
-        if !recent_closed.is_empty() {
-            let is_horizontal = config.position == DockPosition::Bottom;
-            let recent_sep = Separator::new(if is_horizontal {
-                Orientation::Vertical
-            } else {
-                Orientation::Horizontal
-            });
-            recent_sep.add_css_class("dock-separator");
-            recent_sep.add_css_class("dock-recent-separator");
-            recent_sep.add_css_class("dock-dynamic-item");
-            recent_sep.set_halign(gtk4::Align::Fill);
-            recent_sep.set_valign(if is_horizontal {
-                gtk4::Align::End
-            } else {
-                gtk4::Align::Center
-            });
-            apps_box.append(&recent_sep);
+        })
+    } else {
+        Vec::new()
+    };
 
-            for app_cfg in recent_closed {
-                let (widget, ind) = create_dock_item(
-                    &app_cfg,
-                    false,
-                    0,
-                    0,
-                    icon_size,
-                    false,
-                    running_cache.clone(),
-                    active_app_cache.clone(),
-                    minimized_cache.clone(),
-                    dock_config.clone(),
-                    on_refresh.clone(),
-                );
-                widget.add_css_class("dock-dynamic-item");
-                apps_box.append(&widget);
-                let ind_matchers = if app_cfg.matchers.is_empty() {
-                    vec![app_cfg.name.clone()]
-                } else {
-                    app_cfg.matchers.clone()
-                };
-                dock_indicators.borrow_mut().push((ind_matchers, ind));
-            }
-        }
-    }
+    sync_recent_apps_section(
+        recent_apps_revealer,
+        recent_apps_box,
+        recent_apps_state,
+        window,
+        dock_root,
+        dock_bar,
+        &config,
+        recent_closed,
+        running_cache,
+        active_app_cache,
+        minimized_cache,
+        dock_config,
+        on_refresh,
+        animate_recent,
+    );
 }
 
 const MAX_STORED_RECENT_APPS: usize = 8;
@@ -4145,6 +5229,9 @@ fn update_icon_size_recursive(
     base_size: i32,
     position: DockPosition,
 ) -> bool {
+    if widget.is::<Popover>() {
+        return false;
+    }
     let mut changed = false;
     let clamped_size = size.clamp(1, 512);
     let clamped_base = base_size.clamp(1, 512);
@@ -4243,7 +5330,7 @@ struct IconSizeAnimation {
 
 fn update_icon_size_animation_targets(
     animations: &Rc<RefCell<Vec<IconSizeAnimation>>>,
-    targets: Vec<(gtk4::Widget, i32, i32)>,
+    targets: Vec<(gtk4::Widget, f64, i32)>,
 ) {
     let mut animations = animations.borrow_mut();
     animations.retain(|animation| animation.widget.parent().is_some());
@@ -4253,13 +5340,17 @@ fn update_icon_size_animation_targets(
             .iter_mut()
             .find(|animation| animation.widget == widget)
         {
-            animation.target_size = target_size as f64;
+            if (target_size - animation.target_size).abs() >= 0.45
+                || (target_size - base_size as f64).abs() < 0.25
+            {
+                animation.target_size = target_size;
+            }
             animation.base_size = base_size;
         } else {
             animations.push(IconSizeAnimation {
                 widget,
                 current_size: base_size as f64,
-                target_size: target_size as f64,
+                target_size,
                 base_size,
             });
         }
@@ -4726,6 +5817,9 @@ fn create_magnifiable_icon(
 }
 
 fn queue_dock_icon_backgrounds(widget: &gtk4::Widget) {
+    if widget.is::<Popover>() {
+        return;
+    }
     if let Ok(area) = widget.clone().downcast::<DrawingArea>() {
         if area.has_css_class("dock-icon-shadow") || area.has_css_class("dock-progress-overlay") {
             area.queue_draw();
@@ -4986,73 +6080,71 @@ fn make_dock_menu_button(label: &str, danger: bool) -> Button {
         &["popover-menu-item", "malus-squircle-menu-item"]
     };
     let btn = Button::builder()
-        .label(label)
         .has_frame(false)
         .css_classes(classes)
         .build();
-    if let Some(inner) = btn.child() {
-        if let Some(lbl) = inner.downcast_ref::<Label>() {
-            lbl.set_xalign(0.0);
+    let lbl = Label::builder()
+        .label(label)
+        .xalign(0.0)
+        .hexpand(true)
+        .margin_top(3)
+        .margin_bottom(3)
+        .margin_start(8)
+        .margin_end(8)
+        .build();
+
+    let bg = DrawingArea::new();
+    bg.set_can_target(false);
+    bg.set_hexpand(true);
+    bg.set_vexpand(false);
+
+    let btn_weak = btn.downgrade();
+    bg.set_draw_func(move |_, cr, w, h| {
+        let width = w as f64;
+        let height = h as f64;
+        if width <= 2.0 || height <= 2.0 {
+            return;
         }
-        btn.set_child(gtk4::Widget::NONE);
-        inner.set_margin_top(4);
-        inner.set_margin_bottom(4);
-        inner.set_margin_start(8);
-        inner.set_margin_end(8);
+        let Some(b) = btn_weak.upgrade() else {
+            return;
+        };
+        let flags = b.state_flags();
+        if flags.contains(gtk4::StateFlags::INSENSITIVE) {
+            return;
+        }
+        let hovered = flags.contains(gtk4::StateFlags::PRELIGHT);
+        let active = flags.contains(gtk4::StateFlags::ACTIVE);
+        if !hovered && !active {
+            return;
+        }
+        let _ = cr.save();
+        squircle_path(cr, width, height, 14.0);
+        let (red, green, blue) = malus_de_common::config::load_accent_color();
+        if active {
+            cr.set_source_rgba(red * 0.82, green * 0.82, blue * 0.82, 0.94);
+        } else {
+            cr.set_source_rgba(red, green, blue, 0.90);
+        }
+        let _ = cr.fill();
+        let _ = cr.restore();
+    });
 
-        let bg = DrawingArea::new();
-        bg.set_can_target(false);
-        bg.set_hexpand(true);
-        bg.set_vexpand(false);
+    let bg_state = bg.clone();
+    btn.connect_state_flags_changed(move |_, _| {
+        bg_state.queue_draw();
+    });
 
-        let btn_weak = btn.downgrade();
-        bg.set_draw_func(move |_, cr, w, h| {
-            let width = w as f64;
-            let height = h as f64;
-            if width <= 2.0 || height <= 2.0 {
-                return;
-            }
-            let Some(b) = btn_weak.upgrade() else {
-                return;
-            };
-            let flags = b.state_flags();
-            if flags.contains(gtk4::StateFlags::INSENSITIVE) {
-                return;
-            }
-            let hovered = flags.contains(gtk4::StateFlags::PRELIGHT);
-            let active = flags.contains(gtk4::StateFlags::ACTIVE);
-            if !hovered && !active {
-                return;
-            }
-            let _ = cr.save();
-            squircle_path(cr, width, height, 14.0);
-            let (red, green, blue) = malus_de_common::config::load_accent_color();
-            if active {
-                cr.set_source_rgba(red * 0.78, green * 0.78, blue * 0.78, 0.86);
-            } else {
-                cr.set_source_rgba(red, green, blue, 0.74);
-            }
-            let _ = cr.fill();
-            let _ = cr.restore();
-        });
-
-        let bg_state = bg.clone();
-        btn.connect_state_flags_changed(move |_, _| {
-            bg_state.queue_draw();
-        });
-
-        let overlay = Overlay::builder()
-            .hexpand(true)
-            .vexpand(false)
-            .valign(gtk4::Align::Center)
-            .build();
-        overlay.set_child(Some(&bg));
-        overlay.add_overlay(&inner);
-        overlay.set_measure_overlay(&inner, true);
-        btn.set_vexpand(false);
-        btn.set_valign(gtk4::Align::Start);
-        btn.set_child(Some(&overlay));
-    }
+    let overlay = Overlay::builder()
+        .hexpand(true)
+        .vexpand(false)
+        .valign(gtk4::Align::Center)
+        .build();
+    overlay.set_child(Some(&bg));
+    overlay.add_overlay(&lbl);
+    overlay.set_measure_overlay(&lbl, true);
+    btn.set_vexpand(false);
+    btn.set_valign(gtk4::Align::Start);
+    btn.set_child(Some(&overlay));
     btn
 }
 
@@ -5301,7 +6393,6 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
 
     let btn = Button::builder()
         .css_classes(["dock-item-btn", "dock-trash-btn"])
-        .tooltip_text("Papelera")
         .focusable(false)
         .valign(gtk4::Align::End)
         .build();
@@ -5322,21 +6413,24 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
         create_magnifiable_icon(&trash_img, icon_size, DockIconRenderMode::RawNative);
     btn.set_child(Some(&trash_overlay));
 
-    btn.connect_clicked(|_| {
+    let trash_tooltip = attach_dock_hover_tooltip(&btn, "Papelera");
+    let tip_click = trash_tooltip.clone();
+    btn.connect_clicked(move |_| {
+        tip_click.popdown();
         spawn_dock_app("Branches", "malus-de-branches", &["trash:///"]);
     });
 
-    // Menú Popover de Clic Derecho para la Papelera
+    // Menú Popover de Clic Derecho para la Papelera (estilo macOS Tahoe)
     let popover = Popover::builder()
         .css_classes(["malus-popover-menu"])
         .has_arrow(false)
         .position(gtk4::PositionType::Top)
         .build();
-    popover.set_offset(0, POPOVER_SHADOW_GUTTER);
+    apply_popover_dock_placement(&popover, DOCK_CURRENT_POSITION.get());
 
     let menu_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .spacing(2)
+        .spacing(1)
         .build();
 
     let header = Label::builder()
@@ -5369,20 +6463,47 @@ fn create_trash_item(icon_size: i32) -> (GtkBox, Image) {
 
     menu_box.append(&btn_open);
     menu_box.append(&btn_empty);
-    let popover_surface = create_popover_surface(&menu_box);
+    let popover_surface = create_popover_surface(&menu_box, Some(btn.upcast_ref()));
     popover.set_child(Some(&popover_surface));
     popover.set_parent(&btn);
+    let btn_show = btn.clone();
+    popover.connect_show(move |_| {
+        DOCK_CONTEXT_MENU_OPEN.set(true);
+        hide_active_hover_tooltip();
+        btn_show.add_css_class("dock-menu-open");
+    });
+    let btn_closed = btn.clone();
+    popover.connect_closed(move |_| {
+        DOCK_CONTEXT_MENU_OPEN.set(false);
+        btn_closed.remove_css_class("dock-menu-open");
+        notify_dock_context_menu_closed();
+    });
     let p_unroot = popover.clone();
     btn.connect_unrealize(move |_| {
         p_unroot.unparent();
     });
 
+    let open_trash_menu: Rc<dyn Fn()> = {
+        let p = popover.clone();
+        let tip_rc = trash_tooltip.clone();
+        let btn_rc = btn.clone();
+        Rc::new(move || {
+            tip_rc.popdown();
+            hide_active_hover_tooltip();
+            DOCK_CONTEXT_MENU_OPEN.set(true);
+            let pos = DOCK_CURRENT_POSITION.get();
+            let extra_px = dock_button_zoom_extra_px(&btn_rc, pos);
+            apply_popover_dock_placement_with_extra(&p, pos, extra_px);
+            p.popup();
+        })
+    };
+    register_dock_context_menu_opener(&btn, open_trash_menu.clone());
+
     let right_click = GestureClick::new();
     right_click.set_button(3);
-    let p = popover.clone();
+    let open_trash_rc = open_trash_menu.clone();
     right_click.connect_pressed(move |_, _, _, _| {
-        apply_popover_dock_placement(&p, DOCK_CURRENT_POSITION.get());
-        p.popup();
+        open_trash_rc();
     });
     btn.add_controller(right_click);
 
@@ -5488,7 +6609,7 @@ fn populate_dock_app_menu_box(
         }
     }
 
-    // 3. Opciones de anclado / organización estilo macOS
+    // 3. Opciones de anclado / organización
     if is_pinned {
         if idx > 0 {
             let btn_move_left = make_dock_menu_button("Mover a la izquierda", false);
@@ -5595,7 +6716,7 @@ fn populate_dock_app_menu_box(
                 }
                 let _ = Command::new("pkill").args(["-x", "--", pattern]).status();
             }
-            let parts: Vec<&str> = cmd_fq.split_whitespace().collect();
+            let parts = split_command_args(&cmd_fq);
             if let Some((exe, _)) = parts.split_first() {
                 if let Some(base) = std::path::Path::new(exe).file_name().and_then(|n| n.to_str())
                 {
@@ -5606,10 +6727,6 @@ fn populate_dock_app_menu_box(
             }
         });
         menu_box.append(&btn_force_quit);
-    }
-
-    if let Some(last_item) = menu_box.last_child() {
-        last_item.set_margin_bottom(10);
     }
 }
 
@@ -5747,22 +6864,27 @@ fn create_dock_item(
         })
     };
 
+    // Popover píldora con cola curva al pasar el cursor (nombre de la app estilo macOS Tahoe)
+    let hover_tooltip = attach_dock_hover_tooltip(&btn, &app_cfg.name);
+
     let act_click = activate_or_spawn.clone();
+    let tip_click = hover_tooltip.clone();
     btn.connect_clicked(move |_| {
+        tip_click.popdown();
         act_click();
     });
 
-    // Menú Popover de Clic Derecho (macOS Style Context Menu)
+    // Menú Popover de Clic Derecho (macOS Tahoe Context Menu)
     let popover = Popover::builder()
         .css_classes(["malus-popover-menu"])
         .has_arrow(false)
         .position(gtk4::PositionType::Top)
         .build();
-    popover.set_offset(0, POPOVER_SHADOW_GUTTER);
+    apply_popover_dock_placement(&popover, DOCK_CURRENT_POSITION.get());
 
     let menu_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
-        .spacing(2)
+        .spacing(1)
         .build();
 
     let app_cfg_menu = app_cfg.clone();
@@ -5780,40 +6902,67 @@ fn create_dock_item(
         &on_refresh,
     );
 
-    let popover_surface = create_popover_surface(&menu_box);
+    let popover_surface = create_popover_surface(&menu_box, Some(btn.upcast_ref()));
     popover.set_child(Some(&popover_surface));
     popover.set_parent(&btn);
+    let btn_show = btn.clone();
+    popover.connect_show(move |_| {
+        DOCK_CONTEXT_MENU_OPEN.set(true);
+        hide_active_hover_tooltip();
+        btn_show.add_css_class("dock-menu-open");
+    });
+    let btn_closed = btn.clone();
+    popover.connect_closed(move |_| {
+        DOCK_CONTEXT_MENU_OPEN.set(false);
+        btn_closed.remove_css_class("dock-menu-open");
+        notify_dock_context_menu_closed();
+    });
     let p_unroot = popover.clone();
     btn.connect_unrealize(move |_| {
         p_unroot.unparent();
     });
 
+    let open_app_menu: Rc<dyn Fn()> = {
+        let p_rc = popover.clone();
+        let tip_rc = hover_tooltip.clone();
+        let btn_rc = btn.clone();
+        let menu_box_rc = menu_box.clone();
+        let cache_rc = cache.clone();
+        let min_rc = minimized_cache.clone();
+        let cfg_rc = dock_config.clone();
+        let on_rf_rc = on_refresh.clone();
+        let act_rc = activate_or_spawn.clone();
+        Rc::new(move || {
+            tip_rc.popdown();
+            hide_active_hover_tooltip();
+            DOCK_CONTEXT_MENU_OPEN.set(true);
+            let live_running = is_dock_item_running(&cache_rc, &app_cfg_menu);
+            populate_dock_app_menu_box(
+                &menu_box_rc,
+                &p_rc,
+                &app_cfg_menu,
+                is_pinned,
+                idx,
+                total_pinned,
+                live_running,
+                &act_rc,
+                &min_rc,
+                &cfg_rc,
+                &on_rf_rc,
+            );
+            let pos = DOCK_CURRENT_POSITION.get();
+            let extra_px = dock_button_zoom_extra_px(&btn_rc, pos);
+            apply_popover_dock_placement_with_extra(&p_rc, pos, extra_px);
+            p_rc.popup();
+        })
+    };
+    register_dock_context_menu_opener(&btn, open_app_menu.clone());
+
     let right_click = GestureClick::new();
     right_click.set_button(3); // Clic derecho
-    let p_rc = popover.clone();
-    let menu_box_rc = menu_box.clone();
-    let cache_rc = cache.clone();
-    let min_rc = minimized_cache.clone();
-    let cfg_rc = dock_config.clone();
-    let on_rf_rc = on_refresh.clone();
-    let act_rc = activate_or_spawn.clone();
+    let open_app_rc = open_app_menu.clone();
     right_click.connect_pressed(move |_, _, _, _| {
-        let live_running = is_dock_item_running(&cache_rc, &app_cfg_menu);
-        populate_dock_app_menu_box(
-            &menu_box_rc,
-            &p_rc,
-            &app_cfg_menu,
-            is_pinned,
-            idx,
-            total_pinned,
-            live_running,
-            &act_rc,
-            &min_rc,
-            &cfg_rc,
-            &on_rf_rc,
-        );
-        apply_popover_dock_placement(&p_rc, DOCK_CURRENT_POSITION.get());
-        p_rc.popup();
+        open_app_rc();
     });
     btn.add_controller(right_click);
 
