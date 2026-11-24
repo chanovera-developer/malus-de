@@ -2171,6 +2171,7 @@ dependencies = [
  "libadwaita",
  "malus-de-common",
  "serde",
+ "serde_json",
  "toml 0.8.23",
  "tracing",
  "zbus",

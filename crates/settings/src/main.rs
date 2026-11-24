@@ -2,7 +2,7 @@ use clap::Parser;
 use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea, Entry,
-    EventControllerFocus, FlowBox, Image, Label, Orientation, Overlay, PackType, PolicyType, Scale,
+    EventControllerFocus, FlowBox, Image, Label, Orientation, Overlay, PackType, PolicyType,
     ScrolledWindow, SearchEntry, Stack, StackTransitionType, WindowControls, WindowHandle,
 };
 use malus_de_common::mac_switch::MacSwitch as Switch;
@@ -26,6 +26,7 @@ mod menubar_pane;
 mod network_pane;
 mod notifications_pane;
 mod siri_pane;
+mod sound_pane;
 mod vpn_pane;
 mod wallpaper_pane;
 mod wifi_pane;
@@ -577,7 +578,11 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             "preferences-system-notifications-symbolic",
             notifications_pane::NOTIFICATIONS_PANEL_TITLE,
         ),
-        ("sound", "audio-volume-high-symbolic", "Sonido"),
+        (
+            sound_pane::SOUND_PANEL_ID,
+            "audio-volume-high-symbolic",
+            sound_pane::SOUND_PANEL_TITLE,
+        ),
         ("keyboard", "input-keyboard-symbolic", "Teclado"),
     ];
 
@@ -634,7 +639,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                     "siri" => "pip siri asistente voz inteligencia chatgpt extension consulta visual sugerencias idioma respuestas",
                     "spotlight" => "canopy spotlight busqueda aplicaciones archivos carpetas portapapeles privacidad",
                     "notifications" => "notificaciones avisos tiras alertas banners sonidos previsualizar centro apps",
-                    "sound" => "sonido volumen audio",
+                    "sound" => "sonido volumen audio alerta salida entrada microfono bocinas balance silencio efectos",
                     "about" => "general acerca sistema procesador ram version informacion actualizacion almacenamiento airdrop compartir disco arranque inicio extensiones fecha hora idioma region time machine",
                     "accessibility" => "accesibilidad accessibility vision voiceover orca zoom pantalla contraste movimiento voz teclado puntero subtitulos audio",
                     _ => "",
@@ -849,9 +854,11 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                         stack_c.add_named(&pane, Some("siri"));
                     }
                     "sound" => {
-                        let pane = create_sound_pane();
+                        let (pane, rf) = sound_pane::create_sound_pane();
                         configure_right_pane_widget(pane.upcast_ref());
                         stack_c.add_named(&pane, Some("sound"));
+                        refreshers_c.borrow_mut().insert("sound".to_string(), rf);
+                        refreshed_on_construct = true;
                     }
                     "dock" => {
                         let (pane, rf) = dock_pane::create_dock_pane(&win_c, nav_gen_c.clone());
@@ -1926,58 +1933,8 @@ pub(crate) fn set_cursor_theme_and_size(theme: &str, size: u32) {
 // ============================================================================
 
 // ============================================================================
-// PANEL 4: SONIDO
+// PANEL 4: SONIDO -> `sound_pane.rs`
 // ============================================================================
-
-fn create_sound_pane() -> ScrolledWindow {
-    let scrolled = ScrolledWindow::builder()
-        .hscrollbar_policy(PolicyType::Never)
-        .vscrollbar_policy(PolicyType::Automatic)
-        .hexpand(true)
-        .vexpand(true)
-        .build();
-
-    let pane = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .css_classes(["content-pane"])
-        .spacing(16)
-        .build();
-
-    let title = Label::builder()
-        .label("Sonido")
-        .css_classes(["pane-header-title"])
-        .xalign(0.0)
-        .build();
-    pane.append(&title);
-
-    let card = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .css_classes(["macos-group-card"])
-        .spacing(10)
-        .build();
-
-    let vol_lbl = Label::builder()
-        .label("Volumen de salida maestro (PipeWire / WirePlumber)")
-        .css_classes(["card-section-title"])
-        .wrap(true)
-        .xalign(0.0)
-        .build();
-    let vol_slider = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
-    vol_slider.set_value(75.0);
-    vol_slider.connect_value_changed(|s| {
-        let pct = s.value().round() as i32;
-        let _ = Command::new("wpctl")
-            .args(["set-volume", "@DEFAULT_AUDIO_SINK@", &format!("{}%", pct)])
-            .spawn();
-    });
-
-    card.append(&vol_lbl);
-    card.append(&vol_slider);
-    pane.append(&card);
-
-    scrolled.set_child(Some(&pane));
-    scrolled
-}
 
 #[cfg(test)]
 mod tests {

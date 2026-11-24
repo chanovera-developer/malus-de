@@ -4329,6 +4329,87 @@ impl NotificationsConfig {
     }
 }
 
+/// Preferencias persistentes del panel Sonido (`~/.config/malus-de/sound.toml`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SoundConfig {
+    /// Nombre del sonido de alerta seleccionado (ej. "Boop", "Glass", "Pop").
+    #[serde(default = "default_alert_sound")]
+    pub alert_sound: String,
+    /// Nombre interno del dispositivo PipeWire para efectos, o vacío para seguir la salida elegida.
+    #[serde(default)]
+    pub effects_device: String,
+    /// Volumen de reproducción de alertas (0.0 ..= 100.0).
+    #[serde(default = "default_alert_volume")]
+    pub alert_volume: f64,
+    /// Reproducir sonido de arranque (reservado / por implementar en sesión).
+    #[serde(default = "default_true")]
+    pub play_startup_sound: bool,
+    /// Reproducir efectos sonoros de la interfaz (reservado / por implementar).
+    #[serde(default = "default_true")]
+    pub play_ui_sound_effects: bool,
+    /// Emitir sonido al cambiar el volumen con teclas de hardware (reservado / por implementar).
+    #[serde(default)]
+    pub volume_change_feedback: bool,
+}
+
+fn default_alert_sound() -> String {
+    "Boop".to_string()
+}
+
+fn default_alert_volume() -> f64 {
+    85.0
+}
+
+impl Default for SoundConfig {
+    fn default() -> Self {
+        Self {
+            alert_sound: default_alert_sound(),
+            effects_device: String::new(),
+            alert_volume: default_alert_volume(),
+            play_startup_sound: true,
+            play_ui_sound_effects: true,
+            volume_change_feedback: false,
+        }
+    }
+}
+
+impl SoundConfig {
+    pub fn config_path() -> PathBuf {
+        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+            let p = PathBuf::from(&xdg);
+            if p.file_name().is_some_and(|n| n == "malus-de") {
+                return p.join("sound.toml");
+            }
+            return p.join("malus-de").join("sound.toml");
+        }
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/malus-de/sound.toml")
+    }
+
+    pub fn load() -> Self {
+        let path = Self::config_path();
+        if let Ok(raw) = std::fs::read_to_string(&path) {
+            if let Ok(mut parsed) = toml::from_str::<Self>(&raw) {
+                parsed.alert_volume = parsed.alert_volume.clamp(0.0, 100.0);
+                if parsed.alert_sound.trim().is_empty() {
+                    parsed.alert_sound = default_alert_sound();
+                }
+                return parsed;
+            }
+        }
+        Self::default()
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::config_path();
+        let raw = toml::to_string_pretty(self).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+        })?;
+        write_file_atomic_if_changed(&path, &raw)?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4358,6 +4439,29 @@ mod tests {
         let raw = toml::to_string_pretty(&cfg).unwrap();
         let parsed: NotificationsConfig = toml::from_str(&raw).unwrap();
         assert_eq!(parsed, cfg);
+    }
+
+    #[test]
+    fn sound_config_defaults_and_toml_roundtrip() {
+        let cfg = SoundConfig::default();
+        assert_eq!(cfg.alert_sound, "Boop");
+        assert!(cfg.effects_device.is_empty());
+        assert!((cfg.alert_volume - 85.0).abs() < f64::EPSILON);
+        assert!(cfg.play_startup_sound);
+        assert!(cfg.play_ui_sound_effects);
+        assert!(!cfg.volume_change_feedback);
+
+        let custom = SoundConfig {
+            alert_sound: "Glass".to_string(),
+            effects_device: "alsa_output.pci-0000_00_1f.3.analog-stereo".to_string(),
+            alert_volume: 62.0,
+            play_startup_sound: false,
+            play_ui_sound_effects: true,
+            volume_change_feedback: true,
+        };
+        let raw = toml::to_string_pretty(&custom).unwrap();
+        let parsed: SoundConfig = toml::from_str(&raw).unwrap();
+        assert_eq!(parsed, custom);
     }
 
     #[test]
