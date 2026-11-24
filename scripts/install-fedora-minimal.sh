@@ -121,6 +121,7 @@ $SUDO dnf install -y --skip-unavailable \
     xdg-desktop-portal \
     xdg-desktop-portal-gtk \
     wl-clipboard \
+    libnotify \
     pam \
     rust \
     cargo \

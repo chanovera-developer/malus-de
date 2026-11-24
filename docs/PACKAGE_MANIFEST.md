@@ -83,6 +83,7 @@ sudo dnf install -y \
     xdg-desktop-portal-gtk \
     xdg-desktop-portal-gnome \
     wl-clipboard \
+    libnotify \
     pipewire-utils \
     libcanberra-gtk3 \
     ffmpeg-free \
@@ -148,6 +149,7 @@ sudo apt install -y \
     xdg-desktop-portal-gtk \
     xdg-desktop-portal-gnome \
     wl-clipboard \
+    libnotify-bin \
     libcanberra-gtk3-module \
     ffmpeg \
     gvfs \
@@ -209,6 +211,7 @@ sudo pacman -S --needed \
     xdg-desktop-portal-gtk \
     xdg-desktop-portal-gnome \
     wl-clipboard \
+    libnotify \
     libcanberra \
     ffmpeg \
     gvfs \

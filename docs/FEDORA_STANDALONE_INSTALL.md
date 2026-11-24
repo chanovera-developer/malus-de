@@ -86,7 +86,8 @@ sudo dnf install -y \
     libsecret \
     xdg-desktop-portal \
     xdg-desktop-portal-gtk \
-    wl-clipboard
+    wl-clipboard \
+    libnotify
 ```
 
 ### Justificación de Paquetes Clave:
