@@ -4,11 +4,11 @@ use glib::ControlFlow;
 use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea,
-    EventControllerMotion, Image, Label, Orientation, Overlay,
+    EventControllerMotion, GestureClick, Image, Label, Orientation, Overlay,
 };
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use libadwaita as adw;
-use malus_de_common::ipc::{ipc_socket_path, IpcMessage};
+use malus_de_common::ipc::{ipc_socket_path, send_ipc_message, IpcMessage};
 use malus_de_common::logging::init_logging;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -67,8 +67,17 @@ thread_local! {
     static NOTIF_DARK_ACTIVE: Cell<bool> = const { Cell::new(false) };
     static NOTIF_OPACITY: Cell<f64> = const { Cell::new(0.55) };
     static ACTIVE_BANNERS: RefCell<Vec<BannerEntry>> = const { RefCell::new(Vec::new()) };
+    static RUNNING_APPS_CACHE: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    static DBUS_SIGNAL_TX: RefCell<Option<async_channel::Sender<DbusSignalCmd>>> =
+        const { RefCell::new(None) };
     static ANIM_RUNNING: Cell<bool> = const { Cell::new(false) };
     static ANIM_LAST_TICK: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+#[derive(Debug, Clone)]
+enum DbusSignalCmd {
+    ActionInvoked { id: u32, action_key: String },
+    NotificationClosed { id: u32, reason: u32 },
 }
 
 fn squircle_path(cr: &gtk4::cairo::Context, x: f64, y: f64, w: f64, h: f64, radius: f64) {
@@ -421,16 +430,213 @@ pub enum NotificationEvent {
     Show(NotificationMsg),
     Close(u32),
     ThemeChanged(bool),
+    RunningAppsChanged(Vec<String>),
 }
 
 #[derive(Debug, Clone)]
 pub struct NotificationMsg {
     pub id: u32,
+    pub desktop_entry: String,
     pub app_name: String,
     pub app_icon: String,
     pub summary: String,
     pub body: String,
     pub sound: bool,
+    pub has_default_action: bool,
+}
+
+fn has_default_notification_action(actions: &[String]) -> bool {
+    actions
+        .chunks(2)
+        .any(|pair| pair.first().is_some_and(|key| key == "default"))
+}
+
+fn normalize_app_token(raw: &str) -> String {
+    raw.trim()
+        .strip_prefix("application://")
+        .unwrap_or(raw.trim())
+        .trim_end_matches(".desktop")
+        .trim()
+        .to_ascii_lowercase()
+}
+
+fn resolve_target_running_app(
+    running_apps: &[String],
+    desktop_entry: &str,
+    app_name: &str,
+    app_icon: &str,
+) -> Option<String> {
+    let raw_candidates = [desktop_entry, app_name, app_icon];
+    let mut normalized_candidates: Vec<String> = Vec::new();
+    let mut push_unique = |val: String| {
+        if val.len() >= 2 && !normalized_candidates.iter().any(|c| c == &val) {
+            normalized_candidates.push(val);
+        }
+    };
+
+    for raw in raw_candidates {
+        let norm = normalize_app_token(raw);
+        if norm.is_empty() || norm.starts_with('/') {
+            continue;
+        }
+        push_unique(norm.clone());
+        if let Some(last_dot) = norm.rsplit('.').next() {
+            if last_dot.len() >= 3 && last_dot != "desktop" {
+                push_unique(last_dot.to_string());
+            }
+        }
+        let dashed = norm.replace(' ', "-");
+        if dashed != norm {
+            push_unique(dashed);
+        }
+    }
+
+    // 1. Coincidencia exacta (case-insensitive)
+    for cand in &normalized_candidates {
+        if let Some(found) = running_apps
+            .iter()
+            .find(|r| normalize_app_token(r) == *cand)
+        {
+            return Some(found.clone());
+        }
+    }
+
+    // 2. Coincidencia parcial segura (>= 3 caracteres)
+    for cand in &normalized_candidates {
+        if cand.len() < 3 {
+            continue;
+        }
+        if let Some(found) = running_apps.iter().find(|r| {
+            let r_norm = normalize_app_token(r);
+            r_norm.len() >= 3 && (r_norm.contains(cand.as_str()) || cand.contains(r_norm.as_str()))
+        }) {
+            return Some(found.clone());
+        }
+    }
+
+    None
+}
+
+fn launch_desktop_app_for_notification(desktop_entry: &str, app_name: &str, app_icon: &str) -> bool {
+    let mut lookup_ids: Vec<String> = Vec::new();
+    for raw in [desktop_entry, app_name, app_icon] {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() || trimmed.starts_with('/') {
+            continue;
+        }
+        let norm = normalize_app_token(trimmed);
+        for cand in [
+            format!("{trimmed}.desktop"),
+            format!("{norm}.desktop"),
+            trimmed.to_string(),
+        ] {
+            if !lookup_ids.contains(&cand) {
+                lookup_ids.push(cand);
+            }
+        }
+    }
+
+    for cand in &lookup_ids {
+        if let Some(info) = gio::DesktopAppInfo::new(cand) {
+            if info.launch(&[], gio::AppLaunchContext::NONE).is_ok() {
+                info!("🚀 Aplicación lanzada desde notificación: {}", info.name());
+                return true;
+            }
+        }
+    }
+
+    let targets: Vec<String> = [desktop_entry, app_name, app_icon]
+        .into_iter()
+        .map(normalize_app_token)
+        .filter(|s| s.len() >= 3 && !s.starts_with('/'))
+        .collect();
+    if targets.is_empty() {
+        return false;
+    }
+
+    for app_info in gio::AppInfo::all() {
+        let id_norm = app_info
+            .id()
+            .map(|id| normalize_app_token(&id))
+            .unwrap_or_default();
+        let name_norm = normalize_app_token(&app_info.name());
+        let matches = targets.iter().any(|t| {
+            id_norm == *t
+                || name_norm == *t
+                || (!id_norm.is_empty() && (id_norm.contains(t.as_str()) || t.contains(id_norm.as_str())))
+                || (!name_norm.is_empty() && name_norm == *t)
+        });
+        if matches && app_info.launch(&[], gio::AppLaunchContext::NONE).is_ok() {
+            info!(
+                "🚀 Aplicación lanzada desde notificación (AppInfo): {}",
+                app_info.name()
+            );
+            return true;
+        }
+    }
+
+    false
+}
+
+fn activate_notification_source_app(
+    notif_id: u32,
+    desktop_entry: &str,
+    app_name: &str,
+    app_icon: &str,
+    has_default_action: bool,
+) {
+    // 1. Si la app registró acción "default" (p. ej. abrir pestaña/chat exacto), emitir ActionInvoked
+    if has_default_action {
+        DBUS_SIGNAL_TX.with(|cell| {
+            if let Some(tx) = cell.borrow().as_ref() {
+                let _ = tx.send_blocking(DbusSignalCmd::ActionInvoked {
+                    id: notif_id,
+                    action_key: "default".to_string(),
+                });
+            }
+        });
+    }
+
+    // 2. Enfocar/restaurar la ventana existente en el compositor vía IPC `ActivateApp`
+    let running = RUNNING_APPS_CACHE.with(|cell| cell.borrow().clone());
+    if let Some(running_id) =
+        resolve_target_running_app(&running, desktop_entry, app_name, app_icon)
+    {
+        info!(
+            "🔔 Clic en notificación [id={}]: activando app en ejecución '{}'",
+            notif_id, running_id
+        );
+        let _ = send_ipc_message(&IpcMessage::ActivateApp { app_id: running_id });
+        return;
+    }
+
+    // 3. Si no teníamos la lista en caché o la app no coincidió por caché, intentar ActivateApp directo
+    let fallback_target = [desktop_entry, app_name, app_icon]
+        .into_iter()
+        .map(str::trim)
+        .find(|s| !s.is_empty() && !s.starts_with('/'));
+
+    if running.is_empty() {
+        if let Some(target) = fallback_target {
+            info!(
+                "🔔 Clic en notificación [id={}]: solicitando ActivateApp para '{}'",
+                notif_id, target
+            );
+            let _ = send_ipc_message(&IpcMessage::ActivateApp {
+                app_id: target.to_string(),
+            });
+            return;
+        }
+    }
+
+    // 4. Si la app está cerrada, intentar abrir su lanzador .desktop
+    if !launch_desktop_app_for_notification(desktop_entry, app_name, app_icon) {
+        if let Some(target) = fallback_target {
+            let _ = send_ipc_message(&IpcMessage::ActivateApp {
+                app_id: target.to_string(),
+            });
+        }
+    }
 }
 
 fn extract_hint_str(hints: &HashMap<String, Value<'_>>, key: &str) -> Option<String> {
@@ -500,7 +706,7 @@ impl NotificationServer {
         app_icon: String,
         summary: String,
         body: String,
-        _actions: Vec<String>,
+        actions: Vec<String>,
         hints: HashMap<String, Value<'_>>,
         _expire_timeout: i32,
     ) -> u32 {
@@ -514,6 +720,7 @@ impl NotificationServer {
         let category = extract_hint_str(&hints, "category");
         let transient = extract_hint_bool(&hints, "transient");
         let urgency = extract_hint_urgency(&hints);
+        let has_default_action = has_default_notification_action(&actions);
 
         let notif_cfg = malus_de_common::config::NotificationsConfig::load();
         let rule_key = if !app_name.trim().is_empty() {
@@ -566,12 +773,14 @@ impl NotificationServer {
         if rule.style != malus_de_common::config::NotificationAlertStyle::None {
             let msg = NotificationMsg {
                 id,
+                desktop_entry,
                 app_name,
                 app_icon,
                 summary,
                 body,
                 sound: rule.sound
                     && (hints.contains_key("sound-name") || !hints.contains_key("suppress-sound")),
+                has_default_action,
             };
 
             let _ = self.sender.send(NotificationEvent::Show(msg)).await;
@@ -607,6 +816,10 @@ fn main() -> Result<()> {
     }
 
     let (sender, receiver) = async_channel::unbounded::<NotificationEvent>();
+    let (dbus_sig_tx, dbus_sig_rx) = async_channel::unbounded::<DbusSignalCmd>();
+    DBUS_SIGNAL_TX.with(|cell| {
+        *cell.borrow_mut() = Some(dbus_sig_tx);
+    });
 
     // Servidor D-Bus en hilo de fondo
     let s_clone = sender.clone();
@@ -629,7 +842,32 @@ fn main() -> Result<()> {
                 .await?;
 
             info!("Servicio D-Bus org.freedesktop.Notifications registrado con éxito.");
-            std::future::pending::<()>().await;
+            while let Ok(cmd) = dbus_sig_rx.recv().await {
+                match cmd {
+                    DbusSignalCmd::ActionInvoked { id, action_key } => {
+                        let _ = connection
+                            .emit_signal(
+                                None::<&str>,
+                                "/org/freedesktop/Notifications",
+                                "org.freedesktop.Notifications",
+                                "ActionInvoked",
+                                &(id, action_key.as_str()),
+                            )
+                            .await;
+                    }
+                    DbusSignalCmd::NotificationClosed { id, reason } => {
+                        let _ = connection
+                            .emit_signal(
+                                None::<&str>,
+                                "/org/freedesktop/Notifications",
+                                "org.freedesktop.Notifications",
+                                "NotificationClosed",
+                                &(id, reason),
+                            )
+                            .await;
+                    }
+                }
+            }
             Ok::<(), zbus::Error>(())
         });
         if let Err(e) = rt {
@@ -637,7 +875,7 @@ fn main() -> Result<()> {
         }
     });
 
-    // Escuchar cambios de tema / opacidad del compositor por IPC
+    // Escuchar cambios de tema / opacidad / apps abiertas del compositor por IPC
     let ipc_tx = sender.clone();
     std::thread::spawn(move || loop {
         if let Ok(stream) = UnixStream::connect(ipc_socket_path()) {
@@ -651,6 +889,10 @@ fn main() -> Result<()> {
                         IpcMessage::LiquidGlassOpacityChanged { .. } => {
                             let is_dark = malus_de_common::config::is_dark_mode_active();
                             let _ = ipc_tx.send_blocking(NotificationEvent::ThemeChanged(is_dark));
+                        }
+                        IpcMessage::RunningAppsChanged { running_apps } => {
+                            let _ = ipc_tx
+                                .send_blocking(NotificationEvent::RunningAppsChanged(running_apps));
                         }
                         _ => {}
                     }
@@ -726,6 +968,11 @@ fn main() -> Result<()> {
                 NotificationEvent::ThemeChanged(is_dark) => {
                     malus_de_common::config::invalidate_appearance_settings_cache();
                     apply_notification_theme_now(Some(is_dark));
+                }
+                NotificationEvent::RunningAppsChanged(running_apps) => {
+                    RUNNING_APPS_CACHE.with(|cell| {
+                        *cell.borrow_mut() = running_apps;
+                    });
                 }
             }
         }
@@ -964,7 +1211,47 @@ fn display_banner(app: &Application, msg: NotificationMsg) {
     overlay.add_controller(motion);
 
     let notif_id = msg.id;
+    let has_target_app = !msg.desktop_entry.trim().is_empty()
+        || !msg.app_name.trim().is_empty()
+        || !msg.app_icon.trim().is_empty();
+    if has_target_app {
+        banner.set_cursor_from_name(Some("pointer"));
+        let click_gesture = GestureClick::new();
+        click_gesture.set_button(1);
+        let click_desktop = msg.desktop_entry.clone();
+        let click_app_name = msg.app_name.clone();
+        let click_app_icon = msg.app_icon.clone();
+        let click_has_default = msg.has_default_action;
+        click_gesture.connect_released(move |_, _, _, _| {
+            activate_notification_source_app(
+                notif_id,
+                &click_desktop,
+                &click_app_name,
+                &click_app_icon,
+                click_has_default,
+            );
+            DBUS_SIGNAL_TX.with(|cell| {
+                if let Some(tx) = cell.borrow().as_ref() {
+                    let _ = tx.send_blocking(DbusSignalCmd::NotificationClosed {
+                        id: notif_id,
+                        reason: 2,
+                    });
+                }
+            });
+            close_banner_immediately(notif_id, false);
+        });
+        banner.add_controller(click_gesture);
+    }
+
     close_btn.connect_clicked(move |_| {
+        DBUS_SIGNAL_TX.with(|cell| {
+            if let Some(tx) = cell.borrow().as_ref() {
+                let _ = tx.send_blocking(DbusSignalCmd::NotificationClosed {
+                    id: notif_id,
+                    reason: 2,
+                });
+            }
+        });
         close_banner_immediately(notif_id, true);
     });
     window.connect_close_request(move |_| {
@@ -1053,5 +1340,56 @@ mod tests {
             y = next;
         }
         assert!((y - target_y).abs() < 1e-6);
+    }
+
+    #[test]
+    fn resolves_notification_click_target_and_default_action_cleanly() {
+        assert!(has_default_notification_action(&[
+            "default".to_string(),
+            "Abrir".to_string(),
+            "reply".to_string(),
+            "Responder".to_string(),
+        ]));
+        assert!(!has_default_notification_action(&[
+            "dismiss".to_string(),
+            "Descartar".to_string(),
+        ]));
+
+        let running = vec![
+            "org.mozilla.firefox".to_string(),
+            "brave-origin".to_string(),
+            "org.telegram.desktop".to_string(),
+        ];
+        assert_eq!(
+            resolve_target_running_app(&running, "org.mozilla.firefox", "Firefox", "firefox")
+                .as_deref(),
+            Some("org.mozilla.firefox")
+        );
+        assert_eq!(
+            resolve_target_running_app(&running, "", "Brave Origin", "brave-origin").as_deref(),
+            Some("brave-origin")
+        );
+        assert_eq!(
+            resolve_target_running_app(&running, "", "Telegram", "telegram").as_deref(),
+            Some("org.telegram.desktop")
+        );
+        assert_eq!(
+            resolve_target_running_app(&running, "", "App Inexistente", ""),
+            None
+        );
+
+        assert!(should_skip_dock_push_badge("Malus DE", "", None, false));
+        assert!(should_skip_dock_push_badge(
+            "Firefox",
+            "org.mozilla.firefox",
+            Some("transfer.complete"),
+            false
+        ));
+        assert!(!should_skip_dock_push_badge(
+            "Firefox",
+            "org.mozilla.firefox",
+            None,
+            false
+        ));
     }
 }
