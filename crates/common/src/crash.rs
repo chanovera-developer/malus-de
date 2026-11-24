@@ -221,7 +221,79 @@ pub fn format_panic_report_text(
         },
     );
 
-    sanitize_home_paths(&raw, home_dir)
+    let without_home = sanitize_home_paths(&raw, home_dir);
+    sanitize_sensitive_log_patterns(&without_home)
+}
+
+/// Redacta patrones comunes de credenciales y tokens que puedan aparecer en `session.log`.
+pub fn sanitize_sensitive_log_patterns(text: &str) -> String {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let lower = line.to_ascii_lowercase();
+        let has_sensitive_marker = lower.contains("authorization:")
+            || lower.contains("bearer ")
+            || lower.contains("password=")
+            || lower.contains("password:")
+            || lower.contains("passwd=")
+            || lower.contains("api_key=")
+            || lower.contains("apikey=")
+            || lower.contains("client_secret=")
+            || lower.contains("secret=")
+            || lower.contains("token=")
+            || lower.contains("ipsec-psk=");
+        if has_sensitive_marker {
+            out.push("[LÍNEA REDACTADA POR CONTENER POSIBLE CREDENCIAL]".to_string());
+        } else if (lower.contains("http://") || lower.contains("https://")) && line.contains('@') {
+            out.push(redact_url_userinfo(line));
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    out.join("\n")
+}
+
+fn redact_url_userinfo(line: &str) -> String {
+    let mut result = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(scheme_pos) = rest.find("://") {
+        let after_scheme = scheme_pos + 3;
+        result.push_str(&rest[..after_scheme]);
+        let tail = &rest[after_scheme..];
+        let end_of_token = tail
+            .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '>' | ')'))
+            .unwrap_or(tail.len());
+        let url_body = &tail[..end_of_token];
+        let authority_end = url_body.find('/').unwrap_or(url_body.len());
+        let authority = &url_body[..authority_end];
+        if let Some(at_pos) = authority.rfind('@') {
+            result.push_str("[REDACTED]@");
+            result.push_str(&url_body[at_pos + 1..]);
+        } else {
+            result.push_str(url_body);
+        }
+        rest = &tail[end_of_token..];
+    }
+    result.push_str(rest);
+    result
+}
+
+/// Valida que el endpoint de reportes sea una URL HTTPS segura y no un argumento malicioso para `curl`.
+pub fn validate_crash_endpoint(endpoint: &str) -> Result<String, String> {
+    let trimmed = endpoint.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with('-')
+        || trimmed.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err("URL de endpoint de reportes inválida.".to_string());
+    }
+    let Some(rest) = trimmed.strip_prefix("https://") else {
+        return Err("El endpoint de reportes debe utilizar estrictamente HTTPS.".to_string());
+    };
+    let host = rest.split('/').next().unwrap_or("");
+    if host.is_empty() || host.contains('@') {
+        return Err("El endpoint HTTPS no contiene un host válido.".to_string());
+    }
+    Ok(trimmed.to_string())
 }
 
 /// Reemplaza rutas absolutas del directorio personal del usuario por `~` para evitar filtrar su nombre de usuario.
@@ -337,6 +409,7 @@ pub fn send_report_via_endpoint(
     report_path: &Path,
     report_text: &str,
 ) -> Result<String, String> {
+    let validated_endpoint = validate_crash_endpoint(endpoint)?;
     let filename = report_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -357,6 +430,10 @@ pub fn send_report_via_endpoint(
     let mut child = Command::new("curl")
         .args([
             "-sS",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
             "--max-time",
             "15",
             "-X",
@@ -371,7 +448,8 @@ pub fn send_report_via_endpoint(
             "\n%{http_code}",
             "--data-binary",
             "@-",
-            endpoint,
+            "--",
+            &validated_endpoint,
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -597,5 +675,24 @@ mod tests {
             cfg.endpoint.as_deref(),
             Some("https://example.chano.dev/report")
         );
+    }
+
+    #[test]
+    fn validate_crash_endpoint_enforces_https_and_rejects_flags() {
+        assert!(validate_crash_endpoint("https://crash.chano.dev/report").is_ok());
+        assert!(validate_crash_endpoint("http://crash.chano.dev/report").is_err());
+        assert!(validate_crash_endpoint("file:///etc/passwd").is_err());
+        assert!(validate_crash_endpoint("-K /etc/passwd").is_err());
+        assert!(validate_crash_endpoint("https://user:pass@crash.chano.dev/report").is_err());
+    }
+
+    #[test]
+    fn sanitize_sensitive_log_patterns_redacts_secrets_and_url_creds() {
+        let input = "INFO normal line\nAuthorization: Bearer secret123\nGET https://alice:topsecret@example.com/api\n";
+        let sanitized = sanitize_sensitive_log_patterns(input);
+        assert!(sanitized.contains("INFO normal line"));
+        assert!(!sanitized.contains("secret123"));
+        assert!(!sanitized.contains("topsecret"));
+        assert!(sanitized.contains("https://[REDACTED]@example.com/api"));
     }
 }

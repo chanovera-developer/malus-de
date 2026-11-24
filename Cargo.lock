@@ -1972,15 +1972,20 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-channel",
+ "calloop 0.13.0",
+ "calloop-wayland-source",
  "gio",
  "glib",
  "gtk4",
+ "libc",
  "malus-de-common",
  "serde",
  "serde_json",
  "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
+ "wayland-client",
+ "wayland-protocols-wlr",
 ]
 
 [[package]]
@@ -1988,6 +1993,7 @@ name = "malus-de-common"
 version = "0.1.0"
 dependencies = [
  "gtk4",
+ "libc",
  "serde",
  "serde_json",
  "toml 0.8.23",

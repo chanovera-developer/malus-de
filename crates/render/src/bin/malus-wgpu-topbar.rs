@@ -111,19 +111,37 @@ fn main() -> Result<()> {
     let (_sni_service, sni_watcher) = SniService::new();
     SniService::start_watcher(sni_watcher);
 
-    // 4b. Hilo de sondeo periódico para reloj e indicadores de estado del sistema (1 Hz)
+    // 4b. Hilo de sondeo periódico de bajo consumo para reloj, batería y tema
+    // (sin lanzar `date`, sin escanear `/sys/class/net` descartado, alineado al cambio de minuto)
     {
         let status_tx = status_tx.clone();
-        std::thread::spawn(move || loop {
-            let clock = current_clock_string();
-            let status_items = fetch_current_status_items();
-            let is_dark = malus_de_render::luminance::detect_system_is_dark();
-            let _ = status_tx.send(StatusUpdate {
-                clock,
-                status_items,
-                is_dark,
-            });
-            std::thread::sleep(Duration::from_secs(1));
+        std::thread::spawn(move || {
+            let mut last_battery_check = std::time::Instant::now()
+                .checked_sub(Duration::from_secs(60))
+                .unwrap_or_else(std::time::Instant::now);
+            let mut cached_battery_pct: Option<u32> = None;
+            loop {
+                if last_battery_check.elapsed() >= Duration::from_secs(30) {
+                    cached_battery_pct = read_battery_pct();
+                    last_battery_check = std::time::Instant::now();
+                }
+                let clock = current_clock_string();
+                let status_items = fetch_current_status_items(cached_battery_pct);
+                let is_dark = malus_de_render::luminance::detect_system_is_dark();
+                let _ = status_tx.send(StatusUpdate {
+                    clock,
+                    status_items,
+                    is_dark,
+                });
+                // Despertar en el siguiente borde de minuto (o cada 10 s como máximo para detectar
+                // cambios externos de teclado/tema sin despertar cada segundo).
+                let secs_in_min = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() % 60)
+                    .unwrap_or(0);
+                let until_next_min = (60 - secs_in_min).clamp(1, 10);
+                std::thread::sleep(Duration::from_secs(until_next_min));
+            }
         });
     }
 
@@ -251,7 +269,7 @@ fn main() -> Result<()> {
                                         is_dark
                                     );
                                     let clock = current_clock_string();
-                                    let status_items = fetch_current_status_items();
+                                    let status_items = fetch_current_status_items(read_battery_pct());
                                     let _ = status_tx.send(StatusUpdate {
                                         clock,
                                         status_items,
@@ -260,8 +278,9 @@ fn main() -> Result<()> {
                                 }
                                 IpcMessage::LiquidGlassOpacityChanged { opacity } => {
                                     info!("✨ [TopBar] IPC LiquidGlassOpacityChanged recibido: opacity={:.2}", opacity);
+                                    malus_de_common::config::invalidate_appearance_settings_cache();
                                     let clock = current_clock_string();
-                                    let status_items = fetch_current_status_items();
+                                    let status_items = fetch_current_status_items(read_battery_pct());
                                     let is_dark =
                                         malus_de_render::luminance::detect_system_is_dark();
                                     let _ = status_tx.send(StatusUpdate {
@@ -293,7 +312,7 @@ fn main() -> Result<()> {
     let model = TopBarModel {
         app_name: "Finder".to_string(),
         menus: default_menus_for_app(&None),
-        status_items: fetch_current_status_items(),
+        status_items: fetch_current_status_items(read_battery_pct()),
         clock_text: current_clock_string(),
         is_dark_background: malus_de_render::luminance::detect_system_is_dark(),
         active_popover: None,
@@ -382,29 +401,26 @@ fn default_menus_for_app(app_id: &Option<String>) -> Vec<String> {
 }
 
 fn current_clock_string() -> String {
-    // Formato estilo macOS en español (ej. "Jue 5 Nov  00:23")
-    if let Ok(out) = std::process::Command::new("date")
-        .arg("+%a %-d %b  %H:%M")
-        .output()
-    {
-        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if !s.is_empty() {
-            let mut chars = s.chars();
-            if let Some(first) = chars.next() {
-                return first.to_uppercase().collect::<String>() + chars.as_str();
-            }
-        }
-    }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let hours = (now / 3600) % 24;
-    let minutes = (now / 60) % 60;
-    format!("{:02}:{:02}", hours, minutes)
+    malus_de_common::format_macos_clock_now()
 }
 
-fn fetch_current_status_items() -> Vec<StatusItem> {
+fn read_battery_pct() -> Option<u32> {
+    std::fs::read_dir("/sys/class/power_supply")
+        .ok()
+        .and_then(|entries| {
+            for entry in entries.flatten() {
+                let cap_path = entry.path().join("capacity");
+                if let Ok(s) = std::fs::read_to_string(cap_path) {
+                    if let Ok(val) = s.trim().parse::<u32>() {
+                        return Some(val);
+                    }
+                }
+            }
+            None
+        })
+}
+
+fn fetch_current_status_items(battery_pct: Option<u32>) -> Vec<StatusItem> {
     let mut items = Vec::new();
 
     // 0. Bandeja del sistema (expansor estilo Bartender)
@@ -423,44 +439,12 @@ fn fetch_current_status_items() -> Vec<StatusItem> {
     );
 
     // 2. Wi-Fi (Vectorial Font Awesome 6 Free Solid)
-    let _wifi_up = std::fs::read_dir("/sys/class/net")
-        .ok()
-        .map(|entries| {
-            entries.flatten().any(|e| {
-                let name = e.file_name();
-                let name_str = name.to_string_lossy();
-                if name_str.starts_with("wl") {
-                    let operstate_path = e.path().join("operstate");
-                    std::fs::read_to_string(operstate_path)
-                        .map(|s| s.trim() == "up")
-                        .unwrap_or(false)
-                } else {
-                    false
-                }
-            })
-        })
-        .unwrap_or(false);
-
     items.push(StatusItem::new("status:wifi", "\u{F1EB}").with_size(13.0));
 
     // 3. Salida de audio / Volumen
     items.push(StatusItem::new("status:volume", "\u{F028}").with_size(13.0));
 
     // 4. Batería (Dispositivos HID o equipo portátil)
-    let battery_pct = std::fs::read_dir("/sys/class/power_supply")
-        .ok()
-        .and_then(|entries| {
-            for entry in entries.flatten() {
-                let cap_path = entry.path().join("capacity");
-                if let Ok(s) = std::fs::read_to_string(cap_path) {
-                    if let Ok(val) = s.trim().parse::<u32>() {
-                        return Some(val);
-                    }
-                }
-            }
-            None
-        });
-
     if let Some(pct) = battery_pct {
         items.push(StatusItem::new("status:battery", format!("\u{F240} {}%", pct)).with_size(12.0));
     } else {

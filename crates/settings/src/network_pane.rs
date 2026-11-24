@@ -2001,14 +2001,9 @@ fn run_firewall_cmd(args: &[&str]) -> Result<String, String> {
 }
 
 fn set_firewalld_enabled(enable: bool) -> Result<(), String> {
-    let action = if enable {
-        "enable --now"
-    } else {
-        "disable --now"
-    };
-    let script = format!("systemctl {action} firewalld");
+    let subcmd = if enable { "enable" } else { "disable" };
     let out = Command::new("pkexec")
-        .args(["sh", "-c", &script])
+        .args(["systemctl", subcmd, "--now", "--", "firewalld"])
         .output()
         .map_err(|e| format!("pkexec: {e}"))?;
     if out.status.success() {
@@ -2023,6 +2018,30 @@ fn set_firewalld_enabled(enable: bool) -> Result<(), String> {
     }
 }
 
+fn is_valid_firewall_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 64
+        && !s.starts_with('-')
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+fn is_valid_firewall_port_spec(s: &str) -> bool {
+    let Some((ports, proto)) = s.split_once('/') else {
+        return false;
+    };
+    if !matches!(proto, "tcp" | "udp" | "sctp" | "dccp") {
+        return false;
+    }
+    let parts: Vec<&str> = ports.split('-').collect();
+    if parts.is_empty() || parts.len() > 2 {
+        return false;
+    }
+    parts
+        .iter()
+        .all(|p| !p.is_empty() && p.parse::<u16>().is_ok_and(|n| n > 0))
+}
+
 fn apply_firewall_options_batch(
     old_snap: &FirewallSnapshot,
     previous_zone: &str,
@@ -2030,7 +2049,7 @@ fn apply_firewall_options_batch(
     stealth: bool,
     new_rules: &[FirewallAppRule],
 ) -> Result<(), String> {
-    let mut cmds: Vec<String> = Vec::new();
+    let mut ops: Vec<String> = Vec::new();
     let target_zone = if block_all {
         "block".to_string()
     } else if previous_zone.is_empty() || previous_zone == "block" || previous_zone == "drop" {
@@ -2039,25 +2058,19 @@ fn apply_firewall_options_batch(
         previous_zone.to_string()
     };
 
+    if !is_valid_firewall_name(&target_zone) {
+        return Err(format!("Zona de firewall inválida: {target_zone}"));
+    }
+
     if block_all != old_snap.block_all_incoming {
-        cmds.push(format!(
-            "firewall-cmd --set-default-zone={}",
-            shell_escape_simple(&target_zone)
-        ));
+        ops.push(format!("set-default-zone:{target_zone}"));
     }
 
     if stealth != old_snap.stealth_mode {
-        let z_flag = format!("--zone={}", shell_escape_simple(&target_zone));
         if stealth {
-            cmds.push(format!(
-                "firewall-cmd --permanent {z_flag} --add-icmp-block=echo-request"
-            ));
-            cmds.push("sysctl -w net.ipv4.icmp_echo_ignore_all=1".to_string());
+            ops.push(format!("stealth-on:{target_zone}"));
         } else {
-            cmds.push(format!(
-                "firewall-cmd --permanent {z_flag} --remove-icmp-block=echo-request"
-            ));
-            cmds.push("sysctl -w net.ipv4.icmp_echo_ignore_all=0".to_string());
+            ops.push(format!("stealth-off:{target_zone}"));
         }
     }
 
@@ -2074,44 +2087,83 @@ fn apply_firewall_options_batch(
         }
     }
 
-    let z_flag = format!("--zone={}", shell_escape_simple(&target_zone));
     for to_add in desired_allowed.difference(&old_allowed) {
         if is_port_spec(to_add) {
-            cmds.push(format!(
-                "firewall-cmd --permanent {z_flag} --add-port={}",
-                shell_escape_simple(to_add)
-            ));
+            if !is_valid_firewall_port_spec(to_add) {
+                return Err(format!("Especificación de puerto inválida: {to_add}"));
+            }
+            ops.push(format!("add-port:{target_zone}:{to_add}"));
         } else {
-            cmds.push(format!(
-                "firewall-cmd --permanent {z_flag} --add-service={}",
-                shell_escape_simple(to_add)
-            ));
+            if !is_valid_firewall_name(to_add) {
+                return Err(format!("Nombre de servicio inválido: {to_add}"));
+            }
+            ops.push(format!("add-service:{target_zone}:{to_add}"));
         }
     }
     for to_rem in old_allowed.difference(&desired_allowed) {
         if is_port_spec(to_rem) {
-            cmds.push(format!(
-                "firewall-cmd --permanent {z_flag} --remove-port={}",
-                shell_escape_simple(to_rem)
-            ));
+            if !is_valid_firewall_port_spec(to_rem) {
+                return Err(format!("Especificación de puerto inválida: {to_rem}"));
+            }
+            ops.push(format!("remove-port:{target_zone}:{to_rem}"));
         } else {
-            cmds.push(format!(
-                "firewall-cmd --permanent {z_flag} --remove-service={}",
-                shell_escape_simple(to_rem)
-            ));
+            if !is_valid_firewall_name(to_rem) {
+                return Err(format!("Nombre de servicio inválido: {to_rem}"));
+            }
+            ops.push(format!("remove-service:{target_zone}:{to_rem}"));
         }
     }
 
-    if cmds.is_empty() {
+    if ops.is_empty() {
         return Ok(());
     }
-    cmds.push("firewall-cmd --reload".to_string());
-    let script = cmds.join(" && ");
 
-    let out = Command::new("pkexec")
-        .args(["sh", "-c", &script])
-        .output()
-        .map_err(|e| format!("pkexec: {e}"))?;
+    // Script completamente estático sin interpolación de datos de usuario; todos los valores
+    // pasan como argumentos posicionales validados.
+    const FIREWALL_BATCH_RUNNER: &str = r#"set -e
+for op in "$@"; do
+  case "$op" in
+    set-default-zone:*)
+      firewall-cmd "--set-default-zone=${op#set-default-zone:}"
+      ;;
+    stealth-on:*)
+      firewall-cmd --permanent "--zone=${op#stealth-on:}" --add-icmp-block=echo-request
+      sysctl -w net.ipv4.icmp_echo_ignore_all=1
+      ;;
+    stealth-off:*)
+      firewall-cmd --permanent "--zone=${op#stealth-off:}" --remove-icmp-block=echo-request
+      sysctl -w net.ipv4.icmp_echo_ignore_all=0
+      ;;
+    add-port:*)
+      rest="${op#add-port:}"
+      firewall-cmd --permanent "--zone=${rest%%:*}" "--add-port=${rest#*:}"
+      ;;
+    remove-port:*)
+      rest="${op#remove-port:}"
+      firewall-cmd --permanent "--zone=${rest%%:*}" "--remove-port=${rest#*:}"
+      ;;
+    add-service:*)
+      rest="${op#add-service:}"
+      firewall-cmd --permanent "--zone=${rest%%:*}" "--add-service=${rest#*:}"
+      ;;
+    remove-service:*)
+      rest="${op#remove-service:}"
+      firewall-cmd --permanent "--zone=${rest%%:*}" "--remove-service=${rest#*:}"
+      ;;
+    *)
+      exit 2
+      ;;
+  esac
+done
+firewall-cmd --reload
+"#;
+
+    let mut cmd = Command::new("pkexec");
+    cmd.args(["sh", "-c", FIREWALL_BATCH_RUNNER, "malus-firewall-batch"]);
+    for op in &ops {
+        cmd.arg(op);
+    }
+    let out = cmd.output().map_err(|e| format!("pkexec: {e}"))?;
     if out.status.success() {
         Ok(())
     } else {
@@ -2122,14 +2174,6 @@ fn apply_firewall_options_batch(
             err
         })
     }
-}
-
-fn shell_escape_simple(s: &str) -> String {
-    let clean: String = s
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '/' | '.' | ':'))
-        .collect();
-    format!("'{clean}'")
 }
 
 pub(crate) fn is_port_spec(s: &str) -> bool {
@@ -2564,5 +2608,20 @@ mod tests {
         assert_eq!(merged.len(), 4);
         assert_eq!(merged[0].app_name, "8080/tcp");
         assert_eq!(merged[2].app_name, "python3");
+    }
+
+    #[test]
+    fn validates_firewall_names_and_port_specs() {
+        assert!(is_valid_firewall_name("public"));
+        assert!(is_valid_firewall_name("dhcpv6-client"));
+        assert!(!is_valid_firewall_name("--bad"));
+        assert!(!is_valid_firewall_name("ssh;id"));
+        assert!(!is_valid_firewall_name(""));
+
+        assert!(is_valid_firewall_port_spec("8080/tcp"));
+        assert!(is_valid_firewall_port_spec("5000-5010/udp"));
+        assert!(!is_valid_firewall_port_spec("0/tcp"));
+        assert!(!is_valid_firewall_port_spec("8080/http"));
+        assert!(!is_valid_firewall_port_spec("8080/tcp;rm"));
     }
 }

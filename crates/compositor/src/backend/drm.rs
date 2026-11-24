@@ -246,17 +246,39 @@ fn spawn_emergency_zap_watchdog(session_active: Arc<AtomicBool>, session_locked:
                     || session_locked.load(Ordering::Relaxed)
                 {
                     key_state.reset();
-                    std::thread::sleep(Duration::from_millis(80));
+                    std::thread::sleep(Duration::from_millis(250));
                     continue;
                 }
-                if last_rescan.elapsed() >= Duration::from_secs(5) {
-                    last_rescan = Instant::now();
-                    let refreshed = open_readable_evdev_keyboards();
-                    if !refreshed.is_empty() {
-                        keyboards = refreshed;
+
+                // Esperar pasivamente eventos del kernel con `poll()` (timeout 500 ms) en lugar
+                // de despertar el hilo 28 veces por segundo en reposo.
+                let mut needs_rescan = last_rescan.elapsed() >= Duration::from_secs(30);
+                let mut readable_indices = Vec::new();
+                {
+                    let mut poll_fds: Vec<rustix::event::PollFd<'_>> = keyboards
+                        .iter()
+                        .map(|kb| {
+                            rustix::event::PollFd::new(kb, rustix::event::PollFlags::IN)
+                        })
+                        .collect();
+                    let ready = rustix::event::poll(&mut poll_fds, 500).unwrap_or(0);
+                    if ready > 0 {
+                        for (idx, pfd) in poll_fds.iter().enumerate() {
+                            let revents = pfd.revents();
+                            if revents.intersects(
+                                rustix::event::PollFlags::ERR
+                                    | rustix::event::PollFlags::HUP
+                                    | rustix::event::PollFlags::NVAL,
+                            ) {
+                                needs_rescan = true;
+                            } else if revents.contains(rustix::event::PollFlags::IN) {
+                                readable_indices.push(idx);
+                            }
+                        }
                     }
                 }
-                for kb in &mut keyboards {
+                for idx in readable_indices {
+                    let kb = &mut keyboards[idx];
                     loop {
                         match kb.read(&mut buf) {
                             Ok(n) if n >= EVENT_SIZE => {
@@ -273,7 +295,14 @@ fn spawn_emergency_zap_watchdog(session_active: Arc<AtomicBool>, session_locked:
                         }
                     }
                 }
-                std::thread::sleep(Duration::from_millis(35));
+
+                if needs_rescan {
+                    last_rescan = Instant::now();
+                    let refreshed = open_readable_evdev_keyboards();
+                    if !refreshed.is_empty() {
+                        keyboards = refreshed;
+                    }
+                }
             }
         })
         .ok();
@@ -468,6 +497,10 @@ struct DrmOutputSurface {
     last_window_geometries: std::collections::HashMap<
         smithay::backend::renderer::element::Id,
         (Rectangle<i32, Physical>, bool),
+    >,
+    last_window_logical_geoms: std::collections::HashMap<
+        smithay::backend::renderer::element::Id,
+        (Rectangle<i32, Logical>, bool),
     >,
     window_redraw_shadow_blur:
         std::collections::HashMap<smithay::backend::renderer::element::Id, usize>,
@@ -1053,6 +1086,7 @@ fn create_drm_output_surface_for_connector(
         cursor_history: std::collections::VecDeque::with_capacity(4),
         extra_damage_history: std::collections::VecDeque::with_capacity(4),
         last_window_geometries: std::collections::HashMap::new(),
+        last_window_logical_geoms: std::collections::HashMap::new(),
         window_redraw_shadow_blur: std::collections::HashMap::new(),
         popup_effect_ids: std::collections::HashMap::new(),
         last_popup_count: 0,
@@ -3626,7 +3660,7 @@ pub fn run_drm() -> Result<()> {
         let dispatch_timeout = if has_ready_output {
             Duration::ZERO
         } else {
-            Duration::from_millis(8)
+            Duration::from_millis(16)
         };
         let _ = event_loop.dispatch(Some(dispatch_timeout), &mut state);
         let _ = display.flush_clients();
@@ -3669,6 +3703,127 @@ pub fn run_drm() -> Result<()> {
                     .space
                     .output_geometry(&out_surface.output)
                     .unwrap_or_default();
+                let out_name = out_surface.output.name();
+
+                // Fast-path en reposo / flip pendiente: evitar construir todos los elementos de
+                // escena (`render_elements_from_surface_tree`, SSD, oclusión, overlays) cuando
+                // este monitor no necesita renderizar en este ciclo.
+                let has_pending_captures = !state.pending_black_holes.is_empty()
+                    || !state.active_animations.is_empty()
+                    || theme_capture_request.is_some()
+                    || workspace_switch_pending;
+                if out_surface.is_flip_pending() && !has_pending_captures {
+                    continue;
+                }
+                if !has_pending_captures {
+                    let quick_cursor_point = state.seat.get_pointer().and_then(|pointer| {
+                        let loc = pointer.current_location();
+                        if output_geo.to_f64().contains(loc)
+                            && !matches!(&state.cursor_status, CursorImageStatus::Hidden)
+                        {
+                            let px = ((loc.x - output_geo.loc.x as f64) * scale).round() as i32;
+                            let py = ((loc.y - output_geo.loc.y as f64) * scale).round() as i32;
+                            Some((px, py))
+                        } else {
+                            None
+                        }
+                    });
+                    let quick_has_commits = state.surface_commit_counter
+                        != out_surface.last_commit_counter
+                        || state.output_commit_counter(&out_name)
+                            != out_surface.last_output_commit_counter;
+                    let quick_cursor_changed = quick_cursor_point
+                        != out_surface.last_cursor_draw_point
+                        || state.cursor_status != out_surface.last_cursor_status;
+                    let quick_has_effects = out_surface.pending_damage_buffers > 0
+                        || out_surface.full_damage_buffers > 0
+                        || out_surface.dock_redraw_buffers > 0
+                        || quick_has_commits
+                        || quick_cursor_changed
+                        || state.dnd_drop_hold.is_some()
+                        || state.active_dnd_icon_draw_location().is_some()
+                        || expose_animating
+                        || expose_just_closed
+                        || out_surface.last_expose_revision != state.expose.render_revision
+                        || out_surface.last_workspace_revision != state.workspace_revision
+                        || active_black_holes.iter().any(|bh| bh.output_name == out_name)
+                        || !state.snap_transitions.is_empty()
+                        || state.snap_preview.is_some()
+                        || state.theme_transition_started_at.is_some()
+                        || state.workspace_transition.is_some()
+                        || !state.pending_screenshot_requests.is_empty()
+                        || state.spotlight.should_render_on_output(&out_name)
+                        || state.spotlight.has_active_drag_or_poof()
+                        || state.screenshot_ui.should_render_on_output(&out_name)
+                        || state.snap_layouts.should_render_on_output(&out_name)
+                        || state.media_keys.should_render_on_output(&out_name)
+                        || state.deck_should_render_on_output(&out_name);
+
+                    if !quick_has_effects {
+                        // Verificar rápidamente si cambiaron popups o geometrías/foco de ventanas en este monitor
+                        let kb_focus = state.seat.get_keyboard().and_then(|k| k.current_focus());
+                        let mut quick_win_count = 0usize;
+                        let mut quick_win_changed = false;
+                        for window in state.space.elements() {
+                            let Some(loc) = state.space.element_location(window) else {
+                                continue;
+                            };
+                            let Some(main_surface) = window.wl_surface() else {
+                                continue;
+                            };
+                            let geo = window.geometry();
+                            let win_rect = Rectangle::new(loc, geo.size);
+                            if !output_geo.overlaps(win_rect) {
+                                continue;
+                            }
+                            quick_win_count += 1;
+                            let root_id =
+                                smithay::backend::renderer::element::Id::from_wayland_resource(
+                                    main_surface.as_ref(),
+                                );
+                            let is_active = window
+                                .toplevel()
+                                .map(|t| {
+                                    t.current_state().states.contains(
+                                        smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated,
+                                    )
+                                })
+                                .unwrap_or(false)
+                                || kb_focus.as_ref() == Some(main_surface.as_ref());
+                            if out_surface.last_window_logical_geoms.get(&root_id)
+                                != Some(&(win_rect, is_active))
+                            {
+                                quick_win_changed = true;
+                                break;
+                            }
+                        }
+                        if !quick_win_changed
+                            && quick_win_count == out_surface.last_window_logical_geoms.len()
+                        {
+                            let quick_layer_map =
+                                smithay::desktop::layer_map_for_output(&out_surface.output);
+                            let mut quick_popups = state.active_popups.len();
+                            for surface in quick_layer_map.layers() {
+                                if matches!(
+                                    surface.namespace(),
+                                    "malus-top-bar"
+                                        | "malus-dock"
+                                        | "malus-wallpaper"
+                                        | "malus-desktop-icons"
+                                ) {
+                                    quick_popups +=
+                                        smithay::desktop::PopupManager::popups_for_surface(
+                                            surface.wl_surface(),
+                                        )
+                                        .count();
+                                }
+                            }
+                            if quick_popups == out_surface.last_popup_count {
+                                continue;
+                            }
+                        }
+                    }
+                }
 
                 // Preparar animaciones Genie activas que intersecten este monitor
                 let now = Instant::now();
@@ -3983,7 +4138,11 @@ pub fn run_drm() -> Result<()> {
                                 (loc, geo.size, false)
                             };
 
-                        let uses_ssd = crate::state::window_uses_ssd(window);
+                        let win_flags = crate::state::WindowRenderFlags::from_window(
+                            window,
+                            main_surface.as_ref(),
+                        );
+                        let uses_ssd = win_flags.uses_ssd;
                         let ssd_top = if uses_ssd {
                             crate::ssd::SSD_TITLEBAR_HEIGHT
                         } else {
@@ -4046,15 +4205,7 @@ pub fn run_drm() -> Result<()> {
                                 bool,
                             )> = Vec::new();
                             let mut popup_shadow_rects = Vec::new();
-                            let popup_effects_enabled =
-                                crate::state::app_id_for_surface(main_surface.as_ref())
-                                    .map(|app_id| {
-                                        !app_id.contains("org.malus_de.dock")
-                                            && !app_id.contains("malus-de-dock")
-                                            && !crate::state::is_browser_identifier(&app_id)
-                                    })
-                                    .unwrap_or(true)
-                                    && !crate::state::is_browser_window(&window);
+                            let popup_effects_enabled = win_flags.popup_effects_enabled;
                             let mut raw_popups: Vec<_> =
                                 smithay::desktop::PopupManager::popups_for_surface(
                                     main_surface.as_ref(),
@@ -4100,9 +4251,9 @@ pub fn run_drm() -> Result<()> {
                                 states.contains(smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated)
                             }).unwrap_or(false) || (state.seat.get_keyboard().and_then(|k| k.current_focus()).as_ref() == Some(main_surface.as_ref()));
 
-                            let is_firefox = crate::state::is_firefox_window(&window);
-                            let is_translucent = crate::state::is_translucent_window(&window);
-                            let is_branches = crate::state::is_branches_window(&window);
+                            let is_firefox = win_flags.is_firefox;
+                            let is_translucent = win_flags.is_translucent;
+                            let is_branches = win_flags.is_branches;
                             let root_id =
                                 smithay::backend::renderer::element::Id::from_wayland_resource(
                                     main_surface.as_ref(),
@@ -7189,7 +7340,7 @@ pub fn run_drm() -> Result<()> {
                                 ) {
                                     if let Ok(pixels) = renderer.map_texture(&mapping) {
                                         if pixels.len() == (cl_w as usize * cl_h as usize * 4) {
-                                            session.push_frame(pixels.to_vec());
+                                            session.push_frame_slice(pixels);
                                         }
                                     }
                                 }
@@ -7254,6 +7405,33 @@ pub fn run_drm() -> Result<()> {
                         out_surface
                             .last_window_geometries
                             .insert(root_id.clone(), (*win_rect, *is_active));
+                    }
+                    out_surface.last_window_logical_geoms.clear();
+                    let kb_focus = state.seat.get_keyboard().and_then(|k| k.current_focus());
+                    for window in state.space.elements() {
+                        if let (Some(loc), Some(main_surface)) =
+                            (state.space.element_location(window), window.wl_surface())
+                        {
+                            let win_rect = Rectangle::new(loc, window.geometry().size);
+                            if output_geo.overlaps(win_rect) {
+                                let root_id =
+                                    smithay::backend::renderer::element::Id::from_wayland_resource(
+                                        main_surface.as_ref(),
+                                    );
+                                let is_active = window
+                                    .toplevel()
+                                    .map(|t| {
+                                        t.current_state().states.contains(
+                                            smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Activated,
+                                        )
+                                    })
+                                    .unwrap_or(false)
+                                    || kb_focus.as_ref() == Some(main_surface.as_ref());
+                                out_surface
+                                    .last_window_logical_geoms
+                                    .insert(root_id, (win_rect, is_active));
+                            }
+                        }
                     }
                 }
             }
@@ -7390,6 +7568,9 @@ pub fn run_drm() -> Result<()> {
 
         for output in state.space.outputs() {
             let output_rendered = rendered_outputs.contains(output);
+            if !output_rendered {
+                continue;
+            }
             let has_fullscreen = state.has_fullscreen_window_on_output(output);
             let refresh_nanos = output
                 .current_mode()

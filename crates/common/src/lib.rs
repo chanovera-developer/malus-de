@@ -120,6 +120,42 @@ pub fn read_drag_anchor(expected_path: &std::path::Path) -> Option<(f64, f64)> {
     Some((ox, oy))
 }
 
+/// Formatea la fecha y hora local al estilo macOS (p. ej. `"Jue 5 Nov  00:23"`)
+/// directamente en proceso vía `libc::localtime_r` + `libc::strftime`, sin lanzar `date`.
+pub fn format_macos_clock_now() -> String {
+    let mut now: libc::time_t = 0;
+    unsafe {
+        libc::time(&mut now);
+    }
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let ok = unsafe { !libc::localtime_r(&now, &mut tm).is_null() };
+    if ok {
+        let mut buf = [0u8; 64];
+        let fmt = c"%a %-d %b  %H:%M";
+        let len = unsafe {
+            libc::strftime(
+                buf.as_mut_ptr() as *mut libc::c_char,
+                buf.len(),
+                fmt.as_ptr(),
+                &tm,
+            )
+        };
+        if len > 0 {
+            let s = String::from_utf8_lossy(&buf[..len]).trim().to_string();
+            let mut chars = s.chars();
+            if let Some(first) = chars.next() {
+                return first.to_uppercase().collect::<String>() + chars.as_str();
+            }
+        }
+        return format!("{:02}:{:02}", tm.tm_hour, tm.tm_min);
+    }
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    format!("{:02}:{:02}", (secs / 3600) % 24, (secs / 60) % 60)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

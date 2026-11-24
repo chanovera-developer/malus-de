@@ -141,10 +141,15 @@ if import_host_bookmarks:
     import_marker.touch()
 PY
 
+MALUS_BUTTON_LAYOUT="close,minimize,maximize:"
+if grep -Eq '^[[:space:]]*window_buttons_right[[:space:]]*=[[:space:]]*true' "$XDG_CONFIG_HOME/appearance-settings.toml" 2>/dev/null; then
+    MALUS_BUTTON_LAYOUT=":minimize,maximize,close"
+fi
+
 if [ ! -f "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile" ]; then
-cat << 'EOF' > "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile"
+cat << EOF > "$XDG_CONFIG_HOME/glib-2.0/settings/keyfile"
 [org/gnome/desktop/wm/preferences]
-button-layout='close,minimize,maximize:'
+button-layout='$MALUS_BUTTON_LAYOUT'
 
 [org/gnome/desktop/interface]
 color-scheme='prefer-light'
@@ -164,8 +169,8 @@ overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
 EOF
 fi
 
-# Aplicar y asegurar el diseño macOS en el keyfile aislado de Malus DE
-gsettings set org.gnome.desktop.wm.preferences button-layout "close,minimize,maximize:" || true
+# Aplicar y asegurar el diseño configurado de botones en el keyfile aislado de Malus DE
+gsettings set org.gnome.desktop.wm.preferences button-layout "$MALUS_BUTTON_LAYOUT" || true
 
 # Nautilus usa esta configuración aislada para montar medios extraíbles.
 if ! gsettings set org.gnome.desktop.media-handling automount true; then
@@ -229,7 +234,7 @@ export XCURSOR_SIZE="$CURSOR_SIZE"
 if [ ! -f "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" ]; then
 cat << EOF > "$XDG_CONFIG_HOME/gtk-3.0/settings.ini"
 [Settings]
-gtk-decoration-layout=close,minimize,maximize:
+gtk-decoration-layout=$MALUS_BUTTON_LAYOUT
 gtk-application-prefer-dark-theme=0
 gtk-cursor-theme-name=$CURSOR_THEME
 gtk-cursor-theme-size=$CURSOR_SIZE
@@ -238,13 +243,13 @@ gtk-theme-name=Adwaita
 EOF
 else
     sed -i "s/^gtk-cursor-theme-name=.*/gtk-cursor-theme-name=$CURSOR_THEME/" "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" 2>/dev/null || true
-    sed -i "s/^gtk-decoration-layout=.*/gtk-decoration-layout=close,minimize,maximize:/" "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" 2>/dev/null || true
+    sed -i "s/^gtk-decoration-layout=.*/gtk-decoration-layout=$MALUS_BUTTON_LAYOUT/" "$XDG_CONFIG_HOME/gtk-3.0/settings.ini" 2>/dev/null || true
 fi
 
 if [ ! -f "$XDG_CONFIG_HOME/gtk-4.0/settings.ini" ]; then
 cat << EOF > "$XDG_CONFIG_HOME/gtk-4.0/settings.ini"
 [Settings]
-gtk-decoration-layout=close,minimize,maximize:
+gtk-decoration-layout=$MALUS_BUTTON_LAYOUT
 gtk-application-prefer-dark-theme=0
 gtk-cursor-theme-name=$CURSOR_THEME
 gtk-cursor-theme-size=$CURSOR_SIZE
@@ -253,7 +258,7 @@ gtk-theme-name=Adwaita
 EOF
 else
     sed -i "s/^gtk-cursor-theme-name=.*/gtk-cursor-theme-name=$CURSOR_THEME/" "$XDG_CONFIG_HOME/gtk-4.0/settings.ini" 2>/dev/null || true
-    sed -i "s/^gtk-decoration-layout=.*/gtk-decoration-layout=close,minimize,maximize:/" "$XDG_CONFIG_HOME/gtk-4.0/settings.ini" 2>/dev/null || true
+    sed -i "s/^gtk-decoration-layout=.*/gtk-decoration-layout=$MALUS_BUTTON_LAYOUT/" "$XDG_CONFIG_HOME/gtk-4.0/settings.ini" 2>/dev/null || true
 fi
 
 DEFAULT_GTK_ICON_THEME="Malus"

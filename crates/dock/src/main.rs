@@ -757,6 +757,7 @@ fn load_css() {
         gtk4::gio::Cancellable::NONE,
     ) {
         monitor.connect_changed(|_, _, _, _| {
+            malus_de_common::config::invalidate_appearance_settings_cache();
             apply_dock_accent_color(malus_de_common::config::load_accent_color_index());
             apply_dock_liquid_glass_opacity(malus_de_common::config::load_liquid_glass_opacity());
             DOCK_REPAINT_TARGETS.with(|cell| {
@@ -796,36 +797,63 @@ fn create_popover_surface(menu_box: &GtkBox) -> Overlay {
     background.set_hexpand(true);
     background.set_vexpand(false);
 
-    match dock_popover_svg_path() {
-        Some(path) => match std::fs::read_to_string(&path) {
-            Ok(svg_template) => {
-                background.set_draw_func(move |area, context, width, height| {
-                    if width <= 0 || height <= 0 {
-                        return;
-                    }
-
-                    match themed_popover_svg(&svg_template, area, width, height) {
-                        Ok(svg) => {
-                            gtk4::gdk::prelude::GdkCairoContextExt::set_source_pixbuf(
-                                context, &svg, 0.0, 0.0,
-                            );
-                            if let Err(error) = context.paint() {
-                                warn!("No se pudo dibujar el fondo SVG del popover: {error}");
-                            }
-                        }
-                        Err(error) => {
-                            warn!("No se pudo adaptar el SVG del popover al tema: {error}");
-                        }
-                    }
-                });
-            }
+    static POPOVER_SVG_TEMPLATE: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    let svg_template_opt = POPOVER_SVG_TEMPLATE.get_or_init(|| {
+        let path = dock_popover_svg_path()?;
+        match std::fs::read_to_string(&path) {
+            Ok(s) => Some(s),
             Err(error) => {
                 warn!("No se pudo leer el SVG del popover del dock: {error}");
+                None
             }
-        },
-        None => {
-            warn!("No se encontró el SVG del popover del dock.");
         }
+    });
+
+    if let Some(svg_template) = svg_template_opt.as_deref() {
+        let svg_template = svg_template.to_string();
+        let cached_pixbuf: RefCell<Option<((i32, i32, bool, i32), gtk4::gdk_pixbuf::Pixbuf)>> =
+            RefCell::new(None);
+        background.set_draw_func(move |area, context, width, height| {
+            if width <= 0 || height <= 0 {
+                return;
+            }
+            let is_dark = libadwaita::StyleManager::default().is_dark();
+            let glass_milli =
+                (malus_de_common::config::current_liquid_glass_scale() * 1000.0).round() as i32;
+            let cache_key = (width, height, is_dark, glass_milli);
+            let mut cache = cached_pixbuf.borrow_mut();
+            let pixbuf = if let Some((k, ref pb)) = *cache {
+                if k == cache_key {
+                    Some(pb.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let pixbuf = match pixbuf {
+                Some(pb) => Ok(pb),
+                None => themed_popover_svg(&svg_template, area, width, height).map(|pb| {
+                    *cache = Some((cache_key, pb.clone()));
+                    pb
+                }),
+            };
+            match pixbuf {
+                Ok(svg) => {
+                    gtk4::gdk::prelude::GdkCairoContextExt::set_source_pixbuf(
+                        context, &svg, 0.0, 0.0,
+                    );
+                    if let Err(error) = context.paint() {
+                        warn!("No se pudo dibujar el fondo SVG del popover: {error}");
+                    }
+                }
+                Err(error) => {
+                    warn!("No se pudo adaptar el SVG del popover al tema: {error}");
+                }
+            }
+        });
+    } else {
+        warn!("No se encontró el SVG del popover del dock.");
     }
 
     overlay.set_child(Some(&background));
@@ -2687,17 +2715,46 @@ fn build_dock_ui(app: &Application) {
         }
     });
 
-    // Monitor periódico para actualizar icono de papelera (vacía vs llena)
+    // Monitor reactivo de papelera (GVFS monitor en vez de polling cada 3 s en hilo GTK)
     let trash_img_ref = trash_img;
-    glib::timeout_add_local(std::time::Duration::from_secs(3), move || {
-        let is_full = check_trash_full();
-        trash_img_ref.set_icon_name(Some(if is_full {
-            "user-trash-full"
-        } else {
-            "user-trash"
-        }));
-        glib::ControlFlow::Continue
-    });
+    let last_trash_full: Rc<Cell<Option<bool>>> = Rc::new(Cell::new(None));
+    let sync_trash_icon: Rc<dyn Fn()> = {
+        let img = trash_img_ref.clone();
+        let last = last_trash_full.clone();
+        Rc::new(move || {
+            let is_full = check_trash_full();
+            if last.get() != Some(is_full) {
+                last.set(Some(is_full));
+                img.set_icon_name(Some(if is_full {
+                    "user-trash-full"
+                } else {
+                    "user-trash"
+                }));
+            }
+        })
+    };
+    sync_trash_icon();
+    let trash_file = gtk4::gio::File::for_uri("trash:///");
+    match trash_file.monitor_directory(
+        gtk4::gio::FileMonitorFlags::NONE,
+        gtk4::gio::Cancellable::NONE,
+    ) {
+        Ok(monitor) => {
+            let sync_cb = sync_trash_icon.clone();
+            monitor.connect_changed(move |_, _, _, _| {
+                sync_cb();
+            });
+            // Mantener vivo el monitor durante toda la vida de la app
+            std::mem::forget(monitor);
+        }
+        Err(_) => {
+            let sync_fallback = sync_trash_icon.clone();
+            glib::timeout_add_local(std::time::Duration::from_secs(15), move || {
+                sync_fallback();
+                glib::ControlFlow::Continue
+            });
+        }
+    }
 
     if let Some(display) = gtk4::gdk::Display::default() {
         let win_mon = window.clone();
@@ -4857,11 +4914,25 @@ fn populate_dock_app_menu_box(
             p_fq.popdown();
             info!("🛑 Forzando salida de {}", app_name_fq);
             for m in &matchers_fq {
-                let _ = Command::new("pkill").args(["-f", m]).status();
+                let pattern = m.trim();
+                if pattern.len() < 3
+                    || pattern.starts_with('-')
+                    || !pattern
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+                {
+                    continue;
+                }
+                let _ = Command::new("pkill").args(["-x", "--", pattern]).status();
             }
             let parts: Vec<&str> = cmd_fq.split_whitespace().collect();
             if let Some((exe, _)) = parts.split_first() {
-                let _ = Command::new("killall").arg(exe).status();
+                if let Some(base) = std::path::Path::new(exe).file_name().and_then(|n| n.to_str())
+                {
+                    if !base.is_empty() && !base.starts_with('-') {
+                        let _ = Command::new("killall").args(["--", base]).status();
+                    }
+                }
             }
         });
         menu_box.append(&btn_force_quit);
@@ -5092,15 +5163,6 @@ fn spawn_dock_app(name: &str, cmd: &str, extra_args: &[&str]) {
             .ok()
             .and_then(|p| p.parent().map(|d| d.join(target_exe)))
             .filter(|p| p.exists())
-            .or_else(|| {
-                let rel = std::path::PathBuf::from("/home/cristian/Apps/malus-de/target/release")
-                    .join(target_exe);
-                if rel.exists() {
-                    Some(rel)
-                } else {
-                    None
-                }
-            })
             .unwrap_or_else(|| std::path::PathBuf::from(target_exe));
         let mut command = Command::new(&resolved_exe);
         command.args(args).args(extra_args);

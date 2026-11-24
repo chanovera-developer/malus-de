@@ -179,24 +179,34 @@ fn show_recording_indicator(_destination: PathBuf) -> Result<()> {
     let main_loop = glib::MainLoop::new(None, false);
     let start_time = Instant::now();
 
-    // Actualización de reloj 00:00
-    {
+    // Actualización de reloj 00:00 (con limpieza del timer al cerrar la ventana)
+    let timer_source_id = {
         let timer_label = timer_label.clone();
-        glib::timeout_add_local(Duration::from_secs(1), move || {
-            let elapsed = start_time.elapsed().as_secs();
-            let mins = elapsed / 60;
-            let secs = elapsed % 60;
-            timer_label.set_label(&format!("{mins:02}:{secs:02}"));
-            glib::ControlFlow::Continue
-        });
-    }
+        std::rc::Rc::new(std::cell::RefCell::new(Some(glib::timeout_add_local(
+            Duration::from_secs(1),
+            move || {
+                if timer_label.root().is_none() {
+                    return glib::ControlFlow::Break;
+                }
+                let elapsed = start_time.elapsed().as_secs();
+                let mins = elapsed / 60;
+                let secs = elapsed % 60;
+                timer_label.set_label(&format!("{mins:02}:{secs:02}"));
+                glib::ControlFlow::Continue
+            },
+        ))))
+    };
 
     // Detener grabación al pulsar botón
     {
         let window = window.clone();
         let loop_quit = main_loop.clone();
+        let timer_source_id = timer_source_id.clone();
         stop_btn.connect_clicked(move |_| {
             info!("Deteniendo grabación de pantalla por usuario...");
+            if let Some(id) = timer_source_id.borrow_mut().take() {
+                id.remove();
+            }
             if let Err(e) = send_ipc_message(&IpcMessage::StopScreenRecording) {
                 warn!("Error al enviar parada de grabación: {e}");
             }

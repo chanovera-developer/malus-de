@@ -499,17 +499,44 @@ pub fn create_bluetooth_pane(parent_window: &ApplicationWindow) -> (ScrolledWind
     help_popover.set_child(Some(&help_pop_box));
     help_btn.set_popover(Some(&help_popover));
 
-    // Refresco periódico mientras el panel esté visible
-    let pane_timer = pane.clone();
-    let ref_timer = run_refresh.clone();
-    glib::timeout_add_local(std::time::Duration::from_secs(3), move || {
-        if pane_timer.is_mapped() {
-            // Consultar el estado de conexión sin reiniciar el escaneo ni
-            // reconstruir la lista de dispositivos.
-            ref_timer(false);
-        }
-        glib::ControlFlow::Continue
-    });
+    // Refresco periódico únicamente mientras el panel esté mapeado (se detiene al cambiar de panel)
+    let timer_source: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
+    {
+        let timer_slot = timer_source.clone();
+        let ref_timer = run_refresh.clone();
+        pane.connect_map(move |p| {
+            if timer_slot.borrow().is_some() {
+                return;
+            }
+            let p_weak = p.downgrade();
+            let ref_cb = ref_timer.clone();
+            let slot_clear = timer_slot.clone();
+            let id = glib::timeout_add_local(std::time::Duration::from_secs(3), move || {
+                let Some(w) = p_weak.upgrade() else {
+                    let _ = slot_clear.borrow_mut().take();
+                    return glib::ControlFlow::Break;
+                };
+                if w.is_mapped() {
+                    // Consultar el estado de conexión sin reiniciar el escaneo ni
+                    // reconstruir la lista de dispositivos.
+                    ref_cb(false);
+                    glib::ControlFlow::Continue
+                } else {
+                    let _ = slot_clear.borrow_mut().take();
+                    glib::ControlFlow::Break
+                }
+            });
+            *timer_slot.borrow_mut() = Some(id);
+        });
+    }
+    {
+        let timer_slot = timer_source;
+        pane.connect_unmap(move |_| {
+            if let Some(id) = timer_slot.borrow_mut().take() {
+                id.remove();
+            }
+        });
+    }
 
     let public_refresh: Rc<dyn Fn()> = Rc::new(move || {
         run_refresh(true);
@@ -1073,10 +1100,26 @@ pub(crate) fn classify_bluetooth_devices(
 
 type ManagedObjects = HashMap<OwnedObjectPath, HashMap<String, HashMap<String, OwnedValue>>>;
 
+async fn shared_system_connection() -> Option<Connection> {
+    static SYS_CONN: std::sync::OnceLock<std::sync::Mutex<Option<Connection>>> =
+        std::sync::OnceLock::new();
+    let lock = SYS_CONN.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(guard) = lock.lock() {
+        if let Some(conn) = guard.as_ref() {
+            return Some(conn.clone());
+        }
+    }
+    let conn = Connection::system().await.ok()?;
+    if let Ok(mut guard) = lock.lock() {
+        *guard = Some(conn.clone());
+    }
+    Some(conn)
+}
+
 async fn collect_bluetooth_snapshot() -> BluetoothSnapshot {
-    let conn = match Connection::system().await {
-        Ok(c) => c,
-        Err(_) => return BluetoothSnapshot::default(),
+    let conn = match shared_system_connection().await {
+        Some(c) => c,
+        None => return BluetoothSnapshot::default(),
     };
     let reply = match conn
         .call_method(

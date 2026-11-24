@@ -46,6 +46,9 @@ pub struct AppearancePreferences {
     /// 0 = Pequeños, 1 = Medianos, 2 = Grandes
     pub sidebar_icon_size_idx: usize,
     pub tint_windows_with_wallpaper: bool,
+    /// «Mostrar los botones del lado derecho» (`:minimize,maximize,close`).
+    #[serde(default)]
+    pub window_buttons_right: bool,
     /// 0 = Automáticamente, 1 = Durante el desplazamiento, 2 = Siempre
     pub show_scrollbars_idx: usize,
     /// 0 = Ir a la página siguiente, 1 = Ir a donde se hizo clic
@@ -64,6 +67,7 @@ impl Default for AppearancePreferences {
             folder_color_idx: 0,
             sidebar_icon_size_idx: 1,
             tint_windows_with_wallpaper: true,
+            window_buttons_right: false,
             show_scrollbars_idx: 0,
             scrollbar_click_idx: 0,
         }
@@ -93,6 +97,7 @@ impl AppearancePreferences {
         }
         if let Ok(raw) = toml::to_string_pretty(self) {
             let _ = fs::write(path, raw);
+            malus_de_common::config::invalidate_appearance_settings_cache();
         }
     }
 }
@@ -806,6 +811,42 @@ fn build_appearance_main_pane(
     }
     tint_row.append(&*tint_sw);
     win_card1.append(&tint_row);
+    win_card1.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
+
+    let right_btns_row = GtkBox::builder()
+        .orientation(Orientation::Horizontal)
+        .spacing(12)
+        .css_classes(["wifi-pref-row"])
+        .build();
+    right_btns_row.append(
+        &Label::builder()
+            .label("Mostrar los botones del lado derecho")
+            .css_classes(["wifi-row-title"])
+            .wrap(true)
+            .xalign(0.0)
+            .hexpand(true)
+            .build(),
+    );
+    let right_btns_sw = Switch::builder()
+        .active(prefs.borrow().window_buttons_right)
+        .css_classes(["macos-switch"])
+        .valign(Align::Center)
+        .build();
+    {
+        let p = prefs.clone();
+        right_btns_sw.connect_state_set(move |_, active| {
+            p.borrow_mut().window_buttons_right = active;
+            p.borrow().save();
+            malus_de_common::config::apply_window_buttons_layout(active);
+            malus_de_common::sidebar_style::apply_window_buttons_layout_now();
+            let _ = IpcClient::send_command(IpcMessage::WindowButtonsLayoutChanged {
+                right: active,
+            });
+            glib::Propagation::Proceed
+        });
+    }
+    right_btns_row.append(&*right_btns_sw);
+    win_card1.append(&right_btns_row);
     pane.append(&wrap_squircle_card(&win_card1, WIFI_CARD_SQUIRCLE_RADIUS));
 
     // Curvatura de esquinas del escritorio y de las ventanas

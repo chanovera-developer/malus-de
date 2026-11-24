@@ -128,71 +128,89 @@ pub fn get_db_path() -> PathBuf {
 }
 
 pub fn open_db() -> Result<Connection, rusqlite::Error> {
+    static SCHEMA_INIT_PATH: std::sync::OnceLock<std::sync::Mutex<Option<PathBuf>>> =
+        std::sync::OnceLock::new();
+
     let path = get_db_path();
-    let conn = Connection::open(path)?;
+    let conn = Connection::open(&path)?;
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(2000));
 
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS folder_positions (
-            folder_path TEXT NOT NULL,
-            file_name TEXT NOT NULL,
-            pos_x INTEGER NOT NULL,
-            pos_y INTEGER NOT NULL,
-            PRIMARY KEY (folder_path, file_name)
-        );
-        CREATE TABLE IF NOT EXISTS folder_settings (
-            folder_path TEXT PRIMARY KEY,
-            layout_mode TEXT NOT NULL DEFAULT 'auto',
-            icon_size INTEGER
-        );
-        CREATE TABLE IF NOT EXISTS file_tags (
-            file_path TEXT NOT NULL,
-            tag_name TEXT NOT NULL,
-            tag_color TEXT NOT NULL,
-            PRIMARY KEY (file_path, tag_name)
-        );
-        CREATE TABLE IF NOT EXISTS sidebar_bookmarks (
-            folder_path TEXT PRIMARY KEY,
-            title TEXT NOT NULL,
-            sort_order INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE TABLE IF NOT EXISTS sidebar_hidden_defaults (
-            folder_path TEXT PRIMARY KEY
-        );
-        CREATE TABLE IF NOT EXISTS tag_settings (
-            tag_id TEXT PRIMARY KEY,
-            custom_label TEXT,
-            color_id TEXT,
-            hidden_in_sidebar INTEGER NOT NULL DEFAULT 0
-        );",
-    )?;
+    let init_lock = SCHEMA_INIT_PATH.get_or_init(|| std::sync::Mutex::new(None));
+    let needs_init = init_lock
+        .lock()
+        .map(|g| g.as_ref() != Some(&path))
+        .unwrap_or(true);
 
-    // Migración no destructiva para bases existentes sin columna icon_size
-    let _ = conn.execute(
-        "ALTER TABLE folder_settings ADD COLUMN icon_size INTEGER",
-        [],
-    );
-    let _ = conn.execute(
-        "ALTER TABLE folder_settings ADD COLUMN use_groups INTEGER NOT NULL DEFAULT 0",
-        [],
-    );
+    if needs_init {
+        let _ = conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS folder_positions (
+                folder_path TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                pos_x INTEGER NOT NULL,
+                pos_y INTEGER NOT NULL,
+                PRIMARY KEY (folder_path, file_name)
+            );
+            CREATE TABLE IF NOT EXISTS folder_settings (
+                folder_path TEXT PRIMARY KEY,
+                layout_mode TEXT NOT NULL DEFAULT 'auto',
+                icon_size INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS file_tags (
+                file_path TEXT NOT NULL,
+                tag_name TEXT NOT NULL,
+                tag_color TEXT NOT NULL,
+                PRIMARY KEY (file_path, tag_name)
+            );
+            CREATE INDEX IF NOT EXISTS idx_file_tags_tag_name ON file_tags(tag_name);
+            CREATE TABLE IF NOT EXISTS sidebar_bookmarks (
+                folder_path TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS sidebar_hidden_defaults (
+                folder_path TEXT PRIMARY KEY
+            );
+            CREATE TABLE IF NOT EXISTS tag_settings (
+                tag_id TEXT PRIMARY KEY,
+                custom_label TEXT,
+                color_id TEXT,
+                hidden_in_sidebar INTEGER NOT NULL DEFAULT 0
+            );",
+        )?;
 
-    // Migración v1: carpetas con snap_to_grid implícito de versiones previas pasan a freeform
-    // para que los iconos permanezcan exactamente donde se sueltan (el usuario puede elegir SnapToGrid si lo desea).
-    let user_ver: i32 = conn
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .unwrap_or(0);
-    if user_ver < 1 {
+        // Migración no destructiva para bases existentes sin columna icon_size
         let _ = conn.execute(
-            "UPDATE folder_settings SET layout_mode = 'freeform' WHERE layout_mode = 'snap_to_grid'",
+            "ALTER TABLE folder_settings ADD COLUMN icon_size INTEGER",
             [],
         );
-        let _ = conn.execute("PRAGMA user_version = 1", []);
-    }
+        let _ = conn.execute(
+            "ALTER TABLE folder_settings ADD COLUMN use_groups INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
 
-    // Migración v2: normalizar etiquetas localizadas previas ("Rojo", "Verde", "Azul"...) a IDs canónicos.
-    if user_ver < 2 {
-        migrate_legacy_tags(&conn);
-        let _ = conn.execute("PRAGMA user_version = 2", []);
+        // Migración v1: carpetas con snap_to_grid implícito de versiones previas pasan a freeform
+        // para que los iconos permanezcan exactamente donde se sueltan (el usuario puede elegir SnapToGrid si lo desea).
+        let user_ver: i32 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap_or(0);
+        if user_ver < 1 {
+            let _ = conn.execute(
+                "UPDATE folder_settings SET layout_mode = 'freeform' WHERE layout_mode = 'snap_to_grid'",
+                [],
+            );
+            let _ = conn.execute("PRAGMA user_version = 1", []);
+        }
+
+        // Migración v2: normalizar etiquetas localizadas previas ("Rojo", "Verde", "Azul"...) a IDs canónicos.
+        if user_ver < 2 {
+            migrate_legacy_tags(&conn);
+            let _ = conn.execute("PRAGMA user_version = 2", []);
+        }
+
+        if let Ok(mut g) = init_lock.lock() {
+            *g = Some(path);
+        }
     }
 
     Ok(conn)

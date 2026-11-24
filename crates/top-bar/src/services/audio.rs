@@ -40,20 +40,21 @@ impl AudioService {
     /// Establece el volumen en WirePlumber/PipeWire (0.0 a 100.0)
     pub fn set_volume(pct: f64) {
         let normalized = (pct / 100.0).clamp(0.0, 1.5);
-        let _ = Command::new("wpctl")
-            .args([
-                "set-volume",
-                "@DEFAULT_AUDIO_SINK@",
-                &format!("{:.2}", normalized),
-            ])
-            .spawn();
+        let arg = format!("{:.2}", normalized);
+        std::thread::spawn(move || {
+            let _ = Command::new("wpctl")
+                .args(["set-volume", "@DEFAULT_AUDIO_SINK@", &arg])
+                .status();
+        });
     }
 
     /// Alterna el estado de silencio (mute) en WirePlumber/PipeWire
     pub fn toggle_mute() {
-        let _ = Command::new("wpctl")
-            .args(["set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
-            .spawn();
+        std::thread::spawn(|| {
+            let _ = Command::new("wpctl")
+                .args(["set-mute", "@DEFAULT_AUDIO_SINK@", "toggle"])
+                .status();
+        });
     }
 
     /// Obtiene el nombre del dispositivo de salida de audio activo
@@ -102,9 +103,25 @@ pub struct MprisMediaInfo {
 pub struct MprisService;
 
 impl MprisService {
+    async fn shared_session_connection() -> Option<Connection> {
+        static SESSION_CONN: std::sync::OnceLock<std::sync::Mutex<Option<Connection>>> =
+            std::sync::OnceLock::new();
+        let lock = SESSION_CONN.get_or_init(|| std::sync::Mutex::new(None));
+        if let Ok(guard) = lock.lock() {
+            if let Some(conn) = guard.as_ref() {
+                return Some(conn.clone());
+            }
+        }
+        let conn = Connection::session().await.ok()?;
+        if let Ok(mut guard) = lock.lock() {
+            *guard = Some(conn.clone());
+        }
+        Some(conn)
+    }
+
     /// Obtiene información de la pista y estado del reproductor multimedia activo
     pub async fn get_current_media() -> Option<MprisMediaInfo> {
-        let conn = Connection::session().await.ok()?;
+        let conn = Self::shared_session_connection().await?;
 
         // Listar nombres en el bus de sesión
         let reply = conn

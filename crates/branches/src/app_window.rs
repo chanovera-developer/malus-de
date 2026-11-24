@@ -970,9 +970,19 @@ impl BranchesWindow {
             .valign(Align::Center)
             .build();
 
+        let window_controls_end = WindowControls::builder()
+            .side(PackType::End)
+            .valign(Align::Center)
+            .build();
+        window_controls_end.set_visible(!window_controls_end.is_empty());
+        window_controls_end.connect_empty_notify(|wc| {
+            wc.set_visible(!wc.is_empty());
+        });
+
         header_toolbar.append(&left_header_box);
         header_toolbar.append(&center_spacer);
         header_toolbar.append(&right_header_box);
+        header_toolbar.append(&window_controls_end);
 
         let header_handle = WindowHandle::builder()
             .child(&header_toolbar)

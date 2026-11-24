@@ -1,9 +1,11 @@
 //! Indexado y análisis compartido de archivos `.desktop` (XDG / Flatpak) para Spotlight, Branches y Dock.
 
 use crate::config::{DockAppConfig, DockIconAppearance};
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DesktopAppEntry {
@@ -121,22 +123,58 @@ fn clean_exec_line(raw: &str) -> String {
         .join(" ")
 }
 
+struct DesktopLocaleKeys {
+    full_locale: String,
+    lang_code: String,
+    name_full_key: String,
+    name_lang_key: String,
+    comment_full_key: String,
+    comment_lang_key: String,
+    keywords_full_key: String,
+    keywords_lang_key: String,
+}
+
+impl DesktopLocaleKeys {
+    fn current() -> Self {
+        let (full_locale, lang_code) = session_locale_codes();
+        let name_full_key = format!("Name[{full_locale}]");
+        let name_lang_key = format!("Name[{lang_code}]");
+        let comment_full_key = format!("Comment[{full_locale}]");
+        let comment_lang_key = format!("Comment[{lang_code}]");
+        let keywords_full_key = format!("Keywords[{full_locale}]");
+        let keywords_lang_key = format!("Keywords[{lang_code}]");
+        Self {
+            full_locale,
+            lang_code,
+            name_full_key,
+            name_lang_key,
+            comment_full_key,
+            comment_lang_key,
+            keywords_full_key,
+            keywords_lang_key,
+        }
+    }
+}
+
 fn parse_desktop_file_inner(path: &Path, include_hidden: bool) -> Option<DesktopAppEntry> {
+    let locale_keys = DesktopLocaleKeys::current();
+    parse_desktop_file_with_locale(path, include_hidden, &locale_keys)
+}
+
+fn parse_desktop_file_with_locale(
+    path: &Path,
+    include_hidden: bool,
+    locale: &DesktopLocaleKeys,
+) -> Option<DesktopAppEntry> {
     let content = fs::read_to_string(path).ok()?;
-    let (full_locale, lang_code) = session_locale_codes();
-    let name_full_key = format!("Name[{full_locale}]");
-    let name_lang_key = format!("Name[{lang_code}]");
-    let comment_full_key = format!("Comment[{full_locale}]");
-    let comment_lang_key = format!("Comment[{lang_code}]");
-    let keywords_full_key = format!("Keywords[{full_locale}]");
-    let keywords_lang_key = format!("Keywords[{lang_code}]");
 
     let mut in_desktop_entry = false;
+    let mut seen_desktop_entry = false;
     let mut entry_type: Option<String> = None;
     let mut name_default = None;
     let mut name_lang = None;
     let mut name_full = None;
-    let mut exec = None;
+    let mut exec_raw: Option<&str> = None;
     let mut icon = None;
     let mut comment_default = None;
     let mut comment_lang = None;
@@ -149,40 +187,48 @@ fn parse_desktop_file_inner(path: &Path, include_hidden: bool) -> Option<Desktop
     for line in content.lines() {
         let line = line.trim();
         if line.starts_with('[') && line.ends_with(']') {
+            if seen_desktop_entry && in_desktop_entry {
+                break;
+            }
             in_desktop_entry = line == "[Desktop Entry]";
+            if in_desktop_entry {
+                seen_desktop_entry = true;
+            }
             continue;
         }
-        if !in_desktop_entry || line.starts_with('#') || !line.contains('=') {
+        if !in_desktop_entry || line.starts_with('#') {
             continue;
         }
-        let mut parts = line.splitn(2, '=');
-        let key = parts.next()?.trim();
-        let value = parts.next()?.trim();
+        let Some((raw_key, raw_value)) = line.split_once('=') else {
+            continue;
+        };
+        let key = raw_key.trim();
+        let value = raw_value.trim();
 
         if key == "Type" && entry_type.is_none() {
             entry_type = Some(value.to_string());
         } else if key == "Name" && name_default.is_none() {
             name_default = Some(value.to_string());
             search_terms.push(value.to_lowercase());
-        } else if !full_locale.is_empty() && key == name_full_key {
+        } else if !locale.full_locale.is_empty() && key == locale.name_full_key {
             name_full = Some(value.to_string());
             search_terms.push(value.to_lowercase());
-        } else if !lang_code.is_empty() && key == name_lang_key {
+        } else if !locale.lang_code.is_empty() && key == locale.name_lang_key {
             name_lang = Some(value.to_string());
             search_terms.push(value.to_lowercase());
-        } else if key == "Exec" && exec.is_none() {
-            exec = Some(clean_exec_line(value));
+        } else if key == "Exec" && exec_raw.is_none() {
+            exec_raw = Some(value);
         } else if key == "Icon" && icon.is_none() {
             icon = Some(value.to_string());
         } else if key == "Comment" && comment_default.is_none() {
             comment_default = Some(value.to_string());
-        } else if !full_locale.is_empty() && key == comment_full_key {
+        } else if !locale.full_locale.is_empty() && key == locale.comment_full_key {
             comment_full = Some(value.to_string());
-        } else if !lang_code.is_empty() && key == comment_lang_key {
+        } else if !locale.lang_code.is_empty() && key == locale.comment_lang_key {
             comment_lang = Some(value.to_string());
         } else if key == "Keywords"
-            || (!full_locale.is_empty() && key == keywords_full_key)
-            || (!lang_code.is_empty() && key == keywords_lang_key)
+            || (!locale.full_locale.is_empty() && key == locale.keywords_full_key)
+            || (!locale.lang_code.is_empty() && key == locale.keywords_lang_key)
         {
             search_terms.push(value.to_lowercase());
         } else if key == "Categories" {
@@ -204,7 +250,7 @@ fn parse_desktop_file_inner(path: &Path, include_hidden: bool) -> Option<Desktop
     }
 
     let name = name_full.or(name_lang).or(name_default)?;
-    let exec = exec?;
+    let exec = clean_exec_line(exec_raw?);
     let icon = icon
         .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
         .filter(|s| !s.is_empty())
@@ -262,16 +308,25 @@ pub fn is_application_desktop_file(path: &Path) -> bool {
     let Some(parent) = path.parent() else {
         return false;
     };
-    let canonical_parent = fs::canonicalize(parent).ok();
-    application_dirs().into_iter().any(|dir| {
-        if dir == parent {
-            return true;
-        }
-        match (&canonical_parent, fs::canonicalize(&dir).ok()) {
-            (Some(cp), Some(cd)) => cp == &cd,
-            _ => false,
-        }
-    })
+    static APP_DIRS_CACHE: OnceLock<Vec<(PathBuf, Option<PathBuf>)>> = OnceLock::new();
+    let cached_dirs = APP_DIRS_CACHE.get_or_init(|| {
+        application_dirs()
+            .into_iter()
+            .map(|dir| {
+                let canon = fs::canonicalize(&dir).ok();
+                (dir, canon)
+            })
+            .collect()
+    });
+    if cached_dirs.iter().any(|(dir, _)| dir == parent) {
+        return true;
+    }
+    let Some(canonical_parent) = fs::canonicalize(parent).ok() else {
+        return false;
+    };
+    cached_dirs
+        .iter()
+        .any(|(_, canon)| canon.as_ref() == Some(&canonical_parent))
 }
 
 pub fn read_desktop_launch_metadata(path: &Path) -> (bool, Option<PathBuf>) {
@@ -487,23 +542,22 @@ pub fn spawn_desktop_entry_path(path: &Path) -> Result<(), String> {
 pub fn index_applications() -> Vec<DesktopAppEntry> {
     let mut apps = Vec::new();
     let dirs = application_dirs();
+    let locale_keys = DesktopLocaleKeys::current();
 
     for dir in &dirs {
-        if dir.exists() {
-            if let Ok(entries) = fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|s| s.to_str()) == Some("desktop") {
-                        if let Some(app) = parse_desktop_file(&path) {
-                            apps.push(app);
-                        }
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) == Some("desktop") {
+                    if let Some(app) = parse_desktop_file_with_locale(&path, false, &locale_keys) {
+                        apps.push(app);
                     }
                 }
             }
         }
     }
 
-    apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    apps.sort_by_cached_key(|a| a.name.to_lowercase());
     apps.dedup_by(|a, b| a.name.eq_ignore_ascii_case(&b.name));
     apps
 }
@@ -728,12 +782,80 @@ pub fn resolve_icon_file_path_in_dirs(
     None
 }
 
+const MAX_ICON_PATH_CACHE_ENTRIES: usize = 2048;
+
+static ICON_PATH_CACHE: OnceLock<Mutex<HashMap<String, Option<PathBuf>>>> = OnceLock::new();
+
+/// Limpia la caché en memoria de rutas de iconos resueltas (p. ej. tras cambiar de tema).
+pub fn invalidate_icon_path_cache() {
+    if let Some(lock) = ICON_PATH_CACHE.get() {
+        let mut guard = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.clear();
+    }
+}
+
+struct CachedIconSearchRoots {
+    home: Option<PathBuf>,
+    icon_roots: Vec<PathBuf>,
+    pixmap_dirs: Vec<PathBuf>,
+}
+
+fn cached_icon_search_roots() -> &'static CachedIconSearchRoots {
+    static ROOTS: OnceLock<CachedIconSearchRoots> = OnceLock::new();
+    ROOTS.get_or_init(|| {
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let icon_roots = extra_icon_search_paths()
+            .into_iter()
+            .filter(|d| d.is_dir())
+            .collect();
+        let pixmap_dirs = pixmap_dirs_from(home.as_deref())
+            .into_iter()
+            .filter(|d| d.is_dir())
+            .collect();
+        CachedIconSearchRoots {
+            home,
+            icon_roots,
+            pixmap_dirs,
+        }
+    })
+}
+
 /// Resuelve el archivo de icono (`.svg` o `.png`) para un nombre de icono de `.desktop`.
+/// Usa caché en memoria (positivo y negativo) para evitar cientos de `stat()` por consulta.
 pub fn resolve_icon_file_path(icon_name: &str) -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let icon_roots = extra_icon_search_paths();
-    let pixmap_dirs = pixmap_dirs_from(home.as_deref());
-    resolve_icon_file_path_in_dirs(icon_name, &icon_roots, &pixmap_dirs, home.as_deref())
+    let trimmed = icon_name.trim().trim_matches('"').trim_matches('\'');
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lock = ICON_PATH_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    {
+        let guard = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(hit) = guard.get(trimmed) {
+            return hit.clone();
+        }
+    }
+
+    let roots = cached_icon_search_roots();
+    let resolved = resolve_icon_file_path_in_dirs(
+        trimmed,
+        &roots.icon_roots,
+        &roots.pixmap_dirs,
+        roots.home.as_deref(),
+    );
+
+    let mut guard = lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if guard.len() >= MAX_ICON_PATH_CACHE_ENTRIES {
+        guard.clear();
+    }
+    guard.insert(trimmed.to_string(), resolved.clone());
+    resolved
 }
 
 #[cfg(test)]

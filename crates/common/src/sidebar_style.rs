@@ -6,8 +6,9 @@
 //! consistente y actualización en vivo al cambiar «Íconos de la barra lateral» en Aspecto.
 
 use crate::config::{
-    appearance_settings_path, load_sidebar_icon_size_index, load_tint_windows_with_wallpaper,
-    sidebar_icon_metrics, sidebar_icon_size_css,
+    appearance_settings_path, invalidate_appearance_settings_cache, load_sidebar_icon_size_index,
+    load_tint_windows_with_wallpaper, load_window_buttons_right, sidebar_icon_metrics,
+    sidebar_icon_size_css, window_decoration_layout_for,
 };
 use gtk4::gdk::Display;
 use gtk4::gio;
@@ -21,8 +22,25 @@ thread_local! {
     static SIDEBAR_MONITOR: RefCell<Option<gio::FileMonitor>> = const { RefCell::new(None) };
     static LAST_SIDEBAR_IDX: Cell<usize> = const { Cell::new(usize::MAX) };
     static LAST_SIDEBAR_TINT: Cell<Option<bool>> = const { Cell::new(None) };
+    static LAST_BUTTONS_RIGHT: Cell<Option<bool>> = const { Cell::new(None) };
     static SIDEBAR_ICONS: RefCell<Vec<glib::WeakRef<Image>>> = const { RefCell::new(Vec::new()) };
     static SIDEBAR_ROWS: RefCell<Vec<glib::WeakRef<Widget>>> = const { RefCell::new(Vec::new()) };
+}
+
+fn apply_gtk_window_buttons_layout_for_display(display: Option<&Display>, buttons_right: bool) {
+    LAST_BUTTONS_RIGHT.with(|c| c.set(Some(buttons_right)));
+    let layout = window_decoration_layout_for(buttons_right);
+    let settings = display
+        .map(gtk4::Settings::for_display)
+        .or_else(gtk4::Settings::default);
+    if let Some(settings) = settings {
+        settings.set_gtk_decoration_layout(Some(layout));
+    }
+}
+
+/// Aplica de inmediato el layout activo de botones de ventana en `gtk4::Settings::default()`.
+pub fn apply_window_buttons_layout_now() {
+    apply_gtk_window_buttons_layout_for_display(None, load_window_buttons_right());
 }
 
 /// Instala el proveedor CSS y el monitor sobre `appearance-settings.toml` para esta ventana/app.
@@ -43,13 +61,19 @@ pub fn install_sidebar_size_sync(display: &Display) {
         if let Ok(monitor) =
             cfg_file.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
         {
-            monitor.connect_changed(|_, _, _, _| {
+            let display_c = display.clone();
+            monitor.connect_changed(move |_, _, _, _| {
+                invalidate_appearance_settings_cache();
                 let idx = load_sidebar_icon_size_index();
                 let tint = load_tint_windows_with_wallpaper();
+                let buttons_right = load_window_buttons_right();
                 let changed = LAST_SIDEBAR_IDX.with(|c| c.get()) != idx
                     || LAST_SIDEBAR_TINT.with(|c| c.get()) != Some(tint);
                 if changed {
                     apply_sidebar_size_index(idx);
+                }
+                if LAST_BUTTONS_RIGHT.with(|c| c.get()) != Some(buttons_right) {
+                    apply_gtk_window_buttons_layout_for_display(Some(&display_c), buttons_right);
                 }
             });
             SIDEBAR_MONITOR.with(|c| {
@@ -58,12 +82,23 @@ pub fn install_sidebar_size_sync(display: &Display) {
         }
     }
     apply_sidebar_size_now();
+    apply_gtk_window_buttons_layout_for_display(Some(display), load_window_buttons_right());
+}
+
+fn current_sidebar_size_index() -> usize {
+    let cached = LAST_SIDEBAR_IDX.with(|c| c.get());
+    if cached != usize::MAX {
+        return cached;
+    }
+    let idx = load_sidebar_icon_size_index();
+    LAST_SIDEBAR_IDX.with(|c| c.set(idx));
+    idx
 }
 
 /// Registra un `gtk4::Image` de barra lateral para que escale automáticamente (`14` / `16` / `20` px).
 pub fn register_sidebar_icon(img: &Image) {
     img.add_css_class("malus-sidebar-icon");
-    let metrics = sidebar_icon_metrics(load_sidebar_icon_size_index());
+    let metrics = sidebar_icon_metrics(current_sidebar_size_index());
     img.set_pixel_size(metrics.icon_px);
     SIDEBAR_ICONS.with(|cell| {
         let mut list = cell.borrow_mut();
@@ -76,7 +111,7 @@ pub fn register_sidebar_icon(img: &Image) {
 pub fn register_sidebar_row(widget: &impl IsA<Widget>) {
     let w = widget.as_ref();
     w.add_css_class("malus-sidebar-row");
-    let metrics = sidebar_icon_metrics(load_sidebar_icon_size_index());
+    let metrics = sidebar_icon_metrics(current_sidebar_size_index());
     w.set_height_request(metrics.row_height);
     SIDEBAR_ROWS.with(|cell| {
         let mut list = cell.borrow_mut();

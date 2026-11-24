@@ -1165,15 +1165,42 @@ pub fn create_wifi_pane(parent_window: &ApplicationWindow) -> (ScrolledWindow, R
     help_popover.set_child(Some(&help_pop_box));
     help_btn.set_popover(Some(&help_popover));
 
-    // Refresco periódico mientras el panel esté visible
-    let pane_timer = pane.clone();
-    let ref_timer = run_refresh.clone();
-    glib::timeout_add_local(std::time::Duration::from_secs(10), move || {
-        if pane_timer.is_mapped() {
-            ref_timer(false);
-        }
-        glib::ControlFlow::Continue
-    });
+    // Refresco periódico únicamente mientras el panel esté mapeado (se detiene al cambiar de panel)
+    let timer_source: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
+    {
+        let timer_slot = timer_source.clone();
+        let ref_timer = run_refresh.clone();
+        pane.connect_map(move |p| {
+            if timer_slot.borrow().is_some() {
+                return;
+            }
+            let p_weak = p.downgrade();
+            let ref_cb = ref_timer.clone();
+            let slot_clear = timer_slot.clone();
+            let id = glib::timeout_add_local(std::time::Duration::from_secs(10), move || {
+                let Some(w) = p_weak.upgrade() else {
+                    let _ = slot_clear.borrow_mut().take();
+                    return glib::ControlFlow::Break;
+                };
+                if w.is_mapped() {
+                    ref_cb(false);
+                    glib::ControlFlow::Continue
+                } else {
+                    let _ = slot_clear.borrow_mut().take();
+                    glib::ControlFlow::Break
+                }
+            });
+            *timer_slot.borrow_mut() = Some(id);
+        });
+    }
+    {
+        let timer_slot = timer_source;
+        pane.connect_unmap(move |_| {
+            if let Some(id) = timer_slot.borrow_mut().take() {
+                id.remove();
+            }
+        });
+    }
 
     let public_refresh: Rc<dyn Fn()> = Rc::new(move || {
         run_refresh(true);
@@ -1960,6 +1987,99 @@ fn wifi_signal_icon_name(signal: u8) -> &'static str {
     }
 }
 
+/// Conecta a una red Wi-Fi protegida usando D-Bus (`org.freedesktop.NetworkManager`)
+/// para evitar exponer la contraseña como argumento CLI en `/proc/<pid>/cmdline`.
+fn connect_wifi_protected_dbus(ssid: &str, password: &str, hidden: bool) -> Result<(), String> {
+    use std::collections::HashMap;
+    use zbus::zvariant::{ObjectPath, OwnedObjectPath, Value};
+
+    if ssid.is_empty() {
+        return Err("El SSID no puede estar vacío.".to_string());
+    }
+
+    let conn = zbus::blocking::Connection::system()
+        .map_err(|e| format!("No se pudo conectar al bus D-Bus del sistema: {e}"))?;
+
+    let devices_msg = conn
+        .call_method(
+            Some("org.freedesktop.NetworkManager"),
+            "/org/freedesktop/NetworkManager",
+            Some("org.freedesktop.NetworkManager"),
+            "GetDevices",
+            &(),
+        )
+        .map_err(|e| format!("NetworkManager GetDevices: {e}"))?;
+    let devices: Vec<OwnedObjectPath> = devices_msg
+        .body()
+        .deserialize()
+        .map_err(|e| format!("No se pudo leer lista de dispositivos NM: {e}"))?;
+
+    let mut wifi_device: Option<OwnedObjectPath> = None;
+    for dev in devices {
+        let prop_msg = conn.call_method(
+            Some("org.freedesktop.NetworkManager"),
+            dev.as_str(),
+            Some("org.freedesktop.DBus.Properties"),
+            "Get",
+            &("org.freedesktop.NetworkManager.Device", "DeviceType"),
+        );
+        if let Ok(reply) = prop_msg {
+            if let Ok(val) = reply.body().deserialize::<zbus::zvariant::OwnedValue>() {
+                if u32::try_from(&val).ok() == Some(2) {
+                    wifi_device = Some(dev);
+                    break;
+                }
+            }
+        }
+    }
+
+    let device_path = wifi_device
+        .ok_or_else(|| "No se encontró ninguna interfaz Wi-Fi gestionada por NetworkManager.".to_string())?;
+
+    let mut connection_section: HashMap<&str, Value<'_>> = HashMap::new();
+    connection_section.insert("id", Value::from(ssid));
+    connection_section.insert("type", Value::from("802-11-wireless"));
+    connection_section.insert("autoconnect", Value::from(true));
+
+    let mut wireless_section: HashMap<&str, Value<'_>> = HashMap::new();
+    wireless_section.insert("ssid", Value::from(ssid.as_bytes().to_vec()));
+    wireless_section.insert("mode", Value::from("infrastructure"));
+    if hidden {
+        wireless_section.insert("hidden", Value::from(true));
+    }
+
+    let mut security_section: HashMap<&str, Value<'_>> = HashMap::new();
+    security_section.insert("key-mgmt", Value::from("wpa-psk"));
+    security_section.insert("psk", Value::from(password));
+
+    let mut ipv4_section: HashMap<&str, Value<'_>> = HashMap::new();
+    ipv4_section.insert("method", Value::from("auto"));
+
+    let mut ipv6_section: HashMap<&str, Value<'_>> = HashMap::new();
+    ipv6_section.insert("method", Value::from("auto"));
+
+    let mut settings: HashMap<&str, HashMap<&str, Value<'_>>> = HashMap::new();
+    settings.insert("connection", connection_section);
+    settings.insert("802-11-wireless", wireless_section);
+    settings.insert("802-11-wireless-security", security_section);
+    settings.insert("ipv4", ipv4_section);
+    settings.insert("ipv6", ipv6_section);
+
+    let specific_object = ObjectPath::try_from("/")
+        .map_err(|e| format!("ObjectPath inválido: {e}"))?;
+
+    conn.call_method(
+        Some("org.freedesktop.NetworkManager"),
+        "/org/freedesktop/NetworkManager",
+        Some("org.freedesktop.NetworkManager"),
+        "AddAndActivateConnection",
+        &(settings, device_path.as_ref(), specific_object),
+    )
+    .map_err(|e| format!("NetworkManager rechazó la conexión Wi-Fi: {e}"))?;
+
+    Ok(())
+}
+
 fn connect_wifi_async(
     ssid: String,
     password: Option<String>,
@@ -1973,7 +2093,7 @@ fn connect_wifi_async(
     let (tx, rx) = async_channel::bounded::<Result<(), String>>(1);
     std::thread::spawn(move || {
         let res = if let Some(pw) = password {
-            run_nmcli(&["device", "wifi", "connect", &ssid, "password", &pw]).map(|_| ())
+            connect_wifi_protected_dbus(&ssid, &pw, false)
         } else if known {
             run_nmcli(&["connection", "up", "id", &ssid])
                 .or_else(|_| run_nmcli(&["device", "wifi", "connect", &ssid]))
@@ -2180,10 +2300,7 @@ fn show_hidden_network_dialog(
             let res = if open {
                 run_nmcli(&["device", "wifi", "connect", &ssid, "hidden", "yes"]).map(|_| ())
             } else {
-                run_nmcli(&[
-                    "device", "wifi", "connect", &ssid, "password", &pw, "hidden", "yes",
-                ])
-                .map(|_| ())
+                connect_wifi_protected_dbus(&ssid, &pw, true)
             };
             let _ = tx.send_blocking(res);
         });

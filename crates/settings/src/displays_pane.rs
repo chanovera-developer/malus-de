@@ -178,14 +178,16 @@ fn read_night_shift_temperature() -> u32 {
 
 fn write_night_shift_temperature(kelvin: u32) {
     let val = kelvin.clamp(2700, 5500).to_string();
-    let _ = Command::new("gsettings")
-        .args([
-            "set",
-            "org.gnome.settings-daemon.plugins.color",
-            "night-light-temperature",
-            &val,
-        ])
-        .spawn();
+    std::thread::spawn(move || {
+        let _ = Command::new("gsettings")
+            .args([
+                "set",
+                "org.gnome.settings-daemon.plugins.color",
+                "night-light-temperature",
+                &val,
+            ])
+            .status();
+    });
 }
 
 pub(crate) fn friendly_display_name(o: &DisplayOutputConfig) -> String {

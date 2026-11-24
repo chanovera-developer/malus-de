@@ -1,9 +1,17 @@
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::unix::io::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+
+/// Tamaño máximo permitido por mensaje IPC (64 KiB) para prevenir DoS por agotamiento de memoria.
+const MAX_IPC_LINE_BYTES: usize = 64 * 1024;
+/// Número máximo de clientes IPC simultáneos para prevenir agotamiento de hilos/descriptores.
+const MAX_IPC_CLIENTS: usize = 64;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MinimizedWindowInfo {
@@ -146,6 +154,8 @@ pub enum IpcMessage {
     AccentColorChanged { index: usize },
     /// Notificación de cambio en el nivel de transparencia / opacidad de Liquid Glass (`[0.15, 0.95]`)
     LiquidGlassOpacityChanged { opacity: f64 },
+    /// Notificación de cambio de lado de los botones de ventana (`false` = izquierda macOS, `true` = derecha)
+    WindowButtonsLayoutChanged { right: bool },
     /// Solicita al compositor capturar el fotograma actual antes de cambiar el tema.
     PrepareThemeTransition { request_id: String },
     /// Confirmación enviada cuando el fotograma anterior quedó guardado.
@@ -207,12 +217,105 @@ pub enum IpcMessage {
     },
 }
 
-/// Obtiene la ruta canónica del socket IPC Unix de Malus DE
+/// Obtiene la ruta canónica del socket IPC Unix de Malus DE.
+/// Prefiere `XDG_RUNTIME_DIR`; si no está definido, usa un subdirectorio privado por UID (`0o700`)
+/// en lugar de exponer un socket global en `/tmp`.
 pub fn ipc_socket_path() -> PathBuf {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        PathBuf::from(runtime_dir).join("malus-de-ipc.sock")
-    } else {
-        PathBuf::from("/tmp/malus-de-ipc.sock")
+        let trimmed = runtime_dir.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed).join("malus-de-ipc.sock");
+        }
+    }
+    let uid = unsafe { libc::geteuid() };
+    let private_dir = PathBuf::from(format!("/tmp/malus-de-runtime-{uid}"));
+    if let Ok(meta) = std::fs::symlink_metadata(&private_dir) {
+        if !meta.file_type().is_dir() || meta.uid() != uid {
+            tracing::warn!(
+                "⚠️ Directorio de respaldo IPC no confiable ({:?}); evitando sobrescribirlo",
+                private_dir
+            );
+        } else {
+            let _ = std::fs::set_permissions(&private_dir, std::fs::Permissions::from_mode(0o700));
+        }
+    } else if std::fs::create_dir_all(&private_dir).is_ok() {
+        let _ = std::fs::set_permissions(&private_dir, std::fs::Permissions::from_mode(0o700));
+    }
+    private_dir.join("malus-de-ipc.sock")
+}
+
+/// Verifica mediante `SO_PEERCRED` que el proceso conectado al socket Unix pertenece al mismo UID efectivo.
+fn peer_matches_current_uid(stream: &UnixStream) -> bool {
+    let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let rc = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut cred as *mut libc::ucred).cast(),
+            &mut len,
+        )
+    };
+    if rc != 0 || len as usize != std::mem::size_of::<libc::ucred>() {
+        return false;
+    }
+    let expected_uid = unsafe { libc::geteuid() };
+    cred.uid == expected_uid
+}
+
+/// Lee una línea delimitada por `\n` acotando el tamaño máximo para prevenir agotamiento de memoria.
+/// Devuelve `Ok(Some(line))` si se leyó una línea válida, `Ok(None)` en EOF, o `Err(InvalidData)` si excede `max_bytes`.
+fn read_bounded_line<R: BufRead>(
+    reader: &mut R,
+    max_bytes: usize,
+) -> std::io::Result<Option<String>> {
+    let mut buf = Vec::new();
+    let mut limited = reader.by_ref().take((max_bytes + 1) as u64);
+    let read = limited.read_until(b'\n', &mut buf)?;
+    if read == 0 {
+        return Ok(None);
+    }
+    if buf.len() > max_bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Mensaje IPC excede el tamaño máximo permitido",
+        ));
+    }
+    while matches!(buf.last(), Some(b'\n' | b'\r')) {
+        buf.pop();
+    }
+    let line = String::from_utf8(buf).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "Mensaje IPC no es UTF-8")
+    })?;
+    Ok(Some(line))
+}
+
+/// Asegura que la ruta del socket no sea un archivo regular ni enlace simbólico antes de limpiarla.
+fn remove_stale_socket_if_safe(path: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => {
+            if !meta.file_type().is_socket() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "No se reemplazará una ruta IPC que no es socket: {}",
+                        path.display()
+                    ),
+                ));
+            }
+            std::fs::remove_file(path)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+struct ActiveClientGuard(Arc<AtomicUsize>);
+
+impl Drop for ActiveClientGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -254,18 +357,39 @@ impl IpcBroadcaster {
     /// Inicializa el servidor Unix Listener en un hilo dedicado en segundo plano
     pub fn start_server(&self) -> std::io::Result<()> {
         let path = ipc_socket_path();
-        let _ = std::fs::remove_file(&path);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        remove_stale_socket_if_safe(&path)?;
         let listener = UnixListener::bind(&path)?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
         let clients = self.clients.clone();
         let last_active = self.last_active.clone();
         let last_running = self.last_running.clone();
         let last_minimized = self.last_minimized.clone();
         let incoming_tx = self.incoming_tx.clone();
+        let active_readers = Arc::new(AtomicUsize::new(0));
 
         thread::spawn(move || {
             tracing::info!("📡 Servidor IPC Malus DE escuchando en: {:?}", path);
             for stream in listener.incoming() {
                 if let Ok(mut stream) = stream {
+                    if !peer_matches_current_uid(&stream) {
+                        tracing::warn!("🔒 Conexión IPC rechazada: UID de cliente no coincide");
+                        continue;
+                    }
+
+                    let current = active_readers.fetch_add(1, Ordering::SeqCst);
+                    if current >= MAX_IPC_CLIENTS {
+                        active_readers.fetch_sub(1, Ordering::SeqCst);
+                        tracing::warn!(
+                            "⚠️ Conexión IPC rechazada: límite de clientes concurrentes ({}) alcanzado",
+                            MAX_IPC_CLIENTS
+                        );
+                        continue;
+                    }
+                    let guard = ActiveClientGuard(active_readers.clone());
+
                     let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(20)));
                     // Enviar los últimos estados conocidos al nuevo cliente conectado
                     if let Some(ref act) = *last_active.lock().unwrap() {
@@ -282,20 +406,34 @@ impl IpcBroadcaster {
                     if let Ok(read_stream) = stream.try_clone() {
                         let tx = incoming_tx.clone();
                         thread::spawn(move || {
-                            let reader = BufReader::new(read_stream);
-                            for line in reader.lines() {
-                                if let Ok(line) = line {
-                                    if let Ok(msg) = serde_json::from_str::<IpcMessage>(&line) {
-                                        let _ = tx.send(msg);
+                            let _guard = guard;
+                            let mut reader = BufReader::new(read_stream);
+                            loop {
+                                match read_bounded_line(&mut reader, MAX_IPC_LINE_BYTES) {
+                                    Ok(Some(line)) => {
+                                        if let Ok(msg) = serde_json::from_str::<IpcMessage>(&line) {
+                                            let _ = tx.send(msg);
+                                        }
                                     }
-                                } else {
-                                    break;
+                                    Ok(None) => break,
+                                    Err(err) => {
+                                        tracing::warn!(
+                                            "⚠️ Cerrando cliente IPC por error de lectura: {}",
+                                            err
+                                        );
+                                        break;
+                                    }
                                 }
                             }
                         });
+                    } else {
+                        drop(guard);
                     }
 
                     let mut lock = clients.lock().unwrap();
+                    if lock.len() >= MAX_IPC_CLIENTS {
+                        lock.remove(0);
+                    }
                     lock.push(stream);
                 }
             }
@@ -573,5 +711,37 @@ mod tests {
         let json = serde_json::to_string(&stop).expect("Serialización falló");
         let parsed: IpcMessage = serde_json::from_str(&json).expect("Deserialización falló");
         assert!(matches!(parsed, IpcMessage::StopScreenRecording));
+    }
+
+    #[test]
+    fn test_read_bounded_line_rejects_oversized_payload() {
+        let mut cursor = std::io::Cursor::new(b"hola\n");
+        let ok = read_bounded_line(&mut cursor, 16).expect("Debe leer línea corta");
+        assert_eq!(ok.as_deref(), Some("hola"));
+        assert_eq!(read_bounded_line(&mut cursor, 16).unwrap(), None);
+
+        let oversized = vec![b'A'; 128];
+        let mut big_cursor = std::io::Cursor::new(oversized);
+        let err = read_bounded_line(&mut big_cursor, 64).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn test_peer_matches_current_uid_on_unix_pair() {
+        let (a, _b) = UnixStream::pair().expect("pair");
+        assert!(peer_matches_current_uid(&a));
+    }
+
+    #[test]
+    fn test_remove_stale_socket_rejects_regular_file() {
+        let tmp = std::env::temp_dir().join(format!(
+            "malus-ipc-non-socket-{}",
+            std::process::id()
+        ));
+        std::fs::write(&tmp, b"not a socket").unwrap();
+        let res = remove_stale_socket_if_safe(&tmp);
+        assert!(res.is_err());
+        assert!(tmp.exists());
+        let _ = std::fs::remove_file(&tmp);
     }
 }

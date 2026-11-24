@@ -49,8 +49,25 @@ fn load_raw_svg_cached(path: &PathBuf) -> Option<String> {
 pub fn tinted_folder_texture(gicon: &gio::Icon, pixel_size: i32) -> Option<gdk::Texture> {
     let themed = gicon.downcast_ref::<gio::ThemedIcon>()?;
     let names = themed.names();
-    if !names.iter().any(|n| is_folder_themed_name(n.as_str())) {
-        return None;
+    let primary_folder_name = names
+        .iter()
+        .find(|n| is_folder_themed_name(n.as_str()))?
+        .as_str()
+        .to_string();
+
+    let target_hex = load_folder_tint_hex();
+    let render_px = (pixel_size.max(16) * 2).clamp(32, 256);
+
+    thread_local! {
+        static NAME_TEX_CACHE: RefCell<HashMap<(String, i32, String), Option<gdk::Texture>>> =
+            RefCell::new(HashMap::new());
+        static TEX_CACHE: RefCell<HashMap<(PathBuf, i32, String), gdk::Texture>> =
+            RefCell::new(HashMap::new());
+    }
+
+    let fast_key = (primary_folder_name, render_px, target_hex.clone());
+    if let Some(hit) = NAME_TEX_CACHE.with(|c| c.borrow().get(&fast_key).cloned()) {
+        return hit;
     }
 
     let mut resolved_path: Option<PathBuf> = None;
@@ -75,22 +92,40 @@ pub fn tinted_folder_texture(gicon: &gio::Icon, pixel_size: i32) -> Option<gdk::
                 .is_some_and(|e| e.eq_ignore_ascii_case("svg"))
         });
     }
-    let svg_path = resolved_path?;
+    let Some(svg_path) = resolved_path else {
+        NAME_TEX_CACHE.with(|c| {
+            let mut map = c.borrow_mut();
+            if map.len() >= MAX_FOLDER_TEX_CACHE {
+                map.clear();
+            }
+            map.insert(fast_key, None);
+        });
+        return None;
+    };
 
-    let target_hex = load_folder_tint_hex();
-    let render_px = (pixel_size.max(16) * 2).clamp(32, 256);
-
-    thread_local! {
-        static TEX_CACHE: RefCell<HashMap<(PathBuf, i32, String), gdk::Texture>> =
-            RefCell::new(HashMap::new());
-    }
     let key = (svg_path.clone(), render_px, target_hex.clone());
     if let Some(hit) = TEX_CACHE.with(|c| c.borrow().get(&key).cloned()) {
+        NAME_TEX_CACHE.with(|c| {
+            let mut map = c.borrow_mut();
+            if map.len() >= MAX_FOLDER_TEX_CACHE {
+                map.clear();
+            }
+            map.insert(fast_key, Some(hit.clone()));
+        });
         return Some(hit);
     }
 
-    let raw_svg = load_raw_svg_cached(&svg_path)?;
+    let Some(raw_svg) = load_raw_svg_cached(&svg_path) else {
+        return None;
+    };
     if !raw_svg.contains("#60c0f0") && !raw_svg.contains("#60C0F0") {
+        NAME_TEX_CACHE.with(|c| {
+            let mut map = c.borrow_mut();
+            if map.len() >= MAX_FOLDER_TEX_CACHE {
+                map.clear();
+            }
+            map.insert(fast_key, None);
+        });
         return None;
     }
     let tinted_svg = raw_svg
@@ -110,6 +145,13 @@ pub fn tinted_folder_texture(gicon: &gio::Icon, pixel_size: i32) -> Option<gdk::
             map.clear();
         }
         map.insert(key, texture.clone());
+    });
+    NAME_TEX_CACHE.with(|c| {
+        let mut map = c.borrow_mut();
+        if map.len() >= MAX_FOLDER_TEX_CACHE {
+            map.clear();
+        }
+        map.insert(fast_key, Some(texture.clone()));
     });
     Some(texture)
 }

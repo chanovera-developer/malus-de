@@ -382,6 +382,7 @@ impl SnapLayoutsState {
         space: &Space<Window>,
         point: Point<f64, Logical>,
         occluded: bool,
+        buttons_right: bool,
         now: Instant,
     ) {
         self.last_pointer = Some(point);
@@ -395,7 +396,7 @@ impl SnapLayoutsState {
             return;
         }
 
-        let hovered_btn = detect_maximize_button_under(space, point);
+        let hovered_btn = detect_maximize_button_under(space, point, buttons_right);
 
         if let Some(ref mut active) = self.active {
             // Si el usuario pasó el cursor al botón de maximizar de OTRA ventana (fuera del popup actual),
@@ -948,6 +949,7 @@ fn is_window_fullscreen(window: &Window) -> bool {
 fn detect_maximize_button_under(
     space: &Space<Window>,
     point: Point<f64, Logical>,
+    buttons_right: bool,
 ) -> Option<MaximizeButtonTarget> {
     for window in space.elements().rev() {
         let Some(loc) = space.element_location(window) else {
@@ -976,7 +978,8 @@ fn detect_maximize_button_under(
                 && point.y <= tb_y + tb_h
             {
                 if is_top_level_app {
-                    let cx = tb_x + crate::ssd::BTN_MAX_X;
+                    let (_, _, max_x) = crate::ssd::button_positions(tb_w, buttons_right);
+                    let cx = tb_x + max_x;
                     let cy = tb_y + crate::ssd::BTN_Y;
                     if (point.x - cx).abs() <= SSD_MAX_HALF_W
                         && (point.y - cy).abs() <= SSD_MAX_HALF_H
@@ -986,7 +989,7 @@ fn detect_maximize_button_under(
                             surface: surf.into_owned(),
                             anchor_rect: Rectangle::new(
                                 Point::from((
-                                    loc.x + 53,
+                                    loc.x + (max_x - 7.0).round() as i32,
                                     loc.y - crate::ssd::SSD_TITLEBAR_HEIGHT + 12,
                                 )),
                                 Size::from((14, 14)),
@@ -1003,7 +1006,26 @@ fn detect_maximize_button_under(
             if is_top_level_app && !window_uses_ssd(window) {
                 let lx = point.x - loc.x as f64;
                 let ly = point.y - loc.y as f64;
-                if (CSD_MAX_MIN_X..=CSD_MAX_MAX_X).contains(&lx)
+                if buttons_right {
+                    let rx = geo.size.w as f64 - lx;
+                    if (26.0..=58.0).contains(&rx)
+                        && (CSD_MAX_MIN_Y..=CSD_MAX_MAX_Y).contains(&ly)
+                    {
+                        let (ax, ay) = if is_gnome_window(window) {
+                            (loc.x + geo.size.w - 48, loc.y + 15)
+                        } else {
+                            (loc.x + geo.size.w - 46, loc.y + 13)
+                        };
+                        return Some(MaximizeButtonTarget {
+                            window: window.clone(),
+                            surface: surf.into_owned(),
+                            anchor_rect: Rectangle::new(
+                                Point::from((ax, ay)),
+                                Size::from((14, 14)),
+                            ),
+                        });
+                    }
+                } else if (CSD_MAX_MIN_X..=CSD_MAX_MAX_X).contains(&lx)
                     && (CSD_MAX_MIN_Y..=CSD_MAX_MAX_Y).contains(&ly)
                 {
                     let (ax, ay) = if is_gnome_window(window) {

@@ -1,5 +1,8 @@
+mod data_control;
+
 use anyhow::{bail, Context, Result};
 use async_channel::{Receiver, Sender};
+use data_control::{try_start_data_control, CapturedSelection, DataControlHandle};
 use gio::prelude::*;
 use gtk4::prelude::*;
 use gtk4::{
@@ -28,11 +31,12 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 const MAX_HISTORY_ITEMS: usize = 50;
-const MAX_CLIPBOARD_BYTES: usize = 10 * 1024 * 1024;
+pub(crate) const MAX_CLIPBOARD_BYTES: usize = 10 * 1024 * 1024;
 const MAX_HISTORY_STORAGE_BYTES: usize = 50 * 1024 * 1024;
+const MAX_SENSITIVE_SCAN_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, Debug)]
 struct ClipboardItem {
@@ -154,6 +158,7 @@ struct HistoryUi {
     settings_path: PathBuf,
     sync_primary_selection: Arc<AtomicBool>,
     filter_sensitive_content: Arc<AtomicBool>,
+    data_control: Option<DataControlHandle>,
 }
 
 fn main() -> Result<()> {
@@ -188,6 +193,14 @@ fn run_manager() -> Result<()> {
         .build();
     let _hold_guard = app.hold();
 
+    let data_control = start_clipboard_service(
+        history.clone(),
+        history_path.clone(),
+        event_tx.clone(),
+        sync_primary_selection.clone(),
+        filter_sensitive_content.clone(),
+    )?;
+
     let ui_state: Arc<Mutex<Option<HistoryUi>>> = Arc::new(Mutex::new(None));
     let ui_state_activate = ui_state.clone();
     let history_activate = history.clone();
@@ -195,6 +208,7 @@ fn run_manager() -> Result<()> {
     let settings_path_activate = settings_path.clone();
     let sync_primary_activate = sync_primary_selection.clone();
     let filter_sensitive_activate = filter_sensitive_content.clone();
+    let data_control_activate = data_control.clone();
     app.connect_activate(move |application| {
         if ui_state_activate.lock().unwrap().is_some() {
             return;
@@ -206,16 +220,11 @@ fn run_manager() -> Result<()> {
             settings_path_activate.clone(),
             sync_primary_activate.clone(),
             filter_sensitive_activate.clone(),
+            data_control_activate.clone(),
         );
         *ui_state_activate.lock().unwrap() = Some(ui);
     });
 
-    start_clipboard_service(
-        history.clone(),
-        event_tx.clone(),
-        sync_primary_selection.clone(),
-        filter_sensitive_content.clone(),
-    )?;
     start_compositor_listener(event_tx)?;
     poll_ui_events(event_rx, ui_state);
 
@@ -366,7 +375,7 @@ fn save_history(path: &Path, history: &ClipboardHistory) -> Result<()> {
             })
             .collect(),
     };
-    let mut file = fs::OpenOptions::new()
+    let file = fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
@@ -380,14 +389,21 @@ fn save_history(path: &Path, history: &ClipboardHistory) -> Result<()> {
                 temporary_path.display()
             )
         })?;
-    serde_json::to_writer(&mut file, &persisted)
+    let mut writer = std::io::BufWriter::with_capacity(64 * 1024, file);
+    serde_json::to_writer(&mut writer, &persisted)
         .context("No se pudo serializar el índice del historial")?;
-    file.write_all(b"\n")
+    writer
+        .write_all(b"\n")
         .context("No se pudo terminar el índice del historial")?;
     for item in &history.items {
-        file.write_all(&item.data)
+        writer
+            .write_all(&item.data)
             .context("No se pudo guardar un elemento del historial")?;
     }
+    let file = writer
+        .into_inner()
+        .map_err(|e| e.into_error())
+        .context("No se pudo vaciar el búfer del historial")?;
     file.sync_all()
         .with_context(|| format!("No se pudo sincronizar {}", temporary_path.display()))?;
     fs::rename(&temporary_path, path)
@@ -414,10 +430,11 @@ fn clipboard_socket_path() -> Result<PathBuf> {
 
 fn start_clipboard_service(
     history: Arc<Mutex<ClipboardHistory>>,
+    history_path: PathBuf,
     event_tx: Sender<UiEvent>,
     sync_primary_selection: Arc<AtomicBool>,
     filter_sensitive_content: Arc<AtomicBool>,
-) -> Result<()> {
+) -> Result<Option<DataControlHandle>> {
     let socket_path = clipboard_socket_path()?;
     if let Ok(metadata) = fs::symlink_metadata(&socket_path) {
         if !metadata.file_type().is_socket() {
@@ -443,9 +460,40 @@ fn start_clipboard_service(
         .with_context(|| format!("No se pudo abrir el socket {}", socket_path.display()))?;
     info!("Socket local del historial: {}", socket_path.display());
 
+    // Prefer native in-process Wayland zwlr_data_control_manager_v1 (zero wl-paste/wl-copy
+    // subprocesses and zero 250 ms polling). Fall back to wl-paste --watch only if the
+    // compositor does not advertise the protocol.
+    let history_for_wayland = history.clone();
+    let history_path_for_wayland = history_path.clone();
+    let event_tx_for_wayland = event_tx.clone();
+    let sync_primary_for_wayland = sync_primary_selection.clone();
+    let filter_sensitive_for_wayland = filter_sensitive_content.clone();
+    let data_control = try_start_data_control(
+        sync_primary_selection.clone(),
+        filter_sensitive_content.clone(),
+        move |captured: CapturedSelection, handle: DataControlHandle| {
+            if let Err(error) = process_captured_payload(
+                captured.mime_type,
+                captured.data,
+                captured.primary_selection,
+                captured.sensitive_hint,
+                &history_for_wayland,
+                &history_path_for_wayland,
+                &event_tx_for_wayland,
+                &sync_primary_for_wayland,
+                &filter_sensitive_for_wayland,
+                Some(&handle),
+            ) {
+                warn!("No se pudo procesar un cambio del portapapeles Wayland: {error:#}");
+            }
+        },
+    )?;
+
     let history_for_listener = history.clone();
+    let history_path_for_listener = history_path;
     let sync_primary_for_listener = sync_primary_selection.clone();
     let filter_sensitive_for_listener = filter_sensitive_content.clone();
+    let data_control_for_listener = data_control.clone();
     thread::Builder::new()
         .name("clipboard-history-ipc".to_string())
         .spawn(move || {
@@ -453,16 +501,20 @@ fn start_clipboard_service(
                 match incoming {
                     Ok(stream) => {
                         let history = history_for_listener.clone();
+                        let history_path = history_path_for_listener.clone();
                         let event_tx = event_tx.clone();
                         let sync_primary_selection = sync_primary_for_listener.clone();
                         let filter_sensitive_content = filter_sensitive_for_listener.clone();
+                        let data_control = data_control_for_listener.clone();
                         thread::spawn(move || {
                             if let Err(error) = handle_capture(
                                 stream,
                                 history,
+                                history_path,
                                 event_tx,
                                 sync_primary_selection,
                                 filter_sensitive_content,
+                                data_control,
                             ) {
                                 warn!("No se pudo procesar un cambio del portapapeles: {error:#}");
                             }
@@ -474,8 +526,10 @@ fn start_clipboard_service(
         })
         .context("No se pudo iniciar el servidor IPC del historial")?;
 
-    start_clipboard_watcher(sync_primary_selection)?;
-    Ok(())
+    if data_control.is_none() {
+        start_clipboard_watcher(sync_primary_selection)?;
+    }
+    Ok(data_control)
 }
 
 fn start_clipboard_watcher(sync_primary_selection: Arc<AtomicBool>) -> Result<()> {
@@ -628,6 +682,10 @@ fn capture_clipboard_change(primary_selection: bool) -> Result<()> {
 
 fn select_mime_type(types: &str) -> Option<String> {
     let offered: Vec<&str> = types.lines().map(str::trim).collect();
+    select_mime_type_from_slice(&offered)
+}
+
+pub(crate) fn select_mime_type_from_slice(offered: &[&str]) -> Option<String> {
     let preferred = [
         "image/png",
         "image/jpeg",
@@ -669,22 +727,24 @@ fn select_mime_type(types: &str) -> Option<String> {
         .find_map(|candidate| {
             offered
                 .iter()
+                .map(|mime| mime.trim())
                 .find(|mime| mime.eq_ignore_ascii_case(candidate))
-                .map(|mime| (*mime).to_string())
+                .map(str::to_string)
         })
         .or_else(|| {
             offered
                 .iter()
+                .map(|mime| mime.trim())
                 .find(|mime| {
                     !is_sensitive_mime_hint(mime)
-                        && (mime.to_ascii_lowercase().starts_with("text/")
-                            || mime.to_ascii_lowercase().starts_with("image/"))
+                        && (mime.len() >= 5 && mime[..5].eq_ignore_ascii_case("text/")
+                            || mime.len() >= 6 && mime[..6].eq_ignore_ascii_case("image/"))
                 })
-                .map(|mime| (*mime).to_string())
+                .map(str::to_string)
         })
 }
 
-fn is_sensitive_mime_hint(mime_type: &str) -> bool {
+pub(crate) fn is_sensitive_mime_hint(mime_type: &str) -> bool {
     let mime_type = mime_type.to_ascii_lowercase();
     mime_type.contains("passwordmanagerhint")
         || mime_type.contains("password-manager-hint")
@@ -698,8 +758,21 @@ fn is_sensitive_content(mime_type: &str, data: &[u8]) -> bool {
     if is_sensitive_mime_hint(mime_type) {
         return true;
     }
-    let Ok(text) = std::str::from_utf8(data) else {
-        return false;
+    let scan_slice = if data.len() > MAX_SENSITIVE_SCAN_BYTES {
+        &data[..MAX_SENSITIVE_SCAN_BYTES]
+    } else {
+        data
+    };
+    let text = match std::str::from_utf8(scan_slice) {
+        Ok(text) => text,
+        Err(err) if err.error_len().is_none() && err.valid_up_to() > 0 => {
+            // Truncated mid-codepoint at MAX_SENSITIVE_SCAN_BYTES.
+            match std::str::from_utf8(&scan_slice[..err.valid_up_to()]) {
+                Ok(text) => text,
+                Err(_) => return false,
+            }
+        }
+        Err(_) => return false,
     };
     let lowercase = text.to_ascii_lowercase();
     if lowercase.contains("-----begin") && lowercase.contains("private key")
@@ -861,9 +934,11 @@ fn send_capture(
 fn handle_capture(
     stream: UnixStream,
     history: Arc<Mutex<ClipboardHistory>>,
+    history_path: PathBuf,
     event_tx: Sender<UiEvent>,
     sync_primary_selection: Arc<AtomicBool>,
     filter_sensitive_content: Arc<AtomicBool>,
+    data_control: Option<DataControlHandle>,
 ) -> Result<()> {
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
@@ -880,12 +955,39 @@ fn handle_capture(
         .read_exact(&mut data)
         .context("El contenido del portapapeles llegó incompleto")?;
 
+    process_captured_payload(
+        header.mime_type,
+        data,
+        header.primary_selection,
+        header.sensitive_hint,
+        &history,
+        &history_path,
+        &event_tx,
+        &sync_primary_selection,
+        &filter_sensitive_content,
+        data_control.as_ref(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn process_captured_payload(
+    mime_type: String,
+    data: Vec<u8>,
+    primary_selection: bool,
+    sensitive_hint: bool,
+    history: &Arc<Mutex<ClipboardHistory>>,
+    history_path: &Path,
+    event_tx: &Sender<UiEvent>,
+    sync_primary_selection: &Arc<AtomicBool>,
+    filter_sensitive_content: &Arc<AtomicBool>,
+    data_control: Option<&DataControlHandle>,
+) -> Result<()> {
     let sync_primary = sync_primary_selection.load(Ordering::Relaxed);
-    if header.primary_selection && !sync_primary {
+    if primary_selection && !sync_primary {
         return Ok(());
     }
 
-    if header.sensitive_hint && data.is_empty() {
+    if sensitive_hint && data.is_empty() {
         event_tx
             .send_blocking(UiEvent::SensitiveSkipped)
             .map_err(|_| anyhow::anyhow!("La interfaz del historial ya no está disponible"))?;
@@ -893,19 +995,19 @@ fn handle_capture(
     }
 
     if filter_sensitive_content.load(Ordering::Relaxed)
-        && (header.sensitive_hint || is_sensitive_content(&header.mime_type, &data))
+        && (sensitive_hint || is_sensitive_content(&mime_type, &data))
     {
         event_tx
             .send_blocking(UiEvent::SensitiveSkipped)
             .map_err(|_| anyhow::anyhow!("La interfaz del historial ya no está disponible"))?;
         if sync_primary {
-            let target_primary = !header.primary_selection;
+            let target_primary = !primary_selection;
             let mut state = history
                 .lock()
                 .map_err(|_| anyhow::anyhow!("El historial del portapapeles está bloqueado"))?;
-            mark_manager_payload(&mut state, &header.mime_type, &data);
+            mark_manager_payload(&mut state, &mime_type, &data);
             drop(state);
-            if let Err(error) = copy_to_selection(&header.mime_type, &data, target_primary) {
+            if let Err(error) = copy_to_selection(data_control, &mime_type, &data, target_primary) {
                 error!("No se pudo sincronizar la selección sensible: {error:#}");
             }
         }
@@ -915,13 +1017,13 @@ fn handle_capture(
     let item = history
         .lock()
         .map_err(|_| anyhow::anyhow!("El historial del portapapeles está bloqueado"))?
-        .capture(header.mime_type.clone(), data.clone());
+        .capture(mime_type, data);
     if let Some(item) = item {
         let save_result = {
             let history = history
                 .lock()
                 .map_err(|_| anyhow::anyhow!("El historial del portapapeles está bloqueado"))?;
-            save_history(&history_path()?, &history)
+            save_history(history_path, &history)
         };
         if let Err(error) = save_result {
             error!("No se pudo persistir el historial: {error:#}");
@@ -929,17 +1031,21 @@ fn handle_capture(
         event_tx
             .send_blocking(UiEvent::Refresh)
             .map_err(|_| anyhow::anyhow!("La interfaz del historial ya no está disponible"))?;
-        mark_manager_copy(&history, &item)?;
-        let copy_result = if sync_primary {
-            let target_primary = !header.primary_selection;
-            copy_to_selection(&item.mime_type, &item.data, target_primary)
-        } else if header.primary_selection {
-            copy_to_selection(&item.mime_type, &item.data, false)
+
+        let target_selection = if sync_primary {
+            Some(!primary_selection)
+        } else if primary_selection {
+            Some(false)
         } else {
-            Ok(())
+            None
         };
-        if let Err(error) = copy_result {
-            error!("No se pudo sincronizar la selección capturada: {error:#}");
+        if let Some(target_primary) = target_selection {
+            mark_manager_copy(history, &item)?;
+            if let Err(error) =
+                copy_to_selection(data_control, &item.mime_type, &item.data, target_primary)
+            {
+                error!("No se pudo sincronizar la selección capturada: {error:#}");
+            }
         }
     }
     Ok(())
@@ -972,7 +1078,19 @@ fn mark_manager_payload(history: &mut ClipboardHistory, mime_type: &str, data: &
     ));
 }
 
-fn copy_to_selection(mime_type: &str, data: &[u8], primary_selection: bool) -> Result<()> {
+fn copy_to_selection(
+    data_control: Option<&DataControlHandle>,
+    mime_type: &str,
+    data: &[u8],
+    primary_selection: bool,
+) -> Result<()> {
+    if let Some(handle) = data_control {
+        return handle.set_selection(mime_type, data, primary_selection);
+    }
+    copy_to_selection_wl_copy(mime_type, data, primary_selection)
+}
+
+fn copy_to_selection_wl_copy(mime_type: &str, data: &[u8], primary_selection: bool) -> Result<()> {
     let mut command = Command::new("wl-copy");
     if primary_selection {
         command.arg("--primary");
@@ -1001,28 +1119,42 @@ fn copy_to_selection(mime_type: &str, data: &[u8], primary_selection: bool) -> R
 fn start_compositor_listener(event_tx: Sender<UiEvent>) -> Result<()> {
     thread::Builder::new()
         .name("clipboard-compositor-ipc".to_string())
-        .spawn(move || loop {
-            match UnixStream::connect(ipc_socket_path()) {
-                Ok(stream) => {
-                    let reader = BufReader::new(stream);
-                    for line in reader.lines() {
-                        let Ok(line) = line else {
-                            break;
-                        };
-                        if matches!(
-                            serde_json::from_str::<IpcMessage>(&line),
-                            Ok(IpcMessage::ToggleClipboardHistory)
-                        ) {
-                            if event_tx.send_blocking(UiEvent::ToggleWindow).is_err() {
-                                return;
+        .spawn(move || {
+            let mut backoff_secs: u64 = 1;
+            let mut warned_disconnected = false;
+            loop {
+                match UnixStream::connect(ipc_socket_path()) {
+                    Ok(stream) => {
+                        backoff_secs = 1;
+                        warned_disconnected = false;
+                        let reader = BufReader::new(stream);
+                        for line in reader.lines() {
+                            let Ok(line) = line else {
+                                break;
+                            };
+                            if matches!(
+                                serde_json::from_str::<IpcMessage>(&line),
+                                Ok(IpcMessage::ToggleClipboardHistory)
+                            ) {
+                                if event_tx.send_blocking(UiEvent::ToggleWindow).is_err() {
+                                    return;
+                                }
                             }
                         }
+                        warn!("Se desconectó el canal IPC del compositor");
                     }
-                    warn!("Se desconectó el canal IPC del compositor");
+                    Err(error) => {
+                        if !warned_disconnected {
+                            warn!("No se pudo conectar con el compositor: {error}");
+                            warned_disconnected = true;
+                        } else {
+                            debug!("Reintento IPC del compositor fallido: {error}");
+                        }
+                    }
                 }
-                Err(error) => warn!("No se pudo conectar con el compositor: {error}"),
+                thread::sleep(Duration::from_secs(backoff_secs));
+                backoff_secs = (backoff_secs * 2).min(30);
             }
-            thread::sleep(Duration::from_secs(1));
         })
         .context("No se pudo iniciar el receptor de atajos")?;
     Ok(())
@@ -1035,6 +1167,7 @@ fn build_history_ui(
     settings_path: PathBuf,
     sync_primary_selection: Arc<AtomicBool>,
     filter_sensitive_content: Arc<AtomicBool>,
+    data_control: Option<DataControlHandle>,
 ) -> HistoryUi {
     let window = ApplicationWindow::builder()
         .application(application)
@@ -1109,14 +1242,22 @@ fn build_history_ui(
         settings_path,
         sync_primary_selection: sync_primary_selection.clone(),
         filter_sensitive_content: filter_sensitive_content.clone(),
+        data_control,
     };
     let ui_search = ui.clone();
     search.connect_changed(move |_| refresh_history(&ui_search));
 
     let ui_enter = ui.clone();
     search.connect_activate(move |_| {
-        if let Some(item) = filtered_items(&ui_enter).into_iter().next() {
-            restore_clipboard_item(&ui_enter, &item);
+        if let Some(row) = filtered_items(&ui_enter).into_iter().next() {
+            let found = ui_enter
+                .history
+                .lock()
+                .ok()
+                .and_then(|h| h.items.iter().find(|it| it.id == row.id).cloned());
+            if let Some(item) = found {
+                restore_clipboard_item(&ui_enter, &item);
+            }
         }
     });
 
@@ -1205,6 +1346,13 @@ fn build_history_ui(
     ui
 }
 
+struct FilteredItemRow {
+    id: u64,
+    mime_type: String,
+    pinned: bool,
+    preview: String,
+}
+
 fn refresh_history(ui: &HistoryUi) {
     while let Some(child) = ui.list.first_child() {
         ui.list.remove(&child);
@@ -1232,7 +1380,7 @@ fn refresh_history(ui: &HistoryUi) {
             .hexpand(true)
             .build();
         let preview = Label::builder()
-            .label(item_preview(&item))
+            .label(&item.preview)
             .xalign(0.0)
             .wrap(true)
             .max_width_chars(52)
@@ -1246,10 +1394,17 @@ fn refresh_history(ui: &HistoryUi) {
         content.append(&mime);
 
         let copy_button = Button::with_label("Copiar");
-        let item_for_copy = item.clone();
+        let item_id_for_copy = item.id;
         let ui_for_copy = ui.clone();
         copy_button.connect_clicked(move |_| {
-            restore_clipboard_item(&ui_for_copy, &item_for_copy);
+            let found = ui_for_copy
+                .history
+                .lock()
+                .ok()
+                .and_then(|h| h.items.iter().find(|it| it.id == item_id_for_copy).cloned());
+            if let Some(found_item) = found {
+                restore_clipboard_item(&ui_for_copy, &found_item);
+            }
         });
 
         let pin_button = Button::with_label(if item.pinned { "★" } else { "☆" });
@@ -1288,20 +1443,29 @@ fn refresh_history(ui: &HistoryUi) {
     }
 }
 
-fn filtered_items(ui: &HistoryUi) -> Vec<ClipboardItem> {
+fn filtered_items(ui: &HistoryUi) -> Vec<FilteredItemRow> {
     let query = ui.search.text().to_string().to_lowercase();
     ui.history
         .lock()
         .unwrap()
         .items
         .iter()
-        .filter(|item| {
+        .filter_map(|item| {
             let preview = item_preview(item);
-            query.is_empty()
+            if query.is_empty()
                 || preview.to_lowercase().contains(&query)
                 || item.mime_type.to_lowercase().contains(&query)
+            {
+                Some(FilteredItemRow {
+                    id: item.id,
+                    mime_type: item.mime_type.clone(),
+                    pinned: item.pinned,
+                    preview,
+                })
+            } else {
+                None
+            }
         })
-        .cloned()
         .collect()
 }
 
@@ -1319,7 +1483,7 @@ fn restore_clipboard_item(ui: &HistoryUi, item: &ClipboardItem) {
             error!("No se pudo persistir el historial al restaurar: {error:#}");
         }
     }
-    match copy_to_selection(&item.mime_type, &item.data, false) {
+    match copy_to_selection(ui.data_control.as_ref(), &item.mime_type, &item.data, false) {
         Ok(()) => {
             ui.window.set_visible(false);
             info!("Elemento del historial copiado al portapapeles");
@@ -1363,7 +1527,8 @@ fn item_preview(item: &ClipboardItem) -> String {
                     item.data.len().div_ceil(1024)
                 );
             }
-            let text = String::from_utf8_lossy(&item.data);
+            let snippet_bytes = &item.data[..item.data.len().min(1024)];
+            let text = String::from_utf8_lossy(snippet_bytes);
             let first_line = text.lines().next().unwrap_or_default();
             let preview: String = first_line.chars().take(160).collect();
             if preview.is_empty() {
@@ -1376,15 +1541,19 @@ fn item_preview(item: &ClipboardItem) -> String {
 }
 
 fn poll_ui_events(receiver: Receiver<UiEvent>, ui_state: Arc<Mutex<Option<HistoryUi>>>) {
-    glib::timeout_add_local(Duration::from_millis(100), move || {
-        while let Ok(event) = receiver.try_recv() {
+    glib::MainContext::default().spawn_local(async move {
+        while let Ok(event) = receiver.recv().await {
             let mut ui_guard = ui_state.lock().unwrap();
             if ui_guard.is_none() {
                 continue;
             }
             let ui = ui_guard.as_mut().unwrap();
             match event {
-                UiEvent::Refresh => refresh_history(ui),
+                UiEvent::Refresh => {
+                    if ui.window.is_visible() {
+                        refresh_history(ui);
+                    }
+                }
                 UiEvent::SensitiveSkipped => ui
                     .status
                     .set_label("Se omitió del historial contenido que parece sensible."),
@@ -1399,7 +1568,6 @@ fn poll_ui_events(receiver: Receiver<UiEvent>, ui_state: Arc<Mutex<Option<Histor
                 }
             }
         }
-        glib::ControlFlow::Continue
     });
 }
 
@@ -1527,5 +1695,88 @@ mod tests {
 
         std::fs::remove_file(path).unwrap();
         std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn data_control_pipe_helpers_enforce_bounds_and_roundtrip() {
+        use crate::data_control::{expanded_offer_mimes, read_fd_bounded, write_fd_with_timeout};
+        use std::{
+            os::fd::{FromRawFd, OwnedFd},
+            time::Duration,
+        };
+
+        let mimes = expanded_offer_mimes("text/plain");
+        assert!(mimes.contains(&"text/plain".to_string()));
+        assert!(mimes.contains(&"text/plain;charset=utf-8".to_string()));
+        assert!(mimes.contains(&"UTF8_STRING".to_string()));
+        assert_eq!(expanded_offer_mimes("image/png"), vec!["image/png"]);
+
+        let mut fds = [0 as libc::c_int; 2];
+        assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
+        let (rfd, wfd) = unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+        write_fd_with_timeout(wfd, b"hello wayland clipboard", Duration::from_secs(1)).unwrap();
+        let read = read_fd_bounded(rfd, 1024, Duration::from_secs(1)).unwrap();
+        assert_eq!(read.as_deref(), Some(&b"hello wayland clipboard"[..]));
+
+        // Over-limit payload returns Ok(None) instead of allocating unbounded memory.
+        let mut fds2 = [0 as libc::c_int; 2];
+        assert_eq!(unsafe { libc::pipe2(fds2.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
+        let (rfd2, wfd2) =
+            unsafe { (OwnedFd::from_raw_fd(fds2[0]), OwnedFd::from_raw_fd(fds2[1])) };
+        write_fd_with_timeout(wfd2, &[b'a'; 64], Duration::from_secs(1)).unwrap();
+        let oversized = read_fd_bounded(rfd2, 32, Duration::from_secs(1)).unwrap();
+        assert!(oversized.is_none());
+    }
+
+    #[test]
+    fn process_captured_payload_skips_unnecessary_manager_copy_and_handles_large_utf8() {
+        use super::{process_captured_payload, UiEvent, MAX_SENSITIVE_SCAN_BYTES};
+        use std::sync::atomic::AtomicBool;
+
+        // Large UTF-8 payload with a multi-byte character straddling MAX_SENSITIVE_SCAN_BYTES.
+        let mut big_utf8 = vec![b'x'; MAX_SENSITIVE_SCAN_BYTES - 1];
+        big_utf8.extend_from_slice("é".as_bytes());
+        big_utf8.extend_from_slice(b" trailing text");
+        assert!(!is_sensitive_content("text/plain", &big_utf8));
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "malus-de-clipboard-proc-{}-{unique}",
+            std::process::id()
+        ));
+        let path = dir.join("history.dat");
+        let history = Arc::new(Mutex::new(ClipboardHistory::default()));
+        let (tx, rx) = async_channel::unbounded();
+        let sync_primary = Arc::new(AtomicBool::new(false));
+        let filter_sensitive = Arc::new(AtomicBool::new(true));
+
+        process_captured_payload(
+            "text/plain".to_string(),
+            b"normal note".to_vec(),
+            false,
+            false,
+            &history,
+            &path,
+            &tx,
+            &sync_primary,
+            &filter_sensitive,
+            None,
+        )
+        .unwrap();
+
+        assert!(matches!(rx.try_recv(), Ok(UiEvent::Refresh)));
+        let guard = history.lock().unwrap();
+        assert_eq!(guard.items.len(), 1);
+        assert!(
+            guard.manager_copy.is_none(),
+            "manager_copy should not be populated when sync_primary is disabled"
+        );
+        drop(guard);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
     }
 }

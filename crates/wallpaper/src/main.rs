@@ -324,6 +324,7 @@ fn apply_thumb_squircle_clip_rgba(rgba: &mut [u8], width: usize, height: usize, 
     }
 }
 
+#[allow(dead_code)]
 /// Devuelve el pixbuf con las esquinas recortadas en squircle (como en Branches).
 fn squircle_clip_pixbuf(pixbuf: &gdk_pixbuf::Pixbuf) -> Option<gdk_pixbuf::Pixbuf> {
     let width = pixbuf.width();
@@ -363,13 +364,247 @@ fn squircle_clip_pixbuf(pixbuf: &gdk_pixbuf::Pixbuf) -> Option<gdk_pixbuf::Pixbu
     ))
 }
 
+const MAX_DESKTOP_THUMB_CACHE_ENTRIES: usize = 256;
+const DESKTOP_THUMB_WORKERS: usize = 2;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct DesktopThumbCacheKey {
+    path: PathBuf,
+    modified_secs: u64,
+    size: u64,
+    decode_px: i32,
+}
+
+struct DecodedDesktopThumb {
+    width: i32,
+    height: i32,
+    rowstride: usize,
+    bytes: glib::Bytes,
+}
+
+struct DesktopThumbLru {
+    entries: HashMap<DesktopThumbCacheKey, (u64, gtk4::gdk::Texture)>,
+    seq: u64,
+}
+
+impl DesktopThumbLru {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            seq: 0,
+        }
+    }
+
+    fn get(&mut self, key: &DesktopThumbCacheKey) -> Option<gtk4::gdk::Texture> {
+        self.seq = self.seq.wrapping_add(1);
+        let seq = self.seq;
+        if let Some((last_used, tex)) = self.entries.get_mut(key) {
+            *last_used = seq;
+            return Some(tex.clone());
+        }
+        None
+    }
+
+    fn insert(&mut self, key: DesktopThumbCacheKey, tex: gtk4::gdk::Texture) {
+        self.seq = self.seq.wrapping_add(1);
+        let seq = self.seq;
+        self.entries.insert(key, (seq, tex));
+        if self.entries.len() > MAX_DESKTOP_THUMB_CACHE_ENTRIES {
+            let mut by_age: Vec<(u64, DesktopThumbCacheKey)> = self
+                .entries
+                .iter()
+                .map(|(k, (used, _))| (*used, k.clone()))
+                .collect();
+            by_age.sort_unstable_by_key(|(used, _)| *used);
+            let evict_count = (self.entries.len() / 4).max(1);
+            for (_, old_key) in by_age.into_iter().take(evict_count) {
+                self.entries.remove(&old_key);
+            }
+        }
+    }
+}
+
+thread_local! {
+    static DESKTOP_THUMB_CACHE: RefCell<DesktopThumbLru> = RefCell::new(DesktopThumbLru::new());
+    static DESKTOP_THUMB_IN_FLIGHT: RefCell<HashMap<DesktopThumbCacheKey, Vec<(glib::WeakRef<Image>, i32)>>> =
+        RefCell::new(HashMap::new());
+}
+
+fn decode_desktop_thumb_rgba(path: &Path, decode_px: i32) -> Option<DecodedDesktopThumb> {
+    let pixbuf =
+        gdk_pixbuf::Pixbuf::from_file_at_scale(path, decode_px, decode_px, true).ok()?;
+    let width = pixbuf.width();
+    let height = pixbuf.height();
+    if width <= 0 || height <= 0 || pixbuf.n_channels() < 3 {
+        return None;
+    }
+    let (w, h) = (width as usize, height as usize);
+    let stride = pixbuf.rowstride() as usize;
+    let channels = pixbuf.n_channels() as usize;
+    let has_alpha = pixbuf.has_alpha();
+    let src_bytes = pixbuf.read_pixel_bytes();
+    let src = src_bytes.as_ref();
+    let out_stride = w * 4;
+    let mut rgba = vec![255u8; out_stride * h];
+    for y in 0..h {
+        let row_start = y * stride;
+        let out_start = y * out_stride;
+        if row_start + w * channels > src.len() {
+            return None;
+        }
+        if has_alpha && channels == 4 {
+            rgba[out_start..out_start + out_stride]
+                .copy_from_slice(&src[row_start..row_start + out_stride]);
+        } else {
+            for x in 0..w {
+                let s = row_start + x * channels;
+                let d = out_start + x * 4;
+                rgba[d..d + 3].copy_from_slice(&src[s..s + 3]);
+                if has_alpha {
+                    rgba[d + 3] = src[s + 3];
+                }
+            }
+        }
+    }
+    apply_thumb_squircle_clip_rgba(&mut rgba, w, h, thumb_squircle_radius(width, height));
+    Some(DecodedDesktopThumb {
+        width,
+        height,
+        rowstride: out_stride,
+        bytes: glib::Bytes::from_owned(rgba),
+    })
+}
+
+fn enqueue_desktop_thumbnail_decode(key: DesktopThumbCacheKey) {
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Condvar, Mutex, OnceLock};
+
+    static QUEUE: OnceLock<Arc<(Mutex<VecDeque<DesktopThumbCacheKey>>, Condvar)>> = OnceLock::new();
+    let shared = QUEUE.get_or_init(|| {
+        let pair = Arc::new((Mutex::new(VecDeque::<DesktopThumbCacheKey>::new()), Condvar::new()));
+        for idx in 0..DESKTOP_THUMB_WORKERS {
+            let worker_pair = Arc::clone(&pair);
+            let _ = std::thread::Builder::new()
+                .name(format!("malus-desktop-thumb-{idx}"))
+                .spawn(move || loop {
+                    let job = {
+                        let (lock, cvar) = &*worker_pair;
+                        let mut q = lock
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        while q.is_empty() {
+                            q = cvar
+                                .wait(q)
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        }
+                        q.pop_front()
+                    };
+                    let Some(key) = job else {
+                        continue;
+                    };
+                    let decoded = decode_desktop_thumb_rgba(&key.path, key.decode_px);
+                    glib::MainContext::default().invoke(move || {
+                        let waiters = DESKTOP_THUMB_IN_FLIGHT
+                            .with(|cell| cell.borrow_mut().remove(&key))
+                            .unwrap_or_default();
+                        let Some(data) = decoded else {
+                            return;
+                        };
+                        let texture: gtk4::gdk::Texture = gtk4::gdk::MemoryTexture::new(
+                            data.width,
+                            data.height,
+                            gtk4::gdk::MemoryFormat::R8g8b8a8,
+                            &data.bytes,
+                            data.rowstride,
+                        )
+                        .upcast();
+                        DESKTOP_THUMB_CACHE.with(|cache| {
+                            cache.borrow_mut().insert(key, texture.clone());
+                        });
+                        for (weak_img, pixel_size) in waiters {
+                            if let Some(img) = weak_img.upgrade() {
+                                img.set_paintable(Some(&texture));
+                                img.set_pixel_size(pixel_size);
+                            }
+                        }
+                    });
+                });
+        }
+        pair
+    });
+
+    let (lock, cvar) = &**shared;
+    let mut q = lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    q.push_back(key);
+    cvar.notify_one();
+}
+
+fn desktop_thumb_cache_key(path: &Path, icon_size: i32) -> DesktopThumbCacheKey {
+    let meta = fs::metadata(path).ok();
+    let modified_secs = meta
+        .as_ref()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+    let decode_px = (icon_size.max(16) * 2).clamp(32, 256);
+    DesktopThumbCacheKey {
+        path: path.to_path_buf(),
+        modified_secs,
+        size,
+        decode_px,
+    }
+}
+
+fn request_desktop_icon_thumbnail(img: &Image, path: &Path, icon_size: i32) -> bool {
+    let key = desktop_thumb_cache_key(path, icon_size);
+    if let Some(cached) = DESKTOP_THUMB_CACHE.with(|cache| cache.borrow_mut().get(&key)) {
+        img.set_paintable(Some(&cached));
+        img.set_pixel_size(icon_size);
+        return true;
+    }
+    let should_enqueue = DESKTOP_THUMB_IN_FLIGHT.with(|cell| {
+        let mut map = cell.borrow_mut();
+        let entry = map.entry(key.clone());
+        match entry {
+            std::collections::hash_map::Entry::Occupied(mut occ) => {
+                occ.get_mut().push((img.downgrade(), icon_size));
+                false
+            }
+            std::collections::hash_map::Entry::Vacant(vac) => {
+                vac.insert(vec![(img.downgrade(), icon_size)]);
+                true
+            }
+        }
+    });
+    if should_enqueue {
+        enqueue_desktop_thumbnail_decode(key);
+    }
+    false
+}
+
 fn build_aurora_gradient_texture(
     target_w: i32,
     target_h: i32,
     is_dark: bool,
 ) -> Option<gtk4::gdk::Texture> {
-    let target_w = target_w.max(1);
-    let target_h = target_h.max(1);
+    let raw_w = target_w.max(1);
+    let raw_h = target_h.max(1);
+    // Los degradados suaves se escalan linealmente en GPU sin pérdida visual: acotar el lado
+    // mayor a 512 px ahorra ~65 MB de RAM transitoria por monitor en pantallas 4K.
+    let max_side = raw_w.max(raw_h);
+    let (target_w, target_h) = if max_side > 512 {
+        let ratio = 512.0 / max_side as f64;
+        (
+            ((raw_w as f64 * ratio).round() as i32).max(1),
+            ((raw_h as f64 * ratio).round() as i32).max(1),
+        )
+    } else {
+        (raw_w, raw_h)
+    };
     let surface =
         gtk4::cairo::ImageSurface::create(gtk4::cairo::Format::ARgb32, target_w, target_h).ok()?;
     {
@@ -883,6 +1118,14 @@ fn park_layer_window(win: ApplicationWindow) -> ApplicationWindow {
         win.set_keyboard_mode(KeyboardMode::None);
     }
     win.set_default_size(1, 1);
+    // Cerrar la ventana de forma diferida tras estabilizar el hotplug para evitar fugas
+    // acumulativas de superficies Wayland y árboles GTK en `parked_windows`.
+    let win_weak = win.downgrade();
+    glib::timeout_add_local_once(std::time::Duration::from_secs(2), move || {
+        if let Some(w) = win_weak.upgrade() {
+            w.close();
+        }
+    });
     win
 }
 
@@ -4086,6 +4329,95 @@ fn desktop_is_supported_archive(path: &Path) -> bool {
         || lower.ends_with(".tar")
 }
 
+fn is_safe_desktop_archive_entry(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.contains('\0') {
+        return false;
+    }
+    let normalized = trimmed.replace('\\', "/");
+    let p = Path::new(&normalized);
+    if p.is_absolute() {
+        return false;
+    }
+    !p.components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::RootDir
+                | std::path::Component::ParentDir
+                | std::path::Component::Prefix(_)
+        )
+    })
+}
+
+fn validate_desktop_archive_entries(src: &Path, is_zip: bool) -> bool {
+    let out = if is_zip {
+        std::process::Command::new("unzip")
+            .args(["-Z1", "--"])
+            .arg(src)
+            .output()
+    } else {
+        std::process::Command::new("tar")
+            .args(["--force-local", "-tf"])
+            .arg(src)
+            .output()
+    };
+    let Ok(out) = out else {
+        return false;
+    };
+    if !out.status.success() {
+        return false;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .all(is_safe_desktop_archive_entry)
+}
+
+fn desktop_extracted_tree_has_escaping_symlink(root: &Path) -> bool {
+    let Ok(canonical_root) = std::fs::canonicalize(root) else {
+        return true;
+    };
+    let mut stack = vec![canonical_root.clone()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            return true;
+        };
+        for entry in rd.flatten() {
+            let p = entry.path();
+            let Ok(meta) = std::fs::symlink_metadata(&p) else {
+                return true;
+            };
+            if meta.file_type().is_symlink() {
+                let Ok(target) = std::fs::read_link(&p) else {
+                    return true;
+                };
+                if target.is_absolute() {
+                    return true;
+                }
+                let parent = p.parent().unwrap_or(&canonical_root);
+                let resolved = std::fs::canonicalize(parent.join(&target)).unwrap_or_else(|_| {
+                    let mut acc = parent.to_path_buf();
+                    for comp in target.components() {
+                        match comp {
+                            std::path::Component::ParentDir => {
+                                acc.pop();
+                            }
+                            std::path::Component::Normal(seg) => acc.push(seg),
+                            _ => {}
+                        }
+                    }
+                    acc
+                });
+                if !resolved.starts_with(&canonical_root) {
+                    return true;
+                }
+            } else if meta.is_dir() {
+                stack.push(p);
+            }
+        }
+    }
+    false
+}
+
 fn extract_desktop_archive(path: &Path) {
     let Some(parent) = path.parent() else {
         return;
@@ -4093,22 +4425,79 @@ fn extract_desktop_archive(path: &Path) {
     let src = path.to_path_buf();
     let dest = parent.to_path_buf();
     let lower = src.to_string_lossy().to_ascii_lowercase();
+    let is_zip = lower.ends_with(".zip");
     std::thread::spawn(move || {
-        if lower.ends_with(".zip") {
-            let _ = std::process::Command::new("unzip")
-                .arg("-oq")
+        if !validate_desktop_archive_entries(&src, is_zip) {
+            warn!(
+                "🔒 [SECURITY] Archivo comprimido rechazado por contener rutas inseguras: {:?}",
+                src
+            );
+            return;
+        }
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let tmp_dir = dest.join(format!(
+            ".malus_desktop_extract_{}_{}",
+            std::process::id(),
+            nanos
+        ));
+        if std::fs::create_dir_all(&tmp_dir).is_err() {
+            return;
+        }
+
+        let ok = if is_zip {
+            std::process::Command::new("unzip")
+                .args(["-q", "-d"])
+                .arg(&tmp_dir)
+                .arg("--")
                 .arg(&src)
-                .arg("-d")
-                .arg(&dest)
-                .status();
+                .status()
+                .is_ok_and(|s| s.success())
         } else {
-            let _ = std::process::Command::new("tar")
-                .arg("-xf")
+            std::process::Command::new("tar")
+                .args(["--force-local", "-xf"])
                 .arg(&src)
                 .arg("-C")
-                .arg(&dest)
-                .status();
+                .arg(&tmp_dir)
+                .status()
+                .is_ok_and(|s| s.success())
+        };
+
+        if !ok || desktop_extracted_tree_has_escaping_symlink(&tmp_dir) {
+            warn!(
+                "🔒 [SECURITY] Extracción cancelada (fallo o enlace simbólico fuera de destino): {:?}",
+                src
+            );
+            let _ = std::fs::remove_dir_all(&tmp_dir);
+            return;
         }
+
+        if let Ok(entries) = std::fs::read_dir(&tmp_dir) {
+            for entry in entries.flatten() {
+                let entry_path = entry.path();
+                let name = entry.file_name();
+                let mut target = dest.join(&name);
+                if target.symlink_metadata().is_ok() {
+                    let stem = Path::new(&name)
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| name.to_string_lossy().into_owned());
+                    let ext = Path::new(&name)
+                        .extension()
+                        .map(|e| format!(".{}", e.to_string_lossy()))
+                        .unwrap_or_default();
+                    let mut idx = 2usize;
+                    while target.symlink_metadata().is_ok() {
+                        target = dest.join(format!("{stem} {idx}{ext}"));
+                        idx += 1;
+                    }
+                }
+                let _ = std::fs::rename(&entry_path, &target);
+            }
+        }
+        let _ = std::fs::remove_dir_all(&tmp_dir);
     });
 }
 
@@ -4283,10 +4672,13 @@ fn compress_desktop_item(path: &Path) {
     let parent_dir = parent.to_path_buf();
     let fname = file_name.to_os_string();
     std::thread::spawn(move || {
+        let mut safe_rel = std::ffi::OsString::from("./");
+        safe_rel.push(&fname);
         let _ = std::process::Command::new("zip")
             .arg("-rq")
             .arg(&archive)
-            .arg(&fname)
+            .arg("--")
+            .arg(&safe_rel)
             .current_dir(&parent_dir)
             .status();
     });
@@ -5230,42 +5622,28 @@ fn render_single_icon(
     let icon = item.icon;
     let content_type = item.content_type;
 
-    let thumbnail = content_type
+    let is_image = content_type
         .as_deref()
-        .filter(|ct| ct.starts_with("image/"))
-        .and_then(|_| {
-            gdk_pixbuf::Pixbuf::from_file_at_scale(
-                &path,
-                metrics.icon_size,
-                metrics.icon_size,
-                true,
-            )
-            .ok()
-        });
+        .is_some_and(|ct| ct.starts_with("image/"));
 
-    let icon_image = thumbnail
-        .as_ref()
-        .map(|pixbuf| {
-            let clipped = squircle_clip_pixbuf(pixbuf);
-            let texture = gtk4::gdk::Texture::for_pixbuf(clipped.as_ref().unwrap_or(pixbuf));
-            Image::from_paintable(Some(&texture))
-        })
-        .unwrap_or_else(|| match icon.as_ref() {
+    let icon_image = Image::new();
+    let cached_thumb_applied = is_image && request_desktop_icon_thumbnail(&icon_image, &path, metrics.icon_size);
+    if !cached_thumb_applied {
+        match icon.as_ref() {
             Some(i) => {
-                let img = Image::new();
                 if !(path.is_dir()
                     && malus_de_common::folder_icon::apply_tinted_folder_icon(
-                        &img,
+                        &icon_image,
                         i,
                         metrics.icon_size,
                     ))
                 {
-                    img.set_from_gicon(i);
+                    icon_image.set_from_gicon(i);
                 }
-                img
             }
-            None => Image::from_icon_name("text-x-generic"),
-        });
+            None => icon_image.set_icon_name(Some("text-x-generic")),
+        }
+    }
     icon_image.set_pixel_size(metrics.icon_size);
 
     let label = Label::builder()
@@ -7355,6 +7733,8 @@ fn populate_wallpaper_role(
         match desktop_file.monitor_directory(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE) {
             Ok(monitor) => {
                 let trigger_c = trigger_refresh.clone();
+                let pending_desktop_refresh: Rc<Cell<Option<glib::SourceId>>> =
+                    Rc::new(Cell::new(None));
                 let insert_c = insert_single_icon.clone();
                 let cfg_mon = current_config.clone();
                 let icons_mon = icons.clone();
@@ -7410,7 +7790,19 @@ fn populate_wallpaper_role(
                         }
                         _ => {}
                     }
-                    trigger_c();
+                    if let Some(old_id) = pending_desktop_refresh.take() {
+                        old_id.remove();
+                    }
+                    let slot = pending_desktop_refresh.clone();
+                    let trigger_debounced = trigger_c.clone();
+                    let id = glib::timeout_add_local_once(
+                        std::time::Duration::from_millis(60),
+                        move || {
+                            slot.set(None);
+                            trigger_debounced();
+                        },
+                    );
+                    pending_desktop_refresh.set(Some(id));
                 });
                 desktop_monitors.borrow_mut().push(monitor);
             }
@@ -7848,6 +8240,9 @@ fn main() -> Result<()> {
             geometry_retry_count.set(0);
 
             let primary_index = select_primary_monitor_index(&monitor_list, &displays_cfg);
+            parked_windows_sync
+                .borrow_mut()
+                .retain(|w| w.surface().is_some());
             let mut prev_slots: Vec<WallpaperWindowSlot> =
                 wallpaper_surfaces_sync.borrow_mut().drain(..).collect();
 

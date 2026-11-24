@@ -107,6 +107,8 @@ pub struct ScreenshotUiState {
     render_buffer: Option<MemoryRenderBuffer>,
     render_buffer_size: (i32, i32),
     mask_buffer: Vec<u8>,
+    last_render_signature: u64,
+    last_render_rect: Rectangle<i32, Physical>,
 }
 
 impl ScreenshotUiState {
@@ -144,6 +146,8 @@ impl ScreenshotUiState {
             render_buffer: None,
             render_buffer_size: (0, 0),
             mask_buffer: Vec::new(),
+            last_render_signature: 0,
+            last_render_rect: Rectangle::default(),
         }
     }
 
@@ -514,11 +518,91 @@ impl ScreenshotUiState {
 
         let sw = output_geo.size.w as f64;
         let sh = output_geo.size.h as f64;
-        let phys_w = (sw * scale).round() as i32;
-        let phys_h = (sh * scale).round() as i32;
+        let full_phys_w = (sw * scale).round() as i32;
+        let full_phys_h = (sh * scale).round() as i32;
 
-        if phys_w <= 0 || phys_h <= 0 {
+        if full_phys_w <= 0 || full_phys_h <= 0 {
             return None;
+        }
+
+        // Cuando solo está visible la píldora indicadora de grabación, rasterizar únicamente su
+        // rectángulo compacto (~166x72 lógicos) en vez de dos superficies Cairo de pantalla completa.
+        let (origin_x, origin_y, canvas_w, canvas_h, phys_loc, phys_w, phys_h) = if self.is_recording
+        {
+            let (rx, ry, rw, rh) = recording_indicator_geometry(sw);
+            let pad = 20.0;
+            let lx = (rx - pad).max(0.0).floor();
+            let ly = (ry - pad).max(0.0).floor();
+            let lw = (rw + pad * 2.0).min(sw - lx).ceil().max(2.0);
+            let lh = (rh + pad * 2.0).min(sh - ly).ceil().max(2.0);
+            let px = (lx * scale).round() as i32;
+            let py = (ly * scale).round() as i32;
+            let pw = (lw * scale).round().max(2.0) as i32;
+            let ph = (lh * scale).round().max(2.0) as i32;
+            (lx, ly, lw, lh, Point::from((px, py)), pw, ph)
+        } else {
+            (
+                0.0,
+                0.0,
+                sw,
+                sh,
+                Point::from((0, 0)),
+                full_phys_w,
+                full_phys_h,
+            )
+        };
+
+        let glass_scale = malus_de_common::config::current_liquid_glass_scale();
+        let (rec_secs, rec_pulse) = if self.is_recording {
+            let elapsed_ms = self
+                .recording_start
+                .map(|t| t.elapsed().as_millis())
+                .unwrap_or(0);
+            ((elapsed_ms / 1000) as u64, u64::from((elapsed_ms % 1000) < 500))
+        } else {
+            (0, 0)
+        };
+
+        let mut sig = 1469598103934665603u64;
+        let mix = |s: &mut u64, v: u64| {
+            *s ^= v;
+            *s = s.wrapping_mul(1099511628211);
+        };
+        mix(&mut sig, u64::from(self.is_recording));
+        mix(&mut sig, u64::from(is_dark));
+        mix(&mut sig, (scale * 1000.0).round() as u64);
+        mix(&mut sig, (glass_scale * 1000.0).round() as u64);
+        mix(&mut sig, phys_loc.x as u64);
+        mix(&mut sig, phys_loc.y as u64);
+        mix(&mut sig, phys_w as u64);
+        mix(&mut sig, phys_h as u64);
+        mix(&mut sig, self.hovered_item.unwrap_or(99) as u64);
+        if self.is_recording {
+            mix(&mut sig, rec_secs);
+            mix(&mut sig, rec_pulse);
+        } else {
+            mix(&mut sig, self.mode as u64);
+            mix(&mut sig, u64::from(self.show_options_menu));
+            mix(&mut sig, self.hovered_menu_item.unwrap_or(999) as u64);
+            mix(&mut sig, self.options.save_to as u64);
+            mix(&mut sig, u64::from(self.options.timer_seconds));
+            mix(&mut sig, u64::from(self.options.remember_selection));
+            mix(&mut sig, u64::from(self.options.include_audio));
+            mix(&mut sig, (self.selection.x * 2.0).round() as i64 as u64);
+            mix(&mut sig, (self.selection.y * 2.0).round() as i64 as u64);
+            mix(&mut sig, (self.selection.width * 2.0).round() as i64 as u64);
+            mix(&mut sig, (self.selection.height * 2.0).round() as i64 as u64);
+        }
+        let _ = (canvas_w, canvas_h);
+
+        let rect = Rectangle::new(phys_loc, (phys_w, phys_h).into());
+        if sig == self.last_render_signature
+            && self.render_buffer.is_some()
+            && self.render_buffer_size == (phys_w, phys_h)
+            && self.last_render_rect == rect
+            && !self.mask_buffer.is_empty()
+        {
+            return Some((rect, Some(&self.mask_buffer), (phys_w, phys_h), 1.0));
         }
 
         let mut surface = ImageSurface::create(Format::ARgb32, phys_w, phys_h).ok()?;
@@ -529,6 +613,10 @@ impl ScreenshotUiState {
             let mask_ctx = Context::new(&mask_surface).ok()?;
             ctx.scale(scale, scale);
             mask_ctx.scale(scale, scale);
+            if origin_x != 0.0 || origin_y != 0.0 {
+                ctx.translate(-origin_x, -origin_y);
+                mask_ctx.translate(-origin_x, -origin_y);
+            }
 
             mask_ctx.set_operator(Operator::Source);
             mask_ctx.set_source_rgba(0.0, 0.0, 0.0, 0.0);
@@ -555,7 +643,8 @@ impl ScreenshotUiState {
         mask_surface.flush();
 
         if let Ok(mask_data) = mask_surface.data() {
-            self.mask_buffer = mask_data.to_vec();
+            self.mask_buffer.clear();
+            self.mask_buffer.extend_from_slice(&mask_data);
         }
 
         if let Ok(data) = surface.data() {
@@ -580,8 +669,9 @@ impl ScreenshotUiState {
             }
         }
 
-        let full_phys = Rectangle::new((0, 0).into(), (phys_w, phys_h).into());
-        Some((full_phys, Some(&self.mask_buffer), (phys_w, phys_h), 1.0))
+        self.last_render_signature = sig;
+        self.last_render_rect = rect;
+        Some((rect, Some(&self.mask_buffer), (phys_w, phys_h), 1.0))
     }
 
     pub fn create_render_element(
@@ -989,7 +1079,10 @@ impl ScreenshotUiState {
         let _ = ctx.stroke();
 
         // Punto rojo parpadeante
-        let pulse = Instant::now().elapsed().as_millis() % 1000 < 500;
+        let pulse = self
+            .recording_start
+            .map(|t| (t.elapsed().as_millis() % 1000) < 500)
+            .unwrap_or(true);
         ctx.arc(rx + 15.0, ry + 16.0, 4.5, 0.0, TAU);
         if pulse {
             ctx.set_source_rgba(0.96, 0.24, 0.22, 1.0);

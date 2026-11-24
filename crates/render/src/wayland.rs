@@ -96,7 +96,7 @@ impl WaylandTopBarApp {
         let layer_shell_state = LayerShell::bind(globals, qh)
             .context("Protocolo wlr-layer-shell no disponible en el compositor")?;
         let shm_state = Shm::bind(globals, qh).context("Protocolo wl_shm no disponible")?;
-        let slot_pool = SlotPool::new(1920 * 1080 * 4, &shm_state).ok();
+        let slot_pool = SlotPool::new(512 * 1024, &shm_state).ok();
 
         let wl_surface = compositor_state.create_surface(qh);
         let layer = layer_shell_state.create_layer_surface(
@@ -146,7 +146,7 @@ impl WaylandTopBarApp {
         let adapter = futures_lite::future::block_on(instance.request_adapter(
             &wgpu::RequestAdapterOptions {
                 compatible_surface: Some(&wgpu_surface),
-                power_preference: wgpu::PowerPreference::HighPerformance,
+                power_preference: wgpu::PowerPreference::LowPower,
                 force_fallback_adapter: false,
             },
         ))
@@ -502,26 +502,46 @@ impl WaylandTopBarApp {
         let pct = (((cursor_x - sx) / sw).clamp(0.0, 1.0) * 100.0) as u32;
 
         if tag.contains("sound") {
+            let mut changed = false;
             if let Some(ref mut p) = self.model.active_popover {
                 if let Some(ref mut cc) = p.control_center {
-                    cc.sound_volume = pct;
-                    cc.sound_muted = false;
+                    if cc.sound_volume != pct || cc.sound_muted {
+                        cc.sound_volume = pct;
+                        cc.sound_muted = false;
+                        changed = true;
+                    }
                 }
             }
-            let _ = std::process::Command::new("wpctl")
-                .args(["set-volume", "@DEFAULT_AUDIO_SINK@", &format!("{}%", pct)])
-                .spawn();
+            if !changed {
+                return;
+            }
+            let pct_arg = format!("{}%", pct);
+            std::thread::spawn(move || {
+                let _ = std::process::Command::new("wpctl")
+                    .args(["set-volume", "@DEFAULT_AUDIO_SINK@", &pct_arg])
+                    .status();
+            });
             let _ = self.rebuild_ui();
             let _ = self.render();
         } else if tag.contains("display") {
+            let mut changed = false;
             if let Some(ref mut p) = self.model.active_popover {
                 if let Some(ref mut cc) = p.control_center {
-                    cc.display_brightness = pct;
+                    if cc.display_brightness != pct {
+                        cc.display_brightness = pct;
+                        changed = true;
+                    }
                 }
             }
-            let _ = std::process::Command::new("brightnessctl")
-                .args(["set", &format!("{}%", pct)])
-                .spawn();
+            if !changed {
+                return;
+            }
+            let pct_arg = format!("{}%", pct);
+            std::thread::spawn(move || {
+                let _ = std::process::Command::new("brightnessctl")
+                    .args(["set", &pct_arg])
+                    .status();
+            });
             let _ = self.rebuild_ui();
             let _ = self.render();
         }
@@ -807,7 +827,7 @@ impl WaylandTopBarApp {
             width: self.width.max(1),
             height: self.height.max(1),
             desired_maximum_frame_latency: 2,
-            present_mode: wgpu::PresentMode::Mailbox,
+            present_mode: wgpu::PresentMode::Fifo,
         };
         self.wgpu_surface.configure(&self.device, &surface_config);
     }

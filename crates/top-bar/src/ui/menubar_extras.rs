@@ -142,22 +142,23 @@ pub fn battery_icon_name(pct: u8, charging: bool) -> &'static str {
     }
 }
 
+fn notifications_gsettings() -> Option<gtk4::gio::Settings> {
+    let source = gtk4::gio::SettingsSchemaSource::default()?;
+    source.lookup("org.gnome.desktop.notifications", true)?;
+    Some(gtk4::gio::Settings::new("org.gnome.desktop.notifications"))
+}
+
 fn is_focus_active() -> bool {
-    let output = Command::new("gsettings")
-        .args(["get", "org.gnome.desktop.notifications", "show-banners"])
-        .output();
-    if let Ok(out) = output {
-        String::from_utf8_lossy(&out.stdout).trim().eq_ignore_ascii_case("false")
-    } else {
-        false
+    if let Some(settings) = notifications_gsettings() {
+        return !settings.boolean("show-banners");
     }
+    false
 }
 
 fn set_focus_active(active: bool) {
-    let val = if active { "false" } else { "true" };
-    let _ = Command::new("gsettings")
-        .args(["set", "org.gnome.desktop.notifications", "show-banners", val])
-        .spawn();
+    if let Some(settings) = notifications_gsettings() {
+        let _ = settings.set_boolean("show-banners", !active);
+    }
 }
 
 fn resolve_user_names() -> (String, String) {
@@ -426,8 +427,55 @@ pub fn create_menubar_extra_widgets() -> MenuBarExtraWidgets {
 
     let timer_rem = Rc::new(Cell::new(0u32));
     let timer_running = Rc::new(Cell::new(false));
+    let timer_source_id: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
     let timer_status = Label::builder().label("Sin temporizador activo").css_classes(["cc-tile-title"]).xalign(0.0).build();
     timer_box.append(&timer_status);
+
+    let start_countdown_timer: Rc<dyn Fn()> = {
+        let tr = timer_rem.clone();
+        let run = timer_running.clone();
+        let tl = timer_lbl.clone();
+        let ts = timer_status.clone();
+        let tb = timer_btn.clone();
+        let src_slot = timer_source_id.clone();
+        Rc::new(move || {
+            if src_slot.borrow().is_some() {
+                return;
+            }
+            let tr = tr.clone();
+            let run = run.clone();
+            let tl = tl.clone();
+            let ts = ts.clone();
+            let tb = tb.clone();
+            let src_clear = src_slot.clone();
+            let id = glib::timeout_add_local(std::time::Duration::from_secs(1), move || {
+                if !run.get() {
+                    let _ = src_clear.borrow_mut().take();
+                    return glib::ControlFlow::Break;
+                }
+                let left = tr.get();
+                if left > 0 {
+                    let next = left - 1;
+                    tr.set(next);
+                    let txt = format!("{:02}:{:02}", next / 60, next % 60);
+                    tl.set_label(&txt);
+                    tl.set_visible(true);
+                    ts.set_label(&format!("Restante: {txt}"));
+                    glib::ControlFlow::Continue
+                } else {
+                    run.set(false);
+                    tl.set_visible(false);
+                    ts.set_label("¡Tiempo finalizado!");
+                    let c = MenuBarConfig::load();
+                    tb.set_visible(c.timer && c.timer_mode == 0);
+                    let _ = src_clear.borrow_mut().take();
+                    glib::ControlFlow::Break
+                }
+            });
+            *src_slot.borrow_mut() = Some(id);
+        })
+    };
+
     let preset_row = GtkBox::builder().orientation(Orientation::Horizontal).spacing(6).homogeneous(true).build();
     for mins in [1u32, 5, 10, 15] {
         let pb = Button::builder().label(&format!("{mins}m")).css_classes(["cc-pill-btn"]).has_frame(false).build();
@@ -435,6 +483,7 @@ pub fn create_menubar_extra_widgets() -> MenuBarExtraWidgets {
         let run = timer_running.clone();
         let tl = timer_lbl.clone();
         let ts = timer_status.clone();
+        let start_cb = start_countdown_timer.clone();
         pb.connect_clicked(move |_| {
             tr.set(mins * 60);
             run.set(true);
@@ -442,6 +491,7 @@ pub fn create_menubar_extra_widgets() -> MenuBarExtraWidgets {
             tl.set_label(&txt);
             tl.set_visible(true);
             ts.set_label(&format!("Restante: {txt}"));
+            start_cb();
         });
         preset_row.append(&pb);
     }
@@ -451,9 +501,13 @@ pub fn create_menubar_extra_widgets() -> MenuBarExtraWidgets {
         let run = timer_running.clone();
         let tl = timer_lbl.clone();
         let ts = timer_status.clone();
+        let src_slot = timer_source_id.clone();
         stop_btn.connect_clicked(move |_| {
             tr.set(0);
             run.set(false);
+            if let Some(id) = src_slot.borrow_mut().take() {
+                id.remove();
+            }
             tl.set_visible(false);
             ts.set_label("Sin temporizador activo");
         });
@@ -538,34 +592,36 @@ pub fn create_menubar_extra_widgets() -> MenuBarExtraWidgets {
             timer_btn_c.set_visible(cfg.timer && (cfg.timer_mode == 0 || timer_run_c.get()));
             weather_btn_c.set_visible(cfg.weather);
 
-            let np_b = np_btn_c.clone();
-            let np_a = np_act_c.clone();
-            let npt = np_t_c.clone();
-            let npa = np_a_c.clone();
-            let npp = np_p_c.clone();
-            let npbus = np_bus_c.clone();
-            glib::MainContext::default().spawn_local(async move {
-                let media = MprisService::get_current_media().await;
-                if let Some(m) = media {
-                    np_a.set(true);
-                    npt.set_label(&m.title);
-                    npa.set_label(&m.artist);
-                    npp.set_icon_name(if m.is_playing {
-                        "media-playback-pause-symbolic"
+            if cfg.now_playing {
+                let np_b = np_btn_c.clone();
+                let np_a = np_act_c.clone();
+                let npt = np_t_c.clone();
+                let npa = np_a_c.clone();
+                let npp = np_p_c.clone();
+                let npbus = np_bus_c.clone();
+                let np_mode = cfg.now_playing_mode;
+                glib::MainContext::default().spawn_local(async move {
+                    let media = MprisService::get_current_media().await;
+                    if let Some(m) = media {
+                        np_a.set(true);
+                        npt.set_label(&m.title);
+                        npa.set_label(&m.artist);
+                        npp.set_icon_name(if m.is_playing {
+                            "media-playback-pause-symbolic"
+                        } else {
+                            "media-playback-start-symbolic"
+                        });
+                        *npbus.borrow_mut() = Some(m.player_bus);
                     } else {
-                        "media-playback-start-symbolic"
-                    });
-                    *npbus.borrow_mut() = Some(m.player_bus);
-                } else {
-                    np_a.set(false);
-                    npt.set_label("Sin reproducción activa");
-                    npa.set_label("");
-                    npp.set_icon_name("media-playback-start-symbolic");
-                    *npbus.borrow_mut() = None;
-                }
-                let latest = MenuBarConfig::load();
-                np_b.set_visible(latest.now_playing && (latest.now_playing_mode == 0 || np_a.get()));
-            });
+                        np_a.set(false);
+                        npt.set_label("Sin reproducción activa");
+                        npa.set_label("");
+                        npp.set_icon_name("media-playback-start-symbolic");
+                        *npbus.borrow_mut() = None;
+                    }
+                    np_b.set_visible(np_mode == 0 || np_a.get());
+                });
+            }
         })
     };
 
@@ -579,39 +635,10 @@ pub fn create_menubar_extra_widgets() -> MenuBarExtraWidgets {
         });
     }
 
-    // Tick de temporizador cada 1s + refresco suave cada 3s
-    {
-        let tr = timer_rem;
-        let run = timer_running;
-        let tl = timer_lbl;
-        let ts = timer_status;
-        let tb = timer_btn.clone();
-        glib::timeout_add_local(std::time::Duration::from_secs(1), move || {
-            if run.get() {
-                let left = tr.get();
-                if left > 0 {
-                    let next = left - 1;
-                    tr.set(next);
-                    let txt = format!("{:02}:{:02}", next / 60, next % 60);
-                    tl.set_label(&txt);
-                    tl.set_visible(true);
-                    ts.set_label(&format!("Restante: {txt}"));
-                } else {
-                    run.set(false);
-                    tl.set_visible(false);
-                    ts.set_label("¡Tiempo finalizado!");
-                    let c = MenuBarConfig::load();
-                    tb.set_visible(c.timer && c.timer_mode == 0);
-                }
-            }
-            glib::ControlFlow::Continue
-        });
-    }
-
     refresh_fn();
     {
         let rf = refresh_fn.clone();
-        glib::timeout_add_local(std::time::Duration::from_secs(3), move || {
+        glib::timeout_add_local(std::time::Duration::from_secs(15), move || {
             rf();
             glib::ControlFlow::Continue
         });

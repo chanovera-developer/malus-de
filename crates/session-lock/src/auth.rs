@@ -96,9 +96,41 @@ fn load_pam_api() -> Result<&'static PamApi, String> {
     res.as_ref().map_err(Clone::clone)
 }
 
+/// Sobrescribe un búfer en memoria con ceros usando escrituras volátiles para evitar que el compilador las elimine.
+fn zeroize_bytes(bytes: &mut [u8]) {
+    for b in bytes.iter_mut() {
+        unsafe {
+            std::ptr::write_volatile(b, 0);
+        }
+    }
+    std::sync::atomic::compiler_fence(std::sync::atomic::Ordering::SeqCst);
+}
+
+unsafe fn free_partial_pam_replies(replies: *mut PamResponse, count: isize) {
+    for j in 0..count {
+        let resp_ptr = (*replies.offset(j)).resp;
+        if !resp_ptr.is_null() {
+            let len = libc::strlen(resp_ptr);
+            if len > 0 {
+                let slice = std::slice::from_raw_parts_mut(resp_ptr.cast::<u8>(), len);
+                zeroize_bytes(slice);
+            }
+            libc::free(resp_ptr.cast());
+        }
+    }
+    libc::free(replies.cast());
+}
+
 struct ConvPayload {
     username: CString,
-    password: CString,
+    /// Contraseña terminada en byte nulo, borrada explícitamente con ceros en `Drop`.
+    password_nul: Vec<u8>,
+}
+
+impl Drop for ConvPayload {
+    fn drop(&mut self) {
+        zeroize_bytes(&mut self.password_nul);
+    }
 }
 
 unsafe extern "C" fn pam_conv_cb(
@@ -120,16 +152,16 @@ unsafe extern "C" fn pam_conv_cb(
     for i in 0..(num_msg as isize) {
         let m = *msg.offset(i);
         if m.is_null() {
-            libc::free(replies.cast());
+            free_partial_pam_replies(replies, i);
             return PAM_CONV_ERR;
         }
         let slot = &mut *replies.offset(i);
         slot.resp_retcode = 0;
         match (*m).msg_style {
             PAM_PROMPT_ECHO_OFF => {
-                let dup = libc::strdup(payload.password.as_ptr());
+                let dup = libc::strdup(payload.password_nul.as_ptr().cast());
                 if dup.is_null() {
-                    libc::free(replies.cast());
+                    free_partial_pam_replies(replies, i);
                     return PAM_CONV_ERR;
                 }
                 slot.resp = dup;
@@ -137,7 +169,7 @@ unsafe extern "C" fn pam_conv_cb(
             PAM_PROMPT_ECHO_ON => {
                 let dup = libc::strdup(payload.username.as_ptr());
                 if dup.is_null() {
-                    libc::free(replies.cast());
+                    free_partial_pam_replies(replies, i);
                     return PAM_CONV_ERR;
                 }
                 slot.resp = dup;
@@ -155,13 +187,23 @@ unsafe extern "C" fn pam_conv_cb(
     PAM_SUCCESS
 }
 
-/// Obtiene el nombre del usuario real del UID actual mediante NSS (`getpwuid`),
+/// Obtiene el nombre del usuario real del UID actual mediante NSS (`getpwuid_r`, seguro frente a hilos),
 /// evitando depender de la variable de entorno `USER`.
 pub fn current_username() -> String {
     unsafe {
-        let pw = libc::getpwuid(libc::getuid());
-        if !pw.is_null() && !(*pw).pw_name.is_null() {
-            if let Ok(name) = CStr::from_ptr((*pw).pw_name).to_str() {
+        let uid = libc::getuid();
+        let mut pwd: libc::passwd = std::mem::zeroed();
+        let mut result: *mut libc::passwd = std::ptr::null_mut();
+        let mut buf = vec![0u8; 4096];
+        let rc = libc::getpwuid_r(
+            uid,
+            &mut pwd,
+            buf.as_mut_ptr().cast(),
+            buf.len(),
+            &mut result,
+        );
+        if rc == 0 && !result.is_null() && !pwd.pw_name.is_null() {
+            if let Ok(name) = CStr::from_ptr(pwd.pw_name).to_str() {
                 if !name.is_empty() {
                     return name.to_string();
                 }
@@ -176,12 +218,16 @@ pub fn current_username() -> String {
 pub fn verify_user_password(username: &str, password: &str) -> Result<bool, String> {
     let api = load_pam_api()?;
     let c_user = CString::new(username).map_err(|_| "Nombre de usuario inválido".to_string())?;
-    let c_pass =
-        CString::new(password).map_err(|_| "La contraseña contiene bytes nulos".to_string())?;
+    if password.as_bytes().contains(&0) {
+        return Err("La contraseña contiene bytes nulos".to_string());
+    }
+    let mut password_nul = Vec::with_capacity(password.len() + 1);
+    password_nul.extend_from_slice(password.as_bytes());
+    password_nul.push(0);
 
     let payload = ConvPayload {
         username: c_user.clone(),
-        password: c_pass,
+        password_nul,
     };
     let conv = PamConv {
         conv: Some(pam_conv_cb),
@@ -251,5 +297,12 @@ mod tests {
     #[test]
     fn libpam_loads_cleanly() {
         assert!(load_pam_api().is_ok());
+    }
+
+    #[test]
+    fn zeroize_bytes_overwrites_buffer_with_zeros() {
+        let mut secret = b"super-secret-password".to_vec();
+        zeroize_bytes(&mut secret);
+        assert!(secret.iter().all(|&b| b == 0));
     }
 }

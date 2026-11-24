@@ -418,10 +418,13 @@ impl GalleryView {
             text_card.add_css_class("branches-gallery-text-card");
             text_card.set_size_request(420, 260);
 
-            let preview_snippet = match fs::read(&item.path) {
-                Ok(bytes) => {
-                    let len = bytes.len().min(400);
-                    String::from_utf8_lossy(&bytes[..len]).to_string()
+            let preview_snippet = match fs::File::open(&item.path) {
+                Ok(file) => {
+                    use std::io::Read;
+                    let mut buf = Vec::with_capacity(1024);
+                    let _ = file.take(4096).read_to_end(&mut buf);
+                    let len = buf.len().min(400);
+                    String::from_utf8_lossy(&buf[..len]).to_string()
                 }
                 Err(_) => "(Texto no disponible)".to_string(),
             };

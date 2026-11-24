@@ -53,6 +53,8 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
     static TOPBAR_MENUBAR_MONITOR: std::cell::RefCell<Option<gtk4::gio::FileMonitor>> =
         const { std::cell::RefCell::new(None) };
+    static TOPBAR_SYNC_VIS_CALLBACK: std::cell::RefCell<Option<std::rc::Rc<dyn Fn()>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 fn apply_topbar_accent_color(index: usize) {
@@ -210,6 +212,7 @@ fn load_css() {
         gtk4::gio::Cancellable::NONE,
     ) {
         monitor.connect_changed(|_, _, _, _| {
+            malus_de_common::config::invalidate_appearance_settings_cache();
             apply_topbar_accent_color(malus_de_common::config::load_accent_color_index());
             apply_topbar_liquid_glass_opacity(malus_de_common::config::load_liquid_glass_opacity());
         });
@@ -225,12 +228,18 @@ fn load_css() {
         gtk4::gio::Cancellable::NONE,
     ) {
         mb_monitor.connect_changed(|_, _, _, _| {
+            malus_de_common::config::invalidate_appearance_settings_cache();
             apply_topbar_liquid_glass_opacity(malus_de_common::config::load_liquid_glass_opacity());
             ui::status_tray::refresh_tray_visibility();
             ui::power_profile::refresh_power_profile_visibility();
             ui::auto_tiling::refresh_auto_tiling_visibility();
             ui::clock::refresh_clock_now();
             ui::system_menu::refresh_system_menu_logo();
+            TOPBAR_SYNC_VIS_CALLBACK.with(|cell| {
+                if let Some(ref f) = *cell.borrow() {
+                    f();
+                }
+            });
         });
         TOPBAR_MENUBAR_MONITOR.with(|cell| {
             *cell.borrow_mut() = Some(mb_monitor);
@@ -424,6 +433,10 @@ fn build_ui(app: &Application) {
                     ui::auto_tiling::set_auto_tiling_visual(enabled);
                     win_ipc.queue_draw();
                 }
+                malus_de_common::ipc::IpcMessage::KeyboardLayoutChanged { .. }
+                | malus_de_common::ipc::IpcMessage::ReloadInputConfig => {
+                    ui::status_tray::refresh_keyboard_layout_badge();
+                }
                 _ => {}
             }
         }
@@ -553,6 +566,9 @@ fn build_ui(app: &Application) {
         })
     };
     *sync_bar_slot.borrow_mut() = Some(sync_bar_vis.clone());
+    TOPBAR_SYNC_VIS_CALLBACK.with(|cell| {
+        *cell.borrow_mut() = Some(sync_bar_vis.clone());
+    });
 
     let motion = gtk4::EventControllerMotion::new();
     {
@@ -572,14 +588,6 @@ fn build_ui(app: &Application) {
         });
     }
     window.add_controller(motion);
-
-    {
-        let sync_t = sync_bar_vis.clone();
-        glib::timeout_add_local(std::time::Duration::from_millis(600), move || {
-            sync_t();
-            glib::ControlFlow::Continue
-        });
-    }
 
     window.set_child(Some(&revealer));
     window.present();

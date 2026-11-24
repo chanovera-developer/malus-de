@@ -933,6 +933,10 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         .side(PackType::End)
         .valign(Align::Center)
         .build();
+    window_controls_end.set_visible(!window_controls_end.is_empty());
+    window_controls_end.connect_empty_notify(|wc| {
+        wc.set_visible(!wc.is_empty());
+    });
     header_toolbar.append(&window_controls_end);
     header_toolbar.set_margin_start(SETTINGS_SIDEBAR_WIDTH);
 
@@ -1839,6 +1843,7 @@ pub(crate) fn set_cursor_theme_and_size(theme: &str, size: u32) {
         malus_de_common::config::DockConfig::load_or_create_default()
             .titlebar_double_click_action,
     );
+    let decoration_layout = malus_de_common::config::active_window_decoration_layout();
     for ini_path in [
         format!("{}/.config/malus-de/gtk-3.0/settings.ini", home),
         format!("{}/.config/malus-de/gtk-4.0/settings.ini", home),
@@ -1850,7 +1855,7 @@ pub(crate) fn set_cursor_theme_and_size(theme: &str, size: u32) {
             &[(
                 "Settings",
                 &[
-                    ("gtk-decoration-layout", "close,minimize,maximize:"),
+                    ("gtk-decoration-layout", decoration_layout),
                     ("gtk-application-prefer-dark-theme", dark_num),
                     ("gtk-cursor-theme-name", theme),
                     ("gtk-cursor-theme-size", size_str.as_str()),

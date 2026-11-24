@@ -35,6 +35,21 @@ pub const BTN_MAX_X: f64 = 60.0;
 const BTN_RADIUS: f64 = 6.5;
 const BTN_HIT_RADIUS: f64 = 8.0;
 
+/// Devuelve las coordenadas X lógicas `(close_x, min_x, max_x)` de los tres botones semáforo:
+/// - Izquierda (`buttons_right = false`): cerrar (20), minimizar (40), maximizar (60).
+/// - Derecha (`buttons_right = true`): minimizar (`width - 60`), maximizar (`width - 40`), cerrar (`width - 20`).
+pub fn button_positions(width: f64, buttons_right: bool) -> (f64, f64, f64) {
+    if buttons_right {
+        (
+            (width - BTN_CLOSE_X).max(BTN_CLOSE_X),
+            (width - BTN_MAX_X).max(BTN_CLOSE_X),
+            (width - BTN_MIN_X).max(BTN_CLOSE_X),
+        )
+    } else {
+        (BTN_CLOSE_X, BTN_MIN_X, BTN_MAX_X)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SsdButton {
     Close,
@@ -49,31 +64,55 @@ pub enum SsdHit {
 }
 
 /// Realiza hit-testing en coordenadas lógicas locales a la barra de título `(0..width, 0..SSD_TITLEBAR_HEIGHT)`.
-pub fn hit_test_titlebar(local_x: f64, local_y: f64, width: f64) -> Option<SsdHit> {
+pub fn hit_test_titlebar_with_layout(
+    local_x: f64,
+    local_y: f64,
+    width: f64,
+    buttons_right: bool,
+) -> Option<SsdHit> {
     if local_x < 0.0 || local_x > width || local_y < 0.0 || local_y > SSD_TITLEBAR_HEIGHT as f64 {
         return None;
     }
 
+    let (close_x, min_x, max_x) = button_positions(width, buttons_right);
     let dy = local_y - BTN_Y;
-    if (local_x - BTN_CLOSE_X).hypot(dy) <= BTN_HIT_RADIUS {
+    if (local_x - close_x).hypot(dy) <= BTN_HIT_RADIUS {
         return Some(SsdHit::Button(SsdButton::Close));
     }
-    if (local_x - BTN_MIN_X).hypot(dy) <= BTN_HIT_RADIUS {
+    if (local_x - min_x).hypot(dy) <= BTN_HIT_RADIUS {
         return Some(SsdHit::Button(SsdButton::Minimize));
     }
-    if (local_x - BTN_MAX_X).hypot(dy) <= BTN_HIT_RADIUS {
+    if (local_x - max_x).hypot(dy) <= BTN_HIT_RADIUS {
         return Some(SsdHit::Button(SsdButton::Maximize));
     }
 
     Some(SsdHit::Titlebar)
 }
 
+/// Realiza hit-testing en coordenadas lógicas locales asumiendo el diseño izquierdo predeterminado.
+pub fn hit_test_titlebar(local_x: f64, local_y: f64, width: f64) -> Option<SsdHit> {
+    hit_test_titlebar_with_layout(local_x, local_y, width, false)
+}
+
 /// Determina si el cursor está sobre el grupo de los 3 botones semáforo (para revelar todos los glifos).
-pub fn is_in_traffic_lights_group(local_x: f64, local_y: f64) -> bool {
-    local_x >= (BTN_CLOSE_X - BTN_HIT_RADIUS - 2.0)
-        && local_x <= (BTN_MAX_X + BTN_HIT_RADIUS + 2.0)
+pub fn is_in_traffic_lights_group_with_layout(
+    local_x: f64,
+    local_y: f64,
+    width: f64,
+    buttons_right: bool,
+) -> bool {
+    let (close_x, min_x, max_x) = button_positions(width, buttons_right);
+    let left_x = close_x.min(min_x).min(max_x);
+    let right_x = close_x.max(min_x).max(max_x);
+    local_x >= (left_x - BTN_HIT_RADIUS - 2.0)
+        && local_x <= (right_x + BTN_HIT_RADIUS + 2.0)
         && local_y >= (BTN_Y - BTN_HIT_RADIUS - 2.0)
         && local_y <= (BTN_Y + BTN_HIT_RADIUS + 2.0)
+}
+
+/// Determina si el cursor está sobre el grupo izquierdo de los 3 botones semáforo.
+pub fn is_in_traffic_lights_group(local_x: f64, local_y: f64) -> bool {
+    is_in_traffic_lights_group_with_layout(local_x, local_y, 800.0, false)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +123,7 @@ struct CacheKey {
     title: String,
     is_active: bool,
     is_dark: bool,
+    buttons_right: bool,
     group_hovered: bool,
     hovered_button: Option<SsdButton>,
 }
@@ -100,6 +140,8 @@ pub struct SsdManager {
     pub group_hovered: bool,
     pub hovered_button: Option<SsdButton>,
     pub last_titlebar_click: Option<(WlSurface, Instant, Point<f64, Logical>)>,
+    /// True cuando los botones semáforo se muestran del lado derecho (minimizar, maximizar, cerrar).
+    pub buttons_right: bool,
     /// True cuando el puntero está sobre un borde de redimensión o barra SSD del compositor
     pub cursor_override: bool,
     /// True mientras un grab interactivo del compositor (ResizeSurfaceGrab / MoveSurfaceGrab) está activo
@@ -109,6 +151,22 @@ pub struct SsdManager {
 impl SsdManager {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn new_with_layout(buttons_right: bool) -> Self {
+        Self {
+            buttons_right,
+            ..Self::default()
+        }
+    }
+
+    pub fn set_buttons_right(&mut self, buttons_right: bool) {
+        if self.buttons_right != buttons_right {
+            self.buttons_right = buttons_right;
+            self.cache.clear();
+            self.group_hovered = false;
+            self.hovered_button = None;
+        }
     }
 
     pub fn retain_alive(&mut self) {
@@ -133,8 +191,10 @@ impl SsdManager {
         width: f64,
     ) {
         if let Some(surf) = surface {
-            let group = is_in_traffic_lights_group(local_x, local_y);
-            let btn = match hit_test_titlebar(local_x, local_y, width) {
+            let group =
+                is_in_traffic_lights_group_with_layout(local_x, local_y, width, self.buttons_right);
+            let btn = match hit_test_titlebar_with_layout(local_x, local_y, width, self.buttons_right)
+            {
                 Some(SsdHit::Button(b)) => Some(b),
                 _ => None,
             };
@@ -181,6 +241,7 @@ impl SsdManager {
             title: title.to_string(),
             is_active,
             is_dark,
+            buttons_right: self.buttons_right,
             group_hovered,
             hovered_button,
         };
@@ -270,27 +331,29 @@ fn rasterize_titlebar(key: &CacheKey, scale: f64) -> Option<Vec<u8>> {
         ctx.rectangle(0.0, (hf - 1.0).max(0.0), wf, 1.0);
         let _ = ctx.fill();
 
-        // 2. Botones semáforo macOS (Cerrar, Minimizar, Maximizar)
+        // 2. Botones semáforo macOS (Izquierda: Cerrar, Minimizar, Maximizar; Derecha: Minimizar, Maximizar, Cerrar)
         let cy = BTN_Y * scale;
         let r = BTN_RADIUS * scale;
         let show_colors = key.is_active || key.group_hovered;
+        let logical_w = wf / scale.max(0.1);
+        let (close_x, min_x, max_x) = button_positions(logical_w, key.buttons_right);
 
         let buttons = [
             (
                 SsdButton::Close,
-                BTN_CLOSE_X * scale,
+                close_x * scale,
                 (1.0, 0.373, 0.337),   // #ff5f56
                 (0.878, 0.267, 0.243), // #e0443e
             ),
             (
                 SsdButton::Minimize,
-                BTN_MIN_X * scale,
+                min_x * scale,
                 (1.0, 0.741, 0.180),   // #ffbd2e
                 (0.871, 0.631, 0.137), // #dea123
             ),
             (
                 SsdButton::Maximize,
-                BTN_MAX_X * scale,
+                max_x * scale,
                 (0.153, 0.788, 0.247), // #27c93f
                 (0.102, 0.671, 0.161), // #1aab29
             ),
@@ -447,18 +510,44 @@ mod tests {
     }
 
     #[test]
+    fn test_ssd_hit_test_right_side_order_min_max_close() {
+        // Ancho 800: minimizar en 740, maximizar en 760, cerrar en 780
+        assert_eq!(
+            hit_test_titlebar_with_layout(740.0, 19.0, 800.0, true),
+            Some(SsdHit::Button(SsdButton::Minimize))
+        );
+        assert_eq!(
+            hit_test_titlebar_with_layout(760.0, 19.0, 800.0, true),
+            Some(SsdHit::Button(SsdButton::Maximize))
+        );
+        assert_eq!(
+            hit_test_titlebar_with_layout(780.0, 19.0, 800.0, true),
+            Some(SsdHit::Button(SsdButton::Close))
+        );
+        assert_eq!(
+            hit_test_titlebar_with_layout(20.0, 19.0, 800.0, true),
+            Some(SsdHit::Titlebar)
+        );
+        assert!(is_in_traffic_lights_group_with_layout(760.0, 19.0, 800.0, true));
+        assert!(!is_in_traffic_lights_group_with_layout(20.0, 19.0, 800.0, true));
+    }
+
+    #[test]
     fn test_rasterize_titlebar_produces_valid_argb_buffer() {
-        let key = CacheKey {
-            width_phys: 600,
-            height_phys: 38,
-            scale_milli: 1000,
-            title: "ZapFast".to_string(),
-            is_active: true,
-            is_dark: true,
-            group_hovered: true,
-            hovered_button: Some(SsdButton::Close),
-        };
-        let buf = rasterize_titlebar(&key, 1.0).expect("rasterize should succeed");
-        assert_eq!(buf.len(), 600 * 38 * 4);
+        for buttons_right in [false, true] {
+            let key = CacheKey {
+                width_phys: 600,
+                height_phys: 38,
+                scale_milli: 1000,
+                title: "ZapFast".to_string(),
+                is_active: true,
+                is_dark: true,
+                buttons_right,
+                group_hovered: true,
+                hovered_button: Some(SsdButton::Close),
+            };
+            let buf = rasterize_titlebar(&key, 1.0).expect("rasterize should succeed");
+            assert_eq!(buf.len(), 600 * 38 * 4);
+        }
     }
 }

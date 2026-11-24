@@ -1,6 +1,58 @@
 import { EmailMessage } from "cloudflare:email";
 
 const MAX_BODY_BYTES = 256 * 1024;
+const RATE_WINDOW_MS = 10 * 60 * 1000;
+const MAX_REPORTS_PER_WINDOW = 5;
+const ipWindowCounters = new Map();
+
+function timingSafeEqualString(a, b) {
+  const enc = new TextEncoder();
+  const ab = enc.encode(String(a));
+  const bb = enc.encode(String(b));
+  if (ab.length !== bb.length) return false;
+  let diff = 0;
+  for (let i = 0; i < ab.length; i++) {
+    diff |= ab[i] ^ bb[i];
+  }
+  return diff === 0;
+}
+
+async function checkRateLimit(request, env) {
+  const clientIp =
+    request.headers.get("CF-Connecting-IP") ||
+    request.headers.get("X-Forwarded-For")?.split(",")[0]?.trim() ||
+    "unknown";
+
+  if (env.RATE_LIMITER && typeof env.RATE_LIMITER.limit === "function") {
+    const { success } = await env.RATE_LIMITER.limit({ key: clientIp });
+    return success;
+  }
+
+  const now = Date.now();
+  const entry = ipWindowCounters.get(clientIp);
+  if (!entry || now - entry.windowStart > RATE_WINDOW_MS) {
+    if (ipWindowCounters.size > 1000) {
+      ipWindowCounters.clear();
+    }
+    ipWindowCounters.set(clientIp, { windowStart: now, count: 1 });
+    return true;
+  }
+  if (entry.count >= MAX_REPORTS_PER_WINDOW) {
+    return false;
+  }
+  entry.count += 1;
+  return true;
+}
+
+function isAuthorized(request, env) {
+  const expected = env.CRASH_API_TOKEN;
+  if (!expected) return true;
+  const headerToken = request.headers.get("X-Malus-Token");
+  const auth = request.headers.get("Authorization") || "";
+  const bearer = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
+  const provided = headerToken || bearer;
+  return Boolean(provided) && timingSafeEqualString(provided, expected);
+}
 
 function sanitizeHeaderValue(value, maxLen = 140) {
   return String(value ?? "")
@@ -85,6 +137,14 @@ export default {
       return jsonResponse({ error: "Method or path not allowed" }, 405);
     }
 
+    if (!isAuthorized(request, env)) {
+      return jsonResponse({ error: "Unauthorized" }, 401);
+    }
+
+    if (!(await checkRateLimit(request, env))) {
+      return jsonResponse({ error: "Too many crash reports; try again later" }, 429);
+    }
+
     const contentLength = Number(request.headers.get("content-length") || "0");
     if (contentLength > MAX_BODY_BYTES) {
       return jsonResponse({ error: "Report payload too large" }, 413);
@@ -145,12 +205,10 @@ export default {
     try {
       const message = new EmailMessage(from, to, rawMime);
       await env.SEND_EMAIL.send(message);
-      return jsonResponse({ ok: true, delivered_to: to }, 200);
+      return jsonResponse({ ok: true }, 200);
     } catch (err) {
-      return jsonResponse(
-        { error: `Email delivery failed: ${err?.message || "unknown error"}` },
-        502,
-      );
+      console.error("Email delivery failed:", err?.message || err);
+      return jsonResponse({ error: "Email delivery failed" }, 502);
     }
   },
 };

@@ -1765,7 +1765,9 @@ const IMAGE_THUMB_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "webp", "gif", "svg", "bmp", "ico", "tif", "tiff", "avif", "heic", "heif",
 ];
 const MAX_THUMBNAIL_FILE_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_THUMBNAIL_CACHE_ENTRIES: usize = 512;
+const MAX_THUMBNAIL_CACHE_ENTRIES: usize = 384;
+const MAX_THUMBNAIL_CACHE_BYTES: usize = 64 * 1024 * 1024;
+const THUMBNAIL_WORKER_THREADS: usize = 3;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct ThumbnailCacheKey {
@@ -1783,12 +1785,178 @@ struct DecodedThumbnail {
     bytes: glib::Bytes,
 }
 
+struct ThumbnailCacheEntry {
+    texture: gtk4::gdk::Texture,
+    byte_size: usize,
+    last_used: u64,
+}
+
+struct ThumbnailLruCache {
+    entries: std::collections::HashMap<ThumbnailCacheKey, ThumbnailCacheEntry>,
+    total_bytes: usize,
+    seq: u64,
+}
+
+impl ThumbnailLruCache {
+    fn new() -> Self {
+        Self {
+            entries: std::collections::HashMap::new(),
+            total_bytes: 0,
+            seq: 0,
+        }
+    }
+
+    fn get(&mut self, key: &ThumbnailCacheKey) -> Option<gtk4::gdk::Texture> {
+        self.seq = self.seq.wrapping_add(1);
+        let seq = self.seq;
+        if let Some(entry) = self.entries.get_mut(key) {
+            entry.last_used = seq;
+            return Some(entry.texture.clone());
+        }
+        None
+    }
+
+    fn insert(&mut self, key: ThumbnailCacheKey, texture: gtk4::gdk::Texture, byte_size: usize) {
+        self.seq = self.seq.wrapping_add(1);
+        let seq = self.seq;
+        if let Some(prev) = self.entries.insert(
+            key,
+            ThumbnailCacheEntry {
+                texture,
+                byte_size,
+                last_used: seq,
+            },
+        ) {
+            self.total_bytes = self.total_bytes.saturating_sub(prev.byte_size);
+        }
+        self.total_bytes = self.total_bytes.saturating_add(byte_size);
+
+        if self.entries.len() > MAX_THUMBNAIL_CACHE_ENTRIES
+            || self.total_bytes > MAX_THUMBNAIL_CACHE_BYTES
+        {
+            let target_entries = (MAX_THUMBNAIL_CACHE_ENTRIES * 3) / 4;
+            let target_bytes = (MAX_THUMBNAIL_CACHE_BYTES * 3) / 4;
+            let mut by_age: Vec<(u64, ThumbnailCacheKey)> = self
+                .entries
+                .iter()
+                .map(|(k, e)| (e.last_used, k.clone()))
+                .collect();
+            by_age.sort_unstable_by_key(|(used, _)| *used);
+            for (_, old_key) in by_age {
+                if self.entries.len() <= target_entries && self.total_bytes <= target_bytes {
+                    break;
+                }
+                if let Some(removed) = self.entries.remove(&old_key) {
+                    self.total_bytes = self.total_bytes.saturating_sub(removed.byte_size);
+                }
+            }
+        }
+    }
+}
+
+struct ThumbnailWaiter {
+    img_weak: glib::WeakRef<gtk4::Image>,
+    marker: String,
+    pixel_size: i32,
+    thumb_css: Option<String>,
+}
+
 thread_local! {
-    static THUMBNAIL_CACHE: std::cell::RefCell<std::collections::HashMap<ThumbnailCacheKey, gtk4::gdk::Texture>> =
+    static THUMBNAIL_CACHE: std::cell::RefCell<ThumbnailLruCache> =
+        std::cell::RefCell::new(ThumbnailLruCache::new());
+    static THUMBNAIL_IN_FLIGHT: std::cell::RefCell<std::collections::HashMap<ThumbnailCacheKey, Vec<ThumbnailWaiter>>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
 static NEXT_THUMB_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn enqueue_branches_thumbnail_decode(key: ThumbnailCacheKey) {
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Condvar, Mutex, OnceLock};
+
+    static WORKER_QUEUE: OnceLock<Arc<(Mutex<VecDeque<ThumbnailCacheKey>>, Condvar)>> =
+        OnceLock::new();
+    let shared = WORKER_QUEUE.get_or_init(|| {
+        let pair = Arc::new((
+            Mutex::new(VecDeque::<ThumbnailCacheKey>::new()),
+            Condvar::new(),
+        ));
+        for idx in 0..THUMBNAIL_WORKER_THREADS {
+            let worker_pair = Arc::clone(&pair);
+            let _ = std::thread::Builder::new()
+                .name(format!("branches-thumb-{idx}"))
+                .spawn(move || loop {
+                    let job = {
+                        let (lock, cvar) = &*worker_pair;
+                        let mut q = lock
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        while q.is_empty() {
+                            q = cvar
+                                .wait(q)
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        }
+                        q.pop_front()
+                    };
+                    let Some(key) = job else {
+                        continue;
+                    };
+                    let decoded = decode_thumbnail_bytes(&key.path, key.decode_px);
+                    glib::MainContext::default().invoke(move || {
+                        use gtk4::prelude::*;
+                        let waiters = THUMBNAIL_IN_FLIGHT
+                            .with(|cell| cell.borrow_mut().remove(&key))
+                            .unwrap_or_default();
+                        let Some(data) = decoded else {
+                            return;
+                        };
+
+                        let byte_size = data.bytes.len();
+                        let format = if data.has_alpha {
+                            gtk4::gdk::MemoryFormat::R8g8b8a8
+                        } else {
+                            gtk4::gdk::MemoryFormat::R8g8b8
+                        };
+                        let texture: gtk4::gdk::Texture = gtk4::gdk::MemoryTexture::new(
+                            data.width,
+                            data.height,
+                            format,
+                            &data.bytes,
+                            data.rowstride,
+                        )
+                        .upcast();
+
+                        THUMBNAIL_CACHE.with(|cache| {
+                            cache
+                                .borrow_mut()
+                                .insert(key, texture.clone(), byte_size);
+                        });
+
+                        for waiter in waiters {
+                            if let Some(target_img) = waiter.img_weak.upgrade() {
+                                if target_img.widget_name().as_str() == waiter.marker {
+                                    apply_thumbnail_texture(
+                                        &target_img,
+                                        &texture,
+                                        waiter.pixel_size,
+                                        waiter.thumb_css.as_deref(),
+                                    );
+                                }
+                            }
+                        }
+                    });
+                });
+        }
+        pair
+    });
+
+    let (lock, cvar) = &**shared;
+    let mut q = lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    q.push_back(key);
+    cvar.notify_one();
+}
 
 pub(super) fn is_image_thumbnail_candidate(item: &crate::fs_backend::FileItem) -> bool {
     if item.is_dir || item.size > MAX_THUMBNAIL_FILE_BYTES {
@@ -1959,7 +2127,7 @@ pub(super) fn update_item_image_thumbnail(
         decode_px,
     };
 
-    if let Some(cached) = THUMBNAIL_CACHE.with(|cache| cache.borrow().get(&cache_key).cloned()) {
+    if let Some(cached) = THUMBNAIL_CACHE.with(|cache| cache.borrow_mut().get(&cache_key)) {
         img.set_widget_name("");
         apply_thumbnail_texture(img, &cached, pixel_size, thumb_css_class);
         return;
@@ -1969,43 +2137,28 @@ pub(super) fn update_item_image_thumbnail(
     let marker = format!("thumb:{token}");
     img.set_widget_name(&marker);
 
-    let img_weak = img.downgrade();
-    let path = item.path.clone();
-    let thumb_css = thumb_css_class.map(str::to_string);
-    glib::spawn_future_local(async move {
-        let decoded = gio::spawn_blocking(move || decode_thumbnail_bytes(&path, decode_px)).await;
-        let Ok(Some(data)) = decoded else {
-            return;
-        };
-
-        let format = if data.has_alpha {
-            gtk4::gdk::MemoryFormat::R8g8b8a8
-        } else {
-            gtk4::gdk::MemoryFormat::R8g8b8
-        };
-        let texture: gtk4::gdk::Texture = gtk4::gdk::MemoryTexture::new(
-            data.width,
-            data.height,
-            format,
-            &data.bytes,
-            data.rowstride,
-        )
-        .upcast();
-
-        THUMBNAIL_CACHE.with(|cache| {
-            let mut map = cache.borrow_mut();
-            if map.len() >= MAX_THUMBNAIL_CACHE_ENTRIES {
-                map.clear();
+    let waiter = ThumbnailWaiter {
+        img_weak: img.downgrade(),
+        marker,
+        pixel_size,
+        thumb_css: thumb_css_class.map(str::to_string),
+    };
+    let should_enqueue = THUMBNAIL_IN_FLIGHT.with(|cell| {
+        let mut map = cell.borrow_mut();
+        match map.entry(cache_key.clone()) {
+            std::collections::hash_map::Entry::Occupied(mut occ) => {
+                occ.get_mut().push(waiter);
+                false
             }
-            map.insert(cache_key, texture.clone());
-        });
-
-        if let Some(target_img) = img_weak.upgrade() {
-            if target_img.widget_name().as_str() == marker {
-                apply_thumbnail_texture(&target_img, &texture, pixel_size, thumb_css.as_deref());
+            std::collections::hash_map::Entry::Vacant(vac) => {
+                vac.insert(vec![waiter]);
+                true
             }
         }
     });
+    if should_enqueue {
+        enqueue_branches_thumbnail_decode(cache_key);
+    }
 }
 
 pub(super) fn create_item_image(
@@ -2015,10 +2168,28 @@ pub(super) fn create_item_image(
 ) -> gtk4::Image {
     let img = gtk4::Image::new();
     apply_folder_icon_tint(&img, item);
-    apply_item_gicon_or_tinted_folder(&img, item, pixel_size);
     img.set_pixel_size(pixel_size);
     if is_image_thumbnail_candidate(item) {
+        let decode_px = thumbnail_decode_target_px(pixel_size);
+        let modified_secs = item
+            .modified
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let cache_key = ThumbnailCacheKey {
+            path: item.path.clone(),
+            modified_secs,
+            size: item.size,
+            decode_px,
+        };
+        if let Some(cached) = THUMBNAIL_CACHE.with(|cache| cache.borrow_mut().get(&cache_key)) {
+            apply_thumbnail_texture(&img, &cached, pixel_size, thumb_css_class);
+            return img;
+        }
+        apply_item_gicon_or_tinted_folder(&img, item, pixel_size);
         update_item_image_thumbnail(&img, item, pixel_size, thumb_css_class);
+    } else {
+        apply_item_gicon_or_tinted_folder(&img, item, pixel_size);
     }
     img
 }

@@ -16,6 +16,16 @@ use crate::services::network::{NetworkService, WifiApInfo};
 thread_local! {
     static TRAY_VISIBILITY_REFRESH: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
     static VOLUME_TRAY_REFRESH: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
+    static KEYBOARD_CONFIG_MONITOR: RefCell<Option<gtk4::gio::FileMonitor>> = const { RefCell::new(None) };
+    static KEYBOARD_LABEL_REFRESH: RefCell<Option<Rc<dyn Fn()>>> = const { RefCell::new(None) };
+}
+
+pub fn refresh_keyboard_layout_badge() {
+    KEYBOARD_LABEL_REFRESH.with(|cell| {
+        if let Some(ref f) = *cell.borrow() {
+            f();
+        }
+    });
 }
 
 pub fn refresh_tray_visibility() {
@@ -86,11 +96,6 @@ pub fn create_status_tray_widget() -> GtkBox {
         extras.refresh(&cfg);
     });
     apply_vis();
-    let apply_poll = apply_vis.clone();
-    glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
-        apply_poll();
-        glib::ControlFlow::Continue
-    });
     TRAY_VISIBILITY_REFRESH.with(|cell| {
         *cell.borrow_mut() = Some(apply_vis);
     });
@@ -134,19 +139,34 @@ fn create_keyboard_tray_button() -> Button {
         )));
     });
 
-    let btn_timer = btn.clone();
-    glib::timeout_add_local(std::time::Duration::from_secs(2), move || {
+    let btn_sync = btn.clone();
+    let refresh_kb: Rc<dyn Fn()> = Rc::new(move || {
         let cfg = malus_de_common::config::InputConfig::load();
         let expected = format!("⌨ {}", cfg.layout_short_badge());
-        if btn_timer.label().as_deref() != Some(expected.as_str()) {
-            btn_timer.set_label(&expected);
-            btn_timer.set_tooltip_text(Some(&format!(
+        if btn_sync.label().as_deref() != Some(expected.as_str()) {
+            btn_sync.set_label(&expected);
+            btn_sync.set_tooltip_text(Some(&format!(
                 "Teclado: {} (Clic para alternar LATAM / ES / US)",
                 cfg.layout_display_name()
             )));
         }
-        glib::ControlFlow::Continue
     });
+    KEYBOARD_LABEL_REFRESH.with(|cell| {
+        *cell.borrow_mut() = Some(refresh_kb.clone());
+    });
+    let input_file = gtk4::gio::File::for_path(malus_de_common::config::InputConfig::config_path());
+    if let Ok(monitor) = input_file.monitor_file(
+        gtk4::gio::FileMonitorFlags::NONE,
+        gtk4::gio::Cancellable::NONE,
+    ) {
+        let refresh_mon = refresh_kb.clone();
+        monitor.connect_changed(move |_, _, _, _| {
+            refresh_mon();
+        });
+        KEYBOARD_CONFIG_MONITOR.with(|cell| {
+            *cell.borrow_mut() = Some(monitor);
+        });
+    }
 
     btn
 }

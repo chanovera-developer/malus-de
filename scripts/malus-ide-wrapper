@@ -180,6 +180,9 @@ def recv_exact(sock, n):
         buf.extend(chunk)
     return bytes(buf)
 
+MAX_WS_FRAME_BYTES = 1024 * 1024
+MAX_CDP_JSON_BYTES = 512 * 1024
+
 def read_ws_text_frame(sock):
     header = recv_exact(sock, 2)
     if not header:
@@ -195,6 +198,8 @@ def read_ws_text_frame(sock):
         if not ext:
             return None
         length = int.from_bytes(ext, 'big')
+    if length > MAX_WS_FRAME_BYTES:
+        return None
     if header[1] & 0x80:
         mask = recv_exact(sock, 4)
         payload = recv_exact(sock, length)
@@ -207,14 +212,21 @@ def read_ws_text_frame(sock):
             return None
     return payload.decode('utf-8', errors='replace')
 
-def send_cdp_eval(ws_url, expr):
+def send_cdp_eval(ws_url, expr, expected_port):
     try:
         u = urllib.parse.urlparse(ws_url)
-        s = socket.create_connection((u.hostname, u.port or 80), timeout=3)
+        if (
+            u.scheme != "ws"
+            or u.hostname not in ("127.0.0.1", "localhost")
+            or u.port != expected_port
+            or not u.path.startswith("/devtools/")
+        ):
+            return False
+        s = socket.create_connection(("127.0.0.1", expected_port), timeout=3)
         key = base64.b64encode(os.urandom(16)).decode('utf-8')
         req = (
             f"GET {u.path} HTTP/1.1\r\n"
-            f"Host: {u.hostname}:{u.port}\r\n"
+            f"Host: 127.0.0.1:{expected_port}\r\n"
             f"Upgrade: websocket\r\n"
             f"Connection: Upgrade\r\n"
             f"Sec-WebSocket-Key: {key}\r\n"
@@ -269,12 +281,21 @@ def send_cdp_eval(ws_url, expr):
 
 INJECTION_SCRIPT = """
 (() => {
+    window._malusButtonsRight = __BUTTONS_RIGHT__;
+
     function relocate() {
-        const left = document.querySelector('.titlebar-left');
+        const rightMode = Boolean(window._malusButtonsRight);
+        const target = document.querySelector(rightMode ? '.titlebar-right' : '.titlebar-left');
         const controls = document.querySelector('.window-controls-container');
-        if (left && controls) {
-            if (controls.parentElement !== left || left.firstElementChild !== controls) {
-                left.prepend(controls);
+        if (target && controls) {
+            if (rightMode) {
+                if (controls.parentElement !== target || target.lastElementChild !== controls) {
+                    target.append(controls);
+                }
+            } else {
+                if (controls.parentElement !== target || target.firstElementChild !== controls) {
+                    target.prepend(controls);
+                }
             }
             return true;
         }
@@ -286,27 +307,35 @@ INJECTION_SCRIPT = """
         if (!host) {
             return false;
         }
+        const rightMode = Boolean(window._malusButtonsRight);
+        const version = rightMode ? 'ssd-v3-right' : 'ssd-v3-left';
+        const containerPadding = rightMode ? '0 14px 0 12px' : '0 12px 0 14px';
+        const containerJustify = rightMode ? 'flex-end' : 'flex-start';
+        const closeOrder = rightMode ? 3 : 1;
+        const minOrder = rightMode ? 1 : 2;
+        const maxOrder = rightMode ? 2 : 3;
+
         let style = document.getElementById('malus-left-controls-style');
         if (style && style.parentElement === host && host.lastElementChild !== style) {
             host.appendChild(style);
         }
-        if (!style || style.dataset.malusVersion !== 'ssd-v2') {
+        if (!style || style.dataset.malusVersion !== version) {
             if (!style) {
                 style = document.createElement('style');
                 style.id = 'malus-left-controls-style';
                 host.appendChild(style);
             }
-            style.dataset.malusVersion = 'ssd-v2';
+            style.dataset.malusVersion = version;
             style.textContent = `
                 /* Contenedor estilo semáforo SSD de Malus DE */
                 .monaco-workbench .part.titlebar .window-controls-container,
                 .part.titlebar .window-controls-container {
                     display: inline-flex !important;
                     align-items: center !important;
-                    justify-content: flex-start !important;
+                    justify-content: ${containerJustify} !important;
                     flex-direction: row !important;
                     gap: 7px !important;
-                    padding: 0 12px 0 14px !important;
+                    padding: ${containerPadding} !important;
                     width: auto !important;
                     height: 100% !important;
                     -webkit-app-region: no-drag !important;
@@ -348,14 +377,14 @@ INJECTION_SCRIPT = """
                     display: none !important;
                 }
 
-                /* Orden y colores exactos del SSD (Rojo=1, Amarillo=2, Verde=3) */
+                /* Orden y colores exactos del SSD (Izquierda: Rojo/Amarillo/Verde; Derecha: Amarillo/Verde/Rojo) */
                 .monaco-workbench .part.titlebar .window-controls-container > .window-icon.window-close,
                 .monaco-workbench .part.titlebar .window-controls-container > .window-icon.codicon-chrome-close,
                 .part.titlebar .window-controls-container > .window-icon.window-close,
                 .part.titlebar .window-controls-container > .window-icon.codicon-chrome-close,
                 .monaco-workbench .part.titlebar.inactive .window-controls-container:hover > .window-icon.window-close,
                 .monaco-workbench .part.titlebar.inactive .window-controls-container:hover > .window-icon.codicon-chrome-close {
-                    order: 1 !important;
+                    order: ${closeOrder} !important;
                     background-color: #ff5f56 !important;
                     border-color: rgba(224, 68, 62, 0.9) !important;
                 }
@@ -378,7 +407,7 @@ INJECTION_SCRIPT = """
                 .part.titlebar .window-controls-container > .window-icon.codicon-chrome-minimize,
                 .monaco-workbench .part.titlebar.inactive .window-controls-container:hover > .window-icon.window-minimize,
                 .monaco-workbench .part.titlebar.inactive .window-controls-container:hover > .window-icon.codicon-chrome-minimize {
-                    order: 2 !important;
+                    order: ${minOrder} !important;
                     background-color: #ffbd2e !important;
                     border-color: rgba(222, 161, 35, 0.9) !important;
                 }
@@ -408,7 +437,7 @@ INJECTION_SCRIPT = """
                 .monaco-workbench .part.titlebar.inactive .window-controls-container:hover > .window-icon.window-unmaximize,
                 .monaco-workbench .part.titlebar.inactive .window-controls-container:hover > .window-icon.codicon-chrome-maximize,
                 .monaco-workbench .part.titlebar.inactive .window-controls-container:hover > .window-icon.codicon-chrome-restore {
-                    order: 3 !important;
+                    order: ${maxOrder} !important;
                     background-color: #27c93f !important;
                     border-color: rgba(26, 171, 41, 0.9) !important;
                 }
@@ -564,6 +593,7 @@ INJECTION_SCRIPT = """
 
 AGY_APP_INJECTION_SCRIPT = """
 (() => {
+    window._malusButtonsRight = __BUTTONS_RIGHT__;
     const STYLE_ID = 'malus-agy-controls-style';
     const BOX_ID = 'malus-agy-window-controls';
 
@@ -572,25 +602,33 @@ AGY_APP_INJECTION_SCRIPT = """
         if (!host) {
             return false;
         }
+        const rightMode = Boolean(window._malusButtonsRight);
+        const version = rightMode ? 'agy-ssd-v4-right' : 'agy-ssd-v4-left';
+        const boxPadding = rightMode ? '0 10px 0 8px' : '0 8px 0 6px';
+        const boxJustify = rightMode ? 'flex-end' : 'flex-start';
+        const closeOrder = rightMode ? 3 : 1;
+        const minOrder = rightMode ? 1 : 2;
+        const maxOrder = rightMode ? 2 : 3;
+
         let style = document.getElementById(STYLE_ID);
         if (style && style.parentElement === host && host.lastElementChild !== style) {
             host.appendChild(style);
         }
-        if (!style || style.dataset.malusVersion !== 'agy-ssd-v3') {
+        if (!style || style.dataset.malusVersion !== version) {
             if (!style) {
                 style = document.createElement('style');
                 style.id = STYLE_ID;
                 host.appendChild(style);
             }
-            style.dataset.malusVersion = 'agy-ssd-v3';
+            style.dataset.malusVersion = version;
             style.textContent = `
                 #${BOX_ID} {
                     display: inline-flex !important;
                     align-items: center !important;
-                    justify-content: flex-start !important;
+                    justify-content: ${boxJustify} !important;
                     flex-direction: row !important;
                     gap: 7px !important;
-                    padding: 0 8px 0 6px !important;
+                    padding: ${boxPadding} !important;
                     height: 100% !important;
                     flex-shrink: 0 !important;
                     -webkit-app-region: no-drag !important;
@@ -636,6 +674,7 @@ AGY_APP_INJECTION_SCRIPT = """
                 }
                 #${BOX_ID} > .malus-agy-close,
                 #${BOX_ID}.malus-agy-inactive:hover > .malus-agy-close {
+                    order: ${closeOrder} !important;
                     background-color: #ff5f56 !important;
                     border-color: rgba(224, 68, 62, 0.9) !important;
                 }
@@ -651,6 +690,7 @@ AGY_APP_INJECTION_SCRIPT = """
                 }
                 #${BOX_ID} > .malus-agy-min,
                 #${BOX_ID}.malus-agy-inactive:hover > .malus-agy-min {
+                    order: ${minOrder} !important;
                     background-color: #ffbd2e !important;
                     border-color: rgba(222, 161, 35, 0.9) !important;
                 }
@@ -666,6 +706,7 @@ AGY_APP_INJECTION_SCRIPT = """
                 }
                 #${BOX_ID} > .malus-agy-max,
                 #${BOX_ID}.malus-agy-inactive:hover > .malus-agy-max {
+                    order: ${maxOrder} !important;
                     background-color: #27c93f !important;
                     border-color: rgba(26, 171, 41, 0.9) !important;
                 }
@@ -755,7 +796,12 @@ AGY_APP_INJECTION_SCRIPT = """
             box.appendChild(maxBtn);
         }
 
-        if (box.parentElement !== bar || bar.firstElementChild !== box) {
+        const rightMode = Boolean(window._malusButtonsRight);
+        if (rightMode) {
+            if (box.parentElement !== bar || bar.lastElementChild !== box) {
+                bar.append(box);
+            }
+        } else if (box.parentElement !== bar || bar.firstElementChild !== box) {
             bar.prepend(box);
         }
         syncFocusState(box);
@@ -765,8 +811,8 @@ AGY_APP_INJECTION_SCRIPT = """
     const styled = ensureAgyStyle();
     const placed = ensureAgyControls();
 
-    if (window._malusAgyControlsInstalled !== 'agy-ssd-v3') {
-        window._malusAgyControlsInstalled = 'agy-ssd-v3';
+    if (window._malusAgyControlsInstalled !== 'agy-ssd-v4') {
+        window._malusAgyControlsInstalled = 'agy-ssd-v4';
         window._malusAgyBlurred = false;
         syncFocusState(document.getElementById(BOX_ID));
     }
@@ -831,17 +877,51 @@ AGY_APP_INJECTION_SCRIPT = """
 
 REINJECT_INTERVAL = 3.0  # segundos; el script inyectado es idempotente
 
+def appearance_settings_path():
+    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    if xdg:
+        if os.path.basename(os.path.normpath(xdg)) == "malus-de":
+            return os.path.join(xdg, "appearance-settings.toml")
+        return os.path.join(xdg, "malus-de", "appearance-settings.toml")
+    return os.path.expanduser("~/.config/malus-de/appearance-settings.toml")
+
+def read_window_buttons_right():
+    try:
+        with open(appearance_settings_path(), "r", encoding="utf-8") as fh:
+            for raw_line in fh:
+                line = raw_line.strip()
+                if line.startswith("window_buttons_right"):
+                    parts = line.split("=", 1)
+                    if len(parts) == 2:
+                        val = parts[1].split("#", 1)[0].strip().lower()
+                        return val == "true"
+    except Exception:
+        pass
+    return False
+
+def build_injection_script(template, buttons_right):
+    return template.replace("__BUTTONS_RIGHT__", "true" if buttons_right else "false")
+
 def watcher(port, stop_event, state):
     # tid -> timestamp de la última confirmación exitosa. Reintenta rápido (0.5s)
     # durante el arranque en frío hasta confirmar montaje, y luego verifica cada
     # 3s para sobrevivir a "Reload Window" o recreaciones de DOM manteniendo el tid.
     injected_targets = {}
+    last_buttons_right = None
     url = f"http://127.0.0.1:{port}/json"
 
     while not stop_event.is_set():
         try:
+            buttons_right = read_window_buttons_right()
+            if last_buttons_right is not None and buttons_right != last_buttons_right:
+                injected_targets.clear()
+            last_buttons_right = buttons_right
+
             with urllib.request.urlopen(url, timeout=1) as resp:
-                targets = json.loads(resp.read().decode('utf-8'))
+                raw_json = resp.read(MAX_CDP_JSON_BYTES + 1)
+                if len(raw_json) > MAX_CDP_JSON_BYTES:
+                    continue
+                targets = json.loads(raw_json.decode('utf-8'))
                 state["last_alive"] = time.time()
                 state["ever_alive"] = True
                 now = time.time()
@@ -851,16 +931,16 @@ def watcher(port, stop_event, state):
                     tid = t.get("id")
                     t_url = t.get("url", "")
                     if "workbench" in t_url:
-                        script = INJECTION_SCRIPT
+                        script = build_injection_script(INJECTION_SCRIPT, buttons_right)
                     elif t_url.startswith("http://127.0.0.1:") or t_url.startswith("https://127.0.0.1:"):
-                        script = AGY_APP_INJECTION_SCRIPT
+                        script = build_injection_script(AGY_APP_INJECTION_SCRIPT, buttons_right)
                     else:
                         continue
                     last_ok = injected_targets.get(tid, 0.0)
                     if last_ok > 0.0 and (now - last_ok) < REINJECT_INTERVAL:
                         continue
                     ws_url = t.get("webSocketDebuggerUrl")
-                    if ws_url and send_cdp_eval(ws_url, script):
+                    if ws_url and send_cdp_eval(ws_url, script, port):
                         injected_targets[tid] = now
         except Exception:
             pass
@@ -868,8 +948,21 @@ def watcher(port, stop_event, state):
 
 def main():
     target_cmd = find_target_command(sys.argv[0], sys.argv[1:])
+
+    # Permite deshabilitar por completo el puerto CDP en entornos de alta seguridad.
+    if os.environ.get("MALUS_DISABLE_IDE_CDP", "").strip() in ("1", "true", "yes"):
+        os.execvp(target_cmd[0], target_cmd + ["--ozone-platform-hint=auto"] + sys.argv[1:])
+
     port = get_free_port()
-    args = target_cmd + [f"--remote-debugging-port={port}", "--ozone-platform-hint=auto"] + sys.argv[1:]
+    args = (
+        target_cmd
+        + [
+            "--remote-debugging-address=127.0.0.1",
+            f"--remote-debugging-port={port}",
+            "--ozone-platform-hint=auto",
+        ]
+        + sys.argv[1:]
+    )
 
     proc = subprocess.Popen(args)
 

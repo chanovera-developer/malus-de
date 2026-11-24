@@ -41,6 +41,14 @@ impl VpnProtocolKind {
         }
     }
 
+    pub fn nm_vpn_service_type(self) -> &'static str {
+        match self {
+            Self::L2tpIpsec => "org.freedesktop.NetworkManager.l2tp",
+            Self::CiscoIpsec => "org.freedesktop.NetworkManager.vpnc",
+            Self::Ikev2 => "org.freedesktop.NetworkManager.libreswan",
+        }
+    }
+
     pub fn required_fedora_package(self) -> &'static str {
         match self {
             Self::L2tpIpsec => "NetworkManager-l2tp",
@@ -915,6 +923,20 @@ fn run_nmcli(args: &[&str]) -> Result<String, String> {
     }
 }
 
+fn validate_vpn_field(label: &str, value: &str, allow_separators: bool) -> Result<(), String> {
+    if value.chars().any(|c| c.is_control()) {
+        return Err(format!(
+            "El campo «{label}» contiene caracteres de control no permitidos."
+        ));
+    }
+    if !allow_separators && value.chars().any(|c| matches!(c, ',' | '=')) {
+        return Err(format!(
+            "El campo «{label}» contiene caracteres no permitidos (',' o '=')."
+        ));
+    }
+    Ok(())
+}
+
 fn create_nm_vpn_profile(
     proto: VpnProtocolKind,
     name: &str,
@@ -924,73 +946,112 @@ fn create_nm_vpn_profile(
     password: &str,
     psk: &str,
 ) -> Result<(), String> {
-    let Some(vpn_type) = proto.nm_vpn_type() else {
+    use zbus::zvariant::Value;
+
+    let Some(_vpn_type) = proto.nm_vpn_type() else {
         return Err("Usa Importar WireGuard (.conf) para perfiles WireGuard.".to_string());
     };
-    let data = match proto {
+
+    validate_vpn_field("Nombre", name, false)?;
+    validate_vpn_field("Servidor", server, false)?;
+    validate_vpn_field("ID remoto", remote_id, false)?;
+    validate_vpn_field("Usuario", user, false)?;
+    validate_vpn_field("Contraseña", password, true)?;
+    validate_vpn_field("Clave precompartida (PSK)", psk, true)?;
+
+    if name.trim().is_empty() || server.trim().is_empty() {
+        return Err("El nombre y el servidor VPN son obligatorios.".to_string());
+    }
+
+    let mut data: HashMap<String, String> = HashMap::new();
+    let mut secrets: HashMap<String, String> = HashMap::new();
+
+    match proto {
         VpnProtocolKind::Ikev2 => {
-            let mut pairs = vec![format!("right={server}"), "ikev2=insist".to_string()];
+            data.insert("right".to_string(), server.to_string());
+            data.insert("ikev2".to_string(), "insist".to_string());
             if !remote_id.is_empty() {
-                pairs.push(format!("rightid={remote_id}"));
+                data.insert("rightid".to_string(), remote_id.to_string());
             }
             if !user.is_empty() {
-                pairs.push(format!("leftxauthusername={user}"));
+                data.insert("leftxauthusername".to_string(), user.to_string());
             }
-            pairs.join(", ")
-        }
-        VpnProtocolKind::L2tpIpsec => {
-            let mut pairs = vec![format!("gateway={server}"), "ipsec-enabled=yes".to_string()];
-            if !user.is_empty() {
-                pairs.push(format!("user={user}"));
+            if !password.is_empty() {
+                secrets.insert("xauthpassword".to_string(), password.to_string());
             }
             if !psk.is_empty() {
-                pairs.push(format!("ipsec-psk={psk}"));
+                secrets.insert("pskvalue".to_string(), psk.to_string());
             }
-            pairs.join(", ")
+        }
+        VpnProtocolKind::L2tpIpsec => {
+            data.insert("gateway".to_string(), server.to_string());
+            data.insert("ipsec-enabled".to_string(), "yes".to_string());
+            if !user.is_empty() {
+                data.insert("user".to_string(), user.to_string());
+            }
+            if !password.is_empty() {
+                data.insert("password-flags".to_string(), "0".to_string());
+                secrets.insert("password".to_string(), password.to_string());
+            }
+            if !psk.is_empty() {
+                // Guardar la clave precompartida como secreto de NetworkManager, nunca en vpn.data ni CLI.
+                data.insert("ipsec-psk-flags".to_string(), "0".to_string());
+                secrets.insert("ipsec-psk".to_string(), psk.to_string());
+            }
         }
         VpnProtocolKind::CiscoIpsec => {
-            let mut pairs = vec![format!("IPSec gateway={server}")];
+            data.insert("IPSec gateway".to_string(), server.to_string());
             if !user.is_empty() {
-                pairs.push(format!("Xauth username={user}"));
+                data.insert("Xauth username".to_string(), user.to_string());
             }
             if !remote_id.is_empty() {
-                pairs.push(format!("IPSec ID={remote_id}"));
+                data.insert("IPSec ID".to_string(), remote_id.to_string());
             }
-            pairs.join(", ")
+            if !password.is_empty() {
+                data.insert("Xauth password-flags".to_string(), "0".to_string());
+                secrets.insert("Xauth password".to_string(), password.to_string());
+            }
+            if !psk.is_empty() {
+                data.insert("IPSec secret-flags".to_string(), "0".to_string());
+                secrets.insert("IPSec secret".to_string(), psk.to_string());
+            }
         }
-    };
-
-    run_nmcli(&[
-        "connection",
-        "add",
-        "type",
-        "vpn",
-        "vpn-type",
-        vpn_type,
-        "con-name",
-        name,
-        "ifname",
-        "*",
-        "--",
-        "vpn.data",
-        &data,
-    ])?;
-
-    if !password.is_empty() {
-        let secret_key = match proto {
-            VpnProtocolKind::CiscoIpsec => "Xauth password",
-            VpnProtocolKind::Ikev2 => "xauthpassword",
-            _ => "password",
-        };
-        let _ = run_nmcli(&[
-            "connection",
-            "modify",
-            "id",
-            name,
-            "vpn.secrets",
-            &format!("{secret_key}={password}"),
-        ]);
     }
+
+    let mut connection_section: HashMap<&str, Value<'_>> = HashMap::new();
+    connection_section.insert("id", Value::from(name));
+    connection_section.insert("type", Value::from("vpn"));
+
+    let mut vpn_section: HashMap<&str, Value<'_>> = HashMap::new();
+    vpn_section.insert("service-type", Value::from(proto.nm_vpn_service_type()));
+    vpn_section.insert("data", Value::from(data));
+    if !secrets.is_empty() {
+        vpn_section.insert("secrets", Value::from(secrets));
+    }
+
+    let mut ipv4_section: HashMap<&str, Value<'_>> = HashMap::new();
+    ipv4_section.insert("method", Value::from("auto"));
+
+    let mut ipv6_section: HashMap<&str, Value<'_>> = HashMap::new();
+    ipv6_section.insert("method", Value::from("auto"));
+
+    let mut settings: HashMap<&str, HashMap<&str, Value<'_>>> = HashMap::new();
+    settings.insert("connection", connection_section);
+    settings.insert("vpn", vpn_section);
+    settings.insert("ipv4", ipv4_section);
+    settings.insert("ipv6", ipv6_section);
+
+    let conn = zbus::blocking::Connection::system()
+        .map_err(|e| format!("No se pudo conectar al bus D-Bus del sistema: {e}"))?;
+    conn.call_method(
+        Some("org.freedesktop.NetworkManager"),
+        "/org/freedesktop/NetworkManager/Settings",
+        Some("org.freedesktop.NetworkManager.Settings"),
+        "AddConnection",
+        &(settings,),
+    )
+    .map_err(|e| format!("NetworkManager rechazó el perfil VPN: {e}"))?;
+
     Ok(())
 }
 
@@ -1237,5 +1298,14 @@ mod tests {
             friendly_vpn_service_label("org.freedesktop.NetworkManager.vpnc"),
             "Cisco IPSec"
         );
+    }
+
+    #[test]
+    fn validates_vpn_fields_against_separator_and_control_injection() {
+        assert!(validate_vpn_field("Servidor", "vpn.example.com", false).is_ok());
+        assert!(validate_vpn_field("Servidor", "vpn.example.com, evil=1", false).is_err());
+        assert!(validate_vpn_field("Usuario", "alice=admin", false).is_err());
+        assert!(validate_vpn_field("Contraseña", "p@ss,word=123", true).is_ok());
+        assert!(validate_vpn_field("Contraseña", "bad\nline", true).is_err());
     }
 }

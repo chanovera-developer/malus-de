@@ -131,16 +131,22 @@ pub fn map_window(state: &mut MalusState, surface: X11Surface) {
             }
         });
         let target_size = crate::state::clamp_size_to_bounds(requested, max_bounds);
-        let centered = crate::state::centered_window_location(
+        let saved_pos = if !class.is_empty() {
+            state.get_saved_window_position(&class)
+        } else {
+            None
+        };
+        let target_loc = crate::state::clamped_or_centered_window_location(
             usable,
             Rectangle::from_size(target_size),
             0,
+            saved_pos,
         );
-        let geometry = Rectangle::new(centered, target_size);
+        let geometry = Rectangle::new(target_loc, target_size);
         if let Err(error) = surface.configure(Some(geometry)) {
             warn!("No se pudo ubicar la ventana X11: {error}");
         }
-        centered
+        target_loc
     } else {
         surface.geometry().loc
     };
@@ -186,9 +192,9 @@ pub fn unmap_window(state: &mut MalusState, surface: &X11Surface) {
     if let Some(wl_surface) = wl_surface {
         if !surface.is_override_redirect() && !surface.is_maximized() && !surface.is_fullscreen() {
             let class = surface.class();
-            let geo_size = surface.geometry().size;
-            if !class.is_empty() && geo_size.w >= 200 && geo_size.h >= 200 {
-                state.save_app_window_size(&class, geo_size);
+            let geo = surface.geometry();
+            if !class.is_empty() && geo.size.w >= 200 && geo.size.h >= 200 {
+                state.save_app_window_geometry(&class, geo.size, Some(geo.loc));
             }
         }
         state.minimized_windows.remove(&wl_surface);

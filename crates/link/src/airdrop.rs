@@ -860,6 +860,22 @@ pub fn awdl0_has_link_local() -> bool {
     if !Path::new("/sys/class/net/awdl0").exists() {
         return false;
     }
+    // Leer `/proc/net/if_inet6` en proceso para evitar lanzar hasta 72 subprocesos `ip`
+    if let Ok(raw) = std::fs::read_to_string("/proc/net/if_inet6") {
+        for line in raw.lines() {
+            let mut cols = line.split_whitespace();
+            let Some(addr_hex) = cols.next() else {
+                continue;
+            };
+            let Some(iface) = cols.last() else {
+                continue;
+            };
+            if iface == "awdl0" && addr_hex.to_ascii_lowercase().starts_with("fe80") {
+                return true;
+            }
+        }
+        return false;
+    }
     if let Ok(out) = Command::new("ip")
         .args(["-6", "-o", "addr", "show", "dev", "awdl0", "scope", "link"])
         .output()
@@ -1008,14 +1024,18 @@ pub fn resolve_computer_name() -> String {
 }
 
 pub fn notify_airdrop(summary: &str, body: &str) {
-    let _ = Command::new("notify-send")
-        .args([
-            "--app-name=AirDrop",
-            "--icon=network-wireless-hotspot-symbolic",
-            summary,
-            body,
-        ])
-        .spawn();
+    let summary = summary.to_string();
+    let body = body.to_string();
+    std::thread::spawn(move || {
+        let _ = Command::new("notify-send")
+            .args([
+                "--app-name=AirDrop",
+                "--icon=network-wireless-hotspot-symbolic",
+                &summary,
+                &body,
+            ])
+            .status();
+    });
 }
 
 /// Parsea líneas de salida de `owly browse` para extraer receptores AirDrop descubiertos.

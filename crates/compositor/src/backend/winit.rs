@@ -3100,7 +3100,7 @@ pub fn run_winit() -> Result<()> {
                             ) {
                                 if let Ok(pixels) = renderer.map_texture(&mapping) {
                                     if pixels.len() == (cl_w as usize * cl_h as usize * 4) {
-                                        session.push_frame(pixels.to_vec());
+                                        session.push_frame_slice(pixels);
                                     }
                                 }
                             }

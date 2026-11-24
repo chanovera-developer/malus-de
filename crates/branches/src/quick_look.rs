@@ -1486,7 +1486,7 @@ fn decode_image_rgba_offthread(path: &Path, ext: &str) -> Option<DecodedRgbaFram
     let tmp_png = unique_temp_path("img", "png");
     let ok = Command::new("ffmpeg")
         .args(["-y", "-loglevel", "error", "-i"])
-        .arg(path)
+        .arg(safe_ffmpeg_input_arg(path))
         .args([
             "-frames:v",
             "1",
@@ -1586,8 +1586,37 @@ pub fn parse_pdfinfo_page_count(stdout: &str) -> u32 {
     1
 }
 
+/// Normaliza una ruta local para herramientas CLI (evitando que un nombre que empiece por `-` sea tratado como opción).
+fn safe_cli_path_arg(path: &Path) -> std::ffi::OsString {
+    if path.is_absolute() {
+        path.as_os_str().to_os_string()
+    } else {
+        let mut s = std::ffi::OsString::from("./");
+        s.push(path.as_os_str());
+        s
+    }
+}
+
+/// Prefija `file:` para FFmpeg/FFprobe/FFplay evitando que nombres con `:` sean interpretados como protocolos de red.
+fn safe_ffmpeg_input_arg(path: &Path) -> std::ffi::OsString {
+    let abs = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    let mut s = std::ffi::OsString::from("file:");
+    s.push(abs.as_os_str());
+    s
+}
+
 fn query_pdf_page_count(path: &Path) -> u32 {
-    let Ok(out) = Command::new("pdfinfo").arg(path).output() else {
+    let Ok(out) = Command::new("pdfinfo")
+        .arg("--")
+        .arg(safe_cli_path_arg(path))
+        .output()
+    else {
         return 1;
     };
     if !out.status.success() {
@@ -1610,7 +1639,7 @@ fn render_pdf_page_rgba_offthread(path: &Path, page: u32) -> Option<DecodedRgbaF
             "-scale-to",
             "1100",
         ])
-        .arg(path)
+        .arg(safe_cli_path_arg(path))
         .arg(&prefix)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -1786,7 +1815,7 @@ fn probe_media_metadata(path: &Path) -> MediaMetadata {
             "-of",
             "default=noprint_wrappers=1",
         ])
-        .arg(path)
+        .arg(safe_ffmpeg_input_arg(path))
         .output()
     else {
         return meta;
@@ -1864,7 +1893,7 @@ fn extract_video_poster_rgba_offthread(
     let tmp_png = unique_temp_path("vposter", "png");
     let ok = Command::new("ffmpeg")
         .args(["-y", "-loglevel", "error", "-ss", seek_arg, "-i"])
-        .arg(path)
+        .arg(safe_ffmpeg_input_arg(path))
         .args(["-frames:v", "1", "-vf", "scale='min(760,iw)':-1"])
         .arg(&tmp_png)
         .stdout(Stdio::null())
@@ -1897,7 +1926,7 @@ fn spawn_video_playback(
     let scale_filter = format!("scale={}:{}:flags=fast_bilinear,fps=24", width, height);
     let child_video = Command::new("ffmpeg")
         .args(["-re", "-loglevel", "error", "-i"])
-        .arg(path)
+        .arg(safe_ffmpeg_input_arg(path))
         .args([
             "-vf",
             &scale_filter,
@@ -1914,8 +1943,8 @@ fn spawn_video_playback(
 
     if play_audio {
         if let Ok(audio_child) = Command::new("ffplay")
-            .args(["-nodisp", "-autoexit", "-loglevel", "quiet"])
-            .arg(path)
+            .args(["-nodisp", "-autoexit", "-loglevel", "quiet", "-i"])
+            .arg(safe_ffmpeg_input_arg(path))
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
@@ -2245,8 +2274,8 @@ fn create_audio_preview_from_payload(
             }
             let h = Rc::new(MediaPlaybackHandle::new());
             if let Ok(child) = Command::new("ffplay")
-                .args(["-nodisp", "-autoexit", "-loglevel", "quiet"])
-                .arg(&path)
+                .args(["-nodisp", "-autoexit", "-loglevel", "quiet", "-i"])
+                .arg(safe_ffmpeg_input_arg(&path))
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
@@ -2294,18 +2323,21 @@ fn create_audio_preview_from_payload(
 }
 
 fn read_archive_listing_text(path: &Path, ext: &str) -> Option<String> {
+    let safe_path = safe_cli_path_arg(path);
     let out = match ext {
         "zip" => Command::new("unzip")
-            .args(["-Z1"])
-            .arg(path)
+            .args(["-Z1", "--"])
+            .arg(&safe_path)
             .output()
             .ok()?,
-        "tar" | "gz" | "tgz" | "bz2" | "xz" => {
-            Command::new("tar").args(["-tf"]).arg(path).output().ok()?
-        }
+        "tar" | "gz" | "tgz" | "bz2" | "xz" => Command::new("tar")
+            .args(["--force-local", "-tf"])
+            .arg(&safe_path)
+            .output()
+            .ok()?,
         "7z" => Command::new("7z")
-            .args(["l", "-ba"])
-            .arg(path)
+            .args(["l", "-ba", "--"])
+            .arg(&safe_path)
             .output()
             .ok()?,
         _ => return None,

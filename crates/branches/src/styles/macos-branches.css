@@ -269,6 +269,10 @@ button.branches-split-btn.active {
     border-bottom: none;
 }
 
+.branches-header-toolbar windowcontrols.end {
+    margin: 0px 4px 0px 6px;
+}
+
 /* Contenedores squircle Liquid Glass de la barra superior (concéntricos al squircle de ventana) */
 .branches-toolbar-pill {
     border-radius: 8px;

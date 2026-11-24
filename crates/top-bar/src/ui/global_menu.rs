@@ -780,7 +780,12 @@ fn is_current_menu(
         .is_some_and(|menu| menu.0 == service && menu.1 == path)
 }
 
+thread_local! {
+    static LAST_STATIC_MENU_PTR: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn clear_app_menus(handles: &GlobalMenuHandles) {
+    LAST_STATIC_MENU_PTR.with(|c| c.set(0));
     while let Some(child) = handles.menus_container.first_child() {
         handles.menus_container.remove(&child);
     }
@@ -792,6 +797,7 @@ fn render_dbus_categories(
     service: &str,
     path: &str,
 ) {
+    LAST_STATIC_MENU_PTR.with(|c| c.set(0));
     // Limpiar menús previos
     while let Some(child) = handles.menus_container.first_child() {
         handles.menus_container.remove(&child);
@@ -1025,6 +1031,14 @@ fn render_static_or_clear(handles: &GlobalMenuHandles, app_id: Option<&str>, tit
 }
 
 fn render_static_categories(handles: &GlobalMenuHandles, categories: &[MenuCategoryDef]) {
+    let ptr = categories.as_ptr() as usize;
+    let already_rendered = LAST_STATIC_MENU_PTR.with(|c| c.get() == ptr)
+        && handles.menus_container.first_child().is_some();
+    if already_rendered {
+        return;
+    }
+    LAST_STATIC_MENU_PTR.with(|c| c.set(ptr));
+
     // Limpiar menús previos
     while let Some(child) = handles.menus_container.first_child() {
         handles.menus_container.remove(&child);

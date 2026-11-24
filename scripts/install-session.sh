@@ -37,7 +37,7 @@ fi
 if [ "${1:-}" != "--skip-build" ]; then
     TARGET_USER="${SUDO_USER:-$USER}"
     echo "📦 [1/4] Compilando binarios de Malus DE en perfil Release..."
-    su - "$TARGET_USER" -c "cd '$PROJECT_DIR' && cargo build --release --workspace"
+    su - "$TARGET_USER" -s /bin/bash -c 'cd "$1" && cargo build --release --workspace' -- _ "$PROJECT_DIR"
 else
     shift
 fi
@@ -108,8 +108,9 @@ chmod 644 /usr/local/share/malus-de/dock/macos-popover.svg
 if [ -d "$PROJECT_DIR/assets/wallpapers" ]; then
     echo "Instalando fondo de pantalla predeterminado en /usr/local/share/malus-de/wallpapers..."
     mkdir -p /usr/local/share/malus-de/wallpapers
-    cp -rf "$PROJECT_DIR/assets/wallpapers/"* /usr/local/share/malus-de/wallpapers/
-    chmod -R 644 /usr/local/share/malus-de/wallpapers/*
+    cp -rf "$PROJECT_DIR/assets/wallpapers/." /usr/local/share/malus-de/wallpapers/
+    find /usr/local/share/malus-de/wallpapers -type d -exec chmod 755 {} +
+    find /usr/local/share/malus-de/wallpapers -type f -exec chmod 644 {} +
 fi
 
 # Instalar los temas declarativos compartidos por los componentes de Malus DE
@@ -148,8 +149,8 @@ REAL_USER="${SUDO_USER:-$USER}"
 REAL_HOME="$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6 || true)"
 if command -v xdg-mime >/dev/null 2>&1 && [ -n "$REAL_USER" ] && [ -n "$REAL_HOME" ]; then
     if [ "$(id -u)" -eq 0 ] && [ "$REAL_USER" != "root" ]; then
-        su - "$REAL_USER" -c "XDG_DATA_HOME=\"$REAL_HOME/.local/share\" xdg-mime default dev.malus.Branches.desktop inode/directory" >/dev/null 2>&1 || true
-        su - "$REAL_USER" -c "XDG_DATA_HOME=\"$REAL_HOME/.local/share\" xdg-mime default dev.malus.Branches.desktop x-scheme-handler/trash" >/dev/null 2>&1 || true
+        su - "$REAL_USER" -s /bin/sh -c 'XDG_DATA_HOME="$1/.local/share" xdg-mime default dev.malus.Branches.desktop inode/directory' -- _ "$REAL_HOME" >/dev/null 2>&1 || true
+        su - "$REAL_USER" -s /bin/sh -c 'XDG_DATA_HOME="$1/.local/share" xdg-mime default dev.malus.Branches.desktop x-scheme-handler/trash' -- _ "$REAL_HOME" >/dev/null 2>&1 || true
     else
         xdg-mime default dev.malus.Branches.desktop inode/directory >/dev/null 2>&1 || true
         xdg-mime default dev.malus.Branches.desktop x-scheme-handler/trash >/dev/null 2>&1 || true
@@ -170,16 +171,28 @@ if [ -f "$SCRIPT_DIR/malus-ide-wrapper" ]; then
     ln -sf "/usr/local/bin/malus-ide-wrapper" "/usr/local/bin/code-wrapper"
     echo "   ✔ /usr/local/bin/malus-ide-wrapper (antigravity-ide-wrapper, code-wrapper)"
 
-    # Si existe una copia previa en ~/.local/bin del usuario, reemplazarla para que no sombree /usr/local/bin
+    # Si existe una copia previa en ~/.local/bin del usuario, reemplazarla sin escribir como root en $HOME
     REAL_USER="${SUDO_USER:-$USER}"
     REAL_HOME="$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6 || true)"
     if [ -n "$REAL_HOME" ] && [ -d "$REAL_HOME/.local/bin" ]; then
-        for user_wrap in malus-ide-wrapper antigravity-ide-wrapper code-wrapper; do
-            if [ -e "$REAL_HOME/.local/bin/$user_wrap" ] || [ -L "$REAL_HOME/.local/bin/$user_wrap" ]; then
-                ln -sf "/usr/local/bin/malus-ide-wrapper" "$REAL_HOME/.local/bin/$user_wrap"
-                echo "   ✔ Actualizado enlace de usuario $REAL_HOME/.local/bin/$user_wrap"
-            fi
-        done
+        if [ "$(id -u)" -eq 0 ] && [ "$REAL_USER" != "root" ]; then
+            su - "$REAL_USER" -s /bin/sh -c '
+                for user_wrap in malus-ide-wrapper antigravity-ide-wrapper code-wrapper; do
+                    target="$1/.local/bin/$user_wrap"
+                    if [ -e "$target" ] || [ -L "$target" ]; then
+                        ln -sf "/usr/local/bin/malus-ide-wrapper" "$target"
+                        echo "   ✔ Actualizado enlace de usuario $target"
+                    fi
+                done
+            ' -- _ "$REAL_HOME"
+        else
+            for user_wrap in malus-ide-wrapper antigravity-ide-wrapper code-wrapper; do
+                if [ -e "$REAL_HOME/.local/bin/$user_wrap" ] || [ -L "$REAL_HOME/.local/bin/$user_wrap" ]; then
+                    ln -sf "/usr/local/bin/malus-ide-wrapper" "$REAL_HOME/.local/bin/$user_wrap"
+                    echo "   ✔ Actualizado enlace de usuario $REAL_HOME/.local/bin/$user_wrap"
+                fi
+            done
+        fi
     fi
 elif [ -f "$SCRIPT_DIR/antigravity-ide-wrapper" ]; then
     cp -f "$SCRIPT_DIR/antigravity-ide-wrapper" "/usr/local/bin/antigravity-ide-wrapper"

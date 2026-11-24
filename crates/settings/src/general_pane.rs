@@ -113,12 +113,29 @@ impl GeneralPreferences {
     }
 
     pub fn save(&self) {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
         let path = Self::config_path();
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
         if let Ok(raw) = toml::to_string_pretty(self) {
-            let _ = fs::write(path, raw);
+            let tmp = path.with_extension("toml.tmp");
+            if let Ok(mut file) = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)
+            {
+                let _ = file.set_permissions(fs::Permissions::from_mode(0o600));
+                if file.write_all(raw.as_bytes()).is_ok() && file.sync_all().is_ok() {
+                    let _ = fs::rename(&tmp, &path);
+                } else {
+                    let _ = fs::remove_file(&tmp);
+                }
+            }
         }
     }
 }
@@ -2300,14 +2317,21 @@ fn sharing_service_row(
         .build();
     if let Some(unit) = systemd_unit {
         sw.connect_state_set(move |_, enable| {
+            const ALLOWED_UNITS: [&str; 6] = [
+                "sshd",
+                "sshd.service",
+                "cups",
+                "cups.service",
+                "smb",
+                "smb.service",
+            ];
+            if !ALLOWED_UNITS.contains(&unit) {
+                return glib::Propagation::Stop;
+            }
             std::thread::spawn(move || {
-                let act = if enable {
-                    "enable --now"
-                } else {
-                    "disable --now"
-                };
+                let subcmd = if enable { "enable" } else { "disable" };
                 let _ = Command::new("pkexec")
-                    .args(["sh", "-c", &format!("systemctl {act} {unit}")])
+                    .args(["systemctl", subcmd, "--now", "--", unit])
                     .output();
             });
             glib::Propagation::Proceed

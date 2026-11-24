@@ -39,6 +39,9 @@ pub struct FolderPane {
     pane_header: GtkBox,
     pane_title: Label,
     items_cache: Rc<RefCell<Vec<FileItem>>>,
+    groups_cache: Rc<RefCell<Option<Vec<String>>>>,
+    synced_views: Cell<[bool; 4]>,
+    folder_is_real: Cell<bool>,
     use_groups: Rc<Cell<bool>>,
     kind_filter: Rc<RefCell<Option<String>>>,
     self_weak_ref: RefCell<Weak<Self>>,
@@ -172,6 +175,9 @@ impl FolderPane {
             pane_header,
             pane_title,
             items_cache,
+            groups_cache: Rc::new(RefCell::new(None)),
+            synced_views: Cell::new([false; 4]),
+            folder_is_real: Cell::new(true),
             use_groups: Rc::new(Cell::new(false)),
             kind_filter: Rc::new(RefCell::new(None)),
             self_weak_ref: RefCell::new(Weak::new()),
@@ -218,8 +224,75 @@ impl FolderPane {
         }
     }
 
+    fn view_mode_index(mode_name: &str) -> usize {
+        match mode_name {
+            "list" => 1,
+            "columns" => 2,
+            "gallery" => 3,
+            _ => 0,
+        }
+    }
+
+    fn sync_active_view(&self, incremental_icons: bool) {
+        let mode = self.view_mode();
+        let idx = Self::view_mode_index(&mode);
+        let mut flags = self.synced_views.get();
+        if flags[idx] {
+            return;
+        }
+        let items = self.items_cache.borrow();
+        let groups = self.groups_cache.borrow();
+        let (current_path, show_hidden, sort_by, sort_order) = {
+            let s = self.state.borrow();
+            (
+                s.current_path.clone(),
+                s.show_hidden,
+                s.sort_by,
+                s.sort_order,
+            )
+        };
+        let folder_opt = if self.folder_is_real.get() {
+            Some(current_path.as_path())
+        } else {
+            None
+        };
+        match idx {
+            1 => {
+                self.list_view.set_current_folder(folder_opt);
+                self.list_view
+                    .set_items_grouped(&items, groups.as_deref());
+            }
+            2 => {
+                self.column_view.set_current_folder(folder_opt);
+                self.column_view.set_root(
+                    &current_path,
+                    &items,
+                    show_hidden,
+                    sort_by,
+                    sort_order,
+                );
+            }
+            3 => {
+                self.gallery_view.set_current_folder(folder_opt);
+                self.gallery_view.set_items(&items);
+            }
+            _ => {
+                self.icon_view.set_current_folder(folder_opt);
+                if incremental_icons && groups.is_none() {
+                    self.icon_view.sync_items_incremental(&items);
+                } else {
+                    self.icon_view
+                        .set_items_grouped(&items, groups.as_deref());
+                }
+            }
+        }
+        flags[idx] = true;
+        self.synced_views.set(flags);
+    }
+
     pub fn set_view_mode(&self, mode_name: &str) {
         self.view_stack.set_visible_child_name(mode_name);
+        self.sync_active_view(false);
         self.refresh_cut_states();
         (self.on_selection_changed)(
             self.id,
@@ -592,16 +665,11 @@ impl FolderPane {
             Ok(items) => {
                 let (items, groups) = self.prepare_items(items, sort_by, sort_order);
                 let count = items.len();
-                self.icon_view.set_current_folder(Some(&current_path));
-                self.list_view.set_current_folder(Some(&current_path));
-                self.column_view.set_current_folder(Some(&current_path));
-                self.gallery_view.set_current_folder(Some(&current_path));
-                self.icon_view.set_items_grouped(&items, groups.as_deref());
-                self.list_view.set_items_grouped(&items, groups.as_deref());
-                self.column_view
-                    .set_root(&current_path, &items, show_hidden, sort_by, sort_order);
-                self.gallery_view.set_items(&items);
                 *self.items_cache.borrow_mut() = items;
+                *self.groups_cache.borrow_mut() = groups;
+                self.folder_is_real.set(true);
+                self.synced_views.set([false; 4]);
+                self.sync_active_view(false);
                 (self.on_selection_changed)(
                     self.id,
                     count,
@@ -734,16 +802,11 @@ impl FolderPane {
         }
 
         let count = items.len();
-        if let Some(ref grp) = groups {
-            self.icon_view.set_items_grouped(&items, Some(grp.as_slice()));
-        } else {
-            self.icon_view.sync_items_incremental(&items);
-        }
-        self.list_view.set_items_grouped(&items, groups.as_deref());
-        self.column_view
-            .set_root(&current_path, &items, show_hidden, sort_by, sort_order);
-        self.gallery_view.set_items(&items);
         *self.items_cache.borrow_mut() = items;
+        *self.groups_cache.borrow_mut() = groups;
+        self.folder_is_real.set(true);
+        self.synced_views.set([false; 4]);
+        self.sync_active_view(true);
         (self.on_selection_changed)(
             self.id,
             count,
@@ -1018,7 +1081,7 @@ impl FolderPane {
     }
 
     fn apply_items_snapshot(&self, items: Vec<FileItem>) {
-        let (current_path, show_hidden, sort_by, sort_order) = {
+        let (current_path, _show_hidden, sort_by, sort_order) = {
             let s = self.state.borrow();
             (
                 s.current_path.clone(),
@@ -1029,16 +1092,11 @@ impl FolderPane {
         };
         let (items, groups) = self.prepare_items(items, sort_by, sort_order);
         let count = items.len();
-        self.icon_view.set_current_folder(None);
-        self.list_view.set_current_folder(None);
-        self.column_view.set_current_folder(None);
-        self.gallery_view.set_current_folder(None);
-        self.icon_view.set_items_grouped(&items, groups.as_deref());
-        self.list_view.set_items_grouped(&items, groups.as_deref());
-        self.column_view
-            .set_root(&current_path, &items, show_hidden, sort_by, sort_order);
-        self.gallery_view.set_items(&items);
         *self.items_cache.borrow_mut() = items;
+        *self.groups_cache.borrow_mut() = groups;
+        self.folder_is_real.set(false);
+        self.synced_views.set([false; 4]);
+        self.sync_active_view(false);
         (self.on_selection_changed)(
             self.id,
             count,

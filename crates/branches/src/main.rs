@@ -346,6 +346,7 @@ fn load_custom_css() {
         app_cfg_file.monitor_file(gio::FileMonitorFlags::NONE, gio::Cancellable::NONE)
     {
         monitor.connect_changed(|_, _, _, _| {
+            malus_de_common::config::invalidate_appearance_settings_cache();
             apply_branches_accent_color(malus_de_common::config::load_accent_color_index());
             apply_branches_folder_color(malus_de_common::config::load_folder_color_index());
             apply_branches_liquid_glass_opacity(

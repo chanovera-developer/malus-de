@@ -93,22 +93,26 @@ pub fn load_directory(
     filter_query: &str,
 ) -> Result<Vec<FileItem>, std::io::Error> {
     let mut items = Vec::new();
+    let filter_lower = if filter_query.is_empty() {
+        None
+    } else {
+        Some(filter_query.to_lowercase())
+    };
 
     let entries = fs::read_dir(path)?;
     for entry in entries.flatten() {
+        let fname = entry.file_name();
+        let fname_str = fname.to_string_lossy();
+        if !show_hidden && fname_str.starts_with('.') {
+            continue;
+        }
+        if let Some(ref fq) = filter_lower {
+            if !fname_str.to_lowercase().contains(fq.as_str()) {
+                continue;
+            }
+        }
         let p = entry.path();
         if let Some(item) = FileItem::from_path(&p) {
-            if !show_hidden && item.is_hidden {
-                continue;
-            }
-            if !filter_query.is_empty()
-                && !item
-                    .name
-                    .to_lowercase()
-                    .contains(&filter_query.to_lowercase())
-            {
-                continue;
-            }
             items.push(item);
         }
     }
@@ -698,14 +702,16 @@ fn resolve_kind_and_icon(path: &Path, is_dir: bool, name: &str) -> (String, gio:
         }
     }
 
-    // Archivo ordinario: consultar tipo MIME mediante GIO
+    // Archivo ordinario: consultar tipo MIME rápido por extensión (evita abrir cada archivo para sniff)
     let gfile = gio::File::for_path(path);
     if let Ok(info) = gfile.query_info(
-        "standard::content-type,standard::icon",
+        "standard::fast-content-type,standard::icon",
         gio::FileQueryInfoFlags::NONE,
         gio::Cancellable::NONE,
     ) {
-        let content_type = info.content_type().unwrap_or_default();
+        let content_type = info
+            .attribute_string("standard::fast-content-type")
+            .unwrap_or_default();
         let description = gio::content_type_get_description(&content_type).to_string();
 
         if let Some(icon) = info.icon() {

@@ -1,8 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use smithay::utils::{Physical, Rectangle};
 use std::{
     io::Write,
-    path::PathBuf,
+    path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     sync::mpsc::{sync_channel, SyncSender, TrySendError},
     thread::{self, JoinHandle},
@@ -10,11 +10,82 @@ use std::{
 };
 use tracing::{error, info, warn};
 
+/// Valida que la ruta destino de una grabación sea un archivo `.webm` local,
+/// absoluto, sin traversal (`..`), no existente previamente, y dentro de un
+/// directorio del usuario permitido (`$HOME`, `$XDG_VIDEOS_DIR` o `$XDG_RUNTIME_DIR`).
+pub fn validate_recording_destination(destination: &Path) -> Result<PathBuf> {
+    if !destination.is_absolute() {
+        bail!("La ruta de grabación debe ser absoluta");
+    }
+    if destination
+        .components()
+        .any(|c| matches!(c, Component::ParentDir))
+    {
+        bail!("La ruta de grabación no puede contener componentes '..'");
+    }
+
+    let file_name = destination
+        .file_name()
+        .and_then(|n| n.to_str())
+        .context("La ruta de grabación no tiene un nombre de archivo UTF-8 válido")?;
+    if file_name.is_empty() || file_name.starts_with('-') || file_name.starts_with('.') {
+        bail!("Nombre de archivo de grabación inválido");
+    }
+
+    let ext_ok = destination
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("webm"));
+    if !ext_ok {
+        bail!("La grabación de pantalla solo permite archivos .webm");
+    }
+
+    let allowed_roots: Vec<PathBuf> = ["HOME", "XDG_VIDEOS_DIR", "XDG_RUNTIME_DIR"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .filter_map(|p| std::fs::canonicalize(&p).ok().or(Some(p)))
+        .collect();
+
+    if allowed_roots.is_empty() {
+        bail!("No se pudo determinar un directorio base permitido para grabaciones");
+    }
+
+    // Verificar ancestro existente más cercano para evitar escapes por enlaces simbólicos
+    let mut existing_ancestor = destination.parent().unwrap_or(destination);
+    while !existing_ancestor.exists() {
+        match existing_ancestor.parent() {
+            Some(p) => existing_ancestor = p,
+            None => break,
+        }
+    }
+    let canonical_ancestor = std::fs::canonicalize(existing_ancestor)
+        .with_context(|| format!("No se pudo resolver {}", existing_ancestor.display()))?;
+    if !allowed_roots
+        .iter()
+        .any(|root| canonical_ancestor.starts_with(root))
+    {
+        bail!("La ruta de grabación debe residir dentro del directorio del usuario");
+    }
+
+    if std::fs::symlink_metadata(destination).is_ok() {
+        bail!("La ruta de grabación ya existe; se rechaza sobrescribir archivos existentes");
+    }
+
+    let relative_tail = destination
+        .strip_prefix(existing_ancestor)
+        .unwrap_or(Path::new(file_name));
+    Ok(canonical_ancestor.join(relative_tail))
+}
+
 pub struct ScreenRecordingSession {
     pub destination: PathBuf,
     pub rect: Option<Rectangle<i32, Physical>>,
     pub target_fps: u32,
     frame_sender: Option<SyncSender<Vec<u8>>>,
+    recycle_receiver: Option<std::sync::mpsc::Receiver<Vec<u8>>>,
     worker_handle: Option<JoinHandle<()>>,
     pub last_frame: Instant,
     pub start_time: Instant,
@@ -32,6 +103,7 @@ impl ScreenRecordingSession {
         fps: u32,
         broadcaster: malus_de_common::ipc::IpcBroadcaster,
     ) -> Result<Self> {
+        let destination = validate_recording_destination(&destination)?;
         let w = (width & !1).max(2);
         let h = (height & !1).max(2);
         let fps = fps.clamp(10, 60);
@@ -42,7 +114,7 @@ impl ScreenRecordingSession {
 
         let mut cmd = Command::new("ffmpeg");
         cmd.args([
-            "-y",
+            "-n",
             "-f",
             "rawvideo",
             "-pixel_format",
@@ -79,7 +151,10 @@ impl ScreenRecordingSession {
             cmd.args(["-c:a", "libopus", "-b:a", "128k"]);
         }
 
-        cmd.arg(destination.to_str().unwrap_or("recording.webm"));
+        let dest_str = destination
+            .to_str()
+            .context("La ruta de grabación no es UTF-8 válida")?;
+        cmd.arg(format!("file:{dest_str}"));
 
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::null());
@@ -94,6 +169,7 @@ impl ScreenRecordingSession {
             .context("No se pudo abrir stdin de ffmpeg")?;
 
         let (sender, receiver) = sync_channel::<Vec<u8>>(4);
+        let (recycle_tx, recycle_rx) = sync_channel::<Vec<u8>>(4);
 
         let dest_clone = destination.clone();
         let worker_handle = thread::spawn(move || {
@@ -104,6 +180,7 @@ impl ScreenRecordingSession {
                     break;
                 }
                 total_frames += 1;
+                let _ = recycle_tx.try_send(frame);
             }
             drop(stdin);
 
@@ -158,6 +235,7 @@ impl ScreenRecordingSession {
             rect,
             target_fps: fps,
             frame_sender: Some(sender),
+            recycle_receiver: Some(recycle_rx),
             worker_handle: Some(worker_handle),
             last_frame: Instant::now(),
             start_time: Instant::now(),
@@ -177,13 +255,51 @@ impl ScreenRecordingSession {
             }
         }
     }
+
+    /// Copia `pixels` en un búfer reciclado del pool de grabación para evitar asignaciones
+    /// de varios megabytes en el heap en cada fotograma.
+    pub fn push_frame_slice(&mut self, pixels: &[u8]) {
+        let mut buf = self
+            .recycle_receiver
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok())
+            .unwrap_or_else(|| Vec::with_capacity(pixels.len()));
+        buf.clear();
+        buf.extend_from_slice(pixels);
+        self.push_frame(buf);
+    }
 }
 
 impl Drop for ScreenRecordingSession {
     fn drop(&mut self) {
+        // Cerrar el canal señala EOF al hilo de ffmpeg; NO hacemos `join()` en el hilo principal
+        // del compositor para evitar congelar el escritorio mientras ffmpeg vacía su búfer.
         drop(self.frame_sender.take());
-        if let Some(handle) = self.worker_handle.take() {
-            let _ = handle.join();
-        }
+        drop(self.recycle_receiver.take());
+        let _ = self.worker_handle.take();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_recording_destination;
+    use std::path::PathBuf;
+
+    #[test]
+    fn validates_recording_destination_paths() {
+        let home = PathBuf::from(std::env::var("HOME").expect("HOME requerido en pruebas"));
+        let valid = home.join("malus-test-recording-nonexistent-987654.webm");
+        assert!(validate_recording_destination(&valid).is_ok());
+
+        // Rechaza rutas relativas
+        assert!(validate_recording_destination(std::path::Path::new("video.webm")).is_err());
+        // Rechaza path traversal
+        assert!(validate_recording_destination(&home.join("../etc/out.webm")).is_err());
+        // Rechaza extensiones no webm
+        assert!(validate_recording_destination(&home.join(".bashrc")).is_err());
+        // Rechaza nombres que empiezan por '-' (inyección de argumentos)
+        assert!(validate_recording_destination(&home.join("-flag.webm")).is_err());
+        // Rechaza rutas fuera del directorio del usuario
+        assert!(validate_recording_destination(std::path::Path::new("/etc/evil.webm")).is_err());
     }
 }

@@ -113,53 +113,106 @@ pub fn calculate_luminance_rgba(rgba_data: &[u8]) -> f32 {
 }
 
 /// Detecta si el fondo bajo la barra superior es oscuro (usando luminancia real del wallpaper) o el tema del sistema.
+/// Cachea el resultado por ruta y `(mtime, len)` del wallpaper para evitar lanzar `python3`+PIL en cada segundo.
 pub fn detect_system_is_dark() -> bool {
-    // 1. Intentar analizar la imagen de fondo de pantalla activa en Malus DE / GNOME
-    if let Some(is_dark) = detect_wallpaper_luminance_is_dark() {
+    // 1. Intentar analizar la imagen de fondo de pantalla activa (solo cuando cambia en disco)
+    if let Some(is_dark) = detect_wallpaper_luminance_is_dark_cached() {
         return is_dark;
     }
 
-    // 2. Si no se puede leer el fondo de pantalla, recurrir al tema del sistema
-    if let Ok(out) = std::process::Command::new("gsettings")
-        .args(["get", "org.gnome.desktop.interface", "color-scheme"])
-        .output()
+    // 2. Respaldo sin subprocesos: configuración aislada de modo oscuro de Malus DE
+    malus_de_common::config::is_dark_mode_active()
+}
+
+fn detect_wallpaper_luminance_is_dark_cached() -> Option<bool> {
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant, SystemTime};
+
+    struct WallpaperLumCache {
+        path: PathBuf,
+        mtime: Option<SystemTime>,
+        len: Option<u64>,
+        checked_at: Instant,
+        result: Option<bool>,
+    }
+
+    static LUM_CACHE: OnceLock<Mutex<Option<WallpaperLumCache>>> = OnceLock::new();
+    const CHECK_INTERVAL: Duration = Duration::from_secs(5);
+
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let path = home.join(".config/malus-de/wallpaper.jpg");
+
+    let lock = LUM_CACHE.get_or_init(|| Mutex::new(None));
     {
-        let scheme = String::from_utf8_lossy(&out.stdout).to_lowercase();
-        if scheme.contains("prefer-dark") || scheme.contains("dark") {
-            return true;
+        let guard = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(ref cached) = *guard {
+            if cached.path == path && cached.checked_at.elapsed() < CHECK_INTERVAL {
+                return cached.result;
+            }
         }
     }
 
-    true // Por defecto fondo oscuro en Malus DE (macOS dark vibrancy)
+    let meta = std::fs::metadata(&path).ok();
+    let (mtime, len) = meta
+        .as_ref()
+        .map(|m| (m.modified().ok(), Some(m.len())))
+        .unwrap_or((None, None));
+
+    {
+        let mut guard = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(ref mut cached) = *guard {
+            if cached.path == path && cached.mtime == mtime && cached.len == len {
+                cached.checked_at = Instant::now();
+                return cached.result;
+            }
+        }
+    }
+
+    let result = if meta.is_some() {
+        detect_wallpaper_luminance_is_dark(&path)
+    } else {
+        None
+    };
+
+    let mut guard = lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = Some(WallpaperLumCache {
+        path,
+        mtime,
+        len,
+        checked_at: Instant::now(),
+        result,
+    });
+    result
 }
 
 /// Analiza la tira superior del archivo de fondo de pantalla para calcular su luminancia matemática ITU-R BT.709.
-fn detect_wallpaper_luminance_is_dark() -> Option<bool> {
+fn detect_wallpaper_luminance_is_dark(path: &std::path::Path) -> Option<bool> {
     if let Ok(out) = std::process::Command::new("python3")
         .args([
             "-c",
             r#"
-import os, sys, warnings
+import sys, warnings
 warnings.filterwarnings('ignore')
 try:
     from PIL import Image
-    home = os.environ.get('HOME', '')
-    path = os.path.join(home, '.config/malus-de/wallpaper.jpg')
-    if not os.path.exists(path):
-        import subprocess
-        uri = subprocess.check_output(['gsettings', 'get', 'org.gnome.desktop.background', 'picture-uri']).decode().strip().strip("'")
-        if uri.startswith('file://'):
-            path = uri[7:]
-    if os.path.exists(path):
-        im = Image.open(path)
-        top = im.crop((0, 0, im.width, min(48, im.height)))
-        px = list(top.getdata())
-        lum = sum(0.2126*(p[0]/255) + 0.7152*(p[1]/255) + 0.0722*(p[2]/255) for p in px) / len(px)
-        sys.exit(0 if lum < 0.50 else 1)
+    im = Image.open(sys.argv[1]).convert('RGB')
+    top = im.crop((0, 0, im.width, min(48, im.height)))
+    top.thumbnail((128, 16))
+    px = list(top.getdata())
+    lum = sum(0.2126*(p[0]/255) + 0.7152*(p[1]/255) + 0.0722*(p[2]/255) for p in px) / max(len(px), 1)
+    sys.exit(0 if lum < 0.50 else 1)
 except Exception:
     pass
 sys.exit(2)
 "#,
+            path.to_str()?,
         ])
         .status()
     {

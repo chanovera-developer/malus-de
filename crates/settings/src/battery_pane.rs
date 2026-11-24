@@ -563,15 +563,37 @@ pub fn create_battery_pane(
         });
     }
 
-    // Refresco periódico discreto cada 30s mientras la vista siga mapeada
+    // Refresco periódico discreto cada 30s únicamente mientras la vista siga mapeada
     {
-        let pane_w = pane.clone();
+        let timer_source: Rc<RefCell<Option<glib::SourceId>>> = Rc::new(RefCell::new(None));
+        let slot_map = timer_source.clone();
         let rel_t = run_reload.clone();
-        glib::timeout_add_local(std::time::Duration::from_secs(30), move || {
-            if pane_w.is_mapped() {
-                rel_t();
+        pane.connect_map(move |p| {
+            if slot_map.borrow().is_some() {
+                return;
             }
-            glib::ControlFlow::Continue
+            let p_weak = p.downgrade();
+            let rel_cb = rel_t.clone();
+            let slot_clear = slot_map.clone();
+            let id = glib::timeout_add_local(std::time::Duration::from_secs(30), move || {
+                let Some(w) = p_weak.upgrade() else {
+                    let _ = slot_clear.borrow_mut().take();
+                    return glib::ControlFlow::Break;
+                };
+                if w.is_mapped() {
+                    rel_cb();
+                    glib::ControlFlow::Continue
+                } else {
+                    let _ = slot_clear.borrow_mut().take();
+                    glib::ControlFlow::Break
+                }
+            });
+            *slot_map.borrow_mut() = Some(id);
+        });
+        pane.connect_unmap(move |_| {
+            if let Some(id) = timer_source.borrow_mut().take() {
+                id.remove();
+            }
         });
     }
 
@@ -1995,15 +2017,72 @@ fn apply_low_power_policy_async(
     });
 }
 
+fn validate_charge_threshold_sysfs_path(bat_dir: &str) -> Result<std::path::PathBuf, String> {
+    let p = std::path::Path::new(bat_dir);
+    if !p.is_absolute()
+        || p.components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err("Ruta de batería sysfs inválida.".to_string());
+    }
+    let rel = p
+        .strip_prefix("/sys/class/power_supply")
+        .map_err(|_| "La ruta de batería debe residir en /sys/class/power_supply.".to_string())?;
+    let mut comps = rel.components();
+    let Some(std::path::Component::Normal(dev_name)) = comps.next() else {
+        return Err("Dispositivo de batería inválido.".to_string());
+    };
+    if comps.next().is_some() {
+        return Err("Se esperaba un directorio directo bajo /sys/class/power_supply.".to_string());
+    }
+    let dev_str = dev_name
+        .to_str()
+        .ok_or_else(|| "Nombre de dispositivo de batería inválido.".to_string())?;
+    if dev_str.is_empty()
+        || dev_str.starts_with('-')
+        || dev_str.starts_with('.')
+        || !dev_str
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+    {
+        return Err("Caracteres no permitidos en dispositivo de batería.".to_string());
+    }
+    Ok(std::path::PathBuf::from("/sys/class/power_supply")
+        .join(dev_str)
+        .join("charge_control_end_threshold"))
+}
+
 fn write_charge_control_threshold(bat_dir: &str, limit: u8) -> Result<(), String> {
-    let clean_dir: String = bat_dir
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_' | '.'))
-        .collect();
-    let script = format!("echo {limit} > '{clean_dir}/charge_control_end_threshold'");
-    let out = Command::new("pkexec")
-        .args(["sh", "-c", &script])
-        .output()
+    use std::io::Write;
+    use std::process::Stdio;
+
+    if limit > 100 {
+        return Err("El límite de carga debe estar entre 0 y 100.".to_string());
+    }
+    let target = validate_charge_threshold_sysfs_path(bat_dir)?;
+    if let Ok(canon) = std::fs::canonicalize(&target) {
+        if !canon.starts_with("/sys/") {
+            return Err("La ruta canónica de batería está fuera de /sys.".to_string());
+        }
+    }
+
+    let mut child = Command::new("pkexec")
+        .args(["tee", "--"])
+        .arg(&target)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("pkexec: {e}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(format!("{limit}\n").as_bytes())
+            .map_err(|e| format!("No se pudo escribir límite en pkexec tee: {e}"))?;
+    }
+
+    let out = child
+        .wait_with_output()
         .map_err(|e| format!("pkexec: {e}"))?;
     if out.status.success() {
         Ok(())
@@ -2082,5 +2161,18 @@ mod tests {
         assert_eq!(snap.level_pct, 53);
         assert_eq!(snap.status, "Charging");
         assert!(snap.ac_online);
+    }
+
+    #[test]
+    fn validates_charge_threshold_sysfs_paths() {
+        let ok = validate_charge_threshold_sysfs_path("/sys/class/power_supply/BAT0").unwrap();
+        assert_eq!(
+            ok,
+            std::path::PathBuf::from("/sys/class/power_supply/BAT0/charge_control_end_threshold")
+        );
+        assert!(validate_charge_threshold_sysfs_path("/sys/class/power_supply/../etc").is_err());
+        assert!(validate_charge_threshold_sysfs_path("/tmp/BAT0").is_err());
+        assert!(validate_charge_threshold_sysfs_path("/sys/class/power_supply/BAT0/extra").is_err());
+        assert!(validate_charge_threshold_sysfs_path("/sys/class/power_supply/-bad").is_err());
     }
 }

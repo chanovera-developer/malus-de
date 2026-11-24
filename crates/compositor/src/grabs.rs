@@ -650,6 +650,15 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
                 data.toggle_expose(crate::expose::ExposeMode::Global);
             } else if let Some(surf) = self.window.wl_surface() {
                 if !self.is_snapped && win_geo.size.w > 150 && win_geo.size.h > 150 {
+                    if self.window.toplevel().is_none_or(|t| t.parent().is_none()) {
+                        if let Some(id) = crate::state::app_id_for_surface(&surf) {
+                            data.save_app_window_geometry(
+                                &id,
+                                win_geo.size,
+                                Some(win_loc + win_geo.loc),
+                            );
+                        }
+                    }
                     data.window_restore_geometries
                         .insert(surf.into_owned(), (win_loc, win_geo.size));
                 }

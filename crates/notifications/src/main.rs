@@ -168,6 +168,7 @@ fn main() -> Result<()> {
             gtk4::gio::Cancellable::NONE,
         ) {
             monitor.connect_changed(|_, _, _, _| {
+                malus_de_common::config::invalidate_appearance_settings_cache();
                 apply_notification_liquid_glass_opacity(
                     malus_de_common::config::load_liquid_glass_opacity(),
                 );

@@ -833,15 +833,20 @@ fn build_lock_window(
         let clock_label = Label::builder().css_classes(["giant-clock"]).build();
 
         update_lock_time(&clock_label, &date_label);
-        let c_clone = clock_label.clone();
-        let d_clone = date_label.clone();
-        glib::timeout_add_local(Duration::from_secs(1), move || {
-            if c_clone.root().is_none() {
-                return ControlFlow::Break;
-            }
-            update_lock_time(&c_clone, &d_clone);
-            ControlFlow::Continue
-        });
+        fn schedule_lock_clock_tick(clock: Label, date: Label) {
+            let delay_secs = glib::DateTime::now_local()
+                .map(|now| (60 - now.second().clamp(0, 59)) as u64)
+                .unwrap_or(60)
+                .max(1);
+            glib::timeout_add_local_once(Duration::from_secs(delay_secs), move || {
+                if clock.root().is_none() {
+                    return;
+                }
+                update_lock_time(&clock, &date);
+                schedule_lock_clock_tick(clock, date);
+            });
+        }
+        schedule_lock_clock_tick(clock_label.clone(), date_label.clone());
 
         top_clock_box.append(&date_label);
         top_clock_box.append(&clock_label);

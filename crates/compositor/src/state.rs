@@ -747,6 +747,102 @@ pub fn is_translucent_window(window: &smithay::desktop::Window) -> bool {
     false
 }
 
+/// Clasificación consolidada de propiedades de renderizado de una ventana en una sola lectura
+/// de `toplevel_info` (evita múltiples bloqueos de mutex y asignaciones `to_lowercase` por frame).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WindowRenderFlags {
+    pub is_firefox: bool,
+    pub is_browser: bool,
+    pub is_branches: bool,
+    pub is_translucent: bool,
+    pub popup_effects_enabled: bool,
+    pub uses_ssd: bool,
+}
+
+impl WindowRenderFlags {
+    pub fn from_window(window: &smithay::desktop::Window, main_surface: &WlSurface) -> Self {
+        let (app_id, title) = toplevel_info(main_surface);
+        let id_lower = app_id.as_deref().map(str::to_lowercase);
+        let title_lower = title.as_deref().map(|t| t.trim().to_lowercase());
+
+        let is_firefox = id_lower
+            .as_deref()
+            .is_some_and(|s| s.contains("firefox") || s.contains("mozilla"))
+            || title_lower
+                .as_deref()
+                .is_some_and(|s| s.contains("firefox") || s.contains("mozilla"));
+
+        let is_browser = app_id
+            .as_deref()
+            .is_some_and(is_browser_identifier);
+
+        let is_branches = id_lower.as_deref().is_some_and(|lower| {
+            lower == "branches"
+                || lower.contains("malus.branches")
+                || lower.contains("malus-de-branches")
+                || lower.contains("malus_de_branches")
+        }) || title_lower.as_deref().is_some_and(|lower| lower == "branches");
+
+        let is_translucent = is_branches
+            || id_lower.as_deref().is_some_and(|lower| {
+                lower.contains("malus.settings")
+                    || lower.contains("malus-de-settings")
+                    || lower.contains("malus_de_settings")
+            })
+            || title_lower.as_deref().is_some_and(|lower| {
+                lower == "ajustes del sistema"
+                    || lower == "confirmación de acción del sistema"
+                    || lower == "system action confirmation"
+            });
+
+        let popup_effects_enabled = !is_browser
+            && app_id.as_deref().map_or(true, |id| {
+                !id.contains("org.malus_de.dock") && !id.contains("malus-de-dock")
+            });
+
+        let uses_ssd = if is_browser {
+            false
+        } else {
+            let is_gnome = id_lower.as_deref().is_some_and(|lower| {
+                lower.starts_with("org.gnome.")
+                    || lower.contains("nautilus")
+                    || lower.contains("malus.settings")
+                    || lower.contains("malus-de-settings")
+                    || lower.contains("malus_de_settings")
+                    || lower == "branches"
+                    || lower.contains("malus.branches")
+                    || lower.contains("malus-de-branches")
+                    || lower.contains("malus_de_branches")
+                    || lower.contains("ptyxis")
+                    || lower.contains("texteditor")
+                    || lower.contains("calculator")
+                    || lower.contains("systemmonitor")
+            });
+            if is_gnome {
+                false
+            } else if let Some(toplevel) = window.toplevel() {
+                let state = toplevel.current_state();
+                let is_fullscreen = state.states.contains(
+                    smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::State::Fullscreen,
+                );
+                use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+                !is_fullscreen && state.decoration_mode == Some(Mode::ServerSide)
+            } else {
+                false
+            }
+        };
+
+        Self {
+            is_firefox,
+            is_browser,
+            is_branches,
+            is_translucent,
+            popup_effects_enabled,
+            uses_ssd,
+        }
+    }
+}
+
 fn parse_color_scheme(settings: &str) -> Option<bool> {
     let mut in_interface_section = false;
     for line in settings.lines().map(str::trim) {
@@ -1400,7 +1496,9 @@ impl MalusState {
             screenshot_ui: crate::screenshot_ui::ScreenshotUiState::new(),
             snap_layouts: crate::snap_layouts::SnapLayoutsState::new(),
             media_keys: crate::media_keys::MediaKeysState::new(),
-            ssd: crate::ssd::SsdManager::new(),
+            ssd: crate::ssd::SsdManager::new_with_layout(
+                malus_de_common::config::load_window_buttons_right(),
+            ),
             expose: crate::expose::ExposeState::default(),
             workspaces: crate::workspaces::WorkspaceManager::default(),
             workspace_revision: 0,
@@ -2007,8 +2105,27 @@ impl MalusState {
         false
     }
 
+    pub fn ipc_message_allowed_when_locked(msg: &IpcMessage) -> bool {
+        matches!(
+            msg,
+            IpcMessage::StopScreenRecording
+                | IpcMessage::HideSpotlight
+                | IpcMessage::HideAppSwitcher
+                | IpcMessage::ReloadDisplaysConfig
+                | IpcMessage::ReloadDisplayBrightness
+                | IpcMessage::ThemeTransitionPrepared { .. }
+        )
+    }
+
     pub fn process_ipc_messages(&mut self) {
         while let Some(msg) = self.ipc_broadcaster.try_recv() {
+            if self.is_session_locked() && !Self::ipc_message_allowed_when_locked(&msg) {
+                tracing::warn!(
+                    "🔒 [SECURITY] Mensaje IPC bloqueado mientras la sesión está bloqueada: {:?}",
+                    std::mem::discriminant(&msg)
+                );
+                continue;
+            }
             match msg {
                 IpcMessage::ActivateApp { app_id } => {
                     tracing::info!("📥 IPC ActivateApp recibido para: {}", app_id);
@@ -2100,6 +2217,18 @@ impl MalusState {
                     self.expose.bump_revision();
                     self.ipc_broadcaster
                         .broadcast(&IpcMessage::LiquidGlassOpacityChanged { opacity });
+                }
+                IpcMessage::WindowButtonsLayoutChanged { right } => {
+                    tracing::info!(
+                        "📥 IPC WindowButtonsLayoutChanged recibido: derecha={}",
+                        right
+                    );
+                    malus_de_common::config::invalidate_appearance_settings_cache();
+                    self.ssd.set_buttons_right(right);
+                    self.surface_commit_counter = self.surface_commit_counter.wrapping_add(1);
+                    self.expose.bump_revision();
+                    self.ipc_broadcaster
+                        .broadcast(&IpcMessage::WindowButtonsLayoutChanged { right });
                 }
                 IpcMessage::AnimateRestore { window_id } => {
                     tracing::info!(
@@ -2408,6 +2537,7 @@ impl MalusState {
         loc: Point<i32, Logical>,
         uses_ssd: bool,
         is_fullscreen: bool,
+        buttons_right: bool,
     ) -> Point<f64, Logical> {
         let top_y = if uses_ssd && !is_fullscreen {
             (loc.y - crate::ssd::SSD_TITLEBAR_HEIGHT) as f64
@@ -2420,7 +2550,17 @@ impl MalusState {
             is_firefox_window(window),
             uses_ssd,
         );
-        Point::from((loc.x as f64 + dx, top_y + dy))
+        let x = if buttons_right {
+            let win_w = window.geometry().size.w.max(0) as f64;
+            if win_w > dx {
+                loc.x as f64 + (win_w - dx)
+            } else {
+                loc.x as f64 + dx
+            }
+        } else {
+            loc.x as f64 + dx
+        };
+        Point::from((x, top_y + dy))
     }
 
     fn record_close_button_hint(&mut self, window: &smithay::desktop::Window) {
@@ -2435,7 +2575,13 @@ impl MalusState {
             .toplevel()
             .map(|t| t.current_state().states.contains(XdgState::Fullscreen))
             .unwrap_or(false);
-        let origin = Self::close_button_center_logical(window, loc, uses_ssd, is_fullscreen);
+        let origin = Self::close_button_center_logical(
+            window,
+            loc,
+            uses_ssd,
+            is_fullscreen,
+            self.ssd.buttons_right,
+        );
         self.close_button_hints
             .insert(surf.into_owned(), (origin, Instant::now()));
     }
@@ -2457,7 +2603,9 @@ impl MalusState {
             .toplevel()
             .map(|t| t.current_state().states.contains(XdgState::Fullscreen))
             .unwrap_or(false);
-        let canonical = Self::close_button_center_logical(window, loc, false, is_fullscreen);
+        let buttons_right = self.ssd.buttons_right;
+        let canonical =
+            Self::close_button_center_logical(window, loc, false, is_fullscreen, buttons_right);
         let app_lower = toplevel_info(&surf)
             .0
             .unwrap_or_default()
@@ -2474,7 +2622,7 @@ impl MalusState {
             && (0.0..=44.0).contains(&rel_y);
 
         if in_left_close_zone {
-            let hint_pt = if is_known_malus_csd {
+            let hint_pt = if is_known_malus_csd && !buttons_right {
                 canonical
             } else {
                 click_pt
@@ -2482,8 +2630,13 @@ impl MalusState {
             self.close_button_hints
                 .insert(surf.into_owned(), (hint_pt, Instant::now()));
         } else if in_right_close_zone {
+            let hint_pt = if is_known_malus_csd && buttons_right {
+                canonical
+            } else {
+                click_pt
+            };
             self.close_button_hints
-                .insert(surf.into_owned(), (click_pt, Instant::now()));
+                .insert(surf.into_owned(), (hint_pt, Instant::now()));
         }
     }
 
@@ -4824,7 +4977,12 @@ impl MalusState {
                 {
                     let lx = point.x - tb_x;
                     let ly = point.y - tb_y;
-                    if let Some(hit) = crate::ssd::hit_test_titlebar(lx, ly, tb_w) {
+                    if let Some(hit) = crate::ssd::hit_test_titlebar_with_layout(
+                        lx,
+                        ly,
+                        tb_w,
+                        self.ssd.buttons_right,
+                    ) {
                         return Some((window.clone(), loc, hit, lx, ly, tb_w));
                     }
                 }
@@ -5000,6 +5158,7 @@ impl MalusState {
             &self.space,
             point,
             occluded_by_top_ui,
+            self.ssd.buttons_right,
             Instant::now(),
         );
         self.check_hot_corners(point);
@@ -7151,8 +7310,13 @@ impl XdgShellHandler for MalusState {
                             .and_then(|k| k.current_focus())
                             .as_ref()
                             == Some(surf);
-                    let fallback_origin =
-                        Self::close_button_center_logical(win, loc, uses_ssd, is_fullscreen);
+                    let fallback_origin = Self::close_button_center_logical(
+                        win,
+                        loc,
+                        uses_ssd,
+                        is_fullscreen,
+                        self.ssd.buttons_right,
+                    );
 
                     let origin_logical = if let Some((hint_pt, hint_at)) = hint_entry {
                         if hint_at.elapsed() < std::time::Duration::from_secs(5) {

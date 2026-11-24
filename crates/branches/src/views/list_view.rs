@@ -347,12 +347,19 @@ impl ListView {
 
     pub fn refresh_cut_states(&self) {
         let items = self.items.borrow();
-        for (idx, item) in items.iter().enumerate() {
-            if let Some(row) = row_for_item_index(&self.list_box, idx) {
-                if let Some(hbox) = row.child() {
-                    crate::views::sync_cut_css_class(&hbox, &item.path);
+        let mut child = self.list_box.first_child();
+        while let Some(widget) = child {
+            if let Ok(row) = widget.clone().downcast::<ListBoxRow>() {
+                if let Some(idx) = unsafe { row.data::<usize>("list_item_idx").map(|p| *p.as_ref()) }
+                {
+                    if let Some(item) = items.get(idx) {
+                        if let Some(hbox) = row.child() {
+                            crate::views::sync_cut_css_class(&hbox, &item.path);
+                        }
+                    }
                 }
             }
+            child = widget.next_sibling();
         }
     }
 }

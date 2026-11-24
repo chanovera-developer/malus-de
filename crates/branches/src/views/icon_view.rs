@@ -1050,6 +1050,7 @@ impl IconView {
         let mut max_y = 300;
 
         let mut new_positions_to_save: HashMap<String, (i32, i32)> = HashMap::new();
+        let tags_map = crate::views::load_tags_map();
 
         for (idx, item) in items.iter().enumerate() {
             let (pos_x, pos_y) = if is_grouped {
@@ -1119,7 +1120,6 @@ impl IconView {
             max_y = max_y.max(pos_y + cell_h);
 
             let pos_cell = Rc::new(Cell::new((pos_x, pos_y)));
-            let tags_map = crate::views::load_tags_map();
             let (widget, image) =
                 self.create_spatial_icon_widget(item, pos_cell.clone(), metrics, &tags_map);
             if pending_select.contains(&item.name) {
@@ -1250,6 +1250,7 @@ impl IconView {
             let mut next_row = 0;
             let mut new_positions_to_save: HashMap<String, (i32, i32)> = HashMap::new();
             let mut pending_select = self.pending_select_names.borrow_mut();
+            let tags_map = crate::views::load_tags_map();
 
             for item in new_items {
                 let (pos_x, pos_y) =
@@ -1283,7 +1284,6 @@ impl IconView {
                     };
 
                 let pos_cell = Rc::new(Cell::new((pos_x, pos_y)));
-                let tags_map = crate::views::load_tags_map();
                 let (widget, image) =
                     self.create_spatial_icon_widget(item, pos_cell.clone(), metrics, &tags_map);
                 if pending_select.remove(&item.name) {
@@ -2137,10 +2137,8 @@ impl IconView {
                             let _ = db::set_layout_mode(&conn, &cur_folder, LayoutMode::Freeform);
                             let _ = db::save_all_positions(&mut conn, &cur_folder, &all_positions);
                         }
-                    } else if let Ok(conn) = db::open_db() {
-                        for (name, (fx, fy)) in dropped_positions {
-                            let _ = db::save_position(&conn, &cur_folder, &name, fx, fy);
-                        }
+                    } else if let Ok(mut conn) = db::open_db() {
+                        let _ = db::save_all_positions(&mut conn, &cur_folder, &dropped_positions);
                     }
                 }
                 if moved_external {
@@ -2149,13 +2147,13 @@ impl IconView {
                     }
                     view_drop.selected_items.borrow_mut().clear();
 
+                    let tags_map = crate::views::load_tags_map();
                     for name in external_selected_names {
                         if let Some(&(fx, fy)) = saved_drop_positions.get(&name) {
                             let dest = cur_folder.join(&name);
                             if let Some(file_item) = FileItem::from_path(&dest) {
                                 if !view_drop.item_widgets.borrow().contains_key(&name) {
                                     let pos_cell = Rc::new(Cell::new((fx, fy)));
-                                    let tags_map = crate::views::load_tags_map();
                                     let (vbox, img) = view_drop.create_spatial_icon_widget(
                                         &file_item,
                                         pos_cell.clone(),

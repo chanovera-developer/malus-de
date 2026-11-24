@@ -799,18 +799,21 @@ fn execute_compress_job(
     let mut cmd = match format {
         ArchiveFormat::Zip => {
             let mut c = std::process::Command::new("zip");
-            c.arg("-r").arg("-q").arg(&archive_path);
+            c.arg("-r").arg("-q").arg(&archive_path).arg("--");
             c
         }
         ArchiveFormat::TarGz => {
             let mut c = std::process::Command::new("tar");
-            c.arg("-czf").arg(&archive_path);
+            c.arg("--force-local").arg("-czf").arg(&archive_path).arg("--");
             c
         }
     };
     cmd.current_dir(parent_dir);
     for name in &rel_names {
-        cmd.arg(name);
+        // Prefijar "./" además de "--" garantiza que nombres que empiecen por '-' nunca se interpreten como opciones.
+        let mut safe_rel = std::ffi::OsString::from("./");
+        safe_rel.push(name);
+        cmd.arg(safe_rel);
     }
 
     if let Err(e) = run_command_cancellable(ctx, cmd, &archive_name) {
@@ -842,6 +845,140 @@ pub fn is_supported_archive(path: &Path) -> bool {
     .any(|ext| lower.ends_with(ext))
 }
 
+fn is_safe_archive_entry_path(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.contains('\0') {
+        return false;
+    }
+    let normalized = trimmed.replace('\\', "/");
+    let p = Path::new(&normalized);
+    if p.is_absolute() {
+        return false;
+    }
+    for comp in p.components() {
+        if matches!(
+            comp,
+            std::path::Component::RootDir
+                | std::path::Component::ParentDir
+                | std::path::Component::Prefix(_)
+        ) {
+            return false;
+        }
+    }
+    true
+}
+
+fn validate_archive_before_extract(archive: &Path, lower: &str) -> Result<(), String> {
+    let entries: Vec<String> = if lower.ends_with(".zip") {
+        let out = std::process::Command::new("unzip")
+            .args(["-Z1", "--"])
+            .arg(archive)
+            .output()
+            .map_err(|e| format!("No se pudo inspeccionar archivo zip: {e}"))?;
+        if !out.status.success() {
+            return Err("No se pudo validar el contenido del archivo zip".to_string());
+        }
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(ToString::to_string)
+            .collect()
+    } else if lower.ends_with(".7z") {
+        let out = std::process::Command::new("7z")
+            .args(["l", "-slt", "--"])
+            .arg(archive)
+            .output()
+            .map_err(|e| format!("No se pudo inspeccionar archivo 7z: {e}"))?;
+        if !out.status.success() {
+            return Err("No se pudo validar el contenido del archivo 7z".to_string());
+        }
+        let mut parsed = Vec::new();
+        let mut seen_header_sep = false;
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            if line.trim() == "----------" {
+                seen_header_sep = true;
+                continue;
+            }
+            if seen_header_sep {
+                if let Some(path_val) = line.strip_prefix("Path = ") {
+                    parsed.push(path_val.to_string());
+                }
+            }
+        }
+        parsed
+    } else {
+        let out = std::process::Command::new("tar")
+            .args(["--force-local", "-tf"])
+            .arg(archive)
+            .output()
+            .map_err(|e| format!("No se pudo inspeccionar archivo tar: {e}"))?;
+        if !out.status.success() {
+            return Err("No se pudo validar el contenido del archivo tar".to_string());
+        }
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(ToString::to_string)
+            .collect()
+    };
+
+    for entry in entries {
+        if !is_safe_archive_entry_path(&entry) {
+            return Err(format!(
+                "Archivo comprimido rechazado por ruta insegura (posible path traversal): {}",
+                entry
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn verify_extracted_tree_safe(root: &Path) -> Result<(), String> {
+    let canonical_root = fs::canonicalize(root)
+        .map_err(|e| format!("No se pudo resolver directorio de extracción: {e}"))?;
+    let mut stack = vec![canonical_root.clone()];
+    while let Some(dir) = stack.pop() {
+        let rd = fs::read_dir(&dir)
+            .map_err(|e| format!("Error validando árbol extraído: {e}"))?;
+        for entry in rd.flatten() {
+            let p = entry.path();
+            let meta = fs::symlink_metadata(&p)
+                .map_err(|e| format!("Error inspeccionando metadatos extraídos: {e}"))?;
+            if meta.file_type().is_symlink() {
+                let target = fs::read_link(&p)
+                    .map_err(|e| format!("Error leyendo enlace simbólico extraído: {e}"))?;
+                if target.is_absolute() {
+                    return Err(format!(
+                        "Enlace simbólico absoluto rechazado en archivo comprimido: {}",
+                        p.display()
+                    ));
+                }
+                let parent = p.parent().unwrap_or(&canonical_root);
+                let resolved = fs::canonicalize(parent.join(&target)).unwrap_or_else(|_| {
+                    let mut acc = parent.to_path_buf();
+                    for comp in target.components() {
+                        match comp {
+                            std::path::Component::ParentDir => {
+                                acc.pop();
+                            }
+                            std::path::Component::Normal(seg) => acc.push(seg),
+                            _ => {}
+                        }
+                    }
+                    acc
+                });
+                if !resolved.starts_with(&canonical_root) {
+                    return Err(format!(
+                        "Enlace simbólico fuera del directorio destino rechazado: {}",
+                        p.display()
+                    ));
+                }
+            } else if meta.is_dir() {
+                stack.push(p);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn execute_extract_job(
     ctx: &mut JobContext<'_>,
     archive: &Path,
@@ -857,29 +994,46 @@ fn execute_extract_job(
     ctx.total_items = 2;
     ctx.emit_progress(&archive_name);
 
+    let lower = archive.to_string_lossy().to_lowercase();
+    validate_archive_before_extract(archive, &lower)?;
+
     let tmp_dir = dest_dir.join(format!(".branches_extract_{}", ctx.id));
     fs::create_dir_all(&tmp_dir)
         .map_err(|e| format!("No se pudo preparar extracción temporal: {}", e))?;
 
-    let lower = archive.to_string_lossy().to_lowercase();
     let cmd = if lower.ends_with(".zip") {
         let mut c = std::process::Command::new("unzip");
-        c.arg("-q").arg("-o").arg(archive).arg("-d").arg(&tmp_dir);
+        c.arg("-q")
+            .arg("-o")
+            .arg("-d")
+            .arg(&tmp_dir)
+            .arg("--")
+            .arg(archive);
         c
     } else if lower.ends_with(".7z") {
         let mut c = std::process::Command::new("7z");
         c.arg("x")
             .arg("-y")
             .arg(format!("-o{}", tmp_dir.display()))
+            .arg("--")
             .arg(archive);
         c
     } else {
         let mut c = std::process::Command::new("tar");
-        c.arg("-xf").arg(archive).arg("-C").arg(&tmp_dir);
+        c.arg("--force-local")
+            .arg("-xf")
+            .arg(archive)
+            .arg("-C")
+            .arg(&tmp_dir);
         c
     };
 
     if let Err(e) = run_command_cancellable(ctx, cmd, &archive_name) {
+        let _ = fs::remove_dir_all(&tmp_dir);
+        return Err(e);
+    }
+
+    if let Err(e) = verify_extracted_tree_safe(&tmp_dir) {
         let _ = fs::remove_dir_all(&tmp_dir);
         return Err(e);
     }
@@ -1176,6 +1330,30 @@ mod tests {
         assert!(comp.cancelled);
         assert!(!comp.changed);
         assert!(!dst_dir.join("grande.bin").exists());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn archive_security_rejects_traversal_and_escaping_symlinks() {
+        assert!(is_safe_archive_entry_path("carpeta/archivo.txt"));
+        assert!(!is_safe_archive_entry_path("/etc/passwd"));
+        assert!(!is_safe_archive_entry_path("../escape.txt"));
+        assert!(!is_safe_archive_entry_path("a/../../escape.txt"));
+        assert!(!is_safe_archive_entry_path("..\\escape.txt"));
+
+        let root = std::env::temp_dir().join(format!(
+            "malus_branches_symlink_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("ok.txt"), b"ok").unwrap();
+        assert!(verify_extracted_tree_safe(&root).is_ok());
+
+        let bad_link = root.join("escape_link");
+        std::os::unix::fs::symlink("/etc/hosts", &bad_link).unwrap();
+        assert!(verify_extracted_tree_safe(&root).is_err());
 
         let _ = fs::remove_dir_all(&root);
     }

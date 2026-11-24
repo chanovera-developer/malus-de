@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+#[cfg(not(test))]
+use std::time::SystemTime;
 
 /// Configuración global de Malus DE
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,16 +126,210 @@ pub fn accent_color_css(index: usize) -> String {
     )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ParsedAppearanceSettings {
+    accent_color_idx: usize,
+    sidebar_icon_size_idx: usize,
+    tint_windows_with_wallpaper: bool,
+    window_buttons_right: bool,
+    icon_widget_style_idx: usize,
+    folder_color_idx: usize,
+    liquid_glass_opacity: f64,
+    reduce_transparency: bool,
+}
+
+impl Default for ParsedAppearanceSettings {
+    fn default() -> Self {
+        Self {
+            accent_color_idx: 0,
+            sidebar_icon_size_idx: 1,
+            tint_windows_with_wallpaper: true,
+            window_buttons_right: false,
+            icon_widget_style_idx: 0,
+            folder_color_idx: 0,
+            liquid_glass_opacity: DEFAULT_LIQUID_GLASS_OPACITY,
+            reduce_transparency: false,
+        }
+    }
+}
+
+impl ParsedAppearanceSettings {
+    fn parse(raw: &str) -> Self {
+        let mut parsed = Self::default();
+        if let Ok(settings) = toml::from_str::<toml::Value>(raw) {
+            if let Some(idx) = settings
+                .get("accent_color_idx")
+                .and_then(toml::Value::as_integer)
+                .and_then(|i| usize::try_from(i).ok())
+                .filter(|i| *i < ACCENT_COLORS.len())
+            {
+                parsed.accent_color_idx = idx;
+            }
+            if let Some(idx) = settings
+                .get("sidebar_icon_size_idx")
+                .and_then(toml::Value::as_integer)
+                .and_then(|i| usize::try_from(i).ok())
+                .filter(|i| *i < 3)
+            {
+                parsed.sidebar_icon_size_idx = idx;
+            }
+            if let Some(v) = settings
+                .get("tint_windows_with_wallpaper")
+                .and_then(toml::Value::as_bool)
+            {
+                parsed.tint_windows_with_wallpaper = v;
+            }
+            if let Some(v) = settings
+                .get("window_buttons_right")
+                .and_then(toml::Value::as_bool)
+            {
+                parsed.window_buttons_right = v;
+            }
+            if let Some(idx) = settings
+                .get("icon_widget_style_idx")
+                .and_then(toml::Value::as_integer)
+                .and_then(|i| usize::try_from(i).ok())
+                .filter(|i| *i < 4)
+            {
+                parsed.icon_widget_style_idx = idx;
+            }
+            if let Some(idx) = settings
+                .get("folder_color_idx")
+                .and_then(toml::Value::as_integer)
+                .and_then(|i| usize::try_from(i).ok())
+                .filter(|i| *i < 4)
+            {
+                parsed.folder_color_idx = idx;
+            }
+            if let Some(v) = settings
+                .get("liquid_glass_opacity")
+                .and_then(toml::Value::as_float)
+                .or_else(|| {
+                    settings
+                        .get("liquid_glass_opacity")
+                        .and_then(toml::Value::as_integer)
+                        .map(|i| i as f64)
+                })
+            {
+                parsed.liquid_glass_opacity = v.clamp(0.15, 0.95);
+            }
+            if let Some(v) = settings
+                .get("reduce_transparency")
+                .and_then(toml::Value::as_bool)
+            {
+                parsed.reduce_transparency = v;
+            }
+            return parsed;
+        }
+
+        // Respaldo tolerante línea a línea si el archivo tiene sintaxis parcial
+        for line in raw.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("liquid_glass_opacity") {
+                if let Some(val_str) = rest.trim_start().strip_prefix('=') {
+                    if let Ok(v) = val_str.trim().parse::<f64>() {
+                        parsed.liquid_glass_opacity = v.clamp(0.15, 0.95);
+                    }
+                }
+            } else if let Some(rest) = trimmed.strip_prefix("reduce_transparency") {
+                if let Some(val) = rest.trim_start().strip_prefix('=') {
+                    parsed.reduce_transparency = val.trim() == "true";
+                }
+            } else if let Some(rest) = trimmed.strip_prefix("window_buttons_right") {
+                if let Some(val) = rest.trim_start().strip_prefix('=') {
+                    parsed.window_buttons_right = val.trim() == "true";
+                }
+            }
+        }
+        parsed
+    }
+}
+
+#[cfg(not(test))]
+struct AppearanceCacheState {
+    path: PathBuf,
+    checked_at: Instant,
+    mtime: Option<SystemTime>,
+    len: Option<u64>,
+    settings: ParsedAppearanceSettings,
+    invalidated: bool,
+}
+
+#[cfg(not(test))]
+static APPEARANCE_CACHE: OnceLock<Mutex<Option<AppearanceCacheState>>> = OnceLock::new();
+
+/// Invalida la caché en memoria de `appearance-settings.toml` para forzar lectura inmediata.
+pub fn invalidate_appearance_settings_cache() {
+    #[cfg(not(test))]
+    {
+        let lock = APPEARANCE_CACHE.get_or_init(|| Mutex::new(None));
+        let mut guard = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(state) = guard.as_mut() {
+            state.invalidated = true;
+        }
+    }
+}
+
+fn load_cached_appearance_settings() -> ParsedAppearanceSettings {
+    let path = appearance_settings_path();
+    #[cfg(test)]
+    {
+        return std::fs::read_to_string(&path)
+            .map(|raw| ParsedAppearanceSettings::parse(&raw))
+            .unwrap_or_default();
+    }
+    #[cfg(not(test))]
+    {
+        const CACHE_TTL: Duration = Duration::from_millis(150);
+        let lock = APPEARANCE_CACHE.get_or_init(|| Mutex::new(None));
+        let mut guard = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        if let Some(ref state) = *guard {
+            if !state.invalidated
+                && state.path == path
+                && state.checked_at.elapsed() < CACHE_TTL
+            {
+                return state.settings;
+            }
+        }
+
+        let (mtime, len) = std::fs::metadata(&path)
+            .ok()
+            .map(|m| (m.modified().ok(), Some(m.len())))
+            .unwrap_or((None, None));
+
+        if let Some(ref mut state) = *guard {
+            if !state.invalidated
+                && state.path == path
+                && state.mtime == mtime
+                && state.len == len
+            {
+                state.checked_at = Instant::now();
+                return state.settings;
+            }
+        }
+
+        let settings = std::fs::read_to_string(&path)
+            .map(|raw| ParsedAppearanceSettings::parse(&raw))
+            .unwrap_or_default();
+        *guard = Some(AppearanceCacheState {
+            path,
+            checked_at: Instant::now(),
+            mtime,
+            len,
+            settings,
+            invalidated: false,
+        });
+        settings
+    }
+}
+
 pub fn load_accent_color_index() -> usize {
-    let Ok(raw) = std::fs::read_to_string(appearance_settings_path()) else {
-        return 0;
-    };
-    toml::from_str::<toml::Value>(&raw)
-        .ok()
-        .and_then(|settings| settings.get("accent_color_idx")?.as_integer())
-        .and_then(|index| usize::try_from(index).ok())
-        .filter(|index| *index < ACCENT_COLORS.len())
-        .unwrap_or(0)
+    load_cached_appearance_settings().accent_color_idx
 }
 
 pub fn load_accent_color() -> (f64, f64, f64) {
@@ -150,15 +348,7 @@ pub struct SidebarSizeMetrics {
 
 /// Indice del tamaño de íconos en la barra lateral (`0 = Pequeños`, `1 = Medianos`, `2 = Grandes`).
 pub fn load_sidebar_icon_size_index() -> usize {
-    let Ok(raw) = std::fs::read_to_string(appearance_settings_path()) else {
-        return 1;
-    };
-    toml::from_str::<toml::Value>(&raw)
-        .ok()
-        .and_then(|settings| settings.get("sidebar_icon_size_idx")?.as_integer())
-        .and_then(|index| usize::try_from(index).ok())
-        .filter(|index| *index < 3)
-        .unwrap_or(1)
+    load_cached_appearance_settings().sidebar_icon_size_idx
 }
 
 /// Devuelve las métricas de píxeles para `0 = Pequeños`, `1 = Medianos`, `2 = Grandes`.
@@ -195,13 +385,7 @@ pub fn load_sidebar_icon_metrics() -> SidebarSizeMetrics {
 
 /// Indica si las barras laterales deben recibir un tinte sutil con el color de énfasis.
 pub fn load_tint_windows_with_wallpaper() -> bool {
-    let Ok(raw) = std::fs::read_to_string(appearance_settings_path()) else {
-        return true;
-    };
-    toml::from_str::<toml::Value>(&raw)
-        .ok()
-        .and_then(|settings| settings.get("tint_windows_with_wallpaper")?.as_bool())
-        .unwrap_or(true)
+    load_cached_appearance_settings().tint_windows_with_wallpaper
 }
 
 /// Degradado CSS (`background-image`) para teñir sutilmente las barras laterales con `@accent_bg_color`.
@@ -241,29 +425,13 @@ pub fn sidebar_icon_size_css(index: usize) -> String {
 /// Indice del estilo de iconos y widgets configurado en Ajustes de Aspecto.
 /// 0 = Predeterminado, 1 = Obscuro, 2 = Transparente, 3 = Teñido.
 pub fn load_icon_widget_style_index() -> usize {
-    let Ok(raw) = std::fs::read_to_string(appearance_settings_path()) else {
-        return 0;
-    };
-    toml::from_str::<toml::Value>(&raw)
-        .ok()
-        .and_then(|settings| settings.get("icon_widget_style_idx")?.as_integer())
-        .and_then(|index| usize::try_from(index).ok())
-        .filter(|index| *index < 4)
-        .unwrap_or(0)
+    load_cached_appearance_settings().icon_widget_style_idx
 }
 
 /// Indice del color de carpetas configurado en Ajustes de Aspecto.
 /// 0 = Automatico, 1 = Azul clasico, 2 = Color de enfasis, 3 = Grafito.
 pub fn load_folder_color_index() -> usize {
-    let Ok(raw) = std::fs::read_to_string(appearance_settings_path()) else {
-        return 0;
-    };
-    toml::from_str::<toml::Value>(&raw)
-        .ok()
-        .and_then(|settings| settings.get("folder_color_idx")?.as_integer())
-        .and_then(|index| usize::try_from(index).ok())
-        .filter(|index| *index < 4)
-        .unwrap_or(0)
+    load_cached_appearance_settings().folder_color_idx
 }
 
 /// Resuelve el color RGB (`[0.0, 1.0]`) para tintar las carpetas según
@@ -291,7 +459,8 @@ pub fn resolve_folder_tint_rgb(folder_color_idx: usize, accent_color_idx: usize)
 
 /// Color RGB actual de carpetas según `appearance-settings.toml`.
 pub fn load_folder_tint_rgb() -> (f64, f64, f64) {
-    resolve_folder_tint_rgb(load_folder_color_index(), load_accent_color_index())
+    let s = load_cached_appearance_settings();
+    resolve_folder_tint_rgb(s.folder_color_idx, s.accent_color_idx)
 }
 
 /// Color hexadecimal `#rrggbb` actual para tintar los SVG de carpetas.
@@ -317,36 +486,37 @@ pub fn folder_color_css(index: usize) -> String {
 
 /// Lee el nivel de opacidad de Liquid Glass configurado en `appearance-settings.toml` (`[0.15, 0.95]`).
 pub fn load_liquid_glass_opacity() -> f64 {
-    let path = appearance_settings_path();
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return DEFAULT_LIQUID_GLASS_OPACITY;
-    };
-    for line in raw.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("liquid_glass_opacity") {
-            if let Some(val_str) = rest.trim_start().strip_prefix('=') {
-                if let Ok(v) = val_str.trim().parse::<f64>() {
-                    return v.clamp(0.15, 0.95);
-                }
-            }
-        }
+    load_cached_appearance_settings().liquid_glass_opacity
+}
+
+/// Disposición macOS predeterminada (botones a la izquierda: cerrar, minimizar, maximizar).
+pub const WINDOW_BUTTONS_LAYOUT_LEFT: &str = "close,minimize,maximize:";
+
+/// Disposición a la derecha solicitada por el usuario (minimizar, maximizar, cerrar).
+pub const WINDOW_BUTTONS_LAYOUT_RIGHT: &str = ":minimize,maximize,close";
+
+/// Devuelve el string GTK / GSettings `button-layout` correspondiente a `buttons_right`.
+pub fn window_decoration_layout_for(buttons_right: bool) -> &'static str {
+    if buttons_right {
+        WINDOW_BUTTONS_LAYOUT_RIGHT
+    } else {
+        WINDOW_BUTTONS_LAYOUT_LEFT
     }
-    DEFAULT_LIQUID_GLASS_OPACITY
+}
+
+/// Indica si el usuario activó «Mostrar los botones del lado derecho» en `appearance-settings.toml`.
+pub fn load_window_buttons_right() -> bool {
+    load_cached_appearance_settings().window_buttons_right
+}
+
+/// Devuelve el `gtk-decoration-layout` / `button-layout` activo según `appearance-settings.toml`.
+pub fn active_window_decoration_layout() -> &'static str {
+    window_decoration_layout_for(load_window_buttons_right())
 }
 
 /// Indica si el usuario activó «Reducir transparencia» (todo sólido, sin blur) en `appearance-settings.toml`.
 pub fn load_reduce_transparency() -> bool {
-    let Ok(raw) = std::fs::read_to_string(appearance_settings_path()) else {
-        return false;
-    };
-    for line in raw.lines() {
-        if let Some(rest) = line.trim().strip_prefix("reduce_transparency") {
-            if let Some(val) = rest.trim_start().strip_prefix('=') {
-                return val.trim() == "true";
-            }
-        }
-    }
-    false
+    load_cached_appearance_settings().reduce_transparency
 }
 
 /// Factor de escala que fuerza opacidad total (modo «Reducir transparencia»).
@@ -363,7 +533,11 @@ pub fn liquid_glass_scale_for(opacity: f64) -> f64 {
 
 /// Factor multiplicativo actual de Liquid Glass leído desde `appearance-settings.toml`.
 pub fn current_liquid_glass_scale() -> f64 {
-    liquid_glass_scale_for(load_liquid_glass_opacity())
+    let s = load_cached_appearance_settings();
+    if s.reduce_transparency {
+        return SOLID_GLASS_SCALE;
+    }
+    (s.liquid_glass_opacity.clamp(0.15, 0.95) / DEFAULT_LIQUID_GLASS_OPACITY).clamp(0.25, 1.85)
 }
 
 /// Escala un valor alfa base según el factor de Liquid Glass manteniéndolo dentro de `[min_a, max_a]`.
@@ -485,11 +659,17 @@ pub fn get_malus_gtk3_css(dark: bool) -> String {
         .replace("__BACKDROP_BORDER__", backdrop_border)
 }
 
-fn set_gtk_decoration_layout(config_dir: &Path) -> std::io::Result<()> {
-    const LAYOUT: &str = "gtk-decoration-layout=close,minimize,maximize:";
+fn set_gtk_decoration_layout_for(config_dir: &Path, buttons_right: bool) -> std::io::Result<()> {
+    let layout_line = format!(
+        "gtk-decoration-layout={}",
+        window_decoration_layout_for(buttons_right)
+    );
 
     for version in ["gtk-3.0", "gtk-4.0"] {
         let settings_path = config_dir.join(version).join("settings.ini");
+        if let Some(parent) = settings_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         let content = match std::fs::read_to_string(&settings_path) {
             Ok(content) => content,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -503,7 +683,7 @@ fn set_gtk_decoration_layout(config_dir: &Path) -> std::io::Result<()> {
                 lines.push(String::new());
             }
             lines.push("[Settings]".to_string());
-            lines.push(LAYOUT.to_string());
+            lines.push(layout_line.clone());
             std::fs::write(settings_path, lines.join("\n") + "\n")?;
             continue;
         };
@@ -519,14 +699,18 @@ fn set_gtk_decoration_layout(config_dir: &Path) -> std::io::Result<()> {
                 .trim_start()
                 .starts_with("gtk-decoration-layout=")
         }) {
-            lines[index] = LAYOUT.to_string();
+            lines[index] = layout_line.clone();
         } else {
-            lines.insert(end, LAYOUT.to_string());
+            lines.insert(end, layout_line.clone());
         }
         std::fs::write(settings_path, lines.join("\n") + "\n")?;
     }
 
     Ok(())
+}
+
+fn set_gtk_decoration_layout(config_dir: &Path) -> std::io::Result<()> {
+    set_gtk_decoration_layout_for(config_dir, load_window_buttons_right())
 }
 
 static ATOMIC_TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -656,12 +840,13 @@ fn update_gtk_ini_appearance(
     gtk_theme: &str,
     icon_theme: &str,
 ) -> std::io::Result<bool> {
+    let layout = active_window_decoration_layout();
     upsert_keyfile_entries(
         ini_path,
         &[(
             "Settings",
             &[
-                ("gtk-decoration-layout", "close,minimize,maximize:"),
+                ("gtk-decoration-layout", layout),
                 ("gtk-application-prefer-dark-theme", dark_val),
                 ("gtk-theme-name", gtk_theme),
                 ("gtk-icon-theme-name", icon_theme),
@@ -997,18 +1182,26 @@ pub fn sync_titlebar_double_click_action(config_dir: &Path, action: u8) -> std::
     Ok(())
 }
 
-pub fn ensure_keyfile_button_layout(keyfile_path: &Path) -> std::io::Result<()> {
+pub fn ensure_keyfile_button_layout_for(
+    keyfile_path: &Path,
+    buttons_right: bool,
+) -> std::io::Result<()> {
     if !keyfile_path.exists() {
         return Ok(());
     }
+    let quoted = format!("'{}'", window_decoration_layout_for(buttons_right));
     upsert_keyfile_entries(
         keyfile_path,
         &[(
             "org/gnome/desktop/wm/preferences",
-            &[("button-layout", "'close,minimize,maximize:'")],
+            &[("button-layout", quoted.as_str())],
         )],
     )
     .map(|_| ())
+}
+
+pub fn ensure_keyfile_button_layout(keyfile_path: &Path) -> std::io::Result<()> {
+    ensure_keyfile_button_layout_for(keyfile_path, load_window_buttons_right())
 }
 
 pub fn set_gsettings_button_layout(config_dir: &Path) {
@@ -1016,6 +1209,46 @@ pub fn set_gsettings_button_layout(config_dir: &Path) {
     if let Err(error) = ensure_keyfile_button_layout(&keyfile_path) {
         tracing::warn!("No se pudo escribir el layout de botones en keyfile: {error}");
     }
+}
+
+/// Aplica el layout de botones de ventana (`buttons_right = false` -> `close,minimize,maximize:`,
+/// `buttons_right = true` -> `:minimize,maximize,close`) en GTK3/GTK4, GSettings keyfile y Firefox.
+pub fn apply_window_buttons_layout(buttons_right: bool) {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let malus_config_dir = PathBuf::from(&home).join(".config").join("malus-de");
+    let layout = window_decoration_layout_for(buttons_right);
+    let quoted = format!("'{layout}'");
+
+    if let Err(error) = set_gtk_decoration_layout_for(&malus_config_dir, buttons_right) {
+        tracing::warn!("No se pudo actualizar gtk-decoration-layout en settings.ini: {error}");
+    }
+
+    let keyfile_path = malus_config_dir.join("glib-2.0/settings/keyfile");
+    if let Err(error) = upsert_keyfile_entries(
+        &keyfile_path,
+        &[(
+            "org/gnome/desktop/wm/preferences",
+            &[("button-layout", quoted.as_str())],
+        )],
+    ) {
+        tracing::warn!("No se pudo actualizar button-layout en keyfile: {error}");
+    }
+
+    setup_firefox_configuration_for(&malus_config_dir, buttons_right);
+
+    let _ = std::process::Command::new("gsettings")
+        .args([
+            "set",
+            "org.gnome.desktop.wm.preferences",
+            "button-layout",
+            layout,
+        ])
+        .env("XDG_CONFIG_HOME", &malus_config_dir)
+        .env("GSETTINGS_BACKEND", "keyfile")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }
 
 /// Inicializa el entorno de configuración aislado para Malus DE en `$HOME/.config/malus-de`.
@@ -1062,27 +1295,12 @@ pub fn setup_isolated_session_environment() -> std::io::Result<PathBuf> {
     let keyfile_dir = malus_config_dir.join("glib-2.0").join("settings");
     std::fs::create_dir_all(&keyfile_dir)?;
     let keyfile_path = keyfile_dir.join("keyfile");
+    let button_layout = active_window_decoration_layout();
     if !keyfile_path.exists() {
-        let keyfile_content = r#"[org/gnome/desktop/wm/preferences]
-button-layout='close,minimize,maximize:'
-
-[org/gnome/desktop/interface]
-color-scheme='prefer-light'
-cursor-theme='macOS'
-cursor-size=24
-document-font-name='Inter 11'
-font-antialiasing='grayscale'
-font-hinting='slight'
-font-name='Inter 11'
-font-rendering='manual'
-font-rgba-order='rgb'
-icon-theme='Malus'
-gtk-theme='Adwaita'
-
-[org/gnome/settings-daemon/plugins/xsettings]
-overrides={'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}
-"#;
-        write_file_atomic_if_changed(&keyfile_path, keyfile_content)?;
+        let keyfile_content = format!(
+            "[org/gnome/desktop/wm/preferences]\nbutton-layout='{button_layout}'\n\n[org/gnome/desktop/interface]\ncolor-scheme='prefer-light'\ncursor-theme='macOS'\ncursor-size=24\ndocument-font-name='Inter 11'\nfont-antialiasing='grayscale'\nfont-hinting='slight'\nfont-name='Inter 11'\nfont-rendering='manual'\nfont-rgba-order='rgb'\nicon-theme='Malus'\ngtk-theme='Adwaita'\n\n[org/gnome/settings-daemon/plugins/xsettings]\noverrides={{'Gtk/ShellShowsAppMenu': <1>, 'Gtk/ShellShowsMenubar': <1>}}\n"
+        );
+        write_file_atomic_if_changed(&keyfile_path, &keyfile_content)?;
     } else {
         let _ = ensure_keyfile_button_layout(&keyfile_path);
     }
@@ -1111,8 +1329,8 @@ org.freedesktop.impl.portal.Secret=gnome-keyring;
     let gtk3_ini = gtk3_dir.join("settings.ini");
     if !gtk3_ini.exists() {
         let gtk_ini_content = format!(
-            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme=0\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-font-name={}\ngtk-xft-antialias=1\ngtk-xft-hinting=1\ngtk-xft-hintstyle=hintslight\ngtk-xft-rgba=none\ngtk-theme-name=Adwaita\ngtk-icon-theme-name={}\n",
-            cursor_theme, cursor_size, DEFAULT_SYSTEM_FONT_NAME, DEFAULT_ICON_THEME_LIGHT
+            "[Settings]\ngtk-decoration-layout={}\ngtk-application-prefer-dark-theme=0\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-font-name={}\ngtk-xft-antialias=1\ngtk-xft-hinting=1\ngtk-xft-hintstyle=hintslight\ngtk-xft-rgba=none\ngtk-theme-name=Adwaita\ngtk-icon-theme-name={}\n",
+            button_layout, cursor_theme, cursor_size, DEFAULT_SYSTEM_FONT_NAME, DEFAULT_ICON_THEME_LIGHT
         );
         write_file_atomic_if_changed(&gtk3_ini, &gtk_ini_content)?;
     }
@@ -1122,8 +1340,8 @@ org.freedesktop.impl.portal.Secret=gnome-keyring;
     let gtk4_ini = gtk4_dir.join("settings.ini");
     if !gtk4_ini.exists() {
         let gtk_ini_content = format!(
-            "[Settings]\ngtk-decoration-layout=close,minimize,maximize:\ngtk-application-prefer-dark-theme=0\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-font-name={}\ngtk-xft-antialias=1\ngtk-xft-hinting=1\ngtk-xft-hintstyle=hintslight\ngtk-xft-rgba=none\ngtk-hint-font-metrics=1\ngtk-theme-name=Adwaita\ngtk-icon-theme-name={}\n",
-            cursor_theme, cursor_size, DEFAULT_SYSTEM_FONT_NAME, DEFAULT_ICON_THEME_LIGHT
+            "[Settings]\ngtk-decoration-layout={}\ngtk-application-prefer-dark-theme=0\ngtk-cursor-theme-name={}\ngtk-cursor-theme-size={}\ngtk-font-name={}\ngtk-xft-antialias=1\ngtk-xft-hinting=1\ngtk-xft-hintstyle=hintslight\ngtk-xft-rgba=none\ngtk-hint-font-metrics=1\ngtk-theme-name=Adwaita\ngtk-icon-theme-name={}\n",
+            button_layout, cursor_theme, cursor_size, DEFAULT_SYSTEM_FONT_NAME, DEFAULT_ICON_THEME_LIGHT
         );
         write_file_atomic_if_changed(&gtk4_ini, &gtk_ini_content)?;
     }
@@ -1374,9 +1592,9 @@ pub fn resolve_electron_ide_wrapper(exe: &str) -> Option<PathBuf> {
 }
 
 /// Configura los perfiles de Mozilla Firefox para que utilicen los controles de ventana
-/// semáforo estilo macOS (posición a la izquierda, círculos de colores y glifos vectoriales en hover)
-/// persistiendo los estilos en `chrome/userChrome.css` y habilitando la preferencia en `user.js`.
-pub fn setup_firefox_configuration(malus_config_dir: &Path) {
+/// semáforo de Malus DE según el lado elegido (`buttons_right = false` izquierda macOS,
+/// `buttons_right = true` derecha en orden minimizar, maximizar, cerrar).
+pub fn setup_firefox_configuration_for(malus_config_dir: &Path, buttons_right: bool) {
     let mut candidate_dirs = Vec::new();
 
     // 1. Perfiles bajo el XDG_CONFIG_HOME aislado de Malus DE (~/.config/malus-de/mozilla/firefox)
@@ -1434,7 +1652,7 @@ pub fn setup_firefox_configuration(malus_config_dir: &Path) {
         }
 
         for profile_dir in profile_subdirs {
-            apply_firefox_profile_styles(&profile_dir);
+            apply_firefox_profile_styles_for(&profile_dir, buttons_right);
             configured_any_profile = true;
         }
     }
@@ -1444,7 +1662,7 @@ pub fn setup_firefox_configuration(malus_config_dir: &Path) {
     if !configured_any_profile {
         let default_profile_dir = isolated_firefox_dir.join("default-release");
         let _ = std::fs::create_dir_all(&default_profile_dir);
-        apply_firefox_profile_styles(&default_profile_dir);
+        apply_firefox_profile_styles_for(&default_profile_dir, buttons_right);
 
         let initial_profiles_ini = r#"[General]
 StartWithLastProfile=1
@@ -1467,19 +1685,36 @@ Locked=1
     }
 }
 
+pub fn setup_firefox_configuration(malus_config_dir: &Path) {
+    setup_firefox_configuration_for(malus_config_dir, load_window_buttons_right());
+}
+
+/// Genera el `userChrome.css` de Firefox con los botones semáforo a la izquierda (macOS)
+/// o a la derecha en orden minimizar, maximizar, cerrar.
+pub fn firefox_user_chrome_css_for(buttons_right: bool) -> String {
+    if !buttons_right {
+        return MALUS_FIREFOX_USER_CHROME_CSS.to_string();
+    }
+    format!(
+        "{}\n/* Disposición de botones a la derecha: minimizar, maximizar, cerrar */\n#TabsToolbar .titlebar-buttonbox-container {{\n    -moz-box-ordinal-group: 100 !important;\n    order: 100 !important;\n    margin-left: 14px !important;\n    margin-right: 10px !important;\n    justify-content: flex-end !important;\n}}\n.titlebar-buttonbox > .titlebar-min,\n:root:-moz-window-inactive .titlebar-buttonbox:hover > .titlebar-min,\n:root[inactive] .titlebar-buttonbox:hover > .titlebar-min {{\n    -moz-box-ordinal-group: 1 !important;\n    order: 1 !important;\n}}\n.titlebar-buttonbox > .titlebar-max,\n.titlebar-buttonbox > .titlebar-restore,\n:root:-moz-window-inactive .titlebar-buttonbox:hover > .titlebar-max,\n:root:-moz-window-inactive .titlebar-buttonbox:hover > .titlebar-restore,\n:root[inactive] .titlebar-buttonbox:hover > .titlebar-max,\n:root[inactive] .titlebar-buttonbox:hover > .titlebar-restore {{\n    -moz-box-ordinal-group: 2 !important;\n    order: 2 !important;\n}}\n.titlebar-buttonbox > .titlebar-close,\n:root:-moz-window-inactive .titlebar-buttonbox:hover > .titlebar-close,\n:root[inactive] .titlebar-buttonbox:hover > .titlebar-close {{\n    -moz-box-ordinal-group: 3 !important;\n    order: 3 !important;\n}}\n",
+        MALUS_FIREFOX_USER_CHROME_CSS
+    )
+}
+
 /// Aplica o actualiza `chrome/userChrome.css` y la preferencia en `user.js` para un perfil específico de Firefox.
-pub fn apply_firefox_profile_styles(profile_dir: &Path) {
+pub fn apply_firefox_profile_styles_for(profile_dir: &Path, buttons_right: bool) {
     let chrome_dir = profile_dir.join("chrome");
     let _ = std::fs::create_dir_all(&chrome_dir);
     let user_chrome_path = chrome_dir.join("userChrome.css");
+    let target_css = firefox_user_chrome_css_for(buttons_right);
 
     let should_write_css = match std::fs::read_to_string(&user_chrome_path) {
-        Ok(existing) => existing != MALUS_FIREFOX_USER_CHROME_CSS,
+        Ok(existing) => existing != target_css,
         Err(_) => true,
     };
 
     if should_write_css {
-        let _ = std::fs::write(&user_chrome_path, MALUS_FIREFOX_USER_CHROME_CSS);
+        let _ = std::fs::write(&user_chrome_path, target_css);
         tracing::info!(
             "🎨 [Firefox] userChrome.css actualizado en: {:?}",
             user_chrome_path
@@ -1503,6 +1738,10 @@ pub fn apply_firefox_profile_styles(profile_dir: &Path) {
         );
         let _ = std::fs::write(&user_js_path, content);
     }
+}
+
+pub fn apply_firefox_profile_styles(profile_dir: &Path) {
+    apply_firefox_profile_styles_for(profile_dir, load_window_buttons_right());
 }
 
 /// Configura las asociaciones MIME por defecto en `mimeapps.list` para que
@@ -1698,14 +1937,34 @@ pub fn apply_isolated_environment(command: &mut std::process::Command) {
     }
 }
 
-/// Consulta el modo oscuro actual exclusivamente desde la configuración aislada de Malus DE.
-/// NUNCA consulta dconf ni GSettings del host GNOME para evitar contaminación mutua.
-pub fn is_dark_mode_active() -> bool {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let malus_config_dir = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(&home).join(".config/malus-de"));
+#[cfg(not(test))]
+struct DarkModeCacheState {
+    config_dir: PathBuf,
+    checked_at: Instant,
+    keyfile_meta: (Option<SystemTime>, Option<u64>),
+    gtk4_meta: (Option<SystemTime>, Option<u64>),
+    is_dark: bool,
+    invalidated: bool,
+}
 
+#[cfg(not(test))]
+static DARK_MODE_CACHE: OnceLock<Mutex<Option<DarkModeCacheState>>> = OnceLock::new();
+
+/// Invalida la caché en memoria del modo claro/oscuro de Malus DE.
+pub fn invalidate_dark_mode_cache() {
+    #[cfg(not(test))]
+    {
+        let lock = DARK_MODE_CACHE.get_or_init(|| Mutex::new(None));
+        let mut guard = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(state) = guard.as_mut() {
+            state.invalidated = true;
+        }
+    }
+}
+
+fn read_dark_mode_from_disk(malus_config_dir: &Path) -> bool {
     // 1. Keyfile aislado de Malus DE
     let keyfile_path = malus_config_dir.join("glib-2.0/settings/keyfile");
     if let Ok(content) = std::fs::read_to_string(&keyfile_path) {
@@ -1730,10 +1989,75 @@ pub fn is_dark_mode_active() -> bool {
     false
 }
 
+/// Consulta el modo oscuro actual exclusivamente desde la configuración aislada de Malus DE.
+/// NUNCA consulta dconf ni GSettings del host GNOME para evitar contaminación mutua.
+pub fn is_dark_mode_active() -> bool {
+    let malus_config_dir = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            PathBuf::from(home).join(".config/malus-de")
+        });
+
+    #[cfg(test)]
+    {
+        return read_dark_mode_from_disk(&malus_config_dir);
+    }
+    #[cfg(not(test))]
+    {
+        const CACHE_TTL: Duration = Duration::from_millis(150);
+        let lock = DARK_MODE_CACHE.get_or_init(|| Mutex::new(None));
+        let mut guard = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        if let Some(ref state) = *guard {
+            if !state.invalidated
+                && state.config_dir == malus_config_dir
+                && state.checked_at.elapsed() < CACHE_TTL
+            {
+                return state.is_dark;
+            }
+        }
+
+        let meta_of = |p: &Path| {
+            std::fs::metadata(p)
+                .ok()
+                .map(|m| (m.modified().ok(), Some(m.len())))
+                .unwrap_or((None, None))
+        };
+        let keyfile_meta = meta_of(&malus_config_dir.join("glib-2.0/settings/keyfile"));
+        let gtk4_meta = meta_of(&malus_config_dir.join("gtk-4.0/settings.ini"));
+
+        if let Some(ref mut state) = *guard {
+            if !state.invalidated
+                && state.config_dir == malus_config_dir
+                && state.keyfile_meta == keyfile_meta
+                && state.gtk4_meta == gtk4_meta
+            {
+                state.checked_at = Instant::now();
+                return state.is_dark;
+            }
+        }
+
+        let is_dark = read_dark_mode_from_disk(&malus_config_dir);
+        *guard = Some(DarkModeCacheState {
+            config_dir: malus_config_dir,
+            checked_at: Instant::now(),
+            keyfile_meta,
+            gtk4_meta,
+            is_dark,
+            invalidated: false,
+        });
+        is_dark
+    }
+}
+
 /// Sincroniza el modo claro/oscuro EXCLUSIVAMENTE dentro del entorno aislado de Malus DE
 /// (~/.config/malus-de). NUNCA modifica dconf del host, ni GSettings global, ni ~/.config/gtk-*.0
 /// del sistema anfitrión, garantizando independencia bidireccional absoluta frente a GNOME.
 pub fn sync_system_appearance(to_dark: bool) {
+    invalidate_dark_mode_cache();
     let target = if to_dark {
         "prefer-dark"
     } else {
@@ -1757,6 +2081,7 @@ pub fn sync_system_appearance(to_dark: bool) {
 
     // 2. Actualizar keyfile en una sola escritura atómica (dispara GLib/portal en ~0.4 ms sin subprocesos)
     let keyfile_path = malus_config_dir.join("glib-2.0/settings/keyfile");
+    let button_layout_quoted = format!("'{}'", active_window_decoration_layout());
     let _ = upsert_keyfile_entries(
         &keyfile_path,
         &[
@@ -1770,7 +2095,7 @@ pub fn sync_system_appearance(to_dark: bool) {
             ),
             (
                 "org/gnome/desktop/wm/preferences",
-                &[("button-layout", "'close,minimize,maximize:'")],
+                &[("button-layout", button_layout_quoted.as_str())],
             ),
         ],
     );
@@ -3024,19 +3349,40 @@ pub fn is_builtin_connector_name(connector: &str) -> bool {
 }
 
 /// Indica si `/sys/class/backlight` expone al menos un dispositivo de brillo hardware válido.
+/// Cacheado en memoria (TTL 30 s) para evitar escanear sysfs en cada fotograma del compositor.
 pub fn system_has_sysfs_backlight() -> bool {
-    let Ok(entries) = std::fs::read_dir("/sys/class/backlight") else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if let Ok(max_str) = std::fs::read_to_string(p.join("max_brightness")) {
-            if max_str.trim().parse::<f64>().is_ok_and(|v| v > 0.0) && p.join("brightness").exists() {
-                return true;
-            }
+    static SYSFS_BACKLIGHT_CACHE: OnceLock<Mutex<Option<(Instant, bool)>>> = OnceLock::new();
+    const CACHE_TTL: Duration = Duration::from_secs(30);
+
+    let lock = SYSFS_BACKLIGHT_CACHE.get_or_init(|| Mutex::new(None));
+    let mut guard = lock
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((checked_at, cached)) = *guard {
+        if checked_at.elapsed() < CACHE_TTL {
+            return cached;
         }
     }
-    false
+
+    let detected = (|| {
+        let Ok(entries) = std::fs::read_dir("/sys/class/backlight") else {
+            return false;
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if let Ok(max_str) = std::fs::read_to_string(p.join("max_brightness")) {
+                if max_str.trim().parse::<f64>().is_ok_and(|v| v > 0.0)
+                    && p.join("brightness").exists()
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    })();
+
+    *guard = Some((Instant::now(), detected));
+    detected
 }
 
 /// Indica si el brillo de la salida se gestiona por backlight sysfs o por el compositor.
@@ -3874,7 +4220,34 @@ mod tests {
             assert!(settings.contains("gtk-decoration-layout=close,minimize,maximize:"));
             assert!(settings.contains("custom-option=true"));
         }
+
+        set_gtk_decoration_layout_for(&config_dir, true).unwrap();
+        for version in ["gtk-3.0", "gtk-4.0"] {
+            let settings =
+                std::fs::read_to_string(config_dir.join(version).join("settings.ini")).unwrap();
+            assert!(settings.contains("gtk-decoration-layout=:minimize,maximize,close"));
+            assert!(settings.contains("custom-option=true"));
+        }
         std::fs::remove_dir_all(config_dir).unwrap();
+    }
+
+    #[test]
+    fn test_window_buttons_right_layout_and_parsing() {
+        assert_eq!(
+            window_decoration_layout_for(false),
+            "close,minimize,maximize:"
+        );
+        assert_eq!(
+            window_decoration_layout_for(true),
+            ":minimize,maximize,close"
+        );
+        assert!(ParsedAppearanceSettings::parse("window_buttons_right = true\n").window_buttons_right);
+        assert!(!ParsedAppearanceSettings::parse("window_buttons_right = false\n").window_buttons_right);
+        assert!(!ParsedAppearanceSettings::parse("").window_buttons_right);
+        let ff_right = firefox_user_chrome_css_for(true);
+        assert!(ff_right.contains("order: 100 !important;"));
+        assert!(ff_right.contains(".titlebar-min"));
+        assert!(ff_right.contains(".titlebar-close"));
     }
 
     #[test]
