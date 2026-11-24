@@ -11,6 +11,18 @@ pub(super) const POPUP_MENU_CORNER_RADIUS_LOGICAL: f64 = 20.0;
 /// Radio squircle lógico (en píxeles 1x, n=4.2) para los paneles emergentes de la bandeja superior
 /// (Sonido, Wi-Fi, Bluetooth, Batería y Centro de Control) estilo macOS Tahoe.
 pub(super) const TOPBAR_TRAY_POPOVER_CORNER_RADIUS_LOGICAL: f64 = 32.0;
+/// Radio squircle lógico (en píxeles 1x, n=4.2) para los menús contextuales del Dock.
+pub(super) const DOCK_POPOVER_CORNER_RADIUS_LOGICAL: f64 = 32.0;
+
+pub(super) fn dock_popover_corner_radius(
+    blur_rect: Rectangle<i32, Physical>,
+    scale: f64,
+) -> f32 {
+    let scale = scale.max(1.0);
+    ((DOCK_POPOVER_CORNER_RADIUS_LOGICAL * scale) as f32)
+        .min(blur_rect.size.w as f32 * 0.5)
+        .min(blur_rect.size.h as f32 * 0.5)
+}
 
 pub(super) fn topbar_popup_corner_radius(
     popup_rect: Rectangle<i32, Physical>,

@@ -4633,6 +4633,8 @@ pub fn run_drm() -> Result<()> {
                     }
                     for (popups, popup_rect) in &dock_popups {
                         let blur_rect = super::dock_popover_blur_rect(*popup_rect, scale);
+                        let dock_popup_radius =
+                            super::dock_popover_corner_radius(blur_rect, scale);
                         let popup_key = popups
                             .first()
                             .map(|elem| elem.id().clone())
@@ -4652,7 +4654,7 @@ pub fn run_drm() -> Result<()> {
                                 effect_commit,
                                 blur.clone(),
                                 blur_rect,
-                                popup_corner_radius.round(),
+                                dock_popup_radius.round(),
                                 out_surface.size,
                             );
                             tracker_elements.push(MalusDrmElement::Blur(menu_blur));
@@ -4663,7 +4665,7 @@ pub fn run_drm() -> Result<()> {
                                 effect_commit,
                                 pipeline.clone(),
                                 *popup_rect,
-                                popup_corner_radius,
+                                dock_popup_radius,
                                 scale,
                             );
                             tracker_elements.push(MalusDrmElement::MenuShadow(menu_shadow));
@@ -6681,6 +6683,8 @@ pub fn run_drm() -> Result<()> {
                                 {
                                     let blur_rect =
                                         super::dock_popover_blur_rect(*popup_rect, scale);
+                                    let dock_popup_radius =
+                                        super::dock_popover_corner_radius(blur_rect, scale);
                                     let _ = frame.with_context(|gl| {
                                         blur.capture_background_region(
                                             gl,
@@ -6693,7 +6697,7 @@ pub fn run_drm() -> Result<()> {
                                             &projection,
                                             out_surface.size,
                                             blur_rect,
-                                            menu_radius as f32,
+                                            dock_popup_radius,
                                         );
                                     });
                                 }

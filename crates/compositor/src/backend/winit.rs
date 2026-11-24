@@ -2521,13 +2521,15 @@ pub fn run_winit() -> Result<()> {
                         for (popup_elems, popup_rect) in &dock_popups {
                             if let Some(blur) = blur_pipeline.as_mut() {
                                 let blur_rect = super::dock_popover_blur_rect(*popup_rect, 1.0);
+                                let dock_popup_radius =
+                                    super::dock_popover_corner_radius(blur_rect, 1.0);
                                 let _ = frame.with_context(|gl| {
                                     blur.render_blur(
                                         gl,
                                         &projection,
                                         size,
                                         blur_rect,
-                                        menu_radius as f32,
+                                        dock_popup_radius,
                                     );
                                 });
                             }
