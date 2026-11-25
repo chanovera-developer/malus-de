@@ -1404,18 +1404,18 @@ fn open_shortcuts_dialog(parent: &ApplicationWindow, navigate: &Rc<dyn Fn(&str)>
     let dlg_nav = dialog.clone();
     let nav_c = navigate.clone();
     kb_btn.connect_clicked(move |_| {
-        dlg_nav.close();
+        crate::close_attached_modal(&dlg_nav);
         nav_c("keyboard");
     });
     let (ok_wrap, ok_btn) = make_squircle_button("Aceptar", true, None);
     let dlg_ok = dialog.clone();
-    ok_btn.connect_clicked(move |_| dlg_ok.close());
+    ok_btn.connect_clicked(move |_| crate::close_attached_modal(&dlg_ok));
     btn_row.append(&kb_wrap);
     btn_row.append(&ok_wrap);
     vbox.append(&btn_row);
 
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 fn hot_corner_to_idx(action: HotCornerAction) -> usize {
@@ -1513,11 +1513,11 @@ fn open_hot_corners_dialog(parent: &ApplicationWindow) {
     let (ok_wrap, ok_btn) = make_squircle_button("Aceptar", true, None);
     ok_wrap.set_halign(Align::End);
     let dlg_ok = dialog.clone();
-    ok_btn.connect_clicked(move |_| dlg_ok.close());
+    ok_btn.connect_clicked(move |_| crate::close_attached_modal(&dlg_ok));
     vbox.append(&ok_wrap);
 
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 #[cfg(test)]

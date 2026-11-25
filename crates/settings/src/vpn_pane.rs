@@ -537,11 +537,11 @@ fn show_vpn_privacy_dialog(parent: &ApplicationWindow) {
     let (ok_wrap, ok_btn) = make_squircle_button("Aceptar", true, None);
     ok_wrap.set_halign(Align::End);
     let d_c = dialog.clone();
-    ok_btn.connect_clicked(move |_| d_c.close());
+    ok_btn.connect_clicked(move |_| crate::close_attached_modal(&d_c));
     vbox.append(&ok_wrap);
 
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 fn show_create_vpn_dialog(
@@ -647,7 +647,7 @@ fn show_create_vpn_dialog(
     footer.append(&create_wrap);
 
     let d_c = dialog.clone();
-    cancel_btn.connect_clicked(move |_| d_c.close());
+    cancel_btn.connect_clicked(move |_| crate::close_attached_modal(&d_c));
 
     let d_ok = dialog.clone();
     let ban_c = banner.clone();
@@ -662,7 +662,7 @@ fn show_create_vpn_dialog(
         if name.is_empty() || server.is_empty() {
             return;
         }
-        d_ok.close();
+        crate::close_attached_modal(&d_ok);
 
         ban_c.set_label(&format!("Creando perfil VPN «{name}»..."));
         ban_c.set_visible(true);
@@ -689,7 +689,7 @@ fn show_create_vpn_dialog(
 
     vbox.append(&footer);
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 fn labeled_field<W: IsA<gtk4::Widget>>(label: &str, widget: &W) -> GtkBox {
@@ -809,7 +809,7 @@ fn show_vpn_details_dialog(
     let b_del = banner.clone();
     let r_del = trigger_reload.clone();
     del_btn.connect_clicked(move |_| {
-        d_del.close();
+        crate::close_attached_modal(&d_del);
         let u = u_del.clone();
         let (tx, rx) = async_channel::bounded::<Result<(), String>>(1);
         std::thread::spawn(move || {
@@ -833,12 +833,12 @@ fn show_vpn_details_dialog(
     footer.append(&GtkBox::builder().hexpand(true).build());
     let (ok_wrap, ok_btn) = make_squircle_button("Aceptar", true, None);
     let d_ok = dialog.clone();
-    ok_btn.connect_clicked(move |_| d_ok.close());
+    ok_btn.connect_clicked(move |_| crate::close_attached_modal(&d_ok));
     footer.append(&ok_wrap);
 
     vbox.append(&footer);
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 fn prompt_import_vpn_file(

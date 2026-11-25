@@ -14,7 +14,11 @@ use gtk4::{
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 use libadwaita as adw;
-use malus_de_common::{config::DisplaysConfig, is_spanish_locale, logging::init_logging};
+use malus_de_common::{
+    config::{DisplaysConfig, LockScreenConfig},
+    is_spanish_locale,
+    logging::init_logging,
+};
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -810,6 +814,7 @@ fn build_lock_window(
         root_overlay.add_overlay(&bottom_scrim);
 
         let es = is_spanish_locale();
+        let lock_cfg = LockScreenConfig::load();
         let root_box = GtkBox::builder()
             .orientation(Orientation::Vertical)
             .valign(Align::Fill)
@@ -927,6 +932,13 @@ fn build_lock_window(
             .build();
         bottom_login_box.append(&error_label);
 
+        let hint_label = Label::builder()
+            .css_classes(["lock-hint-label"])
+            .halign(Align::Center)
+            .visible(false)
+            .build();
+        bottom_login_box.append(&hint_label);
+
         let intrusion_label = Label::builder()
             .css_classes(["lock-intrusion-warning"])
             .halign(Align::Center)
@@ -934,6 +946,73 @@ fn build_lock_window(
             .build();
         bottom_login_box.append(&intrusion_label);
         root_box.append(&bottom_login_box);
+
+        // 2b. Mensaje personalizado en pantalla bloqueada (si está habilitado en Ajustes)
+        if let Some(custom_msg) = lock_cfg.effective_lock_message() {
+            let msg_lbl = Label::builder()
+                .label(custom_msg)
+                .css_classes(["lock-custom-message"])
+                .halign(Align::Center)
+                .justify(gtk4::Justification::Center)
+                .wrap(true)
+                .max_width_chars(68)
+                .build();
+            root_box.append(&msg_lbl);
+        }
+
+        // 2c. Botones Reposo, Reiniciar y Apagar (controlados por show_power_buttons)
+        if lock_cfg.show_power_buttons {
+            let power_bar = GtkBox::builder()
+                .orientation(Orientation::Horizontal)
+                .halign(Align::Center)
+                .valign(Align::End)
+                .spacing(28)
+                .css_classes(["lock-power-bar"])
+                .build();
+
+            let make_power_btn = |icon: &str, text: &str, action: &'static str| -> GtkBox {
+                let col = GtkBox::builder()
+                    .orientation(Orientation::Vertical)
+                    .halign(Align::Center)
+                    .spacing(6)
+                    .build();
+                let btn = Button::builder()
+                    .icon_name(icon)
+                    .css_classes(["lock-power-circle-btn"])
+                    .halign(Align::Center)
+                    .valign(Align::Center)
+                    .tooltip_text(text)
+                    .build();
+                btn.connect_clicked(move |_| {
+                    let _ = std::process::Command::new("systemctl").arg(action).spawn();
+                });
+                let lbl = Label::builder()
+                    .label(text)
+                    .css_classes(["lock-power-label"])
+                    .halign(Align::Center)
+                    .build();
+                col.append(&btn);
+                col.append(&lbl);
+                col
+            };
+
+            power_bar.append(&make_power_btn(
+                "weather-clear-night-symbolic",
+                if es { "Reposo" } else { "Sleep" },
+                "suspend",
+            ));
+            power_bar.append(&make_power_btn(
+                "system-reboot-symbolic",
+                if es { "Reiniciar" } else { "Restart" },
+                "reboot",
+            ));
+            power_bar.append(&make_power_btn(
+                "system-shutdown-symbolic",
+                if es { "Apagar" } else { "Shut Down" },
+                "poweroff",
+            ));
+            root_box.append(&power_bar);
+        }
 
         // Animación estilo Sequoia al despertar: viñeta sutil + resorte orgánico en login y avatar
         let anim_gen = Rc::new(Cell::new(0u64));
@@ -1084,6 +1163,9 @@ fn build_lock_window(
         let arrow_clone = unlock_arrow;
         let spin_clone = unlock_spinner;
         let err_lbl_clone = error_label;
+        let hint_lbl_clone = hint_label;
+        let configured_hint: Option<String> =
+            lock_cfg.effective_password_hint().map(str::to_string);
         let intr_lbl_clone = intrusion_label;
         let err_flag_clone = is_error;
         let entry_shell_clone = entry_shell;
@@ -1248,6 +1330,8 @@ fn build_lock_window(
             let arrow_res = arrow_clone.clone();
             let spin_res = spin_clone.clone();
             let err_lbl_res = err_lbl_clone.clone();
+            let hint_lbl_res = hint_lbl_clone.clone();
+            let hint_text_res = configured_hint.clone();
             let err_flag_res = err_flag_clone.clone();
             let shell_res = entry_shell_clone.clone();
             let row_res = input_row_clone.clone();
@@ -1300,6 +1384,14 @@ fn build_lock_window(
                         banner_res();
                         err_flag_res.set(true);
                         pwd_res.set_text("");
+                        if let Some(ref hint) = hint_text_res {
+                            hint_lbl_res.set_text(&if es {
+                                format!("Pista: {hint}")
+                            } else {
+                                format!("Hint: {hint}")
+                            });
+                            hint_lbl_res.set_visible(true);
+                        }
                         if wait > 0 {
                             cooldown_res();
                         } else {

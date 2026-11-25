@@ -1,12 +1,10 @@
 use clap::Parser;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea, Entry,
-    EventControllerFocus, FlowBox, Image, Label, Orientation, Overlay, PackType, PolicyType,
+    Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, DrawingArea,
+    EventControllerFocus, Image, Label, Orientation, Overlay, PackType, PolicyType,
     ScrolledWindow, SearchEntry, Stack, StackTransitionType, WindowControls, WindowHandle,
 };
-use malus_de_common::mac_switch::MacSwitch as Switch;
-use malus_de_common::config::InputConfig;
 use malus_de_common::ipc::{IpcClient, IpcMessage};
 use malus_de_common::logging::init_logging;
 use std::cell::RefCell;
@@ -15,19 +13,31 @@ use std::process::Command;
 use std::rc::Rc;
 
 mod accessibility_pane;
+mod accounts_pane;
 mod appearance_pane;
 mod battery_pane;
+mod biometrics_pane;
 mod bluetooth_pane;
 mod canopy_pane;
 mod displays_pane;
 mod dock_pane;
+mod focus_pane;
 mod general_pane;
+mod keyboard_pane;
+mod lockscreen_pane;
 mod menubar_pane;
+mod mouse_pane;
 mod network_pane;
 mod notifications_pane;
+mod printers_pane;
+mod privacy_pane;
+mod screentime_pane;
 mod siri_pane;
 mod sound_pane;
+mod trackpad_pane;
+mod users_pane;
 mod vpn_pane;
+mod wallet_pane;
 mod wallpaper_pane;
 mod wifi_pane;
 
@@ -193,14 +203,31 @@ fn resolve_panel_id(raw: &str) -> &str {
         "canopy" => "spotlight",
         "notificaciones" => "notifications",
         "sonido" | "audio" => "sound",
+        "enfoque" | "no molestar" | "dnd" => "focus",
+        "tiempo en pantalla" | "screen-time" => "screentime",
+        "pantalla bloqueada" | "lock-screen" | "bloqueo" => "lockscreen",
+        "privacidad" | "seguridad" | "privacidad y seguridad" | "privacy-security" => "privacy",
+        "biometria" | "biometría" | "touchid" | "touch-id" | "huella" | "contrasena"
+        | "contraseña" | "biometria y contrasena" | "biometría y contraseña" => "biometrics",
+        "usuarios" | "grupos" | "usuarios y grupos" | "users-groups" => "users",
+        "cuentas" | "cuentas de internet" | "internet-accounts" | "online-accounts" => "accounts",
+        "cartera" | "pagos" | "apple pay" | "wallet y apple pay" => "wallet",
+        "touchpad" | "panel tactil" | "panel táctil" => "trackpad",
+        "raton" | "ratón" => "mouse",
+        "impresoras" | "escaneres" | "escáneres" | "impresoras y escaneres"
+        | "impresoras y escáneres" | "printers-scanners" | "cups" => "printers",
         "barra de menus" | "barra de menús" => "menubar",
         p if general_pane::is_general_subpanel(p) => p,
         p if accessibility_pane::is_accessibility_subpanel(p) => p,
         p if appearance_pane::is_appearance_subpanel(p) => p,
         p if notifications_pane::is_notifications_subpanel(p) => p,
+        p if focus_pane::is_focus_subpanel(p) => p,
+        p if screentime_pane::is_screentime_subpanel(p) => p,
+        p if privacy_pane::is_privacy_subpanel(p) => p,
         "wifi" | "bluetooth" | "network" | "network-firewall" | "vpn" | "battery" | "wallpaper"
-        | "keyboard" | "appearance" | "menubar" | "sound" | "about" | "dock" | "siri"
-        | "spotlight" | "notifications" | "displays" => raw,
+        | "keyboard" | "mouse" | "trackpad" | "printers" | "appearance" | "menubar" | "sound"
+        | "focus" | "screentime" | "lockscreen" | "biometrics" | "users" | "accounts" | "wallet"
+        | "about" | "dock" | "siri" | "spotlight" | "notifications" | "displays" => raw,
         _ => "spotlight",
     }
 }
@@ -210,10 +237,19 @@ thread_local! {
     static SETTINGS_ACCENT_PROVIDER: RefCell<Option<CssProvider>> = const { RefCell::new(None) };
     static SETTINGS_ACCENT_DRAW_AREAS: RefCell<Vec<glib::WeakRef<DrawingArea>>> = const { RefCell::new(Vec::new()) };
     static SETTINGS_NAVIGATE_PANEL: RefCell<Option<Rc<dyn Fn(&str)>>> = const { RefCell::new(None) };
+    static SETTINGS_MODAL_STACK: RefCell<Vec<(gtk4::Window, Rc<dyn Fn()>)>> = const { RefCell::new(Vec::new()) };
 }
 
 static SETTINGS_REDUCE_TRANSPARENCY: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn navigate_to_panel(target: &str) {
+    SETTINGS_NAVIGATE_PANEL.with(|cell| {
+        if let Some(nav) = cell.borrow().as_ref() {
+            nav(target);
+        }
+    });
+}
 
 pub(crate) fn register_accent_draw_area(area: &DrawingArea) {
     SETTINGS_ACCENT_DRAW_AREAS.with(|areas| {
@@ -669,7 +705,62 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             "audio-volume-high-symbolic",
             sound_pane::SOUND_PANEL_TITLE,
         ),
+        (
+            focus_pane::FOCUS_PANEL_ID,
+            "weather-clear-night-symbolic",
+            focus_pane::FOCUS_PANEL_TITLE,
+        ),
+        (
+            screentime_pane::SCREENTIME_PANEL_ID,
+            "preferences-system-time-symbolic",
+            screentime_pane::SCREENTIME_PANEL_TITLE,
+        ),
+        (
+            lockscreen_pane::LOCKSCREEN_PANEL_ID,
+            "system-lock-screen-symbolic",
+            lockscreen_pane::LOCKSCREEN_PANEL_TITLE,
+        ),
+        (
+            privacy_pane::PRIVACY_PANEL_ID,
+            "security-high-symbolic",
+            privacy_pane::PRIVACY_PANEL_TITLE,
+        ),
+        (
+            biometrics_pane::BIOMETRICS_PANEL_ID,
+            "auth-fingerprint-symbolic",
+            biometrics_pane::BIOMETRICS_PANEL_TITLE,
+        ),
+        (
+            users_pane::USERS_PANEL_ID,
+            "system-users-symbolic",
+            users_pane::USERS_PANEL_TITLE,
+        ),
+        (
+            accounts_pane::ACCOUNTS_PANEL_ID,
+            "goa-panel-symbolic",
+            accounts_pane::ACCOUNTS_PANEL_TITLE,
+        ),
+        (
+            wallet_pane::WALLET_PANEL_ID,
+            "auth-smartcard-symbolic",
+            wallet_pane::WALLET_PANEL_TITLE,
+        ),
         ("keyboard", "input-keyboard-symbolic", "Teclado"),
+        (
+            mouse_pane::MOUSE_PANEL_ID,
+            "input-mouse-symbolic",
+            mouse_pane::MOUSE_PANEL_TITLE,
+        ),
+        (
+            trackpad_pane::TRACKPAD_PANEL_ID,
+            "input-touchpad-symbolic",
+            trackpad_pane::TRACKPAD_PANEL_TITLE,
+        ),
+        (
+            printers_pane::PRINTERS_PANEL_ID,
+            "printer-symbolic",
+            printers_pane::PRINTERS_PANEL_TITLE,
+        ),
     ];
 
     let stack = Stack::builder()
@@ -684,8 +775,13 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
 
     for (id, icon_name, label_txt) in nav_items {
         let btn = build_sidebar_nav_button(icon_name, label_txt);
-        // Espaciado visual de separación de grupo antes de General y antes de Notificaciones
-        if id == "about" || id == notifications_pane::NOTIFICATIONS_PANEL_ID {
+        // Espaciado visual de separación de grupo antes de General, Notificaciones, Pantalla bloqueada, Cuentas de Internet y Teclado
+        if id == "about"
+            || id == notifications_pane::NOTIFICATIONS_PANEL_ID
+            || id == lockscreen_pane::LOCKSCREEN_PANEL_ID
+            || id == accounts_pane::ACCOUNTS_PANEL_ID
+            || id == "keyboard"
+        {
             btn.set_margin_top(14);
         }
         sidebar_body.append(&btn);
@@ -718,7 +814,10 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                     "battery" => "bateria battery energia recarga condicion ciclos ahorro sdr hdr reposo",
                     "displays" => "pantallas monitor resolucion ppi truesize",
                     "wallpaper" => "fondo pantalla wallpaper imagen",
-                    "keyboard" => "teclado distribucion lenguaje idioma xkb",
+                    "keyboard" => "teclado distribucion lenguaje idioma xkb repeticion brillo atajos sustituciones dictado microfono fuentes entrada",
+                    "mouse" => "mouse raton puntero cursor velocidad desplazamiento natural clic secundario zurdo diestro aceleracion avanzado zoom bluetooth gestos",
+                    "trackpad" => "trackpad touchpad panel tactil cursor velocidad clic secundario presionar desplazamiento natural zoom girar gestos espacios mission control expose escritorio apps bluetooth",
+                    "printers" => "impresoras escaneres escáneres imprimir fax papel carta a4 cups sane cola agregar ip ipp usb",
                     "appearance" => "aspecto tema oscuro claro cursor",
                     "menubar" => "barra de menus menubar centro de control reloj bateria spotlight bluetooth airdrop enfoque pantalla sonido clima",
                     "dock" => "escritorio dock organizador visual widgets navegador ventanas mosaico mission control esquinas activas atajos aladino",
@@ -726,6 +825,14 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                     "spotlight" => "canopy spotlight busqueda aplicaciones archivos carpetas portapapeles privacidad",
                     "notifications" => "notificaciones avisos tiras alertas banners sonidos previsualizar centro apps",
                     "sound" => "sonido volumen audio alerta salida entrada microfono bocinas balance silencio efectos",
+                    "focus" => "enfoque focus no molestar dnd silencio concentracion interrupciones horario",
+                    "screentime" => "tiempo en pantalla screentime limites horario uso actividad apps sitios permitir siempre contenido privacidad comunicacion codigo pin parental",
+                    "lockscreen" => "pantalla bloqueada lockscreen bloqueo contrasena contraseña pistas mensaje reposo reiniciar apagar protector inactividad usuario",
+                    "privacy" => "privacidad seguridad privacy security localizacion camara microfono archivos disco filevault luks accesorios usb analisis mejoras hermetico flatpak permisos",
+                    "biometrics" => "biometria biometría touch id touchid huella digital fingerprint fprintd contrasena contraseña cambiar pam desbloqueo",
+                    "users" => "usuarios grupos cuentas administracion estandar invitado inicio sesion automatico gdm red agregar",
+                    "accounts" => "cuentas internet online google icloud nextcloud owncloud microsoft exchange correo imap caldav carddav goa nube",
+                    "wallet" => "wallet cartera pagos apple pay tarjeta credito debito autorrelleno domicilio envio correo telefono pedidos",
                     "about" => "general acerca sistema procesador ram version informacion actualizacion almacenamiento airdrop compartir disco arranque inicio extensiones fecha hora idioma region time machine",
                     "accessibility" => "accesibilidad accessibility vision voiceover orca zoom pantalla contraste movimiento voz teclado puntero subtitulos audio",
                     _ => "",
@@ -813,6 +920,12 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         appearance_pane::create_appearance_pane_loader(&stack, nav_general.clone());
     let (load_notifications_pane, notifications_title_fn) =
         notifications_pane::create_notifications_pane_loader(&stack, nav_general.clone());
+    let (load_focus_pane, focus_title_fn) =
+        focus_pane::create_focus_pane_loader(&stack, nav_general.clone());
+    let load_screentime_pane =
+        screentime_pane::create_screentime_pane_loader(&window, &stack, nav_general.clone());
+    let load_privacy_pane =
+        privacy_pane::create_privacy_pane_loader(&window, &stack, nav_general.clone());
 
     // Caché de callbacks de refresco por panel ya construido en el Stack
     let cached_refreshers: Rc<RefCell<std::collections::HashMap<String, Rc<dyn Fn()>>>> =
@@ -831,6 +944,9 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         let load_a11y = load_accessibility_pane.clone();
         let load_app = load_appearance_pane.clone();
         let load_notif = load_notifications_pane.clone();
+        let load_focus = load_focus_pane.clone();
+        let load_screentime = load_screentime_pane.clone();
+        let load_privacy = load_privacy_pane.clone();
         let refreshers_c = cached_refreshers.clone();
 
         Rc::new(move |target: &str, refresh: bool| {
@@ -853,6 +969,24 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
             if notifications_pane::is_notifications_subpanel(target) {
                 if refresh || stack_c.child_by_name(target).is_none() {
                     load_notif(target);
+                }
+                return;
+            }
+            if focus_pane::is_focus_subpanel(target) {
+                if refresh || stack_c.child_by_name(target).is_none() {
+                    load_focus(target);
+                }
+                return;
+            }
+            if screentime_pane::is_screentime_subpanel(target) {
+                if refresh || stack_c.child_by_name(target).is_none() {
+                    load_screentime(target);
+                }
+                return;
+            }
+            if privacy_pane::is_privacy_subpanel(target) {
+                if refresh || stack_c.child_by_name(target).is_none() {
+                    load_privacy(target);
                 }
                 return;
             }
@@ -920,7 +1054,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                         refreshed_on_construct = true;
                     }
                     "keyboard" => {
-                        let (pane, rf) = create_keyboard_pane();
+                        let (pane, rf) = keyboard_pane::create_keyboard_pane(&win_c);
                         configure_right_pane_widget(pane.upcast_ref());
                         stack_c.add_named(&pane, Some("keyboard"));
                         refreshers_c.borrow_mut().insert("keyboard".to_string(), rf);
@@ -958,6 +1092,67 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                         configure_right_pane_widget(pane.upcast_ref());
                         stack_c.add_named(&pane, Some("menubar"));
                         refreshers_c.borrow_mut().insert("menubar".to_string(), rf);
+                    }
+                    "lockscreen" => {
+                        let (pane, rf) =
+                            lockscreen_pane::create_lockscreen_pane(&win_c, nav_gen_c.clone());
+                        configure_right_pane_widget(pane.upcast_ref());
+                        stack_c.add_named(&pane, Some("lockscreen"));
+                        refreshers_c
+                            .borrow_mut()
+                            .insert("lockscreen".to_string(), rf);
+                        refreshed_on_construct = true;
+                    }
+                    "biometrics" => {
+                        let (pane, rf) = biometrics_pane::create_biometrics_pane(&win_c);
+                        configure_right_pane_widget(pane.upcast_ref());
+                        stack_c.add_named(&pane, Some("biometrics"));
+                        refreshers_c
+                            .borrow_mut()
+                            .insert("biometrics".to_string(), rf);
+                        refreshed_on_construct = true;
+                    }
+                    "users" => {
+                        let (pane, rf) = users_pane::create_users_pane(&win_c);
+                        configure_right_pane_widget(pane.upcast_ref());
+                        stack_c.add_named(&pane, Some("users"));
+                        refreshers_c.borrow_mut().insert("users".to_string(), rf);
+                        refreshed_on_construct = true;
+                    }
+                    "accounts" => {
+                        let (pane, rf) = accounts_pane::create_accounts_pane(&win_c);
+                        configure_right_pane_widget(pane.upcast_ref());
+                        stack_c.add_named(&pane, Some("accounts"));
+                        refreshers_c.borrow_mut().insert("accounts".to_string(), rf);
+                        refreshed_on_construct = true;
+                    }
+                    "wallet" => {
+                        let (pane, rf) = wallet_pane::create_wallet_pane(&win_c);
+                        configure_right_pane_widget(pane.upcast_ref());
+                        stack_c.add_named(&pane, Some("wallet"));
+                        refreshers_c.borrow_mut().insert("wallet".to_string(), rf);
+                        refreshed_on_construct = true;
+                    }
+                    "mouse" => {
+                        let (pane, rf) = mouse_pane::create_mouse_pane(&win_c);
+                        configure_right_pane_widget(pane.upcast_ref());
+                        stack_c.add_named(&pane, Some("mouse"));
+                        refreshers_c.borrow_mut().insert("mouse".to_string(), rf);
+                        refreshed_on_construct = true;
+                    }
+                    "trackpad" => {
+                        let (pane, rf) = trackpad_pane::create_trackpad_pane(&win_c);
+                        configure_right_pane_widget(pane.upcast_ref());
+                        stack_c.add_named(&pane, Some("trackpad"));
+                        refreshers_c.borrow_mut().insert("trackpad".to_string(), rf);
+                        refreshed_on_construct = true;
+                    }
+                    "printers" => {
+                        let (pane, rf) = printers_pane::create_printers_pane(&win_c);
+                        configure_right_pane_widget(pane.upcast_ref());
+                        stack_c.add_named(&pane, Some("printers"));
+                        refreshers_c.borrow_mut().insert("printers".to_string(), rf);
+                        refreshed_on_construct = true;
                     }
                     _ => {}
                 }
@@ -1067,6 +1262,7 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         let btn_b_c = btn_back.clone();
         let btn_f_c = btn_forward.clone();
         let notif_title_c = notifications_title_fn.clone();
+        let focus_title_c = focus_title_fn.clone();
 
         Rc::new(move |target: &str, action: NavAction| {
             let prev_id = cur_panel_c.borrow().clone();
@@ -1086,6 +1282,12 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                 "appearance"
             } else if notifications_pane::is_notifications_subpanel(target) {
                 notifications_pane::NOTIFICATIONS_PANEL_ID
+            } else if focus_pane::is_focus_subpanel(target) {
+                focus_pane::FOCUS_PANEL_ID
+            } else if screentime_pane::is_screentime_subpanel(target) {
+                screentime_pane::SCREENTIME_PANEL_ID
+            } else if privacy_pane::is_privacy_subpanel(target) {
+                privacy_pane::PRIVACY_PANEL_ID
             } else {
                 target
             };
@@ -1108,6 +1310,9 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                 .or_else(|| accessibility_pane::accessibility_subpanel_title(target).map(str::to_string))
                 .or_else(|| appearance_pane::appearance_subpanel_title(target).map(str::to_string))
                 .or_else(|| notif_title_c(target))
+                .or_else(|| focus_title_c(target))
+                .or_else(|| screentime_pane::screentime_subpanel_title(target).map(str::to_string))
+                .or_else(|| privacy_pane::privacy_subpanel_title(target).map(str::to_string))
                 .unwrap_or_else(|| {
                     match target {
                         "wifi" => "Wi-Fi",
@@ -1119,12 +1324,20 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
                         "displays" => "Pantallas",
                         "wallpaper" => "Fondo de pantalla",
                         "keyboard" => "Teclado",
+                        "mouse" => mouse_pane::MOUSE_PANEL_TITLE,
+                        "trackpad" => trackpad_pane::TRACKPAD_PANEL_TITLE,
+                        "printers" => printers_pane::PRINTERS_PANEL_TITLE,
                         "appearance" => "Aspecto",
                         "menubar" => "Barra de menús",
                         "dock" => "Escritorio y Dock",
                         "siri" => siri_pane::SIRI_PANEL_TITLE,
                         "spotlight" => canopy_pane::CANOPY_PANEL_TITLE,
                         "sound" => "Sonido",
+                        "lockscreen" => lockscreen_pane::LOCKSCREEN_PANEL_TITLE,
+                        "biometrics" => biometrics_pane::BIOMETRICS_PANEL_TITLE,
+                        "users" => users_pane::USERS_PANEL_TITLE,
+                        "accounts" => accounts_pane::ACCOUNTS_PANEL_TITLE,
+                        "wallet" => wallet_pane::WALLET_PANEL_TITLE,
                         _ => "Ajustes",
                     }
                     .to_string()
@@ -1210,7 +1423,27 @@ fn build_settings_window(app: &Application, initial_panel: &str) {
         SETTINGS_NAVIGATE_PANEL.with(|cell| {
             *cell.borrow_mut() = None;
         });
+        SETTINGS_MODAL_STACK.with(|stack| {
+            stack.borrow_mut().clear();
+        });
     });
+
+    // Cerrar el modal anclado superior al pulsar Escape
+    let esc_ctrl = gtk4::EventControllerKey::new();
+    esc_ctrl.set_propagation_phase(gtk4::PropagationPhase::Capture);
+    esc_ctrl.connect_key_pressed(|_, key, _, _| {
+        if key == gtk4::gdk::Key::Escape {
+            let top = SETTINGS_MODAL_STACK.with(|stack| {
+                stack.borrow().last().map(|(w, _)| w.clone())
+            });
+            if let Some(dlg) = top {
+                close_attached_modal(&dlg);
+                return glib::Propagation::Stop;
+            }
+        }
+        glib::Propagation::Proceed
+    });
+    window.add_controller(esc_ctrl);
 
     sidebar.set_halign(Align::Start);
     sidebar.set_valign(Align::Fill);
@@ -1299,6 +1532,192 @@ pub(crate) fn attach_modal_scrim(dialog: &gtk4::Window, parent: &ApplicationWind
     });
 }
 
+fn resolve_settings_application_window(parent: &impl IsA<gtk4::Window>) -> Option<ApplicationWindow> {
+    let mut cur: Option<gtk4::Window> = Some(parent.as_ref().clone());
+    for _ in 0..8 {
+        let win = cur?;
+        if let Ok(app_win) = win.clone().downcast::<ApplicationWindow>() {
+            return Some(app_win);
+        }
+        cur = win.transient_for();
+    }
+    None
+}
+
+/// Cierra un modal anclado retirando su hoja y la capa de atenuación inmediatamente.
+pub(crate) fn close_attached_modal(dialog: &gtk4::Window) {
+    let cleanup = SETTINGS_MODAL_STACK.with(|stack| {
+        let s = stack.borrow();
+        s.iter()
+            .rev()
+            .find(|(w, _)| w == dialog)
+            .map(|(_, cb)| cb.clone())
+    });
+    if let Some(cb) = cleanup {
+        cb();
+        dialog.destroy();
+    } else {
+        dialog.close();
+    }
+}
+
+/// Presenta un diálogo modal como hoja centrada y anclada dentro del `Overlay` de la ventana
+/// de Ajustes, poniendo una capa oscura translúcida sobre la ventana trasera (sin volverla
+/// transparente) y permitiendo mover la ventana completa al arrastrar el modal (`WindowHandle`).
+pub(crate) fn present_attached_modal(dialog: &gtk4::Window, parent: &impl IsA<gtk4::Window>) {
+    let Some(app_win) = resolve_settings_application_window(parent) else {
+        dialog.present();
+        return;
+    };
+    let parent = &app_win;
+    let Some(overlay) = parent.child().and_then(|c| c.downcast::<Overlay>().ok()) else {
+        dialog.present();
+        return;
+    };
+    let Some(content) = dialog.child() else {
+        dialog.present();
+        return;
+    };
+    dialog.set_child(None::<&gtk4::Widget>);
+
+    // Ocultar el scrim estático anterior si attach_modal_scrim lo activó; nuestra capa
+    // por-modal (`backdrop_handle`) gestiona el velo oscuro y bloquea clics al fondo.
+    set_modal_scrim_visible(parent, false);
+
+    let default_w = dialog.default_width();
+    let target_w = if default_w > 0 {
+        default_w.clamp(320, 640)
+    } else {
+        420
+    };
+    let max_h = (parent.height().max(520) - 84).max(280);
+
+    // Contenedor de la tarjeta modal estilo macOS Tahoe (superficie sólida opaca)
+    let sheet_card = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(0)
+        .css_classes(["settings-modal-sheet"])
+        .width_request(target_w)
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .hexpand(false)
+        .vexpand(false)
+        .build();
+
+    if dialog.is_decorated() {
+        if let Some(title) = dialog.title() {
+            let trimmed = title.trim();
+            if !trimmed.is_empty() {
+                let header = GtkBox::builder()
+                    .orientation(Orientation::Horizontal)
+                    .css_classes(["settings-modal-header"])
+                    .hexpand(true)
+                    .build();
+                let title_lbl = Label::builder()
+                    .label(trimmed)
+                    .css_classes(["settings-modal-title"])
+                    .hexpand(true)
+                    .halign(Align::Center)
+                    .ellipsize(gtk4::pango::EllipsizeMode::End)
+                    .build();
+                header.append(&title_lbl);
+                sheet_card.append(&header);
+                sheet_card.append(&GtkBox::builder().css_classes(["wifi-hairline-sep"]).build());
+            }
+        }
+    }
+
+    let scroll = ScrolledWindow::builder()
+        .hscrollbar_policy(PolicyType::Never)
+        .vscrollbar_policy(PolicyType::Automatic)
+        .propagate_natural_height(true)
+        .propagate_natural_width(false)
+        .max_content_height(max_h)
+        .hexpand(true)
+        .vexpand(false)
+        .child(&content)
+        .build();
+    sheet_card.append(&scroll);
+
+    // Envolver la capa completa (velo oscuro + hoja centrada) en un `WindowHandle`:
+    // - Absorbe clics sobre la ventana trasera (desactivada visual y funcionalmente).
+    // - Arrastrar cualquier zona no interactiva del modal mueve la ventana de Ajustes anclada.
+    let backdrop_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .css_classes(["settings-modal-backdrop"])
+        .hexpand(true)
+        .vexpand(true)
+        .can_target(true)
+        .build();
+    let center_wrap = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .halign(Align::Center)
+        .valign(Align::Center)
+        .margin_top(24)
+        .margin_bottom(24)
+        .margin_start(24)
+        .margin_end(24)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+    center_wrap.append(&sheet_card);
+    backdrop_box.append(&center_wrap);
+
+    let backdrop_handle = WindowHandle::builder()
+        .child(&backdrop_box)
+        .hexpand(true)
+        .vexpand(true)
+        .build();
+
+    overlay.add_overlay(&backdrop_handle);
+
+    // Teardown idempotente al cerrar/destruir `dialog`
+    let closed_flag = Rc::new(std::cell::Cell::new(false));
+    let cleanup: Rc<dyn Fn()> = {
+        let overlay_c = overlay.clone();
+        let handle_c = backdrop_handle.clone();
+        let parent_c = parent.clone();
+        let dlg_weak = dialog.downgrade();
+        let flag = closed_flag.clone();
+        Rc::new(move || {
+            if flag.replace(true) {
+                return;
+            }
+            if handle_c.parent().is_some() {
+                overlay_c.remove_overlay(&handle_c);
+            }
+            let dlg_opt = dlg_weak.upgrade();
+            SETTINGS_MODAL_STACK.with(|stack| {
+                let mut s = stack.borrow_mut();
+                if let Some(ref d) = dlg_opt {
+                    s.retain(|(w, _)| w != d);
+                } else {
+                    s.pop();
+                }
+            });
+            set_modal_scrim_visible(&parent_c, false);
+        })
+    };
+
+    SETTINGS_MODAL_STACK.with(|stack| {
+        stack.borrow_mut().push((dialog.clone(), cleanup.clone()));
+    });
+
+    let c1 = cleanup.clone();
+    dialog.connect_close_request(move |_| {
+        c1();
+        glib::Propagation::Proceed
+    });
+    let c2 = cleanup.clone();
+    dialog.connect_hide(move |_| {
+        c2();
+    });
+    let c3 = cleanup;
+    dialog.connect_destroy(move |_| {
+        c3();
+    });
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NavAction {
     Initial,
@@ -1310,6 +1729,10 @@ enum NavAction {
 fn is_subsection_panel(id: &str) -> bool {
     id == "network-firewall"
         || id == notifications_pane::NOTIFICATIONS_APP_SUBPANEL_ID
+        || (id != focus_pane::FOCUS_PANEL_ID && focus_pane::is_focus_subpanel(id))
+        || (id != screentime_pane::SCREENTIME_PANEL_ID
+            && screentime_pane::is_screentime_subpanel(id))
+        || (id != privacy_pane::PRIVACY_PANEL_ID && privacy_pane::is_privacy_subpanel(id))
         || (id != "about" && general_pane::is_general_subpanel(id))
         || (id != "accessibility" && accessibility_pane::is_accessibility_subpanel(id))
         || (id != "appearance" && appearance_pane::is_appearance_subpanel(id))
@@ -1326,6 +1749,12 @@ fn section_group(id: &str) -> &str {
         "appearance"
     } else if notifications_pane::is_notifications_subpanel(id) {
         notifications_pane::NOTIFICATIONS_PANEL_ID
+    } else if focus_pane::is_focus_subpanel(id) {
+        focus_pane::FOCUS_PANEL_ID
+    } else if screentime_pane::is_screentime_subpanel(id) {
+        screentime_pane::SCREENTIME_PANEL_ID
+    } else if privacy_pane::is_privacy_subpanel(id) {
+        privacy_pane::PRIVACY_PANEL_ID
     } else {
         id
     }
@@ -1520,235 +1949,10 @@ mod frosted_sidebar {
     }
 }
 
-/// Builds a wrapping horizontal `FlowBox` whose items fit on one row when wide
-/// and wrap cleanly onto multiple lines when the window is narrowed.
-fn make_wrap_flow(
-    min_per_line: u32,
-    max_per_line: u32,
-    spacing: i32,
-    homogeneous: bool,
-) -> FlowBox {
-    FlowBox::builder()
-        .css_classes(["settings-wrap-flow"])
-        .homogeneous(homogeneous)
-        .min_children_per_line(min_per_line)
-        .max_children_per_line(max_per_line)
-        .row_spacing(spacing as u32)
-        .column_spacing(spacing as u32)
-        .selection_mode(gtk4::SelectionMode::None)
-        .hexpand(true)
-        .valign(Align::Start)
-        .build()
-}
-
 // ============================================================================
 // PANEL 1: PANTALLAS -> `displays_pane.rs`
+// PANEL 2: TECLADO -> `keyboard_pane.rs`
 // ============================================================================
-
-// ============================================================================
-// PANEL 2: TECLADO E IDIOMA (macOS System Settings > Keyboard)
-// ============================================================================
-
-fn create_keyboard_pane() -> (ScrolledWindow, Rc<dyn Fn()>) {
-    let scrolled = ScrolledWindow::builder()
-        .hscrollbar_policy(PolicyType::Never)
-        .vscrollbar_policy(PolicyType::Automatic)
-        .hexpand(true)
-        .vexpand(true)
-        .build();
-
-    let pane = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .css_classes(["content-pane"])
-        .spacing(16)
-        .build();
-
-    let header_box = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .spacing(4)
-        .build();
-    let title = Label::builder()
-        .label("Teclado y Fuentes de Entrada")
-        .css_classes(["pane-header-title"])
-        .xalign(0.0)
-        .build();
-    let subtitle = Label::builder()
-        .label("Selecciona la distribución de teclado XKB activa en toda la sesión Wayland (por defecto Español Latinoamericano 'latam').")
-        .css_classes(["pane-header-subtitle"])
-        .wrap(true)
-        .xalign(0.0)
-        .build();
-    header_box.append(&title);
-    header_box.append(&subtitle);
-    pane.append(&header_box);
-
-    let layout_card = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .css_classes(["macos-group-card"])
-        .spacing(12)
-        .build();
-
-    let active_status_lbl = Label::builder()
-        .label("Distribución activa: Español (Latinoamérica)")
-        .css_classes(["card-section-title"])
-        .wrap(true)
-        .xalign(0.0)
-        .build();
-    layout_card.append(&active_status_lbl);
-
-    let layouts_row = make_wrap_flow(1, 3, 10, true);
-
-    let create_layout_btn = |flag_title: &str, code_sub: &str, desc: &str| -> Button {
-        let btn = Button::builder()
-            .css_classes(["res-thumb-btn"])
-            .has_frame(false)
-            .build();
-        let col = GtkBox::builder()
-            .orientation(Orientation::Vertical)
-            .spacing(4)
-            .margin_top(6)
-            .margin_bottom(6)
-            .build();
-        let t = Label::builder()
-            .label(flag_title)
-            .css_classes(["card-section-title"])
-            .wrap(true)
-            .justify(gtk4::Justification::Center)
-            .build();
-        let c = Label::builder()
-            .label(code_sub)
-            .css_classes(["res-dim-label"])
-            .wrap(true)
-            .justify(gtk4::Justification::Center)
-            .build();
-        let d = Label::builder()
-            .label(desc)
-            .css_classes(["res-pct-label"])
-            .wrap(true)
-            .justify(gtk4::Justification::Center)
-            .build();
-        col.append(&t);
-        col.append(&c);
-        col.append(&d);
-        btn.set_child(Some(&col));
-        btn
-    };
-
-    let btn_latam = create_layout_btn(
-        "Español (Latinoamérica)",
-        "XKB: latam (Predeterminado)",
-        "Tecla ñ, acentos muertos (áéíóú), ¿¡ y @ en AltGr+Q",
-    );
-    let btn_es = create_layout_btn(
-        "Español (España)",
-        "XKB: es",
-        "Distribución ISO española con ç, ñ y @ en AltGr+2",
-    );
-    let btn_us = create_layout_btn(
-        "English (US)",
-        "XKB: us",
-        "Distribución ANSI estadounidense estándar",
-    );
-
-    layouts_row.insert(&btn_latam, -1);
-    layouts_row.insert(&btn_es, -1);
-    layouts_row.insert(&btn_us, -1);
-    layout_card.append(&layouts_row);
-
-    // Campo de prueba en vivo
-    let test_lbl = Label::builder()
-        .label("Prueba tu teclado en vivo aquí (escribe ñ, á, é, í, ó, ú, ¿, ¡, @):")
-        .css_classes(["card-section-sub"])
-        .wrap(true)
-        .xalign(0.0)
-        .build();
-    let test_entry = Entry::builder()
-        .placeholder_text("Escribe aquí para probar: niño, canción, pingüino, ¿qué tal?...")
-        .css_classes(["sidebar-search"])
-        .build();
-    layout_card.append(&test_lbl);
-    layout_card.append(&test_entry);
-
-    pane.append(&layout_card);
-
-    // Tarjeta de Trackpad / Ratón
-    let input_opts_card = GtkBox::builder()
-        .orientation(Orientation::Vertical)
-        .css_classes(["macos-group-card"])
-        .spacing(10)
-        .build();
-
-    let nat_row = GtkBox::builder()
-        .orientation(Orientation::Horizontal)
-        .spacing(10)
-        .build();
-    let nat_lbl = Label::builder()
-        .label("Desplazamiento natural (el contenido sigue el movimiento de los dedos)")
-        .css_classes(["card-section-title"])
-        .wrap(true)
-        .hexpand(true)
-        .xalign(0.0)
-        .build();
-    let nat_switch = Switch::builder()
-        .valign(Align::Center)
-        .active(InputConfig::load().natural_scrolling)
-        .build();
-    nat_row.append(&nat_lbl);
-    nat_row.append(&*nat_switch);
-    input_opts_card.append(&nat_row);
-
-    nat_switch.connect_state_set(|_, active| {
-        let mut cfg = InputConfig::load();
-        cfg.natural_scrolling = active;
-        let _ = cfg.save();
-        glib::Propagation::Proceed
-    });
-
-    pane.append(&input_opts_card);
-    scrolled.set_child(Some(&pane));
-
-    let b_latam = btn_latam.clone();
-    let b_es = btn_es.clone();
-    let b_us = btn_us.clone();
-    let st_lbl = active_status_lbl.clone();
-
-    let refresh_kb: Rc<dyn Fn()> = Rc::new(move || {
-        let cfg = InputConfig::load();
-        st_lbl.set_label(&format!(
-            "Distribución activa: {}",
-            cfg.layout_display_name()
-        ));
-        b_latam.remove_css_class("res-thumb-btn-active");
-        b_es.remove_css_class("res-thumb-btn-active");
-        b_us.remove_css_class("res-thumb-btn-active");
-        match cfg.keyboard_layout.as_str() {
-            "latam" => b_latam.add_css_class("res-thumb-btn-active"),
-            "es" => b_es.add_css_class("res-thumb-btn-active"),
-            "us" => b_us.add_css_class("res-thumb-btn-active"),
-            _ => b_latam.add_css_class("res-thumb-btn-active"),
-        }
-    });
-
-    refresh_kb();
-
-    for (btn, code) in [(&btn_latam, "latam"), (&btn_es, "es"), (&btn_us, "us")] {
-        let c = code.to_string();
-        let ref_c = refresh_kb.clone();
-        btn.connect_clicked(move |_| {
-            let mut cfg = InputConfig::load();
-            cfg.keyboard_layout = c.clone();
-            cfg.keyboard_variant = String::new();
-            let _ = cfg.save();
-            let _ = IpcClient::send_command(IpcMessage::SetKeyboardLayout {
-                layout: c.clone(),
-                variant: String::new(),
-            });
-            ref_c();
-        });
-    }
-
-    (scrolled, refresh_kb)
-}
 
 // ============================================================================
 // PANEL 3: APARIENCIA Y TEMAS (HELPERS COMPARTIDOS)

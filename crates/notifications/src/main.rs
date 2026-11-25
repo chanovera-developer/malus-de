@@ -743,7 +743,12 @@ impl NotificationServer {
             return id;
         }
 
+        let focus_cfg = malus_de_common::config::FocusConfig::load();
+        let (focus_silence_banner, focus_silence_badge) =
+            focus_cfg.should_silence_notification(rule_key, &desktop_entry, urgency);
+
         if rule.badge_icon
+            && !focus_silence_badge
             && !should_skip_dock_push_badge(
                 &app_name,
                 &desktop_entry,
@@ -768,6 +773,14 @@ impl NotificationServer {
                     ),
                 )
                 .await;
+        }
+
+        if focus_silence_banner {
+            info!(
+                "Notificación silenciada por modo de Enfoque activo para '{}'",
+                rule_key
+            );
+            return id;
         }
 
         if rule.style != malus_de_common::config::NotificationAlertStyle::None {

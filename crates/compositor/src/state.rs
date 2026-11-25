@@ -250,6 +250,14 @@ pub struct SwipeGestureState {
     pub app_expose_gesture: bool,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct PinchGestureState {
+    pub active: bool,
+    pub fingers: u32,
+    pub last_scale: f64,
+    pub triggered: bool,
+}
+
 pub struct CachedDndIcon {
     pub buffer: MemoryRenderBuffer,
     pub rel_offset_logical: (f64, f64),
@@ -351,6 +359,7 @@ pub struct MalusState {
     pub workspaces: crate::workspaces::WorkspaceManager,
     pub workspace_revision: u64,
     pub swipe_gesture: SwipeGestureState,
+    pub pinch_gesture: PinchGestureState,
     pub surface_commit_counter: usize,
     pub output_commit_counters: HashMap<String, usize>,
     pub background_commit_counter: usize,
@@ -358,6 +367,7 @@ pub struct MalusState {
     pub dock_cfg: DockConfig,
     pub desktop_dock_cfg: malus_de_common::config::DesktopDockConfig,
     pub input_cfg: malus_de_common::config::InputConfig,
+    pub input_config_dirty: bool,
     pub show_desktop_hidden_ids: Vec<u64>,
     pub hot_corner_hover: Option<(&'static str, Instant, bool)>,
     pub dock_auto_hide_edge_active: bool,
@@ -1516,6 +1526,7 @@ impl MalusState {
             workspaces: crate::workspaces::WorkspaceManager::default(),
             workspace_revision: 0,
             swipe_gesture: SwipeGestureState::default(),
+            pinch_gesture: PinchGestureState::default(),
             surface_commit_counter: 0,
             output_commit_counters: HashMap::new(),
             background_commit_counter: 0,
@@ -1523,6 +1534,7 @@ impl MalusState {
             dock_cfg: dock_config,
             desktop_dock_cfg,
             input_cfg,
+            input_config_dirty: false,
             show_desktop_hidden_ids: Vec::new(),
             hot_corner_hover: None,
             dock_auto_hide_edge_active: false,
@@ -2400,6 +2412,13 @@ impl MalusState {
                 IpcMessage::ReloadInputConfig => {
                     tracing::info!("📥 IPC ReloadInputConfig recibido");
                     self.input_cfg = malus_de_common::config::InputConfig::load();
+                    self.input_config_dirty = true;
+                    if let Some(kb) = self.seat.get_keyboard() {
+                        kb.change_repeat_info(
+                            self.input_cfg.keyboard_repeat_rate.clamp(0, 100),
+                            self.input_cfg.keyboard_repeat_delay_ms.clamp(150, 1500),
+                        );
+                    }
                     self.ipc_broadcaster
                         .broadcast(&IpcMessage::ReloadInputConfig);
                 }
@@ -3713,7 +3732,12 @@ impl MalusState {
 
     /// Inicia el seguimiento de gesto multitáctil de deslizamiento (`libinput` 3+ dedos).
     pub fn handle_gesture_swipe_begin(&mut self, fingers: u32) -> bool {
-        if fingers < 3 {
+        let matches_configured = fingers >= 3
+            && (fingers == self.input_cfg.trackpad_swipe_spaces_fingers as u32
+                || fingers == self.input_cfg.trackpad_mission_control_fingers as u32
+                || fingers == self.input_cfg.trackpad_app_expose_fingers as u32
+                || (self.expose.active && self.expose.target_open));
+        if !matches_configured {
             self.swipe_gesture.active = false;
             return false;
         }
@@ -3750,11 +3774,14 @@ impl MalusState {
             if ay >= ax {
                 self.swipe_gesture.kind = SwipeGestureKind::ExposeVertical;
                 if !self.swipe_gesture.was_open_at_start {
+                    let f = self.swipe_gesture.fingers;
                     if self.swipe_gesture.accum_y < 0.0 {
-                        // 3 dedos arriba -> Mission Control (Exposé Global)
-                        self.open_expose(crate::expose::ExposeMode::Global);
-                    } else {
-                        // 3 dedos abajo -> App Exposé de la app activa
+                        // Deslizar arriba -> Mission Control (si coincide con el número de dedos configurado)
+                        if f == self.input_cfg.trackpad_mission_control_fingers as u32 {
+                            self.open_expose(crate::expose::ExposeMode::Global);
+                        }
+                    } else if f == self.input_cfg.trackpad_app_expose_fingers as u32 {
+                        // Deslizar abajo -> App Exposé de la app activa
                         self.swipe_gesture.app_expose_gesture = true;
                         let app_id = self
                             .get_active_window()
@@ -3825,14 +3852,60 @@ impl MalusState {
                 }
             }
             SwipeGestureKind::WorkspaceHorizontal => {
-                if g.accum_x <= -60.0 {
-                    self.switch_workspace_delta(1);
-                } else if g.accum_x >= 60.0 {
-                    self.switch_workspace_delta(-1);
+                if g.fingers == self.input_cfg.trackpad_swipe_spaces_fingers as u32 {
+                    if g.accum_x <= -60.0 {
+                        self.switch_workspace_delta(1);
+                    } else if g.accum_x >= 60.0 {
+                        self.switch_workspace_delta(-1);
+                    }
                 }
             }
             SwipeGestureKind::Undecided => {}
         }
+        true
+    }
+
+    /// Inicia un gesto multitáctil de pellizco de 4 dedos (Apps / Mostrar escritorio).
+    pub fn handle_gesture_pinch_begin(&mut self, fingers: u32) -> bool {
+        if fingers >= 4
+            && (self.input_cfg.trackpad_apps_gesture || self.input_cfg.show_desktop_gesture)
+        {
+            self.pinch_gesture = PinchGestureState {
+                active: true,
+                fingers,
+                last_scale: 1.0,
+                triggered: false,
+            };
+            return true;
+        }
+        self.pinch_gesture.active = false;
+        false
+    }
+
+    /// Actualiza un gesto de pellizco de 4 dedos: juntar abre Apps/Canopy; separar muestra el escritorio.
+    pub fn handle_gesture_pinch_update(&mut self, scale: f64) -> bool {
+        if !self.pinch_gesture.active {
+            return false;
+        }
+        self.pinch_gesture.last_scale = scale;
+        if !self.pinch_gesture.triggered {
+            if scale <= 0.72 && self.input_cfg.trackpad_apps_gesture {
+                self.pinch_gesture.triggered = true;
+                self.toggle_spotlight();
+            } else if scale >= 1.28 && self.input_cfg.show_desktop_gesture {
+                self.pinch_gesture.triggered = true;
+                self.toggle_show_desktop();
+            }
+        }
+        true
+    }
+
+    /// Finaliza el gesto de pellizco de 4 dedos.
+    pub fn handle_gesture_pinch_end(&mut self, _cancelled: bool) -> bool {
+        if !self.pinch_gesture.active {
+            return false;
+        }
+        self.pinch_gesture = PinchGestureState::default();
         true
     }
 
@@ -5456,6 +5529,7 @@ impl MalusState {
                 cfg.touchpad_enabled = next_enabled;
                 let _ = cfg.save();
                 self.input_cfg = cfg;
+                self.input_config_dirty = true;
                 tracing::info!(
                     "🖱️ [MEDIA KEY] Touchpad {}",
                     if next_enabled { "activado" } else { "desactivado" }
@@ -6406,59 +6480,85 @@ impl CompositorHandler for MalusState {
                             != Some(&(geometry.loc, geometry.size))
                     {
                         if geometry.size.w > 1 && geometry.size.h > 1 {
-                            let parent_output = toplevel
-                                .parent()
-                                .and_then(|parent| {
-                                    let parent_surface = parent.wl_surface();
-                                    parent_surface
-                                        .as_deref()
-                                        .and_then(|surface| self.window_for_surface(surface))
+                            let parent_win = toplevel.parent().and_then(|parent| {
+                                let parent_surface = parent.wl_surface();
+                                parent_surface
+                                    .as_deref()
+                                    .and_then(|surface| self.window_for_surface(surface))
+                            });
+                            let parent_rect = parent_win.as_ref().and_then(|parent| {
+                                let location = self.space.element_location(parent)?;
+                                let parent_geometry = parent.geometry();
+                                Some(Rectangle::new(
+                                    Point::<i32, Logical>::from((
+                                        location.x + parent_geometry.loc.x,
+                                        location.y + parent_geometry.loc.y,
+                                    )),
+                                    parent_geometry.size,
+                                ))
+                            });
+                            let parent_output = parent_rect.and_then(|pr| {
+                                let center = Point::<i32, Logical>::from((
+                                    pr.loc.x + pr.size.w / 2,
+                                    pr.loc.y + pr.size.h / 2,
+                                ));
+                                self.space.outputs().find(|output| {
+                                    self.space
+                                        .output_geometry(output)
+                                        .map(|output_geometry| output_geometry.contains(center))
+                                        .unwrap_or(false)
                                 })
-                                .and_then(|parent| {
-                                    let location = self.space.element_location(&parent)?;
-                                    let parent_geometry = parent.geometry();
-                                    let center = Point::<i32, Logical>::from((
-                                        location.x
-                                            + parent_geometry.loc.x
-                                            + parent_geometry.size.w / 2,
-                                        location.y
-                                            + parent_geometry.loc.y
-                                            + parent_geometry.size.h / 2,
-                                    ));
-                                    self.space.outputs().find(|output| {
-                                        self.space
-                                            .output_geometry(output)
-                                            .map(|output_geometry| output_geometry.contains(center))
-                                            .unwrap_or(false)
-                                    })
-                                });
+                            });
                             let window_location =
                                 self.space.element_location(&window).unwrap_or_default();
                             let current_center = Point::<i32, Logical>::from((
                                 window_location.x + geometry.loc.x + geometry.size.w / 2,
                                 window_location.y + geometry.loc.y + geometry.size.h / 2,
                             ));
-                            let output = parent_output.or_else(|| {
-                                self.space.outputs().find(|output| {
-                                    self.space
-                                        .output_geometry(output)
-                                        .map(|output_geometry| {
-                                            output_geometry.contains(current_center)
-                                        })
-                                        .unwrap_or(false)
+                            let output = parent_output
+                                .or_else(|| {
+                                    self.space.outputs().find(|output| {
+                                        self.space
+                                            .output_geometry(output)
+                                            .map(|output_geometry| {
+                                                output_geometry.contains(current_center)
+                                            })
+                                            .unwrap_or(false)
+                                    })
                                 })
-                            });
+                                .cloned();
 
                             if let Some(output) = output {
-                                if let Some(output_geometry) = self.space.output_geometry(output) {
-                                    let centered_location = Point::<i32, Logical>::from((
-                                        output_geometry.loc.x
-                                            + (output_geometry.size.w - geometry.size.w) / 2
-                                            - geometry.loc.x,
-                                        output_geometry.loc.y
-                                            + (output_geometry.size.h - geometry.size.h) / 2
-                                            - geometry.loc.y,
-                                    ));
+                                if let Some(output_geometry) = self.space.output_geometry(&output) {
+                                    let usable = self.usable_zone_for_output(&output);
+                                    let mut centered_location = if let Some(pr) = parent_rect {
+                                        Point::<i32, Logical>::from((
+                                            pr.loc.x + (pr.size.w - geometry.size.w) / 2
+                                                - geometry.loc.x,
+                                            pr.loc.y + (pr.size.h - geometry.size.h) / 2
+                                                - geometry.loc.y,
+                                        ))
+                                    } else {
+                                        Point::<i32, Logical>::from((
+                                            output_geometry.loc.x
+                                                + (output_geometry.size.w - geometry.size.w) / 2
+                                                - geometry.loc.x,
+                                            output_geometry.loc.y
+                                                + (output_geometry.size.h - geometry.size.h) / 2
+                                                - geometry.loc.y,
+                                        ))
+                                    };
+                                    let min_x = usable.loc.x - geometry.loc.x;
+                                    let max_x = (usable.loc.x + usable.size.w - geometry.size.w
+                                        - geometry.loc.x)
+                                        .max(min_x);
+                                    let min_y = usable.loc.y - geometry.loc.y;
+                                    let max_y = (usable.loc.y + usable.size.h - geometry.size.h
+                                        - geometry.loc.y)
+                                        .max(min_y);
+                                    centered_location.x = centered_location.x.clamp(min_x, max_x);
+                                    centered_location.y = centered_location.y.clamp(min_y, max_y);
+
                                     self.space
                                         .map_element(window.clone(), centered_location, true);
                                     self.space.raise_element(&window, true);

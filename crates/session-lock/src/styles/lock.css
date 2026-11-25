@@ -131,3 +131,55 @@ button.unlock-btn:active,
     font-weight: 600;
     text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
 }
+
+.lock-hint-label {
+    margin-top: 2px;
+    font-size: 12px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.84);
+    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.55);
+}
+
+.lock-custom-message {
+    margin-top: 10px;
+    margin-bottom: 4px;
+    padding: 5px 14px;
+    border-radius: 999px;
+    background-color: rgba(18, 22, 30, 0.28);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    color: rgba(255, 255, 255, 0.92);
+    font-size: 13px;
+    font-weight: 500;
+    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.55);
+}
+
+.lock-power-bar {
+    margin-top: 14px;
+    margin-bottom: 2px;
+}
+
+button.lock-power-circle-btn {
+    min-width: 34px;
+    min-height: 34px;
+    padding: 0;
+    border-radius: 999px;
+    background-color: rgba(255, 255, 255, 0.18);
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    color: #ffffff;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+button.lock-power-circle-btn:hover {
+    background-color: rgba(255, 255, 255, 0.28);
+}
+
+button.lock-power-circle-btn:active {
+    background-color: rgba(255, 255, 255, 0.36);
+}
+
+.lock-power-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.88);
+    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
+}

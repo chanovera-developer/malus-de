@@ -1023,10 +1023,10 @@ fn show_system_report_dialog(parent: &ApplicationWindow, snap: &SystemInfoSnapsh
     let (ok_wrap, ok_btn) = make_squircle_button("Listo", true, None);
     ok_wrap.set_halign(Align::End);
     let d_c = dialog.clone();
-    ok_btn.connect_clicked(move |_| d_c.close());
+    ok_btn.connect_clicked(move |_| crate::close_attached_modal(&d_c));
     vbox.append(&ok_wrap);
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 // ============================================================================
@@ -1236,11 +1236,11 @@ fn build_software_update_subpane(
                 p_ok.borrow_mut().auto_updates_enabled = active;
                 p_ok.borrow().save();
                 lbl_ok.set_label(if active { "Activadas" } else { "Desactivadas" });
-                d_ok.close();
+                crate::close_attached_modal(&d_ok);
             });
             vbox.append(&ok_w);
             dlg.set_child(Some(&vbox));
-            dlg.present();
+            crate::present_attached_modal(&dlg, &win_c);
         });
     }
 
@@ -2217,7 +2217,7 @@ fn build_sharing_subpane(
             actions.append(&cw);
             actions.append(&ow);
             let d1 = dlg.clone();
-            cb.connect_clicked(move |_| d1.close());
+            cb.connect_clicked(move |_| crate::close_attached_modal(&d1));
             let d2 = dlg.clone();
             let hl = h_lbl.clone();
             let sc = snap_c.clone();
@@ -2237,11 +2237,11 @@ fn build_sharing_subpane(
                             .output();
                     });
                 }
-                d2.close();
+                crate::close_attached_modal(&d2);
             });
             vbox.append(&actions);
             dlg.set_child(Some(&vbox));
-            dlg.present();
+            crate::present_attached_modal(&dlg, &win_c);
         });
     }
 
@@ -2445,15 +2445,15 @@ fn build_startup_disk_subpane(
         act.append(&cw);
         act.append(&rw);
         let d1 = dlg.clone();
-        cb.connect_clicked(move |_| d1.close());
+        cb.connect_clicked(move |_| crate::close_attached_modal(&d1));
         let d2 = dlg.clone();
         rb.connect_clicked(move |_| {
-            d2.close();
+            crate::close_attached_modal(&d2);
             let _ = Command::new("systemctl").arg("reboot").spawn();
         });
         vb.append(&act);
         dlg.set_child(Some(&vb));
-        dlg.present();
+        crate::present_attached_modal(&dlg, &win_c);
     });
     footer.append(&sel_lbl);
     footer.append(&reb_wrap);
@@ -2753,7 +2753,7 @@ fn build_login_items_subpane(parent_window: &ApplicationWindow) -> (ScrolledWind
             act.append(&cw);
             act.append(&aw);
             let d1 = dlg.clone();
-            cb.connect_clicked(move |_| d1.close());
+            cb.connect_clicked(move |_| crate::close_attached_modal(&d1));
             let d2 = dlg.clone();
             let r_done = rf.clone();
             ab.connect_clicked(move |_| {
@@ -2763,11 +2763,11 @@ fn build_login_items_subpane(parent_window: &ApplicationWindow) -> (ScrolledWind
                     create_autostart_entry(&n, &e);
                     r_done();
                 }
-                d2.close();
+                crate::close_attached_modal(&d2);
             });
             vb.append(&act);
             dlg.set_child(Some(&vb));
-            dlg.present();
+            crate::present_attached_modal(&dlg, &win_c);
         });
     }
 
@@ -3377,7 +3377,7 @@ fn build_locale_subpane(
             act.append(&cw);
             act.append(&aw);
             let d1 = dlg.clone();
-            cb.connect_clicked(move |_| d1.close());
+            cb.connect_clicked(move |_| crate::close_attached_modal(&d1));
             let d2 = dlg.clone();
             let pc = p_c.clone();
             let r_done = rl.clone();
@@ -3388,11 +3388,11 @@ fn build_locale_subpane(
                     pc.borrow().save();
                     r_done();
                 }
-                d2.close();
+                crate::close_attached_modal(&d2);
             });
             vb.append(&act);
             dlg.set_child(Some(&vb));
-            dlg.present();
+            crate::present_attached_modal(&dlg, &win_c);
         });
     }
     {
@@ -3555,15 +3555,15 @@ fn build_reset_subpane(parent_window: &ApplicationWindow) -> ScrolledWindow {
         act.append(&cw);
         act.append(&ow);
         let d1 = dlg.clone();
-        cb.connect_clicked(move |_| d1.close());
+        cb.connect_clicked(move |_| crate::close_attached_modal(&d1));
         let d2 = dlg.clone();
         ob.connect_clicked(move |_| {
             GeneralPreferences::default().save();
-            d2.close();
+            crate::close_attached_modal(&d2);
         });
         vb.append(&act);
         dlg.set_child(Some(&vb));
-        dlg.present();
+        crate::present_attached_modal(&dlg, &win_c);
     });
     r1.append(&c1);
     r1.append(&rst_wrap);

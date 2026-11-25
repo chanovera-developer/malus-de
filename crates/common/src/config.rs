@@ -3058,6 +3058,34 @@ fn default_keyboard_model() -> String {
     "pc105".to_string()
 }
 
+fn default_keyboard_repeat_rate() -> i32 {
+    25
+}
+
+fn default_keyboard_repeat_delay_ms() -> i32 {
+    400
+}
+
+fn default_trackpad_speed() -> f64 {
+    0.0
+}
+
+fn default_trackpad_secondary_click() -> String {
+    "two_fingers".to_string()
+}
+
+fn default_mouse_secondary_click() -> String {
+    "right".to_string()
+}
+
+fn default_three_fingers() -> u8 {
+    3
+}
+
+fn default_zero_fingers() -> u8 {
+    0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InputConfig {
@@ -3073,11 +3101,56 @@ pub struct InputConfig {
     /// Opciones XKB adicionales (ej. Some("grp:alt_shift_toggle"))
     #[serde(default)]
     pub keyboard_options: Option<String>,
+    /// Velocidad de repetición de tecla (caracteres/segundo; 0 = desactivada).
+    #[serde(default = "default_keyboard_repeat_rate")]
+    pub keyboard_repeat_rate: i32,
+    /// Espera inicial antes de repetir una tecla (milisegundos).
+    #[serde(default = "default_keyboard_repeat_delay_ms")]
+    pub keyboard_repeat_delay_ms: i32,
     pub natural_scrolling: bool,
     pub shake_to_find_cursor: bool,
     pub show_desktop_gesture: bool,
     #[serde(default = "default_true")]
     pub touchpad_enabled: bool,
+    /// Velocidad del cursor del trackpad en rango libinput (`-1.0..=1.0`, `0.0` = predeterminada).
+    #[serde(default = "default_trackpad_speed")]
+    pub trackpad_speed: f64,
+    /// Presionar (tocar) con 1 dedo para hacer clic (`libinput` tap-to-click).
+    #[serde(default = "default_true")]
+    pub trackpad_tap_to_click: bool,
+    /// Modo de clic secundario: `"off"`, `"two_fingers"`, `"bottom_right"`, `"bottom_left"`.
+    #[serde(default = "default_trackpad_secondary_click")]
+    pub trackpad_secondary_click: String,
+    /// Habilita el gesto de pellizco con 2 dedos para aumentar o reducir el zoom.
+    #[serde(default = "default_true")]
+    pub trackpad_pinch_zoom: bool,
+    /// Habilita el componente de rotación en gestos multitáctiles con 2 dedos.
+    #[serde(default = "default_true")]
+    pub trackpad_rotate_gesture: bool,
+    /// Dedos para cambiar de espacio deslizando horizontalmente (`0` = desactivado, `3`, `4`).
+    #[serde(default = "default_three_fingers")]
+    pub trackpad_swipe_spaces_fingers: u8,
+    /// Dedos para abrir Mission Control deslizando hacia arriba (`0` = desactivado, `3`, `4`).
+    #[serde(default = "default_three_fingers")]
+    pub trackpad_mission_control_fingers: u8,
+    /// Dedos para abrir App Exposé deslizando hacia abajo (`0` = desactivado, `3`, `4`).
+    #[serde(default = "default_zero_fingers")]
+    pub trackpad_app_expose_fingers: u8,
+    /// Gesto de juntar pulgar y 3 dedos (pinch-in de 4 dedos) para abrir Apps / Canopy.
+    #[serde(default = "default_true")]
+    pub trackpad_apps_gesture: bool,
+    /// Velocidad del cursor del mouse en rango libinput (`-1.0..=1.0`, `0.0` = predeterminada).
+    #[serde(default = "default_trackpad_speed")]
+    pub mouse_speed: f64,
+    /// Desplazamiento natural para la rueda / superficie del mouse.
+    #[serde(default = "default_true")]
+    pub mouse_natural_scrolling: bool,
+    /// Clic secundario del mouse: `"off"`, `"right"` (diestro), `"left"` (zurdo).
+    #[serde(default = "default_mouse_secondary_click")]
+    pub mouse_secondary_click: String,
+    /// Aceleración del puntero del mouse (`true` = Adaptive, `false` = Flat en libinput).
+    #[serde(default = "default_true")]
+    pub mouse_pointer_acceleration: bool,
     pub hot_corners: HotCornersConfig,
 }
 
@@ -3121,10 +3194,25 @@ impl Default for InputConfig {
             keyboard_variant: String::new(),
             keyboard_model: default_keyboard_model(),
             keyboard_options: None,
+            keyboard_repeat_rate: default_keyboard_repeat_rate(),
+            keyboard_repeat_delay_ms: default_keyboard_repeat_delay_ms(),
             natural_scrolling: true,
             shake_to_find_cursor: true,
             show_desktop_gesture: true,
             touchpad_enabled: true,
+            trackpad_speed: default_trackpad_speed(),
+            trackpad_tap_to_click: true,
+            trackpad_secondary_click: default_trackpad_secondary_click(),
+            trackpad_pinch_zoom: true,
+            trackpad_rotate_gesture: true,
+            trackpad_swipe_spaces_fingers: default_three_fingers(),
+            trackpad_mission_control_fingers: default_three_fingers(),
+            trackpad_app_expose_fingers: default_zero_fingers(),
+            trackpad_apps_gesture: true,
+            mouse_speed: default_trackpad_speed(),
+            mouse_natural_scrolling: true,
+            mouse_secondary_click: default_mouse_secondary_click(),
+            mouse_pointer_acceleration: true,
             hot_corners: HotCornersConfig::default(),
         }
     }
@@ -3166,10 +3254,14 @@ impl InputConfig {
 
     pub fn layout_display_name(&self) -> &'static str {
         match self.keyboard_layout.as_str() {
-            "latam" => "🇲🇽 Español (Latinoamérica)",
-            "es" => "🇪🇸 Español (España)",
-            "us" => "🇺🇸 Inglés (EE. UU.)",
-            _ => "⌨️ Personalizado",
+            "latam" => "Latinoamericano",
+            "es" => "Español (España)",
+            "us" => "Inglés (EE. UU.)",
+            "fr" => "Francés",
+            "de" => "Alemán",
+            "br" => "Portugués (Brasil)",
+            "it" => "Italiano",
+            _ => "Personalizado",
         }
     }
 
@@ -3178,8 +3270,303 @@ impl InputConfig {
             "latam" => "LAT",
             "es" => "ES",
             "us" => "US",
+            "fr" => "FR",
+            "de" => "DE",
+            "br" => "BR",
+            "it" => "IT",
             _ => "KB",
         }
+    }
+}
+
+/// Entrada de sustitución de texto (`reemplazar` -> `por`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TextReplacementEntry {
+    pub trigger: String,
+    pub replacement: String,
+}
+
+/// Preferencias extendidas del panel «Teclado» (`~/.config/malus-de/keyboard.toml`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KeyboardPrefsConfig {
+    pub adjust_backlight_low_light: bool,
+    pub backlight_level_pct: u8,
+    /// Índice de tiempo de apagado de iluminación: 0..=5 (5 = Nunca).
+    pub backlight_idle_idx: u8,
+    /// Acción tecla Globo/Fn: 0 = Cambiar fuente, 1 = Mostrar emojis y símbolos, 2 = Dictado, 3 = Nada.
+    pub globe_key_action_idx: u8,
+    pub keyboard_navigation: bool,
+    pub text_replacements: Vec<TextReplacementEntry>,
+    pub dictation_enabled: bool,
+    pub dictation_language: String,
+    pub dictation_mic_source: String,
+    pub dictation_shortcut_idx: u8,
+}
+
+impl Default for KeyboardPrefsConfig {
+    fn default() -> Self {
+        Self {
+            adjust_backlight_low_light: true,
+            backlight_level_pct: 65,
+            backlight_idle_idx: 5,
+            globe_key_action_idx: 1,
+            keyboard_navigation: false,
+            text_replacements: vec![TextReplacementEntry {
+                trigger: "omw".to_string(),
+                replacement: "¡Ya voy en camino!".to_string(),
+            }],
+            dictation_enabled: false,
+            dictation_language: "Español (México)".to_string(),
+            dictation_mic_source: "Automático".to_string(),
+            dictation_shortcut_idx: 0,
+        }
+    }
+}
+
+impl KeyboardPrefsConfig {
+    pub fn config_path() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/malus-de/keyboard.toml")
+    }
+
+    pub fn load_in(dir: &Path) -> Self {
+        let path = dir.join("keyboard.toml");
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| toml::from_str::<KeyboardPrefsConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn load() -> Self {
+        let path = Self::config_path();
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| toml::from_str::<KeyboardPrefsConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_in(&self, dir: &Path) -> std::io::Result<()> {
+        let _ = std::fs::create_dir_all(dir);
+        let toml_str = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let header = "# Preferencias de Teclado de Malus DE\n\n";
+        write_file_atomic_if_changed(
+            &dir.join("keyboard.toml"),
+            &format!("{header}{toml_str}"),
+        )
+        .map(|_| ())
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            return self.save_in(parent);
+        }
+        Ok(())
+    }
+}
+
+/// Preferencias extendidas del panel «Trackpad» (`~/.config/malus-de/trackpad.toml`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TrackpadPrefsConfig {
+    /// Firmeza de clic Force Touch: `0 = Ligero`, `1 = Medio`, `2 = Firme`.
+    pub click_firmness_idx: u8,
+    pub silent_click: bool,
+    pub force_click_haptic: bool,
+    /// Consultar y detectores de datos: `0 = Desactivado`, `1 = Hacer clic fuerte con 1 dedo`, `2 = Presionar con 3 dedos`.
+    pub lookup_data_detectors_idx: u8,
+    pub smart_zoom: bool,
+    /// Cambiar de página: `0 = Desactivado`, `1 = Ir a la izquierda o la derecha con 2 dedos`, `2 = Deslizar con 3 dedos`, `3 = Deslizar con 2 o 3 dedos`.
+    pub swipe_pages_idx: u8,
+    pub notification_center_gesture: bool,
+}
+
+impl Default for TrackpadPrefsConfig {
+    fn default() -> Self {
+        Self {
+            click_firmness_idx: 1,
+            silent_click: false,
+            force_click_haptic: true,
+            lookup_data_detectors_idx: 1,
+            smart_zoom: true,
+            swipe_pages_idx: 1,
+            notification_center_gesture: true,
+        }
+    }
+}
+
+impl TrackpadPrefsConfig {
+    pub fn config_path() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/malus-de/trackpad.toml")
+    }
+
+    pub fn load_in(dir: &Path) -> Self {
+        let path = dir.join("trackpad.toml");
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| toml::from_str::<TrackpadPrefsConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn load() -> Self {
+        let path = Self::config_path();
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| toml::from_str::<TrackpadPrefsConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_in(&self, dir: &Path) -> std::io::Result<()> {
+        let _ = std::fs::create_dir_all(dir);
+        let toml_str = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let header = "# Preferencias de Trackpad de Malus DE\n\n";
+        write_file_atomic_if_changed(
+            &dir.join("trackpad.toml"),
+            &format!("{header}{toml_str}"),
+        )
+        .map(|_| ())
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            return self.save_in(parent);
+        }
+        Ok(())
+    }
+}
+
+/// Preferencias extendidas del panel «Mouse» (`~/.config/malus-de/mouse.toml`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MousePrefsConfig {
+    /// Zoom inteligente (presionar dos veces con 1 dedo en superficie táctil de mouse).
+    pub smart_zoom: bool,
+    /// Cambiar de página: `0 = Desactivado`, `1 = 1 dedo`, `2 = 2 dedos`, `3 = 1 o 2 dedos`.
+    pub swipe_pages_idx: u8,
+    /// Cambiar entre apps en pantalla completa (ir a la izquierda o derecha con 2 dedos).
+    pub swipe_fullscreen_apps: bool,
+    /// Mission Control (presionar dos veces con 2 dedos).
+    pub mission_control_double_tap: bool,
+}
+
+impl Default for MousePrefsConfig {
+    fn default() -> Self {
+        Self {
+            smart_zoom: false,
+            swipe_pages_idx: 0,
+            swipe_fullscreen_apps: true,
+            mission_control_double_tap: true,
+        }
+    }
+}
+
+impl MousePrefsConfig {
+    pub fn config_path() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/malus-de/mouse.toml")
+    }
+
+    pub fn load_in(dir: &Path) -> Self {
+        let path = dir.join("mouse.toml");
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| toml::from_str::<MousePrefsConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn load() -> Self {
+        let path = Self::config_path();
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| toml::from_str::<MousePrefsConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_in(&self, dir: &Path) -> std::io::Result<()> {
+        let _ = std::fs::create_dir_all(dir);
+        let toml_str = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let header = "# Preferencias de Mouse de Malus DE\n\n";
+        write_file_atomic_if_changed(
+            &dir.join("mouse.toml"),
+            &format!("{header}{toml_str}"),
+        )
+        .map(|_| ())
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            return self.save_in(parent);
+        }
+        Ok(())
+    }
+}
+
+/// Preferencias del panel «Impresoras y escáneres» (`~/.config/malus-de/printers.toml`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PrintersConfig {
+    /// `"last_used"` («Última impresora utilizada») o el nombre exacto de una cola CUPS.
+    pub default_printer: String,
+    /// Clave CUPS del tamaño de papel predeterminado (`"Letter"`, `"Legal"`, `"A4"`, `"A5"`, `"Tabloid"`, `"Executive"`, `"Env10"`).
+    pub default_paper_size: String,
+}
+
+impl Default for PrintersConfig {
+    fn default() -> Self {
+        Self {
+            default_printer: "last_used".to_string(),
+            default_paper_size: "Letter".to_string(),
+        }
+    }
+}
+
+impl PrintersConfig {
+    pub fn config_path() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/malus-de/printers.toml")
+    }
+
+    pub fn load_in(dir: &Path) -> Self {
+        let path = dir.join("printers.toml");
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| toml::from_str::<PrintersConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn load() -> Self {
+        let path = Self::config_path();
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| toml::from_str::<PrintersConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_in(&self, dir: &Path) -> std::io::Result<()> {
+        let _ = std::fs::create_dir_all(dir);
+        let toml_str = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let header = "# Preferencias de Impresoras y escáneres de Malus DE\n\n";
+        write_file_atomic_if_changed(
+            &dir.join("printers.toml"),
+            &format!("{header}{toml_str}"),
+        )
+        .map(|_| ())
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            return self.save_in(parent);
+        }
+        Ok(())
     }
 }
 
@@ -4333,6 +4720,1101 @@ impl NotificationsConfig {
         self.rule_for_app(app_name)
             .preview_override
             .unwrap_or(self.preview_mode)
+    }
+}
+
+fn default_focus_start_hour() -> u8 {
+    22
+}
+
+fn default_focus_end_hour() -> u8 {
+    7
+}
+
+fn default_true_flag() -> bool {
+    true
+}
+
+/// Horario automático opcional para un modo de Enfoque (soporta franjas nocturnas como 22:00 → 07:00).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FocusSchedule {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_focus_start_hour")]
+    pub start_hour: u8,
+    #[serde(default)]
+    pub start_minute: u8,
+    #[serde(default = "default_focus_end_hour")]
+    pub end_hour: u8,
+    #[serde(default)]
+    pub end_minute: u8,
+}
+
+impl Default for FocusSchedule {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            start_hour: 22,
+            start_minute: 0,
+            end_hour: 7,
+            end_minute: 0,
+        }
+    }
+}
+
+impl FocusSchedule {
+    pub fn is_active_at(&self, hour: u8, minute: u8) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        let now = u16::from(hour.min(23)) * 60 + u16::from(minute.min(59));
+        let start = u16::from(self.start_hour.min(23)) * 60 + u16::from(self.start_minute.min(59));
+        let end = u16::from(self.end_hour.min(23)) * 60 + u16::from(self.end_minute.min(59));
+        if start == end {
+            return true;
+        }
+        if start < end {
+            now >= start && now < end
+        } else {
+            now >= start || now < end
+        }
+    }
+
+    pub fn summary_label(&self) -> String {
+        format!(
+            "{:02}:{:02} – {:02}:{:02}",
+            self.start_hour.min(23),
+            self.start_minute.min(59),
+            self.end_hour.min(23),
+            self.end_minute.min(59)
+        )
+    }
+}
+
+/// Configuración de un perfil de Enfoque individual (ej. «No molestar», «Menos interrupciones» o personalizado).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FocusModeConfig {
+    pub id: String,
+    pub name: String,
+    pub icon: String,
+    pub color: String,
+    #[serde(default)]
+    pub builtin: bool,
+    #[serde(default = "default_true_flag")]
+    pub allow_urgent: bool,
+    #[serde(default)]
+    pub silence_badges: bool,
+    #[serde(default)]
+    pub dim_lock_screen: bool,
+    #[serde(default)]
+    pub allowed_apps: Vec<String>,
+    #[serde(default)]
+    pub schedule: FocusSchedule,
+}
+
+impl FocusModeConfig {
+    pub fn default_modes() -> Vec<Self> {
+        vec![
+            Self {
+                id: "do-not-disturb".to_string(),
+                name: "No molestar".to_string(),
+                icon: "weather-clear-night-symbolic".to_string(),
+                color: "indigo".to_string(),
+                builtin: true,
+                allow_urgent: false,
+                silence_badges: false,
+                dim_lock_screen: false,
+                allowed_apps: Vec::new(),
+                schedule: FocusSchedule::default(),
+            },
+            Self {
+                id: "reduce-interruptions".to_string(),
+                name: "Menos interrupciones".to_string(),
+                icon: "starred-symbolic".to_string(),
+                color: "purple".to_string(),
+                builtin: true,
+                allow_urgent: true,
+                silence_badges: false,
+                dim_lock_screen: false,
+                allowed_apps: Vec::new(),
+                schedule: FocusSchedule::default(),
+            },
+        ]
+    }
+
+    pub fn allows_app(&self, app_name: &str, desktop_entry: &str) -> bool {
+        let name_key = NotificationsConfig::normalize_app_key(app_name);
+        let entry_key = NotificationsConfig::normalize_app_key(desktop_entry);
+        self.allowed_apps.iter().any(|allowed| {
+            let a = NotificationsConfig::normalize_app_key(allowed);
+            if a.is_empty() {
+                return false;
+            }
+            (!name_key.is_empty() && (name_key == a || name_key.contains(&a) || a.contains(&name_key)))
+                || (!entry_key.is_empty()
+                    && (entry_key == a || entry_key.contains(&a) || a.contains(&entry_key)))
+        })
+    }
+}
+
+/// Configuración global de Enfoque de Malus DE (`~/.config/malus-de/focus.toml`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FocusConfig {
+    #[serde(default)]
+    pub active_focus_id: Option<String>,
+    #[serde(default = "default_true_flag")]
+    pub share_across_devices: bool,
+    #[serde(default = "default_true_flag")]
+    pub share_focus_status: bool,
+    #[serde(default = "FocusModeConfig::default_modes")]
+    pub modes: Vec<FocusModeConfig>,
+}
+
+impl Default for FocusConfig {
+    fn default() -> Self {
+        Self {
+            active_focus_id: None,
+            share_across_devices: true,
+            share_focus_status: true,
+            modes: FocusModeConfig::default_modes(),
+        }
+    }
+}
+
+fn current_local_hour_minute() -> (u8, u8) {
+    unsafe {
+        let now = libc::time(std::ptr::null_mut());
+        let mut tm: libc::tm = std::mem::zeroed();
+        if !libc::localtime_r(&now, &mut tm).is_null() {
+            return (
+                tm.tm_hour.clamp(0, 23) as u8,
+                tm.tm_min.clamp(0, 59) as u8,
+            );
+        }
+    }
+    (0, 0)
+}
+
+impl FocusConfig {
+    pub fn config_path() -> PathBuf {
+        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+            let p = PathBuf::from(&xdg);
+            if p.file_name().is_some_and(|n| n == "malus-de") {
+                return p.join("focus.toml");
+            }
+            return p.join("malus-de").join("focus.toml");
+        }
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/malus-de/focus.toml")
+    }
+
+    pub fn load() -> Self {
+        let path = Self::config_path();
+        if let Ok(raw) = std::fs::read_to_string(path) {
+            if let Ok(mut parsed) = toml::from_str::<Self>(&raw) {
+                parsed.ensure_builtin_modes();
+                return parsed;
+            }
+        }
+        Self::default()
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::config_path();
+        let raw = toml::to_string_pretty(self).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+        })?;
+        write_file_atomic_if_changed(&path, &raw)?;
+        Ok(())
+    }
+
+    pub fn ensure_builtin_modes(&mut self) {
+        for builtin in FocusModeConfig::default_modes() {
+            if !self.modes.iter().any(|m| m.id == builtin.id) {
+                self.modes.insert(0, builtin);
+            }
+        }
+    }
+
+    pub fn mode_by_id(&self, id: &str) -> Option<&FocusModeConfig> {
+        self.modes.iter().find(|m| m.id == id)
+    }
+
+    pub fn mode_by_id_mut(&mut self, id: &str) -> Option<&mut FocusModeConfig> {
+        self.modes.iter_mut().find(|m| m.id == id)
+    }
+
+    pub fn active_mode_at(&self, hour: u8, minute: u8) -> Option<&FocusModeConfig> {
+        if let Some(id) = self.active_focus_id.as_deref() {
+            if let Some(mode) = self.mode_by_id(id) {
+                return Some(mode);
+            }
+        }
+        self.modes
+            .iter()
+            .find(|m| m.schedule.is_active_at(hour, minute))
+    }
+
+    pub fn active_mode_now(&self) -> Option<&FocusModeConfig> {
+        let (hour, minute) = current_local_hour_minute();
+        self.active_mode_at(hour, minute)
+    }
+
+    pub fn is_active_now(&self) -> bool {
+        self.active_mode_now().is_some()
+    }
+
+    /// Devuelve `(silenciar_banner_y_sonido, silenciar_globo_en_dock)` para la hora dada.
+    pub fn should_silence_notification_at(
+        &self,
+        app_name: &str,
+        desktop_entry: &str,
+        urgency: u8,
+        hour: u8,
+        minute: u8,
+    ) -> (bool, bool) {
+        let Some(mode) = self.active_mode_at(hour, minute) else {
+            return (false, false);
+        };
+        if mode.allow_urgent && urgency >= 2 {
+            return (false, false);
+        }
+        if mode.allows_app(app_name, desktop_entry) {
+            return (false, false);
+        }
+        (true, mode.silence_badges)
+    }
+
+    pub fn should_silence_notification(
+        &self,
+        app_name: &str,
+        desktop_entry: &str,
+        urgency: u8,
+    ) -> (bool, bool) {
+        let (hour, minute) = current_local_hour_minute();
+        self.should_silence_notification_at(app_name, desktop_entry, urgency, hour, minute)
+    }
+
+    pub fn add_custom_mode(&mut self, name: &str, icon: &str, color: &str) -> String {
+        let clean_name = name.trim();
+        let display_name = if clean_name.is_empty() {
+            "Enfoque personalizado"
+        } else {
+            clean_name
+        };
+        let base_slug: String = display_name
+            .to_ascii_lowercase()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect::<String>()
+            .trim_matches('-')
+            .to_string();
+        let slug_root = if base_slug.is_empty() {
+            "custom".to_string()
+        } else {
+            base_slug
+        };
+        let mut candidate = slug_root.clone();
+        let mut counter = 2usize;
+        while self.modes.iter().any(|m| m.id == candidate) {
+            candidate = format!("{slug_root}-{counter}");
+            counter += 1;
+        }
+        self.modes.push(FocusModeConfig {
+            id: candidate.clone(),
+            name: display_name.to_string(),
+            icon: icon.to_string(),
+            color: color.to_string(),
+            builtin: false,
+            allow_urgent: true,
+            silence_badges: false,
+            dim_lock_screen: false,
+            allowed_apps: Vec::new(),
+            schedule: FocusSchedule::default(),
+        });
+        candidate
+    }
+
+    pub fn remove_custom_mode(&mut self, id: &str) -> bool {
+        let Some(pos) = self.modes.iter().position(|m| m.id == id && !m.builtin) else {
+            return false;
+        };
+        self.modes.remove(pos);
+        if self.active_focus_id.as_deref() == Some(id) {
+            self.active_focus_id = None;
+        }
+        true
+    }
+}
+
+/// Configuración e historial local de Tiempo en pantalla (`~/.config/malus-de/screentime.toml`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScreenTimeConfig {
+    #[serde(default = "default_true_flag")]
+    pub activity_tracking: bool,
+    #[serde(default = "default_true_flag")]
+    pub share_across_devices: bool,
+    #[serde(default)]
+    pub passcode_hash: Option<String>,
+    #[serde(default)]
+    pub always_allowed_apps: Vec<String>,
+    #[serde(default)]
+    pub blocked_apps: Vec<String>,
+    #[serde(default)]
+    pub schedule_enabled: bool,
+    #[serde(default)]
+    pub schedule_start_hour: u8,
+    #[serde(default)]
+    pub schedule_start_minute: u8,
+    #[serde(default = "default_screentime_end_hour")]
+    pub schedule_end_hour: u8,
+    #[serde(default = "default_screentime_end_minute")]
+    pub schedule_end_minute: u8,
+    /// `0` = Sin límite; `1..=23` = Hasta N horas diarias para "Todo".
+    #[serde(default)]
+    pub all_limit_hours: u8,
+    #[serde(default = "default_true_flag")]
+    pub adjust_to_schedule: bool,
+    #[serde(default)]
+    pub content_restrictions_enabled: bool,
+    #[serde(default)]
+    pub communication_safety_enabled: bool,
+    #[serde(default)]
+    pub improve_communication_safety: bool,
+    /// Minutos de uso registrados por fecha `YYYY-MM-DD`.
+    #[serde(default)]
+    pub daily_minutes: std::collections::BTreeMap<String, u32>,
+}
+
+fn default_screentime_end_hour() -> u8 {
+    23
+}
+
+fn default_screentime_end_minute() -> u8 {
+    59
+}
+
+impl Default for ScreenTimeConfig {
+    fn default() -> Self {
+        Self {
+            activity_tracking: true,
+            share_across_devices: true,
+            passcode_hash: None,
+            always_allowed_apps: Vec::new(),
+            blocked_apps: Vec::new(),
+            schedule_enabled: false,
+            schedule_start_hour: 0,
+            schedule_start_minute: 0,
+            schedule_end_hour: 23,
+            schedule_end_minute: 59,
+            all_limit_hours: 0,
+            adjust_to_schedule: true,
+            content_restrictions_enabled: false,
+            communication_safety_enabled: false,
+            improve_communication_safety: false,
+            daily_minutes: std::collections::BTreeMap::new(),
+        }
+    }
+}
+
+fn local_date_key_with_offset_days(offset_days: i64) -> (String, &'static str) {
+    const DAY_LETTERS: [&str; 7] = ["D", "L", "M", "M", "J", "V", "S"];
+    unsafe {
+        let now = libc::time(std::ptr::null_mut()) + offset_days * 86_400;
+        let mut tm: libc::tm = std::mem::zeroed();
+        if !libc::localtime_r(&now, &mut tm).is_null() {
+            let year = tm.tm_year + 1900;
+            let month = (tm.tm_mon + 1).clamp(1, 12);
+            let day = tm.tm_mday.clamp(1, 31);
+            let wday = (tm.tm_wday as usize) % 7;
+            return (format!("{year:04}-{month:02}-{day:02}"), DAY_LETTERS[wday]);
+        }
+    }
+    ("1970-01-01".to_string(), "L")
+}
+
+fn system_uptime_minutes() -> u32 {
+    if let Ok(raw) = std::fs::read_to_string("/proc/uptime") {
+        if let Some(first) = raw.split_whitespace().next() {
+            if let Ok(secs) = first.parse::<f64>() {
+                return ((secs / 60.0).floor().max(0.0) as u32).min(24 * 60);
+            }
+        }
+    }
+    0
+}
+
+fn hash_passcode_fnv1a(pin: &str) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in pin.as_bytes() {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
+impl ScreenTimeConfig {
+    pub fn config_path() -> PathBuf {
+        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+            let p = PathBuf::from(&xdg);
+            if p.file_name().is_some_and(|n| n == "malus-de") {
+                return p.join("screentime.toml");
+            }
+            return p.join("malus-de").join("screentime.toml");
+        }
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/malus-de/screentime.toml")
+    }
+
+    pub fn load() -> Self {
+        let path = Self::config_path();
+        if let Ok(raw) = std::fs::read_to_string(path) {
+            if let Ok(parsed) = toml::from_str::<Self>(&raw) {
+                return parsed;
+            }
+        }
+        Self::default()
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::config_path();
+        let raw = toml::to_string_pretty(self).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string())
+        })?;
+        write_file_atomic_if_changed(&path, &raw)?;
+        Ok(())
+    }
+
+    /// Actualiza los minutos de hoy usando el tiempo activo del sistema (acotado al día actual)
+    /// si el registro de actividad está habilitado.
+    pub fn sync_today_from_uptime(&mut self) {
+        if !self.activity_tracking {
+            return;
+        }
+        let (today_key, _) = local_date_key_with_offset_days(0);
+        let up_mins = system_uptime_minutes();
+        let entry = self.daily_minutes.entry(today_key).or_insert(0);
+        if up_mins > *entry {
+            *entry = up_mins;
+        }
+    }
+
+    /// Devuelve 7 pares `(letra_dia, minutos)` de los últimos 7 días terminando en hoy.
+    pub fn last_7_days_bars(&self) -> Vec<(&'static str, u32)> {
+        (-6..=0)
+            .map(|offset| {
+                let (key, letter) = local_date_key_with_offset_days(offset);
+                let mins = if self.activity_tracking {
+                    self.daily_minutes.get(&key).copied().unwrap_or(0)
+                } else {
+                    0
+                };
+                (letter, mins)
+            })
+            .collect()
+    }
+
+    pub fn average_daily_minutes(&self) -> u32 {
+        if !self.activity_tracking {
+            return 0;
+        }
+        let bars = self.last_7_days_bars();
+        let sum: u32 = bars.iter().map(|(_, m)| *m).sum();
+        let active_days = bars.iter().filter(|(_, m)| *m > 0).count().max(1) as u32;
+        sum / active_days
+    }
+
+    pub fn format_minutes_es(minutes: u32) -> String {
+        if minutes == 0 {
+            return "0 min".to_string();
+        }
+        let hours = minutes / 60;
+        let rem = minutes % 60;
+        match (hours, rem) {
+            (0, m) => format!("{m} min"),
+            (h, 0) => format!("{h} h"),
+            (h, m) => format!("{h} h {m} min"),
+        }
+    }
+
+    pub fn limit_summary_label(&self) -> String {
+        if self.all_limit_hours == 0 {
+            "Sin límite".to_string()
+        } else {
+            format!("Hasta {} h", self.all_limit_hours.min(23))
+        }
+    }
+
+    pub fn set_passcode(&mut self, pin: &str) -> bool {
+        let trimmed = pin.trim();
+        if trimmed.len() != 4 || !trimmed.chars().all(|c| c.is_ascii_digit()) {
+            return false;
+        }
+        self.passcode_hash = Some(hash_passcode_fnv1a(trimmed));
+        true
+    }
+
+    pub fn verify_passcode(&self, pin: &str) -> bool {
+        self.passcode_hash
+            .as_deref()
+            .is_some_and(|stored| stored == hash_passcode_fnv1a(pin.trim()))
+    }
+
+    pub fn clear_passcode(&mut self) {
+        self.passcode_hash = None;
+    }
+
+    pub fn has_passcode(&self) -> bool {
+        self.passcode_hash.is_some()
+    }
+}
+
+/// Modo de visualización de la ventana de inicio de sesión al cambiar de usuario.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoginWindowMode {
+    #[default]
+    UserList,
+    NameAndPassword,
+}
+
+/// Configuración persistente de «Pantalla bloqueada» (`~/.config/malus-de/lockscreen.toml`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LockScreenConfig {
+    /// Segundos de inactividad en batería antes de apagar pantalla (`0` = Nunca).
+    pub battery_display_off_secs: u32,
+    /// Segundos de inactividad con adaptador de corriente antes de apagar pantalla (`0` = Nunca).
+    pub ac_display_off_secs: u32,
+    /// Segundos tras apagar pantalla para pedir contraseña (`0` = Inmediatamente, `-1` = Nunca).
+    pub require_password_after_secs: i32,
+    /// Mostrar pistas de contraseña en pantalla bloqueada.
+    pub show_password_hints: bool,
+    /// Texto opcional de pista de contraseña.
+    pub password_hint: String,
+    /// Mostrar mensaje personalizado en la pantalla bloqueada.
+    pub show_lock_message: bool,
+    /// Texto del mensaje personalizado en la pantalla bloqueada.
+    pub lock_message: String,
+    /// Mostrar actividades en vivo con dispositivo bloqueado.
+    pub show_live_activities: bool,
+    /// Qué muestra la ventana de inicio de sesión al cambiar de usuario.
+    pub login_window_mode: LoginWindowMode,
+    /// Mostrar los botones Reposo, Reiniciar y Apagar en la pantalla bloqueada.
+    pub show_power_buttons: bool,
+}
+
+impl Default for LockScreenConfig {
+    fn default() -> Self {
+        Self {
+            battery_display_off_secs: 120,
+            ac_display_off_secs: 600,
+            require_password_after_secs: 300,
+            show_password_hints: false,
+            password_hint: String::new(),
+            show_lock_message: false,
+            lock_message: String::new(),
+            show_live_activities: true,
+            login_window_mode: LoginWindowMode::UserList,
+            show_power_buttons: true,
+        }
+    }
+}
+
+impl LockScreenConfig {
+    pub fn config_path() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/malus-de/lockscreen.toml")
+    }
+
+    pub fn load_in(dir: &Path) -> Self {
+        let path = dir.join("lockscreen.toml");
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| toml::from_str::<LockScreenConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn load() -> Self {
+        let path = Self::config_path();
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| toml::from_str::<LockScreenConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_in(&self, dir: &Path) -> std::io::Result<()> {
+        let _ = std::fs::create_dir_all(dir);
+        let toml_str = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let header = "# Configuración de Pantalla bloqueada de Malus DE\n\n";
+        write_file_atomic_if_changed(&dir.join("lockscreen.toml"), &format!("{header}{toml_str}"))
+            .map(|_| ())
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            self.save_in(parent)?;
+            self.sync_gsettings_keyfile(parent);
+            return Ok(());
+        }
+        Ok(())
+    }
+
+    /// Sincroniza retardos de inactividad y bloqueo dentro del keyfile aislado de Malus DE.
+    pub fn sync_gsettings_keyfile(&self, malus_config_dir: &Path) {
+        let keyfile_path = malus_config_dir.join("glib-2.0/settings/keyfile");
+        let idle_val = format!("uint32 {}", self.ac_display_off_secs);
+        let lock_enabled = if self.require_password_after_secs >= 0 {
+            "true"
+        } else {
+            "false"
+        };
+        let lock_delay = format!("uint32 {}", self.require_password_after_secs.max(0));
+        let _ = upsert_keyfile_entries(
+            &keyfile_path,
+            &[
+                (
+                    "org/gnome/desktop/session",
+                    &[("idle-delay", idle_val.as_str())],
+                ),
+                (
+                    "org/gnome/desktop/screensaver",
+                    &[
+                        ("lock-enabled", lock_enabled),
+                        ("lock-delay", lock_delay.as_str()),
+                    ],
+                ),
+            ],
+        );
+    }
+
+    /// Devuelve el mensaje visible en pantalla bloqueada si está habilitado y no vacío.
+    pub fn effective_lock_message(&self) -> Option<&str> {
+        if !self.show_lock_message {
+            return None;
+        }
+        let trimmed = self.lock_message.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    }
+
+    /// Devuelve la pista de contraseña visible si está habilitada y no vacía.
+    pub fn effective_password_hint(&self) -> Option<&str> {
+        if !self.show_password_hints {
+            return None;
+        }
+        let trimmed = self.password_hint.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    }
+}
+
+/// Configuración persistente de «Privacidad y seguridad» (`~/.config/malus-de/privacy.toml`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PrivacyConfig {
+    /// 0 = App Store, 1 = App Store y desarrolladores conocidos, 2 = Cualquier fuente.
+    pub allow_apps_from: u8,
+    /// Advertencia de contenido íntimo.
+    pub sensitive_content_warning: bool,
+    /// Reporte de Apple Intelligence / IA.
+    pub intelligence_report: bool,
+    /// Modo hermético.
+    pub lockdown_mode: bool,
+    /// Requerir contraseña de administrador para ajustes de todo el sistema.
+    pub require_admin_for_system_prefs: bool,
+}
+
+impl Default for PrivacyConfig {
+    fn default() -> Self {
+        Self {
+            allow_apps_from: 1,
+            sensitive_content_warning: true,
+            intelligence_report: true,
+            lockdown_mode: false,
+            require_admin_for_system_prefs: false,
+        }
+    }
+}
+
+impl PrivacyConfig {
+    pub fn config_path() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/malus-de/privacy.toml")
+    }
+
+    pub fn load_in(dir: &Path) -> Self {
+        let path = dir.join("privacy.toml");
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| toml::from_str::<PrivacyConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn load() -> Self {
+        let path = Self::config_path();
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| toml::from_str::<PrivacyConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_in(&self, dir: &Path) -> std::io::Result<()> {
+        let _ = std::fs::create_dir_all(dir);
+        let toml_str = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let header = "# Configuración de Privacidad y seguridad de Malus DE\n\n";
+        write_file_atomic_if_changed(&dir.join("privacy.toml"), &format!("{header}{toml_str}"))
+            .map(|_| ())
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            return self.save_in(parent);
+        }
+        Ok(())
+    }
+}
+
+/// Configuración persistente de «Biometría y contraseña» (`~/.config/malus-de/biometrics.toml`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BiometricsConfig {
+    /// Usar biometría (fprintd / PAM) para desbloquear el equipo.
+    pub unlock_with_biometrics: bool,
+    /// Usar biometría para pagos.
+    pub biometrics_for_payments: bool,
+    /// Usar biometría para compras en tiendas de apps.
+    pub biometrics_for_store_purchases: bool,
+    /// Usar biometría para autorrellenar contraseñas.
+    pub biometrics_for_autofill: bool,
+    /// Usar biometría para el cambio rápido de usuario.
+    pub biometrics_for_fast_user_switch: bool,
+}
+
+impl Default for BiometricsConfig {
+    fn default() -> Self {
+        Self {
+            unlock_with_biometrics: true,
+            biometrics_for_payments: true,
+            biometrics_for_store_purchases: true,
+            biometrics_for_autofill: true,
+            biometrics_for_fast_user_switch: true,
+        }
+    }
+}
+
+impl BiometricsConfig {
+    pub fn config_path() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/malus-de/biometrics.toml")
+    }
+
+    pub fn load_in(dir: &Path) -> Self {
+        let path = dir.join("biometrics.toml");
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| toml::from_str::<BiometricsConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn load() -> Self {
+        let path = Self::config_path();
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| toml::from_str::<BiometricsConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_in(&self, dir: &Path) -> std::io::Result<()> {
+        let _ = std::fs::create_dir_all(dir);
+        let toml_str = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let header = "# Configuración de Biometría y contraseña de Malus DE\n\n";
+        write_file_atomic_if_changed(
+            &dir.join("biometrics.toml"),
+            &format!("{header}{toml_str}"),
+        )
+        .map(|_| ())
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            return self.save_in(parent);
+        }
+        Ok(())
+    }
+}
+
+/// Cuenta de Internet guardada localmente en Malus DE (`~/.config/malus-de/internet-accounts.toml`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InternetAccountEntry {
+    pub id: String,
+    pub provider: String,
+    pub display_name: String,
+    pub email_or_user: String,
+    pub server_url: String,
+    pub enabled: bool,
+    pub sync_mail: bool,
+    pub sync_contacts: bool,
+    pub sync_calendars: bool,
+    pub sync_notes: bool,
+    pub sync_files: bool,
+}
+
+impl Default for InternetAccountEntry {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            provider: "other".to_string(),
+            display_name: String::new(),
+            email_or_user: String::new(),
+            server_url: String::new(),
+            enabled: true,
+            sync_mail: true,
+            sync_contacts: true,
+            sync_calendars: true,
+            sync_notes: false,
+            sync_files: false,
+        }
+    }
+}
+
+impl InternetAccountEntry {
+    pub fn enabled_services_summary(&self) -> String {
+        if !self.enabled {
+            return "Inactiva".to_string();
+        }
+        let mut active = Vec::new();
+        if self.sync_mail {
+            active.push("Correo");
+        }
+        if self.sync_contacts {
+            active.push("Contactos");
+        }
+        if self.sync_calendars {
+            active.push("Calendarios");
+        }
+        if self.sync_notes {
+            active.push("Notas");
+        }
+        if self.sync_files {
+            active.push("Archivos");
+        }
+        if active.is_empty() {
+            "Sin servicios activos".to_string()
+        } else {
+            active.join(", ")
+        }
+    }
+}
+
+/// Configuración persistente de «Cuentas de Internet» (`~/.config/malus-de/internet-accounts.toml`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InternetAccountsConfig {
+    pub accounts: Vec<InternetAccountEntry>,
+}
+
+impl InternetAccountsConfig {
+    pub fn config_path() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/malus-de/internet-accounts.toml")
+    }
+
+    pub fn load_in(dir: &Path) -> Self {
+        let path = dir.join("internet-accounts.toml");
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| toml::from_str::<InternetAccountsConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn load() -> Self {
+        let path = Self::config_path();
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| toml::from_str::<InternetAccountsConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_in(&self, dir: &Path) -> std::io::Result<()> {
+        let _ = std::fs::create_dir_all(dir);
+        let toml_str = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let header = "# Configuración de Cuentas de Internet de Malus DE\n\n";
+        write_file_atomic_if_changed(
+            &dir.join("internet-accounts.toml"),
+            &format!("{header}{toml_str}"),
+        )
+        .map(|_| ())
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            return self.save_in(parent);
+        }
+        Ok(())
+    }
+
+    pub fn add_account(&mut self, mut entry: InternetAccountEntry) -> String {
+        if entry.id.trim().is_empty() {
+            let seq = ATOMIC_TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            entry.id = format!("acc-{}-{}-{}", entry.provider, ts, seq);
+        }
+        let id = entry.id.clone();
+        self.accounts.push(entry);
+        id
+    }
+
+    pub fn remove_account(&mut self, id: &str) -> bool {
+        let before = self.accounts.len();
+        self.accounts.retain(|a| a.id != id);
+        self.accounts.len() < before
+    }
+}
+
+/// Metadatos seguros de una tarjeta guardada para autorrelleno (solo últimos 4 dígitos).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WalletCardEntry {
+    pub id: String,
+    pub label: String,
+    pub brand: String,
+    pub last4: String,
+    pub holder: String,
+    pub expiry: String,
+}
+
+impl Default for WalletCardEntry {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            label: "Tarjeta".to_string(),
+            brand: "Tarjeta".to_string(),
+            last4: "0000".to_string(),
+            holder: String::new(),
+            expiry: String::new(),
+        }
+    }
+}
+
+/// Configuración persistente de «Wallet» (`~/.config/malus-de/wallet.toml`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WalletConfig {
+    pub autofill_cards: Vec<WalletCardEntry>,
+    pub shipping_addresses: Vec<String>,
+    pub default_shipping_idx: usize,
+    pub emails: Vec<String>,
+    pub default_email_idx: usize,
+    pub phones: Vec<String>,
+    pub default_phone_idx: usize,
+    pub add_orders_to_wallet: bool,
+}
+
+impl Default for WalletConfig {
+    fn default() -> Self {
+        Self {
+            autofill_cards: Vec::new(),
+            shipping_addresses: Vec::new(),
+            default_shipping_idx: 0,
+            emails: Vec::new(),
+            default_email_idx: 0,
+            phones: Vec::new(),
+            default_phone_idx: 0,
+            add_orders_to_wallet: true,
+        }
+    }
+}
+
+impl WalletConfig {
+    pub fn config_path() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/malus-de/wallet.toml")
+    }
+
+    pub fn load_in(dir: &Path) -> Self {
+        let path = dir.join("wallet.toml");
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| toml::from_str::<WalletConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn load() -> Self {
+        let path = Self::config_path();
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| toml::from_str::<WalletConfig>(&content).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_in(&self, dir: &Path) -> std::io::Result<()> {
+        let _ = std::fs::create_dir_all(dir);
+        let toml_str = toml::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let header = "# Configuración de Wallet de Malus DE\n\n";
+        write_file_atomic_if_changed(&dir.join("wallet.toml"), &format!("{header}{toml_str}"))
+            .map(|_| ())
+    }
+
+    pub fn save(&self) -> std::io::Result<()> {
+        let path = Self::config_path();
+        if let Some(parent) = path.parent() {
+            return self.save_in(parent);
+        }
+        Ok(())
+    }
+
+    pub fn detect_card_brand(raw_digits: &str) -> &'static str {
+        let digits: String = raw_digits.chars().filter(|c| c.is_ascii_digit()).collect();
+        if digits.starts_with('4') {
+            "Visa"
+        } else if digits.starts_with("34") || digits.starts_with("37") {
+            "American Express"
+        } else if digits.len() >= 2 {
+            let p2: u32 = digits[..2].parse().unwrap_or(0);
+            if (51..=55).contains(&p2) {
+                "Mastercard"
+            } else {
+                "Tarjeta"
+            }
+        } else {
+            "Tarjeta"
+        }
+    }
+
+    pub fn add_autofill_card(&mut self, mut card: WalletCardEntry) -> String {
+        if card.id.trim().is_empty() {
+            let seq = ATOMIC_TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            card.id = format!("card-{}-{}", card.last4, seq);
+        }
+        let id = card.id.clone();
+        self.autofill_cards.push(card);
+        id
+    }
+
+    pub fn remove_autofill_card(&mut self, id: &str) -> bool {
+        let before = self.autofill_cards.len();
+        self.autofill_cards.retain(|c| c.id != id);
+        self.autofill_cards.len() < before
     }
 }
 
@@ -5709,5 +7191,370 @@ apps = []
         assert!(!is_builtin_connector_name("card0-DP-1"));
         assert!(!connector_has_hardware_backlight("DP-1"));
         assert!(!connector_has_hardware_backlight("HDMI-A-1"));
+    }
+
+    #[test]
+    fn focus_config_schedule_allowed_apps_urgent_and_custom_modes_work() {
+        let mut cfg = FocusConfig::default();
+        assert_eq!(cfg.modes.len(), 2);
+        assert_eq!(cfg.should_silence_notification_at("Firefox", "firefox", 1, 12, 0), (false, false));
+
+        // Activar No molestar manualmente (silencia normales y urgentes por defecto)
+        cfg.active_focus_id = Some("do-not-disturb".to_string());
+        cfg.mode_by_id_mut("do-not-disturb")
+            .unwrap()
+            .allowed_apps
+            .push("Signal".to_string());
+        cfg.mode_by_id_mut("do-not-disturb").unwrap().silence_badges = true;
+
+        assert_eq!(cfg.should_silence_notification_at("Firefox", "firefox", 1, 12, 0), (true, true));
+        assert_eq!(cfg.should_silence_notification_at("Signal", "signal-desktop", 1, 12, 0), (false, false));
+
+        // Horario nocturno 22:00 -> 07:00 en Menos interrupciones (permite urgentes)
+        cfg.active_focus_id = None;
+        let ri = cfg.mode_by_id_mut("reduce-interruptions").unwrap();
+        ri.schedule.enabled = true;
+        ri.schedule.start_hour = 22;
+        ri.schedule.end_hour = 7;
+
+        assert_eq!(cfg.should_silence_notification_at("Firefox", "firefox", 1, 23, 30), (true, false));
+        assert_eq!(cfg.should_silence_notification_at("Firefox", "firefox", 2, 23, 30), (false, false));
+        assert_eq!(cfg.should_silence_notification_at("Firefox", "firefox", 1, 14, 0), (false, false));
+
+        // Crear y eliminar enfoque personalizado; los integrados no se eliminan
+        let custom_id = cfg.add_custom_mode("Trabajo", "applications-office-symbolic", "blue");
+        assert!(cfg.mode_by_id(&custom_id).is_some());
+        assert!(!cfg.remove_custom_mode("do-not-disturb"));
+        assert!(cfg.remove_custom_mode(&custom_id));
+        assert!(cfg.mode_by_id(&custom_id).is_none());
+    }
+
+    #[test]
+    fn screentime_config_usage_limits_and_passcode_work() {
+        let mut cfg = ScreenTimeConfig::default();
+        assert_eq!(ScreenTimeConfig::format_minutes_es(0), "0 min");
+        assert_eq!(ScreenTimeConfig::format_minutes_es(45), "45 min");
+        assert_eq!(ScreenTimeConfig::format_minutes_es(120), "2 h");
+        assert_eq!(ScreenTimeConfig::format_minutes_es(224), "3 h 44 min");
+
+        assert_eq!(cfg.limit_summary_label(), "Sin límite");
+        cfg.all_limit_hours = 18;
+        assert_eq!(cfg.limit_summary_label(), "Hasta 18 h");
+        cfg.all_limit_hours = 30;
+        assert_eq!(cfg.limit_summary_label(), "Hasta 23 h");
+
+        // Barras semanales y promedio diario
+        let (today_key, _) = local_date_key_with_offset_days(0);
+        let (prev_key, _) = local_date_key_with_offset_days(-1);
+        cfg.daily_minutes.insert(today_key, 120);
+        cfg.daily_minutes.insert(prev_key, 60);
+        let bars = cfg.last_7_days_bars();
+        assert_eq!(bars.len(), 7);
+        assert_eq!(bars[5].1, 60);
+        assert_eq!(bars[6].1, 120);
+        assert_eq!(cfg.average_daily_minutes(), 90);
+
+        // Desactivar seguimiento de actividad devuelve 0 en barras y promedio
+        cfg.activity_tracking = false;
+        assert_eq!(cfg.average_daily_minutes(), 0);
+        assert!(cfg.last_7_days_bars().iter().all(|(_, m)| *m == 0));
+
+        // Código de 4 dígitos
+        assert!(!cfg.has_passcode());
+        assert!(!cfg.set_passcode("12"));
+        assert!(!cfg.set_passcode("abcd"));
+        assert!(cfg.set_passcode("4829"));
+        assert!(cfg.has_passcode());
+        assert!(cfg.verify_passcode("4829"));
+        assert!(!cfg.verify_passcode("0000"));
+        cfg.clear_passcode();
+        assert!(!cfg.has_passcode());
+        assert!(!cfg.verify_passcode("4829"));
+    }
+
+    #[test]
+    fn lockscreen_config_defaults_roundtrip_and_helpers_work() {
+        let mut cfg = LockScreenConfig::default();
+        assert_eq!(cfg.battery_display_off_secs, 120);
+        assert_eq!(cfg.ac_display_off_secs, 600);
+        assert_eq!(cfg.require_password_after_secs, 300);
+        assert!(!cfg.show_password_hints);
+        assert!(!cfg.show_lock_message);
+        assert!(cfg.show_live_activities);
+        assert_eq!(cfg.login_window_mode, LoginWindowMode::UserList);
+        assert!(cfg.show_power_buttons);
+        assert_eq!(cfg.effective_lock_message(), None);
+        assert_eq!(cfg.effective_password_hint(), None);
+
+        cfg.show_lock_message = true;
+        cfg.lock_message = "  Si lo encuentras llama al 555-0100  ".to_string();
+        assert_eq!(
+            cfg.effective_lock_message(),
+            Some("Si lo encuentras llama al 555-0100")
+        );
+
+        cfg.show_password_hints = true;
+        cfg.password_hint = "Nombre de mi mascota".to_string();
+        assert_eq!(cfg.effective_password_hint(), Some("Nombre de mi mascota"));
+
+        cfg.login_window_mode = LoginWindowMode::NameAndPassword;
+        cfg.show_power_buttons = false;
+
+        let dir = std::env::temp_dir().join(format!(
+            "malus-lockscreen-cfg-test-{}-{}",
+            std::process::id(),
+            super::ATOMIC_TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        cfg.save_in(&dir).unwrap();
+        let loaded = LockScreenConfig::load_in(&dir);
+        assert_eq!(loaded, cfg);
+
+        cfg.sync_gsettings_keyfile(&dir);
+        let keyfile = std::fs::read_to_string(dir.join("glib-2.0/settings/keyfile")).unwrap();
+        assert!(keyfile.contains("idle-delay=uint32 600"));
+        assert!(keyfile.contains("lock-enabled=true"));
+        assert!(keyfile.contains("lock-delay=uint32 300"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn privacy_config_defaults_and_roundtrip_work() {
+        let mut cfg = PrivacyConfig::default();
+        assert_eq!(cfg.allow_apps_from, 1);
+        assert!(cfg.sensitive_content_warning);
+        assert!(cfg.intelligence_report);
+        assert!(!cfg.lockdown_mode);
+        assert!(!cfg.require_admin_for_system_prefs);
+
+        cfg.allow_apps_from = 2;
+        cfg.sensitive_content_warning = false;
+        cfg.lockdown_mode = true;
+        cfg.require_admin_for_system_prefs = true;
+
+        let dir = std::env::temp_dir().join(format!(
+            "malus-privacy-cfg-test-{}-{}",
+            std::process::id(),
+            super::ATOMIC_TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        cfg.save_in(&dir).unwrap();
+        assert_eq!(PrivacyConfig::load_in(&dir), cfg);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn biometrics_config_defaults_and_roundtrip_work() {
+        let mut cfg = BiometricsConfig::default();
+        assert!(cfg.unlock_with_biometrics);
+        assert!(cfg.biometrics_for_payments);
+        assert!(cfg.biometrics_for_store_purchases);
+        assert!(cfg.biometrics_for_autofill);
+        assert!(cfg.biometrics_for_fast_user_switch);
+
+        cfg.unlock_with_biometrics = false;
+        cfg.biometrics_for_autofill = false;
+
+        let dir = std::env::temp_dir().join(format!(
+            "malus-biometrics-cfg-test-{}-{}",
+            std::process::id(),
+            super::ATOMIC_TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        cfg.save_in(&dir).unwrap();
+        assert_eq!(BiometricsConfig::load_in(&dir), cfg);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn internet_accounts_config_crud_and_summary_work() {
+        let mut cfg = InternetAccountsConfig::default();
+        let entry = InternetAccountEntry {
+            provider: "google".to_string(),
+            display_name: "Google".to_string(),
+            email_or_user: "cristian@example.com".to_string(),
+            sync_mail: true,
+            sync_contacts: true,
+            sync_calendars: true,
+            sync_notes: false,
+            sync_files: true,
+            ..InternetAccountEntry::default()
+        };
+        assert_eq!(
+            entry.enabled_services_summary(),
+            "Correo, Contactos, Calendarios, Archivos"
+        );
+
+        let id = cfg.add_account(entry);
+        assert_eq!(cfg.accounts.len(), 1);
+
+        let dir = std::env::temp_dir().join(format!(
+            "malus-accounts-cfg-test-{}-{}",
+            std::process::id(),
+            super::ATOMIC_TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        cfg.save_in(&dir).unwrap();
+        let loaded = InternetAccountsConfig::load_in(&dir);
+        assert_eq!(loaded, cfg);
+
+        assert!(cfg.remove_account(&id));
+        assert!(cfg.accounts.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wallet_config_crud_and_brand_detection_work() {
+        assert_eq!(WalletConfig::detect_card_brand("4111 1111"), "Visa");
+        assert_eq!(WalletConfig::detect_card_brand("5200 1234"), "Mastercard");
+        assert_eq!(WalletConfig::detect_card_brand("3714 4963"), "American Express");
+        assert_eq!(WalletConfig::detect_card_brand("9999"), "Tarjeta");
+
+        let mut cfg = WalletConfig::default();
+        let id = cfg.add_autofill_card(WalletCardEntry {
+            label: "Débito principal".to_string(),
+            brand: "Visa".to_string(),
+            last4: "4242".to_string(),
+            holder: "Cristian Vera".to_string(),
+            expiry: "12/28".to_string(),
+            ..WalletCardEntry::default()
+        });
+        cfg.shipping_addresses.push("Av. Principal 123".to_string());
+        cfg.emails.push("cristian@example.com".to_string());
+        cfg.phones.push("921 124 3148".to_string());
+
+        let dir = std::env::temp_dir().join(format!(
+            "malus-wallet-cfg-test-{}-{}",
+            std::process::id(),
+            super::ATOMIC_TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        cfg.save_in(&dir).unwrap();
+        assert_eq!(WalletConfig::load_in(&dir), cfg);
+
+        assert!(cfg.remove_autofill_card(&id));
+        assert!(cfg.autofill_cards.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn keyboard_prefs_config_roundtrip_and_replacements_work() {
+        let mut cfg = KeyboardPrefsConfig::default();
+        assert!(cfg.adjust_backlight_low_light);
+        assert_eq!(cfg.backlight_idle_idx, 5);
+        assert_eq!(cfg.globe_key_action_idx, 1);
+        assert!(!cfg.dictation_enabled);
+
+        cfg.keyboard_navigation = true;
+        cfg.text_replacements.push(TextReplacementEntry {
+            trigger: "@@".to_string(),
+            replacement: "correo@ejemplo.com".to_string(),
+        });
+
+        let dir = std::env::temp_dir().join(format!(
+            "malus-keyboard-cfg-test-{}-{}",
+            std::process::id(),
+            super::ATOMIC_TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        cfg.save_in(&dir).unwrap();
+        assert_eq!(KeyboardPrefsConfig::load_in(&dir), cfg);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn trackpad_prefs_config_roundtrip_and_input_defaults_work() {
+        let icfg = InputConfig::default();
+        assert!(icfg.natural_scrolling);
+        assert!(icfg.trackpad_tap_to_click);
+        assert_eq!(icfg.trackpad_secondary_click, "two_fingers");
+        assert!(icfg.trackpad_pinch_zoom);
+        assert!(icfg.trackpad_rotate_gesture);
+        assert_eq!(icfg.trackpad_swipe_spaces_fingers, 3);
+        assert_eq!(icfg.trackpad_mission_control_fingers, 3);
+        assert_eq!(icfg.trackpad_app_expose_fingers, 0);
+        assert!(icfg.trackpad_apps_gesture);
+        assert!(icfg.show_desktop_gesture);
+
+        let mut cfg = TrackpadPrefsConfig::default();
+        assert_eq!(cfg.click_firmness_idx, 1);
+        assert!(!cfg.silent_click);
+        assert!(cfg.force_click_haptic);
+        assert_eq!(cfg.lookup_data_detectors_idx, 1);
+        assert!(cfg.smart_zoom);
+        assert_eq!(cfg.swipe_pages_idx, 1);
+        assert!(cfg.notification_center_gesture);
+
+        cfg.click_firmness_idx = 2;
+        cfg.silent_click = true;
+        cfg.swipe_pages_idx = 0;
+
+        let dir = std::env::temp_dir().join(format!(
+            "malus-trackpad-cfg-test-{}-{}",
+            std::process::id(),
+            super::ATOMIC_TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        cfg.save_in(&dir).unwrap();
+        assert_eq!(TrackpadPrefsConfig::load_in(&dir), cfg);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mouse_prefs_config_roundtrip_and_input_defaults_work() {
+        let icfg = InputConfig::default();
+        assert_eq!(icfg.mouse_speed, 0.0);
+        assert!(icfg.mouse_natural_scrolling);
+        assert_eq!(icfg.mouse_secondary_click, "right");
+        assert!(icfg.mouse_pointer_acceleration);
+
+        let mut cfg = MousePrefsConfig::default();
+        assert!(!cfg.smart_zoom);
+        assert_eq!(cfg.swipe_pages_idx, 0);
+        assert!(cfg.swipe_fullscreen_apps);
+        assert!(cfg.mission_control_double_tap);
+
+        cfg.smart_zoom = true;
+        cfg.swipe_pages_idx = 2;
+        cfg.mission_control_double_tap = false;
+
+        let dir = std::env::temp_dir().join(format!(
+            "malus-mouse-cfg-test-{}-{}",
+            std::process::id(),
+            super::ATOMIC_TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        cfg.save_in(&dir).unwrap();
+        assert_eq!(MousePrefsConfig::load_in(&dir), cfg);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn printers_config_roundtrip_and_defaults_work() {
+        let mut cfg = PrintersConfig::default();
+        assert_eq!(cfg.default_printer, "last_used");
+        assert_eq!(cfg.default_paper_size, "Letter");
+
+        cfg.default_printer = "HP_LaserJet_Pro".to_string();
+        cfg.default_paper_size = "A4".to_string();
+
+        let dir = std::env::temp_dir().join(format!(
+            "malus-printers-cfg-test-{}-{}",
+            std::process::id(),
+            super::ATOMIC_TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        cfg.save_in(&dir).unwrap();
+        assert_eq!(PrintersConfig::load_in(&dir), cfg);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

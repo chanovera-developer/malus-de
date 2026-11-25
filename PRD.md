@@ -52,6 +52,7 @@ graph TD
     subgraph NativeAppsAndTools ["Aplicaciones Nativas, CLI & Wrappers"]
         Settings["Ajustes (malus-de-settings)\n- Pantallas 4K, Red, Tema, Dock, Input"]
         Branches["Branches (malus-de-branches)\n- Explorador macOS Finder (Fases 1-4)"]
+        Browser["Navegador Nativo (malus-de-browser)\n- GTK4 + CEF OSR + adblock-rust (M25)"]
         Link["Malus Link (malus-de-link)\n- Integración móvil & AirDrop"]
         Ctl["CLI (malus-de-ctl)\n- Control por terminal"]
         IdeWrapper["Electron Wrapper (scripts/malus-ide-wrapper)\n- Botones semáforo sin reflujos"]
@@ -73,6 +74,7 @@ graph TD
     Wallpaper -->|wlr-layer-shell: Background| Protocols
     Settings -->|xdg-shell| Protocols
     Branches -->|xdg-shell| Protocols
+    Browser -->|xdg-shell| Protocols
     Clipboard -->|Wayland data-control| Protocols
     Screenshot -->|screencopy / IPC| Protocols
 
@@ -336,6 +338,56 @@ Revisión de capacidades estándar de escritorio esperadas en el uso diario (esp
 * **Accesibilidad y Mezclador por Aplicación (M24):**
   - Zoom de pantalla accesible, alto contraste, reducir movimiento/transparencia, soporte AT-SPI/lector de pantalla, mezclador de volumen por flujo PipeWire e integración visual de actualizaciones (DNF/Flatpak).
 
+### 3.12. Navegador Web Nativo (`crates/browser` — Alcance M25)
+* **Objetivo:** Incorporar un navegador web nativo para Malus DE (`malus-de-browser`) con interfaz 100% diseñada en **Rust + GTK4 / Libadwaita** inspirada en **macOS Safari Tahoe**, renderizado web moderno con soporte nativo para **`corner-shape: squircle`**, bloqueo integrado de anuncios y rastreadores de nivel Brave, soporte multimedia **H.264/AAC** y reproducción **DRM Widevine L3** bajo demanda en Linux, sin mantener un fork de código de Chromium ni WebKit.
+* **Arquitectura y Stack Técnico:**
+  - **Interfaz y Shell:** Rust (Edición 2021), `gtk4-rs`, `libadwaita-rs`, Cairo (squircles $n=4.2$) y `malus-de-common` (tema claro/oscuro, color de acento, Liquid Glass, IPC y D-Bus).
+  - **Motor Web:** **CEF (*Chromium Embedded Framework*) en modo OSR (*Off-Screen Rendering*)** mediante bindings Rust (`cef` / `cef-dll-sys`), usando un build de Chromium 139+ compilado con `proprietary_codecs=true`, `ffmpeg_branding="Chrome"` y `enable_widevine=true` (empaquetado en `/usr/local/lib/malus-de-browser/` sin modificar código upstream).
+  - **Bloqueo de Anuncios y Rastreadores:** Crate oficial **`adblock`** (motor Rust de Brave Shields) ejecutándose en el proceso principal de Rust sobre el `RequestHandler` de CEF + inyección de reglas cosméticas CSS.
+  - **Persistencia Local:** SQLite (`rusqlite`) en `~/.local/share/malus-de/browser.sqlite` para historial, marcadores, grupos de pestañas, lista de lectura, sesiones y preferencias por sitio.
+* **Diseño UI e Integración con Malus DE:**
+  - **Chrome estilo Safari Tahoe:** barra superior compacta con controles semáforo, navegación `[ < ] [ > ]`, botón de barra lateral, pestañas squircle (modo compacto o tradicional), barra de direcciones unificada con indicador de Escudos (`adblock-rust`), estado de carga, lector y botón de descargas.
+  - **Barra Lateral Liquid Glass:** panel lateral translúcido con blur GPU del compositor de Malus DE para pestañas verticales / grupos de pestañas, marcadores, lista de lectura e historial.
+  - **Página de Inicio Nativa:** favoritos en tarjetas squircle, sitios frecuentes, resumen de rastreadores bloqueados y fondo personalizable.
+  - **Controles 100% Nativos:** menús contextuales en popovers squircle GTK4 (`CefContextMenuHandler`), diálogos modales Liquid Glass (`alert`/`confirm`/`prompt`, permisos de cámara/micrófono/ubicación/notificaciones) y selector de archivos nativo integrado con el escritorio.
+  - **Integración Directa con el Shell:**
+    - **Dock (`malus-de-dock`):** reporte directo del progreso de descargas desde `CefDownloadHandler::on_download_updated` vía D-Bus/IPC (evitando la limitación de Chromium/Brave documentada en el ADR 0013), globos de notificaciones push y acciones contextuales (*Nueva ventana*, *Nueva ventana privada*).
+    - **Barra Superior (`malus-de-top-bar`):** menú global D-Bus (`com.canonical.dbusmenu`) con *Archivo, Edición, Visualización, Historial, Marcadores, Desarrollo, Ventana*.
+    - **Notificaciones (`malus-de-notifications`):** puente de *Web Notifications* a burbujas Liquid Glass con activación directa de la pestaña origen al hacer clic.
+    - **Audio:** integración nativa con PipeWire y el mezclador de volumen por aplicación de Malus DE.
+* **Hoja de Ruta — Fases y Pasos de Implementación:**
+  - **Fase 1: Pipeline de Build de CEF (H.264/AAC + Widevine) y Andamiaje del Crate**
+    1. Crear script y flujo CI reproducible (`scripts/build-cef-linux.sh` / GitHub Actions) para generar el artefacto binario CEF Linux x86_64 (Chromium 139+) con `proprietary_codecs=true`, `ffmpeg_branding="Chrome"` y `enable_widevine=true`, e instalarlo en `/usr/local/lib/malus-de-browser/`.
+    2. Añadir el crate `crates/browser` (`malus-de-browser`) al Cargo Workspace de Malus DE con dependencias `gtk4`, `libadwaita`, `malus-de-common`, `rusqlite`, `adblock` y bindings de CEF.
+    3. Implementar el arranque multiproceso limpio de CEF (`--type=renderer|gpu|utility` o ejecutable helper `malus-de-browser-helper`) y la integración del bucle de eventos de CEF con el `MainContext` de GLib/GTK4.
+  - **Fase 2: Widget `CefOsrView` en GTK4/Wayland (GPU + Puente de Entrada)**
+    1. Implementar el widget reutilizable `CefOsrView` que recibe frames OSR (`CefRenderHandler::on_paint` / `on_accelerated_paint`) y los renderiza en `gtk4::GLArea` mediante textura GPU compartida (DMA-BUF / OpenGL) con respaldo BGRA.
+    2. Sincronizar tamaño lógico, factor de escala HiDPI/4K (`device_scale_factor`) y redimensionado sin artefactos bajo Wayland y `wp_fractional_scale_v1`.
+    3. Construir el puente completo de entrada GTK4 → CEF: movimiento/clic de ratón, scroll suave de alta resolución, teclado XKB `latam` (incluyendo teclas muertas, `ñ` y tildes), cursores dinámicos (`on_cursor_change`), foco, portapapeles y arrastrar/soltar.
+    4. Validar renderizado nativo de **`corner-shape: squircle`** en páginas web y fluidez a 60/120 Hz.
+  - **Fase 3: Interfaz Safari Tahoe, Pestañas y Persistencia**
+    1. Construir la ventana principal GTK4/Libadwaita con barra compacta Tahoe, pestañas squircle (reordenables, fijables, con indicador de audio/silencio) y barra de direcciones unificada con autocompletado.
+    2. Añadir navegación privada aislada (`CefRequestContext` en memoria sin persistencia de cookies, caché ni historial).
+    3. Implementar la barra lateral translúcida Liquid Glass (grupos de pestañas, marcadores, historial y lista de lectura) y la página de inicio nativa.
+    4. Persistir historial, marcadores, grupos de pestañas y restauración de sesión en SQLite (`browser.sqlite`) y sincronizar en vivo tema claro/oscuro (`prefers-color-scheme`), color de acento y reducir transparencia desde `malus-de-common`.
+  - **Fase 4: Escudos de Privacidad y Bloqueador (`adblock-rust`)**
+    1. Integrar el motor `adblock` en `CefRequestHandler::on_before_resource_load` para bloquear rastreadores y anuncios antes de realizar la petición de red.
+    2. Inyectar filtros cosméticos CSS por dominio para ocultar contenedores vacíos de anuncios y banners molestos.
+    3. Añadir gestor de actualización y caché local de listas de filtros (EasyList, EasyPrivacy, Fanboy Annoyances, Peter Lowe) en `~/.local/share/malus-de-browser/filters/`.
+    4. Diseñar el popover de **Escudos** estilo Tahoe en la barra de direcciones con contador en vivo por sitio, conmutador de protección por dominio y bloqueo de *cookies* de terceros.
+  - **Fase 5: Multimedia (H.264/AAC), Aceleración de Vídeo y Widevine DRM L3**
+    1. Validar reproducción nativa de vídeo/audio MP4, H.264, AAC, WebM, AV1 y aceleración por hardware VA-API en Wayland/Linux.
+    2. Implementar en Ajustes del navegador la opción *"Habilitar contenido protegido (Widevine DRM)"* con descarga bajo demanda del `WidevineCdm` oficial de Google Chrome (`libwidevinecdm.so` + `manifest.json` de versión compatible) en `~/.local/share/malus-de-browser/WidevineCdm/` sin redistribuir binarios propietarios en el repositorio.
+    3. Configurar `User-Agent` estándar de Chrome Linux y verificar reproducción en plataformas DRM L3 (Spotify Web, Netflix 720p/L3, Prime Video).
+  - **Fase 6: Menús Nativos, Diálogos e Integración Total con el Shell de Malus DE**
+    1. Reemplazar el menú contextual de Chromium mediante `CefContextMenuHandler` mostrando popovers squircle de GTK4/Malus DE (*Abrir en nueva pestaña, Copiar enlace, Guardar imagen, Inspeccionar, etc.*).
+    2. Implementar diálogos nativos Liquid Glass (`alert`, `confirm`, `prompt`, autenticación HTTP, permisos de cámara/micrófono/ubicación/notificaciones) y selector de archivos nativo.
+    3. Construir el gestor de descargas con popover estilo Safari y emitir progreso y finalización directamente a `malus-de-dock` vía D-Bus/IPC.
+    4. Exportar el menú global D-Bus (`com.canonical.dbusmenu`) hacia `malus-de-top-bar` y conectar *Web Notifications* con `malus-de-notifications` (enfocando la pestaña exacta al hacer clic).
+  - **Fase 7: Herramientas de Usuario, DevTools y Empaquetado**
+    1. Integrar DevTools de Chromium (acoplables o en ventana independiente), búsqueda en página (`Cmd+F`), zoom persistente por sitio, modo lectura (*Reader Mode*), impresión/exportar a PDF, atajos macOS (`Cmd+T`, `Cmd+W`, `Cmd+L`, `Cmd+Shift+T`, `Cmd+R`, `Cmd+[`/`]`) y guardado seguro de contraseñas vía `libsecret`.
+    2. Integrar `malus-de-browser` en `scripts/install-session.sh`, crear `malus-de-browser.desktop`, registrar manejadores `http`/`https` opcionales y añadir pruebas unitarias del motor de filtrado, historial/marcadores SQLite y mapeo de entrada/atajos.
+
 ---
 
 ## 4. Estado de Implementación & Roadmap
@@ -365,4 +417,5 @@ Revisión de capacidades estándar de escritorio esperadas en el uso diario (esp
 | **M21** | IME, Selector de Emojis & Juegos | 📋 Planificado | Protocolos `text-input-v3`/`input-method-v2`/`virtual-keyboard`, selector de emojis (`Cmd+Ctrl+Espacio`) y `pointer-constraints`/`relative-pointer`. |
 | **M22** | Concentración (DND) & Avisos | 📋 Planificado | Integración real de Modo No Molestar entre Centro de Control y `malus-de-notifications`, reglas por app y agrupación. |
 | **M23** | Ajustes Completos & Seguridad | 📋 Planificado | Paneles de Red, Bluetooth, Energía, Trackpad, Región/Hora y Huella (`fprintd`); agente Polkit nativo e indicadores de cámara/micrófono. |
-| **M24** | Accesibilidad & Mezclador | 📋 Planificado | Zoom accesible, reducir movimiento/transparencia, AT-SPI/lector de pantalla, volumen por aplicación PipeWire y actualizaciones del sistema. |
+| **M24** | Accesibilidad & Mezclador | 🟡 En Progreso | Mezclador PipeWire por app, enrutamiento, balance L/R, sonidos del sistema, panel de Accesibilidad, reducir transparencia real y Orca/`spd-say`; pendientes zoom GPU y reducir movimiento en compositor/shell. |
+| **M25** | Navegador Web Nativo (`crates/browser`) | 📋 Planificado | Navegador propio estilo Safari Tahoe en Rust + GTK4 + CEF (OSR) con `corner-shape: squircle` nativo, bloqueador `adblock-rust` (Brave Shields), H.264/AAC, Widevine L3 bajo demanda e integración completa con Dock, Top Bar y Notificaciones. |

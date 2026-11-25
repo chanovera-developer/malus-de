@@ -9,8 +9,8 @@ use smithay::{
         egl::{EGLContext, EGLDisplay},
         input::{
             AbsolutePositionEvent, Axis, ButtonState, Event, GestureBeginEvent, GestureEndEvent,
-            GestureSwipeUpdateEvent, InputEvent, KeyState, KeyboardKeyEvent, PointerAxisEvent,
-            PointerButtonEvent, PointerMotionEvent,
+            GesturePinchUpdateEvent, GestureSwipeUpdateEvent, InputEvent, KeyState,
+            KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
         },
         libinput::{LibinputInputBackend, LibinputSessionInterface},
         renderer::{
@@ -36,7 +36,10 @@ use smithay::{
     reexports::{
         calloop::EventLoop,
         drm::control::{connector, crtc, Device as ControlDevice, ResourceHandles},
-        input::Libinput,
+        input::{
+            AccelProfile, ClickMethod, Device as LibinputDevice, DeviceCapability, Libinput,
+            SendEventsMode,
+        },
         wayland_protocols::xdg::shell::server::xdg_toplevel::{ResizeEdge, State as XdgState},
         wayland_server::{backend::GlobalId, Display, ListeningSocket},
     },
@@ -73,6 +76,67 @@ render_elements! {
     DockShadow = crate::shadow::DockShadowRenderElement,
     MenuShadow = crate::shadow::MenuShadowRenderElement,
     Blur = crate::blur::BlurRenderElement,
+}
+
+/// Aplica los ajustes de Trackpad y Mouse de `InputConfig` a un dispositivo libinput.
+fn apply_libinput_device_config(
+    device: &mut LibinputDevice,
+    cfg: &malus_de_common::config::InputConfig,
+) {
+    if device.config_tap_finger_count() > 0 {
+        let _ = device.config_tap_set_enabled(cfg.trackpad_tap_to_click);
+        let _ = device.config_tap_set_drag_enabled(cfg.trackpad_tap_to_click);
+        if device.config_scroll_has_natural_scroll() {
+            let _ = device.config_scroll_set_natural_scroll_enabled(cfg.natural_scrolling);
+        }
+        if device.config_accel_is_available() {
+            let _ = device.config_accel_set_speed(cfg.trackpad_speed.clamp(-1.0, 1.0));
+        }
+        let click_methods = device.config_click_methods();
+        let desired_click = match cfg.trackpad_secondary_click.as_str() {
+            "bottom_right" | "bottom_left" => Some(ClickMethod::ButtonAreas),
+            "off" => None,
+            _ => Some(ClickMethod::Clickfinger),
+        };
+        if let Some(method) = desired_click {
+            if click_methods.contains(&method) {
+                let _ = device.config_click_set_method(method);
+            }
+        }
+        if device
+            .config_send_events_modes()
+            .contains(SendEventsMode::DISABLED)
+        {
+            let mode = if cfg.touchpad_enabled {
+                SendEventsMode::ENABLED
+            } else {
+                SendEventsMode::DISABLED
+            };
+            let _ = device.config_send_events_set_mode(mode);
+        }
+        return;
+    }
+
+    if !device.has_capability(DeviceCapability::Pointer) {
+        return;
+    }
+    if device.config_accel_is_available() {
+        let _ = device.config_accel_set_speed(cfg.mouse_speed.clamp(-1.0, 1.0));
+        let desired_profile = if cfg.mouse_pointer_acceleration {
+            AccelProfile::Adaptive
+        } else {
+            AccelProfile::Flat
+        };
+        if device.config_accel_profiles().contains(&desired_profile) {
+            let _ = device.config_accel_set_profile(desired_profile);
+        }
+    }
+    if device.config_scroll_has_natural_scroll() {
+        let _ = device.config_scroll_set_natural_scroll_enabled(cfg.mouse_natural_scrolling);
+    }
+    if device.config_left_handed_is_available() {
+        let _ = device.config_left_handed_set(cfg.mouse_secondary_click == "left");
+    }
 }
 
 fn send_presentation_feedback_surface_tree(
@@ -2434,14 +2498,18 @@ pub fn run_drm() -> Result<()> {
     // Despacho de eventos de Libinput con soporte para ratón, touchpad y atajos completos
     spawn_emergency_zap_watchdog(session_active, state.session_locked_flag.clone());
     let mut session_vt = session.clone();
+    let libinput_devices: std::rc::Rc<std::cell::RefCell<Vec<LibinputDevice>>> =
+        std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let libinput_devices_ev = libinput_devices.clone();
 
     loop_handle.insert_source(libinput_backend, move |event, _, state: &mut MalusState| {
         match event {
             InputEvent::DeviceAdded { mut device } => {
-                if device.config_tap_finger_count() > 0 {
-                    let _ = device.config_tap_set_enabled(true);
-                    let _ = device.config_tap_set_drag_enabled(true);
-                }
+                apply_libinput_device_config(&mut device, &state.input_cfg);
+                libinput_devices_ev.borrow_mut().push(device);
+            }
+            InputEvent::DeviceRemoved { device } => {
+                libinput_devices_ev.borrow_mut().retain(|d| d != &device);
             }
             InputEvent::Keyboard { event } => {
                 let key = event.key_code().raw();
@@ -3307,6 +3375,66 @@ pub fn run_drm() -> Result<()> {
                     }
                 }
             }
+            InputEvent::GesturePinchBegin { event } => {
+                if !state.handle_gesture_pinch_begin(event.fingers())
+                    && (state.input_cfg.trackpad_pinch_zoom
+                        || state.input_cfg.trackpad_rotate_gesture)
+                {
+                    if let Some(pointer) = state.seat.get_pointer() {
+                        pointer.gesture_pinch_begin(
+                            state,
+                            &smithay::input::pointer::GesturePinchBeginEvent {
+                                serial: SERIAL_COUNTER.next_serial(),
+                                time: event.time_msec(),
+                                fingers: event.fingers(),
+                            },
+                        );
+                    }
+                }
+            }
+            InputEvent::GesturePinchUpdate { event } => {
+                if !state.handle_gesture_pinch_update(event.scale())
+                    && (state.input_cfg.trackpad_pinch_zoom
+                        || state.input_cfg.trackpad_rotate_gesture)
+                {
+                    if let Some(pointer) = state.seat.get_pointer() {
+                        pointer.gesture_pinch_update(
+                            state,
+                            &smithay::input::pointer::GesturePinchUpdateEvent {
+                                time: event.time_msec(),
+                                delta: (event.delta_x(), event.delta_y()).into(),
+                                scale: if state.input_cfg.trackpad_pinch_zoom {
+                                    event.scale()
+                                } else {
+                                    1.0
+                                },
+                                rotation: if state.input_cfg.trackpad_rotate_gesture {
+                                    event.rotation()
+                                } else {
+                                    0.0
+                                },
+                            },
+                        );
+                    }
+                }
+            }
+            InputEvent::GesturePinchEnd { event } => {
+                if !state.handle_gesture_pinch_end(event.cancelled())
+                    && (state.input_cfg.trackpad_pinch_zoom
+                        || state.input_cfg.trackpad_rotate_gesture)
+                {
+                    if let Some(pointer) = state.seat.get_pointer() {
+                        pointer.gesture_pinch_end(
+                            state,
+                            &smithay::input::pointer::GesturePinchEndEvent {
+                                serial: SERIAL_COUNTER.next_serial(),
+                                time: event.time_msec(),
+                                cancelled: event.cancelled(),
+                            },
+                        );
+                    }
+                }
+            }
             _ => {}
         }
     }).map_err(|e| anyhow::anyhow!("Error al registrar libinput event source: {e:?}"))?;
@@ -3607,6 +3735,15 @@ pub fn run_drm() -> Result<()> {
                 let input_cfg = malus_de_common::config::InputConfig::load();
                 state
                     .apply_keyboard_layout(&input_cfg.keyboard_layout, &input_cfg.keyboard_variant);
+                state.input_cfg = input_cfg;
+                state.input_config_dirty = true;
+            }
+        }
+
+        if state.input_config_dirty {
+            state.input_config_dirty = false;
+            for dev in libinput_devices.borrow_mut().iter_mut() {
+                apply_libinput_device_config(dev, &state.input_cfg);
             }
         }
 

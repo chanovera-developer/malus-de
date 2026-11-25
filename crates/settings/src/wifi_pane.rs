@@ -2011,7 +2011,7 @@ fn show_private_wifi_address_dialog(
     vbox.append(&actions);
 
     let d_cancel = dialog.clone();
-    cancel_btn.connect_clicked(move |_| d_cancel.close());
+    cancel_btn.connect_clicked(move |_| crate::close_attached_modal(&d_cancel));
 
     let d_ok = dialog.clone();
     let ssid_ok = net.ssid.clone();
@@ -2033,11 +2033,11 @@ fn show_private_wifi_address_dialog(
                 nm_mode,
             ]);
         });
-        d_ok.close();
+        crate::close_attached_modal(&d_ok);
     });
 
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 fn wifi_signal_icon_name(signal: u8) -> &'static str {
@@ -2253,7 +2253,7 @@ fn show_password_prompt_dialog(
     actions.append(&ok_wrap);
 
     let d_cancel = dialog.clone();
-    cancel_btn.connect_clicked(move |_| d_cancel.close());
+    cancel_btn.connect_clicked(move |_| crate::close_attached_modal(&d_cancel));
 
     let submit_action = {
         let d_ok = dialog.clone();
@@ -2263,7 +2263,7 @@ fn show_password_prompt_dialog(
         let rel_c = trigger_reload.clone();
         Rc::new(move || {
             let pw = entry_c.text().to_string();
-            d_ok.close();
+            crate::close_attached_modal(&d_ok);
             connect_wifi_async(ssid_owned.clone(), Some(pw), false, &ban_c, &rel_c);
         })
     };
@@ -2277,7 +2277,7 @@ fn show_password_prompt_dialog(
     vbox.append(&pw_entry);
     vbox.append(&actions);
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 fn show_hidden_network_dialog(
@@ -2341,7 +2341,7 @@ fn show_hidden_network_dialog(
     actions.append(&join_wrap);
 
     let d_cancel = dialog.clone();
-    cancel_btn.connect_clicked(move |_| d_cancel.close());
+    cancel_btn.connect_clicked(move |_| crate::close_attached_modal(&d_cancel));
 
     let d_join = dialog.clone();
     let ssid_e_c = ssid_entry.clone();
@@ -2356,7 +2356,7 @@ fn show_hidden_network_dialog(
         }
         let open = sec_dd_c.selected() == 1;
         let pw = pw_e_c.text().to_string();
-        d_join.close();
+        crate::close_attached_modal(&d_join);
 
         ban_c.set_label(&format!("Conectando a red oculta «{}»...", ssid));
         ban_c.set_visible(true);
@@ -2390,7 +2390,7 @@ fn show_hidden_network_dialog(
     vbox.append(&pw_entry);
     vbox.append(&actions);
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 fn show_adapter_info_dialog(parent: &ApplicationWindow, snap: &WifiSnapshot) {
@@ -2468,11 +2468,11 @@ fn show_adapter_info_dialog(parent: &ApplicationWindow, snap: &WifiSnapshot) {
     ok_wrap.set_halign(Align::End);
     ok_wrap.set_margin_top(6);
     let d_c = dialog.clone();
-    ok_btn.connect_clicked(move |_| d_c.close());
+    ok_btn.connect_clicked(move |_| crate::close_attached_modal(&d_c));
     vbox.append(&ok_wrap);
 
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 fn show_network_details_dialog(
@@ -2617,7 +2617,7 @@ fn show_network_details_dialog(
         let ban_f = banner.clone();
         let rel_f = trigger_reload.clone();
         forget_btn.connect_clicked(move |_| {
-            d_f.close();
+            crate::close_attached_modal(&d_f);
             forget_wifi_async(ssid_f.clone(), &ban_f, &rel_f);
         });
         footer.append(&forget_wrap);
@@ -2626,14 +2626,14 @@ fn show_network_details_dialog(
     let spacer = GtkBox::builder().hexpand(true).build();
     let (ok_wrap, ok_btn) = make_squircle_button("Aceptar", true, None);
     let d_ok = dialog.clone();
-    ok_btn.connect_clicked(move |_| d_ok.close());
+    ok_btn.connect_clicked(move |_| crate::close_attached_modal(&d_ok));
 
     footer.append(&spacer);
     footer.append(&ok_wrap);
     vbox.append(&footer);
 
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 fn show_advanced_dialog(
@@ -2734,7 +2734,7 @@ fn show_advanced_dialog(
             let ban_c = banner.clone();
             let rel_c = trigger_reload.clone();
             forget.connect_clicked(move |_| {
-                d_c.close();
+                crate::close_attached_modal(&d_c);
                 forget_wifi_async(ssid_c.clone(), &ban_c, &rel_c);
             });
             r.append(&lbl);
@@ -2750,11 +2750,11 @@ fn show_advanced_dialog(
     let (ok_wrap, ok_btn) = make_squircle_button("Aceptar", true, None);
     ok_wrap.set_halign(Align::End);
     let d_c = dialog.clone();
-    ok_btn.connect_clicked(move |_| d_c.close());
+    ok_btn.connect_clicked(move |_| crate::close_attached_modal(&d_c));
     vbox.append(&ok_wrap);
 
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 pub(crate) fn detail_kv_row(key: &str, val: &str) -> GtkBox {

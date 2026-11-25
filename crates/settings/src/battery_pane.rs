@@ -907,12 +907,12 @@ fn show_battery_condition_dialog(parent: &ApplicationWindow, snap: &BatteryHardw
 
     let (ok_wrap, ok_btn) = make_squircle_button("Listo", true, None);
     let d_c = dialog.clone();
-    ok_btn.connect_clicked(move |_| d_c.close());
+    ok_btn.connect_clicked(move |_| crate::close_attached_modal(&d_c));
     footer.append(&ok_wrap);
 
     vbox.append(&footer);
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 /// Modal "Recarga" (`Bateria03.png`) con límite 80-85-90-95-100% y "Recarga optimizada".
@@ -1094,7 +1094,7 @@ fn show_battery_charging_dialog(
             c.optimized_charging = opt;
             c.save();
         }
-        d_ok.close();
+        crate::close_attached_modal(&d_ok);
 
         if writable {
             if let Some(bat_dir) = sysfs_path.clone() {
@@ -1121,7 +1121,7 @@ fn show_battery_charging_dialog(
 
     vbox.append(&footer);
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 /// Modal "Opciones" de Batería (`Bateria05.png`).
@@ -1239,13 +1239,13 @@ fn show_battery_options_dialog(
             c.optimize_video_streaming_on_battery = hdr_sw.is_active();
             c.save();
         }
-        d_ok.close();
+        crate::close_attached_modal(&d_ok);
     });
     footer.append(&ok_wrap);
     vbox.append(&footer);
 
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 fn build_option_switch(title: &str, subtitle: Option<&str>, active: bool) -> (GtkBox, Switch) {
