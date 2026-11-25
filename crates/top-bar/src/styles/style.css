@@ -190,7 +190,7 @@ popover.malus-popover-menu>contents {
     border: none;
     border-radius: 0;
     box-shadow: none;
-    padding: 4px;
+    padding: 6px;
     color: #f4f4f5;
     text-shadow: none;
     -gtk-icon-shadow: none;
@@ -217,7 +217,7 @@ popover.light-popover>contents,
     border: none;
     border-radius: 0;
     box-shadow: none;
-    padding: 4px;
+    padding: 6px;
     color: #1d1d1f;
     text-shadow: none;
     -gtk-icon-shadow: none;
@@ -253,13 +253,16 @@ popover.light-popover.malus-popover-menu modelbutton,
 .light-mode .malus-popover-menu .popover-menu-item,
 .light-mode .malus-popover-menu button.popover-menu-item,
 .light-mode .malus-popover-menu button.flat,
-.light-mode .malus-popover-menu modelbutton,
-popover.light-popover .menu-row-label,
-.light-mode .menu-row-label {
+.light-mode .malus-popover-menu modelbutton {
     color: #1d1d1f;
     border-radius: 6px;
     padding: 3px 8px;
     margin: 1px 2px;
+}
+
+popover.light-popover .menu-row-label,
+.light-mode .menu-row-label {
+    color: #1d1d1f;
 }
 
 popover.light-popover.malus-popover-menu .popover-menu-item:hover,
@@ -325,8 +328,19 @@ popover.light-popover button.popover-menu-item:hover .menu-item-icon,
 }
 
 .menu-submenu-chevron {
-    font-size: 14px;
-    font-weight: 600;
+    color: #f4f4f5;
+    margin-left: 16px;
+}
+
+popover.light-popover .menu-submenu-chevron,
+.light-mode .menu-submenu-chevron {
+    color: #1d1d1f;
+}
+
+button.popover-menu-item:hover .menu-submenu-chevron,
+popover.light-popover button.popover-menu-item:hover .menu-submenu-chevron,
+.light-mode button.popover-menu-item:hover .menu-submenu-chevron {
+    color: #ffffff;
 }
 
 popover.light-popover .menu-separator,
@@ -601,7 +615,7 @@ button.link:hover,
 .menu-separator {
     background-color: rgba(255, 255, 255, 0.10);
     min-height: 1px;
-    margin: 4px 6px;
+    margin: 5px 10px;
 }
 
 .cc-tile {

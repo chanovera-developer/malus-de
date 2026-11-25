@@ -15,6 +15,72 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
     static SYSTEM_MENU_LOGO_PATH: std::cell::RefCell<Option<std::path::PathBuf>> =
         const { std::cell::RefCell::new(None) };
+    static SYSTEM_MENU_FORCEQUIT_LABEL: std::cell::RefCell<Option<glib::WeakRef<Label>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn format_force_quit_label(app_name: Option<&str>, es: bool) -> String {
+    match app_name.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(name) if es => format!("Forzar salida de {name}"),
+        Some(name) => format!("Force Quit {name}"),
+        None if es => "Forzar salida...".to_string(),
+        None => "Force Quit...".to_string(),
+    }
+}
+
+/// Actualiza la etiqueta «Forzar salida de <App>» del menú principal con la aplicación activa.
+pub fn update_active_app_for_system_menu(app_display_name: Option<&str>) {
+    let text = format_force_quit_label(app_display_name, is_spanish_locale());
+    SYSTEM_MENU_FORCEQUIT_LABEL.with(|cell| {
+        if let Some(lbl) = cell.borrow().as_ref().and_then(|w| w.upgrade()) {
+            lbl.set_label(&text);
+        }
+    });
+}
+
+fn capitalize_first(raw: &str) -> String {
+    let mut chars = raw.trim().chars();
+    match chars.next() {
+        Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+        None => String::new(),
+    }
+}
+
+fn extract_first_name_from_gecos(gecos: &str) -> Option<String> {
+    let full = gecos.split(',').next()?.trim();
+    let first = full.split_whitespace().next()?.trim();
+    if first.is_empty() {
+        None
+    } else {
+        Some(first.to_string())
+    }
+}
+
+fn resolve_display_first_name(es: bool) -> String {
+    let username = std::env::var("USER").unwrap_or_default();
+    if !username.is_empty() {
+        if let Ok(passwd) = std::fs::read_to_string("/etc/passwd") {
+            for line in passwd.lines() {
+                let mut fields = line.split(':');
+                if fields.next() == Some(username.as_str()) {
+                    let gecos = fields.nth(3).unwrap_or("");
+                    if let Some(first) = extract_first_name_from_gecos(gecos) {
+                        return first;
+                    }
+                    break;
+                }
+            }
+        }
+        let cap = capitalize_first(&username);
+        if !cap.is_empty() {
+            return cap;
+        }
+    }
+    if es {
+        "Usuario".to_string()
+    } else {
+        "User".to_string()
+    }
 }
 
 pub fn refresh_system_menu_logo() {
@@ -141,8 +207,9 @@ pub fn create_system_menu() -> MenuButton {
     let content_box = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(1)
-        .margin_top(0)
-        .margin_bottom(0)
+        .width_request(258)
+        .margin_top(2)
+        .margin_bottom(2)
         .margin_start(0)
         .margin_end(0)
         .build();
@@ -165,11 +232,7 @@ pub fn create_system_menu() -> MenuButton {
     } else {
         "Recent Items"
     };
-    let label_forcequit = if es {
-        "Forzar salida..."
-    } else {
-        "Force Quit..."
-    };
+    let label_forcequit = format_force_quit_label(None, es);
     let label_sleep = if es { "Reposo" } else { "Sleep" };
     let label_restart = if es { "Reiniciar..." } else { "Restart..." };
     let label_shutdown = if es {
@@ -183,22 +246,16 @@ pub fn create_system_menu() -> MenuButton {
         "Lock Screen"
     };
 
-    let user_name = std::env::var("USER").unwrap_or_else(|_| {
-        if es {
-            "Usuario".to_string()
-        } else {
-            "User".to_string()
-        }
-    });
+    let user_name = resolve_display_first_name(es);
     let label_logout = if es {
         format!("Cerrar sesión de {}...", user_name)
     } else {
         format!("Log Out {}...", user_name)
     };
 
-    // Elementos del menú del sistema según idioma del sistema y estilo macOS
-    // 1. About This Computer / Acerca de este equipo
-    let item_about = create_menu_item("help-about-symbolic", label_about, None, false);
+    // Elementos del menú principal estilo macOS Tahoe (íconos únicamente en los 3 primeros elementos)
+    // 1. Acerca de este equipo
+    let (item_about, _) = create_menu_item(Some("computer-symbolic"), label_about, None, false);
     let popover_clone = popover.clone();
     item_about.connect_clicked(move |_| {
         popover_clone.popdown();
@@ -208,8 +265,9 @@ pub fn create_system_menu() -> MenuButton {
 
     content_box.append(&create_divider());
 
-    // 2. System Settings... / Configuración del Sistema...
-    let item_settings = create_menu_item("apple-settings-symbolic", label_settings, None, false);
+    // 2. Configuración del Sistema...
+    let (item_settings, _) =
+        create_menu_item(Some("apple-settings-symbolic"), label_settings, None, false);
     let popover_clone = popover.clone();
     item_settings.connect_clicked(move |_| {
         popover_clone.popdown();
@@ -231,13 +289,9 @@ pub fn create_system_menu() -> MenuButton {
     });
     content_box.append(&item_settings);
 
-    // 3. Software
-    let item_appstore = create_menu_item(
-        "system-software-install-symbolic",
-        label_appstore,
-        None,
-        false,
-    );
+    // 3. Software (ícono estilo App Store)
+    let (item_appstore, _) =
+        create_menu_item(Some("apple-appstore-symbolic"), label_appstore, None, false);
     let popover_clone = popover.clone();
     item_appstore.connect_clicked(move |_| {
         popover_clone.popdown();
@@ -266,8 +320,8 @@ pub fn create_system_menu() -> MenuButton {
 
     content_box.append(&create_divider());
 
-    // 4. Recent Items / Elementos recientes
-    let item_recent = create_menu_item("apple-recent-symbolic", label_recent, None, true);
+    // 4. Elementos recientes (sin ícono, con chevron derecho)
+    let (item_recent, _) = create_menu_item(None, label_recent, None, true);
     let popover_clone = popover.clone();
     item_recent.connect_clicked(move |_| {
         popover_clone.popdown();
@@ -280,13 +334,12 @@ pub fn create_system_menu() -> MenuButton {
 
     content_box.append(&create_divider());
 
-    // 5. Force Quit... / Forzar salida...
-    let item_monitor = create_menu_item(
-        "apple-forcequit-symbolic",
-        label_forcequit,
-        Some("⌥⌘⎋"),
-        false,
-    );
+    // 5. Forzar salida de <App> (sin ícono, atajo ⌥⇧⌘⎋)
+    let (item_monitor, forcequit_lbl) =
+        create_menu_item(None, &label_forcequit, Some("⌥⇧⌘⎋"), false);
+    SYSTEM_MENU_FORCEQUIT_LABEL.with(|cell| {
+        *cell.borrow_mut() = Some(forcequit_lbl.downgrade());
+    });
     let popover_clone = popover.clone();
     item_monitor.connect_clicked(move |_| {
         popover_clone.popdown();
@@ -299,8 +352,8 @@ pub fn create_system_menu() -> MenuButton {
 
     content_box.append(&create_divider());
 
-    // 6. Sleep / Reposo
-    let item_sleep = create_menu_item("apple-sleep-symbolic", label_sleep, None, false);
+    // 6. Reposo
+    let (item_sleep, _) = create_menu_item(None, label_sleep, None, false);
     let popover_clone = popover.clone();
     item_sleep.connect_clicked(move |_| {
         popover_clone.popdown();
@@ -311,8 +364,8 @@ pub fn create_system_menu() -> MenuButton {
     });
     content_box.append(&item_sleep);
 
-    // 7. Restart... / Reiniciar...
-    let item_reboot = create_menu_item("apple-restart-symbolic", label_restart, None, false);
+    // 7. Reiniciar...
+    let (item_reboot, _) = create_menu_item(None, label_restart, None, false);
     let popover_clone = popover.clone();
     let menu_btn_clone = menu_btn.clone();
     item_reboot.connect_clicked(move |_| {
@@ -332,8 +385,8 @@ pub fn create_system_menu() -> MenuButton {
     });
     content_box.append(&item_reboot);
 
-    // 8. Shut Down... / Apagar equipo...
-    let item_shutdown = create_menu_item("apple-shutdown-symbolic", label_shutdown, None, false);
+    // 8. Apagar equipo...
+    let (item_shutdown, _) = create_menu_item(None, label_shutdown, None, false);
     let popover_clone = popover.clone();
     let menu_btn_clone = menu_btn.clone();
     item_shutdown.connect_clicked(move |_| {
@@ -357,8 +410,8 @@ pub fn create_system_menu() -> MenuButton {
 
     content_box.append(&create_divider());
 
-    // 9. Lock Screen / Bloquear pantalla
-    let item_lock = create_menu_item("apple-lock-symbolic", label_lock, Some("^⌘Q"), false);
+    // 9. Bloquear pantalla (⌃⌘Q)
+    let (item_lock, _) = create_menu_item(None, label_lock, Some("⌃⌘Q"), false);
     let popover_clone = popover.clone();
     item_lock.connect_clicked(move |_| {
         popover_clone.popdown();
@@ -379,8 +432,8 @@ pub fn create_system_menu() -> MenuButton {
     });
     content_box.append(&item_lock);
 
-    // 10. Log Out / Cerrar sesión
-    let item_logout = create_menu_item("apple-logout-symbolic", &label_logout, Some("⇧⌘Q"), false);
+    // 10. Cerrar sesión de <Nombre>... (⇧⌘Q)
+    let (item_logout, _) = create_menu_item(None, &label_logout, Some("⇧⌘Q"), false);
     let popover_clone = popover.clone();
     let menu_btn_clone = menu_btn.clone();
     item_logout.connect_clicked(move |_| {
@@ -418,11 +471,11 @@ pub fn create_system_menu() -> MenuButton {
 }
 
 fn create_menu_item(
-    icon_name: &str,
+    icon_name: Option<&str>,
     label_text: &str,
     shortcut: Option<&str>,
     has_submenu: bool,
-) -> Button {
+) -> (Button, Label) {
     let btn = Button::builder()
         .css_classes(["popover-menu-item"])
         .has_frame(false)
@@ -430,16 +483,19 @@ fn create_menu_item(
 
     let row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
-        .spacing(6)
+        .spacing(8)
+        .valign(gtk4::Align::Center)
         .build();
 
-    let icon = Image::builder()
-        .icon_name(icon_name)
-        .pixel_size(15)
-        .valign(gtk4::Align::Center)
-        .css_classes(["menu-item-icon"])
-        .build();
-    row.append(&icon);
+    if let Some(icon_id) = icon_name {
+        let icon = Image::builder()
+            .icon_name(icon_id)
+            .pixel_size(14)
+            .valign(gtk4::Align::Center)
+            .css_classes(["menu-item-icon"])
+            .build();
+        row.append(&icon);
+    }
 
     let label = Label::builder()
         .label(label_text)
@@ -450,11 +506,12 @@ fn create_menu_item(
     row.append(&label);
 
     if has_submenu {
-        let chevron = Label::builder()
-            .label("›")
-            .xalign(1.0)
+        let chevron = Image::builder()
+            .icon_name("go-next-symbolic")
+            .pixel_size(12)
             .halign(gtk4::Align::End)
-            .css_classes(["menu-shortcut-hint", "menu-submenu-chevron"])
+            .valign(gtk4::Align::Center)
+            .css_classes(["menu-submenu-chevron"])
             .build();
         row.append(&chevron);
     } else if let Some(sc) = shortcut {
@@ -469,7 +526,7 @@ fn create_menu_item(
 
     btn.set_child(Some(&row));
     attach_squircle_menu_hover(&btn);
-    btn
+    (btn, label)
 }
 
 pub(crate) fn squircle_path(
@@ -526,10 +583,10 @@ pub fn attach_squircle_menu_hover(btn: &Button) {
     };
     btn.add_css_class("malus-squircle-menu-item");
     btn.set_child(gtk4::Widget::NONE);
-    inner.set_margin_top(3);
-    inner.set_margin_bottom(3);
-    inner.set_margin_start(8);
-    inner.set_margin_end(8);
+    inner.set_margin_top(4);
+    inner.set_margin_bottom(4);
+    inner.set_margin_start(10);
+    inner.set_margin_end(10);
 
     let bg = gtk4::DrawingArea::new();
     bg.set_can_target(false);
@@ -866,4 +923,27 @@ fn show_power_action_dialog(
         d.close();
     });
     dialog.present();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn force_quit_and_user_first_name_formatting_work() {
+        assert_eq!(
+            format_force_quit_label(Some("Branches"), true),
+            "Forzar salida de Branches"
+        );
+        assert_eq!(format_force_quit_label(None, true), "Forzar salida...");
+        assert_eq!(
+            format_force_quit_label(Some("Finder"), false),
+            "Force Quit Finder"
+        );
+        assert_eq!(
+            extract_first_name_from_gecos("Cristian Graciano Vera,,, ").as_deref(),
+            Some("Cristian")
+        );
+        assert_eq!(capitalize_first("cristian"), "Cristian");
+    }
 }

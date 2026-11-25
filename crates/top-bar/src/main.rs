@@ -370,6 +370,12 @@ fn build_ui(app: &Application) {
                     }
                     let display = format_app_name(app_id.as_deref(), title.as_deref());
                     title_label.set_label(&display);
+                    let active_for_sys = if app_id.as_ref().is_some_and(|id| !id.is_empty()) {
+                        Some(display.as_str())
+                    } else {
+                        None
+                    };
+                    ui::system_menu::update_active_app_for_system_menu(active_for_sys);
                     let es = std::env::var("LC_ALL")
                         .or_else(|_| std::env::var("LC_MESSAGES"))
                         .or_else(|_| std::env::var("LANG"))
