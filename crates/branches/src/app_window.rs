@@ -3419,6 +3419,20 @@ impl BranchesWindow {
                 return glib::Propagation::Stop;
             }
 
+            if (is_ctrl || is_command) && !is_alt && !is_shift && keyval == gdk::Key::comma {
+                bw.open_view_options_window();
+                return glib::Propagation::Stop;
+            }
+
+            if (is_ctrl || is_command)
+                && is_shift
+                && !is_alt
+                && keyval == gdk::Key::BackSpace
+            {
+                bw.confirm_empty_trash();
+                return glib::Propagation::Stop;
+            }
+
             if (is_ctrl || is_command)
                 && !is_alt
                 && !is_shift

@@ -1,6 +1,6 @@
 use gtk4::prelude::*;
 use gtk4::{Box as GtkBox, Button, Label, MenuButton, Orientation, Popover, Separator};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::process::Command;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -12,8 +12,12 @@ use crate::services::dbusmenu::{DbusMenuCategory, DbusMenuItem, DbusMenuService}
 pub struct GlobalMenuHandles {
     pub container: GtkBox,
     pub app_title_label: Label,
-    pub hide_btn: Button,
-    pub quit_btn: Button,
+    pub app_menu_popover: Popover,
+    pub app_menu_content: GtkBox,
+    pub app_menu_submenus: Rc<RefCell<Vec<Popover>>>,
+    pub app_menu_is_branches: Rc<Cell<bool>>,
+    pub hide_btn: Rc<RefCell<Option<Button>>>,
+    pub quit_btn: Rc<RefCell<Option<Button>>>,
     pub menus_container: GtkBox,
     pub dbus_menu_service: Arc<DbusMenuService>,
     pub current_active: Rc<RefCell<(Option<String>, Option<String>, Option<u64>)>>,
@@ -630,50 +634,12 @@ pub fn create_global_menu_widget(dbus_menu_service: Arc<DbusMenuService>) -> Glo
     let content = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(1)
-        .margin_top(0)
-        .margin_bottom(0)
+        .margin_top(2)
+        .margin_bottom(2)
         .margin_start(0)
         .margin_end(0)
         .build();
 
-    let es = std::env::var("LC_ALL")
-        .or_else(|_| std::env::var("LC_MESSAGES"))
-        .or_else(|_| std::env::var("LANG"))
-        .unwrap_or_default()
-        .to_lowercase()
-        .starts_with("es");
-    let hide_init = if es {
-        "Ocultar Malus DE"
-    } else {
-        "Hide Malus DE"
-    };
-    let quit_init = if es {
-        "Salir de Malus DE"
-    } else {
-        "Quit Malus DE"
-    };
-
-    let hide_btn = create_menu_row(hide_init, Some("⌘H"));
-    let popover_hide = popover.clone();
-    hide_btn.connect_clicked(move |_| {
-        popover_hide.popdown();
-        let _ = malus_de_common::ipc::send_ipc_message(
-            &malus_de_common::ipc::IpcMessage::HideActiveWindow,
-        );
-    });
-
-    let quit_btn = create_menu_row(quit_init, Some("⌘Q"));
-    let popover_quit = popover.clone();
-    quit_btn.connect_clicked(move |_| {
-        popover_quit.popdown();
-        let _ = malus_de_common::ipc::send_ipc_message(
-            &malus_de_common::ipc::IpcMessage::CloseActiveWindow,
-        );
-    });
-
-    content.append(&hide_btn);
-    content.append(&create_divider());
-    content.append(&quit_btn);
     popover.set_child(Some(&content));
     app_title_btn.set_popover(Some(&popover));
 
@@ -691,17 +657,144 @@ pub fn create_global_menu_widget(dbus_menu_service: Arc<DbusMenuService>) -> Glo
     let handles = GlobalMenuHandles {
         container,
         app_title_label,
-        hide_btn,
-        quit_btn,
+        app_menu_popover: popover,
+        app_menu_content: content,
+        app_menu_submenus: Rc::new(RefCell::new(Vec::new())),
+        app_menu_is_branches: Rc::new(Cell::new(false)),
+        hide_btn: Rc::new(RefCell::new(None)),
+        quit_btn: Rc::new(RefCell::new(None)),
         menus_container,
         dbus_menu_service,
         current_active,
     };
 
+    populate_generic_app_menu(&handles, "Malus DE");
+
     // Inicializar con el menú por defecto
     update_global_menu(&handles, None, None, None);
 
     handles
+}
+
+fn clear_app_menu_contents(handles: &GlobalMenuHandles) {
+    for sub in handles.app_menu_submenus.borrow_mut().drain(..) {
+        if sub.is_visible() {
+            sub.popdown();
+        }
+        if sub.parent().is_some() {
+            sub.unparent();
+        }
+    }
+    while let Some(child) = handles.app_menu_content.first_child() {
+        handles.app_menu_content.remove(&child);
+    }
+    *handles.hide_btn.borrow_mut() = None;
+    *handles.quit_btn.borrow_mut() = None;
+}
+
+fn populate_generic_app_menu(handles: &GlobalMenuHandles, display_name: &str) {
+    clear_app_menu_contents(handles);
+    handles.app_menu_content.set_width_request(-1);
+
+    let es = std::env::var("LC_ALL")
+        .or_else(|_| std::env::var("LC_MESSAGES"))
+        .or_else(|_| std::env::var("LANG"))
+        .unwrap_or_default()
+        .to_lowercase()
+        .starts_with("es");
+    let hide_txt = if es {
+        format!("Ocultar {}", display_name)
+    } else {
+        format!("Hide {}", display_name)
+    };
+    let quit_txt = if es {
+        format!("Salir de {}", display_name)
+    } else {
+        format!("Quit {}", display_name)
+    };
+
+    let hide_btn = create_menu_row(&hide_txt, Some("⌘H"));
+    let popover_hide = handles.app_menu_popover.clone();
+    hide_btn.connect_clicked(move |_| {
+        popover_hide.popdown();
+        let _ = malus_de_common::ipc::send_ipc_message(
+            &malus_de_common::ipc::IpcMessage::HideActiveWindow,
+        );
+    });
+
+    let quit_btn = create_menu_row(&quit_txt, Some("⌘Q"));
+    let popover_quit = handles.app_menu_popover.clone();
+    quit_btn.connect_clicked(move |_| {
+        popover_quit.popdown();
+        let _ = malus_de_common::ipc::send_ipc_message(
+            &malus_de_common::ipc::IpcMessage::CloseActiveWindow,
+        );
+    });
+
+    handles.app_menu_content.append(&hide_btn);
+    handles.app_menu_content.append(&create_divider());
+    handles.app_menu_content.append(&quit_btn);
+    *handles.hide_btn.borrow_mut() = Some(hide_btn);
+    *handles.quit_btn.borrow_mut() = Some(quit_btn);
+    handles.app_menu_is_branches.set(false);
+    crate::ui::theme::apply_theme_to_popover(
+        &handles.app_menu_popover,
+        crate::ui::theme::is_dark_mode_enabled(),
+    );
+}
+
+/// Actualiza el menú desplegable del nombre de la aplicación en la barra superior.
+/// Para Branches renderiza el menú estilo Finder (`Finder1.png`); para otras apps, Ocultar / Salir.
+pub fn update_active_app_menu(
+    handles: &GlobalMenuHandles,
+    app_id: Option<&str>,
+    title: Option<&str>,
+    display_name: &str,
+) {
+    if crate::ui::branches_menu::is_branches_app(app_id, title) {
+        if !handles.app_menu_is_branches.get() {
+            clear_app_menu_contents(handles);
+            crate::ui::branches_menu::populate_branches_app_menu(
+                &handles.app_menu_popover,
+                &handles.app_menu_content,
+                &handles.app_menu_submenus,
+            );
+            handles.app_menu_is_branches.set(true);
+            crate::ui::theme::apply_theme_to_popover(
+                &handles.app_menu_popover,
+                crate::ui::theme::is_dark_mode_enabled(),
+            );
+        }
+        return;
+    }
+
+    if handles.app_menu_is_branches.get() || handles.hide_btn.borrow().is_none() {
+        populate_generic_app_menu(handles, display_name);
+        return;
+    }
+
+    let es = std::env::var("LC_ALL")
+        .or_else(|_| std::env::var("LC_MESSAGES"))
+        .or_else(|_| std::env::var("LANG"))
+        .unwrap_or_default()
+        .to_lowercase()
+        .starts_with("es");
+    let hide_txt = if es {
+        format!("Ocultar {}", display_name)
+    } else {
+        format!("Hide {}", display_name)
+    };
+    let quit_txt = if es {
+        format!("Salir de {}", display_name)
+    } else {
+        format!("Quit {}", display_name)
+    };
+    if let Some(ref btn) = *handles.hide_btn.borrow() {
+        update_menu_row_label(btn, &hide_txt);
+    }
+    if let Some(ref btn) = *handles.quit_btn.borrow() {
+        update_menu_row_label(btn, &quit_txt);
+    }
 }
 
 pub fn update_global_menu(
@@ -1020,8 +1113,21 @@ fn get_static_categories(
     None
 }
 
+const BRANCHES_MENU_SENTINEL: usize = 1;
+
 fn render_static_or_clear(handles: &GlobalMenuHandles, app_id: Option<&str>, title: Option<&str>) {
-    if let Some(categories) = get_static_categories(app_id, title) {
+    if crate::ui::branches_menu::is_branches_app(app_id, title) {
+        let already_rendered = LAST_STATIC_MENU_PTR.with(|c| c.get() == BRANCHES_MENU_SENTINEL)
+            && handles.menus_container.first_child().is_some();
+        if already_rendered {
+            return;
+        }
+        LAST_STATIC_MENU_PTR.with(|c| c.set(BRANCHES_MENU_SENTINEL));
+        while let Some(child) = handles.menus_container.first_child() {
+            handles.menus_container.remove(&child);
+        }
+        crate::ui::branches_menu::render_branches_category_menus(&handles.menus_container);
+    } else if let Some(categories) = get_static_categories(app_id, title) {
         render_static_categories(handles, categories);
     } else if app_id.is_none() && title.is_none() {
         render_static_categories(handles, DEFAULT_MENUS);

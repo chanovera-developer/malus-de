@@ -1,4 +1,5 @@
 pub mod auto_tiling;
+pub mod branches_menu;
 pub mod clock;
 pub mod control_center;
 pub mod global_menu;

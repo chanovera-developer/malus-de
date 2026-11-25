@@ -2342,6 +2342,10 @@ impl MalusState {
                     tracing::info!("📥 IPC HideActiveWindow recibido");
                     self.minimize_active_window();
                 }
+                IpcMessage::HideOtherWindows => {
+                    tracing::info!("📥 IPC HideOtherWindows recibido");
+                    self.minimize_other_windows();
+                }
                 IpcMessage::CloseActiveWindow => {
                     tracing::info!("📥 IPC CloseActiveWindow recibido");
                     self.close_active_window();
@@ -2691,6 +2695,41 @@ impl MalusState {
                 tracing::info!("📤 Minimizando ventana activa vía minimize_toplevel()");
                 self.minimize_toplevel(&toplevel);
             }
+        }
+    }
+
+    pub fn minimize_other_windows(&mut self) {
+        let Some(active) = self.get_active_window() else {
+            return;
+        };
+        let active_surface = active.wl_surface().map(|s| s.into_owned());
+        let active_app_id = active_surface
+            .as_ref()
+            .and_then(|s| toplevel_info(s).0)
+            .map(|id| id.trim().to_ascii_lowercase())
+            .filter(|id| !id.is_empty());
+
+        let toplevels_to_hide: Vec<ToplevelSurface> = self
+            .space
+            .elements()
+            .filter_map(|win| {
+                let surf = win.wl_surface()?;
+                if active_surface.as_ref() == Some(surf.as_ref()) {
+                    return None;
+                }
+                if let Some(ref keep_app) = active_app_id {
+                    if let Some(other_app) = toplevel_info(surf.as_ref()).0 {
+                        if other_app.trim().to_ascii_lowercase() == *keep_app {
+                            return None;
+                        }
+                    }
+                }
+                win.toplevel().cloned()
+            })
+            .collect();
+
+        for toplevel in toplevels_to_hide {
+            self.minimize_toplevel(&toplevel);
         }
     }
 

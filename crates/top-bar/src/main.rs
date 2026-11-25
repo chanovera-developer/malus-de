@@ -340,8 +340,6 @@ fn build_ui(app: &Application) {
     // Escuchar eventos IPC del compositor para actualizar el nombre de la aplicación activa y acciones
     let (tx, rx) = async_channel::unbounded::<malus_de_common::ipc::IpcMessage>();
     let title_label = menu_handles.app_title_label.clone();
-    let hide_btn = menu_handles.hide_btn.clone();
-    let quit_btn = menu_handles.quit_btn.clone();
     let handles_clone = menu_handles.clone();
 
     adw::StyleManager::default().connect_dark_notify(|sm| {
@@ -376,24 +374,12 @@ fn build_ui(app: &Application) {
                         None
                     };
                     ui::system_menu::update_active_app_for_system_menu(active_for_sys);
-                    let es = std::env::var("LC_ALL")
-                        .or_else(|_| std::env::var("LC_MESSAGES"))
-                        .or_else(|_| std::env::var("LANG"))
-                        .unwrap_or_default()
-                        .to_lowercase()
-                        .starts_with("es");
-                    let hide_txt = if es {
-                        format!("Ocultar {}", display)
-                    } else {
-                        format!("Hide {}", display)
-                    };
-                    let quit_txt = if es {
-                        format!("Salir de {}", display)
-                    } else {
-                        format!("Quit {}", display)
-                    };
-                    ui::global_menu::update_menu_row_label(&hide_btn, &hide_txt);
-                    ui::global_menu::update_menu_row_label(&quit_btn, &quit_txt);
+                    ui::global_menu::update_active_app_menu(
+                        &handles_clone,
+                        app_id.as_deref(),
+                        title.as_deref(),
+                        &display,
+                    );
                     ui::global_menu::update_global_menu(
                         &handles_clone,
                         app_id.as_deref(),
@@ -642,6 +628,9 @@ fn format_app_name(app_id: Option<&str>, title: Option<&str>) -> String {
         .starts_with("es");
 
     if let Some(id) = app_id {
+        if ui::branches_menu::is_branches_app(Some(id), None) {
+            return "Branches".to_string();
+        }
         let lower = id.to_lowercase();
         if lower.contains("firefox") || lower.contains("mozilla") {
             return "Firefox".to_string();
@@ -707,7 +696,7 @@ fn format_app_name(app_id: Option<&str>, title: Option<&str>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::build_topbar_glass_css;
+    use super::{build_topbar_glass_css, format_app_name};
 
     #[test]
     fn topbar_background_removes_shadows_and_uses_theme_foreground_color() {
@@ -720,5 +709,17 @@ mod tests {
         assert!(on.contains("color: @window_fg_color;"));
         assert!(on.contains("text-shadow: none;"));
         assert!(on.contains("-gtk-icon-shadow: none;"));
+    }
+
+    #[test]
+    fn format_app_name_always_returns_branches_for_branches_windows() {
+        assert_eq!(
+            format_app_name(Some("dev.malus.Branches"), Some("Descargas")),
+            "Branches"
+        );
+        assert_eq!(
+            format_app_name(Some("dev.malus.Branches.Info"), Some("Foto.png")),
+            "Branches"
+        );
     }
 }

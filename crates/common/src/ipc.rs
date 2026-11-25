@@ -44,6 +44,8 @@ pub enum IpcMessage {
     HideSpotlight,
     /// Minimizar u ocultar la ventana activa actualmente (⌘H)
     HideActiveWindow,
+    /// Minimizar u ocultar todas las demás ventanas excepto la aplicación activa (⌥⌘H)
+    HideOtherWindows,
     /// Cerrar la ventana activa actualmente (⌘Q)
     CloseActiveWindow,
     /// Mostrar selector visual de aplicaciones estilo macOS (⌘Tab)
@@ -730,6 +732,16 @@ mod tests {
     fn test_peer_matches_current_uid_on_unix_pair() {
         let (a, _b) = UnixStream::pair().expect("pair");
         assert!(peer_matches_current_uid(&a));
+    }
+
+    #[test]
+    fn test_hide_other_windows_ipc_round_trip() {
+        let msg = IpcMessage::HideOtherWindows;
+        let json = serde_json::to_string(&msg).expect("Debe serializar HideOtherWindows");
+        assert!(matches!(
+            serde_json::from_str::<IpcMessage>(&json),
+            Ok(IpcMessage::HideOtherWindows)
+        ));
     }
 
     #[test]

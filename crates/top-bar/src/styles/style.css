@@ -1162,7 +1162,7 @@ popover.light-popover label {
 
 popover.malus-popover-menu.light-popover>contents button.popover-menu-item:hover label.menu-row-label,
 popover.malus-popover-menu.light-popover>contents button.popover-menu-item:hover label,
-popover.malus-popover-menu.light-popover>contents button:hover label {
+popover.malus-popover-menu.light-popover>contents button:hover:not(:disabled) label {
     color: #ffffff;
 }
 
@@ -1182,9 +1182,69 @@ label.menu-shortcut-hint.menu-dark-text {
     color: rgba(255, 255, 255, 0.30);
 }
 
-button.popover-menu-item:hover label.menu-row-label.menu-light-text,
-button.popover-menu-item:hover label.menu-row-label.menu-dark-text {
+button.popover-menu-item:hover:not(:disabled) label.menu-row-label.menu-light-text,
+button.popover-menu-item:hover:not(:disabled) label.menu-row-label.menu-dark-text {
     color: #ffffff;
+}
+
+button.popover-menu-item:disabled,
+button.popover-menu-item:disabled:hover,
+popover.malus-popover-menu button.popover-menu-item:disabled,
+popover.malus-popover-menu button.popover-menu-item:disabled:hover,
+popover.light-popover button.popover-menu-item:disabled,
+popover.light-popover button.popover-menu-item:disabled:hover {
+    background: transparent;
+    background-color: transparent;
+    box-shadow: none;
+}
+
+button.popover-menu-item:disabled label.menu-row-label,
+button.popover-menu-item:disabled label.menu-row-label.menu-dark-text,
+button.popover-menu-item:disabled image.menu-item-icon,
+button.popover-menu-item:disabled .menu-submenu-chevron {
+    color: rgba(255, 255, 255, 0.34);
+}
+
+button.popover-menu-item:disabled label.menu-shortcut-hint,
+button.popover-menu-item:disabled label.menu-shortcut-hint.menu-dark-text {
+    color: rgba(255, 255, 255, 0.22);
+}
+
+popover.light-popover button.popover-menu-item:disabled label.menu-row-label,
+button.popover-menu-item:disabled label.menu-row-label.menu-light-text,
+popover.light-popover button.popover-menu-item:disabled image.menu-item-icon,
+popover.light-popover button.popover-menu-item:disabled .menu-submenu-chevron,
+.light-mode button.popover-menu-item:disabled label.menu-row-label,
+.light-mode button.popover-menu-item:disabled image.menu-item-icon,
+.light-mode button.popover-menu-item:disabled .menu-submenu-chevron {
+    color: rgba(0, 0, 0, 0.32);
+}
+
+popover.light-popover button.popover-menu-item:disabled label.menu-shortcut-hint,
+button.popover-menu-item:disabled label.menu-shortcut-hint.menu-light-text,
+.light-mode button.popover-menu-item:disabled label.menu-shortcut-hint {
+    color: rgba(0, 0, 0, 0.20);
+}
+
+entry.help-menu-search,
+searchentry.help-menu-search {
+    min-height: 28px;
+    border-radius: 999px;
+    background-color: rgba(255, 255, 255, 0.14);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    color: #f4f4f5;
+    padding: 0 10px;
+    font-size: 13px;
+    box-shadow: none;
+}
+
+popover.light-popover entry.help-menu-search,
+popover.light-popover searchentry.help-menu-search,
+.light-mode entry.help-menu-search,
+.light-mode searchentry.help-menu-search {
+    background-color: rgba(255, 255, 255, 0.72);
+    border: 1px solid rgba(0, 0, 0, 0.10);
+    color: #1d1d1f;
 }
 
 popover.malus-popover-menu.light-popover>contents label.menu-shortcut-hint,

@@ -470,6 +470,15 @@ pub fn create_system_menu() -> MenuButton {
     menu_btn
 }
 
+pub(crate) fn create_menu_item_widget(
+    icon_name: Option<&str>,
+    label_text: &str,
+    shortcut: Option<&str>,
+    has_submenu: bool,
+) -> (Button, Label) {
+    create_menu_item(icon_name, label_text, shortcut, has_submenu)
+}
+
 fn create_menu_item(
     icon_name: Option<&str>,
     label_text: &str,
