@@ -2548,11 +2548,8 @@ impl MalusState {
             return (crate::ssd::BTN_CLOSE_X, crate::ssd::BTN_Y);
         }
         let app_lower = app_id.unwrap_or("").trim().to_ascii_lowercase();
-        if app_lower == "dev.malus.branches" {
-            return (22.0, 24.0);
-        }
-        if app_lower == "dev.malus.settings" {
-            return (20.0, 24.0);
+        if app_lower == "dev.malus.branches" || app_lower == "dev.malus.settings" {
+            return (20.5, 24.0);
         }
         if app_lower.contains("antigravity")
             || app_lower == "code"
@@ -9055,7 +9052,7 @@ mod tests {
                 false,
                 false
             ),
-            (22.0, 24.0)
+            (20.5, 24.0)
         );
         assert_eq!(
             super::MalusState::close_button_offset_for_app_id(
@@ -9063,7 +9060,7 @@ mod tests {
                 false,
                 false
             ),
-            (20.0, 24.0)
+            (20.5, 24.0)
         );
         assert_eq!(
             super::MalusState::close_button_offset_for_app_id(Some("antigravity"), false, false),
