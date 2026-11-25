@@ -450,10 +450,10 @@ fn build_a11y_hub_pane(
         let (ow, ob) = make_squircle_button("Listo", true, None);
         ow.set_halign(Align::End);
         let dc = dlg.clone();
-        ob.connect_clicked(move |_| dc.close());
+        ob.connect_clicked(move |_| crate::close_attached_modal(&dc));
         vb.append(&ow);
         dlg.set_child(Some(&vb));
-        dlg.present();
+        crate::present_attached_modal(&dlg, &win_c);
         glib::Propagation::Stop
     });
     hero_text.append(&desc_lbl);

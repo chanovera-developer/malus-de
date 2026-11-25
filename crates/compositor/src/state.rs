@@ -250,6 +250,14 @@ pub struct SwipeGestureState {
     pub app_expose_gesture: bool,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct PinchGestureState {
+    pub active: bool,
+    pub fingers: u32,
+    pub last_scale: f64,
+    pub triggered: bool,
+}
+
 pub struct CachedDndIcon {
     pub buffer: MemoryRenderBuffer,
     pub rel_offset_logical: (f64, f64),
@@ -305,7 +313,10 @@ pub struct MalusState {
     pub next_window_id: u64,
     pub dock_slots: HashMap<u64, Rectangle<i32, Logical>>,
     pub active_animations: Vec<GenieAnimation>,
-    pub close_button_hints: HashMap<WlSurface, (Point<f64, Logical>, Instant)>,
+    pub close_button_hints: HashMap<WlSurface, (Point<f64, Logical>, Instant, bool)>,
+    /// Desplazamientos `(dx_desde_borde, dy_desde_arriba)` aprendidos por `(app_id, botones_derecha)`
+    /// al cerrar ventanas CSD haciendo clic en su botón de cerrar.
+    pub learned_close_button_offsets: HashMap<(String, bool), (f64, f64)>,
     pub renderer_context_id: Option<
         smithay::backend::renderer::ContextId<smithay::backend::renderer::gles::GlesTexture>,
     >,
@@ -351,6 +362,7 @@ pub struct MalusState {
     pub workspaces: crate::workspaces::WorkspaceManager,
     pub workspace_revision: u64,
     pub swipe_gesture: SwipeGestureState,
+    pub pinch_gesture: PinchGestureState,
     pub surface_commit_counter: usize,
     pub output_commit_counters: HashMap<String, usize>,
     pub background_commit_counter: usize,
@@ -358,6 +370,7 @@ pub struct MalusState {
     pub dock_cfg: DockConfig,
     pub desktop_dock_cfg: malus_de_common::config::DesktopDockConfig,
     pub input_cfg: malus_de_common::config::InputConfig,
+    pub input_config_dirty: bool,
     pub show_desktop_hidden_ids: Vec<u64>,
     pub hot_corner_hover: Option<(&'static str, Instant, bool)>,
     pub dock_auto_hide_edge_active: bool,
@@ -1475,6 +1488,7 @@ impl MalusState {
             dock_slots: HashMap::new(),
             active_animations: Vec::new(),
             close_button_hints: HashMap::new(),
+            learned_close_button_offsets: HashMap::new(),
             renderer_context_id: None,
             cached_close_snapshots: HashMap::new(),
             pending_black_holes: Vec::new(),
@@ -1516,6 +1530,7 @@ impl MalusState {
             workspaces: crate::workspaces::WorkspaceManager::default(),
             workspace_revision: 0,
             swipe_gesture: SwipeGestureState::default(),
+            pinch_gesture: PinchGestureState::default(),
             surface_commit_counter: 0,
             output_commit_counters: HashMap::new(),
             background_commit_counter: 0,
@@ -1523,6 +1538,7 @@ impl MalusState {
             dock_cfg: dock_config,
             desktop_dock_cfg,
             input_cfg,
+            input_config_dirty: false,
             show_desktop_hidden_ids: Vec::new(),
             hot_corner_hover: None,
             dock_auto_hide_edge_active: false,
@@ -2400,6 +2416,13 @@ impl MalusState {
                 IpcMessage::ReloadInputConfig => {
                     tracing::info!("📥 IPC ReloadInputConfig recibido");
                     self.input_cfg = malus_de_common::config::InputConfig::load();
+                    self.input_config_dirty = true;
+                    if let Some(kb) = self.seat.get_keyboard() {
+                        kb.change_repeat_info(
+                            self.input_cfg.keyboard_repeat_rate.clamp(0, 100),
+                            self.input_cfg.keyboard_repeat_delay_ms.clamp(150, 1500),
+                        );
+                    }
                     self.ipc_broadcaster
                         .broadcast(&IpcMessage::ReloadInputConfig);
                 }
@@ -2525,11 +2548,8 @@ impl MalusState {
             return (crate::ssd::BTN_CLOSE_X, crate::ssd::BTN_Y);
         }
         let app_lower = app_id.unwrap_or("").trim().to_ascii_lowercase();
-        if app_lower == "dev.malus.branches" {
-            return (28.5, 24.0);
-        }
-        if app_lower == "dev.malus.settings" {
-            return (25.5, 23.5);
+        if app_lower == "dev.malus.branches" || app_lower == "dev.malus.settings" {
+            return (20.5, 24.0);
         }
         if app_lower.contains("antigravity")
             || app_lower == "code"
@@ -2542,10 +2562,11 @@ impl MalusState {
         if is_firefox {
             return (16.5, 21.0);
         }
-        (22.5, 23.0)
+        (22.0, 23.0)
     }
 
     fn close_button_center_logical(
+        &self,
         window: &smithay::desktop::Window,
         loc: Point<i32, Logical>,
         uses_ssd: bool,
@@ -2558,11 +2579,27 @@ impl MalusState {
             loc.y as f64
         };
         let app_id = window.wl_surface().and_then(|s| toplevel_info(&s).0);
-        let (dx, dy) = Self::close_button_offset_for_app_id(
-            app_id.as_deref(),
-            is_firefox_window(window),
-            uses_ssd,
-        );
+        let learned = if !uses_ssd {
+            app_id.as_deref().and_then(|id| {
+                let key = id.trim().to_ascii_lowercase();
+                if key.is_empty() {
+                    None
+                } else {
+                    self.learned_close_button_offsets
+                        .get(&(key, buttons_right))
+                        .copied()
+                }
+            })
+        } else {
+            None
+        };
+        let (dx, dy) = learned.unwrap_or_else(|| {
+            Self::close_button_offset_for_app_id(
+                app_id.as_deref(),
+                is_firefox_window(window),
+                uses_ssd,
+            )
+        });
         let x = if buttons_right {
             let win_w = window.geometry().size.w.max(0) as f64;
             if win_w > dx {
@@ -2588,7 +2625,7 @@ impl MalusState {
             .toplevel()
             .map(|t| t.current_state().states.contains(XdgState::Fullscreen))
             .unwrap_or(false);
-        let origin = Self::close_button_center_logical(
+        let origin = self.close_button_center_logical(
             window,
             loc,
             uses_ssd,
@@ -2596,13 +2633,28 @@ impl MalusState {
             self.ssd.buttons_right,
         );
         self.close_button_hints
-            .insert(surf.into_owned(), (origin, Instant::now()));
+            .insert(surf.into_owned(), (origin, Instant::now(), false));
+    }
+
+    /// Determina si una coordenada relativa `(rel_x, rel_y)` dentro de una ventana CSD de ancho `win_w`
+    /// cae dentro de la zona superior de botones de cierre (izquierda o derecha).
+    fn is_in_csd_close_zone(rel_x: f64, rel_y: f64, win_w: f64) -> Option<bool> {
+        if !(0.0..=56.0).contains(&rel_y) {
+            return None;
+        }
+        let edge_span = 72.0_f64.min((win_w * 0.35).max(48.0));
+        if (0.0..=edge_span).contains(&rel_x) {
+            return Some(false);
+        }
+        if win_w >= edge_span && rel_x >= (win_w - edge_span) && rel_x <= win_w {
+            return Some(true);
+        }
+        None
     }
 
     pub fn record_csd_close_click_hint(
         &mut self,
         window: &smithay::desktop::Window,
-        loc: Point<i32, Logical>,
         click_pt: Point<f64, Logical>,
     ) {
         if window_uses_ssd(window) {
@@ -2611,45 +2663,15 @@ impl MalusState {
         let Some(surf) = window.wl_surface() else {
             return;
         };
+        let Some(win_loc) = self.space.element_location(window) else {
+            return;
+        };
         let geo = window.geometry();
-        let is_fullscreen = window
-            .toplevel()
-            .map(|t| t.current_state().states.contains(XdgState::Fullscreen))
-            .unwrap_or(false);
-        let buttons_right = self.ssd.buttons_right;
-        let canonical =
-            Self::close_button_center_logical(window, loc, false, is_fullscreen, buttons_right);
-        let app_lower = toplevel_info(&surf)
-            .0
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase();
-        let is_known_malus_csd =
-            app_lower == "dev.malus.branches" || app_lower == "dev.malus.settings";
-
-        let rel_x = click_pt.x - loc.x as f64;
-        let rel_y = click_pt.y - loc.y as f64;
-        let in_left_close_zone = (4.0..=48.0).contains(&rel_x) && (0.0..=44.0).contains(&rel_y);
-        let in_right_close_zone = rel_x >= (geo.size.w as f64 - 48.0).max(48.0)
-            && rel_x <= geo.size.w as f64
-            && (0.0..=44.0).contains(&rel_y);
-
-        if in_left_close_zone {
-            let hint_pt = if is_known_malus_csd && !buttons_right {
-                canonical
-            } else {
-                click_pt
-            };
+        let rel_x = click_pt.x - win_loc.x as f64;
+        let rel_y = click_pt.y - win_loc.y as f64;
+        if Self::is_in_csd_close_zone(rel_x, rel_y, geo.size.w as f64).is_some() {
             self.close_button_hints
-                .insert(surf.into_owned(), (hint_pt, Instant::now()));
-        } else if in_right_close_zone {
-            let hint_pt = if is_known_malus_csd && buttons_right {
-                canonical
-            } else {
-                click_pt
-            };
-            self.close_button_hints
-                .insert(surf.into_owned(), (hint_pt, Instant::now()));
+                .insert(surf.into_owned(), (click_pt, Instant::now(), true));
         }
     }
 
@@ -3713,7 +3735,12 @@ impl MalusState {
 
     /// Inicia el seguimiento de gesto multitáctil de deslizamiento (`libinput` 3+ dedos).
     pub fn handle_gesture_swipe_begin(&mut self, fingers: u32) -> bool {
-        if fingers < 3 {
+        let matches_configured = fingers >= 3
+            && (fingers == self.input_cfg.trackpad_swipe_spaces_fingers as u32
+                || fingers == self.input_cfg.trackpad_mission_control_fingers as u32
+                || fingers == self.input_cfg.trackpad_app_expose_fingers as u32
+                || (self.expose.active && self.expose.target_open));
+        if !matches_configured {
             self.swipe_gesture.active = false;
             return false;
         }
@@ -3750,11 +3777,14 @@ impl MalusState {
             if ay >= ax {
                 self.swipe_gesture.kind = SwipeGestureKind::ExposeVertical;
                 if !self.swipe_gesture.was_open_at_start {
+                    let f = self.swipe_gesture.fingers;
                     if self.swipe_gesture.accum_y < 0.0 {
-                        // 3 dedos arriba -> Mission Control (Exposé Global)
-                        self.open_expose(crate::expose::ExposeMode::Global);
-                    } else {
-                        // 3 dedos abajo -> App Exposé de la app activa
+                        // Deslizar arriba -> Mission Control (si coincide con el número de dedos configurado)
+                        if f == self.input_cfg.trackpad_mission_control_fingers as u32 {
+                            self.open_expose(crate::expose::ExposeMode::Global);
+                        }
+                    } else if f == self.input_cfg.trackpad_app_expose_fingers as u32 {
+                        // Deslizar abajo -> App Exposé de la app activa
                         self.swipe_gesture.app_expose_gesture = true;
                         let app_id = self
                             .get_active_window()
@@ -3825,14 +3855,60 @@ impl MalusState {
                 }
             }
             SwipeGestureKind::WorkspaceHorizontal => {
-                if g.accum_x <= -60.0 {
-                    self.switch_workspace_delta(1);
-                } else if g.accum_x >= 60.0 {
-                    self.switch_workspace_delta(-1);
+                if g.fingers == self.input_cfg.trackpad_swipe_spaces_fingers as u32 {
+                    if g.accum_x <= -60.0 {
+                        self.switch_workspace_delta(1);
+                    } else if g.accum_x >= 60.0 {
+                        self.switch_workspace_delta(-1);
+                    }
                 }
             }
             SwipeGestureKind::Undecided => {}
         }
+        true
+    }
+
+    /// Inicia un gesto multitáctil de pellizco de 4 dedos (Apps / Mostrar escritorio).
+    pub fn handle_gesture_pinch_begin(&mut self, fingers: u32) -> bool {
+        if fingers >= 4
+            && (self.input_cfg.trackpad_apps_gesture || self.input_cfg.show_desktop_gesture)
+        {
+            self.pinch_gesture = PinchGestureState {
+                active: true,
+                fingers,
+                last_scale: 1.0,
+                triggered: false,
+            };
+            return true;
+        }
+        self.pinch_gesture.active = false;
+        false
+    }
+
+    /// Actualiza un gesto de pellizco de 4 dedos: juntar abre Apps/Canopy; separar muestra el escritorio.
+    pub fn handle_gesture_pinch_update(&mut self, scale: f64) -> bool {
+        if !self.pinch_gesture.active {
+            return false;
+        }
+        self.pinch_gesture.last_scale = scale;
+        if !self.pinch_gesture.triggered {
+            if scale <= 0.72 && self.input_cfg.trackpad_apps_gesture {
+                self.pinch_gesture.triggered = true;
+                self.toggle_spotlight();
+            } else if scale >= 1.28 && self.input_cfg.show_desktop_gesture {
+                self.pinch_gesture.triggered = true;
+                self.toggle_show_desktop();
+            }
+        }
+        true
+    }
+
+    /// Finaliza el gesto de pellizco de 4 dedos.
+    pub fn handle_gesture_pinch_end(&mut self, _cancelled: bool) -> bool {
+        if !self.pinch_gesture.active {
+            return false;
+        }
+        self.pinch_gesture = PinchGestureState::default();
         true
     }
 
@@ -5456,6 +5532,7 @@ impl MalusState {
                 cfg.touchpad_enabled = next_enabled;
                 let _ = cfg.save();
                 self.input_cfg = cfg;
+                self.input_config_dirty = true;
                 tracing::info!(
                     "🖱️ [MEDIA KEY] Touchpad {}",
                     if next_enabled { "activado" } else { "desactivado" }
@@ -6406,59 +6483,85 @@ impl CompositorHandler for MalusState {
                             != Some(&(geometry.loc, geometry.size))
                     {
                         if geometry.size.w > 1 && geometry.size.h > 1 {
-                            let parent_output = toplevel
-                                .parent()
-                                .and_then(|parent| {
-                                    let parent_surface = parent.wl_surface();
-                                    parent_surface
-                                        .as_deref()
-                                        .and_then(|surface| self.window_for_surface(surface))
+                            let parent_win = toplevel.parent().and_then(|parent| {
+                                let parent_surface = parent.wl_surface();
+                                parent_surface
+                                    .as_deref()
+                                    .and_then(|surface| self.window_for_surface(surface))
+                            });
+                            let parent_rect = parent_win.as_ref().and_then(|parent| {
+                                let location = self.space.element_location(parent)?;
+                                let parent_geometry = parent.geometry();
+                                Some(Rectangle::new(
+                                    Point::<i32, Logical>::from((
+                                        location.x + parent_geometry.loc.x,
+                                        location.y + parent_geometry.loc.y,
+                                    )),
+                                    parent_geometry.size,
+                                ))
+                            });
+                            let parent_output = parent_rect.and_then(|pr| {
+                                let center = Point::<i32, Logical>::from((
+                                    pr.loc.x + pr.size.w / 2,
+                                    pr.loc.y + pr.size.h / 2,
+                                ));
+                                self.space.outputs().find(|output| {
+                                    self.space
+                                        .output_geometry(output)
+                                        .map(|output_geometry| output_geometry.contains(center))
+                                        .unwrap_or(false)
                                 })
-                                .and_then(|parent| {
-                                    let location = self.space.element_location(&parent)?;
-                                    let parent_geometry = parent.geometry();
-                                    let center = Point::<i32, Logical>::from((
-                                        location.x
-                                            + parent_geometry.loc.x
-                                            + parent_geometry.size.w / 2,
-                                        location.y
-                                            + parent_geometry.loc.y
-                                            + parent_geometry.size.h / 2,
-                                    ));
-                                    self.space.outputs().find(|output| {
-                                        self.space
-                                            .output_geometry(output)
-                                            .map(|output_geometry| output_geometry.contains(center))
-                                            .unwrap_or(false)
-                                    })
-                                });
+                            });
                             let window_location =
                                 self.space.element_location(&window).unwrap_or_default();
                             let current_center = Point::<i32, Logical>::from((
                                 window_location.x + geometry.loc.x + geometry.size.w / 2,
                                 window_location.y + geometry.loc.y + geometry.size.h / 2,
                             ));
-                            let output = parent_output.or_else(|| {
-                                self.space.outputs().find(|output| {
-                                    self.space
-                                        .output_geometry(output)
-                                        .map(|output_geometry| {
-                                            output_geometry.contains(current_center)
-                                        })
-                                        .unwrap_or(false)
+                            let output = parent_output
+                                .or_else(|| {
+                                    self.space.outputs().find(|output| {
+                                        self.space
+                                            .output_geometry(output)
+                                            .map(|output_geometry| {
+                                                output_geometry.contains(current_center)
+                                            })
+                                            .unwrap_or(false)
+                                    })
                                 })
-                            });
+                                .cloned();
 
                             if let Some(output) = output {
-                                if let Some(output_geometry) = self.space.output_geometry(output) {
-                                    let centered_location = Point::<i32, Logical>::from((
-                                        output_geometry.loc.x
-                                            + (output_geometry.size.w - geometry.size.w) / 2
-                                            - geometry.loc.x,
-                                        output_geometry.loc.y
-                                            + (output_geometry.size.h - geometry.size.h) / 2
-                                            - geometry.loc.y,
-                                    ));
+                                if let Some(output_geometry) = self.space.output_geometry(&output) {
+                                    let usable = self.usable_zone_for_output(&output);
+                                    let mut centered_location = if let Some(pr) = parent_rect {
+                                        Point::<i32, Logical>::from((
+                                            pr.loc.x + (pr.size.w - geometry.size.w) / 2
+                                                - geometry.loc.x,
+                                            pr.loc.y + (pr.size.h - geometry.size.h) / 2
+                                                - geometry.loc.y,
+                                        ))
+                                    } else {
+                                        Point::<i32, Logical>::from((
+                                            output_geometry.loc.x
+                                                + (output_geometry.size.w - geometry.size.w) / 2
+                                                - geometry.loc.x,
+                                            output_geometry.loc.y
+                                                + (output_geometry.size.h - geometry.size.h) / 2
+                                                - geometry.loc.y,
+                                        ))
+                                    };
+                                    let min_x = usable.loc.x - geometry.loc.x;
+                                    let max_x = (usable.loc.x + usable.size.w - geometry.size.w
+                                        - geometry.loc.x)
+                                        .max(min_x);
+                                    let min_y = usable.loc.y - geometry.loc.y;
+                                    let max_y = (usable.loc.y + usable.size.h - geometry.size.h
+                                        - geometry.loc.y)
+                                        .max(min_y);
+                                    centered_location.x = centered_location.x.clamp(min_x, max_x);
+                                    centered_location.y = centered_location.y.clamp(min_y, max_y);
+
                                     self.space
                                         .map_element(window.clone(), centered_location, true);
                                     self.space.raise_element(&window, true);
@@ -7355,7 +7458,7 @@ impl XdgShellHandler for MalusState {
                             .and_then(|k| k.current_focus())
                             .as_ref()
                             == Some(surf);
-                    let fallback_origin = Self::close_button_center_logical(
+                    let fallback_origin = self.close_button_center_logical(
                         win,
                         loc,
                         uses_ssd,
@@ -7363,15 +7466,37 @@ impl XdgShellHandler for MalusState {
                         self.ssd.buttons_right,
                     );
 
-                    let origin_logical = if let Some((hint_pt, hint_at)) = hint_entry {
-                        if hint_at.elapsed() < std::time::Duration::from_secs(5) {
-                            hint_pt
+                    let (origin_logical, origin_source) =
+                        if let Some((hint_pt, hint_at, from_click)) = hint_entry {
+                            if hint_at.elapsed() < std::time::Duration::from_secs(5) {
+                                if from_click && !uses_ssd {
+                                    let rel_x = hint_pt.x - loc.x as f64;
+                                    let rel_y = hint_pt.y - loc.y as f64;
+                                    if let Some(is_right) =
+                                        Self::is_in_csd_close_zone(rel_x, rel_y, geo.size.w as f64)
+                                    {
+                                        if let Some(app_id) = app_id_for_surface(surf) {
+                                            let key = app_id.trim().to_ascii_lowercase();
+                                            if !key.is_empty() {
+                                                let dx = if is_right {
+                                                    (geo.size.w as f64 - rel_x).clamp(4.0, 72.0)
+                                                } else {
+                                                    rel_x.clamp(4.0, 72.0)
+                                                };
+                                                let dy = rel_y.clamp(4.0, 56.0);
+                                                self.learned_close_button_offsets
+                                                    .insert((key, is_right), (dx, dy));
+                                            }
+                                        }
+                                    }
+                                }
+                                (hint_pt, if from_click { "click" } else { "hint" })
+                            } else {
+                                (fallback_origin, "fallback-expired")
+                            }
                         } else {
-                            fallback_origin
-                        }
-                    } else {
-                        fallback_origin
-                    };
+                            (fallback_origin, "fallback")
+                        };
 
                     let cached_layers = self
                         .cached_close_snapshots
@@ -7385,10 +7510,15 @@ impl XdgShellHandler for MalusState {
                         .unwrap_or_default();
 
                     tracing::info!(
-                        "🕳️ [BlackHole] Encolando cierre de '{}' ({}x{}, cached_layers={})",
+                        "🕳️ [BlackHole] Encolando cierre de '{}' ({}x{}, origin=({:.1},{:.1}) [{}], loc=({},{}), cached_layers={})",
                         window_title_for_ssd(win),
                         geo.size.w,
                         geo.size.h,
+                        origin_logical.x,
+                        origin_logical.y,
+                        origin_source,
+                        loc.x,
+                        loc.y,
                         cached_layers.len()
                     );
 
@@ -7413,7 +7543,7 @@ impl XdgShellHandler for MalusState {
         }
         self.cached_close_snapshots.remove(surf);
         self.close_button_hints
-            .retain(|_, (_, at)| at.elapsed() < std::time::Duration::from_secs(10));
+            .retain(|_, (_, at, _)| at.elapsed() < std::time::Duration::from_secs(10));
 
         self.window_restore_geometries.remove(surf);
         self.snap_transitions.remove(surf);
@@ -8922,7 +9052,7 @@ mod tests {
                 false,
                 false
             ),
-            (28.5, 24.0)
+            (20.5, 24.0)
         );
         assert_eq!(
             super::MalusState::close_button_offset_for_app_id(
@@ -8930,7 +9060,7 @@ mod tests {
                 false,
                 false
             ),
-            (25.5, 23.5)
+            (20.5, 24.0)
         );
         assert_eq!(
             super::MalusState::close_button_offset_for_app_id(Some("antigravity"), false, false),
@@ -8946,7 +9076,27 @@ mod tests {
                 false,
                 false
             ),
-            (22.5, 23.0)
+            (22.0, 23.0)
+        );
+    }
+
+    #[test]
+    fn csd_close_zone_covers_left_and_right_headerbars() {
+        assert_eq!(
+            super::MalusState::is_in_csd_close_zone(20.0, 24.0, 900.0),
+            Some(false)
+        );
+        assert_eq!(
+            super::MalusState::is_in_csd_close_zone(878.0, 24.0, 900.0),
+            Some(true)
+        );
+        assert_eq!(
+            super::MalusState::is_in_csd_close_zone(450.0, 24.0, 900.0),
+            None
+        );
+        assert_eq!(
+            super::MalusState::is_in_csd_close_zone(20.0, 120.0, 900.0),
+            None
         );
     }
 

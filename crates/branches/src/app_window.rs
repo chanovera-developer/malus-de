@@ -1834,25 +1834,30 @@ impl BranchesWindow {
 
     pub fn set_active_pane(&self, id: PaneId) {
         let active_tab_id = *self.active_tab_id.borrow();
-        let curr = {
+        let changed = {
             let tabs = self.tabs.borrow();
             let Some(tab) = tabs.iter().find(|t| t.id == active_tab_id) else {
                 return;
             };
-            *tab.active_pane_id.borrow_mut() = id;
-            tab.primary_pane.set_is_active(id == PaneId::Primary);
-            tab.secondary_pane.set_is_active(id == PaneId::Secondary);
-            let active = if id == PaneId::Secondary {
-                &tab.secondary_pane
+            if *tab.active_pane_id.borrow() == id {
+                false
             } else {
-                &tab.primary_pane
-            };
-            tab.tab_title_label
-                .set_label(&Self::pane_display_title(active));
-            active.current_path()
+                *tab.active_pane_id.borrow_mut() = id;
+                tab.primary_pane.set_is_active(id == PaneId::Primary);
+                tab.secondary_pane.set_is_active(id == PaneId::Secondary);
+                let active = if id == PaneId::Secondary {
+                    &tab.secondary_pane
+                } else {
+                    &tab.primary_pane
+                };
+                tab.tab_title_label
+                    .set_label(&Self::pane_display_title(active));
+                true
+            }
         };
-        self.sync_active_tab_ui();
-        let _ = curr;
+        if changed {
+            self.sync_active_tab_ui();
+        }
     }
 
     pub fn toggle_split_view(&self) {

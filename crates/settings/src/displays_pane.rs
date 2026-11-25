@@ -1097,12 +1097,12 @@ fn show_arrange_modal(
         .build();
     let (done_wrap, done_btn) = make_squircle_button("Listo", true, None);
     let dlg_close = dialog.clone();
-    done_btn.connect_clicked(move |_| dlg_close.close());
+    done_btn.connect_clicked(move |_| crate::close_attached_modal(&dlg_close));
     footer.append(&done_wrap);
     root.append(&footer);
 
     dialog.set_child(Some(&root));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent_window);
 }
 
 fn show_advanced_modal(
@@ -1189,12 +1189,12 @@ fn show_advanced_modal(
         .build();
     let (done_wrap, done_btn) = make_squircle_button("Listo", true, None);
     let dlg_close = dialog.clone();
-    done_btn.connect_clicked(move |_| dlg_close.close());
+    done_btn.connect_clicked(move |_| crate::close_attached_modal(&dlg_close));
     footer.append(&done_wrap);
     root.append(&footer);
 
     dialog.set_child(Some(&root));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent_window);
 }
 
 fn show_night_shift_modal(parent_window: &ApplicationWindow) {
@@ -1333,12 +1333,12 @@ fn show_night_shift_modal(parent_window: &ApplicationWindow) {
         .build();
     let (done_wrap, done_btn) = make_squircle_button("Listo", true, None);
     let dlg_close = dialog.clone();
-    done_btn.connect_clicked(move |_| dlg_close.close());
+    done_btn.connect_clicked(move |_| crate::close_attached_modal(&dlg_close));
     footer.append(&done_wrap);
     root.append(&footer);
 
     dialog.set_child(Some(&root));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent_window);
 }
 
 pub fn create_displays_pane(window: &ApplicationWindow) -> (ScrolledWindow, Rc<dyn Fn()>) {

@@ -1048,11 +1048,11 @@ fn open_clock_options_dialog(parent: &ApplicationWindow, cfg: &Rc<RefCell<MenuBa
     let (ok_wrap, ok_btn) = make_squircle_button("Aceptar", true, None);
     ok_wrap.set_halign(Align::End);
     let dlg_c = dialog.clone();
-    ok_btn.connect_clicked(move |_| dlg_c.close());
+    ok_btn.connect_clicked(move |_| crate::close_attached_modal(&dlg_c));
     vbox.append(&ok_wrap);
 
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 fn open_battery_options_dialog(
@@ -1118,18 +1118,18 @@ fn open_battery_options_dialog(
     let dlg_nav = dialog.clone();
     let nav_c = navigate.clone();
     go_btn.connect_clicked(move |_| {
-        dlg_nav.close();
+        crate::close_attached_modal(&dlg_nav);
         nav_c("battery");
     });
     let (ok_wrap, ok_btn) = make_squircle_button("Aceptar", true, None);
     let dlg_ok = dialog.clone();
-    ok_btn.connect_clicked(move |_| dlg_ok.close());
+    ok_btn.connect_clicked(move |_| crate::close_attached_modal(&dlg_ok));
     btn_row.append(&go_wrap);
     btn_row.append(&ok_wrap);
     vbox.append(&btn_row);
 
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 fn open_add_controls_dialog(
@@ -1228,11 +1228,11 @@ fn open_add_controls_dialog(
     let (ok_wrap, ok_btn) = make_squircle_button("Listo", true, None);
     ok_wrap.set_halign(Align::End);
     let dlg_ok = dialog.clone();
-    ok_btn.connect_clicked(move |_| dlg_ok.close());
+    ok_btn.connect_clicked(move |_| crate::close_attached_modal(&dlg_ok));
     vbox.append(&ok_wrap);
 
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 #[cfg(test)]

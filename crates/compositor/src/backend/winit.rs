@@ -1021,7 +1021,7 @@ pub fn run_winit() -> Result<()> {
                             }
 
                             if !has_super && !has_alt && event.button_code() == 0x110 {
-                                state.record_csd_close_click_hint(&window, loc, point);
+                                state.record_csd_close_click_hint(&window, point);
                             }
 
                             if (has_super || has_alt) && event.button_code() == 0x110 {
@@ -1154,6 +1154,11 @@ pub fn run_winit() -> Result<()> {
                         }
                         if state.handle_app_switcher_deck_pointer_button(point, event.button_code(), false) {
                             return;
+                        }
+                        if event.button_code() == 0x110 && !pointer.is_grabbed() {
+                            if let Some((ref window, _)) = regular_win {
+                                state.record_csd_close_click_hint(window, point);
+                            }
                         }
                         state.snap_preview = None;
                     }

@@ -491,8 +491,50 @@ impl PointerGrab<MalusState> for MoveSurfaceGrab {
             new_location.y = min_top as f64;
         }
 
+        let prev_loc = data.space.element_location(&self.window);
+        let new_loc_i32 = new_location.to_i32_round();
         data.space
-            .map_element(self.window.clone(), new_location.to_i32_round(), true);
+            .map_element(self.window.clone(), new_loc_i32, true);
+
+        // Mantener ancladas ventanas padre e hijas modales/transients durante el arrastre:
+        // mover el modal arrastra la ventana padre y mover la ventana padre arrastra sus modales.
+        if let Some(prev) = prev_loc {
+            let step = new_loc_i32 - prev;
+            if step.x != 0 || step.y != 0 {
+                let parent_win = self
+                    .window
+                    .toplevel()
+                    .and_then(|t| t.parent())
+                    .and_then(|p| {
+                        let ps = p.wl_surface();
+                        ps.as_deref().and_then(|s| data.window_for_surface(s))
+                    });
+                if let Some(parent) = parent_win {
+                    if let Some(p_loc) = data.space.element_location(&parent) {
+                        data.space.map_element(parent.clone(), p_loc + step, false);
+                    }
+                    data.space.raise_element(&self.window, true);
+                } else if let Some(my_surf) = self.window.wl_surface() {
+                    let children: Vec<Window> = data
+                        .space
+                        .elements()
+                        .filter(|w| {
+                            w.toplevel()
+                                .and_then(|t| t.parent())
+                                .and_then(|p| p.wl_surface().map(|s| s.into_owned()))
+                                .is_some_and(|ps| ps == *my_surf)
+                        })
+                        .cloned()
+                        .collect();
+                    for child in children {
+                        if let Some(c_loc) = data.space.element_location(&child) {
+                            data.space.map_element(child.clone(), c_loc + step, false);
+                            data.space.raise_element(&child, true);
+                        }
+                    }
+                }
+            }
+        }
 
         let cur_loc = event.location;
         let active_output = data

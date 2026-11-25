@@ -844,6 +844,10 @@ fn populate_control_center_popover(popover: &Popover) {
 // ==========================================
 
 fn is_focus_active() -> bool {
+    let focus_cfg = malus_de_common::config::FocusConfig::load();
+    if focus_cfg.is_active_now() {
+        return true;
+    }
     let output = Command::new("gsettings")
         .args(["get", "org.gnome.desktop.notifications", "show-banners"])
         .output();
@@ -856,6 +860,14 @@ fn is_focus_active() -> bool {
 }
 
 fn set_focus_active(active: bool) {
+    let mut focus_cfg = malus_de_common::config::FocusConfig::load();
+    focus_cfg.active_focus_id = if active {
+        Some("do-not-disturb".to_string())
+    } else {
+        None
+    };
+    let _ = focus_cfg.save();
+
     let val = if active { "false" } else { "true" };
     let _ = Command::new("gsettings")
         .args([

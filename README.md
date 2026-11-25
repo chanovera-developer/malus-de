@@ -44,20 +44,21 @@ El proyecto sigue una hoja de ruta incremental por hitos. La base del escritorio
 | M8 | Multi-monitor 4K y teclado | ✅ | Soporte dual 4K, hotplug sin desconexión, brillo por pantalla vía LUT gamma CRTC y XKB latam. |
 | M9 | Portapapeles | ✅ | Historial persistente con búsqueda y fijados. |
 | M10 | Captura y grabación | 🟡 | Captura activa; OCR y ventana individual pendientes. |
-| M11 | Explorador de archivos | 🟡 | Branches con vistas, etiquetas de color, selección *type-ahead*, Quick Look flotante y paridad de menús contextuales con el escritorio. |
+| M11 | Explorador de archivos | 🟡 | Branches casi completo (vistas, etiquetas, *type-ahead*, Quick Look y paridad de menús); faltan ventanas de configuración y vista de galería. |
 | M12 | Ajustes del sistema | ✅ | App nativa con carga diferida; paneles de Apariencia, Pantallas, Fondo, Escritorio y Dock, Barra de menús, Sonido, Notificaciones, Pip/Canopy, Red, Wi-Fi, Bluetooth, VPN, Batería, Accesibilidad y General. |
 | M13 | Motor gráfico nativo | 🟡 | Infraestructura lista, migración progresiva en marcha. |
 | M14 | Optimización DRM | ✅ | Idle sleep, caché de fondos/miniaturas y ajustes de rendimiento ya aplicados. |
 | M15 | Spotlight reactivo | 📋 | Pendiente de integración de monitorización de apps. |
 | M16 | Hotkeys (`XF86*`) y OSD | ✅ | Teclas de volumen, micrófono, brillo, luz de teclado, controles MPRIS2 y OSD flotante Liquid Glass squircle de 16 segmentos. |
-| M17 | Gestos, Trackpad y Hot Corners | 📋 | Pellizco (`pinch`), scroll natural/aceleración reales, *shake cursor*, táctil y esquinas activas. |
+| M17 | Gestos, Trackpad y Hot Corners | 🟡 | Hot Corners (Mission Control, escritorio, bloqueo), gestos `swipe` 3+ dedos y *tap-to-click* activos; faltan `GesturePinch*`, scroll natural/aceleración/DWT en `libinput`, *shake cursor* y soporte táctil. |
 | M18 | Energía, Batería e Inactividad | 🟡 | Indicador y panel de Batería activos; pendientes `ext-idle-notify`, inhibición, cierre de tapa y suspensión automática. |
 | M19 | Night Shift real y Display | 🟡 | Brillo real vía LUT gamma CRTC y panel Pantallas estilo Apple; pendientes Night Shift por horario, VRR y gestión de color. |
 | M20 | ScreenCast PipeWire | 📋 | Compartición de pantalla/ventana vía `xdg-desktop-portal` para navegadores y OBS. |
 | M21 | IME, Emojis y Juegos | 📋 | `text-input-v3`/Fcitx5, selector de emojis y `pointer-constraints`/`relative-pointer`. |
 | M22 | Concentración (DND) y Avisos | 🟡 | Burbujas Liquid Glass con animación, clic para enfocar/abrir la app, reglas por app en Ajustes y globos push en el Dock; pendientes DND real y agrupación por app. |
 | M23 | Ajustes completos y Polkit | 🟡 | Paneles de Red, Wi-Fi, Bluetooth, VPN, Batería, Sonido y Notificaciones operativos; pendientes Trackpad, Usuarios/Huella, Polkit nativo e indicadores de cámara/mic. |
-| M24 | Accesibilidad y Mezclador | 🟡 | Mezclador de volumen por app (PipeWire), enrutamiento, balance L/R, sonidos del sistema y reducir transparencia implementados; pendientes zoom de pantalla, reducir movimiento y AT-SPI. |
+| M24 | Accesibilidad y Mezclador | 🟡 | Mezclador PipeWire por app (enrutamiento, balance L/R y sonidos), panel de Accesibilidad, reducir transparencia real en el compositor y soporte Orca/`spd-say`; faltan zoom GPU de pantalla y aplicar reducir movimiento en compositor/shell. |
+| M25 | Navegador web nativo | 📋 | Navegador estilo Safari Tahoe en Rust + GTK4 + CEF (OSR) con `corner-shape: squircle` nativo, `adblock-rust`, H.264/AAC, Widevine L3 bajo demanda e integración completa con Malus DE. |
 
 En conjunto, el proyecto está en una fase de maduración técnica: la infraestructura principal ya está construida y la mayor parte del trabajo actual está centrado en estabilización, validación y completitud funcional de módulos específicos.
 

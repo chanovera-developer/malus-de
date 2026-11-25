@@ -113,7 +113,7 @@ paned.settings-main-paned > separator {
 
 .sidebar-windowcontrols {
     min-height: 48px;
-    padding: 0px 12px;
+    padding: 0px 4px;
     background-color: transparent;
     background: transparent;
     border-color: transparent;
@@ -1186,6 +1186,27 @@ switch.macos-switch image {
 
 .settings-modal-scrim {
     background-color: rgba(0, 0, 0, 0.22);
+}
+
+.settings-modal-backdrop {
+    background-color: rgba(0, 0, 0, 0.22);
+}
+
+.settings-modal-sheet {
+    background-color: @view_bg_color;
+    border-radius: 20px;
+    border: 1px solid alpha(@window_fg_color, 0.12);
+    box-shadow: 0 22px 58px rgba(0, 0, 0, 0.28), 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.settings-modal-header {
+    padding: 12px 18px 10px 18px;
+}
+
+.settings-modal-title {
+    font-size: 13.5px;
+    font-weight: 700;
+    color: @window_fg_color;
 }
 
 popover.wifi-macos-popover,

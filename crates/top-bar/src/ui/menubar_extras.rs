@@ -149,13 +149,37 @@ fn notifications_gsettings() -> Option<gtk4::gio::Settings> {
 }
 
 fn is_focus_active() -> bool {
+    let focus_cfg = malus_de_common::config::FocusConfig::load();
+    if focus_cfg.is_active_now() {
+        return true;
+    }
     if let Some(settings) = notifications_gsettings() {
         return !settings.boolean("show-banners");
     }
     false
 }
 
+fn active_focus_status_text() -> String {
+    let focus_cfg = malus_de_common::config::FocusConfig::load();
+    if let Some(mode) = focus_cfg.active_mode_now() {
+        return format!("{} activado", mode.name);
+    }
+    if is_focus_active() {
+        "No molestar activado".to_string()
+    } else {
+        "Enfoque desactivado".to_string()
+    }
+}
+
 fn set_focus_active(active: bool) {
+    let mut focus_cfg = malus_de_common::config::FocusConfig::load();
+    focus_cfg.active_focus_id = if active {
+        Some("do-not-disturb".to_string())
+    } else {
+        None
+    };
+    let _ = focus_cfg.save();
+
     if let Some(settings) = notifications_gsettings() {
         let _ = settings.set_boolean("show-banners", !active);
     }
@@ -246,9 +270,22 @@ pub fn create_menubar_extra_widgets() -> MenuBarExtraWidgets {
         .css_classes(["popover-menu-item"])
         .has_frame(false)
         .build();
+    let focus_settings_btn = Button::builder()
+        .label("Configuración de enfoque...")
+        .css_classes(["popover-menu-item"])
+        .has_frame(false)
+        .build();
+    {
+        let fp_s = focus_pop.clone();
+        focus_settings_btn.connect_clicked(move |_| {
+            fp_s.popdown();
+            launch_settings_panel("focus");
+        });
+    }
     focus_box.append(&focus_status_lbl);
     focus_box.append(&Separator::new(Orientation::Horizontal));
     focus_box.append(&focus_toggle_btn);
+    focus_box.append(&focus_settings_btn);
 
     // 3. Duplicar pantalla / Pantallas
     let (mirror_btn, mirror_pop, mirror_box) = make_extra_menu_button("Duplicar pantalla", 240);
@@ -563,7 +600,7 @@ pub fn create_menubar_extra_widgets() -> MenuBarExtraWidgets {
             }
 
             let focused = is_focus_active();
-            focus_stat_c.set_label(if focused { "No molestar activado" } else { "Enfoque desactivado" });
+            focus_stat_c.set_label(&active_focus_status_text());
             focus_btn_c.set_visible(cfg.focus && (cfg.focus_mode == 0 || (cfg.focus_mode == 1 && focused)));
 
             let dcfg = DisplaysConfig::load();

@@ -59,7 +59,7 @@ paned:not(.branches-split-paned) > separator {
 
 .branches-sidebar-windowcontrols {
     min-height: 48px;
-    padding: 0 12px;
+    padding: 0 4px;
     background-color: transparent;
 }
 

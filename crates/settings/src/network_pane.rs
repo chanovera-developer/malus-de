@@ -1009,7 +1009,7 @@ fn show_service_details_dialog(
         let ban_c = banner.clone();
         let rel_c = trigger_reload.clone();
         toggle_btn.connect_clicked(move |_| {
-            d_c.close();
+            crate::close_attached_modal(&d_c);
             let c_name = conn.clone();
             let (tx, rx) = async_channel::bounded::<Result<(), String>>(1);
             std::thread::spawn(move || {
@@ -1037,12 +1037,12 @@ fn show_service_details_dialog(
     footer.append(&GtkBox::builder().hexpand(true).build());
     let (ok_wrap, ok_btn) = make_squircle_button("Aceptar", true, None);
     let d_ok = dialog.clone();
-    ok_btn.connect_clicked(move |_| d_ok.close());
+    ok_btn.connect_clicked(move |_| crate::close_attached_modal(&d_ok));
     footer.append(&ok_wrap);
 
     vbox.append(&footer);
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 fn show_add_service_dialog(
@@ -1116,7 +1116,7 @@ fn show_add_service_dialog(
     footer.append(&ok_wrap);
 
     let d_c = dialog.clone();
-    cancel_btn.connect_clicked(move |_| d_c.close());
+    cancel_btn.connect_clicked(move |_| crate::close_attached_modal(&d_c));
 
     let d_ok = dialog.clone();
     let ban_c = banner.clone();
@@ -1128,7 +1128,7 @@ fn show_add_service_dialog(
         }
         let iface = if_entry.text().trim().to_string();
         let kind_idx = type_dd.selected();
-        d_ok.close();
+        crate::close_attached_modal(&d_ok);
 
         let (tx, rx) = async_channel::bounded::<Result<(), String>>(1);
         std::thread::spawn(move || {
@@ -1162,7 +1162,7 @@ fn show_add_service_dialog(
 
     vbox.append(&footer);
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 fn show_service_order_dialog(
@@ -1290,7 +1290,7 @@ fn show_service_order_dialog(
     footer.append(&ok_wrap);
 
     let d_c = dialog.clone();
-    cancel_btn.connect_clicked(move |_| d_c.close());
+    cancel_btn.connect_clicked(move |_| crate::close_attached_modal(&d_c));
 
     let d_ok = dialog.clone();
     let ord_ok = ordered.clone();
@@ -1303,7 +1303,7 @@ fn show_service_order_dialog(
             .filter(|s| !s.connection_name.is_empty())
             .map(|s| s.connection_name.clone())
             .collect();
-        d_ok.close();
+        crate::close_attached_modal(&d_ok);
         let (tx, rx) = async_channel::bounded::<Result<(), String>>(1);
         std::thread::spawn(move || {
             for (i, conn_name) in final_items.iter().enumerate() {
@@ -1335,7 +1335,7 @@ fn show_service_order_dialog(
 
     vbox.append(&footer);
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 fn show_locations_dialog(parent: &ApplicationWindow) {
@@ -1410,7 +1410,7 @@ fn show_locations_dialog(parent: &ApplicationWindow) {
     footer.append(&ok_wrap);
 
     let d_c = dialog.clone();
-    cancel_btn.connect_clicked(move |_| d_c.close());
+    cancel_btn.connect_clicked(move |_| crate::close_attached_modal(&d_c));
 
     let d_ok = dialog.clone();
     let cfg_ok = cfg.clone();
@@ -1421,12 +1421,12 @@ fn show_locations_dialog(parent: &ApplicationWindow) {
             c.active_location = name;
             c.save();
         }
-        d_ok.close();
+        crate::close_attached_modal(&d_ok);
     });
 
     vbox.append(&footer);
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 /// Modal "Opciones de Firewall" inspirado fielmente en `assets/screenshots/Red02.png`.
@@ -1698,7 +1698,7 @@ fn show_firewall_options_dialog(
     vbox.append(&actions);
 
     let d_c = dialog.clone();
-    cancel_btn.connect_clicked(move |_| d_c.close());
+    cancel_btn.connect_clicked(move |_| crate::close_attached_modal(&d_c));
 
     let d_ok = dialog.clone();
     let snap_init = snap.clone();
@@ -1732,7 +1732,7 @@ fn show_firewall_options_dialog(
 
         let prev_zone = prefs_ok.borrow().previous_zone.clone();
         let old_snap = snap_init.clone();
-        d_ok.close();
+        crate::close_attached_modal(&d_ok);
 
         ban_ok.set_label("Aplicando opciones de Firewall...");
         ban_ok.set_visible(true);
@@ -1760,7 +1760,7 @@ fn show_firewall_options_dialog(
     });
 
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 fn build_option_switch_row(title: &str, subtitle: Option<&str>, active: bool) -> (GtkBox, Switch) {
@@ -1932,7 +1932,7 @@ fn show_add_firewall_rule_dialog(
     footer.append(&a_wrap);
 
     let d1 = dlg.clone();
-    c_btn.connect_clicked(move |_| d1.close());
+    c_btn.connect_clicked(move |_| crate::close_attached_modal(&d1));
 
     let d2 = dlg.clone();
     let r_c = draft_rules.clone();
@@ -1951,7 +1951,7 @@ fn show_add_firewall_rule_dialog(
             action: FirewallAppAction::Allow,
             is_custom_binary: is_bin,
         });
-        d2.close();
+        crate::close_attached_modal(&d2);
         if let Some(f) = f_c.borrow().as_ref() {
             f();
         }
@@ -1959,7 +1959,7 @@ fn show_add_firewall_rule_dialog(
 
     vbox.append(&footer);
     dlg.set_child(Some(&vbox));
-    dlg.present();
+    crate::present_attached_modal(&dlg, parent);
 }
 
 // ============================================================================

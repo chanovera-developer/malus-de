@@ -873,11 +873,11 @@ fn show_bluetooth_adapter_details_dialog(parent: &ApplicationWindow, snap: &Blue
     let (ok_wrap, ok_btn) = make_squircle_button("Aceptar", true, None);
     ok_wrap.set_halign(Align::End);
     let d_c = dialog.clone();
-    ok_btn.connect_clicked(move |_| d_c.close());
+    ok_btn.connect_clicked(move |_| crate::close_attached_modal(&d_c));
     vbox.append(&ok_wrap);
 
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 fn show_bt_device_details_dialog(
@@ -990,7 +990,7 @@ fn show_bt_device_details_dialog(
     let rel_f = trigger_reload.clone();
     let remembered_f = remembered_my_devices.clone();
     forget_btn.connect_clicked(move |_| {
-        d_f.close();
+        crate::close_attached_modal(&d_f);
         let p = dev_path_f.clone();
         let n = dev_name_f.clone();
         let b = ban_f.clone();
@@ -1026,7 +1026,7 @@ fn show_bt_device_details_dialog(
     let ban_t = banner.clone();
     let rel_t = trigger_reload.clone();
     toggle_btn.connect_clicked(move |_| {
-        d_t.close();
+        crate::close_attached_modal(&d_t);
         let d = dev_t.clone();
         let b = ban_t.clone();
         let r = rel_t.clone();
@@ -1049,12 +1049,12 @@ fn show_bt_device_details_dialog(
 
     let (ok_wrap, ok_btn) = make_squircle_button("Aceptar", true, None);
     let d_ok = dialog.clone();
-    ok_btn.connect_clicked(move |_| d_ok.close());
+    ok_btn.connect_clicked(move |_| crate::close_attached_modal(&d_ok));
     footer.append(&ok_wrap);
 
     vbox.append(&footer);
     dialog.set_child(Some(&vbox));
-    dialog.present();
+    crate::present_attached_modal(&dialog, parent);
 }
 
 // =========================================================================

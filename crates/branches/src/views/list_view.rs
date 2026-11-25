@@ -115,8 +115,10 @@ const MAX_COLUMN_WIDTH: i32 = 600;
 pub struct ListView {
     container: GtkBox,
     header: GtkBox,
+    scrolled: ScrolledWindow,
     list_box: ListBox,
     items: Rc<RefCell<Vec<FileItem>>>,
+    groups: Rc<RefCell<Option<Vec<String>>>>,
     current_folder: Rc<RefCell<Option<PathBuf>>>,
     pending_select_name: Rc<RefCell<Option<String>>>,
     icon_size: Rc<Cell<i32>>,
@@ -153,6 +155,7 @@ impl ListView {
 
         let current_folder = Rc::new(RefCell::new(None::<PathBuf>));
         let items = Rc::new(RefCell::new(Vec::<FileItem>::new()));
+        let groups = Rc::new(RefCell::new(None::<Vec<String>>));
         let pending_select_name = Rc::new(RefCell::new(None::<String>));
 
         // Franjas grises de columnas pares: capa inferior que llega hasta el final de la vista
@@ -221,6 +224,17 @@ impl ListView {
             .css_classes(["branches-list-scroll"])
             .build();
 
+        // Delegar el desplazamiento por teclado directamente al ListBox y desactivar
+        // scroll-to-focus automático del Viewport para evitar saltos espurios al inicio
+        // cuando cambian miniaturas, metadatos o foco de la ventana.
+        list_box.set_adjustment(Some(&scrolled.vadjustment()));
+        if let Some(vp) = scrolled
+            .child()
+            .and_then(|c| c.downcast::<gtk4::Viewport>().ok())
+        {
+            vp.set_scroll_to_focus(false);
+        }
+
         let bg_click = GestureClick::new();
         bg_click.set_button(gdk::BUTTON_SECONDARY);
         let scrolled_menu = scrolled.clone();
@@ -239,8 +253,10 @@ impl ListView {
         Self {
             container,
             header,
+            scrolled,
             list_box,
             items,
+            groups,
             current_folder,
             pending_select_name,
             icon_size,
@@ -269,7 +285,8 @@ impl ListView {
 
     pub fn get_selected_item_and_widget(&self) -> Option<(FileItem, gtk4::Widget)> {
         let row = self.list_box.selected_rows().into_iter().next()?;
-        let idx = row.index() as usize;
+        let idx = unsafe { row.data::<usize>("list_item_idx").map(|p| *p.as_ref()) }
+            .or_else(|| usize::try_from(row.index()).ok())?;
         let item = self.items.borrow().get(idx).cloned()?;
         Some((item, row.upcast()))
     }
@@ -322,6 +339,7 @@ impl ListView {
             groups.map(|g| g.to_vec())
         };
         *self.items.borrow_mut() = sorted;
+        *self.groups.borrow_mut() = active_groups.clone();
         let items = self.items.borrow().clone();
         let items = &items[..];
 
@@ -345,6 +363,113 @@ impl ListView {
         }
     }
 
+    /// Sincroniza cambios provenientes del monitor del sistema de archivos preservando
+    /// la selección activa y la posición de desplazamiento vertical.
+    pub fn sync_items_incremental(&self, items: &[FileItem], groups: Option<&[String]>) {
+        let mut sorted = items.to_vec();
+        let active_groups: Option<Vec<String>> = if self.sort_state.get().is_some() {
+            sort_items(&mut sorted, self.sort_state.get());
+            None
+        } else {
+            groups.map(|g| g.to_vec())
+        };
+
+        // Ruta rápida sin recrear filas: si las rutas y grupos coinciden exactamente,
+        // actualizar solo las celdas de metadatos (fecha, tamaño, clase y miniatura) in-place.
+        let same_structure = {
+            let prev_items = self.items.borrow();
+            let prev_groups = self.groups.borrow();
+            rows_match_in_place(&prev_items, &sorted, prev_groups.as_deref(), active_groups.as_deref())
+        };
+        if same_structure {
+            let icon_size = self.icon_size.get();
+            let prev_items = self.items.borrow().clone();
+            *self.items.borrow_mut() = sorted.clone();
+            let mut child = self.list_box.first_child();
+            while let Some(widget) = child {
+                if let Some(row) = widget.downcast_ref::<ListBoxRow>() {
+                    if let Some(idx) =
+                        unsafe { row.data::<usize>("list_item_idx").map(|p| *p.as_ref()) }
+                    {
+                        if let (Some(old_it), Some(new_it)) = (prev_items.get(idx), sorted.get(idx))
+                        {
+                            if old_it.modified != new_it.modified
+                                || old_it.size != new_it.size
+                                || old_it.modified_str != new_it.modified_str
+                                || old_it.size_str != new_it.size_str
+                                || old_it.kind_str != new_it.kind_str
+                            {
+                                update_list_row_metadata(row, new_it, icon_size);
+                            }
+                        }
+                    }
+                }
+                child = widget.next_sibling();
+            }
+            return;
+        }
+
+        // Cambio estructural (archivo creado/eliminado/reordenado): preservar selección,
+        // foco y posición vertical del scroll antes de reconstruir las filas.
+        let selected_paths: std::collections::HashSet<PathBuf> = self
+            .get_selected_items()
+            .into_iter()
+            .map(|it| it.path)
+            .collect();
+        let focused_path: Option<PathBuf> = self
+            .list_box
+            .focus_child()
+            .and_then(|w| w.downcast::<ListBoxRow>().ok())
+            .and_then(|row| {
+                let idx = unsafe { row.data::<usize>("list_item_idx").map(|p| *p.as_ref()) }?;
+                self.items.borrow().get(idx).map(|it| it.path.clone())
+            });
+        let saved_scroll_y = self.scrolled.vadjustment().value();
+
+        *self.items.borrow_mut() = sorted;
+        *self.groups.borrow_mut() = active_groups.clone();
+        let snapshot = self.items.borrow().clone();
+
+        populate_list(
+            &self.list_box,
+            &snapshot,
+            active_groups.as_deref(),
+            &self.items,
+            self.icon_size.get(),
+            self.col_widths.get(),
+            &self.on_navigate,
+        );
+
+        let pending_name = self.pending_select_name.borrow_mut().take();
+        if let Some(target_name) = pending_name {
+            if let Some(idx) = snapshot.iter().position(|it| it.name == target_name) {
+                if let Some(row) = row_for_item_index(&self.list_box, idx) {
+                    self.list_box.select_row(Some(&row));
+                    row.grab_focus();
+                }
+            }
+        } else if !selected_paths.is_empty() {
+            for (idx, item) in snapshot.iter().enumerate() {
+                if selected_paths.contains(&item.path) {
+                    if let Some(row) = row_for_item_index(&self.list_box, idx) {
+                        self.list_box.select_row(Some(&row));
+                        if focused_path.as_ref() == Some(&item.path) {
+                            row.grab_focus();
+                        }
+                    }
+                }
+            }
+        }
+
+        // Restaurar el desplazamiento vertical tras el nuevo layout del ListBox
+        let scrolled_c = self.scrolled.clone();
+        glib::idle_add_local_once(move || {
+            let vadj = scrolled_c.vadjustment();
+            let max_y = (vadj.upper() - vadj.page_size()).max(vadj.lower());
+            vadj.set_value(saved_scroll_y.clamp(vadj.lower(), max_y));
+        });
+    }
+
     pub fn refresh_cut_states(&self) {
         let items = self.items.borrow();
         let mut child = self.list_box.first_child();
@@ -361,6 +486,71 @@ impl ListView {
             }
             child = widget.next_sibling();
         }
+    }
+}
+
+/// Comprueba si dos listas de ítems y grupos tienen exactamente la misma secuencia de rutas,
+/// permitiendo actualizar metadatos in-place sin recrear ninguna fila del `ListBox`.
+fn rows_match_in_place(
+    prev_items: &[FileItem],
+    next_items: &[FileItem],
+    prev_groups: Option<&[String]>,
+    next_groups: Option<&[String]>,
+) -> bool {
+    prev_items.len() == next_items.len()
+        && prev_groups == next_groups
+        && prev_items
+            .iter()
+            .zip(next_items.iter())
+            .all(|(a, b)| a.path == b.path && a.name == b.name && a.is_dir == b.is_dir)
+}
+
+/// Actualiza fecha, tamaño, clase y miniatura de una fila existente sin reconstruir el `ListBoxRow`.
+fn update_list_row_metadata(row: &ListBoxRow, item: &FileItem, icon_size: i32) {
+    let Some(hbox) = row.child().and_then(|c| c.downcast::<GtkBox>().ok()) else {
+        return;
+    };
+    let mut child = hbox.first_child();
+    let mut col_idx = 0usize;
+    while let Some(w) = child {
+        match col_idx {
+            0 => {
+                if let Some(name_box) = w.downcast_ref::<GtkBox>() {
+                    if let Some(img) = name_box
+                        .first_child()
+                        .and_then(|c| c.downcast::<gtk4::Image>().ok())
+                    {
+                        crate::views::update_item_image_thumbnail(
+                            &img,
+                            item,
+                            icon_size,
+                            Some("branches-row-thumb"),
+                        );
+                    }
+                }
+            }
+            1 => {
+                if let Some(lbl) = w.downcast_ref::<Label>() {
+                    lbl.set_label(&item.modified_str);
+                    lbl.set_tooltip_text(Some(&item.modified_str));
+                }
+            }
+            2 => {
+                if let Some(lbl) = w.downcast_ref::<Label>() {
+                    lbl.set_label(&item.size_str);
+                    lbl.set_tooltip_text(Some(&item.size_str));
+                }
+            }
+            3 => {
+                if let Some(lbl) = w.downcast_ref::<Label>() {
+                    lbl.set_label(&item.kind_str);
+                    lbl.set_tooltip_text(Some(&item.kind_str));
+                }
+            }
+            _ => break,
+        }
+        child = w.next_sibling();
+        col_idx += 1;
     }
 }
 
@@ -832,4 +1022,44 @@ fn create_list_row(
     }
 
     row
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mk_item(name: &str, size: u64) -> FileItem {
+        FileItem {
+            name: name.to_string(),
+            path: PathBuf::from(format!("/tmp/{name}")),
+            is_dir: false,
+            is_hidden: false,
+            is_symlink: false,
+            size,
+            size_str: format!("{size} B"),
+            modified: None,
+            accessed: None,
+            added: None,
+            created: None,
+            modified_str: "--".to_string(),
+            kind_str: "Archivo".to_string(),
+            gicon: gtk4::gio::ThemedIcon::new("text-x-generic").upcast(),
+        }
+    }
+
+    #[test]
+    fn rows_match_in_place_allows_metadata_updates_without_rebuilding_rows() {
+        let a = vec![mk_item("a.txt", 10), mk_item("b.txt", 20)];
+        let b = vec![mk_item("a.txt", 10), mk_item("b.txt", 999)];
+        let c = vec![mk_item("b.txt", 20), mk_item("a.txt", 10)];
+        let d = vec![mk_item("a.txt", 10)];
+
+        assert!(rows_match_in_place(&a, &b, None, None));
+        assert!(!rows_match_in_place(&a, &c, None, None));
+        assert!(!rows_match_in_place(&a, &d, None, None));
+        let g1 = vec!["A".to_string(), "B".to_string()];
+        let g2 = vec!["A".to_string(), "C".to_string()];
+        assert!(rows_match_in_place(&a, &b, Some(&g1), Some(&g1)));
+        assert!(!rows_match_in_place(&a, &b, Some(&g1), Some(&g2)));
+    }
 }

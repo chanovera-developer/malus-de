@@ -259,8 +259,13 @@ impl FolderPane {
         match idx {
             1 => {
                 self.list_view.set_current_folder(folder_opt);
-                self.list_view
-                    .set_items_grouped(&items, groups.as_deref());
+                if incremental_icons {
+                    self.list_view
+                        .sync_items_incremental(&items, groups.as_deref());
+                } else {
+                    self.list_view
+                        .set_items_grouped(&items, groups.as_deref());
+                }
             }
             2 => {
                 self.column_view.set_current_folder(folder_opt);
