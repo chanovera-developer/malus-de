@@ -313,7 +313,10 @@ pub struct MalusState {
     pub next_window_id: u64,
     pub dock_slots: HashMap<u64, Rectangle<i32, Logical>>,
     pub active_animations: Vec<GenieAnimation>,
-    pub close_button_hints: HashMap<WlSurface, (Point<f64, Logical>, Instant)>,
+    pub close_button_hints: HashMap<WlSurface, (Point<f64, Logical>, Instant, bool)>,
+    /// Desplazamientos `(dx_desde_borde, dy_desde_arriba)` aprendidos por `(app_id, botones_derecha)`
+    /// al cerrar ventanas CSD haciendo clic en su botón de cerrar.
+    pub learned_close_button_offsets: HashMap<(String, bool), (f64, f64)>,
     pub renderer_context_id: Option<
         smithay::backend::renderer::ContextId<smithay::backend::renderer::gles::GlesTexture>,
     >,
@@ -1485,6 +1488,7 @@ impl MalusState {
             dock_slots: HashMap::new(),
             active_animations: Vec::new(),
             close_button_hints: HashMap::new(),
+            learned_close_button_offsets: HashMap::new(),
             renderer_context_id: None,
             cached_close_snapshots: HashMap::new(),
             pending_black_holes: Vec::new(),
@@ -2545,10 +2549,10 @@ impl MalusState {
         }
         let app_lower = app_id.unwrap_or("").trim().to_ascii_lowercase();
         if app_lower == "dev.malus.branches" {
-            return (28.5, 24.0);
+            return (22.0, 24.0);
         }
         if app_lower == "dev.malus.settings" {
-            return (25.5, 23.5);
+            return (20.0, 24.0);
         }
         if app_lower.contains("antigravity")
             || app_lower == "code"
@@ -2561,10 +2565,11 @@ impl MalusState {
         if is_firefox {
             return (16.5, 21.0);
         }
-        (22.5, 23.0)
+        (22.0, 23.0)
     }
 
     fn close_button_center_logical(
+        &self,
         window: &smithay::desktop::Window,
         loc: Point<i32, Logical>,
         uses_ssd: bool,
@@ -2577,11 +2582,27 @@ impl MalusState {
             loc.y as f64
         };
         let app_id = window.wl_surface().and_then(|s| toplevel_info(&s).0);
-        let (dx, dy) = Self::close_button_offset_for_app_id(
-            app_id.as_deref(),
-            is_firefox_window(window),
-            uses_ssd,
-        );
+        let learned = if !uses_ssd {
+            app_id.as_deref().and_then(|id| {
+                let key = id.trim().to_ascii_lowercase();
+                if key.is_empty() {
+                    None
+                } else {
+                    self.learned_close_button_offsets
+                        .get(&(key, buttons_right))
+                        .copied()
+                }
+            })
+        } else {
+            None
+        };
+        let (dx, dy) = learned.unwrap_or_else(|| {
+            Self::close_button_offset_for_app_id(
+                app_id.as_deref(),
+                is_firefox_window(window),
+                uses_ssd,
+            )
+        });
         let x = if buttons_right {
             let win_w = window.geometry().size.w.max(0) as f64;
             if win_w > dx {
@@ -2607,7 +2628,7 @@ impl MalusState {
             .toplevel()
             .map(|t| t.current_state().states.contains(XdgState::Fullscreen))
             .unwrap_or(false);
-        let origin = Self::close_button_center_logical(
+        let origin = self.close_button_center_logical(
             window,
             loc,
             uses_ssd,
@@ -2615,13 +2636,28 @@ impl MalusState {
             self.ssd.buttons_right,
         );
         self.close_button_hints
-            .insert(surf.into_owned(), (origin, Instant::now()));
+            .insert(surf.into_owned(), (origin, Instant::now(), false));
+    }
+
+    /// Determina si una coordenada relativa `(rel_x, rel_y)` dentro de una ventana CSD de ancho `win_w`
+    /// cae dentro de la zona superior de botones de cierre (izquierda o derecha).
+    fn is_in_csd_close_zone(rel_x: f64, rel_y: f64, win_w: f64) -> Option<bool> {
+        if !(0.0..=56.0).contains(&rel_y) {
+            return None;
+        }
+        let edge_span = 72.0_f64.min((win_w * 0.35).max(48.0));
+        if (0.0..=edge_span).contains(&rel_x) {
+            return Some(false);
+        }
+        if win_w >= edge_span && rel_x >= (win_w - edge_span) && rel_x <= win_w {
+            return Some(true);
+        }
+        None
     }
 
     pub fn record_csd_close_click_hint(
         &mut self,
         window: &smithay::desktop::Window,
-        loc: Point<i32, Logical>,
         click_pt: Point<f64, Logical>,
     ) {
         if window_uses_ssd(window) {
@@ -2630,45 +2666,15 @@ impl MalusState {
         let Some(surf) = window.wl_surface() else {
             return;
         };
+        let Some(win_loc) = self.space.element_location(window) else {
+            return;
+        };
         let geo = window.geometry();
-        let is_fullscreen = window
-            .toplevel()
-            .map(|t| t.current_state().states.contains(XdgState::Fullscreen))
-            .unwrap_or(false);
-        let buttons_right = self.ssd.buttons_right;
-        let canonical =
-            Self::close_button_center_logical(window, loc, false, is_fullscreen, buttons_right);
-        let app_lower = toplevel_info(&surf)
-            .0
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase();
-        let is_known_malus_csd =
-            app_lower == "dev.malus.branches" || app_lower == "dev.malus.settings";
-
-        let rel_x = click_pt.x - loc.x as f64;
-        let rel_y = click_pt.y - loc.y as f64;
-        let in_left_close_zone = (4.0..=48.0).contains(&rel_x) && (0.0..=44.0).contains(&rel_y);
-        let in_right_close_zone = rel_x >= (geo.size.w as f64 - 48.0).max(48.0)
-            && rel_x <= geo.size.w as f64
-            && (0.0..=44.0).contains(&rel_y);
-
-        if in_left_close_zone {
-            let hint_pt = if is_known_malus_csd && !buttons_right {
-                canonical
-            } else {
-                click_pt
-            };
+        let rel_x = click_pt.x - win_loc.x as f64;
+        let rel_y = click_pt.y - win_loc.y as f64;
+        if Self::is_in_csd_close_zone(rel_x, rel_y, geo.size.w as f64).is_some() {
             self.close_button_hints
-                .insert(surf.into_owned(), (hint_pt, Instant::now()));
-        } else if in_right_close_zone {
-            let hint_pt = if is_known_malus_csd && buttons_right {
-                canonical
-            } else {
-                click_pt
-            };
-            self.close_button_hints
-                .insert(surf.into_owned(), (hint_pt, Instant::now()));
+                .insert(surf.into_owned(), (click_pt, Instant::now(), true));
         }
     }
 
@@ -7455,7 +7461,7 @@ impl XdgShellHandler for MalusState {
                             .and_then(|k| k.current_focus())
                             .as_ref()
                             == Some(surf);
-                    let fallback_origin = Self::close_button_center_logical(
+                    let fallback_origin = self.close_button_center_logical(
                         win,
                         loc,
                         uses_ssd,
@@ -7463,15 +7469,37 @@ impl XdgShellHandler for MalusState {
                         self.ssd.buttons_right,
                     );
 
-                    let origin_logical = if let Some((hint_pt, hint_at)) = hint_entry {
-                        if hint_at.elapsed() < std::time::Duration::from_secs(5) {
-                            hint_pt
+                    let (origin_logical, origin_source) =
+                        if let Some((hint_pt, hint_at, from_click)) = hint_entry {
+                            if hint_at.elapsed() < std::time::Duration::from_secs(5) {
+                                if from_click && !uses_ssd {
+                                    let rel_x = hint_pt.x - loc.x as f64;
+                                    let rel_y = hint_pt.y - loc.y as f64;
+                                    if let Some(is_right) =
+                                        Self::is_in_csd_close_zone(rel_x, rel_y, geo.size.w as f64)
+                                    {
+                                        if let Some(app_id) = app_id_for_surface(surf) {
+                                            let key = app_id.trim().to_ascii_lowercase();
+                                            if !key.is_empty() {
+                                                let dx = if is_right {
+                                                    (geo.size.w as f64 - rel_x).clamp(4.0, 72.0)
+                                                } else {
+                                                    rel_x.clamp(4.0, 72.0)
+                                                };
+                                                let dy = rel_y.clamp(4.0, 56.0);
+                                                self.learned_close_button_offsets
+                                                    .insert((key, is_right), (dx, dy));
+                                            }
+                                        }
+                                    }
+                                }
+                                (hint_pt, if from_click { "click" } else { "hint" })
+                            } else {
+                                (fallback_origin, "fallback-expired")
+                            }
                         } else {
-                            fallback_origin
-                        }
-                    } else {
-                        fallback_origin
-                    };
+                            (fallback_origin, "fallback")
+                        };
 
                     let cached_layers = self
                         .cached_close_snapshots
@@ -7485,10 +7513,15 @@ impl XdgShellHandler for MalusState {
                         .unwrap_or_default();
 
                     tracing::info!(
-                        "🕳️ [BlackHole] Encolando cierre de '{}' ({}x{}, cached_layers={})",
+                        "🕳️ [BlackHole] Encolando cierre de '{}' ({}x{}, origin=({:.1},{:.1}) [{}], loc=({},{}), cached_layers={})",
                         window_title_for_ssd(win),
                         geo.size.w,
                         geo.size.h,
+                        origin_logical.x,
+                        origin_logical.y,
+                        origin_source,
+                        loc.x,
+                        loc.y,
                         cached_layers.len()
                     );
 
@@ -7513,7 +7546,7 @@ impl XdgShellHandler for MalusState {
         }
         self.cached_close_snapshots.remove(surf);
         self.close_button_hints
-            .retain(|_, (_, at)| at.elapsed() < std::time::Duration::from_secs(10));
+            .retain(|_, (_, at, _)| at.elapsed() < std::time::Duration::from_secs(10));
 
         self.window_restore_geometries.remove(surf);
         self.snap_transitions.remove(surf);
@@ -9022,7 +9055,7 @@ mod tests {
                 false,
                 false
             ),
-            (28.5, 24.0)
+            (22.0, 24.0)
         );
         assert_eq!(
             super::MalusState::close_button_offset_for_app_id(
@@ -9030,7 +9063,7 @@ mod tests {
                 false,
                 false
             ),
-            (25.5, 23.5)
+            (20.0, 24.0)
         );
         assert_eq!(
             super::MalusState::close_button_offset_for_app_id(Some("antigravity"), false, false),
@@ -9046,7 +9079,27 @@ mod tests {
                 false,
                 false
             ),
-            (22.5, 23.0)
+            (22.0, 23.0)
+        );
+    }
+
+    #[test]
+    fn csd_close_zone_covers_left_and_right_headerbars() {
+        assert_eq!(
+            super::MalusState::is_in_csd_close_zone(20.0, 24.0, 900.0),
+            Some(false)
+        );
+        assert_eq!(
+            super::MalusState::is_in_csd_close_zone(878.0, 24.0, 900.0),
+            Some(true)
+        );
+        assert_eq!(
+            super::MalusState::is_in_csd_close_zone(450.0, 24.0, 900.0),
+            None
+        );
+        assert_eq!(
+            super::MalusState::is_in_csd_close_zone(20.0, 120.0, 900.0),
+            None
         );
     }
 
