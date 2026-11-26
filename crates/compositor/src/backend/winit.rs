@@ -1012,7 +1012,11 @@ pub fn run_winit() -> Result<()> {
                         if let Some((surf, ns, can_kb)) = layer_info {
                             info!("🎯 Clic de ratón sobre layer surface: namespace={}, pos={:?}", ns, point);
                             if can_kb {
-                                keyboard.set_focus(&mut state, Some(surf), btn_serial);
+                                state.set_keyboard_focus_with_sync(Some(surf), btn_serial);
+                                if matches!(ns.as_str(), "malus-desktop-icons" | "malus-wallpaper")
+                                {
+                                    state.notify_active_app(None);
+                                }
                             }
                         } else if let Some((window, loc)) = regular_win {
                             info!("🖱️ Clic en ventana regular: button={:#x}, pos={:?}, win_loc={:?}, geo={:?}", event.button_code(), point, loc, window.geometry());
@@ -1640,6 +1644,8 @@ pub fn run_winit() -> Result<()> {
                             let is_firefox = crate::state::is_firefox_window(&window);
                             let is_translucent = crate::state::is_translucent_window(&window);
                             let is_branches = crate::state::is_branches_window(&window);
+                            let is_full_translucent =
+                                crate::state::is_full_translucent_window(&window);
                             let uses_ssd = crate::state::window_uses_ssd(window);
                             let root_id =
                                 smithay::backend::renderer::element::Id::from_wayland_resource(
@@ -1706,6 +1712,7 @@ pub fn run_winit() -> Result<()> {
                                 ssd_elem,
                                 is_maximized,
                                 is_branches,
+                                is_full_translucent,
                             ));
                         }
                     }
@@ -2039,6 +2046,7 @@ pub fn run_winit() -> Result<()> {
                                 ssd_elem,
                                 _is_maximized,
                                 is_branches,
+                                is_full_translucent,
                             ),
                         ) in window_render_data.iter().enumerate()
                         {
@@ -2107,16 +2115,14 @@ pub fn run_winit() -> Result<()> {
                                     } else {
                                         0.0
                                     };
-                                    let blur_rect = if *is_branches {
-                                        let sidebar_blur_w =
-                                            (212 + corner_radius as i32 + 4).min(win_rect.size.w);
-                                        Rectangle::new(
-                                            win_rect.loc,
-                                            (sidebar_blur_w, win_rect.size.h).into(),
-                                        )
-                                    } else {
-                                        *win_rect
-                                    };
+                                    let blur_rect = super::translucent_window_blur_rect(
+                                        *win_rect,
+                                        *is_branches,
+                                        *is_translucent,
+                                        *is_full_translucent,
+                                        win_phys_r,
+                                        1.0,
+                                    );
                                     let screen_size = size;
                                     let _ = frame.with_context(|gl| {
                                         if idx > 0 {

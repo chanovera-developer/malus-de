@@ -32,8 +32,10 @@ const THUMBNAIL_MAX_H: i32 = 152;
 // Constantes de geometría idénticas a Quick Look en Branches (`crates/branches/src/quick_look.rs`)
 const QL_HEADER_HEIGHT: i32 = 42;
 const QL_IMAGE_INSET: i32 = 8;
-const QL_MIN_CARD_W: i32 = 340;
-const QL_MIN_CARD_H: i32 = 240;
+const QL_VIDEO_CHROME_W: i32 = 28;
+const QL_VIDEO_CHROME_H: i32 = 116;
+const QL_MIN_CARD_W: i32 = 360;
+const QL_MIN_CARD_H: i32 = 260;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PreviewKind {
@@ -147,24 +149,15 @@ pub fn fit_quicklook_card_size(
     max_card_w: i32,
     max_card_h: i32,
 ) -> (i32, i32, i32, i32) {
-    let avail_w = (max_card_w - QL_IMAGE_INSET * 2).max(200) as f64;
-    let avail_h = (max_card_h - QL_HEADER_HEIGHT - QL_IMAGE_INSET).max(160) as f64;
+    let avail_w = (max_card_w - QL_IMAGE_INSET * 2).max(1) as f64;
+    let avail_h = (max_card_h - QL_HEADER_HEIGHT - QL_IMAGE_INSET).max(1) as f64;
     let iw = img_w.max(1) as f64;
     let ih = img_h.max(1) as f64;
 
+    // Nunca estirar capturas pequeñas: solo reducir si exceden el espacio disponible.
     let scale_down = (avail_w / iw).min(avail_h / ih).min(1.0);
-    let mut fit_w = (iw * scale_down).round().max(1.0) as i32;
-    let mut fit_h = (ih * scale_down).round().max(1.0) as i32;
-
-    let min_long_edge = 260.0;
-    let cur_long = (fit_w as f64).max(fit_h as f64);
-    if cur_long < min_long_edge {
-        let up = (min_long_edge / cur_long)
-            .min(avail_w / fit_w.max(1) as f64)
-            .min(avail_h / fit_h.max(1) as f64);
-        fit_w = (fit_w as f64 * up).round().max(1.0) as i32;
-        fit_h = (fit_h as f64 * up).round().max(1.0) as i32;
-    }
+    let fit_w = (iw * scale_down).round().max(1.0) as i32;
+    let fit_h = (ih * scale_down).round().max(1.0) as i32;
 
     let card_w = (fit_w + QL_IMAGE_INSET * 2).clamp(QL_MIN_CARD_W.min(max_card_w), max_card_w);
     let card_h = (fit_h + QL_HEADER_HEIGHT + QL_IMAGE_INSET)
@@ -804,7 +797,7 @@ fn image_display_rect(canvas_w: f64, canvas_h: f64, img_w: f64, img_h: f64) -> (
     if canvas_w <= 1.0 || canvas_h <= 1.0 || img_w <= 1.0 || img_h <= 1.0 {
         return (0.0, 0.0, canvas_w.max(1.0), canvas_h.max(1.0));
     }
-    let scale = (canvas_w / img_w).min(canvas_h / img_h);
+    let scale = (canvas_w / img_w).min(canvas_h / img_h).min(1.0);
     let rw = img_w * scale;
     let rh = img_h * scale;
     let ox = (canvas_w - rw) * 0.5;
@@ -1132,9 +1125,33 @@ fn open_preview_editor_window(
     };
     let current_image_dims = Rc::new(Cell::new(initial_img_dims));
 
+    let initial_video_dims = if kind == PreviewKind::Video {
+        let meta = probe_media_metadata(&initial_path);
+        let (pw, ph) = fit_video_dimensions(
+            meta.width.unwrap_or(720),
+            meta.height.unwrap_or(420),
+            760,
+            440,
+        );
+        Some((pw as i32, ph as i32))
+    } else {
+        None
+    };
+
     let (max_w, max_h) = primary_monitor_work_bounds();
     let (init_w, init_h) = if let Some((iw, ih)) = initial_img_dims {
         let (cw, ch, _, _) = fit_quicklook_card_size(iw, ih, max_w, max_h);
+        (cw, ch)
+    } else if let Some((vw, vh)) = initial_video_dims {
+        let avail_w = (max_w - QL_VIDEO_CHROME_W).max(1) as f64;
+        let avail_h = (max_h - QL_VIDEO_CHROME_H).max(1) as f64;
+        let scale = (avail_w / vw.max(1) as f64)
+            .min(avail_h / vh.max(1) as f64)
+            .min(1.0);
+        let fit_w = (vw as f64 * scale).round().max(1.0) as i32;
+        let fit_h = (vh as f64 * scale).round().max(1.0) as i32;
+        let cw = (fit_w + QL_VIDEO_CHROME_W).clamp(QL_MIN_CARD_W.min(max_w), max_w);
+        let ch = (fit_h + QL_VIDEO_CHROME_H).clamp(QL_MIN_CARD_H.min(max_h), max_h);
         (cw, ch)
     } else {
         (max_w.clamp(480, 820), max_h.clamp(380, 600))
@@ -1222,6 +1239,18 @@ fn open_preview_editor_window(
                 }
             } else if is_exp {
                 card.set_size_request(-1, -1);
+            } else if let Some((vw, vh)) = initial_video_dims {
+                let avail_w = (mw - QL_VIDEO_CHROME_W).max(1) as f64;
+                let avail_h = (mh - QL_VIDEO_CHROME_H).max(1) as f64;
+                let scale = (avail_w / vw.max(1) as f64)
+                    .min(avail_h / vh.max(1) as f64)
+                    .min(1.0);
+                let fit_w = (vw as f64 * scale).round().max(1.0) as i32;
+                let fit_h = (vh as f64 * scale).round().max(1.0) as i32;
+                let cw = (fit_w + QL_VIDEO_CHROME_W).clamp(QL_MIN_CARD_W.min(mw), mw);
+                let ch = (fit_h + QL_VIDEO_CHROME_H).clamp(QL_MIN_CARD_H.min(mh), mh);
+                card.set_size_request(cw, ch);
+                win.set_default_size(cw + 32, ch + 32);
             } else {
                 let cw = mw.clamp(480, 820);
                 let ch = mh.clamp(380, 600);
@@ -1735,7 +1764,7 @@ fn open_preview_editor_window(
         } else {
             Picture::for_filename(&initial_path)
         };
-        picture.set_content_fit(ContentFit::Contain);
+        picture.set_content_fit(ContentFit::ScaleDown);
         picture.set_can_shrink(true);
         picture.set_vexpand(true);
         picture.set_hexpand(true);
@@ -1856,7 +1885,7 @@ fn open_preview_editor_window(
         stage.add_css_class("branches-quicklook-video-stage");
 
         let picture = Picture::new();
-        picture.set_content_fit(ContentFit::Contain);
+        picture.set_content_fit(ContentFit::ScaleDown);
         picture.set_can_shrink(true);
         picture.set_vexpand(true);
         picture.set_hexpand(true);
@@ -2184,6 +2213,9 @@ mod tests {
         assert!(fw > fh);
         let (pw, ph, _, _) = fit_quicklook_card_size(520, 900, 900, 720);
         assert!(ph > pw);
+        let (sw, sh, sfw, sfh) = fit_quicklook_card_size(80, 60, 900, 700);
+        assert_eq!((sfw, sfh), (80, 60));
+        assert_eq!((sw, sh), (QL_MIN_CARD_W, QL_MIN_CARD_H));
     }
 
     #[test]

@@ -111,6 +111,7 @@ fn main() {
     if let Some(ql_path) = args.quick_look {
         let app = Application::builder()
             .application_id("dev.malus.Branches.QuickLook")
+            .flags(gio::ApplicationFlags::NON_UNIQUE)
             .build();
         app.connect_startup(|_| {
             load_custom_css();
@@ -263,6 +264,13 @@ pub(crate) fn apply_branches_liquid_glass_opacity(opacity: f64) {
     } else {
         pop_light_a
     };
+    let ql_dark_a = malus_de_common::config::scaled_liquid_glass_alpha(0.72, scale, 0.16, 0.94);
+    let ql_light_a = malus_de_common::config::scaled_liquid_glass_alpha(0.68, scale, 0.16, 0.94);
+    let ql_a = if malus_de_common::config::is_dark_mode_active() {
+        ql_dark_a
+    } else {
+        ql_light_a
+    };
     let side_tint = malus_de_common::config::sidebar_tint_background_image_css(
         malus_de_common::config::load_tint_windows_with_wallpaper(),
     );
@@ -270,6 +278,9 @@ pub(crate) fn apply_branches_liquid_glass_opacity(opacity: f64) {
         ".branches-sidebar-pane {{ \
              background-color: alpha(@window_bg_color, {side_a:.3}); \
              background-image: {side_tint}; \
+         }} \
+         window.branches-quicklook-window .branches-quicklook-container {{ \
+             background-color: alpha(@window_bg_color, {ql_a:.3}); \
          }} \
          window.branches-window popover > contents, \
          window.branches-window popover.menu > contents, \
@@ -467,6 +478,8 @@ mod tests {
         assert!(css.contains(".branches-quicklook-container.ql-closing"));
         assert!(css.contains("transform: scale(0.90);"));
         assert!(css.contains("transform: scale(1.0);"));
+        assert!(css.contains("window.branches-quicklook-window .branches-quicklook-container"));
+        assert!(css.contains(".branches-quicklook-text text"));
     }
 
     #[test]

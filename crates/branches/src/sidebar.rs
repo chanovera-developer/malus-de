@@ -379,7 +379,6 @@ impl Sidebar {
         // 4. Sección Etiquetas (Tags)
         let tags_header = add_section_title(&list_box, if es { "Etiquetas" } else { "Tags" });
         attach_bookmark_drop_target(&tags_header);
-        list_box.append(&tags_header);
 
         // Manejador centralizado de activación de filas del ListBox
         let nav_for_lb = on_navigate.clone();
@@ -422,7 +421,6 @@ impl Sidebar {
             .hexpand(true)
             .css_classes(["branches-sidebar-empty-drop"])
             .build();
-        empty_drop_zone.set_size_request(-1, 64);
         attach_bookmark_drop_target(&empty_drop_zone);
         sidebar_content.append(&empty_drop_zone);
 

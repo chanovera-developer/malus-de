@@ -800,7 +800,7 @@ impl GaussianBlur {
             src_win_rect,
             dst_win_rect,
             corner_radius,
-            2.0,
+            4.2,
             true,
             1.0,
             true,

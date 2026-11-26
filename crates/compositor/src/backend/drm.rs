@@ -3159,12 +3159,16 @@ pub fn run_drm() -> Result<()> {
                             return;
                         }
 
-                        if let Some(keyboard) = state.seat.get_keyboard() {
-                            if let Some((surf, _ns, can_kb)) = layer_info {
-                                if can_kb {
-                                    keyboard.set_focus(state, Some(surf), btn_serial);
+                        if let Some((surf, ns, can_kb)) = layer_info {
+                            if can_kb {
+                                state.set_keyboard_focus_with_sync(Some(surf), btn_serial);
+                                if matches!(ns.as_str(), "malus-desktop-icons" | "malus-wallpaper")
+                                {
+                                    state.notify_active_app(None);
                                 }
-                            } else if let Some((window, loc)) = regular_win {
+                            }
+                        } else if let Some(keyboard) = state.seat.get_keyboard() {
+                            if let Some((window, loc)) = regular_win {
                                 let was_already_top = state.space.elements().last().map(|w| w == &window).unwrap_or(false);
                                 if !was_already_top {
                                     state.space.raise_element(&window, true);
@@ -4445,6 +4449,7 @@ pub fn run_drm() -> Result<()> {
                             let is_firefox = win_flags.is_firefox;
                             let is_translucent = win_flags.is_translucent;
                             let is_branches = win_flags.is_branches;
+                            let is_full_translucent = win_flags.is_full_translucent;
                             let root_id =
                                 smithay::backend::renderer::element::Id::from_wayland_resource(
                                     main_surface.as_ref(),
@@ -4512,6 +4517,7 @@ pub fn run_drm() -> Result<()> {
                                 ssd_elem,
                                 is_maximized,
                                 is_branches,
+                                is_full_translucent,
                             ));
                         }
                     }
@@ -4947,6 +4953,7 @@ pub fn run_drm() -> Result<()> {
                             ssd_elem,
                             _,
                             is_branches,
+                            is_full_translucent,
                         ) in window_render_data.iter().rev()
                         {
                             for (popup_elems, popup_rect, popup_effects) in popups {
@@ -5045,18 +5052,14 @@ pub fn run_drm() -> Result<()> {
                             }
 
                             if *is_translucent {
-                                let blur_rect = if *is_branches {
-                                    let sidebar_blur_w = ((212.0 * scale).round() as i32
-                                        + win_phys_r.unwrap_or(0) as i32
-                                        + 4)
-                                    .min(win_screen_rect.size.w);
-                                    Rectangle::new(
-                                        win_screen_rect.loc,
-                                        (sidebar_blur_w, win_screen_rect.size.h).into(),
-                                    )
-                                } else {
-                                    *win_screen_rect
-                                };
+                                let blur_rect = super::translucent_window_blur_rect(
+                                    *win_screen_rect,
+                                    *is_branches,
+                                    *is_translucent,
+                                    *is_full_translucent,
+                                    win_phys_r,
+                                    scale,
+                                );
                                 let corner_radius = if *should_round {
                                     win_phys_r.unwrap_or(0) as f32
                                 } else {
@@ -6006,6 +6009,7 @@ pub fn run_drm() -> Result<()> {
                                         _,
                                         _,
                                         is_branches,
+                                        is_full_translucent,
                                     )) = window_render_data.first()
                                     {
                                         let needs_transition_backdrop = transition_clip
@@ -6026,6 +6030,7 @@ pub fn run_drm() -> Result<()> {
                                                         *win_rect,
                                                         *is_branches,
                                                         *is_translucent,
+                                                        *is_full_translucent,
                                                         win_phys_r,
                                                         scale,
                                                     )
@@ -6242,6 +6247,7 @@ pub fn run_drm() -> Result<()> {
                                         ssd_elem,
                                         _is_maximized,
                                         is_branches,
+                                        is_full_translucent,
                                     ),
                                 ) in window_render_data.iter().enumerate()
                                 {
@@ -6326,6 +6332,7 @@ pub fn run_drm() -> Result<()> {
                                         *win_rect,
                                         *is_branches,
                                         *is_translucent,
+                                        *is_full_translucent,
                                         win_phys_r,
                                         scale,
                                     );

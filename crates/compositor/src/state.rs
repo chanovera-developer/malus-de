@@ -340,6 +340,7 @@ pub struct MalusState {
     pub pending_drm_hotplug: bool,
     pub saved_app_window_sizes: HashMap<String, Size<i32, Logical>>,
     pub saved_app_window_positions: HashMap<String, Point<i32, Logical>>,
+    pub toplevel_return_layer_focus: HashMap<WlSurface, WlSurface>,
     pub dock_blur_headroom: i32,
     pub pending_screenshot_requests:
         std::collections::VecDeque<(std::path::PathBuf, Option<String>)>,
@@ -693,11 +694,54 @@ pub fn is_browser_window(window: &smithay::desktop::Window) -> bool {
     false
 }
 
+/// Identifica si un `app_id` (en minúsculas) corresponde a una ventana flotante Quick Look / Preview
+/// que requiere desenfoque completo en toda la tarjeta y no el recorte de barra lateral de Branches.
+pub fn is_quicklook_identifier(lower: &str) -> bool {
+    lower.contains("branches.quicklook")
+        || lower == "dev.malus.preview"
+        || lower == "malus-de-preview"
+}
+
+/// Determina si una aplicación debe persistir y restaurar su tamaño/posición en `window_sizes.json`.
+/// Las ventanas transitorias Quick Look / Preview se dimensionan dinámicamente según el archivo
+/// previsualizado y siempre deben abrirse centradas con su tamaño natural.
+pub fn should_persist_window_geometry(app_id: &str) -> bool {
+    let lower = app_id.trim().to_ascii_lowercase();
+    !is_quicklook_identifier(&lower)
+}
+
+/// Identifica si una ventana corresponde a una tarjeta translúcida completa (p. ej. Quick Look).
+pub fn is_full_translucent_window(window: &smithay::desktop::Window) -> bool {
+    let check = |app_id: &Option<String>| -> bool {
+        app_id
+            .as_deref()
+            .map(str::to_lowercase)
+            .is_some_and(|lower| is_quicklook_identifier(&lower))
+    };
+
+    if let Some(surface) = window.wl_surface() {
+        let (app_id, _) = toplevel_info(&surface);
+        if check(&app_id) {
+            return true;
+        }
+    }
+    if let Some(toplevel) = window.toplevel() {
+        let (app_id, _) = toplevel_info(toplevel.wl_surface());
+        if check(&app_id) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Identifica si una ventana corresponde al explorador nativo Branches (`malus-de-branches`).
 pub fn is_branches_window(window: &smithay::desktop::Window) -> bool {
     let check = |app_id: &Option<String>, title: &Option<String>| -> bool {
         if let Some(ref id) = app_id {
             let lower = id.to_lowercase();
+            if is_quicklook_identifier(&lower) {
+                return false;
+            }
             if lower == "branches"
                 || lower.contains("malus.branches")
                 || lower.contains("malus-de-branches")
@@ -741,6 +785,7 @@ pub fn is_translucent_window(window: &smithay::desktop::Window) -> bool {
                 || lower.contains("malus.branches")
                 || lower.contains("malus-de-branches")
                 || lower.contains("malus_de_branches")
+                || is_quicklook_identifier(&lower)
             {
                 return true;
             }
@@ -781,6 +826,7 @@ pub struct WindowRenderFlags {
     pub is_browser: bool,
     pub is_branches: bool,
     pub is_translucent: bool,
+    pub is_full_translucent: bool,
     pub popup_effects_enabled: bool,
     pub uses_ssd: bool,
 }
@@ -802,14 +848,18 @@ impl WindowRenderFlags {
             .as_deref()
             .is_some_and(is_browser_identifier);
 
-        let is_branches = id_lower.as_deref().is_some_and(|lower| {
-            lower == "branches"
-                || lower.contains("malus.branches")
-                || lower.contains("malus-de-branches")
-                || lower.contains("malus_de_branches")
-        }) || title_lower.as_deref().is_some_and(|lower| lower == "branches");
+        let is_full_translucent = id_lower.as_deref().is_some_and(is_quicklook_identifier);
+
+        let is_branches = !is_full_translucent
+            && (id_lower.as_deref().is_some_and(|lower| {
+                lower == "branches"
+                    || lower.contains("malus.branches")
+                    || lower.contains("malus-de-branches")
+                    || lower.contains("malus_de_branches")
+            }) || title_lower.as_deref().is_some_and(|lower| lower == "branches"));
 
         let is_translucent = is_branches
+            || is_full_translucent
             || id_lower.as_deref().is_some_and(|lower| {
                 lower.contains("malus.settings")
                     || lower.contains("malus-de-settings")
@@ -863,6 +913,7 @@ impl WindowRenderFlags {
             is_browser,
             is_branches,
             is_translucent,
+            is_full_translucent,
             popup_effects_enabled,
             uses_ssd,
         }
@@ -1735,6 +1786,7 @@ impl MalusState {
             pending_drm_hotplug: false,
             saved_app_window_sizes,
             saved_app_window_positions,
+            toplevel_return_layer_focus: HashMap::new(),
             dock_blur_headroom,
             pending_screenshot_requests: std::collections::VecDeque::new(),
             pending_theme_transition_capture: None,
@@ -1810,6 +1862,9 @@ impl MalusState {
             if let Ok(data) = std::fs::read_to_string(&path) {
                 if let Ok(raw) = serde_json::from_str::<HashMap<String, Vec<i32>>>(&data) {
                     for (k, vals) in raw {
+                        if !should_persist_window_geometry(&k) {
+                            continue;
+                        }
                         if vals.len() >= 2 && vals[0] >= 200 && vals[1] >= 200 {
                             sizes.insert(k.clone(), Size::from((vals[0], vals[1])));
                         }
@@ -1835,7 +1890,7 @@ impl MalusState {
         size: Size<i32, Logical>,
         visible_loc: Option<Point<i32, Logical>>,
     ) {
-        if size.w < 200 || size.h < 200 {
+        if size.w < 200 || size.h < 200 || !should_persist_window_geometry(app_id) {
             return;
         }
         let clean_id = normalize_app_id(app_id);
@@ -1866,12 +1921,18 @@ impl MalusState {
 
     /// Obtiene el tamaño recordado de una aplicación si existe.
     pub fn get_saved_window_size(&self, app_id: &str) -> Option<Size<i32, Logical>> {
+        if !should_persist_window_geometry(app_id) {
+            return None;
+        }
         let clean_id = normalize_app_id(app_id);
         self.saved_app_window_sizes.get(&clean_id).copied()
     }
 
     /// Obtiene la posición visible recordada de una aplicación si existe.
     pub fn get_saved_window_position(&self, app_id: &str) -> Option<Point<i32, Logical>> {
+        if !should_persist_window_geometry(app_id) {
+            return None;
+        }
         let clean_id = normalize_app_id(app_id);
         self.saved_app_window_positions.get(&clean_id).copied()
     }
@@ -3131,6 +3192,40 @@ impl MalusState {
                 }
                 if fallback.is_none() {
                     fallback = Some(layer.wl_surface().clone());
+                }
+            }
+        }
+        fallback
+    }
+
+    pub fn is_desktop_focusable_layer_surface(&self, surface: &WlSurface) -> bool {
+        self.space.outputs().any(|output| {
+            let layer_map = smithay::desktop::layer_map_for_output(output);
+            let matched = layer_map.layers().any(|layer| {
+                layer.wl_surface() == surface
+                    && layer.can_receive_keyboard_focus()
+                    && matches!(layer.namespace(), "malus-desktop-icons" | "malus-wallpaper")
+            });
+            matched
+        })
+    }
+
+    pub fn desktop_icons_focus_surface(&self) -> Option<WlSurface> {
+        let mut fallback = None;
+        for output in self.space.outputs() {
+            let layer_map = smithay::desktop::layer_map_for_output(output);
+            for layer in layer_map.layers() {
+                if layer.can_receive_keyboard_focus()
+                    && layer.wl_surface().alive()
+                    && matches!(layer.namespace(), "malus-desktop-icons" | "malus-wallpaper")
+                {
+                    if layer.namespace() == "malus-desktop-icons" && self.is_primary_output(output)
+                    {
+                        return Some(layer.wl_surface().clone());
+                    }
+                    if fallback.is_none() {
+                        fallback = Some(layer.wl_surface().clone());
+                    }
                 }
             }
         }
@@ -7281,6 +7376,15 @@ impl XdgShellHandler for MalusState {
         });
         surface.send_configure();
         self.space.map_element(window, spawn_loc, true);
+        let prev_layer_focus = self
+            .seat
+            .get_keyboard()
+            .and_then(|kb| kb.current_focus())
+            .filter(|prev| self.is_desktop_focusable_layer_surface(prev));
+        if let Some(layer_surf) = prev_layer_focus {
+            self.toplevel_return_layer_focus
+                .insert(surface.wl_surface().clone(), layer_surf);
+        }
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
         if let Some(kb) = self.seat.get_keyboard() {
             kb.set_focus(self, Some(surface.wl_surface().clone()), serial);
@@ -7837,13 +7941,37 @@ impl XdgShellHandler for MalusState {
             tracing::warn!("⚠️ No se encontró la ventana en Space al destruir toplevel");
         }
 
+        let return_layer_focus = self
+            .toplevel_return_layer_focus
+            .remove(surf)
+            .filter(|s| s.alive() && self.is_desktop_focusable_layer_surface(s));
+        let destroyed_is_quicklook = app_id_for_surface(surf)
+            .as_deref()
+            .map(str::to_lowercase)
+            .is_some_and(|lower| is_quicklook_identifier(&lower));
+
         self.space.refresh();
 
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-        let next_win = self.space.elements().rev().next().cloned();
-        let next_surface = next_win
-            .as_ref()
-            .and_then(|w| w.wl_surface().map(|s| s.into_owned()));
+        let (next_win, next_surface) = if destroyed_is_quicklook {
+            if let Some(layer_surf) = return_layer_focus {
+                (None, Some(layer_surf))
+            } else {
+                let next_win = self.space.elements().rev().next().cloned();
+                let next_surface = next_win
+                    .as_ref()
+                    .and_then(|w| w.wl_surface().map(|s| s.into_owned()))
+                    .or_else(|| self.desktop_icons_focus_surface());
+                (next_win, next_surface)
+            }
+        } else {
+            let next_win = self.space.elements().rev().next().cloned();
+            let next_surface = next_win
+                .as_ref()
+                .and_then(|w| w.wl_surface().map(|s| s.into_owned()))
+                .or(return_layer_focus);
+            (next_win, next_surface)
+        };
         if let Some(ref win) = next_win {
             if let Some(toplevel) = win.toplevel() {
                 toplevel.send_configure();
@@ -7856,11 +7984,32 @@ impl XdgShellHandler for MalusState {
                 pointer.unset_grab(self, serial, 0);
             }
             let loc = pointer.current_location();
-            let new_target = self.space.element_under(loc).and_then(|(win, win_loc)| {
-                let local_point = loc - win_loc.to_f64();
-                win.surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
-                    .map(|(s, sub_loc)| (s, (win_loc + sub_loc).to_f64()))
-            });
+            let new_target = self
+                .space
+                .element_under(loc)
+                .and_then(|(win, win_loc)| {
+                    let local_point = loc - win_loc.to_f64();
+                    win.surface_under(local_point, smithay::desktop::WindowSurfaceType::all())
+                        .map(|(s, sub_loc)| (s, (win_loc + sub_loc).to_f64()))
+                })
+                .or_else(|| {
+                    self.space.outputs().find_map(|output| {
+                        let output_geo = self.space.output_geometry(output)?;
+                        if !output_geo.to_f64().contains(loc) {
+                            return None;
+                        }
+                        let output_local = loc - output_geo.loc.to_f64();
+                        let layer_map = smithay::desktop::layer_map_for_output(output);
+                        let layer = layer_map
+                            .layer_under(Layer::Bottom, output_local)
+                            .or_else(|| layer_map.layer_under(Layer::Background, output_local))?;
+                        let geo = layer_map.layer_geometry(layer)?;
+                        let local = output_local - geo.loc.to_f64();
+                        layer
+                            .surface_under(local, smithay::desktop::WindowSurfaceType::TOPLEVEL)
+                            .map(|(s, sub_loc)| (s, (output_geo.loc + geo.loc + sub_loc).to_f64()))
+                    })
+                });
             let motion_serial = smithay::utils::SERIAL_COUNTER.next_serial();
             pointer.motion(
                 self,
@@ -8319,6 +8468,19 @@ fn should_skip_black_hole_for_app_id(app_id: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{is_browser_identifier, parse_color_scheme};
+
+    #[test]
+    fn quicklook_windows_do_not_persist_or_restore_geometry() {
+        assert!(!super::should_persist_window_geometry(
+            "dev.malus.Branches.QuickLook"
+        ));
+        assert!(!super::should_persist_window_geometry(
+            "dev.malus.branches.quicklook"
+        ));
+        assert!(!super::should_persist_window_geometry("dev.malus.Preview"));
+        assert!(super::should_persist_window_geometry("dev.malus.Branches"));
+        assert!(super::should_persist_window_geometry("org.gnome.Ptyxis"));
+    }
 
     #[test]
     fn recognizes_browser_identifiers() {

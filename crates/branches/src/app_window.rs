@@ -27,47 +27,81 @@ const BRANCHES_SEARCH_SQUIRCLE_RADIUS: f64 = 16.0;
 const SEARCH_SQUIRCLE_EXPONENT: f64 = 4.2;
 const SEARCH_SQUIRCLE_SEGMENTS: usize = 20;
 
-fn squircle_path(context: &gtk4::cairo::Context, width: f64, height: f64, radius: f64) {
-    let radius = radius.min(width / 2.0).min(height / 2.0).max(1.0);
+pub(crate) fn squircle_path(context: &gtk4::cairo::Context, width: f64, height: f64, radius: f64) {
+    squircle_path_corners(context, 0.0, 0.0, width, height, radius, true, true);
+}
+
+/// Traza un rectángulo con esquinas squircle continuas (`n = 4.2`) permitiendo activar
+/// selectivamente el redondeo en las esquinas superiores (`round_top`) e inferiores (`round_bottom`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn squircle_path_corners(
+    context: &gtk4::cairo::Context,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    radius: f64,
+    round_top: bool,
+    round_bottom: bool,
+) {
+    let max_r = (width / 2.0).min(height / 2.0).max(0.0);
+    let r_top = if round_top {
+        radius.min(max_r).max(1.0)
+    } else {
+        0.0
+    };
+    let r_bot = if round_bottom {
+        radius.min(max_r).max(1.0)
+    } else {
+        0.0
+    };
     let power = 2.0 / SEARCH_SQUIRCLE_EXPONENT;
     let quarter_turn = std::f64::consts::FRAC_PI_2;
 
-    context.move_to(radius, 0.0);
-    context.line_to(width - radius, 0.0);
+    context.move_to(x + r_top, y);
+    context.line_to(x + width - r_top, y);
 
-    for step in 1..=SEARCH_SQUIRCLE_SEGMENTS {
-        let angle = quarter_turn * step as f64 / SEARCH_SQUIRCLE_SEGMENTS as f64;
-        context.line_to(
-            width - radius + radius * angle.sin().powf(power),
-            radius - radius * angle.cos().powf(power),
-        );
+    if r_top > 0.0 {
+        for step in 1..=SEARCH_SQUIRCLE_SEGMENTS {
+            let angle = quarter_turn * step as f64 / SEARCH_SQUIRCLE_SEGMENTS as f64;
+            context.line_to(
+                x + width - r_top + r_top * angle.sin().powf(power),
+                y + r_top - r_top * angle.cos().powf(power),
+            );
+        }
     }
-    context.line_to(width, height - radius);
+    context.line_to(x + width, y + height - r_bot);
 
-    for step in 1..=SEARCH_SQUIRCLE_SEGMENTS {
-        let angle = quarter_turn * step as f64 / SEARCH_SQUIRCLE_SEGMENTS as f64;
-        context.line_to(
-            width - radius + radius * angle.cos().powf(power),
-            height - radius + radius * angle.sin().powf(power),
-        );
+    if r_bot > 0.0 {
+        for step in 1..=SEARCH_SQUIRCLE_SEGMENTS {
+            let angle = quarter_turn * step as f64 / SEARCH_SQUIRCLE_SEGMENTS as f64;
+            context.line_to(
+                x + width - r_bot + r_bot * angle.cos().powf(power),
+                y + height - r_bot + r_bot * angle.sin().powf(power),
+            );
+        }
     }
-    context.line_to(radius, height);
+    context.line_to(x + r_bot, y + height);
 
-    for step in 1..=SEARCH_SQUIRCLE_SEGMENTS {
-        let angle = quarter_turn * step as f64 / SEARCH_SQUIRCLE_SEGMENTS as f64;
-        context.line_to(
-            radius - radius * angle.sin().powf(power),
-            height - radius + radius * angle.cos().powf(power),
-        );
+    if r_bot > 0.0 {
+        for step in 1..=SEARCH_SQUIRCLE_SEGMENTS {
+            let angle = quarter_turn * step as f64 / SEARCH_SQUIRCLE_SEGMENTS as f64;
+            context.line_to(
+                x + r_bot - r_bot * angle.sin().powf(power),
+                y + height - r_bot + r_bot * angle.cos().powf(power),
+            );
+        }
     }
-    context.line_to(0.0, radius);
+    context.line_to(x, y + r_top);
 
-    for step in 1..=SEARCH_SQUIRCLE_SEGMENTS {
-        let angle = quarter_turn * step as f64 / SEARCH_SQUIRCLE_SEGMENTS as f64;
-        context.line_to(
-            radius - radius * angle.cos().powf(power),
-            radius - radius * angle.sin().powf(power),
-        );
+    if r_top > 0.0 {
+        for step in 1..=SEARCH_SQUIRCLE_SEGMENTS {
+            let angle = quarter_turn * step as f64 / SEARCH_SQUIRCLE_SEGMENTS as f64;
+            context.line_to(
+                x + r_top - r_top * angle.cos().powf(power),
+                y + r_top - r_top * angle.sin().powf(power),
+            );
+        }
     }
     context.close_path();
 }

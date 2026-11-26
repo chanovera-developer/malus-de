@@ -3,8 +3,8 @@ use crate::views::{show_item_context_menu, NavigateCallback, SelectionCallback};
 use gtk4::gdk;
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Box as GtkBox, GestureClick, Label, ListBox, ListBoxRow, Orientation, PolicyType,
-    ScrolledWindow,
+    Align, Box as GtkBox, DrawingArea, GestureClick, Label, ListBox, ListBoxRow, Orientation,
+    Overlay, PolicyType, ScrolledWindow,
 };
 use malus_de_common::config::BranchesConfig;
 use std::cell::{Cell, RefCell};
@@ -111,12 +111,46 @@ fn row_for_item_index(list_box: &ListBox, target_idx: usize) -> Option<ListBoxRo
 const DEFAULT_COLUMN_WIDTHS: [i32; 3] = [170, 90, 150];
 const MIN_COLUMN_WIDTH: i32 = 50;
 const MAX_COLUMN_WIDTH: i32 = 600;
+const LIST_ROW_INSET_X: f64 = 10.0;
+
+/// Determina qué esquinas (superiores, inferiores) llevan curvatura squircle en una fila
+/// seleccionada: los extremos de un bloque continuo se redondean y las uniones internas quedan rectas.
+fn selection_squircle_corners(prev_selected: bool, next_selected: bool) -> (bool, bool) {
+    (!prev_selected, !next_selected)
+}
+
+fn row_content_box(row: &ListBoxRow) -> Option<GtkBox> {
+    let child = row.child()?;
+    if let Some(ov) = child.downcast_ref::<Overlay>() {
+        ov.last_child()?.downcast::<GtkBox>().ok()
+    } else {
+        child.downcast::<GtkBox>().ok()
+    }
+}
+
+fn row_bg_area(row: &ListBoxRow) -> Option<DrawingArea> {
+    let ov = row.child()?.downcast::<Overlay>().ok()?;
+    ov.first_child()?.downcast::<DrawingArea>().ok()
+}
+
+fn redraw_all_list_row_bgs(list_box: &ListBox) {
+    let mut child = list_box.first_child();
+    while let Some(w) = child {
+        if let Some(row) = w.downcast_ref::<ListBoxRow>() {
+            if let Some(bg) = row_bg_area(row) {
+                bg.queue_draw();
+            }
+        }
+        child = w.next_sibling();
+    }
+}
 
 pub struct ListView {
     container: GtkBox,
     header: GtkBox,
     scrolled: ScrolledWindow,
     list_box: ListBox,
+    zebra_bg: DrawingArea,
     items: Rc<RefCell<Vec<FileItem>>>,
     groups: Rc<RefCell<Option<Vec<String>>>>,
     current_folder: Rc<RefCell<Option<PathBuf>>>,
@@ -149,6 +183,8 @@ impl ListView {
 
         let sel_cb = on_selection_changed.clone();
         list_box.connect_selected_rows_changed(move |lb| {
+            // Redibujar todas las filas para actualizar esquinas squircle en selecciones continuas
+            redraw_all_list_row_bgs(lb);
             let count = lb.selected_rows().len();
             sel_cb(count);
         });
@@ -158,30 +194,112 @@ impl ListView {
         let groups = Rc::new(RefCell::new(None::<Vec<String>>));
         let pending_select_name = Rc::new(RefCell::new(None::<String>));
 
-        // Franjas grises de columnas pares: capa inferior que llega hasta el final de la vista
-        let bands = GtkBox::new(Orientation::Horizontal, 0);
-        bands.add_css_class("branches-list-bands");
-        bands.set_margin_start(4);
-        bands.set_margin_end(4);
-        bands.set_can_target(false);
+        let scrolled = ScrolledWindow::builder()
+            .hscrollbar_policy(PolicyType::Automatic)
+            .vscrollbar_policy(PolicyType::Automatic)
+            .vexpand(true)
+            .child(&list_box)
+            .css_classes(["branches-list-scroll"])
+            .build();
+
+        // Delegar el desplazamiento por teclado directamente al ListBox y desactivar
+        // scroll-to-focus automático del Viewport para evitar saltos espurios al inicio
+        // cuando cambian miniaturas, metadatos o foco de la ventana.
+        list_box.set_adjustment(Some(&scrolled.vadjustment()));
+        if let Some(vp) = scrolled
+            .child()
+            .and_then(|c| c.downcast::<gtk4::Viewport>().ok())
         {
-            let spacer = GtkBox::new(Orientation::Horizontal, 0);
-            spacer.set_hexpand(true);
-            bands.append(&spacer);
-            for i in 0..3 {
-                let b = GtkBox::new(Orientation::Horizontal, 0);
-                if i % 2 == 0 {
-                    b.add_css_class("branches-list-col-even");
+            vp.set_scroll_to_focus(false);
+        }
+
+        // Franjas horizontales squircle alternadas (estilo macOS Tahoe Finder) bajo las filas vacías
+        let zebra_bg = DrawingArea::new();
+        zebra_bg.add_css_class("branches-list-bands");
+        zebra_bg.set_can_target(false);
+        zebra_bg.set_hexpand(true);
+        zebra_bg.set_vexpand(true);
+        {
+            let lb_weak = list_box.downgrade();
+            let vadj = scrolled.vadjustment();
+            zebra_bg.set_draw_func(move |area, cr, w, h| {
+                let width = w as f64;
+                let height = h as f64;
+                if width <= LIST_ROW_INSET_X * 2.0 + 4.0 || height <= 2.0 {
+                    return;
                 }
-                bands.append(&b);
-            }
-            apply_widths_to_box(&bands, col_widths.get());
+                let Some(lb) = lb_weak.upgrade() else {
+                    return;
+                };
+                let mut row_count = 0usize;
+                let mut total_rows_h = 0.0f64;
+                let mut sample_row_h = 0.0f64;
+                let mut child = lb.first_child();
+                while let Some(w_child) = child {
+                    if w_child.is_visible() {
+                        let ch = w_child.height() as f64;
+                        total_rows_h += ch;
+                        if sample_row_h <= 0.0
+                            && w_child.has_css_class("branches-list-row")
+                            && ch >= 16.0
+                        {
+                            sample_row_h = ch;
+                        }
+                        row_count += 1;
+                    }
+                    child = w_child.next_sibling();
+                }
+                let row_h = if sample_row_h >= 16.0 {
+                    sample_row_h
+                } else {
+                    28.0
+                };
+                let start_y = (total_rows_h - vadj.value()).max(0.0);
+                if start_y >= height {
+                    return;
+                }
+                let fg = area.color();
+                let draw_w = width - LIST_ROW_INSET_X * 2.0;
+                let radius = (row_h * 0.38).clamp(7.0, 11.0);
+                let mut idx = row_count;
+                let mut y = start_y;
+                while y < height {
+                    if idx % 2 == 1 {
+                        let _ = cr.save();
+                        crate::app_window::squircle_path_corners(
+                            cr,
+                            LIST_ROW_INSET_X,
+                            y,
+                            draw_w,
+                            row_h,
+                            radius,
+                            true,
+                            true,
+                        );
+                        cr.set_source_rgba(
+                            fg.red() as f64,
+                            fg.green() as f64,
+                            fg.blue() as f64,
+                            0.035,
+                        );
+                        let _ = cr.fill();
+                        let _ = cr.restore();
+                    }
+                    y += row_h;
+                    idx += 1;
+                }
+            });
+            let zebra_scroll = zebra_bg.clone();
+            scrolled.vadjustment().connect_value_changed(move |_| {
+                zebra_scroll.queue_draw();
+            });
         }
 
         // Reordenar al pulsar el nombre de una columna
         let icon_size_sort = icon_size.clone();
         let on_sort: Rc<dyn Fn()> = {
             let list_box = list_box.clone();
+            let zebra_bg = zebra_bg.clone();
             let items = items.clone();
             let widths = col_widths.clone();
             let state = sort_state.clone();
@@ -209,31 +327,13 @@ impl ListView {
                         }
                     }
                 }
+                zebra_bg.queue_draw();
             })
         };
 
         // Cabecera de columnas (redimensionable y ordenable)
-        let header = create_list_header(&col_widths, &list_box, &bands, &sort_state, on_sort);
+        let header = create_list_header(&col_widths, &list_box, &sort_state, on_sort);
         container.append(&header);
-
-        let scrolled = ScrolledWindow::builder()
-            .hscrollbar_policy(PolicyType::Automatic)
-            .vscrollbar_policy(PolicyType::Automatic)
-            .vexpand(true)
-            .child(&list_box)
-            .css_classes(["branches-list-scroll"])
-            .build();
-
-        // Delegar el desplazamiento por teclado directamente al ListBox y desactivar
-        // scroll-to-focus automático del Viewport para evitar saltos espurios al inicio
-        // cuando cambian miniaturas, metadatos o foco de la ventana.
-        list_box.set_adjustment(Some(&scrolled.vadjustment()));
-        if let Some(vp) = scrolled
-            .child()
-            .and_then(|c| c.downcast::<gtk4::Viewport>().ok())
-        {
-            vp.set_scroll_to_focus(false);
-        }
 
         let bg_click = GestureClick::new();
         bg_click.set_button(gdk::BUTTON_SECONDARY);
@@ -244,9 +344,9 @@ impl ListView {
         });
         scrolled.add_controller(bg_click);
 
-        let body = gtk4::Overlay::new();
+        let body = Overlay::new();
         body.set_vexpand(true);
-        body.set_child(Some(&bands));
+        body.set_child(Some(&zebra_bg));
         body.add_overlay(&scrolled);
         container.append(&body);
 
@@ -255,6 +355,7 @@ impl ListView {
             header,
             scrolled,
             list_box,
+            zebra_bg,
             items,
             groups,
             current_folder,
@@ -361,6 +462,7 @@ impl ListView {
                 }
             }
         }
+        self.zebra_bg.queue_draw();
     }
 
     /// Sincroniza cambios provenientes del monitor del sistema de archivos preservando
@@ -463,10 +565,12 @@ impl ListView {
 
         // Restaurar el desplazamiento vertical tras el nuevo layout del ListBox
         let scrolled_c = self.scrolled.clone();
+        let zebra_c = self.zebra_bg.clone();
         glib::idle_add_local_once(move || {
             let vadj = scrolled_c.vadjustment();
             let max_y = (vadj.upper() - vadj.page_size()).max(vadj.lower());
             vadj.set_value(saved_scroll_y.clamp(vadj.lower(), max_y));
+            zebra_c.queue_draw();
         });
     }
 
@@ -478,7 +582,7 @@ impl ListView {
                 if let Some(idx) = unsafe { row.data::<usize>("list_item_idx").map(|p| *p.as_ref()) }
                 {
                     if let Some(item) = items.get(idx) {
-                        if let Some(hbox) = row.child() {
+                        if let Some(hbox) = row_content_box(&row) {
                             crate::views::sync_cut_css_class(&hbox, &item.path);
                         }
                     }
@@ -507,7 +611,7 @@ fn rows_match_in_place(
 
 /// Actualiza fecha, tamaño, clase y miniatura de una fila existente sin reconstruir el `ListBoxRow`.
 fn update_list_row_metadata(row: &ListBoxRow, item: &FileItem, icon_size: i32) {
-    let Some(hbox) = row.child().and_then(|c| c.downcast::<GtkBox>().ok()) else {
+    let Some(hbox) = row_content_box(row) else {
         return;
     };
     let mut child = hbox.first_child();
@@ -567,13 +671,12 @@ fn apply_widths_to_box(hbox: &GtkBox, widths: [i32; 3]) {
     }
 }
 
-fn apply_column_widths(header: &GtkBox, list_box: &ListBox, bands: &GtkBox, widths: [i32; 3]) {
+fn apply_column_widths(header: &GtkBox, list_box: &ListBox, widths: [i32; 3]) {
     apply_widths_to_box(header, widths);
-    apply_widths_to_box(bands, widths);
     let mut child = list_box.first_child();
     while let Some(w) = child {
         if let Some(row) = w.downcast_ref::<ListBoxRow>() {
-            if let Some(hbox) = row.child().and_then(|c| c.downcast::<GtkBox>().ok()) {
+            if let Some(hbox) = row_content_box(row) {
                 apply_widths_to_box(&hbox, widths);
             }
         }
@@ -640,7 +743,6 @@ fn update_header_titles(hbox: &GtkBox, state: Option<(SortCol, bool)>) {
 fn create_list_header(
     widths: &ColumnWidths,
     list_box: &ListBox,
-    bands: &GtkBox,
     sort_state: &SortState,
     on_sort: Rc<dyn Fn()>,
 ) -> GtkBox {
@@ -660,11 +762,7 @@ fn create_list_header(
 
     for i in 0..3 {
         let (title, col) = HEADER_TITLES[i + 1];
-        let overlay = gtk4::Overlay::new();
-        // Columnas pares (fecha y clase) con fondo gris muy claro
-        if i % 2 == 0 {
-            overlay.add_css_class("branches-list-col-even");
-        }
+        let overlay = Overlay::new();
         overlay.set_child(Some(&create_cell_label(title, col == SortCol::Size)));
 
         // Asa de redimensionado en el borde izquierdo de la columna
@@ -720,7 +818,6 @@ fn create_list_header(
             let active = active.clone();
             let widths = widths.clone();
             let list_box = list_box.clone();
-            let bands = bands.clone();
             drag.connect_drag_update(move |_, dx, _| {
                 let Some(i) = active.get() else { return };
                 let Some(header) = weak_header.upgrade() else {
@@ -732,7 +829,7 @@ fn create_list_header(
                 if w[i] != new_w {
                     w[i] = new_w;
                     widths.set(w);
-                    apply_column_widths(&header, &list_box, &bands, w);
+                    apply_column_widths(&header, &list_box, w);
                 }
             });
         }
@@ -777,7 +874,9 @@ fn create_list_row(
     on_navigate: NavigateCallback,
 ) -> ListBoxRow {
     let hbox = GtkBox::new(Orientation::Horizontal, 0);
-    hbox.add_css_class("branches-list-row");
+    hbox.add_css_class("branches-list-row-content");
+    hbox.set_margin_start(LIST_ROW_INSET_X as i32);
+    hbox.set_margin_end(LIST_ROW_INSET_X as i32);
     if item.is_hidden {
         hbox.add_css_class("branches-hidden-item");
     }
@@ -810,8 +909,11 @@ fn create_list_row(
 
     // Columnas 2-4: fecha, tamaño y clase (ancho fijo compartido con la cabecera)
     let label_date = create_cell_label(&item.modified_str, false);
+    label_date.add_css_class("branches-list-meta-cell");
     let label_size = create_cell_label(&item.size_str, true);
+    label_size.add_css_class("branches-list-meta-cell");
     let label_kind = create_cell_label(&item.kind_str, false);
+    label_kind.add_css_class("branches-list-meta-cell");
 
     hbox.append(&name_box);
     hbox.append(&label_date);
@@ -819,7 +921,89 @@ fn create_list_row(
     hbox.append(&label_kind);
     apply_widths_to_box(&hbox, widths);
 
-    let row = ListBoxRow::builder().child(&hbox).build();
+    let row = ListBoxRow::builder()
+        .css_classes(["branches-list-row"])
+        .build();
+
+    // Fondo Cairo squircle (n = 4.2) con esquinas redondeadas solo al inicio y fin de bloques contiguos
+    let bg = DrawingArea::new();
+    bg.set_can_target(false);
+    bg.set_hexpand(true);
+    bg.set_vexpand(true);
+
+    let row_weak = row.downgrade();
+    bg.set_draw_func(move |_, cr, w, h| {
+        let width = w as f64;
+        let height = h as f64;
+        let draw_w = width - LIST_ROW_INSET_X * 2.0;
+        if draw_w <= 2.0 || height <= 2.0 {
+            return;
+        }
+        let Some(r) = row_weak.upgrade() else {
+            return;
+        };
+        let flags = r.state_flags();
+        let selected = flags.contains(gtk4::StateFlags::SELECTED);
+        let hovered = flags.contains(gtk4::StateFlags::PRELIGHT);
+        let is_odd_stripe = r.index() >= 0 && r.index() % 2 == 1;
+        if !selected && !hovered && !is_odd_stripe {
+            return;
+        }
+
+        let radius = (height * 0.38).clamp(7.0, 11.0);
+        let _ = cr.save();
+        if selected {
+            let prev_selected = r
+                .prev_sibling()
+                .and_then(|s| s.downcast::<ListBoxRow>().ok())
+                .is_some_and(|prev| prev.is_selectable() && prev.is_selected());
+            let next_selected = r
+                .next_sibling()
+                .and_then(|s| s.downcast::<ListBoxRow>().ok())
+                .is_some_and(|next| next.is_selectable() && next.is_selected());
+            let (round_top, round_bottom) =
+                selection_squircle_corners(prev_selected, next_selected);
+            crate::app_window::squircle_path_corners(
+                cr,
+                LIST_ROW_INSET_X,
+                0.0,
+                draw_w,
+                height,
+                radius,
+                round_top,
+                round_bottom,
+            );
+            let (red, green, blue) = malus_de_common::config::load_accent_color();
+            cr.set_source_rgba(red, green, blue, 0.90);
+        } else {
+            crate::app_window::squircle_path_corners(
+                cr,
+                LIST_ROW_INSET_X,
+                0.0,
+                draw_w,
+                height,
+                radius,
+                true,
+                true,
+            );
+            let fg = r.color();
+            let alpha = if hovered { 0.065 } else { 0.035 };
+            cr.set_source_rgba(fg.red() as f64, fg.green() as f64, fg.blue() as f64, alpha);
+        }
+        let _ = cr.fill();
+        let _ = cr.restore();
+    });
+
+    let bg_state = bg.clone();
+    row.connect_state_flags_changed(move |_, _| {
+        bg_state.queue_draw();
+    });
+
+    let overlay = Overlay::builder().hexpand(true).vexpand(false).build();
+    overlay.set_child(Some(&bg));
+    overlay.add_overlay(&hbox);
+    overlay.set_measure_overlay(&hbox, true);
+    row.set_child(Some(&overlay));
 
     // Gestos: Doble clic, segundo clic lento para renombrar (estilo Finder) y Clic derecho
     let gesture = GestureClick::new();
@@ -1061,5 +1245,17 @@ mod tests {
         let g2 = vec!["A".to_string(), "C".to_string()];
         assert!(rows_match_in_place(&a, &b, Some(&g1), Some(&g1)));
         assert!(!rows_match_in_place(&a, &b, Some(&g1), Some(&g2)));
+    }
+
+    #[test]
+    fn selection_squircle_corners_matches_contiguous_selection_runs() {
+        // Elemento aislado: redondeo squircle en las 4 esquinas
+        assert_eq!(selection_squircle_corners(false, false), (true, true));
+        // Inicio de selección continua: solo esquinas superiores
+        assert_eq!(selection_squircle_corners(false, true), (true, false));
+        // Centro de selección continua: sin redondeo para unión limpia
+        assert_eq!(selection_squircle_corners(true, true), (false, false));
+        // Final de selección continua: solo esquinas inferiores
+        assert_eq!(selection_squircle_corners(true, false), (false, true));
     }
 }

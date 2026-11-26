@@ -130,15 +130,20 @@ pub enum BackgroundBlurCapturePlan {
 }
 
 /// Calcula el rectángulo de desenfoque de una ventana translúcida:
+/// - Tarjetas translúcidas completas (p. ej. Quick Look) desenfocan toda la ventana.
 /// - Branches y Ajustes del Sistema (> 480 px) desenfocan su barra lateral de 212 px.
 /// - Diálogos translúcidos compactos (p. ej. Apagar / Reiniciar / Cerrar sesión) desenfocan toda la tarjeta.
 pub fn translucent_window_blur_rect(
     win_rect: Rectangle<i32, Physical>,
     is_branches: bool,
     is_translucent: bool,
+    is_full_translucent: bool,
     win_phys_r: Option<i32>,
     scale: f64,
 ) -> Rectangle<i32, Physical> {
+    if is_full_translucent {
+        return win_rect;
+    }
     let sidebar_blur_w = ((212.0 * scale).round() as i32 + win_phys_r.unwrap_or(0) as i32 + 4)
         .min(win_rect.size.w);
     if is_branches {
@@ -513,6 +518,7 @@ mod tests {
             Rectangle::new((40, 40).into(), (900, 600).into()),
             true,
             true,
+            false,
             Some(28),
             1.0,
         );
@@ -595,13 +601,21 @@ mod tests {
     fn compact_translucent_dialogs_blur_full_card_while_settings_blurs_sidebar() {
         let dialog_rect = Rectangle::new((600, 360).into(), (332, 280).into());
         assert_eq!(
-            translucent_window_blur_rect(dialog_rect, false, true, Some(28), 1.0),
+            translucent_window_blur_rect(dialog_rect, false, true, false, Some(28), 1.0),
             dialog_rect
         );
 
         let settings_rect = Rectangle::new((200, 120).into(), (860, 620).into());
-        let settings_blur = translucent_window_blur_rect(settings_rect, false, true, Some(28), 1.0);
+        let settings_blur =
+            translucent_window_blur_rect(settings_rect, false, true, false, Some(28), 1.0);
         assert_eq!(settings_blur.loc, settings_rect.loc);
         assert_eq!(settings_blur.size, (244, 620).into());
+
+        // Quick Look independiente (> 480 px) debe desenfocar toda la tarjeta y no solo 212 px
+        let quicklook_rect = Rectangle::new((320, 180).into(), (820, 600).into());
+        assert_eq!(
+            translucent_window_blur_rect(quicklook_rect, false, true, true, Some(28), 1.0),
+            quicklook_rect
+        );
     }
 }

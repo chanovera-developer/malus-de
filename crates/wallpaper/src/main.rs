@@ -1727,13 +1727,20 @@ fn launch_quick_look(path: &Path) {
     let mut cmd = std::process::Command::new("malus-de-branches");
     cmd.arg("-q").arg(path);
     malus_de_common::config::set_cursor_environment(&mut cmd);
-    if let Err(err) = cmd.spawn() {
-        warn!(
-            "No se pudo invocar Quick Look para {:?}: {}. Fallback a xdg-open...",
-            path, err
-        );
-        let file = gio::File::for_path(path);
-        launch_file(&file);
+    match cmd.spawn() {
+        Ok(mut child) => {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+        Err(err) => {
+            warn!(
+                "No se pudo invocar Quick Look para {:?}: {}. Fallback a xdg-open...",
+                path, err
+            );
+            let file = gio::File::for_path(path);
+            launch_file(&file);
+        }
     }
 }
 
@@ -5820,6 +5827,7 @@ fn render_single_icon(
             set_desktop_icon_selected(&item_w, true);
         }
         *foc_path_click.borrow_mut() = Some(path_click.clone());
+        item_w.grab_focus();
     });
     item_box.add_controller(click);
 
@@ -6487,6 +6495,196 @@ fn select_desktop_icon_by_typeahead(
     true
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DesktopNavDirection {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+fn find_next_desktop_icon_in_direction(
+    items: &[(PathBuf, f64, f64)],
+    current: Option<&Path>,
+    direction: DesktopNavDirection,
+    cell_w: f64,
+    cell_h: f64,
+    align_left: bool,
+) -> Option<PathBuf> {
+    if items.is_empty() {
+        return None;
+    }
+
+    let step_x = cell_w.max(32.0);
+    let step_y = cell_h.max(32.0);
+
+    let current_entry = current.and_then(|cur| items.iter().find(|(p, _, _)| p.as_path() == cur));
+    let Some((cur_path, cx, cy)) = current_entry else {
+        // Sin selección activa: elegir el primer icono en orden visual del escritorio
+        // (columna derecha arriba en modo macOS por defecto, o columna izquierda arriba si align_left).
+        let mut ordered: Vec<&(PathBuf, f64, f64)> = items.iter().collect();
+        ordered.sort_by(|a, b| {
+            let col_a = (a.1 / step_x).round() as i64;
+            let col_b = (b.1 / step_x).round() as i64;
+            let col_ord = if align_left {
+                col_a.cmp(&col_b)
+            } else {
+                col_b.cmp(&col_a)
+            };
+            col_ord
+                .then_with(|| a.2.total_cmp(&b.2))
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        return ordered.first().map(|(p, _, _)| p.clone());
+    };
+
+    let (dir_x, dir_y) = match direction {
+        DesktopNavDirection::Up => (0.0, -1.0),
+        DesktopNavDirection::Down => (0.0, 1.0),
+        DesktopNavDirection::Left => (-1.0, 0.0),
+        DesktopNavDirection::Right => (1.0, 0.0),
+    };
+    let is_horizontal = dir_x != 0.0;
+    let axis_step = if is_horizontal { step_x } else { step_y };
+    let perp_tol = (if is_horizontal { step_y } else { step_x } * 0.6).max(24.0);
+    let min_primary = (axis_step * 0.25).max(8.0);
+
+    let mut best_same_lane: Option<(f64, f64, &PathBuf)> = None;
+    let mut best_fallback: Option<(f64, f64, f64, &PathBuf)> = None;
+
+    for (path, px, py) in items {
+        if path == cur_path {
+            continue;
+        }
+        let primary = (px - cx) * dir_x + (py - cy) * dir_y;
+        if primary <= min_primary {
+            continue;
+        }
+        let perp = ((px - cx) * dir_y.abs() + (py - cy) * dir_x.abs()).abs();
+
+        if perp <= perp_tol {
+            let replace = match best_same_lane {
+                None => true,
+                Some((bp, bq, _)) => (primary, perp) < (bp, bq),
+            };
+            if replace {
+                best_same_lane = Some((primary, perp, path));
+            }
+        } else if is_horizontal {
+            // Para Izquierda/Derecha, priorizar la columna más cercana y luego la fila más alineada
+            let col_steps = (primary / step_x).round().max(1.0);
+            let replace = match best_fallback {
+                None => true,
+                Some((bc, bq, bp, _)) => (col_steps, perp, primary) < (bc, bq, bp),
+            };
+            if replace {
+                best_fallback = Some((col_steps, perp, primary, path));
+            }
+        } else if perp <= primary * 1.25 {
+            // Para Arriba/Abajo con iconos desplazados manualmente, aceptar vecinos en cono frontal
+            let score = primary + perp * 2.0;
+            let replace = match best_fallback {
+                None => true,
+                Some((bs, bq, bp, _)) => (score, perp, primary) < (bs, bq, bp),
+            };
+            if replace {
+                best_fallback = Some((score, perp, primary, path));
+            }
+        }
+    }
+
+    best_same_lane
+        .map(|(_, _, p)| p.clone())
+        .or_else(|| best_fallback.map(|(_, _, _, p)| p.clone()))
+}
+
+fn resolve_active_desktop_path(
+    icons: &Fixed,
+    selected_paths: &Rc<RefCell<HashSet<PathBuf>>>,
+    focused_path: &Rc<RefCell<Option<PathBuf>>>,
+) -> Option<PathBuf> {
+    if let Some(path) = focused_path.borrow().as_ref() {
+        if has_desktop_icon_widget(icons, path) {
+            return Some(path.clone());
+        }
+    }
+    let sel = selected_paths.borrow();
+    if sel.is_empty() {
+        return None;
+    }
+    let mut sibling = icons.first_child();
+    while let Some(child) = sibling {
+        sibling = child.next_sibling();
+        if !child.has_css_class("desktop-icon") || !child.is_visible() {
+            continue;
+        }
+        if let Some(p) = widget_desktop_path(&child) {
+            if sel.contains(&p) {
+                return Some(p);
+            }
+        }
+    }
+    sel.iter().next().cloned()
+}
+
+fn navigate_desktop_icons_by_arrow(
+    direction: DesktopNavDirection,
+    extend_selection: bool,
+    icons: &Fixed,
+    selected_paths: &Rc<RefCell<HashSet<PathBuf>>>,
+    focused_path: &Rc<RefCell<Option<PathBuf>>>,
+    config: &DesktopIconsConfig,
+) -> bool {
+    let mut entries: Vec<(PathBuf, gtk4::Widget, f64, f64)> = Vec::new();
+    let mut sibling = icons.first_child();
+    while let Some(child) = sibling {
+        sibling = child.next_sibling();
+        if !child.has_css_class("desktop-icon") || !child.is_visible() {
+            continue;
+        }
+        if let Some(path) = widget_desktop_path(&child) {
+            let (x, y) = icons.child_position(&child);
+            entries.push((path, child, x, y));
+        }
+    }
+    if entries.is_empty() {
+        return false;
+    }
+
+    let current = resolve_active_desktop_path(icons, selected_paths, focused_path);
+    let metrics = IconLayoutMetrics::from_config(config);
+    let coords: Vec<(PathBuf, f64, f64)> = entries
+        .iter()
+        .map(|(p, _, x, y)| (p.clone(), *x, *y))
+        .collect();
+
+    let Some(target_path) = find_next_desktop_icon_in_direction(
+        &coords,
+        current.as_deref(),
+        direction,
+        f64::from(metrics.cell_width()),
+        f64::from(metrics.cell_height()),
+        config.align_left,
+    ) else {
+        return true;
+    };
+
+    let mut sel = selected_paths.borrow_mut();
+    if !extend_selection {
+        sel.clear();
+        for (_, w, _, _) in &entries {
+            set_desktop_icon_selected(w, false);
+        }
+    }
+    if let Some((_, target_widget, _, _)) = entries.iter().find(|(p, _, _, _)| p == &target_path) {
+        set_desktop_icon_selected(target_widget, true);
+        sel.insert(target_path.clone());
+        *focused_path.borrow_mut() = Some(target_path);
+        target_widget.grab_focus();
+    }
+    true
+}
+
 #[allow(clippy::too_many_arguments)]
 fn populate_wallpaper_role(
     window: &ApplicationWindow,
@@ -6645,13 +6843,15 @@ fn populate_wallpaper_role(
         watch_clipboard_for_desktop(&icons);
 
         // Controladores de teclado en la ventana del escritorio:
-        // Espacio -> Quick Look, Enter -> Abrir, Delete -> Papelera, Ctrl/Cmd+C/X/V/D/A
+        // Flechas -> Navegar iconos, Espacio -> Quick Look, Enter -> Abrir, Delete -> Papelera, Ctrl/Cmd+C/X/V/D/A
         let key_controller = EventControllerKey::new();
+        key_controller.set_propagation_phase(gtk4::PropagationPhase::Capture);
         let win_key = window.clone();
         let foc_path_key = focused_path.clone();
         let sel_paths_key = selected_paths.clone();
         let icons_key = icons.clone();
         let dir_key = desktop_dir.to_path_buf();
+        let cfg_key = current_config.clone();
         let trigger_key = trigger_refresh.clone();
         let typeahead_key = Rc::new(RefCell::new(DesktopTypeAhead::new()));
         key_controller.connect_key_pressed(move |_, keyval, _, state| {
@@ -6753,13 +6953,33 @@ fn populate_wallpaper_role(
             }
 
             match keyval {
+                Key::Up | Key::Down | Key::Left | Key::Right if !is_ctrl && !is_alt && !is_command => {
+                    typeahead_key.borrow_mut().clear();
+                    let dir = match keyval {
+                        Key::Up => DesktopNavDirection::Up,
+                        Key::Down => DesktopNavDirection::Down,
+                        Key::Left => DesktopNavDirection::Left,
+                        _ => DesktopNavDirection::Right,
+                    };
+                    let cfg_snap = cfg_key.borrow().clone();
+                    if navigate_desktop_icons_by_arrow(
+                        dir,
+                        is_shift,
+                        &icons_key,
+                        &sel_paths_key,
+                        &foc_path_key,
+                        &cfg_snap,
+                    ) {
+                        return glib::Propagation::Stop;
+                    }
+                }
                 Key::Escape => {
                     if typeahead_key.borrow().is_active() {
                         typeahead_key.borrow_mut().clear();
                         return glib::Propagation::Stop;
                     }
                 }
-                Key::space => {
+                Key::space | Key::KP_Space => {
                     if !is_ctrl && !is_alt && !is_command && typeahead_key.borrow().is_active() {
                         let _ = select_desktop_icon_by_typeahead(
                             ' ',
@@ -6770,14 +6990,20 @@ fn populate_wallpaper_role(
                         );
                         return glib::Propagation::Stop;
                     }
-                    if let Some(path) = foc_path_key.borrow().as_ref() {
-                        launch_quick_look(path);
+                    if let Some(path) =
+                        resolve_active_desktop_path(&icons_key, &sel_paths_key, &foc_path_key)
+                    {
+                        *foc_path_key.borrow_mut() = Some(path.clone());
+                        launch_quick_look(&path);
                         return glib::Propagation::Stop;
                     }
                 }
                 Key::Return | Key::KP_Enter => {
-                    if let Some(path) = foc_path_key.borrow().as_ref() {
-                        let file = gio::File::for_path(path);
+                    if let Some(path) =
+                        resolve_active_desktop_path(&icons_key, &sel_paths_key, &foc_path_key)
+                    {
+                        *foc_path_key.borrow_mut() = Some(path.clone());
+                        let file = gio::File::for_path(&path);
                         launch_file(&file);
                         return glib::Propagation::Stop;
                     }
@@ -7288,6 +7514,7 @@ fn populate_wallpaper_role(
         let icons_update = icons.clone();
         let rb_update = rubberband.clone();
         let sel_update = selected_paths.clone();
+        let foc_update = focused_path.clone();
         let cfg_update = current_config.clone();
 
         desktop_drag.connect_drag_update(move |gesture, offset_x, offset_y| {
@@ -7346,6 +7573,9 @@ fn populate_wallpaper_role(
                             if intersects {
                                 set_desktop_icon_selected(&child, true);
                                 if let Some(p) = widget_desktop_path(&child) {
+                                    if foc_update.borrow().is_none() {
+                                        *foc_update.borrow_mut() = Some(p.clone());
+                                    }
                                     sel.insert(p);
                                 }
                             }
@@ -8647,6 +8877,128 @@ mod tests {
     use gtk4::prelude::*;
     use malus_de_common::config::DesktopIconsConfig;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn desktop_arrow_navigation_handles_gaps_columns_and_initial_selection() {
+        let a = PathBuf::from("/desk/a.webp");
+        let b = PathBuf::from("/desk/b.mp4");
+        let c = PathBuf::from("/desk/c.txt");
+        let d = PathBuf::from("/desk/d.pdf");
+        // Columna derecha (x=2436): a en y=56, b en y=176, hueco en y=296, c en y=416
+        // Columna izquierda adyacente (x=2320): d en y=176
+        let items = vec![
+            (a.clone(), 2436.0, 56.0),
+            (b.clone(), 2436.0, 176.0),
+            (c.clone(), 2436.0, 416.0),
+            (d.clone(), 2320.0, 176.0),
+        ];
+
+        // Sin selección inicial en modo macOS (align_left=false), selecciona el superior derecho (a)
+        assert_eq!(
+            super::find_next_desktop_icon_in_direction(
+                &items,
+                None,
+                super::DesktopNavDirection::Down,
+                116.0,
+                120.0,
+                false,
+            ),
+            Some(a.clone())
+        );
+        // Sin selección inicial con align_left=true, selecciona la columna más a la izquierda (d)
+        assert_eq!(
+            super::find_next_desktop_icon_in_direction(
+                &items,
+                None,
+                super::DesktopNavDirection::Down,
+                116.0,
+                120.0,
+                true,
+            ),
+            Some(d.clone())
+        );
+
+        // Navegación vertical saltando huecos vacíos (a -> b -> c y vuelta c -> b -> a)
+        assert_eq!(
+            super::find_next_desktop_icon_in_direction(
+                &items,
+                Some(&a),
+                super::DesktopNavDirection::Down,
+                116.0,
+                120.0,
+                false,
+            ),
+            Some(b.clone())
+        );
+        assert_eq!(
+            super::find_next_desktop_icon_in_direction(
+                &items,
+                Some(&b),
+                super::DesktopNavDirection::Down,
+                116.0,
+                120.0,
+                false,
+            ),
+            Some(c.clone())
+        );
+        assert_eq!(
+            super::find_next_desktop_icon_in_direction(
+                &items,
+                Some(&c),
+                super::DesktopNavDirection::Down,
+                116.0,
+                120.0,
+                false,
+            ),
+            None
+        );
+        assert_eq!(
+            super::find_next_desktop_icon_in_direction(
+                &items,
+                Some(&c),
+                super::DesktopNavDirection::Up,
+                116.0,
+                120.0,
+                false,
+            ),
+            Some(b.clone())
+        );
+
+        // Navegación horizontal entre columnas (misma fila y fila desplazada)
+        assert_eq!(
+            super::find_next_desktop_icon_in_direction(
+                &items,
+                Some(&b),
+                super::DesktopNavDirection::Left,
+                116.0,
+                120.0,
+                false,
+            ),
+            Some(d.clone())
+        );
+        assert_eq!(
+            super::find_next_desktop_icon_in_direction(
+                &items,
+                Some(&c),
+                super::DesktopNavDirection::Left,
+                116.0,
+                120.0,
+                false,
+            ),
+            Some(d.clone())
+        );
+        assert_eq!(
+            super::find_next_desktop_icon_in_direction(
+                &items,
+                Some(&d),
+                super::DesktopNavDirection::Right,
+                116.0,
+                120.0,
+                false,
+            ),
+            Some(b.clone())
+        );
+    }
 
     #[test]
     fn keeps_pointer_offset_and_clamps_icon_to_desktop() {

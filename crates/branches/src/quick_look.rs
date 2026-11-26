@@ -7,7 +7,7 @@ use gtk4::pango;
 use gtk4::prelude::*;
 use gtk4::{
     Align, Application, Box as GtkBox, Button, ContentFit, EventControllerKey, GestureClick, Grid,
-    Label, Orientation, Overlay, Overflow, Picture, PolicyType, PropagationPhase, ScrolledWindow,
+    Label, Orientation, Overflow, Overlay, Picture, PolicyType, PropagationPhase, ScrolledWindow,
     Separator, Spinner, TextView, Window, WindowHandle,
 };
 use std::cell::{Cell, RefCell};
@@ -77,8 +77,688 @@ impl Drop for MediaPlaybackHandle {
 
 const QL_HEADER_HEIGHT: i32 = 42;
 const QL_IMAGE_INSET: i32 = 8;
-const QL_MIN_CARD_W: i32 = 340;
-const QL_MIN_CARD_H: i32 = 240;
+const QL_VIDEO_CHROME_W: i32 = 28;
+const QL_VIDEO_CHROME_H: i32 = 116;
+const QL_PDF_CHROME_W: i32 = 28;
+const QL_PDF_CHROME_H_BASE: i32 = 66;
+const QL_PDF_FOOTER_H: i32 = 46;
+const QL_MIN_CARD_W: i32 = 360;
+const QL_MIN_CARD_H: i32 = 260;
+const QL_MAX_DECODE_W: i32 = 1280;
+const QL_MAX_DECODE_H: i32 = 960;
+const QL_SQUIRCLE_EXPONENT: f64 = 4.2;
+const QL_SQUIRCLE_SEGMENTS: usize = 24;
+const QL_OPEN_ANIM_US: f64 = 220_000.0;
+const QL_CLOSE_ANIM_US: f64 = 165_000.0;
+
+pub fn quicklook_open_anim_state(t: f64, standalone: bool) -> (f32, f64, f32) {
+    let t = t.clamp(0.0, 1.0);
+    let ease_s = 1.0 - (1.0 - t).powi(4);
+    let a_t = (t / 0.70).min(1.0);
+    let opacity = 1.0 - (1.0 - a_t).powi(2);
+    let start_scale = if standalone { 0.94 } else { 0.86 };
+    let start_y = if standalone { 8.0 } else { 10.0 };
+    let scale = (start_scale + (1.0 - start_scale) * ease_s) as f32;
+    let offset_y = (start_y * (1.0 - ease_s)) as f32;
+    (scale, opacity, offset_y)
+}
+
+pub fn quicklook_close_anim_state(
+    t: f64,
+    standalone: bool,
+    start_scale: f32,
+    start_opacity: f64,
+    start_offset_y: f32,
+) -> (f32, f64, f32) {
+    let t = t.clamp(0.0, 1.0);
+    let ease = t * t;
+    let target_scale = if standalone { 0.94_f32 } else { 0.88_f32 };
+    let target_y = if standalone { 6.0_f32 } else { 8.0_f32 };
+    let scale = start_scale + (target_scale - start_scale) * ease as f32;
+    let opacity = (start_opacity * (1.0 - ease)).clamp(0.0, 1.0);
+    let offset_y = start_offset_y + (target_y - start_offset_y) * ease as f32;
+    (scale, opacity, offset_y)
+}
+
+pub fn quicklook_card_squircle_radius() -> f64 {
+    malus_de_common::config::DisplaysConfig::load()
+        .window_corner_radius
+        .clamp(0.0, 48.0)
+}
+
+pub fn quicklook_concentric_inner_radius(outer_radius: f64, inset: f64) -> f64 {
+    if outer_radius <= 0.5 {
+        0.0
+    } else {
+        (outer_radius - inset).max(8.0)
+    }
+}
+
+fn draw_squircle_path(
+    cr: &gtk4::cairo::Context,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    radius: f64,
+) {
+    if width <= 0.0 || height <= 0.0 {
+        return;
+    }
+    let radius = radius.min(width * 0.5).min(height * 0.5);
+    if radius <= 0.5 {
+        cr.rectangle(x, y, width, height);
+        return;
+    }
+    let power = 2.0 / QL_SQUIRCLE_EXPONENT;
+    let quarter_turn = std::f64::consts::FRAC_PI_2;
+
+    cr.move_to(x + radius, y);
+    cr.line_to(x + width - radius, y);
+    for step in 1..=QL_SQUIRCLE_SEGMENTS {
+        let angle = quarter_turn * step as f64 / QL_SQUIRCLE_SEGMENTS as f64;
+        cr.line_to(
+            x + width - radius + radius * angle.sin().powf(power),
+            y + radius - radius * angle.cos().powf(power),
+        );
+    }
+    cr.line_to(x + width, y + height - radius);
+    for step in 1..=QL_SQUIRCLE_SEGMENTS {
+        let angle = quarter_turn * step as f64 / QL_SQUIRCLE_SEGMENTS as f64;
+        cr.line_to(
+            x + width - radius + radius * angle.cos().powf(power),
+            y + height - radius + radius * angle.sin().powf(power),
+        );
+    }
+    cr.line_to(x + radius, y + height);
+    for step in 1..=QL_SQUIRCLE_SEGMENTS {
+        let angle = quarter_turn * step as f64 / QL_SQUIRCLE_SEGMENTS as f64;
+        cr.line_to(
+            x + radius - radius * angle.sin().powf(power),
+            y + height - radius + radius * angle.cos().powf(power),
+        );
+    }
+    cr.line_to(x, y + radius);
+    for step in 1..=QL_SQUIRCLE_SEGMENTS {
+        let angle = quarter_turn * step as f64 / QL_SQUIRCLE_SEGMENTS as f64;
+        cr.line_to(
+            x + radius - radius * angle.cos().powf(power),
+            y + radius - radius * angle.sin().powf(power),
+        );
+    }
+    cr.close_path();
+}
+
+#[inline]
+fn squircle_sdf_f32(px: f32, py: f32, half_w: f32, half_h: f32, radius: f32) -> f32 {
+    let exp = QL_SQUIRCLE_EXPONENT as f32;
+    let dx = px.abs() - half_w + radius;
+    let dy = py.abs() - half_h + radius;
+    if dx <= 0.0 || dy <= 0.0 {
+        dx.max(dy) - radius
+    } else {
+        (dx.powf(exp) + dy.powf(exp)).powf(1.0 / exp) - radius
+    }
+}
+
+fn apply_squircle_clip_rgba_corners(rgba: &mut [u8], width: usize, height: usize, radius: f32) {
+    if width == 0 || height == 0 || radius <= 1.0 {
+        return;
+    }
+    let half_w = width as f32 * 0.5;
+    let half_h = height as f32 * 0.5;
+    let r = radius.min(half_w).min(half_h);
+    if r <= 1.0 {
+        return;
+    }
+    let corner_span = (r.ceil() as usize + 2).min(width).min(height);
+    let aa = 1.0_f32;
+
+    let mut mask_pixel = |x: usize, y: usize| {
+        let idx = (y * width + x) * 4;
+        if idx + 3 >= rgba.len() {
+            return;
+        }
+        let lx = (x as f32 + 0.5) - half_w;
+        let ly = (y as f32 + 0.5) - half_h;
+        let dist = squircle_sdf_f32(lx, ly, half_w, half_h, r);
+        if dist >= 0.0 {
+            rgba[idx + 3] = 0;
+        } else if dist > -aa {
+            let t = ((-dist) / aa).clamp(0.0, 1.0);
+            let smooth = t * t * (3.0 - 2.0 * t);
+            rgba[idx + 3] = ((rgba[idx + 3] as f32) * smooth).round() as u8;
+        }
+    };
+
+    let x_right_start = width.saturating_sub(corner_span);
+    let y_bottom_start = height.saturating_sub(corner_span);
+
+    for y in 0..corner_span {
+        for x in 0..corner_span {
+            mask_pixel(x, y);
+        }
+        for x in x_right_start.max(corner_span)..width {
+            mask_pixel(x, y);
+        }
+    }
+    for y in y_bottom_start.max(corner_span)..height {
+        for x in 0..corner_span {
+            mask_pixel(x, y);
+        }
+        for x in x_right_start.max(corner_span)..width {
+            mask_pixel(x, y);
+        }
+    }
+}
+
+fn precompute_squircle_corner_alpha(
+    width: usize,
+    height: usize,
+    radius: f32,
+) -> Vec<(usize, u8)> {
+    let mut edits = Vec::new();
+    if width == 0 || height == 0 || radius <= 1.0 {
+        return edits;
+    }
+    let half_w = width as f32 * 0.5;
+    let half_h = height as f32 * 0.5;
+    let r = radius.min(half_w).min(half_h);
+    if r <= 1.0 {
+        return edits;
+    }
+    let corner_span = (r.ceil() as usize + 2).min(width).min(height);
+    let aa = 1.0_f32;
+    let mut collect = |x: usize, y: usize| {
+        let lx = (x as f32 + 0.5) - half_w;
+        let ly = (y as f32 + 0.5) - half_h;
+        let dist = squircle_sdf_f32(lx, ly, half_w, half_h, r);
+        if dist >= 0.0 {
+            edits.push(((y * width + x) * 4 + 3, 0));
+        } else if dist > -aa {
+            let t = ((-dist) / aa).clamp(0.0, 1.0);
+            let smooth = t * t * (3.0 - 2.0 * t);
+            edits.push(((y * width + x) * 4 + 3, (smooth * 255.0).round() as u8));
+        }
+    };
+    let x_right_start = width.saturating_sub(corner_span);
+    let y_bottom_start = height.saturating_sub(corner_span);
+    for y in 0..corner_span {
+        for x in 0..corner_span {
+            collect(x, y);
+        }
+        for x in x_right_start.max(corner_span)..width {
+            collect(x, y);
+        }
+    }
+    for y in y_bottom_start.max(corner_span)..height {
+        for x in 0..corner_span {
+            collect(x, y);
+        }
+        for x in x_right_start.max(corner_span)..width {
+            collect(x, y);
+        }
+    }
+    edits
+}
+
+/// Tarjeta Quick Look acelerada por GPU:
+/// - En overlay dentro de Branches: dibuja sombra proyectada squircle (`n = 4.2`), recorte alfa
+///   squircle (`gsk::MaskNode`), desenfoque gaussiano real del fondo (`push_blur`), tinte Liquid
+///   Glass y animación fluida de apertura/cierre sincronizada al frame clock.
+/// - En ventana independiente de escritorio: deja el squircle/blur/sombra exteriores al compositor
+///   y anima suavemente la opacidad y escala interna al abrir y cerrar.
+mod squircle_card {
+    use super::{
+        draw_squircle_path, quicklook_card_squircle_radius, quicklook_close_anim_state,
+        quicklook_open_anim_state, QL_CLOSE_ANIM_US, QL_OPEN_ANIM_US,
+    };
+    use gtk4::glib;
+    use gtk4::prelude::*;
+    use gtk4::subclass::prelude::*;
+    use std::cell::{Cell, RefCell};
+
+    mod imp {
+        use super::*;
+
+        pub struct QuickLookSquircleCard {
+            pub standalone: Cell<bool>,
+            pub anim_scale: Cell<f32>,
+            pub anim_opacity: Cell<f64>,
+            pub anim_offset_y: Cell<f32>,
+            pub anim_gen: Cell<u64>,
+            pub bg_widget: RefCell<Option<glib::WeakRef<gtk4::Widget>>>,
+            pub bg_paintable: RefCell<Option<gtk4::WidgetPaintable>>,
+        }
+
+        impl Default for QuickLookSquircleCard {
+            fn default() -> Self {
+                Self {
+                    standalone: Cell::new(false),
+                    anim_scale: Cell::new(1.0),
+                    anim_opacity: Cell::new(1.0),
+                    anim_offset_y: Cell::new(0.0),
+                    anim_gen: Cell::new(0),
+                    bg_widget: RefCell::new(None),
+                    bg_paintable: RefCell::new(None),
+                }
+            }
+        }
+
+        #[glib::object_subclass]
+        impl ObjectSubclass for QuickLookSquircleCard {
+            const NAME: &'static str = "MalusQuickLookSquircleCard";
+            type Type = super::QuickLookSquircleCard;
+            type ParentType = gtk4::Widget;
+
+            fn class_init(klass: &mut Self::Class) {
+                klass.set_layout_manager_type::<gtk4::BinLayout>();
+            }
+        }
+
+        impl ObjectImpl for QuickLookSquircleCard {
+            fn dispose(&self) {
+                if let Some(paintable) = self.bg_paintable.borrow_mut().take() {
+                    paintable.set_widget(gtk4::Widget::NONE);
+                }
+                *self.bg_widget.borrow_mut() = None;
+                while let Some(child) = self.obj().first_child() {
+                    child.unparent();
+                }
+            }
+        }
+
+        impl WidgetImpl for QuickLookSquircleCard {
+            fn snapshot(&self, snapshot: &gtk4::Snapshot) {
+                let obj = self.obj();
+                let w = obj.width() as f32;
+                let h = obj.height() as f32;
+                if w <= 2.0 || h <= 2.0 {
+                    return;
+                }
+
+                let alpha = self.anim_opacity.get().clamp(0.0, 1.0);
+                if alpha <= 0.001 {
+                    return;
+                }
+                let scale = self.anim_scale.get().max(0.05);
+                let offset_y = self.anim_offset_y.get();
+                let has_transform = (scale - 1.0).abs() > 0.0005 || offset_y.abs() > 0.05;
+
+                // Modo ventana independiente en escritorio: el compositor dibuja el squircle,
+                // blur y sombra exteriores; aquí animamos suavemente opacidad y contenido interior.
+                if self.standalone.get() {
+                    if alpha < 0.999 {
+                        snapshot.push_opacity(alpha);
+                    }
+                    if has_transform {
+                        snapshot.save();
+                        snapshot.translate(&gtk4::graphene::Point::new(
+                            w * 0.5,
+                            h * 0.5 + offset_y,
+                        ));
+                        snapshot.scale(scale, scale);
+                        snapshot.translate(&gtk4::graphene::Point::new(-w * 0.5, -h * 0.5));
+                    }
+                    if let Some(child) = obj.first_child() {
+                        obj.snapshot_child(&child, snapshot);
+                    }
+                    if has_transform {
+                        snapshot.restore();
+                    }
+                    if alpha < 0.999 {
+                        snapshot.pop();
+                    }
+                    return;
+                }
+
+                let radius = quicklook_card_squircle_radius();
+                let is_dark = libadwaita::StyleManager::default().is_dark();
+                let reduce_transparency = malus_de_common::config::load_reduce_transparency();
+                let opacity = malus_de_common::config::load_liquid_glass_opacity();
+                let glass_scale = malus_de_common::config::liquid_glass_scale_for(opacity);
+                let bounds = gtk4::graphene::Rect::new(0.0, 0.0, w, h);
+
+                if alpha < 0.999 {
+                    snapshot.push_opacity(alpha);
+                }
+                if has_transform {
+                    snapshot.save();
+                    snapshot.translate(&gtk4::graphene::Point::new(
+                        w * 0.5,
+                        h * 0.5 + offset_y,
+                    ));
+                    snapshot.scale(scale, scale);
+                    snapshot.translate(&gtk4::graphene::Point::new(-w * 0.5, -h * 0.5));
+                }
+
+                // 1. Sombra proyectada squircle en dos capas (elevación macOS + contacto)
+                let shadow_pad = 56.0_f32;
+                let shadow_bounds = gtk4::graphene::Rect::new(
+                    -shadow_pad,
+                    -shadow_pad,
+                    w + shadow_pad * 2.0,
+                    h + shadow_pad * 2.0,
+                );
+                snapshot.push_blur(32.0);
+                {
+                    let cr = snapshot.append_cairo(&shadow_bounds);
+                    draw_squircle_path(&cr, 0.0, 14.0, w as f64, h as f64, radius);
+                    cr.set_source_rgba(0.0, 0.0, 0.0, if is_dark { 0.44 } else { 0.24 });
+                    let _ = cr.fill();
+                }
+                snapshot.pop();
+
+                snapshot.push_blur(10.0);
+                {
+                    let cr = snapshot.append_cairo(&shadow_bounds);
+                    draw_squircle_path(&cr, 0.0, 3.0, w as f64, h as f64, radius);
+                    cr.set_source_rgba(0.0, 0.0, 0.0, if is_dark { 0.24 } else { 0.12 });
+                    let _ = cr.fill();
+                }
+                snapshot.pop();
+
+                // 2. Contenido (blur GPU + cristal + hijos + bisel) enmascarado con squircle continuo (n = 4.2)
+                let source_snap = gtk4::Snapshot::new();
+
+                // 2a. Desenfoque gaussiano real en GPU del contenido de Branches detrás de la tarjeta
+                if !reduce_transparency {
+                    let bg_opt = self.bg_widget.borrow().as_ref().and_then(|r| r.upgrade());
+                    let paintable_opt = self.bg_paintable.borrow().clone();
+                    if let (Some(bg_widget), Some(paintable)) = (bg_opt, paintable_opt) {
+                        let bg_w = bg_widget.width() as f64;
+                        let bg_h = bg_widget.height() as f64;
+                        if bg_w > 2.0 && bg_h > 2.0 {
+                            if let Some(origin) = obj
+                                .compute_point(&bg_widget, &gtk4::graphene::Point::new(0.0, 0.0))
+                            {
+                                let blur_pad = 36.0_f32;
+                                let expanded = gtk4::graphene::Rect::new(
+                                    -blur_pad,
+                                    -blur_pad,
+                                    w + blur_pad * 2.0,
+                                    h + blur_pad * 2.0,
+                                );
+                                let fallback_bg = if is_dark {
+                                    gtk4::gdk::RGBA::new(30.0 / 255.0, 30.0 / 255.0, 34.0 / 255.0, 1.0)
+                                } else {
+                                    gtk4::gdk::RGBA::new(242.0 / 255.0, 242.0 / 255.0, 246.0 / 255.0, 1.0)
+                                };
+                                source_snap.push_clip(&bounds);
+                                source_snap.push_blur(28.0);
+                                source_snap.push_clip(&expanded);
+                                source_snap.append_color(&fallback_bg, &expanded);
+                                source_snap.save();
+                                source_snap.translate(&gtk4::graphene::Point::new(
+                                    -origin.x(),
+                                    -origin.y(),
+                                ));
+                                paintable.snapshot(&source_snap, bg_w, bg_h);
+                                source_snap.restore();
+                                source_snap.pop();
+                                source_snap.pop();
+                                source_snap.pop();
+                            }
+                        }
+                    }
+                }
+
+                // 2b. Tinte Liquid Glass semitransparente + reflejo superior
+                let fill_alpha = if reduce_transparency {
+                    0.97
+                } else if is_dark {
+                    malus_de_common::config::scaled_liquid_glass_alpha(0.72, glass_scale, 0.16, 0.94)
+                } else {
+                    malus_de_common::config::scaled_liquid_glass_alpha(0.68, glass_scale, 0.16, 0.94)
+                };
+                {
+                    let cr = source_snap.append_cairo(&bounds);
+                    if is_dark {
+                        cr.set_source_rgba(36.0 / 255.0, 36.0 / 255.0, 40.0 / 255.0, fill_alpha);
+                    } else {
+                        cr.set_source_rgba(246.0 / 255.0, 246.0 / 255.0, 248.0 / 255.0, fill_alpha);
+                    }
+                    cr.rectangle(0.0, 0.0, w as f64, h as f64);
+                    let _ = cr.fill();
+
+                    let sheen = gtk4::cairo::LinearGradient::new(0.0, 0.0, 0.0, h as f64);
+                    if is_dark {
+                        sheen.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 0.08);
+                        sheen.add_color_stop_rgba(1.0, 1.0, 1.0, 1.0, 0.01);
+                    } else {
+                        sheen.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 0.28);
+                        sheen.add_color_stop_rgba(1.0, 1.0, 1.0, 1.0, 0.04);
+                    }
+                    let _ = cr.set_source(&sheen);
+                    cr.rectangle(0.0, 0.0, w as f64, h as f64);
+                    let _ = cr.fill();
+                }
+
+                // 2c. Contenido hijo (cabecera + vista previa) recortado al squircle
+                if let Some(child) = obj.first_child() {
+                    obj.snapshot_child(&child, &source_snap);
+                }
+
+                // 2d. Bisel interior squircle de 1 px estilo macOS
+                {
+                    let cr = source_snap.append_cairo(&bounds);
+                    draw_squircle_path(
+                        &cr,
+                        0.5,
+                        0.5,
+                        (w as f64 - 1.0).max(1.0),
+                        (h as f64 - 1.0).max(1.0),
+                        (radius - 0.5).max(0.0),
+                    );
+                    if is_dark {
+                        cr.set_source_rgba(1.0, 1.0, 1.0, 0.18);
+                    } else {
+                        cr.set_source_rgba(0.0, 0.0, 0.0, 0.12);
+                    }
+                    cr.set_line_width(1.0);
+                    let _ = cr.stroke();
+                }
+
+                let mask_snap = gtk4::Snapshot::new();
+                {
+                    let cr = mask_snap.append_cairo(&bounds);
+                    draw_squircle_path(&cr, 0.0, 0.0, w as f64, h as f64, radius);
+                    cr.set_source_rgba(1.0, 1.0, 1.0, 1.0);
+                    let _ = cr.fill();
+                }
+
+                if let (Some(source_node), Some(mask_node)) =
+                    (source_snap.to_node(), mask_snap.to_node())
+                {
+                    let masked = gtk4::gsk::MaskNode::new(
+                        source_node,
+                        mask_node,
+                        gtk4::gsk::MaskMode::Alpha,
+                    );
+                    snapshot.append_node(&masked);
+                }
+
+                if has_transform {
+                    snapshot.restore();
+                }
+                if alpha < 0.999 {
+                    snapshot.pop();
+                }
+            }
+        }
+    }
+
+    glib::wrapper! {
+        pub struct QuickLookSquircleCard(ObjectSubclass<imp::QuickLookSquircleCard>)
+            @extends gtk4::Widget;
+    }
+
+    impl QuickLookSquircleCard {
+        pub fn new(
+            child: &impl IsA<gtk4::Widget>,
+            backdrop_source: Option<&gtk4::Widget>,
+            standalone: bool,
+        ) -> Self {
+            let obj: Self = glib::Object::new();
+            obj.set_hexpand(true);
+            obj.set_vexpand(true);
+            obj.set_overflow(if standalone {
+                gtk4::Overflow::Hidden
+            } else {
+                gtk4::Overflow::Visible
+            });
+            obj.imp().standalone.set(standalone);
+            let (s0, a0, y0) = quicklook_open_anim_state(0.0, standalone);
+            obj.imp().anim_scale.set(s0);
+            obj.imp().anim_opacity.set(a0);
+            obj.imp().anim_offset_y.set(y0);
+            child.set_parent(&obj);
+
+            if !standalone {
+                if let Some(src) = backdrop_source {
+                    let paintable = gtk4::WidgetPaintable::new(Some(src));
+                    let obj_weak = obj.downgrade();
+                    paintable.connect_invalidate_size(move |_| {
+                        if let Some(card) = obj_weak.upgrade() {
+                            card.queue_draw();
+                        }
+                    });
+                    *obj.imp().bg_widget.borrow_mut() = Some(src.downgrade());
+                    *obj.imp().bg_paintable.borrow_mut() = Some(paintable);
+                }
+
+                let obj_theme = obj.downgrade();
+                libadwaita::StyleManager::default().connect_dark_notify(move |_| {
+                    if let Some(card) = obj_theme.upgrade() {
+                        card.queue_draw();
+                    }
+                });
+            }
+
+            obj
+        }
+
+        pub fn animate_open(&self) {
+            let imp = self.imp();
+            let gen = imp.anim_gen.get().wrapping_add(1);
+            imp.anim_gen.set(gen);
+            let standalone = imp.standalone.get();
+            let (s0, a0, y0) = quicklook_open_anim_state(0.0, standalone);
+            imp.anim_scale.set(s0);
+            imp.anim_opacity.set(a0);
+            imp.anim_offset_y.set(y0);
+            self.queue_draw();
+
+            let start_time: Cell<Option<i64>> = Cell::new(None);
+            self.add_tick_callback(move |widget, clock| {
+                let Some(card) = widget.downcast_ref::<Self>() else {
+                    return glib::ControlFlow::Break;
+                };
+                let imp = card.imp();
+                if imp.anim_gen.get() != gen {
+                    return glib::ControlFlow::Break;
+                }
+                let now = clock.frame_time();
+                let t0 = match start_time.get() {
+                    Some(v) => v,
+                    None => {
+                        start_time.set(Some(now));
+                        return glib::ControlFlow::Continue;
+                    }
+                };
+                let t = ((now - t0) as f64 / QL_OPEN_ANIM_US).clamp(0.0, 1.0);
+                let (s, a, y) = quicklook_open_anim_state(t, standalone);
+                imp.anim_scale.set(s);
+                imp.anim_opacity.set(a);
+                imp.anim_offset_y.set(y);
+                card.queue_draw();
+                if t >= 1.0 {
+                    imp.anim_scale.set(1.0);
+                    imp.anim_opacity.set(1.0);
+                    imp.anim_offset_y.set(0.0);
+                    glib::ControlFlow::Break
+                } else {
+                    glib::ControlFlow::Continue
+                }
+            });
+        }
+
+        pub fn animate_close(&self, on_finished: impl FnOnce() + 'static) {
+            let imp = self.imp();
+            let gen = imp.anim_gen.get().wrapping_add(1);
+            imp.anim_gen.set(gen);
+            let standalone = imp.standalone.get();
+            let start_scale = imp.anim_scale.get();
+            let start_opacity = imp.anim_opacity.get();
+            let start_offset_y = imp.anim_offset_y.get();
+
+            let on_finished = RefCell::new(Some(on_finished));
+            let start_time: Cell<Option<i64>> = Cell::new(None);
+            self.add_tick_callback(move |widget, clock| {
+                let Some(card) = widget.downcast_ref::<Self>() else {
+                    return glib::ControlFlow::Break;
+                };
+                let imp = card.imp();
+                if imp.anim_gen.get() != gen {
+                    return glib::ControlFlow::Break;
+                }
+                let now = clock.frame_time();
+                let t0 = match start_time.get() {
+                    Some(v) => v,
+                    None => {
+                        start_time.set(Some(now));
+                        return glib::ControlFlow::Continue;
+                    }
+                };
+                let t = ((now - t0) as f64 / QL_CLOSE_ANIM_US).clamp(0.0, 1.0);
+                let (s, a, y) = quicklook_close_anim_state(
+                    t,
+                    standalone,
+                    start_scale,
+                    start_opacity,
+                    start_offset_y,
+                );
+                imp.anim_scale.set(s);
+                imp.anim_opacity.set(a);
+                imp.anim_offset_y.set(y);
+                card.queue_draw();
+                if t >= 1.0 {
+                    if let Some(cb) = on_finished.borrow_mut().take() {
+                        cb();
+                    }
+                    glib::ControlFlow::Break
+                } else {
+                    glib::ControlFlow::Continue
+                }
+            });
+        }
+    }
+}
+
+pub fn fit_quicklook_media_card_size(
+    media_w: i32,
+    media_h: i32,
+    max_card_w: i32,
+    max_card_h: i32,
+    chrome_w: i32,
+    chrome_h: i32,
+) -> (i32, i32, i32, i32) {
+    let avail_w = (max_card_w - chrome_w).max(1) as f64;
+    let avail_h = (max_card_h - chrome_h).max(1) as f64;
+    let mw = media_w.max(1) as f64;
+    let mh = media_h.max(1) as f64;
+
+    // Nunca estirar archivos pequeños: solo reducir proporcionalmente si exceden el espacio disponible.
+    let scale_down = (avail_w / mw).min(avail_h / mh).min(1.0);
+    let fit_w = (mw * scale_down).round().max(1.0) as i32;
+    let fit_h = (mh * scale_down).round().max(1.0) as i32;
+
+    let min_w = QL_MIN_CARD_W.min(max_card_w);
+    let min_h = QL_MIN_CARD_H.min(max_card_h);
+    let card_w = (fit_w + chrome_w).clamp(min_w, max_card_w);
+    let card_h = (fit_h + chrome_h).clamp(min_h, max_card_h);
+    (card_w, card_h, fit_w, fit_h)
+}
 
 pub fn fit_quicklook_card_size(
     img_w: i32,
@@ -86,38 +766,79 @@ pub fn fit_quicklook_card_size(
     max_card_w: i32,
     max_card_h: i32,
 ) -> (i32, i32, i32, i32) {
-    let avail_w = (max_card_w - QL_IMAGE_INSET * 2).max(200) as f64;
-    let avail_h = (max_card_h - QL_HEADER_HEIGHT - QL_IMAGE_INSET).max(160) as f64;
-    let iw = img_w.max(1) as f64;
-    let ih = img_h.max(1) as f64;
+    fit_quicklook_media_card_size(
+        img_w,
+        img_h,
+        max_card_w,
+        max_card_h,
+        QL_IMAGE_INSET * 2,
+        QL_HEADER_HEIGHT + QL_IMAGE_INSET,
+    )
+}
 
-    let scale_down = (avail_w / iw).min(avail_h / ih).min(1.0);
-    let mut fit_w = (iw * scale_down).round().max(1.0) as i32;
-    let mut fit_h = (ih * scale_down).round().max(1.0) as i32;
-
-    let min_long_edge = 260.0;
-    let cur_long = (fit_w as f64).max(fit_h as f64);
-    if cur_long < min_long_edge {
-        let up = (min_long_edge / cur_long)
-            .min(avail_w / fit_w.max(1) as f64)
-            .min(avail_h / fit_h.max(1) as f64);
-        fit_w = (fit_w as f64 * up).round().max(1.0) as i32;
-        fit_h = (fit_h as f64 * up).round().max(1.0) as i32;
+pub fn quicklook_image_corner_radius(card_w: i32, card_h: i32, fit_w: i32, fit_h: i32) -> f64 {
+    let stage_w = (card_w - QL_IMAGE_INSET * 2).max(1);
+    let stage_h = (card_h - QL_HEADER_HEIGHT - QL_IMAGE_INSET).max(1);
+    if fit_w >= stage_w - 2 && fit_h >= stage_h - 2 {
+        quicklook_concentric_inner_radius(
+            quicklook_card_squircle_radius(),
+            QL_IMAGE_INSET as f64,
+        )
+    } else {
+        0.0
     }
+}
 
-    let card_w = (fit_w + QL_IMAGE_INSET * 2).clamp(QL_MIN_CARD_W.min(max_card_w), max_card_w);
-    let card_h = (fit_h + QL_HEADER_HEIGHT + QL_IMAGE_INSET)
-        .clamp(QL_MIN_CARD_H.min(max_card_h), max_card_h);
-    (card_w, card_h, fit_w, fit_h)
+/// Extrae las dimensiones `(ancho, alto)` desde la cabecera RIFF/WEBP (`VP8 `, `VP8L`, `VP8X`)
+/// sin decodificar píxeles, útil cuando `gdk-pixbuf` no tiene loader WebP instalado.
+pub fn parse_webp_dimensions_from_bytes(buf: &[u8]) -> Option<(i32, i32)> {
+    if buf.len() < 30 || &buf[0..4] != b"RIFF" || &buf[8..12] != b"WEBP" {
+        return None;
+    }
+    let chunk = &buf[12..16];
+    if chunk == b"VP8X" {
+        let w = 1 + (buf[24] as u32 | ((buf[25] as u32) << 8) | ((buf[26] as u32) << 16));
+        let h = 1 + (buf[27] as u32 | ((buf[28] as u32) << 8) | ((buf[29] as u32) << 16));
+        if w > 0 && h > 0 {
+            return Some((w as i32, h as i32));
+        }
+    } else if chunk == b"VP8L" && buf[20] == 0x2f {
+        let bits = u32::from_le_bytes([buf[21], buf[22], buf[23], buf[24]]);
+        let w = 1 + (bits & 0x3fff);
+        let h = 1 + ((bits >> 14) & 0x3fff);
+        if w > 0 && h > 0 {
+            return Some((w as i32, h as i32));
+        }
+    } else if chunk == b"VP8 " && buf[23] == 0x9d && buf[24] == 0x01 && buf[25] == 0x2a {
+        let w = u16::from_le_bytes([buf[26], buf[27]]) & 0x3fff;
+        let h = u16::from_le_bytes([buf[28], buf[29]]) & 0x3fff;
+        if w > 0 && h > 0 {
+            return Some((w as i32, h as i32));
+        }
+    }
+    None
+}
+
+fn probe_webp_dimensions(path: &Path) -> Option<(i32, i32)> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut header = [0u8; 32];
+    let n = file.read(&mut header).ok()?;
+    parse_webp_dimensions_from_bytes(&header[..n])
 }
 
 fn probe_image_dimensions(path: &Path) -> Option<(i32, i32)> {
-    let (_, w, h) = Pixbuf::file_info(path)?;
-    if w > 0 && h > 0 {
-        Some((w, h))
-    } else {
-        None
+    if let Some((_, w, h)) = Pixbuf::file_info(path) {
+        if w > 0 && h > 0 {
+            return Some((w, h));
+        }
     }
+    if path
+        .extension()
+        .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("webp"))
+    {
+        return probe_webp_dimensions(path);
+    }
+    None
 }
 
 fn default_open_app_name(path: &Path) -> Option<String> {
@@ -164,7 +885,15 @@ fn format_open_pill_label(path: &Path, compact: bool, es: bool) -> String {
         }
     });
     if compact {
-        app_name
+        if app_name.chars().count() > 16 {
+            if es {
+                "Abrir".to_string()
+            } else {
+                "Open".to_string()
+            }
+        } else {
+            app_name
+        }
     } else if es {
         format!("Abrir con {app_name}")
     } else {
@@ -219,6 +948,156 @@ fn primary_monitor_work_bounds() -> (i32, i32) {
     (920, 720)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuickLookContentSizing {
+    Image { width: i32, height: i32 },
+    Video { width: i32, height: i32 },
+    Pdf { width: i32, height: i32, has_footer: bool },
+    Compact,
+    Document,
+}
+
+fn probe_video_dimensions_fast(path: &Path) -> Option<(u32, u32)> {
+    let output = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height",
+            "-of",
+            "default=noprint_wrappers=1",
+        ])
+        .arg(safe_ffmpeg_input_arg(path))
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut w = None;
+    let mut h = None;
+    for line in text.lines() {
+        let Some((k, v)) = line.split_once('=') else {
+            continue;
+        };
+        match k.trim() {
+            "width" => w = v.trim().parse::<u32>().ok().filter(|&n| n > 0),
+            "height" => h = v.trim().parse::<u32>().ok().filter(|&n| n > 0),
+            _ => {}
+        }
+    }
+    Some((w?, h?))
+}
+
+fn initial_content_sizing_for_item(item: &FileItem, probe_video: bool) -> QuickLookContentSizing {
+    if item.is_dir {
+        return QuickLookContentSizing::Compact;
+    }
+    let ext = item
+        .path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if is_image_extension(&ext) {
+        if let Some((w, h)) = probe_image_dimensions(&item.path) {
+            return QuickLookContentSizing::Image {
+                width: w,
+                height: h,
+            };
+        }
+        return QuickLookContentSizing::Compact;
+    }
+    if is_video_extension(&ext) {
+        if probe_video {
+            if let Some((vw, vh)) = probe_video_dimensions_fast(&item.path) {
+                let (pw, ph) = fit_video_dimensions(vw, vh, 760, 440);
+                return QuickLookContentSizing::Video {
+                    width: pw as i32,
+                    height: ph as i32,
+                };
+            }
+        }
+        return QuickLookContentSizing::Document;
+    }
+    if ext == "pdf" || is_archive_extension(&ext) || is_text_preview_candidate(&ext, &item.kind_str) {
+        return QuickLookContentSizing::Document;
+    }
+    QuickLookContentSizing::Compact
+}
+
+pub fn compute_quicklook_card_size(
+    sizing: QuickLookContentSizing,
+    max_w: i32,
+    max_h: i32,
+    expanded: bool,
+) -> (i32, i32, Option<(i32, i32)>) {
+    match sizing {
+        QuickLookContentSizing::Image { width, height } => {
+            let (cw, ch, fit_w, fit_h) = fit_quicklook_card_size(width, height, max_w, max_h);
+            (cw, ch, Some((fit_w, fit_h)))
+        }
+        QuickLookContentSizing::Video { width, height } => {
+            let (cw, ch, fit_w, fit_h) = fit_quicklook_media_card_size(
+                width,
+                height,
+                max_w,
+                max_h,
+                QL_VIDEO_CHROME_W,
+                QL_VIDEO_CHROME_H,
+            );
+            (cw, ch, Some((fit_w, fit_h)))
+        }
+        QuickLookContentSizing::Pdf {
+            width,
+            height,
+            has_footer,
+        } => {
+            let chrome_h = QL_PDF_CHROME_H_BASE + if has_footer { QL_PDF_FOOTER_H } else { 0 };
+            let (cw, ch, fit_w, fit_h) = fit_quicklook_media_card_size(
+                width,
+                height,
+                max_w,
+                max_h,
+                QL_PDF_CHROME_W,
+                chrome_h,
+            );
+            (cw, ch, Some((fit_w, fit_h)))
+        }
+        QuickLookContentSizing::Compact => {
+            let min_w = QL_MIN_CARD_W.min(max_w);
+            let min_h = QL_MIN_CARD_H.min(max_h);
+            let cw = if expanded {
+                max_w
+            } else {
+                460.clamp(min_w, max_w)
+            };
+            let ch = if expanded {
+                max_h
+            } else {
+                380.clamp(min_h, max_h)
+            };
+            (cw, ch, None)
+        }
+        QuickLookContentSizing::Document => {
+            let min_w = QL_MIN_CARD_W.min(max_w);
+            let min_h = QL_MIN_CARD_H.min(max_h);
+            let cw = if expanded {
+                max_w
+            } else {
+                max_w.clamp(460.min(max_w).max(min_w), 820.max(min_w))
+            };
+            let ch = if expanded {
+                max_h
+            } else {
+                max_h.clamp(360.min(max_h).max(min_h), 600.max(min_h))
+            };
+            (cw, ch, None)
+        }
+    }
+}
+
 #[derive(Clone)]
 struct ImageViewSlot {
     frame: Rc<RefCell<Option<DecodedRgbaFrame>>>,
@@ -232,11 +1111,12 @@ pub struct QuickLook {
     host_overlay: RefCell<Option<Overlay>>,
     backdrop: RefCell<Option<GtkBox>>,
     container: RefCell<Option<GtkBox>>,
+    anim_card: RefCell<Option<squircle_card::QuickLookSquircleCard>>,
     closing: Cell<bool>,
     expanded: Cell<bool>,
     anim_gen: Cell<u64>,
     current_path: RefCell<Option<PathBuf>>,
-    current_image_dims: Cell<Option<(i32, i32)>>,
+    content_sizing: Cell<QuickLookContentSizing>,
     items_list: RefCell<Vec<FileItem>>,
     current_index: Cell<usize>,
     content_holder: RefCell<Option<GtkBox>>,
@@ -259,11 +1139,12 @@ impl QuickLook {
             host_overlay: RefCell::new(None),
             backdrop: RefCell::new(None),
             container: RefCell::new(None),
+            anim_card: RefCell::new(None),
             closing: Cell::new(false),
             expanded: Cell::new(false),
             anim_gen: Cell::new(0),
             current_path: RefCell::new(None),
-            current_image_dims: Cell::new(None),
+            content_sizing: Cell::new(QuickLookContentSizing::Compact),
             items_list: RefCell::new(Vec::new()),
             current_index: Cell::new(0),
             content_holder: RefCell::new(None),
@@ -309,8 +1190,20 @@ impl QuickLook {
             card.add_css_class("ql-closing");
         }
 
+        let anim_card_opt = self.anim_card.borrow().clone();
+        if let Some(anim_card) = anim_card_opt {
+            let self_tick = self.clone();
+            anim_card.animate_close(move || {
+                if self_tick.anim_gen.get() != next_gen {
+                    return;
+                }
+                self_tick.finish_close_immediately();
+            });
+        }
+
+        // Respaldo de seguridad por si el frame clock no dispara (ventana oculta/minimizada)
         let self_c = self.clone();
-        glib::timeout_add_local_once(Duration::from_millis(140), move || {
+        glib::timeout_add_local_once(Duration::from_millis(260), move || {
             if self_c.anim_gen.get() != next_gen {
                 return;
             }
@@ -320,19 +1213,15 @@ impl QuickLook {
 
     fn finish_close_immediately(&self) {
         self.stop_active_media();
-        if let (Some(overlay), Some(bd)) = (
-            self.host_overlay.borrow_mut().take(),
-            self.backdrop.borrow_mut().take(),
-        ) {
-            overlay.remove_overlay(&bd);
-        } else {
-            *self.host_overlay.borrow_mut() = None;
-            *self.backdrop.borrow_mut() = None;
-        }
+        let host_overlay = self.host_overlay.borrow_mut().take();
+        let backdrop = self.backdrop.borrow_mut().take();
         *self.container.borrow_mut() = None;
         let win_opt = self.window.borrow_mut().take();
         self.clear_refs();
         self.closing.set(false);
+        if let (Some(overlay), Some(bd)) = (host_overlay, backdrop) {
+            overlay.remove_overlay(&bd);
+        }
         if let Some(win) = win_opt {
             win.close();
         }
@@ -417,7 +1306,8 @@ impl QuickLook {
     }
 
     fn stop_active_media(&self) {
-        for handle in self.media_handles.borrow_mut().drain(..) {
+        let handles: Vec<_> = self.media_handles.borrow_mut().drain(..).collect();
+        for handle in handles {
             handle.stop();
         }
     }
@@ -426,8 +1316,9 @@ impl QuickLook {
         self.stop_active_media();
         self.preview_gen.set(self.preview_gen.get().wrapping_add(1));
         self.expanded.set(false);
-        self.current_image_dims.set(None);
+        self.content_sizing.set(QuickLookContentSizing::Compact);
         *self.image_slot.borrow_mut() = None;
+        *self.anim_card.borrow_mut() = None;
         *self.page_step_cb.borrow_mut() = None;
         *self.current_path.borrow_mut() = None;
         *self.content_holder.borrow_mut() = None;
@@ -449,8 +1340,8 @@ impl QuickLook {
             let ow = overlay.width();
             let oh = overlay.height();
             if expanded {
-                let mw = if ow > 0 { (ow - 24).max(360) } else { 960 };
-                let mh = if oh > 0 { (oh - 24).max(260) } else { 700 };
+                let mw = if ow > 0 { (ow - 24).max(QL_MIN_CARD_W) } else { 960 };
+                let mh = if oh > 0 { (oh - 24).max(QL_MIN_CARD_H) } else { 700 };
                 (mw, mh, false)
             } else {
                 let mw = if ow > 0 {
@@ -458,13 +1349,13 @@ impl QuickLook {
                 } else {
                     840
                 }
-                .clamp(360, 1120);
+                .clamp(QL_MIN_CARD_W, 1120);
                 let mh = if oh > 0 {
                     ((oh as f64) * 0.90).round() as i32
                 } else {
                     620
                 }
-                .clamp(260, 820);
+                .clamp(QL_MIN_CARD_H, 820);
                 (mw, mh, false)
             }
         } else {
@@ -472,48 +1363,44 @@ impl QuickLook {
             (mw, mh, true)
         };
 
-        let card_w = if let Some((iw, ih)) = self.current_image_dims.get() {
-            if expanded && is_standalone {
-                card.set_size_request(-1, -1);
-                if let Some(slot) = self.image_slot.borrow().as_ref() {
-                    slot.size_spacer.set_size_request(-1, -1);
-                    slot.img_frame.set_halign(Align::Fill);
-                    slot.img_frame.set_valign(Align::Fill);
+        let sizing = self.content_sizing.get();
+        let card_w = if expanded && is_standalone {
+            card.set_size_request(-1, -1);
+            if let Some(slot) = self.image_slot.borrow().as_ref() {
+                slot.size_spacer.set_size_request(-1, -1);
+                slot.img_frame.set_halign(Align::Fill);
+                slot.img_frame.set_valign(Align::Fill);
+                if let Some(frame) = slot.frame.borrow().as_ref() {
+                    let tex = frame.to_texture();
+                    slot.picture.set_paintable(Some(&tex));
                 }
-                max_w
-            } else {
-                let (cw, ch, fit_w, fit_h) = fit_quicklook_card_size(iw, ih, max_w, max_h);
-                card.set_size_request(cw, ch);
-                if let Some(slot) = self.image_slot.borrow().as_ref() {
+            }
+            max_w
+        } else {
+            let (cw, ch, fit_dims) = compute_quicklook_card_size(sizing, max_w, max_h, expanded);
+            card.set_size_request(cw, ch);
+            if matches!(sizing, QuickLookContentSizing::Image { .. }) {
+                if let (Some(slot), Some((fit_w, fit_h))) =
+                    (self.image_slot.borrow().as_ref(), fit_dims)
+                {
                     slot.img_frame.set_halign(Align::Center);
                     slot.img_frame.set_valign(Align::Center);
                     slot.size_spacer.set_size_request(fit_w, fit_h);
-                }
-                if is_standalone {
-                    if let Some(win) = self.window.borrow().as_ref() {
-                        win.set_default_size(cw + 32, ch + 32);
+                    if let Some(frame) = slot.frame.borrow().as_ref() {
+                        let inner_r = quicklook_image_corner_radius(cw, ch, fit_w, fit_h);
+                        let tex = if inner_r > 0.5 {
+                            frame.to_squircle_texture(fit_w, fit_h, inner_r)
+                        } else {
+                            frame.to_texture()
+                        };
+                        slot.picture.set_paintable(Some(&tex));
                     }
                 }
-                cw
             }
-        } else if expanded && is_standalone {
-            card.set_size_request(-1, -1);
-            max_w
-        } else {
-            let cw = if expanded {
-                max_w
-            } else {
-                max_w.clamp(460, 820)
-            };
-            let ch = if expanded {
-                max_h
-            } else {
-                max_h.clamp(360, 600)
-            };
-            card.set_size_request(cw, ch);
             if is_standalone {
                 if let Some(win) = self.window.borrow().as_ref() {
-                    win.set_default_size(cw + 32, ch + 32);
+                    win.set_default_size(cw, ch);
+                    win.queue_resize();
                 }
             }
             cw
@@ -540,23 +1427,14 @@ impl QuickLook {
                 }));
             }
         }
-        if let Some(win) = self.window.borrow().as_ref() {
+        let win_opt = self.window.borrow().clone();
+        if let Some(win) = win_opt {
             if next {
-                if let Some(card) = self.container.borrow().as_ref() {
-                    card.set_margin_top(0);
-                    card.set_margin_bottom(0);
-                    card.set_margin_start(0);
-                    card.set_margin_end(0);
-                }
+                win.set_resizable(true);
                 win.fullscreen();
             } else {
                 win.unfullscreen();
-                if let Some(card) = self.container.borrow().as_ref() {
-                    card.set_margin_top(16);
-                    card.set_margin_bottom(16);
-                    card.set_margin_start(16);
-                    card.set_margin_end(16);
-                }
+                win.set_resizable(false);
             }
         }
         self.apply_card_geometry();
@@ -579,7 +1457,10 @@ impl QuickLook {
             *frame_guard = Some(rotated);
             dims
         };
-        self.current_image_dims.set(Some(new_dims));
+        self.content_sizing.set(QuickLookContentSizing::Image {
+            width: new_dims.0,
+            height: new_dims.1,
+        });
         self.apply_card_geometry();
     }
 
@@ -595,8 +1476,9 @@ impl QuickLook {
                 .map(|e| e.to_string_lossy().to_lowercase())
                 .unwrap_or_default();
             let is_img = is_image_extension(&ext);
-            self.current_image_dims
-                .set(if is_img { probe_image_dimensions(&item.path) } else { None });
+            let is_standalone = self.host_overlay.borrow().is_none();
+            self.content_sizing
+                .set(initial_content_sizing_for_item(item, is_standalone));
             if let Some(rb) = self.rotate_btn.borrow().as_ref() {
                 rb.set_visible(is_img);
             }
@@ -612,11 +1494,12 @@ impl QuickLook {
 
             self.apply_card_geometry();
 
-            if let Some(holder) = self.content_holder.borrow().as_ref() {
+            let holder_opt = self.content_holder.borrow().clone();
+            if let Some(holder) = holder_opt.as_ref() {
                 let ql_weak = Rc::downgrade(self);
-                let on_img_ready: Rc<dyn Fn(i32, i32)> = Rc::new(move |w, h| {
+                let on_sizing_ready: Rc<dyn Fn(QuickLookContentSizing)> = Rc::new(move |sizing| {
                     if let Some(ql) = ql_weak.upgrade() {
-                        ql.current_image_dims.set(Some((w, h)));
+                        ql.content_sizing.set(sizing);
                         ql.apply_card_geometry();
                     }
                 });
@@ -628,7 +1511,7 @@ impl QuickLook {
                     &self.preview_gen,
                     &self.cache,
                     &self.image_slot,
-                    on_img_ready,
+                    on_sizing_ready,
                     0,
                 );
             }
@@ -651,50 +1534,34 @@ impl QuickLook {
     }
 
     pub fn step_pdf_page(&self, delta: i32) -> bool {
-        if let Some(cb) = self.page_step_cb.borrow().as_ref() {
+        let cb = self.page_step_cb.borrow().clone();
+        if let Some(cb) = cb {
             return cb(delta);
         }
         false
     }
 
     pub fn show_standalone(self: &Rc<Self>, app: &Application, item: &FileItem) {
-        let ext = item
-            .path
-            .extension()
-            .map(|e| e.to_string_lossy().to_lowercase())
-            .unwrap_or_default();
-        let img_dims = if is_image_extension(&ext) {
-            probe_image_dimensions(&item.path)
-        } else {
-            None
-        };
+        let initial_sizing = initial_content_sizing_for_item(item, true);
         let (max_w, max_h) = primary_monitor_work_bounds();
-        let (init_w, init_h) = if let Some((iw, ih)) = img_dims {
-            let (cw, ch, _, _) = fit_quicklook_card_size(iw, ih, max_w, max_h);
-            (cw, ch)
-        } else {
-            (max_w.clamp(480, 820), max_h.clamp(380, 600))
-        };
+        let (init_w, init_h, _) = compute_quicklook_card_size(initial_sizing, max_w, max_h, false);
 
         let win = Window::builder()
             .application(app)
             .title(&item.name)
-            .default_width(init_w + 32)
-            .default_height(init_h + 32)
+            .default_width(init_w)
+            .default_height(init_h)
+            .resizable(false)
             .decorated(false)
             .css_classes(["branches-quicklook-window"])
             .build();
         *self.items_list.borrow_mut() = vec![item.clone()];
         self.current_index.set(0);
         self.expanded.set(false);
-        self.current_image_dims.set(img_dims);
+        self.content_sizing.set(initial_sizing);
 
         *self.window.borrow_mut() = Some(win.clone());
-        let root_box = self.build_preview_card(item, true);
-        root_box.set_margin_top(16);
-        root_box.set_margin_bottom(16);
-        root_box.set_margin_start(16);
-        root_box.set_margin_end(16);
+        let root_box = self.build_preview_card(item, true, None);
         win.set_child(Some(&root_box));
 
         let key_controller = EventControllerKey::new();
@@ -737,7 +1604,7 @@ impl QuickLook {
         *self.container.borrow_mut() = Some(root_box.clone());
         self.apply_card_geometry();
         win.present();
-        Self::trigger_macos_enter_animation(&root_box, None);
+        self.trigger_macos_enter_animation(&root_box, None);
     }
 
     fn show_in_overlay(self: &Rc<Self>, overlay: &Overlay, item: &FileItem) {
@@ -746,17 +1613,8 @@ impl QuickLook {
         self.closing.set(false);
         self.expanded.set(false);
 
-        let ext = item
-            .path
-            .extension()
-            .map(|e| e.to_string_lossy().to_lowercase())
-            .unwrap_or_default();
-        let img_dims = if is_image_extension(&ext) {
-            probe_image_dimensions(&item.path)
-        } else {
-            None
-        };
-        self.current_image_dims.set(img_dims);
+        self.content_sizing
+            .set(initial_content_sizing_for_item(item, false));
 
         let backdrop = GtkBox::new(Orientation::Vertical, 0);
         backdrop.add_css_class("branches-quicklook-backdrop");
@@ -764,7 +1622,8 @@ impl QuickLook {
         backdrop.set_vexpand(true);
 
         *self.host_overlay.borrow_mut() = Some(overlay.clone());
-        let card = self.build_preview_card(item, false);
+        let backdrop_source = overlay.child();
+        let card = self.build_preview_card(item, false, backdrop_source.as_ref());
         card.set_halign(Align::Center);
         card.set_valign(Align::Center);
         card.set_vexpand(true);
@@ -798,10 +1657,13 @@ impl QuickLook {
         self.apply_card_geometry();
 
         overlay.add_overlay(&backdrop);
-        Self::trigger_macos_enter_animation(&card, Some(&backdrop));
+        self.trigger_macos_enter_animation(&card, Some(&backdrop));
     }
 
-    fn trigger_macos_enter_animation(card: &GtkBox, backdrop: Option<&GtkBox>) {
+    fn trigger_macos_enter_animation(&self, card: &GtkBox, backdrop: Option<&GtkBox>) {
+        if let Some(anim_card) = self.anim_card.borrow().clone() {
+            anim_card.animate_open();
+        }
         let bd_opt = backdrop.cloned();
         card.add_tick_callback(move |widget, _| {
             widget.add_css_class("ql-open");
@@ -812,7 +1674,12 @@ impl QuickLook {
         });
     }
 
-    fn build_preview_card(self: &Rc<Self>, item: &FileItem, draggable: bool) -> GtkBox {
+    fn build_preview_card(
+        self: &Rc<Self>,
+        item: &FileItem,
+        draggable: bool,
+        backdrop_source: Option<&gtk4::Widget>,
+    ) -> GtkBox {
         let es = malus_de_common::is_spanish_locale();
         let ext = item
             .path
@@ -823,7 +1690,20 @@ impl QuickLook {
 
         let root_box = GtkBox::new(Orientation::Vertical, 0);
         root_box.add_css_class("branches-quicklook-container");
-        root_box.set_overflow(Overflow::Hidden);
+        root_box.set_overflow(if draggable {
+            Overflow::Hidden
+        } else {
+            Overflow::Visible
+        });
+
+        let content_vbox = GtkBox::new(Orientation::Vertical, 0);
+        content_vbox.set_hexpand(true);
+        content_vbox.set_vexpand(true);
+        let squircle_card =
+            squircle_card::QuickLookSquircleCard::new(&content_vbox, backdrop_source, draggable);
+        *self.anim_card.borrow_mut() = Some(squircle_card.clone());
+        root_box.append(&squircle_card);
+        let inner_box = content_vbox;
 
         // Barra superior compacta estilo macOS Tahoe Quick Look
         let header_box = GtkBox::new(Orientation::Horizontal, 6);
@@ -948,9 +1828,9 @@ impl QuickLook {
 
         if draggable {
             let handle = WindowHandle::builder().child(&header_box).build();
-            root_box.append(&handle);
+            inner_box.append(&handle);
         } else {
-            root_box.append(&header_box);
+            inner_box.append(&header_box);
         }
 
         // Contenedor dinámico de previsualización (carga asíncrona sin bloquear la transición)
@@ -967,9 +1847,9 @@ impl QuickLook {
         *self.current_path.borrow_mut() = Some(item.path.clone());
 
         let ql_weak = Rc::downgrade(self);
-        let on_img_ready: Rc<dyn Fn(i32, i32)> = Rc::new(move |w, h| {
+        let on_sizing_ready: Rc<dyn Fn(QuickLookContentSizing)> = Rc::new(move |sizing| {
             if let Some(ql) = ql_weak.upgrade() {
-                ql.current_image_dims.set(Some((w, h)));
+                ql.content_sizing.set(sizing);
                 ql.apply_card_geometry();
             }
         });
@@ -981,10 +1861,10 @@ impl QuickLook {
             &self.preview_gen,
             &self.cache,
             &self.image_slot,
-            on_img_ready,
+            on_sizing_ready,
             185,
         );
-        root_box.append(&content_holder);
+        inner_box.append(&content_holder);
 
         root_box
     }
@@ -1100,6 +1980,32 @@ impl DecodedRgbaFrame {
             MemoryFormat::R8g8b8a8,
             &self.bytes,
             self.stride,
+        )
+        .upcast()
+    }
+
+    fn to_squircle_texture(&self, display_w: i32, display_h: i32, logical_radius: f64) -> Texture {
+        if logical_radius <= 0.5 || self.width <= 0 || self.height <= 0 {
+            return self.to_texture();
+        }
+        let w = self.width as usize;
+        let h = self.height as usize;
+        let expected_stride = w * 4;
+        if self.stride != expected_stride || self.bytes.len() < expected_stride * h {
+            return self.to_texture();
+        }
+        let sx = self.width as f64 / display_w.max(1) as f64;
+        let sy = self.height as f64 / display_h.max(1) as f64;
+        let r_px = (logical_radius * sx.max(sy)) as f32;
+        let mut rgba = self.bytes.as_ref()[..expected_stride * h].to_vec();
+        apply_squircle_clip_rgba_corners(&mut rgba, w, h, r_px);
+        let bytes = glib::Bytes::from_owned(rgba);
+        MemoryTexture::new(
+            self.width,
+            self.height,
+            MemoryFormat::R8g8b8a8,
+            &bytes,
+            expected_stride,
         )
         .upcast()
     }
@@ -1233,7 +2139,7 @@ fn populate_preview_async(
     preview_gen: &Rc<Cell<u64>>,
     cache: &Arc<Mutex<PreviewCache>>,
     image_slot: &Rc<RefCell<Option<ImageViewSlot>>>,
-    on_image_ready: Rc<dyn Fn(i32, i32)>,
+    on_sizing_ready: Rc<dyn Fn(QuickLookContentSizing)>,
     delay_playback_ms: u64,
 ) {
     let next_gen = preview_gen.get().wrapping_add(1);
@@ -1251,6 +2157,7 @@ fn populate_preview_async(
 
     if !needs_background_preview(&ext, &item.kind_str) {
         holder.append(&create_generic_preview(item));
+        on_sizing_ready(QuickLookContentSizing::Compact);
         return;
     }
 
@@ -1267,7 +2174,7 @@ fn populate_preview_async(
                 preview_gen,
                 next_gen,
                 image_slot,
-                &on_image_ready,
+                &on_sizing_ready,
                 delay_playback_ms,
             );
             holder.append(&widget);
@@ -1308,7 +2215,7 @@ fn populate_preview_async(
                         &gen_ref,
                         next_gen,
                         &slot_poll,
-                        &on_image_ready,
+                        &on_sizing_ready,
                         remaining_delay,
                     );
                     while let Some(child) = h.first_child() {
@@ -1373,18 +2280,27 @@ fn build_widget_from_payload(
     preview_gen: &Rc<Cell<u64>>,
     expected_gen: u64,
     image_slot: &Rc<RefCell<Option<ImageViewSlot>>>,
-    on_image_ready: &Rc<dyn Fn(i32, i32)>,
+    on_sizing_ready: &Rc<dyn Fn(QuickLookContentSizing)>,
     remaining_delay_ms: u64,
 ) -> gtk4::Widget {
     match payload {
         PreparedPreview::Image { frame } => {
-            create_image_preview_from_frame(&item.path, item, frame, image_slot, on_image_ready)
+            create_image_preview_from_frame(&item.path, item, frame, image_slot, on_sizing_ready)
         }
         PreparedPreview::Pdf {
             total_pages,
             first_page,
-        } => create_pdf_preview_from_frame(&item.path, total_pages, first_page, page_step_cb)
-            .unwrap_or_else(|| create_generic_preview(item)),
+        } => create_pdf_preview_from_frame(
+            &item.path,
+            total_pages,
+            first_page,
+            page_step_cb,
+            on_sizing_ready,
+        )
+        .unwrap_or_else(|| {
+            on_sizing_ready(QuickLookContentSizing::Compact);
+            create_generic_preview(item)
+        }),
         PreparedPreview::Video { meta, poster } => create_video_preview_from_payload(
             item,
             meta,
@@ -1392,18 +2308,28 @@ fn build_widget_from_payload(
             media_handles,
             preview_gen,
             expected_gen,
+            on_sizing_ready,
             remaining_delay_ms,
         ),
-        PreparedPreview::Audio { meta } => create_audio_preview_from_payload(
-            item,
-            meta,
-            media_handles,
-            preview_gen,
-            expected_gen,
-            remaining_delay_ms,
-        ),
-        PreparedPreview::Text(content) => create_text_widget_from_string(&content),
-        PreparedPreview::Generic => create_generic_preview(item),
+        PreparedPreview::Audio { meta } => {
+            on_sizing_ready(QuickLookContentSizing::Compact);
+            create_audio_preview_from_payload(
+                item,
+                meta,
+                media_handles,
+                preview_gen,
+                expected_gen,
+                remaining_delay_ms,
+            )
+        }
+        PreparedPreview::Text(content) => {
+            on_sizing_ready(QuickLookContentSizing::Document);
+            create_text_widget_from_string(&content)
+        }
+        PreparedPreview::Generic => {
+            on_sizing_ready(QuickLookContentSizing::Compact);
+            create_generic_preview(item)
+        }
     }
 }
 
@@ -1474,9 +2400,34 @@ fn decode_pixbuf_to_rgba_frame(pixbuf: &Pixbuf) -> Option<DecodedRgbaFrame> {
     })
 }
 
+/// Carga un `Pixbuf` reduciendo imágenes mayores a `(max_w, max_h)` pero SIN estirar nunca
+/// imágenes pequeñas (a diferencia de `Pixbuf::from_file_at_scale`, que siempre escala al tamaño destino).
+pub fn load_pixbuf_no_upscale(path: &Path, max_w: i32, max_h: i32) -> Option<Pixbuf> {
+    if let Some((_, w, h)) = Pixbuf::file_info(path) {
+        if w > 0 && h > 0 {
+            if w <= max_w && h <= max_h {
+                return Pixbuf::from_file(path).ok();
+            }
+            return Pixbuf::from_file_at_scale(path, max_w, max_h, true).ok();
+        }
+    }
+    let pb = Pixbuf::from_file(path).ok()?;
+    let w = pb.width();
+    let h = pb.height();
+    if w > max_w || h > max_h {
+        let scale = (max_w as f64 / w.max(1) as f64).min(max_h as f64 / h.max(1) as f64);
+        let tw = ((w as f64 * scale).round() as i32).max(1);
+        let th = ((h as f64 * scale).round() as i32).max(1);
+        pb.scale_simple(tw, th, gdk_pixbuf::InterpType::Bilinear)
+            .or(Some(pb))
+    } else {
+        Some(pb)
+    }
+}
+
 fn decode_image_rgba_offthread(path: &Path, ext: &str) -> Option<DecodedRgbaFrame> {
     if !matches!(ext, "heic" | "avif" | "jxl") {
-        if let Ok(pb) = Pixbuf::from_file_at_scale(path, 1280, 920, true) {
+        if let Some(pb) = load_pixbuf_no_upscale(path, QL_MAX_DECODE_W, QL_MAX_DECODE_H) {
             if let Some(frame) = decode_pixbuf_to_rgba_frame(&pb) {
                 return Some(frame);
             }
@@ -1484,23 +2435,20 @@ fn decode_image_rgba_offthread(path: &Path, ext: &str) -> Option<DecodedRgbaFram
     }
 
     let tmp_png = unique_temp_path("img", "png");
+    let scale_vf = format!(
+        "scale='min({QL_MAX_DECODE_W},iw)':'min({QL_MAX_DECODE_H},ih)':force_original_aspect_ratio=decrease"
+    );
     let ok = Command::new("ffmpeg")
         .args(["-y", "-loglevel", "error", "-i"])
         .arg(safe_ffmpeg_input_arg(path))
-        .args([
-            "-frames:v",
-            "1",
-            "-vf",
-            "scale='min(1280,iw)':'min(920,ih)':force_original_aspect_ratio=decrease",
-        ])
+        .args(["-frames:v", "1", "-vf", &scale_vf])
         .arg(&tmp_png)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|s| s.success());
     let frame = if ok && tmp_png.exists() {
-        Pixbuf::from_file_at_scale(&tmp_png, 1280, 920, true)
-            .ok()
+        load_pixbuf_no_upscale(&tmp_png, QL_MAX_DECODE_W, QL_MAX_DECODE_H)
             .and_then(|pb| decode_pixbuf_to_rgba_frame(&pb))
     } else {
         None
@@ -1514,7 +2462,7 @@ fn create_image_preview_from_frame(
     item: &FileItem,
     frame_opt: Option<DecodedRgbaFrame>,
     image_slot: &Rc<RefCell<Option<ImageViewSlot>>>,
-    on_image_ready: &Rc<dyn Fn(i32, i32)>,
+    on_sizing_ready: &Rc<dyn Fn(QuickLookContentSizing)>,
 ) -> gtk4::Widget {
     let (texture, dims, stored_frame) = if let Some(frame) = frame_opt {
         let dims = (frame.width, frame.height);
@@ -1528,6 +2476,7 @@ fn create_image_preview_from_frame(
     };
 
     let Some(texture) = texture else {
+        on_sizing_ready(QuickLookContentSizing::Compact);
         return create_generic_preview(item);
     };
 
@@ -1550,7 +2499,7 @@ fn create_image_preview_from_frame(
     img_frame.set_child(Some(&size_spacer));
 
     let picture = Picture::for_paintable(&texture);
-    picture.set_content_fit(ContentFit::Contain);
+    picture.set_content_fit(ContentFit::ScaleDown);
     picture.set_can_shrink(true);
     picture.set_vexpand(true);
     picture.set_hexpand(true);
@@ -1568,7 +2517,10 @@ fn create_image_preview_from_frame(
 
     if let Some((w, h)) = dims {
         if w > 0 && h > 0 {
-            on_image_ready(w, h);
+            on_sizing_ready(QuickLookContentSizing::Image {
+                width: w,
+                height: h,
+            });
         }
     }
 
@@ -1665,8 +2617,19 @@ fn create_pdf_preview_from_frame(
     total_pages: u32,
     first_page: Option<DecodedRgbaFrame>,
     page_step_cb: &Rc<RefCell<Option<PageStepCallback>>>,
+    on_sizing_ready: &Rc<dyn Fn(QuickLookContentSizing)>,
 ) -> Option<gtk4::Widget> {
-    let initial_tex = first_page?.to_texture();
+    let page_frame = first_page?;
+    let page_w = page_frame.width;
+    let page_h = page_frame.height;
+    let initial_tex = page_frame.to_texture();
+    if page_w > 0 && page_h > 0 {
+        on_sizing_ready(QuickLookContentSizing::Pdf {
+            width: page_w,
+            height: page_h,
+            has_footer: total_pages > 1,
+        });
+    }
 
     let root = GtkBox::new(Orientation::Vertical, 0);
     root.set_vexpand(true);
@@ -1688,7 +2651,7 @@ fn create_pdf_preview_from_frame(
     pic_box.set_hexpand(true);
 
     let picture = Picture::for_paintable(&initial_tex);
-    picture.set_content_fit(ContentFit::Contain);
+    picture.set_content_fit(ContentFit::ScaleDown);
     picture.set_can_shrink(true);
     picture.set_vexpand(true);
     picture.set_hexpand(true);
@@ -1988,6 +2951,12 @@ fn spawn_video_playback(
     let stride = (width as usize) * 4;
     let w_i32 = width as i32;
     let h_i32 = height as i32;
+    let video_r = if width >= 160 && height >= 120 {
+        quicklook_concentric_inner_radius(quicklook_card_squircle_radius(), 14.0) as f32
+    } else {
+        0.0
+    };
+    let corner_mask = precompute_squircle_corner_alpha(width as usize, height as usize, video_r);
 
     glib::timeout_add_local(Duration::from_millis(20), move || {
         if stop_ui.load(Ordering::SeqCst) {
@@ -2003,7 +2972,12 @@ fn spawn_video_playback(
                 Ok(frame) => latest_frame = Some(frame),
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    if let Some(frame) = latest_frame {
+                    if let Some(mut frame) = latest_frame {
+                        for &(alpha_idx, alpha_val) in &corner_mask {
+                            if alpha_idx < frame.len() {
+                                frame[alpha_idx] = alpha_val;
+                            }
+                        }
                         let bytes = glib::Bytes::from_owned(frame);
                         let tex = MemoryTexture::new(
                             w_i32,
@@ -2020,7 +2994,12 @@ fn spawn_video_playback(
             }
         }
 
-        if let Some(frame) = latest_frame {
+        if let Some(mut frame) = latest_frame {
+            for &(alpha_idx, alpha_val) in &corner_mask {
+                if alpha_idx < frame.len() {
+                    frame[alpha_idx] = alpha_val;
+                }
+            }
             let bytes = glib::Bytes::from_owned(frame);
             let tex = MemoryTexture::new(w_i32, h_i32, MemoryFormat::R8g8b8a8, &bytes, stride);
             pic.set_paintable(Some(&tex));
@@ -2039,6 +3018,7 @@ fn create_video_preview_from_payload(
     media_handles: &Rc<RefCell<Vec<Rc<MediaPlaybackHandle>>>>,
     preview_gen: &Rc<Cell<u64>>,
     expected_gen: u64,
+    on_sizing_ready: &Rc<dyn Fn(QuickLookContentSizing)>,
     remaining_delay_ms: u64,
 ) -> gtk4::Widget {
     let (play_w, play_h) = fit_video_dimensions(
@@ -2047,6 +3027,10 @@ fn create_video_preview_from_payload(
         760,
         440,
     );
+    on_sizing_ready(QuickLookContentSizing::Video {
+        width: play_w as i32,
+        height: play_h as i32,
+    });
 
     let root = GtkBox::new(Orientation::Vertical, 0);
     root.set_vexpand(true);
@@ -2062,12 +3046,21 @@ fn create_video_preview_from_payload(
     stage.add_css_class("branches-quicklook-video-stage");
 
     let picture = Picture::new();
-    picture.set_content_fit(ContentFit::Contain);
+    picture.set_content_fit(ContentFit::ScaleDown);
     picture.set_can_shrink(true);
     picture.set_vexpand(true);
     picture.set_hexpand(true);
     if let Some(frame) = poster_frame {
-        let poster = frame.to_texture();
+        let video_r = if play_w >= 160 && play_h >= 120 {
+            quicklook_concentric_inner_radius(quicklook_card_squircle_radius(), 14.0)
+        } else {
+            0.0
+        };
+        let poster = if video_r > 0.5 {
+            frame.to_squircle_texture(play_w as i32, play_h as i32, video_r)
+        } else {
+            frame.to_texture()
+        };
         picture.set_paintable(Some(&poster));
     }
     stage.append(&picture);
@@ -2482,6 +3475,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parse_webp_dimensions_supports_vp8_vp8l_and_vp8x() {
+        // VP8 lossy 500x333
+        let mut vp8 = vec![0u8; 30];
+        vp8[0..4].copy_from_slice(b"RIFF");
+        vp8[8..12].copy_from_slice(b"WEBP");
+        vp8[12..16].copy_from_slice(b"VP8 ");
+        vp8[23] = 0x9d;
+        vp8[24] = 0x01;
+        vp8[25] = 0x2a;
+        vp8[26..28].copy_from_slice(&500u16.to_le_bytes());
+        vp8[28..30].copy_from_slice(&333u16.to_le_bytes());
+        assert_eq!(parse_webp_dimensions_from_bytes(&vp8), Some((500, 333)));
+
+        // VP8L lossless 640x480
+        let mut vp8l = vec![0u8; 30];
+        vp8l[0..4].copy_from_slice(b"RIFF");
+        vp8l[8..12].copy_from_slice(b"WEBP");
+        vp8l[12..16].copy_from_slice(b"VP8L");
+        vp8l[20] = 0x2f;
+        let bits = (640u32 - 1) | ((480u32 - 1) << 14);
+        vp8l[21..25].copy_from_slice(&bits.to_le_bytes());
+        assert_eq!(parse_webp_dimensions_from_bytes(&vp8l), Some((640, 480)));
+
+        // VP8X extended 1200x800
+        let mut vp8x = vec![0u8; 30];
+        vp8x[0..4].copy_from_slice(b"RIFF");
+        vp8x[8..12].copy_from_slice(b"WEBP");
+        vp8x[12..16].copy_from_slice(b"VP8X");
+        let w = 1200u32 - 1;
+        let h = 800u32 - 1;
+        vp8x[24..27].copy_from_slice(&w.to_le_bytes()[0..3]);
+        vp8x[27..30].copy_from_slice(&h.to_le_bytes()[0..3]);
+        assert_eq!(parse_webp_dimensions_from_bytes(&vp8x), Some((1200, 800)));
+    }
+
+    #[test]
     fn quick_look_extension_classifiers_cover_images_videos_and_audio() {
         assert!(is_image_extension("png"));
         assert!(is_image_extension("webp"));
@@ -2566,5 +3595,126 @@ mod tests {
         let (pw, ph, _, _) = fit_quicklook_card_size(520, 900, 900, 720);
         assert!(ph > pw);
         assert!(ph <= 720);
+
+        // Small image: NEVER stretched and card enforces minimum size
+        let (sw, sh, sfw, sfh) = fit_quicklook_card_size(64, 64, 900, 700);
+        assert_eq!((sfw, sfh), (64, 64));
+        assert_eq!((sw, sh), (QL_MIN_CARD_W, QL_MIN_CARD_H));
+        assert_eq!(quicklook_image_corner_radius(sw, sh, sfw, sfh), 0.0);
+
+        // Medium image (e.g., 500x333 desktop thumbnail): card fits tightly to image without upscaling
+        let (mw, mh, mfw, mfh) = fit_quicklook_card_size(500, 333, 1280, 960);
+        assert_eq!((mfw, mfh), (500, 333));
+        assert_eq!(mw, 500 + QL_IMAGE_INSET * 2);
+        assert_eq!(mh, 333 + QL_HEADER_HEIGHT + QL_IMAGE_INSET);
+    }
+
+    #[test]
+    fn load_pixbuf_no_upscale_preserves_small_image_dimensions() {
+        let tmp = unique_temp_path("small_img", "png");
+        let small = Pixbuf::new(gdk_pixbuf::Colorspace::Rgb, true, 8, 96, 72).unwrap();
+        small.savev(&tmp, "png", &[]).unwrap();
+
+        let loaded = load_pixbuf_no_upscale(&tmp, QL_MAX_DECODE_W, QL_MAX_DECODE_H).unwrap();
+        assert_eq!((loaded.width(), loaded.height()), (96, 72));
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn compute_quicklook_card_size_adapts_video_pdf_and_enforces_minimums() {
+        // Small video must not upscale and respects minimum card size
+        let (vw, vh, vfit) = compute_quicklook_card_size(
+            QuickLookContentSizing::Video {
+                width: 200,
+                height: 120,
+            },
+            1280,
+            960,
+            false,
+        );
+        assert_eq!(vfit, Some((200, 120)));
+        assert_eq!(vw, QL_MIN_CARD_W);
+        assert_eq!(vh, QL_MIN_CARD_H);
+
+        // Portrait video adjusts card width/height to video instead of wide 820x600
+        let (pvw, pvh, pvfit) = compute_quicklook_card_size(
+            QuickLookContentSizing::Video {
+                width: 248,
+                height: 440,
+            },
+            1280,
+            960,
+            false,
+        );
+        assert_eq!(pvfit, Some((248, 440)));
+        assert_eq!(pvw, QL_MIN_CARD_W);
+        assert_eq!(pvh, 440 + QL_VIDEO_CHROME_H);
+
+        // Portrait PDF adjusts to portrait proportions
+        let (pdf_w, pdf_h, _) = compute_quicklook_card_size(
+            QuickLookContentSizing::Pdf {
+                width: 550,
+                height: 780,
+                has_footer: true,
+            },
+            1280,
+            960,
+            false,
+        );
+        assert!(pdf_h > pdf_w);
+        assert!(pdf_w >= QL_MIN_CARD_W && pdf_h <= 960);
+    }
+
+    #[test]
+    fn finish_close_immediately_without_overlay_does_not_reborrow_refcell() {
+        let ql = QuickLook::new();
+        ql.closing.set(true);
+        ql.finish_close_immediately();
+        assert!(!ql.closing.get());
+        assert!(!ql.is_open());
+        assert!(ql.host_overlay.borrow().is_none());
+        assert!(ql.backdrop.borrow().is_none());
+    }
+
+    #[test]
+    fn quicklook_squircle_clip_clears_extreme_corners_and_preserves_center() {
+        assert_eq!(quicklook_concentric_inner_radius(32.0, 8.0), 24.0);
+        assert_eq!(quicklook_concentric_inner_radius(12.0, 8.0), 8.0);
+        assert_eq!(quicklook_concentric_inner_radius(0.0, 8.0), 0.0);
+
+        let w = 64usize;
+        let h = 64usize;
+        let mut rgba = vec![255u8; w * h * 4];
+        apply_squircle_clip_rgba_corners(&mut rgba, w, h, 24.0);
+        // Las 4 esquinas extremas deben quedar transparentes
+        assert_eq!(rgba[3], 0);
+        assert_eq!(rgba[(w - 1) * 4 + 3], 0);
+        assert_eq!(rgba[((h - 1) * w) * 4 + 3], 0);
+        assert_eq!(rgba[((h - 1) * w + (w - 1)) * 4 + 3], 0);
+        // El centro permanece 100% opaco
+        assert_eq!(rgba[((h / 2) * w + (w / 2)) * 4 + 3], 255);
+    }
+
+    #[test]
+    fn quicklook_open_and_close_animations_interpolate_cleanly() {
+        let (s0, a0, y0) = quicklook_open_anim_state(0.0, false);
+        assert!((s0 - 0.86).abs() < 1e-4);
+        assert!(a0 <= 1e-4);
+        assert!((y0 - 10.0).abs() < 1e-4);
+
+        let (sm, am, ym) = quicklook_open_anim_state(0.5, false);
+        assert!(sm > s0 && sm < 1.0);
+        assert!(am > 0.5 && am <= 1.0);
+        assert!(ym > 0.0 && ym < y0);
+
+        let (s1, a1, y1) = quicklook_open_anim_state(1.0, false);
+        assert!((s1 - 1.0).abs() < 1e-4);
+        assert!((a1 - 1.0).abs() < 1e-4);
+        assert!(y1.abs() < 1e-4);
+
+        let (cs1, ca1, cy1) = quicklook_close_anim_state(1.0, false, 1.0, 1.0, 0.0);
+        assert!((cs1 - 0.88).abs() < 1e-4);
+        assert!(ca1 <= 1e-4);
+        assert!((cy1 - 8.0).abs() < 1e-4);
     }
 }
