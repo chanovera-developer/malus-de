@@ -787,7 +787,7 @@ fn build_appearance_main_pane(
         .build();
     tint_row.append(
         &Label::builder()
-            .label("Teñir el fondo de las ventanas con el color del fondo de pantalla")
+            .label("Teñir el fondo del sidebar con el color del tema")
             .css_classes(["wifi-row-title"])
             .wrap(true)
             .xalign(0.0)

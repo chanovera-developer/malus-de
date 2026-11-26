@@ -8,6 +8,54 @@ Malus DE es una reimplementación libre del entorno de escritorio de macOS para 
 >
 > Para el detalle completo del producto y la arquitectura, consulta [PRD.md](./PRD.md).
 
+## Instalación en una sola línea
+
+Instala dependencias, compila en perfil Release y registra la sesión **Malus DE** automáticamente en **Fedora, Arch Linux, Debian, Ubuntu y derivadas** (incluyendo ediciones Minimal sin gestor de inicio gráfico):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/automate-install.sh | bash
+```
+
+Al finalizar, cierra sesión y selecciona **Malus DE** en tu gestor de arranque (`GDM`, `SDDM`, `LightDM`, `greetd`, etc.) o ejecuta `/usr/local/bin/malus-session` desde una TTY.
+
+<details>
+<summary>Opciones del instalador (gestor de login, autoinicio TTY, rama personalizada)</summary>
+
+```bash
+# Instalar también un gestor de inicio gráfico (gdm | sddm | lightdm | greetd)
+curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/automate-install.sh | bash -s -- --dm sddm
+
+# Configurar autoinicio directo en TTY1 (sin gestor de login)
+curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/automate-install.sh | bash -s -- --tty-autostart
+
+# Usar otra carpeta de compilación o rama de Git
+curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/automate-install.sh | bash -s -- --dir ~/src/malus-de --branch main
+```
+
+</details>
+
+## Galería y demostraciones
+
+### Explorador de archivos (Branches)
+
+![Explorador de archivos Branches](./assets/screenshots/Branches.webp)
+
+### Aspecto y personalización en tiempo real
+
+![Panel Aspecto en Ajustes del sistema](./assets/screenshots/aspecto.webp)
+
+### Efectos GPU y funciones en acción
+
+| Modo claro / oscuro | Efecto Genie |
+| :---: | :---: |
+| ![Transición entre modo claro y modo oscuro](./assets/screenshots/dark-mode.webp) | ![Animación GPU Genie al minimizar y restaurar](./assets/screenshots/Genie.webp) |
+| **Transición GPU** fluida entre tema claro y oscuro. | **Animación Genie** al minimizar y restaurar ventanas hacia el Dock. |
+
+| Efecto Black Hole | Canopy (PiP) |
+| :---: | :---: |
+| ![Efecto GPU Black Hole al cerrar ventanas](./assets/screenshots/Black-hole.webp) | ![Canopy Picture-in-Picture flotante](./assets/screenshots/Canopy.webp) |
+| **Black Hole** al cerrar ventanas con colapso por shader GPU. | **Canopy (PiP)** flotante integrado directamente en el compositor. |
+
 ## Qué incluye
 
 - Compositor Wayland nativo con Smithay.
@@ -84,16 +132,6 @@ Malus DE se prueba principalmente en Fedora 45 y usa una pila moderna de Linux:
 - GTK4 / Libadwaita
 - XWayland para compatibilidad
 - session manager / D-Bus / Polkit
-
-## Instalación rápida en Fedora (cualquier escritorio o Minimal)
-
-Puedes instalar las dependencias, compilar e instalar la sesión de Malus DE en cualquier edición de Fedora (Workstation/GNOME, KDE Plasma, Xfce, Spins o Fedora Minimal) con un solo comando:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/chanovera-developer/malus-de/main/automate-install.sh | bash
-```
-
-Al finalizar, cierra sesión y selecciona **Malus DE** en tu gestor de arranque (GDM, SDDM, LightDM, etc.), o ejecuta `/usr/local/bin/malus-session` desde una TTY.
 
 ## Desarrollo y arranque
 

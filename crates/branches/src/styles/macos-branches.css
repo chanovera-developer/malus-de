@@ -3,7 +3,7 @@
 window.branches-window {
     background-color: transparent;
     background: transparent;
-    border-radius: 12px;
+    border-radius: 0px;
     box-shadow: none;
     color: @window_fg_color;
 }
